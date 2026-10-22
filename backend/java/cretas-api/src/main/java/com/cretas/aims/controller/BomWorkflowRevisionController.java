@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.bom.BomWorkflowRevisionPinRequest;
@@ -28,12 +30,14 @@ public class BomWorkflowRevisionController {
     private final BomWorkflowRevisionService service;
     private final BomRecipeService recipeService;
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @GetMapping
     public ApiResponse<List<WorkflowRevisionCandidateDTO>> list(
             @PathVariable String factoryId, @PathVariable String recipeId) {
         return ApiResponse.success(service.listCompatible(factoryId, recipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @PutMapping("/pin")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     public ApiResponse<BomRecipe> pin(
@@ -43,6 +47,7 @@ public class BomWorkflowRevisionController {
         return ApiResponse.success(service.pin(factoryId, recipeId, request));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @PostMapping("/upgrade-latest")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     public ApiResponse<BomRecipe> upgradeLatest(

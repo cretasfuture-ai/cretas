@@ -50,6 +50,13 @@ public class MobileController {
     private final CookieAuthHelper cookieAuthHelper;
     private final com.cretas.aims.service.mobile.WebLoginSessionService webLoginSessions;
 
+    // 字段注入 (不进构造器): 工艺保密只在重置密码这一条路径上用到
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.UserRepository userRepository;
+
     @Value("${cretas.app.min-version:1.0.0}")
     private String appMinVersion;
 
@@ -490,6 +497,11 @@ public class MobileController {
                 throw new BusinessException(403, "无权重置其他工厂的用户密码").withSeverity("error");
             }
         }
+        // 工艺保密 (审查 H3): 保密负责人 / 被授权人的密码只能本人改, 管理员代改会变成「登录成负责人」
+        userRepository.findByFactoryIdAndUsername(factoryId, username).ifPresent(target ->
+                processSecretAccessService.requireAdminMayChangeCredentials(
+                        com.cretas.aims.security.AuthenticatedActor.current(request).orElse(null),
+                        factoryId, target.getId()));
         log.info("重置密码: factoryId={}, username={}, operator={}", factoryId, username, request.getAttribute("username"));
         mobileService.resetPassword(factoryId, username, newPassword);
         return ApiResponse.success("密码重置成功", null);

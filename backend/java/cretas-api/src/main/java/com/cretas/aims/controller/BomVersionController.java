@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.bom.ApproveBomVersionRequest;
@@ -66,6 +68,7 @@ public class BomVersionController {
         return ApiResponse.success(draft);
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.BOM_VERSION_PATH, name = "versionId")
     @GetMapping("/{versionId}")
     @Operation(summary = "BomVersion 详情")
     public ApiResponse<BomVersion> getById(
@@ -74,6 +77,7 @@ public class BomVersionController {
         return ApiResponse.success(versionService.getById(factoryId, versionId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "bomRecipeId")
     @GetMapping("/by-recipe/{bomRecipeId}/history")
     @Operation(summary = "BOM 全部历史版本 (newest first)")
     public ApiResponse<List<BomVersion>> getHistory(
@@ -82,6 +86,7 @@ public class BomVersionController {
         return ApiResponse.success(versionService.getHistory(factoryId, bomRecipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "bomRecipeId")
     @GetMapping("/by-recipe/{bomRecipeId}/current")
     @Operation(summary = "BOM 当前生效版本 (status=APPROVED + effective_to IS NULL)")
     public ApiResponse<BomVersion> getCurrent(
@@ -92,6 +97,7 @@ public class BomVersionController {
                 .orElseGet(() -> ApiResponse.error(404, "无当前生效 BomVersion: " + bomRecipeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "bomRecipeId")
     @GetMapping("/by-recipe/{bomRecipeId}/effective-at")
     @Operation(summary = "BOM 某历史日期的生效版本 (订单追溯)")
     public ApiResponse<BomVersion> getEffectiveAt(
