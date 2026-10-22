@@ -1,0 +1,44 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { ElMessage } from 'element-plus';
+import { dispatchWarehouseTransfer, getWarehouseTransferDelivery, receiveWarehouseTransfer, type WarehouseTransferDelivery } from '@/api/warehouseTransferDelivery';
+import { useAuthStore } from '@/store/modules/auth';
+
+const props = defineProps<{ transferId: string; status: string; canWrite: boolean }>();
+const emit = defineEmits<{ changed: [] }>();
+const auth = useAuthStore();
+const factoryId = computed(() => auth.factoryId || '');
+const userId = computed(() => String(auth.user?.id || 'unknown'));
+const delivery = ref<WarehouseTransferDelivery | null>(null);
+const loading = ref(false); const submitting = ref(false); const quantities = ref<Record<number, number>>({});
+const requestStorageKey = computed(() => `warehouse-delivery:${factoryId.value}:${userId.value}:${props.transferId}`);
+interface PendingEnvelope { factoryId: string; userId: string; transferId: string; requestKey: string; itemQuantities: Record<number, number>; state: 'pending' | 'unknown'; }
+const pendingStorageKey = computed(() => `${requestStorageKey.value}:pending`);
+const requestKey = ref<string>(localStorage.getItem(requestStorageKey.value) || crypto.randomUUID()); const error = ref(''); const unknown = ref(false);
+const pending = ref<PendingEnvelope | null>(null);
+try { localStorage.setItem(requestStorageKey.value, requestKey.value); const raw = localStorage.getItem(pendingStorageKey.value); if (raw) { pending.value = JSON.parse(raw) as PendingEnvelope; requestKey.value = pending.value.requestKey; quantities.value = { ...pending.value.itemQuantities }; unknown.value = pending.value.state === 'unknown'; } } catch { error.value = '本机存储不可用，已阻止收货发送。'; }
+function savePending(value: PendingEnvelope): boolean { try { localStorage.setItem(pendingStorageKey.value, JSON.stringify(value)); pending.value = value; return true; } catch { return false; } }
+function clearPending(): boolean { try { localStorage.removeItem(pendingStorageKey.value); pending.value = null; return true; } catch { return false; } }
+function receiptMatches(value: WarehouseTransferDelivery, envelope: PendingEnvelope): boolean { return value.items.every(item => { const expected = envelope.itemQuantities[item.id] || 0; const actual = item.receipts.filter(receipt => receipt.requestKey === envelope.requestKey && receipt.unit === item.unit && receipt.operationId && receipt.targetBatchId).reduce((sum, receipt) => sum + receipt.quantity, 0); return expected === 0 || Math.abs(actual - expected) < 0.00005; }); }
+function validateReceipt(rows: Array<{ itemId: number; unit: string; pendingQuantity: number; quantity: number }>) { const quantities: Record<number, number> = {}; let positive = false; for (const row of rows) { const value = Number(row.quantity || 0); if (!Number.isFinite(value) || value < 0 || value > row.pendingQuantity || Number(value.toFixed(4)) !== value) return { valid: false, quantities, reason: `${row.unit} 本次收货不能超过待收数量，最多4位小数` }; if (value > 0) { quantities[row.itemId] = value; positive = true; } } return { valid: positive, quantities, reason: positive ? undefined : '请至少填写一行本次收货数量' }; }
+const load = async () => { if (!factoryId.value) return; loading.value = true; error.value = ''; try { const r = await getWarehouseTransferDelivery(factoryId.value, props.transferId); if (r.success) { delivery.value = r.data; if (pending.value && receiptMatches(r.data, pending.value) && clearPending()) { unknown.value = false; quantities.value = {}; requestKey.value = crypto.randomUUID(); localStorage.setItem(requestStorageKey.value, requestKey.value); emit('changed'); } } else error.value = r.message || '仓内交付状态读取失败，请刷新重试。'; } catch (e) { error.value = e instanceof Error ? e.message : '仓内交付状态读取失败，请刷新重试。'; } finally { loading.value = false; } };
+onMounted(load);
+const canDispatch = computed(() => props.canWrite && props.status === 'APPROVED' && !!delivery.value?.supported && !delivery.value.staged);
+const canReceive = computed(() => props.canWrite && !!delivery.value?.staged && delivery.value.items.some(i => i.pendingQuantity > 0));
+async function dispatch() { if (!canDispatch.value || submitting.value) return; submitting.value = true; try { const r = await dispatchWarehouseTransfer(factoryId.value, props.transferId); if (r.success) { await load(); emit('changed'); ElMessage.success('仓内发运成功'); } else ElMessage.error('仓内发运失败，请检查权限和批次。'); } catch (e) { ElMessage.error(e instanceof Error ? e.message : '仓内发运失败，请刷新查看真实状态'); } finally { submitting.value = false; } }
+async function receive() { if (!delivery.value || submitting.value) return; const rows = delivery.value.items.map(i => ({ itemId: i.id, unit: i.unit, pendingQuantity: i.pendingQuantity, quantity: quantities.value[i.id] || 0 })); const checked = validateReceipt(rows); if (!checked.valid) { ElMessage.warning(checked.reason || '请检查本次收货数量'); return; } const envelope: PendingEnvelope = { factoryId: factoryId.value, userId: userId.value, transferId: props.transferId, requestKey: requestKey.value, itemQuantities: checked.quantities, state: 'pending' }; if (pending.value && JSON.stringify(pending.value.itemQuantities) !== JSON.stringify(checked.quantities)) { ElMessage.error('待核请求不可修改，请保持原数量和请求号后刷新核对。'); return; } if (!savePending(envelope)) { ElMessage.error('本机存储不可用，已阻止收货发送以避免重复收货。'); return; } submitting.value = true; try { const r = await receiveWarehouseTransfer(factoryId.value, props.transferId, { requestKey: envelope.requestKey, itemQuantities: envelope.itemQuantities }); if (!r.success) { savePending({ ...envelope, state: 'unknown' }); unknown.value = true; ElMessage.error('收货未完成，请刷新查看真实状态。'); return; } delivery.value = r.data; if (!receiptMatches(r.data, envelope)) { savePending({ ...envelope, state: 'unknown' }); unknown.value = true; ElMessage.error('收货结果未知，请刷新核对相同请求。'); return; } if (!clearPending()) { unknown.value = true; ElMessage.error('收货已提交但本机未完成清理，请刷新核对后再继续。'); return; } quantities.value = {}; unknown.value = false; requestKey.value = crypto.randomUUID(); localStorage.setItem(requestStorageKey.value, requestKey.value); emit('changed'); ElMessage.success('本次收货已记录'); } catch (e) { savePending({ ...envelope, state: 'unknown' }); unknown.value = true; await load(); ElMessage.error(e instanceof Error ? e.message : '收货结果未知，请刷新查看真实状态'); } finally { submitting.value = false; } }
+</script>
+<template>
+  <el-card class="warehouse-delivery-panel" shadow="never" v-loading="loading">
+    <template #header><div class="panel-header"><span>仓内分步交付</span><el-button size="small" :loading="loading" @click="load">刷新状态</el-button></div></template>
+    <el-alert v-if="error" type="error" show-icon :closable="false" :title="error" />
+    <el-alert v-else-if="delivery && !delivery.supported" type="warning" show-icon :closable="false" title="此单暂不支持仓内分步交付，请使用原一次确认流程或完善批次后重试。" />
+    <template v-if="delivery?.supported">
+      <el-alert v-if="unknown" type="warning" show-icon :closable="false" title="上次收货结果未知，请保持原数量和请求号后重试或刷新核对。" />
+      <div class="context">单号：<b>{{ delivery.transferNumber }}</b>　阶段：{{ delivery.staged ? (delivery.stage === 'CONFIRMED' ? '已收齐' : '部分待收') : '待发运' }}</div>
+      <el-table :data="delivery.items" border size="small"><el-table-column prop="itemName" label="品名" /><el-table-column prop="sourceBatchId" label="源批次" /><el-table-column label="已发 / 已收 / 待收"><template #default="{ row }">{{ row.shippedQuantity }} / {{ row.receivedQuantity }} / {{ row.pendingQuantity }} {{ row.unit }}</template></el-table-column><el-table-column label="收货批次"><template #default="{ row }"><div v-for="receipt in row.receipts" :key="receipt.operationId">{{ receipt.targetBatchId }}：{{ receipt.quantity }} {{ receipt.unit }}</div></template></el-table-column><el-table-column v-if="delivery.staged" label="本次收货"><template #default="{ row }"><el-input-number v-model="quantities[row.id]" :min="0" :max="row.pendingQuantity" :precision="4" :step="0.01" :disabled="!canReceive || submitting" controls-position="right" /></template></el-table-column></el-table>
+      <div class="actions"><el-button v-if="canDispatch" type="primary" :loading="submitting" @click="dispatch">确认仓内发运</el-button><el-button v-if="canReceive" type="success" :loading="submitting" @click="receive">提交本次收货</el-button></div>
+    </template>
+  </el-card>
+</template>
+<style scoped>.warehouse-delivery-panel{margin-top:20px}.panel-header{display:flex;justify-content:space-between;align-items:center}.context{padding:12px 0;color:#606266}.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}</style>
