@@ -14,8 +14,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.Trigger;
+import org.springframework.scheduling.support.SimpleTriggerContext;
 
 import java.lang.reflect.Field;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -185,6 +189,49 @@ class DynamicSchedulerServiceTest {
         assertTrue(config.getLastExecutionError().contains("password=[REDACTED]"));
         assertFalse(config.getLastExecutionError().contains("secret"));
         verify(schedulerRepo).findById(61L);
+    }
+
+    @Test
+    @DisplayName("写运行键 = 计划触发时刻: 同一计划槽无论何时到达(跨过下一计划点、迟到 2h 以上)都同键, 相邻计划槽两个键")
+    void writeRunKey_isThePlannedFireInstantWheneverTheFireActuallyRuns() throws Exception {
+        FactorySchedulerConfig config = config(71L, "F001", "every-minute", "write_tool");
+        config.setCronExpression("0 * * * * ?");
+        config.setRunAsUserId(7L);
+        when(toolRegistry.getExecutor("write_tool")).thenReturn(Optional.of(toolExecutor));
+        when(toolExecutor.getVersion()).thenReturn("1.0.0");
+        when(schedulerRepo.findById(71L)).thenReturn(Optional.of(config));
+        when(runner.run(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AutonomousToolRunner.Outcome("SUCCESS", null, null));
+        org.mockito.Mockito.doReturn(scheduledFuture).when(taskScheduler)
+                .schedule(any(Runnable.class), any(Trigger.class));
+        // Two instances (blue/green), each with its own trigger, schedule the same config.
+        DynamicSchedulerService other = new DynamicSchedulerService(schedulerRepo, toolRegistry, runner, new ObjectMapper());
+        Field schedulerField = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
+        schedulerField.setAccessible(true);
+        schedulerField.set(other, taskScheduler);
+        service.scheduleTask(config);
+        other.scheduleTask(config);
+        ArgumentCaptor<Runnable> tasks = ArgumentCaptor.forClass(Runnable.class);
+        ArgumentCaptor<Trigger> triggers = ArgumentCaptor.forClass(Trigger.class);
+        verify(taskScheduler, times(2)).schedule(tasks.capture(), triggers.capture());
+
+        Instant now = Instant.parse("2026-10-22T07:00:30Z");
+        Instant planned = triggers.getAllValues().get(0).nextExecution(new SimpleTriggerContext(Clock.fixed(now, ZoneOffset.UTC)));
+        assertEquals(planned, triggers.getAllValues().get(1).nextExecution(new SimpleTriggerContext(Clock.fixed(now, ZoneOffset.UTC))));
+        // Instance A runs on time; instance B runs the same planned fire after the next planned point
+        // and hours later: neither reads a clock for the key, so both carry the planned instant.
+        tasks.getAllValues().get(0).run();
+        tasks.getAllValues().get(1).run();
+        // The adjacent planned fire on instance A is a different key.
+        Instant next = triggers.getAllValues().get(0).nextExecution(
+                new SimpleTriggerContext(planned, planned, planned.plusSeconds(1)));
+        tasks.getAllValues().get(0).run();
+
+        ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
+        verify(runner, times(3)).run(eq("F001"), eq(7L), eq("write_tool"), any(), eq(ToolExecutionSource.SCHEDULER),
+                any(), any(), keys.capture());
+        assertEquals(planned.plusSeconds(60), next);
+        assertEquals(List.of("slot:" + planned, "slot:" + planned, "slot:" + next), keys.getAllValues());
     }
 
     private FactorySchedulerConfig config(Long id, String factoryId, String taskCode, String toolName) {

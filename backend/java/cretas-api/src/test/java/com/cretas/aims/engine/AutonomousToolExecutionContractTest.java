@@ -142,10 +142,10 @@ class AutonomousToolExecutionContractTest {
     @Test void writeAndUndeclaredToolsNeverReachTheGateway() throws Exception {
         FactorySchedulerConfig write = schedule(78L, "dictionary_add", Map.of(), 42L);
         when(schedulerRepo.findById(78L)).thenReturn(Optional.of(write));
-        runScheduled(write);
+        runScheduled(write, PLANNED);
         FactorySchedulerConfig undeclared = schedule(79L, "legacy_tool", Map.of(), 42L);
         when(schedulerRepo.findById(79L)).thenReturn(Optional.of(undeclared));
-        runScheduled(undeclared);
+        runScheduled(undeclared, PLANNED);
         FactorySchedulerConfig foreign = schedule(80L, "material_expired_query", Map.of("factoryId", "F-OTHER"), 42L);
         when(schedulerRepo.findById(80L)).thenReturn(Optional.of(foreign));
         runScheduled(foreign);
@@ -156,7 +156,7 @@ class AutonomousToolExecutionContractTest {
         assertThat(undeclared.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
         verify(grants).consume(org.mockito.ArgumentMatchers.argThat(binding -> "78".equals(binding.sourceRef())
                 && "dictionary_add".equals(binding.toolName()) && Long.valueOf(42L).equals(binding.runAsUserId())
-                && binding.configRevision() != null), any(), any());
+                && binding.configRevision() != null), eq(PLANNED), any());
         assertThat(foreign.getLastExecutionStatus()).isEqualTo("CONFIG_INVALID");
     }
 
@@ -171,9 +171,22 @@ class AutonomousToolExecutionContractTest {
                 .schedule(any(Runnable.class), any(org.springframework.scheduling.Trigger.class));
         scheduler.scheduleTask(config);
         verify(taskScheduler).schedule(any(Runnable.class), any(org.springframework.scheduling.Trigger.class));
-        runScheduled(config);
+        runScheduled(config, PLANNED);
         verifyNoInteractions(gateway);
         assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+    }
+
+    @Test void aWriteWithoutAPlannedFireIdentityIsRefusedRatherThanKeyedByItsStartTime() throws Exception {
+        FactorySchedulerConfig write = schedule(84L, "dictionary_add", Map.of(), 42L);
+        when(schedulerRepo.findById(84L)).thenReturn(Optional.of(write));
+        runScheduled(write);
+        assertThat(write.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        assertThat(write.getLastExecutionError()).contains("no planned fire identity");
+        var binding = SchedulerGrantBinding.of(write, null, new ObjectMapper());
+        // An actual-time key (the old fallback) is not an identity either.
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
+                "fire:2026-10-22T07:00").status()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        verifyNoInteractions(gateway, grants, previewTokens);
     }
 
     @Test void eachFireReReadsTheConfigStopsWhenDisabledAndReschedulesWhenTheCronChanged() throws Exception {
@@ -213,17 +226,10 @@ class AutonomousToolExecutionContractTest {
         verify(future, atLeastOnce()).cancel(false);
     }
 
-    @Test void runKeyIsTheScheduledSlotSoInstancesStraddlingAMinuteShareIt() {
-        java.time.LocalDateTime slot = java.time.LocalDateTime.of(2026, 10, 22, 7, 0, 0);
-        String daily = DynamicSchedulerService.slotKey("0 0 7 * * ?", slot.plusSeconds(59));
-        assertThat(daily).isEqualTo("slot:2026-10-22T07:00");
-        assertThat(DynamicSchedulerService.slotKey("0 0 7 * * ?", slot.plusSeconds(62))).isEqualTo(daily);
-        assertThat(DynamicSchedulerService.slotKey("0 0 7 * * ?", slot.plusNanos(300_000_000))).isEqualTo(daily);
-        String minutely = DynamicSchedulerService.slotKey("0 * * * * ?", slot.plusSeconds(59));
-        assertThat(minutely).isEqualTo("slot:2026-10-22T07:00");
-        assertThat(DynamicSchedulerService.slotKey("0 * * * * ?", slot.plusSeconds(61))).isEqualTo("slot:2026-10-22T07:01");
-        // Beyond the lookback there is no slot: fall back to the fire minute rather than invent one.
-        assertThat(DynamicSchedulerService.slotKey("0 0 7 1 1 ?", slot)).isEqualTo("fire:2026-10-22T07:00");
+    @Test void theRunKeyIsThePlannedFireInstantNotAnActualTime() {
+        java.time.Instant planned = java.time.Instant.parse("2026-10-21T23:00:00Z");
+        assertThat(DynamicSchedulerService.plannedFireKey(planned)).isEqualTo("slot:2026-10-21T23:00:00Z");
+        assertThat(DynamicSchedulerService.plannedFireKey(null)).isNull();
     }
 
     @Test void grantedWriteReachesTheGatewayWithAPerRunProofAndIdempotencyKey() {
@@ -305,7 +311,7 @@ class AutonomousToolExecutionContractTest {
         FactorySchedulerConfig config = schedule(83L, "dictionary_add", Map.of(), 42L);
         config.setLastExecutionStatus("SUCCESS");
         when(schedulerRepo.findById(83L)).thenReturn(Optional.of(config));
-        runScheduled(config);
+        runScheduled(config, PLANNED);
         assertThat(config.getLastExecutionStatus()).isEqualTo("SUCCESS");
         verify(schedulerRepo, never()).save(any());
     }
@@ -420,6 +426,16 @@ class AutonomousToolExecutionContractTest {
         executor.onApplicationEvent(new MaterialReceivedEvent());
         verifyNoInteractions(gateway, self);
         verify(chains, never()).save(any());
+    }
+
+    /** A planned fire identity as the scheduler hands it to a run. */
+    private static final String PLANNED = "slot:2026-10-21T23:00:00Z";
+
+    private void runScheduled(FactorySchedulerConfig config, String plannedFireKey) throws Exception {
+        Method run = DynamicSchedulerService.class.getDeclaredMethod("executeTask", FactorySchedulerConfig.class,
+                String.class);
+        run.setAccessible(true);
+        run.invoke(scheduler, config, plannedFireKey);
     }
 
     private void runScheduled(FactorySchedulerConfig config) throws Exception {

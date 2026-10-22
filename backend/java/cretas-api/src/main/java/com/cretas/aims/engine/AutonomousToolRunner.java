@@ -76,7 +76,8 @@ public class AutonomousToolRunner {
     /**
      * @param grantBinding what a delegated write must be granted for, as the scheduler computed it from
      *                     the config it fires ({@link SchedulerGrantBinding}); null for reads
-     * @param runKey       the run's scheduled slot; the same key replays, never re-executes
+     * @param runKey       the run's planned fire identity ("slot:" + planned instant); the same key
+     *                     replays, never re-executes; a write without it is refused
      */
     public Outcome run(String factoryId, Long runAsUserId, String toolName, Map<String, Object> params,
             ToolExecutionSource source, String correlationId, AutonomousGrantService.Binding grantBinding,
@@ -93,9 +94,15 @@ public class AutonomousToolRunner {
         Map<String, Object> safeParams = params == null ? Map.of() : params;
         // Delegated writes are cron-only: an event chain runs all steps in one transaction (a later
         // step's rollback would undo an audited write) and has no durable event id to key replays on.
-        if (write && (source != ToolExecutionSource.SCHEDULER || runKey == null
+        if (write && (source != ToolExecutionSource.SCHEDULER
                 || !boundToThisRun(grantBinding, factoryId, runAsUserId, toolName, tool.get(), safeParams))) {
             return new Outcome(AutonomousToolPolicy.WRITE_DENIED, refusal, null);
+        }
+        // Only an immutable planned fire identity keys a write: never the actual start time, which
+        // two instances (or one late fire) would turn into different keys for the same planned run.
+        if (write && (runKey == null || !runKey.startsWith(PLANNED_FIRE_PREFIX))) {
+            return new Outcome(AutonomousToolPolicy.WRITE_DENIED,
+                    "no planned fire identity for this write run; refused rather than keyed by its start time", null);
         }
         if (runAsUserId == null) {
             return new Outcome("RUN_AS_MISSING",
@@ -155,6 +162,9 @@ public class AutonomousToolRunner {
 
     /** Persisted status when no usable delegated grant covers a write (VARCHAR(20)). */
     public static final String GRANT_DENIED = "GRANT_DENIED";
+
+    /** Run keys of delegated writes: the scheduler's planned fire instant, never an actual time. */
+    static final String PLANNED_FIRE_PREFIX = "slot:";
 
     /** The binding must describe exactly this run, so a grant can never be applied to another one. */
     private boolean boundToThisRun(AutonomousGrantService.Binding binding, String factoryId, Long runAsUserId,

@@ -182,6 +182,31 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(count("factory_scheduler_configs WHERE execution_count = 1")).isEqualTo(1);
     }
 
+    @Test void adjacentRealSlotsWriteTwiceAndALateArrivalOfAnEarlierSlotOnlyReplays() throws Exception {
+        FactorySchedulerConfig config = scheduleSoon();
+        grant(config, 3);
+        instanceA.scheduleTask(config);
+
+        // Two adjacent real planned fires on instance A: two keys, one consumption and one write each.
+        await(() -> count("autonomous_tool_grant_runs") == 2, 135);
+        List<?> keys = entityManager.createNativeQuery(
+                "SELECT run_key FROM autonomous_tool_grant_runs ORDER BY consumed_at").getResultList();
+        assertThat(keys).hasSize(2).doesNotHaveDuplicates()
+                .allSatisfy(key -> assertThat(String.valueOf(key)).startsWith("slot:"));
+        java.time.Instant first = java.time.Instant.parse(String.valueOf(keys.get(0)).substring("slot:".length()));
+        java.time.Instant second = java.time.Instant.parse(String.valueOf(keys.get(1)).substring("slot:".length()));
+        assertThat(java.time.Duration.between(first, second)).isEqualTo(java.time.Duration.ofMinutes(1));
+        await(() -> count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'") == 2, 15);
+
+        // Instance B now runs the first planned fire: well after the next planned point and, for its key,
+        // as late as it gets. Same planned fire, same key: it replays and writes nothing.
+        instanceB.fire(configId, config.getCronExpression(), "late-arrival", first);
+        assertThat(count("autonomous_tool_grant_runs")).isEqualTo(2);
+        assertThat(count("tool_execution_idempotency")).isEqualTo(2);
+        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isEqualTo(2);
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 2")).isEqualTo(1);
+    }
+
     @Test void revokedGrantAtFireTimeIsRefusedWithZeroBusinessWrites() throws Exception {
         FactorySchedulerConfig config = scheduleSoon();
         String grantId = grant(config, 3);

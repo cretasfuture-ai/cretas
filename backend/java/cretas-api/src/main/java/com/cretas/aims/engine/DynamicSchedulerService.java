@@ -13,7 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
-import org.springframework.scheduling.support.CronExpression;
+import org.springframework.scheduling.Trigger;
+import org.springframework.scheduling.TriggerContext;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -21,8 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -120,8 +121,9 @@ public class DynamicSchedulerService {
             // re-reads the row, so a change made through another instance takes effect here too.
             Long configId = config.getId();
             String scheduledCron = config.getCronExpression();
+            PlannedFireTrigger trigger = new PlannedFireTrigger(new CronTrigger(scheduledCron));
             ScheduledFuture<?> future = getOrCreateScheduler().schedule(
-                    () -> fire(configId, scheduledCron, key), new CronTrigger(scheduledCron));
+                    () -> fire(configId, scheduledCron, key, trigger.planned()), trigger);
             activeTasks.put(key, future);
             log.info("Scheduled task: {} [{}] cron={}", key, config.getToolOrMethod(), config.getCronExpression());
         } catch (IllegalArgumentException e) {
@@ -177,14 +179,45 @@ public class DynamicSchedulerService {
         AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.SCHEDULER);
     }
 
-    /** Lookback for the scheduled slot a fire belongs to; a fire later than this falls back to its minute. */
-    static final int SLOT_LOOKBACK_HOURS = 2;
+    /**
+     * A cron trigger that remembers the planned fire time it last handed out. Spring computes the
+     * next planned time before scheduling each run and only after the previous run finished, so the
+     * run that starts reads exactly its own planned time, however late it actually starts.
+     */
+    static final class PlannedFireTrigger implements Trigger {
+        private final Trigger cron;
+        private volatile Instant planned;
+
+        PlannedFireTrigger(Trigger cron) {
+            this.cron = cron;
+        }
+
+        @Override
+        public Instant nextExecution(TriggerContext context) {
+            Instant next = cron.nextExecution(context);
+            planned = next;
+            return next;
+        }
+
+        Instant planned() {
+            return planned;
+        }
+    }
+
+    /**
+     * The immutable identity of one planned fire: the cron is evaluated in this JVM's default zone
+     * (as before), the key is the absolute instant, so it does not depend on when the fire actually
+     * runs. Instances firing for the same planned time share it; adjacent planned times never do.
+     */
+    static String plannedFireKey(Instant plannedFire) {
+        return plannedFire == null ? null : "slot:" + plannedFire;
+    }
 
     /**
      * One cron fire: re-read the config, stop if it is gone or disabled, reschedule if its cron
-     * changed elsewhere, otherwise run it under the slot's run key.
+     * changed elsewhere, otherwise run it under its planned fire's run key.
      */
-    void fire(Long configId, String scheduledCron, String key) {
+    void fire(Long configId, String scheduledCron, String key, Instant plannedFire) {
         FactorySchedulerConfig fresh = configId == null ? null : schedulerRepo.findById(configId).orElse(null);
         if (fresh == null || !Boolean.TRUE.equals(fresh.getEnabled())) {
             ScheduledFuture<?> future = activeTasks.remove(key);
@@ -197,30 +230,15 @@ public class DynamicSchedulerService {
             scheduleTask(fresh);
             return;
         }
-        executeTask(fresh);
+        executeTask(fresh, plannedFireKey(plannedFire));
     }
 
-    /**
-     * The run key of a fire: the latest cron slot at or before {@code now}. Instances firing for the
-     * same slot get the same key even when they straddle a minute boundary, so a delegated write is
-     * consumed once and the other instance only replays.
-     */
-    static String slotKey(String cron, LocalDateTime now) {
-        try {
-            CronExpression expression = CronExpression.parse(cron);
-            LocalDateTime slot = null;
-            for (LocalDateTime next = expression.next(now.minusHours(SLOT_LOOKBACK_HOURS));
-                    next != null && !next.isAfter(now); next = expression.next(next)) {
-                slot = next;
-            }
-            if (slot != null) return "slot:" + slot.truncatedTo(ChronoUnit.SECONDS);
-        } catch (IllegalArgumentException invalidCron) {
-            // Fall through: validated crons parse; this only guards a key for a bad row.
-        }
-        return "fire:" + now.truncatedTo(ChronoUnit.MINUTES);
-    }
-
+    /** A run with no planned fire identity: reads run, delegated writes are refused by the runner. */
     private void executeTask(FactorySchedulerConfig config) {
+        executeTask(config, null);
+    }
+
+    private void executeTask(FactorySchedulerConfig config, String runKey) {
         String validationError = validateConfig(config);
         if (validationError != null) {
             String status = validationStatus(validationError);
@@ -254,7 +272,7 @@ public class DynamicSchedulerService {
                         toolOrMethod, config.getParams(), ToolExecutionSource.SCHEDULER,
                         "sched-" + config.getId() + "-" + config.getTaskCode(),
                         SchedulerGrantBinding.of(config, executor.get().getVersion(), objectMapper),
-                        slotKey(config.getCronExpression(), startedAt));
+                        runKey);
                 if (outcome.replay()) {
                     // Another fire of the same slot (second instance) consumed it: that fire records the
                     // outcome. Writing ours would overwrite its SUCCESS with this instance's view.
