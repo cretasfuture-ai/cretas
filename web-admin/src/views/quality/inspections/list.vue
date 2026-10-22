@@ -422,7 +422,7 @@ function registerDefect(row: TableRow) {
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="showDetail(row)">查看详情</el-button>
             <el-button v-if="canWrite && ['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.result))" type="primary" link @click="reviewException(row)">异常复核</el-button>
-            <el-button v-if="canWrite && ['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.result))" type="warning" link @click="registerDefect(row)">登记不良</el-button>
+            <el-button v-if="canWrite && row.id" type="warning" link @click="registerDefect(row)">登记不良</el-button>
           </template>
         </el-table-column>
       </el-table>

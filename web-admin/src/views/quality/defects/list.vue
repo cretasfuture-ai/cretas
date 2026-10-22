@@ -69,6 +69,8 @@ const sourceLoading = ref(false);
 const directoryLoading = ref(false);
 const sourceError = ref('');
 const directoryError = ref('');
+let sourceRequestGeneration = 0;
+let directoryRequestGeneration = 0;
 const selectedSource = computed(() => inspectionSources.value.find(
   source => source.id === recordForm.value.qualityInspectionId,
 ));
@@ -135,17 +137,20 @@ function assigneeLabel(user: QualityAssigneeDirectoryUser): string {
 }
 
 async function loadInspectionSources(initialInspectionId?: string) {
+  const requestFactoryId = factoryId.value;
+  const requestGeneration = ++sourceRequestGeneration;
   inspectionSources.value = [];
   sourceError.value = '';
-  if (!factoryId.value) return;
+  if (!requestFactoryId) return;
   sourceLoading.value = true;
   try {
     const [listResponse, initialResponse] = await Promise.all([
-      listQualityInspectionSources(factoryId.value),
+      listQualityInspectionSources(requestFactoryId),
       initialInspectionId
-        ? getQualityInspectionSource(factoryId.value, initialInspectionId)
+        ? getQualityInspectionSource(requestFactoryId, initialInspectionId)
         : Promise.resolve(null),
     ]);
+    if (requestFactoryId !== factoryId.value || requestGeneration !== sourceRequestGeneration) return;
     if (!listResponse.success || !listResponse.data?.content) {
       sourceError.value = listResponse.message || '质检来源读取失败，请重试';
     }
@@ -160,28 +165,37 @@ async function loadInspectionSources(initialInspectionId?: string) {
       sourceError.value = '该质检来源不存在或不属于当前工厂，无法登记不良';
     }
   } catch (error) {
+    if (requestFactoryId !== factoryId.value || requestGeneration !== sourceRequestGeneration) return;
     sourceError.value = error instanceof Error ? error.message : '质检来源读取失败，请重试';
   } finally {
-    sourceLoading.value = false;
+    if (requestFactoryId === factoryId.value && requestGeneration === sourceRequestGeneration) {
+      sourceLoading.value = false;
+    }
   }
 }
 
 async function loadAssigneeDirectory() {
+  const requestFactoryId = factoryId.value;
+  const requestGeneration = ++directoryRequestGeneration;
   assigneeDirectory.value = [];
   directoryError.value = '';
-  if (!factoryId.value) return;
+  if (!requestFactoryId) return;
   directoryLoading.value = true;
   try {
-    const response = await listQualityAssigneeDirectory(factoryId.value);
+    const response = await listQualityAssigneeDirectory(requestFactoryId);
+    if (requestFactoryId !== factoryId.value || requestGeneration !== directoryRequestGeneration) return;
     if (!response.success || !Array.isArray(response.data)) {
       directoryError.value = response.message || '处理人员工厂名录读取失败，请重试';
       return;
     }
-    assigneeDirectory.value = response.data.filter(user => user.isActive !== false);
+    assigneeDirectory.value = response.data.filter(user => user.isActive === true);
   } catch (error) {
+    if (requestFactoryId !== factoryId.value || requestGeneration !== directoryRequestGeneration) return;
     directoryError.value = error instanceof Error ? error.message : '处理人员工厂名录读取失败，请重试';
   } finally {
-    directoryLoading.value = false;
+    if (requestFactoryId === factoryId.value && requestGeneration === directoryRequestGeneration) {
+      directoryLoading.value = false;
+    }
   }
 }
 
@@ -299,12 +313,25 @@ async function handleActionSubmit() {
 }
 
 watch(factoryId, () => {
+  sourceRequestGeneration += 1;
+  directoryRequestGeneration += 1;
   inspectionSources.value = [];
   assigneeDirectory.value = [];
+  rows.value = [];
+  pagination.value.total = 0;
   sourceError.value = '';
   directoryError.value = '';
   showRecordDialog.value = false;
   showActionDialog.value = false;
+  recordForm.value = {
+    qualityInspectionId: '',
+    materialId: '',
+    defectType: 'OTHER',
+    quantity: 1,
+    cause: '',
+  };
+  actionForm.value = { handlingAction: '', assignedTo: null, closeNotes: '' };
+  currentDefect.value = null;
 });
 
 onMounted(load);

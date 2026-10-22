@@ -1,19 +1,25 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import ElementPlus, { ElSelect, ElMessage } from 'element-plus';
 import { reactive } from 'vue';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   put: vi.fn(),
+  push: vi.fn(),
 }));
 const route = reactive<{ query: Record<string, string> }>({ query: {} });
+const authState = reactive<{ factoryId: string }>({ factoryId: 'F006' });
 
-vi.mock('vue-router', () => ({ useRoute: () => route }));
-vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006' }) }));
+vi.mock('vue-router', () => ({
+  useRoute: () => route,
+  useRouter: () => ({ push: (...args: unknown[]) => state.push(...args) }),
+}));
+vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => authState }));
+vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => true }) }));
+vi.mock('@/composables/useListSummary', () => ({ useListSummary: () => ({ summary: null, loading: false }) }));
+vi.mock('@/composables/useCreateAndReturn', () => ({ useCreateAndReturn: () => ({ goCreate: vi.fn() }) }));
 vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => state.get(...args),
   post: (...args: unknown[]) => state.post(...args),
@@ -21,6 +27,7 @@ vi.mock('@/api/request', () => ({
 }));
 
 import DefectsPage from '../list.vue';
+import InspectionsPage from '../../inspections/list.vue';
 
 const ok = (data: unknown) => ({ success: true, data });
 const source = {
@@ -35,6 +42,15 @@ function mountPage() {
   return mount(DefectsPage, { global: { plugins: [ElementPlus] } });
 }
 
+function mountInspectionsPage() {
+  return mount(InspectionsPage, { global: { plugins: [ElementPlus], stubs: {
+    CanvasAwareWrapper: { template: '<div><slot /></div>' },
+    CanvasDynamicFields: true,
+    TableFooter: true,
+    UpstreamMissingHint: true,
+  } } });
+}
+
 async function clickText(wrapper: VueWrapper, text: string) {
   const button = wrapper.findAll('button').find(item => item.text() === text);
   expect(button, text).toBeTruthy();
@@ -45,6 +61,7 @@ async function clickText(wrapper: VueWrapper, text: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   route.query = {};
+  authState.factoryId = 'F006';
   state.get.mockImplementation((url: string) => {
     if (url.endsWith('/quality-defects')) {
       return Promise.resolve(ok({ content: [], totalElements: 0 }));
@@ -68,14 +85,24 @@ beforeEach(() => {
 });
 
 describe('S3-11 source and assignee workflow', () => {
-  it('inspection page exposes a real source entry that routes the inspection id', () => {
-    const inspections = readFileSync(
-      resolve(process.cwd(), 'src/views/quality/inspections/list.vue'),
-      'utf-8',
-    );
-    expect(inspections).toContain('登记不良');
-    expect(inspections).toContain("path: '/quality/defects'");
-    expect(inspections).toContain('inspectionId: String(row.id)');
+  it('inspection page routes a PASS source into defect registration', async () => {
+    state.get.mockImplementation((url: string) => {
+      if (url.endsWith('/processing/quality/inspections')) {
+        return Promise.resolve(ok({
+          content: [{ id: 'pass-qc', result: 'PASS', batchNumber: 'B-F006-PASS' }],
+          totalElements: 1,
+        }));
+      }
+      return Promise.resolve(ok({ content: [], totalElements: 0 }));
+    });
+    const wrapper = mountInspectionsPage();
+    await flushPromises();
+    await clickText(wrapper, '登记不良');
+    expect(state.push).toHaveBeenCalledWith({
+      path: '/quality/defects',
+      query: { inspectionId: 'pass-qc' },
+    });
+    wrapper.unmount();
   });
 
   it('loads the real inspection source, saves, and refreshes the defect list', async () => {
@@ -111,7 +138,10 @@ describe('S3-11 source and assignee workflow', () => {
         }));
       }
       if (url.endsWith('/users/directory')) {
-        return Promise.resolve(ok([{ id: 7, fullName: '李质检', department: '质量部', isActive: true }]));
+        return Promise.resolve(ok([
+          { id: 7, fullName: '李质检', department: '质量部', isActive: true },
+          { id: 99, fullName: '未知状态人员', department: '质量部' },
+        ]));
       }
       return Promise.resolve(ok([]));
     });
@@ -157,5 +187,62 @@ describe('S3-11 source and assignee workflow', () => {
     });
     expect(state.get.mock.calls.filter(call => call[0] === '/F006/quality-defects')).toHaveLength(2);
     wrapper.unmount();
+  });
+
+  it('discards delayed source and directory responses after switching factories', async () => {
+    let resolveSourceList!: (value: unknown) => void;
+    let resolveSourceDetail!: (value: unknown) => void;
+    state.get.mockImplementation((url: string) => {
+      if (url.endsWith('/quality-defects')) {
+        return Promise.resolve(ok({ content: [], totalElements: 0 }));
+      }
+      if (url.endsWith('/processing/quality/inspections')) {
+        return new Promise(resolve => { resolveSourceList = resolve; });
+      }
+      if (url.endsWith('/processing/quality/inspections/inspection-f006')) {
+        return new Promise(resolve => { resolveSourceDetail = resolve; });
+      }
+      return Promise.resolve(ok([]));
+    });
+    route.query = { inspectionId: source.id };
+    const sourceWrapper = mountPage();
+    await flushPromises();
+    await clickText(sourceWrapper, '登记不良');
+    authState.factoryId = 'F007';
+    await flushPromises();
+    resolveSourceList(ok({ content: [source], totalElements: 1 }));
+    resolveSourceDetail(ok(source));
+    await flushPromises();
+    expect(state.post).not.toHaveBeenCalled();
+    sourceWrapper.unmount();
+
+    authState.factoryId = 'F006';
+    await flushPromises();
+    state.put.mockClear();
+    let resolveDirectory!: (value: unknown) => void;
+    state.get.mockImplementation((url: string) => {
+      if (url.endsWith('/quality-defects')) {
+        return Promise.resolve(ok({
+          content: [{
+            id: 'defect-1', status: 'OPEN', handlingAction: '返工', assignedTo: null,
+            qualityInspectionId: source.id, defectType: 'OTHER', quantity: 1,
+          }],
+          totalElements: 1,
+        }));
+      }
+      if (url.endsWith('/users/directory')) {
+        return new Promise(resolve => { resolveDirectory = resolve; });
+      }
+      return Promise.resolve(ok([]));
+    });
+    const directoryWrapper = mountPage();
+    await flushPromises();
+    await clickText(directoryWrapper, '分派');
+    authState.factoryId = 'F007';
+    await flushPromises();
+    resolveDirectory(ok([{ id: 7, fullName: '李质检', isActive: true }]));
+    await flushPromises();
+    expect(state.put).not.toHaveBeenCalled();
+    directoryWrapper.unmount();
   });
 });
