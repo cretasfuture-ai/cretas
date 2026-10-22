@@ -7,6 +7,7 @@
 ## 在飞任务
 
 
+
 - `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 7ceacffafd5d34de536dd19862cf5eb3232a1d58 — PR1075/84a实际21文件交付HOLD；未来writeScope=[]；见archive/2026-10-21-claude-s6-actual-intake.md。
 
 
@@ -101,6 +102,7 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
 
 - `ERP-S6-B2-CLAUDE-20261021`：实际21文件只接收review/HOLD；writeScope=[]，Entity/V72/JPA及共享DataScope/runtime policy分别列档，不放开采购/供应商/Gateway目录。
 

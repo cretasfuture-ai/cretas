@@ -45,3 +45,28 @@ Architecture completion within same11: both fixed server adapters use the existi
 PR1090/394ef fast run39691053284 retained 4485 cases/2 assertion failures/0errors/74skips. New execute/4 Long version caused the existing actor-scanner ambiguity rule to hide its unchanged SmartBI frozen station. Rename only the new service method to executeGrant and synchronize controller/caller/lifecycle calls within the same scope. No scanner, frozen baseline, permission or business assertion edits. Prior official artifact is staged history only until a new matching backend tree is built. Add unchanged HardcodedActorIdContractTest to the release selector and validate the final delta; existing Web tree and unchanged security controls reuse exact-content evidence.
 
 Final2cf CI39695060665 and local artifact attempt failed before tests: three Demo fixture references were omitted from the same method rename. Preserve compile errors as setup failure/zero executed cases. Synchronize only those three test calls; all assertions/guards remain unchanged. Target execution now explicitly includes Demo + caller + architecture; unchanged product/lifecycle/caller hashes allow prior realPG evidence reuse, while final coherent CI proves all tests compile. No deployment from either failed attempt.
+
+## Actual final-Full audit inventory completion scope
+
+Owner remains 01a15272-374d-72c0-bb20-cdfa0bd823f1; Base01434fc2393063ed0d10e455c0e0169edd1f3b80, beforeHead e7ea78ce348170e6f57332bd6d16f234cd776628. Full39696013621 normalized16699=16558PASS/2FAIL/139originalSKIP/0ERROR; failures are the two source-inventory drift assertions. All raw logs/inventory retained; no known-red expansion or deployment. D1 audit is not runtime authorization. Exact14 forward lock (same Writer):
+
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/purchase/PurchaseGrantExecuteTool.java`
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/service/intent/PurchaseGrantCallerService.java`
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/controller/PurchaseGrantCallerController.java`
+- `backend/java/cretas-api/src/test/java/com/cretas/aims/service/intent/PurchaseGrantCallerContractTest.java`
+- `backend/java/cretas-api/src/test/java/com/cretas/aims/service/intent/DeferredPurchaseGrantPostgresLifecycleContractTest.java`
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/config/DemoReadOnlyInterceptor.java`
+- `backend/java/cretas-api/src/test/java/com/cretas/aims/config/DeferredPurchaseGrantDemoBoundaryContractTest.java`
+- `web-admin/src/api/controlledPurchase.ts`
+- `web-admin/src/views/procurement/ai-purchase/index.vue`
+- `web-admin/src/views/procurement/ai-purchase/__tests__/DeferredPurchaseGrant.spec.ts`
+- `backend/java/cretas-api/src/main/java/com/cretas/aims/service/skill/impl/SkillExecutorImpl.java`
+- `backend/java/cretas-api/src/main/resources/ai/tool/gateway/tool-descriptors.yaml`
+- `backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/ToolDescriptorInventoryDriftTest.java`
+- `backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/ToolDescriptorCatalogTest.java`
+
+Acceptance: missing-entry actual RED, exact EXPLICIT/WRITE/HIGH/currentprocurement-permission/REVIEW_REQUIRED audit row and precise counts, legacy569 and approved/runtime sets unchanged; strict field comparison and catalog tests, effective negative mutation and restored green; actual Tool/Skill target, final frozen checks and matching artifact. No Gateway/runtime policy/scheduler/Entity/Repository/Claude changes. Metadata YAML/two existing tests are outside Claude B1 exact8 and B2/B3 forward scope; no writer transfer.
+
+Target: `ToolDescriptorInventoryDriftTest,ToolDescriptorCatalogTest,RuntimeToolDescriptorRegistryTest,RuntimeToolPolicyLoaderTest,ApprovedToolSourceMetadataTest,PurchaseGrantCallerContractTest,DeferredPurchaseGrantDemoBoundaryContractTest,ToolExecutionArchitectureTest,HardcodedActorIdContractTest`.
+
+Final audit delta: missing-entry1 effective RED; related54 GREEN; actual classpath HIGH→LOW mutation1 RED and restored54 GREEN. Current class d64c6cc0 bound to fresh PostgreSQL13.23/39PASS and17.10/25PASS, no fail/error/skip; both owned containers/volumes removed, ports closed. Exact14 source/class proof and bounded approval: private final-target-binding-v4-descriptor.json. Source/test frozen; original11 review reused for unchanged hunks, exact4 audit delta independently reviewed. Legacy569 and runtime approved9 unchanged, no new runtime policy. This final commit archives the own in-flight entry and lock; release takes effect only on reviewed merge, same Source reservation retained pending checks. Prior e7 Full2FAIL/139SKIP remains historical; final frozen Full, matching official artifact, merge/release/originalQA are pending. Whole07 remains UNTESTED.

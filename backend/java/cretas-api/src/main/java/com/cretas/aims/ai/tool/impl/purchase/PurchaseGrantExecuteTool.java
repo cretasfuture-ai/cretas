@@ -27,7 +27,7 @@ public class PurchaseGrantExecuteTool extends AbstractBusinessTool {
     }
     private final ObjectProvider<PurchaseGrantCallerService> callers;
 
-    @Override public String getToolName() { return NAME; }
+    @Override public String getToolName() { return "purchase_grant_execute"; }
     @Override public String getDescription() { return "执行当前登录采购用户已人工确认的有效采购授权；仅创建采购草稿，原采购及财务审批继续生效。"; }
     @Override public Map<String, Object> getParametersSchema() {
         return Map.of("type", "object", "additionalProperties", false,
