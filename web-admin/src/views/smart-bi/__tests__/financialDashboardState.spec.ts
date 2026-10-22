@@ -232,3 +232,20 @@ describe('createQueryHistory (刷新失败时把筛选/期间退回到页面上�
     expect(h.lastApplied()!.slicers.月份).toEqual([]);
   });
 });
+
+describe('看板组件接上了失败回滚 (源码断言)', () => {
+  const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+  const start = src.indexOf('async function generate(');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+
+  it('成功时记下这次的筛选和期间', () => {
+    expect(body).toContain('queryHistory.commit({ slicers: slicerFilters.value, period: periodSelection.value })');
+  });
+
+  it('接口返回失败和请求抛错两条路都退回', () => {
+    const elseBranch = body.slice(body.indexOf('} else {'), body.indexOf('} catch (err) {'));
+    const catchBranch = body.slice(body.indexOf('} catch (err) {'), body.indexOf('} finally {'));
+    expect(elseBranch).toContain('restoreLastApplied()');
+    expect(catchBranch).toContain('restoreLastApplied()');
+  });
+});

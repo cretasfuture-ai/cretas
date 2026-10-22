@@ -5,7 +5,7 @@
  */
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import FinanceAnalysis from './FinanceAnalysis.vue';
@@ -19,11 +19,12 @@ import {
   buildChartNav,
   periodRequestLabel,
   dashboardRenderKey,
+  createQueryHistory,
 } from './financialDashboardState';
 import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
 import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
-import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, Delete, Calendar } from '@element-plus/icons-vue';
+import { DataAnalysis, Download, ArrowDown, Delete, Calendar, MoreFilled } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
 import { marked } from 'marked';
@@ -81,6 +82,15 @@ const autoRefreshInterval = ref<number>(0); // 0=off, 60000=1m, 300000=5m, 90000
 
 // Fix 72: Global slicer filters (Power BI / Looker style)
 const slicerFilters = ref<Record<string, string[]>>({});
+// 月份芯片 / 期间是先改再请求的: 记住页面上正显示的那一次, 请求失败就退回,
+// 否则芯片显示「3月」而页面还是全年的数
+const queryHistory = createQueryHistory<{ slicers: Record<string, string[]>; period: PeriodSelection }>();
+function restoreLastApplied() {
+  const applied = queryHistory.lastApplied();
+  if (!applied) return;
+  slicerFilters.value = applied.slicers;
+  periodSelection.value = applied.period;
+}
 const availableDimensions = ref<{ name: string; values: string[] }[]>([]);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const useSvgRenderer = ref(false); // D4: SVG renderer toggle
@@ -177,6 +187,8 @@ const periodSelection = ref<PeriodSelection>({
 const isGenerating = ref(false);
 // 期间选择收进一个按钮; 弹层受控 (内部下拉框挂在 body 上, 点它们不能把弹层关掉)
 const periodPopoverOpen = ref(false);
+// 条件格式 (收进「更多」后用对话框打开)
+const conditionalFormatOpen = ref(false);
 const dashboardResponse = ref<DashboardResponse | null>(null);
 
 // Per-chart AI analysis state
@@ -453,7 +465,7 @@ const chartTypes = [
 ];
 
 // 图表切换条: 只列这份数据能出图的图表; 出不了的收进「还缺数据」并带原因
-const chartNav = computed(() => buildChartNav(chartTypes, getChart));
+const chartNav = computed(() => buildChartNav(chartTypes, getChart, dashboardResponse.value?.unavailableCharts ?? []));
 
 // 当前选中的图这份数据出不了时, 自动切到第一张能出图的 (避免一打开就是空态)
 watch(chartNav, (nav) => {
@@ -587,6 +599,7 @@ async function generate(useDemo?: boolean) {
     if (isComponentUnmounted) return;
     if (resp.success) {
       dashboardResponse.value = resp;
+      queryHistory.commit({ slicers: slicerFilters.value, period: periodSelection.value });
       // Fix 72: Extract available filter dimensions from response
       if (resp.availableDimensions) {
         availableDimensions.value = resp.availableDimensions;
@@ -607,14 +620,15 @@ async function generate(useDemo?: boolean) {
       }
       // Reveal all chart cards with staggered fade-in
       nextTick(() => revealAllCharts());
-      ElMessage.success(`成功生成 ${resp.successCount} 个图表`);
       // 只给当前查看的图自动生成 AI 分析 (其余图点「AI分析」再生成), 避免一次触发几十个请求
       if (viewMode.value === 'tab') nextTick(() => requestAnalysis(activeTab.value));
     } else {
+      restoreLastApplied();
       ElMessage({ message: resp.error || resp.message || '图表生成失败，请检查数据源', type: 'error', duration: 0, showClose: true });
     }
   } catch (err) {
     console.error('generate failed:', err);
+    restoreLastApplied();
     // 后端给的原因 (如「未找到数据源 / 无权访问其他工厂的数据」) 原样显示, 错误提示不自动消失
     const serverMessage = (err as { serverMessage?: string } | null)?.serverMessage;
     ElMessage({ message: serverMessage || '请求失败，请稍后重试', type: 'error', duration: 0, showClose: true });
@@ -1163,6 +1177,43 @@ watch(activeTab, async (newTab) => {
 });
 
 // ---- B3: Dark mode toggle ----
+const REFRESH_OPTIONS = [
+  { value: 0, label: '关' },
+  { value: 60000, label: '每 1 分钟' },
+  { value: 300000, label: '每 5 分钟' },
+  { value: 900000, label: '每 15 分钟' },
+];
+
+async function changeDataSource() {
+  try {
+    const { value } = await ElMessageBox.prompt('输入上传记录的编号（在「数据上传」页可以看到）', '更换数据源', {
+      inputValue: uploadIdInput.value || (uploadId.value ? String(uploadId.value) : ''),
+      inputPattern: /^\d+$/,
+      inputErrorMessage: '编号是数字',
+      confirmButtonText: '生成看板',
+      cancelButtonText: '取消',
+    });
+    uploadIdInput.value = value;
+    uploadId.value = parseInt(value, 10);
+    isInDemoMode.value = false;
+    generate(false);
+  } catch {
+    // 取消
+  }
+}
+
+function handleMoreCommand(command: string) {
+  if (command === 'view:tab' || command === 'view:grid') viewMode.value = command === 'view:tab' ? 'tab' : 'grid';
+  else if (command === 'dark') toggleDarkMode();
+  else if (command.startsWith('refresh:')) autoRefreshInterval.value = Number(command.slice('refresh:'.length));
+  else if (command === 'split') smallMultiplesVisible.value = !smallMultiplesVisible.value;
+  else if (command === 'format') conditionalFormatOpen.value = true;
+  else if (command === 'bookmark') showBookmarkPanel.value = true;
+  else if (command === 'present') isPresentationVisible.value = true;
+  else if (command === 'demo') generate(true);
+  else if (command === 'source') changeDataSource();
+}
+
 function toggleDarkMode() {
   isDarkMode.value = !isDarkMode.value;
   const theme = isDarkMode.value ? 'cretas-dark' : undefined;
@@ -1541,9 +1592,12 @@ onBeforeUnmount(() => {
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar-inner">
         <div class="toolbar-left">
+          <span v-if="uploadId && !isInDemoMode" class="data-source-tag" data-testid="data-source-tag">数据源 #{{ uploadId }}</span>
+          <span v-else-if="isInDemoMode" class="data-source-tag">演示数据</span>
           <el-input
+            v-else
             v-model="uploadIdInput"
-            placeholder="数据源ID (可选)"
+            placeholder="上传记录编号"
             style="width: 140px"
             size="small"
             clearable
@@ -1589,71 +1643,8 @@ onBeforeUnmount(() => {
             <el-icon v-if="!isGenerating"><DataAnalysis /></el-icon>
             {{ isGenerating ? '生成中...' : '生成看板' }}
           </el-button>
-          <el-button
-            size="small"
-            :loading="isGenerating"
-            style="margin-left: 4px"
-            @click="generate(true)"
-          >
-            演示数据
-          </el-button>
         </div>
         <div class="toolbar-right">
-          <el-segmented
-            v-model="viewMode"
-            :options="[{ label: 'Tab', value: 'tab' }, { label: 'Grid', value: 'grid' }]"
-            size="small"
-          />
-          <el-button size="small" @click="toggleDarkMode" :title="isDarkMode ? '切换亮色' : '切换暗色'">
- {{ isDarkMode ? '️' : '' }}
-          </el-button>
-          <el-select
-            v-model="autoRefreshInterval"
-            size="small"
-            placeholder="自动刷新"
-            style="width: 100px"
-            :disabled="!dashboardResponse"
-          >
-            <el-option :value="0" label="刷新: 关" />
-            <el-option :value="60000" label="1分钟" />
-            <el-option :value="300000" label="5分钟" />
-            <el-option :value="900000" label="15分钟" />
-          </el-select>
-          <el-switch
-            v-model="smallMultiplesVisible"
-            size="small"
-            active-text="维度拆分"
-            style="margin-right: 4px"
-          />
-          <el-popover trigger="click" width="520" placement="bottom-end">
-            <template #reference>
-              <el-button size="small" :disabled="!dashboardResponse">
-                <el-icon><SetUp /></el-icon>
-                条件格式
-              </el-button>
-            </template>
-            <ConditionalFormatPanel
-              table-id="financial-dashboard"
-              :available-fields="['value', 'budget', 'actual', 'variance']"
-              @change="onFormattingRulesChange"
-            />
-          </el-popover>
-          <el-button
-            size="small"
-            :disabled="!dashboardResponse"
-            @click="showBookmarkPanel = true"
-          >
-            <el-icon><Collection /></el-icon>
-            书签
-          </el-button>
-          <el-button
-            size="small"
-            :disabled="!dashboardResponse"
-            @click="isPresentationVisible = true"
-          >
-            <el-icon><VideoPlay /></el-icon>
-            演示模式
-          </el-button>
           <el-dropdown :disabled="!dashboardResponse" trigger="click" @command="handleExportCommand">
             <el-button size="small" :disabled="!dashboardResponse" :loading="isExportingPPT || isExportingPDF || isExportingExcel">
               <el-icon><Download /></el-icon>
@@ -1673,9 +1664,44 @@ onBeforeUnmount(() => {
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <!-- 不常用的设置都收在这里: 看板默认只露出期间、生成、导出 -->
+          <el-dropdown trigger="click" :hide-on-click="true" @command="handleMoreCommand">
+            <el-button size="small" data-testid="toolbar-more">
+              <el-icon><MoreFilled /></el-icon>
+              <span>更多</span>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu class="toolbar-more-menu">
+                <el-dropdown-item command="source">更换数据源…</el-dropdown-item>
+                <el-dropdown-item command="demo">用演示数据看看</el-dropdown-item>
+                <el-dropdown-item divided command="view:tab">{{ viewMode === 'tab' ? '✓ ' : '' }}一次看一张图</el-dropdown-item>
+                <el-dropdown-item command="view:grid">{{ viewMode === 'grid' ? '✓ ' : '' }}所有图平铺</el-dropdown-item>
+                <el-dropdown-item command="split" :disabled="!dashboardResponse">{{ smallMultiplesVisible ? '✓ ' : '' }}按维度拆成小图</el-dropdown-item>
+                <el-dropdown-item command="format" :disabled="!dashboardResponse">条件格式…</el-dropdown-item>
+                <el-dropdown-item divided command="bookmark" :disabled="!dashboardResponse">书签</el-dropdown-item>
+                <el-dropdown-item command="present" :disabled="!dashboardResponse">演示模式</el-dropdown-item>
+                <el-dropdown-item command="dark">{{ isDarkMode ? '切换到亮色' : '切换到暗色' }}</el-dropdown-item>
+                <el-dropdown-item
+                  v-for="(opt, i) in REFRESH_OPTIONS"
+                  :key="opt.value"
+                  :divided="i === 0"
+                  :command="`refresh:${opt.value}`"
+                  :disabled="!dashboardResponse"
+                >{{ autoRefreshInterval === opt.value ? '✓ ' : '' }}自动刷新：{{ opt.label }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </div>
     </el-card>
+
+    <el-dialog v-model="conditionalFormatOpen" title="条件格式" width="560px" append-to-body>
+      <ConditionalFormatPanel
+        table-id="financial-dashboard"
+        :available-fields="['value', 'budget', 'actual', 'variance']"
+        @change="onFormattingRulesChange"
+      />
+    </el-dialog>
 
     <!-- 页首一句话结论: 后端按规则从同一指标库算出, 不经过 AI -->
     <p
@@ -2051,14 +2077,25 @@ onBeforeUnmount(() => {
                 还缺数据（{{ chartNav.missing.length }}）
               </button>
             </template>
-            <div class="missing-charts">
-              <p class="missing-charts__hint">下面这些图这份数据出不了，补上对应的列后重新上传即可：</p>
-              <ul>
-                <li v-for="m in chartNav.missing" :key="m.key">
-                  <button type="button" class="missing-charts__name" @click="activeTab = m.key">{{ m.label }}</button>
-                  <span class="missing-charts__reason">{{ m.reason }}</span>
-                </li>
-              </ul>
+            <div class="missing-charts" data-testid="missing-charts">
+              <template v-if="chartNav.missingByKind.column.length">
+                <p class="missing-charts__hint">在这张表上补一列就能出：</p>
+                <ul>
+                  <li v-for="m in chartNav.missingByKind.column" :key="m.key">
+                    <button type="button" class="missing-charts__name" @click="activeTab = m.key">{{ m.label }}</button>
+                    <span class="missing-charts__reason">{{ m.reason }}</span>
+                  </li>
+                </ul>
+              </template>
+              <template v-if="chartNav.missingByKind.statement.length">
+                <p class="missing-charts__hint">需要另一张报表：</p>
+                <ul>
+                  <li v-for="m in chartNav.missingByKind.statement" :key="m.key">
+                    <button type="button" class="missing-charts__name" @click="activeTab = m.key">{{ m.label }}</button>
+                    <span class="missing-charts__reason">{{ m.reason }}</span>
+                  </li>
+                </ul>
+              </template>
             </div>
           </el-popover>
           <button
@@ -2703,6 +2740,18 @@ onBeforeUnmount(() => {
 }
 
 /* Interaction tips */
+.data-source-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 4px;
+  color: var(--el-text-color-regular, #606266);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .dashboard-headline {
   display: flex;
   align-items: baseline;
