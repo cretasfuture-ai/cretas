@@ -838,7 +838,7 @@ public class TransferServiceImpl implements TransferService {
      * Apr 7 W1 D2; now all state transitions enforce factoryId via {@link #getTransferById}.
      */
     private InternalTransfer loadForStateChange(String factoryId, String transferId) {
-        return getTransferById(factoryId, transferId);
+        return entityManager != null ? loadTransferLocked(factoryId, transferId) : getTransferById(factoryId, transferId);
     }
 
     /** 调拨出库的消耗流水来源标识。列宽 varchar(20), 这里 12 字符。 */
@@ -1306,8 +1306,7 @@ public class TransferServiceImpl implements TransferService {
     public InternalTransfer confirmTransfer(String factoryId, String transferId, Long userId) {
         // Serialize the legacy atomic path with explicit staged dispatch. Otherwise
         // both callers can observe APPROVED and deduct the same order twice.
-        InternalTransfer transfer = entityManager != null
-                ? loadTransferLocked(factoryId, transferId) : loadForStateChange(factoryId, transferId);
+        InternalTransfer transfer = loadForStateChange(factoryId, transferId);
         // 只有调入方可以确认 (因为要增加调入方库存)
         assertTargetFactory(factoryId, transfer, "确认");
         boolean intraFactory = isIntraFactory(transfer);
@@ -1654,7 +1653,14 @@ public class TransferServiceImpl implements TransferService {
                         factoryId, productionPlanId,
                         List.of(TransferStatus.DRAFT, TransferStatus.REQUESTED, TransferStatus.APPROVED));
         int closed = 0;
-        for (InternalTransfer transfer : transfers) {
+        for (InternalTransfer candidate : transfers) {
+            InternalTransfer transfer = loadForStateChange(factoryId, candidate.getId());
+            if (!factoryId.equals(transfer.getSourceFactoryId())
+                    || !productionPlanId.equals(transfer.getProductionPlanId())
+                    || !List.of(TransferStatus.DRAFT, TransferStatus.REQUESTED, TransferStatus.APPROVED)
+                    .contains(transfer.getStatus())) {
+                continue;
+            }
             if (transfer.getStatus() == TransferStatus.REQUESTED && workflowEngine != null) {
                 workflowEngine.getLatestInstance(factoryId, "INVENTORY_TRANSFER", transfer.getId())
                         .filter(instance -> instance.getStatus()
@@ -2072,7 +2078,7 @@ public class TransferServiceImpl implements TransferService {
     @Override
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getAvailableBatchesForItem(String factoryId, String transferId, Long itemId) {
-        InternalTransfer transfer = loadForStateChange(factoryId, transferId);
+        InternalTransfer transfer = getTransferById(factoryId, transferId);
         assertSourceFactory(factoryId, transfer, "查询可用批次");
 
         InternalTransferItem item = transfer.getItems().stream()
