@@ -1304,7 +1304,10 @@ public class TransferServiceImpl implements TransferService {
     @Override
     @Transactional
     public InternalTransfer confirmTransfer(String factoryId, String transferId, Long userId) {
-        InternalTransfer transfer = loadForStateChange(factoryId, transferId);
+        // Serialize the legacy atomic path with explicit staged dispatch. Otherwise
+        // both callers can observe APPROVED and deduct the same order twice.
+        InternalTransfer transfer = entityManager != null
+                ? loadTransferLocked(factoryId, transferId) : loadForStateChange(factoryId, transferId);
         // 只有调入方可以确认 (因为要增加调入方库存)
         assertTargetFactory(factoryId, transfer, "确认");
         boolean intraFactory = isIntraFactory(transfer);
@@ -1373,49 +1376,74 @@ public class TransferServiceImpl implements TransferService {
                     .withHint("跨厂调拨请使用现有发货/签收流程");
         }
         assertStatus(transfer, TransferStatus.APPROVED, "仓内发运");
-        if (transfer.getSourceWarehouseId() == null || transfer.getTargetWarehouseId() == null
-                || transfer.getSourceWarehouseId().equals(transfer.getTargetWarehouseId())) {
-            throw new BusinessException(409, "仓内发运需要两个有效且不同的仓库");
-        }
+        assertWarehouseDeliveryWarehouses(factoryId, transfer);
         if (transfer.getItems() == null || transfer.getItems().isEmpty()) {
             throw new BusinessException(409, "没有可发运的调拨明细");
         }
-        Map<InternalTransferItem, MaterialBatch> sourceBatches = new LinkedHashMap<>();
+        if (!warehouseMovementRepository.findTransferHistoryIncludingDeleted(transferId).isEmpty()) {
+            throw new BusinessException(409, "该调拨已有仓内交付记录，不能重复发运");
+        }
+        Map<String, MaterialBatch> sourceBatches = new TreeMap<>();
+        Map<String, BigDecimal> requiredByBatch = new HashMap<>();
         for (InternalTransferItem item : transfer.getItems()) {
             if (item.getItemType() != TransferItemType.RAW_MATERIAL || item.getSourceBatchId() == null
-                    || item.getSourceBatchId().isBlank()) {
+                    || item.getSourceBatchId().isBlank() || item.getQuantity() == null
+                    || item.getQuantity().signum() <= 0 || item.getQuantity().stripTrailingZeros().scale() > 4
+                    || !hasText(item.getUnit())) {
                 throw new BusinessException(409, "该调拨行不支持仓内分段发运：必须是已选批次的原料公司物权行")
                         .withHint("请使用现有原子确认或完善来源批次");
             }
-            MaterialBatch batch = materialBatchRepository
-                    .findByIdAndFactoryIdForUpdate(item.getSourceBatchId(), factoryId)
+            requiredByBatch.merge(item.getSourceBatchId(), item.getQuantity(), BigDecimal::add);
+        }
+        // A stable order also prevents two different transfers locking shared
+        // batches in opposite orders. Validate every row before the first write.
+        for (String batchId : new TreeSet<>(requiredByBatch.keySet())) {
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
                     .orElseThrow(() -> new BusinessException(409, "来源批次不存在或不属于源仓库"));
+            sourceBatches.put(batchId, batch);
+        }
+        Map<String, BigDecimal> unsettled = loadUnsettledForBatches(factoryId, new ArrayList<>(sourceBatches.values()));
+        for (InternalTransferItem item : transfer.getItems()) {
+            MaterialBatch batch = sourceBatches.get(item.getSourceBatchId());
             if (!transfer.getSourceWarehouseId().equals(batch.getWarehouseId())
                     || !Objects.equals(item.getMaterialTypeId(), batch.getMaterialTypeId())
                     || batch.getOwnership() != InventoryOwnership.COMPANY_OWNED
-                    || batch.getStatus() != MaterialBatchStatus.AVAILABLE) {
+                    || batch.getStatus() != MaterialBatchStatus.AVAILABLE || batch.getDeletedAt() != null
+                    || !transferUnitsMatch(factoryId, item.getUnit(), batch.getQuantityUnit())
+                    || !transferUnitsMatch(factoryId, transferNativeInventoryUnit(factoryId, item), batch.getQuantityUnit())) {
                 throw new BusinessException(409, "来源批次不属于指定源仓库或不是公司物权原料");
             }
-            BigDecimal available = batch.getReceiptQuantity()
+            BigDecimal available = Optional.ofNullable(batch.getReceiptQuantity()).orElse(BigDecimal.ZERO)
                     .subtract(Optional.ofNullable(batch.getUsedQuantity()).orElse(BigDecimal.ZERO))
                     .subtract(Optional.ofNullable(batch.getReservedQuantity()).orElse(BigDecimal.ZERO));
-            if (available.compareTo(item.getQuantity()) < 0) {
+            if (physicalShelf(available, unsettled.get(batch.getId())).compareTo(requiredByBatch.get(batch.getId())) < 0) {
                 throw new BusinessException(409, "来源批次可用量不足");
             }
-            sourceBatches.put(item, batch);
         }
-        for (Map.Entry<InternalTransferItem, MaterialBatch> entry : sourceBatches.entrySet()) {
-            InternalTransferItem item = entry.getKey(); MaterialBatch batch = entry.getValue();
-            batch.setUsedQuantity(batch.getUsedQuantity().add(item.getQuantity()));
-            materialBatchRepository.save(batch);
+        String operationId = UUID.randomUUID().toString();
+        for (InternalTransferItem item : transfer.getItems()) {
+            MaterialBatch batch = sourceBatches.get(item.getSourceBatchId());
+            batch.setUsedQuantity(Optional.ofNullable(batch.getUsedQuantity()).orElse(BigDecimal.ZERO).add(item.getQuantity()));
+            if (batch.getReceiptQuantity().subtract(batch.getUsedQuantity()).signum() <= 0) {
+                batch.setStatus(MaterialBatchStatus.DEPLETED);
+            }
+            materialBatchRepository.saveAndFlush(batch);
+            recordTransferConsumption(factoryId, batch, item.getQuantity(), item, userId, transfer.getTransferNumber());
+            if (item.getUnitPrice() == null && batch.getUnitPrice() != null) {
+                inheritSourceUnitPrice(item, item.getQuantity(), item.getQuantity().multiply(batch.getUnitPrice()));
+            }
+            if (inventoryLowStockEventPublisher != null) {
+                inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "TRANSFER_OUT");
+            }
             WarehouseTransferMovement movement = new WarehouseTransferMovement();
             movement.setFactoryId(factoryId); movement.setTransferId(transferId); movement.setTransferItemId(item.getId());
-            movement.setKind(WarehouseTransferMovement.Kind.DISPATCH); movement.setOperationId(UUID.randomUUID().toString());
+            movement.setKind(WarehouseTransferMovement.Kind.DISPATCH); movement.setOperationId(operationId);
             movement.setRequestKey("dispatch:" + transferId + ":" + item.getId());
             movement.setSourceBatchId(item.getSourceBatchId()); movement.setQuantity(item.getQuantity()); movement.setUnit(item.getUnit());
             movement.setActorId(userId); warehouseMovementRepository.save(movement);
             item.setReceivedQuantity(BigDecimal.ZERO);
         }
+        transferItemRepository.saveAll(transfer.getItems());
         transfer.setStatus(TransferStatus.SHIPPED);
         transfer.setShippedAt(LocalDateTime.now());
         return transferRepository.save(transfer);
@@ -1439,6 +1467,8 @@ public class TransferServiceImpl implements TransferService {
         assertTargetFactory(factoryId, transfer, "仓内收货");
         if (!isIntraFactory(transfer)) throw new BusinessException(409, "仓内分段收货仅适用于同厂仓间调拨");
         assertStatus(transfer, TransferStatus.SHIPPED, "仓内收货");
+        assertWarehouseDeliveryWarehouses(factoryId, transfer);
+        List<WarehouseTransferMovement> history = warehouseMovementRepository.findTransferHistoryIncludingDeleted(transferId);
         String key = request.getRequestKey().toString();
         if (!warehouseMovementRepository.findRequestHistoryIncludingDeleted(key, factoryId, transferId).isEmpty()) {
             throw new BusinessException(409, "requestKey已处理，请查询仓内交付状态");
@@ -1452,9 +1482,24 @@ public class TransferServiceImpl implements TransferService {
         BigDecimal total = BigDecimal.ZERO;
         Map<InternalTransferItem, BigDecimal> accepted = new LinkedHashMap<>();
         for (InternalTransferItem item : transfer.getItems()) {
+            List<WarehouseTransferMovement> dispatch = history.stream().filter(m ->
+                    m.getKind() == WarehouseTransferMovement.Kind.DISPATCH
+                    && Objects.equals(m.getTransferItemId(), item.getId())).toList();
+            BigDecimal shipped = dispatch.stream().map(WarehouseTransferMovement::getQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal recordedReceived = history.stream().filter(m -> m.getKind() == WarehouseTransferMovement.Kind.RECEIPT
+                    && Objects.equals(m.getTransferItemId(), item.getId())).map(WarehouseTransferMovement::getQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (dispatch.size() != 1 || item.getItemType() != TransferItemType.RAW_MATERIAL
+                    || shipped.compareTo(item.getQuantity()) != 0
+                    || !Objects.equals(dispatch.get(0).getSourceBatchId(), item.getSourceBatchId())
+                    || !Objects.equals(dispatch.get(0).getUnit(), item.getUnit())
+                    || recordedReceived.compareTo(Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO)) != 0) {
+                throw new BusinessException(409, "调拨明细与实际发运/收货记录不一致，不能登记收货");
+            }
             BigDecimal qty = quantities.getOrDefault(item.getId(), BigDecimal.ZERO);
             BigDecimal received = Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO);
-            BigDecimal pending = item.getQuantity().subtract(received);
+            BigDecimal pending = shipped.subtract(received);
             if (qty.compareTo(pending) > 0) throw new BusinessException(409, "收货数量超过该行待收量");
             if (qty.signum() > 0) { accepted.put(item, qty); total = total.add(qty); }
         }
@@ -1463,12 +1508,22 @@ public class TransferServiceImpl implements TransferService {
         for (Map.Entry<InternalTransferItem, BigDecimal> entry : accepted.entrySet()) {
             InternalTransferItem item = entry.getKey(); BigDecimal qty = entry.getValue();
             BigDecimal previousReceived = Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO);
+            MaterialBatch source = materialBatchRepository.findByIdAndFactoryId(item.getSourceBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(409, "实际发运的来源批次已不可查询"));
+            if (source.getOwnership() != InventoryOwnership.COMPANY_OWNED) {
+                throw new BusinessException(409, "实际发运的来源批次不是公司物权");
+            }
+            var allocations = List.of(new TransferSourceAllocation(source.getId(), qty, item.getUnit(), source.getSupplierId()));
             // createTargetInventory consumes receivedQuantity as the quantity for this
             // batch. Keep the persisted cumulative value separate so a 0.04 + 0.06
             // receipt creates 0.04 and 0.06 target batches, never 0.04 and 0.10.
             item.setReceivedQuantity(qty);
             createTargetInventory(transfer.getTargetFactoryId(), transfer.getTargetWarehouseId(), item, userId,
-                    Collections.emptyList(), UUID.randomUUID().toString().substring(0, 8));
+                    allocations, UUID.randomUUID().toString());
+            if (lineageEdgeRecorder != null) {
+                lineageEdgeRecorder.recordMaterialTransfer(factoryId, source.getId(), item.getTargetBatchId(), qty,
+                        item.getUnit(), userId, transferId + ":" + item.getId() + ":" + key, null);
+            }
             item.setReceivedQuantity(previousReceived.add(qty));
             WarehouseTransferMovement movement = new WarehouseTransferMovement();
             movement.setFactoryId(factoryId); movement.setTransferId(transferId); movement.setTransferItemId(item.getId());
@@ -1491,13 +1546,41 @@ public class TransferServiceImpl implements TransferService {
     }
 
     private InternalTransfer loadWarehouseLocked(String factoryId, String transferId) {
+        InternalTransfer transfer = loadTransferLocked(factoryId, transferId);
+        if (!isIntraFactory(transfer)) {
+            throw new BusinessException(409, "仓内分段交付仅适用于同厂仓间调拨");
+        }
+        return transfer;
+    }
+
+    private InternalTransfer loadTransferLocked(String factoryId, String transferId) {
         if (entityManager == null) {
             throw new IllegalStateException("warehouse delivery requires an EntityManager for the scoped pessimistic lock");
         }
-        return entityManager.createQuery("select distinct t from InternalTransfer t left join fetch t.items "
-                        + "where t.id=:id and t.sourceFactoryId=:factoryId and t.sourceFactoryId=t.targetFactoryId", InternalTransfer.class)
-                .setParameter("id", transferId).setParameter("factoryId", factoryId).setLockMode(LockModeType.PESSIMISTIC_WRITE)
-                .getResultStream().findFirst().orElseThrow(() -> new ResourceNotFoundException("调拨单不存在或不属于当前工厂"));
+        // PostgreSQL cannot FOR UPDATE a DISTINCT outer-joined collection.
+        // Lock only the scoped parent row, then discard any pre-lock snapshot.
+        var locked = entityManager.createNativeQuery("select id from internal_transfers where id=:id "
+                        + "and (source_factory_id=:factoryId or target_factory_id=:factoryId) "
+                        + "and deleted_at is null for update")
+                .setParameter("id", transferId).setParameter("factoryId", factoryId).getResultList();
+        if (locked.isEmpty()) throw new ResourceNotFoundException("调拨单不存在或不属于当前工厂");
+        entityManager.flush();
+        entityManager.clear();
+        InternalTransfer transfer = getTransferById(factoryId, transferId);
+        transfer.getItems().size();
+        return transfer;
+    }
+
+    private void assertWarehouseDeliveryWarehouses(String factoryId, InternalTransfer transfer) {
+        if (!hasText(transfer.getSourceWarehouseId()) || !hasText(transfer.getTargetWarehouseId())
+                || transfer.getSourceWarehouseId().equals(transfer.getTargetWarehouseId())) {
+            throw new BusinessException(409, "仓内交付需要两个有效且不同的仓库");
+        }
+        var live = entityManager.createNativeQuery("select id from factory_warehouses where factory_id=:factoryId "
+                        + "and id in (:source,:target) and deleted_at is null and is_active=true order by id for share")
+                .setParameter("factoryId", factoryId).setParameter("source", transfer.getSourceWarehouseId())
+                .setParameter("target", transfer.getTargetWarehouseId()).getResultList();
+        if (live.size() != 2) throw new BusinessException(409, "调出仓或调入仓不存在、已停用或不属于当前工厂");
     }
 
     private WarehouseTransferDeliveryDTO toWarehouseDelivery(InternalTransfer transfer) {
