@@ -276,6 +276,34 @@ class TestHeadline:
         assert h is None or '万' not in h['text']
 
 
+class TestSlicerScope:
+    """线上验收 (2026-10-22): 点筛选器「3月」后数字已是 3 月的, 页首结论和期间标签仍写「全部历史」。
+    期间标签要说清楚这些数字是哪一部分数据。走真实 /batch 入口 (筛选在接口层生效)。"""
+
+    def test_month_filter_is_named_in_headline_and_period_label(self, monkeypatch):
+        client, _ = _tenant_client(monkeypatch, 'F006')
+        body = client.post('/batch', json={'upload_id': 5245, 'period_type': 'all',
+                                           'filters': {'月份': ['2月']}}).json()
+        assert body['period']['label'] == '全部历史 · 月份 2月', body['period']
+        text = body['headline']['text']
+        assert text.startswith('全部历史 · 月份 2月：'), text
+        assert '实际 240.00' in text and '目标 220.00' in text, text
+
+    def test_no_filter_keeps_plain_label(self, monkeypatch):
+        client, _ = _tenant_client(monkeypatch, 'F006')
+        body = client.post('/batch', json={'upload_id': 5245, 'period_type': 'all'}).json()
+        assert body['period']['label'] == '全部历史'
+        assert body['headline']['text'].startswith('全部历史：')
+        assert '实际 420.00' in body['headline']['text']
+
+    def test_filter_on_a_column_the_data_lacks_is_not_claimed(self, monkeypatch):
+        # 接口层忽略不存在的列 (数据没被筛), 标签就不能说筛过
+        client, _ = _tenant_client(monkeypatch, 'F006')
+        body = client.post('/batch', json={'upload_id': 5245, 'period_type': 'all',
+                                           'filters': {'渠道': ['线上'], '月份': []}}).json()
+        assert body['period']['label'] == '全部历史'
+
+
 class TestExpenseChart:
     def test_expense_total_excludes_revenue(self):
         r = build('expense_yoy_budget', [

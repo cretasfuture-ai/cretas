@@ -81,7 +81,7 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
 
     // Grant IDs contain "preview-", but these explicit endpoints mutate authorization or business state.
     private static final Pattern DEFERRED_PURCHASE_GRANT_WRITE_POST = Pattern.compile(
-            "^/api/mobile/[^/]+/ai-purchase-task-grants/(?:authorize-later|[^/]+/(?:execute|revoke))$");
+            "^/api/mobile/[^/]+/ai-purchase-task-grants/(?:authorize-later|[^/]+/(?:execute(?:-tool|-skill)?|revoke))$");
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
