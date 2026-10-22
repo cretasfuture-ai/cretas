@@ -12,7 +12,7 @@
 
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
-- `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — V72被动5文件；待原Owner回传独立WT后claim；无runtime scope，见archive/2026-10-22-native-date-v72-registration.md。
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `in-progress` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base e4896543a76a15c8808cb02767b3b021fad53462 — 0ed旧候选实核5文件；当前main已占72，同号冲突禁止合入；run-as73/grant74保留待精确修订ACK，原验证在途；详见archive/2026-10-22-native-date-v72-registration.md。
 
 
 - `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — PR1075/41eda实际28文件整体HOLD；未来runtime writeScope=[]；V72另列被动5文件队列。

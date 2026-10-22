@@ -74,3 +74,25 @@ Root 通过私有 `source-native-date-delivery-20261022/root-ledger-write-releas
 同一原QA正常登录真实F006 dispatcher，在小米正常更新/菜单/详情入口选择已有计划日期；空原因disabled与取消零写；一次trimmed原因保存、正常退出重进后持久，真实界面说明仅记录原因。Root独立AFTER确认仅选定计划notes/updated_at变化，原时间/资源/父子对象与其他计划和受保护账号字段保持。原比较器exit1/DIFF_REQUIRES_REVIEW保留，由原QA按声明的合法备注delta独立签收；没有把缺失HTTP request-id/payload补造为已观察到。
 
 原QA actualexit0/SAFE，`ERP-S1-NATIVE-PLAN-DOMAIN-001` 由原QA关闭，canonical仅追加S1-03证据，保留原Web PASS和所有原FAIL/未测/判据。私有证据：`execution/native-date-original-qa-runtime-20261022/`、`execution/native-date-original-qa-db-20261022/`、`execution/coordination/root-native-reason-db-accepted-20261022.json`。手机/浏览器/canonical仍由原QA独占；这不表示全S1或全阶段通过。
+
+## V72 实际 ACK、Base 核对与当前范围释放（2026-10-22）
+
+原Owner `local_f6b118ce-f036-4ece-9a0b-322073b20c74` 实际回传 ACK；独立 worktree `C:/Users/Steve/cretas-s6-v72-20261022`，branch `codex/claude-erp-s6-v72-passive-20261022`。Root现场核对实际Base `e4896543a76a15c8808cb02767b3b021fad53462`、候选branch-ref `0edbf213debcc24117b39f9101707550fa8015c8`，工作区clean，精确五文件与原1075/41eda695各blob一致，diff-check通过。旧登记Base56e434保留为历史，五路径期间零漂移。旧应用冷启动在同一WT由Owner临时detached到e489验证，Root没有切分支、改文件或中断测试；最终须Owner恢复候选并回读。当前main0407已加入另一Owner工艺保密改动，本登记不声称候选已集成/测试该改动。不是新Owner或其他分支自动接管。
+
+ACK文件时间17:11:23，提交17:12:06，均早于本次Root claimed登记。保留先实施后登记事实，不回填为预授权；从此条开始仅释放此前明确列出的exact5续修及独立验证范围。任务状态in-progress，不因已有commit或目标测试进入review/允许合并。原Owner不改ACTIVE/QA CSV，Root独占登记。
+
+目标命令：私有独立PG连接属性 `CRETAS_WORKFLOW_PG_URL`、`CRETAS_WORKFLOW_PG_USER`、`CRETAS_WORKFLOW_PG_VERIFY=true` 下运行 `mvn.cmd -B test -Dtest=AutonomousRunAsRepositoryQueryValidationTest,AutonomousRunAsMigrationPostgresContractTest`。实际PG17.7目标3项0失败/错误/跳过，PG_EXIT=0；该证据由独立只读审阅核对内容/HEAD/tree，不重复运行。不能将PG13.23导出的schema文件冒充PG13实例验收。
+
+当前生产形态隔离验证在途：原Owner独占loopback55500/55501与其scratch/target；V71 baseline→真实Flyway V72→候选应用`ddl-auto=validate`→停止候选→旧main应用冷启动/validate。当前未取得完整健康和冷回滚结果，PG13尚未实测；不得中断在途操作或将未验算通过。以Schema-only导入没有旧业务行，旧行保持需有实际Flyway路径数据证据，ScriptUtils单测另列，不能替代迁移路径。必须回传精确命令、退出、版本/迁移/行内容、应用启动、清理及未验项后才能review。
+
+实测限制另列：应用曾向本机共享8083 efficiency发出健康探测并尝试embedding，未见业务写，但不能称完全外部服务隔离。保留原日志；后续隔离验证显式关闭非必需后台集成，不停止共享服务。候选启动健康与Owner主动停止导致的Maven退出分开记录，不把停止exit1吞成整段成功。
+
+隔离验证只写任务私有harness、target和独占一次性数据库，不扩大tracked源码scope；需补其他测试或公共脚本先申请文件。不复用别人的target/库/端口，不在Windows叠加第二重任务，不以资源点时快照当受保护并行窗口；两台既有机器按实际队列和Owner安排。生产数据库、迁移、部署、Runner/Gateway/Policy/DynamicScheduler/Skill/身份/Orchestrator及采购/供应商均无新增scope，生产cron不启动。S2正常入口另列queued待原Owner精确包，不作为本切片已领取或已交付。
+
+## 当前主线迁移撞号与后续保留（2026-10-22）
+
+Root现场复核：main0407cf7c（PR1096）新增V20261103_72__process_secret_access.sql，旧候选0ed的V20261103_72__autonomous_run_as_user.sql与其撞号。此前五路径零漂移结论仍为真，但不足以证明版本无冲突。旧0ed禁止原样合入、部署或触发新最终全量/构建；不改已入main的process-secret迁移。当前Owner旧应用冷回滚实际detached SHA为e4896543，保留在途结果，不能当0407集成通过。
+
+Root保留新顺序：run-as使用V20261103_73__autonomous_run_as_user.sql；后续B3A grant改为V20261103_74__autonomous_tool_grants.sql。原draft grant73保留撤销，不得独立合并。这里是编号/接口裁定，尚未收到原Owner对新Base/精确rename及断言/helper路径的ACK，新增源码writeScope=[]。旧exact5历史登记不自动授权新文件；Owner回包后再登记释放修订范围，任务ID中的V72仅为历史切片名。C2/C3/Gateway/生产任务未因此获得scope。
+
+明确不重复无关测试；新版本和新main实际受影响迁移/JPA/应用冷启动仍须验证。生产PG13不可用PG13导出文件或PG17代替，旧行真实Flyway前后读回与ScriptUtils证据分列。原日志与共享本机Python/embedding探测事实保留。Root已实际发送精确碰撞裁决至原Owner handoff文件及PR1075/1093评论；送达不等于已确认新scope或已实施。
