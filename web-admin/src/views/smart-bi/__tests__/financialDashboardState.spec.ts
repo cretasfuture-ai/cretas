@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   periodSelectionToRequest,
   periodRequestLabel,
+  dashboardRenderKey,
   chartGapReason,
   chartNotes,
   createDataVersion,
@@ -139,5 +142,32 @@ describe('createDataVersion (换期间/换数据后丢弃旧的分析结果)', (
     v.bump();
     expect(v.isCurrent(first)).toBe(false);
     expect(v.isCurrent(v.current())).toBe(true);
+  });
+});
+
+describe('dashboardRenderKey (每次生成完成都要重画图)', () => {
+  const resp = (n: number) => ({ charts: Array.from({ length: n }, (_, i) => ({ chartType: `c${i}` })) });
+
+  it('生成中为 null; 生成完成给出这次的结果', () => {
+    const r = resp(3);
+    expect(dashboardRenderKey(r, true)).toBeNull();
+    expect(dashboardRenderKey(null, false)).toBeNull();
+    expect(dashboardRenderKey(r, false)).toBe(r);
+  });
+
+  it('月份筛选后图表数量不变, 触发值仍然变了 (旧触发「图表数量」在这里不变, 图表区一直空着)', () => {
+    const first = resp(5);
+    const filtered = resp(5);
+    expect(first.charts.length).toBe(filtered.charts.length);
+    expect(Object.is(dashboardRenderKey(first, false), dashboardRenderKey(filtered, false))).toBe(false);
+  });
+
+  it('看板组件里画图的那个 watch 用的就是它, 不是图表数量', () => {
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    const body = src.indexOf('observeChartCard(cardEl, chartType)');
+    expect(body).toBeGreaterThan(0);
+    const watcher = src.slice(src.lastIndexOf('watch(', body), body);
+    expect(watcher.startsWith('watch(() => dashboardRenderKey(dashboardResponse.value, isGenerating.value)')).toBe(true);
+    expect(watcher).not.toContain('charts.value.length');
   });
 });
