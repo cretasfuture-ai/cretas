@@ -24,6 +24,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final ModuleEnabledInterceptor moduleEnabledInterceptor;
     private final DataScopeRouteInterceptor dataScopeRouteInterceptor;
     private final ProcessSecretGuardInterceptor processSecretGuardInterceptor;
+    private final com.cretas.aims.audit.PlatformDataAccessLogInterceptor platformDataAccessLogInterceptor;
+
 
     // 构造器注入 - Spring 确保依赖已就绪
     public WebMvcConfig(JwtAuthInterceptor jwtAuthInterceptor,
@@ -32,7 +34,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         RequireRoleInterceptor requireRoleInterceptor,
                         ModuleEnabledInterceptor moduleEnabledInterceptor,
                         DataScopeRouteInterceptor dataScopeRouteInterceptor,
-                        ProcessSecretGuardInterceptor processSecretGuardInterceptor) {
+                        ProcessSecretGuardInterceptor processSecretGuardInterceptor,
+                        com.cretas.aims.audit.PlatformDataAccessLogInterceptor platformDataAccessLogInterceptor) {
         this.jwtAuthInterceptor = jwtAuthInterceptor;
         this.demoReadOnlyInterceptor = demoReadOnlyInterceptor;
         this.permissionInterceptor = permissionInterceptor;
@@ -40,6 +43,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
         this.moduleEnabledInterceptor = moduleEnabledInterceptor;
         this.dataScopeRouteInterceptor = dataScopeRouteInterceptor;
         this.processSecretGuardInterceptor = processSecretGuardInterceptor;
+        this.platformDataAccessLogInterceptor = platformDataAccessLogInterceptor;
     }
 
     @Override
@@ -119,6 +123,16 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns(swaggerWhitelist)
                 .excludePathPatterns(publicWhitelist)
                 .order(7);
+
+        // Platform staff → factory data access record (reads included). Same order as JWT and
+        // registered after it: the stable sort puts it directly behind JWT, ahead of every guard,
+        // so its afterCompletion also sees later 403s. See PlatformDataAccessLogInterceptor.
+        registry.addInterceptor(platformDataAccessLogInterceptor)
+                .addPathPatterns("/api/mobile/**", "/api/platform/**", "/api/admin/**",
+                                 "/api/camera/**", "/api/ai/**")
+                .excludePathPatterns(swaggerWhitelist)
+                .excludePathPatterns(publicWhitelist)
+                .order(1);
 
         WebMvcConfigurer.super.addInterceptors(registry);
     }
