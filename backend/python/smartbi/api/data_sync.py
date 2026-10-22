@@ -26,8 +26,9 @@ import re
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Request
+from pydantic import BaseModel
+from common.tenant_identity import scoped_factory
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -103,7 +104,7 @@ def _safe_str(val, max_len=200):
 
 class SyncRequest(BaseModel):
     upload_id: Optional[int] = None
-    factory_id: str = "F001"
+    factory_id: Optional[str] = None  # 已废弃: 写入哪个工厂由登录身份决定, 传了必须一致
     file_path: Optional[str] = None
 
 
@@ -513,7 +514,7 @@ def _persist_to_db(db_url: str, factory_id: str, sales, ar_rows, dept_rows):
 
 
 @router.post("/sync-system-data", response_model=SyncResult)
-async def sync_system_data(req: SyncRequest):
+async def sync_system_data(req: SyncRequest, request: Request):
     """
     Auto-adaptation endpoint: derive system dashboard data from uploaded Excel.
 
@@ -524,6 +525,8 @@ async def sync_system_data(req: SyncRequest):
 
     Sheets that don't exist are skipped gracefully.
     """
+    # 工厂隔离: 这是写入 (销售/应收/部门数据), 目标工厂只能是登录身份的工厂
+    req.factory_id = scoped_factory(request, req.factory_id)
     logger.info(f"Sync request: factory={req.factory_id}, upload={req.upload_id}, file={req.file_path}")
 
     if not req.file_path:

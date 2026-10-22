@@ -56,16 +56,18 @@ PUBLIC_PREFIXES = (
     "/api/public/",
     "/api/ai/",          # AI proxy — called by Java backend internally
     "/api/classifier/",  # Classifier — called by Java backend internally
-    "/api/client-requirement/",  # Client requirement wizard (public)
+    # "/api/client-requirement/" — removed 2026-10-22: anonymous callers could list every
+    #   surveyed company (contacts/phones), rewrite feedback, link a company to any factory
+    #   and create factories. Now JWT; management routes are platform-only (wizard_api.py).
     "/api/chart/",       # Chart building — stateless data processing, no user context needed
     "/api/smartbi/chart/",  # SmartBI chart endpoints (same reason)
     "/api/insight/",     # Insight endpoints — stateless LLM analysis, no user context needed
     "/api/excel/",       # Excel parsing — called by Java backend internally (no JWT forwarded)
     # "/api/smartbi/analysis-cache/" — removed 2026-10-22: requires JWT + own-factory upload (IDOR fix)
-    "/api/smartbi/cross-sheet",  # Cross-sheet analysis
-    "/api/smartbi/yoy-",  # YoY comparison
+    # "/api/smartbi/cross-sheet", "/api/smartbi/yoy-" — removed 2026-10-22: they read
+    #   uploads by a client-supplied factory_id (yoy even set the RLS tenant from it).
     "/api/smartbi/benchmark",  # Industry benchmarks
-    "/api/smartbi/layouts",  # Dashboard layout persistence — frontend direct calls
+    # "/api/smartbi/layouts" — removed 2026-10-22: read/write/delete keyed by client factory_id.
     # "/api/smartbi/restaurant-analytics/" — removed: requires JWT auth (IDOR fix)
     "/api/statistical/",  # Statistical analysis
     "/api/analysis/",  # Analysis endpoints
@@ -91,6 +93,10 @@ PUBLIC_PREFIXES = (
 INTERNAL_ONLY_PATHS = frozenset({
     "/api/smartbi/restaurant/sections/owner-action-chat",
     "/api/llm/f006-boss-question-stream",
+    # 2026-10-22 隔离排查: 下面两条没有任何调用方, 却在公开前缀下 —— 匿名即可往服务器任意目录写文件 /
+    # 从任意本地路径加载模型。收为仅内部 (需 X-Internal-Secret)。
+    "/api/excel/export/batch/save",
+    "/api/classifier/load",
 })
 INTERNAL_ONLY_PREFIXES = (
     "/api/internal/smartbi/agent/runs",

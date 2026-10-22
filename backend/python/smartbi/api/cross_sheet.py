@@ -11,8 +11,10 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from common.tenant_identity import require_same_factory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Cross-Sheet Analysis"])
@@ -26,7 +28,8 @@ class CrossSheetRequest(BaseModel):
     """Request for cross-sheet analysis"""
     upload_ids: List[int] = Field(..., description="Upload IDs to include")
     sheet_names: List[str] = Field(default=[], description="Sheet display names")
-    factory_id: str = Field(default="F001", description="Factory ID")
+    # 已废弃: 工厂取登录身份; 旧前端若仍传, 必须与身份一致 (否则 403)
+    factory_id: Optional[str] = Field(default=None, description="Deprecated; taken from the login")
 
 
 class SheetKPI(BaseModel):
@@ -57,7 +60,7 @@ class CrossSheetResponse(BaseModel):
 # ============================================================================
 
 @router.post("/cross-sheet-analysis", response_model=CrossSheetResponse)
-async def cross_sheet_analysis(request: CrossSheetRequest) -> CrossSheetResponse:
+async def cross_sheet_analysis(request: CrossSheetRequest, http_request: Request) -> CrossSheetResponse:
     """
     Perform cross-sheet comprehensive analysis.
 
@@ -73,6 +76,7 @@ async def cross_sheet_analysis(request: CrossSheetRequest) -> CrossSheetResponse
         CrossSheetResponse with KPI comparison, charts, and AI summary
     """
     start_time = time.time()
+    factory_id = require_same_factory(http_request, request.factory_id)
 
     try:
         if not request.upload_ids:
@@ -84,7 +88,7 @@ async def cross_sheet_analysis(request: CrossSheetRequest) -> CrossSheetResponse
         result = await aggregator.aggregate(
             upload_ids=request.upload_ids,
             sheet_names=request.sheet_names,
-            factory_id=request.factory_id
+            factory_id=factory_id
         )
 
         elapsed = int((time.time() - start_time) * 1000)
