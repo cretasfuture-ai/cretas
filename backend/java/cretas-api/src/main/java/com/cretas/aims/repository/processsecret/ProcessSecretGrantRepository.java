@@ -25,6 +25,14 @@ public interface ProcessSecretGrantRepository extends JpaRepository<ProcessSecre
                                         @Param("granteeId") Long granteeId,
                                         @Param("now") LocalDateTime now);
 
+    @Query("SELECT COUNT(g) FROM ProcessSecretGrant g WHERE g.factoryId = :factoryId "
+            + "AND g.granteeType = :granteeType AND g.granteeId = :granteeId "
+            + "AND g.revokedAt IS NULL AND g.expiresAt > :now")
+    long countActiveForGrantee(@Param("factoryId") String factoryId,
+                               @Param("granteeType") ProcessSecretGranteeType granteeType,
+                               @Param("granteeId") Long granteeId,
+                               @Param("now") LocalDateTime now);
+
     List<ProcessSecretGrant> findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(String factoryId, String productTypeId);
 
     Optional<ProcessSecretGrant> findByIdAndFactoryId(Long id, String factoryId);

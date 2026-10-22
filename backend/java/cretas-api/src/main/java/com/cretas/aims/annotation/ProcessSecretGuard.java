@@ -31,7 +31,17 @@ public @interface ProcessSecretGuard {
         /** 路径变量是工艺 Workflow ID, 经 Workflow 解析产品。 */
         WORKFLOW_PATH,
         /** 查询参数就是 productTypeId。 */
-        PRODUCT_PARAM
+        PRODUCT_PARAM,
+        /** 路径变量是 BOM 版本 ID (快照), 经版本 → 配方解析产品。 */
+        BOM_VERSION_PATH,
+        /** 路径变量是生产批次 ID。 */
+        BATCH_PATH,
+        /** 路径变量是生产计划 ID (打印单据带锁定 BOM)。 */
+        PLAN_PATH,
+        /** 查询参数是生产计划 ID 列表 (逗号分隔或重复参数)。 */
+        PLAN_PARAM_LIST,
+        /** 路径变量是领料单 ID, 经领料单 → 生产计划解析产品。 */
+        MATERIAL_REQUISITION_PATH
     }
 
     ProcessSecretAction action();

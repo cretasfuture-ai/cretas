@@ -48,13 +48,14 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
     private final RawMaterialTypeRepository materialRepo;
     private final BomVersionService versionService;
     private final ECNService ecnService;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
     // ========== batchModify ==========
 
     @Override
     @Transactional
     public BatchResult batchModify(BatchModifyRequest req) {
-        List<BomRecipe> recipes = resolveScope(req.getFactoryId(), req.getMaterialId(),
+        List<BomRecipe> recipes = guardedScope(req.getFactoryId(), req.getMaterialId(),
                 req.isAllInFactory(), req.getRecipeIds());
 
         BatchResult.BatchResultBuilder result = BatchResult.builder().operation("MODIFY");
@@ -126,7 +127,7 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
     @Override
     @Transactional
     public BatchResult batchReplace(BatchReplaceRequest req) {
-        List<BomRecipe> recipes = resolveScope(req.getFactoryId(), req.getOldMaterialId(),
+        List<BomRecipe> recipes = guardedScope(req.getFactoryId(), req.getOldMaterialId(),
                 req.isAllInFactory(), req.getRecipeIds());
 
         RawMaterialType newMat = materialRepo.findById(req.getNewMaterialId())
@@ -186,7 +187,7 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
     @Override
     @Transactional
     public BatchResult batchDelete(BatchDeleteRequest req) {
-        List<BomRecipe> recipes = resolveScope(req.getFactoryId(), req.getMaterialId(),
+        List<BomRecipe> recipes = guardedScope(req.getFactoryId(), req.getMaterialId(),
                 req.isAllInFactory(), req.getRecipeIds());
 
         BatchResult.BatchResultBuilder result = BatchResult.builder().operation("DELETE");
@@ -258,6 +259,7 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
                     "batchAdd requires allInFactory=true OR explicit recipeIds list");
         }
 
+        processSecretGuard.requireRecipes(req.getFactoryId(), recipes, com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "bom batch ADD");
         RawMaterialType material = materialRepo.findById(req.getMaterialId())
                 .orElseThrow(() -> new IllegalArgumentException("material not found: " + req.getMaterialId()));
         List<String> warnings = new ArrayList<>();
@@ -366,6 +368,15 @@ public class BomBatchOperationServiceImpl implements BomBatchOperationService {
         impact.put("unit", unit);
         impact.put("materialCategory", category);
         return impact;
+    }
+
+    /** 工艺保密: 批量改动范围内任一受保护配方无编辑权即整体 403 (不静默跳过)。 */
+    private List<BomRecipe> guardedScope(String factoryId, String anchorMaterialId,
+                                         boolean allInFactory, List<String> recipeIds) {
+        List<BomRecipe> recipes = resolveScope(factoryId, anchorMaterialId, allInFactory, recipeIds);
+        processSecretGuard.requireRecipes(factoryId, recipes,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "bom batch");
+        return recipes;
     }
 
     /**

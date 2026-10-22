@@ -60,6 +60,8 @@ class ProcessSecretBomRouteSecurityTest {
     BomRecipeRepository recipeRepository;
     ProcessSecretPolicyRepository policies;
     ProcessSecretAuditRecorder recorder;
+    ProcessSecretGrantRepository grants;
+    BomCopyService copyService;
     MockMvc mvc;
 
     @BeforeEach
@@ -68,7 +70,7 @@ class ProcessSecretBomRouteSecurityTest {
         recipeRepository = mock(BomRecipeRepository.class);
         policies = mock(ProcessSecretPolicyRepository.class);
         recorder = mock(ProcessSecretAuditRecorder.class);
-        ProcessSecretGrantRepository grants = mock(ProcessSecretGrantRepository.class);
+        grants = mock(ProcessSecretGrantRepository.class);
         when(grants.findActive(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
         ProcessSecretAccessService access = new ProcessSecretAccessService(policies, grants, recorder);
 
@@ -93,14 +95,19 @@ class ProcessSecretBomRouteSecurityTest {
         when(recipeService.getRecipe(F, "r1")).thenReturn(recipe);
         when(recipeService.getSeasoning(F, "r1")).thenReturn(new BomSeasoningResponse());
 
-        BomRecipeController controller = new BomRecipeController(recipeService, mock(BomCopyService.class),
+        copyService = mock(BomCopyService.class);
+        BomRecipeController controller = new BomRecipeController(recipeService, copyService,
                 mock(BomSeasoningWorkspaceService.class), mock(BomItemSubstituteService.class),
                 mock(ProductTypeRepository.class), access, recipeRepository);
         ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .addMappedInterceptors(new String[]{"/api/mobile/**"}, new ProcessSecretGuardInterceptor(access,
                         recipeRepository, mock(BomRecipeItemRepository.class),
-                        mock(ProductProcessWorkflowRepository.class)))
+                        mock(ProductProcessWorkflowRepository.class),
+                        mock(com.cretas.aims.repository.bom.BomVersionRepository.class),
+                        mock(com.cretas.aims.repository.ProductionBatchRepository.class),
+                        mock(com.cretas.aims.repository.ProductionPlanRepository.class),
+                        mock(com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository.class)))
                 .setControllerAdvice(new GlobalExceptionHandler(),
                         new ProcessSecretResponseAdvice(access, recipeRepository, json))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(json))
@@ -143,6 +150,29 @@ class ProcessSecretBomRouteSecurityTest {
 
     static String utf8(org.springframework.test.web.servlet.ResultActions actions) throws Exception {
         return actions.andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void viewOnlyGrantCannotCopyProtectedRecipeToAnotherProduct() throws Exception {
+        // 审查 M1: 只有查看授权 (含限时平台授权) 不能把保密配方复制到未保护产品上「洗白」
+        when(grants.findActive(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq(SECRET),
+                org.mockito.ArgumentMatchers.eq(com.cretas.aims.entity.processsecret.ProcessSecretGranteeType.FACTORY_USER),
+                org.mockito.ArgumentMatchers.eq(20L), any()))
+                .thenReturn(List.of(com.cretas.aims.entity.processsecret.ProcessSecretGrant.builder()
+                        .factoryId(F).productTypeId(SECRET)
+                        .granteeType(com.cretas.aims.entity.processsecret.ProcessSecretGranteeType.FACTORY_USER)
+                        .granteeId(20L).canViewFull(true).canExport(false).canEdit(false).purpose("看")
+                        .expiresAt(java.time.LocalDateTime.now().plusDays(1)).grantedBy(OWNER).build()));
+        String body = "{\"targetProductTypeId\":\"PLAIN\",\"sourceRecipeId\":\"r1\"}";
+        mvc.perform(as(post("/api/mobile/F-A/bom/recipes/copy-to-draft"), 20, "production_manager")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden());
+        verify(copyService, never()).copySelectedRulesToDraft(anyString(), any());
+        // 阳性对照: 负责人可以复制
+        mvc.perform(as(post("/api/mobile/F-A/bom/recipes/copy-to-draft"), OWNER, "factory_super_admin")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk());
+        verify(copyService).copySelectedRulesToDraft(anyString(), any());
     }
 
     @Test

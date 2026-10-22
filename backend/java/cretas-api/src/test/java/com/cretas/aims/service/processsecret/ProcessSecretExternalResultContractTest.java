@@ -69,7 +69,15 @@ class ProcessSecretExternalResultContractTest {
                 com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository.class),
                 mock(com.cretas.aims.repository.processsecret.ProcessSecretAccessEventRepository.class),
                 mock(com.cretas.aims.repository.UserRepository.class), access);
-        service = new ProcessSecretExternalService(policies, packages, results, batches, recipes, policyService, access);
+        com.cretas.aims.service.unit.UnitContractService units = mock(com.cretas.aims.service.unit.UnitContractService.class);
+        // 桩: 只认 kg / 千克 / g 三种写法, kg 与 千克 同一单位 —— 足以区分「同义放行」和「不同单位拒绝」
+        when(units.areEquivalent(any(), any(), any())).thenAnswer(call -> {
+            String a = canonical(call.getArgument(1));
+            String b = canonical(call.getArgument(2));
+            return a != null && a.equals(b);
+        });
+        service = new ProcessSecretExternalService(policies, packages, results, batches, recipes, policyService, access,
+                units);
 
         executorKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
         publicKey = Base64.getEncoder().encodeToString(executorKey.getPublic().getEncoded());
@@ -232,6 +240,24 @@ class ProcessSecretExternalResultContractTest {
                 .isEqualTo("HISTORICAL_CLOUD_COPY_PENDING_DISPOSAL");
         when(recipes.countByFactoryIdAndProductTypeId(F, P)).thenReturn(0L);
         assertThat(service.packageStatus(user(20), F, P).cloudCopyStatus()).isEqualTo("NONE");
+    }
+
+    static String canonical(String unit) {
+        if (unit == null) return null;
+        return switch (unit) {
+            case "kg", "千克" -> "KG";
+            case "g" -> "G";
+            default -> null;
+        };
+    }
+
+    @Test
+    void synonymousUnitIsAcceptedAndUnknownUnitCannotBeRegistered() throws Exception {
+        assertThat(service.submitResult(user(20), F, signed("evt-00000017", "5", "千克", 300L, executorKey))
+                .duplicate()).isFalse();
+        policy(ProcessSecretStorageMode.CUSTOMER_HELD);
+        assertCode(400, () -> service.registerPackage(user(OWNER), F,
+                new ProcessSecretExternalService.PackageRequest(P, "P17-PREMIX", "v9", "桶", publicKey)));
     }
 
     static String sha(String s) throws Exception {

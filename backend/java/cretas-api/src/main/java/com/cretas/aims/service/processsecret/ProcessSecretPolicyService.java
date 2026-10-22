@@ -99,7 +99,7 @@ public class ProcessSecretPolicyService {
                         .build());
             } catch (org.springframework.dao.DataIntegrityViolationException e) {
                 // 并发首次启用: 另一请求已建好策略 (审计在落库成功之后才写, 不会留下假 ALLOW)
-                throw new BusinessException(409, "该产品刚被设置了保密策略，请刷新后重试");
+                throw new BusinessException(409, "该产品刚被设置了保密策略，请刷新后重试").withHint("刷新保密设置列表后再操作");
             }
             audit(factoryId, productTypeId, actor, "ENABLE " + mode + " owner=" + ownerUserId);
         } else {
@@ -143,7 +143,7 @@ public class ProcessSecretPolicyService {
                 .orElseThrow(() -> new BusinessException(404, "该产品没有保密策略"));
         requireOwner(actor, factoryId, policy);
         if (policy.getStorageMode() == ProcessSecretStorageMode.CUSTOMER_HELD) {
-            throw new BusinessException(409, "该产品核心工艺由客户侧保存，云端没有可授予的完整工艺");
+            throw new BusinessException(409, "该产品核心工艺由客户侧保存，云端没有可授予的完整工艺").withHint("需要授权时请在客户侧系统中处理");
         }
         Objects.requireNonNull(request, "grant request");
         if (request.granteeType() == null || request.granteeId() == null || request.granteeId() <= 0) {
@@ -260,7 +260,7 @@ public class ProcessSecretPolicyService {
 
     private static void requireVersion(ProcessSecretPolicy policy, Long expected) {
         if (expected == null || !expected.equals(policy.getPolicyVersion())) {
-            throw new BusinessException(409, "保密设置已被修改，请刷新后重试");
+            throw new BusinessException(409, "保密设置已被修改，请刷新后重试").withHint("刷新页面获取最新保密设置后重试");
         }
     }
 

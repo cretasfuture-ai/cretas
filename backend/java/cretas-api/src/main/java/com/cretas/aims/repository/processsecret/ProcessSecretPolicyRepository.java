@@ -20,6 +20,8 @@ public interface ProcessSecretPolicyRepository extends JpaRepository<ProcessSecr
 
     boolean existsByFactoryId(String factoryId);
 
+    boolean existsByFactoryIdAndOwnerUserId(String factoryId, Long ownerUserId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM ProcessSecretPolicy p WHERE p.factoryId = :factoryId AND p.productTypeId = :productTypeId")
     Optional<ProcessSecretPolicy> findForUpdate(@Param("factoryId") String factoryId,

@@ -172,9 +172,13 @@ public class BomRecipeController {
         // 工艺保密: 复制要能看源配方的完整工艺, 并能编辑目标产品
         com.cretas.aims.security.AuthenticatedActor actor =
                 com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null);
-        recipeProduct(factoryId, request.getSourceRecipeId()).ifPresent(source ->
-                processSecretAccessService.require(actor, factoryId, source, ProcessSecretAction.VIEW_FULL,
-                        "POST /bom/recipes/copy-to-draft source"));
+        // 复制出去等同导出: 只有查看授权 (含限时、不可导出的平台授权) 不能把配方「洗」到别的产品上
+        recipeProduct(factoryId, request.getSourceRecipeId()).ifPresent(source -> {
+            processSecretAccessService.require(actor, factoryId, source, ProcessSecretAction.VIEW_FULL,
+                    "POST /bom/recipes/copy-to-draft source");
+            processSecretAccessService.require(actor, factoryId, source, ProcessSecretAction.EXPORT,
+                    "POST /bom/recipes/copy-to-draft source");
+        });
         processSecretAccessService.require(actor, factoryId, request.getTargetProductTypeId(),
                 ProcessSecretAction.EDIT, "POST /bom/recipes/copy-to-draft target");
         return ApiResponse.success(bomCopyService.copySelectedRulesToDraft(factoryId, request));

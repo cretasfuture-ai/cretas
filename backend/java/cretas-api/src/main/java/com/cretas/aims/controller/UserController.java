@@ -55,6 +55,10 @@ import com.cretas.aims.annotation.RequireModule;
 public class UserController {
 
     private final UserService userService;
+
+    // 字段注入 (不进构造器): 只有「管理员改别人的密码」这条路径用到
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
     private final com.cretas.aims.service.MobileService mobileService;
     private final com.cretas.aims.repository.inventory.PurchaseOrderRepository purchaseOrderRepository;
 
@@ -126,6 +130,11 @@ public class UserController {
             @PathVariable @NotNull Long userId,
             @Valid @RequestBody CreateUserRequest request) {
         log.info("更新用户: factoryId={}, userId={}", factoryId, userId);
+        if (request.getPassword() != null && !request.getPassword().isEmpty()) {
+            // 工艺保密 (审查 H3): 管理员不能代改保密负责人 / 被授权人的密码
+            processSecretAccessService.requireAdminMayChangeCredentials(
+                    com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null), factoryId, userId);
+        }
         UserDTO user = userService.updateUser(factoryId, userId, request);
         return ApiResponse.success("用户更新成功", user);
     }

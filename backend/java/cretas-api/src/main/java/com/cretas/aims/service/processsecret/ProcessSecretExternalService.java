@@ -61,6 +61,7 @@ public class ProcessSecretExternalService {
     private final BomRecipeRepository recipeRepository;
     private final ProcessSecretPolicyService policyService;
     private final ProcessSecretAccessService accessService;
+    private final com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     public ProcessSecretExternalService(ProcessSecretPolicyRepository policyRepository,
                                         ProcessSecretExternalPackageRepository packageRepository,
@@ -68,7 +69,8 @@ public class ProcessSecretExternalService {
                                         ProductionBatchRepository batchRepository,
                                         BomRecipeRepository recipeRepository,
                                         ProcessSecretPolicyService policyService,
-                                        ProcessSecretAccessService accessService) {
+                                        ProcessSecretAccessService accessService,
+                                        com.cretas.aims.service.unit.UnitContractService unitContractService) {
         this.policyRepository = policyRepository;
         this.packageRepository = packageRepository;
         this.resultRepository = resultRepository;
@@ -76,6 +78,7 @@ public class ProcessSecretExternalService {
         this.recipeRepository = recipeRepository;
         this.policyService = policyService;
         this.accessService = accessService;
+        this.unitContractService = unitContractService;
     }
 
     public record PackageRequest(String productTypeId, String packageRef, String packageVersion,
@@ -104,16 +107,20 @@ public class ProcessSecretExternalService {
         ProcessSecretPolicy policy = policyService.requirePolicy(factoryId, request.productTypeId());
         policyService.requireOwner(actor, factoryId, policy);
         if (policy.getStorageMode() != ProcessSecretStorageMode.CUSTOMER_HELD) {
-            throw new BusinessException(409, "只有「核心工艺不入云」的产品才能登记客户侧工艺包");
+            throw new BusinessException(409, "只有「核心工艺不入云」的产品才能登记客户侧工艺包").withHint("先在保密设置里把该产品切换为「核心工艺不入云」，再登记工艺包");
         }
         requireRef(request.packageRef(), "packageRef");
         requireRef(request.packageVersion(), "packageVersion");
         requireText(request.outputUnit(), "outputUnit");
         if (request.outputUnit().trim().length() > 20) throw new BusinessException(400, "outputUnit 过长");
+        // 单位同一性问单位契约 (同义写法如 kg / 千克 视为同一单位); 契约不认识的单位不允许登记
+        if (!unitContractService.areEquivalent(factoryId, request.outputUnit().trim(), request.outputUnit().trim())) {
+            throw new BusinessException(400, "outputUnit 不是系统认可的单位: " + request.outputUnit().trim());
+        }
         parsePublicKey(request.executorPublicKey());
         if (packageRepository.findByFactoryIdAndPackageRefAndPackageVersion(factoryId, request.packageRef(),
                 request.packageVersion()).isPresent()) {
-            throw new BusinessException(409, "该工艺包版本已登记");
+            throw new BusinessException(409, "该工艺包版本已登记").withHint("换一个新的版本号登记，或在列表里查看已登记的版本");
         }
         ProcessSecretExternalPackage saved = packageRepository.save(ProcessSecretExternalPackage.builder()
                 .factoryId(factoryId).productTypeId(request.productTypeId())
@@ -168,15 +175,15 @@ public class ProcessSecretExternalService {
 
         ProcessSecretExternalPackage pkg = packageRepository.findByFactoryIdAndPackageRefAndPackageVersion(
                         factoryId, request.packageRef(), request.packageVersion())
-                .orElseThrow(() -> new BusinessException(409, "工艺包版本未登记或不匹配"));
+                .orElseThrow(() -> new BusinessException(409, "工艺包版本未登记或不匹配").withHint("核对执行端使用的工艺包编号与版本是否和云端登记一致"));
         if (pkg.getStatus() != ProcessSecretPackageStatus.ACTIVE) {
-            throw new BusinessException(409, "工艺包版本已停用");
+            throw new BusinessException(409, "工艺包版本已停用").withHint("请执行端改用当前有效的工艺包版本");
         }
         // 产品已不再是「客户侧保存」(改回 A 档或关闭保密) 时, 旧包的结果一律不收
         boolean stillCustomerHeld = policyRepository.findByFactoryIdAndProductTypeId(factoryId, pkg.getProductTypeId())
                 .map(p -> p.getStorageMode() == ProcessSecretStorageMode.CUSTOMER_HELD).orElse(false);
         if (!stillCustomerHeld) {
-            throw new BusinessException(409, "该产品已不是「核心工艺不入云」模式，不再接收客户侧结果");
+            throw new BusinessException(409, "该产品已不是「核心工艺不入云」模式，不再接收客户侧结果").withHint("如需继续接收，请保密负责人把产品切回「核心工艺不入云」");
         }
         String canonical = canonicalPayload(factoryId, request);
         if (!verify(pkg.getExecutorPublicKey(), canonical, request.signature())) {
@@ -192,20 +199,20 @@ public class ProcessSecretExternalService {
             if (digest.equals(existing.get().getPayloadDigest())) {
                 return view(existing.get(), true);
             }
-            throw new BusinessException(409, "同一事件 ID 已提交过不同内容，已拒绝");
+            throw new BusinessException(409, "同一事件 ID 已提交过不同内容，已拒绝").withHint("同一结果重发请保持内容不变；新的结果请使用新的事件 ID");
         }
 
-        if (!pkg.getOutputUnit().equals(request.outputUnit().trim())) {
-            throw new BusinessException(409, "产出单位与工艺包登记不一致");
+        if (!unitContractService.areEquivalent(factoryId, pkg.getOutputUnit(), request.outputUnit().trim())) {
+            throw new BusinessException(409, "产出单位与工艺包登记不一致").withHint("按工艺包登记的产出单位回传数量");
         }
         ProductionBatch batch = batchRepository.findByIdAndFactoryId(request.productionBatchId(), factoryId)
-                .orElseThrow(() -> new BusinessException(409, "生产批次不存在或不属于本厂"));
+                .orElseThrow(() -> new BusinessException(409, "生产批次不存在或不属于本厂").withHint("核对批次编号是否属于本厂"));
         if (!pkg.getProductTypeId().equals(batch.getProductTypeId())) {
-            throw new BusinessException(409, "生产批次的产品与工艺包不一致");
+            throw new BusinessException(409, "生产批次的产品与工艺包不一致").withHint("选择该工艺包对应产品的生产批次");
         }
         LocalDateTime now = LocalDateTime.now(BUSINESS_ZONE);
         if (signedAt.isAfter(now.plus(MAX_CLOCK_SKEW)) || signedAt.isBefore(now.minus(MAX_SIGNATURE_AGE))) {
-            throw new BusinessException(409, "签名时间超出允许范围，请重新签发");
+            throw new BusinessException(409, "签名时间超出允许范围，请重新签发").withHint("核对执行端时钟后重新签名再提交");
         }
 
         ProcessSecretExternalResult saved;
@@ -218,7 +225,7 @@ public class ProcessSecretExternalService {
                     .build());
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             // 同一事件并发提交: 另一请求已先落库。重试即可得到幂等应答 (内容相同) 或 409 (内容不同)
-            throw new BusinessException(409, "同一事件正在被并发提交，请稍后重试");
+            throw new BusinessException(409, "同一事件正在被并发提交，请稍后重试").withHint("稍后用相同内容重试一次即可");
         }
         accessService.audit(factoryId, pkg.getProductTypeId(), actor, ProcessSecretAction.SUBMIT_RESULT,
                 "ALLOW", "签名有效，待核验", request.eventId());

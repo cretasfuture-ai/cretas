@@ -3,8 +3,13 @@ package com.cretas.aims.contract;
 import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.controller.BomController;
 import com.cretas.aims.controller.BomRecipeController;
+import com.cretas.aims.controller.BomBatchOperationController;
+import com.cretas.aims.controller.BomReverseQueryController;
+import com.cretas.aims.controller.BomVersionController;
 import com.cretas.aims.controller.BomWorkflowRevisionController;
+import com.cretas.aims.controller.PrintController;
 import com.cretas.aims.controller.ProductProcessWorkflowController;
+import com.cretas.aims.controller.ProductProcessWorkflowRuntimeController;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,7 +42,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ProcessSecretRouteLedgerContractTest {
 
     static final List<Class<?>> CONTROLLERS = List.of(BomRecipeController.class, BomController.class,
-            ProductProcessWorkflowController.class, BomWorkflowRevisionController.class);
+            ProductProcessWorkflowController.class, BomWorkflowRevisionController.class,
+            BomVersionController.class, BomReverseQueryController.class, BomBatchOperationController.class,
+            ProductProcessWorkflowRuntimeController.class);
+
+    /** 判定在服务层 (ProcessSecretRecipeGuard), 因为同一服务还被 ECN 审批等非 HTTP 入口调用。 */
+    static final Set<String> CHECKED_IN_SERVICE = Set.of(
+            "BomVersionController#createDraft",
+            "BomVersionController#submitForApproval",
+            "BomVersionController#approve",
+            "BomVersionController#reject",
+            "BomBatchOperationController#batchModify",
+            "BomBatchOperationController#batchReplace",
+            "BomBatchOperationController#batchDelete",
+            "BomBatchOperationController#batchAdd");
+
+    /** 打印控制器端点很多, 只钉住「payload 里带锁定 BOM / 调味 / 工序」的这几个必须带 Guard。 */
+    static final Set<String> PRINT_ENDPOINTS_WITH_BOM = Set.of(
+            "printMaterialRequisition", "printProductionWorkOrder", "printProductionWorkOrderMulti",
+            "printBatchingSheet", "printProductionDocumentPackage");
 
     static final Set<String> CHECKED_IN_BODY = Set.of(
             "BomRecipeController#createRecipe",
@@ -60,7 +83,11 @@ class ProcessSecretRouteLedgerContractTest {
             Map.entry("BomController#getProductTypesWithBom", "只有产品 ID 列表"),
             Map.entry("BomController#recalculatePreview", "V1 未纳管: 出成率重算预览 (需 bom:yield_standard 权限), S1 补"),
             Map.entry("BomController#recalculateApply", "V1 未纳管: 出成率批量应用 (需 bom:yield_standard:write), S1 补"),
-            Map.entry("BomController#listYieldSuggestions", "V1 未纳管: 全厂出成率建议, S1 补"));
+            Map.entry("BomController#listYieldSuggestions", "V1 未纳管: 全厂出成率建议, S1 补"),
+            Map.entry("BomReverseQueryController#findRecipesByMaterial", "响应裁剪: 配方实体换成摘要"),
+            Map.entry("BomReverseQueryController#findUsageByMaterial", "响应裁剪: BomItemUsage 换成摘要"),
+            Map.entry("BomReverseQueryController#analyzeReplacement",
+                    "V1 未纳管: 每配方成本差额 (价格另受价格权限), S1 补"));
 
     @Test
     void everyEndpointIsGuardedCheckedInBodyOrLedgered() {
@@ -73,23 +100,47 @@ class ProcessSecretRouteLedgerContractTest {
                 seen.add(key);
                 boolean guarded = method.isAnnotationPresent(ProcessSecretGuard.class);
                 int classes = (guarded ? 1 : 0) + (CHECKED_IN_BODY.contains(key) ? 1 : 0)
-                        + (LEDGER.containsKey(key) ? 1 : 0);
+                        + (CHECKED_IN_SERVICE.contains(key) ? 1 : 0) + (LEDGER.containsKey(key) ? 1 : 0);
                 if (classes != 1) unclassified.add(key + " (classified " + classes + " times)");
             }
         }
         assertThat(unclassified).as("每个接口恰好归入一类").isEmpty();
         // 台账里不能留已删除接口的条目 (否则台账会悄悄变成摆设)
-        assertThat(seen).containsAll(LEDGER.keySet()).containsAll(CHECKED_IN_BODY);
+        assertThat(seen).containsAll(LEDGER.keySet()).containsAll(CHECKED_IN_BODY).containsAll(CHECKED_IN_SERVICE);
+    }
+
+    @Test
+    void printEndpointsThatEmbedPinnedBomAreGuarded() {
+        Set<String> guarded = new TreeSet<>();
+        for (Method method : PrintController.class.getDeclaredMethods()) {
+            if (method.isAnnotationPresent(ProcessSecretGuard.class)) guarded.add(method.getName());
+        }
+        assertThat(guarded).containsAll(PRINT_ENDPOINTS_WITH_BOM);
+    }
+
+    @Test
+    void serviceLevelChecksAreReallyInTheServices() throws IOException {
+        for (String[] spec : new String[][]{
+                {"service/bom/impl/BomVersionServiceImpl.java", "processSecretGuard.requireRecipe(", "5"},
+                {"service/bom/impl/BomBatchOperationServiceImpl.java", "processSecretGuard.requireRecipes(", "2"},
+                {"service/bom/impl/BomBatchOperationServiceImpl.java", "guardedScope(req.getFactoryId()", "3"}}) {
+            String text = Files.readString(Path.of("src/main/java/com/cretas/aims/" + spec[0]), StandardCharsets.UTF_8);
+            int count = text.split(java.util.regex.Pattern.quote(spec[1]), -1).length - 1;
+            assertThat(count).as(spec[0] + " " + spec[1]).isEqualTo(Integer.parseInt(spec[2]));
+        }
     }
 
     @Test
     void guardNamesPointAtRealParametersOfTheRightKind() {
         List<String> broken = new ArrayList<>();
-        for (Class<?> controller : CONTROLLERS) {
+        List<Class<?>> withGuards = new ArrayList<>(CONTROLLERS);
+        withGuards.add(PrintController.class);
+        for (Class<?> controller : withGuards) {
             for (Method method : controller.getDeclaredMethods()) {
                 ProcessSecretGuard guard = method.getAnnotation(ProcessSecretGuard.class);
                 if (guard == null) continue;
-                boolean wantParam = guard.from() == ProcessSecretGuard.Source.PRODUCT_PARAM;
+                boolean wantParam = guard.from() == ProcessSecretGuard.Source.PRODUCT_PARAM
+                        || guard.from() == ProcessSecretGuard.Source.PLAN_PARAM_LIST;
                 boolean found = false;
                 for (Parameter p : method.getParameters()) {
                     PathVariable pv = p.getAnnotation(PathVariable.class);

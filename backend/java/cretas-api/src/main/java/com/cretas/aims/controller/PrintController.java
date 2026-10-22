@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
@@ -230,6 +232,7 @@ public class PrintController {
         return proxyToPython("production-task", payload, "production-task-" + id, authorization);
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.MATERIAL_REQUISITION_PATH, name = "id")
     @GetMapping("/material-requisition/{id}")
     @RequirePermission({"procurement:read", "procurement:read_write",
             "warehouse:read", "warehouse:read_write"})
@@ -315,6 +318,7 @@ public class PrintController {
      *
      * <p>G4 要求: ProductionPlanService.getProductionPlanById + 工序列表 + 汇总材料.
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PLAN_PATH, name = "planId")
     @GetMapping("/production-work-order/{planId}")
     @RequirePermission({"production:read", "production:read_write"})
     public ResponseEntity<byte[]> printProductionWorkOrder(
@@ -349,6 +353,7 @@ public class PrintController {
      * 上限 20 个 plan, 超出返回 400.
      * 诚实策略: 某个 planId 不存在时跳过 (记 warn log), 不抛全局错误.
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PLAN_PARAM_LIST, name = "planIds")
     @GetMapping("/production-work-order-multi")
     @RequirePermission({"production:read", "production:read_write"})
     public ResponseEntity<byte[]> printProductionWorkOrderMulti(
@@ -395,6 +400,7 @@ public class PrintController {
      * <p>锅数 = ceil(计划产量 / 单锅产能[ProductType.singlePotCapacity]); 每锅料量 = 物料总需求 / 锅数。
      * 单锅产能未配置时 potCount=null → 模板显"请先在产品配置单锅产能"。配料员当前用现有生产/报工角色兼任。
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PLAN_PATH, name = "planId")
     @GetMapping("/batching-sheet/{planId}")
     @RequirePermission({"production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write"})
@@ -418,6 +424,7 @@ public class PrintController {
      * permissions prevents this convenience endpoint from bypassing either
      * the production-document or warehouse-document gates.</p>
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PLAN_PATH, name = "planId")
     @GetMapping("/production-document-pack/{planId}")
     @RequirePermission(
             value = {"production:read", "warehouse:read"},

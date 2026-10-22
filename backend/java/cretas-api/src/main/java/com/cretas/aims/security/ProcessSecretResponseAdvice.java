@@ -99,14 +99,18 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         HttpServletRequest http = servletRequest.getServletRequest();
         AuthenticatedActor actor = AuthenticatedActor.current(http).orElse(null);
         if (actor == null) return body;
-        String scopeFactory = actor.isPlatformAdmin() ? pathFactoryId(http) : actor.factoryId();
-        if (scopeFactory == null || accessService.protectedProductTypeIds(scopeFactory).isEmpty()) {
+        // 快路径要看「这次访问的是哪个工厂」: 路径上的 factoryId 优先, 身份里的工厂也算上
+        // (审查 M2: factoryId=PLATFORM 一类跨厂令牌若只看身份会直接跳过裁剪)
+        String pathFactory = pathFactoryId(http);
+        boolean anyProtected = (pathFactory != null && !accessService.protectedProductTypeIds(pathFactory).isEmpty())
+                || (actor.factoryId() != null && !accessService.protectedProductTypeIds(actor.factoryId()).isEmpty());
+        if (!anyProtected) {
             return body;
         }
         Object payload = body instanceof ApiResponse<?> api ? api.getData() : body;
         if (payload == null) return body;
 
-        JsonNode filtered = filter(payload, actor);
+        JsonNode filtered = filter(payload, actor, pathFactory != null ? pathFactory : actor.factoryId());
         if (filtered == null) return body;
         if (body instanceof ApiResponse<?> api) {
             ((ApiResponse<Object>) api).setData(filtered);
@@ -116,8 +120,8 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
     }
 
     /** @return 裁剪后的 JSON 树; 没有任何对象被裁剪时返回 null (调用方保留原响应)。 */
-    JsonNode filter(Object payload, AuthenticatedActor actor) {
-        Scope scope = new Scope(actor);
+    JsonNode filter(Object payload, AuthenticatedActor actor, String requestFactory) {
+        Scope scope = new Scope(actor, requestFactory);
         SCOPE.set(scope);
         try {
             JsonNode tree = filteringMapper.valueToTree(payload);
@@ -139,13 +143,20 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
 
     private final class Scope {
         final AuthenticatedActor actor;
+        /** 本次请求访问的工厂: 不带 factoryId 的 DTO (如 BomItemUsage) 按它判定。 */
+        final String requestFactory;
         final Map<String, Set<String>> protectedByFactory = new HashMap<>();
         final Map<ProductKey, ProcessSecretAccessService.Decision> decisions = new HashMap<>();
         final Map<String, Optional<String>> recipeProduct = new HashMap<>();
         boolean redacted;
 
-        Scope(AuthenticatedActor actor) {
+        Scope(AuthenticatedActor actor, String requestFactory) {
             this.actor = actor;
+            this.requestFactory = requestFactory;
+        }
+
+        String factoryOfUsage() {
+            return requestFactory;
         }
 
         /** @return 需要裁剪时返回判定 (含档位), 否则 null。 */
@@ -178,7 +189,28 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         void write(Object value, JsonGenerator gen) throws IOException;
     }
 
-    private static final Map<Class<?>, Rule> RULES = Map.of(
+    private static final Map<Class<?>, Rule> RULES = Map.ofEntries(
+            Map.entry(com.cretas.aims.entity.bom.BomVersion.class, new Rule(
+                    (v, s) -> new ProductKey(((com.cretas.aims.entity.bom.BomVersion) v).getFactoryId(),
+                            s.productOfRecipe(((com.cretas.aims.entity.bom.BomVersion) v).getBomRecipeId())),
+                    (v, g) -> {
+                        com.cretas.aims.entity.bom.BomVersion bv = (com.cretas.aims.entity.bom.BomVersion) v;
+                        g.writeStringField("id", bv.getId());
+                        g.writeStringField("bomRecipeId", bv.getBomRecipeId());
+                        g.writeStringField("status", bv.getStatus() == null ? null : bv.getStatus().name());
+                    })),
+            Map.entry(com.cretas.aims.dto.bom.BomItemUsage.class, new Rule(
+                    (v, s) -> {
+                        com.cretas.aims.dto.bom.BomItemUsage u = (com.cretas.aims.dto.bom.BomItemUsage) v;
+                        return new ProductKey(s.factoryOfUsage(), u.getProductTypeId());
+                    },
+                    (v, g) -> {
+                        com.cretas.aims.dto.bom.BomItemUsage u = (com.cretas.aims.dto.bom.BomItemUsage) v;
+                        g.writeStringField("recipeId", u.getRecipeId());
+                        g.writeStringField("productTypeId", u.getProductTypeId());
+                        g.writeStringField("productName", u.getProductName());
+                    })),
+            Map.entry(
             BomRecipe.class, new Rule(
                     (v, s) -> new ProductKey(((BomRecipe) v).getFactoryId(), ((BomRecipe) v).getProductTypeId()),
                     (v, g) -> {
@@ -191,24 +223,24 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                         if (r.getVersion() != null) g.writeNumberField("version", r.getVersion());
                         if (r.getIsCurrent() != null) g.writeBooleanField("isCurrent", r.getIsCurrent());
                         g.writeStringField("status", r.getStatus() == null ? null : r.getStatus().name());
-                    }),
-            BomRecipeItem.class, new Rule(
+                    })),
+            Map.entry(BomRecipeItem.class, new Rule(
                     (v, s) -> new ProductKey(((BomRecipeItem) v).getFactoryId(),
                             s.productOfRecipe(((BomRecipeItem) v).getRecipeId())),
                     (v, g) -> {
                         BomRecipeItem i = (BomRecipeItem) v;
                         if (i.getId() != null) g.writeNumberField("id", i.getId());
                         g.writeStringField("recipeId", i.getRecipeId());
-                    }),
-            BomSeasoningItem.class, new Rule(
+                    })),
+            Map.entry(BomSeasoningItem.class, new Rule(
                     (v, s) -> new ProductKey(((BomSeasoningItem) v).getFactoryId(),
                             s.productOfRecipe(((BomSeasoningItem) v).getRecipeId())),
                     (v, g) -> {
                         BomSeasoningItem i = (BomSeasoningItem) v;
                         if (i.getId() != null) g.writeNumberField("id", i.getId());
                         g.writeStringField("recipeId", i.getRecipeId());
-                    }),
-            ProductProcessWorkflow.class, new Rule(
+                    })),
+            Map.entry(ProductProcessWorkflow.class, new Rule(
                     (v, s) -> new ProductKey(((ProductProcessWorkflow) v).getFactoryId(),
                             ((ProductProcessWorkflow) v).getProductTypeId()),
                     (v, g) -> {
@@ -217,8 +249,8 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                         g.writeStringField("factoryId", w.getFactoryId());
                         g.writeStringField("productTypeId", w.getProductTypeId());
                         g.writeStringField("status", w.getStatus() == null ? null : w.getStatus().name());
-                    }),
-            ProductProcessWorkflowRevision.class, new Rule(
+                    })),
+            Map.entry(ProductProcessWorkflowRevision.class, new Rule(
                     (v, s) -> new ProductKey(((ProductProcessWorkflowRevision) v).getFactoryId(),
                             ((ProductProcessWorkflowRevision) v).getProductTypeId()),
                     (v, g) -> {
@@ -226,8 +258,8 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                         if (w.getId() != null) g.writeNumberField("id", w.getId());
                         g.writeStringField("factoryId", w.getFactoryId());
                         g.writeStringField("productTypeId", w.getProductTypeId());
-                    }),
-            ProductProcessWorkflowDTO.class, new Rule(
+                    })),
+            Map.entry(ProductProcessWorkflowDTO.class, new Rule(
                     (v, s) -> new ProductKey(((ProductProcessWorkflowDTO) v).getFactoryId(),
                             ((ProductProcessWorkflowDTO) v).getProductTypeId()),
                     (v, g) -> {
@@ -237,7 +269,7 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                         g.writeStringField("productTypeId", d.getProductTypeId());
                         g.writeStringField("status", d.getStatus());
                         if (d.getVersion() != null) g.writeNumberField("version", d.getVersion());
-                    }));
+                    })));
 
     static Rule ruleFor(Class<?> type) {
         for (Map.Entry<Class<?>, Rule> e : RULES.entrySet()) {

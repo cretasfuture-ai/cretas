@@ -188,6 +188,24 @@ public class ProcessSecretAccessService {
         return permitted;
     }
 
+    /**
+     * 审查 H3: 管理员 (工厂总监 / HR / 平台) 重置某人的密码后就能以他的身份登录。
+     * 对保密负责人和持有有效授权的人, 只允许本人改自己的凭证; 管理员代改一律拒绝并审计。
+     */
+    public void requireAdminMayChangeCredentials(AuthenticatedActor operator, String factoryId, Long targetUserId) {
+        if (targetUserId == null || factoryId == null) return;
+        boolean self = operator != null && !operator.isPlatformAdmin()
+                && factoryId.equals(operator.factoryId()) && targetUserId.equals(operator.id());
+        if (self) return;
+        boolean holder = policyRepository.existsByFactoryIdAndOwnerUserId(factoryId, targetUserId)
+                || grantRepository.countActiveForGrantee(factoryId, ProcessSecretGranteeType.FACTORY_USER, targetUserId,
+                        LocalDateTime.now(ProcessSecretPolicyService.BUSINESS_ZONE)) > 0;
+        if (!holder) return;
+        audit(factoryId, null, operator, ProcessSecretAction.MANAGE_GRANT, "DENY",
+                "管理员代改保密负责人/被授权人的凭证", "user:" + targetUserId);
+        throw new BusinessException(403, "该账号是工艺保密负责人或持有工艺授权，不能由管理员代为重置密码，请本人修改");
+    }
+
     /** 写审计; 失败只返回 false (不吞掉判定), 由调用方决定是否 fail-closed。 */
     public boolean audit(String factoryId, String productTypeId, AuthenticatedActor actor,
                          ProcessSecretAction action, String decision, String reason, String resourceRef) {
