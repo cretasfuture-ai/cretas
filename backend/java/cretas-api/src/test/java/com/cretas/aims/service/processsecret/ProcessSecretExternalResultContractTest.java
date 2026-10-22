@@ -68,7 +68,8 @@ class ProcessSecretExternalResultContractTest {
         policyService = new ProcessSecretPolicyService(policies, mock(
                 com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository.class),
                 mock(com.cretas.aims.repository.processsecret.ProcessSecretAccessEventRepository.class),
-                mock(com.cretas.aims.repository.UserRepository.class), access);
+                mock(com.cretas.aims.repository.UserRepository.class), access,
+                mock(com.cretas.aims.repository.processsecret.ProcessSecretExternalPackageRepository.class));
         com.cretas.aims.service.unit.UnitContractService units = mock(com.cretas.aims.service.unit.UnitContractService.class);
         // 桩: 只认 kg / 千克 / g 三种写法, kg 与 千克 同一单位 —— 足以区分「同义放行」和「不同单位拒绝」
         when(units.areEquivalent(any(), any(), any())).thenAnswer(call -> {
@@ -204,6 +205,9 @@ class ProcessSecretExternalResultContractTest {
         assertCode(400, () -> service.submitResult(user(20), F, signed("evt-00000011", "123456789012", "kg", 300L,
                 executorKey)));
         verify(packages, never()).findByFactoryIdAndPackageRefAndPackageVersion(F, "P17-PREMIX", "v2");
+        // 尾零不算精度: 1.00000 与签名规范串一样视为 1 (复审 L1)
+        assertThat(service.submitResult(user(20), F, signed("evt-00000018", "1.00000", "kg", 300L, executorKey))
+                .duplicate()).isFalse();
         // 阳性对照: 边界值 11 位整数 + 4 位小数照收
         assertThat(service.submitResult(user(20), F, signed("evt-00000012", "12345678901.1234", "kg", 300L,
                 executorKey)).duplicate()).isFalse();

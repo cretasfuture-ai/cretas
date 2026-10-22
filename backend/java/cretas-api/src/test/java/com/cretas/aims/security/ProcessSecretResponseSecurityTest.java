@@ -54,7 +54,7 @@ class ProcessSecretResponseSecurityTest {
         access = mock(ProcessSecretAccessService.class);
         recipes = mock(BomRecipeRepository.class);
         json = new ObjectMapper().registerModule(new JavaTimeModule());
-        advice = new ProcessSecretResponseAdvice(access, recipes, json);
+        advice = new ProcessSecretResponseAdvice(access, recipes, mock(com.cretas.aims.repository.ProductionPlanRepository.class), json);
         when(access.protectedProductTypeIds(F)).thenReturn(Set.of(SECRET));
     }
 

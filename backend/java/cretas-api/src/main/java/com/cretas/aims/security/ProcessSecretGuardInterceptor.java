@@ -73,6 +73,8 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
         Map<String, String> vars = pathVariables(request);
         String factoryId = vars.get("factoryId");
         if (factoryId == null) return true;
+        // 本厂没有任何保密策略: 不做额外查询 (无策略工厂零开销)
+        if (accessService.protectedProductTypeIds(factoryId).isEmpty()) return true;
         AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
         for (String productTypeId : resolveProducts(guard, factoryId, vars, request)) {
             accessService.require(actor, factoryId, productTypeId, guard.action(),
@@ -84,21 +86,48 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
     /** 一个接口可能涉及多个产品 (多计划打印); 任一受保护产品无权即 403。 */
     List<String> resolveProducts(ProcessSecretGuard guard, String factoryId, Map<String, String> vars,
                                  HttpServletRequest request) {
-        if (guard.from() == ProcessSecretGuard.Source.PLAN_PARAM_LIST) {
-            String[] raw = request.getParameterValues(guard.name());
-            if (raw == null) return List.of();
-            Set<String> products = new LinkedHashSet<>();
-            Arrays.stream(raw).flatMap(v -> Arrays.stream(v.split(",")))
-                    .map(String::trim).filter(v -> !v.isEmpty())
-                    .forEach(planId -> planProduct(factoryId, planId).ifPresent(products::add));
-            return new ArrayList<>(products);
+        Set<String> products = new LinkedHashSet<>();
+        switch (guard.from()) {
+            case PLAN_PARAM_LIST -> {
+                String[] raw = request.getParameterValues(guard.name());
+                if (raw == null) return List.of();
+                List<String> planIds = Arrays.stream(raw).flatMap(v -> Arrays.stream(v.split(",")))
+                        .map(String::trim).filter(v -> !v.isEmpty()).distinct().toList();
+                if (planIds.size() > MAX_PLANS_PER_REQUEST) {
+                    throw new com.cretas.aims.exception.BusinessException(400,
+                            "一次最多处理 " + MAX_PLANS_PER_REQUEST + " 个生产计划");
+                }
+                planIds.forEach(planId -> products.addAll(planProducts(factoryId, planId)));
+            }
+            case PLAN_PATH -> products.addAll(planProducts(factoryId, vars.get(guard.name())));
+            case MATERIAL_REQUISITION_PATH -> {
+                String raw = vars.get(guard.name());
+                if (raw != null) {
+                    requisitionRepository.findById(raw)
+                            .filter(r -> factoryId.equals(r.getFactoryId()))
+                            .ifPresent(r -> products.addAll(planProducts(factoryId, r.getProductionPlanId())));
+                }
+            }
+            case BATCH_PATH -> parseLong(vars.get(guard.name()))
+                    .flatMap(id -> batchRepository.findByIdAndFactoryId(id, factoryId))
+                    .ifPresent(batch -> {
+                        if (batch.getProductTypeId() != null) products.add(batch.getProductTypeId());
+                        products.addAll(planProducts(factoryId, batch.getProductionPlanId()));
+                    });
+            default -> resolveProduct(guard, factoryId, vars, request).ifPresent(products::add);
         }
-        return resolveProduct(guard, factoryId, vars, request).map(List::of).orElse(List.of());
+        return new ArrayList<>(products);
     }
 
-    private Optional<String> planProduct(String factoryId, String planId) {
+    static final int MAX_PLANS_PER_REQUEST = 20;
+
+    /** 计划牵涉的全部产品 (多产出计划: 锚点 + 各成品 + 钉住配方的产品, 复审 H-A)。 */
+    private Set<String> planProducts(String factoryId, String planId) {
+        if (planId == null || planId.isBlank()) return Set.of();
         return planRepository.findByIdAndFactoryId(planId, factoryId)
-                .map(com.cretas.aims.entity.ProductionPlan::getProductTypeId);
+                .map(plan -> com.cretas.aims.service.processsecret.ProcessSecretPlanProducts.of(plan,
+                        recipeId -> recipeProduct(factoryId, recipeId)))
+                .orElse(Set.of());
     }
 
     private Optional<String> recipeProduct(String factoryId, String recipeId) {
@@ -133,14 +162,8 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
             case BOM_VERSION_PATH -> versionRepository.findById(raw)
                     .filter(v -> factoryId.equals(v.getFactoryId()))
                     .flatMap(v -> recipeProduct(factoryId, v.getBomRecipeId()));
-            case BATCH_PATH -> parseLong(raw)
-                    .flatMap(id -> batchRepository.findByIdAndFactoryId(id, factoryId))
-                    .map(com.cretas.aims.entity.ProductionBatch::getProductTypeId);
-            case PLAN_PATH -> planProduct(factoryId, raw);
-            case MATERIAL_REQUISITION_PATH -> requisitionRepository.findById(raw)
-                    .filter(r -> factoryId.equals(r.getFactoryId()))
-                    .flatMap(r -> planProduct(factoryId, r.getProductionPlanId()));
-            case PLAN_PARAM_LIST -> Optional.empty();
+            // 以下几种在 resolveProducts 里按「多产品」处理
+            case BATCH_PATH, PLAN_PATH, MATERIAL_REQUISITION_PATH, PLAN_PARAM_LIST -> Optional.empty();
         };
     }
 

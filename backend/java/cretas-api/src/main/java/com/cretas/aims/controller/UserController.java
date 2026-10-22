@@ -59,6 +59,9 @@ public class UserController {
     // 字段注入 (不进构造器): 只有「管理员改别人的密码」这条路径用到
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.UserRepository userRepository;
     private final com.cretas.aims.service.MobileService mobileService;
     private final com.cretas.aims.repository.inventory.PurchaseOrderRepository purchaseOrderRepository;
 
@@ -130,8 +133,11 @@ public class UserController {
             @PathVariable @NotNull Long userId,
             @Valid @RequestBody CreateUserRequest request) {
         log.info("更新用户: factoryId={}, userId={}", factoryId, userId);
-        if (request.getPassword() != null && !request.getPassword().isEmpty()) {
-            // 工艺保密 (审查 H3): 管理员不能代改保密负责人 / 被授权人的密码
+        boolean phoneChanges = request.getPhone() != null && userRepository.findByIdAndFactoryId(userId, factoryId)
+                .map(u -> !request.getPhone().equals(u.getPhone())).orElse(false);
+        if ((request.getPassword() != null && !request.getPassword().isEmpty()) || phoneChanges) {
+            // 工艺保密 (审查 H3 / 复审 M-1): 管理员不能代改保密负责人 / 被授权人的密码或手机号
+            // (改手机号 + 忘记密码 = 换个方式接管)
             processSecretAccessService.requireAdminMayChangeCredentials(
                     com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null), factoryId, userId);
         }

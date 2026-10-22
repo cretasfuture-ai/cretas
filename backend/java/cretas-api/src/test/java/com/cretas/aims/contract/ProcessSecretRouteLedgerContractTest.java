@@ -60,7 +60,7 @@ class ProcessSecretRouteLedgerContractTest {
     /** 打印控制器端点很多, 只钉住「payload 里带锁定 BOM / 调味 / 工序」的这几个必须带 Guard。 */
     static final Set<String> PRINT_ENDPOINTS_WITH_BOM = Set.of(
             "printMaterialRequisition", "printProductionWorkOrder", "printProductionWorkOrderMulti",
-            "printBatchingSheet", "printProductionDocumentPackage");
+            "printBatchingSheet", "printProductionDocumentPackage", "printConsolidatedMaterialRequisition");
 
     static final Set<String> CHECKED_IN_BODY = Set.of(
             "BomRecipeController#createRecipe",
@@ -122,7 +122,7 @@ class ProcessSecretRouteLedgerContractTest {
     void serviceLevelChecksAreReallyInTheServices() throws IOException {
         for (String[] spec : new String[][]{
                 {"service/bom/impl/BomVersionServiceImpl.java", "processSecretGuard.requireRecipe(", "5"},
-                {"service/bom/impl/BomBatchOperationServiceImpl.java", "processSecretGuard.requireRecipes(", "2"},
+                {"service/bom/impl/BomBatchOperationServiceImpl.java", "processSecretGuard.partitionForEdit(", "2"},
                 {"service/bom/impl/BomBatchOperationServiceImpl.java", "guardedScope(req.getFactoryId()", "3"}}) {
             String text = Files.readString(Path.of("src/main/java/com/cretas/aims/" + spec[0]), StandardCharsets.UTF_8);
             int count = text.split(java.util.regex.Pattern.quote(spec[1]), -1).length - 1;

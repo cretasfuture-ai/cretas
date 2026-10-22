@@ -9,5 +9,6 @@ public enum ProcessSecretAction {
     MANAGE_GRANT,
     READ_AUDIT,
     REGISTER_PACKAGE,
+    RETIRE_PACKAGE,
     SUBMIT_RESULT
 }

@@ -192,7 +192,7 @@ class ProcessSecretSecondaryExitsSecurityTest {
     @Test
     void versionSnapshotsAndReverseQueryUsageAreSummarisedForNonOwners() {
         ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
-        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, json);
+        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, mock(ProductionPlanRepository.class), json);
         BomVersion version = new BomVersion();
         version.setId("v1");
         version.setFactoryId(F);
@@ -221,7 +221,7 @@ class ProcessSecretSecondaryExitsSecurityTest {
     void crossFactoryTokenIsStillSummarisedByPathFactory() {
         // 审查 M2: factoryId=PLATFORM 的非平台令牌, 身份工厂下没有策略, 不能因此跳过裁剪
         ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
-        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, json);
+        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, mock(ProductionPlanRepository.class), json);
         when(policies.findByFactoryIdOrderByProductTypeIdAsc("PLATFORM")).thenReturn(List.of());
         AuthenticatedActor crossFactory = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 5L,
                 "PLATFORM", "factory_super_admin");

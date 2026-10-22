@@ -48,17 +48,20 @@ public class ProcessSecretPolicyService {
     private final ProcessSecretAccessEventRepository eventRepository;
     private final UserRepository userRepository;
     private final ProcessSecretAccessService accessService;
+    private final com.cretas.aims.repository.processsecret.ProcessSecretExternalPackageRepository packageRepository;
 
     public ProcessSecretPolicyService(ProcessSecretPolicyRepository policyRepository,
                                       ProcessSecretGrantRepository grantRepository,
                                       ProcessSecretAccessEventRepository eventRepository,
                                       UserRepository userRepository,
-                                      ProcessSecretAccessService accessService) {
+                                      ProcessSecretAccessService accessService,
+                                      com.cretas.aims.repository.processsecret.ProcessSecretExternalPackageRepository packageRepository) {
         this.policyRepository = policyRepository;
         this.grantRepository = grantRepository;
         this.eventRepository = eventRepository;
         this.userRepository = userRepository;
         this.accessService = accessService;
+        this.packageRepository = packageRepository;
     }
 
     public record PolicyView(String productTypeId, ProcessSecretStorageMode storageMode, Long ownerUserId,
@@ -113,7 +116,10 @@ public class ProcessSecretPolicyService {
             policyRepository.save(policy);
             if (mode == ProcessSecretStorageMode.CUSTOMER_HELD && before != mode) {
                 // 云端不再有可授予的完整工艺, 旧授权一并失效
-                grantRepository.revokeAllForProduct(factoryId, productTypeId, LocalDateTime.now(), actor.id());
+                grantRepository.revokeAllForProduct(factoryId, productTypeId, LocalDateTime.now(BUSINESS_ZONE), actor.id());
+            }
+            if (before == ProcessSecretStorageMode.CUSTOMER_HELD && mode != before) {
+                packageRepository.retireAllForProduct(factoryId, productTypeId);
             }
             audit(factoryId, productTypeId, actor, "UPDATE " + before + "->" + mode
                     + " owner " + ownerBefore + "->" + ownerUserId);
@@ -130,7 +136,8 @@ public class ProcessSecretPolicyService {
                 .orElseThrow(() -> new BusinessException(404, "该产品没有保密策略"));
         requireOwner(actor, factoryId, policy);
         requireVersion(policy, expectedPolicyVersion);
-        grantRepository.revokeAllForProduct(factoryId, productTypeId, LocalDateTime.now(), actor.id());
+        grantRepository.revokeAllForProduct(factoryId, productTypeId, LocalDateTime.now(BUSINESS_ZONE), actor.id());
+        packageRepository.retireAllForProduct(factoryId, productTypeId);
         policyRepository.delete(policy);
         audit(factoryId, productTypeId, actor, "DISABLE " + policy.getStorageMode());
         accessService.invalidate(factoryId);
@@ -195,7 +202,7 @@ public class ProcessSecretPolicyService {
                 .orElseThrow(() -> new BusinessException(404, "该产品没有保密策略"));
         requireOwner(actor, factoryId, policy);
         if (grant.getRevokedAt() == null) {
-            grant.setRevokedAt(LocalDateTime.now());
+            grant.setRevokedAt(LocalDateTime.now(BUSINESS_ZONE));
             grant.setRevokedBy(actor.id());
             grantRepository.save(grant);
             audit(factoryId, grant.getProductTypeId(), actor, "REVOKE #" + grant.getId());

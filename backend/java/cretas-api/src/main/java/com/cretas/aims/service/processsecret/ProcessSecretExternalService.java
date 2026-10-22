@@ -255,8 +255,10 @@ public class ProcessSecretExternalService {
      * 与库列 NUMERIC(15,4) 一致: 最多 4 位小数、11 位整数 —— 超了不静默四舍五入 (签名值 ≠ 存储值)。
      */
     static void requireStorableQuantity(BigDecimal quantity) {
-        long integerDigits = (long) quantity.precision() - quantity.scale();
-        if (quantity.scale() > 4 || integerDigits > 11) {
+        // 先去尾零再判: 1.00000 与签名规范串一致地视为 1 (复审 L1); 大指数值去尾零也是 O(1)
+        BigDecimal normalized = quantity.stripTrailingZeros();
+        long integerDigits = (long) normalized.precision() - normalized.scale();
+        if (normalized.scale() > 4 || integerDigits > 11) {
             throw new BusinessException(400, "outputQuantity 最多 11 位整数、4 位小数");
         }
     }
@@ -272,7 +274,7 @@ public class ProcessSecretExternalService {
         if (pkg.getStatus() != ProcessSecretPackageStatus.RETIRED) {
             pkg.setStatus(ProcessSecretPackageStatus.RETIRED);
             packageRepository.save(pkg);
-            if (!accessService.audit(factoryId, pkg.getProductTypeId(), actor, ProcessSecretAction.REGISTER_PACKAGE,
+            if (!accessService.audit(factoryId, pkg.getProductTypeId(), actor, ProcessSecretAction.RETIRE_PACKAGE,
                     "ALLOW", "停用工艺包", pkg.getPackageRef() + "@" + pkg.getPackageVersion())) {
                 throw new BusinessException(503, "保密审计暂不可用，本次停用未生效");
             }

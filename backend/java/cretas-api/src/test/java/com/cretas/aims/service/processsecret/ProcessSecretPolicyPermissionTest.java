@@ -47,6 +47,7 @@ class ProcessSecretPolicyPermissionTest {
     UserRepository users;
     ProcessSecretAccessService access;
     ProcessSecretPolicyService service;
+    com.cretas.aims.repository.processsecret.ProcessSecretExternalPackageRepository packages;
 
     @BeforeEach
     void setUp() {
@@ -54,9 +55,10 @@ class ProcessSecretPolicyPermissionTest {
         grants = mock(ProcessSecretGrantRepository.class);
         users = mock(UserRepository.class);
         access = mock(ProcessSecretAccessService.class);
+        packages = mock(com.cretas.aims.repository.processsecret.ProcessSecretExternalPackageRepository.class);
         when(access.audit(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
         service = new ProcessSecretPolicyService(policies, grants, mock(ProcessSecretAccessEventRepository.class),
-                users, access);
+                users, access, packages);
         user(OWNER, "factory_super_admin", true);
         user(SUPER, "factory_super_admin", true);
         user(STAFF, "operator", true);
@@ -138,6 +140,14 @@ class ProcessSecretPolicyPermissionTest {
         assertCode(409, () -> service.createGrant(actor(OWNER, "factory_super_admin"), F, P,
                 new ProcessSecretPolicyService.GrantRequest(ProcessSecretGranteeType.FACTORY_USER, STAFF,
                         true, false, false, "生产", OffsetDateTime.now().plusDays(1))));
+    }
+
+    @Test
+    void leavingCustomerHeldRetiresPackagesSoTheyCannotRevive() {
+        existing(ProcessSecretStorageMode.CUSTOMER_HELD);
+        service.upsertPolicy(actor(OWNER, "factory_super_admin"), F, P, ProcessSecretStorageMode.CLOUD_RESTRICTED,
+                OWNER, 4L);
+        verify(packages).retireAllForProduct(F, P);
     }
 
     @Test

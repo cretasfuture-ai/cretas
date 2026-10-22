@@ -380,6 +380,7 @@ public class PrintController {
      *
      * <p>G4 要求: FactoryMaterialRequisitionService.listByPlan 跨批次汇总.
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PLAN_PATH, name = "planId")
     @GetMapping("/consolidated-material-requisition/{planId}")
     @RequirePermission({"production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write"})

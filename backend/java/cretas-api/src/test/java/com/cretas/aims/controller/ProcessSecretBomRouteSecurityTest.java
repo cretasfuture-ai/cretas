@@ -109,7 +109,7 @@ class ProcessSecretBomRouteSecurityTest {
                         mock(com.cretas.aims.repository.ProductionPlanRepository.class),
                         mock(com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository.class)))
                 .setControllerAdvice(new GlobalExceptionHandler(),
-                        new ProcessSecretResponseAdvice(access, recipeRepository, json))
+                        new ProcessSecretResponseAdvice(access, recipeRepository, mock(com.cretas.aims.repository.ProductionPlanRepository.class), json))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(json))
                 .build();
     }

@@ -53,6 +53,45 @@ public class ProcessSecretRecipeGuard {
         accessService.filterPermitted(currentActor(), factoryId, products, action, true, resourceRef);
     }
 
+    /** 批量改动的范围拆分结果: {@code skipped} 是 recipeId → 原因。 */
+    public record Partition(List<BomRecipe> allowed, java.util.Map<String, String> skipped) { }
+
+    /**
+     * 批量编辑: 点名的配方 ({@code explicit}) 任一无权即整体 403;
+     * 「全厂批量」则跳过无权的受保护配方并写明原因 (复审 M-2: 不能让一个保密产品锁死全厂批量)。
+     */
+    public Partition partitionForEdit(String factoryId, List<BomRecipe> recipes, boolean explicit,
+                                      String resourceRef) {
+        if (recipes == null || recipes.isEmpty()) return new Partition(List.of(), java.util.Map.of());
+        if (explicit) {
+            requireRecipes(factoryId, recipes, ProcessSecretAction.EDIT, resourceRef);
+            return new Partition(recipes, java.util.Map.of());
+        }
+        AuthenticatedActor actor = currentActor();
+        java.util.List<BomRecipe> allowed = new java.util.ArrayList<>();
+        java.util.Map<String, String> skipped = new java.util.LinkedHashMap<>();
+        java.util.Map<String, ProcessSecretAccessService.Decision> byProduct = new java.util.HashMap<>();
+        for (BomRecipe recipe : recipes) {
+            String product = recipe.getProductTypeId();
+            ProcessSecretAccessService.Decision decision = product == null ? null : byProduct.computeIfAbsent(
+                    product, p -> accessService.decide(actor, factoryId, p, ProcessSecretAction.EDIT));
+            if (decision != null && !decision.permitted()) {
+                skipped.put(recipe.getId(), "工艺保密：无编辑授权，已跳过");
+                continue;
+            }
+            allowed.add(recipe);
+        }
+        byProduct.forEach((product, decision) -> {
+            if (decision.isProtected()) {
+                accessService.audit(factoryId, product, actor, ProcessSecretAction.EDIT,
+                        decision.permitted() ? "ALLOW" : "DENY",
+                        decision.permitted() ? decision.reason() : decision.reason() + "（全厂批量已跳过）",
+                        resourceRef);
+            }
+        });
+        return new Partition(allowed, skipped);
+    }
+
     /** AI 工具用: 不抛异常, 返回能否给出完整内容 (受保护产品的判定照常审计)。 */
     public boolean permitsFullContent(String factoryId, String recipeId, String resourceRef) {
         Optional<String> product = productOf(factoryId, recipeId);

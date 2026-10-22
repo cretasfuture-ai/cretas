@@ -68,11 +68,15 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
     private final BomRecipeRepository recipeRepository;
     private final ObjectMapper filteringMapper;
 
+    private final com.cretas.aims.repository.ProductionPlanRepository planRepository;
+
     public ProcessSecretResponseAdvice(ProcessSecretAccessService accessService,
                                        BomRecipeRepository recipeRepository,
+                                       com.cretas.aims.repository.ProductionPlanRepository planRepository,
                                        ObjectMapper objectMapper) {
         this.accessService = accessService;
         this.recipeRepository = recipeRepository;
+        this.planRepository = planRepository;
         ObjectMapper copy = objectMapper.copy();
         copy.setSerializerFactory(copy.getSerializerFactory().withSerializerModifier(new Modifier()));
         this.filteringMapper = copy;
@@ -159,6 +163,22 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
             return requestFactory;
         }
 
+        boolean factoryHasProtection(String factoryId) {
+            return factoryId != null && !protectedByFactory.computeIfAbsent(factoryId,
+                    accessService::protectedProductTypeIds).isEmpty();
+        }
+
+        final Map<String, java.util.Set<String>> planProducts = new HashMap<>();
+
+        java.util.Set<String> productsOfPlan(String factoryId, String planId) {
+            if (factoryId == null || planId == null) return java.util.Set.of();
+            return planProducts.computeIfAbsent(factoryId + "|" + planId, k -> planRepository
+                    .findByIdAndFactoryId(planId, factoryId)
+                    .map(plan -> com.cretas.aims.service.processsecret.ProcessSecretPlanProducts.of(plan,
+                            id -> recipeRepository.findById(id).map(BomRecipe::getProductTypeId)))
+                    .orElse(java.util.Set.of()));
+        }
+
         /** @return 需要裁剪时返回判定 (含档位), 否则 null。 */
         ProcessSecretAccessService.Decision restricted(String factoryId, String productTypeId) {
             if (factoryId == null || productTypeId == null) return null;
@@ -182,7 +202,17 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
     // ------------------------------------------------------------- serializers
 
     /** 每种受管类型: 怎么取 (工厂, 产品), 以及摘要里保留哪些字段。 */
-    private record Rule(BiFunction<Object, Scope, ProductKey> key, SummaryWriter summary) { }
+    /**
+     * {@code keys}: 这个对象牵涉的 (工厂, 产品), 任一受保护且无权即裁剪。
+     * {@code failClosed}: 解析不出产品 (父记录已软删等) 且该厂有保密策略时按受限处理 (复审 M-3);
+     * 对本来就可能与工艺无关的对象 (如无计划的领料单) 不开。
+     */
+    private record Rule(BiFunction<Object, Scope, java.util.List<ProductKey>> keys, boolean failClosed,
+                        SummaryWriter summary) {
+        Rule(BiFunction<Object, Scope, ProductKey> key, SummaryWriter summary) {
+            this((v, s) -> java.util.Collections.singletonList(key.apply(v, s)), true, summary);
+        }
+    }
 
     @FunctionalInterface
     private interface SummaryWriter {
@@ -199,6 +229,29 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                         g.writeStringField("bomRecipeId", bv.getBomRecipeId());
                         g.writeStringField("status", bv.getStatus() == null ? null : bv.getStatus().name());
                     })),
+            Map.entry(com.cretas.aims.entity.factory.FactoryMaterialRequisition.class, new Rule(
+                    (v, s) -> {
+                        com.cretas.aims.entity.factory.FactoryMaterialRequisition r =
+                                (com.cretas.aims.entity.factory.FactoryMaterialRequisition) v;
+                        return s.productsOfPlan(r.getFactoryId(), r.getProductionPlanId()).stream()
+                                .map(p -> new ProductKey(r.getFactoryId(), p)).toList();
+                    }, false,
+                    (v, g) -> {
+                        com.cretas.aims.entity.factory.FactoryMaterialRequisition r =
+                                (com.cretas.aims.entity.factory.FactoryMaterialRequisition) v;
+                        g.writeStringField("id", r.getId());
+                        g.writeStringField("productionPlanId", r.getProductionPlanId());
+                        g.writeStringField("productionPlanNumber", r.getProductionPlanNumber());
+                    })),
+            Map.entry(com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO.class, new Rule(
+                    (v, s) -> new ProductKey(((com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO) v).getFactoryId(),
+                            ((com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO) v).getProductTypeId()),
+                    (v, g) -> {
+                        com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO d =
+                                (com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO) v;
+                        if (d.getProductionBatchId() != null) g.writeNumberField("productionBatchId", d.getProductionBatchId());
+                        g.writeStringField("productTypeId", d.getProductTypeId());
+                    })),
             Map.entry(com.cretas.aims.dto.bom.BomItemUsage.class, new Rule(
                     (v, s) -> {
                         com.cretas.aims.dto.bom.BomItemUsage u = (com.cretas.aims.dto.bom.BomItemUsage) v;
@@ -212,7 +265,12 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                     })),
             Map.entry(
             BomRecipe.class, new Rule(
-                    (v, s) -> new ProductKey(((BomRecipe) v).getFactoryId(), ((BomRecipe) v).getProductTypeId()),
+                    (v, s) -> {
+                        BomRecipe r = (BomRecipe) v;
+                        // 记下「配方 → 产品」: 同一响应里嵌套的明细 / 调味 / 版本直接用, 不再逐个查库
+                        if (r.getId() != null) s.recipeProduct.putIfAbsent(r.getId(), Optional.ofNullable(r.getProductTypeId()));
+                        return new ProductKey(r.getFactoryId(), r.getProductTypeId());
+                    },
                     (v, g) -> {
                         BomRecipe r = (BomRecipe) v;
                         g.writeStringField("id", r.getId());
@@ -313,8 +371,27 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         private boolean writeSummaryIfRestricted(Object value, JsonGenerator gen) throws IOException {
             Scope scope = SCOPE.get();
             if (scope == null || value == null) return false;
-            ProductKey key = rule.key().apply(value, scope);
-            ProcessSecretAccessService.Decision decision = scope.restricted(key.factoryId(), key.productTypeId());
+            ProcessSecretAccessService.Decision decision = null;
+            boolean unresolved = false;
+            String anyFactory = null;
+            for (ProductKey key : rule.keys().apply(value, scope)) {
+                if (key == null) continue;
+                anyFactory = anyFactory != null ? anyFactory : key.factoryId();
+                if (key.factoryId() == null || key.productTypeId() == null) {
+                    unresolved = true;
+                    continue;
+                }
+                ProcessSecretAccessService.Decision d = scope.restricted(key.factoryId(), key.productTypeId());
+                if (d != null) {
+                    decision = d;
+                    break;
+                }
+            }
+            if (decision == null && unresolved && rule.failClosed()
+                    && scope.factoryHasProtection(anyFactory != null ? anyFactory : scope.factoryOfUsage())) {
+                decision = new ProcessSecretAccessService.Decision(ProcessSecretAccessService.Outcome.DENY, null,
+                        "无法确认所属产品");
+            }
             if (decision == null) return false;
             scope.redacted = true;
             gen.writeStartObject();
