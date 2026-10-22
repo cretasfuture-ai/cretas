@@ -111,6 +111,24 @@ class WarehouseTransferMovementRepositoryQueryValidationTest {
         });
     }
 
+    @Test void repositoryDeletionRetainsAuditHistoryAndConsumedRequestKey() {
+        var fact = movement("F1", "T-DELETE", 55L, "deleted-via-repository");
+        em.persist(fact); em.flush();
+        Long id = fact.getId();
+        repository.deleteById(id); em.flush(); em.clear();
+        assertTrue(repository.findById(id).isEmpty());
+        var history = repository.findRequestHistoryIncludingDeleted("deleted-via-repository", "F1", "T-DELETE");
+        assertEquals(1, history.size());
+        assertEquals(id, history.get(0).getId());
+        assertNotNull(history.get(0).getDeletedAt());
+        assertEquals(0, new BigDecimal("0.04").compareTo(history.get(0).getQuantity()));
+        assertEquals(1, repository.findTransferHistoryIncludingDeleted("T-DELETE").size());
+        assertThrows(RuntimeException.class, () -> {
+            em.persist(movement("F1", "T-DELETE", 55L, "deleted-via-repository"));
+            em.flush();
+        });
+    }
+
     private WarehouseTransferMovement movement(String tenant, String transfer, Long item, String key) {
         var movement = new WarehouseTransferMovement();
         movement.setFactoryId(tenant); movement.setTransferId(transfer); movement.setTransferItemId(item);

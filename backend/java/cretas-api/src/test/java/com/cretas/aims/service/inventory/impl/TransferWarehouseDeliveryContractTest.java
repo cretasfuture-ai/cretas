@@ -109,6 +109,39 @@ class TransferWarehouseDeliveryContractTest {
         verify(batches, never()).save(any()); verify(movements, never()).save(any());
     }
 
+    @Test void receiptAcceptsStorageUnitAliasesWithoutConvertingQuantity() {
+        var units = mock(com.cretas.aims.service.unit.UnitContractService.class);
+        ReflectionTestUtils.setField(service, "unitContractService", units);
+        when(units.storageUnit(eq("F1"), anyString()))
+                .thenAnswer(call -> "千克".equals(call.getArgument(1)) ? "kg" : call.getArgument(1));
+        item.setUnit("千克");
+        service.receiveWarehouseTransfer("F1", "T1", 9L, request("0.04"));
+        assertEquals(0, new BigDecimal("0.04").compareTo(item.getReceivedQuantity()));
+        assertEquals(TransferStatus.SHIPPED, transfer.getStatus());
+        assertEquals(2, history.size());
+        assertEquals(0, new BigDecimal("0.04").compareTo(history.get(1).getQuantity()));
+    }
+
+    @Test void receiptRejectsScaledAndDistinctCountingUnitsBeforeWrites() {
+        var units = mock(com.cretas.aims.service.unit.UnitContractService.class);
+        ReflectionTestUtils.setField(service, "unitContractService", units);
+        when(units.storageUnit(eq("F1"), anyString())).thenAnswer(call -> call.getArgument(1));
+        for (String[] pair : List.of(new String[]{"kg", "g"}, new String[]{"只", "个"}, new String[]{"箱", "盒"})) {
+            history.get(0).setUnit(pair[0]); item.setUnit(pair[1]);
+            var error = assertThrows(com.cretas.aims.exception.BusinessException.class,
+                    () -> service.receiveWarehouseTransfer("F1", "T1", 9L, request("0.04")));
+            assertEquals(409, error.getCode());
+            assertNotNull(error.getActionHint());
+            assertFalse(error.getActionHint().isBlank());
+            assertEquals(0, BigDecimal.ZERO.compareTo(item.getReceivedQuantity()));
+            assertEquals(1, history.size());
+        }
+        verify(movements, never()).save(any());
+        verify(batches, never()).save(any());
+        verify(batches, never()).saveAndFlush(any());
+        verify(consumptions, never()).save(any());
+    }
+
     @Test void dispatchDebitsExactBatchAndRecordsConsumptionBeforeAnyReceipt() {
         history.clear(); transfer.setStatus(TransferStatus.APPROVED);
         service.dispatchWarehouseTransfer("F1", "T1", 9L);
