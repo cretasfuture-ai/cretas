@@ -6,6 +6,9 @@
 
 ## 在飞任务
 
+- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — 两草稿已取消；S3-06原QA通过；S0缺口、S3-08续修，原FAIL保留；见archive/2026-10-23-s0-s3-acceptance.md。
+- `ERP-S308-WAREHOUSE-DELIVERY-20261023` — `in-progress` — Owner /root/s308_backend — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — 同厂独立发运/累计分收，保留旧原子确认；精确12文件及JPA/PG门禁见archive/2026-10-23-s308-warehouse-delivery-scope.md；QA资源不移交。
+
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
 
 - `ERP-S6-B3C-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a844845c4b63ba0baabdd23a05bc18ba18dce432 — 1099/7f62471的C1增量5文件已审接收；新增测试先写后补审事实保留；C2/C3/集成/生产仍HOLD，详见archive/2026-10-22-s6-b3c-review.md。
@@ -29,7 +32,7 @@
 
 
 
-- `ERP-STAGES-20261019` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base d58fc9c03003118d0d749583c3b89281c41e1413 — 02/03/04/10原QA通过；07HTTP/UI/Tool/Skill子例已验、timer未闭合，整行未测；75=13/1/61，S0/S1未完；见archive/2026-10-22-s1-grant-callers.md。
+- `ERP-STAGES-20261019` — `in-progress` — 协调Owner 01a1523e-881c-7a92-b7ab-f4b8c5a552df，原QA不变 — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — S1原判据10/10通过，S0-05/06仍未收口；S2独立，S3前提成立者续验；见archive/2026-10-23-s0-s3-acceptance.md。
 
 
 
