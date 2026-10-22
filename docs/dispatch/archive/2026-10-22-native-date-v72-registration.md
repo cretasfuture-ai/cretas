@@ -51,6 +51,14 @@ Root 台账写 Owner：`01a1523e-881c-7a92-b7ab-f4b8c5a552df`。原源码 Owner 
 仍未完成：push、PR、必要完整检查、合并、正式签名 OTA、真机、独立 DB 及原 QA 签收。源码 Owner 已停止写入、恢复最终内容；Root 仅提交三份协调文档，原 Source 继续负责接收候选和正式交付。S1-03 Web 已通过证据保留，Native 原缺陷保持 OPEN。
 
 
+## Native 最终候选冻结与条件释放
+
+`ERP-S1-NATIVE-DATE-REACHABILITY-20261022`：Base `56e43461dd59a8d22a07a8cf84fbe2af1373de42`，产品提交 `e810fa80eb91b2f04a141088bcd36019b0d69b14`，唯一 Source `01a15272-374d-72c0-bb20-cdfa0bd823f1`，PR #1098。两产品文件内容冻结，原目标旧红 1 FAIL/9 PASS、恢复绿 10 PASS 按相同哈希复用。最终 RN 门禁依 `.github/workflows/rn-gate.yml` 执行 `npm ci --legacy-peer-deps`、`npx tsc --noEmit`、`npm test -- --ci --forceExit`；本记录不宣称该门禁已经通过。
+
+Root 通过私有 `source-native-date-delivery-20261022/root-ledger-write-release.json` 明确仅释放本任务 ACTIVE 行和本归档，第三份 S6 归档及其他条目保持只读。本候选已从 ACTIVE 移入归档；**两产品文件写锁仅在实际合并后释放**，在此之前仍由原 Source 独占并保留 worktree。实现冻结不等于合并、OTA 或真机验收完成。
+
+现有 Java/Web/OTA 运行版本保留至 Root 明确确认原 QA SAFE、独立 AFTER 并释放合并/OTA。Root 原 QA 1699 后续真实日期选择、一次 reason-only 保存/刷新和独立数据库读回尚未执行，Native 原缺陷保持 OPEN；S0/S1 未完成项与所有历史 FAIL/未测不因本归档改变。最终 PR/门禁/合并/发布/业务回执写私有 `execution/source-native-date-delivery-20261022/`，不重复产品检查来更新文档。
+
 ## 保留的旧页眉记录
 
 **上一版**：2026-09-07 12:40（本批收口：29 个提交合进 main，软删四批 + prod-only 索引 + 唯一性推回写时全部落地；**新库第一次建得出来**(baseline bootstrap)；归档 5 张已完成票，新增 6 张。🔴 三件等 Steve：DeepSeek key 被拒 12 天 / 09-13 悬崖兜底只剩 1 条 / tenant_purge_68 删不删）。此前：2026-09-07 11:10（Steve 四条裁定落地：业务编号可重用 / 工号不管 / 权限读不到要报错 / 历史单据指向已删合法；#720/#722/#723/#724 合并；🔴 登记 9 张此前只存在于对话里的票，含「建不出新库」与根治方案）。
