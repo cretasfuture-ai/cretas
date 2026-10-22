@@ -49,7 +49,12 @@ class AutonomousToolExecutionContractTest {
     private final ToolExecutor undeclaredTool = mock(ToolExecutor.class);
     private final ToolExecutionGateway gateway = mock(ToolExecutionGateway.class);
     private final AuthenticatedToolPrincipalFactory principals = mock(AuthenticatedToolPrincipalFactory.class);
-    private final AutonomousToolRunner runner = new AutonomousToolRunner(gateway, principals, registry, new ObjectMapper());
+    // Unless a test stubs consume(), no delegated grant exists: every write is refused before the gateway.
+    private final AutonomousGrantService grants = mock(AutonomousGrantService.class);
+    private final com.cretas.aims.service.PreviewTokenService previewTokens =
+            mock(com.cretas.aims.service.PreviewTokenService.class);
+    private final AutonomousToolRunner runner = new AutonomousToolRunner(gateway, principals, registry, new ObjectMapper(),
+            grants, previewTokens);
     private final FactorySchedulerConfigRepository schedulerRepo = mock(FactorySchedulerConfigRepository.class);
     private final DynamicSchedulerService scheduler =
             new DynamicSchedulerService(schedulerRepo, registry, runner, new ObjectMapper());
@@ -146,21 +151,147 @@ class AutonomousToolExecutionContractTest {
         runScheduled(foreign);
         verifyNoInteractions(gateway);
         verify(writeTool, never()).execute(any(), any());
-        assertThat(write.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
-        assertThat(undeclared.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        // Writes look for a delegated grant bound to exactly this config run; none exists, so they stop there.
+        assertThat(write.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        assertThat(undeclared.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        verify(grants).consume(org.mockito.ArgumentMatchers.argThat(binding -> "78".equals(binding.sourceRef())
+                && "dictionary_add".equals(binding.toolName()) && Long.valueOf(42L).equals(binding.runAsUserId())
+                && binding.configRevision() != null), any(), any());
         assertThat(foreign.getLastExecutionStatus()).isEqualTo("CONFIG_INVALID");
     }
 
-    @Test void writeToolIsNotEvenScheduled() throws Exception {
+    @Test void writeToolIsScheduledButARunWithoutAGrantNeverReachesTheGateway() throws Exception {
         org.springframework.scheduling.TaskScheduler taskScheduler = mock(org.springframework.scheduling.TaskScheduler.class);
         Field field = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
         field.setAccessible(true);
         field.set(scheduler, taskScheduler);
         FactorySchedulerConfig config = schedule(81L, "dictionary_add", Map.of(), 42L);
         when(schedulerRepo.findById(81L)).thenReturn(Optional.of(config));
+        doReturn(mock(java.util.concurrent.ScheduledFuture.class)).when(taskScheduler)
+                .schedule(any(Runnable.class), any(org.springframework.scheduling.Trigger.class));
         scheduler.scheduleTask(config);
-        verifyNoInteractions(taskScheduler);
-        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        verify(taskScheduler).schedule(any(Runnable.class), any(org.springframework.scheduling.Trigger.class));
+        runScheduled(config);
+        verifyNoInteractions(gateway);
+        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+    }
+
+    @Test void eachFireReReadsTheConfigStopsWhenDisabledAndReschedulesWhenTheCronChanged() throws Exception {
+        org.springframework.scheduling.TaskScheduler taskScheduler = mock(org.springframework.scheduling.TaskScheduler.class);
+        Field field = DynamicSchedulerService.class.getDeclaredField("taskScheduler");
+        field.setAccessible(true);
+        field.set(scheduler, taskScheduler);
+        java.util.concurrent.ScheduledFuture<?> future = mock(java.util.concurrent.ScheduledFuture.class);
+        doReturn(future).when(taskScheduler).schedule(any(Runnable.class), any(org.springframework.scheduling.Trigger.class));
+        FactorySchedulerConfig scheduled = schedule(82L, "material_expired_query", Map.of("limit", 1), 42L);
+        scheduler.scheduleTask(scheduled);
+        ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
+        verify(taskScheduler).schedule(task.capture(), any(org.springframework.scheduling.Trigger.class));
+
+        // Edited elsewhere: new params are what this fire runs with.
+        FactorySchedulerConfig edited = schedule(82L, "material_expired_query", Map.of("limit", 9), 42L);
+        when(schedulerRepo.findById(82L)).thenReturn(Optional.of(edited));
+        task.getValue().run();
+        ArgumentCaptor<ToolExecutionCommand> command = ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(gateway).execute(command.capture());
+        assertThat(command.getValue().parameters().get("limit").asInt()).isEqualTo(9);
+
+        // Cron changed elsewhere: rescheduled here, not run under the old cron.
+        FactorySchedulerConfig recron = schedule(82L, "material_expired_query", Map.of("limit", 9), 42L);
+        recron.setCronExpression("0 30 9 1 * ?");
+        when(schedulerRepo.findById(82L)).thenReturn(Optional.of(recron));
+        task.getValue().run();
+        verify(taskScheduler, times(2)).schedule(any(Runnable.class), any(org.springframework.scheduling.Trigger.class));
+        verify(gateway, times(1)).execute(any());
+
+        // Disabled elsewhere: this instance stops and nothing runs.
+        FactorySchedulerConfig disabled = schedule(82L, "material_expired_query", Map.of("limit", 9), 42L);
+        disabled.setEnabled(false);
+        when(schedulerRepo.findById(82L)).thenReturn(Optional.of(disabled));
+        task.getValue().run();
+        verify(gateway, times(1)).execute(any());
+        verify(future, atLeastOnce()).cancel(false);
+    }
+
+    @Test void runKeyIsTheScheduledSlotSoInstancesStraddlingAMinuteShareIt() {
+        java.time.LocalDateTime slot = java.time.LocalDateTime.of(2026, 10, 22, 7, 0, 0);
+        String daily = DynamicSchedulerService.slotKey("0 0 7 * * ?", slot.plusSeconds(59));
+        assertThat(daily).isEqualTo("slot:2026-10-22T07:00");
+        assertThat(DynamicSchedulerService.slotKey("0 0 7 * * ?", slot.plusSeconds(62))).isEqualTo(daily);
+        assertThat(DynamicSchedulerService.slotKey("0 0 7 * * ?", slot.plusNanos(300_000_000))).isEqualTo(daily);
+        String minutely = DynamicSchedulerService.slotKey("0 * * * * ?", slot.plusSeconds(59));
+        assertThat(minutely).isEqualTo("slot:2026-10-22T07:00");
+        assertThat(DynamicSchedulerService.slotKey("0 * * * * ?", slot.plusSeconds(61))).isEqualTo("slot:2026-10-22T07:01");
+        // Beyond the lookback there is no slot: fall back to the fire minute rather than invent one.
+        assertThat(DynamicSchedulerService.slotKey("0 0 7 1 1 ?", slot)).isEqualTo("fire:2026-10-22T07:00");
+    }
+
+    @Test void grantedWriteReachesTheGatewayWithAPerRunProofAndIdempotencyKey() {
+        when(writeTool.getVersion()).thenReturn("1.0.0");
+        when(grants.consume(any(), any(), any())).thenAnswer(call -> Optional.of(new AutonomousGrantService.Consumption(
+                "g1", "autonomous:g1:" + call.getArgument(1), "1.0.0", false)));
+        when(previewTokens.createBoundToken(any())).thenAnswer(call -> com.cretas.aims.entity.intent.IntentPreviewToken
+                .builder().token("tok").commandDigest("digest").build());
+        FactorySchedulerConfig config = schedule(78L, "dictionary_add", Map.of("name", "x"), 42L);
+        var binding = SchedulerGrantBinding.of(config, "1.0.0", new ObjectMapper());
+
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of("name", "x"), ToolExecutionSource.SCHEDULER,
+                "c", binding, "slot:1").status()).isEqualTo("SUCCESS");
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of("name", "x"), ToolExecutionSource.SCHEDULER,
+                "c", binding, "slot:2").status()).isEqualTo("SUCCESS");
+
+        ArgumentCaptor<ToolExecutionCommand> commands = ArgumentCaptor.forClass(ToolExecutionCommand.class);
+        verify(gateway, times(2)).execute(commands.capture());
+        assertThat(commands.getAllValues()).extracting(c -> c.idempotencyKey().orElseThrow())
+                .containsExactly("autonomous:g1:slot:1", "autonomous:g1:slot:2");
+        assertThat(commands.getAllValues()).allSatisfy(c -> {
+            assertThat(c.confirmationProof().orElseThrow().proofToken()).isEqualTo("tok");
+            assertThat(c.principal().principalId()).isEqualTo("42");
+        });
+        ArgumentCaptor<com.cretas.aims.service.PreviewTokenService.BoundTokenRequest> tokens =
+                ArgumentCaptor.forClass(com.cretas.aims.service.PreviewTokenService.BoundTokenRequest.class);
+        verify(previewTokens, times(2)).createBoundToken(tokens.capture());
+        // Each run gets its own intent code: issuing a token cancels pending tokens with the same code.
+        assertThat(tokens.getAllValues()).extracting(com.cretas.aims.service.PreviewTokenService.BoundTokenRequest::intentCode)
+                .doesNotHaveDuplicates().allMatch(code -> code.startsWith("AUTONOMOUS_TOOL_RUN:"));
+    }
+
+    @Test void aBindingThatDoesNotDescribeThisRunOrAnEventChainWriteIsRefusedBeforeAnyGrant() {
+        when(writeTool.getVersion()).thenReturn("1.0.0");
+        FactorySchedulerConfig config = schedule(78L, "dictionary_add", Map.of("name", "x"), 42L);
+        var binding = SchedulerGrantBinding.of(config, "1.0.0", new ObjectMapper());
+        // Other parameters than the ones the binding was computed for.
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of("name", "y"), ToolExecutionSource.SCHEDULER,
+                "c", binding, "slot:1").status()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        // Another user, another tool version.
+        assertThat(runner.run("F001", 43L, "dictionary_add", Map.of("name", "x"), ToolExecutionSource.SCHEDULER,
+                "c", binding, "slot:1").status()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        when(writeTool.getVersion()).thenReturn("2.0.0");
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of("name", "x"), ToolExecutionSource.SCHEDULER,
+                "c", binding, "slot:1").status()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        // Event chains get no delegated writes whatever is passed.
+        when(writeTool.getVersion()).thenReturn("1.0.0");
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of("name", "x"), ToolExecutionSource.TRIGGER,
+                "c", binding, "slot:1").status()).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        verifyNoInteractions(gateway, grants, previewTokens);
+    }
+
+    @Test void replayedSlotNeverReachesTheGatewayAndReportsTheRecordedOutcome() {
+        when(writeTool.getVersion()).thenReturn("1.0.0");
+        when(grants.consume(any(), any(), any())).thenReturn(Optional.of(
+                new AutonomousGrantService.Consumption("g1", "autonomous:g1:slot:1", "1.0.0", true)));
+        com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord succeeded =
+                mock(com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.class);
+        when(succeeded.getState()).thenReturn(com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.SUCCEEDED);
+        when(grants.gatewayRecord(eq("F001"), eq(42L), eq("dictionary_add"), any()))
+                .thenReturn(Optional.empty(), Optional.of(succeeded));
+        var binding = SchedulerGrantBinding.of(schedule(78L, "dictionary_add", Map.of(), 42L), "1.0.0", new ObjectMapper());
+
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
+                "slot:1").status()).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(runner.run("F001", 42L, "dictionary_add", Map.of(), ToolExecutionSource.SCHEDULER, "c", binding,
+                "slot:1").status()).isEqualTo("SUCCESS");
+        verifyNoInteractions(gateway, previewTokens);
     }
 
     @Test void configTimeGateRejectsWriteToolsAndIdentityParamsButLeavesUnknownToolsToTheRunner() {

@@ -34,6 +34,13 @@ public final class AutonomousToolPolicy {
     }
 
     /** @return null when allowed; otherwise a reason that names the tool or the offending key. */
+    /** Identity keys only: a write tool may be scheduled, each of its runs then needs a delegated grant. */
+    public static String identityRejection(Map<String, Object> params) {
+        if (params == null) return null;
+        return params.keySet().stream().filter(IDENTITY_KEYS::contains).sorted().findFirst()
+                .map(key -> IDENTITY_PREFIX + key).orElse(null);
+    }
+
     public static String rejection(String toolName, ToolExecutor tool, Map<String, Object> params) {
         if (params != null) {
             String key = params.keySet().stream().filter(IDENTITY_KEYS::contains).sorted().findFirst().orElse(null);

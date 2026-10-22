@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -114,8 +116,12 @@ public class DynamicSchedulerService {
         if (existing != null) { existing.cancel(false); activeTasks.remove(key); }
 
         try {
+            // The task carries only the config id and the cron it was scheduled with: every fire
+            // re-reads the row, so a change made through another instance takes effect here too.
+            Long configId = config.getId();
+            String scheduledCron = config.getCronExpression();
             ScheduledFuture<?> future = getOrCreateScheduler().schedule(
-                    () -> executeTask(config), new CronTrigger(config.getCronExpression()));
+                    () -> fire(configId, scheduledCron, key), new CronTrigger(scheduledCron));
             activeTasks.put(key, future);
             log.info("Scheduled task: {} [{}] cron={}", key, config.getToolOrMethod(), config.getCronExpression());
         } catch (IllegalArgumentException e) {
@@ -166,9 +172,52 @@ public class DynamicSchedulerService {
         if (toolName == null || toolName.isBlank()) return;
         Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
         if (tool.isEmpty()) return;
-        String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), params);
+        String refusal = AutonomousToolPolicy.identityRejection(params);
         if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
         AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.SCHEDULER);
+    }
+
+    /** Lookback for the scheduled slot a fire belongs to; a fire later than this falls back to its minute. */
+    static final int SLOT_LOOKBACK_HOURS = 2;
+
+    /**
+     * One cron fire: re-read the config, stop if it is gone or disabled, reschedule if its cron
+     * changed elsewhere, otherwise run it under the slot's run key.
+     */
+    void fire(Long configId, String scheduledCron, String key) {
+        FactorySchedulerConfig fresh = configId == null ? null : schedulerRepo.findById(configId).orElse(null);
+        if (fresh == null || !Boolean.TRUE.equals(fresh.getEnabled())) {
+            ScheduledFuture<?> future = activeTasks.remove(key);
+            if (future != null) future.cancel(false);
+            log.info("Scheduled config id={} is gone or disabled at fire time; stopped on this instance", configId);
+            return;
+        }
+        if (!Objects.equals(scheduledCron, fresh.getCronExpression())) {
+            log.info("Scheduled config id={} cron changed elsewhere; rescheduling on this instance", configId);
+            scheduleTask(fresh);
+            return;
+        }
+        executeTask(fresh);
+    }
+
+    /**
+     * The run key of a fire: the latest cron slot at or before {@code now}. Instances firing for the
+     * same slot get the same key even when they straddle a minute boundary, so a delegated write is
+     * consumed once and the other instance only replays.
+     */
+    static String slotKey(String cron, LocalDateTime now) {
+        try {
+            CronExpression expression = CronExpression.parse(cron);
+            LocalDateTime slot = null;
+            for (LocalDateTime next = expression.next(now.minusHours(SLOT_LOOKBACK_HOURS));
+                    next != null && !next.isAfter(now); next = expression.next(next)) {
+                slot = next;
+            }
+            if (slot != null) return "slot:" + slot.truncatedTo(ChronoUnit.SECONDS);
+        } catch (IllegalArgumentException invalidCron) {
+            // Fall through: validated crons parse; this only guards a key for a bad row.
+        }
+        return "fire:" + now.truncatedTo(ChronoUnit.MINUTES);
     }
 
     private void executeTask(FactorySchedulerConfig config) {
@@ -203,7 +252,9 @@ public class DynamicSchedulerService {
                 // Never executed directly: the gateway runs it as the run-as user and audits it.
                 AutonomousToolRunner.Outcome outcome = runner.run(config.getFactoryId(), config.getRunAsUserId(),
                         toolOrMethod, config.getParams(), ToolExecutionSource.SCHEDULER,
-                        "sched-" + config.getId() + "-" + config.getTaskCode());
+                        "sched-" + config.getId() + "-" + config.getTaskCode(),
+                        SchedulerGrantBinding.of(config, executor.get().getVersion(), objectMapper),
+                        slotKey(config.getCronExpression(), startedAt));
                 String businessError = outcome.succeeded() && outcome.payload() != null
                         ? businessFailure(outcome.payload().toString()) : null;
                 if (!outcome.succeeded()) {
@@ -295,8 +346,9 @@ public class DynamicSchedulerService {
         if (tool.isEmpty()) {
             return "tool not registered: " + config.getToolOrMethod();
         }
-        // Checked at schedule time and again before every run: there is no user behind a cron run.
-        return AutonomousToolPolicy.rejection(config.getToolOrMethod(), tool.get(), config.getParams());
+        // Identity parameters are refused at schedule time and before every run. A write tool may be
+        // scheduled; each of its runs needs a delegated grant, checked by the runner.
+        return AutonomousToolPolicy.identityRejection(config.getParams());
     }
 
     private void markConfigStatus(FactorySchedulerConfig config, String status, String error) {

@@ -3,13 +3,13 @@ package com.cretas.aims.controller;
 import com.cretas.aims.ai.tool.ToolAccessModes;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
-import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.engine.AutonomousGrantService;
 import com.cretas.aims.engine.AutonomousToolPolicy;
+import com.cretas.aims.engine.SchedulerGrantBinding;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.ai.AutonomousToolGrant;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
@@ -22,7 +22,6 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -139,13 +138,7 @@ public class AutonomousGrantController {
      * the config it fires, so the two must stay one computation.
      */
     public AutonomousGrantService.Binding binding(FactorySchedulerConfig config, ToolExecutor tool) {
-        Map<String, Object> params = config.getParams() == null ? Map.of() : config.getParams();
-        String digest = ToolCommandDigest.parametersHash(objectMapper.valueToTree(params));
-        return new AutonomousGrantService.Binding(config.getFactoryId(), ToolExecutionSource.SCHEDULER.name(),
-                String.valueOf(config.getId()), config.getToolOrMethod(), config.getRunAsUserId(), digest,
-                AutonomousGrantService.configRevision(config.getTaskCode(), config.getCronExpression(),
-                        config.getToolOrMethod(), digest, config.getRunAsUserId()),
-                tool.getVersion());
+        return SchedulerGrantBinding.of(config, tool.getVersion(), objectMapper);
     }
 
     /**

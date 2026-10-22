@@ -3,6 +3,8 @@ package com.cretas.aims.engine;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
+import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
@@ -10,11 +12,15 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord;
+import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.service.PreviewTokenService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Deque;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +49,8 @@ public class AutonomousToolRunner {
     private final AuthenticatedToolPrincipalFactory principals;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
+    private final AutonomousGrantService grants;
+    private final PreviewTokenService previewTokens;
 
     /**
      * @param status persisted status, at most 20 characters
@@ -53,16 +61,35 @@ public class AutonomousToolRunner {
         public boolean succeeded() { return "SUCCESS".equals(status); }
     }
 
+    /** A run with no delegated-grant context (event chain, SOP, ad hoc): writes are always refused. */
     public Outcome run(String factoryId, Long runAsUserId, String toolName, Map<String, Object> params,
             ToolExecutionSource source, String correlationId) {
+        return run(factoryId, runAsUserId, toolName, params, source, correlationId, null, null);
+    }
+
+    /**
+     * @param grantBinding what a delegated write must be granted for, as the scheduler computed it from
+     *                     the config it fires ({@link SchedulerGrantBinding}); null for reads
+     * @param runKey       the run's scheduled slot; the same key replays, never re-executes
+     */
+    public Outcome run(String factoryId, Long runAsUserId, String toolName, Map<String, Object> params,
+            ToolExecutionSource source, String correlationId, AutonomousGrantService.Binding grantBinding,
+            String runKey) {
         Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
         if (tool.isEmpty()) {
             return new Outcome("TOOL_NOT_FOUND", "tool not registered: " + toolName, null);
         }
         String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), params);
-        if (refusal != null) {
-            return new Outcome(AutonomousToolPolicy.isWriteDenial(refusal)
-                    ? AutonomousToolPolicy.WRITE_DENIED : "CONFIG_INVALID", refusal, null);
+        boolean write = AutonomousToolPolicy.isWriteDenial(refusal);
+        if (refusal != null && !write) {
+            return new Outcome("CONFIG_INVALID", refusal, null);
+        }
+        Map<String, Object> safeParams = params == null ? Map.of() : params;
+        // Delegated writes are cron-only: an event chain runs all steps in one transaction (a later
+        // step's rollback would undo an audited write) and has no durable event id to key replays on.
+        if (write && (source != ToolExecutionSource.SCHEDULER || runKey == null
+                || !boundToThisRun(grantBinding, factoryId, runAsUserId, toolName, tool.get(), safeParams))) {
+            return new Outcome(AutonomousToolPolicy.WRITE_DENIED, refusal, null);
         }
         if (runAsUserId == null) {
             return new Outcome("RUN_AS_MISSING",
@@ -74,21 +101,84 @@ public class AutonomousToolRunner {
         } catch (SecurityException unavailableTenant) {
             return new Outcome("GATEWAY_DENIED", "run-as identity rejected: " + unavailableTenant.getMessage(), null);
         }
+        Optional<String> idempotencyKey = Optional.empty();
+        Optional<ConfirmationProof> proof = Optional.empty();
+        if (write) {
+            // Consumption is the authorization commit point: a grant matching this config revision,
+            // tool version, parameters and user is used once for this run key, under a row lock.
+            Optional<AutonomousGrantService.Consumption> consumed =
+                    grants.consume(grantBinding, runKey, LocalDateTime.now());
+            if (consumed.isEmpty()) {
+                return new Outcome(GRANT_DENIED, "no usable grant for " + toolName + " (scheduler config "
+                        + grantBinding.sourceRef() + "): missing, revoked, expired, exhausted, or issued for another"
+                        + " config revision, tool version, user or parameters", null);
+            }
+            if (consumed.get().replay()) {
+                // The same slot again (second instance, duplicate fire): never execute a second time,
+                // report what the gateway recorded for the first attempt.
+                return replayed(factoryId, runAsUserId, toolName, consumed.get());
+            }
+            IntentPreviewToken token = previewTokens.createBoundToken(new PreviewTokenService.BoundTokenRequest(
+                    // Per-run intent code: creating a token cancels the user's pending tokens with the same
+                    // code, so a shared code would let two runs of the same user void each other's proof.
+                    factoryId, runAsUserId, null,
+                    "AUTONOMOUS_TOOL_RUN:" + ToolCommandDigest.persistentSecretFingerprint(consumed.get().idempotencyKey()),
+                    "自动任务委托写入", toolName, tool.get().getVersion(), ToolExecutionMode.EXECUTE,
+                    "AUTONOMOUS_GRANT", consumed.get().grantId(), "EXECUTE", safeParams, Map.of(), Map.of(),
+                    (int) DEADLINE.toSeconds()));
+            idempotencyKey = Optional.of(consumed.get().idempotencyKey());
+            proof = Optional.of(new ConfirmationProof(token.getToken(), token.getCommandDigest(),
+                    Instant.now().plus(DEADLINE)));
+        }
         ToolExecutionCommand command = new ToolExecutionCommand(
                 source.name().toLowerCase() + "-" + UUID.randomUUID(),
                 correlationId,
                 source.name().toLowerCase() + "-" + UUID.randomUUID(),
                 toolName,
                 tool.get().getVersion(),
-                objectMapper.valueToTree(params == null ? Map.of() : params),
+                objectMapper.valueToTree(safeParams),
                 principal,
                 source,
                 ToolExecutionMode.EXECUTE,
-                Optional.empty(),
-                Optional.empty(),
+                idempotencyKey,
+                proof,
                 Optional.empty(),
                 Instant.now().plus(DEADLINE));
         return outcome(executeDetached(command));
+    }
+
+    /** Persisted status when no usable delegated grant covers a write (VARCHAR(20)). */
+    public static final String GRANT_DENIED = "GRANT_DENIED";
+
+    /** The binding must describe exactly this run, so a grant can never be applied to another one. */
+    private boolean boundToThisRun(AutonomousGrantService.Binding binding, String factoryId, Long runAsUserId,
+            String toolName, ToolExecutor tool, Map<String, Object> params) {
+        return binding != null
+                && ToolExecutionSource.SCHEDULER.name().equals(binding.sourceType())
+                && java.util.Objects.equals(binding.factoryId(), factoryId)
+                && java.util.Objects.equals(binding.runAsUserId(), runAsUserId)
+                && java.util.Objects.equals(binding.toolName(), toolName)
+                && java.util.Objects.equals(binding.descriptorVersion(), tool.getVersion())
+                && java.util.Objects.equals(binding.parametersDigest(),
+                        ToolCommandDigest.parametersHash(objectMapper.valueToTree(params)));
+    }
+
+    private Outcome replayed(String factoryId, Long runAsUserId, String toolName,
+            AutonomousGrantService.Consumption consumed) {
+        Optional<ToolExecutionIdempotencyRecord> record = grants.gatewayRecord(factoryId, runAsUserId, toolName, consumed);
+        if (record.isEmpty()) {
+            // Consumed but no gateway record: still in flight on another instance, or the first attempt
+            // stopped before the gateway. Left for reconciliation, never retried here.
+            return new Outcome("OUTCOME_UNKNOWN", "run already consumed grant " + consumed.grantId()
+                    + " but no gateway record exists (in flight elsewhere or interrupted); not retried", null);
+        }
+        String detail = "replay of grant " + consumed.grantId() + " run (audit "
+                + record.get().getOriginalAuditEventId() + "): " + record.get().getState();
+        return switch (record.get().getState()) {
+            case SUCCEEDED -> new Outcome("SUCCESS", null, null);
+            case FAILED -> new Outcome("FAILED", detail, null);
+            default -> new Outcome("OUTCOME_UNKNOWN", detail, null);
+        };
     }
 
     /**
