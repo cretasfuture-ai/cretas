@@ -43,3 +43,11 @@ Base eb299396dc7c0a27ca22f24efe73112c2e130289；唯一UI Owner `/root/s308_ui`�
 后端写Owner续行：原 `/root/s308_backend` 在 HEAD c87f4988d4bf05a6bce9781fc69684c6e31427e0 明确回传 SAFE_CODE_OWNER_RELEASED=true、activeTests=0、clean、无未收取session；Root自本安全点接管相同12文件继续DIRECT修复/目标验证。原WIP与失败保留，不并行写同scope。真实PG首个DDL仍是MySQL drop foreign key语法；未完成migration/PG守恒/rollback门禁，不能算通过。
 
 必要门禁接线（Root DIRECT）：额外仅允许 `.github/workflows/java-gate-pr.yml` 的既有 PostgreSQL `-Dtest=` 行追加 `TransferWarehouseDeliveryPostgresContractTest,WarehouseTransferMovementMigrationPostgresContractTest` 两个新类，不改触发、路由、资源或任何既有选择器。原因：这两类必须真实PG执行，普通无PG环境禁用不算通过；已有opt-in治理任务仍保留，Root不领取其存量范围。现场ACTIVE无该文件独占写锁，当前仅本次两类接线；验收为diff精确追加、YAML解析、原PG门禁实跑与新类零跳过日志。scope由12产品文件加此单行扩为13文件。
+
+PR1115门禁失败补件（Root DIRECT、独立现有WT `cretas-s107-timer-delivery-20261022`，Base e754b5e37006d13d0046a9f50f0e23df0b86344d）：新增精确scope `scripts/cron/soft-delete-orphans.sql`、`scripts/cron/soft-delete-orphans.hasdel.txt`，只由既有生成器 `bash scripts/check-soft-delete-orphans.sh --write` 只读生产后生成，禁止手改快照/SQL语义或cron运行配置。原失败真实diff仅实体计数514→515；验收 `bash scripts/tests/test-soft-delete-orphans-sql-drift.sh` 及生成diff/来源。Backend官方build在另一WT运行，不改其源码/target。Ops失败另待读取原断言后精确登记，不自动放宽范围。
+
+后端冻结5bb99本地目标/真实JPA/PG/Flyway72项零失败零跳过；合流98bfa6仅文档，backend tree同为b442de1，按内容等价复用。PR1115完整检查已启动，不代替发布/业务验收。首次CI的Ops两项失败均来自同一生成物漂移（非选择器断言）；生成器在含真实候选实体的隔离副本重新读取生产后，只改变出处时间/实体统计514→515，关联62对及SQL语义不变；原断言未改，两项目标均通过。第一次仅main副本的生成结果不能修复候选，原件及纠正说明保留。
+
+回滚边界：Java先Web，正式发布回执前不发运；首次分步发运后禁止回旧binary遗留同厂SHIPPED。故障冻结新发运并向前修复，或当前安全版本先合法收齐所有开放分步单后评估回滚，V77表/事实不删。main/生产现74且out-of-order=false，本批V77先交付时，S6未合入75/76须由原Owner在fresh-main重编号后另验，不启用乱序。
+
+既有独立边界 `ERP-INV-DELAYED-CONSUMPTION-LOCK-20261023`：Clerk/ProcessSheet延迟消耗与旧调拨的同批并发协议在Base已同样存在，不是本次新增。原QA源夹具独占隔离，未宣称全局生产并发已解决；后续精确scope尚未释放，禁止顺带改共享报工/采购/Orchestrator。源码终审、局部PG、共享CI、正式部署与原QA签收分别记录，S3-08原FAIL保留。
