@@ -18,7 +18,7 @@
 | C3-consent-gate | 默认关闭；两档授权；没有授权就拒绝导出 | live | 同上 |
 | C3-general-knowledge | 改进模型靠通用流程和公开行业知识 | live | 意图标注、评测用的是说法文本，不是业务数字和配方；跨厂共享说法的问题记在 C1-no-cross-learning |
 | C3-no-capture | 默认不授权时，连训练素材都不记录 | pending | 线上 `smart_bi_distillation_samples` 仍在按工厂记录（2026-10-22：MOCK_REST 263、SEED_R 87、SEED_F 80、F006 73、LIUSHANMEN 49、CATTLE_3701_001 7、factory 为空 272）。要改成按授权才记录，并清理已存的样本（第 2 项） |
-| C4-provider | 阿里云百炼（通义千问）；按量付费 API 的调用数据不用于训练 | live | 阿里云官方页面 https://help.aliyun.com/zh/model-studio/ 的 FAQ「阿里云百炼会用我的数据进行训练吗？」写的是「使用百炼按量付费 API 和 Token Plan 团队版时，不会将您的数据用于模型训练」。Coding Plan 和 Token Plan 个人版不在这个承诺内，所以**要 Steve 确认我们的账号都是按量付费**。官方没写数据在哪里处理，所以页面上不写「境内处理」 |
+| C4-provider | 阿里云百炼（通义千问）；按量付费 API 的调用数据不用于训练 | live | 阿里云官方页面 https://help.aliyun.com/zh/model-studio/ 的 FAQ「阿里云百炼会用我的数据进行训练吗？」写的是「使用百炼按量付费 API 和 Token Plan 团队版时，不会将您的数据用于模型训练」。Coding Plan 和 Token Plan 个人版不在这个承诺内，Steve 2026-10-22 确认账号都是按量付费。官方没写数据在哪里处理，所以页面上不写「境内处理」 |
 | C4-redact / C4-fail-closed | 发送前替换名称；替换失败就不发 | pending | Python `llm_redactor` 已上线（只替换名称）；Java `WorkdeskOutputSummarizer` 还没脱敏；fail-closed 在「方案审计与执行」分支上 |
 | C5-hosting | 阿里云中国境内服务器，用户到系统全程 HTTPS | live | nginx TLS 1.2/1.3（`ops/nginx-vhosts-139/admin.cretaceousfuture.com.conf`）；服务器 IP 属于阿里云。注意：网关到应用服务器（139 → 47:8083）是明文，所以只写「你和系统之间」 |
 | C5-daily-backup | 每天凌晨自动备份，保留 7 天 | live | 2026-10-22 线上只读核查：crontab 03:00 `backup-db.sh` ＋ `/etc/cron.d/pg_backup`，`/etc/cron.d/cretas-backup-retention` 保留 7 天；当天三个库的备份文件都在 |
@@ -33,7 +33,7 @@
 - 删除改为「邮件申请、15 个工作日内处理」（人工流程）；
 - 补充 AI 对话记录、语音和图像的收集，核心数据不训练，不向其他企业提供，阿里云百炼的训练说明，以及备份保留 7 天。
 
-待确认：privacy@cretaceousfuture.com 这个邮箱是否真的有人收信（域名有阿里企业邮 MX 记录，但没有确认邮箱本身存在）；「15 个工作日」这个承诺。
+Steve 2026-10-22 确认：百炼账号都是按量付费；privacy@cretaceousfuture.com 能收信；删除申请 15 个工作日内处理可以接受。已在 #1097 上线，线上页面已核对：新句子都在，旧的「定期进行安全审计」「确保数据仅对授权人员可见」已经没有了。
 
 ### 旧版（2026-03-03）当时核对出的问题
 
