@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `ERP-S1-07-PROCUREMENT-TIMER-20261022` — `review` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base edaa711ab0196d86199bcbaf0370bfa5f242f6f9 — 实际ACK后放行精确16文件；原QA独占CSV/浏览器/手机，07未签收；范围/命令见archive/2026-10-22-s107-purchase-timer.md。
+- `ERP-S1-07-PROCUREMENT-TIMER-20261022` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base edaa711ab0196d86199bcbaf0370bfa5f242f6f9 — 实际ACK后放行精确18文件；原QA独占CSV/浏览器/手机，07未签收；范围/命令见archive/2026-10-22-s107-purchase-timer.md。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
 
@@ -111,7 +111,7 @@
 
 ## Scope 锁地图
 
-- `ERP-S1-07-PROCUREMENT-TIMER-20261022`：原采购Owner实际ACK，唯一写16文件；见archive/2026-10-22-s107-purchase-timer.md；Root独占台账。Canvas-Cron仅调用不改；S6/Gateway/Orchestrator/供应商/全局配置不释放。
+- `ERP-S1-07-PROCUREMENT-TIMER-20261022`：原采购Owner实际ACK，唯一写18文件；见archive/2026-10-22-s107-purchase-timer.md；Root独占台账。Canvas-Cron仅调用不改；S6/Gateway/Orchestrator/供应商/全局配置不释放。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：原Claude Owner保留；当前只读追踪，writeScope=[]；禁止放宽平台角色、造蓝图、自动发布或修改既有采购/S6；原QA独占设备/浏览器/CSV。
 
