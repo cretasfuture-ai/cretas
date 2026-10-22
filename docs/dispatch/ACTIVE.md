@@ -1,12 +1,10 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-10-22（S1-02/03/04/10原QA通过，07生命周期子例交付；S0/S1仍未通过）
+**最后更新**：2026-10-22（S1原QA按原判据10/10通过；S0未完成，S2独立推进；S1-07交付归档见archive/2026-10-22-s107-purchase-timer.md）
 **历史**：旧版背景保留在 archive/2026-10-22-native-date-v72-registration.md 的旧页眉记录；本页只保留在飞任务。
 
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-
-- `ERP-S1-07-PROCUREMENT-TIMER-20261022` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base edaa711ab0196d86199bcbaf0370bfa5f242f6f9 — 实际ACK后放行精确18文件；原QA独占CSV/浏览器/手机，07未签收；范围/命令见archive/2026-10-22-s107-purchase-timer.md。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
 
@@ -110,8 +108,6 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
-
-- `ERP-S1-07-PROCUREMENT-TIMER-20261022`：原采购Owner实际ACK，唯一写18文件；见archive/2026-10-22-s107-purchase-timer.md；Root独占台账。Canvas-Cron仅调用不改；S6/Gateway/Orchestrator/供应商/全局配置不释放。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：原Claude Owner保留；当前只读追踪，writeScope=[]；禁止放宽平台角色、造蓝图、自动发布或修改既有采购/S6；原QA独占设备/浏览器/CSV。
 

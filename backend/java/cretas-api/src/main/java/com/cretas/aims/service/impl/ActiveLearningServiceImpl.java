@@ -353,6 +353,18 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             CrossFactoryKnowledge.KnowledgeType knowledgeType,
             String intentCode,
             String content) {
+        // 工厂之间不共享学到的说法 (Steve 2026-10-22: 工厂自己产生的说法不跨厂; 系统预置的全局词保留)。2026-10-22 线上计数: GLOBAL/PROMOTED 关键词 0、跨厂知识 0、采用记录 0, 无存量需清理。
+        throw new com.cretas.aims.exception.BusinessException(410, "跨工厂知识共享已停用，工厂学到的说法只在本厂使用")
+                .withHint("如需在本厂使用，请在本厂的意图配置里维护");
+    }
+
+    /** 已停用的跨厂登记实现, 保留以便评审后恢复; 不可达。 */
+    @SuppressWarnings("unused")
+    private CrossFactoryKnowledge registerKnowledgeDisabled(
+            String factoryId,
+            CrossFactoryKnowledge.KnowledgeType knowledgeType,
+            String intentCode,
+            String content) {
 
         CrossFactoryKnowledge knowledge = CrossFactoryKnowledge.builder()
                 .knowledgeType(knowledgeType)
@@ -440,6 +452,11 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     @Override
     @Transactional
     public CrossFactoryKnowledgeAdoption adoptKnowledge(String factoryId, Long knowledgeId) {
+        // 跨工厂知识共享已停用: 不能采用别的工厂贡献的知识
+        if (!CROSS_FACTORY_KNOWLEDGE_ENABLED) {
+            throw new com.cretas.aims.exception.BusinessException(410, "跨工厂知识共享已停用")
+                    .withHint("工厂学到的说法只在本厂使用");
+        }
         // Check if already adopted
         if (adoptionRepository.existsByKnowledgeIdAndFactoryIdAndIsActiveTrue(knowledgeId, factoryId)) {
             return adoptionRepository.findByKnowledgeIdAndFactoryId(knowledgeId, factoryId).orElse(null);
@@ -457,8 +474,14 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
 
     @Override
     public List<CrossFactoryKnowledge> getAvailableGlobalKnowledge(String factoryId) {
+        if (!CROSS_FACTORY_KNOWLEDGE_ENABLED) {
+            return List.of();
+        }
         return knowledgeRepository.findNotAdoptedByFactory(factoryId);
     }
+
+    /** 跨工厂知识共享 (登记 / 列出 / 采用) 已停用; 要恢复必须改这里并重新评审数据边界。 */
+    static final boolean CROSS_FACTORY_KNOWLEDGE_ENABLED = false;
 
     @Override
     public Map<String, BigDecimal> evaluateKeywordEffectiveness(String factoryId) {
