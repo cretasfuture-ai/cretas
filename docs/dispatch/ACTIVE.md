@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `ERP-S6-B3C-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a844845c4b63ba0baabdd23a05bc18ba18dce432 — PR1099/a2be406精确11文件事实接收、集成HOLD；C1仅4文件修slot，见archive/2026-10-22-s6-b3c-review.md。
+
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
 - `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — V72被动5文件；待原Owner回传独立WT后claim；无runtime scope，见archive/2026-10-22-native-date-v72-registration.md。
@@ -15,7 +17,6 @@
 
 
 
-- `ERP-S2-READINESS-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 5a0c01ff671857ff56fdba03ed27d46808a2fa76 — PR1079/bbe7实际9文件/ACK已读；三问题修复待集成验收，原1079回执见archive/2026-10-21-s1-validation-first.md。
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1/1073/3029151精确8已接收待集成，非部署或业务验收；正式裁决已交原Owner。
 
@@ -106,6 +107,9 @@
 
 ## Scope 锁地图
 
+- `ERP-S6-B3C-CLAUDE-20261022` — 原Claude唯一Owner；仅C1 slot四文件可续修，其余B3C/新共享文件HOLD；精确路径/命令见archive/2026-10-22-s6-b3c-review.md。
+
+
 
 - `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：仅FactorySchedulerConfig/FactoryTriggerChain Entity、V72及2个RunAs PG/JPA测试；queued待原Owner独立WT确认，runtime/Gateway/Skill/Orchestrator无scope，详细全路径与门禁见登记归档。
 
@@ -113,7 +117,6 @@
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021`：仅archive/2026-10-21-claude-s6-actual-intake.md列B1精确8文件修订；Owner不变，不回溯批准先写后登记。
 
-- `ERP-S2-READINESS-CLAUDE-20261021`：Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；九文件及门禁见archive/2026-10-21-claude-s2-s6-registration.md；PR1079/bbe7实际ACK已读，保留review及原Owner锁，待集成发布验收。
 
 
 
