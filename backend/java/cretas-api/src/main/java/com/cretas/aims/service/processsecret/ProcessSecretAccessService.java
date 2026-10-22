@@ -116,7 +116,7 @@ public class ProcessSecretAccessService {
         ProcessSecretGranteeType granteeType = granteeTypeOf(actor, factoryId);
         if (granteeType != null) {
             boolean granted = grantRepository.findActive(factoryId, policy.getProductTypeId(), granteeType,
-                            actor.id(), LocalDateTime.now()).stream()
+                            actor.id(), LocalDateTime.now(ProcessSecretPolicyService.BUSINESS_ZONE)).stream()
                     .anyMatch(grant -> grant.allows(action));
             if (granted) return new Decision(Outcome.ALLOW, mode, "有效授权");
         }

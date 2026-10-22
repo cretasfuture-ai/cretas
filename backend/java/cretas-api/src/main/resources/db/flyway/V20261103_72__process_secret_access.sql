@@ -11,7 +11,7 @@
 CREATE TABLE IF NOT EXISTS process_secret_policies (
     id               BIGSERIAL    PRIMARY KEY,
     factory_id       VARCHAR(50)  NOT NULL,
-    product_type_id  VARCHAR(64)  NOT NULL,
+    product_type_id  VARCHAR(100)  NOT NULL,
     storage_mode     VARCHAR(30)  NOT NULL,
     owner_user_id    BIGINT       NOT NULL,
     policy_version   BIGINT       NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS process_secret_policies (
 CREATE TABLE IF NOT EXISTS process_secret_grants (
     id               BIGSERIAL    PRIMARY KEY,
     factory_id       VARCHAR(50)  NOT NULL,
-    product_type_id  VARCHAR(64)  NOT NULL,
+    product_type_id  VARCHAR(100)  NOT NULL,
     grantee_type     VARCHAR(30)  NOT NULL,
     grantee_id       BIGINT       NOT NULL,
     can_view_full    BOOLEAN      NOT NULL,
@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_process_secret_grant_lookup
 CREATE TABLE IF NOT EXISTS process_secret_access_events (
     id               BIGSERIAL    PRIMARY KEY,
     factory_id       VARCHAR(50)  NOT NULL,
-    product_type_id  VARCHAR(64),
+    product_type_id  VARCHAR(100),
     actor_type       VARCHAR(30)  NOT NULL,
     actor_id         BIGINT,
     action           VARCHAR(40)  NOT NULL,
@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_process_secret_event_product
 CREATE TABLE IF NOT EXISTS process_secret_external_packages (
     id                   BIGSERIAL    PRIMARY KEY,
     factory_id           VARCHAR(50)  NOT NULL,
-    product_type_id      VARCHAR(64)  NOT NULL,
+    product_type_id      VARCHAR(100)  NOT NULL,
     package_ref          VARCHAR(64)  NOT NULL,
     package_version      VARCHAR(64)  NOT NULL,
     output_unit          VARCHAR(20)  NOT NULL,

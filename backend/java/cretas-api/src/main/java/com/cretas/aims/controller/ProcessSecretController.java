@@ -109,6 +109,13 @@ public class ProcessSecretController {
         return ApiResponse.success(externalService.registerPackage(actor(request), factoryId, body));
     }
 
+    @PostMapping("/external-packages/{packageId}/retire")
+    @Operation(summary = "停用工艺包版本 (仅负责人; 执行端密钥泄露或版本作废时用; 停用后结果不再接收)")
+    public ApiResponse<ProcessSecretExternalService.PackageView> retirePackage(
+            @PathVariable String factoryId, @PathVariable Long packageId, HttpServletRequest request) {
+        return ApiResponse.success(externalService.retirePackage(actor(request), factoryId, packageId));
+    }
+
     @GetMapping("/external-packages")
     @Operation(summary = "客户侧工艺包与云端历史副本状态")
     public ApiResponse<ProcessSecretExternalService.PackageStatusView> packageStatus(

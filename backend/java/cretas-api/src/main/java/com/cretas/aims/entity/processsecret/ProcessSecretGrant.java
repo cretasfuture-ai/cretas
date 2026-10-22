@@ -35,7 +35,7 @@ public class ProcessSecretGrant {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
-    @Column(name = "product_type_id", nullable = false, length = 64)
+    @Column(name = "product_type_id", nullable = false, length = 100)
     private String productTypeId;
 
     @Enumerated(EnumType.STRING)

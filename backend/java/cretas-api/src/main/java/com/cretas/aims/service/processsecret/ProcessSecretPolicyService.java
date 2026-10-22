@@ -20,6 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Objects;
 
@@ -62,8 +64,11 @@ public class ProcessSecretPolicyService {
     public record PolicyView(String productTypeId, ProcessSecretStorageMode storageMode, Long ownerUserId,
                              Long policyVersion, boolean currentUserIsOwner, LocalDateTime updatedAt) { }
 
+    /** {@code expiresAt} 必须带时区 (如 {@code 2026-10-23T18:00:00+08:00}); 统一折算到北京时间存储。 */
     public record GrantRequest(ProcessSecretGranteeType granteeType, Long granteeId, boolean canViewFull,
-                               boolean canExport, boolean canEdit, String purpose, LocalDateTime expiresAt) { }
+                               boolean canExport, boolean canEdit, String purpose, OffsetDateTime expiresAt) { }
+
+    static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
     @Transactional(readOnly = true)
     public List<PolicyView> listPolicies(AuthenticatedActor actor, String factoryId) {
@@ -87,10 +92,15 @@ public class ProcessSecretPolicyService {
         ProcessSecretPolicy policy = policyRepository.findForUpdate(factoryId, productTypeId).orElse(null);
         if (policy == null) {
             requireFactorySuperAdmin(actor, factoryId);
-            policy = policyRepository.save(ProcessSecretPolicy.builder()
-                    .factoryId(factoryId).productTypeId(productTypeId)
-                    .storageMode(mode).ownerUserId(ownerUserId).createdBy(actor.id())
-                    .build());
+            try {
+                policy = policyRepository.saveAndFlush(ProcessSecretPolicy.builder()
+                        .factoryId(factoryId).productTypeId(productTypeId)
+                        .storageMode(mode).ownerUserId(ownerUserId).createdBy(actor.id())
+                        .build());
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // 并发首次启用: 另一请求已建好策略 (审计在落库成功之后才写, 不会留下假 ALLOW)
+                throw new BusinessException(409, "该产品刚被设置了保密策略，请刷新后重试");
+            }
             audit(factoryId, productTypeId, actor, "ENABLE " + mode + " owner=" + ownerUserId);
         } else {
             requireOwner(actor, factoryId, policy);
@@ -144,8 +154,12 @@ public class ProcessSecretPolicyService {
         }
         requireText(request.purpose(), "purpose");
         if (request.purpose().length() > 200) throw new BusinessException(400, "用途说明不超过 200 字");
-        LocalDateTime now = LocalDateTime.now();
-        if (request.expiresAt() == null || !request.expiresAt().isAfter(now)) {
+        LocalDateTime now = LocalDateTime.now(BUSINESS_ZONE);
+        if (request.expiresAt() == null) {
+            throw new BusinessException(400, "必须设置带时区的到期时间，例如 2026-10-23T18:00:00+08:00");
+        }
+        LocalDateTime expiresAt = request.expiresAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDateTime();
+        if (!expiresAt.isAfter(now)) {
             throw new BusinessException(400, "必须设置晚于当前时间的到期时间");
         }
         if (request.granteeType() == ProcessSecretGranteeType.FACTORY_USER) {
@@ -153,12 +167,12 @@ public class ProcessSecretPolicyService {
                 throw new BusinessException(400, "保密负责人本人无需授权");
             }
             requireActiveFactoryUser(request.granteeId(), factoryId, "被授权人");
-            if (request.expiresAt().isAfter(now.plus(MAX_FACTORY_GRANT))) {
+            if (expiresAt.isAfter(now.plus(MAX_FACTORY_GRANT))) {
                 throw new BusinessException(400, "授权有效期最长一年");
             }
         } else {
             if (request.canExport()) throw new BusinessException(400, "平台支持授权不允许导出");
-            if (request.expiresAt().isAfter(now.plus(MAX_PLATFORM_GRANT))) {
+            if (expiresAt.isAfter(now.plus(MAX_PLATFORM_GRANT))) {
                 throw new BusinessException(400, "平台支持授权最长 72 小时");
             }
         }
@@ -166,7 +180,7 @@ public class ProcessSecretPolicyService {
                 .factoryId(factoryId).productTypeId(productTypeId)
                 .granteeType(request.granteeType()).granteeId(request.granteeId())
                 .canViewFull(request.canViewFull()).canExport(request.canExport()).canEdit(request.canEdit())
-                .purpose(request.purpose().trim()).expiresAt(request.expiresAt()).grantedBy(actor.id())
+                .purpose(request.purpose().trim()).expiresAt(expiresAt).grantedBy(actor.id())
                 .build());
         audit(factoryId, productTypeId, actor, "GRANT #" + grant.getId() + " to " + request.granteeType()
                 + ":" + request.granteeId());

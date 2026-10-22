@@ -41,7 +41,7 @@ public class ProcessSecretExternalPackage {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
-    @Column(name = "product_type_id", nullable = false, length = 64)
+    @Column(name = "product_type_id", nullable = false, length = 100)
     private String productTypeId;
 
     @Column(name = "package_ref", nullable = false, length = 64)

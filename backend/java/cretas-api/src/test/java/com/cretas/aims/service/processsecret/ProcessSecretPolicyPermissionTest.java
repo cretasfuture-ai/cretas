@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +61,7 @@ class ProcessSecretPolicyPermissionTest {
         user(SUPER, "factory_super_admin", true);
         user(STAFF, "operator", true);
         when(policies.save(any(ProcessSecretPolicy.class))).thenAnswer(i -> i.getArgument(0));
+        when(policies.saveAndFlush(any(ProcessSecretPolicy.class))).thenAnswer(i -> i.getArgument(0));
         when(grants.save(any(ProcessSecretGrant.class))).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -111,7 +114,7 @@ class ProcessSecretPolicyPermissionTest {
         assertCode(403, () -> service.disablePolicy(actor(SUPER, "factory_super_admin"), F, P, 4L));
         assertCode(403, () -> service.createGrant(actor(SUPER, "factory_super_admin"), F, P,
                 new ProcessSecretPolicyService.GrantRequest(ProcessSecretGranteeType.FACTORY_USER, SUPER,
-                        true, true, true, "自授", LocalDateTime.now().plusDays(1))));
+                        true, true, true, "自授", OffsetDateTime.now().plusDays(1))));
         verify(grants, never()).save(any());
     }
 
@@ -134,14 +137,14 @@ class ProcessSecretPolicyPermissionTest {
         verify(grants).revokeAllForProduct(eq(F), eq(P), any(LocalDateTime.class), eq(OWNER));
         assertCode(409, () -> service.createGrant(actor(OWNER, "factory_super_admin"), F, P,
                 new ProcessSecretPolicyService.GrantRequest(ProcessSecretGranteeType.FACTORY_USER, STAFF,
-                        true, false, false, "生产", LocalDateTime.now().plusDays(1))));
+                        true, false, false, "生产", OffsetDateTime.now().plusDays(1))));
     }
 
     @Test
     void grantRulesPurposeExpiryPlatformLimitsAndNoSelfGrant() {
         existing(ProcessSecretStorageMode.CLOUD_RESTRICTED);
         AuthenticatedActor owner = actor(OWNER, "factory_super_admin");
-        LocalDateTime tomorrow = LocalDateTime.now().plusDays(1);
+        OffsetDateTime tomorrow = OffsetDateTime.now().plusDays(1);
         assertCode(400, () -> service.createGrant(owner, F, P, new ProcessSecretPolicyService.GrantRequest(
                 ProcessSecretGranteeType.FACTORY_USER, OWNER, true, false, false, "x", tomorrow)));
         assertCode(400, () -> service.createGrant(owner, F, P, new ProcessSecretPolicyService.GrantRequest(
@@ -152,16 +155,41 @@ class ProcessSecretPolicyPermissionTest {
                 ProcessSecretGranteeType.PLATFORM_ADMIN, 900L, true, true, false, "排障", tomorrow)));
         assertCode(400, () -> service.createGrant(owner, F, P, new ProcessSecretPolicyService.GrantRequest(
                 ProcessSecretGranteeType.PLATFORM_ADMIN, 900L, true, false, false, "排障",
-                LocalDateTime.now().plusDays(4))));
+                OffsetDateTime.now().plusDays(4))));
         user(30L, "operator", false);
         assertCode(400, () -> service.createGrant(owner, F, P, new ProcessSecretPolicyService.GrantRequest(
                 ProcessSecretGranteeType.FACTORY_USER, 30L, true, false, false, "x", tomorrow)));
 
         ProcessSecretGrant ok = service.createGrant(owner, F, P, new ProcessSecretPolicyService.GrantRequest(
                 ProcessSecretGranteeType.PLATFORM_ADMIN, 900L, true, false, false, "排障 #123",
-                LocalDateTime.now().plusHours(24)));
+                OffsetDateTime.now().plusHours(24)));
         assertThat(ok.getCanExport()).isFalse();
         assertThat(ok.getGrantedBy()).isEqualTo(OWNER);
+    }
+
+    @Test
+    void expiryWithUtcOffsetIsConvertedNotTakenAsLocalTime() {
+        existing(ProcessSecretStorageMode.CLOUD_RESTRICTED);
+        // 14:00Z = 22:00 北京时间; 当本地时间用会提前 8 小时到期 (审查 L3)
+        OffsetDateTime utc = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2).withNano(0);
+        ProcessSecretGrant g = service.createGrant(actor(OWNER, "factory_super_admin"), F, P,
+                new ProcessSecretPolicyService.GrantRequest(ProcessSecretGranteeType.FACTORY_USER, STAFF,
+                        true, false, false, "x", utc));
+        assertThat(g.getExpiresAt()).isEqualTo(
+                utc.atZoneSameInstant(ProcessSecretPolicyService.BUSINESS_ZONE).toLocalDateTime());
+        assertCode(400, () -> service.createGrant(actor(OWNER, "factory_super_admin"), F, P,
+                new ProcessSecretPolicyService.GrantRequest(ProcessSecretGranteeType.FACTORY_USER, STAFF,
+                        true, false, false, "x", null)));
+    }
+
+    @Test
+    void concurrentFirstEnableIs409NotA500() {
+        when(policies.findForUpdate(F, P)).thenReturn(Optional.empty());
+        when(policies.saveAndFlush(any(ProcessSecretPolicy.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq"));
+        assertCode(409, () -> service.upsertPolicy(actor(SUPER, "factory_super_admin"), F, P,
+                ProcessSecretStorageMode.CLOUD_RESTRICTED, OWNER, null));
+        verify(access, never()).audit(any(), any(), any(), any(), eq("ALLOW"), any(), any());
     }
 
     @Test

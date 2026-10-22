@@ -84,6 +84,8 @@ class ProcessSecretExternalResultContractTest {
         when(batches.findByIdAndFactoryId(300L, F)).thenReturn(Optional.of(batch));
         when(results.findByFactoryIdAndEventId(any(), any())).thenReturn(Optional.empty());
         when(results.save(any(ProcessSecretExternalResult.class))).thenAnswer(i -> i.getArgument(0));
+        when(results.saveAndFlush(any(ProcessSecretExternalResult.class))).thenAnswer(i -> i.getArgument(0));
+        policy(ProcessSecretStorageMode.CUSTOMER_HELD);
         when(packages.save(any(ProcessSecretExternalPackage.class))).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -163,7 +165,7 @@ class ProcessSecretExternalResultContractTest {
                 good.eventId(), good.productionBatchId(), new BigDecimal("50"), good.outputUnit(), good.signedAt(),
                 good.signature());
         assertCode(403, () -> service.submitResult(user(20), F, tampered));
-        verify(results, never()).save(any());
+        verify(results, never()).saveAndFlush(any());
     }
 
     @Test
@@ -180,7 +182,46 @@ class ProcessSecretExternalResultContractTest {
         assertCode(403, () -> service.submitResult(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 20L, "F-B", "operator"), F,
                 signed("evt-00000008", "5", "kg", 300L, executorKey)));
-        verify(results, never()).save(any());
+        verify(results, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void absurdQuantityIsRejectedBeforeBuildingTheCanonicalString() throws Exception {
+        // 审查 H4: 1e2147483000 若进 toPlainString() 会 OOM; 必须在拼串 / 查包之前就 400
+        var huge = new ProcessSecretExternalService.ResultRequest("P17-PREMIX", "v2", "evt-00000009", 300L,
+                new BigDecimal("1e2147483000"), "kg", now(), "x");
+        assertCode(400, () -> service.submitResult(user(20), F, huge));
+        assertCode(400, () -> service.submitResult(user(20), F, signed("evt-00000010", "1.23456", "kg", 300L,
+                executorKey)));
+        assertCode(400, () -> service.submitResult(user(20), F, signed("evt-00000011", "123456789012", "kg", 300L,
+                executorKey)));
+        verify(packages, never()).findByFactoryIdAndPackageRefAndPackageVersion(F, "P17-PREMIX", "v2");
+        // 阳性对照: 边界值 11 位整数 + 4 位小数照收
+        assertThat(service.submitResult(user(20), F, signed("evt-00000012", "12345678901.1234", "kg", 300L,
+                executorKey)).duplicate()).isFalse();
+    }
+
+    @Test
+    void resultsStopWhenProductLeavesCustomerHeldOrPackageIsRetired() throws Exception {
+        policy(ProcessSecretStorageMode.CLOUD_RESTRICTED);
+        assertCode(409, () -> service.submitResult(user(20), F, signed("evt-00000013", "5", "kg", 300L, executorKey)));
+        when(policies.findByFactoryIdAndProductTypeId(F, P)).thenReturn(Optional.empty());
+        assertCode(409, () -> service.submitResult(user(20), F, signed("evt-00000014", "5", "kg", 300L, executorKey)));
+
+        policy(ProcessSecretStorageMode.CUSTOMER_HELD);
+        when(packages.findById(5L)).thenReturn(Optional.of(pkg));
+        assertCode(403, () -> service.retirePackage(user(77), F, 5L));
+        assertThat(service.retirePackage(user(OWNER), F, 5L).status())
+                .isEqualTo(com.cretas.aims.entity.processsecret.ProcessSecretPackageStatus.RETIRED);
+        assertCode(409, () -> service.submitResult(user(20), F, signed("evt-00000015", "5", "kg", 300L, executorKey)));
+        verify(results, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void concurrentDuplicateEventIs409NotA500() throws Exception {
+        when(results.saveAndFlush(any(ProcessSecretExternalResult.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq"));
+        assertCode(409, () -> service.submitResult(user(20), F, signed("evt-00000016", "5", "kg", 300L, executorKey)));
     }
 
     @Test

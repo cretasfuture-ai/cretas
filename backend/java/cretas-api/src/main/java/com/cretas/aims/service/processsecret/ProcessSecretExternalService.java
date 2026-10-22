@@ -161,6 +161,7 @@ public class ProcessSecretExternalService {
         if (request.outputQuantity() == null || request.outputQuantity().signum() <= 0) {
             throw new BusinessException(400, "outputQuantity 必须大于 0；没有结果请不要回传 0");
         }
+        requireStorableQuantity(request.outputQuantity());
         requireText(request.outputUnit(), "outputUnit");
         requireText(request.signature(), "signature");
         LocalDateTime signedAt = parseSignedAt(request.signedAt());
@@ -170,6 +171,12 @@ public class ProcessSecretExternalService {
                 .orElseThrow(() -> new BusinessException(409, "工艺包版本未登记或不匹配"));
         if (pkg.getStatus() != ProcessSecretPackageStatus.ACTIVE) {
             throw new BusinessException(409, "工艺包版本已停用");
+        }
+        // 产品已不再是「客户侧保存」(改回 A 档或关闭保密) 时, 旧包的结果一律不收
+        boolean stillCustomerHeld = policyRepository.findByFactoryIdAndProductTypeId(factoryId, pkg.getProductTypeId())
+                .map(p -> p.getStorageMode() == ProcessSecretStorageMode.CUSTOMER_HELD).orElse(false);
+        if (!stillCustomerHeld) {
+            throw new BusinessException(409, "该产品已不是「核心工艺不入云」模式，不再接收客户侧结果");
         }
         String canonical = canonicalPayload(factoryId, request);
         if (!verify(pkg.getExecutorPublicKey(), canonical, request.signature())) {
@@ -201,12 +208,18 @@ public class ProcessSecretExternalService {
             throw new BusinessException(409, "签名时间超出允许范围，请重新签发");
         }
 
-        ProcessSecretExternalResult saved = resultRepository.save(ProcessSecretExternalResult.builder()
-                .factoryId(factoryId).packageId(pkg.getId()).eventId(request.eventId())
-                .productionBatchId(batch.getId()).outputQuantity(request.outputQuantity())
-                .outputUnit(pkg.getOutputUnit()).signedAt(signedAt).payloadDigest(digest)
-                .submittedBy(actor.id())
-                .build());
+        ProcessSecretExternalResult saved;
+        try {
+            saved = resultRepository.saveAndFlush(ProcessSecretExternalResult.builder()
+                    .factoryId(factoryId).packageId(pkg.getId()).eventId(request.eventId())
+                    .productionBatchId(batch.getId()).outputQuantity(request.outputQuantity())
+                    .outputUnit(pkg.getOutputUnit()).signedAt(signedAt).payloadDigest(digest)
+                    .submittedBy(actor.id())
+                    .build());
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // 同一事件并发提交: 另一请求已先落库。重试即可得到幂等应答 (内容相同) 或 409 (内容不同)
+            throw new BusinessException(409, "同一事件正在被并发提交，请稍后重试");
+        }
         accessService.audit(factoryId, pkg.getProductTypeId(), actor, ProcessSecretAction.SUBMIT_RESULT,
                 "ALLOW", "签名有效，待核验", request.eventId());
         return view(saved, false);
@@ -227,6 +240,37 @@ public class ProcessSecretExternalService {
                 r.outputQuantity().stripTrailingZeros().toPlainString(),
                 r.outputUnit().trim(),
                 r.signedAt().trim());
+    }
+
+    /**
+     * 必须在拼规范串之前做: {@code 1e2147483000} 这类值 signum>0、Jackson 照收,
+     * 而 {@code toPlainString()} 会拼出十亿位字符串直接 OOM (审查 H4)。
+     * 与库列 NUMERIC(15,4) 一致: 最多 4 位小数、11 位整数 —— 超了不静默四舍五入 (签名值 ≠ 存储值)。
+     */
+    static void requireStorableQuantity(BigDecimal quantity) {
+        long integerDigits = (long) quantity.precision() - quantity.scale();
+        if (quantity.scale() > 4 || integerDigits > 11) {
+            throw new BusinessException(400, "outputQuantity 最多 11 位整数、4 位小数");
+        }
+    }
+
+    /** 停用某个工艺包版本 (执行端密钥泄露 / 版本作废)。仅负责人; 停用后该版本的结果一律不收。 */
+    @Transactional
+    public PackageView retirePackage(AuthenticatedActor actor, String factoryId, Long packageId) {
+        ProcessSecretExternalPackage pkg = packageRepository.findById(packageId)
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(404, "工艺包不存在"));
+        ProcessSecretPolicy policy = policyService.requirePolicy(factoryId, pkg.getProductTypeId());
+        policyService.requireOwner(actor, factoryId, policy);
+        if (pkg.getStatus() != ProcessSecretPackageStatus.RETIRED) {
+            pkg.setStatus(ProcessSecretPackageStatus.RETIRED);
+            packageRepository.save(pkg);
+            if (!accessService.audit(factoryId, pkg.getProductTypeId(), actor, ProcessSecretAction.REGISTER_PACKAGE,
+                    "ALLOW", "停用工艺包", pkg.getPackageRef() + "@" + pkg.getPackageVersion())) {
+                throw new BusinessException(503, "保密审计暂不可用，本次停用未生效");
+            }
+        }
+        return view(pkg);
     }
 
     static PublicKey parsePublicKey(String base64) {
