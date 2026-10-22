@@ -1377,6 +1377,10 @@ public class TransferServiceImpl implements TransferService {
                 || transfer.getSourceWarehouseId().equals(transfer.getTargetWarehouseId())) {
             throw new BusinessException(409, "仓内发运需要两个有效且不同的仓库");
         }
+        if (transfer.getItems() == null || transfer.getItems().isEmpty()) {
+            throw new BusinessException(409, "没有可发运的调拨明细");
+        }
+        Map<InternalTransferItem, MaterialBatch> sourceBatches = new LinkedHashMap<>();
         for (InternalTransferItem item : transfer.getItems()) {
             if (item.getItemType() != TransferItemType.RAW_MATERIAL || item.getSourceBatchId() == null
                     || item.getSourceBatchId().isBlank()) {
@@ -1388,7 +1392,8 @@ public class TransferServiceImpl implements TransferService {
                     .orElseThrow(() -> new BusinessException(409, "来源批次不存在或不属于源仓库"));
             if (!transfer.getSourceWarehouseId().equals(batch.getWarehouseId())
                     || !Objects.equals(item.getMaterialTypeId(), batch.getMaterialTypeId())
-                    || batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+                    || batch.getOwnership() != InventoryOwnership.COMPANY_OWNED
+                    || batch.getStatus() != MaterialBatchStatus.AVAILABLE) {
                 throw new BusinessException(409, "来源批次不属于指定源仓库或不是公司物权原料");
             }
             BigDecimal available = batch.getReceiptQuantity()
@@ -1397,6 +1402,10 @@ public class TransferServiceImpl implements TransferService {
             if (available.compareTo(item.getQuantity()) < 0) {
                 throw new BusinessException(409, "来源批次可用量不足");
             }
+            sourceBatches.put(item, batch);
+        }
+        for (Map.Entry<InternalTransferItem, MaterialBatch> entry : sourceBatches.entrySet()) {
+            InternalTransferItem item = entry.getKey(); MaterialBatch batch = entry.getValue();
             batch.setUsedQuantity(batch.getUsedQuantity().add(item.getQuantity()));
             materialBatchRepository.save(batch);
             WarehouseTransferMovement movement = new WarehouseTransferMovement();
@@ -1431,15 +1440,15 @@ public class TransferServiceImpl implements TransferService {
         if (!isIntraFactory(transfer)) throw new BusinessException(409, "仓内分段收货仅适用于同厂仓间调拨");
         assertStatus(transfer, TransferStatus.SHIPPED, "仓内收货");
         String key = request.getRequestKey().toString();
-        if (!warehouseMovementRepository.findByRequestKey(key).isEmpty()) {
+        if (!warehouseMovementRepository.findRequestHistoryIncludingDeleted(key, factoryId, transferId).isEmpty()) {
             throw new BusinessException(409, "requestKey已处理，请查询仓内交付状态");
         }
         Map<Long, BigDecimal> quantities = request.getItemQuantities() == null
                 ? Collections.emptyMap() : request.getItemQuantities();
         Set<Long> ids = transfer.getItems().stream().map(InternalTransferItem::getId).collect(Collectors.toSet());
         if (!ids.containsAll(quantities.keySet())) throw new BusinessException(409, "收货明细行不属于该调拨单");
-        if (quantities.values().stream().anyMatch(q -> q == null || q.scale() > 6 || q.compareTo(BigDecimal.ZERO) < 0))
-            throw new BusinessException(400, "本次收货数量必须是非负且精度不超过6位的数字");
+        if (quantities.values().stream().anyMatch(q -> q == null || q.scale() > 4 || q.compareTo(BigDecimal.ZERO) < 0))
+            throw new BusinessException(400, "本次收货数量必须是非负且精度不超过4位的数字");
         BigDecimal total = BigDecimal.ZERO;
         Map<InternalTransferItem, BigDecimal> accepted = new LinkedHashMap<>();
         for (InternalTransferItem item : transfer.getItems()) {
@@ -1450,14 +1459,20 @@ public class TransferServiceImpl implements TransferService {
             if (qty.signum() > 0) { accepted.put(item, qty); total = total.add(qty); }
         }
         if (total.signum() <= 0) throw new BusinessException(400, "至少一行本次收货数量必须大于0");
+        String operationId = UUID.randomUUID().toString();
         for (Map.Entry<InternalTransferItem, BigDecimal> entry : accepted.entrySet()) {
             InternalTransferItem item = entry.getKey(); BigDecimal qty = entry.getValue();
-            item.setReceivedQuantity(Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO).add(qty));
+            BigDecimal previousReceived = Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO);
+            // createTargetInventory consumes receivedQuantity as the quantity for this
+            // batch. Keep the persisted cumulative value separate so a 0.04 + 0.06
+            // receipt creates 0.04 and 0.06 target batches, never 0.04 and 0.10.
+            item.setReceivedQuantity(qty);
             createTargetInventory(transfer.getTargetFactoryId(), transfer.getTargetWarehouseId(), item, userId,
                     Collections.emptyList(), UUID.randomUUID().toString().substring(0, 8));
+            item.setReceivedQuantity(previousReceived.add(qty));
             WarehouseTransferMovement movement = new WarehouseTransferMovement();
             movement.setFactoryId(factoryId); movement.setTransferId(transferId); movement.setTransferItemId(item.getId());
-            movement.setKind(WarehouseTransferMovement.Kind.RECEIPT); movement.setOperationId(UUID.randomUUID().toString());
+            movement.setKind(WarehouseTransferMovement.Kind.RECEIPT); movement.setOperationId(operationId);
             movement.setRequestKey(key); movement.setSourceBatchId(item.getSourceBatchId()); movement.setTargetBatchId(item.getTargetBatchId());
             movement.setQuantity(qty); movement.setUnit(item.getUnit()); movement.setActorId(userId);
             warehouseMovementRepository.save(movement);
@@ -1476,7 +1491,9 @@ public class TransferServiceImpl implements TransferService {
     }
 
     private InternalTransfer loadWarehouseLocked(String factoryId, String transferId) {
-        if (entityManager == null) return getTransferById(factoryId, transferId);
+        if (entityManager == null) {
+            throw new IllegalStateException("warehouse delivery requires an EntityManager for the scoped pessimistic lock");
+        }
         return entityManager.createQuery("select distinct t from InternalTransfer t left join fetch t.items "
                         + "where t.id=:id and t.sourceFactoryId=:factoryId and t.sourceFactoryId=t.targetFactoryId", InternalTransfer.class)
                 .setParameter("id", transferId).setParameter("factoryId", factoryId).setLockMode(LockModeType.PESSIMISTIC_WRITE)
@@ -1484,24 +1501,36 @@ public class TransferServiceImpl implements TransferService {
     }
 
     private WarehouseTransferDeliveryDTO toWarehouseDelivery(InternalTransfer transfer) {
-        List<WarehouseTransferMovement> movements = warehouseMovementRepository.findByTransferIdOrderByIdAsc(transfer.getId());
+        List<WarehouseTransferMovement> movements = warehouseMovementRepository.findTransferHistoryIncludingDeleted(transfer.getId());
         boolean supported = isIntraFactory(transfer) && transfer.getSourceWarehouseId() != null
                 && transfer.getTargetWarehouseId() != null && transfer.getItems().stream().allMatch(i ->
                 i.getItemType() == TransferItemType.RAW_MATERIAL && i.getSourceBatchId() != null);
-        WarehouseTransferDeliveryDTO dto = new WarehouseTransferDeliveryDTO(supported, transfer.getStatus().name(), transfer.getId(),
-                transfer.getTransferNumber(), BigDecimal.ZERO, new ArrayList<>());
+        boolean staged = movements.stream().anyMatch(m -> m.getKind() == WarehouseTransferMovement.Kind.DISPATCH);
+        WarehouseTransferDeliveryDTO dto = new WarehouseTransferDeliveryDTO();
+        dto.setSupported(supported); dto.setStaged(staged); dto.setStage(transfer.getStatus().name());
+        dto.setTransferId(transfer.getId()); dto.setTransferNumber(transfer.getTransferNumber()); dto.setItems(new ArrayList<>());
         BigDecimal inTransit = BigDecimal.ZERO;
+        Map<String, BigDecimal> inTransitByUnit = new LinkedHashMap<>();
         for (InternalTransferItem item : transfer.getItems()) {
-            BigDecimal shipped = item.getQuantity(); BigDecimal received = movements.stream()
+            BigDecimal shipped = movements.stream()
+                    .filter(m -> Objects.equals(m.getTransferItemId(), item.getId()) && m.getKind() == WarehouseTransferMovement.Kind.DISPATCH)
+                    .map(WarehouseTransferMovement::getQuantity).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal received = movements.stream()
                     .filter(m -> Objects.equals(m.getTransferItemId(), item.getId()) && m.getKind() == WarehouseTransferMovement.Kind.RECEIPT)
                     .map(WarehouseTransferMovement::getQuantity).reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal pending = shipped.subtract(received); if (pending.signum() > 0) inTransit = inTransit.add(pending);
+            BigDecimal pending = shipped.subtract(received); if (pending.signum() > 0 && item.getUnit() != null) {
+                inTransit = inTransit.add(pending); inTransitByUnit.merge(item.getUnit(), pending, BigDecimal::add);
+            }
             List<WarehouseTransferDeliveryDTO.Receipt> receipts = movements.stream()
                     .filter(m -> Objects.equals(m.getTransferItemId(), item.getId()) && m.getKind() == WarehouseTransferMovement.Kind.RECEIPT)
-                    .map(m -> new WarehouseTransferDeliveryDTO.Receipt(m.getOperationId(), m.getTargetBatchId(), m.getQuantity(), m.getUnit())).toList();
+                    .map(m -> new WarehouseTransferDeliveryDTO.Receipt(m.getRequestKey(), m.getOperationId(), m.getTargetBatchId(), m.getQuantity(), m.getUnit(), m.getActorId(), m.getCreatedAt())).toList();
             dto.getItems().add(new WarehouseTransferDeliveryDTO.Item(item.getId(), item.getItemName(), item.getUnit(), item.getSourceBatchId(), shipped, received, pending, receipts));
         }
-        dto.setInTransitQuantity(inTransit); return dto;
+        dto.setInTransitByUnit(inTransitByUnit);
+        if (inTransitByUnit.size() == 1) {
+            dto.setInTransitUnit(inTransitByUnit.keySet().iterator().next()); dto.setInTransitQuantity(inTransit);
+        } else dto.setInTransitQuantity(null);
+        return dto;
     }
 
     @Override

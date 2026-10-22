@@ -15,6 +15,9 @@ CREATE TABLE warehouse_transfer_movements (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP NULL,
     CONSTRAINT uq_wtm_request_item UNIQUE (request_key, transfer_item_id),
+    CONSTRAINT fk_wtm_factory FOREIGN KEY (factory_id) REFERENCES factories(id),
+    CONSTRAINT fk_wtm_transfer FOREIGN KEY (transfer_id) REFERENCES internal_transfers(id),
+    CONSTRAINT fk_wtm_item FOREIGN KEY (transfer_item_id) REFERENCES internal_transfer_items(id),
     CONSTRAINT ck_wtm_kind CHECK (kind IN ('DISPATCH','RECEIPT')),
     CONSTRAINT ck_wtm_quantity CHECK (quantity > 0)
 );
