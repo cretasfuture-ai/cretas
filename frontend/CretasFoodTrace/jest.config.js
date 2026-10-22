@@ -17,10 +17,6 @@ module.exports = {
     ? Number(process.env.JEST_MAX_WORKERS)
     : (process.env.CI ? '50%' : 8),
 
-  // Recycle idle CI workers between suites before retained transforms reach
-  // Node's heap limit. Keep every suite and the existing worker/resource caps.
-  workerIdleMemoryLimit: process.env.CI ? '768MB' : undefined,
-
   // 全局变量定义 - 修复 __DEV__ 未定义错误
   globals: {
     __DEV__: true,
