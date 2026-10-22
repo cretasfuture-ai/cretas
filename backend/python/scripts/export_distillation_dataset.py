@@ -50,6 +50,12 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
+    SYNTHETIC_FACTORY_IDS,
+    fetch_consent_map,
+    scope_from_map,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("export_distill")
 
@@ -113,7 +119,8 @@ async def _fetch_rows(
 
 
 # Sentinel factory IDs marking synthetic seed corpus (see seed_chart_insight_corpus.py).
-_SENTINEL_FACTORIES = frozenset({"SEED_R", "SEED_F"})
+# Defined once in smartbi.services.training_consent (capture uses the same set).
+_SENTINEL_FACTORIES = SYNTHETIC_FACTORY_IDS
 
 
 def _is_synthetic(row: Dict[str, Any]) -> bool:
