@@ -13,7 +13,7 @@ import org.springframework.jdbc.datasource.init.ScriptUtils;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** V20261103_72 on real PostgreSQL: adds nullable run-as columns and leaves existing configs unset. */
+/** V20261103_73 on real PostgreSQL: adds nullable run-as columns and leaves existing configs unset. */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class AutonomousRunAsMigrationPostgresContractTest {
 
@@ -33,7 +33,7 @@ class AutonomousRunAsMigrationPostgresContractTest {
             statement.execute("INSERT INTO factory_trigger_chains (factory_id, chain_code, enabled) VALUES (NULL, 'BATCH_COMPLETED', false)");
 
             ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/flyway/V20261103_72__autonomous_run_as_user.sql"));
+                    new ClassPathResource("db/flyway/V20261103_73__autonomous_run_as_user.sql"));
 
             for (String table : new String[]{"factory_scheduler_configs", "factory_trigger_chains"}) {
                 try (ResultSet column = statement.executeQuery("""
