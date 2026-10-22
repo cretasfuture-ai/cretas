@@ -2,6 +2,8 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
+import com.cretas.aims.dto.inventory.WarehouseTransferDeliveryDTO;
+import com.cretas.aims.dto.inventory.WarehouseTransferReceiptRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.InventoryOwnership;
@@ -43,6 +45,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -68,6 +73,10 @@ public class TransferServiceImpl implements TransferService {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final MaterialBatchService materialBatchService;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
+    @Autowired
+    private WarehouseTransferMovementRepository warehouseMovementRepository;
+    @PersistenceContext
+    private EntityManager entityManager;
 
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A). */
     @org.springframework.beans.factory.annotation.Autowired
@@ -1356,6 +1365,147 @@ public class TransferServiceImpl implements TransferService {
 
     @Override
     @Transactional
+    public InternalTransfer dispatchWarehouseTransfer(String factoryId, String transferId, Long userId) {
+        InternalTransfer transfer = loadWarehouseLocked(factoryId, transferId);
+        assertSourceFactory(factoryId, transfer, "仓内发运");
+        if (!isIntraFactory(transfer)) {
+            throw new BusinessException(409, "仓内分段发运仅适用于同厂仓间调拨")
+                    .withHint("跨厂调拨请使用现有发货/签收流程");
+        }
+        assertStatus(transfer, TransferStatus.APPROVED, "仓内发运");
+        if (transfer.getSourceWarehouseId() == null || transfer.getTargetWarehouseId() == null
+                || transfer.getSourceWarehouseId().equals(transfer.getTargetWarehouseId())) {
+            throw new BusinessException(409, "仓内发运需要两个有效且不同的仓库");
+        }
+        for (InternalTransferItem item : transfer.getItems()) {
+            if (item.getItemType() != TransferItemType.RAW_MATERIAL || item.getSourceBatchId() == null
+                    || item.getSourceBatchId().isBlank()) {
+                throw new BusinessException(409, "该调拨行不支持仓内分段发运：必须是已选批次的原料公司物权行")
+                        .withHint("请使用现有原子确认或完善来源批次");
+            }
+            MaterialBatch batch = materialBatchRepository
+                    .findByIdAndFactoryIdForUpdate(item.getSourceBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(409, "来源批次不存在或不属于源仓库"));
+            if (!transfer.getSourceWarehouseId().equals(batch.getWarehouseId())
+                    || !Objects.equals(item.getMaterialTypeId(), batch.getMaterialTypeId())
+                    || batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+                throw new BusinessException(409, "来源批次不属于指定源仓库或不是公司物权原料");
+            }
+            BigDecimal available = batch.getReceiptQuantity()
+                    .subtract(Optional.ofNullable(batch.getUsedQuantity()).orElse(BigDecimal.ZERO))
+                    .subtract(Optional.ofNullable(batch.getReservedQuantity()).orElse(BigDecimal.ZERO));
+            if (available.compareTo(item.getQuantity()) < 0) {
+                throw new BusinessException(409, "来源批次可用量不足");
+            }
+            batch.setUsedQuantity(batch.getUsedQuantity().add(item.getQuantity()));
+            materialBatchRepository.save(batch);
+            WarehouseTransferMovement movement = new WarehouseTransferMovement();
+            movement.setFactoryId(factoryId); movement.setTransferId(transferId); movement.setTransferItemId(item.getId());
+            movement.setKind(WarehouseTransferMovement.Kind.DISPATCH); movement.setOperationId(UUID.randomUUID().toString());
+            movement.setRequestKey("dispatch:" + transferId + ":" + item.getId());
+            movement.setSourceBatchId(item.getSourceBatchId()); movement.setQuantity(item.getQuantity()); movement.setUnit(item.getUnit());
+            movement.setActorId(userId); warehouseMovementRepository.save(movement);
+            item.setReceivedQuantity(BigDecimal.ZERO);
+        }
+        transfer.setStatus(TransferStatus.SHIPPED);
+        transfer.setShippedAt(LocalDateTime.now());
+        return transferRepository.save(transfer);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public WarehouseTransferDeliveryDTO getWarehouseDelivery(String factoryId, String transferId) {
+        InternalTransfer transfer = getTransferById(factoryId, transferId);
+        return toWarehouseDelivery(transfer);
+    }
+
+    @Override
+    @Transactional
+    public WarehouseTransferDeliveryDTO receiveWarehouseTransfer(String factoryId, String transferId, Long userId,
+                                                                  WarehouseTransferReceiptRequest request) {
+        if (request == null || request.getRequestKey() == null) {
+            throw new BusinessException(400, "requestKey不能为空");
+        }
+        InternalTransfer transfer = loadWarehouseLocked(factoryId, transferId);
+        assertTargetFactory(factoryId, transfer, "仓内收货");
+        if (!isIntraFactory(transfer)) throw new BusinessException(409, "仓内分段收货仅适用于同厂仓间调拨");
+        assertStatus(transfer, TransferStatus.SHIPPED, "仓内收货");
+        String key = request.getRequestKey().toString();
+        if (!warehouseMovementRepository.findByRequestKey(key).isEmpty()) {
+            throw new BusinessException(409, "requestKey已处理，请查询仓内交付状态");
+        }
+        Map<Long, BigDecimal> quantities = request.getItemQuantities() == null
+                ? Collections.emptyMap() : request.getItemQuantities();
+        Set<Long> ids = transfer.getItems().stream().map(InternalTransferItem::getId).collect(Collectors.toSet());
+        if (!ids.containsAll(quantities.keySet())) throw new BusinessException(409, "收货明细行不属于该调拨单");
+        if (quantities.values().stream().anyMatch(q -> q == null || q.scale() > 6 || q.compareTo(BigDecimal.ZERO) < 0))
+            throw new BusinessException(400, "本次收货数量必须是非负且精度不超过6位的数字");
+        BigDecimal total = BigDecimal.ZERO;
+        Map<InternalTransferItem, BigDecimal> accepted = new LinkedHashMap<>();
+        for (InternalTransferItem item : transfer.getItems()) {
+            BigDecimal qty = quantities.getOrDefault(item.getId(), BigDecimal.ZERO);
+            BigDecimal received = Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO);
+            BigDecimal pending = item.getQuantity().subtract(received);
+            if (qty.compareTo(pending) > 0) throw new BusinessException(409, "收货数量超过该行待收量");
+            if (qty.signum() > 0) { accepted.put(item, qty); total = total.add(qty); }
+        }
+        if (total.signum() <= 0) throw new BusinessException(400, "至少一行本次收货数量必须大于0");
+        for (Map.Entry<InternalTransferItem, BigDecimal> entry : accepted.entrySet()) {
+            InternalTransferItem item = entry.getKey(); BigDecimal qty = entry.getValue();
+            item.setReceivedQuantity(Optional.ofNullable(item.getReceivedQuantity()).orElse(BigDecimal.ZERO).add(qty));
+            createTargetInventory(transfer.getTargetFactoryId(), transfer.getTargetWarehouseId(), item, userId,
+                    Collections.emptyList(), UUID.randomUUID().toString().substring(0, 8));
+            WarehouseTransferMovement movement = new WarehouseTransferMovement();
+            movement.setFactoryId(factoryId); movement.setTransferId(transferId); movement.setTransferItemId(item.getId());
+            movement.setKind(WarehouseTransferMovement.Kind.RECEIPT); movement.setOperationId(UUID.randomUUID().toString());
+            movement.setRequestKey(key); movement.setSourceBatchId(item.getSourceBatchId()); movement.setTargetBatchId(item.getTargetBatchId());
+            movement.setQuantity(qty); movement.setUnit(item.getUnit()); movement.setActorId(userId);
+            warehouseMovementRepository.save(movement);
+        }
+        boolean complete = transfer.getItems().stream().allMatch(i -> Optional.ofNullable(i.getReceivedQuantity()).orElse(BigDecimal.ZERO)
+                .compareTo(i.getQuantity()) >= 0);
+        transferItemRepository.saveAll(transfer.getItems());
+        transfer.setStatus(complete ? TransferStatus.CONFIRMED : TransferStatus.SHIPPED);
+        if (complete) {
+            transfer.setReceivedAt(LocalDateTime.now()); transfer.setConfirmedAt(LocalDateTime.now());
+            InternalTransfer saved = transferRepository.save(transfer);
+            if (applicationEventPublisher != null) applicationEventPublisher.publishEvent(
+                    new com.cretas.aims.event.TransferConfirmedEvent(this, saved.getSourceFactoryId(), saved.getId()));
+        } else transferRepository.save(transfer);
+        return toWarehouseDelivery(transfer);
+    }
+
+    private InternalTransfer loadWarehouseLocked(String factoryId, String transferId) {
+        if (entityManager == null) return getTransferById(factoryId, transferId);
+        return entityManager.createQuery("select distinct t from InternalTransfer t left join fetch t.items "
+                        + "where t.id=:id and t.sourceFactoryId=:factoryId and t.sourceFactoryId=t.targetFactoryId", InternalTransfer.class)
+                .setParameter("id", transferId).setParameter("factoryId", factoryId).setLockMode(LockModeType.PESSIMISTIC_WRITE)
+                .getResultStream().findFirst().orElseThrow(() -> new ResourceNotFoundException("调拨单不存在或不属于当前工厂"));
+    }
+
+    private WarehouseTransferDeliveryDTO toWarehouseDelivery(InternalTransfer transfer) {
+        List<WarehouseTransferMovement> movements = warehouseMovementRepository.findByTransferIdOrderByIdAsc(transfer.getId());
+        boolean supported = isIntraFactory(transfer) && transfer.getSourceWarehouseId() != null
+                && transfer.getTargetWarehouseId() != null && transfer.getItems().stream().allMatch(i ->
+                i.getItemType() == TransferItemType.RAW_MATERIAL && i.getSourceBatchId() != null);
+        WarehouseTransferDeliveryDTO dto = new WarehouseTransferDeliveryDTO(supported, transfer.getStatus().name(), transfer.getId(),
+                transfer.getTransferNumber(), BigDecimal.ZERO, new ArrayList<>());
+        BigDecimal inTransit = BigDecimal.ZERO;
+        for (InternalTransferItem item : transfer.getItems()) {
+            BigDecimal shipped = item.getQuantity(); BigDecimal received = movements.stream()
+                    .filter(m -> Objects.equals(m.getTransferItemId(), item.getId()) && m.getKind() == WarehouseTransferMovement.Kind.RECEIPT)
+                    .map(WarehouseTransferMovement::getQuantity).reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal pending = shipped.subtract(received); if (pending.signum() > 0) inTransit = inTransit.add(pending);
+            List<WarehouseTransferDeliveryDTO.Receipt> receipts = movements.stream()
+                    .filter(m -> Objects.equals(m.getTransferItemId(), item.getId()) && m.getKind() == WarehouseTransferMovement.Kind.RECEIPT)
+                    .map(m -> new WarehouseTransferDeliveryDTO.Receipt(m.getOperationId(), m.getTargetBatchId(), m.getQuantity(), m.getUnit())).toList();
+            dto.getItems().add(new WarehouseTransferDeliveryDTO.Item(item.getId(), item.getItemName(), item.getUnit(), item.getSourceBatchId(), shipped, received, pending, receipts));
+        }
+        dto.setInTransitQuantity(inTransit); return dto;
+    }
+
+    @Override
+    @Transactional
     public InternalTransferItem updateItemQuantity(String factoryId, String transferId,
                                                     Long itemId, BigDecimal quantity) {
         if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
@@ -2078,6 +2228,11 @@ public class TransferServiceImpl implements TransferService {
 
     private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item,
                                        Long userId, List<TransferSourceAllocation> sourceAllocations) {
+        createTargetInventory(targetFactoryId, targetWarehouseId, item, userId, sourceAllocations, null);
+    }
+
+    private void createTargetInventory(String targetFactoryId, String targetWarehouseId, InternalTransferItem item,
+                                       Long userId, List<TransferSourceAllocation> sourceAllocations, String batchNonce) {
         BigDecimal qty = item.getReceivedQuantity() != null ? item.getReceivedQuantity() : item.getQuantity();
 
         // D1: 解析 target warehouse — 显式指定优先, 否则按类型 fallback
@@ -2090,7 +2245,7 @@ public class TransferServiceImpl implements TransferService {
             MaterialBatch batch = new MaterialBatch();
             batch.setId(UUID.randomUUID().toString());
             batch.setFactoryId(targetFactoryId);
-            batch.setBatchNumber(transferInBatchNumber(item));
+            batch.setBatchNumber(transferInBatchNumber(item) + (batchNonce == null ? "" : "-" + batchNonce));
             batch.setMaterialTypeId(item.getMaterialTypeId());
             batch.setReceiptQuantity(qty);
             batch.setUsedQuantity(BigDecimal.ZERO);
@@ -2142,9 +2297,9 @@ public class TransferServiceImpl implements TransferService {
             // 调入方创建成品批次
             FinishedGoodsBatch batch = new FinishedGoodsBatch();
             batch.setFactoryId(targetFactoryId);
-            batch.setBatchNumber(String.format("TRF-FG-%s-%04d",
+            batch.setBatchNumber(String.format("TRF-FG-%s-%04d%s",
                     LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")),
-                    System.currentTimeMillis() % 10000));
+                    System.currentTimeMillis() % 10000, batchNonce == null ? "" : "-" + batchNonce));
             batch.setProductTypeId(item.getProductTypeId());
             batch.setProductName(item.getItemName());
             batch.setProducedQuantity(qty);
