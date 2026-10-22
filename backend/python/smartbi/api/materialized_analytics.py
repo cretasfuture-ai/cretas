@@ -207,8 +207,8 @@ async def precompute_cache_endpoint(upload_id: int, request: Request) -> Dict[st
     enrichment_cache for a given upload.
 
     Lives on the materialized_analytics router (JWT / X-Internal-Secret +
-    X-Factory-Id protected) instead of analysis_cache.router because the
-    latter is in PUBLIC_PREFIXES and can't see request.state.factory_id.
+    X-Factory-Id protected); it was put here while analysis_cache.router was
+    public (that router requires a login too since 2026-10-22).
 
     Called by Java γ-2c afterCommit hook on every successful upload, so the
     FE cache-first branch (analysis.ts cache-first, ~line 1400) hits an
