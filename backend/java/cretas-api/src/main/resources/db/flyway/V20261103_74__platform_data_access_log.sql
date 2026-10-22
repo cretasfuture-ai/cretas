@@ -5,7 +5,7 @@
 -- No FK to factories: the write path must stay cheap and must not fail on unknown ids.
 CREATE TABLE IF NOT EXISTS platform_data_access_log (
     id                 BIGSERIAL PRIMARY KEY,
-    created_at         TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_at         TIMESTAMP    NOT NULL,
     target_factory_id  VARCHAR(64)  NOT NULL,
     target_source      VARCHAR(16)  NOT NULL,
     actor_type         VARCHAR(24)  NOT NULL,
