@@ -17,7 +17,6 @@
 
 
 
-- `ERP-S2-READINESS-CLAUDE-20261021` — `review` — 代码Owner原Claude；Base 5a0c01ff671857ff56fdba03ed27d46808a2fa76 — PR1079/bbe7精确9文件；原Source集成子任务Base e643140；先ACK再释放，见archive/2026-10-22-s2-integration.md。
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — B1/1073/3029151精确8已接收待集成，非部署或业务验收；正式裁决已交原Owner。
 
@@ -118,7 +117,6 @@
 
 - `ERP-S6-EXECUTION-ARCH-CLAUDE-20261021`：仅archive/2026-10-21-claude-s6-actual-intake.md列B1精确8文件修订；Owner不变，不回溯批准先写后登记。
 
-- `ERP-S2-READINESS-CLAUDE-20261021`：代码仍归local_f6b118ce-f036-4ece-9a0b-322073b20c74；原Source仅集成检查/官方发布，不改产品。精确9文件、Base、命令和ACK见archive/2026-10-22-s2-integration.md。
 
 
 
