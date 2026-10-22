@@ -8,7 +8,7 @@
 
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
-- `ERP-S1-NATIVE-DATE-REACHABILITY-20261022` — `review` — Owner /root/s1_native_date_fix — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — e810fa8精确2文件；最终测试旧红/恢复绿已核；待原Source接续必要门禁/PR/签名OTA及原QA真机，见archive/2026-10-22-native-date-v72-registration.md。
+- `ERP-S1-NATIVE-DATE-REACHABILITY-20261022` — `in-progress` — Owner 01a15272-374d-72c0-bb20-cdfa0bd823f1 — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — 原Source实际ACK接续e810fa8精确2；目标红绿复用，必要门禁/PR并行；合发等原QA SAFE+after，见archive/2026-10-22-native-date-v72-registration.md。
 
 - `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 56e43461dd59a8d22a07a8cf84fbe2af1373de42 — V72被动5文件；待原Owner回传独立WT后claim；无runtime scope，见archive/2026-10-22-native-date-v72-registration.md。
 
