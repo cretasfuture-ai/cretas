@@ -38,3 +38,11 @@ Web受影响入口：`npx vitest run src/views/platform/factory-review/__tests__
 
 两台既有本地机器按现场CPU/RAM与其他任务排程，现有runner标签、3CPU/6GB保护不动；不取消他人、不重启共享WSL/Docker、不恢复退役runner。新测试/制品独占目录/target/数据库/端口，最终版本通过证据复用。
 Source完成后SAFE零在途并回传精确版本/官方回执。原QA仍独占手机、浏览器、canonical CSV，Root另启同一原QA核S2-04/S2-07真实界面与独立DB。不得以两项源码/部署称整个S2通过；S0原FAIL/未测、S107timer与S6未交付缺项保持。
+
+## 实际代码合入收口（2026-10-22）
+
+原 PR #1079 精确 HEAD `bbe7d5ee43cfb45b7593e5e2873c67f94fddf575` 已于 `2026-10-22T07:31:52Z` 手动合入，merge `1ea4acdfb11b530d5f3d445d3c55743991159458`。原 Claude 产品 Owner 不变；原 Source 集成 Owner 已完成本次精确9文件接收，产品源码未另改。代码任务状态 merged，释放这9文件的在飞写锁；Source仍独占本人发布worktree、制品和在途发布，不授权清理。
+
+Root 从 ACTIVE 归档本代码任务与 scope。最终必需完整检查/真实JPA证据、可信候选 Java/Web、精确依赖树/选择器和退出码见私有 `execution/source-s2-readiness-integration-20261022/`。候选 backend tree `07aa49351b85f788bd6fad4d6f708d470b5b349e`、Web tree `94a6e4cd530eb2243dc5e8fd0fb395a3a1972c2f`；本次仅归档文档，不重复产品测试或构建。
+
+本归档不声称正式发布或业务验收完成。发布仍由原Source从clean exact origin/main走官方入口；Root在官方回执完成后组织原QA真实S2-04/07及独立SQL。实际F006目录READY/蓝图绑定与包装换算资料尚有前置缺口，按原判据记录，不能用代码合并/制品/部署代替业务PASS。S0原FAIL/未测、S1-07采购timer和S6未交付项保持。

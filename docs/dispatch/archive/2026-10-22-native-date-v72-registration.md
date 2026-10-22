@@ -66,3 +66,11 @@ Root 通过私有 `source-native-date-delivery-20261022/root-ledger-write-releas
 ## 保留的原台账说明
 
 **当前真值**：`origin/main` 为代码与合并真值；本文件只记在飞任务的一行摘要，由 `scripts/ci/check_dispatch_active.py` 钉住（每条 ≤ 300 字 / 全文 ≤ 30,000 bytes）。条目全文与增量日志写 `docs/dispatch/archive/`，最近三份：[2026-09-06-active-organizer-log.md](archive/2026-09-06-active-organizer-log.md)、[2026-09-05-active-entries.md](archive/2026-09-05-active-entries.md)、[2026-09-05-active-organizer-log.md](archive/2026-09-05-active-organizer-log.md)；更早的按日期在同目录下查，⛔ 不在本文件维护链接清单（那份清单曾占本文件 2.6 KB，而它每 session 都被加载）。
+
+## Native 日期缺陷实际交付与原QA收口（2026-10-22）
+
+前述 OPEN/待测记录作为原始历史保留。PR #1098 最终HEAD `04296374e9f3ba8cfe7e9021a8c9d9ecf4861962`，必要RN完整检查通过后手动合入main `d55c328163d55c7e74cae975a67e9b1c6b41051f`。原Source官方生产Android签名OTA exit0，runtime1.0.5、update `605f220d-e16a-0fd5-5395-84027085ad7a`；签名、manifest和CDN字节哈希已核对。没有Java/Python/Web重发。
+
+同一原QA正常登录真实F006 dispatcher，在小米正常更新/菜单/详情入口选择已有计划日期；空原因disabled与取消零写；一次trimmed原因保存、正常退出重进后持久，真实界面说明仅记录原因。Root独立AFTER确认仅选定计划notes/updated_at变化，原时间/资源/父子对象与其他计划和受保护账号字段保持。原比较器exit1/DIFF_REQUIRES_REVIEW保留，由原QA按声明的合法备注delta独立签收；没有把缺失HTTP request-id/payload补造为已观察到。
+
+原QA actualexit0/SAFE，`ERP-S1-NATIVE-PLAN-DOMAIN-001` 由原QA关闭，canonical仅追加S1-03证据，保留原Web PASS和所有原FAIL/未测/判据。私有证据：`execution/native-date-original-qa-runtime-20261022/`、`execution/native-date-original-qa-db-20261022/`、`execution/coordination/root-native-reason-db-accepted-20261022.json`。手机/浏览器/canonical仍由原QA独占；这不表示全S1或全阶段通过。
