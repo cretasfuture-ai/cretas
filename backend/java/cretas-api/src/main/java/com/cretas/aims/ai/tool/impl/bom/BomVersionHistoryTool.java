@@ -26,6 +26,9 @@ public class BomVersionHistoryTool extends AbstractBusinessTool {
     @Autowired
     private BomVersionService versionService;
 
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Override
     public String getToolName() {
         return "bom_version_history";
@@ -75,6 +78,12 @@ public class BomVersionHistoryTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
         String bomRecipeId = getString(params, "bomRecipeId");
+        // 工艺保密: 版本快照含完整配方; 无权 (或识别不出调用者) 时不把快照交给模型
+        if (!processSecretGuard.permitsFullContent(factoryId, bomRecipeId,
+                "AI tool bom_version_history")) {
+            return buildSimpleResult(com.cretas.aims.security.ProcessSecretResponseAdvice.RESTRICTED_MESSAGE,
+                    Map.of("bomRecipeId", bomRecipeId, "processSecret", Map.of("visibility", "RESTRICTED")));
+        }
         String mode = getString(params, "mode");
         if (mode == null || mode.isBlank()) mode = "HISTORY";
 

@@ -4,6 +4,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import com.cretas.aims.security.DataScopeRouteInterceptor;
+import com.cretas.aims.security.ProcessSecretGuardInterceptor;
 
 /**
  * Spring MVC配置
@@ -22,6 +23,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final RequireRoleInterceptor requireRoleInterceptor;
     private final ModuleEnabledInterceptor moduleEnabledInterceptor;
     private final DataScopeRouteInterceptor dataScopeRouteInterceptor;
+    private final ProcessSecretGuardInterceptor processSecretGuardInterceptor;
 
     // 构造器注入 - Spring 确保依赖已就绪
     public WebMvcConfig(JwtAuthInterceptor jwtAuthInterceptor,
@@ -29,13 +31,15 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         PermissionInterceptor permissionInterceptor,
                         RequireRoleInterceptor requireRoleInterceptor,
                         ModuleEnabledInterceptor moduleEnabledInterceptor,
-                        DataScopeRouteInterceptor dataScopeRouteInterceptor) {
+                        DataScopeRouteInterceptor dataScopeRouteInterceptor,
+                        ProcessSecretGuardInterceptor processSecretGuardInterceptor) {
         this.jwtAuthInterceptor = jwtAuthInterceptor;
         this.demoReadOnlyInterceptor = demoReadOnlyInterceptor;
         this.permissionInterceptor = permissionInterceptor;
         this.requireRoleInterceptor = requireRoleInterceptor;
         this.moduleEnabledInterceptor = moduleEnabledInterceptor;
         this.dataScopeRouteInterceptor = dataScopeRouteInterceptor;
+        this.processSecretGuardInterceptor = processSecretGuardInterceptor;
     }
 
     @Override
@@ -108,6 +112,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns(swaggerWhitelist)
                 .excludePathPatterns(publicWhitelist)
                 .order(6);
+
+        // 7. 工艺保密: @ProcessSecretGuard 接口按产品保密策略判定 (无策略的产品不受影响)
+        registry.addInterceptor(processSecretGuardInterceptor)
+                .addPathPatterns("/api/mobile/**")
+                .excludePathPatterns(swaggerWhitelist)
+                .excludePathPatterns(publicWhitelist)
+                .order(7);
 
         WebMvcConfigurer.super.addInterceptors(registry);
     }

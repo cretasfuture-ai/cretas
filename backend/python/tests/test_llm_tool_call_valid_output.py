@@ -297,3 +297,31 @@ def test_endpoint_unrelated_runtime_error_is_not_mislabelled_as_exhaustion(monke
     monkeypatch.setattr(ep, "call_chain", boom)
     resp = _http_client().post("/api/llm/tool-call", json=_tool_call_body())
     assert resp.status_code == 500
+
+
+def test_endpoint_redaction_failure_is_an_explicit_503_and_nothing_egresses(monkeypatch):
+    """脱敏失败 = 本地拦截, 什么都没发出去。端点必须答 503 (EGRESS_REDACTION_FAILED), 不是裸 500。
+
+    对照: 同一套接线、脱敏正常时 200 —— 证明 503 来自拦截而不是入口坏了。
+    """
+    from common.llm_client import _RedactingLLMClient
+
+    inner = _Client({"aliyun_c_vl": _resp(200, payload=_completion("", _qwen_tool_call())),
+                     "aliyun_a_vl": _GOOD_TEXT})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _RedactingLLMClient(inner))
+    assert _http_client().post("/api/llm/tool-call", json=_tool_call_body()).status_code == 200
+
+    inner.call_log.clear()
+    llm_router._CB_FAILURES.clear()
+    llm_router._CB_LAST_FAIL.clear()
+
+    def _boom(_payload):
+        raise RuntimeError("redactor exploded")
+
+    monkeypatch.setattr("common.llm_redactor.redact_payload_for_egress", _boom)
+    for path, body in (("/api/llm/tool-call", _tool_call_body()),
+                       ("/api/llm/chat", {"messages": _MSG, "slot": "chat"})):
+        resp = _http_client().post(path, json=body)
+        assert resp.status_code == 503, f"{path}: {resp.status_code} {resp.text}"
+        assert resp.json()["data"]["reason"] == "EGRESS_REDACTION_FAILED"
+    assert inner.call_log == [], f"脱敏失败后仍有请求出境: {inner.call_log}"

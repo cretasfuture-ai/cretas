@@ -54,7 +54,8 @@ class DeferredPurchaseGrantDemoBoundaryContractTest {
         });
         Map<String, Object> boundaries = Map.of("service", service, "audit", audit, "callers", callers, "auth", auth,
                 "permission", allow(PermissionInterceptor.class), "role", allow(RequireRoleInterceptor.class),
-                "module", allow(ModuleEnabledInterceptor.class), "dataScope", allow(DataScopeRouteInterceptor.class));
+                "module", allow(ModuleEnabledInterceptor.class), "dataScope", allow(DataScopeRouteInterceptor.class),
+                "processSecret", allow(com.cretas.aims.security.ProcessSecretGuardInterceptor.class));
         context.addBeanFactoryPostProcessor(factory -> boundaries.forEach(factory::registerSingleton));
         context.register(Mvc.class);
         context.refresh();

@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.workflow.ProductionWorkflowRuntimeDTO;
@@ -21,6 +23,7 @@ public class ProductProcessWorkflowRuntimeController {
 
     private final ProductProcessWorkflowRuntimeService runtimeService;
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.BATCH_PATH, name = "batchId")
     @GetMapping("/{batchId}/workflow-runtime")
     @Operation(summary = "Read the immutable Workflow runtime for a factory batch")
     public ApiResponse<ProductionWorkflowRuntimeDTO> getRuntime(
