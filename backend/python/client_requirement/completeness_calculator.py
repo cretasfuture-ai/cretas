@@ -13,7 +13,9 @@ RLS-protected by ``app.factory_id`` GUC — we acquire the smartbi pool via
 defensively call ``set_config`` inside a transaction in case the middleware
 context didn't propagate.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+
+from common.tenant_identity import require_same_factory
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import asyncpg
@@ -37,7 +39,8 @@ class CompletenessResult(BaseModel):
 
 
 class CompletenessRequest(BaseModel):
-    factory_id: str
+    # 工厂取登录身份; 传了就必须一致 (旧前端会传自己的工厂)
+    factory_id: Optional[str] = None
     entity_types: Optional[List[str]] = None  # if None, compute all (manufacturing only)
 
 
@@ -355,10 +358,11 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
 
 
 @router.post("/completeness/compute")
-async def api_compute_completeness(req: CompletenessRequest):
+async def api_compute_completeness(req: CompletenessRequest, request: Request):
     """Compute data completeness for a factory."""
+    factory_id = require_same_factory(request, req.factory_id)
     try:
-        results = await compute_completeness(req.factory_id, req.entity_types)
+        results = await compute_completeness(factory_id, req.entity_types)
         return {"success": True, "data": [r.dict() for r in results]}
     except Exception as e:
         logger.error(f"Completeness computation failed: {e}", exc_info=True)
@@ -370,8 +374,10 @@ async def api_compute_completeness(req: CompletenessRequest):
 
 
 @router.get("/completeness/trend")
-async def api_completeness_trend(factory_id: str, entity_type: str = "PROCESSING_BATCH", months: int = 6):
+async def api_completeness_trend(request: Request, factory_id: Optional[str] = None,
+                                 entity_type: str = "PROCESSING_BATCH", months: int = 6):
     """Get completeness trend from snapshots table."""
+    factory_id = require_same_factory(request, factory_id)
     pool = await _get_db_pool()
     try:
         async with pool.acquire() as conn:

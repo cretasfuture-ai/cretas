@@ -26,6 +26,12 @@ public class KeywordPromotionServiceImpl implements KeywordPromotionService {
 
     private static final String GLOBAL_FACTORY_ID = "GLOBAL";
 
+    /**
+     * 「3 家以上工厂用过的说法晋升为全局」已停用 —— 一家工厂的说法会经由全局词表出现在别的工厂。
+     * 要恢复必须改这里并重新评审数据边界, 不提供运行时开关。
+     */
+    static final boolean CROSS_FACTORY_PROMOTION_ENABLED = false;
+
     @Override
     @Transactional
     public KeywordFactoryAdoption recordAdoption(
@@ -117,6 +123,11 @@ public class KeywordPromotionServiceImpl implements KeywordPromotionService {
     @Override
     @Transactional
     public boolean promoteToGlobal(String intentCode, String keyword) {
+        // 工厂之间不共享学到的说法 (Steve 2026-10-22: 工厂自己产生的说法不跨厂; 系统预置的全局词保留)。2026-10-22 线上计数: GLOBAL/PROMOTED 关键词 0、跨厂知识 0、采用记录 0, 无存量需清理。
+        if (!CROSS_FACTORY_PROMOTION_ENABLED) {
+            log.info("跨工厂关键词晋升已停用, 跳过: intent={}, keyword={}", intentCode, keyword);
+            return false;
+        }
         // 获取采用该关键词的工厂列表
         List<String> factoryIds = adoptionRepository.findFactoryIdsByKeyword(intentCode, keyword);
         BigDecimal avgEffectiveness = adoptionRepository.getAverageEffectiveness(intentCode, keyword);
@@ -147,6 +158,10 @@ public class KeywordPromotionServiceImpl implements KeywordPromotionService {
     @Override
     @Transactional
     public int runPromotionCheck(int minFactories, BigDecimal minEffectiveness) {
+        if (!CROSS_FACTORY_PROMOTION_ENABLED) {
+            log.info("跨工厂关键词晋升已停用: 本轮不检查、不晋升");
+            return 0;
+        }
         log.info("开始运行关键词晋升检查: minFactories={}, minEffectiveness={}",
             minFactories, minEffectiveness);
 

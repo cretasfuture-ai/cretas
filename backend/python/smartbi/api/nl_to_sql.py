@@ -17,8 +17,9 @@ from decimal import Decimal
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, Field
+from common.tenant_identity import scoped_factory
 from sqlalchemy import text
 
 from smartbi.database.connection import get_db_context, is_postgres_enabled
@@ -176,7 +177,7 @@ def _execute_sql(sql: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 @router.post("/nl-to-sql")
-async def nl_to_sql(request: NL2SQLRequest) -> NL2SQLResponse:
+async def nl_to_sql(request: NL2SQLRequest, http_request: Request) -> NL2SQLResponse:
     """
     Translate a natural language query into SQL for SmartBI dynamic data.
 
@@ -189,6 +190,8 @@ async def nl_to_sql(request: NL2SQLRequest) -> NL2SQLResponse:
     - **limit**: Max rows (1-1000)
     """
     t0 = time.monotonic()
+    # 工厂隔离: SQL 的租户条件来自登录身份, 不信任请求体
+    request.factory_id = scoped_factory(http_request, request.factory_id)
 
     # Pre-flight checks
     if not is_postgres_enabled():

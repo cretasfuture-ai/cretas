@@ -51,12 +51,152 @@ function buttonWithText(wrapper: ReturnType<typeof mount>, text: string) {
 
 beforeEach(() => {
   harness.factoryId = 'F006'; harness.userId = '42'; factoryScope.value = 'F006'; userScope.value = '42'; harness.get.mockReset(); harness.post.mockReset(); harness.push.mockReset()
-  harness.get.mockResolvedValue({ success: true, data: [] })
+  harness.get.mockImplementation((url: string) => Promise.resolve({ success: true, data: url.endsWith('/timer') ? null : [] }))
   harness.post.mockResolvedValue({ success: true, data: preview })
   localStorage.clear()
 })
 
 describe('deferred purchase grant page', () => {
+  const binding = { bindingId: 'binding-7', grantId: 'preview-7', taskId: 'task-7', executeAt: '2099-01-01T01:02:03', expiresAt: '2099-01-01T01:03:00', state: 'PENDING', approvedSnapshot: '{"supplierId":"SUP-1","quantity":"2"}' }
+
+  async function authorizePage() {
+    const wrapper = await mountPage()
+    await buttonWithText(wrapper, '生成预览').trigger('click'); await flushPromises()
+    harness.post.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'PENDING', version: 1 } })
+    await buttonWithText(wrapper, '仅授权，稍后执行').trigger('click'); await flushPromises()
+    return wrapper
+  }
+
+  it('binds through real mounted time control with only version/time and displays persisted snapshot', async () => {
+    const wrapper = await authorizePage()
+    await wrapper.get('#purchase-timer-at').setValue('2099-01-01T01:02:03')
+    harness.post.mockResolvedValueOnce({ success: true, data: binding })
+    await buttonWithText(wrapper, '设置一次定时执行').trigger('click'); await flushPromises()
+    expect(harness.post).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/timer', { expectedVersion: 1, executeAt: new Date('2099-01-01T01:02:03').toISOString() })
+    expect(wrapper.text()).toContain('task-7')
+    expect(wrapper.text()).toContain('SUP-1')
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    expect(wrapper.text()).not.toContain('设置一次定时执行')
+    expect(wrapper.text()).toContain('撤销当前授权')
+    wrapper.unmount()
+  })
+
+  it('never repeats an uncertain binding or falls back to manual execution before persisted readback', async () => {
+    const wrapper = await authorizePage()
+    await wrapper.get('#purchase-timer-at').setValue('2099-01-01T01:02:03')
+    harness.post.mockRejectedValueOnce(new Error('connection outcome unknown'))
+    const count = harness.post.mock.calls.length
+    await buttonWithText(wrapper, '设置一次定时执行').trigger('click'); await flushPromises()
+    expect(harness.post.mock.calls.length).toBe(count + 1)
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    expect(wrapper.text()).not.toContain('设置一次定时执行')
+    harness.get.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'PENDING', version: 1 } })
+    harness.get.mockResolvedValueOnce({ success: true, data: { ...binding, state: 'UNKNOWN', failureReason: '待持久结果核对' } })
+    await buttonWithText(wrapper, '刷新授权状态').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('UNKNOWN')
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    expect(harness.post.mock.calls.length).toBe(count + 1)
+    wrapper.unmount()
+  })
+
+  it('recovers the same timer after remount instead of offering another execution', async () => {
+    localStorage.setItem('cretas:controlled-purchase:F006:42', JSON.stringify({ grantId: 'preview-7' }))
+    harness.get.mockImplementation((url: string) => Promise.resolve({ success: true, data: url.endsWith('/timer') ? binding : url.endsWith('/preview-7') ? { grantId: 'preview-7', state: 'PENDING', version: 1 } : [] }))
+    const wrapper = await mountPage()
+    expect(wrapper.text()).toContain('task-7')
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    expect(wrapper.text()).not.toContain('设置一次定时执行')
+    expect(harness.post).not.toHaveBeenCalled()
+    factoryScope.value = 'F007'; await nextTick(); await flushPromises()
+    expect(wrapper.text()).not.toContain('task-7')
+    wrapper.unmount()
+  })
+
+  it('retains expired timer evidence across remount and uses explicit reconcile without execution', async () => {
+    localStorage.setItem('cretas:controlled-purchase:F006:42', JSON.stringify({ grantId: 'preview-7' }))
+    harness.get.mockImplementation((url: string) => Promise.resolve({ success: true, data: url.endsWith('/timer') ? { ...binding, state: 'UNKNOWN' } : url.endsWith('/preview-7') ? { grantId: 'preview-7', state: 'EXPIRED', version: 1 } : [] }))
+    const wrapper = await mountPage()
+    expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toContain('preview-7')
+    expect(wrapper.text()).toContain('UNKNOWN')
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    harness.post.mockResolvedValueOnce({ success: true, data: { ...binding, state: 'REFUSED', failureReason: '授权已自然过期' } })
+    await buttonWithText(wrapper, '核对定时执行结果（不重试）').trigger('click'); await flushPromises()
+    expect(harness.post).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/timer/reconcile', {})
+    expect(harness.post).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('授权已自然过期')
+    await buttonWithText(wrapper, '已核对定时结果，开始新采购').trigger('click'); await flushPromises()
+    expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toBeNull()
+    expect(wrapper.text()).not.toContain('task-7')
+    wrapper.unmount()
+  })
+
+  it('exposes explicit PENDING missed-task recovery and never invokes purchase execution', async () => {
+    localStorage.setItem('cretas:controlled-purchase:F006:42', JSON.stringify({ grantId: 'preview-7' }))
+    harness.get.mockImplementation((url: string) => Promise.resolve({ success: true, data: url.endsWith('/timer') ? binding : url.endsWith('/preview-7') ? { grantId: 'preview-7', state: 'PENDING', version: 1 } : [] }))
+    const wrapper = await mountPage()
+    harness.post.mockResolvedValueOnce({ success: true, data: { ...binding, state: 'REFUSED', failureReason: '已错过执行时刻；禁止补发采购' } })
+    await buttonWithText(wrapper, '核对已错过的定时任务（不执行）').trigger('click'); await flushPromises()
+    expect(harness.post).toHaveBeenCalledExactlyOnceWith('/F006/ai-purchase-task-grants/preview-7/timer/reconcile', {})
+    expect(wrapper.text()).toContain('已错过执行时刻')
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    expect(wrapper.text()).not.toContain('设置一次定时执行')
+    wrapper.unmount()
+  })
+
+  it('keeps a revoked timer reference until its real terminal result is explicitly acknowledged', async () => {
+    const wrapper = await authorizePage()
+    await wrapper.get('#purchase-timer-at').setValue('2099-01-01T01:02:03')
+    harness.post.mockResolvedValueOnce({ success: true, data: binding })
+    await buttonWithText(wrapper, '设置一次定时执行').trigger('click'); await flushPromises()
+    harness.post.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'REVOKED', version: 2 } })
+    await buttonWithText(wrapper, '撤销当前授权').trigger('click'); await flushPromises()
+    expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toContain('preview-7')
+    expect(wrapper.text()).toContain('task-7')
+    expect(wrapper.text()).not.toContain('执行已授权采购')
+    harness.get.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'REVOKED', version: 2 } })
+    harness.get.mockResolvedValueOnce({ success: true, data: { ...binding, state: 'REFUSED', failureReason: 'grant is revoked' } })
+    await buttonWithText(wrapper, '刷新定时结果').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('grant is revoked')
+    expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).not.toBeNull()
+    await buttonWithText(wrapper, '已核对定时结果，开始新采购').trigger('click'); await flushPromises()
+    expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it.each(['found', 'inconclusive', 'absent'] as const)('reads back uncertain binding on direct revoke and preserves trace unless definitely absent: %s', async readback => {
+    const wrapper = await authorizePage()
+    await wrapper.get('#purchase-timer-at').setValue('2099-01-01T01:02:03')
+    harness.post.mockRejectedValueOnce(new Error('bind response lost after possible commit'))
+    await buttonWithText(wrapper, '设置一次定时执行').trigger('click'); await flushPromises()
+    expect(wrapper.text()).not.toContain('task-7')
+    harness.post.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'REVOKED', version: 2 } })
+    if (readback === 'inconclusive') harness.get.mockRejectedValueOnce(new Error('readback unavailable'))
+    else harness.get.mockResolvedValueOnce({ success: true, data: readback === 'found' ? binding : null })
+    const before = harness.post.mock.calls.length
+    await buttonWithText(wrapper, '撤销当前授权').trigger('click'); await flushPromises()
+    expect(harness.post.mock.calls.length).toBe(before + 1)
+    expect(harness.get).toHaveBeenLastCalledWith('/F006/ai-purchase-task-grants/preview-7/timer')
+    if (readback === 'absent') {
+      expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toBeNull()
+      expect(buttonWithText(wrapper, '生成预览').attributes('disabled')).toBeUndefined()
+    } else {
+      expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toContain('preview-7')
+      expect(wrapper.text()).not.toContain('执行已授权采购')
+      if (readback === 'found') expect(wrapper.text()).toContain('task-7')
+      else {
+        expect(wrapper.text()).toContain('readback unavailable')
+        expect(wrapper.text()).toContain('刷新定时绑定状态')
+        harness.get.mockResolvedValueOnce({ success: true, data: { grantId: 'preview-7', state: 'REVOKED', version: 2 } })
+        harness.get.mockResolvedValueOnce({ success: true, data: binding })
+        await buttonWithText(wrapper, '刷新定时绑定状态').trigger('click'); await flushPromises()
+        expect(wrapper.text()).toContain('task-7')
+        expect(localStorage.getItem('cretas:controlled-purchase:F006:42')).toContain('preview-7')
+        expect(harness.post.mock.calls.length).toBe(before + 1)
+      }
+    }
+    wrapper.unmount()
+  })
+
   it.each(['authorize', 'execute'] as const)('releases the new scope lock after a stale %s request', async operation => {
     const wrapper = await mountPage()
     await buttonWithText(wrapper, '生成预览').trigger('click'); await flushPromises()

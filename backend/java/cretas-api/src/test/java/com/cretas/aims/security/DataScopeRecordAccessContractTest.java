@@ -39,7 +39,7 @@ class DataScopeRecordAccessContractTest {
         var config=new com.cretas.aims.config.WebMvcConfig(mock(com.cretas.aims.config.JwtAuthInterceptor.class),
             mock(com.cretas.aims.config.DemoReadOnlyInterceptor.class),mock(com.cretas.aims.config.PermissionInterceptor.class),
             mock(com.cretas.aims.config.RequireRoleInterceptor.class),mock(com.cretas.aims.config.ModuleEnabledInterceptor.class),guard,
-            processSecretGuard);
+            processSecretGuard, mock(com.cretas.aims.audit.PlatformDataAccessLogInterceptor.class));
         var registry=new Registered();config.addInterceptors(registry);
         assertThat(registry.all().stream().filter(x->x instanceof org.springframework.web.servlet.handler.MappedInterceptor)
             .map(x->((org.springframework.web.servlet.handler.MappedInterceptor)x).getInterceptor()).toList()).contains(guard, processSecretGuard);
