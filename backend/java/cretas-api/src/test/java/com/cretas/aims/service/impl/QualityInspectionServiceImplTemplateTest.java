@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.engine.DynamicFieldService;
 import com.cretas.aims.engine.ValidationRuleEvaluator;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.ProductionAlert;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionAlertRepository;
@@ -62,6 +63,8 @@ class QualityInspectionServiceImplTemplateTest {
         ReflectionTestUtils.setField(service, "validationRuleEvaluator", validationRuleEvaluator);
         ReflectionTestUtils.setField(service, "dynamicFieldService", dynamicFieldService);
         ReflectionTestUtils.setField(service, "productionBatchRepository", productionBatchRepository);
+        lenient().when(productionAlertRepository.save(any(ProductionAlert.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(productionBatchRepository.findById(any())).thenAnswer(invocation -> {
             ProductionBatch batch = new ProductionBatch();
             batch.setId(invocation.getArgument(0));
@@ -131,5 +134,36 @@ class QualityInspectionServiceImplTemplateTest {
         assertEquals("item-old", ((java.util.List<?>) saved.getCustomFields().get("items")).get(0) instanceof Map
                 ? ((Map<?, ?>) ((java.util.List<?>) saved.getCustomFields().get("items")).get(0)).get("itemId") : null);
         assertEquals("ok", saved.getCustomFields().get("operatorNote"));
+    }
+
+    @Test
+    void updateInspection_rejectsDynamicDecisionChanges_butAllowsNotes() {
+        QualityInspection existing = new QualityInspection();
+        existing.setId("qi-immutable");
+        existing.setFactoryId("F001");
+        existing.setProductionBatchId(44L);
+        existing.setResult("FAIL");
+        existing.setSampleSize(BigDecimal.ONE);
+        existing.setPassCount(BigDecimal.ZERO);
+        existing.setFailCount(BigDecimal.ONE);
+        existing.setPassRate(BigDecimal.ZERO);
+        existing.setCustomFields(new HashMap<>(Map.of("standardBasis", "DYNAMIC_PRODUCT_BINDING", "items", java.util.List.of())));
+        when(qualityInspectionRepository.findById("qi-immutable")).thenReturn(java.util.Optional.of(existing));
+        QualityInspection decision = new QualityInspection();
+        decision.setResult("PASS");
+        decision.setSampleSize(BigDecimal.TEN);
+        decision.setPassCount(BigDecimal.TEN);
+        decision.setFailCount(BigDecimal.ZERO);
+        decision.setPassRate(BigDecimal.valueOf(100));
+        org.junit.jupiter.api.Assertions.assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.updateInspection("F001", "qi-immutable", decision));
+        verify(qualityInspectionRepository, never()).save(any(QualityInspection.class));
+
+        QualityInspection notes = new QualityInspection();
+        notes.setNotes("复核备注");
+        when(qualityInspectionRepository.save(any(QualityInspection.class))).thenAnswer(inv -> inv.getArgument(0));
+        QualityInspection saved = service.updateInspection("F001", "qi-immutable", notes);
+        assertEquals("复核备注", saved.getNotes());
+        verify(qualityInspectionRepository, times(1)).save(existing);
     }
 }

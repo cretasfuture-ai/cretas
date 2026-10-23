@@ -236,6 +236,17 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
 
         QualityInspection existing = getInspectionById(factoryId, inspectionId);
 
+        boolean dynamicSnapshot = existing.getCustomFields() != null
+                && "DYNAMIC_PRODUCT_BINDING".equals(existing.getCustomFields().get("standardBasis"));
+        if (dynamicSnapshot && (inspection.getResult() != null || inspection.getSampleSize() != null
+                || inspection.getPassCount() != null || inspection.getFailCount() != null
+                || inspection.getPassRate() != null)) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "动态标准质检记录的判定字段不可修改，请通过重新质检产生新记录")
+                    .withCode("QUALITY_INSPECTION_DECISION_IMMUTABLE")
+                    .withHint("仅可补充备注或非判定扩展字段").withHintTarget("质检记录");
+        }
+
         // 更新允许修改的字段
         if (inspection.getInspectorId() != null) {
             existing.setInspectorId(inspection.getInspectorId());

@@ -12,6 +12,7 @@ import {
   QualityInspectionForm,
   DynamicQualityForm,
   DynamicQualityAnswer,
+  DynamicQualitySubmitResponse,
   ClockRecord,
   QINotification,
   QIApiResponse,
@@ -134,8 +135,8 @@ class QualityInspectorApiClient {
   async submitDynamicInspection(
     batchId: string,
     data: { standardRevision: string; sampleSize: number; answers: DynamicQualityAnswer[]; notes?: string },
-  ): Promise<QualityRecord> {
-    const response = await apiClient.post<QIApiResponse<QualityRecord>>(
+  ): Promise<DynamicQualitySubmitResponse> {
+    const response = await apiClient.post<QIApiResponse<DynamicQualitySubmitResponse>>(
       `${this.getBasePath()}/processing/batches/${batchId}/quality-inspections`,
       data,
     );

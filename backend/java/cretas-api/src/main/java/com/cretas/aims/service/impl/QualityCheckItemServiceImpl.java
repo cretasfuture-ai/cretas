@@ -315,7 +315,7 @@ public class QualityCheckItemServiceImpl implements QualityCheckItemService {
         QualityCheckItem item = findByIdAndFactory(request.getQualityCheckItemId(), factoryId);
 
         // 验证产品类型存在
-        if (!productTypeRepository.existsById(request.getProductTypeId())) {
+        if (!productTypeRepository.existsByIdAndFactoryId(request.getProductTypeId(), factoryId)) {
             throw new ValidationException("Product type not found: " + request.getProductTypeId());
         }
 

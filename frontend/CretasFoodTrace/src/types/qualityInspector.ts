@@ -79,6 +79,11 @@ export interface DynamicQualityAnswer {
   note?: string;
 }
 
+export interface DynamicQualitySubmitResponse {
+  inspection: { id: string | number; result: QualityInspectionResult };
+  standardRevision: string;
+}
+
 // ============================================
 // 质检等级
 // ============================================

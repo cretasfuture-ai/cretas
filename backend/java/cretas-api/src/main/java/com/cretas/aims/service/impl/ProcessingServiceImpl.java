@@ -959,7 +959,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         form.put("batchNumber", batch.getBatchNumber());
         form.put("productTypeId", batch.getProductTypeId());
         form.put("productName", batch.getProductName());
-        form.put("standardRevision", dynamicRevision(bindings));
+        form.put("standardRevision", dynamicRevision(factoryId, batch.getId().toString(), bindings));
         List<Map<String, Object>> items = new ArrayList<>();
         for (QualityCheckItemBinding binding : bindings) {
             var item = binding.getQualityCheckItem();
@@ -989,7 +989,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         List<QualityCheckItemBinding> bindings = dynamicBindings(factoryId, batch);
         if (bindings.isEmpty()) throw new BusinessException(409, "该产品未配置启用的质检标准")
                 .withHint("请先为产品配置并启用质检标准").withHintTarget("质检标准");
-        String revision = dynamicRevision(bindings);
+        String revision = dynamicRevision(factoryId, batch.getId().toString(), bindings);
         if (request == null || request.getStandardRevision() == null || !revision.equals(request.getStandardRevision())) {
             throw new BusinessException(409, "质检标准已更新，请刷新后重新确认")
                     .withCode("QUALITY_STANDARD_STALE").withHint("刷新质检标准后保留已填写数据").withHintTarget("刷新标准");
@@ -1016,7 +1016,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             if (!seen.add(b.getId())) throw new BusinessException(400, "质检项目重复提交");
             var item = b.getQualityCheckItem();
             if (answer.getItemVersion() == null || !answer.getItemVersion().equals(item.getVersion()))
-                throw new BusinessException(409, "质检项目已更新，请刷新标准").withCode("QUALITY_STANDARD_STALE");
+                throw new BusinessException(409, "质检项目已更新，请刷新标准").withCode("QUALITY_STANDARD_STALE")
+                        .withHint("刷新质检标准后保留已填写数据").withHintTarget("刷新标准");
             String valueType = item.getValueType() == null ? "" : item.getValueType().trim().toUpperCase(Locale.ROOT);
             if (!Set.of("NUMERIC", "RANGE", "TEXT", "BOOLEAN").contains(valueType)) {
                 throw new BusinessException(409, "质检项目类型未配置，无法提交")
@@ -1041,17 +1042,20 @@ public class ProcessingServiceImpl implements ProcessingService {
                             .withCode("QUALITY_STANDARD_INVALID").withHint("补齐范围或标准值").withHintTarget("质检标准");
                 } else {
                     try { itemFailed = value.compareTo(new BigDecimal(standardValue.trim())) != 0; }
-                    catch (NumberFormatException e) { throw new BusinessException(409, "数值型质检标准格式不正确").withCode("QUALITY_STANDARD_INVALID"); }
+                    catch (NumberFormatException e) { throw new BusinessException(409, "数值型质检标准格式不正确").withCode("QUALITY_STANDARD_INVALID")
+                            .withHint("补齐可解析的数值标准").withHintTarget("质检标准"); }
                 }
             } else if ("BOOLEAN".equals(valueType)) {
-                if (standardValue == null || standardValue.isBlank()) throw new BusinessException(409, "布尔型质检项目缺少标准值").withCode("QUALITY_STANDARD_INVALID");
+                if (standardValue == null || standardValue.isBlank()) throw new BusinessException(409, "布尔型质检项目缺少标准值").withCode("QUALITY_STANDARD_INVALID")
+                        .withHint("补齐 true 或 false 标准值").withHintTarget("质检标准");
                 String actual = answer.getValue().toString().trim().toLowerCase(Locale.ROOT);
                 String expected = standardValue.trim().toLowerCase(Locale.ROOT);
                 if (!(actual.equals("true") || actual.equals("false")) || !(expected.equals("true") || expected.equals("false")))
                     throw new BusinessException(400, "布尔型质检项目只能填写 true 或 false");
                 itemFailed = !actual.equals(expected);
             } else {
-                if (standardValue == null || standardValue.isBlank()) throw new BusinessException(409, "文本型质检项目缺少标准值").withCode("QUALITY_STANDARD_INVALID");
+                if (standardValue == null || standardValue.isBlank()) throw new BusinessException(409, "文本型质检项目缺少标准值").withCode("QUALITY_STANDARD_INVALID")
+                        .withHint("补齐文本标准值").withHintTarget("质检标准");
                 itemFailed = !answer.getValue().toString().trim().equals(standardValue.trim());
             }
             sampleFailed |= itemFailed;
@@ -1092,7 +1096,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     private List<QualityCheckItemBinding> dynamicBindings(String factoryId, ProductionBatch batch) {
-        if (qualityCheckItemBindingRepository == null || batch == null) return List.of();
+        if (batch == null) return List.of();
         if (qualityCheckItemBindingRepository == null) {
             throw new BusinessException(503, "动态质检标准服务未就绪").withCode("QUALITY_STANDARD_SERVICE_UNAVAILABLE");
         }
@@ -1100,8 +1104,8 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .filter(b -> factoryId.equals(b.getFactoryId()) && Boolean.TRUE.equals(b.getEnabled())).toList();
     }
 
-    private String dynamicRevision(List<QualityCheckItemBinding> bindings) {
-        return bindings.stream().map(b -> b.getId() + ":" + b.getQualityCheckItem().getVersion() + ":" + b.getQualityCheckItem().getValueType() + ":" + b.getOverrideMinValue() + ":" + b.getOverrideMaxValue() + ":" + b.getOverrideStandardValue() + ":" + b.getOverrideIsRequired() + ":" + b.getQualityCheckItem().getUnit() + ":" + b.getQualityCheckItem().getStandardValue())
+    private String dynamicRevision(String factoryId, String batchId, List<QualityCheckItemBinding> bindings) {
+        return factoryId + ":" + batchId + ":" + bindings.stream().map(b -> b.getId() + ":" + b.getQualityCheckItem().getVersion() + ":" + b.getQualityCheckItem().getValueType() + ":" + b.getOverrideMinValue() + ":" + b.getOverrideMaxValue() + ":" + b.getOverrideStandardValue() + ":" + b.getOverrideIsRequired() + ":" + b.getQualityCheckItem().getUnit() + ":" + b.getQualityCheckItem().getStandardValue())
                 .sorted().collect(Collectors.joining("|"));
     }
 

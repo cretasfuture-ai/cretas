@@ -615,9 +615,13 @@ function DynamicQualityFormScreen({ batch, form, batchNumber }: { batch: QIBatch
     try {
       setSubmitting(true); setError(null);
       const answers: DynamicQualityAnswer[] = form.items.map((item) => ({ bindingId: item.bindingId, itemId: item.itemId, itemVersion: item.itemVersion, value: values[item.bindingId] || '' }));
-      const record = await qualityInspectorApi.submitDynamicInspection(batch.id, { standardRevision: form.standardRevision, sampleSize: 1, answers, notes });
-      const envelope = record as unknown as { inspection?: { id?: string | number }; id?: string | number };
-      navigation.replace('QIResult', { recordId: String(envelope.inspection?.id ?? envelope.id ?? ''), passed: !invalid });
+      const response = await qualityInspectorApi.submitDynamicInspection(batch.id, { standardRevision: form.standardRevision, sampleSize: 1, answers, notes });
+      const inspectionId = response.inspection?.id;
+      const result = response.inspection?.result;
+      if (inspectionId == null || !['PASS', 'FAIL'].includes(result)) {
+        throw new Error('服务端未返回完整的质检结果，请保留当前填写内容后重试');
+      }
+      navigation.replace('QIResult', { recordId: String(inspectionId), passed: result === 'PASS' });
     } catch (e) { setError(e instanceof Error ? e.message : '提交失败，请检查标准版本后重试'); }
     finally { setSubmitting(false); }
   };
@@ -627,7 +631,7 @@ function DynamicQualityFormScreen({ batch, form, batchNumber }: { batch: QIBatch
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 }]} keyboardShouldPersistTaps="handled">
         <View style={styles.batchCard}><Text style={styles.batchNumber}>{batchNumber}</Text><Text style={styles.batchInfo}>{batch.productName} · {batch.unit} {batch.quantity}</Text><Text style={styles.batchInfo}>标准版本：{form.standardRevision}</Text></View>
         <View style={styles.sampleSection}><Text style={styles.sampleTitle}>抽样组数</Text><Text style={styles.batchInfo}>1 组（当前动态质检表按一组样本提交）</Text></View>
-        {form.items.map((item, index) => <View key={item.bindingId} style={styles.checkCard}><Text style={styles.checkName}>{index + 1}. {item.label}{item.effectiveIsRequired ? '（必检）' : ''}</Text><Text style={styles.batchInfo}>{item.unit || '无单位'} · {item.effectiveMinValue ?? '无下限'} ~ {item.effectiveMaxValue ?? '无上限'}{item.effectiveStandardValue ? ` · ${item.effectiveStandardValue}` : ''}</Text><TextInput style={styles.scoreInput} value={values[item.bindingId] || ''} onChangeText={(value) => setValues((prev) => ({ ...prev, [item.bindingId]: value }))} keyboardType={item.valueType === 'TEXT' ? 'default' : 'decimal-pad'} placeholder="填写实测值" /> </View>)}
+        {form.items.map((item, index) => <View key={item.bindingId} style={styles.checkCard}><Text style={styles.checkName}>{index + 1}. {item.label}{item.effectiveIsRequired ? '（必检）' : ''}</Text><Text style={styles.batchInfo}>{item.unit || '无单位'} · {item.effectiveMinValue ?? '无下限'} ~ {item.effectiveMaxValue ?? '无上限'}{item.effectiveStandardValue ? ` · ${item.effectiveStandardValue}` : ''}</Text>{item.valueType === 'BOOLEAN' ? <View style={styles.booleanChoices}><TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.label} 是`} style={styles.booleanChoice} onPress={() => setValues((prev) => ({ ...prev, [item.bindingId]: 'true' }))}><Text>是</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.label} 否`} style={styles.booleanChoice} onPress={() => setValues((prev) => ({ ...prev, [item.bindingId]: 'false' }))}><Text>否</Text></TouchableOpacity></View> : <TextInput style={styles.scoreInput} value={values[item.bindingId] || ''} onChangeText={(value) => setValues((prev) => ({ ...prev, [item.bindingId]: value }))} keyboardType={item.valueType === 'TEXT' ? 'default' : 'decimal-pad'} placeholder="填写实测值" />} </View>)}
         <TextInput style={styles.remarksInput} value={notes} onChangeText={setNotes} placeholder="备注（可选）" multiline />
         {invalid && <Text style={styles.submitErrorText}>存在超出标准范围的实测值，提交后将记录为 FAIL。</Text>}
         {error && <Text style={styles.submitErrorText} accessibilityRole="alert">{error}</Text>}
@@ -744,6 +748,8 @@ const styles = StyleSheet.create({
     color: QI_COLORS.text,
     backgroundColor: QI_COLORS.background,
   },
+  booleanChoices: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  booleanChoice: { minWidth: 72, alignItems: 'center', paddingVertical: 10, borderRadius: 8, backgroundColor: QI_COLORS.background, borderWidth: 1, borderColor: QI_COLORS.border },
   sampleUnit: {
     fontSize: 14,
     color: QI_COLORS.textSecondary,
