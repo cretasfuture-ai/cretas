@@ -1,5 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import React from 'react';
+import { fireEvent, render } from '@testing-library/react-native';
+import QIHomeScreen from '../../../screens/quality-inspector/QIHomeScreen';
+
+const mockNavigate = jest.fn();
+jest.mock('@react-navigation/native', () => ({ useNavigation: () => ({ navigate: mockNavigate }) }));
+jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+jest.mock('../../../store/authStore', () => ({ useAuthStore: (selector: (state: unknown) => unknown) => selector({ user: { fullName: 'QA inspector' } }) }));
+jest.mock('../../../components/ai/FrontlineAIEntry', () => ({ FrontlineAIEntry: () => null }));
 
 const srcRoot = path.resolve(__dirname, '../../../');
 const read = (relativePath: string) =>
@@ -18,6 +27,20 @@ describe('quality inspector home workflow contract', () => {
     expect(homeSource).toContain("screen: 'QILabelQcCreate'");
     expect(homeSource).toContain("screen: 'QILabelQcQueue'");
     expect(homeSource).not.toContain('qi-home-pending-review');
+    expect(homeSource).toContain('testID="qi-home-new-inspection"');
+    expect(homeSource).toContain("screen: 'QIInspectList'");
+    expect(homeSource).toContain('testID="qi-home-inspection-records"');
+    expect(homeSource).toContain("screen: 'QIRecords'");
+  });
+
+  it('mounts the real home actions into the dynamic inspection and records stacks', () => {
+    const view = render(React.createElement(QIHomeScreen));
+    fireEvent.press(view.getByTestId('qi-home-new-inspection'));
+    expect(mockNavigate).toHaveBeenLastCalledWith('QIInspectTab', { screen: 'QIInspectList' });
+    fireEvent.press(view.getByTestId('qi-home-inspection-records'));
+    expect(mockNavigate).toHaveBeenLastCalledWith('QIRecordsTab', { screen: 'QIRecords' });
+    expect(view.getByTestId('qi-home-new-label-qc')).toBeTruthy();
+    expect(view.getByTestId('qi-home-label-qc-records')).toBeTruthy();
   });
 
   it('does not expose review, analytics, summaries, or generic quality work', () => {
