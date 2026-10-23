@@ -1,0 +1,16 @@
+# ERP-S309-WAREHOUSE-FG-ENTRY-20261024
+
+State review; Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2; executor /root/s305_correction_boundary released at b03d7b1eac05a64157c3b3ffbcdb19b6d05643e8. Worktree C:/Users/Steve/cretas-s301-dynamic-quality-20261024, branch codex/s301-dynamic-quality-20261024. Root owns integration and delivery; original QA owns browser/phone/canonical. Source scope is released for the final candidate; merge, publication and business acceptance remain pending.
+
+Actual original QA evidence: execution/s309-opening-original-qa-20261024/phase-prepared.json, normal-entry-missing-final.png. Sales manager has no finished-goods entry. This is intentional sales-menu removal (menuConfig prior user decision), not authorization to restore it. Warehouse inventory hub currently has four tabs but no finished-goods component. Its raw opening workflow cannot create finished goods. Add the existing component to the normal warehouse hub; keep existing permissions unchanged.
+
+Exact file scope:
+- web-admin/src/views/warehouse/inventory-query/index.vue
+- web-admin/src/views/warehouse/inventoryQueryTab.ts
+- web-admin/src/views/warehouse/__tests__/finishedGoodsInventoryHub.mount.spec.ts
+
+Add a lazy finished-goods tab, reuse existing sales/finished-goods/list.vue unchanged, and preserve all four existing tabs/query handling. No router/menuConfig changes (Claude S2 owns them), no SalesController/permission changes, no new API, no production write. Existing sales:rw controls remain: warehouse manager views stock and later performs the authorized shipment workflow; legitimate administrator can prepare the isolated opening fixture through its own normal warehouse UI, not sign sales/warehouse acceptance or replace their available accounts.
+
+Acceptance: mount real hub, drive tab selection and query change to its actual finished-goods child; existing inventoryQueryTab tests and hub tab regression must still pass. Target command `npx vitest run src/views/warehouse/__tests__/finishedGoodsInventoryHub.mount.spec.ts src/views/warehouse/__tests__/inventoryQueryTab.spec.ts --maxWorkers=1` (verify actual existing resolver test path and report if it differs, do not invent an executed file). Existing API, roles, child component, and main publish remain unchanged in this slice. No full build/CI/push/production. Root integrates this independently reproduced navigation gap with the pending Web candidate, without blocking PR1124.
+
+Root preserved the existing finished-goods route's RESTAURANT exclusion in the hub and blocked its query shortcut from mounting the child. The exact command above executed exit0, 2 files/9 tests, at 2026-10-24 02:42 +08; `execution/coordination/s309-warehouse-fg-entry-20261024/root-restaurant-boundary-exit.json` and log retain proof. This is component/source evidence only. The prior sales-menu observation is an intentional navigation decision, not a product permission failure; no production stock was created. Independent 23+8-group before/after readback is unchanged. Original QA must use the published warehouse entry and retain actor roles before any business signoff.

@@ -5,6 +5,7 @@ import ElementPlus from 'element-plus';
 const mockRoute: { query: Record<string, unknown> } = { query: { tab: 'by-warehouse' } };
 const routerReplace = vi.fn();
 const apiGet = vi.fn();
+let factoryType = 'FACTORY';
 
 vi.mock('vue-router', () => ({
   useRoute: () => mockRoute,
@@ -12,7 +13,7 @@ vi.mock('vue-router', () => ({
 }));
 
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'F006', hasRole: () => false }),
+  useAuthStore: () => ({ factoryId: 'F006', factoryType, hasRole: () => false }),
 }));
 
 vi.mock('@/store/modules/permission', () => ({
@@ -43,6 +44,7 @@ import InventoryQueryHub from '../inventory-query/index.vue';
 import FinishedGoodsInventory from '@/views/sales/finished-goods/list.vue';
 
 beforeEach(() => {
+  factoryType = 'FACTORY';
   mockRoute.query = { tab: 'by-warehouse' };
   routerReplace.mockReset();
   apiGet.mockReset();
@@ -50,6 +52,16 @@ beforeEach(() => {
 });
 
 describe('仓储库存查询 hub — 成品库存真实子页面', () => {
+  it('餐饮工厂不能通过 hub query 绕过成品页面的原有隐藏边界', async () => {
+    factoryType = 'RESTAURANT';
+    mockRoute.query = { tab: 'finished-goods' };
+    const wrapper = mount(InventoryQueryHub, { global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(wrapper.findAll('.el-tabs__item').some((node) => node.text() === '成品库存')).toBe(false);
+    expect(wrapper.findComponent(FinishedGoodsInventory).exists()).toBe(false);
+    expect(apiGet).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
   it('切换成品库存后挂载真实成品组件、读取查询接口并同步 tab query', async () => {
     const wrapper = mount(InventoryQueryHub, { global: { plugins: [ElementPlus] } });
     await flushPromises();

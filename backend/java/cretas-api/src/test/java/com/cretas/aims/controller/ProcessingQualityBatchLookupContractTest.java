@@ -2,6 +2,8 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.impl.ProcessingServiceImpl;
@@ -51,16 +53,18 @@ class ProcessingQualityBatchLookupContractTest {
 
     @Test
     void emptyMissingAndForeignFactoryLookupsAreRejectedWithoutWrites() throws Exception {
-        org.junit.jupiter.api.Assertions.assertThrows(
-                RuntimeException.class, () -> processingService.getBatchByNumber("F006", "  "));
+        BusinessException empty = org.junit.jupiter.api.Assertions.assertThrows(
+                BusinessException.class, () -> processingService.getBatchByNumber("F006", "  "));
+        org.junit.jupiter.api.Assertions.assertEquals(400, empty.getCode());
+        org.mockito.Mockito.verifyNoInteractions(batchRepository);
         when(batchRepository.findByFactoryIdAndBatchNumber("F006", "PB-MISSING"))
                 .thenReturn(Optional.empty());
         org.junit.jupiter.api.Assertions.assertThrows(
-                RuntimeException.class, () -> processingService.getBatchByNumber("F006", "PB-MISSING"));
+                ResourceNotFoundException.class, () -> processingService.getBatchByNumber("F006", "PB-MISSING"));
         when(batchRepository.findByFactoryIdAndBatchNumber("F007", "PB-REAL-10806"))
                 .thenReturn(Optional.empty());
         org.junit.jupiter.api.Assertions.assertThrows(
-                RuntimeException.class, () -> processingService.getBatchByNumber("F007", "PB-REAL-10806"));
+                ResourceNotFoundException.class, () -> processingService.getBatchByNumber("F007", "PB-REAL-10806"));
 
         verify(batchRepository).findByFactoryIdAndBatchNumber("F006", "PB-MISSING");
         verify(batchRepository).findByFactoryIdAndBatchNumber("F007", "PB-REAL-10806");
