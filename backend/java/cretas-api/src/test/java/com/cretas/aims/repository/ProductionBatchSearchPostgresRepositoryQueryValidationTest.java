@@ -15,6 +15,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +28,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Opt-in PostgreSQL proof for nullable batch-search filters and plan-number matching. */
-@DataJpaTest(properties = {"spring.jpa.hibernate.ddl-auto=none", "spring.flyway.enabled=false"})
+@DataJpaTest(showSql = false, properties = {"spring.jpa.hibernate.ddl-auto=none", "spring.flyway.enabled=false"})
+@ActiveProfiles("test")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class ProductionBatchSearchPostgresRepositoryQueryValidationTest {
@@ -138,6 +140,23 @@ class ProductionBatchSearchPostgresRepositoryQueryValidationTest {
         assertThat(paged.getTotalElements()).isEqualTo(4);
         assertThat(paged.getContent()).hasSize(2);
         assertThat(paged.getTotalPages()).isEqualTo(2);
+    }
+
+    @Test
+    void localBatchCannotBeFoundThroughAnotherFactoryPlanNumber() {
+        ProductionBatch local = save("WIP-LOCAL-MISLINK", ProductionBatchStatus.IN_PROGRESS, null, FACTORY, "CLERK_WIP");
+        jdbcTemplate.update("INSERT INTO production_plans(id,factory_id,plan_number) VALUES (?,?,?)",
+                "PLAN-FOREIGN-MISLINK", "IT-BATCH-SEARCH-OTHER", "PRIVATE-FOREIGN-PLAN-872");
+        jdbcTemplate.update("INSERT INTO process_sheet_rows(batch_id,plan_id) VALUES (?,?)",
+                local.getId(), "PLAN-FOREIGN-MISLINK");
+
+        Page<ProductionBatch> localMatch = repository.searchByFactoryIdAndBatchNumber(
+                FACTORY, null, null, true, "WIP-LOCAL-MISLINK", PAGE);
+        assertThat(localMatch.getContent()).extracting(ProductionBatch::getId).containsExactly(local.getId());
+        Page<ProductionBatch> foreignPlanMatch = repository.searchByFactoryIdAndBatchNumber(
+                FACTORY, null, null, true, "PRIVATE-FOREIGN-PLAN-872", PAGE);
+        assertThat(foreignPlanMatch.getTotalElements()).isZero();
+        assertThat(foreignPlanMatch.getContent()).isEmpty();
     }
 
     private ProductionBatch save(String number, ProductionBatchStatus status, Long supervisorId, String factory) {
