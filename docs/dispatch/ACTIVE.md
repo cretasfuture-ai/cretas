@@ -6,9 +6,7 @@
 
 ## 在飞任务
 
-- `ERP-S315-BATCH-SEARCH-20261023` — `review` — Owner Root — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 原worker两文件已提交释放，合入S307候选；真实PG复验与scope见archive/2026-10-23-s315-batch-search.md；Root集成发布/原QA验收。
 
-- `ERP-S307-DRIFT-RECOVERY-20261023` — `review` — Owner Root — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 原worker已释放14产品文件，Root接管集成；PG选择器与验收见archive/2026-10-23-s307-drift-recovery.md；旧审批保留，原QA验收。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
 
