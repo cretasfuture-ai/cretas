@@ -54,6 +54,12 @@ public interface ProcessingService {
      * 获取批次详情
       */
     ProductionBatch getBatchById(String factoryId, String batchId);
+
+    /**
+     * Resolve a persisted production batch by its exact batch number within a factory.
+     * This is a read-only lookup used by quality inspection scan/manual entry.
+     */
+    ProductionBatch getBatchByNumber(String factoryId, String batchNumber);
      /**
      * 获取批次列表
       */

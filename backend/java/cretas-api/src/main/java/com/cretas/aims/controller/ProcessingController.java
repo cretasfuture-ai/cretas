@@ -174,6 +174,19 @@ public class ProcessingController {
     }
 
     /**
+     * Exact factory-scoped batch-number lookup for quality inspection scan/manual entry.
+     * This endpoint only reads the persisted batch and never changes production state.
+     */
+    @RequirePermission({"quality:read_write"})
+    @GetMapping("/batches/lookup")
+    @Operation(summary = "按批次号查询质检批次", description = "按工厂和完整批次号精确查询生产批次")
+    public ApiResponse<ProductionBatch> getBatchByNumber(
+            @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
+            @RequestParam @Parameter(description = "完整批次号", example = "PB-20261024-001") String batchNumber) {
+        return ApiResponse.success(processingService.getBatchByNumber(factoryId, batchNumber));
+    }
+
+    /**
      * 获取批次列表
      */
     @GetMapping("/batches-with-clerk-wip")

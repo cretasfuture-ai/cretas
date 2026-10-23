@@ -387,6 +387,22 @@ public class ProcessingServiceImpl implements ProcessingService {
         return batch;
     }
 
+    @Override
+    public ProductionBatch getBatchByNumber(String factoryId, String batchNumber) {
+        String exactBatchNumber = batchNumber == null ? "" : batchNumber.trim();
+        if (exactBatchNumber.isEmpty()) {
+            throw new BusinessException(400, "批次号不能为空")
+                    .withHint("请输入完整批次号后再查询")
+                    .withHintTarget("批次号");
+        }
+        ProductionBatch batch = productionBatchRepository.findByFactoryIdAndBatchNumber(factoryId, exactBatchNumber)
+                .orElseThrow(() -> new ResourceNotFoundException("批次不存在: " + exactBatchNumber)
+                        .withHint("请核对批次号，或从待检批次列表选择")
+                        .withHintTarget("批次号"));
+        enrichBatchDisplayFields(batch);
+        return batch;
+    }
+
     /**
      * headed-audit 修复 (2026-07-03): 生产批次列表显示 GUID + 空数量列.
      *
