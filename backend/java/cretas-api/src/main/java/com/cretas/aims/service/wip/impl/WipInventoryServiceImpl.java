@@ -525,13 +525,37 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHint("请先核对报工原始数量与 WIP 更正流水，确认无并发更正后再提交")
                     .withHintTarget("报工与 WIP 对账");
         }
-        if (nz(wip.getProducedQuantity()).add(delta).signum() < 0) {
+        BigDecimal newProduced = nz(wip.getProducedQuantity()).add(delta);
+        if (newProduced.signum() < 0) {
             throw new BusinessException(409, "更正后 WIP 产出不能为负")
                     .withCode("WIP_CORRECTION_NEGATIVE_PRODUCED")
                     .withHint("请填写不小于已确认 WIP 产出的更正数量")
                     .withHintTarget("更正后产出数量");
         }
+        validateCorrectionCostRepresentability(wip.getAccumulatedCost(), newProduced);
         return wip;
+    }
+
+    private static void validateCorrectionCostRepresentability(BigDecimal accumulatedCost,
+                                                               BigDecimal newProduced) {
+        if (accumulatedCost == null) {
+            return;
+        }
+        if (newProduced.signum() <= 0) {
+            throw unsupportedCorrectionCost("更正后产出为零但仍有已知累计成本，系统拒绝丢失成本");
+        }
+        BigDecimal derivedUnitCost = accumulatedCost.divide(newProduced, 4, RoundingMode.HALF_UP);
+        BigDecimal representedCost = derivedUnitCost.multiply(newProduced).setScale(2, RoundingMode.HALF_UP);
+        if (representedCost.compareTo(accumulatedCost.setScale(2, RoundingMode.HALF_UP)) != 0) {
+            throw unsupportedCorrectionCost("已知累计成本无法由四位小数单价无损表示");
+        }
+    }
+
+    private static BusinessException unsupportedCorrectionCost(String detail) {
+        return new BusinessException(409, "报工数量更正的成本精度不受支持: " + detail)
+                .withCode("WIP_CORRECTION_COST_PRECISION_UNSUPPORTED")
+                .withHint("请核对累计成本与更正后产出数量，改走财务人工核对流程")
+                .withHintTarget("WIP 成本");
     }
 
     private static BigDecimal quantityCorrectionDelta(BigDecimal originalOutput, BigDecimal proposedOutput) {

@@ -77,7 +77,7 @@ class WipOutputCorrectionContractTest {
                 .producedQuantity(new BigDecimal("0.81")).consumedQuantity(BigDecimal.ZERO)
                 .availableQuantity(new BigDecimal("0.81")).adjustmentQuantity(BigDecimal.ZERO)
                 .unit("kg").unitCost(new BigDecimal("12.50"))
-                .accumulatedCost(new BigDecimal("10.125"))
+                .accumulatedCost(new BigDecimal("10.13"))
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         originalIn = SemiFinishedInventoryTransaction.builder().id(7001L).factoryId("F006")
                 .semiFinishedId(383L).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
@@ -100,14 +100,14 @@ class WipOutputCorrectionContractTest {
 
         assertThat(wip.getProducedQuantity()).isEqualByComparingTo("0.82");
         assertThat(wip.getAvailableQuantity()).isEqualByComparingTo("0.82");
-        assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("10.125");
-        assertThat(wip.getUnitCost()).isEqualByComparingTo("12.3476");
+        assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("10.13");
+        assertThat(wip.getUnitCost()).isEqualByComparingTo("12.3537");
         verify(txnRepo).save(org.mockito.ArgumentMatchers.argThat(txn ->
                 WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())
                         && txn.getQuantity().compareTo(new BigDecimal("0.01")) == 0
                         && txn.getSourceRef().contains("COR-UP")
                         && txn.getUnitCostAtTxn() == null
-                        && txn.getBalanceCostAfter().compareTo(new BigDecimal("12.3476")) == 0
+                        && txn.getBalanceCostAfter().compareTo(new BigDecimal("12.3537")) == 0
                         && txn.getReportId().equals(23989L)));
 
         wip.setProducedQuantity(new BigDecimal("0.81"));
@@ -139,6 +139,40 @@ class WipOutputCorrectionContractTest {
                 .hasMessageContaining("两位小数");
         verify(wipRepo, never()).save(org.mockito.ArgumentMatchers.argThat(
                 candidate -> candidate.getProducedQuantity().compareTo(new BigDecimal("0.811")) == 0));
+    }
+
+    @Test
+    void knownCostThatCannotBeRepresentedAtScaleFourIsRejectedBeforeMutation() {
+        wip.setProducedQuantity(new BigDecimal("1000.00"));
+        wip.setAvailableQuantity(new BigDecimal("1000.00"));
+        wip.setAccumulatedCost(new BigDecimal("10.13"));
+        wip.setUnitCost(new BigDecimal("0.0101"));
+
+        assertThatThrownBy(() -> service.correctApprovedOutputQuantity("F006", report, task,
+                new BigDecimal("0.81"), new BigDecimal("0.82"), "COR-COST-PRECISION", 7L))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getErrorCode()).isEqualTo("WIP_CORRECTION_COST_PRECISION_UNSUPPORTED");
+                    assertThat(exception.getActionHint()).contains("成本");
+                });
+        verify(wipRepo, never()).save(any());
+        verify(txnRepo, never()).save(any());
+    }
+
+    @Test
+    void knownCostCannotBeDiscardedWhenCorrectionWouldDepleteProducedQuantity() {
+        wip.setProducedQuantity(new BigDecimal("0.01"));
+        wip.setAvailableQuantity(new BigDecimal("0.01"));
+        wip.setAccumulatedCost(new BigDecimal("10.13"));
+        wip.setUnitCost(new BigDecimal("1013.0000"));
+
+        assertThatThrownBy(() -> service.correctApprovedOutputQuantity("F006", report, task,
+                new BigDecimal("0.81"), new BigDecimal("0.80"), "COR-COST-ZERO", 7L))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getErrorCode()).isEqualTo("WIP_CORRECTION_COST_PRECISION_UNSUPPORTED");
+                    assertThat(exception.getActionHint()).contains("成本");
+                });
+        verify(wipRepo, never()).save(any());
+        verify(txnRepo, never()).save(any());
     }
 
     @Test

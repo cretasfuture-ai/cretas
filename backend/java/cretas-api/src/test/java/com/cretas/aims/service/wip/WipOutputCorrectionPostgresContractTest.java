@@ -125,6 +125,44 @@ class WipOutputCorrectionPostgresContractTest {
     }
 
     @Test
+    void productionPrecisionCostBoundaryRejectsBeforeMutation() {
+        insertFixture();
+        reader.update("UPDATE semi_finished_inventory SET produced_quantity=999.99, available_quantity=999.99 "
+                + "WHERE id=383");
+
+        assertThatThrownBy(() -> service.correctApprovedOutputQuantity(
+                "F006", report(), task(), new BigDecimal("0.81"), new BigDecimal("0.82"), "PG-COST-BOUNDARY", 7L))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getErrorCode()).isEqualTo("WIP_CORRECTION_COST_PRECISION_UNSUPPORTED");
+                    assertThat(exception.getActionHint()).contains("成本");
+                });
+        assertThat(reader.queryForObject("SELECT produced_quantity FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("999.99");
+        assertThat(reader.queryForObject("SELECT count(*) FROM semi_finished_inventory_transactions "
+                + "WHERE source_type='PRODUCTION_REPORT_CORRECTION'", Integer.class)).isZero();
+    }
+
+    @Test
+    void knownCostAtZeroProducedBoundaryRejectsWithoutDroppingCost() {
+        insertFixture();
+        reader.update("UPDATE semi_finished_inventory SET produced_quantity=0.01, available_quantity=0.01, "
+                + "unit_cost=1013.0000 WHERE id=383");
+
+        assertThatThrownBy(() -> service.correctApprovedOutputQuantity(
+                "F006", report(), task(), new BigDecimal("0.81"), new BigDecimal("0.80"), "PG-COST-ZERO", 7L))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getErrorCode()).isEqualTo("WIP_CORRECTION_COST_PRECISION_UNSUPPORTED");
+                    assertThat(exception.getActionHint()).contains("成本");
+                });
+        assertThat(reader.queryForObject("SELECT produced_quantity FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("0.01");
+        assertThat(reader.queryForObject("SELECT accumulated_cost FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("10.13");
+        assertThat(reader.queryForObject("SELECT count(*) FROM semi_finished_inventory_transactions "
+                + "WHERE source_type='PRODUCTION_REPORT_CORRECTION'", Integer.class)).isZero();
+    }
+
+    @Test
     void productionPrecisionRoundTripKeepsCorrectionCostAfterDownstreamReverseReplay() throws Exception {
         insertFixture();
 
