@@ -2,6 +2,8 @@
 
 Status review; Base `4a48c5b49c3a5f5214c68a3add5081ee409d88b2`; code Owner `/root/s305_correction_boundary` released at `1dfd75e020306e1f07a241f7cb321da825ae62d8`; Root now owns integration and delivery.
 
+2026-10-24 final CI correction: Root additionally owns the existing `backend/java/cretas-api/src/test/java/com/cretas/aims/service/QualityInspectionCountBalanceContractTest.java` and `backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ProcessingServiceImplQualityRatePrecisionContractTest.java`. Actual full job 120617119273 exposed missing batch repository injection in the former; same-cause inspection found the latter's positive cases use the same incomplete legacy fixture. Supply same-factory batch and empty binding repository fixtures, preserving every original assertion and production guard. Target selector: `QualityInspectionCountBalanceContractTest,ProcessingServiceImplQualityRatePrecisionContractTest,ProcessingServiceImplDynamicQualityStandardContractTest`. Preserve the original full failure; let its run finish collecting remaining failures before pushing the consolidated correction. No baseline, workflow, permission, Repository, Entity or production-source change is authorized by this test-fixture correction.
+
 Worktree `C:\Users\Steve\cretas-s301-dynamic-quality-20261024`; branch `codex/s301-dynamic-quality-20261024`. Original QA alone owns phone, browser and canonical CSV. Actual native baseline S3-01 FAIL, ERP-S3-QI-DYNAMIC-STANDARD-001; S3-03 remains untested. No business acceptance claimed.
 
 ## Exact scope

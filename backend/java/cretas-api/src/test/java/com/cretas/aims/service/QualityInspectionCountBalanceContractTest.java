@@ -1,7 +1,10 @@
 package com.cretas.aims.service;
 
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.QualityCheckItemBindingRepository;
 import com.cretas.aims.service.impl.ProcessingServiceImpl;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.nio.file.Path;
@@ -19,6 +23,7 @@ import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -29,6 +34,8 @@ class QualityInspectionCountBalanceContractTest {
     private static final String FACTORY = "ORG-G5-COUNT-BALANCE";
 
     @Mock private QualityInspectionService inspectionService;
+    @Mock private ProductionBatchRepository productionBatchRepository;
+    @Mock private QualityCheckItemBindingRepository qualityCheckItemBindingRepository;
     @InjectMocks private ProcessingServiceImpl service;
 
     @BeforeAll
@@ -52,6 +59,10 @@ class QualityInspectionCountBalanceContractTest {
 
     @BeforeEach
     void preservesTheActualEntityAtThePersistenceBoundary() {
+        ReflectionTestUtils.setField(service, "qualityCheckItemBindingRepository", qualityCheckItemBindingRepository);
+        ProductionBatch batch = ProductionBatch.builder().id(10L).factoryId(FACTORY)
+                .productTypeId("QA-COUNT-BALANCE-LEGACY").build();
+        lenient().when(productionBatchRepository.findById(10L)).thenReturn(Optional.of(batch));
         lenient().when(inspectionService.createInspection(eq(FACTORY), any(QualityInspection.class)))
                 .thenAnswer(invocation -> invocation.getArgument(1));
     }
