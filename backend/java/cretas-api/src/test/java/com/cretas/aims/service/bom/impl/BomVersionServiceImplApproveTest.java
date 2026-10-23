@@ -54,6 +54,9 @@ class BomVersionServiceImplApproveTest {
     @Mock
     private ObjectMapper objectMapper;
 
+    @Mock
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @InjectMocks
     private BomVersionServiceImpl service;
 

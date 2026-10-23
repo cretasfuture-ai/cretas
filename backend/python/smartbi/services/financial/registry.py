@@ -11,6 +11,19 @@ from ..financial_data_normalizer import ColumnMapping
 
 logger = logging.getLogger(__name__)
 
+# 构建器自己捕获异常后返回的、或判定数据不足的结果, 都不是「生成成功」的图表
+FAILED_DATA_QUALITY = frozenset({'error', 'insufficient'})
+
+
+def chart_succeeded(result: Dict) -> bool:
+    """图表是否真的生成成功: 看构建结果本身的数据状态, 而不是「没抛异常」。"""
+    if not isinstance(result, dict) or result.get('error'):
+        return False
+    quality = (result.get('metadata') or {}).get('dataQuality')
+    if quality in FAILED_DATA_QUALITY:
+        return False
+    return bool(result.get('echartsOption'))
+
 
 class ChartBuilderRegistry:
     """Registry for financial chart builders. Auto-discovers builder subclasses."""
@@ -57,6 +70,15 @@ class ChartBuilderRegistry:
                 })
         return available
 
+    def list_unavailable(self, column_mapping: ColumnMapping) -> List[Dict]:
+        """这份数据出不了的图表, 每张带缺什么、是补一列还是换一张表。"""
+        gaps = []
+        for b in sorted(self._builders.values(), key=lambda b: b.display_order):
+            gap = b.unavailable_reason(column_mapping)
+            if gap:
+                gaps.append({"chartType": b.chart_type, "displayName": b.display_name, **gap})
+        return gaps
+
     def build_all_available(self, df: pd.DataFrame, column_mapping: ColumnMapping,
                             period: Dict, year: int = 2026) -> List[Dict]:
         """Build all available charts in parallel."""
@@ -94,7 +116,10 @@ class ChartBuilderRegistry:
     def _safe_build(builder, df, column_mapping, period, year):
         try:
             result = builder.build(df, column_mapping, period, year)
-            result['success'] = True
+            result['success'] = chart_succeeded(result)
+            meta = result.get('metadata')
+            if not result['success'] and isinstance(meta, dict) and meta.get('dataQuality') == 'insufficient':
+                meta.setdefault('gapKind', builder.gap_kind)
             return result
         except Exception as e:
             logger.error(f"Builder {builder.chart_type} failed: {e}", exc_info=True)

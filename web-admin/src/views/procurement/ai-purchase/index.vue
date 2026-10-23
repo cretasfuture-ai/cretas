@@ -5,7 +5,10 @@ import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
+  bindPurchaseTimer, getPurchaseTimer, reconcilePurchaseTimer, type PurchaseTimerBinding,
   getControlledPurchaseStatus,
+  authorizeControlledPurchaseForLater,
+  executeDeferredControlledPurchase,
   previewControlledPurchase,
   revokeControlledPurchase,
   type ControlledPurchaseParams,
@@ -32,6 +35,34 @@ const recoveryReady = ref(false);
 const recoveryState = ref('');
 const draftOrderId = ref('');
 const cancelInFlight = ref(false);
+const timerBinding = ref<PurchaseTimerBinding | null>(null);
+const timerExecuteAt = ref('');
+const timerInFlight = ref(false);
+const timerUncertain = ref(false);
+
+async function schedulePurchase(): Promise<void> {
+  if (!grantId.value || recoveryVersion.value == null || !timerExecuteAt.value || timerInFlight.value || timerBinding.value || timerUncertain.value) return;
+  const scope = scopeKey.value; const run = generation;
+  timerInFlight.value = true;
+  try {
+    const result = await bindPurchaseTimer(factoryId.value, grantId.value, recoveryVersion.value, new Date(timerExecuteAt.value).toISOString());
+    if (isCurrent(scope, run)) { timerBinding.value = result; blockedReason.value = '一次定时已绑定；等待实际触发，禁止重复安排或手动执行。'; }
+  } catch (error) {
+    if (isCurrent(scope, run)) { timerUncertain.value = true; blockedReason.value = error instanceof Error ? error.message : '定时绑定结果未知，请刷新原授权状态'; }
+  } finally { if (isCurrent(scope, run)) timerInFlight.value = false; }
+}
+
+async function reconcileTimer(): Promise<void> {
+  if (!grantId.value || !timerBinding.value || !['UNKNOWN', 'PENDING'].includes(timerBinding.value.state) || timerInFlight.value) return;
+  const scope = scopeKey.value; const run = generation;
+  timerInFlight.value = true;
+  try {
+    const result = await reconcilePurchaseTimer(factoryId.value, grantId.value);
+    if (isCurrent(scope, run)) timerBinding.value = result;
+  } catch (error) { if (isCurrent(scope, run)) blockedReason.value = error instanceof Error ? error.message : '持久结果核对失败'; }
+  finally { if (isCurrent(scope, run)) timerInFlight.value = false; }
+}
+const deferredInFlight = ref(false);
 const blockedReason = ref('');
 const grantId = ref('');
 const recoveryVersion = ref<number | null>(null);
@@ -113,9 +144,16 @@ async function recover(): Promise<void> {
     grantId.value = parsed.grantId;
     const outcome = await getControlledPurchaseStatus(factoryId.value, parsed.grantId);
     if (!isCurrent(scope, run)) return;
+    const timer = await getPurchaseTimer(factoryId.value, parsed.grantId);
+    if (!isCurrent(scope, run)) return;
+    timerBinding.value = timer;
+    timerUncertain.value = false;
     recoveryState.value = outcome.state;
     recoveryVersion.value = outcome.version ?? null;
-    if (String(outcome.state).toUpperCase() === 'PENDING') previewResponse.value = null;
+    if (String(outcome.state).toUpperCase() === 'PENDING') {
+      previewResponse.value = null;
+      blockedReason.value = '已有一笔采购已授权稍后执行，请先执行或撤销当前授权。';
+    }
     if (outcome.state === 'DRAFT' && outcome.purchaseOrderId) {
       draftOrderId.value = outcome.purchaseOrderId;
       blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
@@ -136,6 +174,10 @@ async function recover(): Promise<void> {
         ? '采购结果待核对，请先完成状态核对后再继续。'
         : '已有一笔受控采购正在处理，请先取消或完成它。';
     } else {
+      if (timerBinding.value) {
+        blockedReason.value = `原授权已${outcome.state === 'REVOKED' ? '撤销' : '过期'}；请读取定时任务终态后核对结果。`;
+        return;
+      }
       localStorage.removeItem(storageKey.value);
       grantId.value = '';
       recoveryState.value = '';
@@ -160,6 +202,7 @@ async function refreshRecovery(): Promise<void> {
 }
 
 function acknowledgeDraft(): void {
+  timerBinding.value = null; timerUncertain.value = false; timerExecuteAt.value = '';
   localStorage.removeItem(storageKey.value);
   grantId.value = '';
   recoveryState.value = '';
@@ -170,7 +213,9 @@ function acknowledgeDraft(): void {
 }
 
 async function submitPreview(): Promise<void> {
-  if (loading.value || previewed.value || blockedReason.value || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
+  if (loading.value || previewed.value || blockedReason.value
+    || (grantId.value && ['PENDING', 'UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState.value))
+    || !factoryId.value || !recoveryReady.value || recoveryLoading.value) return;
   if (!form.value.supplierId || !form.value.materialTypeId || !form.value.quantity || !form.value.unitPrice || !form.value.amountCap) {
     ElMessage.warning('请完整填写供应商、物料、数量、未税单价和含税预算');
     return;
@@ -207,16 +252,81 @@ async function cancelPreview(): Promise<boolean> {
     const outcome = await revokeControlledPurchase(factoryId.value, grantId.value, recoveryVersion.value, '用户取消受控采购预览');
     if (!isCurrent(scope, run)) return false;
     if (outcome.state !== 'REVOKED') throw new Error('服务器未确认撤销，当前采购仍被锁定');
+    if (timerUncertain.value && !timerBinding.value) {
+      try {
+        const persistedTimer = await getPurchaseTimer(factoryId.value, grantId.value);
+        if (!isCurrent(scope, run)) return false;
+        timerBinding.value = persistedTimer;
+        timerUncertain.value = false;
+      } catch (error) {
+        if (!isCurrent(scope, run)) return false;
+        recoveryState.value = 'REVOKED';
+        recoveryVersion.value = outcome.version ?? null;
+        previewResponse.value = null;
+        blockedReason.value = error instanceof Error ? `授权已撤销，但定时绑定仍待核对：${error.message}` : '授权已撤销，但定时绑定仍待核对';
+        return true;
+      }
+    }
+    if (timerBinding.value) {
+      recoveryState.value = 'REVOKED';
+      recoveryVersion.value = outcome.version ?? null;
+      previewResponse.value = null;
+      blockedReason.value = '采购授权已撤销；保留定时任务参考，等待真实触发拒绝或核对错过任务。';
+      return true;
+    }
     localStorage.removeItem(storageKey.value);
     grantId.value = '';
     recoveryState.value = '';
     blockedReason.value = '';
     draftOrderId.value = '';
     previewResponse.value = null;
+    timerBinding.value = null; timerUncertain.value = false;
     return true;
   } catch (error) { if (isCurrent(scope, run)) blockedReason.value = error instanceof Error ? error.message : '撤销失败，请先核对授权状态'; }
   finally { if (isCurrent(scope, run)) cancelInFlight.value = false; }
   return false;
+}
+
+async function authorizeLater(): Promise<void> {
+  const proof = previewResponse.value?.confirmableAction;
+  if (!grantId.value || !proof || deferredInFlight.value) return;
+  const scope = scopeKey.value;
+  const run = generation;
+  deferredInFlight.value = true;
+  try {
+    const outcome = await authorizeControlledPurchaseForLater(factoryId.value, proof.confirmToken, proof.commandDigest, proof.expiresAt);
+    if (!isCurrent(scope, run)) return;
+    if (outcome.grantId !== grantId.value || outcome.state !== 'PENDING') throw new Error('服务器未确认稍后执行授权');
+    recoveryState.value = outcome.state;
+    recoveryVersion.value = outcome.version ?? null;
+    previewResponse.value = null;
+    blockedReason.value = '已授权稍后执行，请先执行或撤销当前授权。';
+    ElMessage.success('已授权稍后执行，授权有效期内可从本页恢复');
+  } catch (error) {
+    if (!isCurrent(scope, run)) return;
+    recoveryState.value = 'UNKNOWN';
+    previewResponse.value = null;
+    blockedReason.value = error instanceof Error ? error.message : '授权状态未知，请刷新后再处理';
+  } finally { if (isCurrent(scope, run)) deferredInFlight.value = false; }
+}
+
+async function executeLater(): Promise<void> {
+  if (!grantId.value || recoveryVersion.value == null || deferredInFlight.value || timerBinding.value || timerUncertain.value || timerInFlight.value) return;
+  const scope = scopeKey.value;
+  const run = generation;
+  deferredInFlight.value = true;
+  try {
+    const outcome = await executeDeferredControlledPurchase(factoryId.value, grantId.value, recoveryVersion.value, 'skill');
+    if (!isCurrent(scope, run)) return;
+    if (outcome.grantId !== grantId.value || outcome.state !== 'DRAFT' || !outcome.purchaseOrderId) throw new Error('采购结果凭据不匹配，请刷新状态');
+    draftOrderId.value = outcome.purchaseOrderId;
+    recoveryState.value = 'DRAFT';
+    blockedReason.value = '采购草稿已创建，请核对订单后再开始下一笔。';
+  } catch (error) {
+    if (!isCurrent(scope, run)) return;
+    recoveryState.value = 'UNKNOWN';
+    blockedReason.value = error instanceof Error ? error.message : '执行结果未知，请刷新授权状态后再继续';
+  } finally { if (isCurrent(scope, run)) deferredInFlight.value = false; }
 }
 
 function handleConfirmed(result: IntentExecuteResponse): void {
@@ -275,6 +385,7 @@ async function initialize(): Promise<void> {
   if (isCurrent(scope, run)) recoveryReady.value = true;
 }
 watch(scopeKey, () => {
+  timerBinding.value = null; timerExecuteAt.value = ''; timerInFlight.value = false; timerUncertain.value = false;
   generation += 1;
   grantId.value = '';
   previewResponse.value = null;
@@ -287,6 +398,7 @@ watch(scopeKey, () => {
   loading.value = false;
   recoveryLoading.value = false;
   cancelInFlight.value = false;
+  deferredInFlight.value = false;
   form.value = {
     supplierId: '', materialTypeId: '', quantity: '', unit: 'kg', unitPrice: '',
     currency: 'CNY', taxRate: '13', amountCap: '', expectedDeliveryDate: '', remark: '',
@@ -303,8 +415,27 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
     <el-alert v-if="blockedReason" :title="blockedReason" type="warning" :closable="false" class="state-alert" />
     <div v-if="draftOrderId" class="recovery-actions"><el-button link type="primary" @click="router.push(`/procurement/orders/${encodeURIComponent(draftOrderId)}`)">查看采购订单</el-button><el-button type="success" @click="acknowledgeDraft">已核对，开始新采购</el-button></div>
     <div v-else-if="recoveryState === 'FAILED'" class="recovery-actions"><el-button @click="acknowledgeDraft">已核对失败，开始新采购</el-button></div>
-    <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions"><el-button type="danger" @click="cancelPreview">撤销当前授权</el-button></div>
+    <div v-else-if="grantId && !previewResponse && recoveryState === 'PENDING'" class="recovery-actions">
+      <el-button v-if="!timerBinding && !timerUncertain" type="primary" :disabled="recoveryVersion == null || timerInFlight" :loading="deferredInFlight" @click="executeLater">执行已授权采购</el-button><el-button type="danger" :loading="cancelInFlight" @click="cancelPreview">撤销当前授权</el-button><el-button v-if="timerBinding || timerUncertain || recoveryVersion == null" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button><span v-if="recoveryVersion == null" class="state-hint">授权版本尚未恢复，暂不能执行；可尝试撤销并由服务器核对状态</span>
+      <section v-if="!timerBinding && !timerUncertain" aria-label="一次定时采购">
+        <label for="purchase-timer-at">执行时间（本机时区，提交时换算为UTC；须在本次授权有效期内）</label>
+        <input id="purchase-timer-at" v-model="timerExecuteAt" type="datetime-local" step="1" :disabled="timerInFlight || recoveryVersion == null" />
+        <el-button :disabled="!timerExecuteAt || recoveryVersion == null || deferredInFlight || timerInFlight" @click="schedulePurchase">设置一次定时执行</el-button>
+      </section>
+    </div>
+    <section v-if="timerBinding" aria-label="采购定时绑定与结果">
+      <p>定时任务 {{ timerBinding.taskId }} · 执行时间 {{ timerBinding.executeAt }} · 授权到期 {{ timerBinding.expiresAt }}</p>
+      <p>服务器时间 {{ timerBinding.serverNow }} · 时区 {{ timerBinding.serverZone }}</p>
+      <p>执行状态 {{ timerBinding.state }} · {{ timerBinding.failureReason }}</p>
+      <pre v-if="timerBinding.approvedSnapshot">{{ timerBinding.approvedSnapshot }}</pre>
+      <p v-if="timerBinding.state === 'UNKNOWN'">结果待持久记录核对，禁止重新执行或重复安排。</p>
+      <el-button v-if="timerBinding.state === 'UNKNOWN'" :loading="timerInFlight" @click="reconcileTimer">核对定时执行结果（不重试）</el-button>
+      <el-button v-if="timerBinding.state === 'PENDING'" :loading="timerInFlight" @click="reconcileTimer">核对已错过的定时任务（不执行）</el-button>
+      <el-button :loading="recoveryLoading" @click="refreshRecovery">刷新定时结果</el-button>
+      <el-button v-if="['REVOKED', 'EXPIRED'].includes(recoveryState) && ['REFUSED', 'SUCCEEDED'].includes(timerBinding.state)" @click="acknowledgeDraft">已核对定时结果，开始新采购</el-button>
+    </section>
     <div v-else-if="grantId && ['UNKNOWN', 'EXECUTING', 'RECOVERY_ERROR'].includes(recoveryState)" class="recovery-actions"><el-button type="warning" :loading="recoveryLoading" @click="refreshRecovery">刷新授权状态</el-button></div>
+    <div v-if="grantId && timerUncertain" class="recovery-actions"><el-button :loading="recoveryLoading" @click="refreshRecovery">刷新定时绑定状态</el-button><span>定时绑定结果未核对，保留当前参考，禁止重复安排或执行。</span></div>
     <el-card shadow="never" class="content-card">
       <el-form label-position="top" class="purchase-form">
       <el-form-item label="供应商"><el-select v-model="form.supplierId" filterable :disabled="!recoveryReady || previewed || Boolean(blockedReason)" placeholder="选择供应商"><el-option v-for="item in suppliers" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
@@ -320,6 +451,7 @@ onBeforeUnmount(() => { mounted = false; generation += 1; });
       <div class="actions"><el-button type="primary" :loading="loading" :disabled="!recoveryReady || previewed || Boolean(blockedReason)" @click="submitPreview">生成预览</el-button></div>
     </el-card>
     <AiOperationCard v-if="previewResponse" :response="previewResponse" :factory-id="factoryId" :cancel-handler="cancelPreview" @confirmed="handleConfirmed" @uncertain="handleUncertain" @recovered="handleRecovered" />
+    <div v-if="previewResponse" class="deferred-actions"><el-button type="warning" :loading="deferredInFlight" @click="authorizeLater">仅授权，稍后执行</el-button></div>
     <el-card v-if="previewResponse && canonicalRows.length" shadow="never" class="snapshot-card">
       <h3>已锁定的服务器采购快照</h3>
       <div class="canonical-grid"><template v-for="row in canonicalRows" :key="row[0]"><span>{{ row[0] }}</span><strong>{{ row[1] }}</strong></template></div>

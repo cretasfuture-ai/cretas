@@ -11,7 +11,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
+from common.tenant_identity import scoped_factory
 from fastapi.responses import Response
 
 from printing.services.pdf_renderer import RENDERERS
@@ -217,7 +218,7 @@ def print_transfer_instruction(payload: dict[str, Any] = Body(...)) -> Response:
 
 
 @router.post("/preview-template")
-async def preview_template(payload: dict[str, Any] = Body(...)) -> Response:
+async def preview_template(request: Request, payload: dict[str, Any] = Body(...)) -> Response:
     """C-PRT-EDITOR-1 — schema-driven print template preview.
 
     Called by Java PrintController.printPreviewTemplate via the
@@ -237,7 +238,8 @@ async def preview_template(payload: dict[str, Any] = Body(...)) -> Response:
     Java applies canViewPrice masking on `entityData` BEFORE calling this
     endpoint (per existing PrintController.applyPriceMask pattern).
     """
-    factory_id = payload.get("factoryId")
+    # 工厂隔离: 模板查询的 RLS 租户来自登录身份 (Java 转发用户 JWT); 平台模板编辑器须点名工厂
+    factory_id = scoped_factory(request, payload.get("factoryId"))
     if not factory_id or not isinstance(factory_id, str):
         raise HTTPException(status_code=400, detail="factoryId required")
 

@@ -79,6 +79,10 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
     private static final Pattern ACTIVITY_COLLECTION_POST = Pattern.compile(
             "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/activity-events$");
 
+    // Grant IDs contain "preview-", but these explicit endpoints mutate authorization or business state.
+    private static final Pattern DEFERRED_PURCHASE_GRANT_WRITE_POST = Pattern.compile(
+            "^/api/mobile/[^/]+/ai-purchase-task-grants/(?:authorize-later|[^/]+/(?:execute(?:-tool|-skill)?|revoke))$");
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws IOException {
@@ -102,6 +106,11 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
         // 写方法: PUT/PATCH/DELETE 一律拦; POST 放行读取/分析类.
         String uri = request.getRequestURI();
         if ("POST".equals(method)) {
+            if (DEFERRED_PURCHASE_GRANT_WRITE_POST.matcher(uri).matches()) {
+                log.info("演示只读锁拦截采购授权写操作: {} {} (factoryId={})", method, uri, fid);
+                sendReadOnly(response);
+                return false;
+            }
             if (READ_ONLY_RESTAURANT_AGENT_POST.matcher(uri).matches()
                     || ACTIVITY_COLLECTION_POST.matcher(uri).matches()) {
                 return true;

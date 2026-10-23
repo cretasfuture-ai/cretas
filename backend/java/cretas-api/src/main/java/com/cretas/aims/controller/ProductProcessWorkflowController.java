@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
@@ -123,6 +125,7 @@ public class ProductProcessWorkflowController {
         return ApiResponse.success(service.listVersions(factoryId, productTypeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @GetMapping("/{productTypeId}/versions/{version}")
     @Operation(summary = "只读: 读取某产品指定 definitionVersion 的完整 Workflow 图定义")
     public ApiResponse<ProductProcessWorkflowDTO> getVersion(
@@ -132,6 +135,7 @@ public class ProductProcessWorkflowController {
         return ApiResponse.success(service.getVersion(factoryId, productTypeId, version));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
@@ -144,6 +148,7 @@ public class ProductProcessWorkflowController {
         return ApiResponse.success(service.saveDraft(factoryId, productTypeId, definition));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
@@ -161,6 +166,7 @@ public class ProductProcessWorkflowController {
                 (Long) request.getAttribute("userId")));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @GetMapping("/{productTypeId}/bom-sync-preflight")
     @Operation(summary = "只读检查当前生效 BOM 是否可自动同步到 Workflow 草稿")
     public ApiResponse<WorkflowBomSyncPreflightResponse> bomSyncPreflight(
@@ -169,6 +175,7 @@ public class ProductProcessWorkflowController {
         return ApiResponse.success(service.bomSyncPreflight(factoryId, productTypeId));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
@@ -190,6 +197,7 @@ public class ProductProcessWorkflowController {
                 (Long) request.getAttribute("userId")));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.WORKFLOW_PATH, name = "workflowId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
@@ -203,6 +211,7 @@ public class ProductProcessWorkflowController {
                 factoryId, workflowId, (Long) request.getAttribute("userId")));
     }
 
+    @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PARAM, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")

@@ -16,6 +16,8 @@ import com.cretas.aims.repository.SemanticCacheRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.impl.SemanticCacheServiceImpl;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -240,8 +242,11 @@ class SseSemanticCacheAdmissionContractTest {
 
         IntentExecuteResponse execute() {
             events.clear();
-            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), factory,
-                    request, id, role);
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                    new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, id, factory, role))) {
+                ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), factory,
+                        request, id, role);
+            }
             List<IntentExecuteResponse> results = events.stream().filter(e -> e.name().equals("result"))
                     .map(e -> (IntentExecuteResponse) e.data()).toList();
             assertThat(results).hasSize(1);

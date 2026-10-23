@@ -1,8 +1,8 @@
 """Financial Dashboard API — Chart generation, batch, analysis, PPT/PDF/Excel export."""
 import logging
 from typing import Optional, Dict, List, Any
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import pandas as pd
 import io
@@ -25,8 +25,11 @@ class FinancialDashboardRequest(BaseModel):
     period_type: str = "year"  # month|quarter|year|month_range
     start_month: int = Field(1, ge=1, le=12)
     end_month: int = Field(12, ge=1, le=12)
-    factory_id: str = "F001"
+    # 租户以登录身份为准; 只有不带工厂的身份 (平台管理员) 才需要显式传。
+    factory_id: Optional[str] = None
     filters: Optional[Dict[str, List[str]]] = None  # Fix 72: Global slicer filters {col: [values]}
+    # raw_data 调用方可以传工作表名; upload_id 时以库里记录的工作表名为准
+    sheet_name: Optional[str] = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -50,41 +53,77 @@ class PPTExportRequest(BaseModel):
     kpi_summary: Optional[Dict] = None
 
 
-async def _load_data(request: FinancialDashboardRequest) -> pd.DataFrame:
-    """Load data from upload_id or raw_data."""
+class DataSourceError(Exception):
+    """数据源不可用: 带 HTTP 状态码与给用户看的原文。"""
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+    def response(self) -> JSONResponse:
+        return JSONResponse(status_code=self.status_code,
+                            content={"success": False, "message": self.message, "error": self.message})
+
+
+def _resolve_factory_id(http_request: Request, requested: Optional[str]) -> str:
+    """租户取自登录身份 (JWTAuthMiddleware 写入 request.state); 请求体不能改写它。"""
+    token_factory = getattr(http_request.state, "factory_id", None)
+    if token_factory:
+        if requested and requested != token_factory:
+            logger.warning("financial-dashboard factory mismatch: token=%s body=%s", token_factory, requested)
+            raise DataSourceError(403, "无权访问其他工厂的数据")
+        return token_factory
+    if requested:
+        # 不带工厂的身份 (平台管理员 / 内部调用未带 X-Factory-Id) 必须显式指定
+        return requested
+    raise DataSourceError(400, "无法确定当前工厂，请重新登录")
+
+
+async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[str]) -> pd.DataFrame:
+    """Load data from raw_data, or from the uploaded rows of upload_id (one row_data per Excel row).
+
+    upload_id 时把库里的工作表名写回 request.sheet_name (工作表名用于推断无科目表的口径)。
+    """
     if request.raw_data:
         return pd.DataFrame(request.raw_data)
 
-    if request.upload_id:
-        # Load from smart_bi_dynamic_data table (with factory_id isolation)
-        try:
-            from smartbi.config import get_settings
-            from sqlalchemy import create_engine, text
-            settings = get_settings()
-            engine = create_engine(settings.postgres_url)
-            with engine.connect() as conn:
-                row = conn.execute(
-                    text("SELECT parsed_data FROM smart_bi_dynamic_data WHERE id = :id AND factory_id = :factory_id"),
-                    {"id": request.upload_id, "factory_id": request.factory_id}
-                ).fetchone()
-                if row and row[0]:
-                    import json
-                    data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-                    if isinstance(data, list):
-                        return pd.DataFrame(data)
-                    elif isinstance(data, dict):
-                        # {sheetName: [rows]} format — merge all sheets
-                        all_rows = []
-                        for key, val in data.items():
-                            if isinstance(val, list) and len(val) > 0:
-                                all_rows.extend(val)
-                        if all_rows:
-                            return pd.DataFrame(all_rows)
-        except Exception as e:
-            logger.error(f"Failed to load upload {request.upload_id}: {e}")
-            raise HTTPException(status_code=400, detail="数据加载失败，请确认上传ID正确")
+    if not request.upload_id:
+        raise DataSourceError(400, "请先选择已上传的数据源")
 
-    raise HTTPException(status_code=400, detail="Either upload_id or raw_data is required")
+    # 模块属性访问而不是 from-import: 测试与运行期替换连接池都要能生效
+    import smartbi.config as smartbi_config
+    try:
+        pool = await smartbi_config.get_pg_pool()
+        if pool is None:
+            raise DataSourceError(503, "SmartBI 数据库未配置，无法读取上传数据")
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT d.row_data, d.sheet_name
+                FROM smart_bi_dynamic_data d
+                JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                ORDER BY d.row_index
+                """,
+                request.upload_id,
+                factory_id,
+            )
+    except DataSourceError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to load upload {request.upload_id} for {factory_id}: {e}", exc_info=True)
+        raise DataSourceError(500, "读取上传数据失败，请稍后重试")
+
+    if not rows:
+        raise DataSourceError(404, f"未找到数据源 {request.upload_id}，或它不属于当前工厂")
+
+    import json
+    records = [json.loads(r["row_data"]) if isinstance(r["row_data"], str) else r["row_data"] for r in rows]
+    sheet_names = {r["sheet_name"] for r in rows if r["sheet_name"]}
+    if len(sheet_names) == 1:
+        request.sheet_name = sheet_names.pop()
+    return pd.DataFrame(records)
 
 
 def _apply_filters(df: pd.DataFrame, filters: Optional[Dict[str, List[str]]]) -> pd.DataFrame:
@@ -97,6 +136,13 @@ def _apply_filters(df: pd.DataFrame, filters: Optional[Dict[str, List[str]]]) ->
     return df
 
 
+def _natural_sort_key(value: Any):
+    """「1月 2月 … 10月」按数字顺序排, 不按字符串排成「10月 11月 12月 1月」。"""
+    import re
+    text = str(value)
+    return [(0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"(\d+)", text) if part]
+
+
 def _extract_dimensions(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Fix 72: Extract available filter dimensions from DataFrame."""
     dims = []
@@ -104,15 +150,16 @@ def _extract_dimensions(df: pd.DataFrame) -> List[Dict[str, Any]]:
         if df[col].dtype == 'object':
             unique_vals = df[col].dropna().unique().tolist()
             if 2 <= len(unique_vals) <= 20:
-                dims.append({"name": col, "values": sorted(unique_vals)})
+                dims.append({"name": col, "values": sorted(unique_vals, key=_natural_sort_key)})
     return dims
 
 
 @router.post("/generate")
-async def generate_chart(request: FinancialDashboardRequest):
+async def generate_chart(request: FinancialDashboardRequest, http_request: Request):
     """Generate a single financial chart or all charts."""
     try:
-        df = await _load_data(request)
+        factory_id = _resolve_factory_id(http_request, request.factory_id)
+        df = await _load_data(request, factory_id)
         df = _apply_filters(df, request.filters)  # Fix 72
         result = dashboard_service.generate_chart(
             chart_type=request.chart_type,
@@ -121,8 +168,12 @@ async def generate_chart(request: FinancialDashboardRequest):
             period_type=request.period_type,
             start_month=request.start_month,
             end_month=request.end_month,
+            sheet_name=request.sheet_name,
+            filters=request.filters,
         )
         return _sanitize_for_json(result)
+    except DataSourceError as e:
+        return e.response()
     except HTTPException:
         raise
     except Exception as e:
@@ -131,11 +182,12 @@ async def generate_chart(request: FinancialDashboardRequest):
 
 
 @router.post("/batch")
-async def batch_generate(request: FinancialDashboardRequest):
+async def batch_generate(request: FinancialDashboardRequest, http_request: Request):
     """Generate all available charts (batch mode)."""
     try:
         request.chart_type = "all"
-        df = await _load_data(request)
+        factory_id = _resolve_factory_id(http_request, request.factory_id)
+        df = await _load_data(request, factory_id)
         # Fix 72: Extract dimensions before filtering
         dimensions = _extract_dimensions(df)
         # Fix 72: Apply slicer filters
@@ -146,11 +198,15 @@ async def batch_generate(request: FinancialDashboardRequest):
             period_type=request.period_type,
             start_month=request.start_month,
             end_month=request.end_month,
+            sheet_name=request.sheet_name,
+            filters=request.filters,
         )
         # Fix 72: Attach available dimensions to response
         if isinstance(result, dict):
             result["availableDimensions"] = dimensions
         return _sanitize_for_json(result)
+    except DataSourceError as e:
+        return e.response()
     except HTTPException:
         raise
     except Exception as e:
@@ -328,17 +384,25 @@ async def export_excel(request: ExcelExportRequest):
             sheet_name = display_name[:31]
             ws = wb.create_sheet(title=sheet_name)
 
-            headers = table_data.get("headers", [])
-            ws.append(headers)
-            for cell in ws[1]:
+            # 明细表里的金额按图表显示倍率缩放过 (万/亿), 必须写明单位, 否则拿去求和对账会错一万倍
+            unit_note = _table_unit_note(chart)
+            if unit_note:
+                ws.append([unit_note])
+            header_row = ws.max_row + 1 if unit_note else 1
+            ws.append(table_data.get("headers", []))
+            for cell in ws[header_row]:
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = header_align
 
+            # 构建器的明细行有两种形状: {"label", "values"} 或整行列表
             for row in table_data.get("rows", []):
-                label = row.get("label", "")
-                values = row.get("values", [])
-                ws.append([label] + values)
+                if isinstance(row, dict):
+                    ws.append([row.get("label", "")] + list(row.get("values") or []))
+                elif isinstance(row, (list, tuple)):
+                    ws.append(list(row))
+                else:
+                    raise ValueError(f"无法识别的明细行格式: {type(row).__name__}")
 
             for col in ws.columns:
                 max_len = max(len(str(cell.value or "")) for cell in col) + 2
@@ -373,10 +437,26 @@ async def export_excel(request: ExcelExportRequest):
             },
         )
     except ImportError:
-        return {"success": False, "error": "服务器未安装 openpyxl，请联系管理员"}
+        return _export_error("服务器未安装 openpyxl，请联系管理员")
     except Exception as e:
         logger.error(f"Excel export failed: {e}", exc_info=True)
-        return {"success": False, "error": "Excel 导出失败，请稍后重试"}
+        return _export_error("Excel 导出失败，请稍后重试")
+
+
+def _export_error(message: str) -> JSONResponse:
+    # 非 200: 前端据此不会把错误 JSON 当成 .xlsx 下载并提示成功
+    return JSONResponse(status_code=500, content={"success": False, "message": message, "error": message})
+
+
+def _table_unit_note(chart: Dict[str, Any]) -> Optional[str]:
+    """图表明细的金额单位说明 (元 / 万元 / 亿元)。"""
+    scale = (chart.get("metadata") or {}).get("scale")
+    suffix = scale.get("suffix") if isinstance(scale, dict) else scale
+    if suffix in ("万", "亿"):
+        return f"金额单位：{suffix}元（百分比列除外）"
+    if suffix == "":
+        return "金额单位：元（百分比列除外）"
+    return None
 
 
 class PDFExportRequest(BaseModel):

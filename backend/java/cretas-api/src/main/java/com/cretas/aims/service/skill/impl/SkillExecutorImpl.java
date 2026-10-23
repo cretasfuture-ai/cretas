@@ -890,7 +890,11 @@ public class SkillExecutorImpl implements SkillExecutor {
         if (toolPermissionChain == null) {
             throw new IllegalStateException("权限校验暂不可用，未执行「" + toolName + "」。");
         }
-        Optional<String> denied = toolPermissionChain.denyReason(wgTool, factoryId, userRole, null, rbacCtx);
+        // Only this concrete adapter selects the server-owned canonical purchase task. Other
+        // Skills retain null intent; context/LLM intent strings never become policy authority.
+        var fixedIntent = wgTool instanceof com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool
+                ? com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool.canonicalIntent() : null;
+        Optional<String> denied = toolPermissionChain.denyReason(wgTool, factoryId, userRole, fixedIntent, rbacCtx);
         if (denied.isPresent()) {
             log.warn("Skill 工具权限拒绝: tool={}, userRole={}", toolName, userRole);
             throw new IllegalStateException(denied.get());
@@ -901,7 +905,10 @@ public class SkillExecutorImpl implements SkillExecutor {
         // Bind every identity alias (userRole/role/user_id ...) to the authenticated principal so an
         // LLM-extracted "userRole" cannot reach the tool, neither via arguments nor via context —
         // same binding as executeWithTool.
-        Map<String, Object> trustedParams = new HashMap<>(params != null ? params : Map.of());
+        // W0 already consumed the process-local authority above. Never serialize it as a Tool
+        // argument or expose it to business context; persisted domain grants remain authority.
+        Map<String, Object> trustedParams = new HashMap<>(
+                com.cretas.aims.ai.tool.WriteGuardService.withoutServerConfirmationMarker(params != null ? params : Map.of()));
         com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
                 trustedParams, factoryId, userId, userRole);
 

@@ -65,6 +65,7 @@ public class RecursiveBomExpansionService {
      * Canvas-Thresholds resolver (Phase A) — overlays FALLBACK_MAX_DEPTH with per-factory config.
      */
     private final ThresholdResolverService thresholdResolver;
+    private final com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
 
     private int maxDepth(String factoryId) {
         return thresholdResolver.getInteger(factoryId, ThresholdKeys.BOM_MAX_DEPTH, FALLBACK_MAX_DEPTH);
@@ -184,6 +185,23 @@ public class RecursiveBomExpansionService {
         if (bomItems == null || bomItems.isEmpty()) {
             // 叶子节点: 查库存 + 计算短缺
             return buildLeaf(factoryId, typeId, name, quantity, level, unit, wastageRate);
+        }
+
+        // 工艺保密: 子层的受保护半成品, 无权者只看到「受限」节点, 不展开它的配方 (根节点由接口拦截器判定)
+        if (level > 0 && !processSecretAccessService.decide(
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null), factoryId, typeId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL).permitted()) {
+            return BomTreeNode.builder()
+                    .level(level)
+                    .typeId(typeId)
+                    .name(name)
+                    .requiredQuantity(quantity)
+                    .unit(unit)
+                    .wastageRate(wastageRate)
+                    .leaf(true)
+                    .processSecretRestricted(true)
+                    .children(new ArrayList<>())
+                    .build();
         }
 
         // 半成品节点: 递归展开 children

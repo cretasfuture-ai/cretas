@@ -6,6 +6,7 @@ import pandas as pd
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -31,43 +32,49 @@ class VarianceAnalysisBuilder(AbstractFinancialChartBuilder):
         end_month = period.get('end_month', period.get('endMonth', 12))
         months = self._month_labels(start_month, end_month)
 
-        # Use normalized column names (month, budget, actual)
-        monthly = df.groupby('month').agg(
-            budget=('budget', 'sum'),
-            actual=('actual', 'sum'),
-        ).reindex(range(start_month, end_month + 1)).fillna(0)
+        # 业绩口径: 损益表只取收入科目; 缺失月份保持为空, 不补 0
+        source = M.performance_view(df)
+        if source.empty:
+            return {
+                "chartType": self.chart_type,
+                "title": f"{year}年{self.display_name}",
+                "kpis": [],
+                "echartsOption": {},
+                "tableData": None,
+                "analysisContext": M.NO_REVENUE_MESSAGE,
+                "metadata": {"period": period, "dataQuality": "insufficient", "reason": M.NO_REVENUE_MESSAGE},
+            }
+        month_nums = list(range(start_month, end_month + 1))
+        budget_values = M.monthly(source, 'budget', month_nums)
+        actual_values = M.monthly(source, 'actual', month_nums)
 
-        budget_values = monthly['budget'].tolist()
-        actual_values = monthly['actual'].tolist()
-
-        # Calculate variances
-        abs_variances = []
-        rel_variances = []
-        cumulative_variances = []
-        cum_var = 0
-
-        for b, a in zip(budget_values, actual_values):
-            abs_var = a - b
-            abs_variances.append(abs_var)
-            rel_var = round((a - b) / abs(b) * 100, 1) if b != 0 else 0
-            rel_variances.append(rel_var)
-            cum_var += abs_var
-            cumulative_variances.append(cum_var)
+        # Calculate variances (任一侧缺失 → 该月差异为空)
+        abs_variances = [None if a is None or b is None else a - b for a, b in zip(actual_values, budget_values)]
+        rel_variances = [M.growth(a, b).value for a, b in zip(actual_values, budget_values)]
+        rel_variances = [None if v is None else round(v, 1) for v in rel_variances]
+        cumulative_variances = M.cumulative(abs_variances)
 
         # Scale
-        all_values = budget_values + actual_values + [abs(v) for v in abs_variances]
+        all_values = [v for v in budget_values + actual_values if v is not None] +             [abs(v) for v in abs_variances if v is not None]
         scale = _detect_value_scale(all_values)
         divisor = scale['divisor']
 
+        def scaled(v):
+            return None if v is None else round(v / divisor, 2)
+
         # Scaled data
-        budget_scaled = [round(v / divisor, 2) for v in budget_values]
-        actual_scaled = [round(v / divisor, 2) for v in actual_values]
-        abs_var_scaled = [round(v / divisor, 2) for v in abs_variances]
-        cum_var_scaled = [round(v / divisor, 2) for v in cumulative_variances]
+        budget_scaled = [scaled(v) for v in budget_values]
+        actual_scaled = [scaled(v) for v in actual_values]
+        abs_var_scaled = [scaled(v) for v in abs_variances]
+        cum_var_scaled = [scaled(v) for v in cumulative_variances]
 
         # Variance bar colors
         var_bar_data = []
         for i, var_val in enumerate(abs_var_scaled):
+            if var_val is None:
+                var_bar_data.append(None)
+                continue
+            rel = rel_variances[i]
             var_bar_data.append({
                 "value": var_val,
                 "itemStyle": {
@@ -77,7 +84,7 @@ class VarianceAnalysisBuilder(AbstractFinancialChartBuilder):
                 "label": {
                     "show": True,
                     "position": "top" if var_val >= 0 else "bottom",
-                    "formatter": f"{'+' if rel_variances[i] > 0 else ''}{rel_variances[i]}%",
+                    "formatter": "—" if rel is None else f"{'+' if rel > 0 else ''}{rel}%",
                     "fontSize": 10,
                     "color": COLORS['secondary'] if var_val >= 0 else COLORS['danger'],
                     "fontWeight": "bold",
@@ -85,10 +92,10 @@ class VarianceAnalysisBuilder(AbstractFinancialChartBuilder):
             })
 
         # KPIs
-        total_budget = sum(budget_values)
-        total_actual = sum(actual_values)
-        total_variance = total_actual - total_budget
-        achievement_rate = self._calc_achievement_rate(total_actual, total_budget)
+        total_budget = M.total(budget_values)
+        total_actual = M.total(actual_values)
+        total_variance = None if total_budget is None or total_actual is None else total_actual - total_budget
+        achievement_rate = M.ratio(total_actual, total_budget).value
 
         kpis = [
             {
@@ -96,28 +103,28 @@ class VarianceAnalysisBuilder(AbstractFinancialChartBuilder):
                 "value": self._format_value(total_budget, scale),
                 "unit": "元",
                 "trend": "flat",
-                "sparkline": [round(v / divisor, 2) for v in budget_values],
+                "sparkline": budget_scaled,
             },
             {
                 "label": "总实际",
                 "value": self._format_value(total_actual, scale),
                 "unit": "元",
                 "trend": self._trend_from_value(total_variance),
-                "sparkline": [round(v / divisor, 2) for v in actual_values],
+                "sparkline": actual_scaled,
             },
             {
                 "label": "总差异",
                 "value": self._format_value(total_variance, scale),
                 "unit": "元",
                 "trend": self._trend_from_value(total_variance),
-                "sparkline": [round(v / divisor, 2) for v in abs_variances],
+                "sparkline": abs_var_scaled,
             },
             {
                 "label": "达成率",
                 "value": f"{achievement_rate}%" if achievement_rate is not None else "-",
                 "unit": "",
                 "trend": self._trend_from_value((achievement_rate or 0) - 100),
-                "sparkline": [round(v, 1) for v in rel_variances],
+                "sparkline": rel_variances,
             },
         ]
 
@@ -252,20 +259,21 @@ class VarianceAnalysisBuilder(AbstractFinancialChartBuilder):
                 {"label": "预算", "values": budget_scaled},
                 {"label": "实际", "values": actual_scaled},
                 {"label": "绝对差异", "values": abs_var_scaled},
-                {"label": "相对差异", "values": [f"{v}%" for v in rel_variances]},
+                {"label": "相对差异", "values": [None if v is None else f"{v}%" for v in rel_variances]},
             ],
         }
 
         # Analysis context
-        best_month_idx = rel_variances.index(max(rel_variances)) if rel_variances else 0
-        worst_month_idx = rel_variances.index(min(rel_variances)) if rel_variances else 0
+        rated = [(i, v) for i, v in enumerate(rel_variances) if v is not None]
+        best_month_idx = max(rated, key=lambda x: x[1])[0] if rated else None
+        worst_month_idx = min(rated, key=lambda x: x[1])[0] if rated else None
         analysis_parts = [
             f"{year}年预实差异分析:",
             f"总预算{self._format_value(total_budget, scale)}元",
             f"总实际{self._format_value(total_actual, scale)}元",
             f"达成率{achievement_rate if achievement_rate is not None else 'N/A'}%",
         ]
-        if len(months) > 1:
+        if len(rated) > 1:
             analysis_parts.extend([
                 f"最佳月份{months[best_month_idx]}(+{rel_variances[best_month_idx]}%)",
                 f"最差月份{months[worst_month_idx]}({rel_variances[worst_month_idx]}%)",
@@ -282,7 +290,7 @@ class VarianceAnalysisBuilder(AbstractFinancialChartBuilder):
                 "period": period,
                 "scale": scale,
                 "achievementRate": achievement_rate,
-                "totalVariance": round(total_variance, 2),
+                "totalVariance": None if total_variance is None else round(total_variance, 2),
                 "relVariances": rel_variances,
                 "dataQuality": "good",
             },

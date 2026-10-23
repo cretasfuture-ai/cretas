@@ -12,6 +12,8 @@ import com.cretas.aims.dto.cache.SemanticCacheHit;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.dto.conversation.ConversationContext;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ConversationMemoryService;
@@ -97,11 +99,24 @@ class SseF006BossMiniContractTest {
     }
 
     private void execute(String factory, Long user, String role, boolean thinking) {
-        ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, factory,
-                IntentExecuteRequest.builder().userInput(QUESTION).enableThinking(thinking)
-                        .context(Map.of("factoryId", "FOREIGN", "userId", 999,
-                                "role", "factory_super_admin", "model", "forged-model"))
-                        .build(), user, role);
+        executeRequest(factory, user, role, IntentExecuteRequest.builder().userInput(QUESTION)
+                .enableThinking(thinking)
+                .context(Map.of("factoryId", "FOREIGN", "userId", 999,
+                        "role", "factory_super_admin", "model", "forged-model"))
+                .build());
+    }
+
+    private void executeRequest(String factory, Long user, String role, IntentExecuteRequest request) {
+        if (user == null) {
+            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, factory,
+                    request, null, role);
+            return;
+        }
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, user, factory, role))) {
+            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, factory,
+                    request, user, role);
+        }
     }
 
     @Test
@@ -197,9 +212,8 @@ class SseF006BossMiniContractTest {
     @Test
     void missingMemoryBeanCannotEchoCallerSessionOrContactMini() throws Exception {
         ReflectionTestUtils.setField(service, "conversationMemoryService", null);
-        ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, "F006",
-                IntentExecuteRequest.builder().userInput(QUESTION).sessionId("caller-forged-session").build(),
-                77L, "factory_super_admin");
+        executeRequest("F006", 77L, "factory_super_admin",
+                IntentExecuteRequest.builder().userInput(QUESTION).sessionId("caller-forged-session").build());
         verify(mini, never()).stream(any(), any(), any(), any(), anyBoolean(), any(), any(), any());
         verifyNoInteractions(cloud);
         ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
@@ -294,9 +308,8 @@ class SseF006BossMiniContractTest {
         when(dispatch.executeWithTool(eq(tool), eq("F006"), any(), eq(intent), eq(77L),
                 eq("factory_super_admin"), any())).thenReturn(IntentExecuteResponse.builder()
                 .status("SUCCESS").message("查询完成").build());
-        ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, "F006",
-                IntentExecuteRequest.builder().userInput(QUESTION).intentCode("MATERIAL_BATCH_QUERY").build(),
-                77L, "factory_super_admin");
+        executeRequest("F006", 77L, "factory_super_admin",
+                IntentExecuteRequest.builder().userInput(QUESTION).intentCode("MATERIAL_BATCH_QUERY").build());
         verify(dispatch).executeWithTool(eq(tool), eq("F006"), any(), eq(intent), eq(77L),
                 eq("factory_super_admin"), any());
         verifyNoInteractions(mini, cloud, knowledge);

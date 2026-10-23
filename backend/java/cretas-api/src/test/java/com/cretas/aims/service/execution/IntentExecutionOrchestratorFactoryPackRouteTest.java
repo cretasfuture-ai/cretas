@@ -57,7 +57,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
     void packExternalQueryStopsBeforeRestaurantContinuationAndGeneralAnalysis() {
         Harness harness = new Harness();
 
-        IntentExecuteResponse response = harness.orchestrator.execute(
+        IntentExecuteResponse response = harness.execute(
                 "F001",
                 IntentExecuteRequest.builder()
                         .userInput("审批付款")
@@ -91,7 +91,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 .thenReturn(true);
         when(harness.writeGuardService.isWriteIntent(intent)).thenReturn(true);
 
-        IntentExecuteResponse response = harness.orchestrator.execute(
+        IntentExecuteResponse response = harness.execute(
                 "F001",
                 IntentExecuteRequest.builder()
                         .userInput("我要报工")
@@ -138,7 +138,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 any(), anyString(), any(), any(), anyLong(), anyString(), any()))
                 .thenReturn(executed);
 
-        IntentExecuteResponse response = harness.orchestrator.execute(
+        IntentExecuteResponse response = harness.execute(
                 "F001",
                 IntentExecuteRequest.builder()
                         .userInput("查看批次进度")
@@ -181,7 +181,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 .thenReturn(true);
         when(harness.writeGuardService.isWriteIntent(intent)).thenReturn(false);
 
-        IntentExecuteResponse response = harness.orchestrator.execute(
+        IntentExecuteResponse response = harness.execute(
                 "F001",
                 IntentExecuteRequest.builder().userInput("查看批次进度").build(),
                 7L,
@@ -204,7 +204,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         when(harness.aiIntentService.recognizeIntentWithConfidence(
                 "分析生产异常", "F001", 3, 7L, "dispatcher", null, null, null)).thenReturn(general);
 
-        IntentExecuteResponse response = harness.orchestrator.execute(
+        IntentExecuteResponse response = harness.execute(
                 "F001",
                 IntentExecuteRequest.builder().userInput("分析生产异常").build(),
                 7L,
@@ -257,6 +257,15 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 mock(AuthenticatedToolPrincipalFactory.class);
         private final FactoryRepository factoryRepository = mock(FactoryRepository.class);
         private final IntentExecutionOrchestrator orchestrator;
+
+        private IntentExecuteResponse execute(String factoryId, IntentExecuteRequest request,
+                                              Long userId, String role) {
+            try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                    new com.cretas.aims.security.AuthenticatedActor(
+                            com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, factoryId, role))) {
+                return orchestrator.execute(factoryId, request, userId, role);
+            }
+        }
 
         private Harness() {
             Factory factory = new Factory();

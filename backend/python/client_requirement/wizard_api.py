@@ -11,6 +11,8 @@ from typing import List, Optional, Dict
 
 import httpx
 from fastapi import APIRouter, Depends
+
+from common.tenant_identity import require_platform_or_own_factory
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -20,7 +22,11 @@ from .ai_consultant import AIConsultant
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# 2026-10-22 工厂隔离: 这组路由曾整段在 PUBLIC_PREFIXES 里 —— 匿名即可列出全部客户公司
+# (含联系人电话)、改任意公司的反馈、把调研公司绑到任意工厂 (再用内部密钥改那家工厂的字段可见性)、
+# 甚至匿名建厂。现在一律要登录; 只有平台角色能做管理动作, 带 factory_id 的查询还允许该厂本身。
+# (公开问卷页调用的 /api/public/client-requirement 在统一服务里本就未挂载。)
+router = APIRouter(dependencies=[Depends(require_platform_or_own_factory)])
 
 TOTAL_SPEC_FIELDS = 243
 

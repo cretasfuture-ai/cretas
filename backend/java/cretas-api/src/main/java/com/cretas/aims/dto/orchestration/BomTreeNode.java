@@ -60,6 +60,9 @@ public class BomTreeNode {
     /** 是否检测到循环 (此 typeId 在祖先链中已出现, 展开被切断防无限递归) */
     private boolean cycleDetected;
 
+    /** 工艺保密: 该半成品的配方受保护且调用者无权, 不展开子项 (不是「没有 BOM」也不是原料叶子)。 */
+    private boolean processSecretRestricted;
+
     /**
      * 当前库存可用量 (仅 leaf=true 节点填充, 否则 null).
      * 通过 MaterialBatchRepository FEFO 查询并汇总得到。

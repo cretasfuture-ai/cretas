@@ -56,21 +56,24 @@ PUBLIC_PREFIXES = (
     "/api/public/",
     "/api/ai/",          # AI proxy — called by Java backend internally
     "/api/classifier/",  # Classifier — called by Java backend internally
-    "/api/client-requirement/",  # Client requirement wizard (public)
+    # "/api/client-requirement/" — removed 2026-10-22: anonymous callers could list every
+    #   surveyed company (contacts/phones), rewrite feedback, link a company to any factory
+    #   and create factories. Now JWT; management routes are platform-only (wizard_api.py).
     "/api/chart/",       # Chart building — stateless data processing, no user context needed
     "/api/smartbi/chart/",  # SmartBI chart endpoints (same reason)
     "/api/insight/",     # Insight endpoints — stateless LLM analysis, no user context needed
     "/api/excel/",       # Excel parsing — called by Java backend internally (no JWT forwarded)
-    "/api/smartbi/analysis-cache/",  # SmartBI analysis cache — browser direct calls
-    "/api/smartbi/cross-sheet",  # Cross-sheet analysis
-    "/api/smartbi/yoy-",  # YoY comparison
+    # "/api/smartbi/analysis-cache/" — removed 2026-10-22: requires JWT + own-factory upload (IDOR fix)
+    # "/api/smartbi/cross-sheet", "/api/smartbi/yoy-" — removed 2026-10-22: they read
+    #   uploads by a client-supplied factory_id (yoy even set the RLS tenant from it).
     "/api/smartbi/benchmark",  # Industry benchmarks
-    "/api/smartbi/layouts",  # Dashboard layout persistence — frontend direct calls
+    # "/api/smartbi/layouts" — removed 2026-10-22: read/write/delete keyed by client factory_id.
     # "/api/smartbi/restaurant-analytics/" — removed: requires JWT auth (IDOR fix)
     "/api/statistical/",  # Statistical analysis
     "/api/analysis/",  # Analysis endpoints
     "/api/forecast/",  # Forecast endpoints
-    "/api/efficiency/",  # Efficiency recognition — called by Java backend internally
+    # "/api/efficiency/" — moved to INTERNAL_ONLY_PREFIXES 2026-10-22: camera tracking / scene / stream
+    #   state is global (not per factory) and was readable anonymously through the gateway.
     "/api/food-kb/manual-chat",  # Operation manual chat — public (HTML page)
     # "/api/smartbi/financial-dashboard/" — removed: requires JWT auth (IDOR fix)
     "/api/llm/",              # LLM router — called by Java backend internally (no JWT forwarded)
@@ -91,10 +94,17 @@ PUBLIC_PREFIXES = (
 INTERNAL_ONLY_PATHS = frozenset({
     "/api/smartbi/restaurant/sections/owner-action-chat",
     "/api/llm/f006-boss-question-stream",
+    # 2026-10-22 隔离排查: 下面两条没有任何调用方, 却在公开前缀下 —— 匿名即可往服务器任意目录写文件 /
+    # 从任意本地路径加载模型。收为仅内部 (需 X-Internal-Secret)。
+    "/api/excel/export/batch/save",
+    "/api/classifier/load",
 })
 INTERNAL_ONLY_PREFIXES = (
     "/api/internal/smartbi/agent/runs",
     "/api/label-qc",
+    # 效率识别 (摄像头轨迹/场景/录像/视频流): 数据不分工厂, 只允许 Java 带 X-Internal-Secret 调用;
+    # 普通登录用户也不行 (任何一家工厂的用户都会看到全部工厂的轨迹)。2026-10-22 工厂隔离。
+    "/api/efficiency",
 )
 _INTERNAL_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 

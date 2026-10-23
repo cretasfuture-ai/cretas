@@ -9,6 +9,8 @@ import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.cache.SemanticCacheHit;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.SemanticCacheService;
@@ -50,8 +52,15 @@ class SseStreamingFoodFallbackContractTest {
                 .matchMethod(IntentMatchResult.MatchMethod.NONE)
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         doNothing().when(service).sendSseEvent(any(), any(), any());
-        ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, "F006",
-                IntentExecuteRequest.builder().userInput(QUESTION).build(), 77L, "factory_super_admin");
+        try (AuthenticatedActor.ActorScope ignored = trustedFactoryActor()) {
+            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, "F006",
+                    IntentExecuteRequest.builder().userInput(QUESTION).build(), 77L, "factory_super_admin");
+        }
+    }
+
+    private static AuthenticatedActor.ActorScope trustedFactoryActor() {
+        return AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, 77L, "F006", "factory_super_admin"));
     }
 
     private void assertConversationalOnly() {

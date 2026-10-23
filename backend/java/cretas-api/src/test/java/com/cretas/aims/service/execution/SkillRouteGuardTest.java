@@ -31,6 +31,8 @@ import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.ToolRouterService;
 import com.cretas.aims.service.intent.FrontlineAiWriteGrantService;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.skill.impl.SkillExecutorImpl;
 import com.cretas.aims.service.skill.impl.SkillRegistryImpl;
@@ -480,9 +482,12 @@ class SkillRouteGuardTest {
             when(aiIntentService.recognizeIntentWithConfidence(eq(userInput), eq(FACTORY), eq(3), eq(userId),
                     eq(role), any(), any(), any(), any())).thenReturn(match);
             List<Object> results = captureResults();
-            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
-                    IntentExecuteRequest.builder().userInput(userInput).build(), userId, role,
-                    new F006BossQuestionClient.Cancellation());
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                    new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, FACTORY, role))) {
+                ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
+                        IntentExecuteRequest.builder().userInput(userInput).build(), userId, role,
+                        new F006BossQuestionClient.Cancellation());
+            }
             assertThat(results).as("真实入口必须流出一个 result").hasSize(1);
             return new Run((IntentExecuteResponse) results.get(0));
         }
@@ -501,9 +506,12 @@ class SkillRouteGuardTest {
             // 排班查看对操作员在生产上不开放 —— 本组只看「写意图」这一维, 把它对两个角色都放开
             intentRoles.put("SCHEDULING_LIST", List.of(ADMIN, OPERATOR));
             List<Object> results = captureResults();
-            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
-                    IntentExecuteRequest.builder().userInput("1827").build(), userId, role,
-                    new F006BossQuestionClient.Cancellation());
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                    new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, FACTORY, role))) {
+                ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
+                        IntentExecuteRequest.builder().userInput("1827").build(), userId, role,
+                        new F006BossQuestionClient.Cancellation());
+            }
             assertThat(results).hasSize(1);
             IntentExecuteResponse response = (IntentExecuteResponse) results.get(0);
             assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");

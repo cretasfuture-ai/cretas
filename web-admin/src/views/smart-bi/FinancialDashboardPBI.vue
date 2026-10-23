@@ -5,17 +5,30 @@
  */
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import FinanceAnalysis from './FinanceAnalysis.vue';
 import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
 import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
+import {
+  periodSelectionToRequest,
+  chartGapReason,
+  chartNotes,
+  createDataVersion,
+  buildChartNav,
+  periodRequestLabel,
+  dashboardRenderKey,
+  createQueryHistory,
+} from './financialDashboardState';
+import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
 import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
-import { DataAnalysis, VideoPlay, Download, Collection, SetUp, ArrowDown, ArrowRight, Delete } from '@element-plus/icons-vue';
+import { DataAnalysis, Download, ArrowDown, Delete, Calendar, MoreFilled } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { processEChartsOptions } from '@/utils/echarts-fmt';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { sparklinePath, sparklineSVG } from '@/utils/sparkline';
 
 /** Deep clone that handles ECharts options with functions (structuredClone can't clone functions) */
@@ -69,6 +82,15 @@ const autoRefreshInterval = ref<number>(0); // 0=off, 60000=1m, 300000=5m, 90000
 
 // Fix 72: Global slicer filters (Power BI / Looker style)
 const slicerFilters = ref<Record<string, string[]>>({});
+// 月份芯片 / 期间是先改再请求的: 记住页面上正显示的那一次, 请求失败就退回,
+// 否则芯片显示「3月」而页面还是全年的数
+const queryHistory = createQueryHistory<{ slicers: Record<string, string[]>; period: PeriodSelection }>();
+function restoreLastApplied() {
+  const applied = queryHistory.lastApplied();
+  if (!applied) return;
+  slicerFilters.value = applied.slicers;
+  periodSelection.value = applied.period;
+}
 const availableDimensions = ref<{ name: string; values: string[] }[]>([]);
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const useSvgRenderer = ref(false); // D4: SVG renderer toggle
@@ -96,7 +118,6 @@ const goldFinanceMode = computed(() =>
 // Tab navigation state
 const viewMode = ref<'tab' | 'grid'>('tab');
 const activeTab = ref('budget_achievement');
-const collapsedGroups = reactive(new Set<string>());
 const conclusionsText = ref('');
 const conclusionsLoading = ref(false);
 
@@ -153,8 +174,8 @@ function clearAllAnnotations(chartType: string) {
 
 const uploadId = ref<number | null>(null);
 const uploadIdInput = ref<string>('');
-// 默认「全部历史」: type='year' + allHistory 标记 → 后端 period_type='year'
-// (normalizer 对 'year' 不做任何月份过滤, 即返回该数据源全部数据)。
+// 默认「全部历史」: type='year' + allHistory 标记 → 后端 period_type='all'
+// (不按年也不按月过滤, 即该数据源全部数据)。
 const periodSelection = ref<PeriodSelection>({
   type: 'year',
   year: new Date().getFullYear(),
@@ -164,11 +185,17 @@ const periodSelection = ref<PeriodSelection>({
 });
 
 const isGenerating = ref(false);
+// 期间选择收进一个按钮; 弹层受控 (内部下拉框挂在 body 上, 点它们不能把弹层关掉)
+const periodPopoverOpen = ref(false);
+// 条件格式 (收进「更多」后用对话框打开)
+const conditionalFormatOpen = ref(false);
 const dashboardResponse = ref<DashboardResponse | null>(null);
 
 // Per-chart AI analysis state
 const analysisByType = ref<Record<string, string>>({});
 const analysisLoadingByType = ref<Record<string, boolean>>({});
+// 看板数据版本: AI 分析请求回来时版本已变 (期间/数据源已换) 就丢弃结果
+const dataVersion = createDataVersion();
 const analysisExpandedByType = ref<Record<string, boolean>>({});
 
 // PPT export
@@ -275,24 +302,25 @@ function teardownLazyObserver(): void {
 }
 
 // ---- Computed ----
-const currentYear = computed(() => periodSelection.value.year);
-// 「全部历史」与「单年」都映射 period_type='year' (normalizer 对 'year' 不做月份过滤 → 返回全部数据)。
-const periodType = computed(() =>
-  periodSelection.value.allHistory || periodSelection.value.type === 'year' ? 'year' : 'month_range');
-const startMonth = computed(() => {
-  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 1;
-  if (Array.isArray(periodSelection.value.value)) {
-    return parseInt(String(periodSelection.value.value[0]).split('-')[1] || '1', 10);
-  }
-  return 1;
-});
-const endMonth = computed(() => {
-  if (periodSelection.value.allHistory || periodSelection.value.type === 'year') return 12;
-  if (Array.isArray(periodSelection.value.value)) {
-    return parseInt(String(periodSelection.value.value[1]).split('-')[1] || '12', 10);
-  }
-  return 12;
-});
+// 期间选择 → 后端参数 (全部历史=all / 单年=year / 其余=month_range), 规则与单测见 financialDashboardState.ts
+const periodRequest = computed(() => periodSelectionToRequest(periodSelection.value));
+const periodRequestError = computed(() => ('error' in periodRequest.value ? periodRequest.value.error : null));
+const resolvedPeriod = computed<PeriodRequest>(() => ('error' in periodRequest.value
+  ? { periodType: 'year', year: periodSelection.value.year, startMonth: 1, endMonth: 12 }
+  : periodRequest.value));
+const periodButtonLabel = computed(() => periodRequestLabel(periodRequest.value));
+const headline = computed(() => dashboardResponse.value?.headline ?? null);
+
+function applyPeriod() {
+  periodPopoverOpen.value = false;
+  // 已经出过看板就按新期间重出, 免得按钮上的期间和图表不是同一期
+  if (dashboardResponse.value && !periodRequestError.value) generate();
+}
+
+const currentYear = computed(() => resolvedPeriod.value.year);
+const periodType = computed(() => resolvedPeriod.value.periodType);
+const startMonth = computed(() => resolvedPeriod.value.startMonth);
+const endMonth = computed(() => resolvedPeriod.value.endMonth);
 
 const charts = computed(() => dashboardResponse.value?.charts ?? []);
 
@@ -423,6 +451,8 @@ const chartTypes = [
  { key: 'budget_achievement', label: '预算达成分析', icon: '', group: '核心财务', order: 1 },
  { key: 'yoy_mom_comparison', label: '同环比分析', icon: '', group: '核心财务', order: 2 },
  { key: 'pnl_waterfall', label: '损益表瀑布图', icon: '', group: '核心财务', order: 3 },
+ { key: 'expense_yoy_budget', label: '费用同比及预算达成', icon: '', group: '核心财务', order: 4 },
+ { key: 'gross_margin_trend', label: '各月毛利率', icon: '', group: '核心财务', order: 5 },
  { key: 'category_yoy_comparison', label: '品类同期对比', icon: '', group: '品类与渠道', order: 4 },
  { key: 'category_structure_donut',label: '产品结构', icon: '', group: '品类与渠道', order: 5 },
  { key: 'channel_analysis', label: '渠道分析', icon: '', group: '品类与渠道', order: 6 },
@@ -434,13 +464,14 @@ const chartTypes = [
  { key: 'small_multiples', label: '多维度对比矩阵', icon: '', group: '运营专项', order: 12 },
 ];
 
-const chartsByGroup = computed(() => {
-  const groups = new Map<string, typeof chartTypes>();
-  for (const ct of chartTypes) {
-    if (!groups.has(ct.group)) groups.set(ct.group, []);
-    groups.get(ct.group)!.push(ct);
-  }
-  return groups;
+// 图表切换条: 只列这份数据能出图的图表; 出不了的收进「还缺数据」并带原因
+const chartNav = computed(() => buildChartNav(chartTypes, getChart, dashboardResponse.value?.unavailableCharts ?? []));
+
+// 当前选中的图这份数据出不了时, 自动切到第一张能出图的 (避免一打开就是空态)
+watch(chartNav, (nav) => {
+  if (activeTab.value === 'conclusions') return;
+  const available = nav.groups.flatMap(g => g.items.map(i => i.key));
+  if (available.length && !available.includes(activeTab.value)) activeTab.value = available[0];
 });
 
 const presentationSlides = computed<Slide[]>(() => {
@@ -531,9 +562,19 @@ async function generate(useDemo?: boolean) {
     return;
   }
 
+  if (periodRequestError.value) {
+    ElMessage.warning(periodRequestError.value);
+    return;
+  }
+
   isGenerating.value = true;
+  // 新一轮数据: 旧的单图分析、总结论、追问一律作废, 迟到的旧响应按版本号丢弃
+  dataVersion.bump();
   analysisByType.value = {};
   analysisExpandedByType.value = {};
+  analysisLoadingByType.value = {};
+  conclusionsText.value = '';
+  followUpsByType.value = {};
 
   const payload: FinancialDashboardRequest = {
     year: currentYear.value,
@@ -558,6 +599,7 @@ async function generate(useDemo?: boolean) {
     if (isComponentUnmounted) return;
     if (resp.success) {
       dashboardResponse.value = resp;
+      queryHistory.commit({ slicers: slicerFilters.value, period: periodSelection.value });
       // Fix 72: Extract available filter dimensions from response
       if (resp.availableDimensions) {
         availableDimensions.value = resp.availableDimensions;
@@ -578,42 +620,21 @@ async function generate(useDemo?: boolean) {
       }
       // Reveal all chart cards with staggered fade-in
       nextTick(() => revealAllCharts());
-      ElMessage.success(`成功生成 ${resp.successCount} 个图表`);
-      // Auto-trigger AI analysis for all charts
-      nextTick(() => autoAnalyzeAllCharts());
+      // 只给当前查看的图自动生成 AI 分析 (其余图点「AI分析」再生成), 避免一次触发几十个请求
+      if (viewMode.value === 'tab') nextTick(() => requestAnalysis(activeTab.value));
     } else {
-      ElMessage.error('图表生成失败，请检查数据源');
+      restoreLastApplied();
+      ElMessage({ message: resp.error || resp.message || '图表生成失败，请检查数据源', type: 'error', duration: 0, showClose: true });
     }
   } catch (err) {
     console.error('generate failed:', err);
-    ElMessage.error('请求失败，请稍后重试');
+    restoreLastApplied();
+    // 后端给的原因 (如「未找到数据源 / 无权访问其他工厂的数据」) 原样显示, 错误提示不自动消失
+    const serverMessage = (err as { serverMessage?: string } | null)?.serverMessage;
+    ElMessage({ message: serverMessage || '请求失败，请稍后重试', type: 'error', duration: 0, showClose: true });
   } finally {
     isGenerating.value = false;
   }
-}
-
-/**
- * Auto-analyze all charts after dashboard generation.
- * Requests run with concurrency limit of 3 to avoid API overload.
- * Bug #2: stop iterating if the component unmounts — prevents request cancel noise.
- */
-async function autoAnalyzeAllCharts() {
-  const allChartTypes = charts.value.map(c => c.chartType);
-  if (!allChartTypes.length) return;
-
-  const CONCURRENCY = 3;
-  let idx = 0;
-
-  async function next(): Promise<void> {
-    while (idx < allChartTypes.length && !isComponentUnmounted) {
-      const ct = allChartTypes[idx++];
-      if (analysisByType.value[ct]) continue; // already loaded
-      await requestAnalysis(ct);
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(CONCURRENCY, allChartTypes.length) }, () => next());
-  await Promise.allSettled(workers);
 }
 
 function forceRequestAnalysis(chartType: string) {
@@ -629,6 +650,8 @@ async function requestAnalysis(chartType: string) {
 
   const chart = getChart(chartType);
   if (!chart) return;
+  // 出不了图的不做 AI 分析 (缺数据的原因已经显示在图的位置)
+  if (chartGapReason(chart)) return;
 
   // Skip if already loaded
   if (analysisByType.value[chartType]) return;
@@ -637,6 +660,7 @@ async function requestAnalysis(chartType: string) {
   if (analysisLoadingByType.value[chartType]) return;
 
   analysisLoadingByType.value[chartType] = true;
+  const version = dataVersion.current();
 
   try {
     const resp = await analyzeChart({
@@ -645,6 +669,7 @@ async function requestAnalysis(chartType: string) {
     });
     // After await, re-check unmounted — state updates would be wasted + throw
     if (isComponentUnmounted) return;
+    if (!dataVersion.isCurrent(version)) return; // 期间/数据已换, 这条分析属于旧图表
     if (resp.success) {
       analysisByType.value[chartType] = resp.analysis || '暂无分析结果';
     } else {
@@ -660,9 +685,9 @@ async function requestAnalysis(chartType: string) {
       return;
     }
     console.error('analyzeChart failed:', err);
-    analysisByType.value[chartType] = '分析请求失败，请重试';
+    if (dataVersion.isCurrent(version)) analysisByType.value[chartType] = '分析请求失败，请重试';
   } finally {
-    if (!isComponentUnmounted) {
+    if (!isComponentUnmounted && dataVersion.isCurrent(version)) {
       analysisLoadingByType.value[chartType] = false;
     }
   }
@@ -956,7 +981,9 @@ function renderGenericChart(chartType: string, domEl: Element | null, retries = 
   });
 }
 
-watch(() => charts.value.length, async () => {
+// 每次生成完成都重画 (见 dashboardRenderKey): 只看图表数量时, 月份筛选 / 换期间后图表区一直空着
+watch(() => dashboardRenderKey(dashboardResponse.value, isGenerating.value), async (key) => {
+  if (!key) return;
   await nextTick();
   setupLazyObserver();
   // Double rAF: first rAF schedules after v-if DOM insertion, second after layout
@@ -974,10 +1001,13 @@ watch(() => charts.value.length, async () => {
           renderGenericChart(chartType, domEl);
         }
       }
-      // Fallback: render any charts whose cards are in DOM but observer hasn't fired yet
+      // Fallback: render any chart container that is laid out but still has no ECharts instance.
+      // ⚠️ 判据是「画布有没有初始化」而不是 visibleCharts: revealAllCharts() 在这 500ms 内
+      // 就把所有类型标成可见, 旧判据会跳过 Tab 视图的画布 (它没有 IntersectionObserver 兜底),
+      // 结果首次加载 Tab 视图一张图都不画, 切一次标签才出现。
       setTimeout(() => {
         for (const [chartType, domEl] of chartDomRefs.value.entries()) {
-          if (!visibleCharts.has(chartType) && domEl.clientHeight > 0) {
+          if (domEl.clientHeight > 0 && !echarts.getInstanceByDom(domEl)) {
             visibleCharts.add(chartType);
             renderGenericChart(chartType, domEl);
           }
@@ -985,8 +1015,6 @@ watch(() => charts.value.length, async () => {
       }, 500);
       // E1: Connect charts for synchronized crosshair
       connectCharts();
-      // E2: Start KPI counter animations
-      startKpiAnimations();
     });
   });
 });
@@ -1047,14 +1075,11 @@ function onFormattingRulesChange(_rules: unknown[]) {
 }
 
 // ---- Tab navigation ----
-function toggleGroup(groupName: string) {
-  if (collapsedGroups.has(groupName)) collapsedGroups.delete(groupName);
-  else collapsedGroups.add(groupName);
-}
 
 async function generateConclusions() {
   if (isComponentUnmounted) return;
   conclusionsLoading.value = true;
+  const version = dataVersion.current();
   try {
     const allAnalysis = Object.entries(analysisByType.value)
       .filter(([, text]) => text)
@@ -1074,6 +1099,7 @@ async function generateConclusions() {
       analysis_context: allAnalysis,
     });
     if (isComponentUnmounted) return;
+    if (!dataVersion.isCurrent(version)) return; // 期间/数据已换, 这份结论属于旧图表
     if (resp.success) {
       conclusionsText.value = resp.analysis || '暂无分析结论';
     } else {
@@ -1084,7 +1110,7 @@ async function generateConclusions() {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || (err instanceof TypeError && String(err).includes('fetch'))) return;
     console.error('generateConclusions failed:', err);
-    conclusionsText.value = '生成结论失败，请重试';
+    if (dataVersion.isCurrent(version)) conclusionsText.value = '生成结论失败，请重试';
   } finally {
     if (!isComponentUnmounted) conclusionsLoading.value = false;
   }
@@ -1107,6 +1133,7 @@ async function submitFollowUp(chartType: string) {
   if (isComponentUnmounted) return;
   followUpLoading.value = true;
   followUpInput.value = '';
+  const version = dataVersion.current();
 
   try {
     const resp = await analyzeChart({
@@ -1116,6 +1143,7 @@ async function submitFollowUp(chartType: string) {
       previous_analysis: fullAnalysis,
     });
     if (isComponentUnmounted) return;
+    if (!dataVersion.isCurrent(version)) return; // 期间/数据已换, 追问属于旧图表
 
     if (!followUpsByType.value[chartType]) followUpsByType.value[chartType] = [];
     followUpsByType.value[chartType].push({
@@ -1127,6 +1155,7 @@ async function submitFollowUp(chartType: string) {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || (err instanceof TypeError && String(err).includes('fetch'))) return;
     console.error('followUp failed:', err);
+    if (!dataVersion.isCurrent(version)) return;
     if (!followUpsByType.value[chartType]) followUpsByType.value[chartType] = [];
     followUpsByType.value[chartType].push({ question, answer: '请求失败，请重试' });
   } finally {
@@ -1148,6 +1177,43 @@ watch(activeTab, async (newTab) => {
 });
 
 // ---- B3: Dark mode toggle ----
+const REFRESH_OPTIONS = [
+  { value: 0, label: '关' },
+  { value: 60000, label: '每 1 分钟' },
+  { value: 300000, label: '每 5 分钟' },
+  { value: 900000, label: '每 15 分钟' },
+];
+
+async function changeDataSource() {
+  try {
+    const { value } = await ElMessageBox.prompt('输入上传记录的编号（在「数据上传」页可以看到）', '更换数据源', {
+      inputValue: uploadIdInput.value || (uploadId.value ? String(uploadId.value) : ''),
+      inputPattern: /^\d+$/,
+      inputErrorMessage: '编号是数字',
+      confirmButtonText: '生成看板',
+      cancelButtonText: '取消',
+    });
+    uploadIdInput.value = value;
+    uploadId.value = parseInt(value, 10);
+    isInDemoMode.value = false;
+    generate(false);
+  } catch {
+    // 取消
+  }
+}
+
+function handleMoreCommand(command: string) {
+  if (command === 'view:tab' || command === 'view:grid') viewMode.value = command === 'view:tab' ? 'tab' : 'grid';
+  else if (command === 'dark') toggleDarkMode();
+  else if (command.startsWith('refresh:')) autoRefreshInterval.value = Number(command.slice('refresh:'.length));
+  else if (command === 'split') smallMultiplesVisible.value = !smallMultiplesVisible.value;
+  else if (command === 'format') conditionalFormatOpen.value = true;
+  else if (command === 'bookmark') showBookmarkPanel.value = true;
+  else if (command === 'present') isPresentationVisible.value = true;
+  else if (command === 'demo') generate(true);
+  else if (command === 'source') changeDataSource();
+}
+
 function toggleDarkMode() {
   isDarkMode.value = !isDarkMode.value;
   const theme = isDarkMode.value ? 'cretas-dark' : undefined;
@@ -1384,57 +1450,29 @@ function connectCharts() {
 
 // ---- E2: Animated KPI counter ----
 const kpiRafIds: number[] = [];
-const animatedKpiValues = ref<Record<string, string>>({});
-
-function animateKpiValue(key: string, targetStr: string, duration = 800) {
-  // Parse numeric portion
-  const match = targetStr.match(/^([+-]?)([0-9,.]+)(.*)/);
-  if (!match) {
-    animatedKpiValues.value[key] = targetStr;
-    return;
-  }
-  const sign = match[1];
-  const numStr = match[2].replace(/,/g, '');
-  const suffix = match[3];
-  const target = parseFloat(numStr);
-  if (isNaN(target)) {
-    animatedKpiValues.value[key] = targetStr;
-    return;
-  }
-
-  const decimals = numStr.includes('.') ? numStr.split('.')[1].length : 0;
-  const startTime = performance.now();
-  animatedKpiValues.value[key] = `${sign}0${suffix}`;
-
-  function tick(now: number) {
-    const elapsed = now - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    // Ease out cubic
-    const eased = 1 - Math.pow(1 - progress, 3);
-    const current = target * eased;
-    const formatted = decimals > 0 ? current.toFixed(decimals) : Math.round(current).toLocaleString('zh-CN');
-    animatedKpiValues.value[key] = `${sign}${formatted}${suffix}`;
-    if (progress < 1) {
-      kpiRafIds.push(requestAnimationFrame(tick));
-    }
-  }
-  kpiRafIds.push(requestAnimationFrame(tick));
+// 预算达成状态: 颜色用加深色保证对比度, 同时给出文字 (不只靠颜色区分好坏)
+function achievementColor(rate: number | null | undefined): string {
+  if (rate == null) return 'var(--el-text-color-secondary)';
+  if (rate >= 100) return '#1B7A4A';
+  if (rate >= 80) return '#9A6700';
+  return '#C0362C';
+}
+function achievementStatus(rate: number | null | undefined): string {
+  if (rate == null) return '';
+  if (rate >= 100) return '达成';
+  if (rate >= 80) return '接近';
+  return '未达';
 }
 
-function startKpiAnimations() {
-  for (const chart of charts.value) {
-    if (!chart.kpis?.length) continue;
-    for (const kpi of chart.kpis) {
-      const key = `${chart.chartType}_${kpi.label}`;
-      const val = typeof kpi.value === 'number' ? kpi.value.toFixed(1) : String(kpi.value);
-      animateKpiValue(key, val);
-    }
-  }
+// AI 分析文本是 markdown: 渲染后再消毒 (与 ProductionAnalysis 同一做法)
+function renderAnalysis(text: string | null | undefined): string {
+  if (!text) return '';
+  return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 }
 
-function getAnimatedKpi(chartType: string, label: string, original: string | number): string {
-  const key = `${chartType}_${label}`;
-  return animatedKpiValues.value[key] ?? (typeof original === 'number' ? original.toFixed(1) : String(original));
+// KPI 原样显示后端格式化好的值 (千分位、单位由后端统一), 不做计数动画
+function kpiText(original: string | number): string {
+  return typeof original === 'number' ? original.toLocaleString('zh-CN') : String(original);
 }
 
 // ---- Fix 64: Spotlight / Focus mode (Power BI) ----
@@ -1554,23 +1592,47 @@ onBeforeUnmount(() => {
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar-inner">
         <div class="toolbar-left">
+          <span v-if="uploadId && !isInDemoMode" class="data-source-tag" data-testid="data-source-tag">数据源 #{{ uploadId }}</span>
+          <span v-else-if="isInDemoMode" class="data-source-tag">演示数据</span>
           <el-input
+            v-else
             v-model="uploadIdInput"
-            placeholder="数据源ID (可选)"
+            placeholder="上传记录编号"
             style="width: 140px"
             size="small"
             clearable
             @change="(v: string) => { uploadId = v ? parseInt(v, 10) : null }"
           />
-          <PeriodSelector
-            v-model="periodSelection"
-            :show-quick-select="true"
-            :show-custom-tab="false"
-            :show-all-history="true"
-            default-type="year"
-            size="small"
-            style="margin-left: 8px"
-          />
+          <el-popover :visible="periodPopoverOpen" placement="bottom-start" :width="440" popper-class="period-popover">
+            <template #reference>
+              <el-button
+                size="small"
+                class="period-trigger"
+                :class="{ 'is-invalid': periodRequestError }"
+                data-testid="period-trigger"
+                :aria-expanded="periodPopoverOpen"
+                @click="periodPopoverOpen = !periodPopoverOpen"
+              >
+                <el-icon><Calendar /></el-icon>
+                <span>{{ periodButtonLabel }}</span>
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+            </template>
+            <PeriodSelector
+              v-model="periodSelection"
+              :show-quick-select="true"
+              :show-custom-tab="false"
+              :show-all-history="true"
+              :show-compare="false"
+              default-type="year"
+              size="small"
+            />
+            <div class="period-popover__footer">
+              <span v-if="periodRequestError" class="period-popover__error">{{ periodRequestError }}</span>
+              <el-button size="small" @click="periodPopoverOpen = false">取消</el-button>
+              <el-button size="small" type="primary" :disabled="!!periodRequestError" data-testid="period-apply" @click="applyPeriod">确定</el-button>
+            </div>
+          </el-popover>
           <el-button
             type="primary"
             size="small"
@@ -1581,74 +1643,8 @@ onBeforeUnmount(() => {
             <el-icon v-if="!isGenerating"><DataAnalysis /></el-icon>
             {{ isGenerating ? '生成中...' : '生成看板' }}
           </el-button>
-          <el-button
-            size="small"
-            :loading="isGenerating"
-            style="margin-left: 4px"
-            @click="generate(true)"
-          >
-            演示数据
-          </el-button>
         </div>
         <div class="toolbar-right">
-          <el-tag v-if="periodLabel" type="info" size="small" style="margin-right: 8px">
-            {{ periodLabel }}
-          </el-tag>
-          <el-segmented
-            v-model="viewMode"
-            :options="[{ label: 'Tab', value: 'tab' }, { label: 'Grid', value: 'grid' }]"
-            size="small"
-          />
-          <el-button size="small" @click="toggleDarkMode" :title="isDarkMode ? '切换亮色' : '切换暗色'">
- {{ isDarkMode ? '️' : '' }}
-          </el-button>
-          <el-select
-            v-model="autoRefreshInterval"
-            size="small"
-            placeholder="自动刷新"
-            style="width: 100px"
-            :disabled="!dashboardResponse"
-          >
-            <el-option :value="0" label="刷新: 关" />
-            <el-option :value="60000" label="1分钟" />
-            <el-option :value="300000" label="5分钟" />
-            <el-option :value="900000" label="15分钟" />
-          </el-select>
-          <el-switch
-            v-model="smallMultiplesVisible"
-            size="small"
-            active-text="维度拆分"
-            style="margin-right: 4px"
-          />
-          <el-popover trigger="click" width="520" placement="bottom-end">
-            <template #reference>
-              <el-button size="small" :disabled="!dashboardResponse">
-                <el-icon><SetUp /></el-icon>
-                条件格式
-              </el-button>
-            </template>
-            <ConditionalFormatPanel
-              table-id="financial-dashboard"
-              :available-fields="['value', 'budget', 'actual', 'variance']"
-              @change="onFormattingRulesChange"
-            />
-          </el-popover>
-          <el-button
-            size="small"
-            :disabled="!dashboardResponse"
-            @click="showBookmarkPanel = true"
-          >
-            <el-icon><Collection /></el-icon>
-            书签
-          </el-button>
-          <el-button
-            size="small"
-            :disabled="!dashboardResponse"
-            @click="isPresentationVisible = true"
-          >
-            <el-icon><VideoPlay /></el-icon>
-            演示模式
-          </el-button>
           <el-dropdown :disabled="!dashboardResponse" trigger="click" @command="handleExportCommand">
             <el-button size="small" :disabled="!dashboardResponse" :loading="isExportingPPT || isExportingPDF || isExportingExcel">
               <el-icon><Download /></el-icon>
@@ -1668,13 +1664,59 @@ onBeforeUnmount(() => {
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <!-- 不常用的设置都收在这里: 看板默认只露出期间、生成、导出 -->
+          <el-dropdown trigger="click" :hide-on-click="true" @command="handleMoreCommand">
+            <el-button size="small" data-testid="toolbar-more">
+              <el-icon><MoreFilled /></el-icon>
+              <span>更多</span>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu class="toolbar-more-menu">
+                <el-dropdown-item command="source">更换数据源…</el-dropdown-item>
+                <el-dropdown-item command="demo">用演示数据看看</el-dropdown-item>
+                <el-dropdown-item divided command="view:tab">{{ viewMode === 'tab' ? '✓ ' : '' }}一次看一张图</el-dropdown-item>
+                <el-dropdown-item command="view:grid">{{ viewMode === 'grid' ? '✓ ' : '' }}所有图平铺</el-dropdown-item>
+                <el-dropdown-item command="split" :disabled="!dashboardResponse">{{ smallMultiplesVisible ? '✓ ' : '' }}按维度拆成小图</el-dropdown-item>
+                <el-dropdown-item command="format" :disabled="!dashboardResponse">条件格式…</el-dropdown-item>
+                <el-dropdown-item divided command="bookmark" :disabled="!dashboardResponse">书签</el-dropdown-item>
+                <el-dropdown-item command="present" :disabled="!dashboardResponse">演示模式</el-dropdown-item>
+                <el-dropdown-item command="dark">{{ isDarkMode ? '切换到亮色' : '切换到暗色' }}</el-dropdown-item>
+                <el-dropdown-item
+                  v-for="(opt, i) in REFRESH_OPTIONS"
+                  :key="opt.value"
+                  :divided="i === 0"
+                  :command="`refresh:${opt.value}`"
+                  :disabled="!dashboardResponse"
+                >{{ autoRefreshInterval === opt.value ? '✓ ' : '' }}自动刷新：{{ opt.label }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </div>
     </el-card>
 
+    <el-dialog v-model="conditionalFormatOpen" title="条件格式" width="560px" append-to-body>
+      <ConditionalFormatPanel
+        table-id="financial-dashboard"
+        :available-fields="['value', 'budget', 'actual', 'variance']"
+        @change="onFormattingRulesChange"
+      />
+    </el-dialog>
+
+    <!-- 页首一句话结论: 后端按规则从同一指标库算出, 不经过 AI -->
+    <p
+      v-if="headline && !isGenerating"
+      class="dashboard-headline"
+      :class="`dashboard-headline--${headline.tone}`"
+      data-testid="dashboard-headline"
+    >
+      <span class="dashboard-headline__dot" aria-hidden="true" />
+      <span>{{ headline.text }}</span>
+    </p>
+
     <!-- Interaction tips -->
     <div v-if="dashboardResponse && !isGenerating" class="interaction-tips">
- <span> <b>单击</b>交叉过滤 | <b>双击</b>添加标注 | <b>方向键</b>卡片导航 | <b>Shift+滚轮</b>缩放 | 图表间<b>Tooltip联动</b></span>
+      <span><b>单击</b>图形高亮同名数据 · <b>双击</b>添加标注</span>
     </div>
 
     <!-- Fix 72: Global Slicer / Filter bar (Power BI style) -->
@@ -1718,8 +1760,8 @@ onBeforeUnmount(() => {
 
     <!-- B1: Active cross-filter indicator -->
     <div v-if="activeFilter" class="cross-filter-bar">
-      <span>过滤中: <b>{{ activeFilter.value }}</b></span>
-      <el-button size="small" text type="primary" @click="activeFilter = null; applyCrossFilter()">清除过滤</el-button>
+      <span>高亮中: <b>{{ activeFilter.value }}</b>（仅高亮图形，KPI 与 AI 分析仍为全部数据）</span>
+      <el-button size="small" text type="primary" @click="activeFilter = null; applyCrossFilter()">取消高亮</el-button>
     </div>
 
     <!-- Empty state -->
@@ -1775,9 +1817,7 @@ onBeforeUnmount(() => {
         />
         <div v-if="analysisLoadingByType['cost_flow_sankey'] || analysisByType['cost_flow_sankey']" class="analysis-panel">
           <ChartSkeleton v-if="analysisLoadingByType['cost_flow_sankey']" type="ai" />
-          <div v-else class="analysis-text">
-            {{ analysisByType['cost_flow_sankey'] }}
-          </div>
+          <div v-else class="analysis-text" v-html="renderAnalysis(analysisByType['cost_flow_sankey'])" />
         </div>
       </el-card>
 
@@ -1793,7 +1833,7 @@ onBeforeUnmount(() => {
         role="region"
         :aria-label="ct.label"
         tabindex="0"
-        @keydown="(e: KeyboardEvent) => handleCardKeydown(e, chartTypes.filter(c => !['expense_yoy_budget', 'gross_margin_trend'].includes(c.key)).indexOf(ct))"
+        @keydown="(e: KeyboardEvent) => handleCardKeydown(e, chartTypes.indexOf(ct))"
       >
         <template #header>
           <div class="chart-card-header">
@@ -1867,11 +1907,11 @@ onBeforeUnmount(() => {
             tabindex="0"
             :aria-label="`${kpi.label}: ${kpi.value}${kpi.unit || ''}`"
           >
-            <span class="kpi-val">{{ getAnimatedKpi(ct.key, kpi.label, kpi.value) }}{{ kpi.unit }}</span>
+            <span class="kpi-val">{{ kpiText(kpi.value) }}{{ kpi.unit }}</span>
             <span class="kpi-lbl">{{ kpi.label }}</span>
             <!-- A3: KPI sparkline -->
             <svg v-if="kpi.sparkline?.length >= 2" class="kpi-sparkline" viewBox="0 0 60 20" preserveAspectRatio="none">
-              <path :d="sparklinePath(kpi.sparkline)" fill="none" :stroke="kpi.trend === 'down' ? '#FF5630' : '#36B37E'" stroke-width="1.5" />
+              <path :d="sparklinePath(kpi.sparkline)" fill="none" stroke="currentColor" stroke-width="1.5" />
             </svg>
           </div>
         </div>
@@ -1888,23 +1928,37 @@ onBeforeUnmount(() => {
           >
             <span class="q-label">{{ qp.quarter }}</span>
             <el-progress
-              :percentage="Math.min(qp.rate, 100)"
-              :color="qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
+              :percentage="Math.min(qp.rate ?? 0, 100)"
+              :color="achievementColor(qp.rate)"
               :stroke-width="10"
               :text-inside="true"
             />
-            <span class="q-rate" :style="{ color: qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate }}%</span>
+            <span class="q-rate" :style="{ color: achievementColor(qp.rate) }">{{ qp.rate == null ? '—' : `${qp.rate}% ${achievementStatus(qp.rate)}` }}</span>
           </div>
         </div>
 
+        <!-- 数据不足: 不出图, 原样告诉用户缺什么 -->
+        <SmartBIEmptyState
+          v-if="chartGapReason(getChart(ct.key))"
+          type="no-data"
+          title="这份数据出不了这张图"
+          :description="chartGapReason(getChart(ct.key)) ?? ''"
+          :show-action="false"
+          class="chart-gap-notice"
+          data-testid="chart-gap-notice"
+        />
         <!-- ECharts canvas rendered via DOM ref -->
         <div
+          v-else
           :ref="(el) => setChartDomRef(ct.key, el as Element | null)"
           class="generic-chart-canvas"
           role="img"
           :aria-label="`${ct.label}图表`"
-          title="单击: 交叉过滤 | 双击: 添加标注"
+          title="单击: 高亮同名数据 | 双击: 添加标注"
         />
+        <ul v-if="chartNotes(getChart(ct.key)).length" class="chart-data-notes" data-testid="chart-data-notes">
+          <li v-for="note in chartNotes(getChart(ct.key))" :key="note">{{ note }}</li>
+        </ul>
 
         <!-- Phase B Moderate: ChartInsightProvider for bar/line/pie slots (exotic slots render nothing) -->
         <!-- Wired: budget_achievement(comparison) yoy_mom_comparison(comparison) category_yoy_comparison(comparison)
@@ -1944,9 +1998,7 @@ onBeforeUnmount(() => {
         <!-- AI Analysis panel — always visible after auto-analysis -->
         <div v-if="analysisLoadingByType[ct.key] || analysisByType[ct.key]" class="analysis-panel">
           <ChartSkeleton v-if="analysisLoadingByType[ct.key]" type="ai" />
-          <div v-else class="analysis-text">
-            {{ analysisByType[ct.key] }}
-          </div>
+          <div v-else class="analysis-text" v-html="renderAnalysis(analysisByType[ct.key])" />
         </div>
 
         <!-- E4: Data table drawer (Fix 71: with inline sparklines) -->
@@ -1983,11 +2035,9 @@ onBeforeUnmount(() => {
 
     <!-- Tab mode: Loading -->
     <div v-if="isGenerating && viewMode === 'tab'" class="dashboard-layout">
-      <aside class="dash-sidebar">
-        <div v-for="[groupName] in chartsByGroup" :key="groupName" class="nav-group">
-          <div class="nav-group-title">{{ groupName }}</div>
-        </div>
-      </aside>
+      <div class="chart-switcher chart-switcher--loading" aria-hidden="true">
+        <span v-for="n in 5" :key="n" class="chart-switcher__placeholder" />
+      </div>
       <main class="dash-content">
         <el-card shadow="hover">
           <ChartSkeleton type="kpi" />
@@ -1996,41 +2046,69 @@ onBeforeUnmount(() => {
       </main>
     </div>
 
-    <!-- Tab mode: Dashboard layout with sidebar -->
+    <!-- Tab mode: 图表切换条 (横向, 只列能出图的图表; 出不了的收进「还缺数据」并写明原因) -->
     <div v-if="dashboardResponse && !isGenerating && viewMode === 'tab'" class="dashboard-layout">
-      <!-- Sidebar navigation -->
-      <aside class="dash-sidebar">
-        <div v-for="[groupName, items] in chartsByGroup" :key="groupName" class="nav-group">
-          <div class="nav-group-title" @click="toggleGroup(groupName)">
-            <span>{{ groupName }}</span>
-            <el-icon :size="12"><component :is="collapsedGroups.has(groupName) ? ArrowRight : ArrowDown" /></el-icon>
-          </div>
-          <div v-show="!collapsedGroups.has(groupName)" class="nav-group-items">
-            <div
-              v-for="ct in items"
+      <nav class="chart-switcher" aria-label="切换图表" data-testid="chart-switcher">
+        <div class="chart-switcher__groups">
+          <div v-for="group in chartNav.groups" :key="group.name" class="chart-switcher__group" role="group" :aria-label="group.name">
+            <span class="chart-switcher__group-name">{{ group.name }}</span>
+            <button
+              v-for="ct in group.items"
               :key="ct.key"
-              class="nav-tab-item"
-              :class="{ active: activeTab === ct.key, available: !!getChart(ct.key) }"
+              type="button"
+              class="chart-switcher__item"
+              :class="{ 'is-active': activeTab === ct.key }"
+              :aria-pressed="activeTab === ct.key"
               @click="activeTab = ct.key"
             >
-              <span class="nav-icon">{{ ct.icon }}</span>
-              <span class="nav-label">{{ ct.label }}</span>
-              <span class="nav-order">{{ String(ct.order).padStart(2, '0') }}</span>
-            </div>
+              {{ ct.label }}
+            </button>
           </div>
         </div>
-        <div class="nav-group">
-          <div
-            class="nav-tab-item"
-            :class="{ active: activeTab === 'conclusions' }"
+        <div class="chart-switcher__aside">
+          <el-popover
+            v-if="chartNav.missing.length"
+            placement="bottom-end"
+            :width="360"
+            trigger="click"
+          >
+            <template #reference>
+              <button type="button" class="chart-switcher__item chart-switcher__item--muted" data-testid="chart-switcher-missing">
+                还缺数据（{{ chartNav.missing.length }}）
+              </button>
+            </template>
+            <div class="missing-charts" data-testid="missing-charts">
+              <template v-if="chartNav.missingByKind.column.length">
+                <p class="missing-charts__hint">在这张表上补一列就能出：</p>
+                <ul>
+                  <li v-for="m in chartNav.missingByKind.column" :key="m.key">
+                    <button type="button" class="missing-charts__name" @click="activeTab = m.key">{{ m.label }}</button>
+                    <span class="missing-charts__reason">{{ m.reason }}</span>
+                  </li>
+                </ul>
+              </template>
+              <template v-if="chartNav.missingByKind.statement.length">
+                <p class="missing-charts__hint">需要另一张报表：</p>
+                <ul>
+                  <li v-for="m in chartNav.missingByKind.statement" :key="m.key">
+                    <button type="button" class="missing-charts__name" @click="activeTab = m.key">{{ m.label }}</button>
+                    <span class="missing-charts__reason">{{ m.reason }}</span>
+                  </li>
+                </ul>
+              </template>
+            </div>
+          </el-popover>
+          <button
+            type="button"
+            class="chart-switcher__item chart-switcher__item--primary"
+            :class="{ 'is-active': activeTab === 'conclusions' }"
+            :aria-pressed="activeTab === 'conclusions'"
             @click="activeTab = 'conclusions'"
           >
- <span class="nav-icon"></span>
-            <span class="nav-label">分析结论与建议</span>
-            <span class="nav-order">19</span>
-          </div>
+            分析结论与建议
+          </button>
         </div>
-      </aside>
+      </nav>
 
       <!-- Content area -->
       <main class="dash-content">
@@ -2046,7 +2124,7 @@ onBeforeUnmount(() => {
               </div>
             </template>
             <ChartSkeleton v-if="conclusionsLoading" type="ai" />
-            <div v-else-if="conclusionsText" class="analysis-text">{{ conclusionsText }}</div>
+            <div v-else-if="conclusionsText" class="analysis-text" v-html="renderAnalysis(conclusionsText)" />
             <div v-else style="text-align: center; padding: 40px; color: #909399">
               <p>汇总所有图表的分析结果，生成整体结论与建议</p>
               <el-button type="primary" style="margin-top: 16px" @click="generateConclusions">生成分析结论</el-button>
@@ -2064,10 +2142,10 @@ onBeforeUnmount(() => {
               class="generic-kpi-chip"
               :class="{ 'kpi-up': kpi.trend === 'up', 'kpi-down': kpi.trend === 'down' }"
             >
-              <span class="kpi-val">{{ getAnimatedKpi(activeTab, kpi.label, kpi.value) }}{{ kpi.unit }}</span>
+              <span class="kpi-val">{{ kpiText(kpi.value) }}{{ kpi.unit }}</span>
               <span class="kpi-lbl">{{ kpi.label }}</span>
               <svg v-if="kpi.sparkline?.length >= 2" class="kpi-sparkline" viewBox="0 0 60 20" preserveAspectRatio="none">
-                <path :d="sparklinePath(kpi.sparkline)" fill="none" :stroke="kpi.trend === 'down' ? '#FF5630' : '#36B37E'" stroke-width="1.5" />
+                <path :d="sparklinePath(kpi.sparkline)" fill="none" stroke="currentColor" stroke-width="1.5" />
               </svg>
             </div>
           </div>
@@ -2081,12 +2159,12 @@ onBeforeUnmount(() => {
             <div v-for="qp in getChart(activeTab)!.quarterlyProgress" :key="qp.quarter" class="q-progress-item">
               <span class="q-label">{{ qp.quarter }}</span>
               <el-progress
-                :percentage="Math.min(qp.rate, 100)"
-                :color="qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630'"
+                :percentage="Math.min(qp.rate ?? 0, 100)"
+                :color="achievementColor(qp.rate)"
                 :stroke-width="10"
                 :text-inside="true"
               />
-              <span class="q-rate" :style="{ color: qp.rate >= 100 ? '#36B37E' : qp.rate >= 80 ? '#FFAB00' : '#FF5630' }">{{ qp.rate }}%</span>
+              <span class="q-rate" :style="{ color: achievementColor(qp.rate) }">{{ qp.rate == null ? '—' : `${qp.rate}% ${achievementStatus(qp.rate)}` }}</span>
             </div>
           </div>
 
@@ -2140,14 +2218,27 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </template>
+            <SmartBIEmptyState
+              v-if="chartGapReason(getChart(activeTab))"
+              type="no-data"
+              title="这份数据出不了这张图"
+              :description="chartGapReason(getChart(activeTab)) ?? ''"
+              :show-action="false"
+              class="chart-gap-notice"
+              data-testid="chart-gap-notice"
+            />
             <div
+              v-else
               :ref="(el) => setChartDomRef(activeTab, el as Element | null)"
               class="generic-chart-canvas"
               style="height: 480px"
               role="img"
               :aria-label="`${chartTypes.find(c => c.key === activeTab)?.label}图表`"
-              title="单击: 交叉过滤 | 双击: 添加标注"
+              title="单击: 高亮同名数据 | 双击: 添加标注"
             />
+            <ul v-if="chartNotes(getChart(activeTab)).length" class="chart-data-notes" data-testid="chart-data-notes">
+              <li v-for="note in chartNotes(getChart(activeTab))" :key="note">{{ note }}</li>
+            </ul>
           </el-card>
 
           <!-- Monthly data rows (yoy_mom_comparison) -->
@@ -2230,7 +2321,7 @@ onBeforeUnmount(() => {
 
             <!-- Initial analysis -->
             <ChartSkeleton v-if="analysisLoadingByType[activeTab]" type="ai" />
-            <div v-else-if="analysisByType[activeTab]" class="analysis-text">{{ analysisByType[activeTab] }}</div>
+            <div v-else-if="analysisByType[activeTab]" class="analysis-text" v-html="renderAnalysis(analysisByType[activeTab])" />
             <div v-else style="text-align: center; padding: 24px; color: #909399">
               <p style="margin-bottom: 12px">点击下方按钮获取该图表的 AI 分析</p>
               <el-button type="primary" size="small" @click="requestAnalysis(activeTab)">生成 AI 分析</el-button>
@@ -2243,7 +2334,7 @@ onBeforeUnmount(() => {
                   <span class="follow-up-role">追问</span>
                   <span>{{ item.question }}</span>
                 </div>
-                <div class="follow-up-answer analysis-text">{{ item.answer }}</div>
+                <div class="follow-up-answer analysis-text" v-html="renderAnalysis(item.answer)" />
               </div>
             </div>
 
@@ -2276,7 +2367,12 @@ onBeforeUnmount(() => {
 
         <!-- No data -->
         <template v-else>
-          <SmartBIEmptyState type="no-data" message="该图表暂无数据，请检查数据源" />
+          <SmartBIEmptyState
+            type="no-data"
+            title="这份数据出不了这张图"
+            :description="chartNav.missing.find(m => m.key === activeTab)?.reason ?? '这份数据缺少这张图需要的列'"
+            :show-action="false"
+          />
         </template>
       </main>
     </div>
@@ -2454,6 +2550,16 @@ onBeforeUnmount(() => {
 }
 
 /* Empty state */
+.chart-data-notes {
+  margin: 8px 0 0;
+  padding: 8px 12px 8px 28px;
+  background: #fdf6ec;
+  border-radius: 4px;
+  color: #b88230;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .empty-state {
   display: flex;
   justify-content: center;
@@ -2511,65 +2617,40 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+/* KPI 卡: 中性底, 不按红绿着色 (红绿在不同图里含义不同); 标签在上、数值在下, 数值用正文主色保证对比度 */
 .generic-kpi-chip {
   flex: 1;
-  min-width: 100px;
-  background: rgba(45, 139, 87, 0.06);
+  min-width: 140px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--el-text-color-secondary, #606266);
 }
 
-.generic-kpi-chip.kpi-up {
-  background: rgba(54, 179, 126, 0.08);
-}
-
-.generic-kpi-chip.kpi-down {
-  background: rgba(255, 86, 48, 0.08);
-}
-
-/* A6: KPI typography upgrade — Power BI scale */
 .kpi-val {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
-  color: var(--el-color-primary, #2D8B57);
+  color: var(--el-text-color-primary, #303133);
   font-feature-settings: "tnum";
-  letter-spacing: -0.5px;
-  line-height: 1.2;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .kpi-lbl {
-  font-size: 11px;
-  color: var(--el-text-color-secondary, #909399);
-  margin-top: 4px;
+  font-size: 13px;
+  color: var(--el-text-color-regular, #606266);
 }
 
-/* A3: Sparkline */
+/* A3: Sparkline (颜色跟随文字色, 不表示好坏) */
 .kpi-sparkline {
-  width: 60px;
+  width: 72px;
   height: 20px;
-  margin-top: 4px;
-}
-
-/* A6: Trend border accent */
-.generic-kpi-chip.kpi-up {
-  border-left: 3px solid var(--el-color-success, #36B37E);
-}
-
-.generic-kpi-chip.kpi-down {
-  border-left: 3px solid var(--el-color-danger, #FF5630);
-}
-
-.generic-kpi-chip {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.generic-kpi-chip:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  order: -1;
 }
 
 /* Quarterly progress bars (budget_achievement) */
@@ -2600,7 +2681,7 @@ onBeforeUnmount(() => {
 }
 
 .q-rate {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -2659,9 +2740,73 @@ onBeforeUnmount(() => {
 }
 
 /* Interaction tips */
+.data-source-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 4px;
+  color: var(--el-text-color-regular, #606266);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dashboard-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
+  background: var(--el-bg-color, #fff);
+  color: var(--el-text-color-primary, #303133);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.dashboard-headline__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+  background: var(--el-text-color-secondary, #909399);
+}
+
+.dashboard-headline--good .dashboard-headline__dot { background: #1B7A4A; }
+.dashboard-headline--warn .dashboard-headline__dot { background: #9A6700; }
+.dashboard-headline--bad .dashboard-headline__dot { background: #C0362C; }
+
+.period-trigger {
+  margin-left: 8px;
+  min-width: 128px;
+  justify-content: space-between;
+}
+
+.period-trigger.is-invalid {
+  color: #C0362C;
+  border-color: #C0362C;
+}
+
+.period-popover__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.period-popover__error {
+  margin-right: auto;
+  color: #C0362C;
+  font-size: 12px;
+}
+
 .interaction-tips {
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-regular, #606266);
   text-align: center;
   margin-bottom: 8px;
 }
@@ -2691,13 +2836,37 @@ onBeforeUnmount(() => {
 }
 
 .analysis-text {
-  font-size: 13px;
-  color: var(--el-text-color-regular, #606266);
-  line-height: 1.7;
-  white-space: pre-wrap;
-  background: rgba(45, 139, 87, 0.04);
+  font-size: 14px;
+  color: var(--el-text-color-primary, #303133);
+  line-height: 1.75;
+  background: var(--el-fill-color-lighter, #fafafa);
   border-radius: 6px;
-  padding: 12px;
+  padding: 12px 16px;
+  max-width: 72em;
+}
+
+.analysis-text :deep(p),
+.analysis-text :deep(ul),
+.analysis-text :deep(ol) {
+  margin: 0 0 8px;
+}
+
+.analysis-text :deep(ul),
+.analysis-text :deep(ol) {
+  padding-left: 1.4em;
+}
+
+.analysis-text :deep(h1),
+.analysis-text :deep(h2),
+.analysis-text :deep(h3),
+.analysis-text :deep(h4) {
+  margin: 12px 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.analysis-text :deep(> :last-child) {
+  margin-bottom: 0;
 }
 
 /* ---- B3: Dark mode ---- */
@@ -3077,107 +3246,143 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* ---- Tab mode: Sidebar + Content layout ---- */
+/* ---- Tab mode: 图表切换条 + 内容 (原深色内嵌侧栏与应用主侧栏叠成两层, 改为内容上方的浅色横向切换条) ---- */
 .dashboard-layout {
   display: flex;
-  gap: 16px;
-  min-height: calc(100vh - 120px);
-}
-
-.dash-sidebar {
-  width: 220px;
-  flex-shrink: 0;
-  background: #1a2332;
-  border-radius: 12px;
-  color: #c8d0da;
-  padding: 12px 0;
-  overflow-y: auto;
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 120px);
-}
-
-.nav-group {
-  margin-bottom: 4px;
-}
-
-.nav-group-title {
-  padding: 10px 16px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #5a6778;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  user-select: none;
-  transition: color 0.2s;
-}
-
-.nav-group-title:hover {
-  color: #8899aa;
-}
-
-.nav-group-items {
-  display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
-.nav-tab-item {
-  padding: 9px 16px;
-  font-size: 13px;
-  cursor: pointer;
+.chart-switcher {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
-  gap: 8px;
-  border-left: 3px solid transparent;
-  color: #9aa5b4;
-  transition: all 0.2s ease;
-  user-select: none;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--el-bg-color, #fff);
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 8px;
 }
 
-.nav-tab-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #c8d0da;
-}
-
-.nav-tab-item.active {
-  background: rgba(45, 139, 87, 0.15);
-  color: #5ede9a;
-  border-left-color: #2D8B57;
-  font-weight: 500;
-}
-
-.nav-tab-item.available {
-  color: #c8d0da;
-}
-
-.nav-tab-item:not(.available):not(.active) {
-  opacity: 0.5;
-}
-
-.nav-icon {
-  font-size: 14px;
-  flex-shrink: 0;
-  width: 20px;
-  text-align: center;
-}
-
-.nav-label {
+.chart-switcher__groups {
+  display: flex;
+  align-items: center;
+  gap: 4px 20px;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-wrap: wrap;
+}
+
+.chart-switcher__group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-switcher__group-name {
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #606266);
   white-space: nowrap;
 }
 
-.nav-order {
-  margin-left: auto;
-  font-size: 11px;
-  opacity: 0.4;
+.chart-switcher__aside {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.chart-switcher__item {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--el-text-color-regular, #303133);
+  font: inherit;
+  font-size: 13px;
+  line-height: 30px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease-out, color 0.15s ease-out;
+}
+
+.chart-switcher__item:hover {
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.chart-switcher__item:focus-visible {
+  outline: 2px solid var(--el-color-primary, #409eff);
+  outline-offset: 1px;
+}
+
+.chart-switcher__item.is-active {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary, #409eff);
+  font-weight: 600;
+}
+
+.chart-switcher__item--muted {
+  color: var(--el-text-color-secondary, #606266);
+  border-color: var(--el-border-color, #dcdfe6);
+}
+
+.chart-switcher__item--primary {
+  border-color: var(--el-color-primary-light-5, #a0cfff);
+  color: var(--el-color-primary, #409eff);
+}
+
+.chart-switcher--loading {
+  gap: 8px;
+}
+
+.chart-switcher__placeholder {
+  width: 88px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.missing-charts__hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular, #303133);
+}
+
+.missing-charts ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.missing-charts li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.missing-charts__name {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--el-color-primary, #409eff);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.missing-charts__reason {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary, #606266);
 }
 
 .dash-content {
@@ -3196,48 +3401,31 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 
-/* Dark mode sidebar */
-.financial-dashboard-pbi[data-theme="dark"] .dash-sidebar {
-  background: #111827;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+/* 窄屏: 切换条横向滚动, 不换成多行堆叠 */
+@media (max-width: 1024px) {
+  .chart-switcher {
+    position: static;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .chart-switcher__groups {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .chart-switcher__aside {
+    justify-content: flex-end;
+  }
 }
 
-/* Responsive: collapse sidebar on small screens */
-@media (max-width: 1024px) {
-  .dashboard-layout {
-    flex-direction: column;
-  }
-  .dash-sidebar {
-    width: 100%;
-    max-height: none;
-    position: static;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 8px;
-  }
-  .nav-group {
-    flex: 1;
-    min-width: 200px;
-  }
-  .nav-group-items {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .nav-tab-item {
-    padding: 6px 12px;
-    border-left: none;
-    border-bottom: 2px solid transparent;
-    font-size: 12px;
-  }
-  .nav-tab-item.active {
-    border-bottom-color: #2D8B57;
-    border-left-color: transparent;
+@media (prefers-reduced-motion: reduce) {
+  .chart-switcher__item {
+    transition: none;
   }
 }
 
 @media print {
-  .dash-sidebar {
+  .chart-switcher {
     display: none !important;
   }
   .dashboard-layout {

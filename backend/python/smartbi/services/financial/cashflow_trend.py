@@ -2,19 +2,17 @@
 import logging
 from typing import Dict, List, Any, Optional
 import pandas as pd
-import numpy as np
 
 from .base import (
     AbstractFinancialChartBuilder, COLORS, MONTH_LABELS,
     _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
-# Cashflow decomposition ratios (approximation from actual revenue)
-CF_OPERATING_RATIO = 0.85
-CF_INVESTING_RATIO = -0.08
-CF_FINANCING_RATIO = -0.05
+# 现金流量表的三类活动 (按科目名关键词识别)
+CF_ACTIVITIES = (('operating', '经营活动'), ('investing', '投资活动'), ('financing', '筹资活动'))
 
 
 class CashflowTrendBuilder(AbstractFinancialChartBuilder):
@@ -22,6 +20,8 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "cashflow_trend"
     display_name = "现金流趋势分析"
+    gap_kind = 'statement'
+    statement_hint = "需要现金流量表：一列「项目」写经营活动、投资活动、筹资活动的现金流入和流出，按月填金额。"
     description = "按月展示经营/投资/筹资现金流的趋势面积图，叠加累计净现金流折线"
     required_columns = ['actual', 'period']
     display_order = 14
@@ -42,23 +42,29 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
             }
 
     def _do_build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int) -> Dict[str, Any]:
-        # --- Extract monthly data ---
-        monthly_actuals = self._extract_monthly(df, column_mapping, period)
-        if not monthly_actuals or all(v == 0 for v in monthly_actuals.values()):
-            return self._empty_result(period, year)
-
-        start_month = period.get('startMonth', 1)
-        end_month = period.get('endMonth', 12)
+        start_month = period.get('start_month', 1)
+        end_month = period.get('end_month', 12)
         months = list(range(start_month, end_month + 1))
         month_labels = [MONTH_LABELS[m - 1] for m in months]
 
-        # Get actual values per month
-        actuals = [monthly_actuals.get(m, 0) for m in months]
+        # 现金流只来自表内真实的现金流科目 (经营/投资/筹资活动); ⛔ 不按比例从收入拆
+        rows = df
+        reported = getattr(column_mapping, 'reported_rows', None)
+        if reported is not None and not reported.empty:
+            rows = pd.concat([df, reported], ignore_index=True)
+        components = {kind: self._activity_series(rows, keyword, months, 'actual')
+                      for kind, keyword in CF_ACTIVITIES}
+        if all(series is None for series in components.values()):
+            return self._empty_result(
+                period, year,
+                "上传的数据里没有现金流量科目（经营活动、投资活动、筹资活动现金流量），无法做现金流分析。")
 
-        # Decompose into cashflow components
-        operating_cf = [round(v * CF_OPERATING_RATIO, 2) for v in actuals]
-        investing_cf = [round(v * CF_INVESTING_RATIO, 2) for v in actuals]
-        financing_cf = [round(v * CF_FINANCING_RATIO, 2) for v in actuals]
+        def filled(series: Optional[List[Optional[float]]]) -> List[float]:
+            return [0.0 if v is None else round(v, 2) for v in (series or [None] * len(months))]
+
+        operating_cf = filled(components['operating'])
+        investing_cf = filled(components['investing'])
+        financing_cf = filled(components['financing'])
         net_cf = [round(o + i + f, 2) for o, i, f in zip(operating_cf, investing_cf, financing_cf)]
 
         # Cumulative net CF
@@ -68,13 +74,10 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
             running += ncf
             cumulative_net.append(round(running, 2))
 
-        # Check for budget data
-        has_budget = hasattr(column_mapping, 'budget_cols') and column_mapping.budget_cols
-        budget_line = None
-        if has_budget:
-            monthly_budgets = self._extract_monthly_budget(df, column_mapping, period)
-            if monthly_budgets:
-                budget_line = [round(monthly_budgets.get(m, 0) * CF_OPERATING_RATIO, 2) for m in months]
+        # 预算参考线: 只用经营活动现金流自己的预算
+        budget_series = self._activity_series(rows, '经营活动', months, 'budget')
+        has_budget = budget_series is not None
+        budget_line = filled(budget_series) if has_budget else None
 
         # Scale detection
         all_values = operating_cf + investing_cf + financing_cf + cumulative_net
@@ -309,7 +312,7 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
             "analysisContext": analysis_context,
             "metadata": {
                 "period": period,
-                "dataQuality": "good" if has_budget else "derived",
+                "dataQuality": "good",
                 "monthCount": len(months),
                 "hasBudgetRef": budget_line is not None,
                 "scale": scale['suffix'],
@@ -317,98 +320,27 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
         }
         return _sanitize_for_json(result)
 
-    def _extract_monthly(self, df: pd.DataFrame, column_mapping, period: Dict) -> Dict[int, float]:
-        """Extract monthly actual values from DataFrame."""
-        monthly = {}
-        actual_cols = column_mapping.actual_cols if hasattr(column_mapping, 'actual_cols') else []
-        period_cols = column_mapping.period_cols if hasattr(column_mapping, 'period_cols') else []
-
-        if period_cols and actual_cols:
-            # Try to extract from period column
-            period_col = period_cols[0] if isinstance(period_cols, list) else period_cols
-            actual_col = actual_cols[0] if isinstance(actual_cols, list) else actual_cols
-
-            if period_col in df.columns and actual_col in df.columns:
-                for _, row in df.iterrows():
-                    try:
-                        p = row[period_col]
-                        v = float(row[actual_col]) if not pd.isna(row[actual_col]) else 0
-                        # Try to parse month from period
-                        month = self._parse_month(p)
-                        if month and 1 <= month <= 12:
-                            monthly[month] = monthly.get(month, 0) + v
-                    except (ValueError, TypeError):
-                        continue
-
-        # If no period data found, try to distribute from 'actual' column across months
-        if not monthly and 'actual' in df.columns:
-            total = df['actual'].sum()
-            if not pd.isna(total) and total != 0:
-                start = period.get('startMonth', 1)
-                end = period.get('endMonth', 12)
-                n_months = end - start + 1
-                # Distribute with slight variance
-                for m in range(start, end + 1):
-                    variance = np.random.uniform(0.85, 1.15)
-                    monthly[m] = round(float(total) / n_months * variance, 2)
-
-        return monthly
-
-    def _extract_monthly_budget(self, df: pd.DataFrame, column_mapping, period: Dict) -> Optional[Dict[int, float]]:
-        """Extract monthly budget values if available."""
-        budget_cols = column_mapping.budget_cols if hasattr(column_mapping, 'budget_cols') else []
-        period_cols = column_mapping.period_cols if hasattr(column_mapping, 'period_cols') else []
-
-        if not budget_cols or not period_cols:
-            return None
-
-        monthly = {}
-        period_col = period_cols[0] if isinstance(period_cols, list) else period_cols
-        budget_col = budget_cols[0] if isinstance(budget_cols, list) else budget_cols
-
-        if period_col in df.columns and budget_col in df.columns:
-            for _, row in df.iterrows():
-                try:
-                    p = row[period_col]
-                    v = float(row[budget_col]) if not pd.isna(row[budget_col]) else 0
-                    month = self._parse_month(p)
-                    if month and 1 <= month <= 12:
-                        monthly[month] = monthly.get(month, 0) + v
-                except (ValueError, TypeError):
-                    continue
-
-        return monthly if monthly else None
-
     @staticmethod
-    def _parse_month(value) -> Optional[int]:
-        """Parse month number from various period formats."""
-        if value is None or pd.isna(value):
+    def _activity_series(rows: pd.DataFrame, keyword: str, months: List[int],
+                         field_name: str) -> Optional[List[Optional[float]]]:
+        """某类活动 (经营/投资/筹资) 的逐月现金流量净额; 表内没有这类科目时返回 None。
+
+        优先用「…现金流量净额」行; 没有净额行时用 流入 - 流出 (流出按金额扣减, 不论原表符号)。
+        """
+        if rows is None or rows.empty or 'item' not in rows.columns or field_name not in rows.columns:
             return None
-        s = str(value).strip()
-
-        # Direct integer
-        try:
-            m = int(float(s))
-            if 1 <= m <= 12:
-                return m
-        except (ValueError, TypeError):
-            pass
-
-        # "1月", "01月", "M1", "M01"
-        import re
-        match = re.search(r'(\d{1,2})月', s)
-        if match:
-            return int(match.group(1))
-        match = re.search(r'[Mm](\d{1,2})', s)
-        if match:
-            return int(match.group(1))
-
-        # "2026-03" or "2026/03"
-        match = re.search(r'\d{4}[-/](\d{1,2})', s)
-        if match:
-            return int(match.group(1))
-
-        return None
+        items = rows['item'].fillna('').astype(str)
+        part = rows[items.str.contains(keyword)]
+        if part.empty or part[field_name].notna().sum() == 0:
+            return None
+        part_items = part['item'].fillna('').astype(str)
+        net_rows = part[part_items.str.contains('净额')]
+        if not net_rows.empty:
+            return M.monthly(net_rows, field_name, months)
+        signed = part.copy()
+        outflow = part_items.str.contains('流出')
+        signed.loc[outflow, field_name] = -signed.loc[outflow, field_name].abs()
+        return M.monthly(signed, field_name, months)
 
     def _build_net_cf_bar_data(self, scaled_net: List[float]) -> List[Dict]:
         """Build bar data with positive=green, negative=red coloring."""
@@ -421,13 +353,13 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
             })
         return data
 
-    def _empty_result(self, period: Dict, year: int) -> Dict:
+    def _empty_result(self, period: Dict, year: int, reason: str = "无现金流趋势数据") -> Dict:
         return {
             "chartType": self.chart_type,
             "title": f"{year}年{self.display_name}",
             "kpis": [],
             "echartsOption": {},
             "tableData": None,
-            "analysisContext": "无现金流趋势数据",
-            "metadata": {"period": period, "dataQuality": "insufficient"},
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
         }

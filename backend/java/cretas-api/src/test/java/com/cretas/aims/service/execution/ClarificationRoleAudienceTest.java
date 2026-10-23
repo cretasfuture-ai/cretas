@@ -21,6 +21,8 @@ import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.intent.FrontlineAiWriteGrantService;
 import com.cretas.aims.service.intent.FrontlineReadAudience;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -219,9 +221,12 @@ class ClarificationRoleAudienceTest {
             events.add(new Object[]{invocation.getArgument(1), invocation.getArgument(2)});
             return null;
         }).when(sse).sendSseEvent(any(), anyString(), any());
-        ReflectionTestUtils.invokeMethod(sse, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
-                IntentExecuteRequest.builder().userInput(input).mode("READ").build(),
-                7L, role, new F006BossQuestionClient.Cancellation());
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 7L, FACTORY, role))) {
+            ReflectionTestUtils.invokeMethod(sse, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
+                    IntentExecuteRequest.builder().userInput(input).mode("READ").build(),
+                    7L, role, new F006BossQuestionClient.Cancellation());
+        }
 
         IntentExecuteResponse result = events.stream().filter(e -> "result".equals(e[0]))
                 .map(e -> (IntentExecuteResponse) e[1]).findFirst().orElseThrow();
