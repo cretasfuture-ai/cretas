@@ -27,6 +27,8 @@ class PnlWaterfallBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "pnl_waterfall"
     display_name = "损益表瀑布图"
+    gap_kind = 'statement'
+    statement_hint = "需要损益表：一列「项目」写科目（营业收入、营业成本、销售费用、管理费用、财务费用、所得税等），一列「实际」写金额。"
     description = "展示从营业收入到净利润的损益表层级分解，使用瀑布图展现各项增减"
     required_columns = ['item']
     display_order = 3

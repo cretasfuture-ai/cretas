@@ -116,27 +116,12 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
             q_budget = M.total(budget_vals[m - start_month] for m in q_months)
             return q_actual, q_budget
 
-        # --- Compute quarterly totals for markLine annotations ---
-        quarterly_actuals_scaled = {}  # q_index -> scaled actual total
-        quarterly_rates = {}           # q_index -> achievement rate
-        for q in range(4):
-            q_start_m = q * 3 + 1
-            q_end_m = q * 3 + 3
-            if q_start_m < start_month or q_end_m > end_month:
-                continue
-            q_actual, q_budget = quarter_totals(q)
-            q_rate = M.ratio(q_actual, q_budget).value
-            if q_actual is None or q_rate is None:
-                continue
-            quarterly_actuals_scaled[q] = round(q_actual / divisor, 2)
-            quarterly_rates[q] = round(q_rate, 1)
-
         # ECharts option
         option = self._base_echarts_option()
         option.update({
             "grid": {"left": "3%", "right": "5%", "bottom": "10%", "top": "18%", "containLabel": True},
             "legend": {
-                "data": [f"预算{scale['name_suffix']}", f"实际{scale['name_suffix']}", "达成率", "累计达成率"],
+                "data": [f"预算{scale['name_suffix']}", f"实际{scale['name_suffix']}", "达成率"],
                 "top": "2%",
                 "textStyle": {"fontSize": 11},
             },
@@ -167,7 +152,7 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "name": f"预算{scale['name_suffix']}",
                     "type": "bar",
                     "data": budget_scaled,
-                    "itemStyle": {"color": self._gradient_color(COLORS['budget']), "borderRadius": [2, 2, 0, 0]},
+                    "itemStyle": {"color": COLORS['budget'], "borderRadius": [2, 2, 0, 0]},
                     "barGap": "10%",
                     "barMaxWidth": 28,
                     # 柱顶数值默认不显示 (与达成率标签、季度标注叠在一起读不清); 悬停与数据表里看数值
@@ -178,7 +163,7 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "name": f"实际{scale['name_suffix']}",
                     "type": "bar",
                     "data": actual_scaled,
-                    "itemStyle": {"color": self._gradient_color(COLORS['actual']), "borderRadius": [2, 2, 0, 0]},
+                    "itemStyle": {"color": COLORS['actual'], "borderRadius": [2, 2, 0, 0]},
                     "barMaxWidth": 28,
                     "label": {"show": False},
                     "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.2)"}},
@@ -205,78 +190,15 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                         "lineStyle": {"type": "dashed", "color": COLORS['target_line'], "width": 2},
                     },
                 },
-                {
-                    "name": "累计达成率",
-                    "type": "line",
-                    "yAxisIndex": 1,
-                    "data": [r1(r) for r in cum_achievement],
-                    "itemStyle": {"color": COLORS['danger']},
-                    "lineStyle": {"width": 2, "type": "dashed"},
-                    "symbol": "diamond",
-                    "symbolSize": 5,
-                    "label": {"show": False},
-                },
             ],
         })
-        self._apply_datazoom(option)
+        # 一年最多 12 个月, 不需要缩放条; 累计达成率只留在数据表里 (KPI 已给出整体达成率)
 
-        # === Enhanced quarterly markArea — high-visibility backgrounds ===
-        mark_areas = self._enhanced_quarter_mark_areas(start_month, end_month, quarterly_rates)
+        # 季度底色只标「几季度」: 季度达成率由图上方的季度条显示, 这里不再重复
+        mark_areas = self._enhanced_quarter_mark_areas(start_month, end_month)
         if mark_areas:
             option["series"][0]["markArea"] = {"silent": True, "data": mark_areas}
 
-        # === Quarterly actual total markLines (yellow dashed horizontal lines) ===
-        quarterly_mark_lines = self._quarterly_actual_mark_lines(
-            start_month, end_month, quarterly_actuals_scaled, quarterly_rates
-        )
-        if quarterly_mark_lines:
-            # Add markLine to actual (2nd) series so lines are visually tied to actual bars
-            if "markLine" not in option["series"][1]:
-                option["series"][1]["markLine"] = {"silent": True, "data": []}
-            option["series"][1]["markLine"] = {
-                "silent": True,
-                "symbol": "none",
-                "data": quarterly_mark_lines,
-            }
-
-        # === Monthly achievement timeline (colored dots + rate%) ===
-        num_months = len(labels)
-        timeline_graphics = []
-        for i, rate in enumerate(achievement_rates):
-            if rate is None:
-                continue
-            x_pct = 8 + i * (84 / max(num_months - 1, 1)) if num_months > 1 else 50
-            if rate >= 100:
-                dot_color = COLORS['success']
-            elif rate >= 80:
-                dot_color = COLORS.get('warning', '#FFAB00')
-            else:
-                dot_color = COLORS['danger']
-            # Colored dot — larger radius (r=7)
-            timeline_graphics.append({
-                "type": "circle",
-                "shape": {"r": 7, "cx": 0, "cy": 0},
-                "style": {"fill": dot_color, "stroke": "#fff", "lineWidth": 2},
-                "left": f"{x_pct}%",
-                "top": "6%",
-                "silent": True,
-            })
-            # Rate text below dot — larger font (10px)
-            timeline_graphics.append({
-                "type": "text",
-                "style": {
-                    "text": f"{rate:.0f}%",
-                    "fontSize": 10,
-                    "fill": dot_color,
-                    "textAlign": "center",
-                    "fontWeight": "bold",
-                },
-                "left": f"{x_pct}%",
-                "top": "9.5%",
-                "silent": True,
-            })
-        if timeline_graphics:
-            option["graphic"] = timeline_graphics
 
         # === Quarterly progress data (for Vue rendering) ===
         quarterly_progress = []
@@ -321,14 +243,13 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
         }
         return _sanitize_for_json(result)
 
-    def _enhanced_quarter_mark_areas(self, start_month: int, end_month: int,
-                                     quarterly_rates: Dict[int, float]) -> list:
+    def _enhanced_quarter_mark_areas(self, start_month: int, end_month: int) -> list:
         """Build highly visible quarterly markArea backgrounds with labels.
 
         Compared to base _quarter_mark_areas():
         - Opacity 0.08-0.10 (was 0.03-0.04)
         - Visible border on each area
-        - Quarter label at top: "1季度 (XX.X%)"
+        - Quarter label at top: "1季度"
         """
         areas = []
         for q in range(4):
@@ -338,7 +259,6 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                 continue
             actual_start = max(q_start, start_month - 1) - (start_month - 1)
             actual_end = min(q_end, end_month - 1) - (start_month - 1)
-            rate_str = f" ({quarterly_rates[q]}%)" if q in quarterly_rates else ""
             areas.append([
                 {
                     "xAxis": actual_start - 0.5,
@@ -351,7 +271,7 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                     "label": {
                         "show": True,
                         "position": "insideTop",
-                        "formatter": f"{QUARTER_LABELS[q]}{rate_str}",
+                        "formatter": QUARTER_LABELS[q],
                         "fontSize": 11,
                         "fontWeight": "bold",
                         "color": "rgba(0,0,0,0.45)",
@@ -361,57 +281,6 @@ class BudgetAchievementBuilder(AbstractFinancialChartBuilder):
                 {"xAxis": actual_end + 0.5},
             ])
         return areas
-
-    def _quarterly_actual_mark_lines(self, start_month: int, end_month: int,
-                                     quarterly_actuals: Dict[int, float],
-                                     quarterly_rates: Dict[int, float]) -> list:
-        """Build yellow dashed horizontal markLine segments per quarter.
-
-        Each quarter gets a short horizontal line at its actual total level,
-        mimicking Steven's yellow bar annotations.
-
-        Returns list of markLine data items (pairs of start/end points).
-        """
-        lines = []
-        for q in range(4):
-            if q not in quarterly_actuals:
-                continue
-            q_start_m = q * 3 + 1
-            q_end_m = q * 3 + 3
-            if q_start_m < start_month or q_end_m > end_month:
-                continue
-            actual_start_idx = max(q_start_m, start_month) - start_month
-            actual_end_idx = min(q_end_m, end_month) - start_month
-            avg_actual = quarterly_actuals[q] / 3 if quarterly_actuals[q] else 0
-            if avg_actual <= 0:
-                continue
-            rate_label = f"Q{q+1}: {quarterly_rates.get(q, 0)}%"
-            lines.append([
-                {
-                    "xAxis": actual_start_idx,
-                    "yAxis": avg_actual,
-                    "symbol": "none",
-                    "lineStyle": {
-                        "type": "dashed",
-                        "color": "#E8B931",
-                        "width": 2,
-                    },
-                    "label": {
-                        "show": True,
-                        "formatter": rate_label,
-                        "fontSize": 10,
-                        "fontWeight": "bold",
-                        "color": "#B37700",
-                        "position": "insideEndTop",
-                    },
-                },
-                {
-                    "xAxis": actual_end_idx,
-                    "yAxis": avg_actual,
-                    "symbol": "none",
-                },
-            ])
-        return lines
 
     @staticmethod
     def _achievement_label_formatter():

@@ -35,6 +35,8 @@ class ArAgingAnalysisBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "ar_aging"
     display_name = "应收账款账龄分析"
+    gap_kind = 'statement'
+    statement_hint = "需要应收账款账龄表：按客户列出 30天内、31-60天、61-90天、90天以上 等账龄的应收金额。"
     description = "按账龄分段展示应收账款分布，颜色渐变反映逾期风险等级"
     required_columns = ['actual']
     display_order = 13

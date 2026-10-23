@@ -20,6 +20,8 @@ class CashflowTrendBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "cashflow_trend"
     display_name = "现金流趋势分析"
+    gap_kind = 'statement'
+    statement_hint = "需要现金流量表：一列「项目」写经营活动、投资活动、筹资活动的现金流入和流出，按月填金额。"
     description = "按月展示经营/投资/筹资现金流的趋势面积图，叠加累计净现金流折线"
     required_columns = ['actual', 'period']
     display_order = 14

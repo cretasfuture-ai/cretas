@@ -276,6 +276,79 @@ class TestHeadline:
         assert h is None or '万' not in h['text']
 
 
+BUDGET_12 = [{'月份': f'{m}月', '预算（万元）': 1000, '实际（万元）': 100 * m} for m in range(1, 13)]
+GENERIC_GAP = '这份数据缺少这张图需要的列'
+
+
+class TestMissingChartsExplained:
+    """设计复评 (2026-10-23): 「还缺数据」12 条里 9 条是同一句通用话, 还一律叫人重新上传。
+    出不了的图要写明缺哪一列, 并分清「补一列」和「需要另一张表」。"""
+
+    def _dashboard(self, rows, **kw):
+        return svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, **kw)
+
+    def test_unbuildable_charts_name_the_missing_columns(self):
+        r = self._dashboard(BUDGET_12)
+        gaps = {u['chartType']: u for u in r['unavailableCharts']}
+        built = {c['chartType'] for c in r['charts']}
+        assert 'budget_achievement' in built and 'budget_achievement' not in gaps
+        yoy = gaps['yoy_mom_comparison']
+        assert yoy['gapKind'] == 'column' and '「上年」' in yoy['reason'], yoy
+        cat = gaps['category_yoy_comparison']
+        assert '「上年」' in cat['reason'] and '「品类' in cat['reason'], cat
+        assert all(GENERIC_GAP not in u['reason'] for u in gaps.values())
+
+    def test_charts_that_need_another_statement_say_which(self):
+        gaps = {u['chartType']: u for u in self._dashboard(BUDGET_12)['unavailableCharts']}
+        pnl = gaps['pnl_waterfall']
+        assert pnl['gapKind'] == 'statement' and '损益表' in pnl['reason'] and '营业收入' in pnl['reason'], pnl
+        assert gaps['cash_flow_waterfall']['gapKind'] == 'statement'
+        assert '现金流量表' in gaps['cash_flow_waterfall']['reason']
+
+    def test_built_but_empty_charts_carry_a_gap_kind(self):
+        charts = {c['chartType']: c for c in self._dashboard(BUDGET_12)['charts']}
+        assert charts['channel_analysis']['metadata']['gapKind'] == 'column'
+        assert '「渠道」' in charts['channel_analysis']['metadata']['reason']
+        assert charts['hr_cost_analysis']['metadata']['gapKind'] == 'statement'
+        # 出了图的不带 gapKind (阴性对照)
+        assert 'gapKind' not in charts['budget_achievement']['metadata']
+
+    def test_ratio_sheet_explains_why_amount_charts_are_missing(self):
+        rows = [{'月份': f'{m}月', '本年毛利率': '25%', '上年毛利率': '20%'} for m in range(1, 4)]
+        gaps = {u['chartType']: u for u in self._dashboard(rows)['unavailableCharts']}
+        assert gaps['budget_achievement']['gapKind'] == 'statement'
+        assert '比率' in gaps['budget_achievement']['reason']
+        assert 'gross_margin_trend' not in gaps
+
+
+class TestBudgetChartIsReadable:
+    """设计复评 (2026-10-23): 预算达成图叠了柱、两条达成率线、季度底色+百分比、季度虚线均值、
+    一排彩色圆点、目标线和缩放条。减到柱 + 一条达成率线 + 100% 目标线; 季度达成率在上方季度条里。"""
+
+    def _chart(self):
+        r = svc.generate_dashboard(pd.DataFrame(BUDGET_12), 2026, 'all', 1, 12)
+        return next(c for c in r['charts'] if c['chartType'] == 'budget_achievement')
+
+    def test_only_bars_one_rate_line_and_target_line(self):
+        opt = self._chart()['echartsOption']
+        names = [s['name'] for s in opt['series']]
+        assert len(names) == 3 and names[2] == '达成率', names
+        assert '累计达成率' not in names and '累计达成率' not in opt['legend']['data']
+        assert 'graphic' not in opt and 'dataZoom' not in opt
+        assert all(isinstance(s['itemStyle']['color'], str) for s in opt['series'][:2])
+        assert 'markLine' not in opt['series'][1]
+        target = opt['series'][2]['markLine']['data'][0]
+        assert target['yAxis'] == 100
+
+    def test_quarter_bands_have_no_duplicate_rates_and_numbers_are_kept(self):
+        chart = self._chart()
+        bands = chart['echartsOption']['series'][0].get('markArea', {}).get('data', [])
+        assert bands and all('%' not in str(b[0].get('label', {}).get('formatter', '')) for b in bands)
+        assert [q['rate'] for q in chart['quarterlyProgress']] == [20.0, 50.0, 80.0, 110.0]
+        rows = {row['label'] for row in chart['tableData']['rows']}
+        assert '累计达成率(%)' in rows
+
+
 class TestSlicerScope:
     """线上验收 (2026-10-22): 点筛选器「3月」后数字已是 3 月的, 页首结论和期间标签仍写「全部历史」。
     期间标签要说清楚这些数字是哪一部分数据。走真实 /batch 入口 (筛选在接口层生效)。"""
