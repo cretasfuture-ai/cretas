@@ -112,3 +112,6 @@ S3-05原FAIL不变，尚未生产数量纠错。后续必须最终完整检查�
 唯一写Owner Root，原集成WT/branch，Base bf915cdf2812b4c3917bd50290e115099ba54c12；DIRECT只允许ProductionReportCorrectionServiceImpl.java及ProductionReportCorrectionServiceContractTest.java两个既有文件（完整前缀见上）。原执行者仍SAFE释放，其他源码/CI/Entity/Repository/迁移/UI不扩大。为未持久化correction分配UUID，读同厂现有task，首次save/startWorkflow前调用同一WIP预检；保留approval重检和notes-only delta0无库存效果。原下游/成本/精度/租户/审批/分钟全部判据不变。
 
 先对真实submit方法加零write拒绝目标断言，留原行为red；窄修后相同目标绿并核对正例非空UUID及先验证后save/Workflow。开发只跑该类，最终源码冻结后必要完整检查及官方clean构建；旧full由本PR原有concurrency在新HEAD推送时处理，不取消其他Owner任务，不盲目重跑旧HEAD。独立PG不动55327，必要时仅恢复自有55329或新隔离库。生产S305正/负仍HOLD至正式发布。
+
+
+ERP-S305-SUBMIT-WIRING-20261023 源码冻结归档，后续合并/发布/原QA由在飞ERP-S0S3-ACCEPTANCE-20261023跟踪。Root两文件修复7b7d6de4eb：提交前UUID+同厂task+WIP validate，首save/OA前拒绝；approval第二次重检保留。原阴性真实red1断言失败、正常Maven4801主源码编译后ServiceContract19项0fail/error/skip；独立风险复核PASS_FOR_FIX_FREEZE。开发最初PS5 stderr启动器错误另留证据，不计产品red；旧bf915 full因新源码不再适用，仅Root本PR旧run39899200866取消，部分INSTRUMENT_DEAD读数不可签完整覆盖，不取消其他Owner。新候选集中完整CI/真实PG/JPA及官方构建后才能发布；业务S305原FAIL保持。
