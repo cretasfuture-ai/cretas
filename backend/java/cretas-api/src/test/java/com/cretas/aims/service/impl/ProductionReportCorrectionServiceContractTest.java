@@ -209,6 +209,120 @@ class ProductionReportCorrectionServiceContractTest {
     }
 
     @Test
+    void lockedPlanRejectsSubmitBeforeCorrectionOrWorkflowWriteEvenWithNullStatus() {
+        ProductionReport report = report();
+        ProductionPlan locked = plan();
+        locked.setStatus(null);
+        locked.setIsLocked(true);
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(correctionRepository.findFirstByFactoryIdAndProductionReportIdAndStatusOrderBySubmittedAtDesc(
+                "F006", 10L, ProductionReportCorrection.Status.PENDING_APPROVAL)).thenReturn(Optional.empty());
+        when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
+        when(planRepository.findByIdForUpdate("PLAN-1")).thenReturn(Optional.of(locked));
+
+        assertThatThrownBy(() -> service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9"), new BigDecimal("8"),
+                        BigDecimal.ONE, 3, 90, "修正备注", "现场复核"), 7L))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_REPORT_CORRECTION_PLAN_LOCKED");
+                })
+                .hasMessageContaining("生产计划已锁定");
+        verify(wipInventoryService, never()).validateApprovedOutputQuantityCorrection(
+                any(), any(), any(), any(), any(), any());
+        verify(correctionRepository, never()).save(any());
+        verify(workflowEngine, never()).startWorkflowIfConfigured(any(), any(), any(), anyMap(), any());
+    }
+
+    @Test
+    void approvalRejectsPlanLockedAfterSubmitBeforeApplyingCorrection() {
+        ProductionReport report = report();
+        ProductionPlan plan = plan();
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(correctionRepository.findFirstByFactoryIdAndProductionReportIdAndStatusOrderBySubmittedAtDesc(
+                "F006", 10L, ProductionReportCorrection.Status.PENDING_APPROVAL)).thenReturn(Optional.empty());
+        when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
+        when(planRepository.findByIdForUpdate("PLAN-1")).thenReturn(Optional.of(plan));
+        when(correctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ApprovalWorkflowInstance instance = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
+        when(instance.getId()).thenReturn("WF-1");
+        when(instance.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        when(workflowEngine.startWorkflowIfConfigured(eq("F006"), eq("PRODUCTION_REPORT_CORRECTION"),
+                any(), anyMap(), eq(7L))).thenReturn(Optional.of(instance));
+
+        var submitted = service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9"), new BigDecimal("8"),
+                        BigDecimal.ONE, 3, 90, "修正备注", "现场复核"), 7L);
+        ProductionReportCorrection pending = correction();
+        pending.setId(submitted.getId());
+        pending.setWorkflowInstanceId(submitted.getWorkflowInstanceId());
+        plan.setIsLocked(true);
+        when(correctionRepository.findByIdAndFactoryId(submitted.getId(), "F006"))
+                .thenReturn(Optional.of(pending));
+        org.mockito.Mockito.clearInvocations(correctionRepository, reportRepository, batchRepository,
+                planRepository, taskRepository, workflowEngine, wipInventoryService);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", submitted.getId(), "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "同意"))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_REPORT_CORRECTION_PLAN_LOCKED");
+                })
+                .hasMessageContaining("生产计划已锁定");
+        verify(workflowEngine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(wipInventoryService, never()).correctApprovedOutputQuantity(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(reportRepository, never()).save(any());
+        verify(taskRepository, never()).save(any());
+        verify(correctionRepository, never()).save(any());
+    }
+
+    @Test
+    void approvalRejectsReportSettledAfterSubmitBeforeWorkflowTransition() {
+        ProductionReport report = report();
+        ProductionPlan plan = plan();
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(correctionRepository.findFirstByFactoryIdAndProductionReportIdAndStatusOrderBySubmittedAtDesc(
+                "F006", 10L, ProductionReportCorrection.Status.PENDING_APPROVAL)).thenReturn(Optional.empty());
+        when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
+        when(planRepository.findByIdForUpdate("PLAN-1")).thenReturn(Optional.of(plan));
+        when(correctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ApprovalWorkflowInstance instance = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
+        when(instance.getId()).thenReturn("WF-1");
+        when(instance.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        when(workflowEngine.startWorkflowIfConfigured(eq("F006"), eq("PRODUCTION_REPORT_CORRECTION"),
+                any(), anyMap(), eq(7L))).thenReturn(Optional.of(instance));
+
+        var submitted = service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9"), new BigDecimal("8"),
+                        BigDecimal.ONE, 3, 90, "修正备注", "现场复核"), 7L);
+        ProductionReportCorrection pending = correction();
+        pending.setId(submitted.getId());
+        pending.setWorkflowInstanceId(submitted.getWorkflowInstanceId());
+        report.setSettled(true);
+        when(correctionRepository.findByIdAndFactoryId(submitted.getId(), "F006"))
+                .thenReturn(Optional.of(pending));
+        org.mockito.Mockito.clearInvocations(correctionRepository, reportRepository, batchRepository,
+                planRepository, taskRepository, workflowEngine, wipInventoryService);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", submitted.getId(), "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "同意"))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_REPORT_CORRECTION_SETTLEMENT_RACE");
+                })
+                .hasMessageContaining("已结单");
+        verify(workflowEngine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(wipInventoryService, never()).validateApprovedOutputQuantityCorrection(
+                any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, never()).correctApprovedOutputQuantity(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(reportRepository, never()).save(any());
+        verify(taskRepository, never()).save(any());
+        verify(correctionRepository, never()).save(any());
+    }
+
+    @Test
     void correctableListingKeepsPageRowsAndMarksInputWithoutHidingLaterOutput() {
         ProductionReport input = report();
         input.setReportKind("INPUT");
