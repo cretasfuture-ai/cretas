@@ -18,6 +18,8 @@ class CostFlowSankeyBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "cost_flow_sankey"
     display_name = "成本流向桑基图"
+    gap_kind = 'statement'
+    statement_hint = "需要损益表：一列「项目」写科目（营业收入、营业成本、销售费用、管理费用、财务费用、所得税等），一列「实际」写金额。"
     description = "展示从收入到净利润的成本流转路径"
     required_columns = ['item']
     display_order = 8

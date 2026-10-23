@@ -44,6 +44,8 @@ class CashFlowWaterfallBuilder(AbstractFinancialChartBuilder):
 
     chart_type = "cash_flow_waterfall"
     display_name = "现金流量瀑布图"
+    gap_kind = 'statement'
+    statement_hint = "需要现金流量表：一列「项目」写经营活动、投资活动、筹资活动的现金流入和流出，按月填金额。"
     description = "展示经营、投资、筹资三大现金流活动及净增加额的瀑布图分解"
     required_columns = ['item']  # same as pnl_waterfall — needs item column
     display_order = 10
