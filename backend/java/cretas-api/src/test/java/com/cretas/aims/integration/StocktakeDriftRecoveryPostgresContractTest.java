@@ -18,6 +18,7 @@ import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.factory.impl.FactoryStocktakeServiceImpl;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -101,6 +102,37 @@ class StocktakeDriftRecoveryPostgresContractTest {
         registry.add("spring.datasource.hikari.schema", () -> SCHEMA);
         registry.add("spring.datasource.hikari.connection-init-sql", () -> "SET search_path TO " + SCHEMA);
         registry.add("spring.datasource.hikari.data-source-properties.stringtype", () -> "unspecified");
+    }
+
+    @BeforeEach
+    void clearOwnedFixture() {
+        new TransactionTemplate(transactionManager).execute(status -> {
+            entityManager.createNativeQuery(
+                            "DELETE FROM factory_stocktake_items WHERE stocktake_id IN "
+                                    + "(SELECT id FROM factory_stocktakes WHERE factory_id = :factoryId)")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM factory_stocktakes WHERE factory_id = :factoryId")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM material_batches WHERE factory_id = :factoryId")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM raw_material_types WHERE factory_id = :factoryId")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM factory_warehouses WHERE factory_id = :factoryId")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM users WHERE factory_id = :factoryId")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM factories WHERE id = :factoryId")
+                    .setParameter("factoryId", FACTORY)
+                    .executeUpdate();
+            entityManager.clear();
+            return null;
+        });
     }
 
     @AfterAll
