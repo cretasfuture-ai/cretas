@@ -352,9 +352,9 @@ class StocktakeDriftRecoveryPostgresContractTest {
         entityManager.createNativeQuery(
                         "INSERT INTO raw_material_types "
                                 + "(id, factory_id, code, name, category, main_category, is_byproduct, self_supplied, "
-                                + "unit, is_active, created_by, created_at, updated_at) "
+                                + "unit, is_active, is_abaca_packaging, tax_treatment, created_by, created_at, updated_at) "
                                 + "VALUES (:id, :factoryId, 'S307-MAT', 'S307 drift material', '肉类', '原料', "
-                                + "FALSE, FALSE, 'kg', TRUE, 7000, NOW(), NOW()) "
+                                + "FALSE, FALSE, 'kg', TRUE, FALSE, 'TAXABLE', 7000, NOW(), NOW()) "
                                 + "ON CONFLICT (id) DO NOTHING")
                 .setParameter("id", "S307-MATERIAL")
                 .setParameter("factoryId", FACTORY)
