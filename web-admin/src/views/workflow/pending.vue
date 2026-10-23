@@ -62,6 +62,8 @@ interface PendingApproval {
     batchId?: number | null;
     processCategory?: string | null;
     reason?: string;
+    reportKind?: string | null;
+    outputUnit?: string | null;
     before?: Record<string, unknown>;
     after?: Record<string, unknown>;
   };
@@ -406,6 +408,8 @@ function approveConfirmMessage(row: PendingApproval): string {
   if (row.reportCorrectionDetails) {
     fields.push(
       ['工序', row.reportCorrectionDetails.processCategory || '—'],
+      ['报工阶段', reportCorrectionKindLabel(row.reportCorrectionDetails.reportKind)],
+      ['可信产出单位', row.reportCorrectionDetails.outputUnit || '单位未知'],
       ['修正原因', row.reportCorrectionDetails.reason || '—'],
       ['修正前', reportCorrectionValues(row.reportCorrectionDetails.before)],
       ['修正后', reportCorrectionValues(row.reportCorrectionDetails.after)],
@@ -422,6 +426,14 @@ function approveConfirmMessage(row: PendingApproval): string {
     ))
     .join('');
   return `<div style="text-align:left;">${rowsHtml}</div>`;
+}
+
+function reportCorrectionKindLabel(kind?: string | null): string {
+  if (kind === 'INPUT') return '投入';
+  if (kind === 'SEGMENT') return '过程';
+  if (kind === 'OUTPUT') return '完工';
+  if (!kind) return '旧式整合';
+  return `未知(${kind})`;
 }
 
 function reportCorrectionValues(values?: Record<string, unknown>): string {
@@ -551,7 +563,7 @@ onMounted(async () => {
             </el-button>
             <span v-else>{{ row.businessSummary || '—' }}</span>
             <div v-if="row.reportCorrectionDetails" class="correction-summary">
-              {{ row.reportCorrectionDetails.processCategory || '工序未标注' }} · {{ row.reportCorrectionDetails.reason || '未填写原因' }}
+              {{ row.reportCorrectionDetails.processCategory || '工序未标注' }} · {{ reportCorrectionKindLabel(row.reportCorrectionDetails.reportKind) }} · {{ row.reportCorrectionDetails.outputUnit || '单位未知' }} · {{ row.reportCorrectionDetails.reason || '未填写原因' }}
             </div>
           </template>
         </el-table-column>
@@ -585,6 +597,7 @@ onMounted(async () => {
             <div v-if="row.reportCorrectionDetails" class="correction-summary">
               <div>前：{{ reportCorrectionValues(row.reportCorrectionDetails.before) }}</div>
               <div>后：{{ reportCorrectionValues(row.reportCorrectionDetails.after) }}</div>
+              <div>阶段：{{ reportCorrectionKindLabel(row.reportCorrectionDetails.reportKind) }} · 可信产出单位：{{ row.reportCorrectionDetails.outputUnit || '单位未知' }}</div>
               <div>原因：{{ row.reportCorrectionDetails.reason || '—' }}</div>
             </div>
             <span v-else>—</span>
