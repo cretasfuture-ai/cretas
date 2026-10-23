@@ -116,6 +116,17 @@ QUARTER_COLORS = ['rgba(45,139,87,0.04)', 'rgba(54,179,126,0.04)',
                   'rgba(232,185,49,0.04)', 'rgba(169,209,142,0.04)']
 
 
+# 「还缺数据」里给用户看的列名 (与 can_build 的列角色一一对应)
+ROLE_HINTS = {
+    'budget': '「预算」列（如 预算、目标）',
+    'actual': '「实际」列（如 实际、本年）',
+    'last_year': '「上年」列（如 上年、去年同期）',
+    'category': '「品类 / 产品」列',
+    'item': '「项目」列（科目名称，如 营业收入、营业成本）',
+    'period': '「月份」列（如 1月、2026-03）',
+}
+
+
 class AbstractFinancialChartBuilder(ABC):
     """Base class for all financial chart builders."""
 
@@ -126,11 +137,31 @@ class AbstractFinancialChartBuilder(ABC):
     display_order: int = 0         # Order in dashboard
     # 数值是比率 (如各月毛利率) 的表只能进声明了能处理比率的图表; 金额类图表把百分比相加没有意义
     accepts_ratio_values: bool = False
+    # 出不了图时缺的是什么: 'column' = 在这张表上补一列就能出; 'statement' = 要另一张报表 (损益/现金流/账龄/人工)
+    gap_kind: str = 'column'
+    # 需要另一张报表时, 告诉用户那张表长什么样
+    statement_hint: str = ''
 
     def can_build(self, column_mapping) -> bool:
         """Check if this chart can be built with available columns."""
+        return self.unavailable_reason(column_mapping) is None
+
+    def unavailable_reason(self, column_mapping) -> Optional[Dict[str, str]]:
+        """这份数据出不了这张图时返回 {"reason", "gapKind"} (前端「还缺数据」原样显示); 出得了返回 None。"""
         if getattr(column_mapping, 'value_kind', 'amount') == 'ratio' and not self.accepts_ratio_values:
-            return False
+            return {"reason": f"这份是比率表（数值是百分比），{self.display_name}要用金额明细，请换一张金额表上传。",
+                    "gapKind": "statement"}
+        available = self._available_roles(column_mapping)
+        missing = [r for r in self.required_columns if r not in available]
+        if not missing:
+            return None
+        if 'item' in missing and self.statement_hint:
+            return {"reason": self.statement_hint, "gapKind": "statement"}
+        hints = '、'.join(ROLE_HINTS.get(r, r) for r in missing)
+        return {"reason": f"缺少{hints}，在表里补上后重新上传。", "gapKind": "column"}
+
+    @staticmethod
+    def _available_roles(column_mapping) -> set:
         available = set()
         if column_mapping.budget_cols:
             available.add('budget')
@@ -144,7 +175,7 @@ class AbstractFinancialChartBuilder(ABC):
             available.add('item')
         if column_mapping.period_cols:
             available.add('period')
-        return all(r in available for r in self.required_columns)
+        return available
 
     @abstractmethod
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:

@@ -111,6 +111,8 @@ export interface ChartStateLike {
     reason?: string;
     note?: string;
     reconciliation?: string[];
+    /** 出不了图时缺的是什么: column = 补一列; statement = 要另一张报表 */
+    gapKind?: GapKind;
   } & Record<string, unknown>;
 }
 
@@ -136,30 +138,50 @@ export interface ChartNavEntry {
   group: string;
 }
 
+export type GapKind = 'column' | 'statement';
+
+/** 后端 unavailableCharts 的一条: 这份数据出不了的图, 缺哪一列 / 要哪张表 */
+export interface UnavailableChart {
+  chartType: string;
+  reason: string;
+  gapKind: GapKind;
+}
+
+export type MissingChart<T> = T & { reason: string; kind: GapKind };
+
 export interface ChartNavModel<T extends ChartNavEntry> {
   /** 有图可看的图表, 按分组保持原顺序 */
   groups: { name: string; items: T[] }[];
   /** 这份数据出不了的图表, 带给用户看的原因 */
-  missing: (T & { reason: string })[];
+  missing: MissingChart<T>[];
+  /** 同一批, 按「补一列就能出」和「需要另一张表」分开 */
+  missingByKind: Record<GapKind, MissingChart<T>[]>;
 }
 
+/** 只在后端没给原因时用 (旧后端); 新后端对每张出不了的图都写明缺哪一列 */
 const NOT_BUILT_REASON = '这份数据缺少这张图需要的列';
 
 /**
  * 看板图表切换条的数据: 只把能出图的图表放进切换条, 出不了的收进「还缺数据」并写明原因。
- * 后端没有返回的图 (列不满足、比率表等) 也算缺数据。
+ * 后端没有生成的图 (列不满足、比率表等) 用 unavailable 里后端写的原因。
  */
 export function buildChartNav<T extends ChartNavEntry>(
   entries: readonly T[],
   getChart: (key: string) => ChartStateLike | null | undefined,
+  unavailable: readonly UnavailableChart[] = [],
 ): ChartNavModel<T> {
   const groups: { name: string; items: T[] }[] = [];
-  const missing: (T & { reason: string })[] = [];
+  const missing: MissingChart<T>[] = [];
   for (const entry of entries) {
     const chart = getChart(entry.key);
-    const gap = chart ? chartGapReason(chart) : NOT_BUILT_REASON;
+    if (!chart) {
+      const told = unavailable.find(u => u.chartType === entry.key);
+      missing.push({ ...entry, reason: told?.reason ?? NOT_BUILT_REASON, kind: told?.gapKind ?? 'column' });
+      continue;
+    }
+    const gap = chartGapReason(chart);
     if (gap) {
-      missing.push({ ...entry, reason: gap });
+      missing.push({ ...entry, reason: gap, kind: chart.metadata?.gapKind ?? 'column' });
       continue;
     }
     let group = groups.find(g => g.name === entry.group);
@@ -169,7 +191,24 @@ export function buildChartNav<T extends ChartNavEntry>(
     }
     group.items.push(entry);
   }
-  return { groups, missing };
+  const missingByKind: Record<GapKind, MissingChart<T>[]> = {
+    column: missing.filter(m => m.kind === 'column'),
+    statement: missing.filter(m => m.kind === 'statement'),
+  };
+  return { groups, missing, missingByKind };
+}
+
+/**
+ * 记住页面上正显示的那一次查询 (筛选 + 期间)。月份芯片 / 期间是先改再请求的,
+ * 请求失败时用它退回, 否则芯片显示「3月」而页面还是全年的数 (设计复评 2026-10-23)。
+ */
+export function createQueryHistory<Q>() {
+  let applied: Q | null = null;
+  const clone = (q: Q): Q => JSON.parse(JSON.stringify(q)) as Q;
+  return {
+    commit: (q: Q) => { applied = clone(q); },
+    lastApplied: (): Q | null => (applied ? clone(applied) : null),
+  };
 }
 
 /**
