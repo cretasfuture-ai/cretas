@@ -6,6 +6,7 @@ const mockRoute: { query: Record<string, unknown> } = { query: { tab: 'by-wareho
 const routerReplace = vi.fn();
 const apiGet = vi.fn();
 let factoryType = 'FACTORY';
+let canAccessSales = true;
 
 vi.mock('vue-router', () => ({
   useRoute: () => mockRoute,
@@ -17,7 +18,11 @@ vi.mock('@/store/modules/auth', () => ({
 }));
 
 vi.mock('@/store/modules/permission', () => ({
-  usePermissionStore: () => ({ canWrite: () => true, canAccess: () => true, canViewPrice: true }),
+  usePermissionStore: () => ({
+    canWrite: () => true,
+    canAccess: (module: string) => module !== 'sales' || canAccessSales,
+    canViewPrice: true,
+  }),
 }));
 
 vi.mock('@/composables/useBusinessMode', () => ({
@@ -45,6 +50,7 @@ import FinishedGoodsInventory from '@/views/sales/finished-goods/list.vue';
 
 beforeEach(() => {
   factoryType = 'FACTORY';
+  canAccessSales = true;
   mockRoute.query = { tab: 'by-warehouse' };
   routerReplace.mockReset();
   apiGet.mockReset();
@@ -52,8 +58,20 @@ beforeEach(() => {
 });
 
 describe('仓储库存查询 hub — 成品库存真实子页面', () => {
+  it('无销售模块权限时不能借仓储 query 读取成品库存', async () => {
+    canAccessSales = false;
+    mockRoute.query = { tab: 'finished-goods' };
+    const wrapper = mount(InventoryQueryHub, { global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(wrapper.findAll('.el-tabs__item').some((node) => node.text() === '成品库存')).toBe(false);
+    expect(wrapper.findComponent(FinishedGoodsInventory).exists()).toBe(false);
+    expect(apiGet).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
   it('餐饮工厂不能通过 hub query 绕过成品页面的原有隐藏边界', async () => {
     factoryType = 'RESTAURANT';
+    // An explicit module GRANT must not bypass the restaurant exclusion.
+    canAccessSales = true;
     mockRoute.query = { tab: 'finished-goods' };
     const wrapper = mount(InventoryQueryHub, { global: { plugins: [ElementPlus] } });
     await flushPromises();

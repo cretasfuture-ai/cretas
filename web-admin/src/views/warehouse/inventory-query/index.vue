@@ -17,21 +17,25 @@
  *   '/inventory/by-warehouse' '/warehouse/inventory-total'
  *   '/warehouse/inventory' '/warehouse/semi-finished'
  */
-import { computed, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import InventoryByWarehouse from '@/views/inventory/by-warehouse/index.vue';
 import WarehouseInventoryTotal from '@/views/warehouse/inventory-total/index.vue';
 import WarehouseInventoryBatch from '@/views/warehouse/inventory/index.vue';
 import WarehouseSemiFinished from '@/views/warehouse/semi-finished/list.vue';
-import FinishedGoodsInventory from '@/views/sales/finished-goods/list.vue';
 import { resolveInventoryQueryTab, type InventoryQueryTab } from '../inventoryQueryTab';
 
+// A lazy tab must also defer the child module and its chart dependencies.
+const FinishedGoodsInventory = defineAsyncComponent(() => import('@/views/sales/finished-goods/list.vue'));
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-// Preserve the existing finished-goods route's restaurant exclusion.
-const showFinishedGoods = computed(() => authStore.factoryType !== 'RESTAURANT');
+const permissionStore = usePermissionStore();
+// Preserve both guards on the existing sales/finished-goods route.
+const showFinishedGoods = computed(() =>
+  authStore.factoryType !== 'RESTAURANT' && permissionStore.canAccess('sales'));
 function resolveVisibleTab(): InventoryQueryTab {
   const tab = resolveInventoryQueryTab(route.query);
   return tab === 'finished-goods' && !showFinishedGoods.value ? 'by-warehouse' : tab;
