@@ -7,6 +7,7 @@ import com.cretas.aims.dto.factory.StocktakeDiffPreviewDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
+import com.cretas.aims.dto.factory.StocktakeRecountRequest;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
@@ -624,12 +625,25 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     private static final java.util.Set<String> STOCKTAKE_APPROVAL_ROLES = java.util.Set.of(
             "finance_manager", "factory_super_admin", "platform_admin");
 
+    private static final java.util.Set<String> STOCKTAKE_RECOUNT_ROLES = java.util.Set.of(
+            "warehouse_manager", "warehouse_worker", "factory_super_admin", "platform_admin");
+
     private void assertApprovalRole(String requestRole) {
         String normalized = requestRole == null ? "" : requestRole.toLowerCase();
         if (!STOCKTAKE_APPROVAL_ROLES.contains(normalized)) {
             throw new BusinessException(403,
                     "盘点审批需要财务经理或工厂管理员角色，当前角色：" + requestRole)
                     .withHint("请联系财务经理 (finance_manager) 或工厂超管审批");
+        }
+    }
+
+    private void assertRecountRole(String requestRole) {
+        String normalized = requestRole == null ? "" : requestRole.toLowerCase();
+        if (!STOCKTAKE_RECOUNT_ROLES.contains(normalized)) {
+            throw new BusinessException(403,
+                    "漂移后重盘需要仓库写权限，当前角色：" + requestRole)
+                    .withCode("STOCKTAKE_RECOUNT_ROLE_FORBIDDEN")
+                    .withHint("请联系仓储主管或工厂管理员处理");
         }
     }
 
@@ -1141,12 +1155,182 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         return toDetailedDTO(stocktake, factoryId);
     }
 
+    @Override
+    @Transactional
+    public StocktakeDTO recountAfterDrift(String stocktakeId, String factoryId,
+            StocktakeRecountRequest request, Long userId, String requestRole) {
+        assertRecountRole(requestRole);
+        if (request == null || request.getExpectedVersion() == null) {
+            throw new BusinessException(400, "expectedVersion 为必填字段")
+                    .withCode("STOCKTAKE_VERSION_REQUIRED");
+        }
+        String reason = request.getReason() == null ? "" : request.getReason().trim();
+        if (reason.isBlank()) {
+            throw new BusinessException(400, "重盘原因不能为空")
+                    .withCode("STOCKTAKE_RECOUNT_REASON_REQUIRED");
+        }
+
+        FactoryStocktake source = findAndValidateForUpdate(stocktakeId, factoryId);
+        if (source.getStatus() == FactoryStocktake.Status.RECOUNT_REQUIRED) {
+            if (Objects.equals(source.getRecountSourceVersion(), request.getExpectedVersion())
+                    && Objects.equals(source.getRecountReason(), reason)
+                    && source.getRecountStocktakeId() != null) {
+                FactoryStocktake existing = stocktakeRepo.findByIdAndFactoryIdForUpdate(
+                                source.getRecountStocktakeId(), factoryId)
+                        .orElseThrow(() -> new BusinessException(409,
+                                "重盘任务关联记录不存在，不能静默补建")
+                                .withCode("STOCKTAKE_RECOUNT_LINK_MISSING"));
+                return toDetailedDTO(existing, factoryId);
+            }
+            throw new BusinessException(409, "该盘点任务已发起重盘，不能更换原因或版本重复恢复")
+                    .withCode("STOCKTAKE_RECOUNT_ALREADY_REQUESTED");
+        }
+
+        assertExpectedVersion(source, request.getExpectedVersion());
+        assertStatus(source, FactoryStocktake.Status.APPROVED, "漂移后重新盘点");
+        if (!hasCurrentInventoryDrift(source, factoryId)) {
+            throw new BusinessException(409, "当前库存已与盘点快照一致，无需作废已审批盘点")
+                    .withCode("STOCKTAKE_RECOUNT_NOT_REQUIRED");
+        }
+
+        FactoryStocktake recount = createRecountStocktake(source, factoryId, userId, reason);
+        source.setStatus(FactoryStocktake.Status.RECOUNT_REQUIRED);
+        source.setRecountRequestedBy(userId);
+        source.setRecountRequestedAt(LocalDateTime.now());
+        source.setRecountReason(reason);
+        source.setRecountSourceVersion(request.getExpectedVersion());
+        source.setRecountStocktakeId(recount.getId());
+        // The fresh task carries the reverse link; the approved source keeps all
+        // snapshot, actual-count, approval, and workflow fields untouched.
+        stocktakeRepo.save(recount);
+        stocktakeRepo.save(source);
+        return toDetailedDTO(recount, factoryId);
+    }
+
+    private FactoryStocktake createRecountStocktake(FactoryStocktake source, String factoryId,
+            Long userId, String reason) {
+        LocalDateTime cutoff = LocalDateTime.now();
+        FactoryStocktake recount = new FactoryStocktake();
+        recount.setId(UUID.randomUUID().toString());
+        recount.setFactoryId(factoryId);
+        recount.setStocktakeNo(generateStocktakeNo(factoryId));
+        recount.setWarehouseId(source.getWarehouseId());
+        recount.setInventoryScope(source.getInventoryScope() == null
+                ? FactoryStocktake.InventoryScope.RAW_MATERIAL : source.getInventoryScope());
+        recount.setPeriodMonth(source.getPeriodMonth());
+        recount.setInventoryCutoffAt(cutoff);
+        recount.setReconciliationEndAt(cutoff);
+        String preset = source.getReconciliationPreset();
+        recount.setReconciliationPreset(preset == null || preset.isBlank() ? "LAST_APPLIED" : preset);
+        LocalDateTime sourceStart = source.getReconciliationStartAt();
+        recount.setReconciliationStartAt(sourceStart != null && !sourceStart.isAfter(cutoff)
+                ? sourceStart : cutoff.withDayOfMonth(1).toLocalDate().atStartOfDay());
+        recount.setStatus(FactoryStocktake.Status.INITIATED);
+        recount.setInitiatedBy(userId);
+        recount.setInitiatedAt(cutoff);
+        recount.setImportMode(source.getImportMode());
+        recount.setNotes("漂移后重盘：" + reason);
+        recount.setRecountSourceStocktakeId(source.getId());
+
+        if (recount.getInventoryScope() == FactoryStocktake.InventoryScope.FINISHED_GOODS) {
+            List<FactoryStocktakeItem> items = finishedGoodsBatchRepo
+                    .findByFactoryIdAndWarehouseId(factoryId, source.getWarehouseId()).stream()
+                    .filter(batch -> !FinishedGoodsBatch.Status.REVERSED.equals(batch.getStatus()))
+                    .filter(batch -> finishedGoodsPhysicalQty(batch).compareTo(BigDecimal.ZERO) > 0)
+                    .map(batch -> {
+                        FactoryStocktakeItem item = new FactoryStocktakeItem();
+                        item.setStocktake(recount);
+                        item.setFinishedGoodsBatchId(batch.getId());
+                        item.setProductTypeId(batch.getProductTypeId());
+                        item.setQuantityUnit(batch.getUnit());
+                        item.setSystemQty(finishedGoodsPhysicalQty(batch).setScale(4, RoundingMode.HALF_UP));
+                        return item;
+                    }).collect(Collectors.toList());
+            if (items.isEmpty()) {
+                throw new BusinessException(409, "当前仓库没有可重新盘点的成品库存")
+                        .withCode("FINISHED_GOODS_STOCKTAKE_EMPTY");
+            }
+            recount.setItems(items);
+            return recount;
+        }
+
+        List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
+                factoryId, source.getWarehouseId());
+        Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId,
+                batches.stream().map(MaterialBatch::getId).collect(Collectors.toList()));
+        List<FactoryStocktakeItem> items = new ArrayList<>();
+        for (MaterialBatch batch : batches) {
+            FactoryStocktakeItem item = new FactoryStocktakeItem();
+            item.setStocktake(recount);
+            item.setMaterialBatchId(batch.getId());
+            item.setRawMaterialTypeId(inventoryTypeId(batch));
+            item.setQuantityUnit(batch.getQuantityUnit());
+            BigDecimal physical = batch.getPhysicalQuantity() != null
+                    ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
+            item.setSystemQty(physicalShelf(physical, unsettledByBatch.get(batch.getId()))
+                    .setScale(4, RoundingMode.HALF_UP));
+            items.add(item);
+        }
+        recount.setItems(items);
+        return recount;
+    }
+
+    private boolean hasCurrentInventoryDrift(FactoryStocktake source, String factoryId) {
+        List<FactoryStocktakeItem> candidates = source.getItems() == null ? List.of() : source.getItems().stream()
+                .filter(item -> item.getDifferenceQty() != null
+                        && item.getDifferenceQty().compareTo(BigDecimal.ZERO) != 0)
+                .toList();
+        if (candidates.isEmpty()) return false;
+
+        if (source.getInventoryScope() == FactoryStocktake.InventoryScope.FINISHED_GOODS) {
+            for (FactoryStocktakeItem item : candidates) {
+                FinishedGoodsBatch batch = finishedGoodsBatchRepo
+                        .findByIdAndFactoryIdForUpdate(item.getFinishedGoodsBatchId(), factoryId)
+                        .orElseThrow(() -> new BusinessException(409,
+                                "盘点成品批次不存在或不属于当前工厂")
+                                .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
+                if (!Objects.equals(source.getWarehouseId(), batch.getWarehouseId())) {
+                    throw new BusinessException(409, "盘点成品批次仓库身份已不一致")
+                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+                }
+                BigDecimal live = finishedGoodsPhysicalQty(batch).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal snapshot = item.getSystemQty() == null ? BigDecimal.ZERO
+                        : item.getSystemQty().setScale(2, RoundingMode.HALF_UP);
+                if (live.compareTo(snapshot) != 0) return true;
+            }
+            return false;
+        }
+
+        List<String> batchIds = candidates.stream().map(FactoryStocktakeItem::getMaterialBatchId).toList();
+        Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId, batchIds);
+        for (FactoryStocktakeItem item : candidates) {
+            MaterialBatch batch = materialBatchRepo.findByIdAndFactoryIdForUpdate(
+                            item.getMaterialBatchId(), factoryId)
+                    .orElseThrow(() -> new BusinessException(409,
+                            "盘点批次不存在或不属于当前工厂")
+                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
+            if (!Objects.equals(source.getWarehouseId(), batch.getWarehouseId())) {
+                throw new BusinessException(409, "盘点批次仓库身份已不一致")
+                        .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+            }
+            BigDecimal physical = batch.getPhysicalQuantity() != null
+                    ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
+            BigDecimal live = physicalShelf(physical, unsettledByBatch.get(item.getMaterialBatchId()))
+                    .setScale(2, RoundingMode.HALF_UP);
+            BigDecimal snapshot = item.getSystemQty() == null ? BigDecimal.ZERO
+                    : item.getSystemQty().setScale(2, RoundingMode.HALF_UP);
+            if (live.compareTo(snapshot) != 0) return true;
+        }
+        return false;
+    }
+
     private String duplicateStocktakeNextAction(FactoryStocktake.Status status) {
         return switch (status) {
             case INITIATED, COUNTING -> "请先完成录入并提交，或联系有权限的人驳回该盘点单";
             case PENDING_APPROVAL -> "正在等待审批，请联系审批人处理";
             case APPROVED -> "已审批待生效，生效后才能发起新的盘点";
-            case APPLIED, REJECTED -> throw new IllegalArgumentException("盘点单已结束，不应阻止新盘点: " + status);
+            case APPLIED, REJECTED, RECOUNT_REQUIRED -> throw new IllegalArgumentException(
+                    "盘点单已结束，不应阻止新盘点: " + status);
         };
     }
 

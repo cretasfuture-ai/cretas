@@ -1,7 +1,9 @@
 package com.cretas.aims.service.factory.impl;
 
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
+import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.factory.StocktakeRecountRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
@@ -34,6 +36,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -186,6 +189,57 @@ class FactoryStocktakeM12ContractTest {
         assertThat(stocktake.getSubmittedAt()).isNull();
         assertThat(stocktake.getApprovedAt()).isNull();
         assertThat(stocktake.getRejectReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("drift recovery preserves approved evidence and creates a fresh snapshot task")
+    void approvedDriftRecoveryPreservesEvidenceAndCreatesFreshTask() {
+        FactoryStocktake source = stocktake(
+                FactoryStocktake.Status.APPROVED, BigDecimal.TEN, new BigDecimal("11"));
+        source.setVersion(4L);
+        source.setInitiatedBy(1200L);
+        source.setSubmittedBy(1201L);
+        source.setSubmittedAt(LocalDateTime.now().minusMinutes(3));
+        source.setApprovedBy(1309L);
+        source.setApprovedAt(LocalDateTime.now().minusMinutes(2));
+        source.setWorkflowInstanceId("oa-1");
+        source.setNotes("approved evidence");
+        MaterialBatch batch = identityBatch(source.getItems().get(0));
+        batch.setReceiptQuantity(new BigDecimal("12"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+
+        StocktakeRecountRequest request = new StocktakeRecountRequest();
+        request.setExpectedVersion(4L);
+        request.setReason("transfer moved stock after count");
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(source.getId(), "F006"))
+                .thenReturn(Optional.of(source));
+        when(materialBatchRepo.findByIdAndFactoryIdForUpdate("BATCH-001", "F006"))
+                .thenReturn(Optional.of(batch));
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId("F006", "WH-LOG"))
+                .thenReturn(List.of(batch));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(anyString(), anyList()))
+                .thenReturn(List.of());
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeDTO result = service.recountAfterDrift(
+                source.getId(), "F006", request, 1400L, "warehouse_manager");
+
+        assertThat(source.getStatus()).isEqualTo(FactoryStocktake.Status.RECOUNT_REQUIRED);
+        assertThat(source.getSubmittedBy()).isEqualTo(1201L);
+        assertThat(source.getApprovedBy()).isEqualTo(1309L);
+        assertThat(source.getWorkflowInstanceId()).isEqualTo("oa-1");
+        assertThat(source.getNotes()).isEqualTo("approved evidence");
+        assertThat(source.getRecountRequestedBy()).isEqualTo(1400L);
+        assertThat(source.getRecountReason()).isEqualTo("transfer moved stock after count");
+        assertThat(source.getRecountSourceVersion()).isEqualTo(4L);
+        assertThat(source.getRecountStocktakeId()).isEqualTo(result.getId());
+        assertThat(result.getStatus()).isEqualTo(FactoryStocktake.Status.INITIATED.name());
+        assertThat(result.getRecountSourceStocktakeId()).isEqualTo(source.getId());
+        assertThat(result.getItems()).hasSize(1);
+        assertThat(result.getItems().get(0).getSystemQty()).isEqualByComparingTo("12");
+        assertThat(result.getItems().get(0).getActualQty()).isNull();
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
     }
 
     private FactoryStocktake stocktake(FactoryStocktake.Status status, BigDecimal system, BigDecimal actual) {
