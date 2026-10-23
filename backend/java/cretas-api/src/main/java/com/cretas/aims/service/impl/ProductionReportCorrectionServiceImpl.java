@@ -138,6 +138,10 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             throw new BusinessException(409, "审批实例与报工修正记录不匹配")
                     .withCode("PRODUCTION_REPORT_CORRECTION_WORKFLOW_MISMATCH");
         }
+        if (action == HistoryAction.APPROVE
+                && correction.getStatus() == ProductionReportCorrection.Status.APPROVED_APPLIED) {
+            return enrich(correction);
+        }
         ProductionPlan approvalPlan = null;
         if (action == HistoryAction.APPROVE) {
             ProductionReport report = reportRepository.findByIdAndFactoryIdForUpdate(

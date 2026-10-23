@@ -173,6 +173,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
     void persistedSettledReportRejectsSubmitWithoutAnyCorrectionOrWorkflowWrite() {
         Fixture fixture = persistFixture();
         ProductionReport settled = reportRepository.findById(fixture.reportId()).orElseThrow();
+        settled.setStatus(ProductionReport.Status.APPROVED);
         settled.setSettled(true);
         reportRepository.saveAndFlush(settled);
         entityManager.clear();
@@ -229,6 +230,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
         ProductionReportCorrectionDTO submitted = submit(fixture);
 
         ProductionReport settled = reportRepository.findById(fixture.reportId()).orElseThrow();
+        settled.setStatus(ProductionReport.Status.APPROVED);
         settled.setSettled(true);
         reportRepository.saveAndFlush(settled);
         entityManager.clear();

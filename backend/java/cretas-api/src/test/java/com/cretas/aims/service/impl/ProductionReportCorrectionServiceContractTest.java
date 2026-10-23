@@ -323,6 +323,34 @@ class ProductionReportCorrectionServiceContractTest {
     }
 
     @Test
+    void repeatedApproveOfAppliedCorrectionRemainsIdempotentAfterPlanLockAndSettlement() {
+        ProductionReportCorrection applied = correction();
+        applied.setStatus(ProductionReportCorrection.Status.APPROVED_APPLIED);
+        ProductionPlan locked = plan();
+        locked.setIsLocked(true);
+        ProductionReport settled = report();
+        settled.setStatus(ProductionReport.Status.APPROVED);
+        settled.setSettled(true);
+        assertThat(locked.getIsLocked()).isTrue();
+        assertThat(settled.getSettled()).isTrue();
+        when(correctionRepository.findByIdAndFactoryId("COR-1", "F006")).thenReturn(Optional.of(applied));
+
+        var result = service.applyWorkflowAction("F006", "COR-1", "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "重复同意");
+
+        assertThat(result.getStatus()).isEqualTo("APPROVED_APPLIED");
+        verify(reportRepository, never()).findByIdAndFactoryIdForUpdate(any(), any());
+        verify(planRepository, never()).findByIdForUpdate(any());
+        verify(taskRepository, never()).findByFactoryIdAndId(any(), any());
+        verify(wipInventoryService, never()).validateApprovedOutputQuantityCorrection(
+                any(), any(), any(), any(), any(), any());
+        verify(wipInventoryService, never()).correctApprovedOutputQuantity(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(workflowEngine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(correctionRepository, never()).save(any());
+    }
+
+    @Test
     void correctableListingKeepsPageRowsAndMarksInputWithoutHidingLaterOutput() {
         ProductionReport input = report();
         input.setReportKind("INPUT");
