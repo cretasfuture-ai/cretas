@@ -1179,18 +1179,21 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                                 source.getRecountStocktakeId(), factoryId)
                         .orElseThrow(() -> new BusinessException(409,
                                 "重盘任务关联记录不存在，不能静默补建")
-                                .withCode("STOCKTAKE_RECOUNT_LINK_MISSING"));
+                                .withCode("STOCKTAKE_RECOUNT_LINK_MISSING")
+                                .withHint("请保留原盘点单，联系工厂管理员核查关联重盘单，不要重复创建"));
                 return toDetailedDTO(existing, factoryId);
             }
             throw new BusinessException(409, "该盘点任务已发起重盘，不能更换原因或版本重复恢复")
-                    .withCode("STOCKTAKE_RECOUNT_ALREADY_REQUESTED");
+                    .withCode("STOCKTAKE_RECOUNT_ALREADY_REQUESTED")
+                    .withHint("请刷新原盘点单并打开已关联的重盘单继续处理");
         }
 
         assertExpectedVersion(source, request.getExpectedVersion());
         assertStatus(source, FactoryStocktake.Status.APPROVED, "漂移后重新盘点");
         if (!hasCurrentInventoryDrift(source, factoryId)) {
             throw new BusinessException(409, "当前库存已与盘点快照一致，无需作废已审批盘点")
-                    .withCode("STOCKTAKE_RECOUNT_NOT_REQUIRED");
+                    .withCode("STOCKTAKE_RECOUNT_NOT_REQUIRED")
+                    .withHint("请刷新并核对原盘点明细；库存未漂移时继续处理原已审批盘点单");
         }
 
         FactoryStocktake recount = createRecountStocktake(source, factoryId, userId, reason);
@@ -1248,7 +1251,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     }).collect(Collectors.toList());
             if (items.isEmpty()) {
                 throw new BusinessException(409, "当前仓库没有可重新盘点的成品库存")
-                        .withCode("FINISHED_GOODS_STOCKTAKE_EMPTY");
+                        .withCode("FINISHED_GOODS_STOCKTAKE_EMPTY")
+                        .withHint("请在成品库存中核对原仓库的现有批次，保留原盘点单并由仓储主管处理");
             }
             recount.setItems(items);
             return recount;
@@ -1288,10 +1292,12 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                         .findByIdAndFactoryIdForUpdate(item.getFinishedGoodsBatchId(), factoryId)
                         .orElseThrow(() -> new BusinessException(409,
                                 "盘点成品批次不存在或不属于当前工厂")
-                                .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
+                                .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH")
+                                .withHint("请保留原盘点单，由仓储主管核对该成品批次所属工厂和现有库存"));
                 if (!Objects.equals(source.getWarehouseId(), batch.getWarehouseId())) {
                     throw new BusinessException(409, "盘点成品批次仓库身份已不一致")
-                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH")
+                            .withHint("请保留原盘点快照，由仓储主管核对该成品批次的调拨记录和当前仓库");
                 }
                 BigDecimal live = finishedGoodsPhysicalQty(batch).setScale(2, RoundingMode.HALF_UP);
                 BigDecimal snapshot = item.getSystemQty() == null ? BigDecimal.ZERO
@@ -1308,10 +1314,12 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                             item.getMaterialBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(409,
                             "盘点批次不存在或不属于当前工厂")
-                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH"));
+                            .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH")
+                            .withHint("请保留原盘点单，由仓储主管核对该物料批次所属工厂和现有库存"));
             if (!Objects.equals(source.getWarehouseId(), batch.getWarehouseId())) {
                 throw new BusinessException(409, "盘点批次仓库身份已不一致")
-                        .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH");
+                        .withCode("STOCKTAKE_BATCH_IDENTITY_MISMATCH")
+                        .withHint("请保留原盘点快照，由仓储主管核对该物料批次的调拨记录和当前仓库");
             }
             BigDecimal physical = batch.getPhysicalQuantity() != null
                     ? batch.getPhysicalQuantity() : BigDecimal.ZERO;
