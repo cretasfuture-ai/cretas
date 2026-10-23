@@ -111,8 +111,38 @@ class StocktakeDriftRecoveryPostgresContractTest {
         String user = requiredEnv("CRETAS_WORKFLOW_PG_USER");
         String password = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", "");
         try (Connection connection = DriverManager.getConnection(url, user, password);
-             Statement statement = connection.createStatement()) {
-            statement.execute("DROP SCHEMA IF EXISTS " + SCHEMA + " CASCADE");
+             Statement tableQuery = connection.createStatement();
+             Statement tableDrop = connection.createStatement();
+             Statement sequenceQuery = connection.createStatement();
+             Statement sequenceDrop = connection.createStatement();
+             Statement schemaDrop = connection.createStatement()) {
+            // Drop one owned object per autocommit transaction.  A single DROP SCHEMA
+            // CASCADE makes PostgreSQL lock every Hibernate-created object at once and
+            // can exceed shared memory on this full-entity test schema.
+            try (var tables = tableQuery.executeQuery(
+                    "SELECT table_name, table_type FROM information_schema.tables "
+                            + "WHERE table_schema = '" + SCHEMA + "' ORDER BY table_type, table_name")) {
+                while (tables.next()) {
+                    String table = tables.getString(1).replace("\"", "\"\"");
+                    String type = tables.getString(2);
+                    String qualified = SCHEMA + ".\"" + table + "\"";
+                    if ("VIEW".equals(type)) {
+                        tableDrop.execute("DROP VIEW IF EXISTS " + qualified + " CASCADE");
+                    } else {
+                        tableDrop.execute("DROP TABLE IF EXISTS " + qualified + " CASCADE");
+                    }
+                }
+            }
+            try (var sequences = sequenceQuery.executeQuery(
+                    "SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = '"
+                            + SCHEMA + "' ORDER BY sequence_name")) {
+                while (sequences.next()) {
+                    String sequence = sequences.getString(1).replace("\"", "\"\"");
+                    sequenceDrop.execute("DROP SEQUENCE IF EXISTS " + SCHEMA + ".\""
+                            + sequence + "\" CASCADE");
+                }
+            }
+            schemaDrop.execute("DROP SCHEMA IF EXISTS " + SCHEMA);
         } catch (SQLException error) {
             throw new IllegalStateException("Failed to drop owned PostgreSQL schema " + SCHEMA, error);
         }
@@ -238,6 +268,7 @@ class StocktakeDriftRecoveryPostgresContractTest {
     private Fixture persistFixture(String stocktakeNo, BigDecimal systemQty,
             BigDecimal actualQty, BigDecimal liveQty) {
         return new TransactionTemplate(transactionManager).execute(status -> {
+        seedParentFixture();
         MaterialBatch batch = new MaterialBatch();
         batch.setId(UUID.randomUUID().toString());
         batch.setFactoryId(FACTORY);
@@ -288,6 +319,28 @@ class StocktakeDriftRecoveryPostgresContractTest {
         entityManager.clear();
         return new Fixture(source.getId(), batch.getId());
         });
+    }
+
+    private void seedParentFixture() {
+        entityManager.createNativeQuery(
+                        "INSERT INTO factories "
+                                + "(id, name, type, level, is_active, manually_verified, ai_weekly_quota, created_at, updated_at) "
+                                + "VALUES (:id, :name, 'FACTORY', 0, TRUE, FALSE, 20, NOW(), NOW()) "
+                                + "ON CONFLICT (id) DO NOTHING")
+                .setParameter("id", FACTORY)
+                .setParameter("name", "S307 PG drift recovery")
+                .executeUpdate();
+        for (Long actorId : List.of(6000L, 6001L, 7000L, 7001L, 7002L)) {
+            entityManager.createNativeQuery(
+                            "INSERT INTO users "
+                                    + "(id, factory_id, username, password_hash, is_active, created_at, updated_at) "
+                                    + "VALUES (:id, :factoryId, :username, 'test', TRUE, NOW(), NOW()) "
+                                    + "ON CONFLICT (id) DO NOTHING")
+                    .setParameter("id", actorId)
+                    .setParameter("factoryId", FACTORY)
+                    .setParameter("username", "s307-pg-actor-" + actorId)
+                    .executeUpdate();
+        }
     }
 
     private StocktakeRecountRequest request(Long version, String reason) {
