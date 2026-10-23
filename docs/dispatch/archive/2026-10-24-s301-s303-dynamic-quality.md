@@ -22,7 +22,7 @@ Worktree `C:\Users\Steve\cretas-s301-dynamic-quality-20261024`; branch `codex/s3
 - `frontend/CretasFoodTrace/src/__tests__/unit/api/qualityCheckItemApiClient.test.ts`
 - `frontend/CretasFoodTrace/src/__tests__/unit/api/qualityInspectorRecordMapping.test.ts`
 - `frontend/CretasFoodTrace/src/__tests__/unit/navigation/qualityInspectorRoutes.test.ts`
-- `frontend/CretasFoodTrace/src/__tests__/unit/qualityInspectorDynamicStandard.test.ts`
+- `frontend/CretasFoodTrace/src/__tests__/unit/qualityInspectorDynamicStandard.test.tsx`
 - `frontend/CretasFoodTrace/src/__tests__/unit/screens/qualityInspectionSubmissionLogic.test.ts`
 - `frontend/CretasFoodTrace/src/__tests__/unit/screens/qualityInspectorHomeContract.test.ts`
 - `frontend/CretasFoodTrace/src/navigation/QualityInspectorNavigator.tsx`
@@ -64,7 +64,7 @@ Use product binding, existing customFields immutable server snapshot, JWT actor 
 ## Target validation
 
 - cwd `backend/java/cretas-api`: `mvn -Dtest=ProcessingServiceImplInspectionValidationTest,QualityInspectionServiceImplTemplateTest,ProcessingServiceImplDynamicQualityStandardContractTest test`
-- cwd `frontend/CretasFoodTrace`: `npm test -- --runInBand --runTestsByPath src/__tests__/gates/navigatorMountContextReachability.test.ts src/__tests__/gates/retiredScreensStayRetired.test.ts src/__tests__/unit/api/qualityCheckItemApiClient.test.ts src/__tests__/unit/api/qualityInspectorRecordMapping.test.ts src/__tests__/unit/navigation/qualityInspectorRoutes.test.ts src/__tests__/unit/qualityInspectorDynamicStandard.test.ts src/__tests__/unit/screens/qualityInspectionSubmissionLogic.test.ts src/__tests__/unit/screens/qualityInspectorHomeContract.test.ts`
+- cwd `frontend/CretasFoodTrace`: `npm test -- --runInBand --runTestsByPath src/__tests__/gates/navigatorMountContextReachability.test.ts src/__tests__/gates/retiredScreensStayRetired.test.ts src/__tests__/unit/api/qualityCheckItemApiClient.test.ts src/__tests__/unit/api/qualityInspectorRecordMapping.test.ts src/__tests__/unit/navigation/qualityInspectorRoutes.test.ts src/__tests__/unit/qualityInspectorDynamicStandard.test.tsx src/__tests__/unit/screens/qualityInspectionSubmissionLogic.test.ts src/__tests__/unit/screens/qualityInspectorHomeContract.test.ts`
 - cwd `web-admin`: `npx vitest run src/views/quality/standards/__tests__/qualityStandardProductBinding.mount.spec.ts --maxWorkers=1`
 
 Final complete gates and official release are Root responsibilities. Runtime UI and independent database readback required before original QA signs S3-01/S3-03. No synthetic QA values may be called actual factory quality standards.
@@ -138,3 +138,6 @@ Final complete gates and official release are Root responsibilities. Runtime UI 
     "F4 → 网络/业务错误显示后端具体 message 和下一步，保留当前草稿。"
   ]
 }
+
+## 2026-10-24 actual-entry scope correction
+Root verified that navigator registration alone leaves the actual QI home without a batch-inspection or inspection-history action. Existing label-QC actions must remain. The same unique Owner may additionally modify `frontend/CretasFoodTrace/src/screens/quality-inspector/QIHomeScreen.tsx` and the already registered mounted/home/navigation tests to expose real user actions into the correctly mounted stacks. No other scope transfer. Existing profile/settings Owner is unaffected. Run targeted home, navigation and dynamic-form tests; preserve label-QC assertions.
