@@ -11,6 +11,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
@@ -48,6 +49,7 @@ class FactoryStocktakeM12ContractTest {
     @Mock private FactoryStocktakeItemRepository stocktakeItemRepo;
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private MaterialBatchAdjustmentRepository adjustmentRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
     @Mock private RawMaterialTypeRepository rawMaterialTypeRepo;
     @Mock private MaterialConsumptionRepository materialConsumptionRepo;
     @Mock private InventoryLowStockEventPublisher lowStockPublisher;
