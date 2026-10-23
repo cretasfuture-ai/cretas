@@ -45,8 +45,10 @@ describe('dynamic quality inspection screen', () => {
     expect(mockReplace).toHaveBeenCalledWith('QIResult', { recordId: 'qi-1', passed: false });
   });
 
-  it('blocks missing required input and preserves entered value after stale 409', async () => {
-    api.submitDynamicInspection.mockRejectedValue(new Error('质检标准已更新，请刷新后重新确认'));
+  it('refreshes a stale standard on the mounted action, preserves input, and resubmits with the new revision', async () => {
+    api.submitDynamicInspection
+      .mockRejectedValueOnce(new Error('质检标准已更新，请刷新后重新确认'))
+      .mockResolvedValueOnce({ inspection: { id: 'qi-refresh', result: 'PASS' }, standardRevision: 'rev-2' });
     render(<QIFormScreen />);
     await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
     fireEvent.press(screen.getByText('提交质检结果'));
@@ -56,6 +58,35 @@ describe('dynamic quality inspection screen', () => {
     fireEvent.press(screen.getByText('提交质检结果'));
     await waitFor(() => expect(screen.getByText('质检标准已更新，请刷新后重新确认')).toBeTruthy());
     expect(input.props.value).toBe('8.5');
+
+    api.getDynamicQualityForm.mockResolvedValueOnce({
+      batchId, batchNumber: 'PB-1885', productTypeId: 'QA-S301-A', productName: 'QA product A', standardRevision: 'rev-2',
+      items: [{ bindingId: 'binding-a', itemId: 'item-a', itemVersion: 4, label: '温度', valueType: 'RANGE', unit: '°C', effectiveMinValue: 0, effectiveMaxValue: 12, effectiveIsRequired: true }],
+    });
+    fireEvent.press(screen.getByText('刷新标准（保留已填写答案）'));
+    await waitFor(() => expect(screen.getByText('标准版本：rev-2')).toBeTruthy());
+    expect(screen.getByPlaceholderText('填写实测值').props.value).toBe('8.5');
+    fireEvent.press(screen.getByText('提交质检结果'));
+    await waitFor(() => expect(api.submitDynamicInspection).toHaveBeenCalledTimes(2));
+    expect(api.submitDynamicInspection).toHaveBeenLastCalledWith(batchId, expect.objectContaining({
+      standardRevision: 'rev-2',
+      answers: [{ bindingId: 'binding-a', itemId: 'item-a', itemVersion: 4, value: '8.5' }],
+    }));
+    expect(mockReplace).toHaveBeenCalledWith('QIResult', { recordId: 'qi-refresh', passed: true });
+  });
+
+  it('keeps the entered value when refreshing a stale standard fails', async () => {
+    api.submitDynamicInspection.mockRejectedValueOnce(new Error('质检标准已更新，请刷新后重新确认'));
+    render(<QIFormScreen />);
+    await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+    const input = screen.getByPlaceholderText('填写实测值');
+    fireEvent.changeText(input, '8.5');
+    fireEvent.press(screen.getByText('提交质检结果'));
+    await waitFor(() => expect(screen.getByText('刷新标准（保留已填写答案）')).toBeTruthy());
+    api.getDynamicQualityForm.mockRejectedValueOnce(new Error('网络暂不可用'));
+    fireEvent.press(screen.getByText('刷新标准（保留已填写答案）'));
+    await waitFor(() => expect(screen.getByText('网络暂不可用')).toBeTruthy());
+    expect(screen.getByPlaceholderText('填写实测值').props.value).toBe('8.5');
   });
 
   it('does not navigate when the server omits the inspection id', async () => {
