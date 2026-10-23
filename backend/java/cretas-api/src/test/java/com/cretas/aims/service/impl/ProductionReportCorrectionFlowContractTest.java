@@ -55,6 +55,8 @@ class ProductionReportCorrectionFlowContractTest {
                 "PRODUCTION_REPORT_CORRECTION_MIXED_OUTPUT_UNITS",
                 "reportKind",
                 "outputUnit");
-        assertThat(correction).contains("filter(this::isCorrectionableKind)");
+        assertThat(correction).contains("findById(c.getProductionReportId())",
+                "correctionEligible", "correctionEligibilityReason")
+                .doesNotContain("new PageImpl");
     }
 }

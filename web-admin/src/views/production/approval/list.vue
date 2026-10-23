@@ -134,7 +134,7 @@ function correctionKindLabel(kind: string | null | undefined): string {
 }
 
 function correctionKindAllowed(row: CorrectableReportItem): boolean {
-  return row.reportKind == null || row.reportKind === 'OUTPUT';
+  return row.correctionEligible !== false && (row.reportKind == null || row.reportKind === 'OUTPUT');
 }
 
 function trustedCorrectionUnit(row: CorrectableReportItem): string {

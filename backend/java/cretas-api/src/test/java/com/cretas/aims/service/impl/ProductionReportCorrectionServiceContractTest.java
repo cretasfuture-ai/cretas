@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -92,6 +94,48 @@ class ProductionReportCorrectionServiceContractTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("投入或过程报工不能作为产出修正");
         verify(correctionRepository, never()).save(any());
+    }
+
+    @Test
+    void correctableListingKeepsPageRowsAndMarksInputWithoutHidingLaterOutput() {
+        ProductionReport input = report();
+        input.setReportKind("INPUT");
+        ProductionReport output = report();
+        output.setId(11L);
+        output.setReportKind("OUTPUT");
+        when(reportRepository.findByFactoryIdAndSettledFalseAndStatusInAndDeletedAtIsNull(
+                eq("F006"), any(), any())).thenReturn(new PageImpl<>(List.of(input, output),
+                PageRequest.of(0, 2), 2));
+        when(correctionRepository.findByFactoryIdAndProductionReportIdInOrderBySubmittedAtDesc(
+                eq("F006"), any())).thenReturn(List.of());
+
+        var result = service.listCorrectable("F006", PageRequest.of(0, 2));
+
+        assertThat(result.getTotalElements()).isEqualTo(2);
+        assertThat(result.getContent()).hasSize(2);
+        assertThat(result.getContent().get(0)).containsEntry("correctionEligible", false)
+                .containsEntry("reportKind", "INPUT");
+        assertThat(result.getContent().get(1)).containsEntry("correctionEligible", true)
+                .containsEntry("reportKind", "OUTPUT");
+    }
+
+    @Test
+    void approvalSummaryReadsMetadataWithoutRowLockAndKeepsFactoryBoundary() {
+        ProductionReportCorrection correction = correction();
+        ProductionReport sameFactory = report();
+        when(correctionRepository.findByIdAndFactoryId("COR-1", "F006")).thenReturn(Optional.of(correction));
+        when(reportRepository.findById(10L)).thenReturn(Optional.of(sameFactory));
+
+        var summary = service.approvalSummary("F006", "COR-1");
+
+        assertThat(summary).containsEntry("reportKind", null).containsEntry("outputUnit", null);
+        verify(reportRepository).findById(10L);
+        verify(reportRepository, never()).findByIdAndFactoryIdForUpdate(10L, "F006");
+
+        ProductionReport foreign = report();
+        foreign.setFactoryId("OTHER");
+        when(reportRepository.findById(10L)).thenReturn(Optional.of(foreign));
+        assertThat(service.approvalSummary("F006", "COR-1")).doesNotContainKeys("reportKind", "outputUnit");
     }
 
     @Test

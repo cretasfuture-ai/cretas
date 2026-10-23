@@ -19,7 +19,6 @@ import com.cretas.aims.service.ProductionReportCorrectionService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -148,6 +147,7 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
 
     private void applyApproved(ProductionReport report, ProductionReportCorrection correction,
                                Long actorId, String notes) {
+        assertCorrectionableReport(report);
         if (correction.getStatus() == ProductionReportCorrection.Status.APPROVED_APPLIED) return;
         if (Boolean.TRUE.equals(report.getSettled())) {
             throw new BusinessException(409, "报工已结单，不能应用待审批修正")
@@ -169,8 +169,10 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                         List<ProductionReport> taskReports = reportRepository
                                 .findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull(
                                         report.getFactoryId(), report.getWorkProcessTaskId());
+                        assertNoUnknownOutputReports(taskReports);
                         List<ProductionReport> outputReports = taskReports.stream()
                                 .filter(this::isOutputOrLegacy)
+                                .filter(reportRow -> reportRow.getOutputQuantity() != null)
                                 .toList();
                         assertSingleOutputUnit(outputReports);
                         BigDecimal taskOutput = outputReports.stream()
@@ -204,17 +206,14 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         Page<ProductionReport> reports = reportRepository
                 .findByFactoryIdAndSettledFalseAndStatusInAndDeletedAtIsNull(
                         factoryId, EnumSet.of(ProductionReport.Status.SUBMITTED, ProductionReport.Status.APPROVED), pageable);
-        List<ProductionReport> eligibleReports = reports.getContent().stream()
-                .filter(this::isCorrectionableKind).toList();
-        List<Long> ids = eligibleReports.stream().map(ProductionReport::getId).toList();
-        if (ids.isEmpty()) return new PageImpl<>(List.of(), pageable, 0);
+        List<Long> ids = reports.getContent().stream().map(ProductionReport::getId).toList();
+        if (ids.isEmpty()) return reports.map(report -> correctableRow(report, List.of()));
         Map<Long, List<ProductionReportCorrection>> correctionsByReport = correctionRepository
                 .findByFactoryIdAndProductionReportIdInOrderBySubmittedAtDesc(factoryId, ids).stream()
                 .collect(Collectors.groupingBy(ProductionReportCorrection::getProductionReportId,
                         LinkedHashMap::new, Collectors.toList()));
-        return new PageImpl<>(eligibleReports.stream().map(report -> correctableRow(report,
-                correctionsByReport.getOrDefault(report.getId(), List.of())))
-                .toList(), pageable, eligibleReports.size());
+        return reports.map(report -> correctableRow(report,
+                correctionsByReport.getOrDefault(report.getId(), List.of())));
     }
 
     private Map<String, Object> correctableRow(ProductionReport report,
@@ -231,6 +230,8 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         row.put("outputQuantity", report.getOutputQuantity());
         row.put("reportKind", reportKind(report));
         row.put("outputUnit", trustedOutputUnit(report));
+        row.put("correctionEligible", isCorrectionableKind(report));
+        row.put("correctionEligibilityReason", correctionEligibilityReason(report));
         row.put("goodQuantity", report.getGoodQuantity());
         row.put("defectQuantity", report.getDefectQuantity());
         row.put("totalWorkers", report.getTotalWorkers());
@@ -294,7 +295,8 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         context.put("planId", c.getProductionPlanId());
         context.put("batchId", c.getProductionBatchId());
         context.put("processCategory", c.getProcessCategory());
-        reportRepository.findByIdAndFactoryIdForUpdate(c.getProductionReportId(), c.getFactoryId())
+        reportRepository.findById(c.getProductionReportId())
+                .filter(report -> Objects.equals(c.getFactoryId(), report.getFactoryId()))
                 .ifPresent(report -> {
                     context.put("reportKind", reportKind(report));
                     context.put("outputUnit", trustedOutputUnit(report));
@@ -369,9 +371,30 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         return kind == null || "OUTPUT".equals(kind);
     }
 
+    private String correctionEligibilityReason(ProductionReport report) {
+        String kind = reportKind(report);
+        if (kind == null || "OUTPUT".equals(kind)) return null;
+        if ("INPUT".equals(kind) || "SEGMENT".equals(kind)) return "投入或过程报工不能作为产出修正";
+        return "报工阶段无法确认，不能作为产出修正";
+    }
+
     private boolean isOutputOrLegacy(ProductionReport report) {
         String kind = reportKind(report);
         return kind == null || "OUTPUT".equals(kind);
+    }
+
+    private void assertNoUnknownOutputReports(List<ProductionReport> reports) {
+        reports.stream()
+                .filter(report -> report.getOutputQuantity() != null)
+                .filter(report -> {
+                    String kind = reportKind(report);
+                    return kind != null && !"INPUT".equals(kind) && !"SEGMENT".equals(kind) && !"OUTPUT".equals(kind);
+                })
+                .findFirst()
+                .ifPresent(report -> {
+                    throw new BusinessException(409, "报工阶段无法确认，不能汇总其产出")
+                            .withCode("PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND");
+                });
     }
 
     private String reportKind(ProductionReport report) {
