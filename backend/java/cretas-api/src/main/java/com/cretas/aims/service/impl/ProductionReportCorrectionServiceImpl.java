@@ -34,6 +34,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -89,6 +90,7 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         assertSupportedQuantityPrecision(request.defectQuantity(), "defectQuantity");
         ensureChanged(report, request);
         ProductionReportCorrection correction = ProductionReportCorrection.builder()
+                .id(UUID.randomUUID().toString())
                 .factoryId(factoryId).productionReportId(report.getId())
                 .workProcessTaskId(report.getWorkProcessTaskId()).productionBatchId(report.getBatchId())
                 .productionPlanId(planId).productTypeId(report.getProductTypeId() != null
@@ -103,6 +105,11 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                 .originalNotes(report.getNotes()).proposedNotes(trimToNull(request.notes()))
                 .correctionReason(request.reason().trim()).submittedBy(userId).submittedAt(LocalDateTime.now())
                 .build();
+        WorkProcessTask task = report.getWorkProcessTaskId() == null ? null
+                : taskRepository.findByFactoryIdAndId(factoryId, report.getWorkProcessTaskId()).orElse(null);
+        wipInventoryService.validateApprovedOutputQuantityCorrection(
+                factoryId, report, task, correction.getOriginalOutputQuantity(),
+                correction.getProposedOutputQuantity(), correction.getId());
         correctionRepository.save(correction);
 
         Map<String, Object> context = approvalContext(correction);

@@ -5,6 +5,8 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
+- `ERP-S005-UNIT-DETAIL-20261023` — `claimed` — Owner /root/s005_unit_detail；Base bf915cdf2812b4c3917bd50290e115099ba54c12；原料批次详情g错显kg，精确list.vue+挂载测试2文件；原QA只读实证，box中文映射不改；archive/2026-10-23-s005-unit-detail.md。
+- `ERP-S305-SUBMIT-WIRING-20261023` — `in-progress` — Owner Root；Base bf915cdf2812b4c3917bd50290e115099ba54c12；DIRECT原服务+ServiceContract两文件，提交前WIP预检缺口已确认，保留审批重检；archive/2026-10-23-s305-wip-quantity-scope.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
 

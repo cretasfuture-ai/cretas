@@ -103,3 +103,12 @@ Root唯一集成Owner，精确产品范围11文件不变；仅新增既有java-g
 Root干净正常4801主源码及2025测试源码编译、15目标选择器实际125项0fail/error/skip，其中WIP unit7/真实PG13.23五项；全量CI仍待执行，不能签合并或业务。官方Java-only build出口0/一个RELEASE_FINAL_STATUS=built，制品f3bc706a8d5d52ac103f9b09c7262b94913e261146de70750233b8dcd26a6bcb已预上传，未安装/切流；Web/RN未变、不重建。私有证据coordination/s305-final-build-20261023包含命令/退出码/源码树/实际测试inventory。缺失的原始失败编译日志仍UNKNOWN，不以该陈述认定产品编译失败；本次正常clean证据已补齐。
 
 S3-05原FAIL不变，尚未生产数量纠错。后续必须最终完整检查→手动合并→clean exact origin/main官方Java发布→原QA真实UI与独立DB逐阶段核对，不能以源码或制品签业务。原FAIL/旧证据和不支持路径均保留。
+
+
+## 原提交入口接线缺口续修（ERP-S305-SUBMIT-WIRING-20261023）
+
+风险复核确认：最终候选bf915/e24的submit没有调用WIP预检，原“submit/apply共用”仅指WIP服务内两个方法，不是上层入口。实际报告23989已有下游消费，当前submit仍可先保存pending并启动OA，到APPROVE才409；违反本登记原条件零workflow效果，且pending会阻塞后续纠错/结算。未在生产执行该阴性，不伪造已有单据或数据库失败。原正常clean125green真实保留，但不能证明缺失调用；原CI版本证据不当新源码通过。
+
+唯一写Owner Root，原集成WT/branch，Base bf915cdf2812b4c3917bd50290e115099ba54c12；DIRECT只允许ProductionReportCorrectionServiceImpl.java及ProductionReportCorrectionServiceContractTest.java两个既有文件（完整前缀见上）。原执行者仍SAFE释放，其他源码/CI/Entity/Repository/迁移/UI不扩大。为未持久化correction分配UUID，读同厂现有task，首次save/startWorkflow前调用同一WIP预检；保留approval重检和notes-only delta0无库存效果。原下游/成本/精度/租户/审批/分钟全部判据不变。
+
+先对真实submit方法加零write拒绝目标断言，留原行为red；窄修后相同目标绿并核对正例非空UUID及先验证后save/Workflow。开发只跑该类，最终源码冻结后必要完整检查及官方clean构建；旧full由本PR原有concurrency在新HEAD推送时处理，不取消其他Owner任务，不盲目重跑旧HEAD。独立PG不动55327，必要时仅恢复自有55329或新隔离库。生产S305正/负仍HOLD至正式发布。
