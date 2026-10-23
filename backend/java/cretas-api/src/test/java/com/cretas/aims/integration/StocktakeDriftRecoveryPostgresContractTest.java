@@ -341,6 +341,24 @@ class StocktakeDriftRecoveryPostgresContractTest {
                     .setParameter("username", "s307-pg-actor-" + actorId)
                     .executeUpdate();
         }
+        entityManager.createNativeQuery(
+                        "INSERT INTO factory_warehouses "
+                                + "(id, factory_id, code, name, type, is_active, created_at, updated_at) "
+                                + "VALUES (:id, :factoryId, 'WH-LOG', 'S307 logistics warehouse', 'LOGISTICS', TRUE, NOW(), NOW()) "
+                                + "ON CONFLICT (id) DO NOTHING")
+                .setParameter("id", WAREHOUSE)
+                .setParameter("factoryId", FACTORY)
+                .executeUpdate();
+        entityManager.createNativeQuery(
+                        "INSERT INTO raw_material_types "
+                                + "(id, factory_id, code, name, category, main_category, is_byproduct, self_supplied, "
+                                + "unit, is_active, created_by, created_at, updated_at) "
+                                + "VALUES (:id, :factoryId, 'S307-MAT', 'S307 drift material', '肉类', '原料', "
+                                + "FALSE, FALSE, 'kg', TRUE, 7000, NOW(), NOW()) "
+                                + "ON CONFLICT (id) DO NOTHING")
+                .setParameter("id", "S307-MATERIAL")
+                .setParameter("factoryId", FACTORY)
+                .executeUpdate();
     }
 
     private StocktakeRecountRequest request(Long version, String reason) {
