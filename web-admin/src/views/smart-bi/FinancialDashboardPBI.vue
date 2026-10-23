@@ -82,12 +82,31 @@ const autoRefreshInterval = ref<number>(0); // 0=off, 60000=1m, 300000=5m, 90000
 
 // Fix 72: Global slicer filters (Power BI / Looker style)
 const slicerFilters = ref<Record<string, string[]>>({});
-// 月份芯片 / 期间是先改再请求的: 记住页面上正显示的那一次, 请求失败就退回,
-// 否则芯片显示「3月」而页面还是全年的数
-const queryHistory = createQueryHistory<{ slicers: Record<string, string[]>; period: PeriodSelection }>();
+// 数据源 / 月份芯片 / 期间都是先改再请求的: 记住页面上正显示的那一次, 请求失败就退回,
+// 否则芯片显示「3月」而页面还是全年的数, 或标签写「数据源 #99999999」而页面还是 5250 的数
+interface DashboardQuery {
+  uploadId: number | null;
+  uploadIdInput: string;
+  demo: boolean;
+  slicers: Record<string, string[]>;
+  period: PeriodSelection;
+}
+const queryHistory = createQueryHistory<DashboardQuery>();
+function currentQuery(): DashboardQuery {
+  return {
+    uploadId: uploadId.value,
+    uploadIdInput: uploadIdInput.value,
+    demo: isInDemoMode.value,
+    slicers: slicerFilters.value,
+    period: periodSelection.value,
+  };
+}
 function restoreLastApplied() {
   const applied = queryHistory.lastApplied();
   if (!applied) return;
+  uploadId.value = applied.uploadId;
+  uploadIdInput.value = applied.uploadIdInput;
+  isInDemoMode.value = applied.demo;
   slicerFilters.value = applied.slicers;
   periodSelection.value = applied.period;
 }
@@ -599,7 +618,7 @@ async function generate(useDemo?: boolean) {
     if (isComponentUnmounted) return;
     if (resp.success) {
       dashboardResponse.value = resp;
-      queryHistory.commit({ slicers: slicerFilters.value, period: periodSelection.value });
+      queryHistory.commit(currentQuery());
       // Fix 72: Extract available filter dimensions from response
       if (resp.availableDimensions) {
         availableDimensions.value = resp.availableDimensions;

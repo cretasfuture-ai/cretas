@@ -238,8 +238,18 @@ describe('看板组件接上了失败回滚 (源码断言)', () => {
   const start = src.indexOf('async function generate(');
   const body = src.slice(start, src.indexOf('\n}\n', start));
 
-  it('成功时记下这次的筛选和期间', () => {
-    expect(body).toContain('queryHistory.commit({ slicers: slicerFilters.value, period: periodSelection.value })');
+  it('成功时记下这次的数据源、筛选和期间', () => {
+    // 线上验收 (2026-10-23): 数据源编号输错时, 页面还是 5250 的数, 标签却变成「数据源 #99999999」
+    expect(body).toContain('queryHistory.commit(currentQuery())');
+    const fn = src.slice(src.indexOf('function currentQuery('), src.indexOf('function restoreLastApplied('));
+    for (const field of ['uploadId', 'uploadIdInput', 'isInDemoMode', 'slicerFilters', 'periodSelection']) {
+      expect(fn).toContain(`${field}.value`);
+    }
+    const restoreStart = src.indexOf('function restoreLastApplied(');
+    const restore = src.slice(restoreStart, src.indexOf('function ', restoreStart + 10));
+    for (const field of ['uploadId', 'uploadIdInput', 'isInDemoMode', 'slicerFilters', 'periodSelection']) {
+      expect(restore).toContain(`${field}.value =`);
+    }
   });
 
   it('接口返回失败和请求抛错两条路都退回', () => {
