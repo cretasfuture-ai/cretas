@@ -44,6 +44,23 @@ public interface WipInventoryService {
     void postApprovedOutput(String factoryId, ProductionReport report, WorkProcessTask task, Long operatorId);
 
     /**
+     * 审批前重检报工产出数量更正的 WIP 边界；只读但会锁定实际 WIP 行。
+     * 数量没有变化时必须是 no-op，不能因为 WIP 历史缺失阻断 notes-only 更正。
+     */
+    void validateApprovedOutputQuantityCorrection(String factoryId, ProductionReport report,
+                                                   WorkProcessTask task, BigDecimal originalOutput,
+                                                   BigDecimal proposedOutput, String correctionId);
+
+    /**
+     * 在报工更正事务内原子调整简单 FINISHED/legacy WIP 产出。
+     * 仅支持同单位、未被消费且有唯一原始 IN 流水的 WIP；成本未知时诚实保留 null。
+     */
+    void correctApprovedOutputQuantity(String factoryId, ProductionReport report,
+                                       WorkProcessTask task, BigDecimal originalOutput,
+                                       BigDecimal proposedOutput, String correctionId,
+                                       Long operatorId);
+
+    /**
      * 冲销一条报工的库存影响：产出退回、领用还回，各留一条 {@code REVERSE} 流水。
      *
      * <p><b>为什么必须有</b>：库存在<b>提交</b>那一刻就进账（不等审批），

@@ -17,6 +17,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,13 +49,15 @@ class ProductionReportCorrectionServiceContractTest {
     @Mock WorkProcessTaskRepository taskRepository;
     @Mock UserRepository userRepository;
     @Mock WorkflowEngineService workflowEngine;
+    @Mock WipInventoryService wipInventoryService;
 
     ProductionReportCorrectionServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ProductionReportCorrectionServiceImpl(correctionRepository, reportRepository,
-                batchRepository, planRepository, taskRepository, userRepository, workflowEngine);
+                batchRepository, planRepository, taskRepository, userRepository, workflowEngine,
+                wipInventoryService);
         lenient().when(planRepository.findByIdForUpdate(any(String.class))).thenReturn(Optional.of(plan()));
     }
 
@@ -67,6 +70,10 @@ class ProductionReportCorrectionServiceContractTest {
         when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
         when(planRepository.findByIdForUpdate("PLAN-1")).thenReturn(Optional.of(plan()));
         when(correctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(30L);
+        task.setFactoryId("F006");
+        when(taskRepository.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(task));
         ApprovalWorkflowInstance instance = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
         when(instance.getId()).thenReturn("WF-1");
         when(instance.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.RUNNING);
@@ -79,10 +86,75 @@ class ProductionReportCorrectionServiceContractTest {
 
         assertThat(result.getStatus()).isEqualTo("PENDING_APPROVAL");
         assertThat(result.getWorkflowInstanceId()).isEqualTo("WF-1");
+        assertThat(java.util.UUID.fromString(result.getId()).toString()).isEqualTo(result.getId());
+        var order = org.mockito.Mockito.inOrder(wipInventoryService, correctionRepository, workflowEngine);
+        order.verify(wipInventoryService).validateApprovedOutputQuantityCorrection(
+                eq("F006"), eq(report), eq(task), eq(new BigDecimal("10")),
+                eq(new BigDecimal("9")), eq(result.getId()));
+        order.verify(correctionRepository).save(any());
+        order.verify(workflowEngine).startWorkflowIfConfigured(
+                eq("F006"), eq("PRODUCTION_REPORT_CORRECTION"), eq(result.getId()), anyMap(), eq(7L));
         assertThat(report.getOutputQuantity()).isEqualByComparingTo("10");
         assertThat(report.getNotes()).isEqualTo("原备注");
         verify(reportRepository, never()).save(any());
         verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void consumedOutputIsRejectedBeforePendingCorrectionOrWorkflowWrite() {
+        ProductionReport report = report();
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006"))
+                .thenReturn(Optional.of(report));
+        when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(30L);
+        task.setFactoryId("F006");
+        // The old submit never reaches these dependencies; explicit verification below protects wiring.
+        lenient().when(taskRepository.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(task));
+        lenient().doThrow(new BusinessException(409, "该 WIP 已被下游消费，数量更正会破坏库存账")
+                        .withCode("WIP_CORRECTION_DOWNSTREAM_CONSUMED"))
+                .when(wipInventoryService).validateApprovedOutputQuantityCorrection(
+                        eq("F006"), eq(report), eq(task), eq(new BigDecimal("10")),
+                        eq(new BigDecimal("9")), org.mockito.ArgumentMatchers.anyString());
+
+        assertThatThrownBy(() -> service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9"), new BigDecimal("8"),
+                        BigDecimal.ONE, 2, 60, "原备注", "核对数量"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("下游消费");
+
+        verify(wipInventoryService).validateApprovedOutputQuantityCorrection(
+                eq("F006"), eq(report), eq(task), eq(new BigDecimal("10")),
+                eq(new BigDecimal("9")), org.mockito.ArgumentMatchers.argThat(id -> {
+                    if (id == null) return false;
+                    try { return java.util.UUID.fromString(id).toString().equals(id); }
+                    catch (IllegalArgumentException invalid) { return false; }
+                }));
+        verify(correctionRepository, never()).save(any());
+        verify(workflowEngine, never()).startWorkflowIfConfigured(any(), any(), any(), anyMap(), any());
+        verify(workflowEngine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(reportRepository, never()).save(any());
+        verify(taskRepository, never()).save(any());
+        verify(wipInventoryService, never()).correctApprovedOutputQuantity(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void unsupportedReportPrecisionIsRejectedBeforeCorrectionOrWorkflowWrite() {
+        ProductionReport report = report();
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(correctionRepository.findFirstByFactoryIdAndProductionReportIdAndStatusOrderBySubmittedAtDesc(
+                "F006", 10L, ProductionReportCorrection.Status.PENDING_APPROVAL)).thenReturn(Optional.empty());
+        when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
+        when(planRepository.findByIdForUpdate("PLAN-1")).thenReturn(Optional.of(plan()));
+
+        assertThatThrownBy(() -> service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9.001"), new BigDecimal("8"),
+                        BigDecimal.ONE, 3, 90, "修正备注", "现场复核"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("两位小数");
+        verify(correctionRepository, never()).save(any());
+        verify(workflowEngine, never()).startWorkflowIfConfigured(any(), any(), any(), anyMap(), any());
     }
 
     @Test
@@ -256,6 +328,35 @@ class ProductionReportCorrectionServiceContractTest {
         assertThat(task.getActualQuantity()).isEqualByComparingTo("13");
         assertThat(task.getActualMinutes()).isEqualTo(100);
         assertThat(task.getStatus()).isEqualTo(WorkProcessTask.Status.COMPLETED);
+    }
+
+    @Test
+    void quantityOnlyCorrectionPreservesUnknownTaskMinutes() {
+        ProductionReport report = report();
+        report.setTotalWorkMinutes(null);
+        ProductionReportCorrection correction = correction();
+        correction.setOriginalTotalWorkMinutes(null);
+        correction.setProposedTotalWorkMinutes(null);
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(30L);
+        task.setFactoryId("F006");
+        task.setStatus(WorkProcessTask.Status.COMPLETED);
+        when(correctionRepository.findByIdAndFactoryId("COR-1", "F006")).thenReturn(Optional.of(correction));
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(taskRepository.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(task));
+        when(reportRepository.findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull("F006", 30L))
+                .thenReturn(List.of(report));
+        when(correctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ApprovalWorkflowInstance updated = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
+        when(updated.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(workflowEngine.transitionNode("WF-1", 99L, "configured_role", HistoryAction.APPROVE, "同意"))
+                .thenReturn(updated);
+
+        service.applyWorkflowAction("F006", "COR-1", "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "同意");
+
+        assertThat(task.getActualMinutes()).as("unknown report minutes remain unknown").isNull();
+        verify(taskRepository).save(task);
     }
 
     @Test

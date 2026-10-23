@@ -73,4 +73,15 @@ class ProductionReportCorrectionFlowContractTest {
                 "请核实报工阶段后再汇总，系统不会猜测其产出含义",
                 "请先核对各报工的可信产出单位，系统不会猜测换算关系");
     }
+
+    @Test
+    void approvalRechecksAndPostsWipCorrectionAroundWorkflowMutation() throws IOException {
+        String correction = source("service/impl/ProductionReportCorrectionServiceImpl.java");
+        assertThat(correction).contains("validateApprovedOutputQuantityCorrection",
+                "correctApprovedOutputQuantity");
+        assertThat(correction.indexOf("validateApprovedOutputQuantityCorrection"))
+                .isLessThan(correction.indexOf("workflowEngine.transitionNode"));
+        assertThat(correction.indexOf("correctApprovedOutputQuantity"))
+                .isLessThan(correction.indexOf("report.setOutputQuantity"));
+    }
 }
