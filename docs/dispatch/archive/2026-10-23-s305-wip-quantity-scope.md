@@ -94,3 +94,12 @@ Root实际BEFORE：report23989.total_work_minutes=NULL、task1989.actual_minutes
 Root唯一集成Owner，精确产品范围11文件不变；仅新增既有java-gate-pr.yml真实PG选择器一个类。源码冻结，正常clean package及原判据必要最终CI集中一次；受影响目标为原7类，加权限/Security/PartialUnique PG/Workflow/DecisionType及selector/架构/hint门禁。新PG为独立13.23/55329/专属目录数据库，CPU2/JVM2GiB/free>=8GiB，原55327及他人任务不动。真实JPA/PG门禁保留，skip不当PASS。
 
 实际候选23991/task1990/WIP384只读认证为原单IN/未消耗/1盒/累计成本2.22；与已消耗23989不同。不以功能数量代表物理生产。后续真实纠错必须官方发布后新鲜BEFORE、正常岗位入口、独立审批和逐阶段SQL核对；当前S305仍FAIL，无生产纠错写入。纯文档main069d不触发产品重测。
+
+
+## 冻结源码交付归档（最终候选）
+
+任务 ERP-S305-WIP-QUANTITY-20261023，状态review：原执行者与Root产品写scope均冻结释放，不授予其他Owner修改；后续检查/合并/官方发布/原QA业务验收继续由在飞ERP-S0S3-ACCEPTANCE-20261023跟踪。源码aad677与Root11文件blob一致，最终backend tree e24febaa0fd9c334487a72c8b94b5ee47ac0bf54。Root唯一附加CI文件仅追加真实PG类，原门禁全部保留。
+
+Root干净正常4801主源码及2025测试源码编译、15目标选择器实际125项0fail/error/skip，其中WIP unit7/真实PG13.23五项；全量CI仍待执行，不能签合并或业务。官方Java-only build出口0/一个RELEASE_FINAL_STATUS=built，制品f3bc706a8d5d52ac103f9b09c7262b94913e261146de70750233b8dcd26a6bcb已预上传，未安装/切流；Web/RN未变、不重建。私有证据coordination/s305-final-build-20261023包含命令/退出码/源码树/实际测试inventory。缺失的原始失败编译日志仍UNKNOWN，不以该陈述认定产品编译失败；本次正常clean证据已补齐。
+
+S3-05原FAIL不变，尚未生产数量纠错。后续必须最终完整检查→手动合并→clean exact origin/main官方Java发布→原QA真实UI与独立DB逐阶段核对，不能以源码或制品签业务。原FAIL/旧证据和不支持路径均保留。
