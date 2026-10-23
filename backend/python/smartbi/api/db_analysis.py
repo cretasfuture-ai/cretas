@@ -9,8 +9,10 @@ while data is stored in PostgreSQL.
 import logging
 from typing import List, Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
+
+from common.tenant_identity import scoped_factory
 
 from config import get_settings
 
@@ -23,7 +25,7 @@ settings = get_settings()
 # ==================== Request/Response Models ====================
 
 class AggregateRequest(BaseModel):
-    factory_id: str
+    factory_id: Optional[str] = None  # 已废弃: 取登录身份, 传了必须一致
     upload_id: int
     group_field: str
     measure_field: str
@@ -31,7 +33,7 @@ class AggregateRequest(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    factory_id: str
+    factory_id: Optional[str] = None  # 已废弃: 取登录身份, 传了必须一致
     upload_id: int
     analysis_type: str = "auto"
 
@@ -90,13 +92,14 @@ def get_db_session():
 # ==================== Endpoints ====================
 
 @router.post("/overview", response_model=DashboardResponse)
-async def analyze_from_db(request: AnalyzeRequest):
+async def analyze_from_db(request: AnalyzeRequest, http_request: Request):
     """
     Analyze data from PostgreSQL and return dashboard response.
 
     Reads dynamic data from PostgreSQL, auto-detects analysis type,
     and returns KPIs, charts, and insights.
     """
+    request.factory_id = scoped_factory(http_request, request.factory_id)
     if not settings.postgres_enabled:
         raise HTTPException(
             status_code=503,
@@ -214,13 +217,14 @@ async def analyze_from_db(request: AnalyzeRequest):
 
 
 @router.post("/aggregate", response_model=AggregateResponse)
-async def aggregate_from_db(request: AggregateRequest):
+async def aggregate_from_db(request: AggregateRequest, http_request: Request):
     """
     Dynamic aggregation query on PostgreSQL JSONB data.
 
     Uses PostgreSQL native JSONB operators with GIN index support
     for efficient aggregation.
     """
+    request.factory_id = scoped_factory(http_request, request.factory_id)
     if not settings.postgres_enabled:
         raise HTTPException(status_code=503, detail="PostgreSQL is not enabled")
 
@@ -258,13 +262,14 @@ async def aggregate_from_db(request: AggregateRequest):
 
 
 @router.get("/fields/{upload_id}")
-async def get_field_definitions(upload_id: int):
+async def get_field_definitions(upload_id: int, http_request: Request):
     """
     Get field definitions for an upload.
 
     Returns metadata about each field including type, semantic type,
     and chart role for frontend rendering.
     """
+    caller = scoped_factory(http_request, http_request.query_params.get("factory_id"))
     if not settings.postgres_enabled:
         raise HTTPException(status_code=503, detail="PostgreSQL is not enabled")
 
@@ -276,6 +281,14 @@ async def get_field_definitions(upload_id: int):
 
     try:
         with get_db_context() as db:
+            # 工厂隔离: 只能看本厂上传的字段定义 (他厂与不存在一律 404, 不可探测)
+            from database.models import SmartBiPgExcelUpload
+            owned = db.query(SmartBiPgExcelUpload.id).filter(
+                SmartBiPgExcelUpload.id == upload_id,
+                SmartBiPgExcelUpload.factory_id == caller,
+            ).first()
+            if owned is None:
+                raise HTTPException(status_code=404, detail="upload not found")
             field_repo = FieldDefinitionRepository(db)
             fields = field_repo.get_by_upload_id(upload_id)
 
@@ -292,7 +305,8 @@ async def get_field_definitions(upload_id: int):
 @router.get("/distinct/{upload_id}")
 async def get_distinct_values(
     upload_id: int,
-    factory_id: str = Query(...),
+    http_request: Request,
+    factory_id: Optional[str] = Query(None),
     field_name: str = Query(...)
 ):
     """
@@ -310,7 +324,7 @@ async def get_distinct_values(
     try:
         with get_db_context() as db:
             data_repo = DynamicDataRepository(db)
-            values = data_repo.get_distinct_values(factory_id, upload_id, field_name)
+            values = data_repo.get_distinct_values(scoped_factory(http_request, factory_id), upload_id, field_name)
 
             return {
                 "success": True,

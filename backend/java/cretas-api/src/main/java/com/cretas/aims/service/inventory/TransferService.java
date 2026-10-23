@@ -2,6 +2,8 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
+import com.cretas.aims.dto.inventory.WarehouseTransferDeliveryDTO;
+import com.cretas.aims.dto.inventory.WarehouseTransferReceiptRequest;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
@@ -95,4 +97,9 @@ public interface TransferService {
      */
     InternalTransferItem updateItemSourceBatch(String factoryId, String transferId,
                                                 Long itemId, String sourceBatchId);
+
+    InternalTransfer dispatchWarehouseTransfer(String factoryId, String transferId, Long userId);
+    WarehouseTransferDeliveryDTO getWarehouseDelivery(String factoryId, String transferId);
+    WarehouseTransferDeliveryDTO receiveWarehouseTransfer(String factoryId, String transferId, Long userId,
+                                                           WarehouseTransferReceiptRequest request);
 }

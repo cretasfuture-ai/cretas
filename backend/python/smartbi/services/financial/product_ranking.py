@@ -6,6 +6,8 @@ import pandas as pd
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
+from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
 
@@ -35,23 +37,22 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
             }
 
     def _do_build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int) -> Dict[str, Any]:
-        # Aggregate revenue by category/product
-        cat_col = 'category'
-        if cat_col not in df.columns:
+        # 有「产品」列就按具体产品排名; 只有品类时按品类排名并如实标注, 不把品类当产品
+        by_product = bool(getattr(column_mapping, 'product_col', None)) and 'product' in df.columns
+        dim_col = 'product' if by_product else 'category'
+        noun = '产品' if by_product else '品类'
+        if dim_col not in df.columns:
             return self._empty_result(period, year)
 
-        cat_totals = df.groupby(cat_col).agg(
-            revenue=('actual', 'sum')
-        ).reset_index()
-        cat_totals.columns = ['product', 'revenue']
+        source = M.select(df, [S.REVENUE]) if M.has_subjects(df) else df
+        source = source[~source[dim_col].fillna('').astype(str).str.strip().isin(['', 'nan'])]
+        if source.empty or source['actual'].notna().sum() == 0:
+            return self._empty_result(period, year)
 
-        # Clean: remove empty/zero entries
-        cat_totals = cat_totals[
-            (cat_totals['product'].notna()) &
-            (cat_totals['product'].astype(str).str.strip() != '') &
-            (cat_totals['product'].astype(str).str.strip().str.lower() != 'nan') &
-            (cat_totals['revenue'].fillna(0) > 0)
-        ]
+        cat_totals = source.groupby(dim_col).agg(revenue=('actual', 'sum')).reset_index()
+        cat_totals.columns = ['product', 'revenue']
+        # 只去掉 0; 负收入 (退货/冲减) 保留在排名里, 不能让退货严重的产品消失
+        cat_totals = cat_totals[cat_totals['revenue'] != 0]
 
         if cat_totals.empty:
             return self._empty_result(period, year)
@@ -59,9 +60,12 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
         # Sort descending
         cat_totals = cat_totals.sort_values('revenue', ascending=False).reset_index(drop=True)
 
-        products = cat_totals['product'].tolist()
+        products = cat_totals['product'].astype(str).tolist()
         revenues = cat_totals['revenue'].tolist()
-        total_revenue = sum(revenues)
+        gross_revenue = sum(r for r in revenues if r > 0)   # 帕累托占比的分母: 正向销售额
+        returns_total = sum(r for r in revenues if r < 0)
+        net_revenue = gross_revenue + returns_total
+        total_revenue = gross_revenue
 
         # Calculate cumulative percentages
         cumulative = []
@@ -86,7 +90,7 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
 
         kpis = [
             {
-                "label": "Top 1 产品",
+                "label": f"Top 1 {noun}",
                 "value": top1_product,
                 "unit": "",
                 "trend": "flat",
@@ -104,12 +108,17 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
                 "trend": "up" if top3_pct > 60 else "flat",
             },
             {
-                "label": "产品总数",
+                "label": f"{noun}总数",
                 "value": str(len(products)),
                 "unit": "个",
                 "trend": "flat",
             },
         ]
+        if returns_total:
+            kpis.append({"label": "净收入", "value": self._format_value(net_revenue, scale), "unit": "元",
+                         "trend": "flat"})
+            kpis.append({"label": "退货冲减", "value": self._format_value(returns_total, scale), "unit": "元",
+                         "trend": "down"})
 
         # --- ECharts Pareto option ---
         option = self._base_echarts_option()
@@ -231,11 +240,11 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
 
         # --- Table data ---
         table_data = {
-            "headers": ["排名", "产品", f"收入{scale['name_suffix']}", "占比", "累计占比"],
+            "headers": ["排名", noun, f"收入{scale['name_suffix']}", "占比", "累计占比"],
             "rows": [],
         }
         for i, (prod, val, cum) in enumerate(zip(products, scaled_revenues, cumulative)):
-            individual_pct = round(val / sum(scaled_revenues) * 100, 1) if sum(scaled_revenues) else 0
+            individual_pct = round(revenues[i] / total_revenue * 100, 1) if total_revenue else 0
             table_data["rows"].append([
                 str(i + 1),
                 prod,
@@ -246,10 +255,12 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
 
         # --- Analysis context ---
         ctx = (
-            f"{year}年产品排名: 共{len(products)}个产品, "
+            f"{year}年{noun}排名: 共{len(products)}个{noun}, "
             f"Top1 {top1_product} 贡献{round(revenues[0]/total_revenue*100, 1) if total_revenue else 0}%, "
             f"Top3 累计贡献{top3_pct}%"
         )
+        if returns_total:
+            ctx += f"; 退货冲减 {returns_total:,.2f} 元, 净收入 {net_revenue:,.2f} 元 (占比按正向销售额 {gross_revenue:,.2f} 元计算)"
 
         result = {
             "chartType": self.chart_type,
@@ -264,6 +275,10 @@ class ProductRankingParetoBuilder(AbstractFinancialChartBuilder):
                 "productCount": len(products),
                 "scale": scale['suffix'],
                 "paretoTop3Pct": top3_pct,
+                "dimension": dim_col,
+                "grossRevenue": gross_revenue,
+                "returnsTotal": returns_total,
+                "netRevenue": net_revenue,
             },
         }
         return _sanitize_for_json(result)

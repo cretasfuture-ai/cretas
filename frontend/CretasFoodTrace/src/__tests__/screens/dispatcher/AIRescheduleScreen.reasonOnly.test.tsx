@@ -31,7 +31,26 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('expo-linear-gradient', () => ({
   LinearGradient: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
-jest.mock('../../../utils/formatters', () => ({ formatDate: () => '2026-10-20' }));
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaView: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+}));
+jest.mock('@react-native-community/datetimepicker', () => {
+  const ReactNative = require('react-native');
+  const React = require('react');
+  const DatePicker = ({ onChange, testID }: { onChange: (event: unknown, date?: Date) => void; testID?: string }) => (
+    React.createElement(ReactNative.TouchableOpacity, {
+      testID,
+      onPress: () => onChange({ type: 'set' }, new Date(2026, 9, 20, 12, 0, 0)),
+    })
+  );
+  return { ...ReactNative, __esModule: true, default: DatePicker };
+});
+jest.mock('../../../utils/formatters', () => ({
+  formatDate: (date: Date) => {
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  },
+}));
 
 const schedulingPlan = {
   id: 'sched-plan-123',
@@ -54,6 +73,8 @@ function renderScreen() {
 
 describe('AIRescheduleScreen scheduling-plan reason capture', () => {
   beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(2026, 9, 20, 12, 0, 0));
     mockGetPlans.mockReset();
     mockGetPlan.mockReset();
     mockGetPlan.mockResolvedValue({ success: true, data: schedulingPlan });
@@ -61,6 +82,40 @@ describe('AIRescheduleScreen scheduling-plan reason capture', () => {
     mockAiReschedule.mockReset();
     mockWhatIf.mockReset();
     (Alert.alert as jest.Mock).mockClear();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('loads a selected plan date instead of silently staying on today', async () => {
+    jest.setSystemTime(new Date(2026, 9, 22, 12, 0, 0));
+    mockGetPlans.mockImplementation(async ({ startDate }: { startDate: string }) => ({
+      success: true,
+      data: { content: startDate === '2026-10-20' ? [schedulingPlan] : [] },
+    }));
+    const view = render(<AIRescheduleScreen />);
+
+    await waitFor(() => expect(mockGetPlans).toHaveBeenCalledWith({
+      startDate: '2026-10-22',
+      endDate: '2026-10-22',
+      status: 'draft,confirmed,in_progress',
+      page: 0,
+      size: 20,
+    }));
+    expect(view.getByText('暂无可记录调整原因的计划')).toBeTruthy();
+    fireEvent.press(view.getByTestId('schedule-date-selector'));
+    fireEvent.press(view.getByTestId('schedule-date-picker'));
+
+    await waitFor(() => expect(mockGetPlans).toHaveBeenCalledWith({
+      startDate: '2026-10-20',
+      endDate: '2026-10-20',
+      status: 'draft,confirmed,in_progress',
+      page: 0,
+      size: 20,
+    }));
+    await waitFor(() => expect(view.getByTestId('scheduling-plan-sched-plan-123')).toBeTruthy());
+    expect(view.getByTestId('selected-plan-date').props.children).toContain('2026-10-20');
   });
 
   it('disables empty submit and sends the selected scheduling id and trimmed reason once', async () => {

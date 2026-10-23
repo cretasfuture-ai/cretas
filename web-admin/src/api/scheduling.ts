@@ -21,6 +21,7 @@ export interface SchedulingPlan {
   createdAt: string;
   confirmedBy?: number;
   confirmedAt?: string;
+  notes?: string | null;
 }
 
 export interface LineSchedule {

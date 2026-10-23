@@ -23,6 +23,14 @@ _client: Optional[httpx.AsyncClient] = None
 _wrapper: "Optional[_RedactingLLMClient]" = None
 
 
+class EgressRedactionError(RuntimeError):
+    """脱敏失败 → 请求被拦下, 没有任何内容出境。
+
+    这是本地确定性失败, 不是供应商故障: 调用方 (llm_router) 必须直接抛出,
+    不得换候选重试, 也不得记入熔断。
+    """
+
+
 class _RedactingLLMClient:
     """P0 数据主权 — 共享 httpx 客户端的脱敏包装层。
 
@@ -33,7 +41,8 @@ class _RedactingLLMClient:
     脱敏 scope-aware: insights generator 设了 RedactionScope 时, 客户名/门店名/菜品名
     用 known-values 占位 + 输出还原; 无 scope 时对所有出境施加 PII + factory 兜底。
 
-    Fail-open: 任何脱敏异常 → CRITICAL 日志 + 发送原 payload (可用性优先, 错误可见)。
+    Fail-closed: 任何脱敏异常 → CRITICAL 日志 + 抛 EgressRedactionError, 不发送任何内容。
+    (曾是 fail-open 发原 payload; 工艺保密改造起禁止: 脱敏失败绝不换账号/模型后发原文。)
     审计在 metrics_response_hook 统一记录 (universal, 含真实 status_code)。
     """
 
@@ -49,12 +58,12 @@ class _RedactingLLMClient:
             redacted, meta = redact_payload_for_egress(json_payload)
             set_egress_redaction_meta(meta)
             return redacted
-        except Exception as e:  # fail-open: availability over a single missed redaction
+        except Exception as e:  # fail-closed: never send the unredacted payload
             logger.critical(
-                "[P0-redact] egress redaction FAILED, sending ORIGINAL payload "
-                "(LEAK RISK — investigate): %s", e,
+                "[P0-redact] egress redaction FAILED, request BLOCKED (nothing sent): %s",
+                type(e).__name__,
             )
-            return json_payload
+            raise EgressRedactionError(type(e).__name__) from e
 
     async def post(self, url: Any, *, json: Any = None, **kwargs: Any):  # noqa: A002
         json = self._maybe_redact(url, json)

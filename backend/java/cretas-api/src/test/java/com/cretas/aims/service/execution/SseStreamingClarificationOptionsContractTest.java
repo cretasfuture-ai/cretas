@@ -21,6 +21,8 @@ import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.intent.IntentAccessModeFilter;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -143,8 +145,11 @@ class SseStreamingClarificationOptionsContractTest {
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .userInput("查看库存").mode("READ").build();
-        ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
-                request, 7L, "manager", new F006BossQuestionClient.Cancellation());
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 7L, FACTORY, "manager"))) {
+            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
+                    request, 7L, "manager", new F006BossQuestionClient.Cancellation());
+        }
 
         IntentExecuteResponse result = events.stream()
                 .filter(event -> "result".equals(event.name()))
@@ -238,9 +243,12 @@ class SseStreamingClarificationOptionsContractTest {
             events.add(new Event(invocation.getArgument(1), invocation.getArgument(2)));
             return null;
         }).when(service).sendSseEvent(any(), anyString(), any());
-        ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
-                IntentExecuteRequest.builder().userInput("查看库存").mode("READ").build(),
-                7L, "manager", new F006BossQuestionClient.Cancellation());
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 7L, FACTORY, "manager"))) {
+            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", mock(SseEmitter.class), FACTORY,
+                    IntentExecuteRequest.builder().userInput("查看库存").mode("READ").build(),
+                    7L, "manager", new F006BossQuestionClient.Cancellation());
+        }
 
         IntentExecuteResponse result = events.stream()
                 .filter(event -> "result".equals(event.name()))

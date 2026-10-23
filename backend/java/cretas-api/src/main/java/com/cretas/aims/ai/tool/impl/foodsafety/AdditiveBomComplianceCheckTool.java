@@ -77,6 +77,9 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
     private BomRecipeRepository bomRecipeRepository;
 
     @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    @Autowired
     private BomRecipeItemRepository bomRecipeItemRepository;
 
     @Autowired
@@ -174,6 +177,12 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
             return buildSimpleResult(
                     "⚠️ 该 BOM 不属于当前工厂",
                     Map.of("status", "FACTORY_MISMATCH"));
+        }
+
+        // 工艺保密: 受保护且无权的配方不把添加剂用量交给模型
+        if (!processSecretGuard.permitsFullContent(factoryId, recipe.getId(), "AI tool additive_bom_compliance")) {
+            return buildSimpleResult(com.cretas.aims.security.ProcessSecretResponseAdvice.RESTRICTED_MESSAGE,
+                    Map.of("recipeId", recipe.getId(), "processSecret", Map.of("visibility", "RESTRICTED")));
         }
 
         // Step 2: 取 items

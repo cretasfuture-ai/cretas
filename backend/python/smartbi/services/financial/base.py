@@ -54,6 +54,18 @@ def _detect_value_scale(values: list) -> dict:
         return {"divisor": 1, "suffix": "", "name_suffix": ""}
 
 
+def format_amount(val, precision: int = 2) -> str:
+    """金额显示: 1 万以上用「万」, 百亿以上用「亿」, 带千分位; None 显示 '-'。KPI 与页首结论共用。"""
+    if val is None:
+        return '-'
+    magnitude = abs(val)
+    if magnitude >= 1e10:
+        return f"{val / 1e8:,.{precision}f}亿"
+    if magnitude >= 1e4:
+        return f"{val / 1e4:,.{precision}f}万"
+    return f"{val:,.{precision}f}"
+
+
 # Theme colors — aligned with Steven's Power BI green/yellow design language
 COLORS = {
     "primary": "#2D8B57",        # Green — primary color (was blue #1B65A8)
@@ -104,6 +116,17 @@ QUARTER_COLORS = ['rgba(45,139,87,0.04)', 'rgba(54,179,126,0.04)',
                   'rgba(232,185,49,0.04)', 'rgba(169,209,142,0.04)']
 
 
+# 「还缺数据」里给用户看的列名 (与 can_build 的列角色一一对应)
+ROLE_HINTS = {
+    'budget': '「预算」列（如 预算、目标）',
+    'actual': '「实际」列（如 实际、本年）',
+    'last_year': '「上年」列（如 上年、去年同期）',
+    'category': '「品类 / 产品」列',
+    'item': '「项目」列（科目名称，如 营业收入、营业成本）',
+    'period': '「月份」列（如 1月、2026-03）',
+}
+
+
 class AbstractFinancialChartBuilder(ABC):
     """Base class for all financial chart builders."""
 
@@ -112,9 +135,33 @@ class AbstractFinancialChartBuilder(ABC):
     description: str = ""          # Description for AI/UI
     required_columns: List[str] = []  # Required column roles: budget, actual, last_year, category, item
     display_order: int = 0         # Order in dashboard
+    # 数值是比率 (如各月毛利率) 的表只能进声明了能处理比率的图表; 金额类图表把百分比相加没有意义
+    accepts_ratio_values: bool = False
+    # 出不了图时缺的是什么: 'column' = 在这张表上补一列就能出; 'statement' = 要另一张报表 (损益/现金流/账龄/人工)
+    gap_kind: str = 'column'
+    # 需要另一张报表时, 告诉用户那张表长什么样
+    statement_hint: str = ''
 
     def can_build(self, column_mapping) -> bool:
         """Check if this chart can be built with available columns."""
+        return self.unavailable_reason(column_mapping) is None
+
+    def unavailable_reason(self, column_mapping) -> Optional[Dict[str, str]]:
+        """这份数据出不了这张图时返回 {"reason", "gapKind"} (前端「还缺数据」原样显示); 出得了返回 None。"""
+        if getattr(column_mapping, 'value_kind', 'amount') == 'ratio' and not self.accepts_ratio_values:
+            return {"reason": f"这份是比率表（数值是百分比），{self.display_name}要用金额明细，请换一张金额表上传。",
+                    "gapKind": "statement"}
+        available = self._available_roles(column_mapping)
+        missing = [r for r in self.required_columns if r not in available]
+        if not missing:
+            return None
+        if 'item' in missing and self.statement_hint:
+            return {"reason": self.statement_hint, "gapKind": "statement"}
+        hints = '、'.join(ROLE_HINTS.get(r, r) for r in missing)
+        return {"reason": f"缺少{hints}，在表里补上后重新上传。", "gapKind": "column"}
+
+    @staticmethod
+    def _available_roles(column_mapping) -> set:
         available = set()
         if column_mapping.budget_cols:
             available.add('budget')
@@ -122,13 +169,13 @@ class AbstractFinancialChartBuilder(ABC):
             available.add('actual')
         if column_mapping.last_year_cols:
             available.add('last_year')
-        if column_mapping.category_col:
+        if column_mapping.category_col or getattr(column_mapping, 'product_col', None):
             available.add('category')
         if column_mapping.item_col or column_mapping.label_col:
             available.add('item')
         if column_mapping.period_cols:
             available.add('period')
-        return all(r in available for r in self.required_columns)
+        return available
 
     @abstractmethod
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
@@ -145,6 +192,18 @@ class AbstractFinancialChartBuilder(ABC):
                 "metadata": {"period", "dataQuality"}
             }
         """
+
+    def _insufficient(self, period: Dict, year: int, reason: str) -> Dict[str, Any]:
+        """数据不足时的统一结果: 不出图, 把缺什么原样告诉用户。"""
+        return {
+            "chartType": self.chart_type,
+            "title": f"{year}年{self.display_name}",
+            "kpis": [],
+            "echartsOption": {},
+            "tableData": None,
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
+        }
 
     def get_analysis_context(self, result: Dict) -> str:
         """Generate analysis context string from build result for AI analysis."""
@@ -176,14 +235,13 @@ class AbstractFinancialChartBuilder(ABC):
             ])
         return areas
 
-    def _format_value(self, val, scale: dict, precision: int = 2) -> str:
-        """Format value with scale suffix."""
-        if val is None:
-            return '-'
-        scaled = val / scale['divisor']
-        if scale['suffix']:
-            return f"{scaled:,.{precision}f}{scale['suffix']}"
-        return f"{val:,.{precision}f}"
+    def _format_value(self, val, scale: dict = None, precision: int = 2) -> str:
+        """KPI 数值格式化: 单位按数值本身决定 (万元为主, 百亿以上用亿), 带千分位。
+
+        不跟随图表各自按月度值推断的 scale, 这样同一个数在不同图里显示同一个单位
+        (曾出现同一份数据一张图 42,300.00元、另一张 4.24万元)。scale 参数保留以兼容调用方。
+        """
+        return format_amount(val, precision)
 
     def _calc_growth_rate(self, current, previous) -> Optional[float]:
         """Calculate YoY/MoM growth rate as percentage."""

@@ -190,6 +190,22 @@ export function transformKeys(obj: unknown): unknown {
  * untyped calls don't poison call sites with `unknown`. Callers writing NEW
  * code should still supply explicit `<ResponseType>`. See @/types/api.
  */
+/** pythonFetch 在非 2xx 时抛出的错误: 带 HTTP 状态和后端返回的 message (若有)。 */
+export interface PythonServiceError extends Error {
+  status?: number;
+  serverMessage?: string;
+}
+
+async function readServerMessage(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { message?: unknown; error?: unknown; detail?: unknown };
+    const text = body.message ?? body.error ?? body.detail;
+    return typeof text === 'string' && text.trim() ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function pythonFetch<T = any>(path: string, options: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   const { timeoutMs, ...fetchOptions } = options;
@@ -219,7 +235,11 @@ export async function pythonFetch<T = any>(path: string, options: RequestInit & 
     });
 
     if (!response.ok) {
-      throw new Error(`Python service error: ${response.status} ${response.statusText}`);
+      // 错误文本保持原样 (调用方按它判断状态); 后端给的原因另挂在 serverMessage 上, 供界面原样显示
+      const error = new Error(`Python service error: ${response.status} ${response.statusText}`) as PythonServiceError;
+      error.status = response.status;
+      error.serverMessage = await readServerMessage(response);
+      throw error;
     }
 
     // Handle 204 No Content (e.g., DELETE endpoints) without attempting JSON parse

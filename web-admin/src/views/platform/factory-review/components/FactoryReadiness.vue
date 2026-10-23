@@ -17,14 +17,22 @@ const stageLabel = { NOT_APPLICABLE: '本次不适用', BLOCKED: '需要调整',
 const accepted = computed(() => report.value?.capabilities.filter(row => row.stage === 'CONFIGURATION_ACCEPTED').length ?? 0)
 const stageState = { DONE: '已完成', PENDING: '未完成', UNKNOWN: '无法判断', NOT_APPLICABLE: '本次不适用' }
 const domainState = { READY: '可以开展', MISSING: '还差资料', UNKNOWN: '无法判断', NOT_APPLICABLE: '本次不适用' }
-const firstState = { RECORDED: '已有单据', NONE: '尚无单据', UNKNOWN: '无法判断' }
-const tagType = (state: string) => ['DONE', 'READY', 'MET', 'RECORDED'].includes(state) ? 'success'
+const firstState = { COMPLETED: '已完成', RECORDED: '有单据，尚未完成', NONE: '尚无单据', UNKNOWN: '无法判断' }
+const tagType = (state: string) => ['DONE', 'READY', 'MET', 'COMPLETED'].includes(state) ? 'success'
   : ['PENDING', 'MISSING'].includes(state) ? 'warning' : 'info'
 // Existing maintenance pages; they read the signed-in account's own factory, not the reviewed one.
-const remedyPath: Record<FactoryRemedyKey, string> = {
+const remedyPath: Partial<Record<FactoryRemedyKey, string>> = {
   SUPPLIERS: '/procurement/suppliers', CUSTOMERS: '/sales/customers', MATERIAL_TYPES: '/warehouse/material-types',
-  PRODUCTS: '/system/products', PRODUCT_PROCESSES: '/system/product-processes', WAREHOUSE_DEFAULTS: '/canvas-editor',
+  PRODUCTS: '/system/products', PRODUCT_PROCESSES: '/system/product-processes',
 }
+// Default warehouses have no page of their own: they sit in a sub-tab of the canvas editor, which a
+// plain link cannot open. Name the exact steps and the field instead of a link that lands elsewhere.
+const warehouseField: Record<string, string> = {
+  PURCHASE_INBOUND_WAREHOUSE: '采购入库默认仓', WORKSHOP_WAREHOUSE: '生产成品 / 报工消耗默认仓',
+  PRODUCTION_RAW_WAREHOUSE: '生产领料默认仓', SALES_OUTBOUND_WAREHOUSE: '销售出货默认仓',
+}
+const warehouseSteps = (code: string) => `由这家工厂的管理员登录后，依次打开「Canvas 配置编辑器」→「工厂配置」→「仓库管理」，`
+  + `在默认用途里设置「${warehouseField[code] ?? '对应的默认仓'}」并保存（工厂 ${props.factoryId}）`
 const authStore = useAuthStore()
 const ownFactory = computed(() => Boolean(props.factoryId) && authStore.factoryId === props.factoryId)
 const missingChecks = (domain: NonNullable<FactoryReadinessReport['businessReadiness']>[number]) =>
@@ -97,7 +105,8 @@ onBeforeUnmount(() => { alive = false; ++sequence })
           <ul v-if="domain.applicability === 'APPLICABLE' && missingChecks(domain).length" class="missing">
             <li v-for="check in missingChecks(domain)" :key="check.code">
               <span>{{ check.label }}：{{ check.state === 'UNKNOWN' ? '无法判断' : '缺少' }}（{{ check.detail }}）</span>
-              <router-link v-if="ownFactory" :to="{ path: remedyPath[check.remedyKey] }" class="remedy">去「{{ check.remedyLabel }}」补齐</router-link>
+              <span v-if="check.remedyKey === 'WAREHOUSE_DEFAULTS'" class="remedy" data-testid="warehouse-steps">{{ warehouseSteps(check.code) }}</span>
+              <router-link v-else-if="ownFactory && remedyPath[check.remedyKey]" :to="{ path: remedyPath[check.remedyKey]! }" class="remedy">去「{{ check.remedyLabel }}」补齐</router-link>
               <span v-else class="remedy">由工厂管理员在「{{ check.remedyLabel }}」补齐</span>
             </li>
           </ul>

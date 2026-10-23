@@ -32,6 +32,7 @@ from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from common.llm_client import EgressRedactionError
 from common.llm_router import SLOT, LLMChainExhausted, call_chain, call_chain_stream
 from common.llm_metrics import llm_caller_context
 from common.responses import ErrorCode, error_response
@@ -152,14 +153,30 @@ VL_TOTAL_TIMEOUT_S = 27.0
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
-@router.post("/chat")
-async def chat(req: LLMRequest) -> Dict[str, Any]:
+def _redaction_blocked(exc: EgressRedactionError) -> JSONResponse:
+    """脱敏失败 = 请求被拦、什么都没出境。答 503 而不是裸 500, 让 Java 侧知道「没有模型作答」而不是「服务坏了」。"""
+    logger.error("[llm_api] egress redaction failed, request blocked: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content=error_response(
+            "AI 请求在发送前脱敏失败，已拦截，未发送任何内容",
+            ErrorCode.SERVICE_UNAVAILABLE,
+            data={"reason": "EGRESS_REDACTION_FAILED"},
+        ),
+    )
+
+
+@router.post("/chat", response_model=None)
+async def chat(req: LLMRequest) -> Union[Dict[str, Any], JSONResponse]:
     """Synchronous chat passthrough — returns complete call_chain response."""
     slot = _parse_slot(req.slot)
     _validate_tool_choice(req.tool_choice)
     payload = _build_payload(req)
     with llm_caller_context(req.caller or "llm_api.chat"):
-        return await call_chain(slot, payload)
+        try:
+            return await call_chain(slot, payload)
+        except EgressRedactionError as exc:
+            return _redaction_blocked(exc)
 
 
 @router.post("/chat-stream")
@@ -206,6 +223,8 @@ async def tool_call(req: LLMRequest) -> Union[Dict[str, Any], JSONResponse]:
     with llm_caller_context(req.caller or "llm_api.tool_call"):
         try:
             return await call_chain(slot, payload)
+        except EgressRedactionError as exc:
+            return _redaction_blocked(exc)
         except LLMChainExhausted as exc:
             logger.warning("[llm_api.tool_call] %s", exc)
             return JSONResponse(

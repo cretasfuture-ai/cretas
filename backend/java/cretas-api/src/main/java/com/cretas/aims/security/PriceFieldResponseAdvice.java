@@ -70,6 +70,8 @@ import java.util.regex.Pattern;
  * @since 2026-05-12
  */
 @ControllerAdvice
+// 工艺保密裁剪 (ProcessSecretResponseAdvice, LOWEST_PRECEDENCE) 必须在价格隐藏之后把响应转成 JSON 树
+@org.springframework.core.annotation.Order(org.springframework.core.Ordered.LOWEST_PRECEDENCE - 100)
 public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
 
     private static final Logger log = LoggerFactory.getLogger(PriceFieldResponseAdvice.class);
