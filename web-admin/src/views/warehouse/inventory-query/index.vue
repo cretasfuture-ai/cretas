@@ -23,6 +23,7 @@ import InventoryByWarehouse from '@/views/inventory/by-warehouse/index.vue';
 import WarehouseInventoryTotal from '@/views/warehouse/inventory-total/index.vue';
 import WarehouseInventoryBatch from '@/views/warehouse/inventory/index.vue';
 import WarehouseSemiFinished from '@/views/warehouse/semi-finished/list.vue';
+import FinishedGoodsInventory from '@/views/sales/finished-goods/list.vue';
 import { resolveInventoryQueryTab, type InventoryQueryTab } from '../inventoryQueryTab';
 
 const route = useRoute();
@@ -56,6 +57,9 @@ function syncQuery(name: string | number) {
       </el-tab-pane>
       <el-tab-pane label="半成品库存" name="semi-finished" lazy>
         <WarehouseSemiFinished />
+      </el-tab-pane>
+      <el-tab-pane label="成品库存" name="finished-goods" lazy>
+        <FinishedGoodsInventory />
       </el-tab-pane>
     </el-tabs>
   </div>

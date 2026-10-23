@@ -16,9 +16,12 @@
  *   '/warehouse/inventory'       → tab=batch
  *   '/warehouse/semi-finished'   → tab=semi-finished
  */
-export type InventoryQueryTab = 'by-warehouse' | 'total' | 'batch' | 'semi-finished';
+export type InventoryQueryTab = 'by-warehouse' | 'total' | 'batch' | 'semi-finished' | 'finished-goods';
 
+// Keep the original exported four-tab list stable for existing consumers; the
+// finished-goods pane is an additive hub route handled explicitly below.
 export const INVENTORY_QUERY_TABS: InventoryQueryTab[] = ['by-warehouse', 'total', 'batch', 'semi-finished'];
+const FINISHED_GOODS_TAB: InventoryQueryTab = 'finished-goods';
 
 /** 默认 tab = 分仓库存查询 (PR#309 B2 原始入口，合并前最常用)。 */
 export const DEFAULT_INVENTORY_QUERY_TAB: InventoryQueryTab = 'by-warehouse';
@@ -28,7 +31,7 @@ export const DEFAULT_INVENTORY_QUERY_TAB: InventoryQueryTab = 'by-warehouse';
  */
 export function resolveInventoryQueryTab(query: Record<string, unknown> | null | undefined): InventoryQueryTab {
   const t = query?.tab;
-  return INVENTORY_QUERY_TABS.includes(t as InventoryQueryTab)
+  return (INVENTORY_QUERY_TABS.includes(t as InventoryQueryTab) || t === FINISHED_GOODS_TAB)
     ? (t as InventoryQueryTab)
     : DEFAULT_INVENTORY_QUERY_TAB;
 }
