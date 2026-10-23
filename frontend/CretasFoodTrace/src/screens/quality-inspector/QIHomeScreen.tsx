@@ -1,7 +1,7 @@
 /**
  * 现场质检员首页
  *
- * 该角色只负责发起标签拍检和查看拍检记录。人工审核属于质量审核员的 Web 工作台。
+ * 该角色可发起动态批次质检、标签拍检并查看两类记录。人工审核属于质量审核员的 Web 工作台。
  */
 
 import React from 'react';
@@ -44,6 +44,26 @@ export default function QIHomeScreen() {
       <View style={styles.actions}>
         <TouchableRipple
           style={styles.actionCard}
+          onPress={() => navigation.navigate('QIInspectTab', { screen: 'QIInspectList' })}
+          borderless={false}
+          accessibilityRole="button"
+          accessibilityLabel="发起批次质检"
+          testID="qi-home-new-inspection"
+        >
+          <View style={styles.actionContent}>
+            <View style={[styles.actionIcon, styles.photoActionIcon]}>
+              <Ionicons name="clipboard-outline" size={30} color="#B23E2C" />
+            </View>
+            <View style={styles.actionCopy}>
+              <Text style={styles.actionTitle}>发起批次质检</Text>
+              <Text style={styles.actionHint}>选择待检批次并按当前产品标准填写</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
+          </View>
+        </TouchableRipple>
+
+        <TouchableRipple
+          style={styles.actionCard}
           onPress={() => navigation.navigate('QIInspectTab', { screen: 'QILabelQcCreate' })}
           borderless={false}
           accessibilityRole="button"
@@ -77,6 +97,26 @@ export default function QIHomeScreen() {
             <View style={styles.actionCopy}>
               <Text style={styles.actionTitle}>拍检记录</Text>
               <Text style={styles.actionHint}>查看照片上传、AI 初筛和处理结果</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
+          </View>
+        </TouchableRipple>
+
+        <TouchableRipple
+          style={styles.actionCard}
+          onPress={() => navigation.navigate('QIRecordsTab', { screen: 'QIRecords' })}
+          borderless={false}
+          accessibilityRole="button"
+          accessibilityLabel="查看质检记录"
+          testID="qi-home-inspection-records"
+        >
+          <View style={styles.actionContent}>
+            <View style={[styles.actionIcon, styles.recordActionIcon]}>
+              <Ionicons name="document-text-outline" size={30} color="#1463A5" />
+            </View>
+            <View style={styles.actionCopy}>
+              <Text style={styles.actionTitle}>质检记录</Text>
+              <Text style={styles.actionHint}>查看动态标准、实测值和保存的标准快照</Text>
             </View>
             <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
           </View>

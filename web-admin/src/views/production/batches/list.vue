@@ -340,6 +340,7 @@ function openSourcePlan(row: BatchTableRow) {
 const createDialogVisible = ref(false);
 const creating = ref(false);
 const productTypes = ref<TableRow[]>([]);
+const LEGACY_CREATE_UNITS = ['kg', '箱', '件', '吨'] as const;
 const createForm = ref({
   batchNumber: '',
   productTypeId: '',
@@ -350,6 +351,22 @@ const createForm = ref({
   isTrial: false,
   trialSampleId: '',
 });
+
+function declaredProductUnit(product: TableRow | undefined): string {
+  return String(product?.unit || product?.quantityUnit || '').trim();
+}
+
+const createUnitOptions = computed(() => {
+  const selected = productTypes.value.find((product) => String(product.id) === String(createForm.value.productTypeId));
+  const declared = declaredProductUnit(selected);
+  return Array.from(new Set([...(declared ? [declared] : []), ...LEGACY_CREATE_UNITS]));
+});
+
+function handleCreateProductTypeChange(productTypeId: string | number) {
+  const selected = productTypes.value.find((product) => String(product.id) === String(productTypeId));
+  const declared = declaredProductUnit(selected);
+  if (declared) createForm.value.unit = declared;
+}
 
 onMounted(() => {
   loadData();
@@ -735,7 +752,13 @@ function getStatusText(status: string) {
           <el-input v-model="createForm.batchNumber" placeholder="自动生成，可手动修改" />
         </el-form-item>
         <el-form-item label="产品类型" required>
-          <el-select v-model="createForm.productTypeId" placeholder="请选择产品类型" filterable style="width: 100%">
+          <el-select
+            v-model="createForm.productTypeId"
+            placeholder="请选择产品类型"
+            filterable
+            style="width: 100%"
+            @change="handleCreateProductTypeChange"
+          >
             <el-option
               v-for="pt in productTypes"
               :key="pt.id"
@@ -747,10 +770,7 @@ function getStatusText(status: string) {
         <el-form-item label="计划数量" required>
           <el-input-number v-model="createForm.plannedQuantity" :min="1" :precision="2" style="width: 200px" />
           <el-select v-model="createForm.unit" style="width: 80px; margin-left: 8px">
-            <el-option label="kg" value="kg" />
-            <el-option label="箱" value="箱" />
-            <el-option label="件" value="件" />
-            <el-option label="吨" value="吨" />
+            <el-option v-for="unit in createUnitOptions" :key="unit" :label="unit" :value="unit" />
           </el-select>
         </el-form-item>
         <el-form-item label="备注">

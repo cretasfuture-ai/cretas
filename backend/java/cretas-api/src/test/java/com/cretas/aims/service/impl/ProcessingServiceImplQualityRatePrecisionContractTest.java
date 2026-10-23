@@ -1,7 +1,10 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.QualityCheckItemBindingRepository;
 import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
@@ -19,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -30,10 +34,16 @@ class ProcessingServiceImplQualityRatePrecisionContractTest {
     private static final String FACTORY = "SIM24QA";
 
     @Mock private QualityInspectionService inspectionService;
+    @Mock private ProductionBatchRepository productionBatchRepository;
+    @Mock private QualityCheckItemBindingRepository qualityCheckItemBindingRepository;
     @InjectMocks private ProcessingServiceImpl service;
 
     @BeforeEach
     void preserveTheActualServiceEntityAtThePersistenceBoundary() {
+        ReflectionTestUtils.setField(service, "qualityCheckItemBindingRepository", qualityCheckItemBindingRepository);
+        ProductionBatch batch = ProductionBatch.builder().id(10L).factoryId(FACTORY)
+                .productTypeId("QA-RATE-PRECISION-LEGACY").build();
+        lenient().when(productionBatchRepository.findById(10L)).thenReturn(Optional.of(batch));
         lenient().when(inspectionService.createInspection(eq(FACTORY), any(QualityInspection.class)))
                 .thenAnswer(call -> call.getArgument(1));
     }
