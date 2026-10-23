@@ -10,6 +10,8 @@ import {
   QualityStatistics,
   QualityStatisticsResponse,
   QualityInspectionForm,
+  DynamicQualityForm,
+  DynamicQualityAnswer,
   ClockRecord,
   QINotification,
   QIApiResponse,
@@ -118,6 +120,24 @@ class QualityInspectorApiClient {
   async getBatchDetail(batchId: string): Promise<QIBatch> {
     const response = await apiClient.get<QIApiResponse<QIBatch>>(
       `${this.getBasePath()}/processing/batches/${batchId}`
+    );
+    return response.data;
+  }
+
+  async getDynamicQualityForm(batchId: string): Promise<DynamicQualityForm> {
+    const response = await apiClient.get<QIApiResponse<DynamicQualityForm>>(
+      `${this.getBasePath()}/processing/batches/${batchId}/quality-form`,
+    );
+    return response.data;
+  }
+
+  async submitDynamicInspection(
+    batchId: string,
+    data: { standardRevision: string; sampleSize: number; answers: DynamicQualityAnswer[]; notes?: string },
+  ): Promise<QualityRecord> {
+    const response = await apiClient.post<QIApiResponse<QualityRecord>>(
+      `${this.getBasePath()}/processing/batches/${batchId}/quality-inspections`,
+      data,
     );
     return response.data;
   }
@@ -236,6 +256,9 @@ class QualityInspectorApiClient {
         ? `${raw.inspectionDate}T00:00:00`
         : new Date().toISOString(),
       remarks: raw.notes ? String(raw.notes) : undefined,
+      standardBasis: customFields.standardBasis === 'DYNAMIC_PRODUCT_BINDING' ? 'DYNAMIC_PRODUCT_BINDING' : 'UNKNOWN',
+      standardRevision: typeof customFields.standardRevision === 'string' ? customFields.standardRevision : undefined,
+      standardSnapshot: customFields,
     };
   }
 

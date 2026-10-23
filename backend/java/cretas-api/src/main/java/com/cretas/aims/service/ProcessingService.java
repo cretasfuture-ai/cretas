@@ -120,6 +120,10 @@ public interface ProcessingService {
      * 提交质检记录
       */
     Map<String, Object> submitInspection(String factoryId, String batchId, Map<String, Object> inspection);
+    Map<String, Object> getDynamicQualityForm(String factoryId, String batchId);
+    Map<String, Object> submitDynamicInspection(String factoryId, String batchId,
+                                                 com.cretas.aims.dto.quality.DynamicQualityInspectionRequest request,
+                                                 Long inspectorId);
      /**
      * 获取质检记录
       */

@@ -50,6 +50,35 @@ export interface QualityInspectionForm {
   };
 }
 
+export interface DynamicQualityItem {
+  bindingId: string;
+  itemId: string;
+  itemVersion: number;
+  label: string;
+  valueType?: string;
+  unit?: string | null;
+  effectiveStandardValue?: string | null;
+  effectiveMinValue?: number | null;
+  effectiveMaxValue?: number | null;
+  effectiveIsRequired?: boolean;
+}
+
+export interface DynamicQualityForm {
+  batchId: string;
+  productTypeId: string;
+  productName: string;
+  standardRevision: string;
+  items: DynamicQualityItem[];
+}
+
+export interface DynamicQualityAnswer {
+  bindingId: string;
+  itemId: string;
+  itemVersion: number;
+  value: string;
+  note?: string;
+}
+
 // ============================================
 // 质检等级
 // ============================================
@@ -161,6 +190,9 @@ export interface QualityRecord {
   reviewedAt?: string;
   reviewStatus?: 'pending' | 'approved' | 'rejected';
   reviewNotes?: string;
+  standardBasis?: 'DYNAMIC_PRODUCT_BINDING' | 'UNKNOWN';
+  standardRevision?: string;
+  standardSnapshot?: Record<string, unknown>;
 }
 
 // ============================================

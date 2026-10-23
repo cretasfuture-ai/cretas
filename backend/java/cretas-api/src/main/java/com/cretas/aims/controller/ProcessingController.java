@@ -401,6 +401,23 @@ public class ProcessingController {
         return ApiResponse.success(result);
     }
 
+    @RequirePermission({"quality:read_write"})
+    @GetMapping("/batches/{batchId}/quality-form")
+    public ApiResponse<Map<String, Object>> getDynamicQualityForm(
+            @PathVariable String factoryId, @PathVariable String batchId) {
+        return ApiResponse.success(processingService.getDynamicQualityForm(factoryId, batchId));
+    }
+
+    @RequirePermission({"quality:read_write"})
+    @PostMapping("/batches/{batchId}/quality-inspections")
+    public ApiResponse<Map<String, Object>> submitDynamicInspection(
+            @PathVariable String factoryId, @PathVariable String batchId,
+            @Valid @RequestBody DynamicQualityInspectionRequest request,
+            HttpServletRequest httpRequest) {
+        Long actor = (Long) httpRequest.getAttribute("userId");
+        return ApiResponse.success(processingService.submitDynamicInspection(factoryId, batchId, request, actor));
+    }
+
     /**
      * 获取质检记录
      */

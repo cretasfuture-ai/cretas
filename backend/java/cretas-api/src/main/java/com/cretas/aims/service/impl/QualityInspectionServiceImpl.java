@@ -263,7 +263,15 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         if (inspection.getCustomFields() != null && !inspection.getCustomFields().isEmpty()) {
             java.util.Map<String, Object> merged = new java.util.HashMap<>(
                     existing.getCustomFields() != null ? existing.getCustomFields() : java.util.Map.of());
-            merged.putAll(inspection.getCustomFields());
+            if (!"DYNAMIC_PRODUCT_BINDING".equals(merged.get("standardBasis"))) {
+                merged.putAll(inspection.getCustomFields());
+            } else {
+                inspection.getCustomFields().forEach((key, value) -> {
+                    if (!"standardBasis".equals(key) && !"standardRevision".equals(key) && !"items".equals(key)) {
+                        merged.put(key, value);
+                    }
+                });
+            }
             existing.setCustomFields(merged);
         }
 

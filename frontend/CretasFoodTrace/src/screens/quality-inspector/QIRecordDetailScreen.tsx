@@ -165,6 +165,10 @@ export default function QIRecordDetailScreen() {
             <Text style={styles.infoLabel}>{t('recordDetail.sampleSize')}</Text>
             <Text style={styles.infoValue}>{record.sampleSize} {t('recordDetail.sampleUnit')}</Text>
           </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>标准依据</Text>
+            <Text style={styles.infoValue}>{record.standardBasis === 'DYNAMIC_PRODUCT_BINDING' ? `动态产品标准 ${record.standardRevision || ''}` : '历史依据未知'}</Text>
+          </View>
         </View>
       </View>
 
