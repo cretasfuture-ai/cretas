@@ -280,6 +280,35 @@ class ProductionReportCorrectionServiceContractTest {
     }
 
     @Test
+    void quantityOnlyCorrectionPreservesUnknownTaskMinutes() {
+        ProductionReport report = report();
+        report.setTotalWorkMinutes(null);
+        ProductionReportCorrection correction = correction();
+        correction.setOriginalTotalWorkMinutes(null);
+        correction.setProposedTotalWorkMinutes(null);
+        WorkProcessTask task = new WorkProcessTask();
+        task.setId(30L);
+        task.setFactoryId("F006");
+        task.setStatus(WorkProcessTask.Status.COMPLETED);
+        when(correctionRepository.findByIdAndFactoryId("COR-1", "F006")).thenReturn(Optional.of(correction));
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(taskRepository.findByFactoryIdAndId("F006", 30L)).thenReturn(Optional.of(task));
+        when(reportRepository.findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull("F006", 30L))
+                .thenReturn(List.of(report));
+        when(correctionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ApprovalWorkflowInstance updated = org.mockito.Mockito.mock(ApprovalWorkflowInstance.class);
+        when(updated.getStatus()).thenReturn(ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(workflowEngine.transitionNode("WF-1", 99L, "configured_role", HistoryAction.APPROVE, "同意"))
+                .thenReturn(updated);
+
+        service.applyWorkflowAction("F006", "COR-1", "WF-1", 99L,
+                "configured_role", HistoryAction.APPROVE, "同意");
+
+        assertThat(task.getActualMinutes()).as("unknown report minutes remain unknown").isNull();
+        verify(taskRepository).save(task);
+    }
+
+    @Test
     void pendingApprovalCannotApplyAfterPlanBecomesCompleted() {
         ProductionReport report = report();
         ProductionReportCorrection correction = correction();

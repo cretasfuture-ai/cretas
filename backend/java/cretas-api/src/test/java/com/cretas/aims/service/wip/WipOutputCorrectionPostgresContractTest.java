@@ -9,13 +9,18 @@ import com.cretas.aims.integration.DisposablePostgresTargetGuard;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ReportReversalLogRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.service.NotificationService;
+import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +37,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 import javax.sql.DataSource;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -118,6 +124,44 @@ class WipOutputCorrectionPostgresContractTest {
                 + "WHERE source_type='PRODUCTION_REPORT_CORRECTION'", Integer.class)).isZero();
     }
 
+    @Test
+    void productionPrecisionRoundTripKeepsCorrectionCostAfterDownstreamReverseReplay() throws Exception {
+        insertFixture();
+
+        service.correctApprovedOutputQuantity(
+                "F006", report(), task(), new BigDecimal("0.81"), new BigDecimal("0.82"), "PG-ROUNDTRIP", 7L);
+
+        assertThat(reader.queryForObject("SELECT produced_quantity FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("0.82");
+        assertThat(reader.queryForObject("SELECT accumulated_cost FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("10.13");
+        assertThat(reader.queryForObject("SELECT unit_cost FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("12.3537");
+        assertThat(reader.queryForObject("SELECT balance_cost_after FROM semi_finished_inventory_transactions "
+                + "WHERE source_type='PRODUCTION_REPORT_CORRECTION' AND source_ref LIKE '%PG-ROUNDTRIP%'",
+                BigDecimal.class)).isEqualByComparingTo("12.3537");
+
+        insertDownstreamRoundTripRows();
+        ReportReversalServiceImpl reversal = new ReportReversalServiceImpl(
+                mock(ReportReversalLogRepository.class), mock(com.cretas.aims.repository.ProductionBatchRepository.class),
+                mock(ProductionReportRepository.class), store.wipRepository(), store.txnRepository(),
+                mock(FinishedGoodsBatchRepository.class), mock(UserRepository.class),
+                mock(WorkProcessTaskRepository.class), mock(NotificationService.class));
+        Method replay = ReportReversalServiceImpl.class.getDeclaredMethod(
+                "replayMovingAverage", Long.class, String.class, LocalDateTime.class);
+        replay.setAccessible(true);
+        replay.invoke(reversal, 383L, "F006", LocalDateTime.now());
+
+        assertThat(reader.queryForObject("SELECT produced_quantity FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("0.82");
+        assertThat(reader.queryForObject("SELECT available_quantity FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("0.82");
+        assertThat(reader.queryForObject("SELECT accumulated_cost FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("10.13");
+        assertThat(reader.queryForObject("SELECT unit_cost FROM semi_finished_inventory WHERE id=383",
+                BigDecimal.class)).isEqualByComparingTo("12.3537");
+    }
+
     private ProductionReport report() {
         return ProductionReport.builder().id(23989L).factoryId("F006").outputQuantity(new BigDecimal("0.81"))
                 .outputUnit("kg").reportKind("OUTPUT").outputKind(null).semiOutputs(null).build();
@@ -137,13 +181,13 @@ class WipOutputCorrectionPostgresContractTest {
     private void createTables(JdbcTemplate jdbc) {
         jdbc.execute("CREATE TABLE semi_finished_inventory ("
                 + "id bigint primary key, factory_id text not null, intermediate_batch_no text not null, "
-                + "source_work_process_task_id bigint, produced_quantity numeric, consumed_quantity numeric, "
-                + "available_quantity numeric, adjustment_quantity numeric, unit text, status text, "
-                + "unit_cost numeric, accumulated_cost numeric, deleted_at timestamp, version bigint)");
+                + "source_work_process_task_id bigint, produced_quantity numeric(12,2), consumed_quantity numeric(12,2), "
+                + "available_quantity numeric(12,2), adjustment_quantity numeric(12,2), unit text, status text, "
+                + "unit_cost numeric(14,4), accumulated_cost numeric(14,2), deleted_at timestamp, version bigint)");
         jdbc.execute("CREATE TABLE semi_finished_inventory_transactions ("
                 + "id bigserial primary key, factory_id text not null, semi_finished_id bigint not null, "
-                + "txn_type text not null, source_type text not null, source_ref text, quantity numeric not null, "
-                + "unit_cost_at_txn numeric, balance_after numeric, balance_cost_after numeric, report_id bigint, "
+                + "txn_type text not null, source_type text not null, source_ref text, quantity numeric(12,6) not null, "
+                + "unit_cost_at_txn numeric(14,4), balance_after numeric(12,6), balance_cost_after numeric(14,4), report_id bigint, "
                 + "operator_id bigint, created_at timestamp not null)");
     }
 
@@ -151,8 +195,26 @@ class WipOutputCorrectionPostgresContractTest {
         reader.update("INSERT INTO semi_finished_inventory VALUES "
                 + "(383,'F006','SKU-1-B2398-S1-1989',1989,0.81,0,0.81,0,'kg','AVAILABLE',12.50,10.125,NULL,0)");
         reader.update("INSERT INTO semi_finished_inventory_transactions "
-                + "(factory_id,semi_finished_id,txn_type,source_type,source_ref,quantity,report_id,created_at) "
-                + "VALUES ('F006',383,'IN','PRODUCTION_OUTPUT','SKU-1-B2398-S1-1989',0.81,23989,now())");
+                + "(factory_id,semi_finished_id,txn_type,source_type,source_ref,quantity,unit_cost_at_txn,"
+                + "report_id,created_at) "
+                + "VALUES ('F006',383,'IN','PRODUCTION_OUTPUT','SKU-1-B2398-S1-1989',0.81,12.50,23989,now())");
+    }
+
+    private void insertDownstreamRoundTripRows() {
+        Timestamp base = reader.queryForObject("SELECT max(created_at) FROM "
+                + "semi_finished_inventory_transactions WHERE semi_finished_id=383", Timestamp.class);
+        reader.update("INSERT INTO semi_finished_inventory_transactions "
+                        + "(factory_id,semi_finished_id,txn_type,source_type,source_ref,quantity,"
+                        + "unit_cost_at_txn,balance_after,balance_cost_after,created_at) VALUES "
+                        + "('F006',383,'OUT','SECONDARY_CONSUME','PG-ROUNDTRIP-OUT',?,?,?,?,?)",
+                new BigDecimal("-0.20"), new BigDecimal("12.3537"), new BigDecimal("0.62"),
+                new BigDecimal("12.3537"), new Timestamp(base.getTime() + 1000));
+        reader.update("INSERT INTO semi_finished_inventory_transactions "
+                        + "(factory_id,semi_finished_id,txn_type,source_type,source_ref,quantity,"
+                        + "unit_cost_at_txn,balance_after,balance_cost_after,created_at) VALUES "
+                        + "('F006',383,'REVERSE','REVERSAL','PG-ROUNDTRIP-REVERSE',?,?,?,?,?)",
+                new BigDecimal("0.20"), new BigDecimal("12.3537"), new BigDecimal("0.82"),
+                new BigDecimal("12.3537"), new Timestamp(base.getTime() + 2000));
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -218,6 +280,22 @@ class WipOutputCorrectionPostgresContractTest {
                                     .unitCost(rs.getBigDecimal("unit_cost"))
                                     .accumulatedCost(rs.getBigDecimal("accumulated_cost"))
                                     .version(rs.getLong("version")).build(), args[0], args[1]);
+                    return rows.stream().findFirst();
+                }
+                if (method.getName().equals("findByIdForUpdate")) {
+                    List<SemiFinishedInventory> rows = jdbc.query(
+                            "SELECT * FROM semi_finished_inventory WHERE id=? FOR UPDATE", (rs, n) -> SemiFinishedInventory.builder()
+                                    .id(rs.getLong("id")).factoryId(rs.getString("factory_id"))
+                                    .intermediateBatchNo(rs.getString("intermediate_batch_no"))
+                                    .sourceWorkProcessTaskId(rs.getLong("source_work_process_task_id"))
+                                    .producedQuantity(rs.getBigDecimal("produced_quantity"))
+                                    .consumedQuantity(rs.getBigDecimal("consumed_quantity"))
+                                    .availableQuantity(rs.getBigDecimal("available_quantity"))
+                                    .adjustmentQuantity(rs.getBigDecimal("adjustment_quantity"))
+                                    .unit(rs.getString("unit")).status(rs.getString("status"))
+                                    .unitCost(rs.getBigDecimal("unit_cost"))
+                                    .accumulatedCost(rs.getBigDecimal("accumulated_cost"))
+                                    .version(rs.getLong("version")).build(), args[0]);
                     return rows.stream().findFirst();
                 }
                 if (method.getName().equals("save")) {

@@ -181,6 +181,8 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         wipInventoryService.correctApprovedOutputQuantity(
                 report.getFactoryId(), report, task, correction.getOriginalOutputQuantity(),
                 correction.getProposedOutputQuantity(), correction.getId(), actorId);
+        boolean workMinutesChanged = !Objects.equals(report.getTotalWorkMinutes(),
+                correction.getProposedTotalWorkMinutes());
         report.setOutputQuantity(correction.getProposedOutputQuantity());
         report.setGoodQuantity(correction.getProposedGoodQuantity());
         report.setDefectQuantity(correction.getProposedDefectQuantity());
@@ -204,11 +206,13 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             BigDecimal taskOutput = outputReports.stream()
                     .map(ProductionReport::getOutputQuantity).filter(Objects::nonNull)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            int taskMinutes = taskReports.stream()
-                    .map(ProductionReport::getTotalWorkMinutes).filter(Objects::nonNull)
-                    .mapToInt(Integer::intValue).sum();
             task.setActualQuantity(taskOutput);
-            task.setActualMinutes(taskMinutes);
+            if (workMinutesChanged) {
+                int taskMinutes = taskReports.stream()
+                        .map(ProductionReport::getTotalWorkMinutes).filter(Objects::nonNull)
+                        .mapToInt(Integer::intValue).sum();
+                task.setActualMinutes(taskMinutes);
+            }
             taskRepository.save(task); // 状态、领料与库存字段不变。
         }
         correction.setStatus(ProductionReportCorrection.Status.APPROVED_APPLIED);

@@ -2360,6 +2360,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // 正量 REVERSE = 还回领用 (OUT 的逆) 的累计量 —— 抵扣 consumedOut, ⛔ 不进 producedQty。
         BigDecimal restoredConsumption = BigDecimal.ZERO;
         boolean hasUnknownCost = false;
+        BigDecimal correctionUnitCostSnapshot = null;
 
         for (SemiFinishedInventoryTransaction txn : allTxns) {
             if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
@@ -2413,6 +2414,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 if (q != null && q.signum() != 0) {
                     producedQty = producedQty.add(q);
                     ledgerInTotal = ledgerInTotal.add(q);
+                    // apply 已按 persistent accumulated_cost(scale-2) / corrected produced
+                    // 写入 scale-4 balanceCostAfter。回放沿用该 correction 快照，避免用
+                    // 原始 IN 的未舍入 quantity * unitCost 重建出另一套成本口径。
+                    correctionUnitCostSnapshot = txn.getBalanceCostAfter();
+                    if (!hasUnknownCost && correctionUnitCostSnapshot != null
+                            && producedQty.signum() > 0) {
+                        weightedCost = correctionUnitCostSnapshot.multiply(producedQty);
+                    }
                 }
             }
         }

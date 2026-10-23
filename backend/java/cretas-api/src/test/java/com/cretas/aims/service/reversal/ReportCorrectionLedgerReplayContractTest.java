@@ -26,7 +26,8 @@ class ReportCorrectionLedgerReplayContractTest {
     void replayRecognizesOnlyDedicatedCorrectionAdjustAndKeepsCostSeparate() throws IOException {
         String source = source();
         assertThat(source).contains("TxnType.ADJUST", "WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE",
-                "producedQty = producedQty.add(q)", "ledgerInTotal = ledgerInTotal.add(q)");
+                "producedQty = producedQty.add(q)", "ledgerInTotal = ledgerInTotal.add(q)",
+                "correctionUnitCostSnapshot", "balanceCostAfter");
         assertThat(source.indexOf("WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE"))
                 .isLessThan(source.indexOf("producedQty = producedQty.add(q)"));
         assertThat(source).contains("原 IN/REVERSE 的总成本与未知成本标记保持原口径");

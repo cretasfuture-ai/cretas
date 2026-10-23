@@ -683,7 +683,8 @@ class ReplayMovingAverageTest {
                     .id(242L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
                     .sourceType(WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE)
                     .sourceRef("report-correction:COR-COR-1:report:240")
-                    .reportId(240L).quantity(new BigDecimal("0.01")).unitCostAtTxn(null).build();
+                    .reportId(240L).quantity(new BigDecimal("0.01")).unitCostAtTxn(null)
+                    .balanceCostAfter(new BigDecimal("12.3537")).build();
             when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId)).thenReturn(List.of(in, correction));
 
             org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
@@ -691,7 +692,7 @@ class ReplayMovingAverageTest {
 
             assertEquals(new BigDecimal("0.82"), sfi.getProducedQuantity());
             assertEquals(new BigDecimal("10.13"), sfi.getAccumulatedCost());
-            assertEquals(new BigDecimal("12.3476"), sfi.getUnitCost());
+            assertEquals(new BigDecimal("12.3537"), sfi.getUnitCost());
             assertEquals(new BigDecimal("0.82"), sfi.getAvailableQuantity());
         }
 
@@ -708,7 +709,8 @@ class ReplayMovingAverageTest {
             SemiFinishedInventoryTransaction correction = SemiFinishedInventoryTransaction.builder()
                     .id(252L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
                     .sourceType(WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE).reportId(250L)
-                    .quantity(new BigDecimal("0.01")).unitCostAtTxn(null).build();
+                    .quantity(new BigDecimal("0.01")).unitCostAtTxn(null)
+                    .balanceCostAfter(new BigDecimal("12.3537")).build();
             SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
                     .id(253L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
                     .quantity(new BigDecimal("-0.20")).build();
@@ -725,6 +727,7 @@ class ReplayMovingAverageTest {
             assertEquals(0, BigDecimal.ZERO.compareTo(sfi.getConsumedQuantity()));
             assertEquals(new BigDecimal("0.82"), sfi.getAvailableQuantity());
             assertEquals(new BigDecimal("10.13"), sfi.getAccumulatedCost());
+            assertEquals(new BigDecimal("12.3537"), sfi.getUnitCost());
         }
 
         @Test
