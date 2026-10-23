@@ -37,6 +37,19 @@ const ElButton = defineComponent({
     return () => h('button', { disabled: props.disabled, onClick: () => emit('click') }, slots.default?.());
   },
 });
+const ElDialog = defineComponent({
+  props: { modelValue: Boolean, title: String },
+  setup(props, { slots }) {
+    return () => props.modelValue
+      ? h('section', { role: 'dialog', 'aria-label': props.title }, [slots.default?.(), slots.footer?.()])
+      : null;
+  },
+});
+const stubs = {
+  ElTable, ElTableColumn, ElButton, ElDialog,
+  'el-table': ElTable, 'el-table-column': ElTableColumn,
+  'el-button': ElButton, 'el-dialog': ElDialog,
+};
 
 describe('报工修正阶段边界挂载回归', () => {
   it('INPUT 行显示阶段和未知单位且不可打开修正', async () => {
@@ -45,12 +58,35 @@ describe('报工修正阶段边界挂载回归', () => {
       goodQuantity: null, defectQuantity: null, dataCorrected: false,
       reporterName: '操作员', productName: '原料', processCategory: '投料',
     }] } });
-    const wrapper = mount(ApprovalList, { global: { stubs: { ElTable, ElTableColumn, ElButton, 'el-table': ElTable, 'el-table-column': ElTableColumn, 'el-button': ElButton } } });
+    const wrapper = mount(ApprovalList, { global: { stubs } });
     await flushPromises();
     expect(wrapper.text()).toContain('投入');
     expect(wrapper.text()).toContain('单位未知');
     const button = wrapper.findAll('button').find(candidate => candidate.text().includes('核对修正'));
     expect(button, 'INPUT 行必须渲染出核对按钮作为负向对照').toBeDefined();
     expect(button!.attributes('disabled')).toBeDefined();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('OUTPUT 行点击后才打开核对弹窗并显示完工阶段和可信单位', async () => {
+    getCorrectableReports.mockResolvedValue({ success: true, data: { content: [{
+      id: 89, reportKind: 'OUTPUT', outputUnit: 'kg', outputQuantity: 0.81,
+      correctionEligible: true, goodQuantity: null, defectQuantity: null,
+      dataCorrected: false, reporterName: '操作员', productName: '半成品',
+      processCategory: '加工',
+    }] } });
+    const wrapper = mount(ApprovalList, { global: { stubs } });
+    await flushPromises();
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    const button = wrapper.findAll('button').find(candidate => candidate.text().includes('核对修正'));
+    expect(button, 'OUTPUT 正向对照必须能从实际行按钮进入').toBeDefined();
+    expect(button!.attributes('disabled')).toBeUndefined();
+    await button!.trigger('click');
+    const dialog = wrapper.get('[role="dialog"][aria-label="报工核对修正"]');
+    expect(dialog.text()).toContain('完工');
+    expect(dialog.text()).toContain('kg');
+    expect(dialog.text()).toContain('0.81');
+    wrapper.unmount();
   });
 });
