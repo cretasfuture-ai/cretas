@@ -138,12 +138,22 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             throw new BusinessException(409, "审批实例与报工修正记录不匹配")
                     .withCode("PRODUCTION_REPORT_CORRECTION_WORKFLOW_MISMATCH");
         }
+        if (action == HistoryAction.APPROVE
+                && correction.getStatus() == ProductionReportCorrection.Status.APPROVED_APPLIED) {
+            return enrich(correction);
+        }
         ProductionPlan approvalPlan = null;
         if (action == HistoryAction.APPROVE) {
             ProductionReport report = reportRepository.findByIdAndFactoryIdForUpdate(
                             correction.getProductionReportId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404, "原报工记录不存在"));
             assertCorrectionableReport(report);
+            if (Boolean.TRUE.equals(report.getSettled())) {
+                throw new BusinessException(409, "报工已结单，不能应用待审批修正")
+                        .withCode("PRODUCTION_REPORT_CORRECTION_SETTLEMENT_RACE")
+                        .withHint("请先核对报工结单状态，再处理待审批修正")
+                        .withHintTarget("报工结单状态");
+            }
             approvalPlan = lockCorrectionPlan(factoryId, correction.getProductionPlanId());
             assertPlanAllowsCorrection(approvalPlan);
             WorkProcessTask task = correction.getWorkProcessTaskId() == null ? null
@@ -460,7 +470,14 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
     }
 
     private void assertPlanAllowsCorrection(ProductionPlan plan) {
-        if (plan == null || plan.getStatus() == null) return;
+        if (plan == null) return;
+        if (Boolean.TRUE.equals(plan.getIsLocked())) {
+            throw new BusinessException(409, "生产计划已锁定，不能发起或应用报工修正")
+                    .withCode("PRODUCTION_REPORT_CORRECTION_PLAN_LOCKED")
+                    .withHint("请先解除生产计划锁定，再处理报工修正")
+                    .withHintTarget("生产计划锁定状态");
+        }
+        if (plan.getStatus() == null) return;
         ProductionPlanStatus status = plan.getStatus();
         if (status == ProductionPlanStatus.COMPLETED
                 || status == ProductionPlanStatus.CANCELLED
