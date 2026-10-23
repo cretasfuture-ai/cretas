@@ -96,8 +96,8 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * {@code ProcessingServiceImpl#getBatchPage}) —— 空搜索词继续走既有 6 个分支, 零改动。
      */
     @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId "
-         + "AND (:status IS NULL OR p.status = :status) "
-         + "AND (:supervisorId IS NULL OR p.supervisorId = :supervisorId) "
+         + "AND (:#{#status == null} = true OR p.status = :status) "
+         + "AND (:#{#supervisorId == null} = true OR p.supervisorId = :supervisorId) "
          + "AND (:includeClerkWip = true OR p.batchType <> 'CLERK_WIP') "
          + "AND (LOWER(p.batchNumber) LIKE LOWER(CONCAT('%', :batchNumber, '%')) "
          + "     OR p.id IN (SELECT r.batchId FROM ProcessSheetRow r, ProductionPlan pl "

@@ -6,6 +6,7 @@ import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
+import com.cretas.aims.dto.factory.StocktakeRecountRequest;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import org.springframework.data.domain.Page;
@@ -149,6 +150,13 @@ public interface FactoryStocktakeService {
      * @return 盘点任务 DTO
      */
     StocktakeDTO getDetail(String stocktakeId, String factoryId);
+
+    /**
+     * Recover an approved stocktake whose live inventory drifted before apply.
+     * The approved evidence is retained and a new counting task is created.
+     */
+    StocktakeDTO recountAfterDrift(String stocktakeId, String factoryId,
+            StocktakeRecountRequest request, Long userId, String requestRole);
 
     /**
      * SP12 §5.2: 提交审批并启动 INVENTORY_ADJUSTMENT workflow。
