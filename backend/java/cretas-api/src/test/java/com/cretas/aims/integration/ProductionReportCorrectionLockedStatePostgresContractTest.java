@@ -174,6 +174,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
         Fixture fixture = persistFixture();
         ProductionReport settled = reportRepository.findById(fixture.reportId()).orElseThrow();
         settled.setStatus(ProductionReport.Status.APPROVED);
+        settled.setApprovalStatus("APPROVED");
         settled.setSettled(true);
         reportRepository.saveAndFlush(settled);
         entityManager.clear();
@@ -231,6 +232,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
 
         ProductionReport settled = reportRepository.findById(fixture.reportId()).orElseThrow();
         settled.setStatus(ProductionReport.Status.APPROVED);
+        settled.setApprovalStatus("APPROVED");
         settled.setSettled(true);
         reportRepository.saveAndFlush(settled);
         entityManager.clear();
