@@ -817,6 +817,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     continue;
                 }
                 if (SemiFinishedInventoryTransaction.TxnType.ADJUST.equals(txn.getTxnType())) {
+                    if (WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())) {
+                        throw new BusinessException(409,
+                                "该报工已存在已审批的 WIP 数量更正，不能直接撤回原报工")
+                                .withCode("WIP_CORRECTION_REVERSAL_CONFLICT")
+                                .withHint("请继续使用已审批的报工修正流程，或先由负责人核对更正流水后再撤回")
+                                .withHintTarget("报工修正审批");
+                    }
                     throw malformedWipTransaction("报工关联 ADJUST 不属于撤回集合", "WIP_LEDGER_INVALID");
                 }
                 if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType()))
@@ -2397,6 +2404,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 BigDecimal q = txn.getQuantity();
                 if (q != null) {
                     consumedOut = consumedOut.add(q.abs());
+                }
+            } else if (SemiFinishedInventoryTransaction.TxnType.ADJUST.equals(txn.getTxnType())
+                    && WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())) {
+                // 报工数量更正是唯一允许进入净产出回放的 ADJUST。它只改变数量证据，
+                // 不携带成本 delta；原 IN/REVERSE 的总成本与未知成本标记保持原口径。
+                BigDecimal q = txn.getQuantity();
+                if (q != null && q.signum() != 0) {
+                    producedQty = producedQty.add(q);
+                    ledgerInTotal = ledgerInTotal.add(q);
                 }
             }
         }

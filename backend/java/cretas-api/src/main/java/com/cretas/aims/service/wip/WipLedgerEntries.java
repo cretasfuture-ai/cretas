@@ -406,7 +406,7 @@ public final class WipLedgerEntries {
                 .quantity(delta)
                 .unitCostAtTxn(unitCostAtTxn)
                 .balanceAfter(nz(sfi.getAvailableQuantity()))
-                .balanceCostAfter(null)
+                .balanceCostAfter(sfi.getUnitCost())
                 .reportId(report.getId())
                 .operatorId(operatorId)
                 .build();

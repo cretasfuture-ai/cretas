@@ -372,14 +372,20 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         wip.setAvailableQuantity(produced.subtract(consumed).add(adjustment));
         wip.setStatus(wip.getAvailableQuantity().signum() > 0
                 ? SemiFinishedInventory.Status.AVAILABLE : SemiFinishedInventory.Status.DEPLETED);
-        // 没有可证明的成本 delta；保留累计成本历史，但不继续传播会被数量改动污染的均价。
-        wip.setUnitCost(null);
+        // 更正没有可证明的成本 delta；累计成本保持不变，已知成本按新产出量派生，未知成本继续为 null。
+        if (wip.getAccumulatedCost() != null && produced.signum() > 0) {
+            wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
+        } else {
+            wip.setUnitCost(null);
+        }
         SemiFinishedInventory saved = wipRepo.save(wip);
         SemiFinishedInventoryTransaction correction = WipLedgerEntries.correctionRow(
                 saved, delta, null, report, correctionId, operatorId);
         if (correction == null) {
             throw new BusinessException(409, "报工数量更正缺少有效流水标识")
-                    .withCode("WIP_CORRECTION_LEDGER_INVALID");
+                    .withCode("WIP_CORRECTION_LEDGER_INVALID")
+                    .withHint("请重新生成有效的报工修正记录后再审批")
+                    .withHintTarget("报工修正记录");
         }
         txnRepo.save(correction);
     }
@@ -391,23 +397,39 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (report == null || report.getId() == null || task == null || task.getId() == null
                 || correctionId == null || correctionId.isBlank()) {
             throw new BusinessException(409, "报工数量更正缺少可锁定的报工或工序任务")
-                    .withCode("WIP_CORRECTION_CONTEXT_INVALID");
+                    .withCode("WIP_CORRECTION_CONTEXT_INVALID")
+                    .withHint("请确认报工、工序任务和修正单仍属于同一条已审批报工")
+                    .withHintTarget("报工修正记录");
         }
         if (!factoryId.equals(report.getFactoryId()) || !factoryId.equals(task.getFactoryId())) {
             throw new BusinessException(409, "报工数量更正不属于当前工厂")
-                    .withCode("WIP_CORRECTION_FACTORY_MISMATCH");
+                    .withCode("WIP_CORRECTION_FACTORY_MISMATCH")
+                    .withHint("请回到当前工厂重新读取报工修正，不要跨工厂提交")
+                    .withHintTarget("当前工厂报工");
         }
         if (report.getOutputKind() != null && !"FINISHED".equals(report.getOutputKind())) {
             throw new BusinessException(409, "半成品或双产出报工不能直接更正 WIP 产出数量")
-                    .withCode("WIP_CORRECTION_COMPLEX_OUTPUT");
+                    .withCode("WIP_CORRECTION_COMPLEX_OUTPUT")
+                    .withHint("请按对应半成品或多产出流程核对各产出，不要把复杂报工改作单一 WIP 产出")
+                    .withHintTarget("报工产出路径");
         }
         if (report.getSemiOutputs() != null && !report.getSemiOutputs().isEmpty()) {
             throw new BusinessException(409, "多产出报工不能直接更正 WIP 产出数量")
-                    .withCode("WIP_CORRECTION_MULTI_OUTPUT");
+                    .withCode("WIP_CORRECTION_MULTI_OUTPUT")
+                    .withHint("请先核对每个产出项的实际过账，再走对应的多产出更正流程")
+                    .withHintTarget("多产出明细");
         }
         if (originalOutput == null || proposedOutput == null) {
             throw new BusinessException(409, "报工原始与更正产出数量必须同时存在")
-                    .withCode("WIP_CORRECTION_QUANTITY_UNKNOWN");
+                    .withCode("WIP_CORRECTION_QUANTITY_UNKNOWN")
+                    .withHint("请补齐原始产出和更正后产出数量，系统不会猜测数量")
+                    .withHintTarget("产出数量");
+        }
+        if (unsupportedQuantityPrecision(originalOutput) || unsupportedQuantityPrecision(proposedOutput)) {
+            throw new BusinessException(409, "报工数量超过持久化支持的两位小数，已拒绝更正")
+                    .withCode("WIP_CORRECTION_PRECISION_UNSUPPORTED")
+                    .withHint("请按报工数量最多两位小数重新提交，系统不会静默四舍五入")
+                    .withHintTarget("产出数量");
         }
 
         String wipNo = generateBatchNo(task);
@@ -419,15 +441,21 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         String outputUnit = firstNonBlank(report.getOutputUnit(), task.getPlannedUnit());
         if (!sameOutputUnit(outputUnit, wip.getUnit())) {
             throw new BusinessException(409, "报工与 WIP 单位不一致，已拒绝数量更正")
-                    .withCode("WIP_CORRECTION_UNIT_MISMATCH");
+                    .withCode("WIP_CORRECTION_UNIT_MISMATCH")
+                    .withHint("请核对报工和 WIP 的原始单位；系统不做 kg、盒等单位猜测换算")
+                    .withHintTarget("报工单位");
         }
         if (SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
             throw new BusinessException(409, "WIP 已退回，不能直接更正其报工产出")
-                    .withCode("WIP_CORRECTION_RETURNED");
+                    .withCode("WIP_CORRECTION_RETURNED")
+                    .withHint("请先核对退回记录；需要修正时重新走已授权的报工流程")
+                    .withHintTarget("WIP 退回记录");
         }
         if (nz(wip.getAdjustmentQuantity()).signum() != 0) {
             throw new BusinessException(409, "WIP 存在盘点调整，无法安全归属报工数量更正")
-                    .withCode("WIP_CORRECTION_ADJUSTMENT_PRESENT");
+                    .withCode("WIP_CORRECTION_ADJUSTMENT_PRESENT")
+                    .withHint("请先完成盘点调整归属核对，再提交报工数量更正")
+                    .withHintTarget("WIP 盘点调整");
         }
         if (nz(wip.getConsumedQuantity()).signum() > 0) {
             throw new BusinessException(409, "该 WIP 已被下游消费，数量更正会破坏库存账")
@@ -436,14 +464,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         if (wip.getProducedQuantity() == null) {
             throw new BusinessException(409, "WIP 产出数量缺失，已拒绝猜测性更正")
-                    .withCode("WIP_CORRECTION_QUANTITY_UNKNOWN");
+                    .withCode("WIP_CORRECTION_QUANTITY_UNKNOWN")
+                    .withHint("请先补齐或核对 WIP 产出数量及其原始入账流水")
+                    .withHintTarget("WIP 产出数量");
         }
 
         List<SemiFinishedInventoryTransaction> reportLedger = txnRepo
                 .findByFactoryIdAndReportId(factoryId, report.getId());
         if (reportLedger == null) {
             throw new BusinessException(409, "无法读取报工 WIP 流水，已拒绝数量更正")
-                    .withCode("WIP_CORRECTION_LEDGER_UNAVAILABLE");
+                    .withCode("WIP_CORRECTION_LEDGER_UNAVAILABLE")
+                    .withHint("请稍后重新读取报工 WIP 流水；流水不可读时不要重复提交更正")
+                    .withHintTarget("WIP 流水");
         }
         List<SemiFinishedInventoryTransaction> originalRows = reportLedger.stream()
                 .filter(txn -> txn != null
@@ -453,13 +485,17 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .toList();
         if (originalRows.size() != 1) {
             throw new BusinessException(409, "该报工缺少唯一原始 WIP 入账，已拒绝数量更正")
-                    .withCode("WIP_CORRECTION_LEDGER_AMBIGUOUS");
+                    .withCode("WIP_CORRECTION_LEDGER_AMBIGUOUS")
+                    .withHint("请核对唯一的生产入库流水；多条或缺失时改走人工盘点/冲销核查")
+                    .withHintTarget("WIP 原始入账");
         }
         List<SemiFinishedInventoryTransaction> ledger = txnRepo
                 .findBySemiFinishedIdOrderByCreatedAtAsc(wip.getId());
         if (ledger == null) {
             throw new BusinessException(409, "无法读取完整 WIP 流水，已拒绝数量更正")
-                    .withCode("WIP_CORRECTION_LEDGER_UNAVAILABLE");
+                    .withCode("WIP_CORRECTION_LEDGER_UNAVAILABLE")
+                    .withHint("请先恢复完整 WIP 流水读回，再提交数量更正")
+                    .withHintTarget("WIP 完整流水");
         }
         String correctionRef = correctionRef(correctionId, report);
         long sameCorrectionCount = ledger.stream()
@@ -468,7 +504,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .count();
         if (sameCorrectionCount > 1) {
             throw new BusinessException(409, "该报工更正流水重复，已拒绝继续写账")
-                    .withCode("WIP_CORRECTION_LEDGER_AMBIGUOUS");
+                    .withCode("WIP_CORRECTION_LEDGER_AMBIGUOUS")
+                    .withHint("请保留现有更正流水并交由财务核对，不要再次写入同一 correctionId")
+                    .withHintTarget("报工更正流水");
         }
         if (sameCorrectionCount == 1) {
             return wip;
@@ -483,11 +521,15 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         if (effectiveReportOutput.compareTo(originalOutput) != 0) {
             throw new BusinessException(409, "报工原始产出与 WIP 流水不一致，已拒绝数量更正")
-                    .withCode("WIP_CORRECTION_LEDGER_DRIFT");
+                    .withCode("WIP_CORRECTION_LEDGER_DRIFT")
+                    .withHint("请先核对报工原始数量与 WIP 更正流水，确认无并发更正后再提交")
+                    .withHintTarget("报工与 WIP 对账");
         }
         if (nz(wip.getProducedQuantity()).add(delta).signum() < 0) {
             throw new BusinessException(409, "更正后 WIP 产出不能为负")
-                    .withCode("WIP_CORRECTION_NEGATIVE_PRODUCED");
+                    .withCode("WIP_CORRECTION_NEGATIVE_PRODUCED")
+                    .withHint("请填写不小于已确认 WIP 产出的更正数量")
+                    .withHintTarget("更正后产出数量");
         }
         return wip;
     }
@@ -497,6 +539,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return BigDecimal.ONE;
         }
         return proposedOutput.subtract(originalOutput);
+    }
+
+    private static boolean unsupportedQuantityPrecision(BigDecimal quantity) {
+        return quantity != null && quantity.stripTrailingZeros().scale() > 2;
     }
 
     private static String correctionRef(String correctionId, ProductionReport report) {

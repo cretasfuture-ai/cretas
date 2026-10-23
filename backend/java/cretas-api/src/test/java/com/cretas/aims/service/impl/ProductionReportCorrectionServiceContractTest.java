@@ -89,6 +89,24 @@ class ProductionReportCorrectionServiceContractTest {
     }
 
     @Test
+    void unsupportedReportPrecisionIsRejectedBeforeCorrectionOrWorkflowWrite() {
+        ProductionReport report = report();
+        when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
+        when(correctionRepository.findFirstByFactoryIdAndProductionReportIdAndStatusOrderBySubmittedAtDesc(
+                "F006", 10L, ProductionReportCorrection.Status.PENDING_APPROVAL)).thenReturn(Optional.empty());
+        when(batchRepository.findByIdAndFactoryId(20L, "F006")).thenReturn(Optional.of(batch()));
+        when(planRepository.findByIdForUpdate("PLAN-1")).thenReturn(Optional.of(plan()));
+
+        assertThatThrownBy(() -> service.submit("F006", 10L,
+                new ProductionReportCorrectionRequest(new BigDecimal("9.001"), new BigDecimal("8"),
+                        BigDecimal.ONE, 3, 90, "修正备注", "现场复核"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("两位小数");
+        verify(correctionRepository, never()).save(any());
+        verify(workflowEngine, never()).startWorkflowIfConfigured(any(), any(), any(), anyMap(), any());
+    }
+
+    @Test
     void inputReportCannotBeSubmittedForOutputCorrection() {
         ProductionReport report = report();
         report.setReportKind("INPUT");

@@ -84,6 +84,9 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             assertPlanAllowsCorrection(plan);
         }
 
+        assertSupportedQuantityPrecision(request.outputQuantity(), "outputQuantity");
+        assertSupportedQuantityPrecision(request.goodQuantity(), "goodQuantity");
+        assertSupportedQuantityPrecision(request.defectQuantity(), "defectQuantity");
         ensureChanged(report, request);
         ProductionReportCorrection correction = ProductionReportCorrection.builder()
                 .factoryId(factoryId).productionReportId(report.getId())
@@ -138,6 +141,9 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             assertPlanAllowsCorrection(approvalPlan);
             WorkProcessTask task = correction.getWorkProcessTaskId() == null ? null
                     : taskRepository.findByFactoryIdAndId(factoryId, correction.getWorkProcessTaskId()).orElse(null);
+            assertSupportedQuantityPrecision(correction.getProposedOutputQuantity(), "outputQuantity");
+            assertSupportedQuantityPrecision(correction.getProposedGoodQuantity(), "goodQuantity");
+            assertSupportedQuantityPrecision(correction.getProposedDefectQuantity(), "defectQuantity");
             wipInventoryService.validateApprovedOutputQuantityCorrection(
                     factoryId, report, task, correction.getOriginalOutputQuantity(),
                     correction.getProposedOutputQuantity(), correction.getId());
@@ -361,7 +367,18 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                 || !Objects.equals(report.getTotalWorkMinutes(), request.totalWorkMinutes())
                 || !Objects.equals(trimToNull(report.getNotes()), trimToNull(request.notes()));
         if (!changed) throw new BusinessException(400, "修正前后内容完全一致，无需提交审批")
-                .withCode("PRODUCTION_REPORT_CORRECTION_NO_CHANGE");
+                .withCode("PRODUCTION_REPORT_CORRECTION_NO_CHANGE")
+                .withHint("请修改至少一项报工数量、工时或备注后再提交")
+                .withHintTarget("报工修正内容");
+    }
+
+    private void assertSupportedQuantityPrecision(BigDecimal quantity, String field) {
+        if (quantity != null && quantity.stripTrailingZeros().scale() > 2) {
+            throw new BusinessException(409, "报工数量超过持久化支持的两位小数，已拒绝修正")
+                    .withCode("PRODUCTION_REPORT_CORRECTION_PRECISION_UNSUPPORTED")
+                    .withHint("请将 " + field + " 调整为最多两位小数后重新提交，系统不会静默四舍五入")
+                    .withHintTarget(field);
+        }
     }
 
     private boolean same(BigDecimal left, BigDecimal right) {

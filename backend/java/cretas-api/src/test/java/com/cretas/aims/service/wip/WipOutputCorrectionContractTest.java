@@ -100,12 +100,14 @@ class WipOutputCorrectionContractTest {
 
         assertThat(wip.getProducedQuantity()).isEqualByComparingTo("0.82");
         assertThat(wip.getAvailableQuantity()).isEqualByComparingTo("0.82");
-        assertThat(wip.getUnitCost()).isNull();
+        assertThat(wip.getAccumulatedCost()).isEqualByComparingTo("10.125");
+        assertThat(wip.getUnitCost()).isEqualByComparingTo("12.3476");
         verify(txnRepo).save(org.mockito.ArgumentMatchers.argThat(txn ->
                 WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())
                         && txn.getQuantity().compareTo(new BigDecimal("0.01")) == 0
                         && txn.getSourceRef().contains("COR-UP")
                         && txn.getUnitCostAtTxn() == null
+                        && txn.getBalanceCostAfter().compareTo(new BigDecimal("12.3476")) == 0
                         && txn.getReportId().equals(23989L)));
 
         wip.setProducedQuantity(new BigDecimal("0.81"));
@@ -120,6 +122,23 @@ class WipOutputCorrectionContractTest {
         verify(txnRepo).save(org.mockito.ArgumentMatchers.argThat(txn ->
                 txn.getQuantity().compareTo(new BigDecimal("-0.01")) == 0
                         && txn.getSourceRef().contains("COR-DOWN")));
+    }
+
+    @Test
+    void unknownCostRemainsUnknownAndUnsupportedPrecisionIsRejected() {
+        wip.setAccumulatedCost(null);
+        wip.setUnitCost(null);
+        service.correctApprovedOutputQuantity("F006", report, task,
+                new BigDecimal("0.81"), new BigDecimal("0.82"), "COR-UNKNOWN", 7L);
+        assertThat(wip.getAccumulatedCost()).isNull();
+        assertThat(wip.getUnitCost()).isNull();
+
+        assertThatThrownBy(() -> service.correctApprovedOutputQuantity("F006", report, task,
+                new BigDecimal("0.81"), new BigDecimal("0.811"), "COR-PRECISION", 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("两位小数");
+        verify(wipRepo, never()).save(org.mockito.ArgumentMatchers.argThat(
+                candidate -> candidate.getProducedQuantity().compareTo(new BigDecimal("0.811")) == 0));
     }
 
     @Test
