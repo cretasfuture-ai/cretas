@@ -5,7 +5,7 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `ERP-S305-WIP-QUANTITY-20261023` — `in-progress` — Owner /root/s305_wip_quantity；Base 7b211d798fdd7f7519d820ba2503b7cea72eb32f；11文件后续，不改1117；archive/2026-10-23-s305-wip-quantity-scope.md。
+- `ERP-S305-WIP-QUANTITY-20261023` — `review` — Owner Root（原执行者aad677已释放）；集成Base 7378eb962c9dd13b2594a1a6d63ffceb5c4a5533；原11文件+Root PG选择器1文件冻结，风险复核通过；正常clean编译/最终CI待验，S305原FAIL保留；archive/2026-10-23-s305-wip-quantity-scope.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
 
