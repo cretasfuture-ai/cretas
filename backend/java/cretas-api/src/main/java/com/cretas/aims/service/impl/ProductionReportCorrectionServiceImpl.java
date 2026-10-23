@@ -9,6 +9,7 @@ import com.cretas.aims.entity.ProductionReportCorrection;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -18,6 +19,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.ProductionReportCorrectionService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -46,6 +48,7 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
     private final WorkProcessTaskRepository taskRepository;
     private final UserRepository userRepository;
     private final WorkflowEngineService workflowEngine;
+    private final WipInventoryService wipInventoryService;
 
     @Override
     @Transactional
@@ -133,6 +136,11 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             assertCorrectionableReport(report);
             approvalPlan = lockCorrectionPlan(factoryId, correction.getProductionPlanId());
             assertPlanAllowsCorrection(approvalPlan);
+            WorkProcessTask task = correction.getWorkProcessTaskId() == null ? null
+                    : taskRepository.findByFactoryIdAndId(factoryId, correction.getWorkProcessTaskId()).orElse(null);
+            wipInventoryService.validateApprovedOutputQuantityCorrection(
+                    factoryId, report, task, correction.getOriginalOutputQuantity(),
+                    correction.getProposedOutputQuantity(), correction.getId());
         }
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
                 workflowInstanceId, actorId, actorRole, action, notes);
@@ -162,6 +170,11 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             throw new BusinessException(409, "报工已结单，不能应用待审批修正")
                     .withCode("PRODUCTION_REPORT_CORRECTION_SETTLEMENT_RACE");
         }
+        WorkProcessTask task = report.getWorkProcessTaskId() == null ? null
+                : taskRepository.findByFactoryIdAndId(report.getFactoryId(), report.getWorkProcessTaskId()).orElse(null);
+        wipInventoryService.correctApprovedOutputQuantity(
+                report.getFactoryId(), report, task, correction.getOriginalOutputQuantity(),
+                correction.getProposedOutputQuantity(), correction.getId(), actorId);
         report.setOutputQuantity(correction.getProposedOutputQuantity());
         report.setGoodQuantity(correction.getProposedGoodQuantity());
         report.setDefectQuantity(correction.getProposedDefectQuantity());
@@ -172,28 +185,25 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         report.setLastCorrectionId(correction.getId());
         reportRepository.save(report);
 
-        if (report.getWorkProcessTaskId() != null) {
-            taskRepository.findByFactoryIdAndId(report.getFactoryId(), report.getWorkProcessTaskId())
-                    .ifPresent(task -> {
-                        List<ProductionReport> taskReports = reportRepository
-                                .findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull(
-                                        report.getFactoryId(), report.getWorkProcessTaskId());
-                        assertNoUnknownOutputReports(taskReports);
-                        List<ProductionReport> outputReports = taskReports.stream()
-                                .filter(this::isOutputOrLegacy)
-                                .filter(reportRow -> reportRow.getOutputQuantity() != null)
-                                .toList();
-                        assertSingleOutputUnit(outputReports);
-                        BigDecimal taskOutput = outputReports.stream()
-                                .map(ProductionReport::getOutputQuantity).filter(Objects::nonNull)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add);
-                        int taskMinutes = taskReports.stream()
-                                .map(ProductionReport::getTotalWorkMinutes).filter(Objects::nonNull)
-                                .mapToInt(Integer::intValue).sum();
-                        task.setActualQuantity(taskOutput);
-                        task.setActualMinutes(taskMinutes);
-                        taskRepository.save(task); // 状态、领料与库存字段不变。
-                    });
+        if (task != null) {
+            List<ProductionReport> taskReports = reportRepository
+                    .findByFactoryIdAndWorkProcessTaskIdAndDeletedAtIsNull(
+                            report.getFactoryId(), report.getWorkProcessTaskId());
+            assertNoUnknownOutputReports(taskReports);
+            List<ProductionReport> outputReports = taskReports.stream()
+                    .filter(this::isOutputOrLegacy)
+                    .filter(reportRow -> reportRow.getOutputQuantity() != null)
+                    .toList();
+            assertSingleOutputUnit(outputReports);
+            BigDecimal taskOutput = outputReports.stream()
+                    .map(ProductionReport::getOutputQuantity).filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            int taskMinutes = taskReports.stream()
+                    .map(ProductionReport::getTotalWorkMinutes).filter(Objects::nonNull)
+                    .mapToInt(Integer::intValue).sum();
+            task.setActualQuantity(taskOutput);
+            task.setActualMinutes(taskMinutes);
+            taskRepository.save(task); // 状态、领料与库存字段不变。
         }
         correction.setStatus(ProductionReportCorrection.Status.APPROVED_APPLIED);
         correction.setDecidedBy(actorId);

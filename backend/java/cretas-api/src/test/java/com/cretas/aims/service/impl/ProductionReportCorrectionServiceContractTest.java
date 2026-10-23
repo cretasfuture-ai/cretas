@@ -17,6 +17,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
+import com.cretas.aims.service.wip.WipInventoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -48,13 +49,15 @@ class ProductionReportCorrectionServiceContractTest {
     @Mock WorkProcessTaskRepository taskRepository;
     @Mock UserRepository userRepository;
     @Mock WorkflowEngineService workflowEngine;
+    @Mock WipInventoryService wipInventoryService;
 
     ProductionReportCorrectionServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ProductionReportCorrectionServiceImpl(correctionRepository, reportRepository,
-                batchRepository, planRepository, taskRepository, userRepository, workflowEngine);
+                batchRepository, planRepository, taskRepository, userRepository, workflowEngine,
+                wipInventoryService);
         lenient().when(planRepository.findByIdForUpdate(any(String.class))).thenReturn(Optional.of(plan()));
     }
 

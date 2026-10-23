@@ -28,6 +28,12 @@ import java.math.BigDecimal;
  */
 public final class WipLedgerEntries {
 
+    /** 专用于已审批报工数量更正；不能与 STOCKTAKE 或普通 REVERSAL 混用。 */
+    public static final String REPORT_CORRECTION_SOURCE_TYPE = "PRODUCTION_REPORT_CORRECTION";
+    /** 复用可正可负的 ADJUST 数量语义，来源由上面的专用 sourceType 明确区分。 */
+    public static final String REPORT_CORRECTION_TXN_TYPE = SemiFinishedInventoryTransaction.TxnType.ADJUST;
+    public static final String REPORT_CORRECTION_REF_PREFIX = "report-correction:";
+
     private WipLedgerEntries() {
     }
 
@@ -375,6 +381,32 @@ public final class WipLedgerEntries {
                 .unitCostAtTxn(sfi.getUnitCost())   // 诚实 null 传播
                 .balanceAfter(nz(sfi.getAvailableQuantity()))
                 .balanceCostAfter(sfi.getUnitCost())
+                .reportId(report.getId())
+                .operatorId(operatorId)
+                .build();
+    }
+
+    /**
+     * 构造一条已审批报工产出数量更正流水。
+     * 数量是相对原报工的准确 delta，可正可负；成本未知时不伪造成本。
+     */
+    public static SemiFinishedInventoryTransaction correctionRow(
+            SemiFinishedInventory sfi, BigDecimal delta, BigDecimal unitCostAtTxn,
+            ProductionReport report, String correctionId, Long operatorId) {
+        if (sfi == null || report == null || report.getId() == null
+                || delta == null || delta.signum() == 0 || correctionId == null || correctionId.isBlank()) {
+            return null;
+        }
+        return SemiFinishedInventoryTransaction.builder()
+                .factoryId(report.getFactoryId())
+                .semiFinishedId(sfi.getId())
+                .txnType(REPORT_CORRECTION_TXN_TYPE)
+                .sourceType(REPORT_CORRECTION_SOURCE_TYPE)
+                .sourceRef(REPORT_CORRECTION_REF_PREFIX + correctionId + ":report:" + report.getId())
+                .quantity(delta)
+                .unitCostAtTxn(unitCostAtTxn)
+                .balanceAfter(nz(sfi.getAvailableQuantity()))
+                .balanceCostAfter(null)
                 .reportId(report.getId())
                 .operatorId(operatorId)
                 .build();
