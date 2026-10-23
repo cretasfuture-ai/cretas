@@ -85,6 +85,19 @@ const ZERO_QTY_ROW = {
   receiptQuantity: 0,
 };
 
+/** F006 legacy batch: stored quantity unit is g while material master unit is kg. */
+const LEGACY_G_UNIT_ROW = {
+  ...LIUSHANMEN_ROW,
+  id: 'MB-F006-G',
+  batchNumber: 'MB-F006-20260820-1362',
+  materialTypeName: '膝软骨',
+  materialName: '膝软骨',
+  quantity: 1,
+  receiptQuantity: 1,
+  quantityUnit: 'g',
+  unit: 'kg',
+};
+
 /** 原料主数据: 未配置单价 (movingAvgPrice / unitPrice 均为 null) —— 缺陷 A 复现材料。 */
 const MATERIAL_TYPE_NO_MASTER_PRICE = {
   id: 'MAT-XIACAOGU',
@@ -155,6 +168,41 @@ async function openEditDialog(wrapper: ReturnType<typeof mountList>, batchId: st
   await flushPromises();
   await flushPromises();
 }
+
+async function openViewDialog(wrapper: ReturnType<typeof mountList>, batchId: string) {
+  const viewButtons = wrapper.findAll('button').filter((b) => b.text() === '查看');
+  expect(viewButtons.length, `查看按钮一个都没渲染出来 (batchId=${batchId})——列表没加载出行`).toBeGreaterThan(0);
+  await viewButtons[0].trigger('click');
+  await flushPromises();
+}
+
+describe('批次详情单位显示与列表/存储单位一致', () => {
+  it('正常详情优先显示存储 quantityUnit: 1 g，不显示主数据 unit 的 1 kg', async () => {
+    mockApiGet([LEGACY_G_UNIT_ROW]);
+    const wrapper = mountList();
+    await flushPromises();
+    await openViewDialog(wrapper, LEGACY_G_UNIT_ROW.id);
+
+    const detailText = wrapper.find('.dialog-stub').text();
+    expect(detailText).toContain('1 g');
+    expect(detailText).not.toContain('1 kg');
+
+    wrapper.unmount();
+  });
+
+  it('legacy 详情缺少 quantityUnit 时回退到 unit', async () => {
+    const legacyFallbackRow = { ...LEGACY_G_UNIT_ROW, quantityUnit: undefined };
+    mockApiGet([legacyFallbackRow]);
+    const wrapper = mountList();
+    await flushPromises();
+    await openViewDialog(wrapper, legacyFallbackRow.id);
+
+    const detailText = wrapper.find('.dialog-stub').text();
+    expect(detailText).toContain('1 kg');
+
+    wrapper.unmount();
+  });
+});
 
 describe('批次编辑弹窗缺陷 B: 数量显示与 DB/列表/详情一致', () => {
   beforeEach(() => {
