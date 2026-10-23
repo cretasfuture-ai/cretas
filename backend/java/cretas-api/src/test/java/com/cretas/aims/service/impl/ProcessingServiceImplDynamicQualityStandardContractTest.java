@@ -106,6 +106,47 @@ class ProcessingServiceImplDynamicQualityStandardContractTest {
     }
 
     @Test
+    void inRangeMeasurementPersistsLegalPass() {
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH,
+                request(revision, "binding-temp", "item-temp", 3, "5"), 1557L);
+
+        QualityInspection saved = (QualityInspection) result.get("inspection");
+        assertEquals("PASS", saved.getResult());
+        assertEquals(BigDecimal.ONE, saved.getPassCount());
+        assertEquals(BigDecimal.ZERO, saved.getFailCount());
+        verify(qualityInspectionService).createInspection(eq(FACTORY), any(QualityInspection.class));
+    }
+
+    @Test
+    void missingRequiredOrInactiveStandardIsRejectedBeforeSave() {
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        DynamicQualityInspectionRequest missing = request(revision, "binding-temp", "item-temp", 3, "");
+        assertThrows(BusinessException.class, () -> service.submitDynamicInspection(FACTORY, BATCH, missing, 1557L));
+
+        when(bindingRepository.findByProductTypeIdWithItems("QA-PRODUCT")).thenReturn(List.of());
+        DynamicQualityInspectionRequest noActive = request(revision, "binding-temp", "item-temp", 3, "5");
+        assertThrows(BusinessException.class, () -> service.submitDynamicInspection(FACTORY, BATCH, noActive, 1557L));
+        verify(qualityInspectionService, never()).createInspection(anyString(), any(QualityInspection.class));
+    }
+
+    @Test
+    void optionalUnansweredItemIsSavedAsNotAnsweredInCompleteSnapshot() {
+        binding.setOverrideIsRequired(false);
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        DynamicQualityInspectionRequest request = request(revision, "binding-temp", "item-temp", 3, "");
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH, request, 1557L);
+
+        QualityInspection saved = (QualityInspection) result.get("inspection");
+        Map<?, ?> snapshot = (Map<?, ?>) saved.getCustomFields();
+        Map<?, ?> item = (Map<?, ?>) ((List<?>) snapshot.get("items")).get(0);
+        assertEquals("NOT_ANSWERED", item.get("status"));
+        assertNull(item.get("value"));
+        assertEquals(false, item.get("isRequired"));
+        verify(qualityInspectionService).createInspection(eq(FACTORY), any(QualityInspection.class));
+    }
+
+    @Test
     void staleRevisionUnknownAnswerAndDuplicateAnswerAreRejectedBeforeSave() {
         String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
         assertThrows(BusinessException.class, () -> service.submitDynamicInspection(FACTORY, BATCH,

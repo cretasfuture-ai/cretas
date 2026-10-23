@@ -37,6 +37,18 @@ const SCORE_ITEMS: { key: string; label: string; icon: IoniconsName }[] = [
   { key: 'packaging', label: '包装', icon: 'cube-outline' },
 ];
 
+type DynamicSnapshotItem = {
+  label?: unknown;
+  unit?: unknown;
+  minValue?: unknown;
+  maxValue?: unknown;
+  effectiveStandardValue?: unknown;
+  value?: unknown;
+  isRequired?: unknown;
+  itemVersion?: unknown;
+  status?: unknown;
+};
+
 export default function QIRecordDetailScreen() {
   const { t } = useTranslation('quality');
   const navigation = useNavigation<NavigationProp>();
@@ -106,6 +118,10 @@ export default function QIRecordDetailScreen() {
     : record.passed
       ? 'checkmark-circle'
       : 'close-circle';
+  const snapshotItems: DynamicSnapshotItem[] = record.standardBasis === 'DYNAMIC_PRODUCT_BINDING'
+    && Array.isArray(record.standardSnapshot?.items)
+    ? record.standardSnapshot.items.filter((item): item is DynamicSnapshotItem => typeof item === 'object' && item !== null)
+    : [];
 
   return (
     <ScrollView
@@ -171,6 +187,20 @@ export default function QIRecordDetailScreen() {
           </View>
         </View>
       </View>
+
+      {record.standardBasis === 'DYNAMIC_PRODUCT_BINDING' && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>保存的标准与实测明细</Text>
+          {snapshotItems.length > 0 ? snapshotItems.map((item, index) => (
+            <View style={styles.snapshotCard} key={`${String(item.label ?? index)}-${String(item.itemVersion ?? index)}`}>
+              <Text style={styles.snapshotTitle}>{index + 1}. {String(item.label ?? '未命名项目')}</Text>
+              <Text style={styles.snapshotText}>单位：{String(item.unit ?? '无单位')} · 版本：{String(item.itemVersion ?? '未知')}</Text>
+              <Text style={styles.snapshotText}>标准：{String(item.effectiveStandardValue ?? '无')} · 范围：{String(item.minValue ?? '无')} ~ {String(item.maxValue ?? '无')}</Text>
+              <Text style={styles.snapshotText}>实测：{String(item.value ?? '未回答')} · {String(item.isRequired) === 'true' ? '必检' : '可选'} · 判定：{String(item.status ?? '未知')}</Text>
+            </View>
+          )) : <Text style={styles.infoValue}>该动态记录未保存项目快照，依据未知。</Text>}
+        </View>
+      )}
 
       {/* 评分详情 */}
       <View style={styles.section}>
@@ -407,6 +437,16 @@ const styles = StyleSheet.create({
     color: QI_COLORS.text,
     fontWeight: '500',
   },
+  snapshotCard: {
+    backgroundColor: QI_COLORS.card,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: QI_COLORS.border,
+  },
+  snapshotTitle: { fontSize: 16, fontWeight: '700', color: QI_COLORS.text, marginBottom: 6 },
+  snapshotText: { fontSize: 14, color: QI_COLORS.textSecondary, lineHeight: 22 },
 
   // 评分详情
   scoreGrid: {
