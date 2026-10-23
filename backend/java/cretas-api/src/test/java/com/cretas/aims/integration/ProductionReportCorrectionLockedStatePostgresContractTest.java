@@ -20,7 +20,6 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
-import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.impl.ProductionReportCorrectionServiceImpl;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.wip.WipInventoryService;
@@ -79,7 +78,6 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
     @Autowired private ProductionBatchRepository batchRepository;
     @Autowired private ProductionReportRepository reportRepository;
     @Autowired private ProductionReportCorrectionRepository correctionRepository;
-    @Autowired private WorkProcessTaskRepository taskRepository;
     @Autowired private FactoryRepository factoryRepository;
     @Autowired private ProductTypeRepository productTypeRepository;
     @Autowired private UserRepository userRepository;
@@ -151,6 +149,48 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
     }
 
     @Test
+    void persistedPlanLockRejectsSubmitWithoutAnyCorrectionOrWorkflowWrite() {
+        Fixture fixture = persistFixture();
+        ProductionPlan locked = planRepository.findById(fixture.planId()).orElseThrow();
+        locked.setIsLocked(true);
+        planRepository.saveAndFlush(locked);
+        entityManager.clear();
+        StateSnapshot before = snapshot(fixture, null);
+
+        assertThatThrownBy(() -> submit(fixture))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_REPORT_CORRECTION_PLAN_LOCKED");
+                })
+                .hasMessageContaining("生产计划已锁定");
+
+        entityManager.clear();
+        assertThat(snapshot(fixture, null)).isEqualTo(before);
+        verify(workflowEngine, never()).startWorkflowIfConfigured(any(), any(), any(), anyMap(), any());
+    }
+
+    @Test
+    void persistedSettledReportRejectsSubmitWithoutAnyCorrectionOrWorkflowWrite() {
+        Fixture fixture = persistFixture();
+        ProductionReport settled = reportRepository.findById(fixture.reportId()).orElseThrow();
+        settled.setSettled(true);
+        reportRepository.saveAndFlush(settled);
+        entityManager.clear();
+        StateSnapshot before = snapshot(fixture, null);
+
+        assertThatThrownBy(() -> submit(fixture))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_REPORT_ALREADY_SETTLED");
+                })
+                .hasMessageContaining("已经结单");
+
+        entityManager.clear();
+        assertThat(snapshot(fixture, null)).isEqualTo(before);
+        verify(workflowEngine, never()).startWorkflowIfConfigured(any(), any(), any(), anyMap(), any());
+    }
+
+    @Test
     void persistedPlanLockRejectsApprovalAfterSubmitWithoutApplyingOrTransitioning() {
         Fixture fixture = persistFixture();
         ApprovalWorkflowInstance workflow = runningWorkflow();
@@ -162,11 +202,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
         locked.setIsLocked(true);
         planRepository.saveAndFlush(locked);
         entityManager.clear();
-        long correctionCountBefore = correctionRepository.count();
-        long reportCountBefore = reportRepository.count();
-        ProductionReport before = reportRepository.findById(fixture.reportId()).orElseThrow();
-        BigDecimal outputBefore = before.getOutputQuantity();
-        long taskCountBefore = countTasks();
+        StateSnapshot before = snapshot(fixture, submitted.getId());
 
         assertThatThrownBy(() -> applicationService.applyWorkflowAction(FACTORY, submitted.getId(),
                 submitted.getWorkflowInstanceId(), fixture.actorId(), "configured_role", HistoryAction.APPROVE, "同意"))
@@ -177,11 +213,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
                 .hasMessageContaining("生产计划已锁定");
 
         entityManager.clear();
-        assertThat(correctionRepository.count()).isEqualTo(correctionCountBefore);
-        assertThat(reportRepository.count()).isEqualTo(reportCountBefore);
-        assertThat(reportRepository.findById(fixture.reportId()).orElseThrow().getOutputQuantity())
-                .isEqualByComparingTo(outputBefore);
-        assertThat(countTasks()).isEqualTo(taskCountBefore);
+        assertThat(snapshot(fixture, submitted.getId())).isEqualTo(before);
         assertThat(planRepository.findById(fixture.planId()).orElseThrow().getIsLocked()).isTrue();
         verify(workflowEngine, never()).transitionNode(any(), any(), any(), any(), any());
         verify(wipInventoryService, never()).correctApprovedOutputQuantity(
@@ -200,11 +232,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
         settled.setSettled(true);
         reportRepository.saveAndFlush(settled);
         entityManager.clear();
-        long correctionCountBefore = correctionRepository.count();
-        long reportCountBefore = reportRepository.count();
-        ProductionReport before = reportRepository.findById(fixture.reportId()).orElseThrow();
-        BigDecimal outputBefore = before.getOutputQuantity();
-        long taskCountBefore = countTasks();
+        StateSnapshot before = snapshot(fixture, submitted.getId());
 
         assertThatThrownBy(() -> applicationService.applyWorkflowAction(FACTORY, submitted.getId(),
                 submitted.getWorkflowInstanceId(), fixture.actorId(), "configured_role", HistoryAction.APPROVE, "同意"))
@@ -215,12 +243,8 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
                 .hasMessageContaining("已结单");
 
         entityManager.clear();
-        assertThat(correctionRepository.count()).isEqualTo(correctionCountBefore);
-        assertThat(reportRepository.count()).isEqualTo(reportCountBefore);
-        ProductionReport after = reportRepository.findById(fixture.reportId()).orElseThrow();
-        assertThat(after.getSettled()).isTrue();
-        assertThat(after.getOutputQuantity()).isEqualByComparingTo(outputBefore);
-        assertThat(countTasks()).isEqualTo(taskCountBefore);
+        assertThat(snapshot(fixture, submitted.getId())).isEqualTo(before);
+        assertThat(reportRepository.findById(fixture.reportId()).orElseThrow().getSettled()).isTrue();
         verify(workflowEngine, never()).transitionNode(any(), any(), any(), any(), any());
         verify(wipInventoryService, never()).correctApprovedOutputQuantity(
                 any(), any(), any(), any(), any(), any(), any());
@@ -283,6 +307,7 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
                 .factoryId(FACTORY).batchId(batch.getId()).workerId(actorId)
                 .reportType(ProductionReport.ReportType.PROGRESS).reportDate(LocalDate.now())
                 .status(ProductionReport.Status.SUBMITTED).settled(false).processCategory("包装")
+                .reportKind("OUTPUT").outputUnit("kg")
                 .productTypeId(PRODUCT).outputQuantity(new BigDecimal("10"))
                 .goodQuantity(new BigDecimal("9")).defectQuantity(BigDecimal.ONE)
                 .totalWorkers(2).totalWorkMinutes(60).notes("原备注")
@@ -299,8 +324,25 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
         return instance;
     }
 
-    private long countTasks() {
-        return taskRepository.count();
+    private StateSnapshot snapshot(Fixture fixture, String correctionId) {
+        return new StateSnapshot(
+                fullRow("production_plans", "id", fixture.planId()),
+                fullRow("production_reports", "id", fixture.reportId()),
+                correctionId == null ? null : fullRow("production_report_corrections", "id", correctionId),
+                countRows("production_plans"), countRows("production_reports"),
+                countRows("production_report_corrections"), countRows("work_process_tasks"));
+    }
+
+    private String fullRow(String table, String keyColumn, Object key) {
+        String sql = "SELECT row_to_json(r)::text FROM (SELECT * FROM " + table
+                + " WHERE " + keyColumn + " = :key) r";
+        var rows = entityManager.createNativeQuery(sql).setParameter("key", key).getResultList();
+        return rows.isEmpty() ? null : String.valueOf(rows.get(0));
+    }
+
+    private long countRows(String table) {
+        return ((Number) entityManager.createNativeQuery("SELECT count(*) FROM " + table)
+                .getSingleResult()).longValue();
     }
 
     private static void createSchema(String url, String user, String password) {
@@ -321,5 +363,9 @@ class ProductionReportCorrectionLockedStatePostgresContractTest {
     }
 
     private record Fixture(String planId, Long batchId, Long reportId, long actorId) {
+    }
+
+    private record StateSnapshot(String planRow, String reportRow, String correctionRow,
+                                 long planCount, long reportCount, long correctionCount, long taskCount) {
     }
 }
