@@ -59,4 +59,18 @@ class ProductionReportCorrectionFlowContractTest {
                 "correctionEligible", "correctionEligibilityReason")
                 .doesNotContain("new PageImpl");
     }
+
+    @Test
+    void correctionLocksAndRechecksProductionPlanStateAndUsesActionableBoundaryHints() throws IOException {
+        String correction = source("service/impl/ProductionReportCorrectionServiceImpl.java");
+        assertThat(correction).contains("findByIdForUpdate(planId)",
+                "PRODUCTION_REPORT_CORRECTION_PLAN_LOCKED",
+                "ProductionPlanStatus.COMPLETED",
+                "ProductionPlanStatus.CANCELLED",
+                "ProductionPlanStatus.PENDING_APPROVAL",
+                "请先核对生产计划状态，再处理报工修正",
+                "请到领退料或盘点流程核实投入报工，不要改作产出",
+                "请核实报工阶段后再汇总，系统不会猜测其产出含义",
+                "请先核对各报工的可信产出单位，系统不会猜测换算关系");
+    }
 }

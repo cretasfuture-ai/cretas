@@ -6,6 +6,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.ProductionReportCorrection;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.exception.BusinessException;
@@ -77,6 +78,7 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             plan = planRepository.findByIdForUpdate(planId)
                     .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
                     .orElseThrow(() -> new BusinessException(409, "报工关联计划不存在或不属于当前工厂"));
+            assertPlanAllowsCorrection(plan);
         }
 
         ensureChanged(report, request);
@@ -123,11 +125,14 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             throw new BusinessException(409, "审批实例与报工修正记录不匹配")
                     .withCode("PRODUCTION_REPORT_CORRECTION_WORKFLOW_MISMATCH");
         }
+        ProductionPlan approvalPlan = null;
         if (action == HistoryAction.APPROVE) {
             ProductionReport report = reportRepository.findByIdAndFactoryIdForUpdate(
                             correction.getProductionReportId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404, "原报工记录不存在"));
             assertCorrectionableReport(report);
+            approvalPlan = lockCorrectionPlan(factoryId, correction.getProductionPlanId());
+            assertPlanAllowsCorrection(approvalPlan);
         }
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
                 workflowInstanceId, actorId, actorRole, action, notes);
@@ -135,7 +140,10 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
             ProductionReport report = reportRepository.findByIdAndFactoryIdForUpdate(
                             correction.getProductionReportId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404, "原报工记录不存在"));
-            applyApproved(report, correction, actorId, notes);
+            if (approvalPlan == null) {
+                approvalPlan = lockCorrectionPlan(factoryId, correction.getProductionPlanId());
+            }
+            applyApproved(report, correction, actorId, notes, approvalPlan);
         } else if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.REJECTED) {
             correction.setStatus(ProductionReportCorrection.Status.REJECTED);
             correction.setDecidedBy(actorId);
@@ -146,8 +154,9 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
     }
 
     private void applyApproved(ProductionReport report, ProductionReportCorrection correction,
-                               Long actorId, String notes) {
+                               Long actorId, String notes, ProductionPlan plan) {
         assertCorrectionableReport(report);
+        assertPlanAllowsCorrection(plan);
         if (correction.getStatus() == ProductionReportCorrection.Status.APPROVED_APPLIED) return;
         if (Boolean.TRUE.equals(report.getSettled())) {
             throw new BusinessException(409, "报工已结单，不能应用待审批修正")
@@ -358,11 +367,15 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
         String kind = reportKind(report);
         if ("INPUT".equals(kind) || "SEGMENT".equals(kind)) {
             throw new BusinessException(409, "投入或过程报工不能作为产出修正")
-                    .withCode("PRODUCTION_REPORT_CORRECTION_OUTPUT_ONLY");
+                    .withCode("PRODUCTION_REPORT_CORRECTION_OUTPUT_ONLY")
+                    .withHint("请到领退料或盘点流程核实投入报工，不要改作产出")
+                    .withHintTarget("核实报工阶段");
         }
         if (kind != null && !"OUTPUT".equals(kind)) {
             throw new BusinessException(409, "报工阶段无法确认，不能作为产出修正")
-                    .withCode("PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND");
+                    .withCode("PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND")
+                    .withHint("请核实报工阶段后再修正，系统不会猜测其产出含义")
+                    .withHintTarget("核实报工阶段");
         }
     }
 
@@ -393,8 +406,32 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                 .findFirst()
                 .ifPresent(report -> {
                     throw new BusinessException(409, "报工阶段无法确认，不能汇总其产出")
-                            .withCode("PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND");
+                            .withCode("PRODUCTION_REPORT_CORRECTION_UNKNOWN_KIND")
+                            .withHint("请核实报工阶段后再汇总，系统不会猜测其产出含义")
+                            .withHintTarget("核实报工阶段");
                 });
+    }
+
+    private ProductionPlan lockCorrectionPlan(String factoryId, String planId) {
+        if (planId == null || planId.isBlank()) return null;
+        return planRepository.findByIdForUpdate(planId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(409, "报工关联计划不存在或不属于当前工厂")
+                        .withHint("请先核对报工关联的生产计划")
+                        .withHintTarget("生产计划"));
+    }
+
+    private void assertPlanAllowsCorrection(ProductionPlan plan) {
+        if (plan == null || plan.getStatus() == null) return;
+        ProductionPlanStatus status = plan.getStatus();
+        if (status == ProductionPlanStatus.COMPLETED
+                || status == ProductionPlanStatus.CANCELLED
+                || status == ProductionPlanStatus.PENDING_APPROVAL) {
+            throw new BusinessException(409, "生产计划已进入终态或待审批，不能发起或应用报工修正")
+                    .withCode("PRODUCTION_REPORT_CORRECTION_PLAN_LOCKED")
+                    .withHint("请先核对生产计划状态，再处理报工修正")
+                    .withHintTarget("生产计划状态");
+        }
     }
 
     private String reportKind(ProductionReport report) {
@@ -414,7 +451,9 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                 .collect(java.util.stream.Collectors.toSet());
         if (units.size() > 1) {
             throw new BusinessException(409, "同一工序报工的产出单位不一致，不能汇总")
-                    .withCode("PRODUCTION_REPORT_CORRECTION_MIXED_OUTPUT_UNITS");
+                    .withCode("PRODUCTION_REPORT_CORRECTION_MIXED_OUTPUT_UNITS")
+                    .withHint("请先核对各报工的可信产出单位，系统不会猜测换算关系")
+                    .withHintTarget("核对产出单位");
         }
     }
 }
