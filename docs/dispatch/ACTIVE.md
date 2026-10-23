@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `ERP-S301-S303-DYNAMIC-QUALITY-20261024` — `claimed` — Owner /root/s305_correction_boundary — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 原QA证实质检入口缺失；产品标准与不可变检验快照，精确scope/命令见archive/2026-10-24-s301-s303-dynamic-quality.md；不阻塞1124。
+
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
@@ -110,6 +112,8 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `ERP-S301-S303-DYNAMIC-QUALITY-20261024`：仅archive/2026-10-24-s301-s303-dynamic-quality.md逐文件清单；同一Owner；无Repository/Entity/迁移/权限/OTA；原QA独占手机、浏览器、CSV。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：原Claude Owner保留；当前只读追踪，writeScope=[]；禁止放宽平台角色、造蓝图、自动发布或修改既有采购/S6；原QA独占设备/浏览器/CSV。
 
