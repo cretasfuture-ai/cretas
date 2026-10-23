@@ -12,6 +12,7 @@ import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 import NotFoundEmpty from '@/components/common/NotFoundEmpty.vue';
 import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
+import WarehouseDeliveryPanel from './WarehouseDeliveryPanel.vue';
 import { getTransferDocumentTrace } from '@/api/documentTrace';
 import type { TableRow } from '@/types/api';
 import { listWarehouses } from '@/api/factoryWarehouse';
@@ -520,6 +521,7 @@ async function submitDecide() {
       </template>
 
       <template v-if="transfer">
+        <WarehouseDeliveryPanel :transfer-id="transferId" :status="transfer.status" :can-write="canWrite" @changed="loadTransfer" />
         <!-- 状态流程 -->
         <el-steps v-if="!terminalStatuses.includes(transfer.status)" :active="currentStep()" finish-status="success" style="margin-bottom: 24px">
           <el-step title="草稿" />

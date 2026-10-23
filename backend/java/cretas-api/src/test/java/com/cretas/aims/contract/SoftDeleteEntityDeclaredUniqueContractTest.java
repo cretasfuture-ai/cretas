@@ -91,6 +91,11 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
                     "prod: ukoddtjujjj3qfsb0o2nyqvcddi (factory_id,code) 全量、逐列一致；"
                             + "业务口径「编码不回收」——权威查重路径 findCodeConflictIncludingDeleted 也把已删的算进冲突"),
 
+            Map.entry("WarehouseTransferMovement#uq_wtm_request_item",
+                    "V77 新表尚未发布；隔离 PostgreSQL 13 原样迁移后的 pg_constraint/pg_index 实测："
+                            + "UNIQUE(request_key,transfer_item_id) 全量、无部分谓词；"
+                            + "请求身份永久保留，软删后重用同键仍为23505，新键可写且原历史保留"),
+
             // ── 类别 A′：prod 也是全量键、逐列一致，但那个键把 deleted_at 写进了键列 ────────────────
             // 🔴 2026-09-07 实测：PG 里 NULL 互不相等，(device_id, channel_id, deleted_at) 这种键
             // 对**活行零约束**——同一个 (DEV-1, 1) 连插两条活行，两条都成功。
