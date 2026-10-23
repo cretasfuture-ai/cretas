@@ -5,8 +5,7 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `ERP-S305-CORRECTION-BOUNDARY-20261023` — `review` — Owner Root；Base e754b5e37006d13d0046a9f50f0e23df0b86344d；archive/2026-10-23-s305-report-correction-scope.md。
-- `ERP-S311-SOURCE-ASSIGNEE-20261023` — `review` — Owner Root — Base e754b5e37006d13d0046a9f50f0e23df0b86344d — archive/2026-10-23-s311-source-assignee-scope.md。
+- `ERP-S305-WIP-QUANTITY-20261023` — `in-progress` — Owner /root/s305_wip_quantity；Base 7b211d798fdd7f7519d820ba2503b7cea72eb32f；11文件后续，不改1117；archive/2026-10-23-s305-wip-quantity-scope.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
 
@@ -16,7 +15,7 @@
 
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
-- `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `in-progress` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base e4896543a76a15c8808cb02767b3b021fad53462 — 0ed旧候选实核5文件；当前main已占72，同号冲突禁止合入；run-as73/grant74保留待精确修订ACK，原验证在途；详见archive/2026-10-22-native-date-v72-registration.md。
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74；Base e4896543a76a15c8808cb02767b3b021fad53462；1105/66a845精确5文件V78、1093/5c4bc2精确9文件V79仅改号接收；合并HOLD，见archive/2026-10-23-claude-v78-v79-adjudication.md。
 
 
 - `ERP-S6-B2-CLAUDE-20261021` — `blocked` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 405d01f1f7e03f6e57cb06f9dbbc3e5a97e0bdce — PR1075/41eda实际28文件整体HOLD；未来runtime writeScope=[]；V72另列被动5文件队列。
@@ -119,7 +118,7 @@
 
 
 
-- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：仅FactorySchedulerConfig/FactoryTriggerChain Entity、V72及2个RunAs PG/JPA测试；queued待原Owner独立WT确认，runtime/Gateway/Skill/Orchestrator无scope，详细全路径与门禁见登记归档。
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：原Owner精确5文件V78/9文件V79按裁决续验；V80仅候选未释放，C3/Gateway/采购/Orchestrator仍HOLD；S2仍待独立scope ACK。
 
 - `ERP-S6-B2-CLAUDE-20261021`：实际28文件整体review/HOLD；runtime writeScope=[]；V72被动5另列队列待独立WT确认；不放开采购/供应商/Gateway/共享DataScope/runtime policy。
 
