@@ -8,6 +8,8 @@ scope allows. Every reader goes through here:
 
   * ``distillation_capture.persist_distillation_sample`` - capture time
   * ``scripts/export_distillation_dataset.py``           - distillation export
+  * ``scripts/corpus_judge.py`` / ``corpus_eval_freeze.py`` / ``corpus_g3_sample.py``
+    - outside-LLM judging, eval slice, review sampling (``consented_rows_sql``)
   * ``scripts/finetune/training_consent_gate.py``         - intent classifier
     data (export_training_data / shadow_adjudicate / zpd_label_batch), which
     loads this file by path because those scripts run outside the package.
@@ -46,6 +48,19 @@ SHARED_MODEL_SCOPES = frozenset({"shared_anon"})
 # (no parameters, so it runs unchanged on psycopg2).
 SELECT_SCOPE_SQL = "SELECT consent_scope FROM training_consent WHERE factory_id = $1"
 SELECT_ALL_SQL = "SELECT factory_id, consent_scope FROM training_consent"
+
+
+def consented_rows_sql(column: str = "factory_id") -> str:
+    """SQL predicate: the row belongs to a synthetic seed tenant or to a factory
+    whose consent allows it in the corpus. For scripts that read / label / send
+    corpus rows (judge, eval freeze, review sampling). Built only from the
+    constants above, never from input. No row / NULL factory -> excluded."""
+    synthetic = ", ".join(f"'{f}'" for f in sorted(SYNTHETIC_FACTORY_IDS))
+    scopes = ", ".join(f"'{s}'" for s in sorted(CORPUS_CAPTURE_SCOPES))
+    return (
+        f"({column} IN ({synthetic}) OR {column} IN ("
+        f"SELECT tc.factory_id FROM training_consent tc WHERE tc.consent_scope IN ({scopes})))"
+    )
 
 
 def normalize_scope(raw: Any) -> str:
