@@ -182,6 +182,54 @@ public class ProductPackagingSpecServiceImpl implements ProductPackagingSpecServ
         return new PackagingSelection(matching.get(0), false);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public PackagingSelection resolveOpeningSelection(
+            String factoryId, String productTypeId, String transactionUnit, String packagingSpecId) {
+        List<ProductPackagingSpec> active = repository
+                .findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(factoryId, productTypeId);
+        if (active.isEmpty() && (packagingSpecId == null || packagingSpecId.isBlank())) {
+            return PackagingSelection.none();
+        }
+
+        String transactionCode = normalizedCode(factoryId, transactionUnit);
+        if (packagingSpecId != null && !packagingSpecId.isBlank()) {
+            ProductPackagingSpec selected = repository
+                    .findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(packagingSpecId, factoryId, productTypeId)
+                    .orElseThrow(() -> new BusinessException(400, "所选包装规格不存在或已停用")
+                            .withCode("PACKAGING_SPEC_INVALID")
+                            .withHintTarget("packagingSpecId"));
+            boolean packageUnitMatch = Objects.equals(
+                    normalizedCode(factoryId, selected.getPackageUnit()), transactionCode);
+            boolean baseUnitMatch = Objects.equals(
+                    normalizedCode(factoryId, selected.getBaseUnit()), transactionCode);
+            if (!packageUnitMatch && !baseUnitMatch) {
+                throw new BusinessException(400, "所选包装规格与期初入库单位不一致")
+                        .withCode("PACKAGING_SPEC_UNIT_MISMATCH")
+                        .withHintTarget("packagingSpecId");
+            }
+            return new PackagingSelection(selected, true);
+        }
+
+        List<ProductPackagingSpec> matching = active.stream()
+                .filter(spec -> Objects.equals(normalizedCode(factoryId, spec.getPackageUnit()), transactionCode)
+                        || Objects.equals(normalizedCode(factoryId, spec.getBaseUnit()), transactionCode))
+                .toList();
+        if (matching.isEmpty()) {
+            throw new BusinessException(400, "期初入库单位未匹配到有效包装规格")
+                    .withCode("PACKAGING_SPEC_UNIT_MISMATCH")
+                    .withHint("请选择产品基本单位或有效包装单位，并选择对应箱规")
+                    .withHintTarget("packagingSpecId");
+        }
+        if (matching.size() > 1) {
+            throw new BusinessException(400, "该产品有多个装箱规格，请选择本次使用的包装规格")
+                    .withCode("PACKAGING_SPEC_REQUIRED")
+                    .withHint("请选择例如“1箱=8盒”或其他有效箱规后再提交")
+                    .withHintTarget("packagingSpecId");
+        }
+        return new PackagingSelection(matching.get(0), false);
+    }
+
     private void validateRequested(ProductType product, List<ProductPackagingSpecDTO> specs) {
         Set<String> identities = new HashSet<>();
         for (ProductPackagingSpecDTO spec : specs) {
