@@ -78,6 +78,13 @@ const severities = [
   { value: 'MINOR', label: '次要' }
 ];
 
+const valueTypes = [
+  { value: 'RANGE', label: '范围' },
+  { value: 'NUMERIC', label: '数值' },
+  { value: 'TEXT', label: '文本' },
+  { value: 'BOOLEAN', label: '是/否' },
+];
+
 onMounted(() => {
   loadData();
   loadStatistics();
@@ -230,11 +237,17 @@ async function submitForm() {
 
   dialogLoading.value = true;
   try {
+    const payload = { ...itemForm.value };
+    if (payload.valueType !== 'RANGE' && payload.valueType !== 'NUMERIC') {
+      payload.minValue = null;
+      payload.maxValue = null;
+      payload.unit = '';
+    }
     let response;
     if (editingId.value) {
-      response = await put(`/${factoryId.value}/quality-check-items/${editingId.value}`, itemForm.value);
+      response = await put(`/${factoryId.value}/quality-check-items/${editingId.value}`, payload);
     } else {
-      response = await post(`/${factoryId.value}/quality-check-items`, itemForm.value);
+      response = await post(`/${factoryId.value}/quality-check-items`, payload);
     }
     if (response.success) {
       ElMessage.success(editingId.value ? '更新成功' : '创建成功');
@@ -514,7 +527,7 @@ const filteredData = computed(() => {
           <el-input v-model="itemForm.itemName" placeholder="如：菌落总数" />
         </el-form-item>
         <el-form-item label="检测类别" required>
-          <el-select v-model="itemForm.category" placeholder="选择类别" style="width: 100%">
+          <el-select v-model="itemForm.category" placeholder="选择类别" data-testid="quality-category" style="width: 100%">
             <el-option
               v-for="cat in categories"
               :key="cat.value"
@@ -529,10 +542,19 @@ const filteredData = computed(() => {
         <el-form-item label="标准依据">
           <el-input v-model="itemForm.standardReference" placeholder="如：GB 4789.2-2022" />
         </el-form-item>
-        <el-form-item label="标准值">
-          <el-input v-model="itemForm.standardValue" placeholder="如：≤10000 CFU/g" />
+        <el-form-item label="值类型" required>
+          <el-select v-model="itemForm.valueType" data-testid="quality-value-type" style="width: 100%">
+            <el-option v-for="type in valueTypes" :key="type.value" :label="type.label" :value="type.value" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="范围值">
+        <el-form-item label="标准值">
+          <el-select v-if="itemForm.valueType === 'BOOLEAN'" v-model="itemForm.standardValue" data-testid="quality-boolean-value" style="width: 100%">
+            <el-option label="是" value="true" />
+            <el-option label="否" value="false" />
+          </el-select>
+          <el-input v-else v-model="itemForm.standardValue" placeholder="如：≤10000 CFU/g" />
+        </el-form-item>
+        <el-form-item v-if="itemForm.valueType === 'RANGE' || itemForm.valueType === 'NUMERIC'" label="范围值">
           <div style="display: flex; gap: 8px; align-items: center;">
             <el-input-number v-model="itemForm.minValue" :precision="2" placeholder="最小值" style="flex: 1" />
             <span>~</span>

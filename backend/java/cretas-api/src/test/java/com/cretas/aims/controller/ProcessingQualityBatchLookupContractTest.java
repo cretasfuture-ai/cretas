@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.impl.ProcessingServiceImpl;
@@ -16,7 +17,9 @@ import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,6 +47,33 @@ class ProcessingQualityBatchLookupContractTest {
 
         org.junit.jupiter.api.Assertions.assertSame(batch, result);
         verify(batchRepository).findByFactoryIdAndBatchNumber(eq("F006"), eq("PB-REAL-10806"));
+    }
+
+    @Test
+    void emptyMissingAndForeignFactoryLookupsAreRejectedWithoutWrites() throws Exception {
+        org.junit.jupiter.api.Assertions.assertThrows(
+                RuntimeException.class, () -> processingService.getBatchByNumber("F006", "  "));
+        when(batchRepository.findByFactoryIdAndBatchNumber("F006", "PB-MISSING"))
+                .thenReturn(Optional.empty());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                RuntimeException.class, () -> processingService.getBatchByNumber("F006", "PB-MISSING"));
+        when(batchRepository.findByFactoryIdAndBatchNumber("F007", "PB-REAL-10806"))
+                .thenReturn(Optional.empty());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                RuntimeException.class, () -> processingService.getBatchByNumber("F007", "PB-REAL-10806"));
+
+        verify(batchRepository).findByFactoryIdAndBatchNumber("F006", "PB-MISSING");
+        verify(batchRepository).findByFactoryIdAndBatchNumber("F007", "PB-REAL-10806");
+        verify(batchRepository, never()).save(any(ProductionBatch.class));
+    }
+
+    @Test
+    void lookupDeclaresQualityPermissionEvenThoughStandaloneMvcOmitsAuthInterceptors() throws Exception {
+        RequirePermission permission = ProcessingController.class
+                .getMethod("getBatchByNumber", String.class, String.class)
+                .getAnnotation(RequirePermission.class);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new String[]{"quality:read_write"}, permission.value());
     }
 
     @Test

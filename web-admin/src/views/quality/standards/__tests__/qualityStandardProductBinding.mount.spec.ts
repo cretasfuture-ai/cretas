@@ -14,8 +14,10 @@ const ROWS = Symbol('rows');
 const ElTableStub = defineComponent({ props: { data: { type: Array, default: () => [] } }, setup(props, { slots }) { provide(ROWS, computed(() => props.data)); return () => h('div', slots.default?.()); } });
 const ElTableColumnStub = defineComponent({ setup(_props, { slots }) { const rows = inject<ComputedRef<unknown[]>>(ROWS, computed(() => [])); return () => h('div', rows.value.map((row: unknown) => slots.default?.({ row }))); } });
 const PassThrough = defineComponent({ setup(_props, { slots }) { return () => h('div', slots.default?.()); } });
+const ElCardStub = defineComponent({ setup(_props, { slots }) { return () => h('div', [slots.header?.(), slots.default?.()]); } });
+const ElInputStub = defineComponent({ props: { modelValue: { type: [String, Number], default: '' }, placeholder: { type: String, default: '' } }, emits: ['update:modelValue'], setup(props, { emit }) { return () => h('input', { placeholder: props.placeholder, value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value) }); } });
 const ElButtonStub = defineComponent({ setup(_props, { slots, attrs }) { return () => h('button', attrs, slots.default?.()); } });
-const ElSelectStub = defineComponent({ props: { modelValue: { type: [String, Boolean, Number], default: '' } }, emits: ['update:modelValue'], setup(props, { emit, attrs }) { return () => h('select', { 'data-testid': attrs.filterable ? 'binding-product-select' : undefined, value: props.modelValue, onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value) }, [h('option', { value: 'QA-S301-A' }, 'QA产品A')]); } });
+const ElSelectStub = defineComponent({ props: { modelValue: { type: [String, Boolean, Number], default: '' } }, emits: ['update:modelValue'], setup(props, { emit, attrs }) { const options = attrs.placeholder === '选择产品' ? [h('option', { value: 'QA-S301-A' }, 'QA产品A')] : attrs['data-testid'] === 'quality-boolean-value' || props.modelValue === 'BOOLEAN' ? [h('option', { value: 'true' }, '是'), h('option', { value: 'false' }, '否')] : [h('option', { value: 'RANGE' }, '范围'), h('option', { value: 'NUMERIC' }, '数值'), h('option', { value: 'TEXT' }, '文本'), h('option', { value: 'BOOLEAN' }, '是/否'), h('option', { value: 'SENSORY' }, '感官检测')]; return () => h('select', { 'data-testid': attrs['data-testid'] || (attrs.filterable ? 'binding-product-select' : undefined), value: props.modelValue, onChange: (event: Event) => emit('update:modelValue', (event.target as HTMLSelectElement).value) }, options); } });
 const ElDialogStub = defineComponent({ setup(_props, { slots }) { return () => h('div', [slots.default?.(), slots.footer?.()]); } });
 
 describe('quality standard product binding mounted contract', () => {
@@ -33,7 +35,7 @@ describe('quality standard product binding mounted contract', () => {
 
   it('clicks the real binding action, selects a product, and asserts the scoped save payload', async () => {
     const wrapper = shallowMount(StandardsList, {
-      global: { stubs: { ElCard: PassThrough, ElTable: ElTableStub, ElTableColumn: ElTableColumnStub, ElButton: ElButtonStub, ElInput: PassThrough, ElSelect: ElSelectStub, ElOption: PassThrough, ElPagination: PassThrough, ElTag: PassThrough, ElIcon: PassThrough, ElDialog: ElDialogStub, ElForm: PassThrough, ElFormItem: PassThrough, ElInputNumber: PassThrough, ElCheckbox: PassThrough } },
+      global: { stubs: { ElCard: ElCardStub, ElTable: ElTableStub, ElTableColumn: ElTableColumnStub, ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElOption: PassThrough, ElPagination: PassThrough, ElTag: PassThrough, ElIcon: PassThrough, ElDialog: ElDialogStub, ElForm: PassThrough, ElFormItem: PassThrough, ElInputNumber: PassThrough, ElCheckbox: PassThrough } },
     });
     await flushPromises();
     expect(wrapper.text()).toContain('绑定产品');
@@ -58,7 +60,7 @@ describe('quality standard product binding mounted contract', () => {
   it('keeps the mounted dialog open and reports failure when binding save rejects', async () => {
     harness.post.mockRejectedValueOnce(new Error('外厂产品不可绑定'));
     const wrapper = shallowMount(StandardsList, {
-      global: { stubs: { ElCard: PassThrough, ElTable: ElTableStub, ElTableColumn: ElTableColumnStub, ElButton: ElButtonStub, ElInput: PassThrough, ElSelect: ElSelectStub, ElOption: PassThrough, ElPagination: PassThrough, ElTag: PassThrough, ElIcon: PassThrough, ElDialog: ElDialogStub, ElForm: PassThrough, ElFormItem: PassThrough, ElInputNumber: PassThrough, ElCheckbox: PassThrough } },
+      global: { stubs: { ElCard: ElCardStub, ElTable: ElTableStub, ElTableColumn: ElTableColumnStub, ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElOption: PassThrough, ElPagination: PassThrough, ElTag: PassThrough, ElIcon: PassThrough, ElDialog: ElDialogStub, ElForm: PassThrough, ElFormItem: PassThrough, ElInputNumber: PassThrough, ElCheckbox: PassThrough } },
     });
     await flushPromises();
     const openButton = wrapper.findAll('button').find((button) => button.text().includes('绑定产品'));
@@ -75,5 +77,35 @@ describe('quality standard product binding mounted contract', () => {
     expect(harness.error).toHaveBeenCalledWith('外厂产品不可绑定');
     expect(harness.success).not.toHaveBeenCalled();
     expect(wrapper.findAll('button').some((button) => button.text() === '绑定')).toBe(true);
+  });
+
+  it('creates a BOOLEAN standard through the mounted form and clears unrelated range fields', async () => {
+    const wrapper = shallowMount(StandardsList, {
+      global: { stubs: { ElCard: ElCardStub, ElTable: ElTableStub, ElTableColumn: ElTableColumnStub, ElButton: ElButtonStub, ElInput: ElInputStub, ElSelect: ElSelectStub, ElOption: PassThrough, ElPagination: PassThrough, ElTag: PassThrough, ElIcon: PassThrough, ElDialog: ElDialogStub, ElForm: PassThrough, ElFormItem: PassThrough, ElInputNumber: PassThrough, ElCheckbox: PassThrough } },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain('新建标准');
+    const createButton = wrapper.findAll('button').find((button) => button.text().includes('新建标准'));
+    expect(createButton).toBeDefined();
+    await createButton!.trigger('click');
+    const valueTypeSelect = wrapper.find('[data-testid="quality-value-type"]');
+    expect(valueTypeSelect).toBeDefined();
+    await valueTypeSelect!.setValue('BOOLEAN');
+    const booleanSelect = wrapper.find('[data-testid="quality-boolean-value"]');
+    expect(booleanSelect).toBeDefined();
+    await booleanSelect!.setValue('true');
+    const nameInput = wrapper.find('input[placeholder="如：菌落总数"]');
+    await nameInput.setValue('QA布尔标准');
+    const categorySelect = wrapper.find('[data-testid="quality-category"]');
+    expect(categorySelect).toBeDefined();
+    await categorySelect!.setValue('SENSORY');
+    const submitButton = wrapper.findAll('button').find((button) => button.text() === '创建');
+    expect(submitButton).toBeDefined();
+    await submitButton!.trigger('click');
+    await flushPromises();
+    expect(harness.post).toHaveBeenCalledWith('/F006/quality-check-items', expect.objectContaining({
+      itemName: 'QA布尔标准', category: 'SENSORY', valueType: 'BOOLEAN', standardValue: 'true',
+      minValue: null, maxValue: null, unit: '',
+    }));
   });
 });
