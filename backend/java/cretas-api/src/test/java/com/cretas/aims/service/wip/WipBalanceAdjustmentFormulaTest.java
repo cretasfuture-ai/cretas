@@ -147,37 +147,37 @@ class WipBalanceAdjustmentFormulaTest {
     }
 
     @Test
-    @DisplayName("🔴 盘盈 +30: 余额 130, 领 100 必须允许; 余额 30, 流水 −100 / balanceAfter 30")
+    @DisplayName("🔴 盘盈 +30: 产 100、耗 20 ⇒ 余额 110, 领 100 必须允许 (旧校验按 80 拒); 余额 10, 流水 −100 / balanceAfter 10")
     void stocktakeGainAllowsBeyondProduced() {
-        SemiFinishedInventory r = row("kg", "100", "0", "30");
+        SemiFinishedInventory r = row("kg", "100", "20", "30");
         locked(r);
 
         BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("100"));
 
         assertThat(deducted).isEqualByComparingTo("100");
-        assertThat(r.getConsumedQuantity()).isEqualByComparingTo("100");
-        assertThat(r.getAvailableQuantity()).isEqualByComparingTo("30");
+        assertThat(r.getConsumedQuantity()).isEqualByComparingTo("120");
+        assertThat(r.getAvailableQuantity()).isEqualByComparingTo("10");
         assertThat(r.getStatus()).isEqualTo(SemiFinishedInventory.Status.AVAILABLE);
         SemiFinishedInventoryTransaction out = onlyLedgerRow();
         assertThat(out.getQuantity()).isEqualByComparingTo("-100");
-        assertThat(out.getBalanceAfter()).isEqualByComparingTo("30");
+        assertThat(out.getBalanceAfter()).isEqualByComparingTo("10");
     }
 
     @Test
-    @DisplayName("撤回: 盘盈 +30 时领 100 再撤回 100 ⇒ 余额回到 130, REVERSE 流水 balanceAfter 130")
+    @DisplayName("撤回: 盘盈 +30 时领 100 再撤回 100 ⇒ 余额回到 110, REVERSE 流水 balanceAfter 110")
     void restoreAfterGainReturnsToFormulaBalance() {
-        SemiFinishedInventory r = row("kg", "100", "100", "30");   // 已领 100, 余额 30
+        SemiFinishedInventory r = row("kg", "100", "120", "30");   // 已领 120, 余额 10
         r.setStatus(SemiFinishedInventory.Status.AVAILABLE);
         locked(r);
 
         svc.restoreClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("100"), "undo-g02", 9L);
 
-        assertThat(r.getConsumedQuantity()).isEqualByComparingTo("0");
-        assertThat(r.getAvailableQuantity()).isEqualByComparingTo("130");
+        assertThat(r.getConsumedQuantity()).isEqualByComparingTo("20");
+        assertThat(r.getAvailableQuantity()).isEqualByComparingTo("110");
         SemiFinishedInventoryTransaction rev = onlyLedgerRow();
         assertThat(rev.getTxnType()).isEqualTo(SemiFinishedInventoryTransaction.TxnType.REVERSE);
         assertThat(rev.getQuantity()).isEqualByComparingTo("100");
-        assertThat(rev.getBalanceAfter()).isEqualByComparingTo("130");
+        assertThat(rev.getBalanceAfter()).isEqualByComparingTo("110");
     }
 
     @Test
