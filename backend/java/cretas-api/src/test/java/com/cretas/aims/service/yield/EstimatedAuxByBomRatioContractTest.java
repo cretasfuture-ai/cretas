@@ -243,8 +243,12 @@ class EstimatedAuxByBomRatioContractTest {
         braise.setProductionPlanId(PLAN);
         braise.setEquipmentCost(BigDecimal.ZERO);
         braise.setOtherCost(BigDecimal.ZERO);
+        braise.setBatchType("CLERK_WIP");
         ProductionBatch pre = batchRepository.findByFactoryIdAndProductionPlanIdIn(F, List.of(PLAN)).get(0);
-        when(batchRepository.findByFactoryIdAndProductionPlanIdIn(eq(F), any())).thenReturn(List.of(pre, braise));
+        // 与 prod 同形: 成本批次清单排除 CLERK_WIP, 卤制批只在含 WIP 的查询里出现
+        // (#1150 第一版只看清单里的批次, 单测把卤制批也放进清单 ⇒ 绿, 上线后 L3A 仍 409)
+        when(batchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(F, PLAN))
+                .thenReturn(List.of(pre, braise));
         when(yieldReportService.getYield(F, 9202L)).thenReturn(emptyYield());
         when(consumptionRepository.findByProductionBatchIdAndFactoryId(9202L, F))
                 .thenReturn(List.of(consumption("MB-SALT", "MT-SALT", "SEASONING", "0.5", "3.00"),
@@ -257,7 +261,8 @@ class EstimatedAuxByBomRatioContractTest {
 
         assertThat(dto.getEstimatedAuxItems()).isEmpty();
         assertThat(dto.getMissingCostItems()).noneMatch(i -> i.startsWith("ESTIMATED_AUX_"));
-        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("1.50");
+        // 卤制批的调料成本在 prod 上随半成品投料单价进来, 不在本夹具里; 这里只钉「不再估」
+        assertThat(dto.getSeasoningCost()).isZero();
         assertThat(dto.isCostComplete()).as("missing=%s", dto.getMissingCostItems()).isTrue();
     }
 
