@@ -60,10 +60,8 @@ public final class WipLedgerEntries {
             return null;   // ⛔ 领 0 不凭空造流水
         }
 
-        // 余额快照：由扣减前状态推出，与 consumeSourceWip 同口径。
-        BigDecimal balanceAfter = nz(sfi.getProducedQuantity())
-                .subtract(nz(sfi.getConsumedQuantity()).add(input))
-                .add(nz(sfi.getAdjustmentQuantity()));
+        // 余额快照：由扣减前状态推出，与 consumeSourceWip 同一个余额公式 (实体上唯一实现)。
+        BigDecimal balanceAfter = sfi.balanceAfterConsuming(input);
 
         // sourceRef 按实体 javadoc：「OUT → 下道 intermediateBatchNo 或 transferId」。
         // 这里领用方是工序任务，用 task id 定位得到「被谁领走」。
@@ -205,7 +203,7 @@ public final class WipLedgerEntries {
      * 构造一条<b>逐道录入投料出库</b>的 OUT 流水行（clerk 路径，<b>没有报工</b>）。
      *
      * <p>🔴 <b>{@code outQty} 必须是【实际扣减量】，不是【请求量】</b>。
-     * {@code consumeClerkSemi} 在超扣时会 clamp 到 produced（少扣），
+     * {@code consumeClerkSemi} 在超扣时会 clamp 到余额 produced − consumed + adjustment（少扣），
      * {@code consumeClerkSemiStrict} 在盒⇄kg 场景会把 kg 折算成盒数（换单位）——
      * 两处的「请求量」都不等于「真正扣掉多少」。流水记错就等于账本自己在说谎。
      *
