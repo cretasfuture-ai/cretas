@@ -41,18 +41,10 @@ const confirmDialogLoading = ref(false);
 const confirmingDelivery = ref<TableRow | null>(null);
 const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string; batches: string[] }>>([]);
 
-const customers = ref<TableRow[]>([]);
-const customerMap = computed(() => {
-  const map: Record<string, string> = {};
-  customers.value.forEach((c) => { if (c.id && c.name) map[String(c.id)] = String(c.name); });
-  return map;
-});
-
 onMounted(() => {
   // Issue #740: 默认加载销售待确认 queue
   loadPendingSalesDeliveries();
   loadData();
-  loadCustomers();
 });
 
 // ==================== Issue #740: 销售发货单待 confirm queue ====================
@@ -215,23 +207,6 @@ async function loadData() {
     console.error('加载失败:', error);
   } finally {
     loading.value = false;
-  }
-}
-
-async function loadCustomers() {
-  if (!factoryId.value) return;
-  try {
-    const response = await get(`/${factoryId.value}/customers`);
-    if (response.success && response.data) {
-      customers.value = response.data.content || response.data || [];
-    } else if (response.success === false) {
-      ElMessage.error(response.message || '加载客户列表失败');
-    }
-  } catch (error) {
-    // UX polish (2026-05-20): interceptor handles 4xx/5xx with backend message;
-    // fallback only for network errors (避免双 toast).
-    console.error('加载客户列表失败:', error);
-    handleCatchError(error, '加载客户列表失败');
   }
 }
 
@@ -420,7 +395,7 @@ function getStatusText(status: string) {
       <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
         <el-table-column prop="shipmentNumber" label="出货单号" width="160" :formatter="emptyCell" />
         <el-table-column label="客户名称" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.customerName || customerMap[row.customerId] || row.customerId || '-' }}</template>
+          <template #default="{ row }">{{ row.customerName || row.customerId || '-' }}</template>
         </el-table-column>
         <el-table-column label="产品" width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.productName || row.productBatchNumber || '-' }}</template>

@@ -41,6 +41,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.eq;
@@ -235,6 +236,28 @@ class SalesFinishedGoodsPriceContractTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.unitPrice").value(0))
                 .andExpect(jsonPath("$.data.unitCost").value(0));
+    }
+
+    @Test
+    @DisplayName("finished-goods list enriches a blank snapshot from the same-factory product name")
+    void listEnrichesBlankProductNameWithoutMutatingSource() throws Exception {
+        source.setProductName(null);
+        when(salesService.getFinishedGoodsBatches("F006", 1, 20))
+                .thenReturn(PageResponse.of(List.of(source), 1, 20, 1L));
+        when(productType.getId()).thenReturn("PT-1");
+        when(productType.getName()).thenReturn("同厂成品名称");
+        when(productTypeRepository.findByFactoryIdAndIdIn("F006", Set.of("PT-1")))
+                .thenReturn(List.of(productType));
+
+        mockMvc.perform(get("/api/mobile/F006/sales/finished-goods")
+                        .requestAttr("userId", 10L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].productTypeId").value("PT-1"))
+                .andExpect(jsonPath("$.data.content[0].productName").value("同厂成品名称"));
+
+        verify(productTypeRepository).findByFactoryIdAndIdIn("F006", Set.of("PT-1"));
+        org.junit.jupiter.api.Assertions.assertNull(source.getProductName());
+        org.junit.jupiter.api.Assertions.assertSame(productType, source.getProductType());
     }
 
     @Test
