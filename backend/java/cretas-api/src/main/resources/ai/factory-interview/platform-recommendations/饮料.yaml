@@ -1,0 +1,73 @@
+# 平台自编工艺模板（隐私条款第七条：仅来源于公开资料、行业标准及平台自编模板）
+# 依据：食品生产许可审查细则（饮料 · 果蔬汁类及其饮料 / 蛋白饮料）中的基本生产流程与行业通用做法整理。
+# 不含任何客户的工艺：只有工序名称、先后、各步投入/产出与参数名称，不含参数数值与得率。
+industryHint: 饮料
+intro: 这是平台按公开的饮料生产流程整理的通用起点，只列常见工序和要记录的参数名称，不含任何工厂的具体做法。请按你们工厂的实际情况逐项确认或修改。
+variants:
+  - 用浓缩汁或粉料复原的产品去掉「破碎提取」
+  - 不需要均质的产品去掉「均质」
+  - 热灌装与无菌冷灌装的杀菌、灌装顺序不同，按实际调整
+steps:
+  - name: 原料验收
+    input: 水果、植物原料或浓缩汁
+    aux: []
+    pack: []
+    output: 合格原料
+    outputUnit: kg
+    params: [感官检查]
+    yieldNote: 按本厂实际填写
+    byproducts: [不合格原料]
+  - name: 清洗
+    input: 合格原料
+    aux: [加工用水]
+    pack: []
+    output: 清洗后原料
+    outputUnit: kg
+    params: [清洗方式]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 破碎提取
+    input: 清洗后原料
+    aux: []
+    pack: []
+    output: 原汁或提取液
+    outputUnit: L
+    params: [提取方式]
+    yieldNote: 按本厂实际填写
+    byproducts: [果渣或滤渣]
+  - name: 调配
+    input: 原汁或提取液
+    aux: [水, 糖, 食品添加剂]
+    pack: []
+    output: 调配液
+    outputUnit: L
+    params: [调配核对]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 均质
+    input: 调配液
+    aux: []
+    pack: []
+    output: 均质液
+    outputUnit: L
+    params: [均质压力]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 杀菌
+    input: 均质液
+    aux: []
+    pack: []
+    output: 杀菌液
+    outputUnit: L
+    params: [杀菌温度, 杀菌时间]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 灌装
+    input: 杀菌液
+    aux: []
+    pack: [瓶或罐, 瓶盖, 标签, 外箱]
+    output: 灌装成品
+    outputUnit: 瓶
+    params: [灌装量, 封口检查]
+    yieldNote: 包装工序一般不计得率
+    byproducts: []

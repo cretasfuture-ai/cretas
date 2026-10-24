@@ -1,0 +1,73 @@
+# 平台自编工艺模板（隐私条款第七条：仅来源于公开资料、行业标准及平台自编模板）
+# 依据：食品生产许可审查细则（肉制品 · 酱卤肉制品）中的基本生产流程与行业通用做法整理。
+# 不含任何客户的工艺：只有工序名称、先后、各步投入/产出与参数名称，不含参数数值与得率。
+industryHint: 卤味熟食
+intro: 这是平台按公开的酱卤肉制品生产流程整理的通用起点，只列常见工序和要记录的参数名称，不含任何工厂的具体做法。请按你们工厂的实际情况逐项确认或修改。
+variants:
+  - 鲜品原料可去掉「解冻」一步
+  - 散装当日销售的产品通常没有「二次杀菌」
+  - 先切块再卤，或卤后再切分，按你们的实际顺序调整
+steps:
+  - name: 原料解冻
+    input: 冻品原料肉
+    aux: []
+    pack: []
+    output: 解冻原料肉
+    outputUnit: kg
+    params: [解冻方式, 解冻时长, 中心温度]
+    yieldNote: 按本厂实际填写
+    byproducts: [解冻失水]
+  - name: 修整清洗
+    input: 解冻原料肉
+    aux: []
+    pack: []
+    output: 修整后原料
+    outputUnit: kg
+    params: [修整要求]
+    yieldNote: 按本厂实际填写
+    byproducts: [边角料]
+  - name: 焯水
+    input: 修整后原料
+    aux: []
+    pack: []
+    output: 焯水后半成品
+    outputUnit: kg
+    params: [水温, 时长]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 卤制
+    input: 焯水后半成品
+    aux: [卤汁, 香辛料, 调味料]
+    pack: []
+    output: 卤制品
+    outputUnit: kg
+    params: [卤制温度, 卤制时长]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 冷却
+    input: 卤制品
+    aux: []
+    pack: []
+    output: 冷却后卤制品
+    outputUnit: kg
+    params: [冷却方式, 冷却后中心温度]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 包装
+    input: 冷却后卤制品
+    aux: []
+    pack: [包装袋, 标签, 外箱]
+    output: 包装成品
+    outputUnit: 袋
+    params: [包装方式, 每袋规格]
+    yieldNote: 包装工序一般不计得率
+    byproducts: []
+  - name: 二次杀菌
+    input: 包装成品
+    aux: []
+    pack: []
+    output: 杀菌后成品
+    outputUnit: 袋
+    params: [杀菌方式, 杀菌温度, 杀菌时间]
+    yieldNote: 包装后工序一般不计得率
+    byproducts: []
