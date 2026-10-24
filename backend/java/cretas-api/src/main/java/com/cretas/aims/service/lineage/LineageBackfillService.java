@@ -121,6 +121,12 @@ public class LineageBackfillService {
                          Counters productionToWipStock,
                          Counters reportMaterialToProduction) {
 
+        /** 全部段 —— 新增一段时同时加进这里, 进程退出码按它汇总「失败 / 延后待定」。 */
+        public java.util.List<Counters> segments() {
+            return java.util.List.of(rawToProduction, productionToFinished, finishedToShipment,
+                    productionToWipStock, reportMaterialToProduction);
+        }
+
         public String render() {
             return String.format(
                     "[lineage-backfill] factory=%s dryRun=%s%n"
