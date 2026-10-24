@@ -41,6 +41,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     private final EmbeddingClient embeddingClient;
     private final RequestScopedEmbeddingCache requestScopedCache;
     private final IntentEmbeddingCacheService embeddingCacheService;
+    private final com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
 
     // 自引用代理 - 用于解决 Spring @Transactional 自调用不走代理的问题
     @Autowired
@@ -508,6 +509,10 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
                                         String intentCode, TrainingSample.MatchMethod method,
                                         double confidence, String sessionId) {
         if (userInput == null || userInput.trim().isEmpty()) {
+            return null;
+        }
+        // 训练授权 (2026-10-22): 未授权工厂的原话不进训练样本表
+        if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
             return null;
         }
 

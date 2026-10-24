@@ -45,6 +45,7 @@ public class SyntheticDataService {
     private final GRAPEFilter grapeFilter;
     private final TrainingSampleRepository trainingSampleRepository;
     private final SyntheticDataConfig syntheticDataConfig;
+    private final com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
 
     // ==================== 生成结果 ====================
 
@@ -129,6 +130,17 @@ public class SyntheticDataService {
         log.info("开始为意图 {} 生成合成数据, 工厂: {}, 目标数量: {}", intentCode, factoryId, targetCount);
 
         try {
+            // 训练授权 (2026-10-22): 合成样本由该工厂的真实历史样本派生, 未授权不生成
+            if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
+                return SyntheticGenerationResult.builder()
+                        .generated(0)
+                        .validated(0)
+                        .filtered(0)
+                        .saved(0)
+                        .errorMessage("该工厂未授权训练用途, 不生成合成数据")
+                        .durationMs(System.currentTimeMillis() - startTime)
+                        .build();
+            }
             // 检查合成数据比例限制
             if (!checkRatioLimit(factoryId)) {
                 log.warn("工厂 {} 的合成数据比例已达上限，跳过生成", factoryId);

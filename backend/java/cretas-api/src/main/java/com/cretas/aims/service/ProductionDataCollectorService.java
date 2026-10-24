@@ -38,6 +38,7 @@ public class ProductionDataCollectorService {
     private final EquipmentRepository equipmentRepository;
     private final ProductTypeRepository productTypeRepository;
     private final RestTemplate restTemplate;
+    private final com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
 
     @Value("${cretas.ai.service.url:http://localhost:8083}")
     private String aiServiceUrl;
@@ -62,6 +63,10 @@ public class ProductionDataCollectorService {
         log.info("收到批次完成事件: factoryId={}, batchId={}", factoryId, batchId);
 
         try {
+            // 训练授权 (2026-10-22): 未授权工厂的生产数据不进排产训练集
+            if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
+                return;
+            }
             // 检查是否已有记录，避免重复
             if (trainingDataRepository.existsByFactoryIdAndBatchId(factoryId, batchId)) {
                 log.info("批次 {} 的训练数据已存在，跳过", batchId);
@@ -358,6 +363,9 @@ public class ProductionDataCollectorService {
      */
     @Transactional
     public int collectHistoricalData(String factoryId, List<ProductionBatch> completedBatches) {
+        if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
+            return 0;
+        }
         int count = 0;
         for (ProductionBatch batch : completedBatches) {
             if (!trainingDataRepository.existsByFactoryIdAndBatchId(factoryId, batch.getId())) {

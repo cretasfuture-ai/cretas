@@ -50,6 +50,7 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     private final AnnotationQueueRepository annotationRepository;
     private final LearningSuggestionRepository suggestionRepository;
     private final SampleClusterRepository clusterRepository;
+    private final com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
     private final IntentMatchRecordRepository matchRecordRepository;
     private final ObjectMapper objectMapper;
     private final IntentKnowledgeBase intentKnowledgeBase;
@@ -82,6 +83,11 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
 
         // Only collect low confidence samples
         if (confidenceScore != null && confidenceScore.compareTo(confidenceThreshold) >= 0) {
+            return null;
+        }
+
+        // 训练授权 (2026-10-22): 未授权工厂的原话不进主动学习样本
+        if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
             return null;
         }
 
