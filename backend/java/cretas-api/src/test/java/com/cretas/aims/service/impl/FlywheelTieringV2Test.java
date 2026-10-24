@@ -57,7 +57,8 @@ class FlywheelTieringV2Test {
                 null,    // TrainingSampleRepository — not needed for tiering tests
                 null,    // EmbeddingClient
                 null,    // RequestScopedEmbeddingCache
-                null     // IntentEmbeddingCacheService
+                null,    // IntentEmbeddingCacheService
+                null     // TrainingConsentService
         );
 
         // #553 守卫: inject a default "allow-promote" configService mock so that existing

@@ -85,11 +85,11 @@ from common.llm_router import call_chain, SLOT  # noqa: E402
 
 logger = logging.getLogger("corpus_judge")
 
-# Training-consent gate (owner rule 2026-10-22): only synthetic seed rows and rows of
-# factories that authorized training use are read / labeled / sent out here.
-from smartbi.services.training_consent import consented_rows_sql  # noqa: E402
+# Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
+# 2026-10-24 training rule at capture are read / labeled / sent out here.
+from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
 
-_CONSENTED_ROWS = consented_rows_sql()
+_USABLE_ROWS = usable_rows_sql()
 
 # ---------------------------------------------------------------------------
 # Per-task-type judge rubric
@@ -386,7 +386,7 @@ _FETCH_SQL = """
     SELECT id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 3
-      AND """ + _CONSENTED_ROWS + """
+      AND """ + _USABLE_ROWS + """
       AND (metadata IS NULL OR NOT (metadata ? 'judge'))
     {source_clause}
     ORDER BY id
@@ -406,7 +406,7 @@ _CROSSFAMILY_FETCH_SQL = """
     SELECT id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 4
-      AND """ + _CONSENTED_ROWS + """
+      AND """ + _USABLE_ROWS + """
       AND source NOT IN ({sources_placeholder})
       AND (metadata IS NULL OR NOT (metadata ? 'judge_crossfamily'))
     ORDER BY id

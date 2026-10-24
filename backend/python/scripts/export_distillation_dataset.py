@@ -24,12 +24,15 @@ Run on the server (DB env from the app's .env):
 Rows are already deduped at write time (UNIQUE input_hash, ON CONFLICT refresh),
 so no dedup needed here. NO RLS on the table → reads all factories cross-business.
 
-数据主权门控 (training-consent foundation, 2026-06-11):
+训练规则 (Steve 2026-10-24, 见 smartbi/services/training_consent.py):
+  - 真实行必须带 metadata.training_rule (采集时已过新规则); 之前采集的旧行一律排除,
+    等补检。导出时再查一次 qa_has_blocked_content (工艺参数 / 结构 / 问题处理 /
+    人员薪酬), 命中排除 —— 任何工厂, 授权与否。
   - SHARED 导出 (默认, 按 business_type 分桶):
-      * 合成行 (SEED_R/SEED_F / metadata.source_kind='synthetic_seed') → **无条件**收入。
-      * 真实行 → 仅当其 factory_id 的 training_consent.consent_scope='shared_anon' 时收入,
-        且**必经 anonymize_for_shared 脱敏** (数值分桶 + 实体伪名化, 保留 %/形状)。
-      * consent='none'/'private' 或无授权行的真实租户 → **排除** (default-deny)。
+      * 合成行 (SEED_R/SEED_F / metadata.source_kind='synthetic_seed') → 收入。
+      * metadata.desensitized 行 (未授权工厂, 采集时已脱敏) → 收入。
+      * shared_anon 工厂的原始行 → 经 anonymize_for_shared 脱敏后收入。
+      * private 工厂的原始行 → 不进共享导出 (只给它自己的专属模型)。
   - PRIVATE 导出 (--factory F001): 仅当该工厂 consent_scope='private' 时导出其**原始**行
     (不脱敏), 输出 dataset_private_{factory}.jsonl; 否则拒绝并给出清晰提示。
 """
@@ -51,8 +54,11 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
         sys.path.insert(0, _p)
 
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
+    DESENSITIZED_KEY,
+    RULE_KEY,
     SYNTHETIC_FACTORY_IDS,
     fetch_consent_map,
+    qa_has_blocked_content,
     scope_from_map,
 )
 
@@ -205,20 +211,38 @@ def _to_sft_line(
             "teacher_model": row.get("teacher_model"),
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
             "consent_class": consent_class,
-            "anonymized": consent_class == "shared_anon",
+            "anonymized": consent_class in ("shared_anon", "desensitized"),
         },
     }
+
+
+def _metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+    meta = row.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            meta = None
+    return meta if isinstance(meta, dict) else {}
+
+
+def passes_training_rule(row: Dict[str, Any]) -> bool:
+    """A real row may be exported only if it was captured under the 2026-10-24
+    rule and still has no blocked content (re-checked here, defense in depth)."""
+    if RULE_KEY not in _metadata(row):
+        return False
+    return not qa_has_blocked_content(row.get("input_text"), row.get("teacher_output"))
 
 
 def gate_shared_rows(
     rows: List[Dict[str, Any]],
     consent: Dict[str, str],
 ) -> List[Dict[str, Any]]:
-    """Consent-gate rows for the SHARED (cross-tenant) export.
+    """Gate rows for the SHARED (cross-tenant) export.
 
-    Returns list of (row, input_text, teacher_output, consent_class) tuples as
-    dicts ready for _to_sft_line. Synthetic → unconditional raw. Real
-    shared_anon → anonymized. Real none/private → excluded (default-deny).
+    Synthetic -> raw. Real rows must pass the training rule; then desensitized
+    rows -> as stored, shared_anon raw rows -> anonymized, private raw rows ->
+    excluded (own model only).
 
     Returned items: {"row", "input_text", "teacher_output", "consent_class"}.
     """
@@ -230,6 +254,12 @@ def gate_shared_rows(
             out.append({"row": r, "input_text": None, "teacher_output": None,
                         "consent_class": "synthetic"})
             continue
+        if not passes_training_rule(r):
+            continue
+        if _metadata(r).get(DESENSITIZED_KEY):
+            out.append({"row": r, "input_text": None, "teacher_output": None,
+                        "consent_class": "desensitized"})
+            continue
         scope = _consent_of(r, consent)
         if scope == "shared_anon":
             anon_in, anon_out = anonymize_for_shared(
@@ -239,7 +269,7 @@ def gate_shared_rows(
             )
             out.append({"row": r, "input_text": anon_in, "teacher_output": anon_out,
                         "consent_class": "shared_anon"})
-        # scope in ('none', 'private') → real row NOT in shared export (default-deny)
+        # private raw rows stay out of the shared export
     return out
 
 
@@ -259,6 +289,8 @@ async def _export_private(args, pool) -> None:
 
     rows = await _fetch_rows(args.source, args.business_type, args.min_quality,
                              pool=pool, factory_id=args.factory)
+    # process content never enters any set, the factory's own model included
+    rows = [r for r in rows if passes_training_rule(r)]
     if not rows:
         logger.info("No samples for factory %s — nothing to export.", args.factory)
         return

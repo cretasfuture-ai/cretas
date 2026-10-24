@@ -121,11 +121,20 @@ class TestAnonymizePseudonymize:
 
 
 # ===========================================================================
-# 2. Export shared-gating: synthetic always; shared_anon in; none/private out
+# 2. Export shared-gating (rule 2026-10-24): synthetic in; real rows only if
+#    captured under the rule; desensitized in; shared_anon anonymized in;
+#    private / none raw out; process content out for everyone
 # ===========================================================================
 
+RULE = {"training_rule": "2026-10-24"}
+
+
 def _row(factory_id, *, metadata=None, input_text="问题X", teacher_output="答案Y",
-         business_type="restaurant", system_prompt=None):
+         business_type="restaurant", system_prompt=None, rule=True):
+    """Real-tenant rows carry the capture-time rule tag unless rule=False."""
+    real = factory_id and factory_id not in ("SEED_R", "SEED_F")
+    if rule and real:
+        metadata = {**RULE, **(metadata or {})}
     return {
         "id": 1,
         "source": "chat_qa",
@@ -189,6 +198,21 @@ class TestSharedGating:
         assert "35%" in item["input_text"]   # shape kept
         assert "18%" in item["teacher_output"]
 
+    def test_desensitized_row_of_unauthorized_factory_is_included(self):
+        rows = [_row("F001", metadata={"desensitized": True}, input_text="门店A营收¥10-50万")]
+        gated = export_mod.gate_shared_rows(rows, consent={})
+        assert [g["consent_class"] for g in gated] == ["desensitized"]
+
+    def test_row_captured_before_the_rule_is_excluded_even_when_authorized(self):
+        rows = [_row("F001", rule=False), _row("F002", rule=False, metadata={"desensitized": True})]
+        assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
+
+    def test_process_content_is_excluded_even_for_shared_anon(self):
+        rows = [_row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+                _row("F001", input_text="怎么提升出成率", teacher_output="把腌制时间延长到 24 小时"),
+                _row("F002", metadata={"desensitized": True}, input_text="为什么返工多")]
+        assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
+
     def test_mixed_population(self):
         rows = [
             _row("SEED_R"),                                    # synthetic → in
@@ -197,12 +221,14 @@ class TestSharedGating:
             _row("F002"),                                      # none → out
             _row("F003"),                                      # private → out
             _row("F004"),                                      # shared_anon → in
+            _row("F006", metadata={"desensitized": True}),     # desensitized → in
+            _row("F007", rule=False),                          # pre-rule row → out
         ]
-        consent = {"F002": "none", "F003": "private", "F004": "shared_anon"}
+        consent = {"F002": "none", "F003": "private", "F004": "shared_anon", "F007": "shared_anon"}
         gated = export_mod.gate_shared_rows(rows, consent)
         classes = sorted(g["consent_class"] for g in gated)
-        assert classes == ["shared_anon", "synthetic", "synthetic"]
-        assert len(gated) == 3
+        assert classes == ["desensitized", "shared_anon", "synthetic", "synthetic"]
+        assert len(gated) == 4
 
 
 # ===========================================================================
@@ -272,6 +298,18 @@ async def test_private_export_raw_when_consented(tmp_path):
     assert "星巴克" in content
     assert "2500000" in content
     assert '"consent_class": "private"' in content
+
+
+@pytest.mark.asyncio
+async def test_private_export_skips_process_content_and_pre_rule_rows(tmp_path):
+    consent = [{"factory_id": "F001", "consent_scope": "private"}]
+    samples = [_row("F001", input_text="本月营收多少", teacher_output="128 万"),
+               _row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+               _row("F001", input_text="上月库存", teacher_output="350 箱", rule=False)]
+    conn = _FakeConn(consent_rows=consent, sample_rows=samples)
+    await export_mod._export_private(_Args(factory="F001", out=str(tmp_path)), _FakePool(conn))
+    lines = open(os.path.join(str(tmp_path), "dataset_private_F001.jsonl"), encoding="utf-8").read().splitlines()
+    assert len(lines) == 1 and "本月营收多少" in lines[0]
 
 
 @pytest.mark.asyncio

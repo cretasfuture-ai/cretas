@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2
 import psycopg2.extras
 
-from training_consent_gate import CONSENTED_FACTORY_CLAUSE, consented_factories
+from training_consent_gate import apply_utterance_rule
 import requests
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ def fetch_zpd_records(
     N days.
     """
     query = """
-        SELECT id, user_input, normalized_input,
+        SELECT id, factory_id, user_input, normalized_input,
                matched_intent_code, matched_intent_name,
                confidence_score, match_method,
                llm_intent_code, llm_confidence,
@@ -107,10 +107,9 @@ def fetch_zpd_records(
         FROM intent_match_records
         WHERE zpd_boundary = true
           AND created_at >= NOW() - INTERVAL '%s days'
-          """ + CONSENTED_FACTORY_CLAUSE + """
         ORDER BY created_at DESC
     """
-    params: list = [days, consented_factories()]
+    params: list = [days]
 
     if limit:
         query += " LIMIT %s"
@@ -122,7 +121,7 @@ def fetch_zpd_records(
     logger.info(
         "Fetched %d ZPD boundary records from the last %d days", len(rows), days
     )
-    return [dict(r) for r in rows]
+    return apply_utterance_rule([dict(r) for r in rows], ("user_input", "normalized_input"))
 
 
 def build_labeling_prompt(
