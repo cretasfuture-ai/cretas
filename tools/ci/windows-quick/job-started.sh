@@ -2,7 +2,7 @@
 # Job-start hook of the quick-check slot: only the small allowlisted jobs may run here.
 # Anything else (a routing mistake) fails fast instead of running inside 1 CPU / 1 GiB.
 # ⚠️ The allowlist must equal QUICK_JOBS in scripts/ci/switch_ci_runner.py
-#    (scripts/tests/test-quick-runner-routing.sh pins the two copies together).
+#    (pinned by the routing test until the slot was retired on 2026-10-25).
 set -euo pipefail
 [[ $(id -un) == cretas-ci-quick && $(uname -s) == Linux ]] || { echo 'QUICK_PREFLIGHT=wrong_identity'; exit 75; }
 case "${GITHUB_JOB:-preflight}" in

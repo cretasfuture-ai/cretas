@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """在「托管 runner」与「自建 runner」之间切换 CI。
 
+🔴 2026-10-25: 仓库已转 public, 自建 runner 全部退役, `self-hosted` 目标被拒绝 ——
+公开仓库里任何人都能提 PR, 自建路由会让陌生人的代码在我们的机器上执行。
+现在只用 `--check` (scripts/tests/test-public-repo-hosted-only.sh 要求结果是 hosted)。
+
 ## 为什么不是一个组织变量
 
 第一版写的是 `runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}`。
@@ -80,7 +84,7 @@ SELF = "    runs-on: [self-hosted, cretas]"
 # 同一台 WSL 上另有两个 4G 的 extra runner(给 jest/web 用), 也带 [self-hosted, cretas],
 # JVM 按 cgroup 算默认堆只有 1G, Java Gate 在上面第 61 个类就 `Java heap space`。
 # 托管侧用行尾注释标记, 切回自托管时才知道该还原成哪一种形态(两种形态往返必须逐字还原,
-# scripts/tests/test-java-heavy-jobs-need-8g-runner.sh 钉了这条)。
+# 原 test-java-heavy-jobs-need-8g-runner.sh 钉这条, 2026-10-25 随自建 runner 退役)。
 SELF_JAVA = "    runs-on: [self-hosted, cretas, java]"
 HOSTED_JAVA = "    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G runner"
 # 2026-10-03: 可溢出的 Java job —— 只要 `java` 标签, 不要 `cretas`。本机三个 8G 的
@@ -88,7 +92,7 @@ HOSTED_JAVA = "    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G r
 # canada-mini-cretas 只带 [java], 也匹配 ⇒ 本机满了 GitHub 会把这些 job 派过去。
 # 4G 的 extra runner 没有 java 标签, 仍然接不到(这正是 java 标签存在的理由)。
 # ⛔ 带 services: 的 job(会撞同 VM 里 assembly runner 的 job 映射的 5432) 与要 runner 本机常驻 PG 的
-#    java-full-nightly 不许用这一形态 —— test-java-heavy-jobs-need-8g-runner.sh 的 A2 钉着。
+#    java-full-nightly 不许用这一形态 (原由 8G runner 闸的 A2 钉着, 2026-10-25 已退役)。
 #    java-artifact 没有 services:, 但 09-15 起只手动派发, 不抢 runner, 故保留三标签形态。
 SELF_JAVA_ANY = "    runs-on: [self-hosted, java]"
 HOSTED_JAVA_ANY = "    runs-on: ubuntu-latest  # java-heavy-any: self-hosted 时要 8G runner, 可溢到 canada-mini"
@@ -101,7 +105,7 @@ SELF_WEB = "    runs-on: [self-hosted, Linux, cretas, X64, windows-light]"
 # 中位数 12–17 分钟)。现在走专用的 `cretas-quick` 标签: 本机 1 核 / 1G 的小检查槽只带这一个
 # 自定义标签 (不带 cretas, 重任务落不过去); aurora 与 windows-light 也加了 cretas-quick,
 # 小检查槽忙或离线时照样有人接。槽的任务白名单 (tools/ci/windows-quick/job-started.sh)
-# 必须等于 QUICK_JOBS —— scripts/tests/test-quick-runner-routing.sh 钉着两份一致。
+# 必须等于 QUICK_JOBS (原由小检查路由闸钉着, 2026-10-25 随自建 runner 退役)。
 QUICK_WORKFLOWS = frozenset({
     "secret-regression.yml",
     "soft-delete-scan-surface.yml",
@@ -180,6 +184,10 @@ def main() -> int:
 
     if not check_only and target not in ("hosted", "self-hosted"):
         print(__doc__)
+        return 2
+    if target == "self-hosted" and not check_only:
+        print("ci-runner: REFUSED — 仓库是 public, 自建 runner 已退役 (2026-10-25)。")
+        print("  自建路由会让外部 PR 的代码在我们的机器上执行; 要恢复必须先把仓库改回 private。")
         return 2
 
     states = {}

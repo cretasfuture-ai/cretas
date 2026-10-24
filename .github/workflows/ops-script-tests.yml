@@ -71,8 +71,6 @@ on:
       #    (启动超时 ⇒ 没量到, ⛔ 不与迁移失败同一个红) —— 改它的 PR 必须触发那道闸。
       - '.github/workflows/fresh-db-progress.yml'
       - '.github/workflows/ops-script-tests.yml'
-      # 2026-10-24: test-quick-runner-routing.sh 钉着小检查槽的标签/限额/任务白名单。
-      - 'tools/ci/windows-quick/**'
       # 🔴 2026-09-07 P0 的直接教训: `test-ci-gate-runs-merge-result.sh` 断言的正是下面这几个
       #    文件的结构(三处 head.sha pin / 内联 merge 步骤 / ⛔ 不许用本地 composite action),
       #    而它们**一个都不在这份 paths 里** ⇒ 一个**只动 `.github/actions/`** 的 PR 让那道闸
@@ -82,12 +80,11 @@ on:
       - '.github/workflows/java-gate-pr.yml'
       - '.github/workflows/java-full-nightly.yml'
       - '.github/actions/**'
-      # 2026-09-15: test-java-heavy-jobs-need-8g-runner.sh 钉「Maven job 只落 8G runner +
-      #    pom argLine 走属性」, 它声明的三条路径此前都不在触发面里。
+      # 2026-10-25: test-public-repo-hosted-only.sh 钉「全部 job 走托管 + 原自建 job 带超时 + Java 显式堆」
+      #    (取代 2026-09-15 的 8G runner / 自托管超时两道闸; 仓库转 public, 自建 runner 退役)。
       - '.github/workflows/jpa-gate-main.yml'
       - '.github/workflows/tool-inventory-gate.yml'
       - 'backend/java/cretas-api/pom.xml'
-      # 2026-09-15: test-selfhosted-jobs-have-timeouts.sh 钉「自托管 job 全带超时 + rn-gate jest 自带 JEST_MAX_WORKERS」
       - '.github/workflows/rn-gate.yml'
       - '.github/workflows/web-admin-gate.yml'
       - '.github/workflows/python-gate.yml'
@@ -112,7 +109,7 @@ jobs:
     # ⛔ 字面量。`${{ vars.X }}` 在 `runs-on` 里求值为**空**(job 被派成 ubuntu-latest
     #    而不报错) —— 已逐条排除 fork/visibility/授权/时序, 那是能力边界不是配错。
     #    见 .claude/rules/ci-runner-routing.md。
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
