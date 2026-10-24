@@ -42,6 +42,16 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
     Optional<WorkProcessTask> findByFactoryIdAndId(String factoryId, Long id);
 
     /**
+     * 同上, 加悲观写锁 —— Workflow 逐道录入进度重算 ({@code WorkflowTaskProgressWriter}) 用:
+     * 先锁任务行再读该工序全部有效行, 两个并发提交的重算串行化, 后拿到锁的一定读到双方已提交的行,
+     * 不会出现「先读的那次后写、把只含自己一行的合计盖回去」。
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM WorkProcessTask t WHERE t.factoryId = :factoryId AND t.id = :id")
+    Optional<WorkProcessTask> findByFactoryIdAndIdForUpdate(@Param("factoryId") String factoryId,
+                                                            @Param("id") Long id);
+
+    /**
      * 检查某批次是否已 spawn 过工序任务 (防重 spawn).
      */
     boolean existsByFactoryIdAndProductionBatchId(String factoryId, Long productionBatchId);
