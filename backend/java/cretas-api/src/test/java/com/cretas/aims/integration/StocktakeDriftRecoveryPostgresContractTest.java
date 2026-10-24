@@ -73,7 +73,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
  */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        // Multiple real contexts share the disposable server; keep capacity for
+        // independent readback/cleanup and both concurrent stocktake transactions.
+        "spring.datasource.hikari.maximum-pool-size=4",
+        "spring.datasource.hikari.minimum-idle=1"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")

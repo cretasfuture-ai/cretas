@@ -2001,7 +2001,7 @@ onMounted(async () => {
           </el-descriptions-item>
           <el-descriptions-item v-if="detailData.appliedAt" label="应用时间">{{ formatBusinessDateTime(detailData.appliedAt) }}</el-descriptions-item>
           <el-descriptions-item v-if="detailData.cancelledBy" label="取消人">
-            {{ detailData.cancelledByDisplay || `用户 ${detailData.cancelledBy}` }}
+            用户 {{ detailData.cancelledBy }}
           </el-descriptions-item>
           <el-descriptions-item v-if="detailData.cancelledAt" label="取消时间">
             {{ formatBusinessDateTime(detailData.cancelledAt) }}

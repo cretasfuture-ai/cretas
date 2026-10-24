@@ -5253,6 +5253,14 @@ function addInputToProcess(processId: string): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   const mainMaterial = primaryRawInputOf(process);
+  const inputPorts = ((process.data as ProcessNodeData).ports || [])
+    .filter((port) => port.direction === 'INPUT');
+  // Existing non-RAW upstreams keep the legacy direct RAW route. A truly empty
+  // process still opens the chooser so the external SEMI_FINISHED route remains reachable.
+  if (!mainMaterial && inputPorts.length > 0) {
+    createRawInputCell(processId, { skuId: '', substituteOfNodeId: '' });
+    return;
+  }
   Object.assign(rawInputDialog, {
     visible: true,
     processId,

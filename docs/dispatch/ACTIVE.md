@@ -6,7 +6,7 @@
 
 ## 在飞任务
 
-- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — S302/S315/S309/S301源码冻结统一交付，集成Base4b6aa0334d50b123df2653e34e17a8c1e6129ead及scope见archive/2026-10-24-s3-combined-release.md；原QA保留CSV/设备。
+- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131完整检查窄修复；集成Base4b6aa033及唯一Owner/scope/验收见archive/2026-10-24-s3-combined-release.md；原QA保留CSV/设备。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `in-progress` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 10月24日实际ACK并实施；精确11文件见archive/2026-10-23-s2-entry-scope.md；原QA验收。
 
