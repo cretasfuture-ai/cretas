@@ -7,7 +7,7 @@ set -euo pipefail
 # The package auto-starts a 5432 cluster; this helper uses its own cluster on a free port.
 if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] && [ ! -x /usr/lib/postgresql/17/bin/initdb ]; then
     sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 >/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-17-pgvector >/dev/null
 fi
 for candidate in "${CRETAS_CI_PG_BIN:-}" /usr/lib/postgresql/17/bin /opt/homebrew/opt/postgresql@17/bin; do
     if [ -n "$candidate" ] && [ -x "$candidate/initdb" ]; then export PATH="$candidate:$PATH"; break; fi
