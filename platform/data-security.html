@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#fdfcfa">
 <title>数据安全 · 白垩纪 Cretas</title>
-<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看需授权并留痕，未经授权不用核心数据训练模型。每一条都写明是怎么做到的。">
+<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看需授权并留痕，配方和工艺未经授权不用于训练模型。每一条都写明是怎么做到的。">
 <link rel="canonical" href="https://cretaceousfuture.com/data-security/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="数据安全 · 白垩纪 Cretas">
@@ -152,8 +152,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <a href="#q-platform">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
     <li class="v6-reveal">
-      <b>不拿去训练</b>
-      <p>没有你的书面授权，核心数据不进任何模型。</p>
+      <b>配方工艺不外用</b>
+      <p>没有你的书面授权，配方和工艺不用于训练模型。</p>
       <a href="#q-training">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
   </ol>
@@ -265,12 +265,11 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="qrow v6-reveal" id="q-training">
     <h3>我的数据会被拿去训练模型吗？</h3>
     <div>
-      <p class="ans" data-claim="C3-core-data" data-claim-status="live">核心数据不会。没有你的书面授权，我们不用你的配方、工艺参数、成本和经营数字训练模型。</p>
+      <p class="ans" data-claim="C3-recipe-process" data-claim-status="commitment">配方和工艺不会。没有你的书面授权，我们不用你的配方和工艺训练模型。</p>
       <span class="how-label">怎么做到</span>
       <ul>
-        <li data-claim="C3-consent-gate" data-claim-status="live">训练授权默认关闭。授权分两档由你选：只用于你自己工厂的模型；或者匿名化之后才能共享。没有授权，系统拒绝把你工厂的数据导出成训练数据。</li>
-        <li data-claim="C3-no-capture" data-claim-status="commitment">不授权时，你工厂的 AI 问答连训练素材都不会记录。</li>
-        <li data-claim="C3-general-knowledge" data-claim-status="live">我们改进模型，靠的是通用的业务流程和公开的行业知识，不是某一家工厂的具体数字和配方。</li>
+        <li data-claim="C3-recipe-gate" data-claim-status="commitment">配方和工艺数据默认不进入训练；只有你书面授权后才会使用。</li>
+        <li data-claim="C3-other-data" data-claim-status="policy">其他业务数据，例如生产、库存、成本、经营数字和 AI 问答，会用于改进我们的模型，让 AI 更懂食品工厂。这一点写在隐私政策里。</li>
       </ul>
     </div>
   </div>
