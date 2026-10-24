@@ -6,13 +6,9 @@
 
 ## 在飞任务
 
-- `ERP-S315-EXTERNAL-SEMI-INPUT-20261024` — `in-progress` — Owner /root/s315_external_semi_input — Base 8b1dbc6a4e04936dc2b07c592ffc1610ae869aae — 原QA证实外部半成品输入缺口；精确6文件/目标测试见archive/2026-10-24-s315-external-semi-input.md；只加外部SEMI输入目录校验，不改运行消费/已发布配置。
+- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — S302/S315/S309/S301源码冻结统一交付，集成Base4b6aa0334d50b123df2653e34e17a8c1e6129ead及scope见archive/2026-10-24-s3-combined-release.md；原QA保留CSV/设备。
 
-
-
-- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
-
-- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 已收实际会话/独立WT，精确11文件与命令见archive/2026-10-23-s2-entry-scope.md；只读工厂入口，原QA验收。
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `in-progress` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 10月24日实际ACK并实施；精确11文件见archive/2026-10-23-s2-entry-scope.md；原QA验收。
 
 - `ERP-S6-B3C-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 13874247c5b47897e86511cd095dc3bebe6447e1 — C2/C3整改7可写+5冻结，见archive/2026-10-23-s6-c2c3-atomic-scope.md；原HEAD/生产仍HOLD。
 
@@ -121,7 +117,7 @@
 
 
 
-- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：原Owner精确5文件V78/9文件V79按裁决续验；V80仅候选未释放，C3/Gateway/采购/Orchestrator仍HOLD；S2仍待独立scope ACK。
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：原Owner精确5文件V78/9文件V79续验；B3C仅独立登记7可写+5冻结（含V80），原HEAD/生产HOLD；S2已登记11文件待Owner回读；Gateway/采购/Orchestrator不释放。
 
 - `ERP-S6-B2-CLAUDE-20261021`：实际28文件整体review/HOLD；runtime writeScope=[]；V72被动5另列队列待独立WT确认；不放开采购/供应商/Gateway/共享DataScope/runtime policy。
 

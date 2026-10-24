@@ -1,6 +1,10 @@
 package com.cretas.aims.integration;
 
 import com.cretas.aims.dto.factory.StocktakeDTO;
+import com.cretas.aims.dto.factory.CreateStocktakeRequest;
+import com.cretas.aims.dto.factory.StocktakeImportRowDTO;
+import com.cretas.aims.dto.factory.StocktakeBulkImportPreviewDTO;
+import com.cretas.aims.dto.factory.StocktakeCancelRequest;
 import com.cretas.aims.dto.factory.StocktakeRecountRequest;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -16,6 +20,10 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.voucher.VoucherService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.factory.impl.FactoryStocktakeServiceImpl;
+import com.cretas.aims.service.factory.impl.StocktakeBulkImportServiceImpl;
+import com.cretas.aims.service.factory.StocktakeBulkImportService;
+import com.cretas.aims.service.inventory.OpeningInventoryService;
+import com.cretas.aims.utils.ExcelUtil;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +34,7 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,11 +43,13 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.math.BigDecimal;
+import java.io.ByteArrayInputStream;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -53,6 +64,7 @@ import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * Opt-in real JPA/PostgreSQL proof for the drift recovery boundary.  The test owns
@@ -65,7 +77,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
-@Import(FactoryStocktakeServiceImpl.class)
+@Import({FactoryStocktakeServiceImpl.class, StocktakeBulkImportServiceImpl.class, ExcelUtil.class})
 class StocktakeDriftRecoveryPostgresContractTest {
 
     private static final String FACTORY = "S307-PG";
@@ -79,12 +91,15 @@ class StocktakeDriftRecoveryPostgresContractTest {
     @Autowired private FactoryStocktakeService stocktakeService;
     @Autowired private PlatformTransactionManager transactionManager;
     @Autowired private DataSource dataSource;
+    @Autowired private StocktakeBulkImportService bulkImportService;
+    @Autowired private ExcelUtil excelUtil;
 
     @MockBean private UnitContractService unitContractService;
     @MockBean private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @MockBean private ProductionReportCorrectionService productionReportCorrectionService;
     @MockBean private VoucherService voucherService;
     @MockBean private WorkflowEngineService workflowEngineService;
+    @MockBean private OpeningInventoryService openingInventoryService;
 
     @DynamicPropertySource
     static void postgresProperties(DynamicPropertyRegistry registry) {
@@ -178,6 +193,180 @@ class StocktakeDriftRecoveryPostgresContractTest {
         } catch (SQLException error) {
             throw new IllegalStateException("Failed to drop owned PostgreSQL schema " + SCHEMA, error);
         }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void realCancellationRunsExactMigrationAndReturnsPersistedVersion() throws Exception {
+        Fixture legacy = persistFixture("ST-CANCEL-LEGACY", new BigDecimal("10"),
+                new BigDecimal("10"), new BigDecimal("10"));
+        String legacySnapshot = readStocktakeJson(legacy.sourceId);
+        dropCancellationColumns();
+        try (Connection connection = dataSource.getConnection()) {
+            assertThat(scalarLong(connection, "SELECT count(*) FROM information_schema.columns "
+                    + "WHERE table_schema = '" + SCHEMA + "' AND table_name = 'factory_stocktakes' "
+                    + "AND column_name IN ('cancelled_by', 'cancelled_at', 'cancel_reason')")).isZero();
+        }
+
+        ClassPathResource migration = new ClassPathResource(
+                "db/flyway/V20261103_77_2__stocktake_cancellation_audit.sql");
+        String migrationSql = new String(migration.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute(migrationSql);
+            assertThat(scalarLong(connection, "SELECT count(*) FROM information_schema.columns "
+                    + "WHERE table_schema = '" + SCHEMA + "' AND table_name = 'factory_stocktakes' "
+                    + "AND column_name IN ('cancelled_by', 'cancelled_at', 'cancel_reason')")).isEqualTo(3L);
+            assertColumn(connection, "cancelled_by", "bigint", "YES");
+            assertColumn(connection, "cancelled_at", "timestamp without time zone", "YES");
+            assertColumn(connection, "cancel_reason", "text", "YES");
+        }
+        // Production migration precedes application startup. This test deliberately
+        // changes Hibernate's initial varchar column to the exact migration's TEXT;
+        // retire only this test pool's pre-DDL prepared statements before readback.
+        dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class)
+                .getHikariPoolMXBean().softEvictConnections();
+        assertThat(readStocktakeJson(legacy.sourceId)).isEqualTo(legacySnapshot);
+
+        Fixture fixture = persistCancelableFixture("ST-CANCEL-VERSION");
+        CancellationBaseline baseline = new TransactionTemplate(transactionManager).execute(status -> {
+            entityManager.clear();
+            FactoryStocktake source = stocktakeRepository.findById(fixture.sourceId).orElseThrow();
+            return new CancellationBaseline(source.getVersion(),
+                    materialBatchRepository.findById(fixture.batchId).orElseThrow().getReceiptQuantity(),
+                    source.getItems().get(0).getId());
+        });
+        Long beforeVersion = baseline.version();
+        BigDecimal batchQuantityBefore = baseline.batchQuantity();
+        String itemId = baseline.itemId();
+        StocktakeCancelRequest request = cancelRequest(beforeVersion, "操作员主动取消本次盘点");
+
+        StocktakeDTO response = stocktakeService.cancel(
+                fixture.sourceId, FACTORY, request, 6000L);
+        assertThat(response.getStatus()).isEqualTo(FactoryStocktake.Status.CANCELLED.name());
+        assertThat(response.getVersion()).isEqualTo(beforeVersion + 1);
+        assertThat(response.getCancelledBy()).isEqualTo(6000L);
+        assertThat(response.getCancelReason()).isEqualTo(request.getReason());
+
+        new TransactionTemplate(transactionManager).execute(status -> {
+            entityManager.clear();
+            FactoryStocktake persisted = stocktakeRepository.findById(fixture.sourceId).orElseThrow();
+            assertThat(persisted.getStatus()).isEqualTo(FactoryStocktake.Status.CANCELLED);
+            assertThat(persisted.getVersion()).isEqualTo(beforeVersion + 1);
+            assertThat(persisted.getCancelledBy()).isEqualTo(6000L);
+            assertThat(persisted.getCancelReason()).isEqualTo(request.getReason());
+            assertThat(persisted.getItems()).hasSize(1);
+            assertThat(persisted.getItems().get(0).getId()).isEqualTo(itemId);
+            assertThat(materialBatchRepository.findById(fixture.batchId).orElseThrow().getReceiptQuantity())
+                    .isEqualByComparingTo(batchQuantityBefore);
+            assertThat(stocktakeRepository.findActiveStocktakesForWarehouseAndMonth(
+                    FACTORY, WAREHOUSE, "2026-10"))
+                    .noneMatch(stocktake -> stocktake.getId().equals(fixture.sourceId));
+            return null;
+        });
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void realExcelOpeningKeepsTwoRowsAmong85BatchesAfterAuditedCancellation() {
+        new TransactionTemplate(transactionManager).execute(status -> {
+            seedParentFixture();
+            for (int i = 0; i < 85; i++) {
+                MaterialBatch batch = new MaterialBatch();
+                batch.setId("S302-PG-BATCH-" + i);
+                batch.setFactoryId(FACTORY);
+                batch.setBatchNumber("S302-PG-" + i);
+                batch.setMaterialTypeId("S307-MATERIAL");
+                batch.setReceiptDate(LocalDate.now());
+                batch.setWarehouseId(WAREHOUSE);
+                batch.setReceiptQuantity(i < 2 ? BigDecimal.ZERO : BigDecimal.TEN);
+                batch.setQuantityUnit("kg");
+                batch.setUsedQuantity(BigDecimal.ZERO);
+                batch.setReservedQuantity(BigDecimal.ZERO);
+                batch.setStatus(MaterialBatchStatus.AVAILABLE);
+                batch.setCreatedBy(6000L);
+                materialBatchRepository.save(batch);
+            }
+            return null;
+        });
+        String batchesBefore = ownedRowsJson("material_batches");
+        CreateStocktakeRequest manual = new CreateStocktakeRequest();
+        manual.setWarehouseId(WAREHOUSE);
+        manual.setAdHoc(true);
+        manual.setAdHocReason("Isolated PostgreSQL whole-warehouse control");
+        StocktakeDTO wide = stocktakeService.initiate(FACTORY, manual, 6000L);
+        assertThat(wide.getItems()).hasSize(85);
+        String oldItems = stocktakeItemsJson(wide.getId());
+        StocktakeDTO cancelled = stocktakeService.cancel(wide.getId(), FACTORY,
+                cancelRequest(wide.getVersion(), "Retain wide snapshot and retry only selected opening rows"), 6000L);
+        assertThat(cancelled.getStatus()).isEqualTo("CANCELLED");
+        assertThat(stocktakeItemsJson(wide.getId())).isEqualTo(oldItems);
+        assertThat(ownedRowsJson("material_batches")).isEqualTo(batchesBefore);
+
+        StocktakeImportRowDTO first = new StocktakeImportRowDTO();
+        first.setMaterialName("S307 drift material");
+        first.setBatchNumber("S302-PG-0");
+        first.setUnit("kg");
+        first.setActualQty(new BigDecimal("0.01"));
+        StocktakeImportRowDTO second = new StocktakeImportRowDTO();
+        second.setMaterialName("S307 drift material");
+        second.setBatchNumber("S302-PG-1");
+        second.setUnit("kg");
+        second.setActualQty(BigDecimal.ONE);
+        byte[] workbook = excelUtil.exportToExcel(List.of(first, second), StocktakeImportRowDTO.class, "库存盘点");
+        String tasksBeforePreview = ownedRowsJson("factory_stocktakes");
+        StocktakeBulkImportPreviewDTO preview = bulkImportService.preview(FACTORY, WAREHOUSE,
+                FactoryStocktake.ImportMode.OPENING, new ByteArrayInputStream(workbook));
+        assertThat(preview.getTotalRows()).isEqualTo(2);
+        assertThat(preview.getMatchedCount()).isEqualTo(2);
+        assertThat(preview.getErrors()).isEmpty();
+        assertThat(preview.getStocktakeId()).isNull();
+        assertThat(ownedRowsJson("factory_stocktakes")).isEqualTo(tasksBeforePreview);
+        StocktakeBulkImportPreviewDTO confirmed = bulkImportService.confirm(FACTORY, WAREHOUSE,
+                LocalDate.now().toString().substring(0, 7), "Isolated two-row opening retry",
+                FactoryStocktake.ImportMode.OPENING, new ByteArrayInputStream(workbook), 6000L);
+        assertThat(confirmed.getErrors()).isEmpty();
+        assertThat(confirmed.getStocktakeId()).isNotEqualTo(wide.getId());
+        new TransactionTemplate(transactionManager).execute(status -> {
+            entityManager.clear();
+            FactoryStocktake persisted = stocktakeRepository.findById(confirmed.getStocktakeId()).orElseThrow();
+            assertThat(persisted.getStatus()).isEqualTo(FactoryStocktake.Status.COUNTING);
+            assertThat(persisted.getImportMode()).isEqualTo(FactoryStocktake.ImportMode.OPENING);
+            assertThat(persisted.getItems()).hasSize(2)
+                    .extracting(FactoryStocktakeItem::getMaterialBatchId)
+                    .containsExactlyInAnyOrder("S302-PG-BATCH-0", "S302-PG-BATCH-1");
+            for (FactoryStocktakeItem item : persisted.getItems()) {
+                assertThat(item.getSystemQty()).isZero();
+                assertThat(item.getActualQty()).isEqualByComparingTo(
+                        item.getMaterialBatchId().endsWith("-0") ? "0.01" : "1");
+            }
+            assertThat(persisted.getSubmittedAt()).isNull();
+            assertThat(persisted.getApprovedAt()).isNull();
+            assertThat(persisted.getAppliedAt()).isNull();
+            assertThat(persisted.getWorkflowInstanceId()).isNull();
+            return null;
+        });
+        assertThat(stocktakeItemsJson(wide.getId())).isEqualTo(oldItems);
+        assertThat(ownedRowsJson("material_batches")).isEqualTo(batchesBefore);
+        verifyNoInteractions(openingInventoryService, voucherService, workflowEngineService);
+    }
+
+    private String ownedRowsJson(String table) {
+        if (!List.of("material_batches", "factory_stocktakes").contains(table)) {
+            throw new IllegalArgumentException("Unexpected owned fixture table");
+        }
+        return new TransactionTemplate(transactionManager).execute(status ->
+                entityManager.createNativeQuery("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb)::text FROM "
+                        + table + " t WHERE t.factory_id = :factoryId")
+                        .setParameter("factoryId", FACTORY).getSingleResult().toString());
+    }
+
+    private String stocktakeItemsJson(String stocktakeId) {
+        return new TransactionTemplate(transactionManager).execute(status ->
+                entityManager.createNativeQuery("SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.id), '[]'::jsonb)::text "
+                        + "FROM factory_stocktake_items i JOIN factory_stocktakes s ON s.id=i.stocktake_id "
+                        + "WHERE s.factory_id=:factoryId AND s.id=:stocktakeId")
+                        .setParameter("factoryId", FACTORY).setParameter("stocktakeId", stocktakeId)
+                        .getSingleResult().toString());
     }
 
     @Test
@@ -353,6 +542,24 @@ class StocktakeDriftRecoveryPostgresContractTest {
         });
     }
 
+    private Fixture persistCancelableFixture(String stocktakeNo) {
+        Fixture fixture = persistFixture(stocktakeNo, new BigDecimal("10"),
+                new BigDecimal("10"), new BigDecimal("10"));
+        new TransactionTemplate(transactionManager).execute(status -> {
+            FactoryStocktake source = stocktakeRepository.findById(fixture.sourceId).orElseThrow();
+            source.setStatus(FactoryStocktake.Status.COUNTING);
+            source.setSubmittedBy(null);
+            source.setSubmittedAt(null);
+            source.setApprovedBy(null);
+            source.setApprovedAt(null);
+            source.setWorkflowInstanceId(null);
+            stocktakeRepository.saveAndFlush(source);
+            entityManager.clear();
+            return null;
+        });
+        return fixture;
+    }
+
     private void seedParentFixture() {
         entityManager.createNativeQuery(
                         "INSERT INTO factories "
@@ -400,6 +607,13 @@ class StocktakeDriftRecoveryPostgresContractTest {
         return request;
     }
 
+    private StocktakeCancelRequest cancelRequest(Long version, String reason) {
+        StocktakeCancelRequest request = new StocktakeCancelRequest();
+        request.setExpectedVersion(version);
+        request.setReason(reason);
+        return request;
+    }
+
     private final class Fixture {
         private final String sourceId;
         private final String batchId;
@@ -418,6 +632,9 @@ class StocktakeDriftRecoveryPostgresContractTest {
         }
     }
 
+    private record CancellationBaseline(Long version, BigDecimal batchQuantity, String itemId) {
+    }
+
     private static void createSchema(String url, String user, String password) {
         try (Connection connection = DriverManager.getConnection(url, user, password);
              Statement statement = connection.createStatement()) {
@@ -431,5 +648,48 @@ class StocktakeDriftRecoveryPostgresContractTest {
         String value = System.getenv(name);
         if (value == null || value.isBlank()) throw new IllegalStateException(name + " must be set");
         return value;
+    }
+
+    private static long scalarLong(Connection connection, String sql) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             var result = statement.executeQuery(sql)) {
+            if (!result.next()) throw new AssertionError("No scalar result for: " + sql);
+            return result.getLong(1);
+        }
+    }
+
+    private void dropCancellationColumns() throws SQLException {
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE " + SCHEMA + ".factory_stocktakes "
+                    + "DROP COLUMN IF EXISTS cancelled_by, DROP COLUMN IF EXISTS cancelled_at, "
+                    + "DROP COLUMN IF EXISTS cancel_reason");
+        }
+    }
+
+    private String readStocktakeJson(String stocktakeId) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "SELECT to_jsonb(t)::text FROM " + SCHEMA + ".factory_stocktakes t WHERE id = ?")) {
+            statement.setString(1, stocktakeId);
+            try (var result = statement.executeQuery()) {
+                if (!result.next()) throw new AssertionError("Missing stocktake " + stocktakeId);
+                return result.getString(1);
+            }
+        }
+    }
+
+    private void assertColumn(Connection connection, String column, String dataType, String nullable)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT data_type, is_nullable FROM information_schema.columns "
+                        + "WHERE table_schema = ? AND table_name = 'factory_stocktakes' AND column_name = ?")) {
+            statement.setString(1, SCHEMA);
+            statement.setString(2, column);
+            try (var result = statement.executeQuery()) {
+                assertThat(result.next()).as("column %s exists", column).isTrue();
+                assertThat(result.getString("data_type")).isEqualTo(dataType);
+                assertThat(result.getString("is_nullable")).isEqualTo(nullable);
+            }
+        }
     }
 }

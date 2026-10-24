@@ -8,6 +8,7 @@ import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
 import com.cretas.aims.dto.factory.StocktakeRecountRequest;
+import com.cretas.aims.dto.factory.StocktakeCancelRequest;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
@@ -180,6 +181,64 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             List<String> materialBatchIds) {
         return initiateInternal(factoryId, req, userId, FactoryStocktake.ImportMode.OPENING,
                 materialBatchIds);
+    }
+
+    @Override
+    @Transactional
+    public StocktakeDTO cancel(String stocktakeId, String factoryId, StocktakeCancelRequest request,
+            Long actorId) {
+        if (request == null || request.getExpectedVersion() == null) {
+            throw new BusinessException(400, "expectedVersion 为必填字段")
+                    .withCode("STOCKTAKE_VERSION_REQUIRED");
+        }
+        String reason = request.getReason() == null ? "" : request.getReason().trim();
+        if (reason.isBlank()) {
+            throw new BusinessException(400, "取消原因不能为空")
+                    .withCode("STOCKTAKE_CANCEL_REASON_REQUIRED");
+        }
+        if (reason.length() > 500) {
+            throw new BusinessException(400, "取消原因不能超过500字")
+                    .withCode("STOCKTAKE_CANCEL_REASON_TOO_LONG");
+        }
+
+        FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
+        assertExpectedVersion(stocktake, request.getExpectedVersion());
+        if (stocktake.getStatus() != FactoryStocktake.Status.INITIATED
+                && stocktake.getStatus() != FactoryStocktake.Status.COUNTING) {
+            throw new BusinessException(409,
+                    "当前盘点任务状态 [" + stocktake.getStatus() + "] 不支持取消，只能取消未提交的盘点")
+                    .withCode("STOCKTAKE_CANCEL_STATE_INVALID");
+        }
+        if (stocktake.getWorkflowInstanceId() != null
+                || stocktake.getSubmittedBy() != null
+                || stocktake.getSubmittedAt() != null
+                || stocktake.getApprovedBy() != null
+                || stocktake.getApprovedAt() != null
+                || stocktake.getAppliedBy() != null
+                || stocktake.getAppliedAt() != null) {
+            throw new BusinessException(409, "该盘点已有提交或审批证据，不能取消")
+                    .withCode("STOCKTAKE_CANCEL_SUBMITTED");
+        }
+        if (actorId == null || !Objects.equals(stocktake.getInitiatedBy(), actorId)) {
+            throw new BusinessException(403, "只有盘点发起人可以取消该盘点")
+                    .withCode("STOCKTAKE_CANCEL_MAKER_ONLY");
+        }
+        if (userRepository == null || userRepository.findByIdAndFactoryId(actorId, factoryId)
+                .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+                .isEmpty()) {
+            throw new BusinessException(403, "取消人不是当前工厂的激活用户")
+                    .withCode("STOCKTAKE_CANCEL_ACTOR_INVALID");
+        }
+
+        stocktake.setStatus(FactoryStocktake.Status.CANCELLED);
+        stocktake.setCancelledBy(actorId);
+        stocktake.setCancelledAt(LocalDateTime.now());
+        stocktake.setCancelReason(reason);
+        // Flush before mapping so the optimistic-lock version returned to the caller is
+        // the persisted version (before + 1), matching the next conditional request.
+        FactoryStocktake saved = stocktakeRepo.saveAndFlush(stocktake);
+        log.info("盘点任务已取消 stocktakeId={} factoryId={} actorId={}", stocktakeId, factoryId, actorId);
+        return toDetailedDTO(saved, factoryId);
     }
 
     private StocktakeDTO initiateInternal(String factoryId, CreateStocktakeRequest req, Long userId,
@@ -1363,7 +1422,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             case INITIATED, COUNTING -> "请先完成录入并提交，或联系有权限的人驳回该盘点单";
             case PENDING_APPROVAL -> "正在等待审批，请联系审批人处理";
             case APPROVED -> "已审批待生效，生效后才能发起新的盘点";
-            case APPLIED, REJECTED, RECOUNT_REQUIRED -> throw new IllegalArgumentException(
+            case APPLIED, REJECTED, RECOUNT_REQUIRED, CANCELLED -> throw new IllegalArgumentException(
                     "盘点单已结束，不应阻止新盘点: " + status);
         };
     }

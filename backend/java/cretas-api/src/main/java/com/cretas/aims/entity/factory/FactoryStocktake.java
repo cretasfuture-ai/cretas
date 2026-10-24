@@ -14,6 +14,7 @@ import java.util.UUID;
  * 工厂盘点任务实体 (SP7 §3.2).
  *
  * <p>状态机: INITIATED → COUNTING → PENDING_APPROVAL → APPROVED → APPLIED
+ *             ↘ CANCELLED
  *                                                    ↘ REJECTED → 可重提 PENDING_APPROVAL
  *                                                    ↘ RECOUNT_REQUIRED → 新盘点单
  *
@@ -48,7 +49,8 @@ public class FactoryStocktake extends BaseEntity {
         APPROVED("已审批"),
         APPLIED("已生效"),
         REJECTED("已驳回"),
-        RECOUNT_REQUIRED("需重新盘点");
+        RECOUNT_REQUIRED("需重新盘点"),
+        CANCELLED("已取消");
 
         private final String displayLabel;
     }
@@ -161,6 +163,16 @@ public class FactoryStocktake extends BaseEntity {
 
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    /** Audit fields for maker cancellation before submission/approval. */
+    @Column(name = "cancelled_by")
+    private Long cancelledBy;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    @Column(name = "cancel_reason", columnDefinition = "TEXT")
+    private String cancelReason;
 
     /** SP12 §5.2: 工作流实例 ID，关联 ApprovalWorkflowInstance.id */
     @Column(name = "workflow_instance_id", length = 191)
