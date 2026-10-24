@@ -107,6 +107,81 @@ class ProductionPlanStopProductionTest {
                 .thenAnswer(inv -> productionPlanRepository.findByIdAndFactoryId(inv.getArgument(0), FACTORY_ID));
     }
 
+    // ─── 存货多成品分摊比例: 取分支成本分解, 不取小结单位成本 (F006【演示L4】8d77ec57, 2026-10-25) ───
+
+    private FinishedGoodsBatch fgOf(String id, String sku, String qty, String unitCost) {
+        FinishedGoodsBatch fg = new FinishedGoodsBatch();
+        fg.setId(id);
+        fg.setProductTypeId(sku);
+        fg.setProducedQuantity(new BigDecimal(qty));
+        fg.setUnitCost(new BigDecimal(unitCost));
+        return fg;
+    }
+
+    private com.cretas.aims.entity.ProductionBatch branchBatch(String sku, String batchNumber) {
+        com.cretas.aims.entity.ProductionBatch b = new com.cretas.aims.entity.ProductionBatch();
+        b.setProductTypeId(sku);
+        b.setBatchNumber(batchNumber);
+        return b;
+    }
+
+    private com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdownOf(String total) {
+        com.cretas.aims.dto.yield.OrderCostBreakdownDTO d = new com.cretas.aims.dto.yield.OrderCostBreakdownDTO();
+        d.setCostComplete(true);
+        d.setTotalCost(new BigDecimal(total));
+        return d;
+    }
+
+    @Test
+    @DisplayName("存货多成品比例取各成品分支成本分解 (含上游半成品投料): 鸡胸 1835.30 / 鸡翅 1316.02 / 鸡腿 1998.36, "
+            + "⛔ 不取小结单位成本 (鸡胸小结只有 692.46, 漏了半成品投料 1142.90)")
+    void byStockRatiosUseBranchBreakdownNotInterimUnitCost() {
+        com.cretas.aims.service.yield.OrderCostBreakdownService breakdowns =
+                org.mockito.Mockito.mock(com.cretas.aims.service.yield.OrderCostBreakdownService.class);
+        ReflectionTestUtils.setField(service, "orderCostBreakdownService", breakdowns);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, "PLAN-L4")).thenReturn(List.of(
+                branchBatch("SKU-BREAST", "CLK-B-BREAST"), branchBatch("SKU-WING", "CLK-B-WING"),
+                branchBatch("SKU-LEG", "CLK-B-LEG")));
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-BREAST", false)).thenReturn(breakdownOf("1835.30"));
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-WING", false)).thenReturn(breakdownOf("1316.02"));
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-LEG", false)).thenReturn(breakdownOf("1998.36"));
+        List<FinishedGoodsBatch> fgs = List.of(fgOf("FG-BREAST", "SKU-BREAST", "238", "2.9095"),
+                fgOf("FG-WING", "SKU-WING", "110", "5.9018"), fgOf("FG-LEG", "SKU-LEG", "205", "9.7492"));
+
+        java.util.Map<String, BigDecimal> ratios = ReflectionTestUtils.invokeMethod(
+                service, "byStockBranchCostRatios", FACTORY_ID, "PLAN-L4", fgs);
+
+        // 1835.30 / 5149.68 = 35.6391%
+        org.assertj.core.api.Assertions.assertThat(ratios.get("FG-BREAST")).isEqualByComparingTo("35.639108");
+        org.assertj.core.api.Assertions.assertThat(ratios.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isCloseTo(new BigDecimal("100"), org.assertj.core.data.Offset.offset(new BigDecimal("0.00001")));
+    }
+
+    @Test
+    @DisplayName("分支成本拿不全 (某成品成本未知) → 退回小结单位成本口径, 两种来源不混用")
+    void byStockRatiosFallBackToInterimUnitCostWhenAnyBranchIsUnknown() {
+        com.cretas.aims.service.yield.OrderCostBreakdownService breakdowns =
+                org.mockito.Mockito.mock(com.cretas.aims.service.yield.OrderCostBreakdownService.class);
+        ReflectionTestUtils.setField(service, "orderCostBreakdownService", breakdowns);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, "PLAN-L4")).thenReturn(List.of(
+                branchBatch("SKU-BREAST", "CLK-B-BREAST"), branchBatch("SKU-LEG", "CLK-B-LEG")));
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-BREAST", false)).thenReturn(breakdownOf("1835.30"));
+        com.cretas.aims.dto.yield.OrderCostBreakdownDTO unknown = breakdownOf("0");
+        unknown.setCostComplete(false);
+        unknown.setTotalCost(null);
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-LEG", false)).thenReturn(unknown);
+        List<FinishedGoodsBatch> fgs = List.of(fgOf("FG-BREAST", "SKU-BREAST", "238", "2.9095"),
+                fgOf("FG-LEG", "SKU-LEG", "205", "9.7492"));
+
+        java.util.Map<String, BigDecimal> ratios = ReflectionTestUtils.invokeMethod(
+                service, "byStockBranchCostRatios", FACTORY_ID, "PLAN-L4", fgs);
+
+        // 692.461 / (692.461 + 1998.586) = 25.7319%
+        org.assertj.core.api.Assertions.assertThat(ratios.get("FG-BREAST")).isEqualByComparingTo(
+                new BigDecimal("692.4610").multiply(new BigDecimal("100"))
+                        .divide(new BigDecimal("692.4610").add(new BigDecimal("1998.5860")), 6, java.math.RoundingMode.HALF_UP));
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     private ProductionPlan byStockPlan() {
