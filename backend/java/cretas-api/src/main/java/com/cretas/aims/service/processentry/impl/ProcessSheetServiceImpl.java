@@ -380,6 +380,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
             rowRepo.save(row);
         }
+        recordReworkFeedLineage(factoryId, submittedRows, reworkAllocations, userId);
         if (!allocations.isEmpty()) {
             productionStockAllocationService.persist(
                     factoryId, planId, submittedRows.get(0).getId(), userId, allocations);
@@ -401,6 +402,43 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             result.setWarnings(merged);
         }
         return result;
+    }
+
+    /** 正式报工回料扣减的 WIP_CONSUME 写点 (与小结 / 结单共用 SemiFeedLineageRecorder)。required=false: 单测直接 new 本类。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
+
+    /**
+     * 回料严格扣减之后写「产出它的生产批次 → 本次报工物化的生产批次」边。
+     *
+     * <p>扣减发生在 {@code saveRow} 之前 (那时还没有目标批次), 所以边写在 saveRow 之后、拿到行的 batchId 时。
+     * 目标唯一 ⇒ 带实际扣减量; 多产出组物化成多个批次 ⇒ 每个批次一条、数量为 null
+     * (这次投料在各产出间怎么分没有记录, ⛔ 不平均摊一个假数)。没有物化批次 ⇒ recorder 记 SKIPPED。
+     */
+    private void recordReworkFeedLineage(String factoryId, List<ProcessSheetRow> submittedRows,
+                                         List<ProcessSheetRowResult.InputAllocation> reworkAllocations,
+                                         Long userId) {
+        if (semiFeedLineageRecorder == null || reworkAllocations == null || reworkAllocations.isEmpty()) {
+            return;
+        }
+        List<ProcessSheetRow> targets = submittedRows.stream()
+                .filter(r -> r.getBatchId() != null)
+                .collect(java.util.stream.Collectors.toMap(ProcessSheetRow::getBatchId, r -> r, (a, b) -> a,
+                        LinkedHashMap::new))
+                .values().stream().toList();
+        for (ProcessSheetRowResult.InputAllocation a : reworkAllocations) {
+            if (targets.isEmpty()) {
+                semiFeedLineageRecorder.recordSemiFeed(factoryId, a.getBatchNumber(), null, a.getQuantity(),
+                        a.getUnit(), userId, null, "PROCESS_SHEET_REWORK_SUBMIT");
+                continue;
+            }
+            for (ProcessSheetRow target : targets) {
+                semiFeedLineageRecorder.recordSemiFeed(factoryId, a.getBatchNumber(), target.getBatchId(),
+                        targets.size() == 1 ? a.getQuantity() : null, a.getUnit(), userId,
+                        "reworkSubmit:row" + target.getId() + ":" + a.getBatchNumber(),
+                        "PROCESS_SHEET_REWORK_SUBMIT");
+            }
+        }
     }
 
     /**

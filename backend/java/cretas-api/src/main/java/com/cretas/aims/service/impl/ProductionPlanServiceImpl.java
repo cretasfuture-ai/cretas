@@ -252,6 +252,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /** 结单族 SFI 投料 (deductProcessSheetStockFeeds) 的 WIP_CONSUME 写点; required=false 同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
+
     /** raw-centric 多成品: 建计划/转批次守卫 —— 断言 owner 启用 workflow 终端覆盖所选成品. required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
@@ -7226,6 +7230,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     BigDecimal drawn = wipInventoryService.consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
                     sfiOut = sfiOut.add(zeroIfNull(drawn));
                     sfiCount++;
+                    // 血缘: 产出它的生产批次 → 本行生产批次 (结单只扣一次, 见上方幂等说明)。
+                    if (semiFeedLineageRecorder != null) {
+                        semiFeedLineageRecorder.recordSemiFeed(factoryId, srcBatchNo, row.getBatchId(), drawn,
+                                null, com.cretas.aims.utils.SecurityUtils.currentUserId(),
+                                "settleSfiFeed:" + plan.getId() + ":row" + row.getId() + ":" + srcBatchNo,
+                                "SETTLEMENT_SFI_FEED");
+                    }
                 }
             }
         }
@@ -7765,7 +7776,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("Workflow output receipt: " + settlement.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
-        recordProductionToFinishedLineage(saved, receiptDelta, receivedBy, "WORKFLOW_OUTPUT_RECEIPT");
+        recordProductionToFinishedLineage(saved, receiptDelta, receivedBy, "WORKFLOW_OUTPUT_RECEIPT",
+                output.getReportedBatchNumber());
         return saved;
     }
 
@@ -7776,16 +7788,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 「同一件事两份实现」，其中一份会先漂。
      */
     private void recordProductionToFinishedLineage(FinishedGoodsBatch saved, BigDecimal quantity,
-                                                   Long operatorId, String origin) {
+                                                   Long operatorId, String origin,
+                                                   String producingBatchNumberHint) {
         if (lineageEdgeRecorder == null || saved == null) {
             return;
         }
         Map<String, Object> meta = new HashMap<>();
         meta.put("origin", origin);
         meta.put("finishedBatchNumber", saved.getBatchNumber());
+        // 🔴 2026-10-24 prod 实测: 逐行入库的成品批号 = 报工生产批号 (CLK-B-… / PB-PLAN-…), 而同计划有
+        //    3 个同产品正式批次 ⇒ 只按计划对齐恒 AMBIGUOUS ⇒ 3 个成品批没有 PRODUCTION_TO_FINISHED 边。
+        //    报工批号是精确键 (同厂同计划才采纳, 见 FinishedBatchProductionAligner)。
         lineageEdgeRecorder.recordProductionToFinishedByPlan(
                 saved.getFactoryId(), saved.getProductionPlanId(), saved.getProductTypeId(),
-                saved.getId(), quantity, saved.getUnit(), operatorId,
+                producingBatchNumberHint, saved.getId(), quantity, saved.getUnit(), operatorId,
                 "finishedBatch:" + saved.getId(), meta);
     }
 
@@ -7859,7 +7875,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
-        recordProductionToFinishedLineage(saved, received, receivedBy, "SETTLEMENT_WAREHOUSE_RECEIPT");
+        recordProductionToFinishedLineage(saved, received, receivedBy, "SETTLEMENT_WAREHOUSE_RECEIPT", null);
         return saved;
     }
 

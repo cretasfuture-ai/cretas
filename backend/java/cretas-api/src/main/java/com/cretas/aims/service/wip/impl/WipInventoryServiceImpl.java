@@ -1876,15 +1876,48 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
     }
 
+    /**
+     * 来源生产批次解析 —— 与 web 三个半成品扣减点共用同一份规则 ({@code SemiFeedLineageRecorder})。
+     * 声明在这里而不是类头: 它只服务 {@link #recordWipLineageEdge}。
+     * {@code required=false}: 既有单测按位置参数 new 本类 / {@code @InjectMocks}, 不注入时
+     * 退回「只信行上 batch_id」, 行上为空就不写边 (⛔ 不再拿目标批次顶替)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.SemiSourceBatchResolver semiSourceBatchResolver;
+
+    /**
+     * 🔴 2026-10-24: 原来 {@code sourceWip.getBatchId() == null} 时拿<b>目标</b>批次顶替来源
+     * ({@code task.getProductionBatchId()}), 写出「这批半成品是自己产的」自环 ——
+     * prod F006 备份 57 条 WIP_CONSUME 里 51 条自环, 其中 39 条来自行上 batch_id 为空。
+     * 现在: 行上有 batch_id 照旧用它 (同批工序间领用的自环是真的, 保留);
+     * 没有就按共享规则解析 (工序任务 / App 工序批次号 / 同号生产批次);
+     * 解析不了就<b>不写</b>, 由解析器留 warn + 计数。
+     */
     private void recordWipLineageEdge(String factoryId, SemiFinishedInventory sourceWip,
                                       WorkProcessTask task, BigDecimal qty, Long operatorId) {
         try {
+            Long sourceBatchId = sourceWip.getBatchId();
+            String resolvedBy = com.cretas.aims.service.lineage.SemiSourceBatchResolver.BY_ROW_BATCH;
+            if (sourceBatchId == null) {
+                if (semiSourceBatchResolver == null) {
+                    log.warn("[lineage] SEMI_SOURCE_UNRESOLVED 行上无 batch_id 且解析器未注入, 不写 WIP 领用边: "
+                                    + "factory={} sourceWipNo={} targetBatch={}",
+                            factoryId, sourceWip.getIntermediateBatchNo(), task.getProductionBatchId());
+                    return;
+                }
+                com.cretas.aims.service.lineage.SemiSourceBatchResolver.Resolution resolution =
+                        semiSourceBatchResolver.resolve(factoryId, sourceWip, "APP_WIP_CONSUME");
+                if (!resolution.isResolved()) {
+                    return;   // 解析器已 warn + 计数
+                }
+                sourceBatchId = resolution.productionBatchId();
+                resolvedBy = resolution.method();
+            }
             BatchLineageEdge edge = new BatchLineageEdge();
             edge.setFactoryId(factoryId);
             edge.setEdgeType("WIP_CONSUME");
             edge.setSourceType("PRODUCTION_BATCH");
-            edge.setSourceId(String.valueOf(sourceWip.getBatchId() == null
-                    ? task.getProductionBatchId() : sourceWip.getBatchId()));
+            edge.setSourceId(String.valueOf(sourceBatchId));
             edge.setTargetType("PRODUCTION_BATCH");
             edge.setTargetId(String.valueOf(task.getProductionBatchId()));
             edge.setQuantityUsed(qty);
@@ -1895,6 +1928,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             meta.put("sourceWipNo", sourceWip.getIntermediateBatchNo());
             meta.put("targetWorkProcessTaskId", task.getId());
             meta.put("targetProcessOrder", task.getProcessOrder());
+            meta.put("sourceResolvedBy", resolvedBy);
             edge.setMeta(meta);
             lineageEdgeRepo.save(edge);
         } catch (Exception e) {
