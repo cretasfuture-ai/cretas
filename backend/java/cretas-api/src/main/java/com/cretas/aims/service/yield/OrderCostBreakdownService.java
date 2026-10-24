@@ -1481,12 +1481,55 @@ public class OrderCostBreakdownService {
         BigDecimal apportioned;
         if (sum.signum() > 0 && consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
             apportioned = sum.multiply(consumedQty)
+                    .multiply(multiOutputOwnerShare(factoryId, upstreamBatchId))
                     .divide(upstreamQty, 4, java.math.RoundingMode.HALF_UP);
         } else {
             apportioned = legacy;   // 缺量数据 → 改前行为, 既有数据零回归
         }
         visited.remove(upstreamBatchId);   // 路径作用域出栈 (见上方 diamond 注释)
         return new BigDecimal[]{apportioned.signum() > 0 ? apportioned : own, BigDecimal.valueOf(maxChildDepth)};
+    }
+
+    /**
+     * 一进多出拆分批的 WIP 产出只承担它那一份联合成本: 拆分批把<b>全部</b>投入吃进来, 再分成「主产出 →
+     * 本批 WIP」+「其余产出 → 半成品库存(各带分摊成本)」。按 consumedQty/receiptQty 回溯时比例是 1,
+     * 主产出那条链会把拆分批的全部投入和人工都算走, 而其余产出又随半成品投料单价各算一份 ⇒ 双计
+     * (F006【演示L4】整鸡分割: 炸鸡腿链追到整只鸡 ¥2800 + 全部人工, 计划总成本 ¥7188 对实际投入 ¥5096,
+     * 2026-10-25)。份额取拆分批主行报工时落库的 {@code costAllocationRatio} —— 与分给半成品的那几份
+     * 是同一次分摊, 合计 100%。
+     *
+     * @return (0,1]; 不是多产出主行 / 找不到唯一主行 / 比例不在 (0,100) → 1 (原行为)
+     */
+    BigDecimal multiOutputOwnerShare(String factoryId, Long productionBatchId) {
+        if (processSheetRowRepository == null || objectMapper == null || productionBatchId == null) {
+            return BigDecimal.ONE;
+        }
+        List<com.cretas.aims.entity.processentry.ProcessSheetRow> rows =
+                processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, productionBatchId);
+        BigDecimal ratio = null;
+        int owners = 0;
+        for (com.cretas.aims.entity.processentry.ProcessSheetRow row : rows == null
+                ? List.<com.cretas.aims.entity.processentry.ProcessSheetRow>of() : rows) {
+            if (!com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_SUBMITTED
+                    .equals(row.getSubmissionStatus()) || row.getRowPayload() == null) {
+                continue;
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode p = objectMapper.readTree(row.getRowPayload());
+                if (p == null || !p.path("multiOutputMember").asBoolean(false)) {
+                    continue;
+                }
+                com.fasterxml.jackson.databind.JsonNode r = p.get("costAllocationRatio");
+                owners++;
+                ratio = r == null || r.isNull() ? null : new BigDecimal(r.asText());
+            } catch (Exception e) {
+                return BigDecimal.ONE;
+            }
+        }
+        if (owners != 1 || ratio == null || ratio.signum() <= 0 || ratio.compareTo(BigDecimal.valueOf(100)) >= 0) {
+            return BigDecimal.ONE;
+        }
+        return ratio.divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
     }
 
     /**
@@ -1551,10 +1594,11 @@ public class OrderCostBreakdownService {
         BigDecimal consumedQty = nz(c.getQuantity());
         BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
         if (consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
-            labor = labor.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
-            seasoning = seasoning.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
-            byproductCredit = byproductCredit.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
-            semiFeed = semiFeed.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            BigDecimal share = consumedQty.multiply(multiOutputOwnerShare(factoryId, upstreamBatchId));
+            labor = labor.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            seasoning = seasoning.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            byproductCredit = byproductCredit.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            semiFeed = semiFeed.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
         }
         // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
         // ★ 严格审计 2026-06-25: 路径作用域出栈 — 允许兄弟 diamond 路径遍历同上游

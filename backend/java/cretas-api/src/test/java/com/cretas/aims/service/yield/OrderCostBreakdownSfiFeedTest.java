@@ -200,6 +200,71 @@ class OrderCostBreakdownSfiFeedTest {
      * F006【演示L4】8d77ec57 (2026-10-24): 分割后鸡胸入 SFI ¥1142.90, 熟制批投它,
      * 白切鸡胸成品成本只算了本道 ¥692.46 (上游 SFI 投料只在末道批自身查, 链上丢失)。
      */
+    /**
+     * 一进多出拆分批 (F006【演示L4】整鸡分割 10974): 吃进整条分割 WIP ¥2903.55 + 本道人工 468,
+     * 主产出鸡腿 39.548023% 进本批 WIP, 其余进半成品库存。成品链回溯时只能带走那 39.548%,
+     * 否则整只鸡的成本被鸡腿算一遍、又随半成品被鸡胸/鸡翅各算一份 (计划总成本 7188 对实际投入 5096)。
+     */
+    private void stubSplitChain(String ownerPayload) {
+        Long splitBatchId = 800L;
+        com.cretas.aims.entity.MaterialConsumption legWip = new com.cretas.aims.entity.MaterialConsumption();
+        legWip.setBatchId("MB-WIP-LEG");
+        legWip.setProductionBatchId(batchId);
+        legWip.setQuantity(new BigDecimal("70"));
+        legWip.setTotalCost(new BigDecimal("1333.50"));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(batchId, F)).thenReturn(List.of(legWip));
+        com.cretas.aims.entity.MaterialBatch wip = new com.cretas.aims.entity.MaterialBatch();
+        wip.setId("MB-WIP-LEG");
+        wip.setSourceDocType("PRODUCTION_BATCH");
+        wip.setSourceDocId(splitBatchId.toString());
+        wip.setReceiptQuantity(new BigDecimal("70"));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-WIP-LEG", F)).thenReturn(Optional.of(wip));
+
+        com.cretas.aims.entity.MaterialConsumption whole = new com.cretas.aims.entity.MaterialConsumption();
+        whole.setBatchId("MB-WHOLE");
+        whole.setProductionBatchId(splitBatchId);
+        whole.setQuantity(new BigDecimal("195"));
+        whole.setTotalCost(new BigDecimal("2903.55"));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(splitBatchId, F)).thenReturn(List.of(whole));
+        com.cretas.aims.entity.MaterialBatch opening = new com.cretas.aims.entity.MaterialBatch();
+        opening.setId("MB-WHOLE");
+        opening.setSourceDocType("OPENING");
+        when(materialBatchRepository.findByIdAndFactoryId("MB-WHOLE", F)).thenReturn(Optional.of(opening));
+        when(yieldReportService.getYield(F, splitBatchId))
+                .thenReturn(BatchYieldDTO.builder().totalLaborCost(new BigDecimal("468")).steps(List.of()).build());
+
+        when(processSheetRowRepository.findByFactoryIdAndBatchId(F, batchId)).thenReturn(new ArrayList<>());
+        ProcessSheetRow owner = new ProcessSheetRow();
+        owner.setFactoryId(F);
+        owner.setBatchId(splitBatchId);
+        owner.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        owner.setRowPayload(ownerPayload);
+        when(processSheetRowRepository.findByFactoryIdAndBatchId(F, splitBatchId)).thenReturn(List.of(owner));
+    }
+
+    @Test
+    @DisplayName("一进多出主产出链只带走自己那份联合成本: 原料 2903.55×39.548% = 1148.30, 拆分人工 468×39.548% = 185.08")
+    void multiOutputOwnerChainCarriesOnlyItsShareOfTheJointCost() {
+        stubSplitChain("{\"multiOutputMember\":true,\"costAllocationRatio\":39.548023}");
+
+        OrderCostBreakdownDTO dto = service.computeByBatch(F, BN, false);
+
+        assertThat(dto.getRawMaterialCost().setScale(2, java.math.RoundingMode.HALF_UP)).isEqualByComparingTo("1148.30");
+        // 本道 80 + 拆分批 468 的 39.548%
+        assertThat(dto.getLaborCost().setScale(2, java.math.RoundingMode.HALF_UP)).isEqualByComparingTo("265.08");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 上游不是多产出拆分 (无 multiOutputMember) → 照旧按数量全额回溯")
+    void ordinaryUpstreamBatchStillTracesInFull() {
+        stubSplitChain("{\"multiOutputMember\":false}");
+
+        OrderCostBreakdownDTO dto = service.computeByBatch(F, BN, false);
+
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("2903.55");
+        assertThat(dto.getLaborCost()).isEqualByComparingTo("548");
+    }
+
     @Test
     @DisplayName("上游 WIP 批的 SFI 投料沿链计入: 成品批全量消耗上游批 → semiFeedCost=60kg@19=1140")
     void upstreamWipBatchSfiFeedFlowsIntoFinishedCost() {
