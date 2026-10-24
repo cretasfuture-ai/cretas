@@ -119,6 +119,58 @@ class ProcessingServiceImplDynamicQualityStandardContractTest {
     }
 
     @Test
+    void blankBooleanStandardInheritsAcrossFormEvaluationAndNewSnapshot() {
+        QualityCheckItem booleanItem = QualityCheckItem.builder().id("item-boolean").factoryId(FACTORY)
+                .itemCode("BOOL").itemName("包装完整").version(4).valueType("BOOLEAN")
+                .standardValue("true").isRequired(true).enabled(true).build();
+        binding.setQualityCheckItem(booleanItem);
+        binding.setQualityCheckItemId(booleanItem.getId());
+        for (String blankOverride : new String[]{null, "", " \t"}) {
+            binding.setOverrideStandardValue(blankOverride);
+            Map<String, Object> blankForm = service.getDynamicQualityForm(FACTORY, BATCH);
+            Map<?, ?> blankItem = (Map<?, ?>) ((List<?>) blankForm.get("items")).get(0);
+            assertEquals("true", blankItem.get("effectiveStandardValue"));
+        }
+        binding.setOverrideIsRequired(null);
+        when(bindingRepository.findByProductTypeIdWithItems("QA-PRODUCT")).thenReturn(List.of(binding));
+
+        Map<String, Object> form = service.getDynamicQualityForm(FACTORY, BATCH);
+        assertEquals("true", ((Map<?, ?>) ((List<?>) form.get("items")).get(0)).get("effectiveStandardValue"));
+        assertEquals(true, ((Map<?, ?>) ((List<?>) form.get("items")).get(0)).get("effectiveIsRequired"));
+
+        binding.setOverrideStandardValue("false");
+        Map<String, Object> falseForm = service.getDynamicQualityForm(FACTORY, BATCH);
+        assertEquals("false", ((Map<?, ?>) ((List<?>) falseForm.get("items")).get(0)).get("effectiveStandardValue"));
+        String falseRevision = (String) falseForm.get("standardRevision");
+        Map<String, Object> falseResult = service.submitDynamicInspection(FACTORY, BATCH,
+                request(falseRevision, "binding-temp", "item-boolean", 4, false), 1557L);
+        QualityInspection falseInspection = (QualityInspection) falseResult.get("inspection");
+        assertEquals("PASS", falseInspection.getResult());
+        Map<?, ?> falseSnapshotItem = (Map<?, ?>) ((List<?>) falseInspection.getCustomFields().get("items")).get(0);
+        assertEquals("false", falseSnapshotItem.get("effectiveStandardValue"));
+
+        binding.setOverrideStandardValue("0");
+        Map<String, Object> zeroForm = service.getDynamicQualityForm(FACTORY, BATCH);
+        assertEquals("0", ((Map<?, ?>) ((List<?>) zeroForm.get("items")).get(0)).get("effectiveStandardValue"));
+
+        binding.setOverrideStandardValue(null);
+        String whitespaceRevision = (String) form.get("standardRevision");
+        assertThrows(BusinessException.class, () -> service.submitDynamicInspection(FACTORY, BATCH,
+                request(whitespaceRevision, "binding-temp", "item-boolean", 4, true), 1557L));
+        Map<String, Object> inheritedForm = service.getDynamicQualityForm(FACTORY, BATCH);
+        String revision = (String) inheritedForm.get("standardRevision");
+        DynamicQualityInspectionRequest request = request(revision, "binding-temp", "item-boolean", 4, true);
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH, request, 1557L);
+
+        QualityInspection saved = (QualityInspection) result.get("inspection");
+        assertEquals("PASS", saved.getResult());
+        Map<?, ?> snapshotItem = (Map<?, ?>) ((List<?>) saved.getCustomFields().get("items")).get(0);
+        assertEquals("true", snapshotItem.get("effectiveStandardValue"));
+        assertEquals(true, snapshotItem.get("isRequired"));
+        assertEquals("PASS", snapshotItem.get("status"));
+    }
+
+    @Test
     void missingRequiredOrInactiveStandardIsRejectedBeforeSave() {
         String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
         DynamicQualityInspectionRequest missing = request(revision, "binding-temp", "item-temp", 3, "");

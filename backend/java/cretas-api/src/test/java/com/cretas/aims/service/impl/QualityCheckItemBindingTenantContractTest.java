@@ -15,6 +15,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,6 +90,48 @@ class QualityCheckItemBindingTenantContractTest {
 
         verify(productTypeRepository).existsByIdAndFactoryId(PRODUCT_ID, FACTORY);
         verify(bindingRepository, never()).save(any(QualityCheckItemBinding.class));
+    }
+
+    @Test
+    void blankStringOverrideInheritsWhileExplicitFalseAndZeroRemainEffective() {
+        QualityCheckItem booleanItem = QualityCheckItem.builder()
+                .id(ITEM_ID)
+                .factoryId(FACTORY)
+                .itemCode("BOOLEAN-1")
+                .itemName("包装完整")
+                .category(QualityCheckCategory.PHYSICAL)
+                .valueType("BOOLEAN")
+                .standardValue("true")
+                .minValue(BigDecimal.ONE)
+                .samplingRatio(BigDecimal.TEN)
+                .isRequired(true)
+                .enabled(true)
+                .build();
+        when(qualityCheckItemRepository.findById(ITEM_ID)).thenReturn(Optional.of(booleanItem));
+        when(productTypeRepository.existsByIdAndFactoryId(PRODUCT_ID, FACTORY)).thenReturn(true);
+
+        BindQualityCheckItemRequest request = BindQualityCheckItemRequest.builder()
+                .productTypeId(PRODUCT_ID)
+                .qualityCheckItemId(ITEM_ID)
+                .overrideStandardValue("  ")
+                .overrideMinValue(BigDecimal.ZERO)
+                .overrideSamplingRatio(BigDecimal.ZERO)
+                .overrideIsRequired(false)
+                .enabled(true)
+                .build();
+
+        var result = service.bindToProduct(FACTORY, request);
+
+        assertThat(result.getEffectiveStandardValue()).isEqualTo("true");
+        assertThat(result.getEffectiveMinValue()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(result.getEffectiveSamplingRatio()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(result.getEffectiveIsRequired()).isFalse();
+
+        for (String explicitStandard : new String[]{"false", "0"}) {
+            request.setOverrideStandardValue(explicitStandard);
+            assertThat(service.bindToProduct(FACTORY, request).getEffectiveStandardValue())
+                    .isEqualTo(explicitStandard);
+        }
     }
 
     private static BindQualityCheckItemRequest request(String productTypeId) {

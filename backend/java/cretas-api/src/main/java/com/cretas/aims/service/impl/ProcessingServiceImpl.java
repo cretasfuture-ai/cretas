@@ -13,6 +13,7 @@ import com.cretas.aims.repository.*;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.ProcessingStageRecordService;
 import com.cretas.aims.service.QualityInspectionService;
+import com.cretas.aims.service.quality.QualityStandardValueResolver;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.CacheService;
 import com.cretas.aims.service.WageRecordTriggerService;
@@ -986,7 +987,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             row.put("label", item.getItemName());
             row.put("valueType", item.getValueType());
             row.put("unit", item.getUnit());
-            row.put("effectiveStandardValue", binding.getOverrideStandardValue() != null ? binding.getOverrideStandardValue() : item.getStandardValue());
+            row.put("effectiveStandardValue", QualityStandardValueResolver.inheritBlank(
+                    binding.getOverrideStandardValue(), item.getStandardValue()));
             row.put("effectiveMinValue", binding.getOverrideMinValue() != null ? binding.getOverrideMinValue() : item.getMinValue());
             row.put("effectiveMaxValue", binding.getOverrideMaxValue() != null ? binding.getOverrideMaxValue() : item.getMaxValue());
             row.put("effectiveIsRequired", binding.getOverrideIsRequired() != null ? binding.getOverrideIsRequired() : item.getIsRequired());
@@ -1041,7 +1043,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             }
             BigDecimal min = b.getOverrideMinValue() != null ? b.getOverrideMinValue() : item.getMinValue();
             BigDecimal max = b.getOverrideMaxValue() != null ? b.getOverrideMaxValue() : item.getMaxValue();
-            String standardValue = b.getOverrideStandardValue() != null ? b.getOverrideStandardValue() : item.getStandardValue();
+            String standardValue = QualityStandardValueResolver.inheritBlank(
+                    b.getOverrideStandardValue(), item.getStandardValue());
             boolean answered = answer.getValue() != null && !answer.getValue().toString().isBlank();
             boolean itemFailed = false;
             if (!answered) {
@@ -1090,7 +1093,8 @@ public class ProcessingServiceImpl implements ProcessingService {
                 Map<String, Object> saved = new LinkedHashMap<>();
                 saved.put("bindingId", b.getId()); saved.put("itemId", item.getId()); saved.put("itemVersion", item.getVersion());
                 saved.put("label", item.getItemName()); saved.put("valueType", item.getValueType()); saved.put("unit", item.getUnit());
-                saved.put("effectiveStandardValue", b.getOverrideStandardValue() != null ? b.getOverrideStandardValue() : item.getStandardValue());
+                saved.put("effectiveStandardValue", QualityStandardValueResolver.inheritBlank(
+                        b.getOverrideStandardValue(), item.getStandardValue()));
                 saved.put("value", null); saved.put("minValue", b.getOverrideMinValue() != null ? b.getOverrideMinValue() : item.getMinValue());
                 saved.put("maxValue", b.getOverrideMaxValue() != null ? b.getOverrideMaxValue() : item.getMaxValue());
                 saved.put("isRequired", required); saved.put("status", "NOT_ANSWERED"); snapshotItems.add(saved);

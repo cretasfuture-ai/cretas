@@ -214,7 +214,7 @@ public class SalesController {
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setUnit(request.unit());
         ProductPackagingSpecService.PackagingSelection packagingSelection =
-                productPackagingSpecService.resolveSelection(
+                productPackagingSpecService.resolveOpeningSelection(
                         factoryId, request.productTypeId(), request.unit(), request.packagingSpecId());
         if (packagingSelection.spec() != null) {
             batch.setPackagingSpecId(packagingSelection.spec().getId());
