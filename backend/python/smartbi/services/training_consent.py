@@ -4,10 +4,11 @@ what a factory sample may carry into a training / distillation / labeling set.
 Owner rule (Steve, 2026-10-24; replaces the 2026-10-22 "nothing without consent").
 Customer wording: docs sent to the website session the same day.
 
-  * Scheduling features (headcount, equipment, durations, efficiency) are used
-    by default ONLY for that factory's own scheduling model — never for a
-    general model, never merged across factories (training is off today; any
-    future trainer must partition by factory_id).
+  * Scheduling features (headcount, equipment, durations, efficiency) are
+    collected only for factories with a written training authorization, and
+    only for that factory's own scheduling model — never a general model, never
+    merged across factories (clauses 2 / 9; Java ProductionDataCollectorService;
+    training is off today and any future trainer must partition by factory_id).
   * AI Q&A samples (question + the data the model saw -> answer) are used by
     default after desensitization (``corpus_anonymize.desensitize_for_training``:
     generic name placeholders, phone / ID / bank numbers removed, EVERY number
