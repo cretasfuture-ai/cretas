@@ -1073,6 +1073,52 @@ class YieldReportServiceImplTest {
         assertThat(step.getLaborCost()).isEqualByComparingTo("3.33");
     }
 
+    /**
+     * Workflow 逐道录入每道是各自的批次; 上游道的人工记在它自己批次的 YIELD 报工上。
+     * 修复前只合并目标(末道)批次的报工 ⇒ 上游道 laborCost 恒 null ⇒ 成本明细判 LABOR_COST_UNKNOWN
+     * (F006【演示L1】计划 836010b8, 2026-10-24)。
+     */
+    private BatchYieldDTO twoStepYieldWithUpstreamReports(List<ProductionReport> upstreamReports) throws Exception {
+        when(reportRepo.findYieldReportsByBatch("F006", 778L)).thenReturn(List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(778L).processOrder(2).laborCost(new BigDecimal("3.33")).build()));
+        when(reportRepo.findYieldReportsByBatch("F006", 100L)).thenReturn(upstreamReports);
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        ProductionBatch finalBatch = ProductionBatch.builder()
+                .id(778L).factoryId("F006").batchNumber("CLK-B-LABOR")
+                .productionPlanId("PLAN-LABOR").productTypeId("PT-LABOR")
+                .actualQuantity(new BigDecimal("40")).quantity(new BigDecimal("40"))
+                .unit("盒").status(ProductionBatchStatus.COMPLETED).build();
+        when(productionBatchRepo.findByIdAndFactoryId(778L, "F006")).thenReturn(Optional.of(finalBatch));
+        ProductionPlan pinnedPlan = plan("PLAN-LABOR");
+        pinnedPlan.setPlannedUnit("盒");
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-LABOR", "F006")).thenReturn(Optional.of(pinnedPlan));
+        ProductType productType = new ProductType();
+        productType.setId("PT-LABOR");
+        productType.setFactoryId("F006");
+        when(productTypeRepo.findByIdAndFactoryId("PT-LABOR", "F006")).thenReturn(Optional.of(productType));
+        ProcessSheetRow first = sheetRow(10L, 100L, "PLAN-LABOR", "PT-WIP", 1, "前道", "50", "52", "kg", "kg", null);
+        ProcessSheetRow target = sheetRow(11L, 778L, "PLAN-LABOR", "PT-LABOR", 2, "末道", "52", "40", "kg", "盒", "B-100");
+        when(processSheetRowRepository.findByFactoryIdAndPlanId("F006", "PLAN-LABOR")).thenReturn(List.of(first, target));
+        return svc.getYield("F006", 778L);
+    }
+
+    @Test
+    void getYield_upstreamWorkflowStepTakesLaborFromItsOwnBatchReport() throws Exception {
+        BatchYieldDTO dto = twoStepYieldWithUpstreamReports(List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(100L).processOrder(1).laborCost(new BigDecimal("104.00")).build()));
+
+        assertThat(dto.getSteps().get(0).getLaborCost()).isEqualByComparingTo("104.00");
+        assertThat(dto.getSteps().get(1).getLaborCost()).isEqualByComparingTo("3.33");
+    }
+
+    @Test
+    void getYield_upstreamWorkflowStepWithoutLaborStaysUnknownNotZero() throws Exception {
+        BatchYieldDTO dto = twoStepYieldWithUpstreamReports(List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(100L).processOrder(1).laborCost(null).build()));
+
+        assertThat(dto.getSteps().get(0).getLaborCost()).isNull();
+    }
+
     private ProcessSheetRow sheetRow(Long id, Long batchId, String planId, String productTypeId,
                                      int processOrder, String processName, String input,
                                      String output, String inputUnit, String outputUnit,
