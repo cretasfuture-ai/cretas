@@ -96,6 +96,7 @@ class TestPersistQuality:
             input_text="chart_insight|BAR|month|revenue|SUM|restaurant|NORMAL|manager|factory:F001|labels:[1月]|values:[100]",  # noqa: E501
             teacher_output='{"finding":"test","implication":null,"suggestion":null}',
             quality=5,
+            factory_id="SEED_F",  # synthetic seed tenant: consent gate lets it through
         )
 
         mock_conn.execute.assert_awaited_once()
@@ -122,6 +123,7 @@ class TestPersistQuality:
             input_text="some prompt text here",
             teacher_output="some teacher output",
             quality=4,
+            factory_id="SEED_F",
         )
 
         call_args = mock_conn.execute.call_args[0]
@@ -142,6 +144,7 @@ class TestPersistQuality:
             input_text="user query",
             teacher_output="answer",
             # quality not passed → default None
+            factory_id="SEED_F",
         )
 
         call_args = mock_conn.execute.call_args[0]

@@ -50,6 +50,12 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
+    SYNTHETIC_FACTORY_IDS,
+    fetch_consent_map,
+    scope_from_map,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("export_distill")
 
@@ -113,16 +119,21 @@ async def _fetch_rows(
 
 
 # Sentinel factory IDs marking synthetic seed corpus (see seed_chart_insight_corpus.py).
-_SENTINEL_FACTORIES = frozenset({"SEED_R", "SEED_F"})
+# Defined once in smartbi.services.training_consent (capture uses the same set).
+_SENTINEL_FACTORIES = SYNTHETIC_FACTORY_IDS
 
 
 def _is_synthetic(row: Dict[str, Any]) -> bool:
     """Synthetic-seed rows are UNCONDITIONALLY usable for shared training — they
     belong to no real tenant. Detection mirrors corpus_census / seeder tagging:
     metadata.source_kind == 'synthetic_seed' / metadata.seeded == true / factory
-    id in SEED_R/SEED_F."""
-    if (row.get("factory_id") or "") in _SENTINEL_FACTORIES:
+    id in SEED_R/SEED_F. A row tagged with a real tenant's factory_id is never
+    synthetic, whatever its metadata says (metadata is caller-supplied)."""
+    fid = row.get("factory_id") or ""
+    if fid in _SENTINEL_FACTORIES:
         return True
+    if fid:
+        return False
     meta = row.get("metadata")
     if isinstance(meta, str):
         try:
@@ -145,11 +156,9 @@ async def _load_consent(pool) -> Dict[str, str]:
     exist yet (migration not applied), returns {} → every real tenant is
     treated as 'none' (still default-deny, never a fail-open).
     """
-    sql = "SELECT factory_id, consent_scope FROM training_consent"
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql)
-        return {r["factory_id"]: r["consent_scope"] for r in rows}
+            return await fetch_consent_map(conn)
     except Exception as e:  # table absent / permission → treat as no consent
         logger.warning(
             "training_consent unreadable (%s) — treating ALL real tenants as "
@@ -161,7 +170,7 @@ async def _load_consent(pool) -> Dict[str, str]:
 
 def _consent_of(row: Dict[str, Any], consent: Dict[str, str]) -> str:
     """consent_scope for a row's tenant; absent factory → 'none' (default-deny)."""
-    return consent.get(row.get("factory_id") or "", "none")
+    return scope_from_map(consent, row.get("factory_id"))
 
 
 def _to_sft_line(
@@ -238,7 +247,7 @@ async def _export_private(args, pool) -> None:
     """PRIVATE single-tenant export: raw rows for one factory, ONLY if it has
     consent_scope='private'. Else refuse with a clear message."""
     consent = await _load_consent(pool)
-    scope = consent.get(args.factory, "none")
+    scope = scope_from_map(consent, args.factory)
     if scope != "private":
         logger.error(
             "REFUSED: factory %s has consent_scope=%r — private raw export "

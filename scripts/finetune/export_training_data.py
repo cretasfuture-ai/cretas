@@ -33,6 +33,8 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2
 import psycopg2.extras
 
+from training_consent_gate import CONSENTED_FACTORY_CLAUSE, consented_factories
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -187,10 +189,11 @@ def fetch_shadow_disagreements(conn, since_days: int) -> List[Dict]:
           AND shadow_confidence IS NOT NULL
           AND shadow_confidence >= 0.6
           AND created_at >= NOW() - INTERVAL '%s days'
+          """ + CONSENTED_FACTORY_CLAUSE + """
         ORDER BY shadow_confidence DESC
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(query, [since_days])
+        cur.execute(query, [since_days, consented_factories()])
         rows = cur.fetchall()
 
     records = []
@@ -237,10 +240,11 @@ def fetch_user_confirmed(conn, since_days: int) -> List[Dict]:
         FROM intent_match_records
         WHERE user_confirmed = true
           AND created_at >= NOW() - INTERVAL '%s days'
+          """ + CONSENTED_FACTORY_CLAUSE + """
         ORDER BY created_at DESC
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(query, [since_days])
+        cur.execute(query, [since_days, consented_factories()])
         rows = cur.fetchall()
 
     records = []

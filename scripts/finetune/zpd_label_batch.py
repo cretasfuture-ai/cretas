@@ -30,6 +30,8 @@ from typing import Dict, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
+
+from training_consent_gate import CONSENTED_FACTORY_CLAUSE, consented_factories
 import requests
 
 logger = logging.getLogger(__name__)
@@ -105,9 +107,10 @@ def fetch_zpd_records(
         FROM intent_match_records
         WHERE zpd_boundary = true
           AND created_at >= NOW() - INTERVAL '%s days'
+          """ + CONSENTED_FACTORY_CLAUSE + """
         ORDER BY created_at DESC
     """
-    params: list = [days]
+    params: list = [days, consented_factories()]
 
     if limit:
         query += " LIMIT %s"

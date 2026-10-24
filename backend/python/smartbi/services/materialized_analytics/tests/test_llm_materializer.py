@@ -205,9 +205,17 @@ async def test_no_applicable_templates_returns_none(monkeypatch):
 
 # --- Distillation data pipeline capture (Steve 2026-05-31) ---
 
+# training_consent rows the fake DB holds: RES_TEST_001 authorized training use.
+_CONSENT = {"RES_TEST_001": "private"}
+
+
 class _FakeConn:
     def __init__(self, sink):
         self._sink = sink
+
+    async def fetchval(self, sql, *args):
+        assert "training_consent" in sql
+        return _CONSENT.get(args[0])
 
     async def execute(self, sql, *args):
         self._sink.append((sql, args))
@@ -269,6 +277,27 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     assert args[7] == "router:INSIGHTS"
     assert "核心商圈" in args[8]  # teacher_output carried through
     assert len(args[9]) == 64  # sha256 hex
+
+
+@pytest.mark.asyncio
+async def test_distillation_skipped_for_factory_without_training_consent(monkeypatch):
+    """Owner rule 2026-10-22: a factory that never authorized training use gets
+    its insight generated, but no sample is stored."""
+    sink: list = []
+
+    async def _pool():
+        return _FakePool(sink)
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setenv("SMARTBI_DISTILL_CAPTURE", "1")
+
+    results = _make_results()
+    _patch_llm(monkeypatch, json.dumps({
+        "executive_summary": "整体营收稳健。" * 3,
+        "insights": {"top_n_by_dim": "门店 A 因核心商圈贡献过半; 建议复制选址。"},
+    }, ensure_ascii=False))
+
+    await lm.generate_llm_insights(results, "restaurant", factory_id="F_NO_CONSENT")
+    assert sink == [], "no training_consent row → nothing captured"
 
 
 @pytest.mark.asyncio

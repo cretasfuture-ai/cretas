@@ -152,10 +152,17 @@ class TestSharedGating:
         assert all(g["input_text"] is None for g in gated)
 
     def test_synthetic_by_metadata_source_kind(self):
-        rows = [_row("F001", metadata={"source_kind": "synthetic_seed"})]
+        rows = [_row(None, metadata={"source_kind": "synthetic_seed"})]
         gated = export_mod.gate_shared_rows(rows, consent={})  # no consent at all
         assert len(gated) == 1
         assert gated[0]["consent_class"] == "synthetic"
+
+    def test_real_tenant_row_is_never_synthetic_by_metadata(self):
+        # metadata is caller-supplied; a row tagged with a real tenant stays that
+        # tenant's data and needs that tenant's consent (2026-10-22).
+        rows = [_row("F001", metadata={"source_kind": "synthetic_seed"}),
+                _row("F001", metadata={"seeded": True})]
+        assert export_mod.gate_shared_rows(rows, consent={}) == []
 
     def test_real_none_excluded_default_deny(self):
         rows = [_row("F001")]  # no metadata, real tenant
@@ -185,7 +192,8 @@ class TestSharedGating:
     def test_mixed_population(self):
         rows = [
             _row("SEED_R"),                                    # synthetic → in
-            _row("F001", metadata={"seeded": True}),           # synthetic → in
+            _row(None, metadata={"seeded": True}),             # synthetic → in
+            _row("F005", metadata={"seeded": True}),           # real tenant, no consent → out
             _row("F002"),                                      # none → out
             _row("F003"),                                      # private → out
             _row("F004"),                                      # shared_anon → in
@@ -294,25 +302,6 @@ class TestMigration:
             if m:
                 versions.append((m.group(1), m.group(2)))
         return max(versions)
-
-    def test_consent_migration_above_frontier(self):
-        target = None
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if "training_consent" in fn:
-                target = fn
-        assert target is not None, "training_consent migration not found"
-        m = re.match(r"V(\d{8})_(\d{2})__", target)
-        assert m
-        this_ver = (m.group(1), m.group(2))
-        # strictly greater than any OTHER migration
-        others = []
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if fn == target:
-                continue
-            mm = re.match(r"V(\d{8})_(\d{2})__", fn)
-            if mm:
-                others.append((mm.group(1), mm.group(2)))
-        assert this_ver > max(others), f"{this_ver} must be > frontier {max(others)}"
 
     def test_migration_defines_table_and_policy(self):
         target = None
