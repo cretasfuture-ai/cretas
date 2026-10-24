@@ -73,8 +73,11 @@ permissions:
 
 jobs:
   full-suite:
-    runs-on: [self-hosted, cretas, java]
+    runs-on: ubuntu-latest  # java-heavy: self-hosted 时要 8G runner
     timeout-minutes: 120
+    # GitHub-hosted 16 GB: the full suite needs 12g (8g ran to the end but OOMed in the tail).
+    env:
+      CRETAS_JAVA_NIGHTLY_XMX: 12g
 
     steps:
       - uses: actions/checkout@v4

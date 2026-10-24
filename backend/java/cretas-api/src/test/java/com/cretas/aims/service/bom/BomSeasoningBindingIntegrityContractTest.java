@@ -37,11 +37,16 @@ class BomSeasoningBindingIntegrityContractTest {
     @Autowired private BomSeasoningItemRepository seasoningItemRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
 
+    /**
+     * 现役唯一键是**节点级** uk_bsi_recipe_node_material_section。旧的工序级 uq_bsi_recipe_wp_material
+     * 已由 V20261103_80 删除: 同一工序目录条目在一张图里用于多个节点(三个「卤制」)时,
+     * 它会挡住第二个节点绑同一种调料 (F006【演示L3】2026-10-24)。
+     */
     @BeforeEach
     void installH2EquivalentUniqueIndex() {
         jdbcTemplate.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_bsi_recipe_wp_material_test
-                    ON bom_seasoning_items(recipe_id, work_process_id, material_type_id)
+                CREATE UNIQUE INDEX IF NOT EXISTS uk_bsi_recipe_node_material_section_test
+                    ON bom_seasoning_items(recipe_id, workflow_process_node_id, material_type_id, section)
                 """);
     }
 
@@ -63,15 +68,28 @@ class BomSeasoningBindingIntegrityContractTest {
     }
 
     @Test
-    void sameMaterialMayBeBoundToDifferentProcessesButNotTwiceToSameProcess() {
+    void sameMaterialMayBeBoundToEveryNodeOfOneProcessButNotTwiceToSameNode() {
         BomRecipe recipe = recipe("recipe-unique", FACTORY, BomRecipe.Status.DRAFT, 0L);
         recipeRepository.saveAndFlush(recipe);
-        seasoningItemRepository.saveAndFlush(seasoningItem(recipe.getId(), "process-a", "salt"));
+        // 三个「卤制」节点共用同一个工序目录条目 process-a
+        seasoningItemRepository.saveAndFlush(seasoningItem(recipe.getId(), "process-a", "p:beef", "anise"));
         assertDoesNotThrow(() -> seasoningItemRepository.saveAndFlush(
-                seasoningItem(recipe.getId(), "process-b", "salt")));
+                seasoningItem(recipe.getId(), "process-a", "p:tongue", "anise")));
+        assertDoesNotThrow(() -> seasoningItemRepository.saveAndFlush(
+                seasoningItem(recipe.getId(), "process-a", "p:intestine", "anise")));
 
         assertThrows(DataIntegrityViolationException.class, () -> seasoningItemRepository.saveAndFlush(
-                seasoningItem(recipe.getId(), "process-a", "salt")));
+                seasoningItem(recipe.getId(), "process-a", "p:beef", "anise")));
+    }
+
+    @Test
+    void legacyProcessLevelUniqueIndexIsDroppedByMigration() throws Exception {
+        String sql = Files.readString(Path.of("src/main/resources/db/flyway/"
+                + "V20261103_80__drop_legacy_seasoning_wp_unique_index.sql"))
+                .replaceAll("--[^\\n]*", "")
+                .replaceAll("\\s+", " ")
+                .toLowerCase();
+        assertTrue(sql.contains("drop index if exists uq_bsi_recipe_wp_material"));
     }
 
     @Test
@@ -121,11 +139,16 @@ class BomSeasoningBindingIntegrityContractTest {
     }
 
     private BomSeasoningItem seasoningItem(String recipeId, String processId, String materialId) {
+        return seasoningItem(recipeId, processId, "node-" + processId, materialId);
+    }
+
+    private BomSeasoningItem seasoningItem(String recipeId, String processId, String nodeId, String materialId) {
         return BomSeasoningItem.builder()
                 .recipeId(recipeId)
                 .factoryId(FACTORY)
                 .materialTypeId(materialId)
                 .workProcessId(processId)
+                .workflowProcessNodeId(nodeId)
                 .section("COOKING")
                 .seq(0)
                 .name("Salt")
