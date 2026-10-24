@@ -603,6 +603,94 @@ class ProductionPlanStopProductionTest {
         verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
+    // ── 多成品存货计划 (F006【演示L4】8d77ec57 / 【演示L5】f9ba5b6f, 2026-10-24) ─────────────
+    // 修复前一律 409「多成品计划不能合并为一条仓库实收」⇒ 联产/原料分流的存货计划永远结不了单;
+    // 且桥接只写抬头不写产出行 ⇒ 成本重算恒 409「结单产出尚未全部入库」, 设备/其他费用录不进去。
+
+    private ProductionPlan multiTargetWorkflowPlan() {
+        ProductionPlan plan = byStockPlan();
+        plan.setStartTime(LocalDateTime.now().minusHours(2));
+        plan.setTargetFinishedGoodIds(List.of("PT-LEG", "PT-BREAST"));
+        plan.setWorkflowSelectionMode(com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedBomFamilyId("FAM-1");
+        plan.setSelectedBomRecipeIdsByProduct(new java.util.LinkedHashMap<>(Map.of("PT-LEG", "R-LEG", "PT-BREAST", "R-BREAST")));
+        plan.setSelectedBomVersionsByProduct(new java.util.LinkedHashMap<>(Map.of("PT-LEG", 4, "PT-BREAST", 4)));
+        return plan;
+    }
+
+    private com.cretas.aims.entity.bom.BomRecipe recipe(String id, String productTypeId, String terminalNode,
+                                                        com.cretas.aims.entity.bom.BomRecipe.OutputRole role) {
+        com.cretas.aims.entity.bom.BomRecipe r = new com.cretas.aims.entity.bom.BomRecipe();
+        r.setId(id);
+        r.setFactoryId(FACTORY_ID);
+        r.setProductTypeId(productTypeId);
+        r.setBomFamilyId("FAM-1");
+        r.setVersion(4);
+        r.setTargetTerminalNodeId(terminalNode);
+        r.setOutputRole(role);
+        return r;
+    }
+
+    @Test
+    @DisplayName("多成品存货计划、各 SKU 单位不同 → 可结单; 抬头不跨单位加总; 逐 SKU 写结单产出行(含 FG 与钉选 BOM)")
+    void stopProduction_multiTargetMixedUnits_closesAndWritesOutputLines() {
+        ProductionPlan plan = multiTargetWorkflowPlan();
+        ProductionInterimSettlement first = interimSettlement("interim-1", 1, "FG-LEG", "205");
+        ProductionInterimSettlement second = interimSettlement("interim-2", 2, "FG-BREAST", "238");
+        FinishedGoodsBatch leg = finishedGoods("fg-leg", "FG-LEG", "205", "袋",
+                FinishedGoodsBatch.Status.AVAILABLE, InventoryOwnership.COMPANY_OWNED, null);
+        leg.setProductTypeId("PT-LEG");
+        FinishedGoodsBatch breast = finishedGoods("fg-breast", "FG-BREAST", "238", "盒",
+                FinishedGoodsBatch.Status.AVAILABLE, InventoryOwnership.COMPANY_OWNED, null);
+        breast.setProductTypeId("PT-BREAST");
+        stubInterimBridge(plan, List.of(first, second), leg, breast);
+        com.cretas.aims.repository.ProductionSettlementOutputLineRepository lineRepo =
+                mock(com.cretas.aims.repository.ProductionSettlementOutputLineRepository.class);
+        com.cretas.aims.repository.bom.BomRecipeRepository recipeRepo =
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class);
+        ReflectionTestUtils.setField(service, "productionSettlementOutputLineRepository", lineRepo);
+        ReflectionTestUtils.setField(service, "bomRecipeRepository", recipeRepo);
+        when(lineRepo.lockByFactoryIdAndSettlementId(eq(FACTORY_ID), anyString())).thenReturn(List.of());
+        when(recipeRepo.findById("R-LEG")).thenReturn(Optional.of(recipe("R-LEG", "PT-LEG", "m:fL",
+                com.cretas.aims.entity.bom.BomRecipe.OutputRole.CO_PRODUCT)));
+        when(recipeRepo.findById("R-BREAST")).thenReturn(Optional.of(recipe("R-BREAST", "PT-BREAST", "m:fB",
+                com.cretas.aims.entity.bom.BomRecipe.OutputRole.MAIN)));
+
+        service.stopProduction(FACTORY_ID, PLAN_ID);
+
+        assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
+        org.mockito.ArgumentCaptor<ProductionSettlement> settlement = org.mockito.ArgumentCaptor.forClass(ProductionSettlement.class);
+        verify(productionSettlementRepository, atLeastOnce()).save(settlement.capture());
+        assertNull(settlement.getValue().getActualFinishedQuantity(), "袋与盒不能相加, 抬头必须留空");
+        assertNull(settlement.getValue().getQuantityUnit());
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<com.cretas.aims.entity.ProductionSettlementOutputLine>> lines =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(lineRepo).saveAll(lines.capture());
+        assertEquals(2, lines.getValue().size());
+        assertEquals(List.of("fg-leg", "fg-breast"), lines.getValue().stream()
+                .map(com.cretas.aims.entity.ProductionSettlementOutputLine::getFinishedGoodsBatchId).toList());
+        assertEquals(0, new BigDecimal("238").compareTo(lines.getValue().get(1).getReceivedQuantity()));
+        assertEquals("R-BREAST", lines.getValue().get(1).getBomRecipeId());
+    }
+
+    @Test
+    @DisplayName("多成品存货计划: 小结成品 SKU 不在计划终端集合内 → 仍 fail-closed")
+    void stopProduction_multiTargetForeignSku_rejected() {
+        ProductionPlan plan = multiTargetWorkflowPlan();
+        ProductionInterimSettlement first = interimSettlement("interim-1", 1, "FG-LEG", "205");
+        FinishedGoodsBatch foreign = finishedGoods("fg-x", "FG-LEG", "205", "袋",
+                FinishedGoodsBatch.Status.AVAILABLE, InventoryOwnership.COMPANY_OWNED, null);
+        foreign.setProductTypeId("PT-WING");
+        stubInterimBridge(plan, List.of(first), foreign);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.stopProduction(FACTORY_ID, PLAN_ID));
+
+        assertEquals("BY_STOCK_INTERIM_FINISHED_GOODS_INVALID", error.getErrorCode());
+        assertTrue(error.getMessage().contains("SKU 与计划终端 SKU 不一致"));
+    }
+
     @Test
     @DisplayName("任一小结成品批次已撤销 → fail-closed 且不写结单")
     void stopProduction_multipleInterimSettlementsWithReversedBatch_rejected() {

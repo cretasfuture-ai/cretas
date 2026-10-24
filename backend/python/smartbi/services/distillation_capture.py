@@ -33,9 +33,9 @@ Training rule (owner, 2026-10-24; see ``training_consent`` for the full text):
     authorized or not (``qa_has_blocked_content``);
   * otherwise a factory with ``training_consent`` 'private' / 'shared_anon' is
     stored as-is, and everyone else (no row, 'none', lookup error, no factory)
-    is stored desensitized (``anonymize_for_shared``: entity placeholders +
-    amount buckets; plus phone / ID / bank numbers removed), tagged
-    ``metadata.desensitized``;
+    is stored desensitized (``desensitize_for_training``: generic name
+    placeholders, phone / ID / bank numbers removed, every number -> <数值>),
+    tagged ``metadata.desensitized``;
   * every real sample written is tagged ``metadata.training_rule`` (the corpus
     scripts only read tagged rows); synthetic seed tenants are stored as-is.
 Skips are logged once per (reason, factory).
@@ -60,7 +60,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from smartbi.services.corpus_anonymize import anonymize_for_shared
+from smartbi.services.corpus_anonymize import desensitize_for_training
 from smartbi.services.training_consent import (
     DESENSITIZED_KEY,
     RULE_KEY,
@@ -69,7 +69,6 @@ from smartbi.services.training_consent import (
     is_synthetic_factory,
     keeps_raw,
     qa_has_blocked_content,
-    remove_personal_identifiers,
 )
 
 logger = logging.getLogger(__name__)
@@ -218,10 +217,8 @@ async def persist_distillation_sample(
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
                 if not keeps_raw(scope):
-                    input_text, teacher_output = anonymize_for_shared(
-                        input_text, teacher_output, business_type)
-                    input_text = remove_personal_identifiers(input_text) or ""
-                    teacher_output = remove_personal_identifiers(teacher_output) or ""
+                    input_text, teacher_output = desensitize_for_training(
+                        input_text, teacher_output)
                     tags[DESENSITIZED_KEY] = True
                 metadata = {**(metadata or {}), **tags}
             input_hash = compute_input_hash(input_text)
