@@ -10,6 +10,9 @@ import com.cretas.aims.dto.workflow.WorkflowPublishAndActivateResponse;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.enums.ProductCategory;
+import com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
 import com.cretas.aims.security.ActorRef;
@@ -38,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -815,6 +819,81 @@ class ProductProcessWorkflowServiceImplTest {
         verify(repository).saveAndFlush(draft);
     }
 
+    @Test
+    @DisplayName("真实发布服务保留 RAW 路线并接受 kg 外部半成品投入")
+    void publishMixedRawAndExternalSemiThroughRealCatalogValidator() throws Exception {
+        ProductProcessWorkflowDTO definition = validDefinition();
+        addExternalSemiInput(definition);
+        ProductProcessWorkflow draft = persistedDraft(definition, 3L);
+        stubDraft(draft);
+
+        ProductType owner = new ProductType();
+        owner.setId(PRODUCT_ID);
+        owner.setFactoryId(FACTORY_ID);
+        owner.setProductCategory(ProductCategory.FINISHED_PRODUCT);
+        owner.setUnit("kg");
+        when(productTypeRepository.findByIdAndFactoryId(PRODUCT_ID, FACTORY_ID))
+                .thenReturn(Optional.of(owner));
+        when(productTypeRepository.findByIdAndFactoryIdForUpdate(PRODUCT_ID, FACTORY_ID))
+                .thenReturn(Optional.of(owner));
+
+        WorkProcessRepository workProcessRepository = mock(WorkProcessRepository.class);
+        when(workProcessRepository.findByFactoryIdAndIdIn(eq(FACTORY_ID), any()))
+                .thenReturn(List.of(
+                        catalogWorkProcess("WP-trim", WorkProcessOutputMaterialKind.SEMI_FINISHED),
+                        catalogWorkProcess("WP-cook", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<String> ids = invocation.getArgument(0);
+            return ids.stream().map(id -> {
+                ProductType row = new ProductType();
+                row.setId(id);
+                row.setFactoryId(FACTORY_ID);
+                row.setProductCategory(id.startsWith("FG-")
+                        ? ProductCategory.FINISHED_PRODUCT
+                        : ProductCategory.SEMI_FINISHED);
+                row.setUnit("kg");
+                row.setIsActive(true);
+                return row;
+            }).toList();
+        });
+        com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository =
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class);
+        com.cretas.aims.repository.bom.BomRecipeItemRepository bomItemRepository =
+                mock(com.cretas.aims.repository.bom.BomRecipeItemRepository.class);
+        when(bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                eq(FACTORY_ID), anyString(), eq(com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE)))
+                .thenReturn(true);
+        when(bomItemRepository.findCurrentByProduct(eq(FACTORY_ID), anyString()))
+                .thenReturn(List.of(new com.cretas.aims.entity.bom.BomRecipeItem()));
+        com.cretas.aims.service.unit.UnitContractService units =
+                mock(com.cretas.aims.service.unit.UnitContractService.class);
+        when(units.describe(eq(FACTORY_ID), eq("kg"))).thenReturn(Optional.of(
+                new com.cretas.aims.service.unit.CanonicalUnit(
+                        "kg", com.cretas.aims.service.unit.UnitDimension.MASS,
+                        "kg", BigDecimal.ONE, "千克", 3)));
+        ProductProcessWorkflowCatalogValidator realCatalogValidator =
+                new ProductProcessWorkflowCatalogValidator(
+                        workProcessRepository, productTypeRepository, rawMaterialTypeRepository,
+                        bomRecipeRepository, bomItemRepository, units);
+        ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
+                repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
+                workflowBomSynchronizationService, workflowActivationService,
+                activationRepository, productionPlanService, new ObjectMapper(), validator,
+                realCatalogValidator, unitValidator, productTypeRepository, rawMaterialTypeRepository);
+
+        when(repository.lockByIdAndFactoryId(draft.getId(), FACTORY_ID)).thenReturn(Optional.of(draft));
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProductProcessWorkflowDTO published = realService.publish(FACTORY_ID, PRODUCT_ID, 3L, 77L);
+
+        assertEquals(ProductProcessWorkflow.Status.PUBLISHED.name(), published.getStatus());
+        verify(workflowBomSynchronizationService).synchronizeForPublish(
+                eq(FACTORY_ID), eq(PRODUCT_ID), any(), eq(77L));
+        assertTrue(draft.getNodesJson().contains("SKU-EXTERNAL-SEMI"));
+    }
+
     @Test void legacyPublishPreservesContentAddressedOwnerForRawSplit() throws Exception {
         assertRawSplitPublicationPreservesIdentity(false);
     }
@@ -1263,7 +1342,8 @@ class ProductProcessWorkflowServiceImplTest {
                         productTypeRepository,
                         mock(com.cretas.aims.repository.RawMaterialTypeRepository.class),
                         mock(com.cretas.aims.repository.bom.BomRecipeRepository.class),
-                        mock(com.cretas.aims.repository.bom.BomRecipeItemRepository.class));
+                        mock(com.cretas.aims.repository.bom.BomRecipeItemRepository.class),
+                        mock(com.cretas.aims.service.unit.UnitContractService.class));
         ProductProcessWorkflowServiceImpl realService = new ProductProcessWorkflowServiceImpl(
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
                 workflowBomSynchronizationService, workflowActivationService,
@@ -1395,6 +1475,30 @@ class ProductProcessWorkflowServiceImplTest {
         dto.setEdges(edges);
         dto.setViewport(new ProductProcessWorkflowDTO.Viewport(0D, 0D, 1D));
         return dto;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void addExternalSemiInput(ProductProcessWorkflowDTO definition) {
+        ProductProcessWorkflowDTO.Node cook = definition.getNodes().stream()
+                .filter(node -> "cook".equals(node.getId()))
+                .findFirst().orElseThrow();
+        List<Map<String, Object>> ports = (List<Map<String, Object>>) cook.getData().get("ports");
+        ports.add(port("in-external", "INPUT", "external-semi", "SEMI_FINISHED", 2));
+        ProductProcessWorkflowDTO.Node external = material(
+                "external-semi", "SEMI_FINISHED", "外部半成品", "SKU-EXTERNAL-SEMI");
+        external.getData().put("baseUnit", "kg");
+        external.getData().put("inputSource", "EXTERNAL");
+        definition.getNodes().add(external);
+        definition.getEdges().add(edge(
+                "e-external", "external-semi", "output", "cook", "in-external"));
+    }
+
+    private WorkProcess catalogWorkProcess(String id, WorkProcessOutputMaterialKind outputKind) {
+        WorkProcess process = new WorkProcess();
+        process.setId(id);
+        process.setFactoryId(FACTORY_ID);
+        process.setDefaultOutputMaterialKind(outputKind);
+        return process;
     }
 
     private ProductProcessWorkflowDTO rawToFinishedDefinition() {

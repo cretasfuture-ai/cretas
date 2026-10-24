@@ -13,6 +13,9 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,9 +26,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.ArrayList;
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -57,13 +62,18 @@ class ProductProcessWorkflowCatalogValidatorTest {
     @Mock
     private BomRecipeRepository bomRecipeRepository;
 
+    @Mock
+    private UnitContractService unitContractService;
+
     private ProductProcessWorkflowCatalogValidator validator;
 
     @BeforeEach
     void setUp() {
         validator = new ProductProcessWorkflowCatalogValidator(
                 workProcessRepository, productTypeRepository, rawMaterialTypeRepository,
-                bomRecipeRepository, bomItemRepository);
+                bomRecipeRepository, bomItemRepository, unitContractService);
+        lenient().when(unitContractService.describe(anyString(), anyString())).thenReturn(Optional.of(
+                new CanonicalUnit("kg", UnitDimension.MASS, "kg", BigDecimal.ONE, "千克", 3)));
         lenient().when(bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                         anyString(), anyString(), org.mockito.ArgumentMatchers.eq(BomRecipe.Status.ACTIVE)))
                 .thenReturn(true);
@@ -565,6 +575,23 @@ class ProductProcessWorkflowCatalogValidatorTest {
     }
 
     @Test
+    void rejectsExternalInputForCountUnit() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "只");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        ProductType product = product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED);
+        product.setUnit("只");
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(product));
+
+        when(unitContractService.describe(FACTORY_ID, "只")).thenReturn(Optional.of(
+                new CanonicalUnit("只", UnitDimension.COUNT, "只", BigDecimal.ONE, "只", 0)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
     void unknownInputSourceDoesNotBypassProducerGate() {
         ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
         definition.getNodes().stream()
@@ -909,6 +936,7 @@ class ProductProcessWorkflowCatalogValidatorTest {
         product.setId(id);
         product.setFactoryId(factoryId);
         product.setProductCategory(category);
+        product.setUnit("kg");
         return product;
     }
 

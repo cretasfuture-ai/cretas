@@ -1003,6 +1003,13 @@
           <label class="raw-input-label">
             {{ rawInputDialog.inputSource === 'EXTERNAL' ? '选择外部半成品 SKU' : '选择原料 SKU' }}
           </label>
+          <p
+            v-if="rawInputDialog.inputSource === 'EXTERNAL'"
+            class="raw-input-route-hint"
+            data-testid="external-semi-route-hint"
+          >
+            目前支持按公斤投入外部半成品，工艺中仍需保留原料投入。
+          </p>
           <el-select
             v-model="rawInputDialog.skuId"
             filterable
@@ -1470,7 +1477,9 @@ const rawInputDialog = reactive({
 /** 两项都选齐才能确定 —— 关系选项没有默认值, 默认值等于替用户做了决定。 */
 const rawInputDialogReady = computed(
   () => Boolean(rawInputDialog.skuId)
-    && (rawInputDialog.inputSource === 'EXTERNAL' || Boolean(rawInputDialog.relation)),
+    && (rawInputDialog.inputSource === 'EXTERNAL'
+      || Boolean(rawInputDialog.relation)
+      || !rawInputDialog.mainMaterialNodeId),
 );
 const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
@@ -2332,7 +2341,9 @@ const semiFinishedSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) === 'SEMI_FINISHED'
 ));
 const externalSemiInputOptions = computed(() => semiFinishedSkuOptions.value.filter(
-  (option) => option.isActive !== false && Boolean(option.unit?.trim()),
+  (option) => option.isActive !== false
+    && Boolean(option.unit?.trim())
+    && workflowReportingUnit('SEMI_FINISHED', option.unit) === 'kg',
 ));
 const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) === 'FINISHED_GOOD',
@@ -5235,8 +5246,6 @@ function confirmAddProcess(): void {
  * 的算法完全不同: 替代料是二选一, 合成一个逻辑投入; 并列投入各自是独立需求。
  * 系统以前不问, 于是两种情况长得一模一样, `logicalRootCount()` 只能一律按 +1 算。
  *
- * ⚠️ 这道工序**还没有任何原料**时不弹窗 —— 没有可替代的对象, 问了也只有一个答案。
- *
  * ⛔ 弹窗只是录入体验, **不是约束**: AI 画布工具是第二个写图入口, 完全绕过这里。
  *    合法性(自引用/悬空/指向非原料/成链)由后端 ProductProcessWorkflowValidator 保证。
  */
@@ -5244,16 +5253,12 @@ function addInputToProcess(processId: string): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   const mainMaterial = primaryRawInputOf(process);
-  if (!mainMaterial) {
-    createRawInputCell(processId, { skuId: '', substituteOfNodeId: '' });
-    return;
-  }
   Object.assign(rawInputDialog, {
     visible: true,
     processId,
     processName: String((process.data as ProcessNodeData).processName || '工序'),
-    mainMaterialNodeId: mainMaterial.id,
-    mainMaterialName: String(mainMaterial.data?.name || '主料'),
+    mainMaterialNodeId: mainMaterial?.id || '',
+    mainMaterialName: String(mainMaterial?.data?.name || '主料'),
     skuId: '',
     inputSource: 'RAW_MATERIAL',
     relation: '',
@@ -5288,8 +5293,9 @@ function confirmAddRawInput(): void {
   if (rawInputDialog.inputSource === 'EXTERNAL') {
     const option = externalSemiInputOptions.value.find((item) => item.id === rawInputDialog.skuId);
     if (!option || classifyOutputSkuCategory(option.productCategory) !== 'SEMI_FINISHED'
-      || option.isActive === false || !option.unit?.trim()) {
-      ElMessage.warning('请选择当前工厂启用且带真实单位的半成品 SKU');
+      || option.isActive === false || !option.unit?.trim()
+      || workflowReportingUnit('SEMI_FINISHED', option.unit) !== 'kg') {
+      ElMessage.warning('请选择当前工厂启用且按 kg 投入的半成品 SKU');
       return;
     }
     const duplicate = flowNodes.value.some((node) => (

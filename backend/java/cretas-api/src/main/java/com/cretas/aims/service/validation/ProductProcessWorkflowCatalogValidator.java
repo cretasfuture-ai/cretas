@@ -12,6 +12,9 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -42,6 +45,7 @@ public class ProductProcessWorkflowCatalogValidator {
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     private final BomRecipeRepository bomRecipeRepository;
     private final BomRecipeItemRepository bomRecipeItemRepository;
+    private final UnitContractService unitContractService;
 
     public void validateForPublish(
             String factoryId,
@@ -292,6 +296,19 @@ public class ProductProcessWorkflowCatalogValidator {
             if (isBlank(asString(data(materialNode).get("baseUnit")))) {
                 mismatch(materialNode, "外部半成品输入缺少真实单位",
                         "请重新绑定带主单位的半成品 SKU");
+            }
+            CanonicalUnit authoritativeUnit = isBlank(product.getUnit())
+                    ? null
+                    : unitContractService.describe(factoryId, product.getUnit()).orElse(null);
+            if (authoritativeUnit == null || authoritativeUnit.dimension() != UnitDimension.MASS) {
+                mismatch(materialNode,
+                        "外部半成品输入 SKU 必须使用可投影为 kg 的质量单位: " + skuId,
+                        "请改选当前工厂已有质量单位的半成品 SKU");
+            }
+            if (!"kg".equalsIgnoreCase(asString(data(materialNode).get("baseUnit")))) {
+                mismatch(materialNode,
+                        "外部半成品输入单位必须使用 kg 报工投影: " + skuId,
+                        "请重新绑定该半成品 SKU 的 kg 投入单位");
             }
             if (outputBindingsByMaterialId.containsKey(materialNode.getId())) {
                 mismatch(materialNode, "外部半成品输入不能绑定工序产出端口",

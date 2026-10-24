@@ -118,7 +118,8 @@ beforeEach(() => {
   api.get.mockImplementation((url: string) => {
     if (url.endsWith('/product-types/options')) {
       return Promise.resolve({ success: true, data: { content: [
-        { id: 'SKU-SEMI-EXT', name: '外部半成品', code: 'SFI-EXT', unit: '只', productCategory: 'SEMI_FINISHED', isActive: true },
+        { id: 'SKU-SEMI-EXT', name: '外部半成品', code: 'SFI-EXT', unit: 'kg', productCategory: 'SEMI_FINISHED', isActive: true },
+        { id: 'SKU-SEMI-COUNT', name: '计数半成品', code: 'SFI-COUNT', unit: '只', productCategory: 'SEMI_FINISHED', isActive: true },
         { id: 'SKU-SEMI-INACTIVE', name: '停用半成品', code: 'SFI-OFF', unit: 'kg', productCategory: 'SEMI_FINISHED', isActive: false },
         { id: 'SKU-FINISHED', name: '成品', code: 'FG-1', unit: 'kg', productCategory: 'FINISHED_PRODUCT', isActive: true },
         { id: 'SKU-WRONG', name: '原料分类', code: 'RAW-1', unit: 'kg', productCategory: 'RAW_MATERIAL', isActive: true },
@@ -187,12 +188,46 @@ describe('external SEMI_FINISHED source input', () => {
     await wrapper.vm.$nextTick();
 
     const node = vm.flowNodes.find((item) => item.data.inputSource === 'EXTERNAL');
-    expect(node?.data).toMatchObject({ kind: 'SEMI_FINISHED', skuId: 'SKU-SEMI-EXT', baseUnit: '只' });
+    expect(node?.data).toMatchObject({ kind: 'SEMI_FINISHED', skuId: 'SKU-SEMI-EXT', baseUnit: 'kg' });
     const process = vm.flowNodes.find((item) => item.id === 'process:pack');
     const port = process?.data.ports?.find((item) => item.materialNodeId === node?.id);
-    expect(port).toMatchObject({ direction: 'INPUT', materialKind: 'SEMI_FINISHED', skuId: 'SKU-SEMI-EXT', unit: '只' });
+    expect(port).toMatchObject({ direction: 'INPUT', materialKind: 'SEMI_FINISHED', skuId: 'SKU-SEMI-EXT', unit: 'kg' });
     expect(vm.flowEdges).toContainEqual(expect.objectContaining({ source: node?.id, target: 'process:pack', targetHandle: port?.id }));
     expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(false);
+  });
+
+  it('opens the chooser for the first source and allows a RAW input without a relation', async () => {
+    const { wrapper, vm } = await mountEditor();
+    const process = vm.flowNodes.find((item) => item.id === 'process:pack');
+    const rawNode = vm.flowNodes.find((item) => item.id === 'raw');
+    vm.flowNodes.splice(vm.flowNodes.findIndex((item) => item.id === rawNode?.id), 1);
+    if (process?.data.ports) {
+      process.data.ports.splice(
+        process.data.ports.findIndex((port) => port.materialNodeId === rawNode?.id), 1);
+    }
+    vm.flowEdges.splice(
+      0,
+      vm.flowEdges.length,
+      ...vm.flowEdges.filter((edge) => edge.source !== rawNode?.id && edge.target !== rawNode?.id));
+
+    vm.addInputToProcess('process:pack');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(true);
+    vm.rawInputDialog.skuId = 'RM-2';
+    expect(vm.rawInputDialog.relation).toBe('');
+    vm.confirmAddRawInput();
+    await wrapper.vm.$nextTick();
+
+    expect(vm.flowNodes.filter((item) => item.data.kind === 'RAW_MATERIAL')).toHaveLength(1);
+    expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(false);
+  });
+
+  it('explains the RAW-route limitation when external mode is selected', async () => {
+    const { wrapper, vm } = await mountEditor();
+    vm.addInputToProcess('process:pack');
+    vm.rawInputDialog.inputSource = 'EXTERNAL';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-testid="external-semi-route-hint"]').text()).toContain('仍需保留原料投入');
   });
 
   it('cancels external selection without changing the graph', async () => {
@@ -223,6 +258,7 @@ describe('external SEMI_FINISHED source input', () => {
   });
 
   it.each([
+    ['SKU-SEMI-COUNT', '计数单位'],
     ['SKU-SEMI-INACTIVE', '停用半成品'],
     ['SKU-WRONG', '错误分类'],
     ['SKU-MISSING', '不存在'],

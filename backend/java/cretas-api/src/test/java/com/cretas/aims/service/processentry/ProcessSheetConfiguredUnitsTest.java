@@ -1,11 +1,33 @@
 package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProcessSheetRowChangeLogRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductWorkProcessRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.SemiFinishedInventoryRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
+import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
+import com.cretas.aims.service.wip.WipInventoryService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -14,8 +36,42 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.mockito.Mockito.when;
 
+import java.util.Optional;
+
+@ExtendWith(MockitoExtension.class)
 class ProcessSheetConfiguredUnitsTest {
+
+    @Mock private ClerkProcessEntryService clerkService;
+    @Mock private ProcessSheetRowRepository rowRepo;
+    @Mock private MaterialBatchRepository materialBatchRepo;
+    @Mock private ProductionBatchRepository productionBatchRepo;
+    @Mock private MaterialConsumptionRepository consumptionRepo;
+    @Mock private ProductionReportRepository reportRepo;
+    @Mock private ProductionPlanRepository productionPlanRepo;
+    @Mock private ProcessSheetRowChangeLogRepository changeLogRepo;
+    @Mock private SemiFinishedInventoryRepository wipRepo;
+    @Mock private WorkProcessTaskRepository taskRepo;
+    @Mock private WorkProcessRepository processRepo;
+    @Mock private ProductWorkProcessRepository productWorkProcessRepo;
+    @Mock private ProductTypeRepository productTypeRepo;
+    @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepo;
+    @Mock private WipInventoryService wipInventoryService;
+    @Mock private FinishedGoodsFeedService finishedGoodsFeedService;
+
+    private ProcessSheetServiceImpl service;
+
+    @BeforeEach
+    void setUpService() {
+        service = new ProcessSheetServiceImpl(
+                clerkService, rowRepo, materialBatchRepo, productionBatchRepo,
+                consumptionRepo, reportRepo, productionPlanRepo, changeLogRepo,
+                new ObjectMapper(), wipRepo, taskRepo, processRepo,
+                productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo,
+                wipInventoryService, finishedGoodsFeedService);
+    }
 
     @Test
     void normalizesRequestUnitsFromProductProcessConfiguration() throws Exception {
@@ -86,6 +142,45 @@ class ProcessSheetConfiguredUnitsTest {
 
         BusinessException error = (BusinessException) thrown.getCause();
         assertEquals("PROCESS_SHEET_EXTERNAL_FEED_UNIT_UNSUPPORTED", error.getErrorCode());
+    }
+
+    @Test
+    void savesKgExternalSemiFinishedFeedThroughTheActualSaveRowPath() {
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setClientRowId("ROW-EXTERNAL-KG");
+        request.setProcessCode("pack");
+        request.setProcessOrder(1);
+        request.setProductTypeId("PT-FINISHED");
+        request.setUnit("kg");
+        request.setOutputQuantity(BigDecimal.ZERO);
+        ProcessSheetRowRequest.UpstreamRef source = new ProcessSheetRowRequest.UpstreamRef();
+        source.setSourceBatchNumber("SFI-001");
+        source.setFeedQuantityKg(BigDecimal.ONE);
+        source.setSkuId("PT-SEMI");
+        source.setSemiFinished(true);
+        request.setUpstreamSources(List.of(source));
+
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId("F006");
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-1", "F006"))
+                .thenReturn(Optional.of(plan));
+        when(productWorkProcessRepo.findByFactoryIdAndProductTypeIdAndProcessOrder(
+                "F006", "PT-FINISHED", 1)).thenReturn(Optional.empty());
+        SemiFinishedInventory inventory = new SemiFinishedInventory();
+        inventory.setFactoryId("F006");
+        inventory.setIntermediateBatchNo("SFI-001");
+        inventory.setProductTypeId("PT-SEMI");
+        inventory.setStatus(SemiFinishedInventory.Status.AVAILABLE);
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull("F006", "SFI-001"))
+                .thenReturn(Optional.of(inventory));
+        when(rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                "F006", "PLAN-1", "pack", "ROW-EXTERNAL-KG"))
+                .thenReturn(Optional.empty());
+
+        var result = service.saveRow("F006", "PLAN-1", request, 7L);
+
+        assertFalse(result.isMaterialized());
     }
 
     @Test
