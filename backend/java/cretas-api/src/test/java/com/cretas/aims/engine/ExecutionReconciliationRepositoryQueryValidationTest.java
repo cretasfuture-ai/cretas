@@ -98,6 +98,29 @@ class ExecutionReconciliationRepositoryQueryValidationTest {
                 .getSingleResult()).isEqualTo("IN_DOUBT");
     }
 
+    @Test void unresolvedGrantRunsAreCountedInTheDatabaseAndOnlyACappedSampleIsLoaded() {
+        LocalDateTime now = LocalDateTime.now();
+        for (int i = 0; i < 13; i++) {
+            grantRun("many-" + i, null, now.minusHours(2).plusSeconds(i));
+        }
+        testEntityManager.flush();
+        testEntityManager.clear();
+        var statistics = entityManager.getEntityManagerFactory()
+                .unwrap(org.hibernate.SessionFactory.class).getStatistics();
+        statistics.setStatisticsEnabled(true);
+        statistics.clear();
+
+        var snapshot = new ExecutionReconciliationReporter(entityManager, 30).report(now);
+
+        assertThat(snapshot.unresolvedGrantRuns()).isEqualTo(13L);
+        assertThat(snapshot.samples()).hasSize(10).allMatch(sample -> sample.contains(":grant-run:"));
+        // The sample query itself is capped: it never loads the whole unresolved backlog.
+        String sampleQuery = java.util.Arrays.stream(statistics.getQueries())
+                .filter(query -> query.contains("':grant-run:'")).findFirst().orElseThrow();
+        assertThat(statistics.getQueryStatistics(sampleQuery).getExecutionRowCount()).isEqualTo(10L);
+        statistics.setStatisticsEnabled(false);
+    }
+
     @Test void nothingStaleIsClean() {
         token("fresh", IntentPreviewToken.TokenStatus.EXECUTING, LocalDateTime.now());
         testEntityManager.flush();

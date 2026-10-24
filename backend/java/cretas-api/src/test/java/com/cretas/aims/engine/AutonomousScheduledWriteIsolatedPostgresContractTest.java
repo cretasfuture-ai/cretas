@@ -270,24 +270,220 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(active(target)).isTrue();
     }
 
-    @Test void aRunConsumedButNeverResolvedIsReportedAndNotRetried() throws Exception {
+    @Test void aFailureAfterTheDeductionInsideTheConsumingTransactionRollsAllOfItBack() throws Exception {
+        FactorySchedulerConfig config = scheduleSoon();
+        grant(config, 3);
+        // Deterministic fault at the last step of the consuming transaction: marking the config RUNNING.
+        // By then the grant row is locked, its budget decremented and the run inserted in the same
+        // transaction; all of it must roll back with the failure.
+        String trigger = "s6_fail_running_" + System.nanoTime();
+        try {
+            tx.executeWithoutResult(status -> {
+                entityManager.createNativeQuery("CREATE FUNCTION " + trigger + "() RETURNS trigger LANGUAGE plpgsql AS $$"
+                        + " BEGIN RAISE EXCEPTION 's6 injected fault after consumption'; END $$").executeUpdate();
+                entityManager.createNativeQuery("CREATE TRIGGER " + trigger + " BEFORE UPDATE ON factory_scheduler_configs"
+                        + " FOR EACH ROW WHEN (NEW.last_execution_status = 'RUNNING') EXECUTE FUNCTION " + trigger + "()")
+                        .executeUpdate();
+            });
+            instanceA.scheduleTask(config);
+
+            // The real fire reaches the fault, and the scheduler records the failed run.
+            await(() -> "FAILED".equals(status()), 75);
+
+            assertThat(text("SELECT last_execution_error FROM factory_scheduler_configs WHERE id = " + configId))
+                    .contains("s6 injected fault after consumption");
+            assertThat(count("autonomous_tool_grants WHERE used_runs = 0")).isEqualTo(1);
+            assertThat(count("autonomous_tool_grant_runs")).isZero();
+            assertThat(count("intent_preview_tokens")).isZero();
+            assertThat(count("tool_execution_idempotency")).isZero();
+            assertThat(count("tool_execution_audit_events")).isZero();
+            assertThat(active(target)).isTrue();
+        } finally {
+            instanceA.cancelTask(config.getFactoryId(), config.getTaskCode());
+            tx.executeWithoutResult(status -> {
+                entityManager.createNativeQuery("DROP TRIGGER IF EXISTS " + trigger + " ON factory_scheduler_configs")
+                        .executeUpdate();
+                entityManager.createNativeQuery("DROP FUNCTION IF EXISTS " + trigger + "()").executeUpdate();
+            });
+        }
+    }
+
+    @Test void aRealFireStoppedAfterConsumptionShowsRunningIsReportedAndAReplayNeverExecutesOrDowngrades()
+            throws Exception {
+        FactorySchedulerConfig config = scheduleSoon();
+        grant(config, 3);
+        String url = System.getenv("CRETAS_WORKFLOW_PG_URL");
+        String user = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci");
+        String password = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", "");
+        String runKey;
+        try (java.sql.Connection holder = java.sql.DriverManager.getConnection(url, user, password)) {
+            // The business write stalls on the target's row: the state between consumption and outcome
+            // that a crash would leave behind, observed through the real cron fire on two instances.
+            holder.setAutoCommit(false);
+            try (java.sql.Statement statement = holder.createStatement()) {
+                statement.executeQuery("SELECT id FROM users WHERE id = " + target + " FOR UPDATE").close();
+            }
+            instanceA.scheduleTask(config);
+            instanceB.scheduleTask(config);
+
+            await(() -> count("autonomous_tool_grant_runs") == 1 && "RUNNING".equals(status()), 75);
+            Thread.sleep(3000); // the other instance's fire of the same slot only replays
+            runKey = text("SELECT run_key FROM autonomous_tool_grant_runs");
+
+            assertThat(status()).isEqualTo("RUNNING");
+            assertThat(count("autonomous_tool_grant_runs WHERE outcome IS NULL")).isEqualTo(1);
+            assertThat(count("autonomous_tool_grants WHERE used_runs = 1")).isEqualTo(1);
+            assertThat(active(target)).isTrue();
+            var report = new ExecutionReconciliationReporter(entityManager, 0).report(LocalDateTime.now().plusMinutes(1));
+            assertThat(report.unresolvedGrantRuns()).isEqualTo(1L);
+            assertThat(report.samples()).anyMatch(sample -> sample.endsWith(":grant-run:" + runKey));
+            holder.rollback();
+        }
+        // Released: the one execution finishes and records its outcome once.
+        await(() -> "SUCCESS".equals(status()) && !active(target), 30);
+        assertThat(text("SELECT outcome FROM autonomous_tool_grant_runs")).isEqualTo("SUCCEEDED");
+        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isEqualTo(1);
+
+        // A late fire of the same planned slot replays: no second write, no RUNNING over the SUCCESS.
+        instanceA.cancelTask(config.getFactoryId(), config.getTaskCode());
+        instanceB.cancelTask(config.getFactoryId(), config.getTaskCode());
+        instanceB.fire(configId, config.getCronExpression(), "late-replay",
+                java.time.Instant.parse(runKey.substring("slot:".length())));
+        assertThat(status()).isEqualTo("SUCCESS");
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 1")).isEqualTo(1);
+        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isEqualTo(1);
+    }
+
+    @Test void aConfigDeletedOrRetooledOrReassignedAfterTheFireReadItIsNotConsumed() throws Exception {
         FactorySchedulerConfig fired = scheduleSoon();
-        grant(fired, 3);
+        String grantId = grant(fired, 3);
         var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
                 objectMapper);
-        // The first attempt consumed the grant and stopped before the gateway (crash in between).
-        assertThat(issuer.consumeForScheduledFire(fireBinding, "slot:2026-10-22T03:00:00Z", LocalDateTime.now()))
-                .isPresent();
+        // Each change happens after the fire read the config and before consumption.
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE factory_scheduler_configs SET tool_or_method = 'user_enable' WHERE id = :id")
+                .setParameter("id", configId).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T01:00:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE factory_scheduler_configs SET tool_or_method = :tool, run_as_user_id = :other WHERE id = :id")
+                .setParameter("tool", TOOL).setParameter("other", bystander).setParameter("id", configId).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T01:01:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "DELETE FROM factory_scheduler_configs WHERE id = :id").setParameter("id", configId).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T01:02:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        configId = null;
 
-        var report = new ExecutionReconciliationReporter(entityManager, 0).report(LocalDateTime.now().plusMinutes(1));
-        assertThat(report.status()).isEqualTo("FOUND");
-        assertThat(report.unresolvedGrantRuns()).isEqualTo(1L);
-        // Replaying the same slot never executes; the run stays unresolved for a person to look up.
-        assertThat(runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c3",
-                fireBinding, "slot:2026-10-22T03:00:00Z").status()).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(count("autonomous_tool_grants WHERE id = '" + grantId + "' AND used_runs = 0")).isEqualTo(1);
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
         assertThat(count("tool_execution_audit_events")).isZero();
         assertThat(active(target)).isTrue();
-        assertThat(count("autonomous_tool_grant_runs WHERE outcome IS NULL")).isEqualTo(1);
+    }
+
+    @Test void aFireThatReadTheOldConfigCannotSpendAGrantIssuedForTheEditedOne() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        String oldGrant = grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        // After this fire read the config, it is edited to another target and a grant is issued for
+        // the edited config. The fire still carries the old parameters: it must not spend the new grant.
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE factory_scheduler_configs SET params = '{\"username\":\"iso-bystander\"}' WHERE id = :id")
+                .setParameter("id", configId).executeUpdate());
+        assertThat(grants.revoke("F-ISO", oldGrant, operator, LocalDateTime.now())).isPresent();
+        String newGrant = grant(schedules.findById(configId).orElseThrow(), 3);
+
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T04:00:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+
+        assertThat(count("autonomous_tool_grants WHERE id = '" + newGrant + "' AND used_runs = 0")).isEqualTo(1);
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(active(target)).isTrue();
+        assertThat(active(bystander)).isTrue();
+    }
+
+    @Test void anExpiredOrDeletedGrantIsNotConsumed() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        String grantId = grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE autonomous_tool_grants SET expires_at = :past WHERE id = :id")
+                .setParameter("past", LocalDateTime.now().minusMinutes(1)).setParameter("id", grantId).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T02:00:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 0")).isEqualTo(1);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "DELETE FROM autonomous_tool_grants WHERE id = :id").setParameter("id", grantId).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T02:01:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(active(target)).isTrue();
+    }
+
+    @Test void aRevokeHoldingTheGrantRowMakesConsumptionWaitAndThenRefuse() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        String grantId = grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        String url = System.getenv("CRETAS_WORKFLOW_PG_URL");
+        String user = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci");
+        String password = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", "");
+        try (java.sql.Connection revoke = java.sql.DriverManager.getConnection(url, user, password)) {
+            revoke.setAutoCommit(false);
+            try (java.sql.Statement statement = revoke.createStatement()) {
+                statement.executeUpdate("UPDATE autonomous_tool_grants SET revoked_at = now(), revoked_by = " + operator
+                        + " WHERE id = '" + grantId + "'");
+            }
+            // Lock order config then grant: consumption takes the config row and waits on the grant row.
+            java.util.concurrent.CompletableFuture<String> run = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> runFired(fired, fireBinding, "slot:2026-10-24T03:00:00Z"));
+            try {
+                run.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                throw new AssertionError("consumption should wait on the grant row the revoke holds");
+            } catch (java.util.concurrent.TimeoutException expected) {
+                // waiting on the revoke's row lock
+            }
+            revoke.commit();
+            assertThat(run.get(30, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        }
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 0")).isEqualTo(1);
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(active(target)).isTrue();
+    }
+
+    @Test void aCronChangedElsewhereOnlyReschedulesAndNeverRunsTheOldBinding() throws Exception {
+        // Two configs share the next fire second. The control's write proves the fire window passed;
+        // the changed config must only reschedule on this instance, never run under its old schedule.
+        FactorySchedulerConfig changed = scheduleSoon();
+        Long changedId = configId;
+        grant(changed, 3);
+        FactorySchedulerConfig control = schedules.saveAndFlush(FactorySchedulerConfig.builder().factoryId("F-ISO")
+                .taskCode("control-" + System.nanoTime()).cronExpression(changed.getCronExpression()).enabled(true)
+                .toolOrMethod(TOOL).params(Map.of("username", "iso-bystander")).runAsUserId(operator).build());
+        grant(control, 3);
+        instanceA.scheduleTask(changed);
+        instanceA.scheduleTask(control);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE factory_scheduler_configs SET cron_expression = '0 0 3 * * ?' WHERE id = :id")
+                .setParameter("id", changedId).executeUpdate());
+        try {
+            await(() -> !active(bystander), 75);
+            Thread.sleep(3000);
+
+            assertThat(active(target)).isTrue();
+            assertThat(count("autonomous_tool_grant_runs")).isEqualTo(1);
+            assertThat(count("autonomous_tool_grant_runs r JOIN autonomous_tool_grants g ON g.id = r.grant_id"
+                    + " WHERE g.source_ref = '" + changedId + "'")).isZero();
+            assertThat(count("factory_scheduler_configs WHERE id = " + changedId + " AND last_execution_status IS NULL"))
+                    .isEqualTo(1);
+        } finally {
+            instanceA.cancelTask(control.getFactoryId(), control.getTaskCode());
+        }
+    }
+
+    private String runFired(FactorySchedulerConfig fired, AutonomousGrantService.Binding fireBinding, String runKey) {
+        return runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c2-" + runKey,
+                fireBinding, runKey).status();
     }
 
     @Test void revokedGrantAtFireTimeIsRefusedWithZeroBusinessWrites() throws Exception {

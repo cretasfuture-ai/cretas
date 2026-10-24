@@ -134,8 +134,8 @@ public class AutonomousToolRunner {
                 // report what the first attempt recorded.
                 return replayed(factoryId, runAsUserId, toolName, consumed.get(), runKey);
             }
+            // The config was marked RUNNING in the same transaction that consumed the grant.
             consumption = consumed.get();
-            issuer.markRunning(Long.parseLong(grantBinding.sourceRef()), LocalDateTime.now());
             IntentPreviewToken token = previewTokens.createBoundToken(new PreviewTokenService.BoundTokenRequest(
                     // Per-run intent code: creating a token cancels the user's pending tokens with the same
                     // code, so a shared code would let two runs of the same user void each other's proof.

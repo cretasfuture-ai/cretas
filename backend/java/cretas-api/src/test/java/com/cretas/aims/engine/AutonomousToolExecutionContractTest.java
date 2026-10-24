@@ -265,8 +265,8 @@ class AutonomousToolExecutionContractTest {
         // Each run gets its own intent code: issuing a token cancels pending tokens with the same code.
         assertThat(tokens.getAllValues()).extracting(com.cretas.aims.service.PreviewTokenService.BoundTokenRequest::intentCode)
                 .doesNotHaveDuplicates().allMatch(code -> code.startsWith("AUTONOMOUS_TOOL_RUN:"));
-        // The executing instance marks the config RUNNING, then records each run's outcome once.
-        verify(issuer, times(2)).markRunning(eq(78L), any());
+        // RUNNING is written inside the consuming transaction (issuer); the runner records each outcome once.
+        verify(issuer, times(2)).consumeForScheduledFire(any(), any(), any());
         verify(issuer).recordOutcome(eq("g1"), eq("slot:1"), eq("SUCCEEDED"), any(), any());
         verify(issuer).recordOutcome(eq("g1"), eq("slot:2"), eq("SUCCEEDED"), any(), any());
     }
@@ -310,7 +310,6 @@ class AutonomousToolExecutionContractTest {
         assertThat(done.status()).isEqualTo("SUCCESS");
         assertThat(List.of(inFlight, done)).allMatch(AutonomousToolRunner.Outcome::replay);
         verifyNoInteractions(gateway, previewTokens);
-        verify(issuer, never()).markRunning(anyLong(), any());
         verify(issuer, never()).recordOutcome(any(), any(), any(), any(), any());
     }
 

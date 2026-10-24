@@ -91,12 +91,14 @@ public class AutonomousGrantIssuer {
     }
 
     /**
-     * Consumes a grant for one scheduled fire against the config as it is now, atomically: the config
-     * row is read FOR SHARE, so an edit, disable or delete (an UPDATE/DELETE on that row) either
-     * committed before (and is seen here) or waits until this consumption committed. The fire's
-     * binding, computed from the config the scheduler read at fire time, must equal the binding of
-     * the locked row; otherwise (config gone, disabled, edited, run-as changed) nothing is consumed.
-     * The tool runs outside this transaction.
+     * Consumes a grant for one scheduled fire against the config as it is now, in one physical
+     * transaction: the config row is locked FOR UPDATE first (lock order config then grant), the fire's
+     * binding must equal the binding of the locked row, the grant's budget is decremented and its run
+     * recorded ({@link AutonomousGrantService#consume} joins this transaction), and the config is
+     * marked RUNNING. Either all of it commits or none of it does, so a crash can never leave a
+     * consumed run beside a config still showing the previous slot. An edit, disable or delete of the
+     * config either committed before (and is seen here) or waits for this commit. A replay consumes
+     * nothing and leaves the config as the executing instance left it. The tool runs outside.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<AutonomousGrantService.Consumption> consumeForScheduledFire(
@@ -108,7 +110,7 @@ public class AutonomousGrantIssuer {
             return Optional.empty();
         }
         FactorySchedulerConfig config = entityManager.find(FactorySchedulerConfig.class, configId,
-                LockModeType.PESSIMISTIC_READ);
+                LockModeType.PESSIMISTIC_WRITE);
         if (config == null || !Boolean.TRUE.equals(config.getEnabled())
                 || !Objects.equals(fireBinding.factoryId(), config.getFactoryId())) {
             return Optional.empty();
@@ -118,7 +120,13 @@ public class AutonomousGrantIssuer {
         if (!current.equals(fireBinding)) {
             return Optional.empty();
         }
-        return grants.consume(current, runKey, now);
+        Optional<AutonomousGrantService.Consumption> consumed = grants.consume(current, runKey, now);
+        if (consumed.isPresent() && !consumed.get().replay()) {
+            entityManager.createQuery("update FactorySchedulerConfig c set c.lastExecutionStatus = 'RUNNING',"
+                            + " c.lastExecutedAt = :now, c.lastExecutionError = null where c.id = :id")
+                    .setParameter("now", now).setParameter("id", configId).executeUpdate();
+        }
+        return consumed;
     }
 
     /**
@@ -140,17 +148,6 @@ public class AutonomousGrantIssuer {
         return entityManager.createQuery("select r.outcome from AutonomousToolGrantRun r"
                         + " where r.grantId = :grantId and r.runKey = :runKey and r.outcome is not null", String.class)
                 .setParameter("grantId", grantId).setParameter("runKey", runKey).getResultStream().findFirst();
-    }
-
-    /**
-     * Marks a config RUNNING once this instance consumed a grant for it, so a crash before the outcome
-     * leaves RUNNING (not the previous slot's SUCCESS) and the unresolved run for reconciliation.
-     */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markRunning(long configId, LocalDateTime now) {
-        entityManager.createQuery("update FactorySchedulerConfig c set c.lastExecutionStatus = 'RUNNING',"
-                        + " c.lastExecutedAt = :now, c.lastExecutionError = null where c.id = :id")
-                .setParameter("now", now).setParameter("id", configId).executeUpdate();
     }
 
     /**

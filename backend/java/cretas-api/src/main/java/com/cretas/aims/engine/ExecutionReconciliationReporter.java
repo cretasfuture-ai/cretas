@@ -83,16 +83,21 @@ public class ExecutionReconciliationReporter {
                             + " where e.state = :state and e.startedAt < :cutoff order by e.id", String.class)
                     .setParameter("state", ToolExecutionAuditEvent.State.STARTED)
                     .setParameter("cutoff", cutoff).getResultList();
-            // A delegated scheduled run that consumed its grant but never recorded an outcome.
+            // A delegated scheduled run that consumed its grant but never recorded an outcome. These rows
+            // are never cleared automatically, so they are counted in the database and only a capped
+            // sample is loaded.
+            long grantRunCount = entityManager.createQuery(
+                    "select count(r) from AutonomousToolGrantRun r where r.outcome is null and r.consumedAt < :cutoff",
+                    Long.class).setParameter("cutoff", cutoff).getSingleResult();
             List<String> grantRuns = entityManager.createQuery(
                     "select concat(r.grantId, ':grant-run:', r.runKey) from AutonomousToolGrantRun r"
                             + " where r.outcome is null and r.consumedAt < :cutoff order by r.consumedAt", String.class)
-                    .setParameter("cutoff", cutoff).getResultList();
-            long total = tokens.size() + inDoubt.size() + inProgress.size() + audits.size() + grantRuns.size();
+                    .setParameter("cutoff", cutoff).setMaxResults(SAMPLE_LIMIT).getResultList();
+            long total = tokens.size() + inDoubt.size() + inProgress.size() + audits.size() + grantRunCount;
             List<String> samples = java.util.stream.Stream.of(tokens, inDoubt, inProgress, audits, grantRuns)
                     .flatMap(List::stream).limit(SAMPLE_LIMIT).toList();
             return new Snapshot(total == 0 ? "CLEAN" : "FOUND", cutoff, (long) tokens.size(), (long) inDoubt.size(),
-                    (long) inProgress.size(), (long) audits.size(), (long) grantRuns.size(), samples, null);
+                    (long) inProgress.size(), (long) audits.size(), grantRunCount, samples, null);
         } catch (RuntimeException unmeasured) {
             return new Snapshot("UNMEASURED", cutoff, null, null, null, null, null, List.of(),
                     unmeasured.getClass().getSimpleName() + ": " + unmeasured.getMessage());
