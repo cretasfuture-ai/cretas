@@ -1480,7 +1480,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 if (availableAfter.signum() < 0) {
                     BigDecimal loss = nz(wip.getAdjustmentQuantity()).negate();
                     throw new BusinessException(409, "这笔产出已发生半成品盘亏 "
-                            + loss.stripTrailingZeros().toPlainString() + firstNonBlank(wip.getUnit(), "")
+                            + loss.stripTrailingZeros().toPlainString()
+                            + com.cretas.aims.service.unit.UnitDisplayNames.display(firstNonBlank(wip.getUnit(), ""))
                             + " (盘点损耗), 驳回会让余额变成负数")
                             .withCode("WIP_REVERSE_STOCKTAKE_LOSS")
                             .withHint("盘亏已过账, 不随驳回自动冲销; 请先按实际库存重新盘点该半成品, 再回来驳回本条")
