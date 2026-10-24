@@ -57,7 +57,7 @@ permissions:
 
 jobs:
   reap:
-    runs-on: [self-hosted, cretas]
+    runs-on: [self-hosted, cretas-quick]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7

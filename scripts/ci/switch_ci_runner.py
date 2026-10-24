@@ -67,6 +67,11 @@ WORKFLOWS = [
     # Verified on the isolated Linux runner; neither uses service containers.
     "ops-script-tests.yml",
     "soft-delete-scan-surface.yml",
+    # 2026-10-24: 小检查专用槽 (cretas-quick) 接入时纳入。六关逐条过: 4 空格缩进; 两个都不用
+    # setup-python (直接找 python3, 只用标准库); 无 Linux 专有命令依赖; 只用 git/python3/bash;
+    # 无平台 wheel; 无 services: / 容器。托管侧就是 ubuntu-latest。
+    "source-hygiene.yml",
+    "artifact-reaper.yml",
 ]
 
 HOSTED = "    runs-on: ubuntu-latest"
@@ -92,6 +97,22 @@ PAIRS = ((SELF, HOSTED), (SELF_JAVA, HOSTED_JAVA), (SELF_JAVA_ANY, HOSTED_JAVA_A
 # without changing any existing Java-heavy return markers or other workflows.
 WEB_WORKFLOWS = frozenset({"web-admin-gate.yml", "web-dist.yml"})
 SELF_WEB = "    runs-on: [self-hosted, Linux, cretas, X64, windows-light]"
+# 2026-10-24: 不到 1 分钟的小检查原来和 vitest/pytest 挤在本机那一个轻任务槽里排队 (实测
+# 中位数 12–17 分钟)。现在走专用的 `cretas-quick` 标签: 本机 1 核 / 1G 的小检查槽只带这一个
+# 自定义标签 (不带 cretas, 重任务落不过去); aurora 与 windows-light 也加了 cretas-quick,
+# 小检查槽忙或离线时照样有人接。槽的任务白名单 (tools/ci/windows-quick/job-started.sh)
+# 必须等于 QUICK_JOBS —— scripts/tests/test-quick-runner-routing.sh 钉着两份一致。
+QUICK_WORKFLOWS = frozenset({
+    "secret-regression.yml",
+    "soft-delete-scan-surface.yml",
+    "source-hygiene.yml",
+    "artifact-reaper.yml",
+})
+QUICK_JOBS = ("tracked-secret-scan", "scan-surface-in-sync", "no-literal-nul-bytes", "reap")
+SELF_QUICK = "    runs-on: [self-hosted, cretas-quick]"
+# 有专用自托管路由的工作流: 自托管时用它, 托管时是 ubuntu-latest; 从通用 SELF 迁移要显式 --adopt。
+DEDICATED = {name: SELF_WEB for name in WEB_WORKFLOWS}
+DEDICATED.update({name: SELF_QUICK for name in QUICK_WORKFLOWS})
 
 
 def read(p):
@@ -120,7 +141,8 @@ def current(text):
     「共享结构只改一处」那种坏法**藏起来**。而多 job 的文件正是最容易半转换的
     (ci.yml 有 4 个 job)。⇒ 两种都数, 同时存在就是显式的坏状态 `mixed`。
     """
-    n_self = sum(_count_lines(text, s) for s, _ in PAIRS) + _count_lines(text, SELF_WEB)
+    n_self = (sum(_count_lines(text, s) for s, _ in PAIRS)
+              + _count_lines(text, SELF_WEB) + _count_lines(text, SELF_QUICK))
     n_hosted = sum(_count_lines(text, h) for _, h in PAIRS)
     if n_self and n_hosted:
         return "mixed"
@@ -170,11 +192,11 @@ def main() -> int:
             return 1
         contents[name] = read(p)
         states[name] = current(contents[name])
-        allowed = {HOSTED, SELF_WEB} if name in WEB_WORKFLOWS else {
+        allowed = {HOSTED, DEDICATED[name]} if name in DEDICATED else {
             literal for pair in PAIRS for literal in pair
         }
-        # Only explicit adoption may migrate the previously ambiguous Web label.
-        if adopt and not check_only and name in WEB_WORKFLOWS:
+        # Only explicit adoption may migrate a generic route to its dedicated label.
+        if adopt and not check_only and name in DEDICATED:
             allowed.add(SELF)
         routes = [line.rstrip("\r") for line in contents[name].split("\n")
                   if line.startswith("    runs-on:")]
@@ -185,7 +207,7 @@ def main() -> int:
     # Validate the whole batch before writing any file, including --adopt.
     if issues:
         print("ci-runner: FAIL — invalid routing literal or mixed/unknown state: %s" % ", ".join(issues))
-        print("  Legacy generic Web routes require explicit self-hosted --adopt migration.")
+        print("  Legacy generic Web / quick-check routes require explicit self-hosted --adopt migration.")
         return 1
 
     # 各处必须一致 —— 改共享结构最容易的坏法就是只改一处
@@ -217,8 +239,8 @@ def main() -> int:
         _remind_if_quota_reset(now)
         return 0 if now != "unknown" else 1
 
-    needs_web_migration = any(_count_lines(contents[name], SELF) for name in WEB_WORKFLOWS)
-    if len(distinct) == 1 and distinct.copy().pop() == target and not needs_web_migration:
+    needs_migration = any(_count_lines(contents[name], SELF) for name in DEDICATED)
+    if len(distinct) == 1 and distinct.copy().pop() == target and not needs_migration:
         print("ci-runner: 已经是 %s, 无需改动" % target)
         return 0
 
@@ -227,11 +249,11 @@ def main() -> int:
     for name in WORKFLOWS:
         p = REPO / ".github" / "workflows" / name
         s = contents[name]
-        route_pairs = ((SELF_WEB, HOSTED),) if name in WEB_WORKFLOWS else PAIRS
+        route_pairs = ((DEDICATED[name], HOSTED),) if name in DEDICATED else PAIRS
         pairs = [(h, own) for own, h in route_pairs] if target == "self-hosted" else list(route_pairs)
-        if adopt and name in WEB_WORKFLOWS:
-            pairs.append((SELF, SELF_WEB if target == "self-hosted" else HOSTED))
-        if states[name] == target and not (name in WEB_WORKFLOWS and _count_lines(s, SELF)):
+        if adopt and name in DEDICATED:
+            pairs.append((SELF, DEDICATED[name] if target == "self-hosted" else HOSTED))
+        if states[name] == target and not (name in DEDICATED and _count_lines(s, SELF)):
             # --adopt 下会出现「一部分已经是目标态」, 这不是错误, 但要**说出来**,
             # ⛔ 不能让「没改」和「改了」在输出里长得一样。
             print("  %-26s 已经是 %s, 跳过" % (name, target))
@@ -259,7 +281,7 @@ def main() -> int:
     print("ci-runner: 改动 %d 个文件, 跳过 %d 个。" % (changed, len(WORKFLOWS) - changed))
     print("ci-runner: 已切到 %s。⚠️ 要 commit + push 才生效。" % target)
     if target == "self-hosted":
-        print("  Web: Windows light literal; existing Java and other workflow mappings preserved.")
+        print("  Web: Windows light literal; quick checks: cretas-quick; existing Java and other mappings preserved.")
         print("  在线检查: gh api orgs/cretasfuture-ai/actions/runners --jq '.runners[]|.name+\" \"+.status'")
     return 0
 
