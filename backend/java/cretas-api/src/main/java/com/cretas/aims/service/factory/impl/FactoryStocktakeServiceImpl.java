@@ -207,7 +207,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 && stocktake.getStatus() != FactoryStocktake.Status.COUNTING) {
             throw new BusinessException(409,
                     "当前盘点任务状态 [" + stocktake.getStatus() + "] 不支持取消，只能取消未提交的盘点")
-                    .withCode("STOCKTAKE_CANCEL_STATE_INVALID");
+                    .withCode("STOCKTAKE_CANCEL_STATE_INVALID")
+                    .withHint("请刷新盘点详情确认当前状态；此入口只能取消未提交的盘点，请勿重复取消或修改已生效记录。");
         }
         if (stocktake.getWorkflowInstanceId() != null
                 || stocktake.getSubmittedBy() != null
@@ -217,7 +218,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 || stocktake.getAppliedBy() != null
                 || stocktake.getAppliedAt() != null) {
             throw new BusinessException(409, "该盘点已有提交或审批证据，不能取消")
-                    .withCode("STOCKTAKE_CANCEL_SUBMITTED");
+                    .withCode("STOCKTAKE_CANCEL_SUBMITTED")
+                    .withHint("请在盘点详情核对提交和审批记录，并联系审批负责人按原流程处理。");
         }
         if (actorId == null || !Objects.equals(stocktake.getInitiatedBy(), actorId)) {
             throw new BusinessException(403, "只有盘点发起人可以取消该盘点")
