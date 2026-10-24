@@ -46,6 +46,13 @@ public interface FactoryStocktakeService {
                           FactoryStocktake.ImportMode importMode);
 
     /**
+     * Internal OPENING import entry: snapshot exactly the already-resolved batch identities.
+     * This is intentionally not exposed through the public REST request DTO.
+     */
+    StocktakeDTO initiateOpeningScoped(String factoryId, CreateStocktakeRequest req, Long userId,
+            List<String> materialBatchIds);
+
+    /**
      * 查询"发起盘点"的月底约束展示态 (fool-proof-design Rule 1: 边界必须在用户填表前展示,
      * 不能等填完表单点提交才报错). 只读, 不做任何校验/side-effect —— {@link #initiate}
      * 仍是唯一真正 enforce 约束的地方, 本方法只是把同一个 threshold 换算成前端可直接渲染的

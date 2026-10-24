@@ -160,13 +160,30 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId) {
-        return initiate(factoryId, req, userId, null);
+        return initiateInternal(factoryId, req, userId, null, null);
     }
 
     @Override
     @Transactional
     public StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId,
             FactoryStocktake.ImportMode importMode) {
+        if (importMode == FactoryStocktake.ImportMode.OPENING) {
+            throw new BusinessException(400, "OPENING 期初导入必须使用已解析批次范围入口")
+                    .withCode("STOCKTAKE_OPENING_BATCH_SCOPE_REQUIRED");
+        }
+        return initiateInternal(factoryId, req, userId, importMode, null);
+    }
+
+    @Override
+    @Transactional
+    public StocktakeDTO initiateOpeningScoped(String factoryId, CreateStocktakeRequest req, Long userId,
+            List<String> materialBatchIds) {
+        return initiateInternal(factoryId, req, userId, FactoryStocktake.ImportMode.OPENING,
+                materialBatchIds);
+    }
+
+    private StocktakeDTO initiateInternal(String factoryId, CreateStocktakeRequest req, Long userId,
+            FactoryStocktake.ImportMode importMode, List<String> scopedMaterialBatchIds) {
         // 月底约束 — OPENING 期初建账 除外 (客户任意日建账, Decision 4)。
         // 全局 threshold 不降 (NORMAL/逐项盘点仍受月底约束), 只对 OPENING / 临时盘点跳过。
         // 🔒 fool-proof Rule 5 (2026-07): 月底约束此前无任何例外出口 (疑似失窃/货损等
@@ -257,6 +274,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         // 快照该仓库所有 MaterialBatch 的当前库存
         List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
                 factoryId, req.getWarehouseId());
+        if (opening) {
+            batches = resolveOpeningBatchScope(factoryId, req.getWarehouseId(), scopedMaterialBatchIds, batches);
+        }
         // 🔴 Fix (🔒🔒 生产仓延迟扣减盲区, 2026-07-04): 逐批预取未小结报工消耗量 (见 loadUnsettledByBatch)。
         Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId,
                 batches.stream().map(MaterialBatch::getId).collect(Collectors.toList()));
@@ -1260,6 +1280,12 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
         List<MaterialBatch> batches = materialBatchRepo.findByFactoryIdAndWarehouseId(
                 factoryId, source.getWarehouseId());
+        if (source.getImportMode() == FactoryStocktake.ImportMode.OPENING) {
+            List<String> selectedBatchIds = source.getItems() == null ? List.of() : source.getItems().stream()
+                    .map(FactoryStocktakeItem::getMaterialBatchId)
+                    .toList();
+            batches = resolveOpeningBatchScope(factoryId, source.getWarehouseId(), selectedBatchIds, batches);
+        }
         Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId,
                 batches.stream().map(MaterialBatch::getId).collect(Collectors.toList()));
         List<FactoryStocktakeItem> items = new ArrayList<>();
@@ -1835,6 +1861,38 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     // -------------------------------------------------------
     // private helpers
     // -------------------------------------------------------
+
+    private List<MaterialBatch> resolveOpeningBatchScope(String factoryId, String warehouseId,
+            List<String> requestedBatchIds, List<MaterialBatch> warehouseBatches) {
+        if (requestedBatchIds == null || requestedBatchIds.isEmpty()) {
+            throw new BusinessException(400, "OPENING 盘点必须明确选择至少一个库存批次")
+                    .withCode("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+        }
+        List<String> normalizedIds = new ArrayList<>(requestedBatchIds.size());
+        for (String requestedId : requestedBatchIds) {
+            if (requestedId == null || requestedId.isBlank() || !requestedId.equals(requestedId.trim())) {
+                throw new BusinessException(400, "OPENING 盘点批次范围必须是非空且唯一的真实批次 ID")
+                        .withCode("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+            }
+            normalizedIds.add(requestedId);
+        }
+        if (normalizedIds.stream().distinct().count() != normalizedIds.size()) {
+            throw new BusinessException(400, "OPENING 盘点批次范围必须是非空且唯一的真实批次 ID")
+                    .withCode("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+        }
+
+        Map<String, MaterialBatch> batchesById = warehouseBatches.stream()
+                .filter(batch -> batch != null && !batch.isDeleted())
+                .filter(batch -> factoryId.equals(batch.getFactoryId()))
+                .filter(batch -> warehouseId.equals(batch.getWarehouseId()))
+                .collect(Collectors.toMap(MaterialBatch::getId, batch -> batch, (left, right) -> left));
+        if (normalizedIds.stream().anyMatch(id -> !batchesById.containsKey(id))) {
+            throw new BusinessException(409, "OPENING 盘点批次必须全部属于当前工厂和仓库且仍有效")
+                    .withCode("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID")
+                    .withHint("请刷新当前仓库库存后重新选择期初导入行");
+        }
+        return normalizedIds.stream().map(batchesById::get).toList();
+    }
 
     /**
      * 🔴🔒🔒 生产仓延迟扣减盲区 (2026-07-04): 逐批查未小结报工消耗量 (报工写未结

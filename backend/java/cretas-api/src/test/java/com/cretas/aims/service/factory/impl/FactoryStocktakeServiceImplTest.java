@@ -3,11 +3,13 @@ package com.cretas.aims.service.factory.impl;
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.factory.StocktakeRecountRequest;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.VoucherType;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -1172,10 +1174,14 @@ class FactoryStocktakeServiceImplTest {
 
         // 核心断言：OPENING 无论今天几号都跳过月底约束 → 创建成功
         when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
-        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any())).thenReturn(Collections.emptyList());
+        MaterialBatch openingBatch = materialBatch("OPENING-TEST", "10");
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any())).thenReturn(List.of(openingBatch));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        StocktakeDTO opened = service.initiate(FACTORY_ID, req, USER_ID, FactoryStocktake.ImportMode.OPENING);
+        StocktakeDTO opened = service.initiateOpeningScoped(
+                FACTORY_ID, req, USER_ID, List.of("OPENING-TEST"));
         assertThat(opened).isNotNull();
         assertThat(opened.getStatus()).isEqualTo(FactoryStocktake.Status.INITIATED.name());
 
@@ -1186,6 +1192,125 @@ class FactoryStocktakeServiceImplTest {
                     .isInstanceOf(BusinessException.class)
                     .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
         }
+    }
+
+    @Test
+    @DisplayName("OPENING 内部入口只快照导入已解析的批次 ID")
+    void initiateOpeningScoped_snapshotsOnlySelectedBatches() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 28);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-07");
+
+        MaterialBatch first = materialBatch("OPEN-A", "100");
+        MaterialBatch second = materialBatch("OPEN-B", "50");
+        MaterialBatch unrelated = materialBatch("OPEN-UNRELATED", "25");
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(first, second, unrelated));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeDTO result = service.initiateOpeningScoped(
+                FACTORY_ID, req, USER_ID, List.of("OPEN-A", "OPEN-B"));
+
+        assertThat(result.getItems()).extracting(StocktakeDTO.StocktakeItemDTO::getMaterialBatchId)
+                .containsExactlyInAnyOrder("OPEN-A", "OPEN-B");
+        ArgumentCaptor<FactoryStocktake> saved = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(saved.capture());
+        assertThat(saved.getValue().getItems()).extracting(FactoryStocktakeItem::getMaterialBatchId)
+                .containsExactlyInAnyOrder("OPEN-A", "OPEN-B");
+    }
+
+    @Test
+    @DisplayName("OPENING 批次范围缺失、重复、跨工厂/仓库或软删除时拒绝")
+    void initiateOpeningScoped_rejectsInvalidBatchScope() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(List.of());
+        MaterialBatch valid = materialBatch("OPEN-A", "100");
+        MaterialBatch foreign = materialBatch("OPEN-FOREIGN", "10");
+        foreign.setFactoryId("F999");
+        MaterialBatch otherWarehouse = materialBatch("OPEN-OTHER-WH", "10");
+        otherWarehouse.setWarehouseId("WH-999");
+        MaterialBatch deleted = materialBatch("OPEN-DELETED", "10");
+        deleted.setDeletedAt(LocalDateTime.now());
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(valid, foreign, otherWarehouse, deleted));
+
+        assertThatThrownBy(() -> service.initiateOpeningScoped(
+                FACTORY_ID, req, USER_ID, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+
+        List<List<String>> invalidScopes = List.of(
+                List.of(),
+                List.of(""),
+                List.of("OPEN-A", "OPEN-A"),
+                List.of("OPEN-MISSING"),
+                List.of("OPEN-FOREIGN"),
+                List.of("OPEN-OTHER-WH"),
+                List.of("OPEN-DELETED"));
+        for (List<String> invalidScope : invalidScopes) {
+            assertThatThrownBy(() -> service.initiateOpeningScoped(
+                    FACTORY_ID, req, USER_ID, invalidScope))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                    .isEqualTo("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+        }
+        verify(stocktakeRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("OPENING 漂移重盘保留原始选中批次，不扩展到全仓")
+    void recountOpeningAfterDrift_preservesOriginalBatchScope() {
+        FactoryStocktake source = buildStocktake(FactoryStocktake.Status.APPROVED);
+        source.setId("OPEN-SOURCE");
+        source.setVersion(7L);
+        source.setImportMode(FactoryStocktake.ImportMode.OPENING);
+        FactoryStocktakeItem selected = buildItem(source, new BigDecimal("100"));
+        selected.setId("ITEM-OPEN-A");
+        selected.setMaterialBatchId("OPEN-A");
+        selected.setActualQty(new BigDecimal("110"));
+        selected.setDifferenceQty(new BigDecimal("10"));
+        selected.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+        FactoryStocktakeItem secondSelected = buildItem(source, new BigDecimal("50"));
+        secondSelected.setId("ITEM-OPEN-B");
+        secondSelected.setMaterialBatchId("OPEN-B");
+        source.setItems(new ArrayList<>(List.of(selected, secondSelected)));
+
+        MaterialBatch liveSelected = materialBatch("OPEN-A", "95");
+        MaterialBatch liveSecond = materialBatch("OPEN-B", "50");
+        MaterialBatch unrelated = materialBatch("OPEN-UNRELATED", "25");
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate("OPEN-SOURCE", FACTORY_ID))
+                .thenReturn(Optional.of(source));
+        when(materialBatchRepo.findByIdAndFactoryIdForUpdate("OPEN-A", FACTORY_ID))
+                .thenReturn(Optional.of(liveSelected));
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(liveSelected, liveSecond, unrelated));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeRecountRequest request = new StocktakeRecountRequest();
+        request.setExpectedVersion(7L);
+        request.setReason("OPENING 期初批次发生漂移");
+        StocktakeDTO result = service.recountAfterDrift(
+                "OPEN-SOURCE", FACTORY_ID, request, USER_ID, "warehouse_manager");
+
+        assertThat(result.getId()).isNotEqualTo("OPEN-SOURCE");
+        ArgumentCaptor<FactoryStocktake> saved = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo, times(2)).save(saved.capture());
+        FactoryStocktake recount = saved.getAllValues().stream()
+                .filter(stocktake -> !"OPEN-SOURCE".equals(stocktake.getId()))
+                .findFirst().orElseThrow();
+        assertThat(recount.getItems()).extracting(FactoryStocktakeItem::getMaterialBatchId)
+                .containsExactlyInAnyOrder("OPEN-A", "OPEN-B");
     }
 
     // -------------------------------------------------------
@@ -1434,6 +1559,20 @@ class FactoryStocktakeServiceImplTest {
         batch.setFactoryId(FACTORY_ID);
         batch.setWarehouseId(WAREHOUSE_ID);
         batch.setMaterialTypeId(item.getRawMaterialTypeId());
+        return batch;
+    }
+
+    private MaterialBatch materialBatch(String id, String receiptQuantity) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setWarehouseId(WAREHOUSE_ID);
+        batch.setMaterialTypeId("TYPE-" + id);
+        batch.setReceiptQuantity(new BigDecimal(receiptQuantity));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit("kg");
+        batch.setStatus(MaterialBatchStatus.AVAILABLE);
         return batch;
     }
 
