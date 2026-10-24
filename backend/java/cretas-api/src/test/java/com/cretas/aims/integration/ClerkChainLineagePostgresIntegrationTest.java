@@ -117,15 +117,15 @@ class ClerkChainLineagePostgresIntegrationTest {
                 Integer.class, FACTORY);
         Integer allEdges = jdbc.queryForObject(
                 "select count(*) from batch_lineage_edges where factory_id = ?", Integer.class, FACTORY);
-        System.out.println("[lineage-pg] edges=" + allEdges + " PRODUCTION_TO_WIP=" + wipEdges
-                + " finishedBatch=" + finished);
-        assertThat(wipEdges).isEqualTo(2);
-
         List<Map<String, Object>> ancestors = jdbc.queryForList(
                 "select ancestor_type, ancestor_id, depth from batch_lineage_closure "
                         + "where factory_id = ? and descendant_type = 'PRODUCTION_BATCH' and descendant_id = ? "
                         + "and depth > 0 order by depth", FACTORY, String.valueOf(finished));
+        System.out.println("[lineage-pg] edges=" + allEdges + " PRODUCTION_TO_WIP=" + wipEdges
+                + " finishedBatch=" + finished);
         System.out.println("[lineage-pg] closure ancestors of finished batch = " + ancestors);
+        assertThat(wipEdges).isEqualTo(2);
+
         assertThat(ancestors)
                 .as("终端批的闭包祖先必须含首道原料 (prod 实测只到 depth 1)")
                 .anySatisfy(row -> {
