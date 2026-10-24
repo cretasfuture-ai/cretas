@@ -1,5 +1,9 @@
 # Windows quick-check CI slot
 
+> **Retired 2026-10-25.** The repository is public and every workflow runs on GitHub-hosted
+> runners (`scripts/tests/test-public-repo-hosted-only.sh`). Do not register this slot again:
+> on a public repo a self-hosted route would run outside contributors' PR code on this PC.
+
 A second isolated Linux x64 runner in the **already-running Ubuntu-22.04**, next to
 `windows-light-cretas`, that only takes the four sub-minute checks:
 `tracked-secret-scan`, `no-literal-nul-bytes`, `scan-surface-in-sync`, `reap`.

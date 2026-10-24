@@ -1,4 +1,17 @@
-# CI runner 路由：Aurora 重任务 + Windows 受限轻任务
+# CI runner 路由：全部 GitHub 托管（仓库已 public）
+
+## 🔴 现行（2026-10-25，owner 决定）
+
+- 仓库 `cretasfuture-ai/cretas` 已转 **public**。全部工作流 `runs-on: ubuntu-latest`（公开仓库托管 runner 免费、不限分钟、4 vCPU / 16 GB，免费计划最多并发 20 个 job）。
+- ⛔ **任何 job 都不许再指向自建 runner**：公开仓库谁都能提 PR，自建路由会让陌生人的代码在我们的机器上执行。闸 `scripts/tests/test-public-repo-hosted-only.sh`（全部托管 + 原自建 job 带超时 + Java 显式堆）；`switch_ci_runner.py self-hosted` 直接拒绝。
+- 外部 PR：仓库设置 `fork-pr-contributor-approval = all_external_contributors`，外部贡献者的 PR 必须我们点批准才运行；外部贡献者没有写权限，合并只能由组织成员做。
+- 托管机上的差异已在工作流里处理：测试库用 PGDG 装 PostgreSQL 17（`run-with-test-postgres.sh`，托管镜像自带 16）；Java Gate `CRETAS_JAVA_FORK_XMX=6g`、nightly `CRETAS_JAVA_NIGHTLY_XMX=12g` 写在 job env；Fresh DB 预检在托管机上跳过 Aurora 身份检查、保留资源/Docker/JDK/Maven 检查。
+- Aurora、本机轻任务槽、小检查槽全部退役（`tools/ci/windows-*` 只作历史）。要恢复自建 runner，必须先把仓库改回 private。
+- 判据仍是实际 job 的 `runner_name`（托管机形如 `GitHub Actions N`），不看配置。
+
+以下为退役前的历史记录。
+
+## 历史：Aurora 重任务 + Windows 受限轻任务
 
 **当前运行说明：2026-10-24。** 下面的旧机型、加拿大主备与历史内存数字属于迁移前记录，不作为现行启停入口。
 **最后更新**：2026-10-24（新增本机小检查槽 `windows-quick-cretas`）。

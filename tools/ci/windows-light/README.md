@@ -1,5 +1,9 @@
 # Windows lightweight CI
 
+> **Retired 2026-10-25.** The repository is public and every workflow runs on GitHub-hosted
+> runners (`scripts/tests/test-public-repo-hosted-only.sh`). Do not register this slot again:
+> on a public repo a self-hosted route would run outside contributors' PR code on this PC.
+
 One isolated Linux x64 runner in the **already-running Ubuntu-22.04** distribution
 accepts the existing non-Java `self-hosted,cretas` queue. Aurora retains Java and
 PostgreSQL concurrency jobs. No workflow, test selector, baseline or in-flight
