@@ -180,10 +180,23 @@ export interface CostVarianceReportDTO {
   factoryId: string;
   startDate: string;
   endDate: string;
-  totalPlannedCost: number;
-  totalActualCost: number;
-  totalVariance: number;
-  totalVarianceRate: number;
+  /**
+   * 可比性。false = 没有独立于实际成本的标准成本, 标准 / 差异 / 差异率均为 null,
+   * 页面必须显示「无法比较：缺少独立标准成本」(见 utils/costVarianceComparability)。
+   * 旧后端不下发此字段 (undefined)。
+   */
+  comparable?: boolean;
+  /** 不可比较的原因 */
+  comparabilityReason?: string | null;
+  /** 后端字段名: 标准(BOM)成本; 不可比较时为 null */
+  totalBomCost?: number | null;
+  /** 旧字段名, 后端从未下发; 保留只为兼容 */
+  totalPlannedCost?: number | null;
+  totalActualCost: number | null;
+  /** 不可比较时为 null —— ⛔ 不要 `?? 0` 兜底 */
+  totalVariance: number | null;
+  /** 不可比较时为 null —— 原来恒约 5.26% (= 实际 × 0.95 当标准) */
+  totalVarianceRate: number | null;
   varianceByCategory: Array<{
     category: string;
     plannedCost: number;

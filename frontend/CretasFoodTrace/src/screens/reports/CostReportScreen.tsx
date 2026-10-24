@@ -23,6 +23,11 @@ import { ReportStackParamList } from '../../types/navigation';
 import { handleError , getErrorMsg} from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { formatDate } from '../../utils/formatters';
+import {
+  COST_VARIANCE_NOT_COMPARABLE_TEXT,
+  isCostVarianceComparable,
+  standardCostOf,
+} from '../../utils/costVarianceComparability';
 
 // 创建CostReport专用logger
 const costReportLogger = logger.createContextLogger('CostReport');
@@ -247,6 +252,11 @@ export default function CostReportScreen() {
     navigation.navigate('CostVarianceReport');
   };
 
+  // 成本差异可比性: 没有独立标准成本时后端给 comparable=false, 差异为 null
+  const varianceComparable = isCostVarianceComparable(costVarianceData);
+  const varianceStandardCost = costVarianceData ? standardCostOf(costVarianceData) : null;
+  const varianceTotal = costVarianceData?.totalVariance ?? null;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Appbar.Header elevated>
@@ -415,32 +425,45 @@ export default function CostReportScreen() {
                 </View>
               ) : costVarianceData ? (
                 <>
-                  {/* 计划vs实际对比 - 使用真实数据 */}
+                  {/* 标准vs实际对比 - 使用真实数据; 不可比较时 ⛔ 不显示差异 (原来 `?? 0` 兜底 + 后端 ×0.95) */}
                   <View style={styles.varianceCompareSection}>
                     <Text variant="bodyMedium" style={styles.varianceSectionTitle}>
-                      计划成本 vs 实际成本
+                      标准成本 vs 实际成本
                     </Text>
+                    {!varianceComparable && (
+                      <Text style={styles.emptyText} testID="cost-report-variance-not-comparable">
+                        {COST_VARIANCE_NOT_COMPARABLE_TEXT}
+                      </Text>
+                    )}
                     <View style={styles.varianceCompareRow}>
                       <View style={styles.varianceCompareItem}>
-                        <Text style={styles.varianceCompareLabel}>计划成本</Text>
+                        <Text style={styles.varianceCompareLabel}>标准成本</Text>
                         <Text style={[styles.varianceCompareValue, { color: '#2196F3' }]}>
-                          ¥{(costVarianceData.totalPlannedCost ?? 0).toFixed(2)}
+                          {varianceComparable && varianceStandardCost !== null
+                            ? `¥${varianceStandardCost.toFixed(2)}`
+                            : '无法比较'}
                         </Text>
                       </View>
                       <View style={styles.varianceCompareItem}>
                         <Text style={styles.varianceCompareLabel}>实际成本</Text>
                         <Text style={[styles.varianceCompareValue, { color: '#FF9800' }]}>
-                          ¥{(costVarianceData.totalActualCost ?? 0).toFixed(2)}
+                          {costVarianceData.totalActualCost !== null && costVarianceData.totalActualCost !== undefined
+                            ? `¥${costVarianceData.totalActualCost.toFixed(2)}`
+                            : '-'}
                         </Text>
                       </View>
                       <View style={styles.varianceCompareItem}>
                         <Text style={styles.varianceCompareLabel}>差异</Text>
-                        <Text style={[styles.varianceCompareValue, {
-                          color: (costVarianceData.totalVariance ?? 0) > 0 ? '#F44336' : '#4CAF50'
-                        }]}>
-                          {(costVarianceData.totalVariance ?? 0) > 0 ? '+' : ''}
-                          ¥{(costVarianceData.totalVariance ?? 0).toFixed(2)}
-                        </Text>
+                        {varianceComparable && varianceTotal !== null ? (
+                          <Text style={[styles.varianceCompareValue, {
+                            color: varianceTotal > 0 ? '#F44336' : '#4CAF50'
+                          }]}>
+                            {varianceTotal > 0 ? '+' : ''}
+                            ¥{varianceTotal.toFixed(2)}
+                          </Text>
+                        ) : (
+                          <Text style={styles.varianceCompareValue}>无法比较</Text>
+                        )}
                       </View>
                     </View>
                   </View>

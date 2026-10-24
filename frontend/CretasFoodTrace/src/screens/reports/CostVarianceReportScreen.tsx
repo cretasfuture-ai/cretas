@@ -22,6 +22,11 @@ import { logger } from '../../utils/logger';
 import { WaterfallChart, WaterfallDataItem } from '../../components/charts';
 import { theme } from '../../theme';
 import { formatDate } from '../../utils/formatters';
+import {
+  COST_VARIANCE_NOT_COMPARABLE_TEXT,
+  isCostVarianceComparable,
+  standardCostOf,
+} from '../../utils/costVarianceComparability';
 
 // 创建 CostVarianceReport 专用 logger
 const costVarianceLogger = logger.createContextLogger('CostVarianceReport');
@@ -92,10 +97,11 @@ export default function CostVarianceReportScreen() {
       setReportData(data);
 
       costVarianceLogger.info('成本差异报表数据加载成功', {
-        totalPlannedCost: Number(data.totalPlannedCost ?? 0).toFixed(2),
-        totalActualCost: Number(data.totalActualCost ?? 0).toFixed(2),
-        totalVariance: Number(data.totalVariance ?? 0).toFixed(2),
-        totalVarianceRate: Number(data.totalVarianceRate ?? 0).toFixed(2),
+        comparable: data.comparable,
+        totalBomCost: data.totalBomCost ?? null,
+        totalActualCost: data.totalActualCost ?? null,
+        totalVariance: data.totalVariance ?? null,
+        totalVarianceRate: data.totalVarianceRate ?? null,
         factoryId,
       });
     } catch (error) {
@@ -146,14 +152,23 @@ export default function CostVarianceReportScreen() {
     return `${sign}${value.toFixed(2)}%`;
   };
 
+  // 可比性: 没有独立标准成本时后端给 comparable=false 且差异 / 差异率为 null。
+  const comparable = isCostVarianceComparable(reportData);
+  const totalVariance = reportData?.totalVariance ?? null;
+  const totalVarianceRate = reportData?.totalVarianceRate ?? null;
+  const standardCost = reportData ? standardCostOf(reportData) : null;
+
   /**
    * 生成瀑布图数据
    */
   const waterfallData = useMemo((): WaterfallDataItem[] => {
     if (!reportData || !reportData.varianceByCategory) return [];
+    // 不可比较时没有起点(标准成本), ⛔ 不拿 0 当起点画一张瀑布图
+    const start = standardCostOf(reportData);
+    if (!isCostVarianceComparable(reportData) || start === null) return [];
 
     const data: WaterfallDataItem[] = [
-      { name: '计划成本', value: reportData.totalPlannedCost || 0, type: 'start' },
+      { name: '标准成本', value: start, type: 'start' },
     ];
 
     // 按差异大小排序并添加各类别差异
@@ -171,7 +186,7 @@ export default function CostVarianceReportScreen() {
       }
     });
 
-    data.push({ name: '实际成本', value: reportData.totalActualCost || 0, type: 'total' });
+    data.push({ name: '实际成本', value: reportData.totalActualCost ?? 0, type: 'total' });
 
     return data;
   }, [reportData]);
@@ -357,7 +372,31 @@ export default function CostVarianceReportScreen() {
               <ActivityIndicator size="small" />
               <Text style={styles.loadingText}>加载中...</Text>
             </View>
-          ) : reportData ? (
+          ) : reportData && !comparable ? (
+            <>
+              {/* 不可比较: 没有独立标准成本, ⛔ 不显示差异金额 / 差异率 (原来恒约 +5.26%) */}
+              <View style={styles.emptyContainer} testID="cost-variance-not-comparable">
+                <Text style={styles.emptyText}>{COST_VARIANCE_NOT_COMPARABLE_TEXT}</Text>
+              </View>
+
+              <Divider style={styles.divider} />
+
+              <View style={styles.costComparisonGrid}>
+                <View style={styles.costBox}>
+                  <Text style={styles.costBoxLabel}>标准成本</Text>
+                  <Text style={[styles.costBoxValue, { color: theme.colors.textSecondary }]}>
+                    无法比较
+                  </Text>
+                </View>
+                <View style={styles.costBox}>
+                  <Text style={styles.costBoxLabel}>实际成本</Text>
+                  <Text style={[styles.costBoxValue, { color: theme.colors.error }]}>
+                    {formatCurrency(reportData.totalActualCost)}
+                  </Text>
+                </View>
+              </View>
+            </>
+          ) : reportData && totalVariance !== null && totalVarianceRate !== null ? (
             <>
               {/* 差异金额和差异率 */}
               <View style={styles.varianceHighlight}>
@@ -366,36 +405,36 @@ export default function CostVarianceReportScreen() {
                   <Text
                     style={[
                       styles.varianceValue,
-                      { color: getVarianceColor(reportData.totalVariance) },
+                      { color: getVarianceColor(totalVariance) },
                     ]}
                   >
-                    {reportData.totalVariance >= 0 ? '+' : ''}
-                    {formatCurrency(reportData.totalVariance)}
+                    {totalVariance >= 0 ? '+' : ''}
+                    {formatCurrency(totalVariance)}
                   </Text>
                 </View>
                 <View style={styles.varianceRateContainer}>
                   <Text
                     style={[
                       styles.varianceRateValue,
-                      { color: getVarianceColor(reportData.totalVarianceRate) },
+                      { color: getVarianceColor(totalVarianceRate) },
                     ]}
                   >
-                    {formatPercent(reportData.totalVarianceRate)}
+                    {formatPercent(totalVarianceRate)}
                   </Text>
                   <Text style={styles.varianceStatus}>
-                    {getVarianceStatus(reportData.totalVarianceRate)}
+                    {getVarianceStatus(totalVarianceRate)}
                   </Text>
                 </View>
               </View>
 
               <Divider style={styles.divider} />
 
-              {/* 计划成本与实际成本对比 */}
+              {/* 标准成本与实际成本对比 */}
               <View style={styles.costComparisonGrid}>
                 <View style={styles.costBox}>
-                  <Text style={styles.costBoxLabel}>计划成本</Text>
+                  <Text style={styles.costBoxLabel}>标准成本</Text>
                   <Text style={[styles.costBoxValue, { color: theme.colors.primary }]}>
-                    {formatCurrency(reportData.totalPlannedCost)}
+                    {formatCurrency(standardCost)}
                   </Text>
                 </View>
                 <View style={styles.costBox}>
@@ -407,29 +446,25 @@ export default function CostVarianceReportScreen() {
               </View>
 
               {/* 差异进度条 */}
-              <View style={styles.progressContainer}>
-                <View style={styles.progressLabelRow}>
-                  <Text style={styles.progressLabel}>实际/计划</Text>
-                  <Text style={styles.progressValue}>
-                    {reportData.totalPlannedCost > 0
-                      ? `${((reportData.totalActualCost / reportData.totalPlannedCost) * 100).toFixed(1)}%`
-                      : '-'}
-                  </Text>
+              {standardCost !== null && standardCost > 0 && reportData.totalActualCost !== null ? (
+                <View style={styles.progressContainer}>
+                  <View style={styles.progressLabelRow}>
+                    <Text style={styles.progressLabel}>实际/标准</Text>
+                    <Text style={styles.progressValue}>
+                      {`${((reportData.totalActualCost / standardCost) * 100).toFixed(1)}%`}
+                    </Text>
+                  </View>
+                  <ProgressBar
+                    progress={Math.min(reportData.totalActualCost / standardCost, 1.5)}
+                    color={
+                      reportData.totalActualCost > standardCost
+                        ? theme.colors.error
+                        : theme.colors.success
+                    }
+                    style={styles.progressBar}
+                  />
                 </View>
-                <ProgressBar
-                  progress={
-                    reportData.totalPlannedCost > 0
-                      ? Math.min(reportData.totalActualCost / reportData.totalPlannedCost, 1.5)
-                      : 0
-                  }
-                  color={
-                    reportData.totalActualCost > reportData.totalPlannedCost
-                      ? theme.colors.error
-                      : theme.colors.success
-                  }
-                  style={styles.progressBar}
-                />
-              </View>
+              ) : null}
             </>
           ) : (
             <View style={styles.emptyContainer}>

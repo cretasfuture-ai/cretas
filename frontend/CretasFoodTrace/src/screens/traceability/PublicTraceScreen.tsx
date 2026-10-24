@@ -200,12 +200,13 @@ const PublicTraceScreen: React.FC = () => {
                           <Text style={styles.value}>{traceData.productionDate}</Text>
                         </View>
                       )}
-                      {traceData.certificationInfo && (
+                      {/* 没有真实认证来源时后端给 null, 整块不渲染 —— ⛔ 不要在这里补一个默认文案 */}
+                      {traceData.certificationInfo ? (
                         <View style={styles.infoRow}>
                           <Text style={styles.label}>认证信息</Text>
                           <Text style={styles.value}>{traceData.certificationInfo}</Text>
                         </View>
-                      )}
+                      ) : null}
                     </View>
                   </Card.Content>
                 </Card>
