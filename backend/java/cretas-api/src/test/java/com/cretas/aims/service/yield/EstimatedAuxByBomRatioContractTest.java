@@ -232,6 +232,36 @@ class EstimatedAuxByBomRatioContractTest {
     }
 
     @Test
+    @DisplayName("🔴 逐道录入: 调料实耗在卤制批, 前处理批有主料无调料 ⇒ 前处理批【不】再估整张 BOM "
+            + "(F006【演示L3】猪舌/猪大肠批把 10 味调料各估一遍, 无价的阻断成本)")
+    void auxConsumedOnAnotherBatchOfTheSamePlanIsNotReEstimated() {
+        stubBatch(List.of());
+        ProductionBatch braise = new ProductionBatch();
+        braise.setId(9202L);
+        braise.setFactoryId(F);
+        braise.setBatchNumber("CLK-AUX-BRAISE");
+        braise.setProductionPlanId(PLAN);
+        braise.setEquipmentCost(BigDecimal.ZERO);
+        braise.setOtherCost(BigDecimal.ZERO);
+        ProductionBatch pre = batchRepository.findByFactoryIdAndProductionPlanIdIn(F, List.of(PLAN)).get(0);
+        when(batchRepository.findByFactoryIdAndProductionPlanIdIn(eq(F), any())).thenReturn(List.of(pre, braise));
+        when(yieldReportService.getYield(F, 9202L)).thenReturn(emptyYield());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(9202L, F))
+                .thenReturn(List.of(consumption("MB-SALT", "MT-SALT", "SEASONING", "0.5", "3.00"),
+                        consumption("MB-BOX", "MT-BOX", "PACKAGING", "10", "0.50")));
+        stubMaterialBatch("MB-SALT", "食用盐-0001", "kg", "3.00", InventoryOwnership.COMPANY_OWNED);
+        // BOM 价没填 —— 若前处理批去估它, 会落 ESTIMATED_AUX_PRICE_MISSING 并阻断
+        stubBom(seasoning("MT-SALT", "食用盐", "10", null, null));
+
+        OrderCostBreakdownDTO dto = compute();
+
+        assertThat(dto.getEstimatedAuxItems()).isEmpty();
+        assertThat(dto.getMissingCostItems()).noneMatch(i -> i.startsWith("ESTIMATED_AUX_"));
+        assertThat(dto.getSeasoningCost()).isEqualByComparingTo("1.50");
+        assertThat(dto.isCostComplete()).as("missing=%s", dto.getMissingCostItems()).isTrue();
+    }
+
+    @Test
     @DisplayName("priceSource1 缺失时退 priceSource2 (与 BomRecipeServiceImpl#seasoningCost 同一条规则)")
     void fallsBackToPriceSource2() {
         stubBatch(List.of());

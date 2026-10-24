@@ -229,6 +229,23 @@ public class OrderCostBreakdownService {
                     .findByProductionBatchIdAndFactoryId(batch.getId(), factoryId);
             directConsumptionsByBatch.put(batch.getId(), rows == null ? List.of() : rows);
         }
+        // 辅料先估的「有没有记录」按【计划】问, 不按批次问: 逐道录入的 Workflow 计划一道工序一个批次,
+        // 调料只在绑了它的那道(卤制)上实耗, 前处理批(修油/清洗)有主料投入却没有调料 ——
+        // 按批次问就会在每个前处理批上把整张 BOM 的调料再估一遍(双计), 无价的那几味还会阻断成本
+        // (F006【演示L3】c644d590: 猪舌/猪大肠两批各估 10 味, 2026-10-25)。
+        Map<String, java.util.Set<String>> recordedMaterialTypeIdsByPlan = new LinkedHashMap<>();
+        for (ProductionBatch batch : batches) {
+            if (batch.getProductionPlanId() == null) {
+                continue;
+            }
+            java.util.Set<String> planRecorded = recordedMaterialTypeIdsByPlan
+                    .computeIfAbsent(batch.getProductionPlanId(), k -> new java.util.HashSet<>());
+            for (MaterialConsumption c : directConsumptionsByBatch.getOrDefault(batch.getId(), List.of())) {
+                if (c.getMaterialTypeId() != null) {
+                    planRecorded.add(c.getMaterialTypeId());
+                }
+            }
+        }
         MultiOutputPackagingScope multiOutputPackagingScope = resolveMultiOutputPackagingScope(
                 factoryId, batches, directConsumptionsByBatch);
 
@@ -254,7 +271,9 @@ public class OrderCostBreakdownService {
             boolean batchRawInputConvertible = true;
             // 本批任何类别下已经有耗用记录的物料 —— 有记录就不估 (含 quantity=0 的记录, 见
             // estimateAuxByBomRatio javadoc「什么叫没有实际耗用」)。
-            java.util.Set<String> recordedMaterialTypeIds = new java.util.HashSet<>();
+            java.util.Set<String> recordedMaterialTypeIds = new java.util.HashSet<>(
+                    b.getProductionPlanId() == null ? java.util.Set.of()
+                            : recordedMaterialTypeIdsByPlan.getOrDefault(b.getProductionPlanId(), java.util.Set.of()));
             List<MaterialConsumption> batchConsumptions = new ArrayList<>(
                     directConsumptionsByBatch.getOrDefault(b.getId(), List.of()));
             batchConsumptions.addAll(
