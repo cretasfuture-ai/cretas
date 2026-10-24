@@ -8,6 +8,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.LocalDate;
@@ -34,13 +35,53 @@ class FinishedGoodsExpirySchedulerTest {
         FinishedGoodsBatch todayBatch = batch("FG-T", TODAY);   // 模拟查询口径漂移
         when(repository.findAllExpiredAvailableBatches(TODAY)).thenReturn(List.of(yesterday, todayBatch));
 
-        int marked = scheduler.markExpiredBatches(TODAY);
+        FinishedGoodsExpiryScheduler.Result result = scheduler.markExpiredBatches(TODAY);
 
-        assertThat(marked).isEqualTo(1);
+        assertThat(result.marked()).isEqualTo(1);
+        assertThat(result.skipped()).isEqualTo(1);
+        assertThat(result.failed()).isZero();
         assertThat(yesterday.getStatus()).isEqualTo(FinishedGoodsBatch.Status.EXPIRED);
         assertThat(todayBatch.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         verify(repository).save(yesterday);
         verify(repository, never()).save(todayBatch);
+    }
+
+    @Test
+    @DisplayName("逐批隔离: 中间一批乐观锁失败, 前后批次照常置过期, 汇总失败数 1 并带批号")
+    void oneFailingBatchDoesNotStopTheRest() {
+        FinishedGoodsBatch first = batch("FG-1", TODAY.minusDays(2));
+        FinishedGoodsBatch locked = batch("FG-LOCKED", TODAY.minusDays(1));
+        FinishedGoodsBatch last = batch("FG-3", TODAY.minusDays(1));
+        when(repository.findAllExpiredAvailableBatches(TODAY)).thenReturn(List.of(first, locked, last));
+        when(repository.save(org.mockito.ArgumentMatchers.any(FinishedGoodsBatch.class))).thenAnswer(call -> {
+            FinishedGoodsBatch saved = call.getArgument(0);
+            if (saved == locked) {
+                throw new ObjectOptimisticLockingFailureException(FinishedGoodsBatch.class, "id-FG-LOCKED");
+            }
+            return saved;
+        });
+
+        FinishedGoodsExpiryScheduler.Result result = scheduler.markExpiredBatches(TODAY);
+
+        assertThat(result.candidates()).isEqualTo(3);
+        assertThat(result.marked()).isEqualTo(2);
+        assertThat(result.failed()).isEqualTo(1);
+        assertThat(result.failedBatchNumbers()).containsExactly("FG-LOCKED");
+        assertThat(first.getStatus()).isEqualTo(FinishedGoodsBatch.Status.EXPIRED);
+        assertThat(last.getStatus()).isEqualTo(FinishedGoodsBatch.Status.EXPIRED);
+        verify(repository).save(first);
+        verify(repository).save(last);
+    }
+
+    @Test
+    @DisplayName("逐批隔离的前提: 置位方法与类都不包外层事务 (否则一次失败把整个事务标成 rollback-only)")
+    void markingIsNotWrappedInOneTransaction() throws Exception {
+        assertThat(FinishedGoodsExpiryScheduler.class
+                .isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class)).isFalse();
+        assertThat(FinishedGoodsExpiryScheduler.class.getMethod("markExpiredBatches", LocalDate.class)
+                .isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class)).isFalse();
+        assertThat(FinishedGoodsExpiryScheduler.class.getMethod("dailyExpiryCheck")
+                .isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class)).isFalse();
     }
 
     @Test
