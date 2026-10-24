@@ -262,7 +262,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (!"available".equals(slot.getStatus())) {
             throw new BusinessException(409, "时段已被占用或不可用 (当前状态: " + slot.getStatus()
                     + ")，请刷新后选择其他时段")
-                    .withCode("INSERT_SLOT_NOT_AVAILABLE");
+                    .withCode("INSERT_SLOT_NOT_AVAILABLE")
+                    .withHint("刷新插单时段列表，改选一个状态为「可用」的时段");
         }
         return slot;
     }
@@ -276,7 +277,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (claimed != 1) {
             log.warn("插单时段占用冲突: factoryId={}, slotId={}, updatedRows={}", factoryId, slot.getId(), claimed);
             throw new BusinessException(409, "该时段刚刚已被占用（可能是重复提交或他人同时确认），未创建新计划，请刷新后重试")
-                    .withCode("INSERT_SLOT_CLAIM_CONFLICT");
+                    .withCode("INSERT_SLOT_CLAIM_CONFLICT")
+                    .withHint("刷新后查看该时段的最新状态；如果刚才已经提交过，先到生产计划里确认，不要重复提交");
         }
     }
 
@@ -344,7 +346,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (!Boolean.TRUE.equals(request.getForceInsert())) {
             // 非强制插入，检查影响等级
             if ("high".equals(slot.getImpactLevel())) {
-                throw new BusinessException(409, "该时段影响等级高，请使用强制插入或选择其他时段");
+                throw new BusinessException(409, "该时段影响等级高，请使用强制插入或选择其他时段")
+                        .withHint("改选影响等级较低的时段，或由有审批权限的人使用「强制插入」");
             }
         }
 

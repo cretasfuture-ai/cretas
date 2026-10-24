@@ -439,7 +439,8 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
                     bomExpansionService.expandBOM(factoryId, productTypeId, requiredQuantity);
             if (requirements == null || requirements.isEmpty()) {
                 // 配方只有副产行 / 物料未绑定: 没有可核对的投入 ⇒ 不能说「够」
-                throw new BusinessException(409, "该产品配方没有可核对的原料投入行");
+                throw new BusinessException(409, "该产品配方没有可核对的原料投入行")
+                        .withHint("先在该产品的 BOM 配方里补上原料投入行并绑定物料，再回来做插单分析");
             }
             return bomExpansionService.checkMaterialAvailability(factoryId, requirements);
         });
