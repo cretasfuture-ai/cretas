@@ -39,6 +39,18 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
 
     List<FinishedGoodsBatch> findByFactoryIdAndProductTypeIdAndStatus(String factoryId, String productTypeId, String status);
 
+    /**
+     * 成品过期定时任务用 (跨全部工厂): 状态仍是 AVAILABLE 但到期日<b>早于</b> {@code today} 的批次。
+     *
+     * <p>口径与原料 {@code MaterialBatchRepository#findAllExpiredAvailableBatches} 逐字相同
+     * ({@code expireDate < :today}): 到期日当天仍可用, 次日起过期; 到期日为空的批次永不被选中。
+     * {@code today} 由调用方按东八区业务日传入 ({@link com.cretas.aims.util.InventoryExpiry#today()}),
+     * ⛔ 不用 JPQL {@code CURRENT_DATE} —— 那是数据库会话时区的日子, 不是业务日。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.status = 'AVAILABLE' " +
+            "AND b.expireDate IS NOT NULL AND b.expireDate < :today")
+    List<FinishedGoodsBatch> findAllExpiredAvailableBatches(@Param("today") java.time.LocalDate today);
+
     Optional<FinishedGoodsBatch> findByFactoryIdAndBatchNumber(String factoryId, String batchNumber);
 
     List<FinishedGoodsBatch> findByFactoryIdAndReturnOrderItemId(
