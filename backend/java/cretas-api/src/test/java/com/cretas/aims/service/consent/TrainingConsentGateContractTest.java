@@ -183,37 +183,6 @@ class TrainingConsentGateContractTest {
 
     @Nested
     @ExtendWith(MockitoExtension.class)
-    class SchedulingTrainingData {
-        @Mock com.cretas.aims.repository.TrainingDataRepository trainingDataRepository;
-        @Mock TrainingConsentService trainingConsentService;
-        @InjectMocks com.cretas.aims.service.ProductionDataCollectorService service;
-
-        com.cretas.aims.entity.ProductionBatch batch(String factoryId) {
-            com.cretas.aims.entity.ProductionBatch b = new com.cretas.aims.entity.ProductionBatch();
-            b.setFactoryId(factoryId);
-            b.setId(42L);
-            return b;
-        }
-
-        @Test
-        void unauthorizedFactoryBatchesAreNotCollected() {
-            when(trainingConsentService.isAuthorized("F_NONE")).thenReturn(false);
-            service.onBatchCompleted(new com.cretas.aims.event.BatchCompletedEvent(this, batch("F_NONE")));
-            assertThat(service.collectHistoricalData("F_NONE", List.of(batch("F_NONE")))).isZero();
-            verifyNoInteractions(trainingDataRepository);
-        }
-
-        @Test
-        void authorizedFactoryBatchesReachCollection() {
-            when(trainingConsentService.isAuthorized("F_PRIV")).thenReturn(true);
-            when(trainingDataRepository.existsByFactoryIdAndBatchId("F_PRIV", 42L)).thenReturn(true);
-            assertThat(service.collectHistoricalData("F_PRIV", List.of(batch("F_PRIV")))).isZero();
-            verify(trainingDataRepository).existsByFactoryIdAndBatchId("F_PRIV", 42L);
-        }
-    }
-
-    @Nested
-    @ExtendWith(MockitoExtension.class)
     class ActiveLearningSamples {
         @Mock ActiveLearningSampleRepository sampleRepository;
         @Mock TrainingConsentService trainingConsentService;

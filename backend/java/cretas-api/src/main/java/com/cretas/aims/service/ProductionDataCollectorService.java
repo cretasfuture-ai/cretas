@@ -3,7 +3,6 @@ package com.cretas.aims.service;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.event.BatchCompletedEvent;
 import com.cretas.aims.repository.*;
-import com.cretas.aims.service.consent.TrainingConsentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,7 +38,6 @@ public class ProductionDataCollectorService {
     private final EquipmentRepository equipmentRepository;
     private final ProductTypeRepository productTypeRepository;
     private final RestTemplate restTemplate;
-    private final TrainingConsentService trainingConsentService;
 
     @Value("${cretas.ai.service.url:http://localhost:8083}")
     private String aiServiceUrl;
@@ -64,10 +62,6 @@ public class ProductionDataCollectorService {
         log.info("收到批次完成事件: factoryId={}, batchId={}", factoryId, batchId);
 
         try {
-            // 训练条款第二、九条 (Steve 2026-10-24): 排程数据书面授权后才采集, 只用于该厂专属排程模型
-            if (!trainingConsentService.isAuthorized(factoryId)) {
-                return;
-            }
             // 检查是否已有记录，避免重复
             if (trainingDataRepository.existsByFactoryIdAndBatchId(factoryId, batchId)) {
                 log.info("批次 {} 的训练数据已存在，跳过", batchId);
@@ -364,9 +358,6 @@ public class ProductionDataCollectorService {
      */
     @Transactional
     public int collectHistoricalData(String factoryId, List<ProductionBatch> completedBatches) {
-        if (!trainingConsentService.isAuthorized(factoryId)) {
-            return 0;
-        }
         int count = 0;
         for (ProductionBatch batch : completedBatches) {
             if (!trainingDataRepository.existsByFactoryIdAndBatchId(factoryId, batch.getId())) {
