@@ -6,6 +6,8 @@
 
 ## 在飞任务
 
+- `ERP-S315-EXTERNAL-SEMI-INPUT-20261024` — `in-progress` — Owner /root/s315_external_semi_input — Base 8b1dbc6a4e04936dc2b07c592ffc1610ae869aae — 原QA证实外部半成品输入缺口；精确6文件/目标测试见archive/2026-10-24-s315-external-semi-input.md；只加外部SEMI输入目录校验，不改运行消费/已发布配置。
+
 
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
