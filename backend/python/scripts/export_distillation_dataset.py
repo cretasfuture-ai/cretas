@@ -58,6 +58,7 @@ from smartbi.services.training_consent import (  # noqa: E402 (after path bootst
     DESENSITIZED_KEY,
     RULE_KEY,
     SYNTHETIC_FACTORY_IDS,
+    WITHDRAWN,
     fetch_consent_map,
     qa_has_blocked_content,
     scope_from_map,
@@ -257,6 +258,8 @@ def gate_shared_rows(
             continue
         if not passes_training_rule(r):
             continue
+        if _consent_of(r, consent) == WITHDRAWN:
+            continue  # withdrawn factories leave every model update (clause 10)
         if _metadata(r).get(DESENSITIZED_KEY):
             out.append({"row": r, "input_text": None, "teacher_output": None,
                         "consent_class": "desensitized"})

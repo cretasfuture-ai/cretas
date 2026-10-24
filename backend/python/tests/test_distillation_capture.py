@@ -272,14 +272,12 @@ async def test_generic_process_words_in_the_answer_do_not_block():
     assert len(sink) == 1
 
 
-async def test_consent_lookup_error_means_desensitized_not_raw():
+async def test_consent_lookup_error_means_not_stored():
+    # an unreadable consent row could hide a withdrawal (clause 10) -> store nothing
     sink: list = []
     pool = _RecordingPool(sink, {"F_PRIV": "private"}, consent_error=RuntimeError("relation does not exist"))
     await _capture(pool, factory_id="F_PRIV", input_text="华东工厂本月营收多少")
-    assert len(sink) == 1
-    _, args = sink[0]
-    assert "华东" not in args[6]
-    assert _meta(args).get("desensitized") is True
+    assert sink == []
 
 
 async def test_sample_without_factory_is_stored_desensitized():
@@ -332,3 +330,11 @@ async def test_generic_customer_words_are_stored():
                    input_text="大客户占比多少", teacher_output="前十大客户占比 35%，新客户 12 家")
     assert len(sink) == 1
     assert sink[0][1][8] == "前十大客户占比 <数值>%，新客户 <数值> 家"   # generic words kept, numbers masked
+
+
+async def test_withdrawn_factory_is_never_stored():
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_GONE": "withdrawn", "F006": "none"})
+    await _capture(pool, factory_id="F_GONE")
+    await _capture(pool, factory_id="F006")          # control: same sample, not withdrawn
+    assert [a[2] for _, a in sink] == ["F006"]

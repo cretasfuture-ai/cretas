@@ -59,6 +59,10 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 CONSENT_SCOPES = ("none", "private", "shared_anon")
 DEFAULT_SCOPE = "none"
+# Not a stored consent_scope: what a factory reads as once ``withdrawn_at`` is set
+# (training clause 10, migration V20261101_17). A withdrawn factory leaves
+# training entirely: nothing captured, exported, judged or sampled.
+WITHDRAWN = "withdrawn"
 
 # Sentinel tenants of the synthetic seed corpus (seed_chart_insight_corpus.py).
 SYNTHETIC_FACTORY_IDS = frozenset({"SEED_R", "SEED_F"})
@@ -78,8 +82,9 @@ DESENSITIZED_KEY = "desensitized"
 
 # asyncpg placeholder style; the finetune scripts use SELECT_ALL_SQL only
 # (no parameters, so it runs unchanged on psycopg2).
-SELECT_SCOPE_SQL = "SELECT consent_scope FROM training_consent WHERE factory_id = $1"
-SELECT_ALL_SQL = "SELECT factory_id, consent_scope FROM training_consent"
+_EFFECTIVE_SCOPE = f"CASE WHEN withdrawn_at IS NOT NULL THEN '{WITHDRAWN}' ELSE consent_scope END"
+SELECT_SCOPE_SQL = f"SELECT {_EFFECTIVE_SCOPE} FROM training_consent WHERE factory_id = $1"
+SELECT_ALL_SQL = f"SELECT factory_id, {_EFFECTIVE_SCOPE} AS consent_scope FROM training_consent"
 
 # Keep every tuple below identical to TrainingSampleRules (Java); a test compares.
 #
@@ -194,28 +199,39 @@ def keeps_raw(scope: str) -> bool:
     return scope in CORPUS_CAPTURE_SCOPES
 
 
+def is_withdrawn(scope: str) -> bool:
+    return scope == WITHDRAWN
+
+
 def desensitize_utterance(scope: str, text: Optional[str]) -> Tuple[bool, Optional[str]]:
-    """Intent-mapping rule: ``(keep, text)``. Parameter / recipe content is dropped
-    for every factory; authorized -> raw; otherwise numbers and identifiers masked."""
-    if utterance_has_blocked_content(text):
+    """Intent-mapping rule: ``(keep, text)``. Withdrawn factories and parameter /
+    recipe content are dropped; authorized -> raw; otherwise numbers masked."""
+    if is_withdrawn(scope) or utterance_has_blocked_content(text):
         return False, None
     if keeps_raw(scope):
         return True, text
     return True, mask_numbers(text)
 
 
-def usable_rows_sql(column: str = "factory_id", metadata: str = "metadata") -> str:
+def usable_rows_sql(column: str = "smart_bi_distillation_samples.factory_id",
+                    metadata: str = "smart_bi_distillation_samples.metadata") -> str:
     """SQL predicate for corpus scripts (judge, eval freeze, review sampling):
     synthetic seed rows and rows that passed this rule at capture. Rows captured
     before 2026-10-24 stay out until a backfill re-checks them. Built only from
     constants, never from input."""
     synthetic = ", ".join(f"'{f}'" for f in sorted(SYNTHETIC_FACTORY_IDS))
-    return f"({column} IN ({synthetic}) OR ({metadata} ? '{RULE_KEY}'))"
+    # NOT EXISTS (not NOT IN): rows without a factory must stay usable. The outer
+    # column MUST be table-qualified: an unqualified factory_id inside the
+    # subquery would bind to training_consent itself and exclude every row as
+    # soon as any factory withdrew.
+    not_withdrawn = (f"NOT EXISTS (SELECT 1 FROM training_consent tw "
+                     f"WHERE tw.factory_id = {column} AND tw.withdrawn_at IS NOT NULL)")
+    return f"(({column} IN ({synthetic}) OR ({metadata} ? '{RULE_KEY}')) AND {not_withdrawn})"
 
 
 def normalize_scope(raw: Any) -> str:
     """Map a stored value to a known scope. Anything unexpected is 'none'."""
-    if isinstance(raw, str) and raw in CONSENT_SCOPES:
+    if isinstance(raw, str) and (raw in CONSENT_SCOPES or raw == WITHDRAWN):
         return raw
     return DEFAULT_SCOPE
 
