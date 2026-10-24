@@ -7,6 +7,7 @@ import com.cretas.aims.repository.PlatformAdminRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -24,6 +25,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * The factory's own readiness entry: who may read it, what it says without a canonical blueprint,
@@ -160,6 +164,125 @@ class FactorySelfReadinessControllerContractTest {
                 .run(context -> assertThat(context).doesNotHaveBean(FactorySelfReadinessController.class));
         runner.withPropertyValues("cretas.platform.factory-assembly.enabled=true")
                 .run(context -> assertThat(context).hasSingleBean(FactorySelfReadinessController.class));
+    }
+
+    /**
+     * The same reads over real HTTP: the production {@link com.cretas.aims.config.WebMvcConfig}
+     * registers the interceptors on their real paths, {@link com.cretas.aims.config.JwtAuthInterceptor}
+     * verifies tokens signed by a real {@link com.cretas.aims.utils.JwtUtil} and compares the URL
+     * factory with the token's, and {@link com.cretas.aims.exception.GlobalExceptionHandler} writes the
+     * response. The demo read-only and @RequireRole interceptors run as themselves; the permission,
+     * module, data-scope, process-secret and access-log interceptors are not this endpoint's gate and
+     * pass through. Repositories are mocks.
+     */
+    @Test
+    void overRealHttpTheTokenTheTenantAndTheRoleEachDecideWithTheirOwnGate() throws Exception {
+        var jwt = new com.cretas.aims.utils.JwtUtil();
+        org.springframework.test.util.ReflectionTestUtils.setField(jwt, "secret",
+                java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID());
+        org.springframework.test.util.ReflectionTestUtils.setField(jwt, "expiration", 60_000L);
+        User superAdmin = member("factory_super_admin", true);
+        User otherFactoryAdmin = member("factory_super_admin", true);
+        otherFactoryAdmin.setId(8L);
+        otherFactoryAdmin.setFactoryId("F007");
+        User operator = member("operator", true);
+        operator.setId(9L);
+        User inactive = member("factory_super_admin", false);
+        inactive.setId(10L);
+        for (User user : List.of(superAdmin, otherFactoryAdmin, operator, inactive)) {
+            when(users.findById(user.getId())).thenReturn(Optional.of(user));
+            when(users.findByIdAndFactoryId(user.getId(), user.getFactoryId())).thenReturn(Optional.of(user));
+        }
+        when(blueprints.current("F006")).thenReturn(BlueprintResponse.builder().id("bp-1").factoryId("F006")
+                .version(3).rowVersion(11L).lifecycleState("PUBLISHED").build());
+        when(readiness.read("F006", "bp-1")).thenReturn(null);
+        var blacklist = mock(com.cretas.aims.service.TokenBlacklistService.class);
+        var factories = mock(com.cretas.aims.repository.FactoryRepository.class);
+        when(factories.findById(anyString())).thenReturn(Optional.empty());
+
+        try (var context = new org.springframework.web.context.support.AnnotationConfigWebApplicationContext()) {
+            context.setServletContext(new org.springframework.mock.web.MockServletContext());
+            context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource(
+                    "feature", java.util.Map.of("cretas.platform.factory-assembly.enabled", "true")));
+            context.addBeanFactoryPostProcessor(registry -> {
+                registry.registerSingleton("jwtUtil", jwt);
+                registry.registerSingleton("tokenBlacklistService", blacklist);
+                registry.registerSingleton("webLoginSessionService",
+                        mock(com.cretas.aims.service.mobile.WebLoginSessionService.class));
+                registry.registerSingleton("factoryRepository", factories);
+                registry.registerSingleton("userRepository", users);
+                registry.registerSingleton("platformAdminRepository", platformAdmins);
+                registry.registerSingleton("blueprints", blueprints);
+                registry.registerSingleton("readiness", readiness);
+                registry.registerSingleton("objectMapper", new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+                registry.registerSingleton("permissionInterceptor", passThrough(com.cretas.aims.config.PermissionInterceptor.class));
+                registry.registerSingleton("moduleEnabledInterceptor", passThrough(com.cretas.aims.config.ModuleEnabledInterceptor.class));
+                registry.registerSingleton("dataScopeRouteInterceptor", passThrough(com.cretas.aims.security.DataScopeRouteInterceptor.class));
+                registry.registerSingleton("processSecretGuardInterceptor",
+                        passThrough(com.cretas.aims.security.ProcessSecretGuardInterceptor.class));
+                registry.registerSingleton("platformDataAccessLogInterceptor",
+                        passThrough(com.cretas.aims.audit.PlatformDataAccessLogInterceptor.class));
+            });
+            context.register(WebMvc.class, com.cretas.aims.config.WebMvcConfig.class,
+                    com.cretas.aims.config.JwtAuthInterceptor.class, com.cretas.aims.config.DemoReadOnlyInterceptor.class,
+                    com.cretas.aims.config.RequireRoleInterceptor.class, com.cretas.aims.exception.GlobalExceptionHandler.class,
+                    CanonicalBlueprintActorAuthority.class, FactorySelfReadinessController.class);
+            context.refresh();
+            var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context).build();
+            String endpoint = "/api/mobile/F006/factory-readiness/current";
+
+            // No token: the JWT interceptor answers before anything else (its own message, not the
+            // controller's "无法获取已认证操作者").
+            mvc.perform(get(endpoint)).andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.message").value("未授权，请先登录"));
+            // Same factory, active factory_super_admin: the real report is read for the current blueprint.
+            mvc.perform(get(endpoint).header("Authorization", bearer(jwt.generateToken(7L, "F006", "sa", "factory_super_admin"))))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true))
+                    .andExpect(jsonPath("$.data.state").value(FactorySelfReadinessController.READY_TO_READ))
+                    .andExpect(jsonPath("$.data.blueprint.id").value("bp-1"))
+                    .andExpect(jsonPath("$.data.blueprint.rowVersion").value(11));
+            verify(readiness).read("F006", "bp-1");
+            org.mockito.Mockito.clearInvocations(blueprints, readiness);
+
+            // Another factory's token on this factory's path: the mobile tenant check refuses it.
+            mvc.perform(get(endpoint).header("Authorization", bearer(jwt.generateToken(8L, "F007", "other", "factory_super_admin"))))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.message").value("无权访问该工厂数据"))
+                    .andExpect(jsonPath("$.errorCode").doesNotExist());
+            // A platform token passes the tenant check (platform roles may) and is refused by this endpoint.
+            mvc.perform(get(endpoint).header("Authorization", bearer(jwt.generatePlatformToken(62L, "platform", "super_admin"))))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.success").value(false))
+                    .andExpect(jsonPath("$.errorCode").value("FACTORY_SELF_READINESS_FACTORY_USER_REQUIRED"));
+            // A same-factory account with another role is refused by the blueprint authority.
+            mvc.perform(get(endpoint).header("Authorization", bearer(jwt.generateToken(9L, "F006", "op", "operator"))))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.errorCode").value("CANONICAL_FACTORY_ROLE_REQUIRED"));
+            // A deactivated account's still-valid token is refused by the interceptor's account check.
+            mvc.perform(get(endpoint).header("Authorization", bearer(jwt.generateToken(10L, "F006", "gone", "factory_super_admin"))))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.message").value("账号已被禁用或不存在，请重新登录"));
+            verifyNoInteractions(blueprints, readiness);
+        }
+    }
+
+    @org.springframework.context.annotation.Configuration
+    @org.springframework.web.servlet.config.annotation.EnableWebMvc
+    static class WebMvc { }
+
+    private static String bearer(String token) {
+        return "Bearer " + token;
+    }
+
+    private static <T extends org.springframework.web.servlet.HandlerInterceptor> T passThrough(Class<T> type) {
+        T interceptor = mock(type);
+        try {
+            when(interceptor.preHandle(any(), any(), any())).thenReturn(true);
+        } catch (Exception impossible) {
+            throw new IllegalStateException(impossible);
+        }
+        return interceptor;
     }
 
     private void assertDeniedWith(String code) {
