@@ -11,8 +11,9 @@ authorizations are the ``training_consent`` table in the SmartBI database.
 export_training_data / shadow_adjudicate / zpd_label_batch read
 ``intent_match_records`` (cretas DB, every tenant) and send user text to an
 outside LLM or into a training file; every row goes through
-``apply_utterance_rule`` first. If the consent table cannot be read, every
-factory is treated as un-authorized (masked) — never as authorized.
+``apply_utterance_rule`` first. Withdrawn factories (clause 10) are dropped.
+If the consent table cannot be read the script stops: an unreadable table could
+hide a withdrawal.
 
 Consent DB connection (SmartBI database, NOT the cretas DB the scripts read):
     CONSENT_DB_HOST / CONSENT_DB_PORT / CONSENT_DB_NAME / CONSENT_DB_USER /
@@ -61,7 +62,7 @@ def _connect():
 
 @lru_cache(maxsize=1)
 def consent_map() -> Dict[str, str]:
-    """``{factory_id: scope}``; unreadable table -> ``{}`` (everyone un-authorized)."""
+    """``{factory_id: scope}`` (withdrawn factories read as 'withdrawn'); unreadable -> SystemExit."""
     try:
         conn = _connect()
         try:
@@ -70,10 +71,11 @@ def consent_map() -> Dict[str, str]:
                 consent = {row[0]: rules().normalize_scope(row[1]) for row in cur.fetchall()}
         finally:
             conn.close()
-    except Exception as e:  # noqa: BLE001 - any failure means "not proven authorized"
-        logger.warning("training_consent unreadable (%s: %s) — masking every factory",
-                       type(e).__name__, e)
-        return {}
+    except Exception as e:  # noqa: BLE001 - an unreadable table could hide a withdrawal
+        raise SystemExit(
+            f"training_consent unreadable ({type(e).__name__}: {e}) — refusing to read "
+            "factory data. Set CONSENT_DB_* to the SmartBI database."
+        ) from e
     logger.info("training consent rows: %d", len(consent))
     return consent
 

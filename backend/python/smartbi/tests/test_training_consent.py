@@ -343,10 +343,7 @@ class TestMigration:
         return max(versions)
 
     def test_migration_defines_table_and_policy(self):
-        target = None
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if "training_consent" in fn:
-                target = os.path.join(self.MIGRATIONS_DIR, fn)
+        target = os.path.join(self.MIGRATIONS_DIR, "V20261001_01__training_consent.sql")
         sql = open(target, encoding="utf-8").read()
         assert "CREATE TABLE IF NOT EXISTS training_consent" in sql
         assert "consent_scope" in sql
@@ -377,3 +374,41 @@ def test_customer_names_are_pseudonymized_but_generic_customer_words_kept():
     assert "张记" not in a_in and "张记" not in a_out
     assert "客户A" in a_in and "客户A" in a_out          # same customer, same placeholder
     assert "大客户占比 35%" in a_out                      # generic word untouched
+
+
+def test_withdrawn_factory_is_excluded_from_shared_export():
+    rows = [_row("F001", metadata={"desensitized": True}),
+            _row("F002", metadata={"desensitized": True})]
+    gated = export_mod.gate_shared_rows(rows, consent={"F001": "withdrawn"})
+    assert [g["row"]["factory_id"] for g in gated] == ["F002"]
+
+
+def test_effective_scope_sql_reads_withdrawal():
+    from smartbi.services import training_consent as tc
+
+    assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_SCOPE_SQL
+    assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_ALL_SQL
+    assert tc.normalize_scope("withdrawn") == "withdrawn"
+    assert tc.desensitize_utterance("withdrawn", "库存多少") == (False, None)
+
+
+def test_registration_requires_a_contract_and_withdraw_is_exclusive():
+    import pytest as _pytest
+    from scripts import set_training_consent as cli
+
+    cli.validate("private", "HT-2026-001", False)
+    cli.validate("none", None, False)
+    cli.validate(None, None, True)
+    for args in [("private", None, False), ("shared_anon", "  ", False),
+                 ("none", None, True), (None, None, False)]:
+        with _pytest.raises(ValueError):
+            cli.validate(*args)
+
+
+def test_migration_enforces_contract_and_adds_withdrawal_columns():
+    mig = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database",
+                       "migrations", "V20261101_17__training_consent_contract_and_withdrawal.sql")
+    sql = open(mig, encoding="utf-8").read()
+    for col in ("contract_no", "withdrawn_at", "withdrawn_by", "withdrawal_note"):
+        assert f"ADD COLUMN IF NOT EXISTS {col}" in sql
+    assert "CHECK (consent_scope = 'none' OR (contract_no IS NOT NULL" in sql

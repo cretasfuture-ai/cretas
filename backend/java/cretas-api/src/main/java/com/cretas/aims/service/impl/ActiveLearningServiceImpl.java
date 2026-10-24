@@ -93,7 +93,11 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
                 || TrainingSampleRules.utteranceHasBlockedContent(normalizedInput)) {
             return null;
         }
-        if (!trainingConsentService.isAuthorized(factoryId)) {
+        TrainingConsentService.Status status = trainingConsentService.status(factoryId);
+        if (!status.storable()) {
+            return null;
+        }
+        if (status != TrainingConsentService.Status.AUTHORIZED) {
             userInput = TrainingSampleRules.maskNumbers(userInput);
             normalizedInput = TrainingSampleRules.maskNumbers(normalizedInput);
             matchedKeywords = TrainingSampleRules.maskNumbers(matchedKeywords);

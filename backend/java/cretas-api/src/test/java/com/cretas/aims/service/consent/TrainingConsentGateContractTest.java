@@ -57,10 +57,14 @@ class TrainingConsentGateContractTest {
         JdbcDataSource ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:consent_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         JdbcTemplate jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE training_consent (factory_id VARCHAR(64) PRIMARY KEY, consent_scope VARCHAR(32))");
+        jdbc.execute("CREATE TABLE training_consent (factory_id VARCHAR(64) PRIMARY KEY, consent_scope VARCHAR(32), withdrawn_at TIMESTAMP)");
         for (String row : rows) {
             String[] kv = row.split("=");
-            jdbc.update("INSERT INTO training_consent VALUES (?, ?)", kv[0], kv[1]);
+            if ("withdrawn".equals(kv[1])) {
+                jdbc.update("INSERT INTO training_consent VALUES (?, 'none', CURRENT_TIMESTAMP)", kv[0]);
+            } else {
+                jdbc.update("INSERT INTO training_consent VALUES (?, ?, NULL)", kv[0], kv[1]);
+            }
         }
         return ds;
     }
@@ -113,9 +117,24 @@ class TrainingConsentGateContractTest {
         }
 
         @Test
+        void statusDistinguishesAuthorizedDefaultWithdrawnAndUnknown() {
+            TrainingConsentService svc = new TrainingConsentService(provider(consentDb(
+                    "F_PRIV=private", "F_NONE=none", "F_GONE=withdrawn")), Clock.systemUTC());
+            assertThat(svc.status("F_PRIV")).isEqualTo(TrainingConsentService.Status.AUTHORIZED);
+            assertThat(svc.status("F_NONE")).isEqualTo(TrainingConsentService.Status.DEFAULT);
+            assertThat(svc.status("F_NO_ROW")).isEqualTo(TrainingConsentService.Status.DEFAULT);
+            assertThat(svc.status("F_GONE")).isEqualTo(TrainingConsentService.Status.WITHDRAWN);
+            assertThat(svc.status(null)).isEqualTo(TrainingConsentService.Status.UNKNOWN);
+            assertThat(svc.isAuthorized("F_GONE")).isFalse();
+            assertThat(TrainingConsentService.Status.WITHDRAWN.storable()).isFalse();
+            assertThat(TrainingConsentService.Status.UNKNOWN.storable()).isFalse();
+        }
+
+        @Test
         void missingSmartbiDatasourceMeansNotAuthorized() {
             TrainingConsentService svc = new TrainingConsentService(provider(null), Clock.systemUTC());
             assertThat(svc.isAuthorized("F_PRIV")).isFalse();
+            assertThat(svc.status("F_PRIV")).isEqualTo(TrainingConsentService.Status.UNKNOWN);
         }
 
         @Test
@@ -123,10 +142,10 @@ class TrainingConsentGateContractTest {
             JdbcDataSource empty = new JdbcDataSource(); // no training_consent table
             empty.setURL("jdbc:h2:mem:noconsent_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
             TrainingConsentService svc = new TrainingConsentService(provider(empty), Clock.systemUTC());
-            assertThat(svc.isAuthorized("F_PRIV")).isFalse();
+            assertThat(svc.status("F_PRIV")).isEqualTo(TrainingConsentService.Status.UNKNOWN);
             new JdbcTemplate(empty).execute(
-                    "CREATE TABLE training_consent (factory_id VARCHAR(64) PRIMARY KEY, consent_scope VARCHAR(32))");
-            new JdbcTemplate(empty).update("INSERT INTO training_consent VALUES ('F_PRIV', 'private')");
+                    "CREATE TABLE training_consent (factory_id VARCHAR(64) PRIMARY KEY, consent_scope VARCHAR(32), withdrawn_at TIMESTAMP)");
+            new JdbcTemplate(empty).update("INSERT INTO training_consent VALUES ('F_PRIV', 'private', NULL)");
             assertThat(svc.isAuthorized("F_PRIV")).isTrue();
         }
 
@@ -152,7 +171,7 @@ class TrainingConsentGateContractTest {
 
         @Test
         void recipeUtteranceIsNotStoredEvenWhenAuthorized() {
-            when(trainingConsentService.isAuthorized("F_PRIV")).thenReturn(true);
+            when(trainingConsentService.status("F_PRIV")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
             assertThat(service.recordSample("F_PRIV", "这个产品配方里盐放多少", "BOM_RECIPE_QUERY",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
             verify(sampleRepository, never()).save(any());
@@ -160,7 +179,7 @@ class TrainingConsentGateContractTest {
 
         @Test
         void unauthorizedFactoryUtteranceIsStoredDesensitized() {
-            when(trainingConsentService.isAuthorized("F006")).thenReturn(false);
+            when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             service.recordSample("F006", "今天入库 350 箱，联系 13812345678", "MATERIAL_INBOUND",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1");
@@ -171,13 +190,24 @@ class TrainingConsentGateContractTest {
 
         @Test
         void authorizedFactoryUtteranceIsStoredAsIs() {
-            when(trainingConsentService.isAuthorized("F_PRIV")).thenReturn(true);
+            when(trainingConsentService.status("F_PRIV")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             service.recordSample("F_PRIV", "今天入库 350 箱", "MATERIAL_INBOUND",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1");
             ArgumentCaptor<TrainingSample> saved = ArgumentCaptor.forClass(TrainingSample.class);
             verify(sampleRepository).save(saved.capture());
             assertThat(saved.getValue().getUserInput()).isEqualTo("今天入库 350 箱");
+        }
+
+        @Test
+        void withdrawnOrUnknownFactoryUtteranceIsNotStored() {
+            when(trainingConsentService.status("F_GONE")).thenReturn(TrainingConsentService.Status.WITHDRAWN);
+            when(trainingConsentService.status("F_ERR")).thenReturn(TrainingConsentService.Status.UNKNOWN);
+            assertThat(service.recordSample("F_GONE", "今天入库多少", "MATERIAL_INBOUND",
+                    TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
+            assertThat(service.recordSample("F_ERR", "今天入库多少", "MATERIAL_INBOUND",
+                    TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
+            verify(sampleRepository, never()).save(any());
         }
     }
 
@@ -201,8 +231,16 @@ class TrainingConsentGateContractTest {
         }
 
         @Test
+        void withdrawnFactoryLowConfidenceInputIsNotCollected() {
+            when(trainingConsentService.status("F_GONE")).thenReturn(TrainingConsentService.Status.WITHDRAWN);
+            assertThat(service.collectSample("F_GONE", 1L, "那批还剩多少", null, "X",
+                    new BigDecimal("0.3"), "SEMANTIC", null, null, "rec-1")).isNull();
+            verifyNoInteractions(sampleRepository);
+        }
+
+        @Test
         void unauthorizedFactoryLowConfidenceInputIsCollectedDesensitized() {
-            when(trainingConsentService.isAuthorized("F006")).thenReturn(false);
+            when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
             when(sampleRepository.existsBySourceRecordId(anyString())).thenReturn(false);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             ActiveLearningSample s = service.collectSample("F006", 1L, "那批 200 箱还剩多少", "那批 200 箱 剩余",
