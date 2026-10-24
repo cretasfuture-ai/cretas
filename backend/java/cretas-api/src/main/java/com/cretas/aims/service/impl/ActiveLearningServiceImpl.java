@@ -53,6 +53,7 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     private final LearningSuggestionRepository suggestionRepository;
     private final SampleClusterRepository clusterRepository;
     private final TrainingConsentService trainingConsentService;
+    private final com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
     private final IntentMatchRecordRepository matchRecordRepository;
     private final ObjectMapper objectMapper;
     private final IntentKnowledgeBase intentKnowledgeBase;
@@ -94,7 +95,8 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             return null;
         }
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);
-        if (!status.storable()) {
+        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本
+        if (!status.storable() || processSecretSampleFilter.mentionsProtectedProduct(factoryId, userInput, normalizedInput)) {
             return null;
         }
         if (status != TrainingConsentService.Status.AUTHORIZED) {

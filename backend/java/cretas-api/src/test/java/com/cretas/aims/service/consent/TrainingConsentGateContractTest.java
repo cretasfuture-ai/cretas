@@ -77,6 +77,45 @@ class TrainingConsentGateContractTest {
     }
 
     @Nested
+    class ProcessSecretProductNames {
+        com.cretas.aims.service.processsecret.ProcessSecretAccessService access =
+                org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretAccessService.class);
+        com.cretas.aims.repository.ProductTypeRepository products =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products);
+
+        com.cretas.aims.entity.ProductType product(String id, String factoryId, String name) {
+            com.cretas.aims.entity.ProductType p = new com.cretas.aims.entity.ProductType();
+            p.setId(id);
+            p.setFactoryId(factoryId);
+            p.setName(name);
+            return p;
+        }
+
+        @Test
+        void matchesOnlyThisFactorysProtectedProductNames() {
+            when(access.protectedProductTypeIds("F006")).thenReturn(java.util.Set.of("P1", "P2", "P3"));
+            when(products.findAllById(any())).thenReturn(List.of(
+                    product("P1", "F006", "秘制牛肉干"),
+                    product("P2", "OTHER", "麻辣鸭脖"),     // another factory's row never counts
+                    product("P3", "F006", "酱")));         // single-character names never match
+            assertThat(filter.mentionsProtectedProduct("F006", "秘制牛肉干今天做了多少")).isTrue();
+            assertThat(filter.mentionsProtectedProduct("F006", null, "问一下秘制牛肉干")).isTrue();
+            assertThat(filter.mentionsProtectedProduct("F006", "麻辣鸭脖今天做了多少")).isFalse();
+            assertThat(filter.mentionsProtectedProduct("F006", "酱料还剩多少")).isFalse();
+            assertThat(filter.mentionsProtectedProduct("F006", "普通牛肉干今天做了多少")).isFalse();
+        }
+
+        @Test
+        void factoryWithoutProtectedProductsNeverLooksUpNames() {
+            when(access.protectedProductTypeIds("F007")).thenReturn(java.util.Set.of());
+            assertThat(filter.mentionsProtectedProduct("F007", "秘制牛肉干")).isFalse();
+            assertThat(filter.mentionsProtectedProduct(null, "秘制牛肉干")).isFalse();
+            verifyNoInteractions(products);
+        }
+    }
+
+    @Nested
     class SharedCasesWithPython {
 
         @Test
@@ -167,7 +206,18 @@ class TrainingConsentGateContractTest {
     class IntentTrainingSamples {
         @Mock TrainingSampleRepository sampleRepository;
         @Mock TrainingConsentService trainingConsentService;
+        @Mock ProcessSecretSampleFilter processSecretSampleFilter;
         @InjectMocks ExpressionLearningServiceImpl service;
+
+        @Test
+        void utteranceNamingAProcessSecretProductIsNotStored() {
+            when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
+            when(processSecretSampleFilter.mentionsProtectedProduct("F006", "秘制牛肉干今天做了多少"))
+                    .thenReturn(true);
+            assertThat(service.recordSample("F006", "秘制牛肉干今天做了多少", "PRODUCTION_QUERY",
+                    TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
+            verify(sampleRepository, never()).save(any());
+        }
 
         @Test
         void recipeUtteranceIsNotStoredEvenWhenAuthorized() {
@@ -216,7 +266,18 @@ class TrainingConsentGateContractTest {
     class ActiveLearningSamples {
         @Mock ActiveLearningSampleRepository sampleRepository;
         @Mock TrainingConsentService trainingConsentService;
+        @Mock ProcessSecretSampleFilter processSecretSampleFilter;
         @InjectMocks ActiveLearningServiceImpl service;
+
+        @Test
+        void lowConfidenceInputNamingAProcessSecretProductIsNotCollected() {
+            when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
+            when(processSecretSampleFilter.mentionsProtectedProduct("F006", "秘制牛肉干还剩多少", null))
+                    .thenReturn(true);
+            assertThat(service.collectSample("F006", 1L, "秘制牛肉干还剩多少", null, "X",
+                    new BigDecimal("0.3"), "SEMANTIC", null, null, "rec-1")).isNull();
+            verifyNoInteractions(sampleRepository);
+        }
 
         @BeforeEach
         void threshold() {

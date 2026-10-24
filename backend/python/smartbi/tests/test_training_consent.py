@@ -39,6 +39,15 @@ export_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(export_mod)
 
 
+@pytest.fixture(autouse=True)
+def _no_protected_products(monkeypatch):
+    """The export reads process-secret product names from the Cretas database;
+    unit tests have none (tests about the rule set their own names)."""
+    async def _none_map(*_a, **_k):
+        return {}
+    monkeypatch.setattr(export_mod, "all_protected_product_names", _none_map)
+
+
 # ===========================================================================
 # 1. Anonymization: bucket absolute ¥, pseudonymize labels, KEEP %/shape
 # ===========================================================================
@@ -412,3 +421,14 @@ def test_migration_enforces_contract_and_adds_withdrawal_columns():
     for col in ("contract_no", "withdrawn_at", "withdrawn_by", "withdrawal_note"):
         assert f"ADD COLUMN IF NOT EXISTS {col}" in sql
     assert "CHECK (consent_scope = 'none' OR (contract_no IS NOT NULL" in sql
+
+
+def test_rows_naming_a_process_secret_product_are_not_exported():
+    protected = {"F001": frozenset({"秘制牛肉干"})}
+    rows = [_row("F001", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量"),
+            _row("F001", metadata={"desensitized": True}, input_text="普通牛肉干本月销量"),
+            _row("F002", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量")]
+    gated = export_mod.gate_shared_rows(rows, consent={}, protected_names=protected)
+    # F001's protected product is out; the same name in F002 is not F002's protected product
+    assert [(g["row"]["factory_id"], g["row"]["input_text"]) for g in gated] == [
+        ("F001", "普通牛肉干本月销量"), ("F002", "秘制牛肉干本月销量")]

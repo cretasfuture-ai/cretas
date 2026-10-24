@@ -338,3 +338,34 @@ async def test_withdrawn_factory_is_never_stored():
     await _capture(pool, factory_id="F_GONE")
     await _capture(pool, factory_id="F006")          # control: same sample, not withdrawn
     assert [a[2] for _, a in sink] == ["F006"]
+
+
+async def test_sample_naming_a_process_secret_product_is_never_stored(monkeypatch):
+    # privacy clause 6: process-secret products are not used for training
+    from smartbi.services import distillation_capture as dc
+
+    async def names(factory_id, *_a, **_k):
+        return frozenset({"秘制牛肉干"}) if factory_id == "F_PRIV" else frozenset()
+
+    monkeypatch.setattr(dc, "protected_product_names", names)
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    await _capture(pool, factory_id="F_PRIV", input_text="秘制牛肉干本月销量多少")
+    await _capture(pool, factory_id="F_PRIV", teacher_output="秘制牛肉干本月销量增长")
+    await _capture(pool, factory_id="F_PRIV", input_text="普通牛肉干本月销量多少")   # control
+    await _capture(pool, factory_id="F006", input_text="秘制牛肉干本月销量多少")     # not F006's product
+    assert [(a[2], a[6]) for _, a in sink] == [
+        ("F_PRIV", "普通牛肉干本月销量多少"), ("F006", "秘制牛肉干本月销量多少")]
+
+
+async def test_process_secret_lookup_failure_means_not_stored(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("cretas db unavailable")
+
+    monkeypatch.setattr(dc, "protected_product_names", boom)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {"F_PRIV": "private"}), factory_id="F_PRIV")
+    await _capture(_RecordingPool(sink, {}), factory_id="SEED_R")   # synthetic: no lookup, stored
+    assert [a[2] for _, a in sink] == ["SEED_R"]
