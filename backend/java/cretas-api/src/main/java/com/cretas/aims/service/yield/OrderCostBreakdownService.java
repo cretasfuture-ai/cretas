@@ -233,16 +233,33 @@ public class OrderCostBreakdownService {
         // 调料只在绑了它的那道(卤制)上实耗, 前处理批(修油/清洗)有主料投入却没有调料 ——
         // 按批次问就会在每个前处理批上把整张 BOM 的调料再估一遍(双计), 无价的那几味还会阻断成本
         // (F006【演示L3】c644d590: 猪舌/猪大肠两批各估 10 味, 2026-10-25)。
+        // ⚠️ 必须连 CLERK_WIP 批一起看: 计划成本的批次清单 (findByFactoryIdAndProductionPlanId) 排除了逐道录入的
+        //    中间 WIP 批, 调料恰恰实耗在它们身上, 到末道只以半成品投料单价的形式进来 —— 只看清单里的批次,
+        //    末道仍会把整张 BOM 再估一遍 (#1150 上线后 L3A 实测仍 409, 2026-10-25)。
         Map<String, java.util.Set<String>> recordedMaterialTypeIdsByPlan = new LinkedHashMap<>();
         for (ProductionBatch batch : batches) {
-            if (batch.getProductionPlanId() == null) {
+            String planId = batch.getProductionPlanId();
+            if (planId == null || recordedMaterialTypeIdsByPlan.containsKey(planId)) {
                 continue;
             }
-            java.util.Set<String> planRecorded = recordedMaterialTypeIdsByPlan
-                    .computeIfAbsent(batch.getProductionPlanId(), k -> new java.util.HashSet<>());
-            for (MaterialConsumption c : directConsumptionsByBatch.getOrDefault(batch.getId(), List.of())) {
-                if (c.getMaterialTypeId() != null) {
-                    planRecorded.add(c.getMaterialTypeId());
+            java.util.Set<String> planRecorded = new java.util.HashSet<>();
+            recordedMaterialTypeIdsByPlan.put(planId, planRecorded);
+            java.util.Map<Long, ProductionBatch> planBatches = new LinkedHashMap<>();
+            batches.stream().filter(x -> planId.equals(x.getProductionPlanId()))
+                    .forEach(x -> planBatches.put(x.getId(), x));
+            List<ProductionBatch> withWip = batchRepository
+                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId);
+            if (withWip != null) {
+                withWip.forEach(x -> planBatches.putIfAbsent(x.getId(), x));
+            }
+            for (Long batchId : planBatches.keySet()) {
+                List<MaterialConsumption> rows = directConsumptionsByBatch.containsKey(batchId)
+                        ? directConsumptionsByBatch.get(batchId)
+                        : consumptionRepository.findByProductionBatchIdAndFactoryId(batchId, factoryId);
+                for (MaterialConsumption c : rows == null ? List.<MaterialConsumption>of() : rows) {
+                    if (c.getMaterialTypeId() != null) {
+                        planRecorded.add(c.getMaterialTypeId());
+                    }
                 }
             }
         }
