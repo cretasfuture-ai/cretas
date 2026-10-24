@@ -21,8 +21,8 @@ Customer wording: docs sent to the website session the same day.
         suggested to another factory (recommendations only come from a
         reviewed template library);
       - per-person pay / attendance (``PERSONNEL_MARKERS``);
-      - in Q&A, a specific customer name (``mentions_specific_customer``) or a
-        person's name (``mentions_person_name``; surnames 于/向/付/万 are left out
+      - in Q&A and in intent utterances, a specific customer name
+        (``mentions_specific_customer``) or a person's name (``mentions_person_name``; surnames 于/向/付/万 are left out
         because they are mostly function words, so "于经理" is not caught).
     A hit drops the whole sample; masking is no substitute (商业秘密保护规定
     第五至七、十一至十二条: protection is not limited to numbers).
@@ -163,8 +163,10 @@ def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str]) -> 
 
 
 def utterance_has_blocked_content(text: Optional[str]) -> bool:
-    """True when an intent utterance must not be stored (any factory)."""
-    return _hit(text, UTTERANCE_MARKERS)
+    """True when an intent utterance must not be stored (any factory): recipe /
+    parameter content, a specific customer, or a person's name."""
+    return (_hit(text, UTTERANCE_MARKERS) or mentions_specific_customer(text)
+            or mentions_person_name(text))
 
 
 def remove_personal_identifiers(text: Optional[str]) -> Optional[str]:

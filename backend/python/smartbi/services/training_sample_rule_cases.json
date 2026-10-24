@@ -54,7 +54,7 @@
     {
       "text": "联系张三 13812345678 身份证 110101199003071234",
       "authorized": false,
-      "stored": "联系张三 <电话> 身份证 <证件号>"
+      "stored": null
     },
     {
       "text": "打款到 6222021234567890123",
@@ -65,6 +65,46 @@
       "text": "全角数字１２３保持不变",
       "authorized": false,
       "stored": "全角数字１２３保持不变"
+    },
+    {
+      "text": "身份证 110101199003071234 手机 13812345678 登记一下",
+      "authorized": false,
+      "stored": "身份证 <证件号> 手机 <电话> 登记一下"
+    },
+    {
+      "text": "查一下张记食品有限公司这个客户的订单",
+      "authorized": true,
+      "stored": null
+    },
+    {
+      "text": "客户：华联 还欠多少",
+      "authorized": false,
+      "stored": null
+    },
+    {
+      "text": "大客户这个月下了多少单",
+      "authorized": false,
+      "stored": "大客户这个月下了多少单"
+    },
+    {
+      "text": "操作员王五报工",
+      "authorized": false,
+      "stored": null
+    },
+    {
+      "text": "李经理要的报表",
+      "authorized": true,
+      "stored": null
+    },
+    {
+      "text": "联系方式在哪里改",
+      "authorized": false,
+      "stored": "联系方式在哪里改"
+    },
+    {
+      "text": "怎么提高总产量",
+      "authorized": false,
+      "stored": "怎么提高总产量"
     }
   ],
   "qa_cases": [
