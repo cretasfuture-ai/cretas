@@ -1523,7 +1523,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     /**
      * 2B B3 (F3 回写): workflow 批次行产出后, 把对应 workflow 工序任务 (WorkProcessTask) 标记为 COMPLETED
-     * 并回写实际产量, 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
+     * 并重算实际产量 (G08: 该道全部有效行主产出合计, 由 WorkflowTaskProgressWriter 聚合, 不再用本行覆盖),
+     * 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
      *
      * <p><b>fail-soft</b>: 主事务只发布携带精确 Workflow 快照的事件；提交后再用独立事务回写任务进度。
      * 回写异常由监听器隔离，绝不反向回滚已保存的逐道行、物化批次或库存。
@@ -1534,25 +1535,58 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String planId,
             ProcessSheetRowRequest req,
             WorkflowClerkSheetConfigDTO config) {
+        publishWorkflowTaskProgress(factoryId, planId, req.getProcessOrder(), req.getOutputQuantity(),
+                config, true);
+    }
+
+    /**
+     * G08 (2026-10-24): 删除 / 撤回成草稿之后也要让 Workflow 任务产量重算 —— 否则删掉的那行产出永远留在
+     * {@code WorkProcessTask.actualQuantity} 里。只改产量, 不动状态 ({@code markCompleted=false})。
+     *
+     * <p>这些路径上 {@code validateWorkflowRowIfApplicable} 对产出≤0 直接返 null, 拿不到快照,
+     * 所以这里自己读一次。读失败只告警不阻断: 删除是主操作, 进度回写本来就是提交后 best-effort 的投影。
+     */
+    private void requestWorkflowTaskRecompute(String factoryId, String planId, Integer processOrder) {
+        if (applicationEventPublisher == null || workflowClerkSheetService == null || processOrder == null) {
+            return;
+        }
+        WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (Exception e) {
+            log.warn("[workflow-progress] 读 Workflow 快照失败, 本次删除/撤回后未重算工序产量: plan={}, processOrder={}, err={}",
+                    planId, processOrder, e.getMessage());
+            return;
+        }
+        publishWorkflowTaskProgress(factoryId, planId, processOrder, null, config, false);
+    }
+
+    /** 唯一的进度事件出口: 只发「请重算这道工序」, 产量由 WorkflowTaskProgressWriter 从全部有效行聚合。 */
+    private void publishWorkflowTaskProgress(String factoryId, String planId, Integer processOrder,
+                                             BigDecimal triggerRowQuantity,
+                                             WorkflowClerkSheetConfigDTO config, boolean markCompleted) {
         if (applicationEventPublisher == null || config == null
                 || config.getProcesses() == null || config.getWorkflowInstanceId() == null) {
             return;
         }
         WorkflowClerkSheetConfigDTO.ProcessDescriptor desc = config.getProcesses().stream()
                 .filter(p -> p.getProcessOrder() != null
-                        && p.getProcessOrder().equals(req.getProcessOrder()))
+                        && p.getProcessOrder().equals(processOrder))
                 .findFirst()
                 .orElse(null);
         if (desc == null || desc.getWorkflowNodeId() == null) {
             return;
         }
+        String primaryOutputPortId = desc.getOutput() != null ? desc.getOutput().getWorkflowPortId() : null;
         applicationEventPublisher.publishEvent(new WorkflowTaskProgressRequestedEvent(
                 factoryId,
                 planId,
                 config.getWorkflowInstanceId(),
                 desc.getWorkflowNodeId(),
-                req.getProcessOrder(),
-                req.getOutputQuantity()));
+                processOrder,
+                triggerRowQuantity,
+                primaryOutputPortId,
+                markCompleted));
     }
 
     /**
@@ -2508,13 +2542,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             // #1252 中段起步: 旧行若为 SAVED_SFI (保存时已 SFI IN 入库), 任何重存 (改产出/转 DRAFT/转物化)
             //   前先冲销旧 SFI IN (reverseClerkOutput; 下游已消耗则 409 SFI_DOWNSTREAM_CONSUMED 拒绝, 防超扣),
             //   再按新 req 重新入库 —— 避免重复 SFI IN 造幽灵库存。旧行 DRAFT (无入库) 则无冲销。
-            if (ProcessSheetRow.STATUS_SAVED_SFI.equals(existing.getRowStatus())) {
+            boolean wasSavedSfi = ProcessSheetRow.STATUS_SAVED_SFI.equals(existing.getRowStatus());
+            if (wasSavedSfi) {
                 reverseSfiOutput(factoryId, planId, beforeReq);
             }
             if (!hasOutput) {
                 // 仍是 DRAFT —— 仅更新行 payload, 保持 DRAFT, 不物化。
                 updateRowInPlace(existing, req, null, null, "DRAFT");
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+                if (wasSavedSfi) {
+                    // G08: 有产出的行撤回成草稿 → 它的产出不再算进任务产量, 重算。
+                    requestWorkflowTaskRecompute(factoryId, planId, req.getProcessOrder());
+                }
                 return buildResult(req, null, null, null, null, null, true, false, warnings);
             }
             // #1252 纯外部库存 (SFI/FG) 非成品道 (output>0) → 保存时即 SFI IN 入库 (同 create 路径);
@@ -2575,6 +2614,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             reverseMaterialization(factoryId, existing.getBatchId(), wipOpt);
             updateRowInPlace(existing, req, null, null, "DRAFT");
             logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+            // G08: 已物化的行改成产出≤0 (撤回成草稿) → 重算任务产量。
+            requestWorkflowTaskRecompute(factoryId, planId, req.getProcessOrder());
             return buildResult(req, null, null, null, null, null, true, false, warnings);
         }
 
@@ -2639,8 +2680,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                 || r.getClientRowId().startsWith(baseRowId + "#")))
                         .toList()
                 : rows;
+        // G08: 记下删掉的「有效」行属于哪几道 —— 删完让对应 Workflow 任务产量重算。
+        //   草稿行从没计进任务产量, 删它不触发重算 (避免无谓地覆盖同一任务上 App 报工写的产量)。
+        java.util.Set<Integer> recomputeOrders = new java.util.LinkedHashSet<>();
         for (ProcessSheetRow row : targets) {
+            boolean contributed = !"DRAFT".equals(row.getRowStatus())
+                    && !ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus());
             deleteOneRow(factoryId, planId, row, userId);
+            if (contributed && row.getProcessOrder() != null) {
+                recomputeOrders.add(row.getProcessOrder());
+            }
+        }
+        for (Integer order : recomputeOrders) {
+            requestWorkflowTaskRecompute(factoryId, planId, order);
         }
     }
 
