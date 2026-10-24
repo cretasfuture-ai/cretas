@@ -64,12 +64,14 @@ public class WorkflowTaskProgressWriter {
                 .filter(candidate -> event.workflowNodeId().equals(candidate.getWorkflowNodeId()))
                 .findFirst()
                 .orElseThrow(() -> new BusinessException(409, "Workflow 工序任务不存在，无法回写报工进度")
-                        .withCode("WORKFLOW_RUNTIME_TASK_NOT_FOUND"));
+                        .withCode("WORKFLOW_RUNTIME_TASK_NOT_FOUND")
+                        .withHint("工序任务可能已被撤回或重建；刷新生产计划后重新提交这一行报工"));
         // 先锁任务行, 再读行: 并发的两次重算里后拿到锁的那次一定读得到双方已提交的行。
         WorkProcessTask task = taskRepository
                 .findByFactoryIdAndIdForUpdate(event.factoryId(), located.getId())
                 .orElseThrow(() -> new BusinessException(409, "Workflow 工序任务不存在，无法回写报工进度")
-                        .withCode("WORKFLOW_RUNTIME_TASK_NOT_FOUND"));
+                        .withCode("WORKFLOW_RUNTIME_TASK_NOT_FOUND")
+                        .withHint("工序任务可能已被撤回或重建；刷新生产计划后重新提交这一行报工"));
         // 🔴 上面那次不加锁的列表查询已经把这条任务放进一级缓存; 加锁查询虽然发了 FOR UPDATE,
         //    返回的却是缓存里那个【旧实例】, 不会用数据库新值覆盖它的字段。而 saveAndFlush 是全列 UPDATE
         //    (无 @Version / @DynamicUpdate) ⇒ 两次查询之间别人改过的 status 会被写回旧值。
