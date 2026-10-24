@@ -99,6 +99,22 @@ describe('dynamic quality inspection screen', () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
+  it('shows a localized network retry action and preserves the actual draft after an offline failure', async () => {
+    api.submitDynamicInspection.mockRejectedValueOnce(new Error('Network Error'));
+    render(<QIFormScreen />);
+    await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+    fireEvent.changeText(screen.getByPlaceholderText('填写实测值'), '8.5');
+    fireEvent.changeText(screen.getByPlaceholderText('备注（可选）'), 'QA note retained');
+    fireEvent.press(screen.getByText('提交质检结果'));
+    await waitFor(() => expect(screen.getByText('form.checkNetworkAndRetry')).toBeTruthy());
+    expect(screen.queryByText('Network Error')).toBeNull();
+    expect(screen.getByPlaceholderText('填写实测值').props.value).toBe('8.5');
+    expect(screen.getByPlaceholderText('备注（可选）').props.value).toBe('QA note retained');
+    expect(api.submitDynamicInspection).toHaveBeenCalledTimes(1);
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(screen.queryByText('刷新标准（保留已填写答案）')).toBeNull();
+  });
+
   it('renders boolean standards as explicit yes/no choices', async () => {
     api.getDynamicQualityForm.mockResolvedValue({
       batchId, batchNumber: 'PB-1885', productTypeId: 'QA-S301-A', productName: 'QA product A', standardRevision: 'rev-bool',

@@ -69,6 +69,7 @@ export function checkQualityInspectionSubmission(
 }
 
 interface ApiErrorShape {
+  code?: unknown;
   message?: unknown;
   response?: {
     data?: {
@@ -80,6 +81,7 @@ interface ApiErrorShape {
 export function getQualityInspectionSubmitErrorMessage(
   error: unknown,
   fallback: string,
+  networkMessage: string = fallback,
 ): string {
   if (typeof error !== 'object' || error === null) return fallback;
 
@@ -87,6 +89,13 @@ export function getQualityInspectionSubmitErrorMessage(
   const backendMessage = apiError.response?.data?.message;
   if (typeof backendMessage === 'string' && backendMessage.trim()) {
     return backendMessage;
+  }
+  if (!apiError.response && (
+    ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'].includes(String(apiError.code))
+    || (typeof apiError.message === 'string'
+      && /^(network error|network request failed|timeout of \d+ms exceeded)$/i.test(apiError.message.trim()))
+  )) {
+    return networkMessage;
   }
   if (typeof apiError.message === 'string' && apiError.message.trim()) {
     return apiError.message;
