@@ -613,8 +613,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal totalPotKg = potRawKgs.stream().filter(Objects::nonNull)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             int potCount = potRawKgs.size();
-            BigDecimal equalPotKg = potCount == 0 ? BigDecimal.ZERO
-                    : totalPotKg.divide(BigDecimal.valueOf(potCount), 12, RoundingMode.HALF_UP);
             for (BomSeasoningItem item : seasoningItems) {
                 if (item.getMaterialTypeId() == null || item.getDosagePerKgG() == null
                         || item.getDosagePerKgG().signum() <= 0) {
@@ -635,9 +633,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         ? inputKg : totalPotKg;
                 if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
                         && item.getSubsequentPotRatio() != null && potCount > 0) {
-                    BigDecimal factor = BigDecimal.ONE.add(
-                            BigDecimal.valueOf(potCount - 1L).multiply(item.getSubsequentPotRatio()));
-                    effectiveRawKg = equalPotKg.multiply(factor);
+                    // 锅序口径唯一真值在 RecipeCostCalculator: 扣料与成本必须同一个数
+                    effectiveRawKg = com.cretas.aims.service.recipe.RecipeCostCalculator
+                            .effectivePotRawKg(potRawKgs, item.getSubsequentPotRatio());
                 }
                 BigDecimal quantityKg = effectiveRawKg
                         .multiply(item.getDosagePerKgG())
