@@ -195,6 +195,82 @@ class OrderCostBreakdownSfiFeedTest {
         assertThat(dto.getPerBoxCost()).isEqualByComparingTo("8");
     }
 
+    /**
+     * 上游 WIP 批吃进的常驻半成品, 成本必须沿 WIP 链带到成品 ——
+     * F006【演示L4】8d77ec57 (2026-10-24): 分割后鸡胸入 SFI ¥1142.90, 熟制批投它,
+     * 白切鸡胸成品成本只算了本道 ¥692.46 (上游 SFI 投料只在末道批自身查, 链上丢失)。
+     */
+    @Test
+    @DisplayName("上游 WIP 批的 SFI 投料沿链计入: 成品批全量消耗上游批 → semiFeedCost=60kg@19=1140")
+    void upstreamWipBatchSfiFeedFlowsIntoFinishedCost() {
+        Long upstreamBatchId = 800L;
+        com.cretas.aims.entity.MaterialConsumption c = new com.cretas.aims.entity.MaterialConsumption();
+        c.setBatchId("MB-WIP-800");
+        c.setProductionBatchId(batchId);
+        c.setQuantity(new BigDecimal("48"));
+        c.setUnitPrice(new BigDecimal("2"));
+        c.setTotalCost(new BigDecimal("96"));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(batchId, F)).thenReturn(List.of(c));
+        com.cretas.aims.entity.MaterialBatch wip = new com.cretas.aims.entity.MaterialBatch();
+        wip.setId("MB-WIP-800");
+        wip.setBatchNumber("CLK-W-UP");
+        wip.setSourceDocType("PRODUCTION_BATCH");
+        wip.setSourceDocId(upstreamBatchId.toString());
+        wip.setReceiptQuantity(new BigDecimal("48"));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-WIP-800", F)).thenReturn(Optional.of(wip));
+        when(yieldReportService.getYield(F, upstreamBatchId))
+                .thenReturn(BatchYieldDTO.builder().totalLaborCost(BigDecimal.ZERO).steps(List.of()).build());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, F)).thenReturn(new ArrayList<>());
+        when(processSheetRowRepository.findByFactoryIdAndBatchId(F, batchId)).thenReturn(new ArrayList<>());
+        ProcessSheetRow upstreamRow = rowWithFeed("SFI-BREAST", "60", true, false);
+        upstreamRow.setBatchId(upstreamBatchId);
+        when(processSheetRowRepository.findByFactoryIdAndBatchId(F, upstreamBatchId)).thenReturn(List.of(upstreamRow));
+        when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(eq(F), eq("SFI-BREAST"), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.getSemiUnitCost(F, "SFI-BREAST")).thenReturn(new BigDecimal("19"));
+
+        OrderCostBreakdownDTO dto = service.computeByBatch(F, BN, false);
+
+        assertThat(dto.getSemiFeedCost()).isEqualByComparingTo("1140");
+        assertThat(dto.getTotalCost()).isNotNull();
+        assertThat(dto.getTotalCost()).isGreaterThanOrEqualTo(new BigDecimal("1140"));
+    }
+
+    @Test
+    @DisplayName("上游 WIP 批的 SFI 投料成本未知 → 整单诚实 null, 不按 0 计")
+    void upstreamWipBatchSfiFeedUnknownMakesTotalUnknown() {
+        Long upstreamBatchId = 801L;
+        com.cretas.aims.entity.MaterialConsumption c = new com.cretas.aims.entity.MaterialConsumption();
+        c.setBatchId("MB-WIP-801");
+        c.setProductionBatchId(batchId);
+        c.setQuantity(new BigDecimal("10"));
+        c.setUnitPrice(new BigDecimal("2"));
+        c.setTotalCost(new BigDecimal("20"));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(batchId, F)).thenReturn(List.of(c));
+        com.cretas.aims.entity.MaterialBatch wip = new com.cretas.aims.entity.MaterialBatch();
+        wip.setId("MB-WIP-801");
+        wip.setBatchNumber("CLK-W-UP2");
+        wip.setSourceDocType("PRODUCTION_BATCH");
+        wip.setSourceDocId(upstreamBatchId.toString());
+        wip.setReceiptQuantity(new BigDecimal("10"));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-WIP-801", F)).thenReturn(Optional.of(wip));
+        when(yieldReportService.getYield(F, upstreamBatchId))
+                .thenReturn(BatchYieldDTO.builder().totalLaborCost(BigDecimal.ZERO).steps(List.of()).build());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, F)).thenReturn(new ArrayList<>());
+        when(processSheetRowRepository.findByFactoryIdAndBatchId(F, batchId)).thenReturn(new ArrayList<>());
+        ProcessSheetRow upstreamRow = rowWithFeed("SFI-NOCOST", "10", true, false);
+        upstreamRow.setBatchId(upstreamBatchId);
+        when(processSheetRowRepository.findByFactoryIdAndBatchId(F, upstreamBatchId)).thenReturn(List.of(upstreamRow));
+        when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(eq(F), eq("SFI-NOCOST"), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.getSemiUnitCost(F, "SFI-NOCOST")).thenReturn(null);
+
+        OrderCostBreakdownDTO dto = service.computeByBatch(F, BN, false);
+
+        assertThat(dto.isCostComplete()).isFalse();
+        assertThat(dto.getTotalCost()).isNull();
+    }
+
     @Test
     @DisplayName("R4 脱敏: maskPrice → semiFeedCost 与其它金额一并 null (物理量保留)")
     void maskPriceNullsSemiFeedCost() {

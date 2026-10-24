@@ -490,6 +490,9 @@ public class OrderCostBreakdownService {
                 labor = labor.add(up[0]);
                 seasoning = seasoning.add(up[1]);
                 upstreamByproductCredit = upstreamByproductCredit.add(up[2]);
+                semiFeedCost = semiFeedCost.add(up[3]);
+                anySemiFeed = anySemiFeed || up[4].signum() > 0;
+                semiFeedUnknown = semiFeedUnknown || up[5].signum() > 0;
             }
 
             // ── R4: 本批 process-row 的 SFI/FG 投料成本 (MaterialConsumption 之外的边) ──
@@ -1469,7 +1472,9 @@ public class OrderCostBreakdownService {
      */
     private BigDecimal[] aggregateUpstreamLaborSeasoning(String factoryId, MaterialConsumption c,
                                                          int depth, java.util.Set<Long> visited) {
-        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        // [labor, seasoning, byproductCredit, semiFeedKnown, semiFeedAny(0/1), semiFeedUnknown(0/1)]
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
         if (c.getBatchId() == null || depth >= MAX_DEPTH) {
             return zero;
         }
@@ -1486,26 +1491,41 @@ public class OrderCostBreakdownService {
         BigDecimal labor = self[0];
         BigDecimal seasoning = self[1];
         BigDecimal byproductCredit = self[2];   // ★ 副产回收沿 WIP 链传播 (严格审计 2026-06-25)
-        // 再递归该上游批的消耗 → 更上游的 人工/调料/副产
+        // 上游生产批自身 process-row 的 SFI/FG 投料 —— 从前只算末道批自身(accumulateStockFeedCost(b)),
+        // 上游 WIP 批吃进的常驻半成品成本沿链丢失 (F006【演示L4】8d77ec57: 鸡胸分割后入 SFI ¥1142.90,
+        // 熟制批投它, 白切鸡胸成品成本只剩本道 ¥692.46)。与本批同一个计价服务, 不双计:
+        // SFI/FG 投料边不写 MaterialConsumption, traceCost 永远看不到它们。
+        ProductionBatch upstreamBatch = new ProductionBatch();
+        upstreamBatch.setId(upstreamBatchId);
+        BigDecimal[] feed = accumulateStockFeedCost(factoryId, upstreamBatch);
+        BigDecimal semiFeed = feed[0];
+        boolean semiAny = feed[1].signum() > 0;
+        boolean semiUnknown = feed[2].signum() > 0;
+        // 再递归该上游批的消耗 → 更上游的 人工/调料/副产/投料
         for (MaterialConsumption u : consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId)) {
             BigDecimal[] r = aggregateUpstreamLaborSeasoning(factoryId, u, depth + 1, visited);
             labor = labor.add(r[0]);
             seasoning = seasoning.add(r[1]);
             byproductCredit = byproductCredit.add(r[2]);
+            semiFeed = semiFeed.add(r[3]);
+            semiAny = semiAny || r[4].signum() > 0;
+            semiUnknown = semiUnknown || r[5].signum() > 0;
         }
-        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料/副产 × consumedQty/upstreamReceiptQty。
+        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料/副产/投料 × consumedQty/upstreamReceiptQty。
         BigDecimal consumedQty = nz(c.getQuantity());
         BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
         if (consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
             labor = labor.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
             seasoning = seasoning.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
             byproductCredit = byproductCredit.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            semiFeed = semiFeed.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
         }
         // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
         // ★ 严格审计 2026-06-25: 路径作用域出栈 — 允许兄弟 diamond 路径遍历同上游
         // (否则第二条路径被误判为环 → 返 zero → diamond 下 labor/调料/副产少计; 镜像 traceCost)。
         visited.remove(upstreamBatchId);
-        return new BigDecimal[]{labor, seasoning, byproductCredit};
+        return new BigDecimal[]{labor, seasoning, byproductCredit, semiFeed,
+                semiAny ? BigDecimal.ONE : BigDecimal.ZERO, semiUnknown ? BigDecimal.ONE : BigDecimal.ZERO};
     }
 
     /**
