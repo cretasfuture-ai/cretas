@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#fdfcfa">
 <title>数据安全 · 白垩纪 Cretas</title>
-<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看需授权并留痕，配方和工艺未经授权不用于训练模型。每一条都写明是怎么做到的。">
+<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看会留下记录，工艺和配方任何情况下都不用于训练模型。每一条都写明是怎么做到的。">
 <link rel="canonical" href="https://cretaceousfuture.com/data-security/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="数据安全 · 白垩纪 Cretas">
@@ -152,8 +152,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <a href="#q-platform">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
     <li class="v6-reveal">
-      <b>配方工艺不外用</b>
-      <p>没有你的书面授权，配方和工艺不用于训练模型。</p>
+      <b>工艺配方不进训练</b>
+      <p>工艺参数、配方和工序做法，任何情况下都不用于训练。</p>
       <a href="#q-training">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
   </ol>
@@ -265,11 +265,13 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="qrow v6-reveal" id="q-training">
     <h3>我的数据会被拿去训练模型吗？</h3>
     <div>
-      <p class="ans" data-claim="C3-recipe-process" data-claim-status="commitment">配方和工艺不会。没有你的书面授权，我们不用你的配方和工艺训练模型。</p>
+      <p class="ans" data-claim="C3-process-never" data-claim-status="live">工艺内容不会，任何情况下都不会。</p>
       <span class="how-label">怎么做到</span>
       <ul>
-        <li data-claim="C3-recipe-gate" data-claim-status="commitment">配方和工艺数据默认不进入训练；只有你书面授权后才会使用。</li>
-        <li data-claim="C3-other-data" data-claim-status="policy">其他业务数据，例如生产、库存、成本、经营数字和 AI 问答，会用于改进我们的模型，让 AI 更懂食品工厂。这一点写在隐私政策里。</li>
+        <li data-claim="C3-process-never" data-claim-status="live">工艺参数、配方和原料用量、工序先后和合并方式、问题的处理办法，都不进入训练，授权了也一样。</li>
+        <li data-claim="C3-desensitized" data-claim-status="live">用于改进模型的只有经营数字的汇总指标，以及脱敏后的 AI 问答：门店、产品、供应商、工厂名换成代号，电话和证件号删除，金额只保留区间。</li>
+        <li data-claim="C3-excluded" data-claim-status="live">价格、折扣、账期、交易对象、客户名单、合同、工资考勤、个人信息、摄像头画面、录音和上传的原始文件，都不用于训练。</li>
+        <li data-claim="C3-no-cross-process" data-claim-status="live">平台不分析、不比对任何工厂的工艺流程，你的工艺只用来运行你自己的系统。</li>
       </ul>
     </div>
   </div>
