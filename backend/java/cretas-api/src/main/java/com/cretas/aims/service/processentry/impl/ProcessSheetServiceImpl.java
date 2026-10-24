@@ -159,6 +159,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     /** 回料按配比自动扣减 (正式提交时在 consumeReworkInputs 之前追加回料投料)。 */
     @Autowired(required = false)
     private ReworkPolicyAutoDeduction reworkPolicyAutoDeduction;
+    /** 多产出分摊时读副产 SKU 单价 (副产按可变现净值先扣)。未注入 → 副产照常按重量分摊并告警。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
     /** Workflow progress is projected only after the process-sheet transaction commits. */
     @Autowired(required = false)
@@ -1725,7 +1728,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 4. 成本只汇总一次，再按可追溯规则分到每个产出。副产回收不冲减库存批成本，
         //    仍由既有 OrderCostBreakdownService 按各产出 YIELD 报工单独冲减，避免重复计价。
-        applyMultiOutputCostAllocation(factoryId, planId, materializations);
+        applyMultiOutputCostAllocation(factoryId, planId, materializations,
+                byproductPortIds(workflowConfig, req.getProcessOrder()), warnings);
 
         // 5. workflow 任务进度回写一次 (整道工序完成)
         stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
@@ -1928,10 +1932,76 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return minutes.divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP);
     }
 
+    private static Set<String> byproductPortIds(WorkflowClerkSheetConfigDTO config, Integer processOrder) {
+        if (config == null || config.getProcesses() == null || processOrder == null) {
+            return Set.of();
+        }
+        return config.getProcesses().stream()
+                .filter(p -> processOrder.equals(p.getProcessOrder()))
+                .flatMap(p -> workflowOutputs(p).stream())
+                .filter(port -> Boolean.TRUE.equals(port.getByproduct()) && port.getWorkflowPortId() != null)
+                .map(WorkflowClerkSheetConfigDTO.PortDescriptor::getWorkflowPortId)
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * 副产先按可变现净值(数量 × 副产 SKU 单价)取走固定份额, 剩余按原有口径(重量)分给其余产出。
+     * owner 2026-10-24 裁定「一进多出按产出重量比例分摊, 副产按可变现净值先扣除」。
+     *
+     * <p>副产单价未知 → 该副产保留原比例(重量)并告警 —— ⛔ 不编一个 0 价把副产成本压成 0,
+     * 那会让主产出成本虚高。单价往往是事后在副产定价确认里补的, 所以这条告警是常态不是异常。
+     */
+    private CostAllocationPlan applyByproductNrv(String factoryId, CostAllocationPlan base,
+                                                 List<MultiOutputMaterialization> materializations,
+                                                 BigDecimal jointCost,
+                                                 Set<String> byproductPortIds,
+                                                 List<String> warnings) {
+        if (byproductPortIds.isEmpty() || jointCost == null || jointCost.signum() <= 0
+                || "EXPLICIT_RATIO".equals(base.basis())) {
+            return base;
+        }
+        int n = materializations.size();
+        List<BigDecimal> nrvValues = new ArrayList<>(java.util.Collections.nCopies(n, null));
+        BigDecimal fixedTotal = BigDecimal.ZERO;
+        for (int i = 0; i < n; i++) {
+            ProcessSheetRowRequest.OutputLine output = materializations.get(i).output();
+            if (!byproductPortIds.contains(output.getWorkflowPortId())) {
+                continue;
+            }
+            BigDecimal price = rawMaterialTypeRepository == null ? null
+                    : rawMaterialTypeRepository.findByIdAndFactoryId(output.getProductTypeId(), factoryId)
+                            .map(m -> m.getUnitPrice() != null && m.getUnitPrice().signum() > 0
+                                    ? m.getUnitPrice() : m.getMovingAvgPrice())
+                            .filter(p -> p != null && p.signum() > 0)
+                            .orElse(null);
+            if (price == null) {
+                warnings.add("副产「" + output.getProductTypeId() + "」没有单价, 本次按重量分摊成本; "
+                        + "确认副产单价后可按可变现净值重算");
+                continue;
+            }
+            BigDecimal value = output.getQuantity().multiply(price);
+            nrvValues.set(i, value);
+            fixedTotal = fixedTotal.add(value);
+        }
+        if (fixedTotal.signum() == 0) {
+            return base;
+        }
+        List<BigDecimal> ratios = ByproductNrvAllocation.ratios(base.ratios(), nrvValues, jointCost);
+        if (ratios == null) {
+            // 副产净值超过本道总成本: 说明价或量录错了, 不让主产出成本变负 —— 回到重量口径并告警。
+            warnings.add("副产可变现净值合计 ¥" + fixedTotal.setScale(2, RoundingMode.HALF_UP)
+                    + " 超过本道总成本 ¥" + jointCost.setScale(2, RoundingMode.HALF_UP) + ", 本次按重量分摊");
+            return base;
+        }
+        return new CostAllocationPlan(ratios, base.basis() + "+BYPRODUCT_NRV");
+    }
+
     private void applyMultiOutputCostAllocation(
             String factoryId,
             String planId,
-            List<MultiOutputMaterialization> materializations) {
+            List<MultiOutputMaterialization> materializations,
+            Set<String> byproductPortIds,
+            List<String> warnings) {
         CostAllocationPlan plan = resolveCostAllocationPlan(materializations);
         BigDecimal jointCost = BigDecimal.ZERO;
         boolean costKnown = true;
@@ -1961,6 +2031,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
         }
 
+        if (costKnown) {
+            plan = applyByproductNrv(factoryId, plan, materializations, jointCost, byproductPortIds, warnings);
+        }
         List<BigDecimal> allocatedTotals = allocateMoney(costKnown ? jointCost : null, plan.ratios());
         List<BigDecimal> allocatedMaterial = allocateMoney(costKnown ? materialPool : null, plan.ratios());
         List<BigDecimal> allocatedLabor = allocateMoney(costKnown ? laborPool : null, plan.ratios());
