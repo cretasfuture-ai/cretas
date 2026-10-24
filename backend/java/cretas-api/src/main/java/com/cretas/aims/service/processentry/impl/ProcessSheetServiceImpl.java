@@ -4209,6 +4209,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         if (req.getUpstreamSources() != null) {
             for (ProcessSheetRowRequest.UpstreamRef input : req.getUpstreamSources()) {
+                // 按画布 reworkPolicy 自动追加的回料(ReworkPolicyAutoDeduction)来自回料 Cell, 回料 Cell
+                // 不是本工序的投入端口(它是下游金检的产出, 连回来会成环), 天生没有 workflowPortId。
+                // 送进 resolveInputPort 时: 多投入工序必抛「多投入报工必须逐项指定 Workflow 投入端口」,
+                // 单投入工序则被兜底到那个端口再撞 SKU 白名单 —— 与上面自动分摊的包材/调料同形。
+                //
+                // 线上实证 (F006【演示L5】绞肉搅拌 4 个投入端口, 2026-10-24): 同一报工请求在回料库存为 0 时成功,
+                // 上一批产出回料入 SFI 后同一请求必 409 —— 回料库存一存在, 这道工序就再也报不了工。
+                //
+                // ⛔ 只放行服务端能证实是回料的来源: automaticRework 是客户端也能回显的字段,
+                //    不核验就等于给任意上游开了绕过端口白名单的口子。
+                if (isVerifiedAutomaticRework(factoryId, input)) {
+                    continue;
+                }
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 String selectedSkuId = resolveAllowedUpstreamSku(
@@ -4256,6 +4269,23 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withCode("PROCESS_SHEET_INPUT_QUANTITY_INVALID")
                     .withSeverity("BLOCKING");
         }
+    }
+
+    /**
+     * 自动回料引用是否经服务端证实: 标了 automaticRework、指向常驻 SFI、该 SFI 确为回料
+     * ({@code is_rework=true}) 且 SKU 与引用一致。任何一条不满足都回到普通端口校验。
+     */
+    private boolean isVerifiedAutomaticRework(String factoryId, ProcessSheetRowRequest.UpstreamRef input) {
+        if (input == null || !input.isAutomaticRework() || !input.isSemiFinished()
+                || input.getSourceBatchNumber() == null || input.getSourceBatchNumber().isBlank()
+                || wipRepo == null) {
+            return false;
+        }
+        return wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                        factoryId, input.getSourceBatchNumber().trim())
+                .filter(source -> Boolean.TRUE.equals(source.getIsRework()))
+                .filter(source -> input.getSkuId() == null || input.getSkuId().equals(source.getProductTypeId()))
+                .isPresent();
     }
 
     private static com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor resolveInputPort(
