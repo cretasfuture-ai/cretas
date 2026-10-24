@@ -349,6 +349,107 @@ class TestBudgetChartIsReadable:
         assert '累计达成率(%)' in rows
 
 
+def _charts(rows, **kw):
+    r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, **kw)
+    return r, {c['chartType']: c for c in r['charts']}
+
+
+class TestMonthOverMonth:
+    """客户需求「实际与同期、环比」: 环比原来只在图顶部一排没标签的小字里 (环比线因默认「综合」模式永远不画)。"""
+
+    ROWS = [{'月份': f'{m}月', '实际': a, '上年': ly} for m, a, ly in [(1, 100, 90), (2, 120, 100), (3, 90, 95), (4, 108, 100)]]
+
+    def test_mom_line_is_drawn_and_named(self):
+        opt = _charts(self.ROWS)[1]['yoy_mom_comparison']['echartsOption']
+        mom = next(s for s in opt['series'] if s['name'] == '环比增长率')
+        assert mom['type'] == 'line'
+        assert mom['data'][:4] == [None, 20.0, -25.0, 20.0]
+        assert all(v is None for v in mom['data'][4:])  # 没上传的月份是空, 不是 0
+        assert '环比增长率' in opt['legend']['data']
+
+    def test_latest_mom_is_a_kpi_with_its_month(self):
+        kpis = {k['label']: k for k in _charts(self.ROWS)[1]['yoy_mom_comparison']['kpis']}
+        assert kpis['最近月环比']['value'] == '4月 +20.0'
+        assert kpis['最近月环比']['unit'] == '%'
+
+    def test_unlabeled_mom_row_is_gone(self):
+        opt = _charts(self.ROWS)[1]['yoy_mom_comparison']['echartsOption']
+        top_row = [g for g in opt.get('graphic', []) if g.get('top') == '7%']
+        assert top_row == []
+
+    def test_single_month_has_no_mom_kpi(self):
+        kpis = {k['label']: k for k in _charts(self.ROWS[:1])[1]['yoy_mom_comparison']['kpis']}
+        assert kpis['最近月环比']['value'] == '-'
+
+
+class TestBusinessUnits:
+    """客户需求「从各业务单元」: 能识别事业部 / 部门列, 但原来没有对应的图。"""
+
+    ROWS = [
+        {'月份': f'{m}月', '事业部': bu, '预算': b, '实际': a, '上年': ly}
+        for m in (1, 2)
+        for bu, b, a, ly in [('华东', 500, 600, 450), ('华南', 400, 300, 320), ('西南', 100, 100, 50)]
+    ]
+
+    def test_units_are_compared_by_actual_share_achievement_and_yoy(self):
+        chart = _charts(self.ROWS)[1]['business_unit_analysis']
+        kpis = {k['label']: k['value'] for k in chart['kpis']}
+        assert kpis['业务单元数'] == '3个'
+        assert kpis['实际最大'] == '华东 (60.0%)'
+        assert kpis['达成最低'] == '华南 (75.0%)'
+        assert kpis['同比增长最快'] == '西南 (+100.0%)'
+        opt = chart['echartsOption']
+        assert opt['yAxis']['data'] == ['西南', '华南', '华东']  # 横向条形, 最大的在最上面
+        assert [s['name'] for s in opt['series']][:2] == ['实际', '预算']
+
+    def test_pnl_sheet_counts_revenue_rows_only(self):
+        rows = [{'月份': '1月', '事业部': bu, '项目': item, '实际': v}
+                for bu, item, v in [('华东', '营业收入', 1000), ('华东', '营业成本', 600), ('华南', '营业收入', 500), ('华南', '营业成本', 450)]]
+        chart = _charts(rows)[1]['business_unit_analysis']
+        kpis = {k['label']: k['value'] for k in chart['kpis']}
+        assert kpis['实际最大'] == '华东 (66.7%)'
+
+    def test_missing_unit_column_is_explained(self):
+        r, charts = _charts(BUDGET_12)
+        assert 'business_unit_analysis' not in charts
+        gap = next(u for u in r['unavailableCharts'] if u['chartType'] == 'business_unit_analysis')
+        assert gap['gapKind'] == 'column' and '「事业部' in gap['reason']
+
+
+class TestFindings:
+    """客户需求「好的与不好的、建议」: 原来只有 AI 生成; 现在先给规则算出来的, 每条都带数字。"""
+
+    def test_budget_sheet_names_good_quarters_and_the_weak_one(self):
+        f = svc.generate_dashboard(pd.DataFrame(BUDGET_12), 2026, 'all', 1, 12)['findings']
+        assert any('Q4 达成 110.0%' in g for g in f['good'])
+        assert any('Q1 只达成 20.0%' in a for a in f['attention'])
+        assert any(s.startswith('Q1') and '缺口' in s for s in f['suggestions'])
+        for line in f['good'] + f['attention'] + f['suggestions']:
+            assert re.search(r'\d', line), line
+
+    def test_expense_sheet_flags_the_overrun_months(self):
+        rows = [{'月份': f'{m}月', '预算': 100, '实际': a, '上年': 110} for m, a in [(1, 90), (2, 280), (3, 120)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, sheet_name='费用预算')['findings']
+        assert any('超预算' in a and '163.3%' in a for a in f['attention'])
+        assert any('2月' in s and '280.0%' in s for s in f['suggestions'])
+        assert not any('超支' in g for g in f['good'])
+
+    def test_yoy_decline_months_are_attention(self):
+        f = svc.generate_dashboard(pd.DataFrame(TestMonthOverMonth.ROWS), 2026, 'all', 1, 12)['findings']
+        assert any('同比增长' in g for g in f['good'])
+        assert any('3月' in a and '比上年' in a for a in f['attention'])
+
+    def test_business_unit_below_target_gets_a_suggestion(self):
+        f = svc.generate_dashboard(pd.DataFrame(TestBusinessUnits.ROWS), 2026, 'all', 1, 12)['findings']
+        assert any('华南' in a and '75.0%' in a for a in f['attention'])
+        assert any('华南' in s for s in f['suggestions'])
+
+    def test_ratio_sheet_has_no_amount_findings(self):
+        rows = [{'月份': '1月', '本年毛利率': '25%', '上年毛利率': '20%'}]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert f is None
+
+
 class TestSlicerScope:
     """线上验收 (2026-10-22): 点筛选器「3月」后数字已是 3 月的, 页首结论和期间标签仍写「全部历史」。
     期间标签要说清楚这些数字是哪一部分数据。走真实 /batch 入口 (筛选在接口层生效)。"""

@@ -20,6 +20,7 @@ import {
   periodRequestLabel,
   dashboardRenderKey,
   createQueryHistory,
+  findingSections,
 } from './financialDashboardState';
 import type { PeriodRequest } from './financialDashboardState';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
@@ -329,6 +330,7 @@ const resolvedPeriod = computed<PeriodRequest>(() => ('error' in periodRequest.v
   : periodRequest.value));
 const periodButtonLabel = computed(() => periodRequestLabel(periodRequest.value));
 const headline = computed(() => dashboardResponse.value?.headline ?? null);
+const ruleFindings = computed(() => findingSections(dashboardResponse.value?.findings));
 
 function applyPeriod() {
   periodPopoverOpen.value = false;
@@ -475,6 +477,7 @@ const chartTypes = [
  { key: 'category_yoy_comparison', label: '品类同期对比', icon: '', group: '品类与渠道', order: 4 },
  { key: 'category_structure_donut',label: '产品结构', icon: '', group: '品类与渠道', order: 5 },
  { key: 'channel_analysis', label: '渠道分析', icon: '', group: '品类与渠道', order: 6 },
+ { key: 'business_unit_analysis', label: '业务单元分析', icon: '', group: '品类与渠道', order: 6 },
  { key: 'cash_flow_waterfall', label: '现金流量瀑布图', icon: '', group: '现金流与成本', order: 7 },
  { key: 'cashflow_trend', label: '现金流趋势', icon: '', group: '现金流与成本', order: 8 },
  { key: 'cost_flow_sankey', label: '成本流向桑基图', icon: '', group: '现金流与成本', order: 9 },
@@ -2142,11 +2145,23 @@ onBeforeUnmount(() => {
                 </el-button>
               </div>
             </template>
+            <!-- 规则结论: 按表内数据算出来, 每条带数字; AI 的段落在下面作补充 -->
+            <div v-if="ruleFindings.length" class="findings" data-testid="findings">
+              <section v-for="sec in ruleFindings" :key="sec.key" class="findings__group" :class="`findings__group--${sec.key}`">
+                <h4 class="findings__title">{{ sec.title }}</h4>
+                <ul class="findings__list">
+                  <li v-for="(item, i) in sec.items" :key="i">{{ item }}</li>
+                </ul>
+              </section>
+              <p class="findings__source">以上按表内数据算出。下面是 AI 汇总各图后的补充，可以重新生成。</p>
+            </div>
+            <p v-else class="findings__none" data-testid="findings-none">这份数据算不出规则结论（例如只有百分比的比率表）。可以让 AI 汇总各图的分析。</p>
+
+            <h4 class="findings__ai-title">AI 补充</h4>
             <ChartSkeleton v-if="conclusionsLoading" type="ai" />
             <div v-else-if="conclusionsText" class="analysis-text" v-html="renderAnalysis(conclusionsText)" />
-            <div v-else style="text-align: center; padding: 40px; color: #909399">
-              <p>汇总所有图表的分析结果，生成整体结论与建议</p>
-              <el-button type="primary" style="margin-top: 16px" @click="generateConclusions">生成分析结论</el-button>
+            <div v-else class="findings__ai-empty">
+              <el-button type="primary" @click="generateConclusions">生成 AI 补充</el-button>
             </div>
           </el-card>
         </template>
@@ -2759,6 +2774,37 @@ onBeforeUnmount(() => {
 }
 
 /* Interaction tips */
+.findings {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.findings__title,
+.findings__ai-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary, #303133);
+}
+.findings__group--good .findings__title { color: #1B7A4A; }
+.findings__group--attention .findings__title { color: #C0362C; }
+.findings__list {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.8;
+  font-size: 14px;
+  color: var(--el-text-color-primary, #303133);
+}
+.findings__source,
+.findings__none {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--el-text-color-regular, #606266);
+}
+.findings__ai-empty {
+  padding: 16px 0;
+}
+
 .data-source-tag {
   display: inline-flex;
   align-items: center;
