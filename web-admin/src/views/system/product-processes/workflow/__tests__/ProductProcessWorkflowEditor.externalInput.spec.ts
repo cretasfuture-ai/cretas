@@ -98,6 +98,7 @@ interface EditorVm {
   flowEdges: Array<{ id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string }>;
   addInputToProcess: (processId: string) => void;
   confirmAddRawInput: () => void;
+  saveDraft: () => Promise<boolean>;
   rawInputDialog: {
     visible: boolean;
     processId: string;
@@ -164,6 +165,12 @@ beforeEach(() => {
   }));
   api.getProductProcessWorkflowActivation.mockResolvedValue({ success: true, data: null });
   api.getWorkflowBomSyncPreflight.mockResolvedValue({ success: true, data: { classification: 'READY', missingItems: [], conflicts: [] } });
+  api.saveProductProcessWorkflowDraft.mockImplementation(
+    (_factoryId: string, _productTypeId: string, definition: unknown) => Promise.resolve({
+      success: true,
+      data: structuredClone(definition),
+    }),
+  );
 });
 
 async function mountEditor(): Promise<{ wrapper: VueWrapper; vm: EditorVm }> {
@@ -194,6 +201,28 @@ describe('external SEMI_FINISHED source input', () => {
     expect(port).toMatchObject({ direction: 'INPUT', materialKind: 'SEMI_FINISHED', skuId: 'SKU-SEMI-EXT', unit: 'kg' });
     expect(vm.flowEdges).toContainEqual(expect.objectContaining({ source: node?.id, target: 'process:pack', targetHandle: port?.id }));
     expect(wrapper.find('[data-testid="raw-input-modal"]').exists()).toBe(false);
+
+    const saved = await vm.saveDraft();
+    expect(saved).toBe(true);
+    expect(api.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+    const [, , persisted] = api.saveProductProcessWorkflowDraft.mock.calls[0] as [
+      string,
+      string,
+      { nodes: Array<EditorNode & { kind?: string }>; edges: Array<{ source: string; target: string; targetHandle?: string }> },
+    ];
+    const persistedExternal = persisted.nodes.find((item) => item.data.inputSource === 'EXTERNAL');
+    const persistedProcess = persisted.nodes.find((item) => item.id === 'process:pack');
+    const persistedPort = persistedProcess?.data.ports?.find(
+      (item) => item.materialNodeId === persistedExternal?.id,
+    );
+    expect(persistedExternal).toMatchObject({ kind: 'SEMI_FINISHED' });
+    expect(persistedExternal?.data).toMatchObject({ skuId: 'SKU-SEMI-EXT', baseUnit: 'kg' });
+    expect(persistedPort).toMatchObject({ direction: 'INPUT', materialKind: 'SEMI_FINISHED', skuId: 'SKU-SEMI-EXT', unit: 'kg' });
+    expect(persisted.edges).toContainEqual(expect.objectContaining({
+      source: persistedExternal?.id,
+      target: 'process:pack',
+      targetHandle: persistedPort?.id,
+    }));
   });
 
   it('opens the chooser for the first source and allows a RAW input without a relation', async () => {

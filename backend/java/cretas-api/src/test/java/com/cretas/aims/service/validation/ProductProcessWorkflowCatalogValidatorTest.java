@@ -31,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -561,9 +562,66 @@ class ProductProcessWorkflowCatalogValidatorTest {
     }
 
     @Test
+    void rejectsExternalInputForSoftDeletedSku() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        ProductType deleted = product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED);
+        deleted.setDeletedAt(LocalDateTime.now());
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(deleted));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
     void rejectsExternalInputWithoutExactIncomingInputBinding() {
         ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
         definition.getEdges().removeIf(edge -> "edge:external-input".equals(edge.getId()));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputWithProducerOutputBinding() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()
+                .filter(node -> "process:packing".equals(node.getId())).findFirst().orElseThrow();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> ports = (List<Map<String, Object>>) process.getData().get("ports");
+        ports.add(new LinkedHashMap<>(Map.of(
+                "id", "out-external",
+                "direction", "OUTPUT",
+                "materialNodeId", "material:external-semi",
+                "materialKind", "SEMI_FINISHED",
+                "unit", "kg",
+                "ordinal", 1)));
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:external-producer", "process:packing", "out-external",
+                "material:external-semi", "input"));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputWithWrongInputPortHandle() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        definition.getEdges().stream()
+                .filter(edge -> "edge:external-input".equals(edge.getId()))
+                .findFirst().orElseThrow().setTargetHandle("wrong-input-handle");
         when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
                 .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
         when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
