@@ -427,6 +427,19 @@ class TestFindings:
         for line in f['good'] + f['attention'] + f['suggestions']:
             assert re.search(r'\d', line), line
 
+    def test_best_month_is_good_news_even_when_no_quarter_reaches_target(self):
+        # 线上 5250 (2026-10-24): 四个季度都没达标, 但 8 月 124.4%, 「做得好的」原来是空的
+        actuals = [100, 200, 300, 400, 500, 600, 700, 1244, 900, 500, 500, 500]
+        rows = [{'月份': f'{m}月', '预算': 1000, '实际': a} for m, a in zip(range(1, 13), actuals)]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert not any(g.startswith('Q') for g in f['good'])
+        assert '8月 达成 124.4%，各月里最好' in f['good']
+
+    def test_no_month_reaches_target_means_no_month_good_news(self):
+        rows = [{'月份': f'{m}月', '预算': 1000, '实际': 500} for m in range(1, 13)]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert not any('各月里最好' in g for g in f['good'])
+
     def test_expense_sheet_flags_the_overrun_months(self):
         rows = [{'月份': f'{m}月', '预算': 100, '实际': a, '上年': 110} for m, a in [(1, 90), (2, 280), (3, 120)]]
         f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, sheet_name='费用预算')['findings']
