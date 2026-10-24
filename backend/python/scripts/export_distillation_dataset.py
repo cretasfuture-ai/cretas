@@ -31,7 +31,8 @@ so no dedup needed here. NO RLS on the table → reads all factories cross-busin
   - SHARED 导出 (默认, 按 business_type 分桶):
       * 合成行 (SEED_R/SEED_F / metadata.source_kind='synthetic_seed') → 收入。
       * metadata.desensitized 行 (未授权工厂, 采集时已脱敏) → 收入。
-      * shared_anon 工厂的原始行 → 经 anonymize_for_shared 脱敏后收入。
+      * shared_anon 工厂的原始行 → 经 desensitize_for_training 脱敏 (名称换通用标记、
+        数字全部换占位符) 后收入。
       * private 工厂的原始行 → 不进共享导出 (只给它自己的专属模型)。
   - PRIVATE 导出 (--factory F001): 仅当该工厂 consent_scope='private' 时导出其**原始**行
     (不脱敏), 输出 dataset_private_{factory}.jsonl; 否则拒绝并给出清晰提示。
@@ -246,7 +247,7 @@ def gate_shared_rows(
 
     Returned items: {"row", "input_text", "teacher_output", "consent_class"}.
     """
-    from smartbi.services.corpus_anonymize import anonymize_for_shared
+    from smartbi.services.corpus_anonymize import desensitize_for_training
 
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -262,10 +263,9 @@ def gate_shared_rows(
             continue
         scope = _consent_of(r, consent)
         if scope == "shared_anon":
-            anon_in, anon_out = anonymize_for_shared(
+            anon_in, anon_out = desensitize_for_training(
                 r.get("input_text") or "",
                 r.get("teacher_output") or "",
-                r.get("business_type"),
             )
             out.append({"row": r, "input_text": anon_in, "teacher_output": anon_out,
                         "consent_class": "shared_anon"})

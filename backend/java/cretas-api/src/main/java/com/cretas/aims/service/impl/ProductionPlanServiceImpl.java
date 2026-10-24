@@ -7491,6 +7491,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         BigDecimal producedQuantity = BigDecimal.ZERO;
         String quantityUnit = null;
         String canonicalQuantityUnit = null;
+        boolean multiTarget = byStockTargetIds(plan).size() > 1;
+        boolean mixedUnits = false;
         for (String batchNumber : batchNumbers) {
             FinishedGoodsBatch finishedGoods = finishedGoodsBatchRepository
                     .findByFactoryIdAndBatchNumber(factoryId, batchNumber)
@@ -7503,8 +7505,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 quantityUnit = batchUnit;
                 canonicalQuantityUnit = canonicalBatchUnit;
             } else if (!Objects.equals(canonicalQuantityUnit, canonicalBatchUnit)) {
-                throw invalidInterimFinishedGoods("多次小结的成品批次计量单位不一致: "
-                        + quantityUnit + " / " + batchUnit);
+                // 多成品计划各 SKU 单位本来就可以不同(袋/盒) —— 真值在逐 SKU 产出行上, 抬头不加总。
+                // 单成品计划出现两种单位仍是数据错误。
+                if (!multiTarget) {
+                    throw invalidInterimFinishedGoods("多次小结的成品批次计量单位不一致: "
+                            + quantityUnit + " / " + batchUnit);
+                }
+                mixedUnits = true;
             }
 
             BigDecimal batchProduced = zeroIfNull(finishedGoods.getProducedQuantity());
@@ -7529,9 +7536,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setPlanNumber(plan.getPlanNumber());
         settlement.setIdempotencyKey("by-stock-interim:" + latestSession.getId());
         settlement.setPlannedQuantity(zeroIfNull(plan.getPlannedQuantity()));
-        settlement.setActualFinishedQuantity(producedQuantity);
+        // ⛔ 不同单位的数量不能相加: 混合单位时抬头留空, 不编一个「310 袋 + 238 盒 = 548」出来。
+        settlement.setActualFinishedQuantity(mixedUnits ? null : producedQuantity);
         settlement.setActualSemiFinishedQuantity(BigDecimal.ZERO);
-        settlement.setQuantityUnit(quantityUnit);
+        settlement.setQuantityUnit(mixedUnits ? null : quantityUnit);
         settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
         /*
          * SAFETY_STOCK 采用“生产小结即入库”的单一真值：InterimSettle 已经完成扣料并创建
@@ -7546,7 +7554,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setSettledBy(latestSession.getPostedBy());
         settlement.setSettledAt(latestSession.getPostedAt());
         settlement.setWarehouseReceiptIdempotencyKey("by-stock-interim:" + latestSession.getId());
-        settlement.setWarehouseReceivedQuantity(producedQuantity);
+        settlement.setWarehouseReceivedQuantity(mixedUnits ? null : producedQuantity);
         settlement.setWarehouseVarianceQuantity(BigDecimal.ZERO);
         settlement.setWarehouseVarianceReason(null);
         settlement.setWarehouseResponsibilitySide(null);
@@ -7555,10 +7563,130 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setWarehouseReceivedBy(latestSession.getPostedBy());
         settlement.setWarehouseReceivedAt(latestSession.getPostedAt());
         ProductionSettlement saved = productionSettlementRepository.save(settlement);
+        persistByStockSettlementOutputs(factoryId, plan, saved, finishedGoodsBatches);
         log.info("BY_STOCK 结单桥接已对齐小结入库真值: factoryId={}, planId={}, settlementId={}, sessions={}, fgBatches={}, quantity={} {}",
                 factoryId, planId, saved.getId(), sessions.size(), batchNumbers,
-                producedQuantity, quantityUnit);
+                mixedUnits ? "(混合单位, 见产出行)" : producedQuantity, mixedUnits ? "" : quantityUnit);
         return saved;
+    }
+
+    /**
+     * 存货生产(小结即入库)结单的逐成品产出行 —— 与普通结单 {@link #persistWorkflowSettlementOutputs} 同一张表、
+     * 同一套 BOM 钉选, 只是数量与成品批次取自小结已建好的 FG(小结即实收, 不再要仓库二次确认)。
+     *
+     * <p>为什么必须写: 结单成本重算 {@code recalculateSettledPlanCosts} 按产出行分摊总成本并回写 FG 单位成本,
+     * 桥接从前只写抬头 ⇒ 产出行为空 ⇒ 恒 409「结单产出尚未全部入库」, 设备费/其他费用永远录不进去,
+     * 存货生产计划的成本永远停在「部分」(F006【演示L1】计划 836010b8, 2026-10-24)。
+     *
+     * <p>只对 Workflow 计划写(钉了 BOM family 才有产出行口径); 已有产出行时不重复写(桥接可能被调用多次)。
+     * 某个成品找不到钉住的配方时不写任何行 —— 让重算如实 409, ⛔ 不拿一份没钉住的配方凑数。
+     */
+    private void persistByStockSettlementOutputs(String factoryId, ProductionPlan plan,
+                                                 ProductionSettlement settlement,
+                                                 List<FinishedGoodsBatch> finishedGoodsBatches) {
+        if (!isWorkflowPlan(plan) || productionSettlementOutputLineRepository == null || bomRecipeRepository == null
+                || isBlank(plan.getSelectedBomFamilyId())) {
+            return;
+        }
+        if (!productionSettlementOutputLineRepository
+                .lockByFactoryIdAndSettlementId(factoryId, settlement.getId()).isEmpty()) {
+            return;
+        }
+        Map<String, String> recipeIds = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct()).orElseGet(Map::of);
+        Map<String, Integer> recipeVersions = Optional.ofNullable(plan.getSelectedBomVersionsByProduct()).orElseGet(Map::of);
+        Map<String, BigDecimal> tracedRatios = byStockTracedCostRatios(finishedGoodsBatches);
+        List<ProductionSettlementOutputLine> lines = new ArrayList<>();
+        for (FinishedGoodsBatch fg : finishedGoodsBatches) {
+            String productTypeId = trimToNull(fg.getProductTypeId());
+            String recipeId = productTypeId == null ? null : trimToNull(recipeIds.get(productTypeId));
+            Integer recipeVersion = productTypeId == null ? null : recipeVersions.get(productTypeId);
+            BomRecipe recipe = recipeId == null || recipeVersion == null ? null : bomRecipeRepository.findById(recipeId)
+                    .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                    .filter(candidate -> productTypeId.equals(candidate.getProductTypeId()))
+                    .filter(candidate -> Objects.equals(plan.getSelectedBomFamilyId(), candidate.getBomFamilyId()))
+                    .filter(candidate -> Objects.equals(recipeVersion, candidate.getVersion()))
+                    .orElse(null);
+            if (recipe == null || isBlank(recipe.getTargetTerminalNodeId()) || recipe.getOutputRole() == null) {
+                log.warn("BY_STOCK 结单产出行未写: 成品 {} 没有可核验的钉选配方 (planId={}, recipeId={}, version={})",
+                        productTypeId, plan.getId(), recipeId, recipeVersion);
+                return;
+            }
+            BigDecimal produced = zeroIfNull(fg.getProducedQuantity());
+            ProductionSettlementOutputLine line = ProductionSettlementOutputLine.create();
+            line.setFactoryId(factoryId);
+            line.setSettlementId(settlement.getId());
+            line.setProductionPlanId(plan.getId());
+            line.setProductTypeId(productTypeId);
+            line.setReportedBatchNumber(fg.getBatchNumber());
+            line.setReportedQuantity(produced);
+            line.setQuantityUnit(canonicalReceiptUnit(trimToNull(fg.getUnit())));
+            line.setBomFamilyId(plan.getSelectedBomFamilyId());
+            line.setBomRecipeId(recipe.getId());
+            line.setBomRecipeVersion(recipe.getVersion());
+            line.setTargetTerminalNodeId(recipe.getTargetTerminalNodeId());
+            line.setOutputRole(recipe.getOutputRole());
+            line.setCostAllocationRatio(recipe.getCostAllocationRatio() != null
+                    || recipe.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT || tracedRatios == null
+                    ? recipe.getCostAllocationRatio() : tracedRatios.get(fg.getId()));
+            line.setByproductNrvUnitPrice(recipe.getByproductNrvUnitPrice());
+            line.setReceivedQuantity(produced);
+            line.setFinishedGoodsBatchId(fg.getId());
+            line.setReceiptIdempotencyKey(settlement.getWarehouseReceiptIdempotencyKey());
+            lines.add(line);
+        }
+        productionSettlementOutputLineRepository.saveAll(lines);
+    }
+
+    /**
+     * 存货生产多成品的分摊比例(百分比, 按 FG 批次 id): 各成品小结时已按自己那条分支追溯出成本
+     * (分叉点按重量 + 副产 NRV 先扣, 之后各走各的工序), 比例就是这些已追溯成本的占比。
+     * 普通结单靠报工页的多产出行凭证 ({@code ReportedOutputCostAllocationService}), 而存货计划的分叉发生在
+     * 上游半成品, 成品行不是多产出行 —— 那条路在这里永远拿不到凭证(F006【演示L4】8d77ec57, 2026-10-25)。
+     *
+     * <p>任何一个成品缺单位成本就返回 null —— 让重算如实 409, ⛔ 不把缺成本的那个当 0 分走。
+     */
+    static Map<String, BigDecimal> byStockTracedCostRatios(List<FinishedGoodsBatch> finishedGoodsBatches) {
+        if (finishedGoodsBatches == null || finishedGoodsBatches.size() < 2) {
+            return null;
+        }
+        Map<String, BigDecimal> costs = new LinkedHashMap<>();
+        BigDecimal total = BigDecimal.ZERO;
+        for (FinishedGoodsBatch fg : finishedGoodsBatches) {
+            if (fg.getId() == null || fg.getUnitCost() == null || fg.getUnitCost().signum() <= 0
+                    || fg.getProducedQuantity() == null || fg.getProducedQuantity().signum() <= 0) {
+                return null;
+            }
+            BigDecimal cost = fg.getUnitCost().multiply(fg.getProducedQuantity());
+            costs.put(fg.getId(), cost);
+            total = total.add(cost);
+        }
+        Map<String, BigDecimal> ratios = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> entry : costs.entrySet()) {
+            ratios.put(entry.getKey(), entry.getValue().multiply(BigDecimal.valueOf(100))
+                    .divide(total, 6, RoundingMode.HALF_UP));
+        }
+        return ratios;
+    }
+
+    /** 本修复之前写下的存货结单产出行比例全空 —— 用同一口径补一次; 补不出就原样留着让重算如实 409。 */
+    private List<ProductionSettlementOutputLine> backfillByStockLineRatios(
+            String factoryId, String planId, List<ProductionSettlementOutputLine> lines) {
+        boolean allPrimaryMissing = lines.stream()
+                .filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .allMatch(line -> line.getCostAllocationRatio() == null);
+        if (lines.size() < 2 || !allPrimaryMissing) {
+            return lines;
+        }
+        Map<String, BigDecimal> ratios = byStockTracedCostRatios(
+                finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId));
+        if (ratios == null || lines.stream().filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .anyMatch(line -> ratios.get(line.getFinishedGoodsBatchId()) == null)) {
+            return lines;
+        }
+        lines.stream().filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .forEach(line -> line.setCostAllocationRatio(ratios.get(line.getFinishedGoodsBatchId())));
+        productionSettlementOutputLineRepository.saveAll(lines);
+        return lines;
     }
 
     private BusinessException incompleteByStockSettlementRows() {
@@ -7577,18 +7705,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
     }
 
+    private List<String> byStockTargetIds(ProductionPlan plan) {
+        return Optional.ofNullable(plan.getTargetFinishedGoodIds()).orElseGet(ArrayList::new)
+                .stream().map(this::trimToNull).filter(Objects::nonNull).distinct().toList();
+    }
+
     private void validateInterimFinishedGoodsIdentity(ProductionPlan plan, FinishedGoodsBatch finishedGoods) {
         if (!plan.getId().equals(finishedGoods.getProductionPlanId())) {
             throw invalidInterimFinishedGoods("小结成品批次不属于当前生产计划");
         }
-        List<String> targetIds = Optional.ofNullable(plan.getTargetFinishedGoodIds()).orElseGet(ArrayList::new)
-                .stream().map(this::trimToNull).filter(Objects::nonNull).distinct().toList();
-        if (targetIds.size() > 1) {
-            throw invalidInterimFinishedGoods("多成品计划不能合并为一条仓库实收");
-        }
-        String expectedProductTypeId = targetIds.isEmpty()
-                ? trimToNull(plan.getProductTypeId()) : targetIds.get(0);
-        if (!Objects.equals(expectedProductTypeId, trimToNull(finishedGoods.getProductTypeId()))) {
+        List<String> targetIds = byStockTargetIds(plan);
+        // 多成品(联产/原料分流)计划: 每个小结成品批次必须属于计划钉住的终端集合之一。
+        // 从前一律拒绝「多成品计划不能合并为一条仓库实收」⇒ 多成品存货计划永远结不了单
+        // (F006【演示L4】8d77ec57 / 【演示L5】f9ba5b6f, 2026-10-24)。逐 SKU 的真值写进结单产出行。
+        String actualProductTypeId = trimToNull(finishedGoods.getProductTypeId());
+        boolean skuMatches = targetIds.size() > 1
+                ? targetIds.contains(actualProductTypeId)
+                : Objects.equals(targetIds.isEmpty() ? trimToNull(plan.getProductTypeId()) : targetIds.get(0),
+                        actualProductTypeId);
+        if (!skuMatches) {
             throw invalidInterimFinishedGoods("小结成品 SKU 与计划终端 SKU 不一致");
         }
         if (isBlank(finishedGoods.getUnit())) {
@@ -7937,6 +8072,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         List<ProductionSettlementOutputLine> lines = productionSettlementOutputLineRepository
                 .lockByFactoryIdAndSettlementId(factoryId, settlement.getId());
+        if (lines.isEmpty() && plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
+            // 本修复之前桥接的存货结单只有抬头没有产出行 —— 用小结已建好的 FG 补齐一次(与新桥接同一口径),
+            // 否则这些历史计划永远录不进设备/其他费用。补不出来(无钉选配方)就照旧如实 409。
+            persistByStockSettlementOutputs(factoryId, plan, settlement,
+                    finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId));
+            lines = productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(factoryId, settlement.getId());
+        }
+        if (plan.getSourceType() == PlanSourceType.SAFETY_STOCK && finishedGoodsBatchRepository != null) {
+            lines = backfillByStockLineRatios(factoryId, planId, lines);
+        }
         if (lines.isEmpty() || lines.stream().anyMatch(line -> line.getReceivedQuantity() == null
                 || line.getReceivedQuantity().signum() <= 0 || line.getFinishedGoodsBatchId() == null)) {
             throw new BusinessException(409, "结单产出尚未全部入库, 不能重算产出成本")

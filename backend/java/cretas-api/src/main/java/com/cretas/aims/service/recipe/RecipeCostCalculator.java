@@ -47,6 +47,27 @@ public final class RecipeCostCalculator {
     }
 
     /**
+     * 一条调料绑定按锅序折算后的「有效原料 kg」—— 报工自动扣料与成本计算的**唯一**口径。
+     *
+     * <p>逐锅: 第一锅按自身原料 ×1, 后续各锅按各自原料 × 比例 (0–1)。比例为 null ⇒ 全部原料 ×1。
+     * ⛔ 不按「总量/锅数」均摊 —— 报工侧要求 N>1 逐锅填原料, 正是因为各锅不等;
+     * 均摊会把逐锅填的数白白丢掉 (F006【演示L1】卤制 60/55kg、八角 50%: 逐锅 87.5kg, 均摊 86.25kg)。
+     */
+    public static BigDecimal effectivePotRawKg(List<BigDecimal> potRawKgs, BigDecimal subsequentPotRatio) {
+        BigDecimal totalRawKg = BigDecimal.ZERO;
+        if (potRawKgs != null) {
+            for (BigDecimal potRawKg : potRawKgs) {
+                totalRawKg = totalRawKg.add(nz(potRawKg));
+            }
+        }
+        if (subsequentPotRatio == null || potRawKgs == null || potRawKgs.isEmpty()) {
+            return totalRawKg;
+        }
+        BigDecimal firstPotRawKg = nz(potRawKgs.get(0));
+        return firstPotRawKg.add(totalRawKg.subtract(firstPotRawKg).multiply(subsequentPotRatio));
+    }
+
+    /**
      * Calculate cooking cost with a pot rule attached to each BOM seasoning binding.
      * The first pot is always 100%; every later pot uses the same (non-compounding)
      * binding ratio. A binding with a null ratio is applied to the full process input once.
@@ -55,17 +76,6 @@ public final class RecipeCostCalculator {
                                                        List<BigDecimal> potRawKgs) {
         List<String> unpriced = new ArrayList<>();
         BigDecimal cookPerKg = perKg(ingredients, BomSeasoningItem.SECTION_COOKING, true, unpriced);
-        BigDecimal totalRawKg = BigDecimal.ZERO;
-        if (potRawKgs != null) {
-            for (BigDecimal potRawKg : potRawKgs) {
-                totalRawKg = totalRawKg.add(nz(potRawKg));
-            }
-        }
-        int potCount = potRawKgs == null || potRawKgs.isEmpty() ? 0 : potRawKgs.size();
-        BigDecimal equalPotRawKg = potCount == 0
-                ? BigDecimal.ZERO
-                : totalRawKg.divide(BigDecimal.valueOf(potCount), 8, RoundingMode.HALF_UP);
-
         BigDecimal cookingTotal = BigDecimal.ZERO;
         if (ingredients != null) {
             for (BomSeasoningItem item : ingredients) {
@@ -73,13 +83,7 @@ public final class RecipeCostCalculator {
                         || !Boolean.TRUE.equals(item.getCountInSeasoning())) {
                     continue;
                 }
-                BigDecimal ratio = item.getSubsequentPotRatio();
-                BigDecimal effectiveRawKg = totalRawKg;
-                if (ratio != null && potCount > 0) {
-                    BigDecimal factor = BigDecimal.ONE.add(
-                            BigDecimal.valueOf(potCount - 1L).multiply(ratio));
-                    effectiveRawKg = equalPotRawKg.multiply(factor);
-                }
+                BigDecimal effectiveRawKg = effectivePotRawKg(potRawKgs, item.getSubsequentPotRatio());
                 BigDecimal itemPerKg = nz(item.getDosagePerKgG())
                         .divide(G_PER_KG, 8, RoundingMode.HALF_UP)
                         .multiply(maxPrice(item, unpriced));
