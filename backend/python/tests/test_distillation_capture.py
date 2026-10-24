@@ -310,3 +310,24 @@ async def test_request_tenant_wins_and_a_different_factory_id_is_refused():
     finally:
         tenant_ctx.reset_factory_id(token)
     assert [a[2] for _, a in sink] == ["F_CONSENTED"]
+
+
+async def test_specific_customer_or_person_name_is_never_stored():
+    # Steve 2026-10-24: 问答里出现「客户」且带具体名称、或出现人名 → 整条不存 (任何工厂)
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    for q, a in [("张记食品有限公司这个客户回款怎么样", "回款正常"),
+                 ("客户：华联 欠款多少", "欠款 12 万元"),
+                 ("这批货谁签收的", "签收人：李四"),
+                 ("王总要求加急，能排吗", "可以安排")]:
+        await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)
+        await _capture(pool, factory_id="F006", input_text=q, teacher_output=a)
+    assert sink == []
+
+
+async def test_generic_customer_words_are_stored():
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), factory_id="F006",
+                   input_text="大客户占比多少", teacher_output="前十大客户占比 35%，新客户 12 家")
+    assert len(sink) == 1
+    assert "前十大客户占比 35%" in sink[0][1][8]

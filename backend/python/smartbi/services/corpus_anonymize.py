@@ -129,7 +129,19 @@ _ENTITY_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
     ("菜品", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>菜品|产品)")),
     # 工厂: "XX工厂"
     ("工厂", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>工厂)")),
+    # 客户 (Steve 2026-10-24): "XX客户" 与 "客户：XX" / "客户「XX」" (只认显式分隔, 避免吞掉
+    # "客户数量增长" 这类正文)。
+    ("客户", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>客户)")),
+    ("客户", re.compile(r"(?P<kind>客户)(?:名称|名)?\s*[:：]\s*(?P<name>[一-龥A-Za-z0-9]{2,12})")),
+    ("客户", re.compile(r"(?P<kind>客户)\s*[「“\"『](?P<name>[^」”\"』]{1,12})[」”\"』]")),
 ]
+
+# "XX客户" 里 XX 以这些泛称结尾时不是客户名 (大客户、新客户、重点客户 ...)。
+_GENERIC_CUSTOMER_WORDS = (
+    "大", "新", "老", "重点", "核心", "主要", "所有", "全部", "各", "该", "这个", "这些", "那个",
+    "某", "每个", "每位", "潜在", "流失", "活跃", "优质", "头部", "散", "目标", "意向", "终端",
+    "零售", "批发", "经销", "直营", "线上", "线下", "个人", "企业", "长期", "合作", "VIP", "vip",
+)
 
 # 占位符字母序列。
 _PLACEHOLDER_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -160,6 +172,9 @@ def _pseudonymize_entities(text: str, mapping: Dict[str, str]) -> str:
             m.group("kind")
             # 名字为空 / 纯类别词 → 不动。
             if not name:
+                return m.group(0)
+            # "大客户 / 新客户 / 前十大客户" 是泛称不是名字 → 不动。
+            if kind == "客户" and name.endswith(_GENERIC_CUSTOMER_WORDS):
                 return m.group(0)
             # 已知通用占位符前缀本身 (避免二次伪名化) → 不动。
             m.group(0)

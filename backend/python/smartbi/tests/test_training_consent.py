@@ -367,3 +367,12 @@ class TestParse:
         ):
             p = os.path.join(PYTHON_ROOT, rel)
             ast.parse(open(p, encoding="utf-8").read())
+
+
+def test_customer_names_are_pseudonymized_but_generic_customer_words_kept():
+    from smartbi.services.corpus_anonymize import anonymize_for_shared
+
+    a_in, a_out = anonymize_for_shared("张记食品客户本月回款 ¥250000", "客户：张记食品 欠款；大客户占比 35%")
+    assert "张记" not in a_in and "张记" not in a_out
+    assert "客户A" in a_in and "客户A" in a_out          # same customer, same placeholder
+    assert "大客户占比 35%" in a_out                      # generic word untouched
