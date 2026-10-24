@@ -49,7 +49,9 @@ class WorkflowTaskProgressWriterTest {
     void setUp() {
         taskRepository = mock(WorkProcessTaskRepository.class);
         rowRepository = mock(ProcessSheetRowRepository.class);
-        writer = new WorkflowTaskProgressWriter(taskRepository, rowRepository, mapper);
+        // 一级缓存 / refresh 的真实行为由 WorkflowTaskProgressWriterStaleStatusTest (真 JPA) 钉住; 这里只测聚合。
+        writer = new WorkflowTaskProgressWriter(taskRepository, rowRepository, mapper,
+                mock(jakarta.persistence.EntityManager.class));
         first = task(101L, "node-1");
         target = task(102L, "node-2");
         when(taskRepository.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(FACTORY, 31L))

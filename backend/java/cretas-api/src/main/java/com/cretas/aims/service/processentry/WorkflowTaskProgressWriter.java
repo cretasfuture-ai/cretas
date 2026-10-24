@@ -8,6 +8,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -52,6 +53,7 @@ public class WorkflowTaskProgressWriter {
     private final WorkProcessTaskRepository taskRepository;
     private final ProcessSheetRowRepository rowRepository;
     private final ObjectMapper objectMapper;
+    private final EntityManager entityManager;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void stamp(WorkflowTaskProgressRequestedEvent event) {
@@ -68,6 +70,11 @@ public class WorkflowTaskProgressWriter {
                 .findByFactoryIdAndIdForUpdate(event.factoryId(), located.getId())
                 .orElseThrow(() -> new BusinessException(409, "Workflow 工序任务不存在，无法回写报工进度")
                         .withCode("WORKFLOW_RUNTIME_TASK_NOT_FOUND"));
+        // 🔴 上面那次不加锁的列表查询已经把这条任务放进一级缓存; 加锁查询虽然发了 FOR UPDATE,
+        //    返回的却是缓存里那个【旧实例】, 不会用数据库新值覆盖它的字段。而 saveAndFlush 是全列 UPDATE
+        //    (无 @Version / @DynamicUpdate) ⇒ 两次查询之间别人改过的 status 会被写回旧值。
+        //    ⇒ 拿到锁之后从数据库重读一次。由 WorkflowTaskProgressWriterStaleStatusTest 钉住。
+        entityManager.refresh(task);
 
         BigDecimal total = aggregatePrimaryOutput(event);
         task.setActualQuantity(total);
