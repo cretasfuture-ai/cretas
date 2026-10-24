@@ -228,7 +228,11 @@ export interface PublicTraceResponse {
   productionDate?: string;
   factoryName: string;
   qualityStatus: string;
-  certificationInfo?: string;
+  /**
+   * 认证信息。没有真实来源时为 null(后端不再对所有批次写死「食品安全认证」);
+   * 为 null 时页面整块不渲染。
+   */
+  certificationInfo?: string | null;
   materials: PublicMaterialInfo[];
   qualityInspection?: PublicQualityInfo;
   /** 已打印标签上的溯源码; 还没打过标签为 null(后端不再现造扫不回来的码)。 */

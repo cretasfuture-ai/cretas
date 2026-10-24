@@ -275,7 +275,12 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                 .productionDate(batch.getStartTime() != null ? batch.getStartTime().toLocalDate() : null)
                 .factoryName(factoryName)
                 .qualityStatus(batch.getQualityStatus() != null ? batch.getQualityStatus().name() : "待检验")
-                .certificationInfo("食品安全认证")
+                // ⛔ 原来对所有批次无条件写死「食品安全认证」—— 消费者扫码看到的是一张编出来的证。
+                //    现在没有产品 / 工厂级认证的落库来源: Factory 实体没有认证字段;
+                //    MaterialBatch.qualityCertificate 是<b>原料批次</b>的字段(还被当 qualityGrade 用),
+                //    不是本成品的认证; 供应商资质(SupplierQualification)属于供应商, 公开页已按脱敏不带供应商。
+                //    ⇒ 一律 null, 前端为 null 时整块不渲染。有了真实来源再接, ⛔ 不要再写一个常量顶上。
+                .certificationInfo(null)
                 .materials(publicMaterials)
                 .qualityInspection(publicQuality)
                 .traceCode(persistedTraceCode(batch.getId()))
