@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   web-dist:
-    runs-on: [self-hosted, Linux, cretas, X64, windows-light]
+    runs-on: ubuntu-latest
     # 2026-09-15: 自托管 job 一律带超时 (见 rn-gate.yml jest 的 20 小时事故)
     timeout-minutes: 30
 

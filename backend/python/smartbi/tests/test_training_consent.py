@@ -195,8 +195,9 @@ class TestSharedGating:
         assert item["input_text"] is not None
         assert "星巴克" not in item["input_text"]
         assert "2500000" not in item["input_text"]
-        assert "35%" in item["input_text"]   # shape kept
-        assert "18%" in item["teacher_output"]
+        # numbers masked in shared exports too (Steve 2026-10-24)
+        assert item["input_text"] == "门店A营收¥<数值>，占比<数值>%"
+        assert item["teacher_output"] == "门店A环比增长<数值>%"
 
     def test_desensitized_row_of_unauthorized_factory_is_included(self):
         rows = [_row("F001", metadata={"desensitized": True}, input_text="门店A营收¥10-50万")]
@@ -367,3 +368,12 @@ class TestParse:
         ):
             p = os.path.join(PYTHON_ROOT, rel)
             ast.parse(open(p, encoding="utf-8").read())
+
+
+def test_customer_names_are_pseudonymized_but_generic_customer_words_kept():
+    from smartbi.services.corpus_anonymize import anonymize_for_shared
+
+    a_in, a_out = anonymize_for_shared("张记食品客户本月回款 ¥250000", "客户：张记食品 欠款；大客户占比 35%")
+    assert "张记" not in a_in and "张记" not in a_out
+    assert "客户A" in a_in and "客户A" in a_out          # same customer, same placeholder
+    assert "大客户占比 35%" in a_out                      # generic word untouched

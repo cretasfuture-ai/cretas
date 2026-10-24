@@ -1,0 +1,39 @@
+[Unit]
+Description=Cretas Windows quick-check CI (one small non-Java slot: secret scan, hygiene, reaper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cretas-ci-quick
+Group=cretas-ci-quick
+WorkingDirectory=/opt/cretas-ci-quick
+Environment=HOME=/var/lib/cretas-ci-quick
+Environment=RUNNER_TOOL_CACHE=/var/lib/cretas-ci-quick/toolcache
+Environment=PATH=/opt/cretas-ci-quick-tools/bin:/usr/local/bin:/usr/bin:/bin
+Environment=GIT_CONFIG_NOSYSTEM=1
+Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=/etc/cretas-ci-quick/job-started.sh
+ExecStart=/opt/cretas-ci-quick/run.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=120
+KillMode=mixed
+Nice=10
+CPUWeight=10
+CPUQuota=100%
+IOWeight=10
+MemoryHigh=768M
+MemoryMax=1G
+MemorySwapMax=0
+TasksMax=128
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+ReadWritePaths=/opt/cretas-ci-quick /var/lib/cretas-ci-quick
+PrivateTmp=yes
+PrivateDevices=yes
+InaccessiblePaths=-/mnt/c -/mnt/b -/mnt/d -/mnt/wsl/docker-desktop -/root -/opt/cretas-ci -/opt/cretas-ci-light -/var/lib/cretas-ci-light -/etc/cretas-ci-light -/run/docker.sock -/var/run/docker.sock
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
