@@ -2046,12 +2046,45 @@ public class YieldReportServiceImpl implements YieldReportService {
                 : dto.getSteps().stream()
                         .filter(step -> step.getProcessOrder() != null)
                         .collect(Collectors.toMap(StepYieldDTO::getProcessOrder, step -> step, (left, right) -> left));
+        // dto.steps 来自目标批次(末道)自己的 YIELD 报工; Workflow 逐道录入时每道是**各自的批次**
+        // (CLK-W-…), 它们的人工金额记在各自批次的 YIELD 报工上。只按目标批次合并 ⇒ 上游道 laborCost
+        // 恒 null ⇒ 成本明细判 LABOR_COST_UNKNOWN, 多道工艺图 costComplete 永远 false
+        // (F006【演示L1】计划 836010b8, 2026-10-24: 四道报工 labor_cost 104/273/78/208 都在, 前三道判未知)。
+        Map<Long, List<ProductionReport>> upstreamReportsByBatch = new HashMap<>();
         dto.setSteps(sheetRows.stream()
-                .map(this::toStepYield)
-                .map(step -> mergeStepAudit(step, reportStepsByOrder.get(step.getProcessOrder())))
+                .map(row -> {
+                    StepYieldDTO step = mergeStepAudit(
+                            toStepYield(row), reportStepsByOrder.get(row.processOrder()));
+                    if (step.getLaborCost() == null && row.batchId() != null
+                            && !Objects.equals(row.batchId(), batchId)) {
+                        step.setLaborCost(upstreamRowLaborCost(factoryId, row, upstreamReportsByBatch));
+                    }
+                    return step;
+                })
                 .toList());
         dto.setComplete(sheetRows.stream()
                 .allMatch(row -> positive(row.inputQuantity()) && row.outputQuantity() != null));
+    }
+
+    /**
+     * 上游行自己批次上的 YIELD 报工人工合计。⛔ 一条都没有金额时返回 null(未知), 不兜 0 ——
+     * 0 会被成本明细当成「已采集的零人工」。
+     */
+    private BigDecimal upstreamRowLaborCost(String factoryId, SheetYieldRow row,
+                                            Map<Long, List<ProductionReport>> cache) {
+        List<ProductionReport> reports = cache.computeIfAbsent(row.batchId(),
+                id -> reportRepo.findYieldReportsByBatch(factoryId, id));
+        if (reports == null) {
+            return null;
+        }
+        BigDecimal total = null;
+        for (ProductionReport report : reports) {
+            if (report.getLaborCost() == null) continue;
+            if (row.processOrder() != null && report.getProcessOrder() != null
+                    && !row.processOrder().equals(report.getProcessOrder())) continue;
+            total = total == null ? report.getLaborCost() : total.add(report.getLaborCost());
+        }
+        return total;
     }
 
     /**
