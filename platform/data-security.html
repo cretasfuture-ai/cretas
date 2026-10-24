@@ -270,10 +270,10 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <ul>
         <li data-claim="C3-process-never" data-claim-status="live">工艺参数（温度、时间、配比、用量等）、配方和原料用量、工序顺序和合并方式、问题的处理办法、薪酬考勤、客户名称和人员姓名：含有这些内容的记录整条不进训练，授权了也一样。</li>
         <li data-claim="C3-default-train" data-claim-status="commitment">默认用于训练的包括 AI 问答的提问方式和分析思路、说法与功能的对应关系。训练副本里经营数字换成占位符，名称换成通用标记，电话、证件号、银行卡号删除；你系统里的原始数据不受影响。</li>
-        <li data-claim="C3-scheduling-own" data-claim-status="live">排程数据只用来训练你自己工厂的排程模型，不用于其他客户。</li>
+        <li data-claim="C3-scheduling-own" data-claim-status="commitment">排程数据默认不用于训练；只有你书面授权，才会用来训练只给你用的排程模型。</li>
         <li data-claim="C3-excluded" data-claim-status="live">价格与交易对象的对应关系、客户名单、合同、录音、账户凭证和访问日志，都不用于训练。</li>
         <li data-claim="C3-no-cross-process" data-claim-status="live">平台不分析、不比对任何工厂的工艺流程，你的工艺只用来运行你自己的系统。</li>
-        <li data-claim="C3-secret-product" data-claim-status="commitment">你可以把任一产品设为工艺保密：它的工序、物料、成本不用于训练和统计，平台人员也看不到它的配方和工艺。</li>
+        <li data-claim="C3-secret-product" data-claim-status="commitment">你可以把任一产品设为工艺保密：它的工序、物料、成本不用于任何训练，不纳入跨客户的统计和对比，平台人员也看不到它的配方和工艺；你自己系统里的报表不受影响。</li>
       </ul>
     </div>
   </div>
