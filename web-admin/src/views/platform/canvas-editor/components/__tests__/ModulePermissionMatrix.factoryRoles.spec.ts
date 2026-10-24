@@ -1,17 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
+import { defineComponent, h, type PropType } from 'vue';
 import ElementPlus, { ElSelect } from 'element-plus';
 const api=vi.hoisted(()=>({get:vi.fn(),getPlatformPermissions:vi.fn(),getFactoryOverride:vi.fn(),updateFactoryOverride:vi.fn(),updatePlatformPermission:vi.fn()}));
 vi.mock('@/api/request',()=>({get:api.get}));
 vi.mock('@/api/permissionApi',()=>api);
 import Matrix from '../ModulePermissionMatrix.vue';
 const wrappers: VueWrapper[]=[];
+const ElOptionStub = defineComponent({
+  name: 'ElOption',
+  props: { label: { type: String, required: true }, value: { type: String, required: true } },
+  setup() { return () => null; },
+});
+const ElSelectStub = defineComponent({
+  name: 'ElSelect',
+  props: { modelValue: { type: String as PropType<string>, required: true } },
+  emits: ['change'],
+  setup(props, { emit, slots }) {
+    return () => h('select', {
+      class: 'el-select',
+      value: props.modelValue,
+      onChange: (event: Event) => emit('change', (event.target as HTMLSelectElement).value),
+    }, slots.default?.());
+  },
+});
 beforeEach(()=>{
   vi.clearAllMocks();api.get.mockResolvedValue({success:true,data:[{name:'factory_super_admin'},{name:'sales_manager'},{name:'platform_admin'}]});
   api.getPlatformPermissions.mockResolvedValue([]);api.getFactoryOverride.mockResolvedValue({});api.updateFactoryOverride.mockResolvedValue(undefined);
 });
 afterEach(()=>{wrappers.splice(0).forEach(w=>w.unmount());document.body.innerHTML='';});
-async function open(){const w=mount(Matrix,{props:{factoryId:'F1'},attachTo:document.body,global:{plugins:[ElementPlus]}});wrappers.push(w);await flushPromises();return w;}
+async function open(){const w=mount(Matrix,{props:{factoryId:'F1'},attachTo:document.body,global:{plugins:[ElementPlus],stubs:{ElSelect:ElSelectStub,ElOption:ElOptionStub}}});wrappers.push(w);await flushPromises();return w;}
 describe('factory-local role permission configuration',()=>{
   it('shows authoritative factory roles with empty L1 and saves only an explicit local change',async()=>{
     const w=await open();const row=w.findAll('.el-table__row').find(row=>row.text().includes('sales_manager'))!;
