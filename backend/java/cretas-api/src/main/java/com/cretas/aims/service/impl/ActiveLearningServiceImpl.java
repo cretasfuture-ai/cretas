@@ -9,6 +9,8 @@ import com.cretas.aims.service.ActiveLearningService;
 import com.cretas.aims.service.ExpressionLearningService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleRules;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,7 +52,7 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     private final AnnotationQueueRepository annotationRepository;
     private final LearningSuggestionRepository suggestionRepository;
     private final SampleClusterRepository clusterRepository;
-    private final com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
+    private final TrainingConsentService trainingConsentService;
     private final IntentMatchRecordRepository matchRecordRepository;
     private final ObjectMapper objectMapper;
     private final IntentKnowledgeBase intentKnowledgeBase;
@@ -86,9 +88,15 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             return null;
         }
 
-        // 训练授权 (2026-10-22): 未授权工厂的原话不进主动学习样本
-        if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
+        // 训练规则 (2026-10-24): 配方 / 工艺参数类原话任何工厂都不存; 未授权工厂脱敏后存
+        if (TrainingSampleRules.utteranceHasBlockedContent(userInput)
+                || TrainingSampleRules.utteranceHasBlockedContent(normalizedInput)) {
             return null;
+        }
+        if (!trainingConsentService.isAuthorized(factoryId)) {
+            userInput = TrainingSampleRules.maskNumbers(userInput);
+            normalizedInput = TrainingSampleRules.maskNumbers(normalizedInput);
+            matchedKeywords = TrainingSampleRules.maskNumbers(matchedKeywords);
         }
 
         // Check if already collected

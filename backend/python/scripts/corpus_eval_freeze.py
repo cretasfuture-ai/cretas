@@ -49,11 +49,11 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# Training-consent gate (owner rule 2026-10-22): only synthetic seed rows and rows of
-# factories that authorized training use are read / labeled / sent out here.
-from smartbi.services.training_consent import consented_rows_sql  # noqa: E402
+# Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
+# 2026-10-24 training rule at capture are read / labeled / sent out here.
+from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
 
-_CONSENTED_ROWS = consented_rows_sql()
+_USABLE_ROWS = usable_rows_sql()
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("corpus_eval_freeze")
@@ -68,7 +68,7 @@ _FETCH_SQL = """
     SELECT id, source, business_type
     FROM smart_bi_distillation_samples
     WHERE quality >= 4
-      AND """ + _CONSENTED_ROWS + """
+      AND """ + _USABLE_ROWS + """
       AND (metadata IS NULL OR NOT (metadata ? 'eval_frozen'))
     ORDER BY source, business_type, id
 """
@@ -95,7 +95,7 @@ _TOTAL_QUALITY_SQL = """
     SELECT source, business_type, COUNT(*) AS cnt
     FROM smart_bi_distillation_samples
     WHERE quality >= 4
-      AND """ + _CONSENTED_ROWS + """
+      AND """ + _USABLE_ROWS + """
     GROUP BY source, business_type
 """
 

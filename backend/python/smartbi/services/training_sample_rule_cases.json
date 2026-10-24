@@ -1,0 +1,28 @@
+{
+  "_doc": "Shared cases for the training-sample rules (Steve 2026-10-24). utterance_cases run in Python (training_consent.desensitize_utterance) AND Java (TrainingSampleRules.textToStore); stored=null means not stored. qa_cases run in Python only (training_consent.qa_has_blocked_content).",
+  "utterance_cases": [
+    {"text": "这个产品的配方里盐放多少", "authorized": false, "stored": null},
+    {"text": "这个产品的配方里盐放多少", "authorized": true, "stored": null},
+    {"text": "杀菌温度一般设多少", "authorized": false, "stored": null},
+    {"text": "发酵终点 pH 控制在哪", "authorized": false, "stored": null},
+    {"text": "我们腌制和滚揉一起做", "authorized": false, "stored": "我们腌制和滚揉一起做"},
+    {"text": "第二道工序换成新设备", "authorized": false, "stored": "第二道工序换成新设备"},
+    {"text": "今天入库 350 箱牛肉，单价 42.5 元", "authorized": false, "stored": "今天入库 <数值> 箱牛肉，单价 <数值> 元"},
+    {"text": "今天入库 350 箱牛肉，单价 42.5 元", "authorized": true, "stored": "今天入库 350 箱牛肉，单价 42.5 元"},
+    {"text": "查 F006 的批次 B12 和 V2 版本", "authorized": false, "stored": "查 F006 的批次 B12 和 V2 版本"},
+    {"text": "500kg 订单 10月24日 发货", "authorized": false, "stored": "<数值>kg 订单 <数值>月<数值>日 发货"},
+    {"text": "联系张三 13812345678 身份证 110101199003071234", "authorized": false, "stored": "联系张三 <电话> 身份证 <证件号>"},
+    {"text": "打款到 6222021234567890123", "authorized": false, "stored": "打款到 <卡号>"},
+    {"text": "全角数字１２３保持不变", "authorized": false, "stored": "全角数字１２３保持不变"}
+  ],
+  "qa_cases": [
+    {"input": "本月牛肉干产量多少", "answer": "本月产量 1200kg，环比增长 8%", "blocked": false},
+    {"input": "BOM成本 和实际成本差异", "answer": "差异率 12%，建议优化工艺降低损耗", "blocked": false},
+    {"input": "上周毛利率为什么下降", "answer": "主要是原料价格上涨，建议检查工序损耗", "blocked": false},
+    {"input": "这个产品怎么提升出成率", "answer": "建议把腌制时间延长到 24 小时再滚揉", "blocked": true},
+    {"input": "数据：工序 1 清洗、工序 2 切配", "answer": "按顺序执行即可", "blocked": true},
+    {"input": "产品配方表如下", "answer": "已读取", "blocked": true},
+    {"input": "为什么返工多", "answer": "回料比例高", "blocked": true},
+    {"input": "本月工资总额", "answer": "人工成本 35 万", "blocked": true}
+  ]
+}

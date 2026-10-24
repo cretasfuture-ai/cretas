@@ -185,12 +185,13 @@ async def test_business_type_none_normalized_to_unknown():
 
 
 async def test_no_template_codes_and_no_metadata_pass_none():
+    # synthetic seed tenant: no rule tags are added, so metadata stays NULL
     sink: list = []
     await persist_distillation_sample(
         _RecordingPool(sink, _CONSENTED),
         source="chat_qa", task_type="qa",
         input_text="问题", teacher_output="答案",
-        factory_id="F_CONSENTED",
+        factory_id="SEED_F",
     )
     assert len(sink) == 1
     _, args = sink[0]
@@ -198,62 +199,103 @@ async def test_no_template_codes_and_no_metadata_pass_none():
     assert args[11] is None  # metadata
 
 
-# ---- training-consent gate (owner rule 2026-10-22) ----
-# A real factory's sample is stored ONLY when training_consent says 'private' or
-# 'shared_anon'. Everything else — no row, 'none', unknown scope, lookup error,
-# no factory at all — writes nothing.
+
+
+# ---- training rule (owner, 2026-10-24) ----
+# Process parameters / structure / problem handling / per-person pay: never stored,
+# for any factory. Everything else is stored: authorized factories raw, everyone
+# else (no row, 'none', unknown scope, lookup error, no factory) desensitized.
+
+import json as _json  # noqa: E402
+
 
 async def _capture(pool, **kw):
     kw.setdefault("source", "chat_qa")
     kw.setdefault("task_type", "qa")
-    kw.setdefault("input_text", "问题")
-    kw.setdefault("teacher_output", "答案")
+    kw.setdefault("input_text", "本月营收多少")
+    kw.setdefault("teacher_output", "本月营收 128 万元，环比增长 8%")
     await persist_distillation_sample(pool, **kw)
 
 
-async def test_factory_without_consent_row_is_not_captured():
-    sink: list = []
-    await _capture(_RecordingPool(sink, {}), factory_id="F006")
-    assert sink == [], "no training_consent row means 'none' — nothing stored"
+def _meta(args):
+    return _json.loads(args[11]) if args[11] else {}
 
 
-async def test_scope_none_and_unknown_scope_are_not_captured():
+async def test_unauthorized_factory_qa_is_stored_desensitized():
     sink: list = []
-    pool = _RecordingPool(sink, {"F_NONE": "none", "F_ODD": "everything"})
-    await _capture(pool, factory_id="F_NONE")
-    await _capture(pool, factory_id="F_ODD")
+    pool = _RecordingPool(sink, {"F_NONE": "none"})
+    await _capture(pool, factory_id="F006",
+                   input_text="华东工厂本月营收多少，联系 13812345678",
+                   teacher_output="华东工厂本月营收 ¥2500000，环比增长 8%")
+    await _capture(pool, factory_id="F_NONE", input_text="乙", teacher_output="丙")
+    assert [a[2] for _, a in sink] == ["F006", "F_NONE"]
+    _, args = sink[0]
+    assert "13812345678" not in args[6] and "<电话>" in args[6]
+    assert "华东" not in args[6] and "华东" not in args[8]      # entity placeholders
+    assert "2500000" not in args[8] and "8%" in args[8]          # amount bucketed, shape kept
+    assert args[9] == compute_input_hash(args[6])                # hash of what is stored
+    assert _meta(args) == {"training_rule": "2026-10-24", "desensitized": True}
+
+
+async def test_authorized_factory_qa_is_stored_as_is():
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private", "F_SHARE": "shared_anon"})
+    await _capture(pool, factory_id="F_PRIV", input_text="华东工厂本月营收多少")
+    await _capture(pool, factory_id="F_SHARE", input_text="华北工厂本月营收多少")
+    assert [a[6] for _, a in sink] == ["华东工厂本月营收多少", "华北工厂本月营收多少"]
+    assert all(_meta(a) == {"training_rule": "2026-10-24"} for _, a in sink)
+
+
+async def test_process_content_is_never_stored_even_when_authorized():
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    cases = [
+        ("产品配方表如下：盐 2.5%", "已读取"),                  # parameter in input
+        ("数据：工序 1 清洗、工序 2 切配", "按顺序执行即可"),     # structure in input
+        ("怎么提升出成率", "建议把腌制时间延长到 24 小时再滚揉"),  # detail in answer
+        ("为什么最近返工多", "主要是原料批次差"),                # problem handling
+        ("本月工资总额", "人工成本 35 万"),                      # per-person pay
+    ]
+    for q, a in cases:
+        await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)
+        await _capture(pool, factory_id="F006", input_text=q, teacher_output=a)
     assert sink == []
 
 
-async def test_consent_lookup_error_fails_closed():
+async def test_generic_process_words_in_the_answer_do_not_block():
+    # Steve chose "B": generic 工艺 / 工序 in model advice are ignored
     sink: list = []
-    pool = _RecordingPool(sink, _CONSENTED, consent_error=RuntimeError("relation does not exist"))
-    await _capture(pool, factory_id="F_CONSENTED")
-    assert sink == [], "unreadable consent must not be read as consent"
+    await _capture(_RecordingPool(sink, {}), factory_id="F006",
+                   input_text="上周毛利率为什么下降",
+                   teacher_output="主要是原料涨价，建议优化工艺、检查工序损耗")
+    assert len(sink) == 1
 
 
-async def test_private_and_shared_anon_consent_are_captured():
+async def test_consent_lookup_error_means_desensitized_not_raw():
     sink: list = []
-    pool = _RecordingPool(sink, {"F_PRIV": "private", "F_SHARE": "shared_anon"})
-    await _capture(pool, factory_id="F_PRIV", input_text="甲")
-    await _capture(pool, factory_id="F_SHARE", input_text="乙")
-    assert [args[2] for _, args in sink] == ["F_PRIV", "F_SHARE"]
+    pool = _RecordingPool(sink, {"F_PRIV": "private"}, consent_error=RuntimeError("relation does not exist"))
+    await _capture(pool, factory_id="F_PRIV", input_text="华东工厂本月营收多少")
+    assert len(sink) == 1
+    _, args = sink[0]
+    assert "华东" not in args[6]
+    assert _meta(args).get("desensitized") is True
 
 
-async def test_sample_without_factory_is_not_captured():
+async def test_sample_without_factory_is_stored_desensitized():
     sink: list = []
-    await _capture(_RecordingPool(sink, _CONSENTED))
-    await _capture(_RecordingPool(sink, _CONSENTED), factory_id="")
-    assert sink == [], "a sample nobody owns cannot have been authorized"
+    pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
+    await _capture(pool, input_text="华东工厂本月营收多少")
+    assert len(sink) == 1
+    _, args = sink[0]
+    assert args[2] is None and _meta(args).get("desensitized") is True
 
 
-async def test_synthetic_seed_tenants_skip_the_consent_lookup():
+async def test_synthetic_seed_tenants_are_stored_as_is_without_lookup():
     sink: list = []
-    # lookup would explode — synthetic seed corpus must not even ask
     pool = _RecordingPool(sink, {}, consent_error=AssertionError("must not look up"))
-    await _capture(pool, factory_id="SEED_R", input_text="合成甲")
-    await _capture(pool, factory_id="SEED_F", input_text="合成乙")
-    assert [args[2] for _, args in sink] == ["SEED_R", "SEED_F"]
+    await _capture(pool, factory_id="SEED_R", input_text="合成甲：产品配方表")
+    assert [a[2] for _, a in sink] == ["SEED_R"]
+    assert sink[0][1][11] is None
 
 
 async def test_request_tenant_wins_and_a_different_factory_id_is_refused():
@@ -263,22 +305,8 @@ async def test_request_tenant_wins_and_a_different_factory_id_is_refused():
     pool = _RecordingPool(sink, {"F_CONSENTED": "private", "F_OTHER": "private"})
     token = tenant_ctx.set_factory_id("F_CONSENTED")
     try:
-        # caller names another (even consented) factory → refused
-        await _capture(pool, factory_id="F_OTHER", input_text="甲")
-        # no factory_id given → the authenticated tenant is used
-        await _capture(pool, input_text="乙")
+        await _capture(pool, factory_id="F_OTHER", input_text="甲")   # refused
+        await _capture(pool, input_text="乙")                          # authenticated tenant used
     finally:
         tenant_ctx.reset_factory_id(token)
-    assert [args[2] for _, args in sink] == ["F_CONSENTED"]
-
-
-async def test_request_tenant_without_consent_is_not_captured():
-    from smartbi import tenant_ctx
-
-    sink: list = []
-    token = tenant_ctx.set_factory_id("F006")
-    try:
-        await _capture(_RecordingPool(sink, _CONSENTED), factory_id="F006")
-    finally:
-        tenant_ctx.reset_factory_id(token)
-    assert sink == []
+    assert [a[2] for _, a in sink] == ["F_CONSENTED"]

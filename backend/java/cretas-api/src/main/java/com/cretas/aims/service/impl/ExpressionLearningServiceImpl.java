@@ -11,6 +11,8 @@ import com.cretas.aims.service.ExpressionLearningService;
 import com.cretas.aims.service.IntentEmbeddingCacheService;
 import com.cretas.aims.service.RequestScopedEmbeddingCache;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleRules;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,7 +43,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     private final EmbeddingClient embeddingClient;
     private final RequestScopedEmbeddingCache requestScopedCache;
     private final IntentEmbeddingCacheService embeddingCacheService;
-    private final com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
+    private final TrainingConsentService trainingConsentService;
 
     // 自引用代理 - 用于解决 Spring @Transactional 自调用不走代理的问题
     @Autowired
@@ -511,14 +513,16 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         if (userInput == null || userInput.trim().isEmpty()) {
             return null;
         }
-        // 训练授权 (2026-10-22): 未授权工厂的原话不进训练样本表
-        if (!trainingConsentService.mayStoreTrainingData(factoryId)) {
+        // 训练规则 (2026-10-24): 配方 / 工艺参数类原话任何工厂都不存; 未授权工厂脱敏后存
+        String textToStore = TrainingSampleRules.textToStore(
+                userInput.trim(), trainingConsentService.isAuthorized(factoryId));
+        if (textToStore == null) {
             return null;
         }
 
         TrainingSample sample = TrainingSample.create(
                 factoryId,
-                userInput.trim(),
+                textToStore,
                 intentCode,
                 method,
                 confidence,

@@ -759,17 +759,11 @@ class SyntheticDataServiceTest {
         @Mock
         private SyntheticDataConfig syntheticDataConfig;
 
-        @Mock
-        private com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
-
         @InjectMocks
         private SyntheticDataService syntheticDataService;
 
         @BeforeEach
         void setUp() {
-            // generation flow under test: the factory authorized training use
-            lenient().when(trainingConsentService.mayStoreTrainingData(org.mockito.ArgumentMatchers.anyString()))
-                    .thenReturn(true);
             // Configure default mock behavior
             lenient().when(syntheticDataConfig.getMaxSyntheticRatio()).thenReturn(0.8);
             lenient().when(syntheticDataConfig.getCandidateMultiplier()).thenReturn(3);

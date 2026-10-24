@@ -280,9 +280,9 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_distillation_skipped_for_factory_without_training_consent(monkeypatch):
-    """Owner rule 2026-10-22: a factory that never authorized training use gets
-    its insight generated, but no sample is stored."""
+async def test_distillation_desensitized_for_factory_without_training_consent(monkeypatch):
+    """Owner rule 2026-10-24: a factory that never authorized training use still
+    contributes the sample, desensitized and tagged."""
     sink: list = []
 
     async def _pool():
@@ -297,7 +297,30 @@ async def test_distillation_skipped_for_factory_without_training_consent(monkeyp
     }, ensure_ascii=False))
 
     await lm.generate_llm_insights(results, "restaurant", factory_id="F_NO_CONSENT")
-    assert sink == [], "no training_consent row → nothing captured"
+    assert len(sink) == 1, "un-authorized factory: stored desensitized"
+    _, args = sink[0]
+    meta = json.loads(args[11])
+    assert meta["desensitized"] is True and meta["training_rule"] == "2026-10-24"
+
+
+@pytest.mark.asyncio
+async def test_distillation_skipped_when_insight_carries_process_detail(monkeypatch):
+    """Process content is never stored, even for an authorized factory."""
+    sink: list = []
+
+    async def _pool():
+        return _FakePool(sink)
+    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
+    monkeypatch.setenv("SMARTBI_DISTILL_CAPTURE", "1")
+
+    results = _make_results()
+    _patch_llm(monkeypatch, json.dumps({
+        "executive_summary": "整体营收稳健。" * 3,
+        "insights": {"top_n_by_dim": "建议把腌制时间延长到 24 小时再滚揉以提升出成率。"},
+    }, ensure_ascii=False))
+
+    await lm.generate_llm_insights(results, "restaurant", factory_id="RES_TEST_001")
+    assert sink == [], "answer names a process detail → nothing captured"
 
 
 @pytest.mark.asyncio
