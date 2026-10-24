@@ -6,6 +6,7 @@ import com.cretas.aims.client.PythonErrorAnalysisClient;
 import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.config.WebSocketConfig;
 import com.cretas.aims.engine.DynamicSchedulerService;
+import com.cretas.aims.engine.TriggerChainExecutor;
 import com.cretas.aims.mcp.MCPClientAdapter;
 import com.cretas.aims.service.ClassifierIntentMatcher;
 import com.cretas.aims.service.auth.impl.PermissionRegistryServiceImpl;
@@ -64,6 +65,8 @@ public final class LineageBackfillPreflight {
         m.put(DailyIndicatorRecomputeScheduler.class, "ApplicationReadyEvent 重算指标并写 indicator_versions");
         m.put(PurchaseGrantTimerExecutionService.class, "ApplicationReadyEvent 对账定时采购授权(改状态) + 重载 Canvas-Cron");
         m.put(WorkflowEngineServiceImpl.class, "ApplicationReadyEvent 用 PG 覆盖写共享 Redis 里的审批流状态");
+        m.put(TriggerChainExecutor.class, "监听全部 ApplicationEvent (含启动事件) 并按 factory_trigger_chains 执行工具链; "
+                + "一被实例化就把整张工具依赖图拖起来");
         // ── 启动即连外部 ──
         m.put(StartupWarmupCoordinator.class, "ApplicationReadyEvent 预热意图向量(调 embedding 服务)");
         m.put(ClassifierIntentMatcher.class, "@PostConstruct 对 Python 分类服务做 HTTP 健康检查");
