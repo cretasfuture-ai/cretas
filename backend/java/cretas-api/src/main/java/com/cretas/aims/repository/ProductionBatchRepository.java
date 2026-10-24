@@ -358,6 +358,20 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     long countByStatus(ProductionBatchStatus status);
 
     /**
+     * 跨工厂批次总数, 不含工艺保密产品的批次 (隐私条款第六条: 保密产品不纳入跨客户统计)。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE NOT EXISTS (SELECT 1 FROM ProcessSecretPolicy p "
+            + "WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId)")
+    long countExcludingProcessSecretProducts();
+
+    /**
+     * 跨工厂某状态批次数, 不含工艺保密产品的批次 (隐私条款第六条)。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.status = :status AND NOT EXISTS ("
+            + "SELECT 1 FROM ProcessSecretPolicy p WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId)")
+    long countByStatusExcludingProcessSecretProducts(@Param("status") ProductionBatchStatus status);
+
+    /**
      * 获取时间范围内的批次（用于成本分析和绩效计算）
      */
     @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.startTime BETWEEN :startTime AND :endTime ORDER BY b.startTime DESC")
