@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -175,7 +176,9 @@ public class ProductProcessWorkflowCatalogValidator {
             }
         }
 
-        validateMaterialProducers(definition, outputBindingsByMaterialId);
+        Set<String> externalInputMaterialIds = validateExternalInputSources(
+                factoryId, definition, nodesById, outputBindingsByMaterialId);
+        validateMaterialProducers(definition, outputBindingsByMaterialId, externalInputMaterialIds);
         List<OutputBinding> outputBindings = new ArrayList<>(outputBindingsByMaterialId.values());
         validateOutputSkus(factoryId, productTypeId, outputBindings);
         if (requireActiveBom) {
@@ -234,12 +237,127 @@ public class ProductProcessWorkflowCatalogValidator {
         }
     }
 
+    private Set<String> validateExternalInputSources(
+            String factoryId,
+            ProductProcessWorkflowDTO definition,
+            Map<String, ProductProcessWorkflowDTO.Node> nodesById,
+            Map<String, OutputBinding> outputBindingsByMaterialId) {
+        List<ProductProcessWorkflowDTO.Node> externalNodes = definition.getNodes().stream()
+                .filter(node -> "EXTERNAL".equals(asString(data(node).get("inputSource"))))
+                .toList();
+        if (externalNodes.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<String> skuIds = externalNodes.stream()
+                .map(node -> asString(data(node).get("skuId")))
+                .filter(skuId -> !isBlank(skuId))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, ProductType> productsById = productTypeRepository.findByIdIn(new ArrayList<>(skuIds))
+                .stream()
+                .filter(product -> product != null && !isBlank(product.getId()))
+                .collect(Collectors.toMap(ProductType::getId, Function.identity(), (left, right) -> left,
+                        LinkedHashMap::new));
+        Set<String> validated = new LinkedHashSet<>();
+        for (ProductProcessWorkflowDTO.Node materialNode : externalNodes) {
+            if (!"SEMI_FINISHED".equals(materialNode.getKind())) {
+                mismatch(materialNode,
+                        "EXTERNAL 输入只能标记 SEMI_FINISHED 物料 Cell",
+                        "请清除 EXTERNAL 标记或改用半成品输入 Cell");
+            }
+            String skuId = asString(data(materialNode).get("skuId"));
+            if (isBlank(skuId)) {
+                mismatch(materialNode, "外部半成品输入未绑定 SKU",
+                        "请为外部输入 Cell 选择有效的半成品 SKU");
+            }
+            ProductType product = productsById.get(skuId);
+            if (product == null || product.isDeleted()) {
+                mismatch(materialNode, "外部半成品输入 SKU 不存在或已删除: " + skuId,
+                        "请改选当前工厂仍在使用的半成品 SKU");
+            }
+            if (!factoryId.equals(product.getFactoryId())) {
+                mismatch(materialNode, "外部半成品输入 SKU 不属于当前工厂: " + skuId,
+                        "请改选当前工厂的半成品 SKU");
+            }
+            if (!Boolean.TRUE.equals(product.getIsActive())) {
+                mismatch(materialNode, "外部半成品输入 SKU 已停用: " + skuId,
+                        "请改选当前工厂启用中的半成品 SKU");
+            }
+            if (!ProductCategory.SEMI_FINISHED.equals(product.getProductCategory())) {
+                mismatch(materialNode,
+                        "外部输入 SKU 必须是 SEMI_FINISHED 分类，当前分类: "
+                                + displayCategory(product.getProductCategory()),
+                        "请改选半成品 SKU");
+            }
+            if (isBlank(asString(data(materialNode).get("baseUnit")))) {
+                mismatch(materialNode, "外部半成品输入缺少真实单位",
+                        "请重新绑定带主单位的半成品 SKU");
+            }
+            if (outputBindingsByMaterialId.containsKey(materialNode.getId())) {
+                mismatch(materialNode, "外部半成品输入不能绑定工序产出端口",
+                        "请删除该 Cell 的产出端口绑定，仅保留投入端口");
+            }
+
+            List<ProductProcessWorkflowDTO.Edge> sourceEdges = definition.getEdges().stream()
+                    .filter(edge -> materialNode.getId().equals(edge.getSource()))
+                    .toList();
+            if (sourceEdges.size() != 1) {
+                mismatch(materialNode,
+                        "外部半成品输入必须且只能连接一条 INPUT 连线，当前 source edge 数: "
+                                + sourceEdges.size(),
+                        "请从该 Cell 的 output 端口连接到真实工序 INPUT 端口");
+            }
+            ProductProcessWorkflowDTO.Edge incomingEdge = sourceEdges.getFirst();
+            ProductProcessWorkflowDTO.Node processNode = nodesById.get(incomingEdge.getTarget());
+            if (processNode == null || !"PROCESS".equals(processNode.getKind())
+                    || !"output".equals(incomingEdge.getSourceHandle())) {
+                mismatch(materialNode,
+                        "外部半成品输入连线必须从物料 Cell output 连到真实工序",
+                        "请删除该连线并从外部半成品 Cell 的 output 端口重新连接");
+            }
+            Map<String, Object> inputPort = findPort(processNode, incomingEdge.getTargetHandle(), "INPUT");
+            if (inputPort == null
+                    || !materialNode.getId().equals(asString(inputPort.get("materialNodeId")))
+                    || !"SEMI_FINISHED".equals(asString(inputPort.get("materialKind")))) {
+                mismatch(materialNode,
+                        "外部半成品输入连线未绑定匹配的 SEMI_FINISHED INPUT 端口",
+                        "请将该 Cell 连接到声明了相同 materialNodeId 的半成品 INPUT 端口");
+            }
+            validated.add(materialNode.getId());
+        }
+        return Set.copyOf(validated);
+    }
+
+    private Map<String, Object> findPort(
+            ProductProcessWorkflowDTO.Node processNode,
+            String portId,
+            String direction) {
+        Object portsValue = data(processNode).get("ports");
+        if (!(portsValue instanceof List<?> ports)) {
+            return null;
+        }
+        for (Object value : ports) {
+            if (value instanceof Map<?, ?> port
+                    && direction.equals(asString(port.get("direction")))
+                    && Objects.equals(portId, asString(port.get("id")))) {
+                Map<String, Object> copy = new LinkedHashMap<>();
+                port.forEach((key, item) -> copy.put(String.valueOf(key), item));
+                return copy;
+            }
+        }
+        return null;
+    }
+
     private void validateMaterialProducers(
             ProductProcessWorkflowDTO definition,
-            Map<String, OutputBinding> outputBindingsByMaterialId) {
+            Map<String, OutputBinding> outputBindingsByMaterialId,
+            Set<String> externalInputMaterialIds) {
         for (ProductProcessWorkflowDTO.Node materialNode : definition.getNodes()) {
             if (!"SEMI_FINISHED".equals(materialNode.getKind())
                     && !"FINISHED_GOOD".equals(materialNode.getKind())) {
+                continue;
+            }
+            if (externalInputMaterialIds.contains(materialNode.getId())) {
                 continue;
             }
             OutputBinding binding = outputBindingsByMaterialId.get(materialNode.getId());
