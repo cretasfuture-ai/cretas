@@ -4058,13 +4058,17 @@ public class SalesServiceImpl implements SalesService {
         //     同口径。旧逻辑 blank 硬默认单一 WH-LOG/SALES_OUTBOUND_DEFAULT → 成品落生产仓 WH-WKS 时
         //     "库存查询" 假报无货 (推荐/发货能找到, 但可用性查询查不到 → 用户困惑). 可用性语义不变
         //     (仍减 reserved), 仅放宽仓库范围。
+        // 过期批次 (到期日早于今天, 东八区) 不进可售列表 —— 前端选批时选不到它。
+        // 状态还是 AVAILABLE 的过期批 (成品过期定时任务还没跑到) 也在这里被滤掉。
+        java.time.LocalDate today = com.cretas.aims.util.InventoryExpiry.today();
         if (sourceWarehouseCode != null && !sourceWarehouseCode.isBlank()) {
             String warehouseId = warehouseResolver.resolveId(factoryId, sourceWarehouseCode);
-            return finishedGoodsBatchRepository
-                    .findAvailableBatchesByWarehouse(factoryId, productTypeId, warehouseId);
+            return FinishedGoodsBatchSaleabilityGuard.excludeExpired(finishedGoodsBatchRepository
+                    .findAvailableBatchesByWarehouse(factoryId, productTypeId, warehouseId), today);
         }
-        return finishedGoodsBatchRepository
-                .findAvailableBatchesFefoAllWarehousesExcluding(factoryId, productTypeId, WarehouseCodes.WH_RD);
+        return FinishedGoodsBatchSaleabilityGuard.excludeExpired(finishedGoodsBatchRepository
+                .findAvailableBatchesFefoAllWarehousesExcluding(factoryId, productTypeId, WarehouseCodes.WH_RD),
+                today);
     }
 
     @Override
@@ -4602,6 +4606,13 @@ public class SalesServiceImpl implements SalesService {
                     : finishedGoodsBatchRepository.findShippableBatchesAllWarehousesExcluding(
                             factoryId, item.getProductTypeId(), WarehouseCodes.WH_RD);
         }
+        // 过期批次 (到期日早于今天, 东八区; 到期日当天仍可发) 不进自动扣减候选 —— 发货当下比日期,
+        // 不依赖成品过期定时任务是否已把它置 EXPIRED。被滤掉的件数带进下面的库存不足提示,
+        // 免得「货架上明明有」被读成数据错了。
+        List<FinishedGoodsBatch> unexpiredBatches = FinishedGoodsBatchSaleabilityGuard.excludeExpired(
+                batches, com.cretas.aims.util.InventoryExpiry.today());
+        int expiredBatchesSkipped = batches.size() - unexpiredBatches.size();
+        batches = unexpiredBatches;
 
         // 🔴 C1 (2026-07-05): FG batches for one product may be recorded in DIFFERENT native units
         // (one 小结'd with productWeight → kg, another without → 盒/件, F006 confirmed live). All
@@ -4689,8 +4700,11 @@ public class SalesServiceImpl implements SalesService {
 
         if (remaining.compareTo(BigDecimal.ZERO) > 0) {
             String warehouseDisplay = hasExplicitSource ? sourceCode : "全部可售仓库(除研发库)";
-            throw new BusinessException(String.format("成品库存不足: 产品=%s, 仓库=%s, 缺少数量=%s",
-                item.getProductTypeId(), warehouseDisplay, remaining.toPlainString()))
+            String expiredNote = expiredBatchesSkipped > 0
+                    ? "（另有 " + expiredBatchesSkipped + " 个已过期批次未计入，过期成品不可发货，请走报损处理）"
+                    : "";
+            throw new BusinessException(String.format("成品库存不足: 产品=%s, 仓库=%s, 缺少数量=%s%s",
+                item.getProductTypeId(), warehouseDisplay, remaining.toPlainString(), expiredNote))
                 .withHint(prestockedCustomerStock
                         ? "请先完成该订单的客户已有库存预留，再按预留数量发货"
                         : "请检查 " + warehouseDisplay + " 的成品库存, 或先完成生产入库后再发货")
