@@ -6,6 +6,7 @@ from .financial.registry import registry, chart_succeeded
 from .financial_data_normalizer import FinancialDataNormalizer, ColumnMapping
 from .financial_subjects import classify_sheet_name
 from .financial_headline import build_headline
+from .financial_findings import build_findings
 from .financial.base import _sanitize_for_json
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,8 @@ class FinancialDashboardService:
             "success": True,
             # 页首一句话结论 (规则生成, 与图表同一指标库; 没有可说的事实时为 None)
             "headline": build_headline(df, column_mapping.value_kind, period["label"]),
+            # 「分析结论与建议」的规则部分: 好的 / 需要关注 / 建议 (说不出任何一条时为 None)
+            "findings": build_findings(df, column_mapping.value_kind),
             "charts": charts,
             "availableTypes": available,
             # 出不了的图: 缺哪一列 / 要哪张表 (「还缺数据」)

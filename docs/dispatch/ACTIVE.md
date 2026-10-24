@@ -6,7 +6,10 @@
 
 ## 在飞任务
 
-- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131完整检查窄修复；集成Base4b6aa033及唯一Owner/scope/验收见archive/2026-10-24-s3-combined-release.md；原QA保留CSV/设备。
+- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
+- `ERP-S2-08A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确6文件/无迁移；待办恢复及真实JPA，见archive/2026-10-24-s245-next-slices.md。
+- `ERP-S4-03A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确5文件/无迁移；可行性拒绝及真实JPA，见archive/2026-10-24-s245-next-slices.md。
+
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `in-progress` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 10月24日实际ACK并实施；精确11文件见archive/2026-10-23-s2-entry-scope.md；原QA验收。
 
@@ -110,6 +113,9 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `ERP-S2-08A-CLAUDE-20261024`：仅archive/2026-10-24-s245-next-slices.md列6文件；原Claude唯一写者，不接管设备/浏览器/CSV或权限入口。
+- `ERP-S4-03A-CLAUDE-20261024`：同归档精确5文件，含InsertSlotRepositoryQueryValidationTest；无迁移，不放开S4-05/Orchestrator/采购链。
 
 - `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：精确11文件锁见archive/2026-10-23-s2-entry-scope.md；原Claude唯一写者，平台权限/采购/S6不释放。
 

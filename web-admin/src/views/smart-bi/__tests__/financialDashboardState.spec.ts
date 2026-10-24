@@ -6,6 +6,7 @@ import {
   periodRequestLabel,
   dashboardRenderKey,
   createQueryHistory,
+  findingSections,
   chartGapReason,
   chartNotes,
   createDataVersion,
@@ -257,5 +258,34 @@ describe('看板组件接上了失败回滚 (源码断言)', () => {
     const catchBranch = body.slice(body.indexOf('} catch (err) {'), body.indexOf('} finally {'));
     expect(elseBranch).toContain('restoreLastApplied()');
     expect(catchBranch).toContain('restoreLastApplied()');
+  });
+});
+
+describe('findingSections (分析结论与建议的规则部分)', () => {
+  it('按 做得好的 / 需要关注 / 建议 分组, 空组不出现', () => {
+    const s = findingSections({ good: ['Q4 达成 110.0%'], attention: [], suggestions: ['Q1 缺口 2,400.00：先复盘'] });
+    expect(s.map(x => [x.title, x.items])).toEqual([
+      ['做得好的', ['Q4 达成 110.0%']],
+      ['建议', ['Q1 缺口 2,400.00：先复盘']],
+    ]);
+  });
+
+  it('后端说不出结论 (比率表) 时为空', () => {
+    expect(findingSections(null)).toEqual([]);
+    expect(findingSections(undefined)).toEqual([]);
+  });
+});
+
+describe('看板列出了业务单元分析 (源码断言)', () => {
+  it('chartTypes 里有 business_unit_analysis', () => {
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    expect(src).toMatch(/key: 'business_unit_analysis', label: '业务单元分析'/);
+  });
+
+  it('结论页先显示规则结论, 再显示 AI 补充', () => {
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    const tab = src.slice(src.indexOf("<template v-if=\"activeTab === 'conclusions'\">"));
+    expect(tab.indexOf('data-testid="findings"')).toBeGreaterThan(0);
+    expect(tab.indexOf('data-testid="findings"')).toBeLessThan(tab.indexOf('renderAnalysis(conclusionsText)'));
   });
 });

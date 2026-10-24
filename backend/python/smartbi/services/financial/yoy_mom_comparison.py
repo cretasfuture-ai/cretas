@@ -5,7 +5,7 @@ Steven's Power BI design:
 - Star markers for quarterly totals above bar groups
 - Prominent red quarterly summary boxes at bottom
 - Monthly data rows (本年/上年) as graphic elements inside chart
-- In 综合 viewMode, MoM line is hidden for cleaner look
+- 环比增长率是一条带图例的折线 (原来默认「综合」模式下永远不画, 只剩图顶部一排没标签的小字)
 """
 import logging
 from typing import Dict, Any
@@ -29,8 +29,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
     required_columns = ['actual', 'last_year', 'period']
     display_order = 2
 
-    def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026,
-              view_mode: str = "综合") -> Dict[str, Any]:
+    def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
         start_month = period.get('start_month', 1)
         end_month = period.get('end_month', 12)
         labels = self._month_labels(start_month, end_month)
@@ -59,6 +58,15 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
         yoy_rates = [M.growth(a, ly).value for a, ly in zip(actual_vals, last_year_vals)]
         mom_rates = M.month_over_month(actual_vals)
 
+        # 最近一个算得出环比的月份 (本月和上月都有数、上月不为 0)
+        latest_mom = next(((labels[i], r) for i, r in reversed(list(enumerate(mom_rates))) if r is not None), None)
+        latest_mom_kpi = {
+            "label": "最近月环比",
+            "value": f"{latest_mom[0]} {latest_mom[1]:+.1f}" if latest_mom else '-',
+            "unit": "%",
+            "trend": self._trend_from_value(latest_mom[1]) if latest_mom else "flat",
+        }
+
         # KPIs
         total_actual = M.total(actual_vals)
         total_last_year = M.total(last_year_vals)
@@ -85,6 +93,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             {"label": "同比增长率", "value": f"{total_yoy_rate:.1f}" if total_yoy_rate is not None else '-',
              "unit": "%", "trend": self._trend_from_value(total_yoy_rate),
              "sparkline": [r1(r) for r in yoy_rates]},
+            latest_mom_kpi,
         ]
 
         # Scale values
@@ -143,10 +152,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             })
 
         # --- ECharts option ---
-        is_comprehensive = view_mode == "综合"
-        legend_data = [f"本年{scale['name_suffix']}", f"上年{scale['name_suffix']}", "同比增长率"]
-        if not is_comprehensive:
-            legend_data.append("环比增长率")
+        legend_data = [f"本年{scale['name_suffix']}", f"上年{scale['name_suffix']}", "同比增长率", "环比增长率"]
 
         option = self._base_echarts_option()
         option.update({
@@ -219,19 +225,18 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             ],
         })
 
-        # Change 6: Only add MoM line when NOT in 综合 viewMode
-        if not is_comprehensive:
-            option["series"].append({
-                "name": "环比增长率",
-                "type": "line",
-                "yAxisIndex": 1,
-                "data": [r1(r) for r in mom_rates],
-                "itemStyle": {"color": COLORS['accent']},
-                "lineStyle": {"width": 1.5, "type": "dashed"},
-                "symbol": "triangle",
-                "symbolSize": 6,
-                "label": {"show": False},
-            })
+        option["series"].append({
+            "name": "环比增长率",
+            "type": "line",
+            "yAxisIndex": 1,
+            "data": [r1(r) for r in mom_rates],
+            "connectNulls": False,
+            "itemStyle": {"color": COLORS['accent']},
+            "lineStyle": {"width": 1.5, "type": "dashed"},
+            "symbol": "triangle",
+            "symbolSize": 6,
+            "label": {"show": True, "formatter": "{c}%", "fontSize": 11, "position": "top"},
+        })
 
         self._apply_datazoom(option)
 
@@ -239,30 +244,6 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
         mark_areas = self._quarter_mark_areas(start_month, end_month)
         if mark_areas:
             option["series"][0]["markArea"] = {"silent": True, "data": mark_areas}
-
-        # === Monthly MoM rate row (top of chart) — Change 4: font 10px ===
-        mom_row_graphics = []
-        for i, mom_rate in enumerate(mom_rates):
-            x_pct = 8 + i * (84 / max(len(labels) - 1, 1)) if len(labels) > 1 else 50
-            if mom_rate is None:
-                text = "—"
-                color = "#999"
-            else:
-                text = f"{mom_rate:+.1f}%"
-                color = COLORS['yoy_up'] if mom_rate >= 0 else COLORS['yoy_down']
-            mom_row_graphics.append({
-                "type": "text",
-                "style": {
-                    "text": text,
-                    "fontSize": 10,
-                    "fill": color,
-                    "fontWeight": "bold",
-                    "textAlign": "center",
-                },
-                "left": f"{x_pct}%",
-                "top": "7%",
-                "silent": True,
-            })
 
         # Difference arrows as graphic elements
         graphic_elements = []
@@ -400,7 +381,7 @@ class YoyMomComparisonBuilder(AbstractFinancialChartBuilder):
             })
 
         # Merge all graphic elements
-        all_graphics = (mom_row_graphics + graphic_elements + quarter_star_graphics
+        all_graphics = (graphic_elements + quarter_star_graphics
                         + data_row_graphics + quarter_summary_graphics)
         if all_graphics:
             option["graphic"] = all_graphics
