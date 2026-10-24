@@ -225,3 +225,26 @@ def anonymize_for_shared(
     anon_out = _bucket_amounts_in_text(anon_out)
 
     return anon_in, anon_out
+
+
+def desensitize_for_training(
+    input_text: str,
+    teacher_output: str,
+) -> Tuple[str, str]:
+    """Training-sample desensitization (Steve 2026-10-24) for un-authorized
+    factories' Q&A and for shared exports.
+
+    Names become generic placeholders (门店A / 客户A ..., consistent across the
+    pair), phone / ID / bank numbers are removed, and then EVERY number becomes
+    ``<数值>`` — revenue, cost, profit, margins and other ratios, output,
+    inventory. Only the question form and the reasoning remain: operating
+    figures such as a gross margin are business secrets and the general model
+    does not need them. (``anonymize_for_shared`` keeps percentages; it is no
+    longer used for training samples.)
+    """
+    from smartbi.services.training_consent import mask_numbers
+
+    shared_mapping: Dict[str, str] = {}
+    anon_in = _pseudonymize_entities(input_text or "", shared_mapping)
+    anon_out = _pseudonymize_entities(teacher_output or "", shared_mapping)
+    return mask_numbers(anon_in) or "", mask_numbers(anon_out) or ""

@@ -4,11 +4,15 @@ what a factory sample may carry into a training / distillation / labeling set.
 Owner rule (Steve, 2026-10-24; replaces the 2026-10-22 "nothing without consent").
 Customer wording: docs sent to the website session the same day.
 
-  * Structured operating figures (scheduling features: headcount, equipment,
-    durations, efficiency ...) are general capability: used by default.
+  * Scheduling features (headcount, equipment, durations, efficiency) are used
+    by default ONLY for that factory's own scheduling model — never for a
+    general model, never merged across factories (training is off today; any
+    future trainer must partition by factory_id).
   * AI Q&A samples (question + the data the model saw -> answer) are used by
-    default after desensitization (entity placeholders, amount buckets, phone /
-    ID / bank numbers removed). Factories with ``training_consent`` 'private' /
+    default after desensitization (``corpus_anonymize.desensitize_for_training``:
+    generic name placeholders, phone / ID / bank numbers removed, EVERY number
+    -> <数值> — revenue, cost, margins and other ratios, output, inventory; only
+    the question form and the reasoning remain). Factories with ``training_consent`` 'private' /
     'shared_anon' are stored without desensitization.
   * Intent mappings (utterance -> intent) are used by default with numbers and
     phone / ID / bank numbers masked. They teach UNDERSTANDING, so an utterance

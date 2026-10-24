@@ -195,8 +195,9 @@ class TestSharedGating:
         assert item["input_text"] is not None
         assert "星巴克" not in item["input_text"]
         assert "2500000" not in item["input_text"]
-        assert "35%" in item["input_text"]   # shape kept
-        assert "18%" in item["teacher_output"]
+        # numbers masked in shared exports too (Steve 2026-10-24)
+        assert item["input_text"] == "门店A营收¥<数值>，占比<数值>%"
+        assert item["teacher_output"] == "门店A环比增长<数值>%"
 
     def test_desensitized_row_of_unauthorized_factory_is_included(self):
         rows = [_row("F001", metadata={"desensitized": True}, input_text="门店A营收¥10-50万")]
