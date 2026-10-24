@@ -17,10 +17,8 @@
 | C1-headline | 「看不到。」 | pending | 依赖 C1-api-scope 和 C1-no-cross-learning 都变成 live |
 | C1-headline-ai | 「用 AI 问不出来。」（过渡用的标题） | 已删除 | 改为直接写 C1-headline「看不到。」 |
 | C2-platform-access | 配方代号显示、授权查看、平台访问留痕、工厂可查访问记录 | pending | 工艺保密（ProcessSecret，「方案审计与执行」在做）＋ 平台读取审计（第 3 项） |
-| C3-core-data | 未经书面授权，不用配方、工艺参数、成本和经营数字训练模型（Steve 2026-10-22 定的口径） | live | 2026-10-22 线上只读核查：`training_consent` 表 0 行，也就是没有任何工厂授权过；导出脚本 `export_distillation_dataset.py` 默认拒绝（V20261001_01）。注意：这是从现在起的承诺，没有核查 6 月至 9 月授权闸上线之前是否导出过样本 |
-| C3-consent-gate | 默认关闭；两档授权；没有授权就拒绝导出 | live | 同上 |
-| C3-general-knowledge | 改进模型靠通用流程和公开行业知识 | live | 意图标注、评测用的是说法文本，不是业务数字和配方；跨厂共享说法的问题记在 C1-no-cross-learning |
-| C3-no-capture | 默认不授权时，连训练素材都不记录 | pending | 线上 `smart_bi_distillation_samples` 仍在按工厂记录（2026-10-22：MOCK_REST 263、SEED_R 87、SEED_F 80、F006 73、LIUSHANMEN 49、CATTLE_3701_001 7、factory 为空 272）。要改成按授权才记录，并清理已存的样本（第 2 项） |
+| C3-recipe-process / C3-recipe-gate | 配方和工艺未经书面授权不用于训练 | commitment | 2026-10-24 Steve 改了训练口径：只有配方和工艺需要授权，其他业务数据默认用于训练，不提供关闭选项，并在官网和隐私政策里如实写明。代码要按这个范围调整：Python #1118 现在是「未授权工厂一律不存样本」，比新口径严；Java 侧还没加任何授权检查。已交给「方案审计与执行」 |
+| C3-other-data | 其他业务数据（生产、库存、成本、经营数字、AI 问答）用于改进模型 | policy | 这是告知，不是限制；隐私政策第二条同步写明（2026-10-24 版） |
 | C4-provider | 阿里云百炼（通义千问）；按量付费 API 的调用数据不用于训练 | live | 阿里云官方页面 https://help.aliyun.com/zh/model-studio/ 的 FAQ「阿里云百炼会用我的数据进行训练吗？」写的是「使用百炼按量付费 API 和 Token Plan 团队版时，不会将您的数据用于模型训练」。Coding Plan 和 Token Plan 个人版不在这个承诺内，Steve 2026-10-22 确认账号都是按量付费。官方没写数据在哪里处理，所以页面上不写「境内处理」 |
 | C4-smartbi-redact | 智能报表分析发给模型前替换客户、门店、产品名称；替换失败就不发送 | live | #1096 上线（方案审计与执行，2026-10-22）。我独立核对：线上 8083 进程 17:37 启动，`common/llm_client.py` 里有 fail-closed（`EgressRedactionError`，失败时不发送）。名称替换只在 SmartBI insights 注册了 `RedactionScope` 的路径上生效，其余 Python 调用只用正则兜底 PII；**数字照常发送**，所以页面上不写「数字也脱敏」 |
 | C4-assistant-redact | 工厂 AI 助手（Java）发给模型前同样替换名称、失败不发 | pending | origin/main 0407cf7c85：`WorkdeskOutputSummarizer` 没有脱敏，Java 侧也没有脱敏类，查询结果原样发给 DashScope。已转告「方案审计与执行」 |

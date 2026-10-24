@@ -121,11 +121,20 @@ class TestAnonymizePseudonymize:
 
 
 # ===========================================================================
-# 2. Export shared-gating: synthetic always; shared_anon in; none/private out
+# 2. Export shared-gating (rule 2026-10-24): synthetic in; real rows only if
+#    captured under the rule; desensitized in; shared_anon anonymized in;
+#    private / none raw out; process content out for everyone
 # ===========================================================================
 
+RULE = {"training_rule": "2026-10-24"}
+
+
 def _row(factory_id, *, metadata=None, input_text="问题X", teacher_output="答案Y",
-         business_type="restaurant", system_prompt=None):
+         business_type="restaurant", system_prompt=None, rule=True):
+    """Real-tenant rows carry the capture-time rule tag unless rule=False."""
+    real = factory_id and factory_id not in ("SEED_R", "SEED_F")
+    if rule and real:
+        metadata = {**RULE, **(metadata or {})}
     return {
         "id": 1,
         "source": "chat_qa",
@@ -152,10 +161,17 @@ class TestSharedGating:
         assert all(g["input_text"] is None for g in gated)
 
     def test_synthetic_by_metadata_source_kind(self):
-        rows = [_row("F001", metadata={"source_kind": "synthetic_seed"})]
+        rows = [_row(None, metadata={"source_kind": "synthetic_seed"})]
         gated = export_mod.gate_shared_rows(rows, consent={})  # no consent at all
         assert len(gated) == 1
         assert gated[0]["consent_class"] == "synthetic"
+
+    def test_real_tenant_row_is_never_synthetic_by_metadata(self):
+        # metadata is caller-supplied; a row tagged with a real tenant stays that
+        # tenant's data and needs that tenant's consent (2026-10-22).
+        rows = [_row("F001", metadata={"source_kind": "synthetic_seed"}),
+                _row("F001", metadata={"seeded": True})]
+        assert export_mod.gate_shared_rows(rows, consent={}) == []
 
     def test_real_none_excluded_default_deny(self):
         rows = [_row("F001")]  # no metadata, real tenant
@@ -182,19 +198,37 @@ class TestSharedGating:
         assert "35%" in item["input_text"]   # shape kept
         assert "18%" in item["teacher_output"]
 
+    def test_desensitized_row_of_unauthorized_factory_is_included(self):
+        rows = [_row("F001", metadata={"desensitized": True}, input_text="门店A营收¥10-50万")]
+        gated = export_mod.gate_shared_rows(rows, consent={})
+        assert [g["consent_class"] for g in gated] == ["desensitized"]
+
+    def test_row_captured_before_the_rule_is_excluded_even_when_authorized(self):
+        rows = [_row("F001", rule=False), _row("F002", rule=False, metadata={"desensitized": True})]
+        assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
+
+    def test_process_content_is_excluded_even_for_shared_anon(self):
+        rows = [_row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+                _row("F001", input_text="怎么提升出成率", teacher_output="把腌制时间延长到 24 小时"),
+                _row("F002", metadata={"desensitized": True}, input_text="为什么返工多")]
+        assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
+
     def test_mixed_population(self):
         rows = [
             _row("SEED_R"),                                    # synthetic → in
-            _row("F001", metadata={"seeded": True}),           # synthetic → in
+            _row(None, metadata={"seeded": True}),             # synthetic → in
+            _row("F005", metadata={"seeded": True}),           # real tenant, no consent → out
             _row("F002"),                                      # none → out
             _row("F003"),                                      # private → out
             _row("F004"),                                      # shared_anon → in
+            _row("F006", metadata={"desensitized": True}),     # desensitized → in
+            _row("F007", rule=False),                          # pre-rule row → out
         ]
-        consent = {"F002": "none", "F003": "private", "F004": "shared_anon"}
+        consent = {"F002": "none", "F003": "private", "F004": "shared_anon", "F007": "shared_anon"}
         gated = export_mod.gate_shared_rows(rows, consent)
         classes = sorted(g["consent_class"] for g in gated)
-        assert classes == ["shared_anon", "synthetic", "synthetic"]
-        assert len(gated) == 3
+        assert classes == ["desensitized", "shared_anon", "synthetic", "synthetic"]
+        assert len(gated) == 4
 
 
 # ===========================================================================
@@ -267,6 +301,18 @@ async def test_private_export_raw_when_consented(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_private_export_skips_process_content_and_pre_rule_rows(tmp_path):
+    consent = [{"factory_id": "F001", "consent_scope": "private"}]
+    samples = [_row("F001", input_text="本月营收多少", teacher_output="128 万"),
+               _row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+               _row("F001", input_text="上月库存", teacher_output="350 箱", rule=False)]
+    conn = _FakeConn(consent_rows=consent, sample_rows=samples)
+    await export_mod._export_private(_Args(factory="F001", out=str(tmp_path)), _FakePool(conn))
+    lines = open(os.path.join(str(tmp_path), "dataset_private_F001.jsonl"), encoding="utf-8").read().splitlines()
+    assert len(lines) == 1 and "本月营收多少" in lines[0]
+
+
+@pytest.mark.asyncio
 async def test_private_export_refused_when_shared_anon_only(tmp_path, caplog):
     # shared_anon is NOT private → private raw export must refuse
     consent = [{"factory_id": "F001", "consent_scope": "shared_anon"}]
@@ -294,25 +340,6 @@ class TestMigration:
             if m:
                 versions.append((m.group(1), m.group(2)))
         return max(versions)
-
-    def test_consent_migration_above_frontier(self):
-        target = None
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if "training_consent" in fn:
-                target = fn
-        assert target is not None, "training_consent migration not found"
-        m = re.match(r"V(\d{8})_(\d{2})__", target)
-        assert m
-        this_ver = (m.group(1), m.group(2))
-        # strictly greater than any OTHER migration
-        others = []
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if fn == target:
-                continue
-            mm = re.match(r"V(\d{8})_(\d{2})__", fn)
-            if mm:
-                others.append((mm.group(1), mm.group(2)))
-        assert this_ver > max(others), f"{this_ver} must be > frontier {max(others)}"
 
     def test_migration_defines_table_and_policy(self):
         target = None

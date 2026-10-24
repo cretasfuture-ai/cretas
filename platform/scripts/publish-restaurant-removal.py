@@ -10,9 +10,8 @@ import urllib.request
 # Assets precede pages that reference their new cache-busting version.
 # NEW_FILES do not exist on the server yet: they must be absent (or already
 # identical) before publication, and rollback deletes them.
-NEW_FILES = ['data-security.html']
-FILES = ['index.html', 'solutions-factory.html', 'solutions-logistics.html', 'solutions-ai.html',
-         'solutions-custom.html', 'demo.html', 'factory-onboarding.html']
+NEW_FILES = []
+FILES = ['data-security.html', 'privacy.html']
 HOST = 'root@139.196.165.140'
 ROOT = '/www/wwwroot/showcase/cretaceousfuture'
 REPO = Path(__file__).resolve().parents[2]

@@ -1589,6 +1589,14 @@ app.include_router(
     tags=["Restaurant ETL Admin"],
 )
 
+# Factory overview (2026-10-23): 经营分析页顶部概览卡的工厂销售订单汇总 (只读 cretas_db, 租户来自登录)
+from smartbi.api import factory_overview  # noqa: E402
+app.include_router(
+    factory_overview.router,
+    prefix="/api/smartbi/factory-overview",
+    tags=["Factory Overview"],
+)
+
 # Factory Production Gold ETL admin (2026-06-11): trigger + status endpoints
 from smartbi.api import factory_etl_admin  # noqa: E402
 app.include_router(
