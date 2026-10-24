@@ -1,6 +1,9 @@
 package com.cretas.aims.service.lineage;
 
+import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.service.production.WorkshopReportReservationService;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
@@ -13,8 +16,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -108,19 +113,24 @@ public class LineageBackfillService {
         }
     }
 
-    /** 三段各一份计数，外加「预演不写」标记。 */
+    /** 五段各一份计数，外加「预演不写」标记。 */
     public record Report(String factoryId, boolean dryRun,
                          Counters rawToProduction,
                          Counters productionToFinished,
-                         Counters finishedToShipment) {
+                         Counters finishedToShipment,
+                         Counters productionToWipStock,
+                         Counters reportMaterialToProduction) {
 
         public String render() {
             return String.format(
                     "[lineage-backfill] factory=%s dryRun=%s%n"
                     + "  RAW_TO_PRODUCTION      %s%n"
                     + "  PRODUCTION_TO_FINISHED %s%n"
-                    + "  FINISHED_TO_SHIPMENT   %s",
-                    factoryId, dryRun, rawToProduction, productionToFinished, finishedToShipment);
+                    + "  FINISHED_TO_SHIPMENT   %s%n"
+                    + "  PRODUCTION_TO_WIP      %s%n"
+                    + "  APP_REPORT_MATERIAL    %s",
+                    factoryId, dryRun, rawToProduction, productionToFinished, finishedToShipment,
+                    productionToWipStock, reportMaterialToProduction);
         }
     }
 
@@ -148,7 +158,10 @@ public class LineageBackfillService {
         Counters raw = backfillRawToProduction(factoryId, dryRun);
         Counters prod = backfillProductionToFinished(factoryId, dryRun);
         Counters ship = backfillFinishedToShipment(factoryId, dryRun);
-        Report report = new Report(factoryId, dryRun, raw, prod, ship);
+        // 顺序无关 (闭包触发器双向维护), 但先补中间跳再补报工投料, 日志读起来是从上游往下游。
+        Counters wip = backfillProductionToWipStock(factoryId, dryRun);
+        Counters appRaw = backfillReportMaterialToProduction(factoryId, dryRun);
+        Report report = new Report(factoryId, dryRun, raw, prod, ship, wip, appRaw);
         log.info("{}", report.render());
         return report;
     }
@@ -196,13 +209,15 @@ public class LineageBackfillService {
             //    原来这里无条件报 SKIPPED, 预演会显示「跳过 N / 新增 0」,
             //    运维照着「先 dry-run 再真跑」的指示读, 会把它解读成「这一段不会新增边」,
             //    而真跑时可能插入大量行 —— 一个会误导决策的假读数。
+            // 成品批号作「产出它的生产批号」线索: 逐行入库的成品批号就是报工批号 (同厂同计划才采纳),
+            // 与在线 createFinishedGoodsForOutputLine 同一条对齐规则。
             LineageRecordOutcome outcome = dryRun
                     ? recorder.previewProductionToFinishedByPlan(factoryId, fg.getProductionPlanId(),
-                            fg.getProductTypeId(), fg.getId(), fg.getProducedQuantity(), fg.getUnit(),
-                            "finishedBatch:" + fg.getId())
+                            fg.getProductTypeId(), fg.getBatchNumber(), fg.getId(), fg.getProducedQuantity(),
+                            fg.getUnit(), "finishedBatch:" + fg.getId())
                     : recorder.recordProductionToFinishedByPlan(factoryId, fg.getProductionPlanId(),
-                            fg.getProductTypeId(), fg.getId(), fg.getProducedQuantity(), fg.getUnit(),
-                            fg.getCreatedBy(), "finishedBatch:" + fg.getId(), meta);
+                            fg.getProductTypeId(), fg.getBatchNumber(), fg.getId(), fg.getProducedQuantity(),
+                            fg.getUnit(), fg.getCreatedBy(), "finishedBatch:" + fg.getId(), meta);
             counters.record(outcome);
         }
         return counters;
@@ -282,4 +297,117 @@ public class LineageBackfillService {
         return counters;
     }
 
+
+    /**
+     * 生产批次 → 在制库存批 (PRODUCTION_TO_WIP)。数据源 = {@code material_batches} 里
+     * {@code source_doc_type='PRODUCTION_BATCH'} 的行, 产出它的生产批次 = {@code source_doc_id}。
+     *
+     * <p>幂等键与在线 ({@code ClerkProcessEntryServiceImpl#recordWipStockLineage}) 同一个:
+     * {@link LineageEdgeRecorder#wipStockRefKey}。
+     *
+     * <p>跳过 (SKIPPED, 不造边): {@code source_doc_id} 不是数字 / 本厂查不到该生产批次 ——
+     * 指向一个不存在的批次的边比没有边更糟。
+     */
+    Counters backfillProductionToWipStock(String factoryId, boolean dryRun) {
+        List<MaterialBatch> rows = entityManager.createQuery(
+                        "SELECT m FROM MaterialBatch m "
+                        + "WHERE m.factoryId = :factoryId AND m.sourceDocType = 'PRODUCTION_BATCH' "
+                        + "AND m.sourceDocId IS NOT NULL ORDER BY m.id ASC", MaterialBatch.class)
+                .setParameter("factoryId", factoryId)
+                .getResultList();
+        Counters counters = new Counters();
+        if (rows == null || rows.isEmpty()) {
+            return counters;
+        }
+        Set<Long> wanted = new HashSet<>();
+        for (MaterialBatch m : rows) {
+            Long id = parseLong(m.getSourceDocId());
+            if (id != null) {
+                wanted.add(id);
+            }
+        }
+        Set<Long> existing = wanted.isEmpty() ? Set.of()
+                : new HashSet<>(entityManager.createQuery(
+                                "SELECT p.id FROM ProductionBatch p WHERE p.factoryId = :factoryId AND p.id IN :ids",
+                                Long.class)
+                        .setParameter("factoryId", factoryId)
+                        .setParameter("ids", wanted)
+                        .getResultList());
+        for (MaterialBatch m : rows) {
+            Long productionBatchId = parseLong(m.getSourceDocId());
+            if (productionBatchId == null || !existing.contains(productionBatchId)) {
+                log.warn("[lineage-backfill] 在制库存批的来源生产批次无效, 不写边: factory={} wip={} sourceDocId={}",
+                        factoryId, m.getBatchNumber(), m.getSourceDocId());
+                counters.record(LineageRecordOutcome.SKIPPED);
+                continue;
+            }
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("origin", "BACKFILL");
+            meta.put("wipBatchNumber", m.getBatchNumber());
+            String refKey = LineageEdgeRecorder.wipStockRefKey(m.getId());
+            LineageRecordOutcome outcome = dryRun
+                    ? recorder.previewProductionToWipStock(factoryId, productionBatchId, m.getId(),
+                            m.getReceiptQuantity(), m.getQuantityUnit(), refKey)
+                    : recorder.recordProductionToWipStock(factoryId, productionBatchId, m.getId(),
+                            m.getReceiptQuantity(), m.getQuantityUnit(), m.getCreatedBy(), refKey, meta);
+            counters.record(outcome);
+        }
+        return counters;
+    }
+
+    /**
+     * App 报工领料 {@code production_reports.material_batch_refs} → RAW_TO_PRODUCTION。
+     *
+     * <p>每个 (报工, 原料批次) 一个计数单位; 数量取 {@link WorkshopReportReservationService#reservationOf}
+     * (与在线写边、生产仓占用同一口径)。幂等键 {@link LineageEdgeRecorder#reportMaterialRefKey}。
+     *
+     * <p>⚠️ 已软删 / 已驳回的报工<b>不补</b> (SKIPPED): 那份领料已经被撤回, 不是事实。
+     * 这与在线路径不完全对称 —— 在线在提交时就写了, 事后驳回撤不回 (边表 append-only)。
+     */
+    Counters backfillReportMaterialToProduction(String factoryId, boolean dryRun) {
+        List<ProductionReport> rows = entityManager.createQuery(
+                        "SELECT r FROM ProductionReport r "
+                        + "WHERE r.factoryId = :factoryId AND r.batchId IS NOT NULL ORDER BY r.id ASC",
+                        ProductionReport.class)
+                .setParameter("factoryId", factoryId)
+                .getResultList();
+        Counters counters = new Counters();
+        if (rows == null) {
+            return counters;
+        }
+        for (ProductionReport r : rows) {
+            Map<String, BigDecimal> byBatch = WorkshopReportReservationService.reservationOf(r);
+            if (byBatch.isEmpty()) {
+                continue;   // 没有领料引用的报工不是这一段的样本, 不计数
+            }
+            boolean retracted = r.getDeletedAt() != null || "REJECTED".equals(r.getApprovalStatus());
+            for (Map.Entry<String, BigDecimal> e : byBatch.entrySet()) {
+                if (retracted) {
+                    counters.record(LineageRecordOutcome.SKIPPED);
+                    continue;
+                }
+                String refKey = LineageEdgeRecorder.reportMaterialRefKey(r.getId(), e.getKey());
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("origin", "BACKFILL");
+                meta.put("reportId", r.getId());
+                LineageRecordOutcome outcome = dryRun
+                        ? recorder.previewRawToProduction(factoryId, e.getKey(), r.getBatchId(), e.getValue(), refKey)
+                        : recorder.recordRawToProduction(factoryId, e.getKey(), r.getBatchId(), e.getValue(),
+                                null, r.getWorkerId(), refKey, meta);
+                counters.record(outcome);
+            }
+        }
+        return counters;
+    }
+
+    private static Long parseLong(String s) {
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 }
