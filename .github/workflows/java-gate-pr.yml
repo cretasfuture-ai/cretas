@@ -37,7 +37,8 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB). fast-contracts OOMs at 3g/4g in this class order; 6g passes.
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB). -DreuseForks=false gives each test class a fresh JVM, as
+    # Aurora's Maven wrapper did: one shared fork accumulated Spring contexts and OOMed at 6g.
     env:
       CRETAS_JAVA_FORK_XMX: 6g
     steps:
@@ -142,12 +143,14 @@ jobs:
             -Dtest='*ContractTest,*ContractsTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*RoleGateMvcTest,*SecurityTest,*VulnerabilityTest,*AuthorizationTest,*PermissionTest,*PermissionGateTest,PermissionServiceImpl*Test,*ArchitectureTest' \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
+            -DreuseForks=false \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
   postgres-reversal-concurrency:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB). fast-contracts OOMs at 3g/4g in this class order; 6g passes.
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB). -DreuseForks=false gives each test class a fresh JVM, as
+    # Aurora's Maven wrapper did: one shared fork accumulated Spring contexts and OOMed at 6g.
     env:
       CRETAS_JAVA_FORK_XMX: 6g
     steps:
@@ -251,6 +254,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" "$MVN" -B test \
             -Dtest=ProductionScopePostgresContractTest,FinanceScopePostgresContractTest,VoucherLedgerScopePostgresContractTest,ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest,InventoryAuditTransactionContractTest,RoleDataScopePostgresContractTest,UserOrganizationConcurrencyPostgresContractTest,PurchaseReturnConcurrencyPostgresContractTest,BatchAdjustmentAtomicityPostgresContractTest,PurchaseExceptionConcurrencyPostgresContractTest,PurchaseExceptionRepositoryQueryValidationTest,OperationalQuoteOrderPostgresContractTest,AiPurchaseTaskGrantServiceContractTest,AiPurchaseTaskGrantRepositoryQueryValidationTest,ProcessSecretRepositoryQueryValidationTest,PlatformDataAccessLogRepositoryQueryValidationTest,TransferWarehouseDeliveryPostgresContractTest,WarehouseTransferMovementMigrationPostgresContractTest,WipOutputCorrectionPostgresContractTest,ProductionReportCorrectionLockedStatePostgresContractTest,StocktakeDriftRecoveryPostgresContractTest,ProductionBatchSearchPostgresRepositoryQueryValidationTest \
             -Dspring.profiles.active=test \
+            -DreuseForks=false \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
       - name: Prove activity event migration and committed JDBC writes
