@@ -7583,6 +7583,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         Map<String, String> recipeIds = Optional.ofNullable(plan.getSelectedBomRecipeIdsByProduct()).orElseGet(Map::of);
         Map<String, Integer> recipeVersions = Optional.ofNullable(plan.getSelectedBomVersionsByProduct()).orElseGet(Map::of);
+        Map<String, BigDecimal> tracedRatios = byStockTracedCostRatios(finishedGoodsBatches);
         List<ProductionSettlementOutputLine> lines = new ArrayList<>();
         for (FinishedGoodsBatch fg : finishedGoodsBatches) {
             String productTypeId = trimToNull(fg.getProductTypeId());
@@ -7613,7 +7614,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             line.setBomRecipeVersion(recipe.getVersion());
             line.setTargetTerminalNodeId(recipe.getTargetTerminalNodeId());
             line.setOutputRole(recipe.getOutputRole());
-            line.setCostAllocationRatio(recipe.getCostAllocationRatio());
+            line.setCostAllocationRatio(recipe.getCostAllocationRatio() != null
+                    || recipe.getOutputRole() == BomRecipe.OutputRole.BY_PRODUCT || tracedRatios == null
+                    ? recipe.getCostAllocationRatio() : tracedRatios.get(fg.getId()));
             line.setByproductNrvUnitPrice(recipe.getByproductNrvUnitPrice());
             line.setReceivedQuantity(produced);
             line.setFinishedGoodsBatchId(fg.getId());
@@ -7621,6 +7624,58 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             lines.add(line);
         }
         productionSettlementOutputLineRepository.saveAll(lines);
+    }
+
+    /**
+     * 存货生产多成品的分摊比例(百分比, 按 FG 批次 id): 各成品小结时已按自己那条分支追溯出成本
+     * (分叉点按重量 + 副产 NRV 先扣, 之后各走各的工序), 比例就是这些已追溯成本的占比。
+     * 普通结单靠报工页的多产出行凭证 ({@code ReportedOutputCostAllocationService}), 而存货计划的分叉发生在
+     * 上游半成品, 成品行不是多产出行 —— 那条路在这里永远拿不到凭证(F006【演示L4】8d77ec57, 2026-10-25)。
+     *
+     * <p>任何一个成品缺单位成本就返回 null —— 让重算如实 409, ⛔ 不把缺成本的那个当 0 分走。
+     */
+    static Map<String, BigDecimal> byStockTracedCostRatios(List<FinishedGoodsBatch> finishedGoodsBatches) {
+        if (finishedGoodsBatches == null || finishedGoodsBatches.size() < 2) {
+            return null;
+        }
+        Map<String, BigDecimal> costs = new LinkedHashMap<>();
+        BigDecimal total = BigDecimal.ZERO;
+        for (FinishedGoodsBatch fg : finishedGoodsBatches) {
+            if (fg.getId() == null || fg.getUnitCost() == null || fg.getUnitCost().signum() <= 0
+                    || fg.getProducedQuantity() == null || fg.getProducedQuantity().signum() <= 0) {
+                return null;
+            }
+            BigDecimal cost = fg.getUnitCost().multiply(fg.getProducedQuantity());
+            costs.put(fg.getId(), cost);
+            total = total.add(cost);
+        }
+        Map<String, BigDecimal> ratios = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> entry : costs.entrySet()) {
+            ratios.put(entry.getKey(), entry.getValue().multiply(BigDecimal.valueOf(100))
+                    .divide(total, 6, RoundingMode.HALF_UP));
+        }
+        return ratios;
+    }
+
+    /** 本修复之前写下的存货结单产出行比例全空 —— 用同一口径补一次; 补不出就原样留着让重算如实 409。 */
+    private List<ProductionSettlementOutputLine> backfillByStockLineRatios(
+            String factoryId, String planId, List<ProductionSettlementOutputLine> lines) {
+        boolean allPrimaryMissing = lines.stream()
+                .filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .allMatch(line -> line.getCostAllocationRatio() == null);
+        if (lines.size() < 2 || !allPrimaryMissing) {
+            return lines;
+        }
+        Map<String, BigDecimal> ratios = byStockTracedCostRatios(
+                finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId));
+        if (ratios == null || lines.stream().filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .anyMatch(line -> ratios.get(line.getFinishedGoodsBatchId()) == null)) {
+            return lines;
+        }
+        lines.stream().filter(line -> line.getOutputRole() != BomRecipe.OutputRole.BY_PRODUCT)
+                .forEach(line -> line.setCostAllocationRatio(ratios.get(line.getFinishedGoodsBatchId())));
+        productionSettlementOutputLineRepository.saveAll(lines);
+        return lines;
     }
 
     private BusinessException incompleteByStockSettlementRows() {
@@ -8007,6 +8062,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             persistByStockSettlementOutputs(factoryId, plan, settlement,
                     finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId));
             lines = productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(factoryId, settlement.getId());
+        }
+        if (plan.getSourceType() == PlanSourceType.SAFETY_STOCK && finishedGoodsBatchRepository != null) {
+            lines = backfillByStockLineRatios(factoryId, planId, lines);
         }
         if (lines.isEmpty() || lines.stream().anyMatch(line -> line.getReceivedQuantity() == null
                 || line.getReceivedQuantity().signum() <= 0 || line.getFinishedGoodsBatchId() == null)) {
