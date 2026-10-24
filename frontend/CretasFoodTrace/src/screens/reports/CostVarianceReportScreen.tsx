@@ -25,6 +25,7 @@ import { formatDate } from '../../utils/formatters';
 import {
   COST_VARIANCE_NOT_COMPARABLE_TEXT,
   isCostVarianceComparable,
+  isReading,
   standardCostOf,
 } from '../../utils/costVarianceComparability';
 
@@ -139,17 +140,23 @@ export default function CostVarianceReportScreen() {
    * 格式化金额
    */
   const formatCurrency = (value: number | null | undefined): string => {
-    if (value === null || value === undefined) return '-';
+    if (!isReading(value)) return '—';
     return `¥${value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   /**
-   * 格式化百分比
+   * 格式化百分比; 没有读数时「无法比较」—— ⛔ 不显示成 0.00%
    */
   const formatPercent = (value: number | null | undefined): string => {
-    if (value === null || value === undefined) return '-';
+    if (!isReading(value)) return '无法比较';
     const sign = value >= 0 ? '+' : '';
     return `${sign}${value.toFixed(2)}%`;
+  };
+
+  /** 带符号金额; 没有读数时「—」 */
+  const formatSignedCurrency = (value: number | null | undefined): string => {
+    if (!isReading(value)) return '—';
+    return `${value >= 0 ? '+' : ''}${formatCurrency(value)}`;
   };
 
   // 可比性: 没有独立标准成本时后端给 comparable=false 且差异 / 差异率为 null。
@@ -171,10 +178,10 @@ export default function CostVarianceReportScreen() {
       { name: '标准成本', value: start, type: 'start' },
     ];
 
-    // 按差异大小排序并添加各类别差异
-    const sortedCategories = [...reportData.varianceByCategory].sort(
-      (a, b) => Math.abs(b.variance) - Math.abs(a.variance)
-    );
+    // 按差异大小排序并添加各类别差异; 没有读数的类别不进瀑布图 (⛔ 不当成 0)
+    const sortedCategories = reportData.varianceByCategory
+      .flatMap((c) => (isReading(c.variance) ? [{ category: c.category, variance: c.variance }] : []))
+      .sort((a, b) => Math.abs(b.variance) - Math.abs(a.variance));
 
     sortedCategories.forEach((category) => {
       if (category.variance !== 0) {
@@ -313,7 +320,8 @@ export default function CostVarianceReportScreen() {
   /**
    * 获取差异状态颜色
    */
-  const getVarianceColor = (variance: number): string => {
+  const getVarianceColor = (variance: number | null | undefined): string => {
+    if (!isReading(variance)) return theme.colors.textSecondary; // 没有读数 - 灰色
     if (variance > 0) return theme.colors.error; // 超支 - 红色
     if (variance < 0) return theme.colors.success; // 节约 - 绿色
     return theme.colors.textSecondary; // 持平 - 灰色
@@ -510,8 +518,7 @@ export default function CostVarianceReportScreen() {
                           { color: getVarianceColor(category.variance) },
                         ]}
                       >
-                        {category.variance >= 0 ? '+' : ''}
-                        {formatCurrency(category.variance)}
+                        {formatSignedCurrency(category.variance)}
                       </Text>
                     </View>
                     <View style={styles.categoryDetails}>
@@ -532,11 +539,14 @@ export default function CostVarianceReportScreen() {
                     </View>
                     <ProgressBar
                       progress={
-                        category.plannedCost > 0
+                        isReading(category.plannedCost) && category.plannedCost > 0
+                          && isReading(category.actualCost)
                           ? Math.min(category.actualCost / category.plannedCost, 1.5)
                           : 0
                       }
-                      color={category.variance > 0 ? theme.colors.error : theme.colors.success}
+                      color={isReading(category.variance) && category.variance > 0
+                        ? theme.colors.error
+                        : theme.colors.success}
                       style={styles.categoryProgress}
                     />
                     {index < reportData.varianceByCategory.length - 1 && (
@@ -586,8 +596,7 @@ export default function CostVarianceReportScreen() {
                       variant="bodySmall"
                       style={{ color: getVarianceColor(item.variance) }}
                     >
-                      {item.variance >= 0 ? '+' : ''}
-                      {formatCurrency(item.variance)}
+                      {formatSignedCurrency(item.variance)}
                     </Text>
                   </DataTable.Cell>
                   <DataTable.Cell numeric>

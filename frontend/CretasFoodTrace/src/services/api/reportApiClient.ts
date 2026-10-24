@@ -167,13 +167,14 @@ export interface OeeReportDTO {
   }>;
 }
 
+/** 差异类字段没有读数时为 null —— ⛔ 不要 `?? 0` 兜底成 0 / 0.0% */
 export interface CostVarianceItem {
   category: string;
   itemName: string;
-  plannedCost: number;
-  actualCost: number;
-  variance: number;
-  varianceRate: number;
+  plannedCost: number | null;
+  actualCost: number | null;
+  variance: number | null;
+  varianceRate: number | null;
 }
 
 export interface CostVarianceReportDTO {
@@ -199,10 +200,10 @@ export interface CostVarianceReportDTO {
   totalVarianceRate: number | null;
   varianceByCategory: Array<{
     category: string;
-    plannedCost: number;
-    actualCost: number;
-    variance: number;
-    varianceRate: number;
+    plannedCost: number | null;
+    actualCost: number | null;
+    variance: number | null;
+    varianceRate: number | null;
   }>;
   topVarianceItems: CostVarianceItem[];
   varianceTrend: Array<{

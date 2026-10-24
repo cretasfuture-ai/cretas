@@ -20,6 +20,28 @@ export function isCostVarianceComparable(data: ComparabilityFields | null | unde
   return typeof data.totalVarianceRate === 'number' && Number.isFinite(data.totalVarianceRate);
 }
 
+/** 有限数字才算读数; null / undefined / NaN 一律视为「没有」。 */
+export function isReading(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * 带符号的百分比; 没有读数时返回「无法比较」—— ⛔ 不用 `?? 0` 显示成 0.0%。
+ */
+export function formatSignedPercentOrNotComparable(
+  value: number | null | undefined,
+  digits = 1
+): string {
+  if (!isReading(value)) return '无法比较';
+  return `${value > 0 ? '+' : ''}${value.toFixed(digits)}%`;
+}
+
+/** 金额; 没有读数时返回「—」—— ⛔ 不显示成 ¥0.00。 */
+export function formatYuanOrDash(value: number | null | undefined, digits = 2): string {
+  if (!isReading(value)) return '—';
+  return `¥${value.toFixed(digits)}`;
+}
+
 /** 标准成本: 新字段 totalBomCost 优先, 旧字段 totalPlannedCost 兼容; 都没有为 null。 */
 export function standardCostOf(
   data: Pick<CostVarianceReportDTO, 'totalBomCost' | 'totalPlannedCost'>

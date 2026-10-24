@@ -25,7 +25,10 @@ import { logger } from '../../utils/logger';
 import { formatDate } from '../../utils/formatters';
 import {
   COST_VARIANCE_NOT_COMPARABLE_TEXT,
+  formatSignedPercentOrNotComparable,
+  formatYuanOrDash,
   isCostVarianceComparable,
+  isReading,
   standardCostOf,
 } from '../../utils/costVarianceComparability';
 
@@ -484,13 +487,16 @@ export default function CostReportScreen() {
                             <Text style={styles.varianceCategoryName}>{category.category}</Text>
                           </View>
                           <View style={styles.varianceCategoryRight}>
+                            {/* 没有读数时显示「—」/「无法比较」, ⛔ 不用 `?? 0` 显示成 ¥0.00 / 0.0% */}
                             <Text style={styles.varianceCategoryValue}>
-                              ¥{(category.actualCost ?? 0).toFixed(2)}
+                              {formatYuanOrDash(category.actualCost)}
                             </Text>
                             <Text style={[styles.varianceCategoryDiff, {
-                              color: (category.varianceRate ?? 0) > 0 ? '#F44336' : '#4CAF50'
+                              color: !isReading(category.varianceRate)
+                                ? '#9E9E9E'
+                                : category.varianceRate > 0 ? '#F44336' : '#4CAF50'
                             }]}>
-                              {(category.varianceRate ?? 0) > 0 ? '+' : ''}{(category.varianceRate ?? 0).toFixed(1)}%
+                              {formatSignedPercentOrNotComparable(category.varianceRate)}
                             </Text>
                           </View>
                         </View>
@@ -511,13 +517,17 @@ export default function CostReportScreen() {
                     {(costVarianceData.topVarianceItems || []).slice(0, 3).map((item, index) => (
                       <View key={item.itemName || index} style={styles.varianceReasonItem}>
                         <Icon
-                          source={(item.variance ?? 0) > 0 ? "alert-circle" : "check-circle"}
+                          source={!isReading(item.variance)
+                            ? 'help-circle'
+                            : item.variance > 0 ? 'alert-circle' : 'check-circle'}
                           size={18}
-                          color={(item.variance ?? 0) > 0 ? '#F44336' : '#4CAF50'}
+                          color={!isReading(item.variance)
+                            ? '#9E9E9E'
+                            : item.variance > 0 ? '#F44336' : '#4CAF50'}
                         />
                         <Text style={styles.varianceReasonText}>
-                          {item.itemName}: {(item.varianceRate ?? 0) > 0 ? '+' : ''}{(item.varianceRate ?? 0).toFixed(1)}%
-                          (¥{Math.abs(item.variance ?? 0).toFixed(2)})
+                          {item.itemName}: {formatSignedPercentOrNotComparable(item.varianceRate)}
+                          {isReading(item.variance) ? ` (${formatYuanOrDash(Math.abs(item.variance))})` : ''}
                         </Text>
                       </View>
                     ))}

@@ -75,6 +75,25 @@ const comparableReport = {
   varianceStatus: 'NORMAL',
 };
 
+/** 分类 / 项目的差异字段全为 null —— 原来 `?? 0` 会显示成 ¥0.00 / 0.0% */
+const nullCategoryAndItem = {
+  varianceByCategory: [
+    { category: '原料', plannedCost: null, actualCost: null, variance: null, varianceRate: null },
+  ],
+  topVarianceItems: [
+    { category: '原料', itemName: '冻猪蹄', plannedCost: null, actualCost: null, variance: null, varianceRate: null },
+  ],
+};
+
+const readingCategoryAndItem = {
+  varianceByCategory: [
+    { category: '原料', plannedCost: 390, actualCost: 400, variance: 10, varianceRate: 2.5 },
+  ],
+  topVarianceItems: [
+    { category: '原料', itemName: '冻猪蹄', plannedCost: 400, actualCost: 394, variance: -6, varianceRate: -1.5 },
+  ],
+};
+
 function reply(data: Record<string, unknown>) {
   apiMock.onGet(costVarianceUrl).reply(200, { success: true, data });
 }
@@ -113,6 +132,17 @@ describe('CostVarianceReportScreen', () => {
     expect(screen.queryByText('总差异金额')).toBeNull();
   });
 
+  it('分类差异没有读数: 不显示 0.00% 或 ¥0.00', async () => {
+    reply({ ...notComparableReport, ...nullCategoryAndItem });
+    const screen = render(<CostVarianceReportScreen />);
+
+    await waitFor(() => expect(screen.getAllByText('原料').length).toBeGreaterThan(0));
+    expect(screen.getByText('冻猪蹄')).toBeTruthy();
+    expect(screen.queryAllByText(/0\.00%/)).toHaveLength(0);
+    expect(screen.queryAllByText(/¥0\.00/)).toHaveLength(0);
+    expect(screen.getAllByText('无法比较').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('阴性对照: 可比较时照常显示差异率, 不显示「无法比较」', async () => {
     reply(comparableReport);
     const screen = render(<CostVarianceReportScreen />);
@@ -139,6 +169,29 @@ describe('CostReportScreen 成本差异 tab', () => {
     expect(screen.getByText('¥1000.00')).toBeTruthy();
     expect(screen.queryByText(/¥0\.00/)).toBeNull();
     expect(screen.getAllByText('无法比较').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('分类差异 / 差异最大项目没有读数: 显示「无法比较」/「—」, ⛔ 不显示 0.0% 或 ¥0.00', async () => {
+    reply({ ...notComparableReport, ...nullCategoryAndItem });
+    const screen = await openVarianceTab();
+
+    // 一定会出现的读数: 分类名和项目名都渲染出来了 (否则「没有 0.0%」可能只是那一块没渲染)
+    await waitFor(() => expect(screen.getByText('原料')).toBeTruthy());
+    expect(screen.getByText(/冻猪蹄/)).toBeTruthy();
+
+    expect(screen.queryAllByText(/0\.0%/)).toHaveLength(0);
+    expect(screen.queryAllByText(/¥0\.00/)).toHaveLength(0);
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByText('冻猪蹄: 无法比较')).toBeTruthy();
+  });
+
+  it('阴性对照: 分类差异有读数时照常显示百分比', async () => {
+    reply({ ...comparableReport, ...readingCategoryAndItem });
+    const screen = await openVarianceTab();
+
+    await waitFor(() => expect(screen.getByText('+2.5%')).toBeTruthy());
+    expect(screen.getByText('¥400.00')).toBeTruthy();
+    expect(screen.getByText('冻猪蹄: -1.5% (¥6.00)')).toBeTruthy();
   });
 
   it('阴性对照: 可比较时显示标准成本与差异金额', async () => {
