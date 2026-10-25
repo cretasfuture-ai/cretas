@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -242,6 +243,11 @@ public class WorkdeskOutputSummarizer {
             sb.append("- ").append(toChineseLabel(key)).append(": ");
             sb.append(describeLeaf(value));
             sb.append("\n");
+            // 工具结果里有条目列表 (客户 / 记录 / 商机 / 月度): 列出前几条, 比「N 个字段」有用。
+            // 本地拼的文字, 不发给模型, 可以用真名。
+            for (String line : itemLines(value)) {
+                sb.append("  · ").append(line).append("\n");
+            }
         }
         sb.append("\n详细数据请在对应工作台模块查看 (批次放行 / 质检 / HACCP 监控 / 库存 / 采购 / 客户跟进).\n");
 
@@ -261,6 +267,12 @@ public class WorkdeskOutputSummarizer {
     private String toChineseLabel(String key) {
         if (key == null) return "数据项";
         String k = key.toLowerCase();
+        // 先判更具体的 (customer_revenue_trend 里也有 customer, opportunity_stage_alert 里也有 alert)
+        if (k.contains("wechat")) return "微信沟通记录";
+        if (k.contains("call_record") || k.startsWith("call_")) return "通话待跟进";
+        if (k.contains("opportunit")) return "商机阶段提醒";
+        if (k.contains("revenue_trend") || k.contains("trend")) return "销售趋势";
+        if (k.contains("customer_priority")) return "重点客户";
         if (k.contains("quality_check") || k.contains("inspection")) return "质检汇总";
         if (k.contains("haccp")) return "HACCP 监控状态";
         if (k.contains("additive")) return "添加剂合规检查";
@@ -277,6 +289,80 @@ public class WorkdeskOutputSummarizer {
         return key.replace('_', ' ');
     }
 
+    private static final int FALLBACK_ITEMS = 5;
+    private static final String[] ITEM_NAME_KEYS = {
+            "customerName", "name", "title", "productName", "materialName", "supplierName", "month"};
+    private static final String[][] ITEM_NUMBER_LABELS = {
+            {"priorityScore", "评分"}, {"totalAmount", "金额"}, {"valueAmount", "金额"}, {"orderCount", "订单数"},
+            {"activeOpportunityCount", "活跃商机"}, {"stagnantDays", "停滞天数"}, {"daysAgo", "天前"},
+            {"quantity", "数量"}, {"stock", "库存"}, {"probability", "成交概率"}};
+
+    /** 工具结果 (Map) 里第一张条目列表的前几条, 每条一行: 名称 + 联系人 + 状态文字 + 带中文标签的数字。 */
+    @SuppressWarnings("unchecked")
+    List<String> itemLines(Object value) {
+        List<String> lines = new java.util.ArrayList<>();
+        List<Object> items = firstItemList(value, 0);
+        if (items == null) {
+            return lines;
+        }
+        for (Object item : items) {
+            if (lines.size() >= FALLBACK_ITEMS) {
+                lines.add("…等共 " + items.size() + " 项");
+                break;
+            }
+            if (!(item instanceof Map)) {
+                continue;
+            }
+            Map<String, Object> m = (Map<String, Object>) item;
+            String label = null;
+            for (String k : ITEM_NAME_KEYS) {
+                if (m.get(k) instanceof String s && !s.isBlank()) {
+                    label = s;
+                    break;
+                }
+            }
+            if (label == null) {
+                continue;
+            }
+            List<String> details = new java.util.ArrayList<>();
+            if (m.get("contactPerson") instanceof String cp && !cp.isBlank()) {
+                details.add("联系人 " + cp);
+            }
+            for (Map.Entry<String, Object> e : m.entrySet()) {
+                if (e.getKey().endsWith("Display") && e.getValue() instanceof String s && !s.isBlank()) {
+                    details.add(s);
+                }
+            }
+            for (String[] pair : ITEM_NUMBER_LABELS) {
+                if (m.get(pair[0]) instanceof Number n) {
+                    details.add(pair[1] + " " + n);
+                }
+            }
+            lines.add(details.isEmpty() ? label : label + "（" + String.join("，", details) + "）");
+        }
+        return lines;
+    }
+
+    /** 深度 ≤ 2 的第一张「元素是 Map」的列表 (工具结果常包一层 data)。 */
+    @SuppressWarnings("unchecked")
+    private List<Object> firstItemList(Object value, int depth) {
+        if (depth > 2 || !(value instanceof Map)) {
+            return null;
+        }
+        for (Object v : ((Map<String, Object>) value).values()) {
+            if (v instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map) {
+                return (List<Object>) list;
+            }
+        }
+        for (Object v : ((Map<String, Object>) value).values()) {
+            List<Object> nested = firstItemList(v, depth + 1);
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
+    }
+
     /**
      * Render a leaf value as a short Chinese description (count / size / scalar),
      * never JSON-dumping nested structure.
@@ -286,14 +372,34 @@ public class WorkdeskOutputSummarizer {
         if (value == null) return "无数据";
         if (value instanceof Map) {
             Map<String, Object> m = (Map<String, Object>) value;
+            // 工具自己的中文说明 (含 data 包一层的情况) 比「N 个字段」有用
+            Object msg = m.get("message");
+            if (!(msg instanceof String) && m.get("data") instanceof Map<?, ?> data) {
+                msg = data.get("message");
+            }
+            if (msg instanceof String s && !s.isBlank() && !isDirty(s)) {
+                return s.length() > 100 ? s.substring(0, 100) + "..." : s;
+            }
+            List<Object> items = firstItemList(m, 0);
+            if (items != null) {
+                Object count = m.get("count");
+                if (count == null && m.get("data") instanceof Map<?, ?> data) {
+                    count = data.get("count");
+                }
+                return "共 " + (count instanceof Number ? count : items.size()) + " 项";
+            }
             // Look for common count fields
             for (String countKey : new String[]{"count", "total", "size", "totalCount", "rowCount"}) {
                 if (m.containsKey(countKey)) {
                     Object cv = m.get(countKey);
-                    if (cv != null) return cv + " 项";
+                    if (cv == null) continue;
+                    // 金额类 total (611355.40) 不是条目数, 原样给数, 不加「项」
+                    boolean whole = !(cv instanceof Number n) || n.doubleValue() == Math.rint(n.doubleValue());
+                    return whole ? cv + " 项" : cv.toString();
                 }
             }
-            return m.size() + " 个字段";
+            // 「N 个字段」对用户没有意义
+            return "无可列出的明细";
         }
         if (value instanceof Iterable) {
             int n = 0;
