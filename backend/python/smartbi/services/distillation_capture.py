@@ -32,7 +32,8 @@ Training rule (owner, 2026-10-24; see ``training_consent`` for the full text):
     whose answer names a specific one, is NOT written — for every factory,
     authorized or not (``qa_has_blocked_content``);
   * otherwise a factory with ``training_consent`` 'private' / 'shared_anon' is
-    stored as-is, and everyone else (no row, 'none', lookup error, no factory)
+    stored as-is, a withdrawn factory or an unreadable consent row is not
+    stored at all, and everyone else (no row, 'none', no factory)
     is stored desensitized (``desensitize_for_training``: generic name
     placeholders, phone / ID / bank numbers removed, every number -> <数值>),
     tagged ``metadata.desensitized``;
@@ -61,12 +62,14 @@ import os
 from typing import Any, Dict, List, Optional
 
 from smartbi.services.corpus_anonymize import desensitize_for_training
+from smartbi.services.process_secret_names import mentions_any, protected_product_names
 from smartbi.services.training_consent import (
     DESENSITIZED_KEY,
     RULE_KEY,
     RULE_VERSION,
     fetch_consent_scope,
     is_synthetic_factory,
+    is_withdrawn,
     keeps_raw,
     qa_has_blocked_content,
 )
@@ -212,8 +215,25 @@ async def persist_distillation_sample(
                 try:
                     scope = await fetch_consent_scope(conn, factory_id)
                 except Exception as e:
-                    _log_skip_once("training_consent lookup failed, desensitizing",
+                    # unreadable consent could hide a withdrawal -> do not store
+                    _log_skip_once("training_consent lookup failed, sample not stored",
                                    factory_id, f"({type(e).__name__}: {e})")
+                    return
+            if is_withdrawn(scope):
+                _log_skip_once("factory withdrew from training", factory_id)
+                return
+            if factory_id and not synthetic:
+                # privacy clause 6: a sample naming one of the factory's
+                # process-secret products is not used for training
+                try:
+                    names = await protected_product_names(factory_id)
+                except Exception as e:
+                    _log_skip_once("process-secret product lookup failed, sample not stored",
+                                   factory_id, f"({type(e).__name__}: {e})")
+                    return
+                if mentions_any(names, input_text, teacher_output):
+                    _log_skip_once("sample names a process-secret product", factory_id)
+                    return
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
                 if not keeps_raw(scope):

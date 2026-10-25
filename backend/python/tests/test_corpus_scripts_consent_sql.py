@@ -19,7 +19,10 @@ def test_predicate_admits_only_seed_tenants_and_rule_checked_rows():
     sql = usable_rows_sql()
     assert "'SEED_F', 'SEED_R'" in sql
     assert f"metadata ? '{RULE_KEY}'" in sql
-    assert "training_consent" not in sql, "authorization alone no longer admits an unchecked row"
+    # authorization alone never admits an unchecked row; withdrawal always excludes one
+    assert "consent_scope" not in sql
+    assert ("NOT EXISTS (SELECT 1 FROM training_consent tw WHERE tw.factory_id = "
+            "smart_bi_distillation_samples.factory_id AND tw.withdrawn_at IS NOT NULL)") in sql
 
 
 @pytest.mark.parametrize("module_name, attrs", [

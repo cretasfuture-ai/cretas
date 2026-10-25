@@ -45,7 +45,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 # Path bootstrap — importing smartbi.services.corpus_anonymize triggers smartbi/services/__init__
 # which uses bare `from services.X import ...`; mirror main.py so it resolves to smartbi/services/X.
@@ -54,10 +54,15 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    mentions_any,
+)
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
     DESENSITIZED_KEY,
     RULE_KEY,
     SYNTHETIC_FACTORY_IDS,
+    WITHDRAWN,
     fetch_consent_map,
     qa_has_blocked_content,
     scope_from_map,
@@ -227,17 +232,24 @@ def _metadata(row: Dict[str, Any]) -> Dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
-def passes_training_rule(row: Dict[str, Any]) -> bool:
+def passes_training_rule(row: Dict[str, Any],
+                         protected_names: Optional[Mapping[str, Any]] = None) -> bool:
     """A real row may be exported only if it was captured under the 2026-10-24
-    rule and still has no blocked content (re-checked here, defense in depth)."""
+    rule and still has no blocked content (re-checked here, defense in depth),
+    and it does not name one of its factory's process-secret products (privacy
+    clause 6; rows captured before the product was protected are caught here)."""
     if RULE_KEY not in _metadata(row):
         return False
-    return not qa_has_blocked_content(row.get("input_text"), row.get("teacher_output"))
+    if qa_has_blocked_content(row.get("input_text"), row.get("teacher_output")):
+        return False
+    names = (protected_names or {}).get(row.get("factory_id") or "", ())
+    return not mentions_any(names, row.get("input_text"), row.get("teacher_output"))
 
 
 def gate_shared_rows(
     rows: List[Dict[str, Any]],
     consent: Dict[str, str],
+    protected_names: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Gate rows for the SHARED (cross-tenant) export.
 
@@ -255,8 +267,10 @@ def gate_shared_rows(
             out.append({"row": r, "input_text": None, "teacher_output": None,
                         "consent_class": "synthetic"})
             continue
-        if not passes_training_rule(r):
+        if not passes_training_rule(r, protected_names):
             continue
+        if _consent_of(r, consent) == WITHDRAWN:
+            continue  # withdrawn factories leave every model update (clause 10)
         if _metadata(r).get(DESENSITIZED_KEY):
             out.append({"row": r, "input_text": None, "teacher_output": None,
                         "consent_class": "desensitized"})
@@ -289,8 +303,10 @@ async def _export_private(args, pool) -> None:
 
     rows = await _fetch_rows(args.source, args.business_type, args.min_quality,
                              pool=pool, factory_id=args.factory)
-    # process content never enters any set, the factory's own model included
-    rows = [r for r in rows if passes_training_rule(r)]
+    # process content and process-secret products never enter any set, the
+    # factory's own model included
+    protected = await all_protected_product_names()
+    rows = [r for r in rows if passes_training_rule(r, protected)]
     if not rows:
         logger.info("No samples for factory %s — nothing to export.", args.factory)
         return
@@ -338,7 +354,8 @@ async def main() -> None:
         logger.info("No samples matched — nothing to export.")
         return
 
-    gated = gate_shared_rows(rows, consent)
+    protected = await all_protected_product_names()   # failure aborts the export
+    gated = gate_shared_rows(rows, consent, protected)
     excluded = len(rows) - len(gated)
     if not gated:
         logger.info(
