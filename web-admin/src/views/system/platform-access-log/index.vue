@@ -38,7 +38,7 @@
         </template>
         <el-table-column label="操作" :width="compact ? 92 : 96">
           <template #default="{ row }">
-            <el-tag size="small" :type="methodTagType(row)">{{ methodLabel(row) }}</el-tag>
+            <el-tag size="small" disable-transitions :type="methodTagType(row)">{{ methodLabel(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="访问内容" :min-width="compact ? 110 : 260">
@@ -52,8 +52,8 @@
         </el-table-column>
         <el-table-column label="结果" :width="compact ? 70 : 80">
           <template #default="{ row }">
-            <el-tag v-if="row.responseStatus != null && row.responseStatus < 400" size="small" type="success">成功</el-tag>
-            <el-tag v-else-if="row.responseStatus != null" size="small" type="danger">被拒绝</el-tag>
+            <el-tag v-if="row.responseStatus != null && row.responseStatus < 400" size="small" disable-transitions type="success">成功</el-tag>
+            <el-tag v-else-if="row.responseStatus != null" size="small" disable-transitions type="danger">被拒绝</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
