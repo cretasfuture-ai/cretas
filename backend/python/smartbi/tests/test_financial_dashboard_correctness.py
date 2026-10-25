@@ -462,6 +462,67 @@ class TestFindings:
         f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
         assert f is None
 
+    # 样图⑤「各月毛利率」(比率表) 原来没有规则结论, 结论区只能靠 AI。
+    MARGIN_CUR = [24, 25, 26, 27, 28, 25, 25, 27, 29, 28, 24, 25]
+    MARGIN_LY = [25, 24, 25, 26, 27, 27, 26, 26, 27, 27, 27, 24]
+    MARGIN_ROWS = [{'月份': f'{m}月', '本年毛利率': f'{c}%', '上年毛利率': f'{ly}%'}
+                   for m, c, ly in zip(range(1, 13), MARGIN_CUR, MARGIN_LY)]
+
+    def test_margin_sheet_names_average_best_worst_and_declines(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.MARGIN_ROWS), 2026, 'all', 1, 12)
+        f = r['findings']
+        assert '各月平均毛利率 26.1%，比上年 +0.2 个百分点（各月简单平均）' in f['good']
+        assert '9月毛利率最高，29.0%' in f['good']
+        assert '1月毛利率最低，24.0%，比最高月低 5.0 个百分点' in f['attention']
+        declines = [a for a in f['attention'] if '比上年低' in a]
+        assert declines == ['11月比上年低 3.0 个百分点（24.0%，上年 27.0%）',
+                            '6月比上年低 2.0 个百分点（25.0%，上年 27.0%）']
+        assert f['suggestions'] and f['suggestions'][0].startswith('复盘 11月')
+        for line in f['good'] + f['attention'] + f['suggestions']:
+            assert '万' not in line, line  # 比率表不出金额结论
+        # 与毛利率趋势图同一口径: 月均毛利率 KPI 也是 26.1
+        kpis = {k['label']: k['value'] for k in _charts(self.MARGIN_ROWS)[1]['gross_margin_trend']['kpis']}
+        assert kpis['本年月均毛利率'] == '26.1'
+
+    def test_margin_sheet_headline_states_the_average_gap(self):
+        h = svc.generate_dashboard(pd.DataFrame(self.MARGIN_ROWS), 2026, 'all', 1, 12)['headline']
+        assert '各月平均毛利率 26.1%，上年 25.9%，+0.2 个百分点（各月简单平均）' in h['text']
+        assert h['tone'] == 'good'
+        worse = [{**row, '本年毛利率': '20%'} for row in self.MARGIN_ROWS]
+        assert svc.generate_dashboard(pd.DataFrame(worse), 2026, 'all', 1, 12)['headline']['tone'] == 'bad'
+
+    def test_pnl_sheet_states_margin_expense_share_and_biggest_item(self):
+        # 线上 5252 (2026-10-25): 损益表只有「净利润」一条结论
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v} for k, v in PNL_REFERENCE]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert '净利润 3,308.00万，净利率 39.7%' in f['good']
+        assert '毛利率 82.3%（毛利 6,862.00万 / 营业收入 8,333.00万）' in f['good']
+        assert ('期间费用 2,472.00万，占营业收入 29.7%，最大一项是研发费用 999.00万（占 40%）'
+                in f['attention'])
+        assert '营业外收支净减少 44.00万（收入 42.00万，支出 86.00万）' in f['attention']
+        assert f['suggestions'] == ['先看研发费用：999.00万，占期间费用 40%，是期间费用里最大的一项']
+
+    def test_pnl_with_last_year_states_net_profit_growth(self):
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v, '上年（万元）': v * 0.8} for k, v in PNL_REFERENCE]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert any(g.startswith('净利润同比 +25.0%') for g in f['good'])
+
+    def test_yoy_sheet_names_best_month_and_suggests_reviewing_the_biggest_drop(self):
+        # 线上 5251 (2026-10-25): 同比表没有「建议」
+        rows = [{'月份': f'{m}月', '实际': a, '上年': ly}
+                for m, a, ly in [(1, 100, 90), (2, 150, 100), (3, 80, 120), (4, 95, 100)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert '2月同比 +50.0%（多 50.00），各月里增长最多' in f['good']
+        assert f['suggestions'] == ['复盘 3月：比上年少 40.00，各月里减少的金额最多']
+
+    def test_latest_mom_finding_matches_the_kpi_month(self):
+        f = svc.generate_dashboard(pd.DataFrame(TestMonthOverMonth.ROWS), 2026, 'all', 1, 12)['findings']
+        assert '4月环比 +20.0%（上月 90.00 → 本月 108.00）' in f['good']  # 列名没写单位, 金额不带「万」
+        falling = TestMonthOverMonth.ROWS[:3]  # 最近一月是 3 月: 120 → 90
+        f = svc.generate_dashboard(pd.DataFrame(falling), 2026, 'all', 1, 12)['findings']
+        assert any(a.startswith('3月环比 -25.0%') for a in f['attention'])
+        assert not any('环比' in g for g in f['good'])
+
 
 class TestSlicerScope:
     """线上验收 (2026-10-22): 点筛选器「3月」后数字已是 3 月的, 页首结论和期间标签仍写「全部历史」。

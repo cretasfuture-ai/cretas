@@ -190,10 +190,12 @@ const PublicTraceScreen: React.FC = () => {
                     </View>
 
                     <View style={styles.infoGrid}>
-                      <View style={styles.infoRow}>
-                        <Text style={styles.label}>生产工厂</Text>
-                        <Text style={styles.value}>{traceData.factoryName}</Text>
-                      </View>
+                      {traceData.factoryName ? (
+                        <View style={styles.infoRow}>
+                          <Text style={styles.label}>生产工厂</Text>
+                          <Text style={styles.value}>{traceData.factoryName}</Text>
+                        </View>
+                      ) : null}
                       {traceData.productionDate && (
                         <View style={styles.infoRow}>
                           <Text style={styles.label}>生产日期</Text>

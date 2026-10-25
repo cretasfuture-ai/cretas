@@ -91,4 +91,26 @@ class PublicTraceCertificationInfoTest {
                 .as("原来对所有批次无条件写死「食品安全认证」")
                 .isNull();
     }
+
+    @Test
+    @DisplayName("找不到工厂: factoryName 为 null, ⛔ 不回落成写死的「认证工厂」")
+    void factoryNameIsNullWhenTheFactoryIsMissing() {
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(7002L);
+        batch.setFactoryId("F-GONE");
+        batch.setBatchNumber("PB-CERT-2");
+        batch.setProductName("卤猪蹄");
+
+        when(productionBatchRepository.findByBatchNumber("PB-CERT-2")).thenReturn(Optional.of(batch));
+        when(factoryRepository.findById("F-GONE")).thenReturn(Optional.empty());
+        when(materialConsumptionRepository.findByProductionBatchId(7002L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(7002L)).thenReturn(List.of());
+
+        TraceabilityDTO.PublicTraceResponse r = service.getPublicTrace("PB-CERT-2");
+
+        // 一定会发生的读数: 批次查到了, 响应走完了构建
+        assertThat(r.getIsValid()).isTrue();
+        assertThat(r.getProductName()).isEqualTo("卤猪蹄");
+        assertThat(r.getFactoryName()).as("原来回落成「认证工厂」").isNull();
+    }
 }
