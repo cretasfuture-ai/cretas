@@ -727,6 +727,11 @@ def _export_client():
     from smartbi.api import financial_dashboard as api
 
     app = FastAPI()
+    @app.middleware('http')
+    async def authenticated_factory(request,call_next):
+        request.state.factory_id='F006'
+        request.state.role='factory_super_admin'
+        return await call_next(request)
     app.include_router(api.router)
     return TestClient(app)
 
