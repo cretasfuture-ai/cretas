@@ -8,6 +8,7 @@ from .financial_subjects import classify_sheet_name
 from .financial_headline import build_headline
 from .financial_findings import build_findings
 from .financial.base import _sanitize_for_json
+from .financial import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class FinancialDashboardService:
         detail, reported = self.normalizer.split_detail(df)
         column_mapping.reported_rows = reported
         column_mapping.raw_frame = raw_data
+        column_mapping.margin_summary = M.gross_margins(detail, column_mapping.value_kind, reported)
 
         if period_type == 'all':
             label = "全部历史"
@@ -125,9 +127,9 @@ class FinancialDashboardService:
         return _sanitize_for_json({
             "success": True,
             # 页首一句话结论 (规则生成, 与图表同一指标库; 没有可说的事实时为 None)
-            "headline": build_headline(df, column_mapping.value_kind, period["label"]),
+            "headline": build_headline(df, column_mapping.value_kind, period["label"], column_mapping.margin_summary),
             # 「分析结论与建议」的规则部分: 好的 / 需要关注 / 建议 (说不出任何一条时为 None)
-            "findings": build_findings(df, column_mapping.value_kind),
+            "findings": build_findings(df, column_mapping.value_kind, column_mapping.margin_summary),
             "charts": charts,
             "availableTypes": available,
             # 出不了的图: 缺哪一列 / 要哪张表 (「还缺数据」)

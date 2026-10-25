@@ -14,7 +14,6 @@ import pandas as pd
 from . import financial_subjects as S
 from .financial import metrics as M
 from .financial.base import format_amount
-from .financial_findings import ratio_months  # 比率表与结论区同一取数口径
 
 MONTHS = list(range(1, 13))
 
@@ -117,21 +116,18 @@ def _pnl_sentence(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     return {"text": text, "tone": tone}
 
 
-def _ratio_sentence(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+def _ratio_sentence(df: pd.DataFrame, summary: Optional[M.GrossMargins] = None) -> Optional[Dict[str, Any]]:
     """比率表 (各月毛利率): 各月简单平均与上年对比 —— 与毛利率趋势图「月均毛利率」同一口径。"""
-    series = ratio_months(df)
-    if series is None:
+    summary = summary or M.gross_margins(df, 'ratio')
+    cur = [v for v in summary.current if v is not None]
+    if summary.current_total is None:
         return None
-    cur = [v for v in series["current"] if v is not None]
-    last = [v for v in series["last"] if v is not None]
-    if not cur:
-        return None
-    mean_cur = sum(cur) / len(cur)
-    if not last:
+    mean_cur = summary.current_total
+    if summary.last_total is None:
         return {"text": f"各月平均毛利率 {_pct(mean_cur)}（{len(cur)} 个月简单平均）", "tone": "neutral"}
-    mean_last = sum(last) / len(last)
+    mean_last = summary.last_total
     # 差值用显示出来的两个一位小数相减: 否则会出现「26.3%，上年 26.3%，+0.1 个百分点」(线上 5254)
-    diff = round(mean_cur, 1) - round(mean_last, 1)
+    diff = summary.displayed_difference
     if abs(diff) < 0.05:  # 显示出来两个数相同: 说持平, 不说「+0.0 个百分点」, 也不算好消息
         return {"text": f"各月平均毛利率 {_pct(mean_cur)}，与上年持平（各月简单平均）", "tone": "neutral"}
     tone = "good" if diff > 0 else "bad"
@@ -139,12 +135,13 @@ def _ratio_sentence(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             "tone": tone}
 
 
-def build_headline(df: pd.DataFrame, value_kind: str, period_label: str) -> Optional[Dict[str, Any]]:
+def build_headline(df: pd.DataFrame, value_kind: str, period_label: str,
+                   margin_summary: Optional[M.GrossMargins] = None) -> Optional[Dict[str, Any]]:
     """df 为已按期间过滤、只含明细行的标准明细。"""
     if df is None or df.empty:
         return None
     if value_kind == 'ratio':
-        fact = _ratio_sentence(df)
+        fact = _ratio_sentence(df, margin_summary)
         if fact is None:
             return None
         return {"text": f"{period_label}：{fact['text']}。", "tone": fact["tone"], "facts": [fact["text"]]}
@@ -168,6 +165,11 @@ def build_headline(df: pd.DataFrame, value_kind: str, period_label: str) -> Opti
             fact = _pnl_sentence(df)
             if fact:
                 facts.append(fact)
+
+        summary = margin_summary or M.gross_margins(df)
+        if summary.current_total is not None:
+            facts.append({'text': f'毛利率 {_pct(summary.current_total)}（按收入加权）',
+                          'tone': 'good' if summary.current_total >= 0 else 'bad'})
 
     if not facts:
         return None

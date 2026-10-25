@@ -14,12 +14,15 @@
 import re
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 import pandas as pd
 import numpy as np
 
 from . import financial_subjects as S
+
+if TYPE_CHECKING:
+    from .financial.metrics import GrossMargins
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,8 @@ class ColumnMapping:
     raw_frame: Optional[pd.DataFrame] = None
     # 解析中发现、需要告诉用户的问题
     issues: List[str] = field(default_factory=list)
+    amount_subject_cols: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    margin_summary: Optional['GrossMargins'] = None
 
 
 class FinancialDataNormalizer:
@@ -202,6 +207,27 @@ class FinancialDataNormalizer:
                 break
 
         mapping.value_kind = self._value_kind(mapping, sample_data)
+
+        # A monthly table may put income/cost/profit in separate columns,
+        # alongside the supplied percentages. Normalize the amounts into the
+        # same subject rows used by a P&L instead of averaging the percentages.
+        subjects: Dict[str, Dict[str, str]] = {}
+        for col in columns:
+            base, _ = header_unit(col)
+            if any(word in base for word in self.RATIO_HEADER_KEYWORDS):
+                continue
+            role = 'last_year' if any(word in base for word in self.LAST_YEAR_KEYWORDS) else 'actual'
+            if any(word in base for word in self.BUDGET_KEYWORDS):
+                role = 'last_year_budget' if role == 'last_year' else 'budget'
+            name = re.sub(r'本年|本期|实际|上年|去年|同期|上期|预算|目标', '', base).strip()
+            subject = S.classify_subject(name)
+            if subject in (S.REVENUE, S.COST, S.PROFIT_GROSS):
+                subjects.setdefault(subject, {})[role] = col
+        if S.REVENUE in subjects and (S.COST in subjects or S.PROFIT_GROSS in subjects):
+            mapping.amount_subject_cols = subjects
+            mapping.actual_cols = [cols['actual'] for cols in subjects.values() if 'actual' in cols]
+            mapping.last_year_cols = [cols['last_year'] for cols in subjects.values() if 'last_year' in cols]
+            mapping.value_kind = 'amount'
 
         logger.info(f"Column mapping detected: periods={len(mapping.period_cols)}, "
                     f"budget={len(mapping.budget_cols)}, actual={len(mapping.actual_cols)}, "
@@ -378,11 +404,20 @@ class FinancialDataNormalizer:
                 if explicit:
                     year_num = explicit
 
-            rows.append({
+            period_dims = {
                 'year': year_num or mapping.year,
                 'month': month_num or 0,
                 'quarter': f"Q{(month_num - 1) // 3 + 1}" if month_num else '',
                 **dims,
+            }
+            if mapping.amount_subject_cols:
+                for subject, cols in mapping.amount_subject_cols.items():
+                    rows.append({**period_dims, 'item': S.CLASS_LABELS[subject],
+                                 **{role: value(row, cols.get(role)) for role in
+                                    ('actual', 'last_year', 'budget', 'last_year_budget')}})
+                continue
+            rows.append({
+                **period_dims,
                 'budget': value(row, budget_col),
                 'actual': value(row, actual_col),
                 'last_year': value(row, last_year_col),

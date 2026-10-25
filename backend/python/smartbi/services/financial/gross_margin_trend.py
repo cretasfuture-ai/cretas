@@ -7,7 +7,6 @@ from .base import (
     AbstractFinancialChartBuilder, _sanitize_for_json,
 )
 from . import metrics as M
-from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
 
@@ -38,41 +37,25 @@ class GrossMarginTrendBuilder(AbstractFinancialChartBuilder):
 
         # 口径 1 (首选): 有收入、成本科目 → 毛利率 = (收入-成本)/收入, 合计按期间总额加权
         # 口径 2: 表里直接给的是毛利率百分比 → 各月照用, 合计只能是月均 (没有收入做权重)
-        rev = M.select(df, [S.REVENUE])
-        cost = M.select(df, [S.COST])
-        weighted = not rev.empty and not cost.empty
-
-        if weighted:
-            rev_cur, cost_cur = M.monthly(rev, 'actual', months), M.monthly(cost, 'actual', months)
-            rev_ly, cost_ly = M.monthly(rev, 'last_year', months), M.monthly(cost, 'last_year', months)
-            current_margins = [self._margin(r, c) for r, c in zip(rev_cur, cost_cur)]
-            ly_margins = [self._margin(r, c) for r, c in zip(rev_ly, cost_ly)]
-            total_cur = self._margin(M.total(rev_cur), M.total(cost_cur))
-            total_ly = self._margin(M.total(rev_ly), M.total(cost_ly))
-        else:
-            cur_raw = M.monthly(df, 'actual', months)
-            ly_raw = M.monthly(df, 'last_year', months)
-            present = [abs(v) for v in cur_raw + ly_raw if v is not None]
-            if not present or max(present) > 100:
-                reason = ("数据为绝对金额而非百分比，无法计算毛利率。需要毛利率百分比数据或独立的收入/成本数据。"
-                          if present else "所选期间没有毛利率数据")
-                return {
-                    "chartType": self.chart_type,
-                    "title": f"{year}年{self.display_name}",
-                    "kpis": [],
-                    "echartsOption": {},
-                    "tableData": None,
-                    "analysisContext": reason,
-                    "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
-                }
-            current_margins, ly_margins = cur_raw, ly_raw
-            total_cur = self._mean(current_margins)
-            total_ly = self._mean(ly_margins)
+        summary = column_mapping.margin_summary or M.gross_margins(
+            df, column_mapping.value_kind, column_mapping.reported_rows)
+        weighted = summary.weighted
+        current_margins = [summary.current[m - 1] for m in months]
+        ly_margins = [summary.last[m - 1] for m in months]
+        total_cur, total_ly = summary.current_total, summary.last_total
+        if not any(v is not None for v in current_margins + ly_margins):
+            reason = summary.note or '所选期间没有毛利率数据'
+            return {
+                'chartType': self.chart_type, 'title': f'{year}年{self.display_name}',
+                'kpis': [], 'echartsOption': {}, 'tableData': None,
+                'analysisContext': reason,
+                'metadata': {'period': period, 'dataQuality': 'insufficient', 'reason': reason},
+            }
 
         # Margin difference (百分点); 任一侧缺失则该月差异为空
         margin_diff = [None if c is None or ly is None else round(c - ly, 2)
                        for c, ly in zip(current_margins, ly_margins)]
-        total_diff = None if total_cur is None or total_ly is None else round(total_cur - total_ly, 2)
+        total_diff = summary.displayed_difference
 
         prefix = "累计" if weighted else "月均"
         valid_diffs = [(i, d) for i, d in enumerate(margin_diff) if d is not None]
@@ -169,8 +152,8 @@ class GrossMarginTrendBuilder(AbstractFinancialChartBuilder):
 
         metadata: Dict[str, Any] = {"period": period, "dataQuality": "good",
                                     "marginBasis": "weighted" if weighted else "monthly_average"}
-        if not weighted:
-            metadata["note"] = "表内只有各月毛利率、没有收入和成本，合计为各月简单平均，不是加权毛利率"
+        if summary.note:
+            metadata["note"] = summary.note
 
         result = {
             "chartType": self.chart_type,
@@ -182,13 +165,3 @@ class GrossMarginTrendBuilder(AbstractFinancialChartBuilder):
             "metadata": metadata,
         }
         return _sanitize_for_json(result)
-
-    @staticmethod
-    def _margin(revenue: Optional[float], cost: Optional[float]) -> Optional[float]:
-        m = M.ratio(None if revenue is None or cost is None else revenue - cost, revenue)
-        return m.value
-
-    @staticmethod
-    def _mean(values: List[Optional[float]]) -> Optional[float]:
-        vals = [v for v in values if v is not None]
-        return round(sum(vals) / len(vals), 2) if vals else None
