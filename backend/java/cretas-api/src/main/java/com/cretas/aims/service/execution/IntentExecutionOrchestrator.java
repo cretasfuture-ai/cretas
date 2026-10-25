@@ -887,7 +887,7 @@ public class IntentExecutionOrchestrator {
             if (skillResponse != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] Skill 优先匹配成功: total={}", count);
-                return skillResponse;
+                return finishSkillBranchResponse(factoryId, request, intent, userId, skillResponse);
             }
 
             // Sprint 9 P0.1 fix (2026-05-21): Sprint 8 WORKDESK intents (DAILY_CUSTOMER_FOLLOWUP /
@@ -905,7 +905,7 @@ public class IntentExecutionOrchestrator {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
                         intent.getIntentCode(), count);
-                return explicitSkillResponse;
+                return finishSkillBranchResponse(factoryId, request, intent, userId, explicitSkillResponse);
             }
         }
 
@@ -4298,6 +4298,27 @@ public class IntentExecutionOrchestrator {
                 .actionCode("SHOW_INTENTS").actionName("查看所有可用操作")
                 .endpoint("/api/mobile/" + factoryId + "/ai-intents").build());
         return actions;
+    }
+
+    /**
+     * 自由提问识别到工作台意图、走 Skill 分支时的收尾: 与显式意图路径 ({@link #executeWithExplicitIntent})
+     * 同一套展示处理 —— 补问引导 → 结果格式化 → formattedText 兜底 (含 {@link WorkdeskOutputSummarizer}
+     * 脱敏摘要) → aiMode。以前这里直接 return, 组合结果的子工具是 JsonNode 时用户只拿到
+     * 「未返回可直接展示的明细数据」那句通用话 (2026-10-25 F006「今天要跟进哪些客户」线上实测)。
+     *
+     * <p>缓存与对话记忆刻意不在这里补: 对话记忆会把还原后的真名写进历史, 带历史的模型调用尚未接入脱敏。
+     */
+    private IntentExecuteResponse finishSkillBranchResponse(String factoryId, IntentExecuteRequest request,
+                                                            AIIntentConfig intent, Long userId,
+                                                            IntentExecuteResponse response) {
+        IntentExecuteResponse finished = response;
+        if ("NEED_MORE_INFO".equals(finished.getStatus())) {
+            finished = enrichWithClarificationQuestions(finished, request, intent, factoryId, userId);
+        }
+        applyResultFormatting(finished);
+        applyFormattedTextFallback(factoryId, finished);
+        applyAiModeStamp(finished, intent, intent.getToolName());
+        return finished;
     }
 
     private void applyResultFormatting(IntentExecuteResponse response) {
