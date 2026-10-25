@@ -312,9 +312,11 @@ class TraceabilityApiClient {
     batchId: string,
     options?: { maxDepth?: number; factoryId?: string }
   ): Promise<ImpactResponse> {
-    const maxDepth = options?.maxDepth ?? 5;
+    // 不传 maxDepth 时**不带这个参数**: 缺省由后端定（= 上限，整条链）。
+    // ⛔ 不在这里写一个更浅的默认值 —— 原来写死 5，多道工序的召回会漏掉 2 道工序以外的成品。
+    const depthQuery = options?.maxDepth != null ? `?maxDepth=${options.maxDepth}` : '';
     const response = await apiClient.get<any>(
-      `${this.getPath(options?.factoryId)}/impact/${batchType}/${encodeURIComponent(batchId)}?maxDepth=${maxDepth}`
+      `${this.getPath(options?.factoryId)}/impact/${batchType}/${encodeURIComponent(batchId)}${depthQuery}`
     );
     return response.data || response;
   }
