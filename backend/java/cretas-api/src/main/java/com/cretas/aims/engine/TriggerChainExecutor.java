@@ -1,5 +1,6 @@
 package com.cretas.aims.engine;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
@@ -121,7 +122,10 @@ public class TriggerChainExecutor {
      * 会导致这些 chain 永不触发。fallbackExecution=true 让无事务时仍同步执行 (此时无 doom 风险,
      * 因为没有外层事务可被回滚)。
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    // 回填进程里不触发: 它监听的是 ApplicationEvent 全集, 启动事件(ContextRefreshed/Started/Ready)也会走到这里
+    // (无事务 ⇒ fallbackExecution), 于是把它和 ToolRegistry 下面整张工具依赖图在懒加载的回填进程里全部实例化。
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true,
+            condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onApplicationEvent(ApplicationEvent event) {
         String eventType = event.getClass().getSimpleName();

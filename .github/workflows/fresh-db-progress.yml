@@ -12,7 +12,7 @@ name: Fresh DB progress ratchet
 # · nightly 无条件: 防「没人改 db/ 但环境变了」(镜像升级、依赖漂移)。
 #
 # ═══════════════════════════════════════════════════════════════════════════
-# Aurora-only local lane
+# Fresh DB lane (GitHub-hosted since 2026-10-25; the repo is public)
 # ═══════════════════════════════════════════════════════════════════════════
 # `fresh-db-gate.sh` uses Docker Compose for pgvector/PG17.  The route is
 # deliberately pinned to the verified Aurora Linux ARM64 runner with Docker;
@@ -32,7 +32,7 @@ on:
       - 'ops/db-baseline/**'
       - 'docker-compose.fresh-db.yml'
       - 'scripts/ci/fresh-db-runner-preflight.sh'
-      - 'scripts/tests/test-fresh-db-local-runner.sh'
+      - 'scripts/tests/test-public-repo-hosted-only.sh'
       # 自指: 改本文件的 PR 也要跑一次(否则触发面改坏了没人知道)
       - '.github/workflows/fresh-db-progress.yml'
   schedule:
@@ -57,7 +57,7 @@ permissions:
 jobs:
   progress:
     # Keep the verified Aurora label set literal.
-    runs-on: [self-hosted, Linux, ARM64, java, cretas, aurora]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -145,11 +145,6 @@ jobs:
           echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
           # FRESH_DB_READBACK_END
 
-      - name: Aurora Fresh DB runner preflight
-        id: preflight
-        working-directory: workflow-source
-        run: bash scripts/ci/fresh-db-runner-preflight.sh
-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -159,6 +154,12 @@ jobs:
           #    (maven-compiler 增量名不副实, 任何改动全量重编)。效果看 FRESH_DB_COMPILE 的 elapsed_s。
           cache: 'maven'
           cache-dependency-path: workflow-source/backend/java/cretas-api/pom.xml
+
+      # After setup-java: on GitHub-hosted the default java is not 21 until setup-java runs.
+      - name: Fresh DB runner preflight
+        id: preflight
+        working-directory: workflow-source
+        run: bash scripts/ci/fresh-db-runner-preflight.sh
 
       - name: Show what this runner actually has
         run: |

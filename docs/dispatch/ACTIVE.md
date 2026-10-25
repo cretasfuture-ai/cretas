@@ -6,11 +6,16 @@
 
 ## 在飞任务
 
+- `ERP-S2-08A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确6文件/无迁移；待办恢复及真实JPA，见archive/2026-10-24-s245-next-slices.md。
+- `ERP-S4-03A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确5文件/无迁移；可行性拒绝及真实JPA，见archive/2026-10-24-s245-next-slices.md。
+
+
+
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
 
-- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `queued` — Owner保留local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a1e9fb8e2c80b9a8110bcce8233c2261ea83dbc7 — 原QA实测工厂就绪报告无正常入口；待原Owner独立WT/精确scope确认，writeScope=[]；S2原未测保留，见archive/2026-10-22-s2-integration.md。
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 已收实际会话/独立WT，精确11文件与命令见archive/2026-10-23-s2-entry-scope.md；只读工厂入口，原QA验收。
 
-- `ERP-S6-B3C-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base a844845c4b63ba0baabdd23a05bc18ba18dce432 — 1099/7f62471的C1增量5文件已审接收；新增测试先写后补审事实保留；C2/C3/集成/生产仍HOLD，详见archive/2026-10-22-s6-b3c-review.md。
+- `ERP-S6-B3C-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 13874247c5b47897e86511cd095dc3bebe6447e1 — C2/C3整改7可写+5冻结，见archive/2026-10-23-s6-c2c3-atomic-scope.md；原HEAD/生产仍HOLD。
 
 - `ERP-S6-B3B-GRANT-CLAUDE-20261022` — `review` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 41eda6951b56790a4d3989c35e234e4b0f54b204 — PR1095/a844845精确3+1仅审阅；重放等V72→V73；新共享scope未释放，见archive/2026-10-22-s6-b3b-review.md。
 
@@ -111,9 +116,12 @@
 
 ## Scope 锁地图
 
-- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：原Claude Owner保留；当前只读追踪，writeScope=[]；禁止放宽平台角色、造蓝图、自动发布或修改既有采购/S6；原QA独占设备/浏览器/CSV。
+- `ERP-S2-08A-CLAUDE-20261024`：仅archive/2026-10-24-s245-next-slices.md列6文件；原Claude唯一写者，不接管设备/浏览器/CSV或权限入口。
+- `ERP-S4-03A-CLAUDE-20261024`：同归档精确5文件，含InsertSlotRepositoryQueryValidationTest；无迁移，不放开S4-05/Orchestrator/采购链。
 
-- `ERP-S6-B3C-CLAUDE-20261022` — 原Claude唯一Owner；C1实际5文件已接收后不重复修改/测试；新C2/C3写scope=[]待精确包审阅，Gateway/采购/供应商/Orchestrator未释放；路径/命令见archive/2026-10-22-s6-b3c-review.md。
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022`：精确11文件锁见archive/2026-10-23-s2-entry-scope.md；原Claude唯一写者，平台权限/采购/S6不释放。
+
+- `ERP-S6-B3C-CLAUDE-20261022`：仅archive/2026-10-23-s6-c2c3-atomic-scope.md的7文件修改，5依赖冻结；config写锁与同事务扣减，禁止回写B3A/B2和生产调度。
 
 
 

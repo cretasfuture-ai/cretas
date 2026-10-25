@@ -61,6 +61,28 @@ public class LineageEdgeRecorder {
     public static final String EDGE_FINISHED_TO_SHIPMENT = "FINISHED_TO_SHIPMENT";
     public static final String EDGE_MATERIAL_TRANSFER = "MATERIAL_TRANSFER";
 
+    /**
+     * 生产批次 → 它产出的在制库存批（{@code material_batches}，{@code source_doc_type='PRODUCTION_BATCH'}）。
+     *
+     * <p>🔴 2026-10-24 prod 实测：文员逐道录入每道中间产出一个 WIP 库存批，下一道把它当原料投入
+     * （那一跳 RAW_TO_PRODUCTION 一直有），但「谁产出了这个 WIP 库存批」只记在
+     * {@code source_doc_id} 上、<b>从来没有边</b> ⇒ 闭包在每一道中间产出处断开，
+     * 近 60 天 12 个终端成品批 0/12 追得到首道原料。
+     *
+     * <p>为什么是新边型而不是复用 {@link #EDGE_PRODUCTION_TO_FINISHED}：目标节点是
+     * MATERIAL_BATCH 不是 FINISHED_BATCH；按 edge_type 统计「成品入库」的读者会把它数进去。
+     * {@code edge_type} 列是 VARCHAR(30) 无 CHECK 约束（V20260821_02），不需要迁移。
+     */
+    public static final String EDGE_PRODUCTION_TO_WIP = "PRODUCTION_TO_WIP";
+
+    /**
+     * 半成品（{@code semi_finished_inventory}）被另一个生产批次领用：产出它的生产批次 → 领用它的生产批次。
+     *
+     * <p>App 路径（{@code WipInventoryServiceImpl#recordWipLineageEdge}）历史上直接写这个边型；
+     * web 逐道录入的三个扣减点（回料正式报工 / 小结 / 结单）经 {@link SemiFeedLineageRecorder} 写同一个边型。
+     */
+    public static final String EDGE_WIP_CONSUME = "WIP_CONSUME";
+
     /** meta 里存幂等键的字段名。 */
     public static final String META_REF_KEY = "refKey";
 
@@ -77,6 +99,18 @@ public class LineageEdgeRecorder {
     public static final String META_SHIPMENT_CARRIER = "shipmentCarrier";
 
     public static final String SHIPMENT_CARRIER_SALES_DELIVERY = "SALES_DELIVERY_RECORD";
+
+    // ── 幂等键：在线路径与回填共用（⛔ 不许在调用方各拼一份 —— 差一个字符重跑就双写）──
+
+    /** 一个在制库存批只有一个产出它的生产批次，所以键只需要库存批 id。 */
+    public static String wipStockRefKey(String wipMaterialBatchId) {
+        return "wipStock:" + wipMaterialBatchId;
+    }
+
+    /** App 报工 {@code material_batch_refs} 里的一个原料批次（同一报工同一批次的多条引用已求和）。 */
+    public static String reportMaterialRefKey(Long reportId, String materialBatchId) {
+        return "report:" + reportId + ":material:" + materialBatchId;
+    }
 
     /**
      * 真正落库的那一层（独立事务 + 立即 flush）。
@@ -142,8 +176,29 @@ public class LineageEdgeRecorder {
                                                                  Long operatorId,
                                                                  String refKey,
                                                                  Map<String, Object> extraMeta) {
-        FinishedBatchProductionAligner.Alignment alignment =
-                productionAligner.align(factoryId, productionPlanId, finishedProductTypeId);
+        return recordProductionToFinishedByPlan(factoryId, productionPlanId, finishedProductTypeId,
+                null, finishedBatchId, quantity, unit, operatorId, refKey, extraMeta);
+    }
+
+    /**
+     * 同上，但带一个「产出它的生产批次号」线索（见 {@link FinishedBatchProductionAligner#align(String, String, String, String)}）。
+     *
+     * <p>🔴 2026-10-24 prod 实测：结单「按终端产出逐行入库」({@code createFinishedGoodsForOutputLine})
+     * 建的成品批次号<b>就是</b>报工生产批次号（CLK-B-… / PB-PLAN-…），而同一计划下有 3 个同产品的正式批次 ⇒
+     * 只按计划对齐必然 AMBIGUOUS ⇒ 3 个成品批一条 PRODUCTION_TO_FINISHED 都没有。批次号是精确键，先用它。
+     */
+    public LineageRecordOutcome recordProductionToFinishedByPlan(String factoryId,
+                                                                 String productionPlanId,
+                                                                 String finishedProductTypeId,
+                                                                 String producingBatchNumberHint,
+                                                                 String finishedBatchId,
+                                                                 BigDecimal quantity,
+                                                                 String unit,
+                                                                 Long operatorId,
+                                                                 String refKey,
+                                                                 Map<String, Object> extraMeta) {
+        FinishedBatchProductionAligner.Alignment alignment = productionAligner.align(
+                factoryId, productionPlanId, finishedProductTypeId, producingBatchNumberHint);
         if (alignment.batch().isEmpty()) {
             return alignment.asFailureOutcome();
         }
@@ -153,8 +208,59 @@ public class LineageEdgeRecorder {
         }
         meta.put("productionPlanId", productionPlanId);
         meta.put("planBatchCandidates", alignment.candidateCount());
+        meta.put("alignedBy", alignment.method());
         return recordProductionToFinished(factoryId, alignment.batch().get().getId(), finishedBatchId,
                 quantity, unit, operatorId, refKey, meta);
+    }
+
+    /**
+     * 生产批次 → 它产出的在制库存批（{@link #EDGE_PRODUCTION_TO_WIP}）。
+     *
+     * @param wipMaterialBatchId {@code material_batches.id}（{@code source_doc_type='PRODUCTION_BATCH'}）
+     * @param refKey             应为 {@link #wipStockRefKey(String)}
+     */
+    public LineageRecordOutcome recordProductionToWipStock(String factoryId,
+                                                           Long productionBatchId,
+                                                           String wipMaterialBatchId,
+                                                           BigDecimal quantity,
+                                                           String unit,
+                                                           Long operatorId,
+                                                           String refKey,
+                                                           Map<String, Object> extraMeta) {
+        return record(factoryId, EDGE_PRODUCTION_TO_WIP,
+                NODE_PRODUCTION_BATCH, productionBatchId == null ? null : String.valueOf(productionBatchId),
+                NODE_MATERIAL_BATCH, wipMaterialBatchId,
+                quantity, unit, operatorId, refKey, extraMeta);
+    }
+
+    /** dry-run 版的生产批次→在制库存批入口。 */
+    public LineageRecordOutcome previewProductionToWipStock(String factoryId, Long productionBatchId,
+                                                            String wipMaterialBatchId, BigDecimal quantity,
+                                                            String unit, String refKey) {
+        return preview(factoryId, EDGE_PRODUCTION_TO_WIP,
+                NODE_PRODUCTION_BATCH, productionBatchId == null ? null : String.valueOf(productionBatchId),
+                NODE_MATERIAL_BATCH, wipMaterialBatchId,
+                quantity, unit, null, refKey, null);
+    }
+
+    /**
+     * 半成品领用：产出它的生产批次 → 领用它的生产批次（{@link #EDGE_WIP_CONSUME}）。
+     *
+     * <p>⚠️ 来源生产批次必须由调用方<b>可靠解析</b>出来（{@link SemiSourceBatchResolver}）。
+     * ⛔ 解析不了时不许拿目标批次顶替 —— 那正是 prod 上 64/70 条 WIP_CONSUME 自环的来历。
+     */
+    public LineageRecordOutcome recordWipConsume(String factoryId,
+                                                 Long sourceProductionBatchId,
+                                                 Long targetProductionBatchId,
+                                                 BigDecimal quantity,
+                                                 String unit,
+                                                 Long operatorId,
+                                                 String refKey,
+                                                 Map<String, Object> extraMeta) {
+        return record(factoryId, EDGE_WIP_CONSUME,
+                NODE_PRODUCTION_BATCH, sourceProductionBatchId == null ? null : String.valueOf(sourceProductionBatchId),
+                NODE_PRODUCTION_BATCH, targetProductionBatchId == null ? null : String.valueOf(targetProductionBatchId),
+                quantity, unit, operatorId, refKey, extraMeta);
     }
 
     /**
@@ -312,8 +418,21 @@ public class LineageEdgeRecorder {
                                                                   BigDecimal quantity,
                                                                   String unit,
                                                                   String refKey) {
-        FinishedBatchProductionAligner.Alignment alignment =
-                productionAligner.align(factoryId, productionPlanId, finishedProductTypeId);
+        return previewProductionToFinishedByPlan(factoryId, productionPlanId, finishedProductTypeId,
+                null, finishedBatchId, quantity, unit, refKey);
+    }
+
+    /** dry-run 版，带生产批次号线索（与在线 / 真跑同一条对齐规则）。 */
+    public LineageRecordOutcome previewProductionToFinishedByPlan(String factoryId,
+                                                                  String productionPlanId,
+                                                                  String finishedProductTypeId,
+                                                                  String producingBatchNumberHint,
+                                                                  String finishedBatchId,
+                                                                  BigDecimal quantity,
+                                                                  String unit,
+                                                                  String refKey) {
+        FinishedBatchProductionAligner.Alignment alignment = productionAligner.align(
+                factoryId, productionPlanId, finishedProductTypeId, producingBatchNumberHint);
         if (alignment.batch().isEmpty()) {
             return alignment.asFailureOutcome();
         }

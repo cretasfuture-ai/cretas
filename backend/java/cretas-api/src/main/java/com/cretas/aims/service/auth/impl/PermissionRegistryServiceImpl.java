@@ -1,5 +1,7 @@
 package com.cretas.aims.service.auth.impl;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.auth.PermissionRegistry;
 import com.cretas.aims.entity.auth.PermissionRegistry.Source;
@@ -54,7 +56,7 @@ public class PermissionRegistryServiceImpl implements PermissionRegistryService 
      * Spring Boot 全部 bean 就绪后自动扫描注册。
      * 失败不阻断启动 (catch + log)。
      */
-    @EventListener(ApplicationReadyEvent.class)
+    @EventListener(value = ApplicationReadyEvent.class, condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void onApplicationReady() {
         try {
             ScanResult result = scanAndRegister();

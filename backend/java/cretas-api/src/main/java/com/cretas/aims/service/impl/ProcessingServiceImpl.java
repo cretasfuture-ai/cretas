@@ -13,9 +13,12 @@ import com.cretas.aims.repository.*;
 import com.cretas.aims.service.ProcessingService;
 import com.cretas.aims.service.ProcessingStageRecordService;
 import com.cretas.aims.service.QualityInspectionService;
+import com.cretas.aims.service.quality.QualityStandardValueResolver;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.CacheService;
 import com.cretas.aims.service.WageRecordTriggerService;
+import com.cretas.aims.entity.config.QualityCheckItemBinding;
+import com.cretas.aims.repository.QualityCheckItemBindingRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.canvas.ThresholdKeys;
 import com.cretas.aims.service.canvas.ThresholdResolverService;
@@ -93,6 +96,8 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProductionAlertRepository productionAlertRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     private final ProcessSheetRowRepository processSheetRowRepository;
+    @Autowired
+    private QualityCheckItemBindingRepository qualityCheckItemBindingRepository;
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     // 来源工序真名解析 (2026-08-02): 暂用 optional 字段注入 —— 该类的大量既有测试仍按
@@ -379,6 +384,22 @@ public class ProcessingServiceImpl implements ProcessingService {
             productionPlanRepository.findById(batch.getProductionPlanId())
                     .ifPresent(plan -> batch.setBatchSourceType(plan.getPlanSourceType()));
         }
+        enrichBatchDisplayFields(batch);
+        return batch;
+    }
+
+    @Override
+    public ProductionBatch getBatchByNumber(String factoryId, String batchNumber) {
+        String exactBatchNumber = batchNumber == null ? "" : batchNumber.trim();
+        if (exactBatchNumber.isEmpty()) {
+            throw new BusinessException(400, "批次号不能为空")
+                    .withHint("请输入完整批次号后再查询")
+                    .withHintTarget("批次号");
+        }
+        ProductionBatch batch = productionBatchRepository.findByFactoryIdAndBatchNumber(factoryId, exactBatchNumber)
+                .orElseThrow(() -> new ResourceNotFoundException("批次不存在: " + exactBatchNumber)
+                        .withHint("请核对批次号，或从待检批次列表选择")
+                        .withHintTarget("批次号"));
         enrichBatchDisplayFields(batch);
         return batch;
     }
@@ -942,6 +963,172 @@ public class ProcessingServiceImpl implements ProcessingService {
         return thresholdResolver.getBigDecimal(factoryId, ThresholdKeys.PROCESSING_FAIL_THRESHOLD, FALLBACK_FAIL_THRESHOLD);
     }
 
+    @Override
+    public Map<String, Object> getDynamicQualityForm(String factoryId, String batchId) {
+        ProductionBatch batch = getBatchById(factoryId, batchId);
+        List<QualityCheckItemBinding> bindings = dynamicBindings(factoryId, batch);
+        if (bindings.isEmpty()) {
+            throw new BusinessException(409, "该产品未配置启用的质检标准")
+                    .withHint("请先为产品配置并启用质检标准").withHintTarget("质检标准");
+        }
+        Map<String, Object> form = new LinkedHashMap<>();
+        form.put("batchId", batch.getId().toString());
+        form.put("batchNumber", batch.getBatchNumber());
+        form.put("productTypeId", batch.getProductTypeId());
+        form.put("productName", batch.getProductName());
+        form.put("standardRevision", dynamicRevision(factoryId, batch.getId().toString(), bindings));
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (QualityCheckItemBinding binding : bindings) {
+            var item = binding.getQualityCheckItem();
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("bindingId", binding.getId());
+            row.put("itemId", binding.getQualityCheckItemId());
+            row.put("itemVersion", item.getVersion());
+            row.put("label", item.getItemName());
+            row.put("valueType", item.getValueType());
+            row.put("unit", item.getUnit());
+            row.put("effectiveStandardValue", QualityStandardValueResolver.inheritBlank(
+                    binding.getOverrideStandardValue(), item.getStandardValue()));
+            row.put("effectiveMinValue", binding.getOverrideMinValue() != null ? binding.getOverrideMinValue() : item.getMinValue());
+            row.put("effectiveMaxValue", binding.getOverrideMaxValue() != null ? binding.getOverrideMaxValue() : item.getMaxValue());
+            row.put("effectiveIsRequired", binding.getOverrideIsRequired() != null ? binding.getOverrideIsRequired() : item.getIsRequired());
+            items.add(row);
+        }
+        form.put("items", items);
+        return form;
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> submitDynamicInspection(String factoryId, String batchId,
+            com.cretas.aims.dto.quality.DynamicQualityInspectionRequest request, Long inspectorId) {
+        if (inspectorId == null) throw new BusinessException(401, "无法确认当前质检员身份");
+        ProductionBatch batch = getBatchById(factoryId, batchId);
+        List<QualityCheckItemBinding> bindings = dynamicBindings(factoryId, batch);
+        if (bindings.isEmpty()) throw new BusinessException(409, "该产品未配置启用的质检标准")
+                .withHint("请先为产品配置并启用质检标准").withHintTarget("质检标准");
+        String revision = dynamicRevision(factoryId, batch.getId().toString(), bindings);
+        if (request == null || request.getStandardRevision() == null || !revision.equals(request.getStandardRevision())) {
+            throw new BusinessException(409, "质检标准已更新，请刷新后重新确认")
+                    .withCode("QUALITY_STANDARD_STALE").withHint("刷新质检标准后保留已填写数据").withHintTarget("刷新标准");
+        }
+        List<com.cretas.aims.dto.quality.DynamicQualityInspectionRequest.Answer> answers = request.getAnswers();
+        if (answers == null) throw new BusinessException(400, "质检项目不能为空");
+        BigDecimal sampleSize = request.getSampleSize() == null ? BigDecimal.ONE : request.getSampleSize();
+        if (sampleSize.compareTo(BigDecimal.ONE) != 0) {
+            throw new BusinessException(400, "当前质检表只支持单组抽样，抽样数量必须为 1")
+                    .withHint("按一组样本填写全部质检项目").withHintTarget("抽样数量");
+        }
+        Map<String, QualityCheckItemBinding> byBinding = new HashMap<>();
+        for (QualityCheckItemBinding b : bindings) byBinding.put(b.getId(), b);
+        Set<String> seen = new HashSet<>();
+        List<Map<String, Object>> snapshotItems = new ArrayList<>();
+        boolean sampleFailed = false;
+        for (var answer : answers) {
+            if (answer == null || answer.getBindingId() == null || answer.getItemId() == null) {
+                throw new BusinessException(400, "质检项目答案不能为空且必须包含项目标识");
+            }
+            QualityCheckItemBinding b = byBinding.get(answer.getBindingId());
+            if (b == null || !b.getQualityCheckItemId().equals(answer.getItemId()))
+                throw new BusinessException(400, "质检项目不属于当前产品标准");
+            if (!seen.add(b.getId())) throw new BusinessException(400, "质检项目重复提交");
+            var item = b.getQualityCheckItem();
+            if (answer.getItemVersion() == null || !answer.getItemVersion().equals(item.getVersion()))
+                throw new BusinessException(409, "质检项目已更新，请刷新标准").withCode("QUALITY_STANDARD_STALE")
+                        .withHint("刷新质检标准后保留已填写数据").withHintTarget("刷新标准");
+            String valueType = item.getValueType() == null ? "" : item.getValueType().trim().toUpperCase(Locale.ROOT);
+            if (!Set.of("NUMERIC", "RANGE", "TEXT", "BOOLEAN").contains(valueType)) {
+                throw new BusinessException(409, "质检项目类型未配置，无法提交")
+                        .withCode("QUALITY_VALUE_TYPE_UNKNOWN").withHint("先补齐质检项目类型").withHintTarget("质检标准");
+            }
+            BigDecimal min = b.getOverrideMinValue() != null ? b.getOverrideMinValue() : item.getMinValue();
+            BigDecimal max = b.getOverrideMaxValue() != null ? b.getOverrideMaxValue() : item.getMaxValue();
+            String standardValue = QualityStandardValueResolver.inheritBlank(
+                    b.getOverrideStandardValue(), item.getStandardValue());
+            boolean answered = answer.getValue() != null && !answer.getValue().toString().isBlank();
+            boolean itemFailed = false;
+            if (!answered) {
+                if (Boolean.TRUE.equals(b.getOverrideIsRequired() != null ? b.getOverrideIsRequired() : item.getIsRequired()))
+                    throw new BusinessException(400, "必检项目未填写");
+            } else if ("NUMERIC".equals(valueType) || "RANGE".equals(valueType)) {
+                BigDecimal value;
+                try { value = new BigDecimal(answer.getValue().toString().trim()); }
+                catch (NumberFormatException e) { throw new BusinessException(400, "数值型质检项目格式不正确"); }
+                if (min != null || max != null) {
+                    itemFailed = (min != null && value.compareTo(min) < 0) || (max != null && value.compareTo(max) > 0);
+                } else if (standardValue == null || standardValue.isBlank()) {
+                    throw new BusinessException(409, "数值型质检项目缺少有效标准")
+                            .withCode("QUALITY_STANDARD_INVALID").withHint("补齐范围或标准值").withHintTarget("质检标准");
+                } else {
+                    try { itemFailed = value.compareTo(new BigDecimal(standardValue.trim())) != 0; }
+                    catch (NumberFormatException e) { throw new BusinessException(409, "数值型质检标准格式不正确").withCode("QUALITY_STANDARD_INVALID")
+                            .withHint("补齐可解析的数值标准").withHintTarget("质检标准"); }
+                }
+            } else if ("BOOLEAN".equals(valueType)) {
+                if (standardValue == null || standardValue.isBlank()) throw new BusinessException(409, "布尔型质检项目缺少标准值").withCode("QUALITY_STANDARD_INVALID")
+                        .withHint("补齐 true 或 false 标准值").withHintTarget("质检标准");
+                String actual = answer.getValue().toString().trim().toLowerCase(Locale.ROOT);
+                String expected = standardValue.trim().toLowerCase(Locale.ROOT);
+                if (!(actual.equals("true") || actual.equals("false")) || !(expected.equals("true") || expected.equals("false")))
+                    throw new BusinessException(400, "布尔型质检项目只能填写 true 或 false");
+                itemFailed = !actual.equals(expected);
+            } else {
+                if (standardValue == null || standardValue.isBlank()) throw new BusinessException(409, "文本型质检项目缺少标准值").withCode("QUALITY_STANDARD_INVALID")
+                        .withHint("补齐文本标准值").withHintTarget("质检标准");
+                itemFailed = !answer.getValue().toString().trim().equals(standardValue.trim());
+            }
+            sampleFailed |= itemFailed;
+            Map<String, Object> saved = new LinkedHashMap<>();
+            saved.put("bindingId", b.getId()); saved.put("itemId", item.getId()); saved.put("itemVersion", item.getVersion());
+            saved.put("label", item.getItemName()); saved.put("valueType", valueType); saved.put("unit", item.getUnit());
+            saved.put("effectiveStandardValue", standardValue); saved.put("value", answered ? answer.getValue() : null);
+            saved.put("minValue", min); saved.put("maxValue", max); saved.put("isRequired", b.getOverrideIsRequired() != null ? b.getOverrideIsRequired() : item.getIsRequired());
+            saved.put("status", answered ? (itemFailed ? "FAIL" : "PASS") : "NOT_ANSWERED");
+            snapshotItems.add(saved);
+        }
+        for (QualityCheckItemBinding b : bindings) {
+            boolean required = Boolean.TRUE.equals(b.getOverrideIsRequired() != null ? b.getOverrideIsRequired() : b.getQualityCheckItem().getIsRequired());
+            if (!seen.contains(b.getId())) {
+                var item = b.getQualityCheckItem();
+                Map<String, Object> saved = new LinkedHashMap<>();
+                saved.put("bindingId", b.getId()); saved.put("itemId", item.getId()); saved.put("itemVersion", item.getVersion());
+                saved.put("label", item.getItemName()); saved.put("valueType", item.getValueType()); saved.put("unit", item.getUnit());
+                saved.put("effectiveStandardValue", QualityStandardValueResolver.inheritBlank(
+                        b.getOverrideStandardValue(), item.getStandardValue()));
+                saved.put("value", null); saved.put("minValue", b.getOverrideMinValue() != null ? b.getOverrideMinValue() : item.getMinValue());
+                saved.put("maxValue", b.getOverrideMaxValue() != null ? b.getOverrideMaxValue() : item.getMaxValue());
+                saved.put("isRequired", required); saved.put("status", "NOT_ANSWERED"); snapshotItems.add(saved);
+            }
+            if (required && !seen.contains(b.getId())) throw new BusinessException(400, "存在未填写的必检项目");
+        }
+        BigDecimal failures = sampleFailed ? BigDecimal.ONE : BigDecimal.ZERO;
+        BigDecimal passes = sampleSize.subtract(failures);
+        QualityInspection inspection = new QualityInspection();
+        inspection.setFactoryId(factoryId); inspection.setProductionBatchId(batch.getId()); inspection.setInspectorId(inspectorId);
+        inspection.setInspectionDate(LocalDate.now()); inspection.setSampleSize(sampleSize); inspection.setFailCount(failures);
+        inspection.setPassCount(passes); inspection.setPassRate(passes.multiply(BigDecimal.valueOf(100)).divide(passes.add(failures).max(BigDecimal.ONE), 2, RoundingMode.HALF_UP));
+        inspection.setResult(sampleFailed ? "FAIL" : "PASS"); inspection.setNotes(request.getNotes());
+        Map<String, Object> customFields = new LinkedHashMap<>();
+        customFields.put("standardBasis", "DYNAMIC_PRODUCT_BINDING"); customFields.put("standardRevision", revision); customFields.put("items", snapshotItems);
+        inspection.setCustomFields(customFields);
+        QualityInspection savedInspection = qualityInspectionService.createInspection(factoryId, inspection);
+        return Map.of("inspection", savedInspection, "standardRevision", revision);
+    }
+
+    private List<QualityCheckItemBinding> dynamicBindings(String factoryId, ProductionBatch batch) {
+        if (batch == null) return List.of();
+        if (qualityCheckItemBindingRepository == null) {
+            throw new BusinessException(503, "动态质检标准服务未就绪").withCode("QUALITY_STANDARD_SERVICE_UNAVAILABLE");
+        }
+        return qualityCheckItemBindingRepository.findByProductTypeIdWithItems(batch.getProductTypeId()).stream()
+                .filter(b -> factoryId.equals(b.getFactoryId()) && Boolean.TRUE.equals(b.getEnabled())).toList();
+    }
+
+    private String dynamicRevision(String factoryId, String batchId, List<QualityCheckItemBinding> bindings) {
+        return factoryId + ":" + batchId + ":" + bindings.stream().map(b -> b.getId() + ":" + b.getQualityCheckItem().getVersion() + ":" + b.getQualityCheckItem().getValueType() + ":" + b.getOverrideMinValue() + ":" + b.getOverrideMaxValue() + ":" + b.getOverrideStandardValue() + ":" + b.getOverrideIsRequired() + ":" + b.getQualityCheckItem().getUnit() + ":" + b.getQualityCheckItem().getStandardValue())
+                .sorted().collect(Collectors.joining("|"));
+    }
+
     public Map<String, Object> submitInspection(String factoryId, String batchId, Map<String, Object> inspection) {
         log.info("提交质检记录: factoryId={}, batchId={}", factoryId, batchId);
         BigDecimal sampleSize = new BigDecimal(inspection.get("sampleSize").toString());
@@ -977,6 +1164,25 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .multiply(new BigDecimal(100))
                 .divide(sampleSize, 2, RoundingMode.HALF_UP);
         validateResultVsPassRate(factoryId, resultStr, passRate);
+        // Compatibility is retained for products with no dynamic binding. Once a
+        // product has an enabled binding, the old fixed-score endpoint cannot bypass
+        // required items. Keep this lookup non-invasive for legacy test callers that
+        // predate the batch guard and do not provide a persisted batch fixture.
+        try {
+            Optional<ProductionBatch> legacyBatch = productionBatchRepository.findById(parseBatchId(batchId))
+                    .filter(candidate -> factoryId.equals(candidate.getFactoryId()));
+            if (legacyBatch.isPresent()) {
+                if (qualityCheckItemBindingRepository == null) {
+                    throw new BusinessException(503, "动态质检标准服务未就绪").withCode("QUALITY_STANDARD_SERVICE_UNAVAILABLE");
+                }
+                if (!dynamicBindings(factoryId, legacyBatch.get()).isEmpty()) {
+                    throw new BusinessException(409, "该产品已绑定动态质检标准，请使用标准质检表提交")
+                            .withCode("QUALITY_STANDARD_REQUIRED").withHint("打开动态质检表后按当前标准填写").withHintTarget("质检表");
+                }
+            }
+        } catch (NumberFormatException ignored) {
+            // Existing validation below remains the compatibility boundary.
+        }
         QualityInspection qualityInspection = new QualityInspection();
         qualityInspection.setFactoryId(factoryId);
         qualityInspection.setProductionBatchId(parseBatchId(batchId));

@@ -1,5 +1,7 @@
 package com.cretas.aims.config;
 
+import org.springframework.context.annotation.Profile;
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,6 +41,8 @@ import java.util.UUID;
  */
 @Slf4j
 @Configuration
+// 回填进程不连 MQTT broker —— 用 profile 而不只靠 mqtt.enabled, 因为环境变量 MQTT_ENABLED 会盖过 profile 配置文件。
+@Profile(LineageBackfillMode.NOT_ACTIVE)
 @ConditionalOnProperty(name = "mqtt.enabled", havingValue = "true", matchIfMissing = false)
 public class MqttConfig {
 

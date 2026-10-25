@@ -170,6 +170,71 @@ class ProductPackagingSpecServiceImplTest {
         assertThat(product.getSpecification()).doesNotContain("pack");
     }
 
+    @Test
+    void openingSelectionAllowsBaseUnitWithExplicitPackagingSnapshot() {
+        ProductPackagingSpec eight = spec("spec-8", "8盒/箱", "箱", "盒", "8", 0L);
+        ProductPackagingSpec twelve = spec("spec-12", "12盒/箱", "箱", "盒", "12", 0L);
+        when(repository.findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                FACTORY_ID, PRODUCT_ID)).thenReturn(List.of(eight, twelve));
+        when(repository.findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "spec-8", FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(eight));
+        when(repository.findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "spec-12", FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(twelve));
+
+        ProductPackagingSpecService.PackagingSelection eightSelection = service.resolveOpeningSelection(
+                FACTORY_ID, PRODUCT_ID, "盒", "spec-8");
+        ProductPackagingSpecService.PackagingSelection twelveSelection = service.resolveOpeningSelection(
+                FACTORY_ID, PRODUCT_ID, "盒", "spec-12");
+
+        assertThat(eightSelection.spec()).isSameAs(eight);
+        assertThat(eightSelection.spec().getConversionFactor()).isEqualByComparingTo("8");
+        assertThat(twelveSelection.spec()).isSameAs(twelve);
+        assertThat(twelveSelection.spec().getConversionFactor()).isEqualByComparingTo("12");
+    }
+
+    @Test
+    void openingSelectionRequiresExplicitChoiceForMultipleSpecsInBaseUnit() {
+        ProductPackagingSpec eight = spec("spec-8", "8盒/箱", "箱", "盒", "8", 0L);
+        ProductPackagingSpec twelve = spec("spec-12", "12盒/箱", "箱", "盒", "12", 0L);
+        when(repository.findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                FACTORY_ID, PRODUCT_ID)).thenReturn(List.of(eight, twelve));
+
+        assertThatThrownBy(() -> service.resolveOpeningSelection(FACTORY_ID, PRODUCT_ID, "盒", null))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo("PACKAGING_SPEC_REQUIRED"));
+    }
+
+    @Test
+    void openingSelectionRejectsUnknownUnitAndWrongProductSpec() {
+        ProductPackagingSpec eight = spec("spec-8", "8盒/箱", "箱", "盒", "8", 0L);
+        when(repository.findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                FACTORY_ID, PRODUCT_ID)).thenReturn(List.of(eight));
+        when(repository.findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "spec-8", FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.of(eight));
+
+        assertThatThrownBy(() -> service.resolveOpeningSelection(FACTORY_ID, PRODUCT_ID, "kg", "spec-8"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo("PACKAGING_SPEC_UNIT_MISMATCH"));
+        assertThatThrownBy(() -> service.resolveOpeningSelection(FACTORY_ID, PRODUCT_ID, "kg", null))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo("PACKAGING_SPEC_UNIT_MISMATCH"));
+    }
+
+    @Test
+    void openingSelectionRejectsInactiveOrForeignSpecLookup() {
+        when(repository.findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                FACTORY_ID, PRODUCT_ID)).thenReturn(List.of());
+        when(repository.findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "foreign-or-inactive", FACTORY_ID, PRODUCT_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resolveOpeningSelection(
+                FACTORY_ID, PRODUCT_ID, "盒", "foreign-or-inactive"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo("PACKAGING_SPEC_INVALID"));
+        verify(repository).findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "foreign-or-inactive", FACTORY_ID, PRODUCT_ID);
+    }
+
     private ProductPackagingSpecDTO dto(String id, String name, String factor, long version) {
         return new ProductPackagingSpecDTO(
                 id, name, "箱", "盒", new BigDecimal(factor), false, true, 0, version);

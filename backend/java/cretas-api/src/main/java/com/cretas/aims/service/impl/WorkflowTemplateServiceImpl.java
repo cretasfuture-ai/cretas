@@ -21,6 +21,9 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class WorkflowTemplateServiceImpl implements WorkflowTemplateService {
 
+    /** 自愿共建 (书面同意) 上线前关闭: 不把任何工厂的流程复制进全局模板表。 */
+    static final boolean CROSS_FACTORY_TEMPLATE_CONTRIBUTION_ENABLED = false;
+
     private static final Logger log = LoggerFactory.getLogger(WorkflowTemplateServiceImpl.class);
     private final WorkflowTemplateRepository repository;
     private final StateMachineRepository stateMachineRepository;
@@ -86,12 +89,20 @@ public class WorkflowTemplateServiceImpl implements WorkflowTemplateService {
         return repository.save(template);
     }
 
+    /**
+     * 只返回平台自编模板 (is_seed_data)。Steve 2026-10-24: 流程建议只来自公开资料和平台自编模板,
+     * 平台不分析、不比对任何工厂的工艺流程 —— 工厂保存进来的模板不对其他工厂列出。
+     */
     @Override
     public List<WorkflowTemplate> search(String keyword) {
+        List<WorkflowTemplate> platform = repository.findByIsSeedDataTrue();
         if (keyword == null || keyword.trim().isEmpty()) {
-            return repository.findByReviewStatusIn(List.of("approved", "pending_review"));
+            return platform;
         }
-        return repository.findByTemplateNameContainingIgnoreCase(keyword.trim());
+        String k = keyword.trim().toLowerCase();
+        return platform.stream()
+                .filter(t -> t.getTemplateName() != null && t.getTemplateName().toLowerCase().contains(k))
+                .collect(java.util.stream.Collectors.toList());
     }
 
     @Override
@@ -99,6 +110,11 @@ public class WorkflowTemplateServiceImpl implements WorkflowTemplateService {
     public WorkflowTemplate extractFromStateMachine(String factoryId, String entityType,
                                                      String templateName, String description,
                                                      String industryTags) {
+        // Steve 2026-10-24: 工厂的工艺流程不进入跨工厂模板库 (将来仅限书面同意「模板共建」的工厂)
+        if (!CROSS_FACTORY_TEMPLATE_CONTRIBUTION_ENABLED) {
+            throw new BusinessException(410, "工厂流程不再保存为平台通用模板")
+                    .withHint("流程只在本厂使用；平台模板来自公开资料和平台自编模板");
+        }
         StateMachine sm = stateMachineRepository
                 .findByFactoryIdAndEntityTypeAndPublishStatus(factoryId, entityType, "published")
                 .orElseThrow(() -> new ResourceNotFoundException(

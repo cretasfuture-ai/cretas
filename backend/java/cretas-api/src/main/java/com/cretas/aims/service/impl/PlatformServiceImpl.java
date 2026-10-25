@@ -43,6 +43,7 @@ public class PlatformServiceImpl implements PlatformService {
     private final AIUsageLogRepository aiUsageLogRepository;
     private final UserRepository userRepository;
     private final ProductionBatchRepository productionBatchRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
 
     @Override
     public List<FactoryAIQuotaDTO> getAllFactoryAIQuotas() {
@@ -178,8 +179,10 @@ public class PlatformServiceImpl implements PlatformService {
         log.debug("用户统计: 总数={}, 活跃={}", totalUsers, activeUsers);
 
         // 3. 统计批次
-        long totalBatches = productionBatchRepository.count();
-        long completedBatches = productionBatchRepository.countByStatus(ProductionBatchStatus.COMPLETED);
+        // 隐私条款第六条: 工艺保密产品的批次不纳入跨客户统计
+        long totalBatches = productionBatchRepository.countExcludingProcessSecretProducts();
+        long completedBatches = productionBatchRepository.countByStatusExcludingProcessSecretProducts(
+                ProductionBatchStatus.COMPLETED);
 
         log.debug("批次统计: 总数={}, 已完成={}", totalBatches, completedBatches);
 
@@ -193,6 +196,8 @@ public class PlatformServiceImpl implements PlatformService {
                 .stream()
                 .filter(batch -> ProductionBatchStatus.COMPLETED.equals(batch.getStatus()))
                 .filter(batch -> batch.getQuantity() != null)
+                .filter(batch -> !processSecretAccessService.protectedProductTypeIds(batch.getFactoryId())
+                        .contains(batch.getProductTypeId()))
                 .mapToDouble(batch -> batch.getQuantity().doubleValue())
                 .sum();
 

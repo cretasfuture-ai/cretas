@@ -23,6 +23,7 @@ import LineageChainTimeline, {
   LINEAGE_TIMELINE_TEST_ID,
   LINEAGE_UNAVAILABLE_TEST_ID,
   LINEAGE_UNAVAILABLE_TEXT,
+  RAW_MATERIAL_GROUP_TEST_ID,
   UNNAMED_NODE_TEXT,
 } from '../../screens/traceability/components/LineageChainTimeline';
 import type { LineageSection } from '../../services/api/traceabilityApiClient';
@@ -351,6 +352,45 @@ describe('措辞：老板听得懂的话，不是图论词', () => {
     );
     expect(getByText(SECTION_TITLE)).toBeTruthy();
     expect(queryByText(/来源 \d+ 项/)).toBeNull();
+  });
+});
+
+describe('公开溯源：只显示原料来源，不显示中间工序（Steve 2026-10-25）', () => {
+  it('后端只下发一组不带 depth 的原料 ⇒ 标题「原料来源」，⛔ 没有「往上第 N 层」也没有「null」，没有空的工序段', () => {
+    const { getByText, queryByText, getByTestId, queryAllByTestId } = render(
+      <LineageChainTimeline
+        lineage={{
+          rootType: 'PRODUCTION_BATCH',
+          rootId: null,
+          maxDepth: null,
+          nodeCount: 2,
+          sourceIndividualCount: 0,
+          ancestors: [
+            {
+              depth: null,
+              nodes: [
+                { nodeType: 'MATERIAL_BATCH', nodeId: null, batchNumber: 'CMR-0001', name: '整牛', resolved: true },
+                { nodeType: 'MATERIAL_BATCH', nodeId: null, batchNumber: 'SALT-0001', name: '食盐', resolved: true },
+              ],
+            },
+          ],
+        }}
+      />
+    );
+
+    // 必发生：原料段与两条原料都渲染出来（否则下面的阴性断言是恒真式）
+    expect(getByTestId(RAW_MATERIAL_GROUP_TEST_ID)).toBeTruthy();
+    expect(getByText('原料来源')).toBeTruthy();
+    expect(getByText(/CMR-0001/)).toBeTruthy();
+    expect(getByText(/SALT-0001/)).toBeTruthy();
+    expect(getByText('来源 2 项')).toBeTruthy();
+
+    // 阴性：不出现层级措辞、不出现 null、只有这一段（没有空的工序段）
+    expect(queryByText(/往上第/)).toBeNull();
+    expect(queryByText(/直接来源/)).toBeNull();
+    expect(queryByText(/null/)).toBeNull();
+    expect(queryAllByTestId(/^lineage-depth-/)).toHaveLength(0);
+    expect(queryAllByTestId(CHAIN_CONNECTOR_TEST_ID)).toHaveLength(0);
   });
 });
 

@@ -1,5 +1,7 @@
 package com.cretas.aims.service.intent;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.entity.ai.*;
 import com.cretas.aims.entity.cron.ScheduledTask;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
@@ -88,7 +90,8 @@ public class PurchaseGrantTimerExecutionService {
     }
 
     /** Restart never replays an in-flight/unknown effect; future PENDING tasks remain for normal Canvas reload. */
-    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    @org.springframework.context.event.EventListener(value = org.springframework.boot.context.event.ApplicationReadyEvent.class,
+            condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void recoverAfterRestart() {
         new TransactionTemplate(transactions).executeWithoutResult(s->{
             for(var candidate:bindings.findByStateIn(List.of("PENDING","RUNNING","UNKNOWN"))) {

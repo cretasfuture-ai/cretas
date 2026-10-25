@@ -1,12 +1,26 @@
-# CI runner 路由：Aurora 重任务 + Windows 受限轻任务
+# CI runner 路由：全部 GitHub 托管（仓库已 public）
 
-**当前运行说明：2026-10-19。** 下面的旧机型、加拿大主备与历史内存数字属于迁移前记录，不作为现行启停入口。
-**最后更新**：2026-10-19。
+## 🔴 现行（2026-10-25，owner 决定）
+
+- 仓库 `cretasfuture-ai/cretas` 已转 **public**。全部工作流 `runs-on: ubuntu-latest`（公开仓库托管 runner 免费、不限分钟、4 vCPU / 16 GB，免费计划最多并发 20 个 job）。
+- ⛔ **任何 job 都不许再指向自建 runner**：公开仓库谁都能提 PR，自建路由会让陌生人的代码在我们的机器上执行。闸 `scripts/tests/test-public-repo-hosted-only.sh`（全部托管 + 原自建 job 带超时 + Java 显式堆）；`switch_ci_runner.py self-hosted` 直接拒绝。
+- 外部 PR：仓库设置 `fork-pr-contributor-approval = all_external_contributors`，外部贡献者的 PR 必须我们点批准才运行；外部贡献者没有写权限，合并只能由组织成员做。
+- 托管机上的差异已在工作流里处理：测试库用 PGDG 装 PostgreSQL 17（`run-with-test-postgres.sh`，托管镜像自带 16）；Java Gate `CRETAS_JAVA_FORK_XMX=6g`、nightly `CRETAS_JAVA_NIGHTLY_XMX=12g` 写在 job env；Fresh DB 预检在托管机上跳过 Aurora 身份检查、保留资源/Docker/JDK/Maven 检查。
+- Aurora、本机轻任务槽、小检查槽全部退役（`tools/ci/windows-*` 只作历史）。要恢复自建 runner，必须先把仓库改回 private。
+- 判据仍是实际 job 的 `runner_name`（托管机形如 `GitHub Actions N`），不看配置。
+
+以下为退役前的历史记录。
+
+## 历史：Aurora 重任务 + Windows 受限轻任务
+
+**当前运行说明：2026-10-24。** 下面的旧机型、加拿大主备与历史内存数字属于迁移前记录，不作为现行启停入口。
+**最后更新**：2026-10-24（新增本机小检查槽 `windows-quick-cretas`）。
 
 - Windows 轻任务入口为既有 `Ubuntu-22.04` 中的独立 `windows-light-cretas`（Linux x64），仓库标签只有 `cretas,windows-light` 加系统默认标签，**禁止添加 `java`**。现有 `[self-hosted, cretas]` 队列可直接分流；Java 工作流、选择器、基线和 Aurora 配置保持不变。用户在本轮明确授权 Aurora + Windows 高效分工。
 - 本机仅启用新 `cretas-ci-light.service`：独立用户 `cretas-ci-light`，单任务、CPUQuota=300%、MemoryHigh=5G、MemoryMax=6G、MemorySwapMax=0、Nice=10。旧 `cretas-ci.service` 保持 inactive/disabled；不重启 WSL/Docker，不修改全局内存配置、不恢复旧重任务或加拿大 runner。
 - 安装/预检源在 `tools/ci/windows-light/`。应用 `/opt/cretas-ci-light`、工具 `/opt/cretas-ci-light-tools`、home/work/cache `/var/lib/cretas-ci-light`、hook `/etc/cretas-ci-light/job-started.sh`；Windows 用户盘、旧 runner、Docker socket和GPU对服务不可访问。只允许官方校验和验证的 runner/Node 包；注册令牌经 stdin 传入，不落 tracked 文件。
 - 轻任务验收看实际 job 的 `runner_name`、步骤和结论，不能用 online 代替通过。仅在 idle/busy=false 的安全点维护新服务；回滚只停止/禁用这个新服务并移除它自己的注册，不动 Aurora、旧服务、业务进程和其他容器。已启用 Linux 启动自启；整机重启恢复未实测时须单列未知。
+- 小检查槽（owner 2026-10-24，不花钱方案）：同一个 `Ubuntu-22.04` 里再起一个 `windows-quick-cretas`，服务 `cretas-ci-quick.service`，独立用户 `cretas-ci-quick`，CPUQuota=100%、MemoryHigh=768M、MemoryMax=1G、MemorySwapMax=0、TasksMax=128。自定义标签**只有 `cretas-quick`**（⛔ 不加 `cretas` / `java`，否则 vitest、pytest 会落进 1G）。只接 `tracked-secret-scan`、`no-literal-nul-bytes`、`scan-surface-in-sync`、`reap` 四个任务，对应工作流 `runs-on: [self-hosted, cretas-quick]`，由 `switch_ci_runner.py` 的 `QUICK_WORKFLOWS` 管；job-start hook 白名单之外一律退出 75。`aurora-cretas` 与 `windows-light-cretas` 也带 `cretas-quick` 标签兜底。安装/预检/回滚见 `tools/ci/windows-quick/README.md`，闸 `scripts/tests/test-quick-runner-routing.sh`。验收看真实 job 的 `runner_name=windows-quick-cretas`。
 
 - 重任务使用 Aurora 既有 Colima `ci` Linux ARM64 VM（4 CPU / 8 GiB）。主仓 runner 为 `aurora-cretas`；Assembly 为独立注册的 `aurora-assembly`。默认 `colima` profile 继续服务 PomeloX，不切换 Docker context 或停止它。
 - SSH 使用 `morrowward-us-mini`，每次连接先确认 `Auroras-Mac-mini.local / aurora`。本机 LaunchAgent `com.cretas.ci-primary` 每 60 秒检查本机 VM 和两个白名单 runner，不查询加拿大。旧 `~/cretas-ci-failover.sh` 只转发到本机 primary，原 failover plist 已退役。

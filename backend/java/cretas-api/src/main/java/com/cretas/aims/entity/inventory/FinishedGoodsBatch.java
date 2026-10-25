@@ -276,9 +276,10 @@ public class FinishedGoodsBatch extends BaseEntity {
         return getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0;
     }
 
-    /** 是否过期 */
+    /** 是否过期 —— 口径见 {@link com.cretas.aims.util.InventoryExpiry} (到期日当天仍可用, 东八区日历日)。 */
     @Transient
     public boolean isExpired() {
-        return expireDate != null && LocalDate.now().isAfter(expireDate);
+        return com.cretas.aims.util.InventoryExpiry.isExpired(
+                expireDate, com.cretas.aims.util.InventoryExpiry.today());
     }
 }

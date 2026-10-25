@@ -168,6 +168,19 @@ class FgQuantityUnitConverterTest {
     }
 
     @Test
+    @DisplayName("期初基本单位快照: 16盒可换算为2箱且不会在盒→盒时重复乘箱规")
+    void baseUnitOpeningSnapshotConvertsOnlyWhenTargetIsPackageUnit() {
+        assertEquals(0, new BigDecimal("2").compareTo(FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("16"), "盒", "箱", null,
+                "箱", "盒", new BigDecimal("8"),
+                "箱", "盒", new BigDecimal("8"))));
+        assertEquals(0, new BigDecimal("16").compareTo(FgQuantityUnitConverter.convertWithPackaging(
+                new BigDecimal("16"), "盒", "盒", null,
+                "箱", "盒", new BigDecimal("8"),
+                "箱", "盒", new BigDecimal("8"))));
+    }
+
+    @Test
     @DisplayName("qty 为 null → 返回 null")
     void nullQty_returnsNull() {
         assertNull(FgQuantityUnitConverter.convert(null, "盒", "kg", new BigDecimal("120")));

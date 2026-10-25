@@ -1,5 +1,7 @@
 package com.cretas.aims.service.workflow.impl;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.config.ApprovalWorkflow;
@@ -1042,7 +1044,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
      * 启动 hook — 从 PG 拉所有 RUNNING 实例重建 Redis state.
      */
     @Override
-    @EventListener(ApplicationReadyEvent.class)
+    @EventListener(value = ApplicationReadyEvent.class, condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void rebuildRedisFromPg() {
         if (redisTemplate == null) {
             log.info("Redis 未配置, 跳过 workflow 实例重建");

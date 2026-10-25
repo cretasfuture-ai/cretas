@@ -87,7 +87,7 @@ permissions:
 
 jobs:
   canary:
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: 报出这次是被什么触发的
