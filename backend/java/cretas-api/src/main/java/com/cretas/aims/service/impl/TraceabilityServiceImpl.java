@@ -241,11 +241,11 @@ public class TraceabilityServiceImpl implements TraceabilityService {
         String factoryId = batch.getFactoryId();
 
         // 2. 获取工厂信息（脱敏）
-        String factoryName = "认证工厂";
-        Optional<Factory> factoryOpt = factoryRepository.findById(factoryId);
-        if (factoryOpt.isPresent()) {
-            factoryName = factoryOpt.get().getName();
-        }
+        //    ⛔ 找不到工厂时原来回落成写死的「认证工厂」—— 一个没有任何认证来源的说法。
+        //    找不到就是 null, 前端不渲染这一行。
+        String factoryName = factoryRepository.findById(factoryId)
+                .map(Factory::getName)
+                .orElse(null);
 
         // 3. 多跳来源链 —— Steve 2026-10-25 裁定: 公开溯源只显示原料来源, 不显示中间工序。
         //    往上查整条链, 但只拿回原料批 (中间生产批 / 在制库存批一个都不出), 见 assemblePublic。

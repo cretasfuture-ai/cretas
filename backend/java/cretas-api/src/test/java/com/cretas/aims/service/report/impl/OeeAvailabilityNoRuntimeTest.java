@@ -85,6 +85,8 @@ class OeeAvailabilityNoRuntimeTest {
         ProductionBatch b = new ProductionBatch();
         b.setPlannedQuantity(new BigDecimal("100"));
         b.setActualQuantity(new BigDecimal("90"));
+        // 良品率读真实良品数 (不再是 产出 × 0.95), 不设它 quality 就是 null
+        b.setGoodQuantity(new BigDecimal("85"));
         when(productionBatchRepository.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
                 .thenReturn(List.of(b));
     }

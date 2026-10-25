@@ -1203,6 +1203,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalPlannedQuantity = BigDecimal.ZERO;
         BigDecimal totalActualQuantity = BigDecimal.ZERO;
         BigDecimal totalGoodQuantity = BigDecimal.ZERO;
+        BigDecimal qualityBaseQuantity = BigDecimal.ZERO;
+        int batchesReportingGood = 0;
 
         for (ProductionBatch batch : batches) {
             if (batch.getPlannedQuantity() != null) {
@@ -1211,9 +1213,13 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             if (batch.getActualQuantity() != null) {
                 totalActualQuantity = totalActualQuantity.add(batch.getActualQuantity());
             }
-            if (batch.getActualQuantity() != null) {
-                totalGoodQuantity = totalGoodQuantity.add(
-                        batch.getActualQuantity().multiply(new BigDecimal("0.95")));
+            // ⛔ 原来良品 = 产出 × 0.95 —— 编出来的常量, 良品率恒 95%。
+            //    改读批次真实报的良品数; 分母只取同时报了良品的那些批次的产出,
+            //    没报良品的批次不进良品率 (不当 0 也不当 100%)。
+            if (batch.getActualQuantity() != null && batch.getGoodQuantity() != null) {
+                totalGoodQuantity = totalGoodQuantity.add(batch.getGoodQuantity());
+                qualityBaseQuantity = qualityBaseQuantity.add(batch.getActualQuantity());
+                batchesReportingGood++;
             }
         }
 
@@ -1257,8 +1263,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 totalActualQuantity.divide(totalPlannedQuantity, 4, RoundingMode.HALF_UP)
                         .multiply(hundred).min(hundred) : null;
 
-        BigDecimal quality = totalActualQuantity.compareTo(BigDecimal.ZERO) > 0 ?
-                totalGoodQuantity.divide(totalActualQuantity, 4, RoundingMode.HALF_UP)
+        BigDecimal quality = qualityBaseQuantity.compareTo(BigDecimal.ZERO) > 0 ?
+                totalGoodQuantity.divide(qualityBaseQuantity, 4, RoundingMode.HALF_UP)
                         .multiply(hundred).min(hundred) : null;
 
         // 三因子缺任意一个, OEE 就没有定义 —— 用剩下两个乘出来的数没有意义。
@@ -1281,8 +1287,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 // 与 availability 的 .min(hundred) 封顶对齐, 停机量封到 0 下限。
                 .downtime(Math.max(0, plannedHours - totalRunningHours) * 60)
                 .totalOutput(totalActualQuantity)
-                .goodOutput(totalGoodQuantity.setScale(2, RoundingMode.HALF_UP))
-                .defectOutput(totalActualQuantity.subtract(totalGoodQuantity).setScale(2, RoundingMode.HALF_UP))
+                // 一个批次都没报良品数 ⇒ 良品/不良品都不知道, 为 null (⛔ 不是 0)
+                .goodOutput(batchesReportingGood == 0 ? null
+                        : totalGoodQuantity.setScale(2, RoundingMode.HALF_UP))
+                .defectOutput(batchesReportingGood == 0 ? null
+                        : qualityBaseQuantity.subtract(totalGoodQuantity).setScale(2, RoundingMode.HALF_UP))
                 .availabilityLoss(lossOrNull(availability))
                 .performanceLoss(lossOrNull(performance))
                 .qualityLoss(lossOrNull(quality))
