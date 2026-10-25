@@ -43,11 +43,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 class FactoryAssemblyApprovalListRepositoryQueryValidationTest {
 
+    /**
+     * PostgreSQL only as a pair: CRETAS_WORKFLOW_PG_URL together with CRETAS_WORKFLOW_PG_VERIFY=true, and
+     * only a disposable local database (checked on the raw URL before any connection or DDL). Neither
+     * set keeps the default non-PG profile; a half-configured or unsafe target refuses to start.
+     */
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
         String url = System.getenv("CRETAS_WORKFLOW_PG_URL");
-        if (url != null && !url.isBlank()) {
-            String bound = url.contains("stringtype=") ? url : url + (url.contains("?") ? "&" : "?") + "stringtype=unspecified";
+        boolean hasUrl = url != null && !url.isBlank();
+        boolean verify = "true".equals(System.getenv("CRETAS_WORKFLOW_PG_VERIFY"));
+        if (hasUrl != verify) {
+            throw new IllegalStateException("CRETAS_WORKFLOW_PG_URL and CRETAS_WORKFLOW_PG_VERIFY=true must be set together");
+        }
+        if (hasUrl) {
+            String bound = com.cretas.aims.integration.DisposablePostgresTargetGuard.requireSafeUrl(url)
+                    + "?stringtype=unspecified";
             registry.add("spring.datasource.url", () -> bound);
             registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
             registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci"));
