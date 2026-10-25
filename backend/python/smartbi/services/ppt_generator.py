@@ -2,7 +2,10 @@
 import base64
 import io
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from textwrap import wrap
+
+from smartbi.services.financial.export_conclusions import conclusion_rows
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -40,7 +43,9 @@ class FinancialPPTGenerator:
                  period_type: str = "year",
                  start_month: int = 1, end_month: int = 12,
                  kpi_summary: Optional[Dict] = None,
-                 template: str = "default") -> bytes:
+                 template: str = "default",
+                 headline: Optional[Dict] = None,
+                 findings: Optional[Dict[str, List[str]]] = None) -> bytes:
         """Generate PPTX bytes from chart images and analysis results."""
         try:
             from pptx import Presentation
@@ -79,6 +84,23 @@ class FinancialPPTGenerator:
         self._add_text(slide, f"生成日期: {datetime.now().strftime('%Y-%m-%d')}",
                        Inches(1), Inches(6.5), Inches(11), Inches(0.4),
                        font_size=Pt(14), color=RGBColor(0x93, 0xC5, 0xFD), alignment=PP_ALIGN.CENTER)
+
+        # Rule conclusions precede KPI/chart/AI pages. Wrap and paginate rather
+        # than truncating long findings or allowing text to run off the slide.
+        rows = conclusion_rows(headline, findings)
+        lines = []
+        for title, text in rows:
+            for paragraph in f"{title}：{text}".splitlines():
+                lines.extend(wrap(paragraph, width=46) or [''])
+            lines.append('')
+        for start in range(0, len(lines), 15):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            title = "分析结论" if start == 0 else "分析结论（续）"
+            self._add_text(slide, title, Inches(0.5), Inches(0.3), Inches(12), Inches(0.7),
+                           font_size=Pt(28), color=BLUE, bold=True)
+            self._add_text(slide, '\n'.join(lines[start:start + 15]),
+                           Inches(0.5), Inches(1.2), Inches(12), Inches(5.8),
+                           font_size=Pt(18), color=DARK)
 
         # --- Slide 2: Executive Summary (if KPI summary provided) ---
         if kpi_summary:

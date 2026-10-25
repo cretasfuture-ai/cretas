@@ -781,6 +781,8 @@ async function handleExportPPT() {
       end_month: endMonth.value,
       chart_images: chartImages,
       analysis_results: analysisResults,
+      headline: dashboardResponse.value?.headline ?? null,
+      findings: dashboardResponse.value?.findings ?? null,
       company_name: '白垩纪科技',
     });
 
@@ -826,6 +828,8 @@ async function handleExportPDF() {
     const blob = await exportPDF({
       chart_images: chartImages,
       analysis_results: analysisResults,
+      headline: dashboardResponse.value?.headline ?? null,
+      findings: dashboardResponse.value?.findings ?? null,
       company_name: '白垩纪科技',
       year: currentYear.value,
       period_type: periodType.value,

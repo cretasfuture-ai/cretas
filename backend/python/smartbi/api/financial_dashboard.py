@@ -9,6 +9,7 @@ import io
 
 from smartbi.services.financial_dashboard import FinancialDashboardService
 from smartbi.services.financial.base import _sanitize_for_json
+from smartbi.services.financial.export_conclusions import conclusion_rows as _conclusion_rows
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,6 +48,8 @@ class PPTExportRequest(BaseModel):
     start_month: int = 1
     end_month: int = 12
     chart_images: Dict[str, str] = Field(default_factory=dict)  # {chartType: base64PNG}
+    headline: Optional[Dict[str, Any]] = None
+    findings: Optional[Dict[str, List[str]]] = None
     analysis_results: Dict[str, str] = Field(default_factory=dict)
     template: str = "default"
     company_name: str = "白垩纪科技"
@@ -290,6 +293,8 @@ async def export_ppt(request: PPTExportRequest):
         generator = FinancialPPTGenerator()
         pptx_bytes = generator.generate(
             chart_images=request.chart_images,
+            headline=request.headline,
+            findings=request.findings,
             analysis_results=request.analysis_results,
             company_name=request.company_name,
             year=request.year,
@@ -461,21 +466,6 @@ async def export_excel(request: ExcelExportRequest):
         return _export_error("Excel 导出失败，请稍后重试")
 
 
-_FINDING_SECTIONS = (("good", "做得好的"), ("attention", "需要关注"), ("suggestions", "建议"))
-
-
-def _conclusion_rows(headline: Optional[Dict[str, Any]],
-                     findings: Optional[Dict[str, List[str]]]) -> List[List[str]]:
-    rows: List[List[str]] = []
-    text = (headline or {}).get("text")
-    if text:
-        rows.append(["页首结论", str(text)])
-    for key, title in _FINDING_SECTIONS:
-        for line in (findings or {}).get(key) or []:
-            rows.append([title, str(line)])
-    return rows
-
-
 def _export_error(message: str) -> JSONResponse:
     # 非 200: 前端据此不会把错误 JSON 当成 .xlsx 下载并提示成功
     return JSONResponse(status_code=500, content={"success": False, "message": message, "error": message})
@@ -494,6 +484,8 @@ def _table_unit_note(chart: Dict[str, Any]) -> Optional[str]:
 
 class PDFExportRequest(BaseModel):
     chart_images: Dict[str, str] = Field(default_factory=dict)  # {chartType: base64PNG}
+    headline: Optional[Dict[str, Any]] = None
+    findings: Optional[Dict[str, List[str]]] = None
     analysis_results: Dict[str, str] = Field(default_factory=dict)
     company_name: str = "白垩纪科技"
     year: int = 2026
@@ -511,6 +503,8 @@ async def export_pdf(request: PDFExportRequest):
         generator = FinancialPDFGenerator()
         pdf_bytes = generator.generate(
             chart_images=request.chart_images,
+            headline=request.headline,
+            findings=request.findings,
             analysis_results=request.analysis_results,
             company_name=request.company_name,
             year=request.year,
