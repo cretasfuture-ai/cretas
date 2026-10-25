@@ -878,6 +878,8 @@ async function handleExportExcel() {
     const blob = await exportExcel({
       charts,
       analysis_results: analysisResults,
+      headline: dashboardResponse.value?.headline ?? null,
+      findings: dashboardResponse.value?.findings ?? null,
       company_name: '白垩纪科技',
       year: currentYear.value,
       period_type: periodType.value,

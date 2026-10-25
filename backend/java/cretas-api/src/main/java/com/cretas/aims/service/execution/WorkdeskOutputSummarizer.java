@@ -124,7 +124,9 @@ public class WorkdeskOutputSummarizer {
         }
         final Object resultData = plain;
 
-        boolean ftDirty = isDirty(formattedText);
+        // formattedText 是 Skill 的「未返回可直接展示的明细」占位 → 数据其实在, 也要出摘要。
+        // 只看 formattedText: message 会写进对话记忆, 换成带真名的摘要会让名字随历史再发给模型。
+        boolean ftDirty = isDirty(formattedText) || isSkillNoDisplayPlaceholder(formattedText);
         boolean msgDirty = isDirty(message);
 
         if (!ftDirty && !msgDirty) {
@@ -331,6 +333,10 @@ public class WorkdeskOutputSummarizer {
             return "本次查询已完成，但结果格式化遇到问题。建议: 1. 重新发起查询; 2. 换用更具体的描述 (指定时段 / 物料 / 客户); 3. 如持续出现请联系管理员检查该功能配置。";
         }
         return cleaned;
+    }
+
+    static boolean isSkillNoDisplayPlaceholder(String text) {
+        return text != null && text.trim().equals(DynamicToolSelectionService.SKILL_NO_DISPLAY_PLACEHOLDER);
     }
 
     /**

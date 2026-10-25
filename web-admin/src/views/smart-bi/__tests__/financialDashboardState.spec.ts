@@ -276,6 +276,17 @@ describe('findingSections (分析结论与建议的规则部分)', () => {
   });
 });
 
+describe('Excel 导出带上页首结论与规则结论 (源码断言)', () => {
+  it('exportExcel 请求里传了这次看板的 headline 和 findings', () => {
+    // 导出报告原来只有 KPI / 明细 / AI 分析, 页面上的结论带不出去
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    const start = src.indexOf('await exportExcel({');
+    const call = src.slice(start, src.indexOf('});', start));
+    expect(call).toContain('headline: dashboardResponse.value?.headline');
+    expect(call).toContain('findings: dashboardResponse.value?.findings');
+  });
+});
+
 describe('看板列出了业务单元分析 (源码断言)', () => {
   it('chartTypes 里有 business_unit_analysis', () => {
     const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');

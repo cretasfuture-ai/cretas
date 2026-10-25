@@ -39,6 +39,22 @@
         <el-button :disabled="!canConfirm || busy || plans[capability]!.status !== 'READY_FOR_APPROVAL'"
           :data-testid="`formal-request-${capability}`" @click="requestApproval(capability)">确认申请{{ label(capability) }}</el-button>
       </div>
+      <div class="recoverable" :data-testid="`formal-recoverable-${capability}`">
+        <p v-if="recoverableError" role="alert">{{ recoverableError }}</p>
+        <p v-else-if="!recoverable(capability).length" class="muted">本蓝图暂无可恢复的{{ label(capability) }}申请</p>
+        <ul v-else>
+          <li v-for="item in recoverable(capability)" :key="item.approval.approvalId"
+            :data-testid="`formal-recoverable-item-${item.approval.approvalId}`">
+            <span>{{ statusText(item.approval.status) }} · 蓝图第{{ item.blueprintVersion ?? '?' }}版 · {{ item.approval.approvalId }}</span>
+            <span v-if="item.approval.status === 'APPROVED'"> · 有效期至 {{ item.approval.expiresAt ?? '未设定' }}</span>
+            <el-button v-if="continuable(item)" size="small" :disabled="!canConfirm || busy"
+              :data-testid="`formal-resume-${item.approval.approvalId}`" @click="resume(capability, item.approval.approvalId)">
+              {{ item.recoverability === 'RECEIPT_ONLY' ? '查看原执行回执' : '继续此申请' }}
+            </el-button>
+            <span v-else class="muted" :data-testid="`formal-readonly-${item.approval.approvalId}`">{{ readonlyReason(item) }}</span>
+          </li>
+        </ul>
+      </div>
       <label>确认申请编号
         <input v-model="approvalIds[capability]" :data-testid="`formal-approval-id-${capability}`" :disabled="busy" placeholder="输入本步骤的确认申请编号" />
       </label>
@@ -71,8 +87,9 @@ import { reactive, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import type { WrittenCapability } from '@/api/factoryBlueprintDraftApi'
 import { previewFormal, requestFormal, readFormal, readFormalReceipt, approveFormal, executeFormal,
+  listRecoverableFormal,
   type FormalCapability, type FormalSelection, type FormalPlan, type FormalApproval,
-  type FormalExecution, type FormalActor } from '@/api/factoryBlueprintActivationApi'
+  type FormalExecution, type FormalActor, type FormalRecoverable } from '@/api/factoryBlueprintActivationApi'
 import { draftErrorMessage } from '../factoryBlueprintDrafts'
 const props = defineProps<{ factoryId: string; blueprintId: string; canConfirm: boolean; written: WrittenCapability[] | null }>()
 const emit = defineEmits<{ changed: []; formalState: [FormalCapability, FormalExecution | null] }>()
@@ -107,6 +124,7 @@ async function requestApproval(capability: FormalCapability) {
     await ElMessageBox.confirm(`单独申请${label(capability)}。服务端将在审批和执行时重新核对前置条件。`, label(capability), { type: 'warning' })
     const approval = (await requestFormal(props.factoryId, props.blueprintId, selection(capability), plan.planDigest)).data
     approvals[capability] = approval; approvalIds[capability] = approval.approvalId
+    void loadRecoverable()
   })
 }
 async function readApproval(capability: FormalCapability) {
@@ -126,6 +144,7 @@ async function approve(capability: FormalCapability) {
     const approval = approvals[capability]; if (!approval) return
     await ElMessageBox.confirm(`由当前登录人审批${label(capability)}，不执行写入。`, '确认审批', { type: 'warning' })
     approvals[capability] = (await approveFormal(props.factoryId, props.blueprintId, approval, reasons[capability])).data
+    void loadRecoverable()
   })
 }
 async function execute(capability: FormalCapability) {
@@ -135,7 +154,40 @@ async function execute(capability: FormalCapability) {
     const result = (await executeFormal(props.factoryId, props.blueprintId, approval)).data
     results[capability] = result; approvals[capability] = result.approval
     emit('formalState', capability, result); emit('changed')
+    void loadRecoverable()
   })
+}
+// Persisted approvals of this blueprint, judged by the server against its current blueprint. Listing
+// only fills in the number; approve and execute still go through every server check.
+const recoverableItems = ref<FormalRecoverable[]>([]), recoverableError = ref('')
+let recoverableSequence = 0
+const recoverable = (capability: FormalCapability) =>
+  recoverableItems.value.filter(item => item.approval.capabilityId === capability)
+const continuable = (item: FormalRecoverable) =>
+  item.recoverability === 'CONTINUE_APPROVAL' || item.recoverability === 'CONTINUE_EXECUTION'
+  || item.recoverability === 'RECEIPT_ONLY'
+const statusText = (status: FormalApproval['status']) =>
+  status === 'REQUESTED' ? '待审批' : status === 'APPROVED' ? '已审批待执行' : '已执行'
+const readonlyReason = (item: FormalRecoverable) => ({
+  EXPIRED: '审批已过期，不能执行，请重新预览并申请',
+  HISTORICAL_VERSION: '属于其他蓝图版本，仅供查看',
+  BLUEPRINT_CHANGED: '蓝图已变更，仅供查看，请重新预览并申请',
+  SNAPSHOT_UNREADABLE: '申请记录无法核对，不能继续',
+} as Record<string, string>)[item.recoverability] ?? '不能继续'
+async function loadRecoverable() {
+  const own = ++recoverableSequence, factoryId = props.factoryId, blueprintId = props.blueprintId
+  recoverableItems.value = []; recoverableError.value = ''
+  if (!factoryId || !blueprintId) return
+  try {
+    const list = (await listRecoverableFormal(factoryId, blueprintId)).data
+    if (own === recoverableSequence) recoverableItems.value = list.approvals
+  } catch (error) {
+    if (own === recoverableSequence) recoverableError.value = draftErrorMessage(error)
+  }
+}
+async function resume(capability: FormalCapability, approvalId: string) {
+  approvalIds[capability] = approvalId
+  await readApproval(capability)
 }
 watch([configDraftId, workflowDraftId, bomDraftId, criticalControlsDraftId], () => {
   // Changing selections invalidates a preview; an existing persisted approval must be explicitly read again.
@@ -147,6 +199,7 @@ watch(() => [props.factoryId, props.blueprintId], () => {
     approvalIds[capability] = ''; errors[capability] = ''
   }
 })
+watch(() => [props.factoryId, props.blueprintId], () => { void loadRecoverable() }, { immediate: true })
 </script>
 
 <style scoped>

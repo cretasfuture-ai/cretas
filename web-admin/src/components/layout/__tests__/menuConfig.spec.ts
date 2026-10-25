@@ -866,3 +866,25 @@ describe('menuConfig — personal OA workbench', () => {
     ]);
   });
 });
+
+describe('menuConfig — factory self-service readiness', () => {
+  it('gives a factory super admin its own read-only readiness entry and leaves the platform pair platform-only', () => {
+    const entry = findDescendant('/system', '/factory-readiness');
+    expect(entry?.roles).toEqual(['factory_super_admin']);
+    // assemblyFeature would hide it: the sidebar turns that flag on for platform super admins only.
+    expect(entry?.assemblyFeature).toBeUndefined();
+    for (const path of ['/factory-onboarding', '/factory-review']) {
+      const platform = findDescendant('/system', path);
+      expect(platform?.roles).toEqual(['platform_admin']);
+      expect(platform?.assemblyFeature).toBe(true);
+    }
+  });
+
+  it('routes the entry to the factory host, not to the platform review page', () => {
+    const route = router.resolve('/factory-readiness');
+    expect(route.name).toBe('FactorySelfReadiness');
+    expect(route.meta.roles).toEqual(['factory_super_admin']);
+    expect(route.meta.assemblyFeature).toBeUndefined();
+    expect(router.resolve('/factory-review').meta.assemblyFeature).toBe(true);
+  });
+});

@@ -491,6 +491,23 @@ class TestFindings:
         worse = [{**row, '本年毛利率': '20%'} for row in self.MARGIN_ROWS]
         assert svc.generate_dashboard(pd.DataFrame(worse), 2026, 'all', 1, 12)['headline']['tone'] == 'bad'
 
+    def test_margin_gap_is_computed_from_the_displayed_averages(self):
+        # 线上 5254 (2026-10-25): 「各月平均毛利率 26.3%，上年 26.3%，+0.1 个百分点」读起来对不上
+        rows = [{'月份': f'{m}月', '本年毛利率': '26.34%', '上年毛利率': '26.26%'} for m in (1, 2)]
+        # 改成「与上年持平」(2026-10-25): 「+0.0 个百分点」放在「做得好的」里读起来像在表扬持平
+        r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)
+        assert '各月平均毛利率 26.3%，与上年持平（各月简单平均）' in r['headline']['text']
+        assert '+0.0' not in r['headline']['text']
+        assert r['headline']['tone'] == 'neutral'
+        f = r['findings']
+        assert not any('平均毛利率' in line for line in f['good'] + f['attention'] + f['suggestions'])
+        # 阳性对照: 差 0.1 个百分点时照常给出差值并算好消息
+        up = [{**row, '本年毛利率': '26.44%'} for row in rows]
+        r = svc.generate_dashboard(pd.DataFrame(up), 2026, 'all', 1, 12)
+        assert '各月平均毛利率 26.4%，上年 26.3%，+0.1 个百分点' in r['headline']['text']
+        assert r['headline']['tone'] == 'good'
+        assert '各月平均毛利率 26.4%，比上年 +0.1 个百分点（各月简单平均）' in r['findings']['good']
+
     def test_pnl_sheet_states_margin_expense_share_and_biggest_item(self):
         # 线上 5252 (2026-10-25): 损益表只有「净利润」一条结论
         rows = [{'月份': '1月', '项目': k, '实际（万元）': v} for k, v in PNL_REFERENCE]
@@ -522,6 +539,26 @@ class TestFindings:
         f = svc.generate_dashboard(pd.DataFrame(falling), 2026, 'all', 1, 12)['findings']
         assert any(a.startswith('3月环比 -25.0%') for a in f['attention'])
         assert not any('环比' in g for g in f['good'])
+
+
+    # 样图⑥ 品类结构: 原来只有「占比变化」两条, 没有建议 (线上 5255, 2026-10-25)
+    CATEGORY_ROWS = [{'品类': k, '月份': '1月', '本年': c, '上年': ly}
+                     for k, c, ly in [('酱料', 600, 400), ('汤料', 250, 300), ('底料', 150, 100)]]
+
+    def test_category_sheet_names_growth_decline_concentration_and_suggests_review(self):
+        f = svc.generate_dashboard(pd.DataFrame(self.CATEGORY_ROWS), 2026, 'all', 1, 12)['findings']
+        assert '酱料比上年多 200.00（+50.0%），各品类里增长最多' in f['good']
+        assert '汤料比上年少 50.00（-16.7%）' in f['attention']
+        assert '酱料占本期 60.0%，一半以上来自这一个品类' in f['attention']
+        assert '复盘汤料：比上年少 50.00，各品类里减少的金额最多' in f['suggestions']
+
+    def test_category_without_decline_suggests_the_share_loser_not_a_review(self):
+        rows = [{'品类': k, '月份': '1月', '本年': c, '上年': ly}
+                for k, c, ly in [('酱料', 300, 200), ('汤料', 220, 200), ('底料', 280, 200)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert not any('复盘' in s and '品类' in s for s in f['suggestions'])
+        assert '关注汤料：占比比上年低 5.8 个百分点，金额同比 +10.0%，增长慢于整体' in f['suggestions']
+        assert not any('一半以上' in a for a in f['attention'])
 
 
 class TestSlicerScope:
@@ -721,6 +758,29 @@ class TestExcelExport:
         assert 'spreadsheetml' in resp.headers.get('content-type', '')
         flat = [c for row in _sheet_cells(resp.content) for c in row]
         assert '产品A' in flat
+
+    def test_report_carries_the_headline_and_rule_findings_first(self):
+        # 导出报告原来只有 KPI / 明细 / AI 分析, 页面上的页首结论和规则结论带不出去
+        r = svc.generate_dashboard(pd.DataFrame(TestFindings.CATEGORY_ROWS), 2026, 'all', 1, 12)
+        resp = _export_client().post('/export-excel', json={
+            'charts': r['charts'], 'headline': r['headline'], 'findings': r['findings']})
+        assert resp.status_code == 200
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        assert wb.sheetnames[0] == '分析结论'
+        rows = [list(x) for x in wb['分析结论'].values][1:]
+        assert rows[0] == ['页首结论', r['headline']['text']]
+        expected = ([['做得好的', g] for g in r['findings']['good']]
+                    + [['需要关注', a] for a in r['findings']['attention']]
+                    + [['建议', s] for s in r['findings']['suggestions']])
+        assert rows[1:] == expected
+        assert ['建议', '复盘汤料：比上年少 50.00，各品类里减少的金额最多'] in rows
+
+    def test_no_conclusions_means_no_conclusion_sheet(self):
+        chart = build('budget_achievement', [{'月份': '1月', '预算': 200, '实际': 100}])
+        resp = _export_client().post('/export-excel', json={'charts': [chart], 'findings': None})
+        import openpyxl
+        assert openpyxl.load_workbook(io.BytesIO(resp.content)).sheetnames[0] == 'KPI汇总'
 
     def test_export_failure_is_not_http_200(self, monkeypatch):
         import openpyxl

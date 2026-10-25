@@ -2505,6 +2505,20 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
         },
       },
       {
+        // The factory's own read-only readiness. Not an assemblyFeature route: that guard admits
+        // platform super admins only, and the backend endpoint already follows the assembly switch.
+        path: 'factory-readiness',
+        name: 'FactorySelfReadiness',
+        component: () => import('@/views/factory-readiness/index.vue'),
+        meta: {
+          title: '建厂就绪',
+          icon: 'DocumentChecked',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: ['factory_super_admin'],
+        },
+      },
+      {
         path: 'factory-review',
         name: 'FactoryBuildReview',
         component: () => import('@/views/platform/factory-review/index.vue'),
