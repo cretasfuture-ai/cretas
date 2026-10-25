@@ -257,6 +257,56 @@ class LlmEgressRedactorTest {
         assertThat(sent).doesNotContain("老王").contains("[名称A]", "IN_PROGRESS");
     }
 
+    // ---------------------------------------------------------------- 第二轮审查
+
+    /** UserCreateTool / ApprovalPendingQueryTool 在 message 里重复登录名。 */
+    @Test
+    void asciiPartyNamesAreReplacedInMessagesToo() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("username", "wangjg");
+        data.put("salesRep", "Zhang Wei");
+        data.put("message", "用户创建成功，用户名: wangjg；对接销售 Zhang Wei；wangjgx 是另一个账号");
+
+        LlmEgressRedactor.Result r = redactor.redact(data, Set.of());
+
+        assertThat(r.refused()).isFalse();
+        assertThat(r.payload()).doesNotContain("用户名: wangjg；", "Zhang Wei").contains("wangjgx");
+        assertThat(r.restore(r.payload())).contains("用户名: wangjg；", "Zhang Wei");
+    }
+
+    /** SupplierBankAccountDTO.accountNumber; 卡号 / 座机做了整个值。 */
+    @Test
+    void bankCardsAndLandlinesAsWholeValuesAreHidden() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("accountNumber", "6222021234567890123");
+        data.put("settlementNumber", "6222021234567890");
+        data.put("contactNo", "021-58881234");
+        data.put("orderId", "1792901944123456789");
+        data.put("message", "座机 (021)58881234 或 02158881234");
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("6222021234567890", "58881234").contains("1792901944123456789");
+    }
+
+    /** 工作台的状态 / 阶段文字要让模型看得懂; 「单位」= 计量单位。 */
+    @Test
+    void statusDisplayTextAndMeasurementUnitAreKept() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("currentStatusDisplay", "待放行");
+        row.put("stageDisplay", "报价中");
+        row.put("质检结果", "不合格");
+        row.put("风险等级", "高");
+        row.put("单位", "kg");
+        row.put("所属单位", "华东分公司");
+        row.put("合格率", "92%");
+
+        String sent = redactor.redact(Map.of("rows", List.of(row)), Set.of()).payload();
+
+        assertThat(sent).contains("待放行", "报价中", "不合格", "\"kg\"", "合格率", "92%");
+        assertThat(sent).doesNotContain("华东分公司");
+    }
+
     @Test
     void lettersSequence() {
         assertThat(LlmEgressRedactor.letters(1)).isEqualTo("A");

@@ -47,6 +47,7 @@ public final class LlmEgressRedactor {
             + "|(?i)^.*(phone|phones|phoneno|phonenumber|mobile|mobileno|mobilenumber|telno|tel|telephone"
             + "|contacttel|contactnumber|contactinfo|contactway|email|emails|address|addresses|addr|idcard"
             + "|idcardno|idno|idnumber|identitycard|passport|bankcard|bankaccount|bankaccountno|accountno"
+            + "|accountnumber|cardno|cardnumber|bankno|iban|swift"
             + "|wechat|wechatid|remark|remarks|note|notes|comment|comments|reason|reasons|description"
             + "|feedback|complaint|opinion|memo)$");
 
@@ -72,11 +73,13 @@ public final class LlmEgressRedactor {
             + "|productcode|batchno|batchnumber|orderno|ordernumber)$"
             + "|(?i)^.*(id|ids|code|codes|count|total|amount|qty|quantity|price|cost|rate|ratio|percent|score"
             + "|status|state|type|level|date|time|at|days|hours|minutes|weight|volume|unit|no|number|seq|index"
-            + "|version|flag|enabled|active|valid)$");
+            + "|version|flag|enabled|active|valid|display|label|text|result|verdict|range|period|stage|mode"
+            + "|direction|importance|priority|severity|grade|trend)$");
 
     private static final Pattern KEEP_KEY_ZH = Pattern.compile(
             ".*(产品|物料|原料|品名|规格|单位|数量|金额|单价|价格|成本|日期|时间|状态|类型|类别|等级|批次|编号|编码"
-            + "|库存|产量|合格率|比例|占比|仓库|设备|工序|指标|阈值|预警|告警级别).*");
+            + "|库存|产量|合格率|比例|占比|仓库|设备|工序|指标|阈值|预警|告警级别|结果|范围|风险|不良|模式|方向|阶段"
+            + "|周期|趋势|级别|优先级).*");
 
     /** 系统生成的说明文字: 保留但过扫描。 */
     private static final Pattern SYSTEM_TEXT_KEY = Pattern.compile(
@@ -93,12 +96,14 @@ public final class LlmEgressRedactor {
             + "|inspectors|handler|handlers|approver|approvers|assignee|assignees|recorder|requestor|requester"
             + "|creator|signer|receiver|receivers|recipient|recipients|sender|driver|drivers|buyer|buyers"
             + "|purchaser|salesman|salesperson|consignee|shipper|carrier|merchant|merchants|partner|partners"
-            + "|company|companies|store|stores|shop|shops|member|members|by)$");
+            + "|company|companies|store|stores|shop|shops|member|members|by|rep|reps|assignedto|account"
+            + "|loginaccount|login|nickname)$");
 
+    /** 单独的「单位」多指计量单位 (kg), 只有「所属单位 / 往来单位 / 单位名称」这类才当机构。 */
     private static final Pattern PARTY_KEY_ZH = Pattern.compile(
-            ".*(客户|供应商|厂商|商家|商户|门店|公司|单位|联系人|负责人|经办人|操作员|操作人|检验员|质检员|审核人|审批人"
-            + "|签收人|收货人|发货人|制单人|创建人|处理人|确认人|员工|人员|姓名|司机|业务员|销售员|采购员|仓管|主管"
-            + "|班长|组长|申请人|提交人).*");
+            ".*(客户|供应商|供应方|厂商|商家|商户|门店|公司|所属单位|往来单位|客户单位|单位名称|联系人|负责人|责任人"
+            + "|经办人|操作员|操作人|操作工|检验员|质检员|审核人|审批人|签收人|收货人|发货人|制单人|创建人|处理人|确认人"
+            + "|维护人|管理员|经理|员工|人员|姓名|司机|业务员|销售员|采购员|仓管|主管|班长|组长|申请人|提交人).*");
 
     /** 「name」裸字段: 只看最近一层容器的字段名。 */
     private static final Pattern BUSINESS_CONTAINER = Pattern.compile(
@@ -123,7 +128,13 @@ public final class LlmEgressRedactor {
     /** 训练规则之外的号码写法: 带横杠 / 空格的手机号、+86、座机。 */
     private static final Pattern MOBILE_LOOSE = Pattern.compile(
             "(?<![0-9])(?:\\+?86[- ]?)?1[3-9]\\d[- ]?\\d{4}[- ]?\\d{4}(?![0-9])");
-    private static final Pattern LANDLINE = Pattern.compile("(?<![0-9])0\\d{2,3}[- ]\\d{7,8}(?![0-9])");
+    private static final Pattern LANDLINE = Pattern.compile(
+            "(?<![0-9])(?:\\(0\\d{2,3}\\)\\s?|0\\d{2,3}[- ]?)\\d{7,8}(?![0-9])");
+    /** 编码类值整个就是座机 (contactNo = 021-58881234)。 */
+    private static final Pattern LANDLINE_WHOLE = Pattern.compile("^\\(?0\\d{2,3}\\)?[- ]?\\d{7,8}$");
+    /** 编码类值整个就是 16-19 位数字: 当银行卡 (以 id 结尾的字段除外, 那是雪花 id)。 */
+    private static final Pattern CARD_WHOLE = Pattern.compile("^\\d{16,19}$");
+    private static final Pattern ID_KEY = Pattern.compile("(?i)^(id|.*id|.*ids)$");
     private static final Pattern MOBILE_NUMBER = Pattern.compile("^1[3-9]\\d{9}$");
 
     private static final String HIDDEN = "[已隐藏]";
@@ -263,6 +274,7 @@ public final class LlmEgressRedactor {
     private static final class Session {
         final Map<String, String> realToToken = new LinkedHashMap<>();
         final Map<String, String> tokenToReal = new LinkedHashMap<>();
+        final Map<String, Kind> realKind = new LinkedHashMap<>();
         final Map<Kind, Integer> counters = new LinkedHashMap<>();
         final List<String> protectedNames = new ArrayList<>();
         int dropped;
@@ -288,6 +300,7 @@ public final class LlmEgressRedactor {
             String t = "[" + kind.label + letters(n) + "]";
             realToToken.put(real, t);
             tokenToReal.put(t, real);
+            realKind.put(real, kind);
             return t;
         }
 
@@ -336,11 +349,11 @@ public final class LlmEgressRedactor {
                 return token(party, v);
             }
             if (isKeepKey(key) || isSystemTextKey(key) || isBusinessObjectName(key, container)) {
-                // 编码类值 (批次号 F006-20261025-0007) 只查严格手机号 / 证件号, 不按座机 / 银行卡误抹
-                return isCode(v) ? scrubCode(value) : scrubFreeText(value);
+                // 编码类值 (批次号 F006-20261025-0007) 不按「含座机 / 含卡号」误抹, 只看整个值是不是号码
+                return isCode(v) ? scrubCode(value, key) : scrubFreeText(value);
             }
-            if (CODE_LIKE.matcher(v).matches() && !MOBILE_LOOSE.matcher(v).find() && !LANDLINE.matcher(v).find()) {
-                return value;
+            if (isCode(v)) {
+                return wholeNumberLooksPrivate(v, key) || MOBILE_LOOSE.matcher(v).find() ? HIDDEN : value;
             }
             // 不认识的字段里的非编码字符串: 默认换代号
             return token(Kind.NAME, v);
@@ -369,10 +382,21 @@ public final class LlmEgressRedactor {
             return CODE_LIKE.matcher(v).matches();
         }
 
-        String scrubCode(String value) {
+        String scrubCode(String value, String key) {
+            if (wholeNumberLooksPrivate(value.trim(), key)) {
+                return HIDDEN;
+            }
             String out = TrainingSampleRules.ID_CARD.matcher(value).replaceAll(HIDDEN);
             out = MOBILE_LOOSE.matcher(out).replaceAll(HIDDEN);
             return TrainingSampleRules.PHONE.matcher(out).replaceAll(HIDDEN);
+        }
+
+        /** 整个值就是座机号, 或 16-19 位纯数字 (卡号; 以 id 结尾的字段是雪花 id, 除外)。 */
+        static boolean wholeNumberLooksPrivate(String v, String key) {
+            if (LANDLINE_WHOLE.matcher(v).matches()) {
+                return true;
+            }
+            return CARD_WHOLE.matcher(v).matches() && (key == null || !ID_KEY.matcher(key).matches());
         }
 
         /** null = 不是指向人 / 交易对象的字段。 */
@@ -461,9 +485,18 @@ public final class LlmEgressRedactor {
             return replaceKnown(node, reals);
         }
 
-        /** 编码类 / 纯数字 / 过短的值不做跨字段替换, 免得把批次号这类编码改坏。 */
-        static boolean replaceableEverywhere(String real) {
-            return real.length() >= 2 && !CODE_LIKE.matcher(real).matches();
+        /**
+         * 哪些真名要在其它字段里也换掉 (以及最后一遍要查):
+         * 人 / 客户 / 供应商 / 单位 / 保密产品 —— 包括 wangjg 这类拼音登录名 (UserCreateTool 会在 message 里重复它);
+         * 按字段推断出的「名称」代号不扩散 (多为状态 / 说明短语, 扩散会把「合格」换进「合格率」)。
+         * 纯数字、过短的不扩散。
+         */
+        boolean replaceableEverywhere(String real) {
+            Kind kind = realKind.get(real);
+            if (kind == null || kind == Kind.NAME || real.length() < 2 || real.matches("\\d+")) {
+                return false;
+            }
+            return !CODE_LIKE.matcher(real).matches() || (real.length() >= 3 && real.matches(".*[A-Za-z].*"));
         }
 
         Object replaceKnown(Object node, List<String> reals) {
@@ -498,11 +531,27 @@ public final class LlmEgressRedactor {
                 }
             }
             for (String real : reals) {
-                if (out.contains(real)) {
-                    out = out.replace(real, realToToken.get(real));
+                if (!out.contains(real)) {
+                    continue;
                 }
+                out = isAscii(real)
+                        ? asciiWord(real).matcher(out).replaceAll(Matcher.quoteReplacement(realToToken.get(real)))
+                        : out.replace(real, realToToken.get(real));
             }
             return out;
+        }
+
+        /** 拼音 / 英文名按整词匹配 (wangjg 不该匹配 wangjgx), 中文按子串。 */
+        static boolean isAscii(String s) {
+            return s.chars().allMatch(c -> c < 128);
+        }
+
+        static Pattern asciiWord(String real) {
+            return Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(real) + "(?![A-Za-z0-9_])");
+        }
+
+        boolean stillContains(String s, String real) {
+            return isAscii(real) ? asciiWord(real).matcher(s).find() : s.contains(real);
         }
 
         boolean isToken(String text) {
@@ -523,8 +572,10 @@ public final class LlmEgressRedactor {
             for (String s : strings) {
                 if (TrainingSampleRules.PHONE.matcher(s).find() || MOBILE_LOOSE.matcher(s).find()) return "残留手机号";
                 if (TrainingSampleRules.ID_CARD.matcher(s).find()) return "残留证件号";
-                // 编码类字符串 (批次号 / 单号) 不按座机与银行卡规则判, 否则批次号会被当座机
-                if (!Session.isCode(s)) {
+                // 编码类字符串 (批次号 / 单号) 不按「含座机 / 含卡号」判, 只看整个值 (卡号已在字段级按字段名处理)
+                if (Session.isCode(s)) {
+                    if (LANDLINE_WHOLE.matcher(s.trim()).matches()) return "残留电话号码";
+                } else {
                     if (LANDLINE.matcher(s).find()) return "残留电话号码";
                     if (TrainingSampleRules.BANK_CARD.matcher(s).find()) return "残留银行卡号";
                 }
@@ -532,7 +583,7 @@ public final class LlmEgressRedactor {
                     if (s.contains(name)) return "残留工艺保密产品名";
                 }
                 for (String real : realToToken.keySet()) {
-                    if (replaceableEverywhere(real) && s.contains(real)) return "残留已脱敏的名称";
+                    if (replaceableEverywhere(real) && stillContains(s, real)) return "残留已脱敏的名称";
                 }
             }
             return null;
