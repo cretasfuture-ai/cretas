@@ -263,10 +263,11 @@ export const indicatorsApi = {
     return request.get<IndicatorTreeFlow>(`${base(factoryId)}/tree`)
   },
 
-  batchLineage(factoryId: string, batchType: string, batchId: string, maxDepth = 5) {
+  /** maxDepth 不传 ⇒ 不带参数, 由后端取缺省 (= 上限 50, 整条链); ⛔ 不在前端另写更浅的默认值。 */
+  batchLineage(factoryId: string, batchType: string, batchId: string, maxDepth?: number) {
     return request.get<BatchLineageGraph>(
       `${base(factoryId)}/batch-lineage/${batchType}/${batchId}`,
-      { params: { maxDepth } },
+      { params: maxDepth == null ? {} : { maxDepth } },
     )
   },
 }

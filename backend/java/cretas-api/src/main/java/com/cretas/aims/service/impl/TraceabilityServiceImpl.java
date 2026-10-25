@@ -18,6 +18,8 @@ import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.TraceabilityService;
+import com.cretas.aims.service.lineage.LineageEdgeRecorder;
+import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -245,12 +247,20 @@ public class TraceabilityServiceImpl implements TraceabilityService {
             factoryName = factoryOpt.get().getName();
         }
 
-        // 3. 获取原材料信息（脱敏）
+        // 3. 多跳来源链 —— Steve 2026-10-25 裁定: 公开溯源只显示原料来源, 不显示中间工序。
+        //    往上查整条链, 但只拿回原料批 (中间生产批 / 在制库存批一个都不出), 见 assemblePublic。
+        LineageGraphAssembler.PublicLineage publicLineage =
+                buildPublicLineage(factoryId, String.valueOf(batch.getId()));
+        TraceabilityDTO.LineageSection lineage = publicLineage == null ? null : publicLineage.section();
+
+        // 4. 原材料来源卡（脱敏）: 本批直接投料里的原料 ∪ 链上的原料, 同一个「是不是原料」判据。
+        //    ⛔ 多道工序的产品, 最后一道直接投的是上一道的在制库存批 —— 原来会把它当「原材料」露出来。
         List<MaterialConsumption> consumptions = materialConsumptionRepository
                 .findByProductionBatchId(batch.getId());
-        List<TraceabilityDTO.PublicMaterialInfo> publicMaterials = buildPublicMaterialInfoList(consumptions);
+        List<TraceabilityDTO.PublicMaterialInfo> publicMaterials = buildPublicMaterialInfoList(
+                consumptions, publicLineage == null ? List.of() : publicLineage.rawMaterials());
 
-        // 4. 获取质检信息（脱敏）
+        // 5. 获取质检信息（脱敏）
         List<QualityInspection> inspections = qualityInspectionRepository
                 .findByProductionBatchId(batch.getId());
         TraceabilityDTO.PublicQualityInfo publicQuality = null;
@@ -263,10 +273,6 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                             latestInspection.getPassRate().doubleValue() : null)
                     .build();
         }
-
-        // 5. 多跳来源链（脱敏：只给 ancestors，节点上不带供应商/客户）
-        TraceabilityDTO.LineageSection lineage = buildLineage(
-                factoryId, "PRODUCTION_BATCH", String.valueOf(batch.getId()), false, true);
 
         // 6. 构建公开响应
         return TraceabilityDTO.PublicTraceResponse.builder()
@@ -328,12 +334,30 @@ public class TraceabilityServiceImpl implements TraceabilityService {
             return null;
         }
         try {
+            // 内部完整溯源取整条链（上限）, 中间工序全给。公开侧走 buildPublicLineage, 只给原料。
             return lineageGraphAssembler.assemble(factoryId, rootType, rootId,
-                    com.cretas.aims.service.lineage.LineageGraphAssembler.DEFAULT_MAX_DEPTH,
+                    com.cretas.aims.service.lineage.LineageGraphAssembler.MAX_DEPTH_CAP,
                     includeDescendants, desensitize);
         } catch (Exception e) {
             log.warn("[lineage] 溯源页血缘组装失败, 本次不带 lineage 字段: factory={} root={}:{}",
                     factoryId, rootType, rootId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 公开溯源的血缘（只有原料，没有中间工序）。失败语义同 {@link #buildLineage}：null = 本次没拿到。
+     */
+    private LineageGraphAssembler.PublicLineage buildPublicLineage(String factoryId, String productionBatchId) {
+        if (lineageGraphAssembler == null) {
+            return null;
+        }
+        try {
+            return lineageGraphAssembler.assemblePublic(
+                    factoryId, LineageEdgeRecorder.NODE_PRODUCTION_BATCH, productionBatchId);
+        } catch (Exception e) {
+            log.warn("[lineage] 公开溯源血缘组装失败, 本次不带 lineage 字段: factory={} pb={}",
+                    factoryId, productionBatchId, e);
             return null;
         }
     }
@@ -1060,19 +1084,35 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     /**
      * 构建公开原材料信息列表（脱敏）
      * N+1 修复：使用批量查询 + Map 替代循环中的单独查询
+     *
+     * <p>Steve 2026-10-25：公开侧只显示原料来源。本批直接投料里的在制库存批 / 副产
+     * （{@link LineageGraphAssembler#isRawMaterialForPublic} 判否）不算原材料、不出；
+     * 再并上链上的原料（{@code lineageRaws}），按批次去重，按品类 + 入库日排序 ——
+     * ⛔ 不按投料顺序（那是工序先后），也不再区分「最后一道直接投的」和「更早投的」。
      */
-    private List<TraceabilityDTO.PublicMaterialInfo> buildPublicMaterialInfoList(List<MaterialConsumption> consumptions) {
-        if (consumptions.isEmpty()) {
-            return new ArrayList<>();
-        }
-
-        // 1. 批量查询所有 MaterialBatch
+    private List<TraceabilityDTO.PublicMaterialInfo> buildPublicMaterialInfoList(List<MaterialConsumption> consumptions,
+                                                                                 List<MaterialBatch> lineageRaws) {
+        // 1. 批量查询本批直接投料的 MaterialBatch, 只留原料, 再并上链上的原料
         Set<String> batchIds = consumptions.stream()
                 .map(MaterialConsumption::getBatchId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
-        Map<String, MaterialBatch> batchMap = materialBatchRepository.findAllById(batchIds)
-                .stream().collect(Collectors.toMap(MaterialBatch::getId, Function.identity()));
+        Map<String, MaterialBatch> batchMap = new LinkedHashMap<>();
+        if (!batchIds.isEmpty()) {
+            for (MaterialBatch mb : materialBatchRepository.findAllById(batchIds)) {
+                if (LineageGraphAssembler.isRawMaterialForPublic(mb)) {
+                    batchMap.putIfAbsent(mb.getId(), mb);
+                }
+            }
+        }
+        for (MaterialBatch mb : lineageRaws == null ? List.<MaterialBatch>of() : lineageRaws) {
+            if (LineageGraphAssembler.isRawMaterialForPublic(mb)) {
+                batchMap.putIfAbsent(mb.getId(), mb);
+            }
+        }
+        if (batchMap.isEmpty()) {
+            return new ArrayList<>();
+        }
 
         // 2. 批量查询所有 Supplier
         Set<String> supplierIds = batchMap.values().stream()
@@ -1085,12 +1125,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
 
         // 3. 使用 Map 关联数据
         List<TraceabilityDTO.PublicMaterialInfo> materials = new ArrayList<>();
-        for (MaterialConsumption consumption : consumptions) {
-            MaterialBatch materialBatch = batchMap.get(consumption.getBatchId());
-            if (materialBatch == null) {
-                continue;
-            }
-
+        for (MaterialBatch materialBatch : batchMap.values()) {
             String materialType = "原材料";
             if (materialBatch.getMaterialType() != null) {
                 materialType = materialBatch.getMaterialType().getName();
@@ -1117,7 +1152,11 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                     .receiptDate(materialBatch.getReceiptDate())
                     .build());
         }
-
+        materials.sort(Comparator
+                .comparing(TraceabilityDTO.PublicMaterialInfo::getMaterialType,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(TraceabilityDTO.PublicMaterialInfo::getReceiptDate,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
         return materials;
     }
 

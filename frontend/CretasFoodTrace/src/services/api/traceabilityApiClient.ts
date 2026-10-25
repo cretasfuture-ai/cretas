@@ -153,20 +153,27 @@ export interface LineageNode {
   sourceIndividual?: SourceIndividualBrief | null;
 }
 
-/** 按跳数分组的一层（1 = 直接上游，2 = 隔一跳…）。 */
+/**
+ * 按跳数分组的一层（1 = 直接上游，2 = 隔一跳…）。
+ *
+ * 公开溯源（Steve 2026-10-25：只显示原料来源，不显示中间工序）只下发**一组**原料，
+ * `depth` 为 null —— 不许从 depth 反推工序数。
+ */
 export interface LineageDepthGroup {
-  depth: number;
+  depth: number | null;
   nodes: LineageNode[];
 }
 
 export interface LineageSection {
   rootType: string;
-  rootId: string;
+  /** 公开接口为 null（生产批自增主键不对外）。 */
+  rootId: string | null;
   /** 上游，depth 由近到远。空数组 = 确实没有上游血缘记录。 */
   ancestors: LineageDepthGroup[];
   /** 下游；公开接口为 null（本接口不提供），不是空数组。 */
   descendants?: LineageDepthGroup[] | null;
-  maxDepth: number;
+  /** 公开接口为 null（不暴露链有多深）。 */
+  maxDepth: number | null;
   nodeCount: number;
   /**
    * 上游链上**去重后**的源头个体数（「本批来自 N 头牛」里的 N）。
@@ -312,9 +319,11 @@ class TraceabilityApiClient {
     batchId: string,
     options?: { maxDepth?: number; factoryId?: string }
   ): Promise<ImpactResponse> {
-    const maxDepth = options?.maxDepth ?? 5;
+    // 不传 maxDepth 时**不带这个参数**: 缺省由后端定（= 上限，整条链）。
+    // ⛔ 不在这里写一个更浅的默认值 —— 原来写死 5，多道工序的召回会漏掉 2 道工序以外的成品。
+    const depthQuery = options?.maxDepth != null ? `?maxDepth=${options.maxDepth}` : '';
     const response = await apiClient.get<any>(
-      `${this.getPath(options?.factoryId)}/impact/${batchType}/${encodeURIComponent(batchId)}?maxDepth=${maxDepth}`
+      `${this.getPath(options?.factoryId)}/impact/${batchType}/${encodeURIComponent(batchId)}${depthQuery}`
     );
     return response.data || response;
   }
