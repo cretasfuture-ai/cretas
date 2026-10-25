@@ -45,7 +45,7 @@ async def rank(candidates: list[dict], use_ai: bool, cache_scope=None):
     from common.llm_router import call_chain, SLOT
     payload = {
         'messages': [
-            {'role': 'system', 'content': '你只给合格工厂图表排序。返回JSON数组，每项仅id和reason_code。必须包含所有候选且各一次；不能增加候选或自由文本。reason_code仅选observe(观察变化)、compare(项目比较)、structure(构成集中度)、plan(目标核对)、trace(流程追溯)。不分析经营现状或原因。'},
+            {'role': 'system', 'content': '你只给合格工厂图表排序。返回JSON对象且只能含rankings字段，格式为{"rankings":[{"id":"候选ID","reason_code":"理由代码"}]}。rankings数组必须包含所有候选且各一次，每项仅id和reason_code；不能增加候选或自由文本。每项reason_code必须属于该候选的allowed_reason_codes，不能从其他候选借用。代码语义为observe(观察变化)、compare(项目比较)、structure(构成集中度)、plan(目标核对)、trace(流程追溯)。不分析经营现状或原因。'},
             {'role': 'user', 'content': json.dumps([
                 {'id': c['id'], 'metric': c.get('aiMetric', c['metric']), 'domain': c['domain'],
                  'allowed_reason_codes':sorted(allowed_codes(c))}
@@ -60,6 +60,10 @@ async def rank(candidates: list[dict], use_ai: bool, cache_scope=None):
         if text.startswith('```'):
             text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text)
         rows = json.loads(text)
+        if isinstance(rows, dict):
+            if set(rows) != {'rankings'}:
+                raise ValueError('invalid ranking envelope')
+            rows = rows['rankings']
         lookup = {c['id']: c for c in candidates}
         if not isinstance(rows, list) or len(rows) != len(lookup):
             raise ValueError('incomplete ranking')
