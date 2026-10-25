@@ -81,7 +81,7 @@ public interface PushNotificationService {
      * @param approvalId   审批项 ID
      * @param message      消息内容
      */
-    void sendApprovalNotification(Long userId, String approvalType, Long approvalId, String message);
+    void sendApprovalNotification(Long userId, String approvalType, String approvalId, String message);
 
     /**
      * 发送质检通知
@@ -110,7 +110,7 @@ public interface PushNotificationService {
      * @param planId  计划 ID
      * @param message 消息内容
      */
-    void sendUrgentInsertNotification(Long userId, Long planId, String message);
+    void sendUrgentInsertNotification(Long userId, String planId, String message);
 
     /**
      * 验证 Push Token 是否有效

@@ -372,7 +372,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         try {
             pushNotificationService.sendUrgentInsertNotification(
                     userId,
-                    Long.valueOf(savedPlan.getId()),
+                    // 计划 id 是 UUID; 原来 Long.valueOf 恒抛异常, 通知从没发出去过
+                    savedPlan.getId(),
                     String.format("紧急插单已创建: %s，计划数量: %s",
                             savedPlan.getPlanNumber(), request.getPlannedQuantity())
             );
@@ -488,7 +489,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
             pushNotificationService.sendUrgentInsertNotification(
                     userId,
-                    Long.valueOf(savedPlan.getId()),
+                    // 计划 id 是 UUID; 原来 Long.valueOf 恒抛异常, 通知从没发出去过
+                    savedPlan.getId(),
                     message
             );
 
@@ -598,7 +600,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 pushNotificationService.sendApprovalNotification(
                         applicantId,
                         "FORCE_INSERT",
-                        Long.valueOf(planId),
+                        // ⛔ 原来 Long.valueOf(planId): 计划 id 是 UUID, 恒抛 NumberFormatException,
+                        //    被下面的 catch 吞掉 ⇒ 审批结果通知从没发出去过。
+                        planId,
                         String.format("强制插单 %s %s: %s",
                                 plan.getPlanNumber(), resultText,
                                 comment != null ? comment : (approved ? "审批通过" : "审批拒绝"))
@@ -745,31 +749,33 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Override
     @Transactional
     public void markSlotAsSelected(String factoryId, String slotId) {
-        InsertSlot slot = insertSlotRepository.findById(slotId)
-                .orElseThrow(() -> new EntityNotFoundException("InsertSlot", slotId));
-
-        if (!factoryId.equals(slot.getFactoryId())) {
-            throw new RuntimeException("无权操作该时段");
-        }
-
-        slot.setStatus("selected");
-        insertSlotRepository.save(slot);
+        // ⛔ 原来 findById 后无条件改成 selected: 已过期 / 已被别人占的时段也能被「选中」,
+        //    并发两次都成功。改走与确认插单同一条条件更新。
+        InsertSlot slot = loadOwnSlot(factoryId, slotId);
+        claimSlotOrThrow(factoryId, slot);
     }
 
     @Override
     @Transactional
     public void releaseSlot(String factoryId, String slotId) {
-        InsertSlot slot = insertSlotRepository.findById(slotId)
+        InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(slotId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("InsertSlot", slotId));
 
-        if (!factoryId.equals(slot.getFactoryId())) {
-            throw new RuntimeException("无权操作该时段");
+        // 只有已选中的时段才能释放; 不是 selected 时与原来一样什么都不做
+        if (!"selected".equals(slot.getStatus())) {
+            return;
         }
-
-        // 只有已选中的时段才能释放
-        if ("selected".equals(slot.getStatus())) {
-            slot.setStatus("available");
-            insertSlotRepository.save(slot);
+        // ⛔ 确认插单后时段也是 selected。原来照样能释放 ⇒ 时段回到 available,
+        //    别人再确认就在同一时段排出第二份计划。已有未取消计划的时段不许释放。
+        if (slot.getStartTime() != null && productionPlanRepository.existsByFactoryIdAndStartTimeAndStatusNot(
+                factoryId, slot.getStartTime(), ProductionPlanStatus.CANCELLED)) {
+            throw new BusinessException(409, "该时段已排入插单计划，不能释放")
+                    .withCode("INSERT_SLOT_HAS_PLAN")
+                    .withHint("如需让出该时段，先到生产计划里取消对应的插单计划");
+        }
+        int released = insertSlotRepository.releaseSelectedSlot(slotId, factoryId, LocalDateTime.now());
+        if (released != 1) {
+            log.warn("插单时段释放冲突: factoryId={}, slotId={}, updatedRows={}", factoryId, slotId, released);
         }
     }
 
