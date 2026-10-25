@@ -2926,11 +2926,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Override
     public List<ProcessSheetInventoryItem> getInventory(String factoryId, String planId,
                                                         String processCode, Integer processOrder) {
-        // SP-F role-mode fix: processOrder 非空 → 双键过滤 (隔离同 archetype 多工序);
+        // processOrder 非空 → 只按 processOrder 取 (链内唯一; processCode 推导会漂, 见 repository 注释);
         // null → code-only 回退 (向后兼容旧客户端)。
         List<ProcessSheetRow> rows = processOrder != null
-                ? rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
-                        factoryId, planId, processCode, processOrder)
+                ? rowRepo.findByFactoryIdAndPlanIdAndProcessOrder(factoryId, planId, processOrder)
                 : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
 
         List<ProcessSheetInventoryItem> result = new ArrayList<>();
@@ -3740,10 +3739,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Override
     public List<ProcessSheetRowView> getRows(String factoryId, String planId,
                                              String processCode, Integer processOrder) {
-        // SP-F role-mode fix: processOrder 非空 → 双键过滤; null → code-only 回退 (向后兼容)。
+        // processOrder 非空 → 只按 processOrder 取 (见 repository 注释); null → code-only 回退 (向后兼容)。
         List<ProcessSheetRow> rows = processOrder != null
-                ? rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
-                        factoryId, planId, processCode, processOrder)
+                ? rowRepo.findByFactoryIdAndPlanIdAndProcessOrder(factoryId, planId, processOrder)
                 : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
         return rows.stream()
                 .map(row -> new ProcessSheetRowView(

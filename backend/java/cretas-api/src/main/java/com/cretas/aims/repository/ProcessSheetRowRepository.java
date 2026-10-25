@@ -38,6 +38,15 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
             String factoryId, String planId);
 
     /**
+     * 按 (factory, plan, processOrder) 取一道的行。processOrder 链内唯一, 已足够隔离各道;
+     * ⛔ 不再拿 processCode 一起过滤 —— processCode 是前端按工序名 / 投入形态推出来的 archetype,
+     * 推导规则一变, 旧行的 processCode 就对不上 (2026-10-25 F006 L4: 分割 4 行存的是 shuzhi,
+     * 现在页面按 chaoshui 查 ⇒ 分割 tab 显示「待报工」, 下游来源批次为空)。
+     */
+    List<ProcessSheetRow> findByFactoryIdAndPlanIdAndProcessOrder(
+            String factoryId, String planId, Integer processOrder);
+
+    /**
      * R4 (2026-07-04): 按物化后的 {@code batchId} (= ProductionBatch.id) 查行 —— 成本拆分
      * ({@code OrderCostBreakdownService}) 逐批读该批 process-row 的 SFI/FG 投料边, 补计投料成本。
      * factory-scoped 🔒。纯 SFI 中间道 (SAVED_SFI, batchId==null) 不物化, 不在此集合内 (其成本经
