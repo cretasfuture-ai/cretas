@@ -41,7 +41,7 @@ class FinancialDashboardService:
         这样任何图表按明细求和都不会重复计算。
         """
         column_mapping = self.normalizer.detect_columns(
-            raw_data.columns.tolist(), raw_data
+            raw_data.columns.tolist(), raw_data, year
         )
         column_mapping.year = year
 

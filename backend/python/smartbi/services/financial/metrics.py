@@ -125,7 +125,24 @@ def gross_margins(df: pd.DataFrame, value_kind: str = 'amount',
                 return {}
             return {key: total(group[field_name]) for key, group in frame.groupby(['year', 'month'])}
 
-        rev, cost, gross = grouped(revenue), grouped(costs), grouped(profits)
+        rev, cost = grouped(revenue), grouped(costs)
+        gross = {}
+        ambiguous_profit = False
+        if not profits.empty and field_name in profits:
+            frame = profits.copy()
+            # The normalizer's fallback category is the subject label itself,
+            # which must not turn aliases of one reported fact into dimensions.
+            frame['_category'] = frame['category'].where(frame['category'] != frame['item'], '')
+            dimensions = ['year', 'month', '_category', 'product', 'channel', 'business_unit']
+            pieces = {}
+            for key, group in frame.groupby(dimensions, dropna=False):
+                per_alias = [total(part[field_name]) for _, part in group.groupby('item')]
+                values = [v for v in per_alias if v is not None]
+                conflicting = values and any(abs(v - values[0]) > 0.005 for v in values)
+                ambiguous_profit = ambiguous_profit or bool(conflicting)
+                pieces.setdefault(key[:2], []).append(None if conflicting or not values else values[0])
+            for key, values in pieces.items():
+                gross[key] = total(values) if all(v is not None for v in values) else None
         period_profits = {}
         for key, amount in rev.items():
             if amount is None:
@@ -141,15 +158,22 @@ def gross_margins(df: pd.DataFrame, value_kind: str = 'amount',
                        if complete else None)
         keys = list(period_profits)
         if not keys:
-            return cur, None, None, None, '缺少毛利率对比期金额'
+            return cur, None, None, None, '缺少毛利率对比期金额', set()
         if any(period_profits[k] is None for k in keys):
-            return cur, None, None, None, '部分收入期间缺少对应营业成本或毛利金额，累计毛利率无法计算'
+            note = ('表内同义毛利金额冲突，累计毛利率无法计算' if ambiguous_profit else
+                    '部分收入期间缺少对应营业成本或毛利金额，累计毛利率无法计算')
+            return cur, None, None, None, note, set(keys)
         r, p = total(rev[k] for k in keys), total(period_profits.values())
         metric = ratio(p, r)
-        return cur, metric.value, r, p, '' if metric.ok else metric.note
+        return cur, metric.value, r, p, '' if metric.ok else metric.note, set(keys)
 
-    cur, cur_total, rev, profit, note = amounts('actual')
-    last, last_total, _, _, _ = amounts('last_year')
+    cur, cur_total, rev, profit, note, current_periods = amounts('actual')
+    last, last_total, _, _, last_note, last_periods = amounts('last_year')
+    if last_periods and current_periods != last_periods:
+        last_total = None
+        last_note = '上年与本年收入期间不一致，无法比较累计毛利率'
+    if last_note and last_periods:
+        note = '；'.join(part for part in (note, last_note) if part)
     return GrossMargins(cur, last, cur_total, last_total, True, rev, profit, note)
 
 
