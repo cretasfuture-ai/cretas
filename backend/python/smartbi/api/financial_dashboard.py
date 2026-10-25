@@ -318,6 +318,9 @@ async def export_ppt(request: PPTExportRequest):
 class ExcelExportRequest(BaseModel):
     charts: List[Dict[str, Any]] = Field(default_factory=list)  # Chart results from batch
     analysis_results: Dict[str, str] = Field(default_factory=dict)
+    # 看板上的页首结论与规则结论 (/batch 原样回传): 导出报告里要和页面上读到的是同一组话
+    headline: Optional[Dict[str, Any]] = None
+    findings: Optional[Dict[str, List[str]]] = None
     company_name: str = "白垩纪科技"
     year: int = 2026
     period_type: str = "year"
@@ -345,9 +348,24 @@ async def export_excel(request: ExcelExportRequest):
             bottom=Side(style="thin", color="D9D9D9"),
         )
 
-        # Sheet 1: KPI Summary
-        ws_summary = wb.active
-        ws_summary.title = "KPI汇总"
+        # Sheet 1: 分析结论 (有页首结论或规则结论时)
+        conclusion_rows = _conclusion_rows(request.headline, request.findings)
+        if conclusion_rows:
+            ws_conc = wb.active
+            ws_conc.title = "分析结论"
+            ws_conc.append(["类别", "内容"])
+            for cell in ws_conc[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_align
+            for row in conclusion_rows:
+                ws_conc.append(row)
+            ws_conc.column_dimensions["A"].width = 14
+            ws_conc.column_dimensions["B"].width = 90
+            ws_summary = wb.create_sheet(title="KPI汇总")
+        else:
+            ws_summary = wb.active
+            ws_summary.title = "KPI汇总"
         ws_summary.append(["图表类型", "指标", "数值", "单位", "趋势"])
         for cell in ws_summary[1]:
             cell.font = header_font
@@ -441,6 +459,21 @@ async def export_excel(request: ExcelExportRequest):
     except Exception as e:
         logger.error(f"Excel export failed: {e}", exc_info=True)
         return _export_error("Excel 导出失败，请稍后重试")
+
+
+_FINDING_SECTIONS = (("good", "做得好的"), ("attention", "需要关注"), ("suggestions", "建议"))
+
+
+def _conclusion_rows(headline: Optional[Dict[str, Any]],
+                     findings: Optional[Dict[str, List[str]]]) -> List[List[str]]:
+    rows: List[List[str]] = []
+    text = (headline or {}).get("text")
+    if text:
+        rows.append(["页首结论", str(text)])
+    for key, title in _FINDING_SECTIONS:
+        for line in (findings or {}).get(key) or []:
+            rows.append([title, str(line)])
+    return rows
 
 
 def _export_error(message: str) -> JSONResponse:

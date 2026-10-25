@@ -130,7 +130,8 @@ def _ratio_sentence(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     if not last:
         return {"text": f"各月平均毛利率 {_pct(mean_cur)}（{len(cur)} 个月简单平均）", "tone": "neutral"}
     mean_last = sum(last) / len(last)
-    diff = mean_cur - mean_last
+    # 差值用显示出来的两个一位小数相减: 否则会出现「26.3%，上年 26.3%，+0.1 个百分点」(线上 5254)
+    diff = round(mean_cur, 1) - round(mean_last, 1)
     tone = "good" if diff >= 0 else "bad"
     return {"text": f"各月平均毛利率 {_pct(mean_cur)}，上年 {_pct(mean_last)}，{diff:+.1f} 个百分点（各月简单平均）",
             "tone": tone}
