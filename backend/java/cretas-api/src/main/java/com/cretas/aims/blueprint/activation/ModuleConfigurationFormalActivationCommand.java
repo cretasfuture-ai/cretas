@@ -97,6 +97,11 @@ public final class ModuleConfigurationFormalActivationCommand implements Factory
             selectedMatch &= feature.isPresent() && Boolean.valueOf(desired).equals(feature.get().getEnabled());
             states.add(entry.moduleId() + ":frontend=" + feature.map(value -> String.valueOf(value.getEnabled())).orElse("MISSING"));
             for (String code : entry.gateCodes()) {
+                // 未在 module_schemas 定义的码没有工厂级开关可读(恒为开放), 切换时已跳过。
+                if (!runtime.isModuleGateDefined(code)) {
+                    states.add(entry.moduleId() + ":" + code + "=UNGATED");
+                    continue;
+                }
                 boolean actual = runtime.isModuleEnabled(factoryId, code);
                 selectedMatch &= actual == desired;
                 states.add(entry.moduleId() + ":" + code + "=" + actual);

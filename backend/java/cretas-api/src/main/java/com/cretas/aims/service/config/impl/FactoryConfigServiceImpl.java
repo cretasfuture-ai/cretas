@@ -300,6 +300,11 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
     }
 
     @Override
+    public boolean isModuleGateDefined(String moduleCode) {
+        return moduleCode != null && moduleSchemaRepository.existsByModuleCode(moduleCode);
+    }
+
+    @Override
     public List<ModuleSummaryDTO> getEnabledModules(String factoryId) {
         // Round 5 Fix PERF-1: previously this loop called getEffectiveConfig once per module,
         // which issues ~4 queries per module (schema lookup + publishedConfig + fmc + dynamicFields)
