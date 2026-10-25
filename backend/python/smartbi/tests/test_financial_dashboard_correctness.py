@@ -491,6 +491,30 @@ class TestFindings:
         worse = [{**row, '本年毛利率': '20%'} for row in self.MARGIN_ROWS]
         assert svc.generate_dashboard(pd.DataFrame(worse), 2026, 'all', 1, 12)['headline']['tone'] == 'bad'
 
+    def test_pnl_sheet_states_margin_expense_share_and_biggest_item(self):
+        # 线上 5252 (2026-10-25): 损益表只有「净利润」一条结论
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v} for k, v in PNL_REFERENCE]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert '净利润 3,308.00万，净利率 39.7%' in f['good']
+        assert '毛利率 82.3%（毛利 6,862.00万 / 营业收入 8,333.00万）' in f['good']
+        assert ('期间费用 2,472.00万，占营业收入 29.7%，最大一项是研发费用 999.00万（占 40%）'
+                in f['attention'])
+        assert '营业外收支净减少 44.00万（收入 42.00万，支出 86.00万）' in f['attention']
+        assert f['suggestions'] == ['先看研发费用：999.00万，占期间费用 40%，是期间费用里最大的一项']
+
+    def test_pnl_with_last_year_states_net_profit_growth(self):
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v, '上年（万元）': v * 0.8} for k, v in PNL_REFERENCE]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert any(g.startswith('净利润同比 +25.0%') for g in f['good'])
+
+    def test_yoy_sheet_names_best_month_and_suggests_reviewing_the_biggest_drop(self):
+        # 线上 5251 (2026-10-25): 同比表没有「建议」
+        rows = [{'月份': f'{m}月', '实际': a, '上年': ly}
+                for m, a, ly in [(1, 100, 90), (2, 150, 100), (3, 80, 120), (4, 95, 100)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert '2月同比 +50.0%（多 50.00），各月里增长最多' in f['good']
+        assert f['suggestions'] == ['复盘 3月：比上年少 40.00，各月里减少的金额最多']
+
     def test_latest_mom_finding_matches_the_kpi_month(self):
         f = svc.generate_dashboard(pd.DataFrame(TestMonthOverMonth.ROWS), 2026, 'all', 1, 12)['findings']
         assert '4月环比 +20.0%（上月 90.00 → 本月 108.00）' in f['good']  # 列名没写单位, 金额不带「万」

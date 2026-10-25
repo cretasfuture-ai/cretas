@@ -3,8 +3,8 @@
 客户需求 8、9 (好的与不好的、建议) 原来只能靠 AI 生成。这里先用规则从同一套指标库算出来,
 每条都带数字、只说表里能算出来的事实; AI 的段落放在它下面作补充。
 
-覆盖: 预算达成 (全期 / 季度 / 最好月) · 同比 (全期 / 下滑月份) · 环比 (最近一月) ·
-费用 (超预算 / 超支月份 / 同比) · 业务单元 (达成 / 同比) · 品类占比变化 · 损益 (净利率) ·
+覆盖: 预算达成 (全期 / 季度 / 最好月) · 同比 (全期 / 增长最多与下滑月份 / 复盘建议) · 环比 (最近一月) ·
+费用 (超预算 / 超支月份 / 同比) · 业务单元 (达成 / 同比) · 品类占比变化 · 损益 (净利率 / 毛利率 / 期间费用占比与最大一项 / 营业外 / 净利润同比) ·
 比率表 (各月毛利率: 平均差异 / 最高最低月 / 比上年下降的月份, 只说百分点, 不出金额结论)。
 """
 from typing import Dict, List, Optional
@@ -90,13 +90,20 @@ def _yoy(rows: pd.DataFrame, out: _Findings, noun: str = '') -> None:
 
     monthly_actual = M.monthly(rows, 'actual', MONTHS)
     monthly_last = M.monthly(rows, 'last_year', MONTHS)
-    declines = []
+    declines, rises = [], []
     for m, a, ly in zip(MONTHS, monthly_actual, monthly_last):
         g = M.growth(a, ly).value
-        if a is not None and ly is not None and g is not None and a < ly:
-            declines.append((g, m, ly - a))
+        if a is None or ly is None or g is None:
+            continue
+        (declines if a < ly else rises).append((g, m, abs(a - ly)))
+    if len(rises) + len(declines) >= 2 and rises:
+        g, m, diff = max(rises)
+        out.good.append(f"{m}月同比 {g:+.1f}%（多 {format_amount(diff)}），各月里增长最多")
     for g, m, diff in sorted(declines)[:2]:
         out.attention.append(f"{m}月比上年少 {format_amount(diff)}（{g:+.1f}%）")
+    if declines:
+        worst = max(declines, key=lambda d: d[2])
+        out.suggestions.append(f"复盘 {worst[1]}月：比上年少 {format_amount(worst[2])}，各月里减少的金额最多")
 
 
 def _mom(rows: pd.DataFrame, out: _Findings) -> None:
@@ -257,6 +264,35 @@ def _pnl(df: pd.DataFrame, out: _Findings) -> None:
         out.good.append(f"净利润 {format_amount(pnl.net_profit)}{tail}")
     else:
         out.attention.append(f"净亏损 {format_amount(-pnl.net_profit)}（营业收入 {format_amount(pnl.revenue)}）")
+
+    gross_margin = pnl.gross_margin().value
+    if gross_margin is not None and pnl.gross_profit is not None:
+        (out.good if gross_margin >= 0 else out.attention).append(
+            f"毛利率 {_pct(gross_margin)}（毛利 {format_amount(pnl.gross_profit)} / 营业收入 {format_amount(pnl.revenue)}）")
+
+    expense_total = pnl.expense_total
+    if expense_total and pnl.revenue:
+        share_of_revenue = expense_total / pnl.revenue * 100
+        text = f"期间费用 {format_amount(expense_total)}，占营业收入 {_pct(share_of_revenue)}"
+        if len(pnl.expenses) >= 2:
+            cls, amount = max(pnl.expenses.items(), key=lambda kv: kv[1])
+            name = S.CLASS_LABELS.get(cls, cls)
+            share = amount / expense_total * 100
+            text += f"，最大一项是{name} {format_amount(amount)}（占 {share:.0f}%）"
+            out.suggestions.append(f"先看{name}：{format_amount(amount)}，占期间费用 {share:.0f}%，是期间费用里最大的一项")
+        out.attention.append(text)
+
+    non_op = (pnl.non_op_income or 0) - (pnl.non_op_expense or 0)
+    if (pnl.non_op_income is not None or pnl.non_op_expense is not None) and non_op < 0:
+        out.attention.append(f"营业外收支净减少 {format_amount(-non_op)}（收入 {format_amount(pnl.non_op_income or 0)}，"
+                             f"支出 {format_amount(pnl.non_op_expense or 0)}）")
+
+    if 'last_year' in df:
+        last = M.pnl(df, 'last_year')
+        growth = M.growth(pnl.net_profit, last.net_profit).value
+        if last.net_profit is not None and growth is not None:
+            (out.good if growth >= 0 else out.attention).append(
+                f"净利润同比 {growth:+.1f}%（上年 {format_amount(last.net_profit)}）")
 
 
 def build_findings(df: pd.DataFrame, value_kind: str) -> Optional[Dict[str, List[str]]]:
