@@ -48,6 +48,10 @@ import static org.mockito.Mockito.when;
 class CanvasAIWorkflowConfigTest {
 
     private static final String TOOL_NAME = "canvas_product_process_workflow_config";
+    private static final String WORKFLOW_SOURCE = """
+            {"rawMaterials":["合成原料"],"steps":[{"process":"分切","outputs":[
+            {"kind":"FINISHED_GOOD","name":"合成成品","unit":"盒"}]}]}
+            """;
 
     @Mock
     private ToolRegistry toolRegistry;
@@ -74,8 +78,8 @@ class CanvasAIWorkflowConfigTest {
         CanvasAIController.AIRequest request = workflowRequest();
 
         when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
-        when(dashScopeClient.chatLowTemp(any(String.class), eq("Change the conversion rule")))
-                .thenReturn("{\"steps\":[{\"processName\":\"分切\",\"outputType\":\"SEMI_FINISHED\"}]}");
+        when(dashScopeClient.chatLowTemp(any(String.class), eq(WORKFLOW_SOURCE)))
+                .thenReturn(WORKFLOW_SOURCE);
 
         ApiResponse<CanvasAIController.AIResponse> envelope =
                 controller.chat("F006", null, request);
@@ -87,6 +91,11 @@ class CanvasAIWorkflowConfigTest {
         Map<String, Object> diffParams = readMap(response.getDiffs().get(0).get("params"));
         Map<String, Object> spec = readMap(diffParams.get("spec"));
         assertEquals(1, ((List<?>) spec.get("steps")).size());
+        assertEquals(List.of("合成原料"), spec.get("rawMaterials"));
+        Map<String, Object> step = readMap(((List<?>) spec.get("steps")).get(0));
+        assertEquals("分切", step.get("process"));
+        assertEquals(Set.of("rawMaterials", "steps"), spec.keySet());
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
         verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
@@ -105,6 +114,68 @@ class CanvasAIWorkflowConfigTest {
         assertTrue(response.getReply().contains("未能从描述里解析"));
         verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"rawMaterials\":[\"清洗料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":\"盒\"}]}]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[null]}",
+            "{\"steps\":[{\"processName\":\"分切\",\"outputType\":\"SEMI_FINISHED\"}]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[{\"process\":\"分切\"}]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":\"盒\"}]}],\"nodes\":[]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":\"盒\"}]}],\"claimed_total\":\"8.4\"}",
+            "{\"rawMaterials\":[\"合成原料\"],\"rawMaterials\":[\"清洗料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":\"盒\"}]}]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":null}]}]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":\"盒\",\"quantity\":8.4}]}]}",
+            "{\"rawMaterials\":[\"合成原料\"],\"steps\":[{\"process\":\"分切\",\"outputs\":[{\"kind\":\"FINISHED_GOOD\",\"name\":\"合成成品\",\"unit\":\"盒\"}]}]} {\"steps\":[{}]}"
+    })
+    void malformedOrSourceChangedWorkflowReturnsNoQualifiedDiff(String providerResponse) throws Exception {
+        when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
+        when(dashScopeClient.chatLowTemp(any(String.class), eq(WORKFLOW_SOURCE)))
+                .thenReturn(providerResponse);
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, workflowRequest()).getData();
+
+        assertFalse(response.isApplied());
+        assertTrue(response.getDiffs().isEmpty());
+        verify(workflowTool, never()).preview(any(ToolCall.class), anyMap());
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
+    }
+
+    @Test
+    void naturalLanguageWithoutSemanticBindingRequiresReviewAndHasNoApplyDiff() throws Exception {
+        CanvasAIController.AIRequest request = workflowRequest();
+        request.setMessage("合成原料经分切，得到合成成品，单位盒");
+        when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
+        when(dashScopeClient.chatLowTemp(any(String.class), eq(request.getMessage())))
+                .thenReturn(WORKFLOW_SOURCE);
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertFalse(response.isApplied());
+        assertTrue(response.getDiffs().isEmpty());
+        assertTrue(response.getReply().contains("人工复核"));
+        verify(toolExecutionGateway, never()).execute(any(ToolExecutionCommand.class));
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+    }
+
+    @Test
+    void graphContextAndUnrecognizedSourceSpecCannotCertifyProviderDraft() throws Exception {
+        CanvasAIController.AIRequest request = workflowRequest();
+        request.setMessage("把当前流程改一下");
+        request.setParams(Map.of("context", Map.of(
+                "definition", Map.of("nodes", List.of(Map.of("name", "合成原料")), "edges", List.of()),
+                "sourceSpec", objectMapper.readTree(WORKFLOW_SOURCE))));
+        when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
+        when(dashScopeClient.chatLowTemp(any(String.class), eq(request.getMessage())))
+                .thenReturn(WORKFLOW_SOURCE);
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertTrue(response.getDiffs().isEmpty());
+        assertTrue(response.getReply().contains("人工复核"));
+        assertFalse(response.isApplied());
     }
 
     @Test
@@ -336,7 +407,7 @@ class CanvasAIWorkflowConfigTest {
         CanvasAIController realController = new CanvasAIController(
                 realRegistry, objectMapper, dashScopeClient, mobileService, toolExecutionGateway);
         when(dashScopeClient.chatLowTemp(any(String.class), any(String.class)))
-                .thenReturn("{\"steps\":[{\"processName\":\"分切\",\"outputType\":\"SEMI_FINISHED\"}]}");
+                .thenReturn(WORKFLOW_SOURCE);
 
         CanvasAIController.AIResponse response =
                 realController.chat("F006", null, workflowRequest()).getData();
@@ -352,7 +423,7 @@ class CanvasAIWorkflowConfigTest {
         CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
         request.setModuleCode("product_process_workflow_config");
         request.setMode("autopilot");
-        request.setMessage("Change the conversion rule");
+        request.setMessage(WORKFLOW_SOURCE);
         request.setParams(Map.of("context", Map.of(
                 "definition", Map.of(
                         "schemaVersion", 1,
