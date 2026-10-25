@@ -50,4 +50,3 @@ def test_dates_are_explicit_period_boundaries():
     start, end = dates(Request())
     assert str(start) == "2026-02-01"
     assert str(end) == "2026-03-31"
-
