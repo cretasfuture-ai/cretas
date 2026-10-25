@@ -24,3 +24,7 @@ Test task SMARTBI-FACTORY-TESTS-20261025; Base e5c5c48fce55a8d0c436055f6b86f2ab3
 
 
 Final frontend target regression: 83 passed across 10 files, including financial state/export and shared fetch contracts. Source/test content frozen before candidate build; full hosted gates still required.
+
+F006 acceptance follow-up SMARTBI-FACTORY-PREFERENCE-20261025 (DIRECT Root; Base a1c5f70af19ff50930ea4ae99e5ce2fbb1e83c14): live period switching exposed automatic preference overwrite when selected charts were unavailable. Scope only FactoryChartRecommendations.vue/factoryChartState.ts and their two tests, plus this archive. Persist only explicit checkbox changes, preserve temporarily unavailable intent, and keep upload_id in router query for reload. Acceptance: mounted period/source regressions, mutation controls, existing frontend target suite, candidate build/typecheck, hosted Web gates, exact-main Web-only release, then rerun only affected F006 preference/upload scenarios. Existing Python/SQL/backup evidence remains unchanged. No Java, Python, migration or additional upload writes.
+
+Preference follow-up frozen: 86 frontend regression tests passed, 4 regression mutations killed with exact-byte restoration. Backend is unchanged from the already verified 193 local / 10276 CI tests; no repeated Python build, migration, upload or backup. Root releases the five-file correction scope in its final commit and retains Web release/F006 verification ownership.

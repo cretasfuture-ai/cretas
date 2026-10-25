@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   authStore: null as { factoryId: string } | null,
   api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn() },
   route: { query: {} as Record<string, unknown> },
+  replace: vi.fn(),
 }));
 
 vi.mock('@/store/modules/auth', async () => {
@@ -14,7 +15,7 @@ vi.mock('@/store/modules/auth', async () => {
   h.authStore = makeReactive({ factoryId: 'F006' });
   return { useAuthStore: () => h.authStore };
 });
-vi.mock('vue-router', () => ({ useRoute: () => h.route }));
+vi.mock('vue-router', () => ({ useRoute: () => h.route, useRouter: () => ({ replace: h.replace }) }));
 vi.mock('@/api/smartbi/factory-charts', async () => {
   const actual = await vi.importActual<typeof import('@/api/smartbi/factory-charts')>('@/api/smartbi/factory-charts');
   return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations };
@@ -69,6 +70,7 @@ beforeEach(() => {
   localStorage.clear();
   h.authStore!.factoryId = 'F006';
   h.route.query = {};
+  h.replace.mockReset();
   h.api.getUploadHistory.mockReset().mockResolvedValue({ success: true, data: [
     { id: 42, fileName: '生产报表.xlsx', sheetName: '产量', rowCount: 8, columnCount: 4, status: 'COMPLETED', createdAt: '2026-10-01' },
   ] });
@@ -77,6 +79,34 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; document.body.innerHTML = ''; });
 
 describe('FactoryChartRecommendations mounted workflow', () => {
+  it('keeps user intent when a period temporarily excludes the selected chart', async () => {
+    const page = await mountPage();
+    await page!.findAll('.selection-panel input[type="checkbox"]')[1].setValue(false);
+    await nextTick();
+    const key = 'smartbi.factory-chart-selection:F006:business';
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(['yield']);
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ recommendations: [response().data.recommendations[1]] }));
+    page!.findComponent(PeriodSelector).vm.$emit('change', { type: 'year', year: 2026, value: '2026', allHistory: false, compareEnabled: false });
+    await flushPromises();
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(['yield']);
+    page!.findComponent(PeriodSelector).vm.$emit('change', { type: 'year', year: 2026, value: '2026', allHistory: true, compareEnabled: false });
+    await flushPromises();
+    expect(page!.findAll('.chart-stub')).toHaveLength(1);
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('产量趋势');
+  });
+
+  it('keeps the active upload in the URL and clears it when returning to business data', async () => {
+    h.route.query = { tab: 'factory' };
+    h.replace.mockImplementation(({ query }: { query: Record<string, unknown> }) => { h.route.query = query; return Promise.resolve(); });
+    const page = await mountPage();
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ source: 'upload' }));
+    page!.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', 'upload');
+    await flushPromises();
+    expect(h.replace).toHaveBeenLastCalledWith({ query: { tab: 'factory', upload_id: '42' } });
+    page!.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', 'business');
+    await flushPromises();
+    expect(h.replace).toHaveBeenLastCalledWith({ query: { tab: 'factory' } });
+  });
   it('loads business data, renders server chart/facts, and persists checkbox selection', async () => {
     const page = await mountPage();
     expect(h.api.getUploadHistory).toHaveBeenCalledWith();
