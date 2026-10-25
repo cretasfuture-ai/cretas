@@ -1,0 +1,73 @@
+# 平台自编工艺模板（隐私条款第七条：仅来源于公开资料、行业标准及平台自编模板）
+# 依据：公开的预制菜（速冻调制食品 / 冷藏即食菜肴）通用生产流程整理。
+# 不含任何客户的工艺：只有工序名称、先后、各步投入/产出与参数名称，不含参数数值与得率。
+industryHint: 预制菜
+intro: 这是平台按公开的预制菜通用生产流程整理的起点，只列常见工序和要记录的参数名称，不含任何工厂的具体做法。请按你们工厂的实际情况逐项确认或修改。
+variants:
+  - 即配类（生料净菜）去掉「熟制」
+  - 冷藏销售的产品把「速冻」换成「冷藏」
+  - 多个半成品组合的菜品在「分装」时合并
+steps:
+  - name: 原料验收
+    input: 肉类、蔬菜等主料
+    aux: []
+    pack: []
+    output: 合格原料
+    outputUnit: kg
+    params: [原料温度, 感官检查]
+    yieldNote: 按本厂实际填写
+    byproducts: [不合格原料]
+  - name: 清洗切配
+    input: 合格原料
+    aux: [加工用水]
+    pack: []
+    output: 切配半成品
+    outputUnit: kg
+    params: [切配规格]
+    yieldNote: 按本厂实际填写
+    byproducts: [边角料]
+  - name: 调味腌制
+    input: 切配半成品
+    aux: [调味料]
+    pack: []
+    output: 调味半成品
+    outputUnit: kg
+    params: [腌制时长]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 熟制
+    input: 调味半成品
+    aux: [食用油]
+    pack: []
+    output: 熟制菜品
+    outputUnit: kg
+    params: [熟制方式, 中心温度]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 冷却
+    input: 熟制菜品
+    aux: []
+    pack: []
+    output: 冷却菜品
+    outputUnit: kg
+    params: [冷却方式, 冷却后中心温度]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 分装
+    input: 冷却菜品
+    aux: []
+    pack: [包装盒或袋, 标签]
+    output: 分装成品
+    outputUnit: 盒
+    params: [每盒规格]
+    yieldNote: 包装工序一般不计得率
+    byproducts: []
+  - name: 速冻
+    input: 分装成品
+    aux: []
+    pack: [外箱]
+    output: 速冻成品
+    outputUnit: 箱
+    params: [速冻后中心温度]
+    yieldNote: 包装后工序一般不计得率
+    byproducts: []

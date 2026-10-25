@@ -226,13 +226,14 @@ async def test_unauthorized_factory_qa_is_stored_desensitized():
     pool = _RecordingPool(sink, {"F_NONE": "none"})
     await _capture(pool, factory_id="F006",
                    input_text="华东工厂本月营收多少，联系 13812345678",
-                   teacher_output="华东工厂本月营收 ¥2500000，环比增长 8%")
+                   teacher_output="华东工厂本月营收 ¥2500000，毛利率 23.5%，环比增长 8%")
     await _capture(pool, factory_id="F_NONE", input_text="乙", teacher_output="丙")
     assert [a[2] for _, a in sink] == ["F006", "F_NONE"]
     _, args = sink[0]
     assert "13812345678" not in args[6] and "<电话>" in args[6]
     assert "华东" not in args[6] and "华东" not in args[8]      # entity placeholders
-    assert "2500000" not in args[8] and "8%" in args[8]          # amount bucketed, shape kept
+    # every number masked (Steve 2026-10-24): margins / ratios are business secrets too
+    assert args[8] == "工厂A本月营收 ¥<数值>，毛利率 <数值>%，环比增长 <数值>%"
     assert args[9] == compute_input_hash(args[6])                # hash of what is stored
     assert _meta(args) == {"training_rule": "2026-10-24", "desensitized": True}
 
@@ -271,14 +272,12 @@ async def test_generic_process_words_in_the_answer_do_not_block():
     assert len(sink) == 1
 
 
-async def test_consent_lookup_error_means_desensitized_not_raw():
+async def test_consent_lookup_error_means_not_stored():
+    # an unreadable consent row could hide a withdrawal (clause 10) -> store nothing
     sink: list = []
     pool = _RecordingPool(sink, {"F_PRIV": "private"}, consent_error=RuntimeError("relation does not exist"))
     await _capture(pool, factory_id="F_PRIV", input_text="华东工厂本月营收多少")
-    assert len(sink) == 1
-    _, args = sink[0]
-    assert "华东" not in args[6]
-    assert _meta(args).get("desensitized") is True
+    assert sink == []
 
 
 async def test_sample_without_factory_is_stored_desensitized():
@@ -310,3 +309,63 @@ async def test_request_tenant_wins_and_a_different_factory_id_is_refused():
     finally:
         tenant_ctx.reset_factory_id(token)
     assert [a[2] for _, a in sink] == ["F_CONSENTED"]
+
+
+async def test_specific_customer_or_person_name_is_never_stored():
+    # Steve 2026-10-24: 问答里出现「客户」且带具体名称、或出现人名 → 整条不存 (任何工厂)
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    for q, a in [("张记食品有限公司这个客户回款怎么样", "回款正常"),
+                 ("客户：华联 欠款多少", "欠款 12 万元"),
+                 ("这批货谁签收的", "签收人：李四"),
+                 ("王总要求加急，能排吗", "可以安排")]:
+        await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)
+        await _capture(pool, factory_id="F006", input_text=q, teacher_output=a)
+    assert sink == []
+
+
+async def test_generic_customer_words_are_stored():
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), factory_id="F006",
+                   input_text="大客户占比多少", teacher_output="前十大客户占比 35%，新客户 12 家")
+    assert len(sink) == 1
+    assert sink[0][1][8] == "前十大客户占比 <数值>%，新客户 <数值> 家"   # generic words kept, numbers masked
+
+
+async def test_withdrawn_factory_is_never_stored():
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_GONE": "withdrawn", "F006": "none"})
+    await _capture(pool, factory_id="F_GONE")
+    await _capture(pool, factory_id="F006")          # control: same sample, not withdrawn
+    assert [a[2] for _, a in sink] == ["F006"]
+
+
+async def test_sample_naming_a_process_secret_product_is_never_stored(monkeypatch):
+    # privacy clause 6: process-secret products are not used for training
+    from smartbi.services import distillation_capture as dc
+
+    async def names(factory_id, *_a, **_k):
+        return frozenset({"秘制牛肉干"}) if factory_id == "F_PRIV" else frozenset()
+
+    monkeypatch.setattr(dc, "protected_product_names", names)
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    await _capture(pool, factory_id="F_PRIV", input_text="秘制牛肉干本月销量多少")
+    await _capture(pool, factory_id="F_PRIV", teacher_output="秘制牛肉干本月销量增长")
+    await _capture(pool, factory_id="F_PRIV", input_text="普通牛肉干本月销量多少")   # control
+    await _capture(pool, factory_id="F006", input_text="秘制牛肉干本月销量多少")     # not F006's product
+    assert [(a[2], a[6]) for _, a in sink] == [
+        ("F_PRIV", "普通牛肉干本月销量多少"), ("F006", "秘制牛肉干本月销量多少")]
+
+
+async def test_process_secret_lookup_failure_means_not_stored(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("cretas db unavailable")
+
+    monkeypatch.setattr(dc, "protected_product_names", boom)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {"F_PRIV": "private"}), factory_id="F_PRIV")
+    await _capture(_RecordingPool(sink, {}), factory_id="SEED_R")   # synthetic: no lookup, stored
+    assert [a[2] for _, a in sink] == ["SEED_R"]

@@ -45,6 +45,13 @@ def _budget(rows: pd.DataFrame, out: _Findings) -> None:
 
     monthly_actual = M.monthly(rows, 'actual', MONTHS)
     monthly_budget = M.monthly(rows, 'budget', MONTHS)
+    # 各月里达成最好的一个月 (≥100% 才算好消息): 季度都没达标时, 「做得好的」也不该是空的
+    month_rates = [(r, m) for m, a, b in zip(MONTHS, monthly_actual, monthly_budget)
+                   if (r := M.ratio(a, b).value) is not None]
+    if len(month_rates) >= 2:
+        best_rate, best_month = max(month_rates)
+        if best_rate >= 100:
+            out.good.append(f"{best_month}月 达成 {_pct(best_rate)}，各月里最好")
     quarters = []
     for q in range(4):
         idx = range(q * 3, q * 3 + 3)

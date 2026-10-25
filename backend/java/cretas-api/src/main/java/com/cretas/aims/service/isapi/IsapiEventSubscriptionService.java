@@ -1,5 +1,7 @@
 package com.cretas.aims.service.isapi;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.client.isapi.IsapiClient;
 import com.cretas.aims.config.IsapiConfig;
 import com.cretas.aims.dto.isapi.IsapiEventDTO;
@@ -397,7 +399,7 @@ public class IsapiEventSubscriptionService {
     /**
      * 应用启动时自动订阅
      */
-    @EventListener(ContextRefreshedEvent.class)
+    @EventListener(value = ContextRefreshedEvent.class, condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void onApplicationStart() {
         // 可选：启动时自动订阅所有在线设备
         // 如果设备较多，建议改为手动触发或按工厂订阅

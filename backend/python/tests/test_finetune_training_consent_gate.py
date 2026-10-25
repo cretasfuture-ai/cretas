@@ -80,13 +80,21 @@ def test_rule_drops_parameter_content_and_masks_unauthorized_factories(monkeypat
     ]
 
 
-def test_unreadable_consent_table_masks_everyone(monkeypatch):
+def test_unreadable_consent_table_stops_the_script(monkeypatch):
     def boom():
         raise RuntimeError("connection refused")
 
     monkeypatch.setattr(gate, "_connect", boom)
-    kept = gate.apply_utterance_rule(ROWS[:1], ("user_input",))
-    assert kept[0]["user_input"] == "今天入库 <数值> 箱"
+    with pytest.raises(SystemExit) as e:
+        gate.apply_utterance_rule(ROWS[:1], ("user_input",))
+    assert "refusing to read factory data" in str(e.value)
+
+
+def test_withdrawn_factory_rows_are_dropped(monkeypatch):
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([("F_PRIV", "withdrawn")]))
+    kept = gate.apply_utterance_rule(ROWS[:1] + [{"factory_id": "F006", "user_input": "库存多少"}],
+                                     ("user_input",))
+    assert [r["factory_id"] for r in kept] == ["F006"]
 
 
 @pytest.mark.parametrize("module_name, call", [

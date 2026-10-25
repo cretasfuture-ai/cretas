@@ -25,6 +25,7 @@ import com.cretas.aims.service.PushNotificationService;
 import com.cretas.aims.service.UrgentInsertService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.cretas.aims.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -116,7 +117,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         log.info("分析插单影响: factoryId={}, slotId={}, productTypeId={}, quantity={}",
                 factoryId, slotId, request.getProductTypeId(), request.getRequiredQuantity());
 
-        InsertSlot slot = insertSlotRepository.findById(slotId)
+        // 只按本厂查: 他厂时段 404, 不泄露他厂排产信息
+        InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(slotId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("InsertSlot", slotId));
 
         // 使用 ImpactAnalysisService 进行详细链式影响分析
@@ -190,10 +192,15 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 资源状态
         Map<String, Object> resourceStatus = new HashMap<>();
         resourceStatus.put("materialAvailable", materialCheck.isAvailable());
+        resourceStatus.put("materialVerified", materialCheck.isVerified());
         resourceStatus.put("materialMessage", materialCheck.getMessage());
         resourceStatus.put("equipmentAvailable", equipmentCheck.isAvailable());
+        resourceStatus.put("equipmentVerified", equipmentCheck.isVerified());
         resourceStatus.put("equipmentMessage", equipmentCheck.getMessage());
         resourceStatus.put("hasEnoughWorkers", slot.hasEnoughWorkers());
+        // 时段上的人数是生成时段时按产能配置估算的, 不是考勤/排班读数 ⇒ 恒为未验证
+        resourceStatus.put("workerVerified", false);
+        resourceStatus.put("workerMessage", WORKER_UNVERIFIED_REASON);
         resourceStatus.put("requiredWorkers", slot.getRequiredWorkers());
         resourceStatus.put("availableWorkers", slot.getAvailableWorkers());
         result.put("resourceStatus", resourceStatus);
@@ -207,19 +214,72 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         result.put("requiresApproval", chainImpact.getRequiresApproval());
         result.put("approvalLevel", chainImpact.getApprovalLevel());
 
-        // 可行性 (处理 null 值)
-        boolean capacityOk = true;  // 默认通过
+        // 可行性 —— 2026-10-24 止血: 任何一项没用真实数据核对过, isFeasible 都不得为 true。
+        // 三态 feasibilityStatus: FEASIBLE / INFEASIBLE (核对过且确定不够) / UNVERIFIED (有项没核对)
+        List<String> unverifiedReasons = new ArrayList<>();
+        if (!materialCheck.isVerified()) {
+            unverifiedReasons.add(materialCheck.getMessage());
+        }
+        if (!equipmentCheck.isVerified()) {
+            unverifiedReasons.add(equipmentCheck.getMessage());
+        }
+        unverifiedReasons.add(WORKER_UNVERIFIED_REASON);
+        Boolean capacityOk = null;
         if (slot.getAvailableCapacity() != null && request.getRequiredQuantity() != null) {
             capacityOk = slot.getAvailableCapacity().compareTo(request.getRequiredQuantity()) >= 0;
+        } else {
+            unverifiedReasons.add("产能未验证: 缺少时段可用产能或插单数量");
         }
-        boolean isFeasible = materialCheck.isAvailable() && equipmentCheck.isAvailable() &&
-                slot.hasEnoughWorkers() && capacityOk;
+        boolean resourcesVerified = unverifiedReasons.isEmpty();
+        boolean definitelyShort = (materialCheck.isVerified() && !materialCheck.isAvailable())
+                || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
+                || Boolean.FALSE.equals(capacityOk);
+        boolean isFeasible = resourcesVerified && !definitelyShort
+                && materialCheck.isAvailable() && equipmentCheck.isAvailable()
+                && slot.hasEnoughWorkers() && Boolean.TRUE.equals(capacityOk);
         result.put("isFeasible", isFeasible);
+        result.put("resourcesVerified", resourcesVerified);
+        result.put("unverifiedReasons", unverifiedReasons);
+        result.put("feasibilityStatus", isFeasible ? "FEASIBLE" : (definitelyShort ? "INFEASIBLE" : "UNVERIFIED"));
         if (!isFeasible) {
             result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, slot, request));
         }
 
         return result;
+    }
+
+    /** 时段人数来源说明: generateInsertSlots 按产能配置估算, 未接考勤/排班。 */
+    static final String WORKER_UNVERIFIED_REASON =
+            "人员未验证: 时段人数按工厂产能配置估算, 未接考勤/排班数据";
+
+    /**
+     * 写路径取时段: 只认本厂 (他厂 / 不存在 ⇒ 404, 不改任何数据), 且必须仍是 available。
+     * 这里的 status 检查只是提前失败; 真正防并发的是 {@link #claimSlotOrThrow} 的条件更新。
+     */
+    private InsertSlot loadOwnSlot(String factoryId, String slotId) {
+        InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(slotId, factoryId)
+                .orElseThrow(() -> new EntityNotFoundException("InsertSlot", slotId));
+        if (!"available".equals(slot.getStatus())) {
+            throw new BusinessException(409, "时段已被占用或不可用 (当前状态: " + slot.getStatus()
+                    + ")，请刷新后选择其他时段")
+                    .withCode("INSERT_SLOT_NOT_AVAILABLE")
+                    .withHint("刷新插单时段列表，改选一个状态为「可用」的时段");
+        }
+        return slot;
+    }
+
+    /**
+     * 原子占用: UPDATE … SET status='selected' WHERE id AND factory_id AND status='available'。
+     * 影响 0 行 = 并发确认 / 重复提交已经占了它 ⇒ 409, 调用方还没建计划, 事务回滚后什么都不留。
+     */
+    private void claimSlotOrThrow(String factoryId, InsertSlot slot) {
+        int claimed = insertSlotRepository.claimAvailableSlot(slot.getId(), factoryId, LocalDateTime.now());
+        if (claimed != 1) {
+            log.warn("插单时段占用冲突: factoryId={}, slotId={}, updatedRows={}", factoryId, slot.getId(), claimed);
+            throw new BusinessException(409, "该时段刚刚已被占用（可能是重复提交或他人同时确认），未创建新计划，请刷新后重试")
+                    .withCode("INSERT_SLOT_CLAIM_CONFLICT")
+                    .withHint("刷新后查看该时段的最新状态；如果刚才已经提交过，先到生产计划里确认，不要重复提交");
+        }
     }
 
     /**
@@ -229,8 +289,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                                       ResourceCheckResult materialCheck,
                                       ResourceCheckResult equipmentCheck,
                                       InsertSlot slot) {
-        // 资源不可用 = 高风险
-        if (!materialCheck.isAvailable() || !equipmentCheck.isAvailable() || !slot.hasEnoughWorkers()) {
+        // 核对过且确定不够 = 高风险 (未验证不等于不够, 它体现在 feasibilityStatus=UNVERIFIED)
+        if ((materialCheck.isVerified() && !materialCheck.isAvailable())
+                || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
+                || !slot.hasEnoughWorkers()) {
             return "critical";
         }
         // 使用链式影响的风险等级
@@ -250,11 +312,15 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                                          GetInsertSlotsRequest request) {
         StringBuilder reasons = new StringBuilder();
         if (!materialCheck.isAvailable()) {
-            reasons.append("原料不足: ").append(materialCheck.getMessage()).append("; ");
+            // 未验证的 message 自带「原料未验证: …」, 不冠「原料不足」
+            reasons.append(materialCheck.isVerified() ? "原料不足: " : "")
+                    .append(materialCheck.getMessage()).append("; ");
         }
         if (!equipmentCheck.isAvailable()) {
-            reasons.append("设备不可用: ").append(equipmentCheck.getMessage()).append("; ");
+            reasons.append(equipmentCheck.isVerified() ? "设备不可用: " : "")
+                    .append(equipmentCheck.getMessage()).append("; ");
         }
+        reasons.append(WORKER_UNVERIFIED_REASON).append("; ");
         if (!slot.hasEnoughWorkers()) {
             reasons.append("人员不足: 需要").append(slot.getRequiredWorkers())
                     .append("人，可用").append(slot.getAvailableWorkers()).append("人; ");
@@ -273,28 +339,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         log.info("确认紧急插单: factoryId={}, slotId={}, quantity={}",
                 factoryId, request.getSlotId(), request.getPlannedQuantity());
 
-        // 验证时段
-        InsertSlot slot = insertSlotRepository.findById(request.getSlotId())
-                .orElseThrow(() -> new EntityNotFoundException("InsertSlot", request.getSlotId()));
-
-        if (!"available".equals(slot.getStatus())) {
-            throw new RuntimeException("时段不可用，当前状态: " + slot.getStatus());
-        }
+        // 验证时段 —— 只按本厂查: 他厂 / 不存在 一律 404, 不改任何数据
+        InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
 
         // 检查是否强制插入
         if (!Boolean.TRUE.equals(request.getForceInsert())) {
             // 非强制插入，检查影响等级
             if ("high".equals(slot.getImpactLevel())) {
-                throw new RuntimeException("该时段影响等级高，请使用强制插入或选择其他时段");
+                throw new BusinessException(409, "该时段影响等级高，请使用强制插入或选择其他时段")
+                        .withHint("改选影响等级较低的时段，或由有审批权限的人使用「强制插入」");
             }
         }
 
+        // 原子占用时段 (条件更新, 0 行 = 被并发请求 / 重复提交抢先) —— 必须在建计划之前
+        claimSlotOrThrow(factoryId, slot);
+
         // 创建生产计划
         ProductionPlan plan = createProductionPlanFromSlot(factoryId, userId, slot, request);
-
-        // 标记时段为已选中
-        slot.setStatus("selected");
-        insertSlotRepository.save(slot);
 
         // 保存计划
         ProductionPlan savedPlan = productionPlanRepository.save(plan);
@@ -329,13 +390,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     public ProductionPlanDTO forceInsert(String factoryId, Long userId, ConfirmUrgentInsertRequest request) {
         log.info("强制紧急插单: factoryId={}, slotId={}", factoryId, request.getSlotId());
 
-        // 验证时段
-        InsertSlot slot = insertSlotRepository.findById(request.getSlotId())
-                .orElseThrow(() -> new EntityNotFoundException("InsertSlot", request.getSlotId()));
-
-        if (!"available".equals(slot.getStatus())) {
-            throw new RuntimeException("时段不可用，当前状态: " + slot.getStatus());
-        }
+        // 验证时段 —— 只按本厂查: 他厂 / 不存在 一律 404, 不改任何数据
+        InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
 
         // 获取操作用户信息
         User operator = userRepository.findById(userId)
@@ -364,9 +420,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             log.info("强制插单需要审批: planId={}, impactLevel={}", plan.getId(), slot.getImpactLevel());
         }
 
-        // 标记时段为已选中
-        slot.setStatus("selected");
-        insertSlotRepository.save(slot);
+        // 原子占用时段 (条件更新, 0 行 = 被并发请求 / 重复提交抢先) —— 必须在保存计划之前
+        claimSlotOrThrow(factoryId, slot);
 
         // 保存计划
         ProductionPlan savedPlan = productionPlanRepository.save(plan);
@@ -832,7 +887,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 检查锁定状态 (TODO: 从 insert_slot_locks 表查询)
         dto.setIsLocked(false);
-        dto.setIsFeasible(true);
+        // 时段列表不做原料/设备核对 ⇒ 不能标「可行」(原来恒为 true)。可行性只看影响分析接口。
+        dto.setIsFeasible(false);
+        dto.setInfeasibleReason("资源未验证: 时段列表不核对原料/设备/人员, 请查看该时段的影响分析");
 
         return dto;
     }

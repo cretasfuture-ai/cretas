@@ -1,5 +1,7 @@
 package com.cretas.aims.service.indicator.scheduler;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.entity.indicator.Indicator;
 import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.service.indicator.IndicatorQueryService;
@@ -71,7 +73,7 @@ public class DailyIndicatorRecomputeScheduler {
      * <p>禁用方式: {@code cretas.indicator.recompute-on-startup=false} (prod 海量 indicators 时考虑).
      * 当前 Sprint 12 Phase B step 1+2 共 4 个 codes × ~1-5 factories = ≤20 个 SQL aggregates, 启动慢度可忽略.
      */
-    @EventListener(ApplicationReadyEvent.class)
+    @EventListener(value = ApplicationReadyEvent.class, condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void onApplicationReady() {
         if (!recomputeOnStartup) {
             log.debug("DailyIndicatorRecomputeScheduler startup hook disabled via cretas.indicator.recompute-on-startup=false");
