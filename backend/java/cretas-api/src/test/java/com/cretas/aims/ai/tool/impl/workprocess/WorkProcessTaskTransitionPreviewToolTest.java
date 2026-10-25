@@ -81,6 +81,30 @@ class WorkProcessTaskTransitionPreviewToolTest {
     }
 
     @Test
+    @DisplayName("START 缺口 04: 上游产出的料还没到 → canDo=false, 原因同写路径 (预览不能说能开、执行却 409)")
+    void startRefusedWhenUpstreamHasNotProduced() throws Exception {
+        var blocked = task(Status.PENDING);
+        blocked.setUnlocked(false);
+        blocked.setBlockedReason("上游工序「解冻」还没有产出，本道要用它的产出，暂时不能报工");
+        stubTask(FACTORY, blocked);
+
+        Map<String, Object> data = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+
+        assertThat(data.get("canDo")).isEqualTo(false);
+        assertThat(data.get("status")).isEqualTo("UPSTREAM_NOT_READY");
+        assertThat(String.valueOf(data.get("message"))).contains("解冻");
+        assertNoMutation();
+
+        // 阴性对照: unlocked=null (没算) 不当成拒绝
+        blocked.setUnlocked(null);
+        stubTask(FACTORY, blocked);
+        Map<String, Object> open = data(startTool.preview(call("work_process_task_start",
+                Map.of("taskId", TASK_ID)), ctx(FACTORY)));
+        assertThat(open.get("canDo")).isEqualTo(true);
+    }
+
+    @Test
     @DisplayName("START 对照: 进行中 / 已完成 / 已跳过 / 已取消 → canDo=false + 中文原因, 不调 start")
     void startRefusedFromEveryNonPendingStatus() throws Exception {
         for (Status from : new Status[]{Status.IN_PROGRESS, Status.COMPLETED, Status.SKIPPED, Status.CANCELLED}) {

@@ -22,6 +22,8 @@ import java.util.Map;
  *   <li>状态转换读 {@link WorkProcessTaskService#isTransitionAllowed} —— 写路径
  *       {@code assertTransition} 读的是同一张表</li>
  *   <li>完成必填实际产量, 且不能为负 (0 允许) —— 同 {@code WorkProcessTaskServiceImpl#complete} 前两条校验</li>
+ *   <li>开始前上游产出的料要到 —— 读 {@code getById} 带回的 {@code unlocked} (与写路径同一个
+ *       {@code WorkflowStepUnlockGuard})</li>
  * </ul>
  *
  * <p>返回形状与其它写工具预览一致 ({@code ReceiveWithLimitTool}):
@@ -46,6 +48,11 @@ final class WorkProcessTaskTransitionPreview {
         Status from = task.getStatus();
         if (!WorkProcessTaskService.isTransitionAllowed(from, Status.IN_PROGRESS)) {
             return cannot(result, "INVALID_STATUS", startRefusal(task));
+        }
+        // 镜像写路径 (缺口 04): 上游产出的料还没到不能开工 —— unlocked 由 getById 用写路径同一个
+        // WorkflowStepUnlockGuard 算出; null = 没算, 不当成拒绝。
+        if (Boolean.FALSE.equals(task.getUnlocked())) {
+            return cannot(result, "UPSTREAM_NOT_READY", task.getBlockedReason());
         }
 
         Map<String, Object> current = identityRows(task);

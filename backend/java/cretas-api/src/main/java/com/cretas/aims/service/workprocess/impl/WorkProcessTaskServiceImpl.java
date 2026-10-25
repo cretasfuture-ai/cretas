@@ -80,6 +80,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private UnitContractService unitContractService;
 
+    /**
+     * 按工艺图解锁 (缺口 04)。开工前拦, 列表上标「能不能报」。
+     * required=false 与上面几条同理 (不改构造器); Spring 里它是 @Component, 一定注得进来。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
     // ==================== T142: batch assignedToName helper ====================
 
     /**
@@ -348,6 +355,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                         t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null,
                         batchNumberMap, productNameMap))
                 .collect(Collectors.toList());
+        applyReadiness(factoryId, page.getContent(), content);
         return PageResponse.of(content, page.getNumber() + 1, page.getSize(), page.getTotalElements());
     }
 
@@ -372,11 +380,36 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         // T157: batch-load batchNumber / productTypeName (no N+1); null when not resolvable
         Map<Long, String> batchNumberMap = loadBatchNumbers(tasks);
         Map<String, String> productNameMap = loadProductTypeNames(tasks);
-        return tasks.stream()
+        List<WorkProcessTaskDTO> dtos = tasks.stream()
                 .map(t -> toDTO(t, defs.get(t.getWorkProcessId()),
                         t.getAssignedTo() != null ? nameMap.get(t.getAssignedTo()) : null,
                         batchNumberMap, productNameMap))
                 .collect(Collectors.toList());
+        applyReadiness(factoryId, tasks, dtos);
+        return dtos;
+    }
+
+    /**
+     * 列表上标「能不能报」(缺口 04)。只算非终态任务; 终态任务 unlocked 留 null。
+     * tasks 与 dtos 下标一一对应 (上面都是同一次 stream map 出来的)。
+     */
+    private void applyReadiness(String factoryId, List<WorkProcessTask> tasks, List<WorkProcessTaskDTO> dtos) {
+        if (unlockGuard == null || tasks.isEmpty()) {
+            return;
+        }
+        List<WorkProcessTask> open = tasks.stream()
+                .filter(t -> t.getStatus() == null || !t.getStatus().isTerminal())
+                .collect(Collectors.toList());
+        Map<Long, com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard.Readiness> readiness =
+                unlockGuard.evaluateAll(factoryId, open);
+        for (int i = 0; i < tasks.size(); i++) {
+            com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard.Readiness r =
+                    readiness.get(tasks.get(i).getId());
+            if (r != null) {
+                dtos.get(i).setUnlocked(r.unlocked());
+                dtos.get(i).setBlockedReason(r.blockedReason());
+            }
+        }
     }
 
     @Override
@@ -399,6 +432,8 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         if (task.getProductTypeId() != null) {
             dto.setProductTypeName(productNameMap.get(task.getProductTypeId()));
         }
+        // AI 开工预览读的就是 getById —— 带上「能不能报」, 预览才能和写路径同一个结论。
+        applyReadiness(factoryId, one, List.of(dto));
         return dto;
     }
 
@@ -407,6 +442,10 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     public WorkProcessTaskDTO start(String factoryId, Long id, Long operatorUserId) {
         WorkProcessTask task = loadOrThrow(factoryId, id);
         assertTransition(task.getStatus(), Status.IN_PROGRESS);
+        // 缺口 04: 上游产出的料还没到, 不许开工 (409 WORKFLOW_UPSTREAM_NOT_READY, 写明等哪一道)
+        if (unlockGuard != null) {
+            unlockGuard.assertUnlocked(factoryId, task);
+        }
 
         task.setStatus(Status.IN_PROGRESS);
         task.setActualStartAt(LocalDateTime.now());

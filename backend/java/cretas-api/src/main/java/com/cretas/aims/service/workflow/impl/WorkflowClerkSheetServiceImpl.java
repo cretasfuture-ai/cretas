@@ -75,6 +75,10 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
     private final BomItemSubstituteService substituteService;
     private final WorkflowReportingUnitResolver reportingUnitResolver;
 
+    /** 缺口 04: 每道「能不能正式报」。字段注入 (required=false) 不改构造器。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
     @Override
     @Transactional(readOnly = true)
     public WorkflowClerkSheetConfigDTO getWorkflowSheetConfig(String factoryId, String planId) {
@@ -112,14 +116,22 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
             portsByTask.computeIfAbsent(port.getTaskId(), ignored -> new ArrayList<>()).add(port);
         }
 
+        Map<Long, com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard.Readiness> readiness =
+                unlockGuard == null ? Map.of() : unlockGuard.evaluateAll(factoryId, tasks);
         List<WorkflowClerkSheetConfigDTO.ProcessDescriptor> processes = new ArrayList<>(tasks.size());
         for (WorkProcessTask task : tasks) {
-            processes.add(buildDescriptor(
+            WorkflowClerkSheetConfigDTO.ProcessDescriptor d = buildDescriptor(
                     factoryId,
                     task,
                     portsByTask.getOrDefault(task.getId(), List.of()),
                     allowedSkuIdsByPort,
-                    instance.getNodesJson()));
+                    instance.getNodesJson());
+            com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard.Readiness r = readiness.get(task.getId());
+            if (r != null) {
+                d.setUnlocked(r.unlocked());
+                d.setBlockedReason(r.blockedReason());
+            }
+            processes.add(d);
         }
 
         return WorkflowClerkSheetConfigDTO.builder()

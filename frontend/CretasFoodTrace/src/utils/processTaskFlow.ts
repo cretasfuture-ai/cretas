@@ -110,6 +110,16 @@ export function buildReportableTaskIds(orderedTasks: ProcessTaskItem[]): Set<str
   }
 
   for (const group of batchTasks.values()) {
+    // 缺口 04: 后端按工艺图算了「能不能报」(上游产出的料到了就解锁) —— 以后端为准,
+    // 并行分支可以同时报, 不再只放每批第一道。后端没给结论的旧接口才退回下面的老规则。
+    if (group.some(task => task.unlocked !== undefined)) {
+      for (const task of group) {
+        if (!isTerminalTask(task.status) && task.unlocked === true) {
+          reportableIds.add(task.id);
+        }
+      }
+      continue;
+    }
     const sortedGroup = [...group].sort(compareTasksByWorkOrder);
     const nextTask = sortedGroup.find(task => !isTerminalTask(task.status));
     if (nextTask && nextTask.status !== 'CLOSED') {

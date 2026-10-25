@@ -91,4 +91,32 @@ describe('processTaskFlow', () => {
     expect(extractProcessTaskList([task])).toEqual([task]);
     expect(extractProcessTaskList({ data: { content: null } })).toEqual([]);
   });
+
+  // 缺口 04: 后端按工艺图算「能不能报」(上游产出的料到了就解锁)
+  it('follows the backend unlocked verdict: parallel branches are reportable together', () => {
+    const tasks = [
+      baseTask({ id: 'thaw', batchId: 9, processOrder: 1, unlocked: true }),
+      baseTask({ id: 'spice', batchId: 9, processOrder: 2, unlocked: true }),
+      baseTask({ id: 'braise', batchId: 9, processOrder: 3, unlocked: false, blockedReason: '上游工序「解冻」还没有产出' }),
+    ];
+    const ids = buildReportableTaskIds(tasks);
+    // 原来只放 thaw; 现在两条并行分支都能报, 等料的那道不能报
+    expect([...ids].sort()).toEqual(['spice', 'thaw']);
+  });
+
+  it('unlocks a downstream step while its upstream is still in progress', () => {
+    const tasks = [
+      baseTask({ id: 'thaw', batchId: 9, processOrder: 1, status: 'IN_PROGRESS', unlocked: true }),
+      baseTask({ id: 'braise', batchId: 9, processOrder: 2, unlocked: true }),
+    ];
+    expect([...buildReportableTaskIds(tasks)].sort()).toEqual(['braise', 'thaw']);
+  });
+
+  it('falls back to first-step-only when the backend gave no verdict', () => {
+    const tasks = [
+      baseTask({ id: 'a', batchId: 9, processOrder: 1 }),
+      baseTask({ id: 'b', batchId: 9, processOrder: 2 }),
+    ];
+    expect([...buildReportableTaskIds(tasks)]).toEqual(['a']);
+  });
 });

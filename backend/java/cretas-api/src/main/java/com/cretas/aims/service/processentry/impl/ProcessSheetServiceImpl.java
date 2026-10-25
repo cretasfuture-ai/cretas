@@ -180,6 +180,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private BomSeasoningItemRepository bomSeasoningItemRepository;
 
+    /** 按工艺图解锁 (缺口 04)。字段注入 (required=false) 不改构造器, 见 WorkflowStepUnlockWiringContractTest。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveDraft(String factoryId, String planId,
@@ -239,6 +243,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         //    ⚠️ 这正是「变异没打到被测行为上」的同一形状: 探针没到达那行, 读数就不作数。
         //    ⇒ 前置校验必须放在**这条路径的最前面**, 否则它只是名义上的"前置"。
         assertColumnLimits(req);
+        // 缺口 04: 同理放在最前面 —— 下面的端口校验 / 领料分配都不该在上游没料时先跑。
+        assertWorkflowUpstreamReady(factoryId, planId, req);
         if (req.getProcessDate() == null) {
             throw new BusinessException(400, "正式报工必须填写生产日期")
                     .withCode("PROCESS_SHEET_PROCESS_DATE_REQUIRED")
@@ -1115,6 +1121,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1a. 列长前置校验 —— 事先拦住, 而不是等数据库拒绝后包成一句误导的话。
         assertColumnLimits(req);
 
+        // 1b. 缺口 04: 按工艺图解锁。有正数产出的行会把这道工序记成已报 (WorkflowTaskProgressWriter),
+        //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
+        assertWorkflowUpstreamReady(factoryId, planId, req);
+
         // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
         //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
         if (req.getOutputs() != null && !req.getOutputs().isEmpty()) {
@@ -1569,6 +1579,41 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * 回写异常由监听器隔离，绝不反向回滚已保存的逐道行、物化批次或库存。
      * legacy 计划 / 未注入 / 找不到对应工序描述 → 静默跳过。仅在行确有产出后调用。
      */
+    /**
+     * 缺口 04: Workflow 计划的正式行, 本道上游产出的料还没到 → 409 WORKFLOW_UPSTREAM_NOT_READY。
+     * 判定与开工 / App 报工同一份 ({@link com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard})。
+     * 无产出的行 (存草稿行) 和非 Workflow 计划不拦 —— 后者前端的「上一道已提交」照旧。
+     */
+    private void assertWorkflowUpstreamReady(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (unlockGuard == null || workflowClerkSheetService == null || req.getProcessOrder() == null) {
+            return;
+        }
+        boolean positiveOutput = req.getOutputs() != null && !req.getOutputs().isEmpty()
+                ? req.getOutputs().stream().anyMatch(o -> o.getQuantity() != null && o.getQuantity().signum() > 0)
+                : req.getOutputQuantity() != null && req.getOutputQuantity().signum() > 0;
+        if (!positiveOutput) {
+            return;
+        }
+        WorkflowClerkSheetConfigDTO config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        if (config == null || config.getWorkflowInstanceId() == null || config.getProcesses() == null) {
+            return;
+        }
+        String nodeId = config.getProcesses().stream()
+                .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                .map(WorkflowClerkSheetConfigDTO.ProcessDescriptor::getWorkflowNodeId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (nodeId == null) {
+            return;
+        }
+        taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(factoryId, config.getWorkflowInstanceId())
+                .stream()
+                .filter(t -> nodeId.equals(t.getWorkflowNodeId()))
+                .findFirst()
+                .ifPresent(task -> unlockGuard.assertUnlocked(factoryId, task));
+    }
+
     private void stampWorkflowTaskIfApplicable(
             String factoryId,
             String planId,

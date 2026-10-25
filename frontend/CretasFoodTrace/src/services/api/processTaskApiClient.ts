@@ -61,6 +61,13 @@ export interface ProcessTaskItem {
   inputQuantity?: number;
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED' | 'SUPPLEMENTING' | string;
   /**
+   * 后端按工艺图算的「能不能报」。`undefined` = 后端没给结论 (旧接口 / 终态),
+   * 此时 buildReportableTaskIds 退回旧的「每批只放第一道」。
+   */
+  unlocked?: boolean;
+  /** unlocked=false 时给人看的原因 (等哪一道上游) */
+  blockedReason?: string;
+  /**
    * 计划起止 —— 车间主管靠这两个答「今天要做什么」。
    *
    * 后端 `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")`, 所以拿到的是
@@ -292,6 +299,8 @@ class ProcessTaskApiClient {
       // 三态: true / false / undefined。⛔ 不要写 `?? false` —— `undefined` 是
       // 「后端没给出判断」(这道工序没设 plannedEndAt), 与「不超期」不是一回事。
       overdue: task.overdue == null ? undefined : task.overdue,
+      unlocked: task.unlocked == null ? undefined : task.unlocked,
+      blockedReason: task.blockedReason ?? undefined,
       createdAt: task.createdAt ?? undefined,
       updatedAt: task.updatedAt ?? undefined,
     };

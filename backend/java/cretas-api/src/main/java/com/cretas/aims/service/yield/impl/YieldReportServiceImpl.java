@@ -147,6 +147,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /** 按工艺图解锁 (缺口 04)。字段注入 (required=false) 不改构造器, 见 WorkflowStepUnlockWiringContractTest。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
     /**
      * App 报工 {@code material_batch_refs} → RAW_TO_PRODUCTION 边。本类建带领料引用报工的
      * <b>两处</b> (submitReport / recordMaterialInput) 都调这里。
@@ -295,6 +299,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (!Objects.equals(batchId, t.getProductionBatchId())) {
             throw new BusinessException(409, "工序任务不属于当前生产批次")
                     .withHint("请从该工序任务所属的生产批次重新打开报工，核对批次与任务后再提交");
+        }
+        // 缺口 04: 按工艺图解锁 —— 上游产出的料还没到, 这一道不能报 (领料 / 工时段 / 产出都算)。
+        // 写在任何落库之前; 幂等重放已在上面提前返回, 不受影响。
+        if (unlockGuard != null) {
+            unlockGuard.assertUnlocked(factoryId, t);
         }
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
