@@ -144,10 +144,15 @@ def build(frame, cols, request, can_price, source):
                 rates = [M.ratio(r[good], r[output]).value for _, r in sums.iterrows()]
                 costs = [float(r[cost]) for _, r in sums.iterrows()]
                 c['chart'] = {'chartType': 'combination', 'echartsOption': {
-                    'animation': False, 'tooltip': {'trigger': 'axis'}, 'legend': {'data': ['产量', '良品率', '总成本']},
-                    'xAxis': {'type': 'category', 'data': [d for d, _ in points]},
-                    'yAxis': [{'type': 'value', 'name': str(u)}, {'type': 'value', 'name': '%', 'max': 100},
-                              {'type': 'value', 'name': '元', 'position': 'right', 'offset': 55}],
+                    'animation': False, 'tooltip': {'trigger': 'axis'},
+                    'legend': {'data': ['产量', '良品率', '总成本'], 'bottom': 0},
+                    # The outer right axis needs space beyond its 55px offset, including in exports.
+                    'grid': {'left': 12, 'right': 90, 'top': 40, 'bottom': 52, 'containLabel': True},
+                    'xAxis': {'type': 'category', 'data': [d for d, _ in points],
+                              'axisLabel': {'rotate': 35, 'fontSize': 10, 'showMinLabel': True, 'showMaxLabel': True}},
+                    'yAxis': [{'type': 'value', 'name': str(u)}, {'type': 'value', 'name': '%', 'max': 100, 'position': 'right'},
+                              {'type': 'value', 'name': '元', 'position': 'right', 'offset': 55,
+                               'axisLabel': {'formatter': '__FMT__thousands_sep'}}],
                     'series': [{'name': '产量', 'type': 'bar', 'data': [v for _, v in points]},
                                {'name': '良品率', 'type': 'line', 'yAxisIndex': 1, 'data': rates},
                                {'name': '总成本', 'type': 'line', 'yAxisIndex': 2, 'data': costs}]}}
