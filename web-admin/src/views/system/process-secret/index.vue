@@ -46,18 +46,25 @@
         <el-table-column label="最后修改" width="170">
           <template #default="{ row }">{{ row.policy ? formatTime(row.policy.updatedAt) : '—' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="330">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <template v-if="!row.policy">
               <el-button v-if="isFactoryDirector" link type="primary" @click="openPolicyDialog(row)">设为保密</el-button>
               <span v-else class="muted">仅工厂总监可以设置</span>
             </template>
-            <template v-else-if="row.policy.currentUserIsOwner">
+            <div v-else-if="row.policy.currentUserIsOwner" class="row-actions">
               <el-button link type="primary" @click="openGrantDrawer(row)">授权管理</el-button>
               <el-button link type="primary" @click="openAuditDrawer(row)">访问记录</el-button>
-              <el-button link type="primary" @click="openPolicyDialog(row)">修改</el-button>
-              <el-button link type="danger" @click="confirmDisable(row)">关闭保密</el-button>
-            </template>
+              <el-dropdown trigger="click" @command="(cmd: string) => onMoreCommand(cmd, row)">
+                <el-button link type="primary">更多<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="edit">修改保密设置</el-dropdown-item>
+                    <el-dropdown-item command="disable" class="danger-item">关闭保密</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
             <span v-else class="muted">由 {{ userName(row.policy.ownerUserId) }} 负责管理</span>
           </template>
         </el-table-column>
@@ -98,7 +105,7 @@
     </el-dialog>
 
     <!-- 授权管理 -->
-    <el-drawer v-model="grantDrawer.open" :title="`授权管理 — ${grantDrawer.product?.name || ''}`" size="720px" destroy-on-close>
+    <el-drawer v-model="grantDrawer.open" :title="`授权管理 — ${grantDrawer.product?.name || ''}`" :size="drawerSize" destroy-on-close>
       <el-alert v-if="grantDrawer.product?.policy?.storageMode === 'CUSTOMER_HELD'" type="info" :closable="false" show-icon
         title="该产品核心工艺不入云，系统里没有可授予的完整工艺，需要授权请在贵方执行端处理。" class="warn" />
       <template v-else>
@@ -136,10 +143,10 @@
       </template>
 
       <el-table v-loading="grantDrawer.loading" :data="grantDrawer.grants" stripe border class="grant-table">
-        <el-table-column label="被授权人" width="130">
+        <el-table-column label="被授权人" min-width="110">
           <template #default="{ row }">{{ userName(row.granteeId) }}</template>
         </el-table-column>
-        <el-table-column label="权限" width="170">
+        <el-table-column label="权限" min-width="120">
           <template #default="{ row }">
             <el-tag v-if="row.canViewFull" size="small">查看</el-tag>
             <el-tag v-if="row.canExport" size="small" type="warning">导出</el-tag>
@@ -147,10 +154,10 @@
           </template>
         </el-table-column>
         <el-table-column prop="purpose" label="用途" min-width="120" />
-        <el-table-column label="到期" width="160">
+        <el-table-column label="到期" min-width="140">
           <template #default="{ row }">{{ formatTime(row.expiresAt) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="150">
+        <el-table-column label="状态" width="130" fixed="right">
           <template #default="{ row }">
             <el-tag v-if="row.revokedAt" size="small" type="info">已撤销</el-tag>
             <el-tag v-else-if="isExpired(row.expiresAt)" size="small" type="info">已到期</el-tag>
@@ -165,28 +172,30 @@
     </el-drawer>
 
     <!-- 访问记录 -->
-    <el-drawer v-model="auditDrawer.open" :title="`访问记录 — ${auditDrawer.product?.name || ''}`" size="720px" destroy-on-close>
+    <el-drawer v-model="auditDrawer.open" :title="`访问记录 — ${auditDrawer.product?.name || ''}`" :size="drawerSize" destroy-on-close>
       <div class="hint audit-hint">记录谁在什么时候查看、导出、修改了该产品的工艺，以及授权的变更。记录里不含工艺内容。</div>
-      <el-table v-loading="auditDrawer.loading" :data="auditDrawer.events" stripe border>
-        <el-table-column label="时间" width="170">
-          <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+      <el-table v-loading="auditDrawer.loading" :data="auditRows" stripe border>
+        <el-table-column label="时间" width="140">
+          <template #default="{ row }">{{ formatTime(row.event.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作人" width="130">
+        <el-table-column label="操作人" min-width="100">
           <template #default="{ row }">
-            {{ row.actorType === 'PLATFORM_ADMIN' ? '平台人员' : userName(row.actorId) }}
+            {{ row.event.actorType === 'PLATFORM_ADMIN' ? '平台人员' : userName(row.event.actorId) }}
           </template>
         </el-table-column>
-        <el-table-column label="动作" width="130">
-          <template #default="{ row }">{{ ACTION_LABELS[row.action] || row.action }}</template>
+        <el-table-column label="动作" min-width="110">
+          <template #default="{ row }">{{ row.actionLabel }}</template>
         </el-table-column>
-        <el-table-column label="结果" width="90">
+        <el-table-column label="结果" width="70">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.decision === 'ALLOW' ? 'success' : 'danger'">
-              {{ row.decision === 'ALLOW' ? '允许' : '拒绝' }}
+            <el-tag size="small" :type="row.event.decision === 'ALLOW' ? 'success' : 'danger'">
+              {{ row.event.decision === 'ALLOW' ? '允许' : '拒绝' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="说明" min-width="160" />
+        <el-table-column label="说明" min-width="200">
+          <template #default="{ row }">{{ row.description }}</template>
+        </el-table-column>
         <template #empty><div class="empty">还没有访问记录。</div></template>
       </el-table>
     </el-drawer>
@@ -194,10 +203,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { describeAuditReason } from './auditLabels';
 import {
   createProcessSecretGrant,
   disableProcessSecretPolicy,
@@ -288,6 +298,18 @@ function isExpired(s?: string | null): boolean {
 }
 function isPastDate(d: Date): boolean {
   return d.getTime() < Date.now() - DAY;
+}
+
+// 窄屏 (< 760px) 抽屉占满宽度, 否则 720px 的抽屉会把表格挤出横向滚动条
+const viewportWidth = ref(window.innerWidth);
+function onResize() { viewportWidth.value = window.innerWidth; }
+window.addEventListener('resize', onResize);
+onBeforeUnmount(() => window.removeEventListener('resize', onResize));
+const drawerSize = computed(() => (viewportWidth.value < 760 ? '100%' : '720px'));
+
+function onMoreCommand(cmd: string, row: ProductRow) {
+  if (cmd === 'edit') openPolicyDialog(row);
+  else if (cmd === 'disable') void confirmDisable(row);
 }
 
 async function load() {
@@ -477,16 +499,33 @@ const auditDrawer = reactive({
   loading: false,
   product: null as ProductRow | null,
   events: [] as ProcessSecretAccessEvent[],
+  grants: [] as ProcessSecretGrant[],
+});
+const auditRows = computed(() => {
+  const grantById = new Map(auditDrawer.grants.map((g) => [g.id, g]));
+  const ctx = { userName, modeLabel, formatTime, grantById: (id: number) => grantById.get(id) };
+  return auditDrawer.events.map((event) => {
+    const d = describeAuditReason(event.reason, ctx);
+    return { event, description: d.text, actionLabel: d.action || ACTION_LABELS[event.action] || event.action };
+  });
 });
 
 async function openAuditDrawer(row: ProductRow) {
   auditDrawer.product = row;
   auditDrawer.events = [];
+  auditDrawer.grants = [];
   auditDrawer.open = true;
   auditDrawer.loading = true;
   try {
-    const res = await listProcessSecretAuditEvents(factoryId.value, row.id);
-    auditDrawer.events = res.success && Array.isArray(res.data) ? res.data : [];
+    // 授权列表用来把「GRANT #3」换成被授权人、权限、用途和到期时间; 拿不到时说明里只少这些细节
+    const [events, grants] = await Promise.all([
+      listProcessSecretAuditEvents(factoryId.value, row.id),
+      row.policy?.storageMode === 'CLOUD_RESTRICTED'
+        ? listProcessSecretGrants(factoryId.value, row.id).catch((): null => null)
+        : Promise.resolve(null),
+    ]);
+    auditDrawer.events = events.success && Array.isArray(events.data) ? events.data : [];
+    auditDrawer.grants = grants?.success && Array.isArray(grants.data) ? grants.data : [];
   } finally {
     auditDrawer.loading = false;
   }
@@ -516,4 +555,7 @@ onMounted(load);
 .other { margin-top: 8px; }
 .reason { margin-left: 12px; font-size: 12px; }
 .audit-hint { margin: 0 0 12px; }
+.row-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.row-actions .el-button + .el-button { margin-left: 8px; }
+:deep(.danger-item) { color: var(--el-color-danger); }
 </style>
