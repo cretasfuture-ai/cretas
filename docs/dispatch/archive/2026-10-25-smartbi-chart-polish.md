@@ -16,9 +16,9 @@ Before changes, captured all eight visible charts from F006 samples 5250–5255 
 
 ## Verification
 
-Combined Python regression/export/margin/polish suite: 150 passed, 9 existing deprecation warnings. Frontend state/export suite: 41 passed. Type check passed. Commands and full logs: `test-output/smartbi-polish/` (gitignored).
+Combined Python regression/export/margin/polish suite: 152 passed, 9 existing deprecation warnings. Frontend state/export suite: 41 passed. Type check passed (frontend unchanged by final Python-only alias fix). Commands and full logs: `test-output/smartbi-polish/` (gitignored).
 
-Mutations cover wrong unit, lost number, only-first-chart export, invalid-chart inclusion, ignored empty image, swallowed rendering exception, measure-as-slicer, percentage label instead of points, mixed amount/ratio slicers, dropped annotation text, dropped original graphics and moved annotation. All must fail their visible-output assertions before release.
+13 mutations cover wrong unit, lost number, only-first-chart export, invalid-chart inclusion, ignored empty image, swallowed rendering exception, measure-as-slicer, percentage label instead of points, mixed amount/ratio slicers, dropped annotation text, dropped original graphics moved annotation and omitted ratio-header aliases. All must fail their visible-output assertions before release.
 
 Actual local Vue downloads of sample 5250 from the conclusions tab: PPTX and PDF each seven pages/slides, with four chart images after the conclusions and before the ending. Production baseline files (three pages) retained. PowerPoint visual rendering remains unverified; PDF is rendered and inspected separately. Browser screenshot calibration for local responsive captures was inconsistent; those captures are retained as instrument failures and are not sufficient visual acceptance.
 

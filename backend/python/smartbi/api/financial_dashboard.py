@@ -155,7 +155,8 @@ def _extract_dimensions(df: pd.DataFrame) -> List[Dict[str, Any]]:
     # Amount-aware normalization may prefer revenue/cost over the ratio columns.
     # Those original percentage measures are still measures, never dimensions.
     measures.update(col for col in df.columns
-                    if any(key in str(col).lower() for key in ('率', 'ratio', 'margin', 'percent')))
+                    if any(key in str(col).lower() for key in
+                           dashboard_service.normalizer.RATIO_HEADER_KEYWORDS + ('ratio', 'margin', 'percent')))
     for col in df.columns:
         if col in measures:
             continue
