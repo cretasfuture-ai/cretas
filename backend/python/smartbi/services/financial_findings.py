@@ -124,31 +124,21 @@ def ratio_months(df: pd.DataFrame) -> Optional[Dict[str, List[Optional[float]]]]
     """比率表 (各月直接给百分比) 的本年 / 上年各月值; 不像百分比 (超过 100) 时返回 None。
 
     与毛利率趋势图口径 2 一致: 没有收入做权重, 合计只能是各月简单平均。"""
-    current = M.monthly(df, 'actual', MONTHS)
-    last: List[Optional[float]] = (M.monthly(df, 'last_year', MONTHS) if 'last_year' in df
-                                   else [None] * len(MONTHS))
-    present = [abs(v) for v in current + last if v is not None]
-    if not present or max(present) > 100:
+    summary = M.gross_margins(df, 'ratio')
+    if summary.current_total is None and summary.last_total is None:
         return None
-    return {"current": current, "last": last}
+    return {"current": summary.current, "last": summary.last}
 
 
-def _mean(values: List[Optional[float]]) -> Optional[float]:
-    vals = [v for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else None
-
-
-def _ratio(df: pd.DataFrame, out: _Findings) -> None:
-    series = ratio_months(df)
-    if series is None:
-        return
-    cur, last = series["current"], series["last"]
+def _ratio(df: pd.DataFrame, out: _Findings, summary: Optional[M.GrossMargins] = None) -> None:
+    summary = summary or M.gross_margins(df, 'ratio')
+    cur, last = summary.current, summary.last
     months = [(m, c) for m, c in zip(MONTHS, cur) if c is not None]
     if len(months) < 2:
         return
-    mean_cur, mean_last = _mean(cur), _mean(last)
+    mean_cur, mean_last = summary.current_total, summary.last_total
     if mean_cur is not None and mean_last is not None:
-        diff = round(mean_cur, 1) - round(mean_last, 1)  # 与页首同一取法: 用显示出来的两个数相减
+        diff = summary.displayed_difference
         # 持平既不是好消息也不需要关注: 不进结论 (页首已用中性语气说「与上年持平」)
         if abs(diff) >= 0.05:
             text = f"各月平均毛利率 {_pct(mean_cur)}，比上年 {diff:+.1f} 个百分点（各月简单平均）"
@@ -289,11 +279,6 @@ def _pnl(df: pd.DataFrame, out: _Findings) -> None:
     else:
         out.attention.append(f"净亏损 {format_amount(-pnl.net_profit)}（营业收入 {format_amount(pnl.revenue)}）")
 
-    gross_margin = pnl.gross_margin().value
-    if gross_margin is not None and pnl.gross_profit is not None:
-        (out.good if gross_margin >= 0 else out.attention).append(
-            f"毛利率 {_pct(gross_margin)}（毛利 {format_amount(pnl.gross_profit)} / 营业收入 {format_amount(pnl.revenue)}）")
-
     expense_total = pnl.expense_total
     if expense_total and pnl.revenue:
         share_of_revenue = expense_total / pnl.revenue * 100
@@ -319,13 +304,14 @@ def _pnl(df: pd.DataFrame, out: _Findings) -> None:
                 f"净利润同比 {growth:+.1f}%（上年 {format_amount(last.net_profit)}）")
 
 
-def build_findings(df: pd.DataFrame, value_kind: str) -> Optional[Dict[str, List[str]]]:
+def build_findings(df: pd.DataFrame, value_kind: str,
+                   margin_summary: Optional[M.GrossMargins] = None) -> Optional[Dict[str, List[str]]]:
     """df 为已按期间过滤、只含明细行的标准明细。说不出任何一条时返回 None。"""
     if df is None or df.empty:
         return None
     out = _Findings()
     if value_kind == 'ratio':
-        _ratio(df, out)
+        _ratio(df, out, margin_summary)
         if not out.any():
             return None
         return {"good": out.good, "attention": out.attention, "suggestions": out.suggestions}
@@ -343,6 +329,11 @@ def build_findings(df: pd.DataFrame, value_kind: str) -> Optional[Dict[str, List
             _categories(perf, out)
         if M.has_subjects(df):
             _pnl(df, out)
+        summary = margin_summary or M.gross_margins(df)
+        if summary.current_total is not None:
+            (out.good if summary.current_total >= 0 else out.attention).append(
+                f'毛利率 {_pct(summary.current_total)}（毛利 {format_amount(summary.profit)} / '
+                f'营业收入 {format_amount(summary.revenue)}）')
     if not out.any():
         return None
     return {"good": out.good, "attention": out.attention, "suggestions": out.suggestions}

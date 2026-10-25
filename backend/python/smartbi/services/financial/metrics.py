@@ -71,6 +71,111 @@ def month_over_month(series: Sequence[Optional[float]]) -> List[Optional[float]]
     return out
 
 
+@dataclass
+class GrossMargins:
+    current: List[Optional[float]]
+    last: List[Optional[float]]
+    current_total: Optional[float]
+    last_total: Optional[float]
+    weighted: bool
+    revenue: Optional[float] = None
+    profit: Optional[float] = None
+    note: str = ''
+
+    @property
+    def displayed_difference(self) -> Optional[float]:
+        if self.current_total is None or self.last_total is None:
+            return None
+        return round(round(self.current_total, 1) - round(self.last_total, 1), 1)
+
+
+def gross_margins(df: pd.DataFrame, value_kind: str = 'amount',
+                  reported_rows: Optional[pd.DataFrame] = None) -> GrossMargins:
+    """One margin definition for the headline, findings and chart.
+
+    Amounts take precedence over percentages. Every revenue period needs a
+    cost or a reported gross-profit amount; a missing month cannot become 0.
+    Ratio-only tables retain their explicitly labelled arithmetic mean.
+    """
+    months = list(range(1, 13))
+    empty = [None] * 12
+    if value_kind == 'ratio':
+        cur, last = monthly(df, 'actual', months), monthly(df, 'last_year', months)
+        present = [abs(v) for v in cur + last if v is not None]
+        if not present or max(present) > 100:
+            return GrossMargins(empty.copy(), empty.copy(), None, None, False, note='所选期间没有毛利率数据')
+
+        def mean(values):
+            vals = [v for v in values if v is not None]
+            return sum(vals) / len(vals) if vals else None
+
+        return GrossMargins(cur, last, mean(cur), mean(last), False,
+                            note='表内只有各月毛利率、没有收入和成本，合计为各月简单平均，不是加权毛利率')
+
+    revenue = select(df, [S.REVENUE])
+    costs = select(df, [S.COST])
+    profits = select(reported_rows, [S.PROFIT_GROSS])
+    if revenue.empty or (costs.empty and profits.empty):
+        return GrossMargins(empty.copy(), empty.copy(), None, None, True,
+                            note='缺少营业收入及对应的营业成本或毛利金额，无法计算毛利率')
+
+    def amounts(field_name):
+        def grouped(frame):
+            if frame.empty or field_name not in frame:
+                return {}
+            return {key: total(group[field_name]) for key, group in frame.groupby(['year', 'month'])}
+
+        rev, cost = grouped(revenue), grouped(costs)
+        gross = {}
+        ambiguous_profit = False
+        if not profits.empty and field_name in profits:
+            frame = profits.copy()
+            # The normalizer's fallback category is the subject label itself,
+            # which must not turn aliases of one reported fact into dimensions.
+            frame['_category'] = frame['category'].where(frame['category'] != frame['item'], '')
+            dimensions = ['year', 'month', '_category', 'product', 'channel', 'business_unit']
+            pieces = {}
+            for key, group in frame.groupby(dimensions, dropna=False):
+                values = [float(v) for v in group[field_name] if v is not None and not pd.isna(v)]
+                conflicting = values and any(abs(v - values[0]) > 0.005 for v in values)
+                ambiguous_profit = ambiguous_profit or bool(conflicting)
+                pieces.setdefault(key[:2], []).append(None if conflicting or not values else values[0])
+            for key, values in pieces.items():
+                gross[key] = total(values) if all(v is not None for v in values) else None
+        period_profits = {}
+        for key, amount in rev.items():
+            if amount is None:
+                continue
+            # Costs, when available, are the canonical amount; reported profit
+            # is only the alternative for a table without that period's costs.
+            period_profits[key] = (amount - cost[key] if cost.get(key) is not None else gross.get(key))
+        cur = []
+        for month in months:
+            keys = [key for key in period_profits if key[1] == month]
+            complete = keys and all(period_profits[k] is not None for k in keys)
+            cur.append(ratio(total(period_profits[k] for k in keys), total(rev[k] for k in keys)).value
+                       if complete else None)
+        keys = list(period_profits)
+        if not keys:
+            return cur, None, None, None, '缺少毛利率对比期金额', set()
+        if any(period_profits[k] is None for k in keys):
+            note = ('表内同义毛利金额冲突，累计毛利率无法计算' if ambiguous_profit else
+                    '部分收入期间缺少对应营业成本或毛利金额，累计毛利率无法计算')
+            return cur, None, None, None, note, set(keys)
+        r, p = total(rev[k] for k in keys), total(period_profits.values())
+        metric = ratio(p, r)
+        return cur, metric.value, r, p, '' if metric.ok else metric.note, set(keys)
+
+    cur, cur_total, rev, profit, note, current_periods = amounts('actual')
+    last, last_total, _, _, last_note, last_periods = amounts('last_year')
+    if last_periods and current_periods != last_periods:
+        last_total = None
+        last_note = '上年与本年收入期间不一致，无法比较累计毛利率'
+    if last_note:
+        note = '；'.join(part for part in (note, last_note) if part)
+    return GrossMargins(cur, last, cur_total, last_total, True, rev, profit, note)
+
+
 def cumulative(series: Sequence[Optional[float]]) -> List[Optional[float]]:
     """累计值: 缺失月份不打断累计, 但累计到该月仍无任何数据时为 None。"""
     out: List[Optional[float]] = []

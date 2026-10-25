@@ -14,12 +14,15 @@
 import re
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 import pandas as pd
 import numpy as np
 
 from . import financial_subjects as S
+
+if TYPE_CHECKING:
+    from .financial.metrics import GrossMargins
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,8 @@ class ColumnMapping:
     raw_frame: Optional[pd.DataFrame] = None
     # 解析中发现、需要告诉用户的问题
     issues: List[str] = field(default_factory=list)
+    amount_subject_cols: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    margin_summary: Optional['GrossMargins'] = None
 
 
 class FinancialDataNormalizer:
@@ -108,7 +113,8 @@ class FinancialDataNormalizer:
     QUARTER_CN = {1: 'Q1', 2: 'Q2', 3: 'Q3', 4: 'Q4'}
 
     # ------------------------------------------------------------------ detect
-    def detect_columns(self, columns: List[str], sample_data: Optional[pd.DataFrame] = None) -> ColumnMapping:
+    def detect_columns(self, columns: List[str], sample_data: Optional[pd.DataFrame] = None,
+                       year: Optional[int] = None) -> ColumnMapping:
         """Auto-detect column roles from column names and sample data."""
         mapping = ColumnMapping()
 
@@ -200,8 +206,37 @@ class FinancialDataNormalizer:
             if m:
                 mapping.year = int(m.group(1))
                 break
+        if year is not None:
+            mapping.year = year
 
         mapping.value_kind = self._value_kind(mapping, sample_data)
+
+        # A monthly table may put income/cost/profit in separate columns,
+        # alongside the supplied percentages. Normalize the amounts into the
+        # same subject rows used by a P&L instead of averaging the percentages.
+        subjects: Dict[str, Dict[str, str]] = {}
+        for col in columns:
+            base, _ = header_unit(col)
+            if any(word in base for word in self.RATIO_HEADER_KEYWORDS):
+                continue
+            role = 'last_year' if any(word in base for word in self.LAST_YEAR_KEYWORDS) else 'actual'
+            explicit_year = re.search(r'(20\d{2})年?', base)
+            if explicit_year:
+                column_year = int(explicit_year.group(1))
+                if column_year not in (mapping.year, mapping.year - 1):
+                    continue
+                role = 'actual' if column_year == mapping.year else 'last_year'
+            if any(word in base for word in self.BUDGET_KEYWORDS):
+                role = 'last_year_budget' if role == 'last_year' else 'budget'
+            name = re.sub(r'20\d{2}年?|本年|本期|实际|上年|去年|同期|上期|预算|目标', '', base).strip()
+            subject = S.classify_subject(name)
+            if subject in (S.REVENUE, S.COST, S.PROFIT_GROSS):
+                subjects.setdefault(subject, {})[role] = col
+        if S.REVENUE in subjects and (S.COST in subjects or S.PROFIT_GROSS in subjects):
+            mapping.amount_subject_cols = subjects
+            mapping.actual_cols = [cols['actual'] for cols in subjects.values() if 'actual' in cols]
+            mapping.last_year_cols = [cols['last_year'] for cols in subjects.values() if 'last_year' in cols]
+            mapping.value_kind = 'amount'
 
         logger.info(f"Column mapping detected: periods={len(mapping.period_cols)}, "
                     f"budget={len(mapping.budget_cols)}, actual={len(mapping.actual_cols)}, "
@@ -295,7 +330,7 @@ class FinancialDataNormalizer:
         has_role_rows = any(r in ('budget', 'actual', 'last_year') for r in row_roles.values())
 
         for period_col in mapping.period_cols:
-            year_num, month_num = self._extract_year_month(period_col)
+            year_num, month_num = self._extract_year_month(header_unit(period_col)[0])
             if month_num is None:
                 continue
             year_num = year_num or mapping.year
@@ -311,7 +346,8 @@ class FinancialDataNormalizer:
                         continue
                     label = str(row.get(label_col, '')) if label_col else ''
                     _, label_factor = header_unit(label)
-                    val = self._scaled(row.get(period_col), col_factor * label_factor)
+                    val = self._scaled(row.get(period_col),
+                                       label_factor if _UNIT_PATTERN.search(label) else col_factor)
                     if val is not None:
                         merged[role] = (merged[role] or 0.0) + val
                 rows.append({
@@ -330,7 +366,8 @@ class FinancialDataNormalizer:
                 rows.append({
                     'year': year_num, 'month': month_num, 'quarter': quarter, **dims,
                     'budget': None,
-                    'actual': self._scaled(row.get(period_col), col_factor * label_factor),
+                    'actual': self._scaled(row.get(period_col),
+                                           label_factor if _UNIT_PATTERN.search(label) else col_factor),
                     'last_year': None, 'last_year_budget': None,
                 })
 
@@ -360,10 +397,12 @@ class FinancialDataNormalizer:
                     actual_col = c
                     break
 
-        def value(row: pd.Series, col: Optional[str]) -> Optional[float]:
+        def value(row: pd.Series, col: Optional[str], label: str = '') -> Optional[float]:
             if not col:
                 return None
-            return self._scaled(row.get(col), mapping.unit_multipliers.get(col, 1.0))
+            base, label_factor = header_unit(label)
+            factor = label_factor if _UNIT_PATTERN.search(label) else mapping.unit_multipliers.get(col, 1.0)
+            return self._scaled(row.get(col), factor)
 
         for _, row in raw_data.iterrows():
             label = str(row.get(label_col, '')) if label_col else ''
@@ -378,15 +417,24 @@ class FinancialDataNormalizer:
                 if explicit:
                     year_num = explicit
 
-            rows.append({
+            period_dims = {
                 'year': year_num or mapping.year,
                 'month': month_num or 0,
                 'quarter': f"Q{(month_num - 1) // 3 + 1}" if month_num else '',
                 **dims,
-                'budget': value(row, budget_col),
-                'actual': value(row, actual_col),
-                'last_year': value(row, last_year_col),
-                'last_year_budget': value(row, ly_budget_col),
+            }
+            if mapping.amount_subject_cols:
+                for subject, cols in mapping.amount_subject_cols.items():
+                    rows.append({**period_dims, 'item': S.CLASS_LABELS[subject],
+                                 **{role: value(row, cols.get(role)) for role in
+                                    ('actual', 'last_year', 'budget', 'last_year_budget')}})
+                continue
+            rows.append({
+                **period_dims,
+                'budget': value(row, budget_col, label),
+                'actual': value(row, actual_col, label),
+                'last_year': value(row, last_year_col, label),
+                'last_year_budget': value(row, ly_budget_col, label),
             })
 
         return rows
