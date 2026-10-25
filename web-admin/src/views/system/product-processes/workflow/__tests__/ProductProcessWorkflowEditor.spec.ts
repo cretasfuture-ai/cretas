@@ -483,6 +483,45 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
   });
 
+  it('opening a product that has no saved Workflow only previews the starter canvas: no autosave, but manual save still works', async () => {
+    // F006 2026-10-25: 每打开一个没图的成品, 2.5s 后就被自动保存出一张「草稿 v1 · 待完善画布」。
+    apiMocks.getProductProcessWorkflow.mockResolvedValueOnce({ success: true, data: null });
+    apiMocks.saveProductProcessWorkflowDraft.mockImplementation((
+      _factoryId: string, productTypeId: string, payload: ProductProcessWorkflowDefinition,
+    ) => Promise.resolve({ success: true, data: { ...payload, id: 99, productTypeId, status: 'DRAFT', version: 1, lockVersion: 0 } }));
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+
+    const wrapper = await mountEditorWrapper();
+    const vm = wrapper.vm as unknown as EditorVm & {
+      unsavedNewDefinition: boolean;
+      saveDraft: () => Promise<boolean>;
+    };
+
+    expect(vm.flowNodes.length).toBeGreaterThan(0);          // 起步图确实画出来了
+    expect(vm.dirty).toBe(false);
+    expect(vm.unsavedNewDefinition).toBe(true);
+    expect(timerSpy.mock.calls.some((call) => call[1] === 2500)).toBe(false);
+    expect(wrapper.find('[data-testid="workflow-unsaved-new"]').exists()).toBe(true);
+    expect(apiMocks.saveProductProcessWorkflowDraft).not.toHaveBeenCalled();
+
+    // 手动保存仍然可以 —— 不改也能存
+    await vm.saveDraft();
+    await flushPromises();
+    expect(apiMocks.saveProductProcessWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(vm.unsavedNewDefinition).toBe(false);
+  });
+
+  it('positive control: editing the starter canvas still schedules the 2.5s autosave', async () => {
+    apiMocks.getProductProcessWorkflow.mockResolvedValueOnce({ success: true, data: null });
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+    const vm = await mountEditor();
+
+    vm.addStandaloneRaw();
+
+    expect(vm.dirty).toBe(true);
+    expect(timerSpy.mock.calls.at(-1)?.[1]).toBe(2500);
+  });
+
   it('serializes multi-output role and allocation fields in the real editor save payload', async () => {
     apiMocks.saveProductProcessWorkflowDraft.mockImplementation((
       _factoryId: string,

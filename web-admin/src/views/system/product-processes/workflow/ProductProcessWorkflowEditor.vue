@@ -44,6 +44,7 @@
             本图产出：尚未画出终端产出
           </el-tag>
           <span v-if="dirty" class="dirty-status">● 有未保存改动</span>
+          <span v-else-if="unsavedNewDefinition" class="dirty-status" data-testid="workflow-unsaved-new">● 新画布，尚未保存</span>
           <span v-else-if="definition" class="saved-status">✓ 已保存</span>
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
         </div>
@@ -53,7 +54,7 @@
           <el-button :disabled="!productTypeId || flowNodes.length === 0" @click="fitCanvas">适应画布</el-button>
           <el-button
             type="primary"
-            :disabled="!canEdit || !dirty"
+            :disabled="!canEdit || (!dirty && !unsavedNewDefinition)"
             :loading="saving"
             @click="() => saveDraft()"
           >{{ saveActionLabel }}</el-button>
@@ -1416,6 +1417,8 @@ const connectingFromKind = ref<'' | 'MATERIAL' | 'PROCESS'>('');
 const selectedEdgeId = ref('');
 const canvasRef = ref<HTMLElement | null>(null);
 let gsapCtx: gsap.Context | null = null;
+/** 画布上是一张还没存过的起步图 (服务端没有这个产品的 Workflow)。可手动保存, 但不自动保存。 */
+const unsavedNewDefinition = computed(() => Boolean(definition.value) && !definition.value?.id);
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let autoSaveGeneration = 0;
 let autoSaveBarrierDepth = 0;
@@ -3195,7 +3198,8 @@ async function reconcileLoadedUnits(): Promise<void> {
   }
   if (unitsChanged) {
     hydrate(result.definition);
-    dirty.value = true;
+    // 未存过的起步图: 单位校正只改本地预览, 不触发自动保存 (见 loadDefinition)。
+    if (definition.value?.id) dirty.value = true;
   }
 }
 
@@ -3290,7 +3294,11 @@ async function loadDefinition(): Promise<void> {
     loadedDefinitionIdentity.value = identity;
     await ensureBoundSkuDetails();
     if (!isCurrentLoad(generation, identity)) return;
-    dirty.value = !nextDefinition.id || inputSelectionMigrated;
+    // 还没有存过图的产品: 画布上那张起步图只是本地预览, ⛔ 不标 dirty —— 标了就会在 2.5s 后被
+    // 自动保存成一张草稿, 「打开看一眼」就往库里写一行 (F006 每看一个没图的成品就多一张
+    // 「草稿 v1 · 待完善画布」, 2026-10-25)。用户真正改动后照常 dirty + 自动保存;
+    // 不改也能手动点保存 (见 unsavedNewDefinition)。与下方「已发布图只看不 fork」同一原则。
+    dirty.value = Boolean(nextDefinition.id) && inputSelectionMigrated;
     await reconcileLoadedUnits();
     await nextTick();
     if (!isCurrentLoad(generation, identity)) return;
@@ -6491,7 +6499,7 @@ async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): P
   }
   let identity = initialIdentity;
   if (!(await reconcileForPersistence(identity, true))) return;
-  if (dirty.value && !(await saveDraft())) return;
+  if ((dirty.value || unsavedNewDefinition.value) && !(await saveDraft())) return;
   identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return;
   if (!definition.value?.lockVersion && definition.value?.lockVersion !== 0) {
