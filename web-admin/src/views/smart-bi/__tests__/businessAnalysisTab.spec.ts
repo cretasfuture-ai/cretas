@@ -6,8 +6,8 @@ import {
 } from '../businessAnalysisTab';
 
 describe('businessAnalysisTab — 经营分析 hub tab 解析 (WS4 Task 2)', () => {
-  it('4 个 tab: 财务/销售/趋势/KPI', () => {
-    expect(BUSINESS_ANALYSIS_TABS).toEqual(['finance', 'sales', 'trend', 'kpi']);
+  it('5 个 tab: 财务/销售/趋势/KPI/工厂图表', () => {
+    expect(BUSINESS_ANALYSIS_TABS).toEqual(['finance', 'sales', 'trend', 'kpi', 'factory']);
   });
 
   it('默认 tab = finance', () => {
@@ -17,7 +17,7 @@ describe('businessAnalysisTab — 经营分析 hub tab 解析 (WS4 Task 2)', () 
     expect(resolveBusinessAnalysisTab(undefined)).toBe('finance');
   });
 
-  it.each(['finance', 'sales', 'trend', 'kpi'] as const)('?tab=%s → %s', (tab) => {
+  it.each(['finance', 'sales', 'trend', 'kpi', 'factory'] as const)('?tab=%s → %s', (tab) => {
     expect(resolveBusinessAnalysisTab({ tab })).toBe(tab);
   });
 

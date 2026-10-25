@@ -207,8 +207,8 @@ async function readServerMessage(response: Response): Promise<string | undefined
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function pythonFetch<T = any>(path: string, options: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
-  const { timeoutMs, ...fetchOptions } = options;
+export async function pythonFetch<T = any>(path: string, options: RequestInit & { timeoutMs?: number; preserveResponseKeys?: boolean } = {}): Promise<T> {
+  const { timeoutMs, preserveResponseKeys, ...fetchOptions } = options;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs || PYTHON_TIMEOUT_MS);
 
@@ -248,7 +248,7 @@ export async function pythonFetch<T = any>(path: string, options: RequestInit & 
     }
 
     const json = await response.json();
-    return transformKeys(json) as T;
+    return (preserveResponseKeys ? json : transformKeys(json)) as T;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('Python service request timed out');

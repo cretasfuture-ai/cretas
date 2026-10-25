@@ -1,0 +1,173 @@
+import { defineComponent, nextTick } from 'vue';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import ElementPlus from 'element-plus';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => ({
+  authStore: null as { factoryId: string } | null,
+  api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn() },
+  route: { query: {} as Record<string, unknown> },
+}));
+
+vi.mock('@/store/modules/auth', async () => {
+  const { reactive: makeReactive } = await import('vue');
+  h.authStore = makeReactive({ factoryId: 'F006' });
+  return { useAuthStore: () => h.authStore };
+});
+vi.mock('vue-router', () => ({ useRoute: () => h.route }));
+vi.mock('@/api/smartbi/factory-charts', async () => {
+  const actual = await vi.importActual<typeof import('@/api/smartbi/factory-charts')>('@/api/smartbi/factory-charts');
+  return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations };
+});
+vi.mock('@/api/smartbi/upload', () => ({
+  getUploadHistory: h.api.getUploadHistory,
+}));
+vi.mock('../FactoryChartCanvas.vue', () => ({
+  default: defineComponent({
+    name: 'FactoryChartCanvasStub',
+    props: { option: { type: Object, required: true } },
+    template: '<div class="chart-stub" :data-title="option.title?.text || \'chart\'">chart</div>',
+  }),
+}));
+
+import FactoryChartRecommendations from '../FactoryChartRecommendations.vue';
+import PeriodSelector from '@/components/smartbi/PeriodSelector.vue';
+
+const response = (overrides: Record<string, unknown> = {}) => ({
+  success: true,
+  data: {
+    factoryId: 'F006', source: 'business', sourceLabel: '业务系统', period: { label: '全部历史' },
+    ranking: { mode: 'rule', reason: '按规则优先级排序，未经AI排序' },
+    recommendations: [
+      {
+        id: 'yield', title: '产量趋势', metric: '产量', domain: '生产', priority: 'required', reason: '有生产日期和产量', source: 'business', unit: 'kg',
+        findings: { good: ['产量连续记录'], attention: ['换产波动'], suggestions: ['按批次复核'] },
+        chart: { chartType: 'line', echartsOption: { title: { text: '产量趋势' }, xAxis: {}, yAxis: {}, series: [] } },
+        kpis: [{ label: '总产量', value: 120, unit: 'kg' }], tableData: [],
+      },
+      {
+        id: 'margin', title: '毛利趋势', metric: '毛利', domain: '经营', priority: 'optional', reason: '有价格字段', aiReason: 'AI补充排序理由', source: 'business', unit: '元',
+        findings: { good: [], attention: ['价格波动'], suggestions: [] },
+        chart: { chartType: 'line', echartsOption: { title: { text: '毛利趋势' }, series: [] } },
+        kpis: [{ label: '毛利', value: '—', unit: '元' }], tableData: [],
+      },
+    ],
+    unavailable: [{ id: 'inventory', title: '库存周转', missing: ['库存流水'] }],
+    sourceErrors: [],
+    ...overrides,
+  },
+});
+
+let wrapper: VueWrapper | null = null;
+async function mountPage() {
+  wrapper = mount(FactoryChartRecommendations, { global: { plugins: [ElementPlus] } });
+  await flushPromises();
+  return wrapper;
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  h.authStore!.factoryId = 'F006';
+  h.route.query = {};
+  h.api.getUploadHistory.mockReset().mockResolvedValue({ success: true, data: [
+    { id: 42, fileName: '生产报表.xlsx', sheetName: '产量', rowCount: 8, columnCount: 4, status: 'COMPLETED', createdAt: '2026-10-01' },
+  ] });
+  h.api.getFactoryChartRecommendations.mockReset().mockResolvedValue(response());
+});
+afterEach(() => { wrapper?.unmount(); wrapper = null; document.body.innerHTML = ''; });
+
+describe('FactoryChartRecommendations mounted workflow', () => {
+  it('loads business data, renders server chart/facts, and persists checkbox selection', async () => {
+    const page = await mountPage();
+    expect(h.api.getUploadHistory).toHaveBeenCalledWith();
+    expect(h.api.getFactoryChartRecommendations).toHaveBeenCalled();
+    expect(h.api.getFactoryChartRecommendations.mock.calls.at(-1)?.[0]).toMatchObject({ source: 'business', period_type: 'all', factory_id: 'F006', include_optional: true, use_ai: true });
+    expect(page!.text()).toContain('规则排序（未经AI排序）');
+    expect(page!.text()).toContain('规则依据');
+    expect(page!.text()).toContain('做得好的');
+    expect(page!.findAll('.chart-stub')).toHaveLength(2);
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('产量趋势');
+    const cardText = page!.get('[data-testid="factory-chart-card-margin"]').text();
+    expect(cardText.indexOf('AI 补充')).toBeGreaterThan(cardText.indexOf('需要关注'));
+
+    const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
+    await boxes[0].setValue(false);
+    await nextTick();
+    expect(page!.findAll('.chart-stub')).toHaveLength(1);
+    expect(localStorage.getItem('smartbi.factory-chart-selection:F006:business')).toContain('margin');
+    await page!.get('[data-testid="factory-chart-refresh"]').trigger('click');
+    await flushPromises();
+    expect(page!.findAll('.chart-stub')).toHaveLength(1);
+  });
+
+  it('switches to upload source and sends selected upload id, then maps period changes', async () => {
+    const page = await mountPage();
+    const sourceSelect = page!.findComponent({ name: 'ElSelect' });
+    sourceSelect.vm.$emit('update:modelValue', 'upload');
+    await flushPromises();
+    expect(h.api.getFactoryChartRecommendations.mock.calls.at(-1)?.[0]).toMatchObject({ source: 'upload', upload_id: 42 });
+
+    const period = page!.findComponent(PeriodSelector);
+    period.vm.$emit('update:modelValue', { type: 'month', year: 2026, value: '2026-03', compareEnabled: false });
+    await flushPromises();
+    expect(h.api.getFactoryChartRecommendations.mock.calls.at(-1)?.[0]).toMatchObject({ period_type: 'month_range', start_month: 3, end_month: 3 });
+  });
+
+  it('shows source errors separately and retries a failed request', async () => {
+    h.api.getFactoryChartRecommendations.mockReset()
+      .mockResolvedValueOnce(response({ sourceErrors: [{ source: 'business', message: '缺少生产表' }], recommendations: [] }))
+      .mockResolvedValueOnce(response());
+    const page = await mountPage();
+    expect(page!.find('[data-testid="factory-chart-source-errors"]').exists()).toBe(true);
+    expect(page!.find('[data-testid="factory-chart-empty"]').exists()).toBe(false);
+    await page!.find('[data-testid="factory-chart-source-errors"] .el-button').trigger('click');
+    await flushPromises();
+    expect(h.api.getFactoryChartRecommendations).toHaveBeenCalledTimes(2);
+    expect(page!.findAll('.chart-stub')).toHaveLength(2);
+  });
+
+  it('loads an upload query automatically and exposes upload-history failure with retry', async () => {
+    h.route.query = { upload_id: '42' };
+    h.api.getFactoryChartRecommendations.mockResolvedValue(response({ source: 'upload' }));
+    h.api.getUploadHistory.mockResolvedValueOnce({ success: false, data: [] });
+    const page = await mountPage();
+    expect(h.api.getFactoryChartRecommendations.mock.calls.at(-1)?.[0]).toMatchObject({ source: 'upload', upload_id: 42 });
+    expect(page!.find('[data-testid="factory-chart-source-load-error"]').exists()).toBe(true);
+    h.api.getUploadHistory.mockResolvedValueOnce({ success: true, data: [] });
+    await page!.find('[data-testid="factory-chart-source-load-error"] .el-button').trigger('click');
+    await flushPromises();
+    expect(page!.find('[data-testid="factory-chart-source-load-error"]').exists()).toBe(false);
+    expect(page!.findAll('.chart-stub')).toHaveLength(2);
+  });
+
+  it.each([{ factoryId: 'F007' }, { source: 'upload' }])('rejects mismatched response scope %j', async (scope) => {
+    h.api.getFactoryChartRecommendations.mockResolvedValue(response(scope));
+    const page = await mountPage();
+    expect(page!.text()).toContain('返回的数据源与当前工厂不一致');
+    expect(page!.findAll('.chart-stub')).toHaveLength(0);
+  });
+
+  it('drops a recommendation response that belongs to the previous factory', async () => {
+    let resolveOld!: (value: ReturnType<typeof response>) => void;
+    const oldResponse = new Promise<ReturnType<typeof response>>(resolve => { resolveOld = resolve; });
+    h.api.getFactoryChartRecommendations.mockReset()
+      .mockImplementationOnce(() => oldResponse)
+      .mockResolvedValueOnce(response({ factoryId: 'F007', sourceLabel: 'F007业务系统' }));
+    const page = await mountPage();
+    h.authStore!.factoryId = 'F007';
+    await nextTick();
+    await flushPromises();
+    resolveOld(response({ factoryId: 'F006', sourceLabel: '旧F006业务系统' }));
+    await flushPromises();
+    expect(page!.text()).toContain('F007业务系统');
+    expect(page!.text()).not.toContain('旧F006业务系统');
+  });
+
+  it('does not request data without a factory', async () => {
+    h.authStore!.factoryId = '';
+    const page = await mountPage();
+    expect(h.api.getUploadHistory).not.toHaveBeenCalled();
+    expect(h.api.getFactoryChartRecommendations).not.toHaveBeenCalled();
+    expect(page!.text()).toContain('当前账号没有所属工厂');
+  });
+});

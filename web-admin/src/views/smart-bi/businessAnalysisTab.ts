@@ -5,9 +5,9 @@
  * 同步 (保书签 + 旧路径 redirect 落点)。这层是纯函数, 方便单测 (与
  * financeDashboardSection.ts 同模式)。
  */
-export type BusinessAnalysisTab = 'finance' | 'sales' | 'trend' | 'kpi';
+export type BusinessAnalysisTab = 'finance' | 'sales' | 'trend' | 'kpi' | 'factory';
 
-export const BUSINESS_ANALYSIS_TABS: BusinessAnalysisTab[] = ['finance', 'sales', 'trend', 'kpi'];
+export const BUSINESS_ANALYSIS_TABS: BusinessAnalysisTab[] = ['finance', 'sales', 'trend', 'kpi', 'factory'];
 
 /** 默认 tab = 财务 (与原"财务看板"为合并前最常用入口一致)。 */
 export const DEFAULT_BUSINESS_ANALYSIS_TAB: BusinessAnalysisTab = 'finance';
