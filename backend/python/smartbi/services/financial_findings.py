@@ -148,7 +148,7 @@ def _ratio(df: pd.DataFrame, out: _Findings) -> None:
         return
     mean_cur, mean_last = _mean(cur), _mean(last)
     if mean_cur is not None and mean_last is not None:
-        diff = mean_cur - mean_last
+        diff = round(mean_cur, 1) - round(mean_last, 1)  # 与页首同一取法: 用显示出来的两个数相减
         text = f"各月平均毛利率 {_pct(mean_cur)}，比上年 {diff:+.1f} 个百分点（各月简单平均）"
         (out.good if diff >= 0 else out.attention).append(text)
 
@@ -258,8 +258,8 @@ def _categories(rows: pd.DataFrame, out: _Findings) -> None:
         out.attention.append(f"{top}占本期 {_pct(top_share)}，一半以上来自这一个品类")
 
     # 各品类比上年多 / 少了多少 (金额): 占比只说结构, 说不出哪个品类在掉
-    changes = [(c - last[k], k, M.growth(c, last[k]).value) for k, c in cur.items()
-               if c is not None and last.get(k) is not None]
+    changes = [(c - prev, k, M.growth(c, prev).value) for k, c in cur.items()
+               if c is not None and (prev := last.get(k)) is not None]
     rising = [x for x in changes if x[0] > 0 and x[2] is not None]
     falling = sorted(x for x in changes if x[0] < 0 and x[2] is not None)
     if rising:

@@ -491,6 +491,13 @@ class TestFindings:
         worse = [{**row, '本年毛利率': '20%'} for row in self.MARGIN_ROWS]
         assert svc.generate_dashboard(pd.DataFrame(worse), 2026, 'all', 1, 12)['headline']['tone'] == 'bad'
 
+    def test_margin_gap_is_computed_from_the_displayed_averages(self):
+        # 线上 5254 (2026-10-25): 「各月平均毛利率 26.3%，上年 26.3%，+0.1 个百分点」读起来对不上
+        rows = [{'月份': f'{m}月', '本年毛利率': '26.34%', '上年毛利率': '26.26%'} for m in (1, 2)]
+        r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)
+        assert '各月平均毛利率 26.3%，上年 26.3%，+0.0 个百分点' in r['headline']['text']
+        assert '各月平均毛利率 26.3%，比上年 +0.0 个百分点（各月简单平均）' in r['findings']['good']
+
     def test_pnl_sheet_states_margin_expense_share_and_biggest_item(self):
         # 线上 5252 (2026-10-25): 损益表只有「净利润」一条结论
         rows = [{'月份': '1月', '项目': k, '实际（万元）': v} for k, v in PNL_REFERENCE]
