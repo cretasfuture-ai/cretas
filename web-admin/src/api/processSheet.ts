@@ -630,6 +630,13 @@ export interface WorkflowProcessDescriptor {
    * 录入 N 条产出 (产品只读=端口 SKU, 只填数量) —— 这是"是否多产出"的唯一判据, 不是 toggle。
    */
   outputs: WorkflowPortDescriptor[];
+  /**
+   * 缺口 04: 按工艺图这一道能不能正式报 (上游产出的料到了就是 true)。与正式录入时后端拦截
+   * 同一份判定。`null`/缺省 = 后端没算, 退回旧的「上一道已正式报工」规则。
+   */
+  unlocked?: boolean | null;
+  /** unlocked=false 时给人看的原因 (等哪一道上游)。 */
+  blockedReason?: string | null;
 }
 
 /**

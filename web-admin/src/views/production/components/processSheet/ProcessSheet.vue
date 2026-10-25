@@ -469,6 +469,7 @@ watch(
 // After a row is saved: refresh inventory of this process + active tab inventory table
 // -------------------------------------------------------------------------
 async function onRowSaved(savedProc: ProcEntry) {
+  void refreshWorkflowReadiness();
   // Refresh inventory for ALL processes (a saved row can affect downstream dropdowns)。
   // SP-F role-mode fix: 按唯一 procKey 刷新 + 传 order 双键过滤。
   await Promise.all(
@@ -529,14 +530,40 @@ function processTabState(proc: ProcEntry): 'reported' | 'current' | 'pending' {
 }
 
 function upstreamSubmissionReady(proc: ProcEntry): boolean {
+  // 缺口 04: Workflow 计划以后端按工艺图算的结论为准 (上游产出的料到了就解锁, 并行分支各报各的);
+  // 后端正式录入时用同一份判定拦截。没有结论 (legacy 计划) 才退回「上一道已正式报工」。
+  const unlocked = proc.workflowContext?.unlocked;
+  if (unlocked === true || unlocked === false) return unlocked;
   const idx = PROCESSES.value.findIndex((item) => procKey(item) === procKey(proc));
   return idx <= 0 || hasSubmittedRow(PROCESSES.value[idx - 1]);
 }
 
 function upstreamSubmissionMessage(proc: ProcEntry): string | undefined {
+  if (upstreamSubmissionReady(proc)) return undefined;
+  if (proc.workflowContext?.unlocked === false) {
+    return `${proc.workflowContext.blockedReason || '上游工序还没有产出'}；可先保存草稿。`;
+  }
   const idx = PROCESSES.value.findIndex((item) => procKey(item) === procKey(proc));
-  if (idx <= 0 || upstreamSubmissionReady(proc)) return undefined;
+  if (idx <= 0) return undefined;
   return `上游工序「${PROCESSES.value[idx - 1].label}」尚未正式报工；可先保存草稿，正式报工前请先完成上游工序。`;
+}
+
+/** 正式报工后上游产出变了, 重新读一次各道「能不能报」(只更新这两个字段, 不重建工序列表)。 */
+async function refreshWorkflowReadiness() {
+  if (!PROCESSES.value.some((p) => p.workflowContext)) return;
+  try {
+    const resp = await getWorkflowSheetConfig(props.factoryId, props.planId);
+    const byOrder = new Map((resp.data?.processes ?? []).map((d) => [d.processOrder, d]));
+    PROCESSES.value = PROCESSES.value.map((p) => {
+      const fresh = p.workflowContext ? byOrder.get(p.workflowContext.processOrder) : undefined;
+      return fresh && p.workflowContext
+        ? { ...p, workflowContext: { ...p.workflowContext, unlocked: fresh.unlocked, blockedReason: fresh.blockedReason } }
+        : p;
+    });
+  } catch (e) {
+    // 读不到就保留旧结论; 真正的拦截在后端, 不会因为这里没刷新而放过
+    console.warn('[ProcessSheet] refresh workflow readiness failed', e);
+  }
 }
 
 // -------------------------------------------------------------------------

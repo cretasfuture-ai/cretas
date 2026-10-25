@@ -66,6 +66,13 @@ export interface WorkProcessTask {
    *    把前者说成后者会把一屏「没排期」画成一屏「一切正常」。
    */
   overdue?: boolean | null;
+  /**
+   * 按工艺图能不能报这一道 (mirror WorkProcessTaskDTO.unlocked): 上游产出的料到了就是 true。
+   * 后端开工 / 报工拦截用的是同一份判定。`null` = 后端没算 (终态任务) —— ⛔ 不要当成 false。
+   */
+  unlocked?: boolean | null;
+  /** unlocked=false 时的原因, 写明在等哪一道上游。 */
+  blockedReason?: string | null;
   actualStartAt?: string | null;
   actualEndAt?: string | null;
   actualMinutes?: number | null;
