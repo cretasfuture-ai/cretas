@@ -36,21 +36,21 @@ public final class TrainingSampleRules {
             + "钱严覃武戴莫孔汤";
     static final String PERSON_ROLE = "(?:联系人|负责人|经办人|业务员|销售员|司机|操作员|质检员|审核人|审批人|签收人|"
             + "收货人|制单人|姓名|员工|工人|班长|组长|主管|仓管员?)";
-    private static final Pattern ORG_NAME = Pattern.compile("[" + HAN + "A-Za-z0-9]{2,12}" + ORG_SUFFIX);
-    private static final Pattern CUSTOMER_NAMED = Pattern.compile(
+    static final Pattern ORG_NAME = Pattern.compile("[" + HAN + "A-Za-z0-9]{2,12}" + ORG_SUFFIX);
+    static final Pattern CUSTOMER_NAMED = Pattern.compile(
             "客户(?:名称|名)?\\s*[:：]\\s*[" + HAN + "A-Za-z0-9]{2,}"
             + "|客户\\s*[「“\"『][^」”\"』]{2,}[」”\"』]"
             + "|[「“\"『][^」”\"』]{2,}[」”\"』]\\s*客户");
-    private static final Pattern PERSON = Pattern.compile(
+    static final Pattern PERSON = Pattern.compile(
             PERSON_ROLE + "\\s*[:：|]?\\s*[" + SURNAMES + "][" + HAN + "]{1,2}"
             + "|(?<![" + HAN + "])[" + SURNAMES + "][" + HAN + "]?(?:先生|女士|小姐|经理|总监|老板|师傅|厂长)"
             + "|(?<![" + HAN + "])[" + SURNAMES + "]总(?![量额数计成产体部结和监经])"
             + "|(?:联系|找|通知|叫|告诉)(?!方式|方法|方面|电话|人)[" + SURNAMES + "][" + HAN + "]{1,2}"
             + "(?=[\\s，,。；;、:：（(]|$|\\d)");
 
-    private static final Pattern ID_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{17}[\\dXx](?![0-9A-Za-z])");
-    private static final Pattern BANK_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{16,19}(?![0-9A-Za-z])");
-    private static final Pattern PHONE = Pattern.compile("(?<![0-9A-Za-z])1[3-9]\\d{9}(?![0-9A-Za-z])");
+    static final Pattern ID_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{17}[\\dXx](?![0-9A-Za-z])");
+    static final Pattern BANK_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{16,19}(?![0-9A-Za-z])");
+    static final Pattern PHONE = Pattern.compile("(?<![0-9A-Za-z])1[3-9]\\d{9}(?![0-9A-Za-z])");
     /** 数字; F006 / V2 / B12 这类编号保留。 */
     private static final Pattern NUMBER = Pattern.compile("(?<![A-Za-z0-9_.<])\\d+(?:\\.\\d+)?");
 

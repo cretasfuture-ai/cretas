@@ -3,6 +3,8 @@ package com.cretas.aims.service.execution;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
+import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -54,9 +57,14 @@ public class WorkdeskOutputSummarizer {
     @Autowired(required = false)
     private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
 
+    /** 工艺保密产品名, 用于发给模型前把它们换成代号。测试里两参构造时为 null (视为本厂没有保密产品)。 */
+    @Autowired(required = false)
+    private ProcessSecretSampleFilter processSecretSampleFilter;
+
     static final String PROVENANCE_SITE = "workdesk-summarizer";
     static final String LLM_UNAVAILABLE_HEADER = " 数据摘要 (LLM 暂不可用, 显示结构化结果):";
     static final String PROVENANCE_FALLBACK_HEADER = " 数据摘要 (AI 摘要里有无法与数据核对的数字, 改为显示系统返回的结构化结果):";
+    static final String PRIVACY_FALLBACK_HEADER = " 数据摘要 (结果里有无法脱敏的内容, 未发给 AI, 显示系统返回的结构化结果):";
 
     @Value("${cretas.ai.workdesk-summarizer.enabled:true}")
     private boolean enabled;
@@ -90,6 +98,13 @@ public class WorkdeskOutputSummarizer {
      * @param response the response to clean up (must not be null)
      */
     public void apply(IntentExecuteResponse response) {
+        apply(response, null);
+    }
+
+    /**
+     * @param factoryId 当前工厂; 用来查工艺保密产品名, 发给模型前换成代号 (null = 不查)
+     */
+    public void apply(IntentExecuteResponse response, String factoryId) {
         if (!enabled || response == null) {
             return;
         }
@@ -105,7 +120,23 @@ public class WorkdeskOutputSummarizer {
             return; // both clean, nothing to do
         }
 
-        String summary = tryLlmSummarize(resultData, response);
+        Attempt attempt = tryLlmSummarize(resultData, response, factoryId);
+        if (attempt.privacyRefused()) {
+            // 脱敏不了就不发: 结构化摘要只在本机拼, 不出服务器
+            String local = buildDeterministicFallback(resultData, response, PRIVACY_FALLBACK_HEADER);
+            if (local != null && isDirty(local)) {
+                local = hardStripDirty(local);
+            }
+            if (local == null || local.isBlank()) {
+                local = hardStripDirty(ftDirty ? formattedText : message);
+            }
+            if (local != null && !local.isBlank()) {
+                if (ftDirty) response.setFormattedText(local);
+                if (msgDirty) response.setMessage(local);
+            }
+            return;
+        }
+        String summary = attempt.text();
         // Sprint 12 fix: the LLM can echo the raw resultData back (incl. underscore
         // metadata keys / JSON braces), producing a summary that is ITSELF dirty.
         // Previously we accepted any non-blank LLM summary, so a dirty LLM output
@@ -320,20 +351,39 @@ public class WorkdeskOutputSummarizer {
         return false;
     }
 
+    /** text = 模型摘要 (已换回真名), null = 没拿到; privacyRefused = 脱敏不了, 根本没发。 */
+    record Attempt(String text, boolean privacyRefused) {
+        static final Attempt NONE = new Attempt(null, false);
+        static final Attempt REFUSED = new Attempt(null, true);
+    }
+
     /**
      * Call LLM to summarize resultData into a Chinese natural-language summary.
-     *
-     * @return summary string (≤ maxChars), or null on failure
+     * 发出前先经 {@link LlmEgressRedactor} 脱敏; 脱敏不了 (或查不到保密产品名) 就不发。
      */
-    private String tryLlmSummarize(Object resultData, IntentExecuteResponse response) {
+    private Attempt tryLlmSummarize(Object resultData, IntentExecuteResponse response, String factoryId) {
         if (resultData == null) {
-            return null;
+            return Attempt.NONE;
         }
+        LlmEgressRedactor.Result redacted;
         try {
-            // Build cleaned-up payload (drop underscore-prefixed metadata keys)
-            String payloadJson = buildCleanPayload(resultData);
+            Set<String> protectedNames = processSecretSampleFilter == null || factoryId == null
+                    ? Set.of() : processSecretSampleFilter.protectedProductNames(factoryId);
+            redacted = new LlmEgressRedactor(objectMapper).redact(stripUnderscoreKeys(resultData), protectedNames);
+        } catch (Exception e) {
+            log.warn("WorkdeskOutputSummarizer: redaction failed ({}), not sending to LLM", e.getClass().getSimpleName());
+            return Attempt.REFUSED;
+        }
+        if (redacted.refused()) {
+            log.warn("WorkdeskOutputSummarizer: redaction refused ({}), not sending to LLM", redacted.refusal());
+            return Attempt.REFUSED;
+        }
+        log.info("WorkdeskOutputSummarizer: redacted {} name(s), dropped {} field(s) before LLM",
+                redacted.tokenCount(), redacted.droppedFields());
+        try {
+            String payloadJson = redacted.payload();
             if (payloadJson == null || payloadJson.length() < 5) {
-                return null;
+                return Attempt.NONE;
             }
             if (payloadJson.length() > MAX_SUMMARIZE_BUDGET_CHARS) {
                 // truncate to keep LLM call fast (Workdesk skill rich payloads OK to clip tail)
@@ -351,19 +401,19 @@ public class WorkdeskOutputSummarizer {
                 llmResult = dashScopeClient.chatFast(systemPrompt, userInput);
             } catch (Exception llmEx) {
                 log.warn("WorkdeskOutputSummarizer: LLM call failed: {}", llmEx.getMessage());
-                return null;
+                return Attempt.NONE;
             }
             if (llmResult == null || llmResult.isBlank()) {
-                return null;
+                return Attempt.NONE;
             }
-            llmResult = llmResult.trim();
+            llmResult = redacted.restore(llmResult.trim());
             if (llmResult.length() > maxChars) {
                 llmResult = llmResult.substring(0, maxChars) + "...";
             }
-            return llmResult;
+            return new Attempt(llmResult, false);
         } catch (Exception e) {
             log.warn("WorkdeskOutputSummarizer: summarize failed: {}", e.getMessage());
-            return null;
+            return Attempt.NONE;
         }
     }
 
@@ -417,6 +467,7 @@ public class WorkdeskOutputSummarizer {
                 // 与数字出处闸同一条边界: 闸不认算术派生, 这里就不让模型去算 ——
                 // 否则算对了的占比也会被闸换成结构化摘要。
                 + "9. 只能引用数据里已经出现的数字, 不要自行计算合计 / 占比 / 环比 / 同比, 也不要估算; "
-                + "也不要自己按状态 / 类型去数「有几个」(数据里给了 count 才写个数, 没给就列名称).\n";
+                + "也不要自己按状态 / 类型去数「有几个」(数据里给了 count 才写个数, 没给就列名称).\n"
+                + "10. 数据里方括号代号 (如 [客户A] [人员B] [保密产品A]) 是脱敏占位, 原样照抄, 不要改写, 也不要猜真实名称.\n";
     }
 }
