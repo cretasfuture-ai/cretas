@@ -1,0 +1,353 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { Refresh, TrendCharts } from '@element-plus/icons-vue';
+import { useRoute } from 'vue-router';
+import { useAuthStore } from '@/store/modules/auth';
+import PeriodSelector, { type PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
+import { getUploadHistory, type UploadHistoryItem } from '@/api/smartbi/upload';
+import {
+  getFactoryChartRecommendations,
+  type FactoryChartSource,
+  type FactoryRecommendation,
+  type FactoryRecommendationsData,
+} from '@/api/smartbi/factory-charts';
+import FactoryChartCanvas from './FactoryChartCanvas.vue';
+import {
+  factoryChartRequestFromSelection,
+  loadFactoryChartSelection,
+  saveFactoryChartSelection,
+} from './factoryChartState';
+
+const route = useRoute();
+const authStore = useAuthStore();
+const factoryId = computed(() => authStore.factoryId || '');
+
+function queryUploadId(): number | null {
+  const value = route.query.upload_id;
+  const raw = Array.isArray(value) ? value[0] : value;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+const source = ref<FactoryChartSource>(queryUploadId() ? 'upload' : 'business');
+const uploadId = ref<number | null>(queryUploadId());
+const dataSources = ref<UploadHistoryItem[]>([]);
+const periodSelection = ref<PeriodSelection>({
+  type: 'year',
+  year: new Date().getFullYear(),
+  value: String(new Date().getFullYear()),
+  compareEnabled: false,
+  allHistory: true,
+});
+const includeOptional = ref(true);
+const useAi = ref(true);
+const selectedIds = ref<string[]>([]);
+const loading = ref(false);
+const loadingSources = ref(false);
+const error = ref('');
+const sourceLoadError = ref('');
+const data = ref<FactoryRecommendationsData | null>(null);
+let initialLoadDone = false;
+let requestVersion = 0;
+let selectionReady = false;
+let suppressSelectionWatch = false;
+let sourceLoadVersion = 0;
+let initialRequestScheduled = false;
+
+const recommendations = computed(() => data.value?.recommendations ?? []);
+const displayedRecommendations = computed(() => recommendations.value.filter(item => selectedIds.value.includes(item.id)));
+const hasNoSelectedCharts = computed(() => recommendations.value.length > 0 && displayedRecommendations.value.length === 0);
+const sourceLabel = computed(() => source.value === 'business' ? '业务系统' : '上传报表');
+const uploadLabel = (item: UploadHistoryItem) => `${item.originalFileName || item.fileName}${item.sheetName ? ` · ${item.sheetName}` : ''}`;
+const chartTypeNames: Record<string, string> = {
+  line: '折线', bar: '柱形', bar_horizontal: '横条', area: '面积', pie: '饼图', donut: '环形',
+  nested_donut: '双环', scatter: '散点', waterfall: '瀑布', sankey: '流向', bullet: '子弹图',
+  dual_axis: '双轴', budget_comparison: '计划对比', combination: '组合', funnel: '漏斗', gantt: '时间安排',
+  gauge: '仪表', pareto: '帕累托', radar: '雷达', slope: '两期变化', sunburst: '旭日', treemap: '矩形树图',
+  boxplot: '箱线', heatmap: '热力', matrix_heatmap: '矩阵热力', correlation_matrix: '相关矩阵', parallel: '平行坐标',
+};
+const chartTypeLabel = (item: FactoryRecommendation) => chartTypeNames[item.chart.chartType] || '财务图表';
+
+function errorText(value: unknown, fallback: string): string {
+  const serverMessage = (value as { serverMessage?: unknown } | null)?.serverMessage;
+  return typeof serverMessage === 'string' && serverMessage ? serverMessage : value instanceof Error ? value.message : fallback;
+}
+
+async function loadDataSources() {
+  if (!factoryId.value) return;
+  const version = ++sourceLoadVersion;
+  const loadingFactoryId = factoryId.value;
+  loadingSources.value = true;
+  sourceLoadError.value = '';
+  try {
+    const result = await getUploadHistory();
+    if (version !== sourceLoadVersion || loadingFactoryId !== factoryId.value) return;
+    if (!result.success) {
+      dataSources.value = [];
+      sourceLoadError.value = '上传报表列表加载失败，请重试';
+      return;
+    }
+    dataSources.value = result.data;
+    if (source.value === 'upload' && !uploadId.value) uploadId.value = dataSources.value[0]?.id ?? null;
+  } catch {
+    if (version === sourceLoadVersion && loadingFactoryId === factoryId.value) {
+      dataSources.value = [];
+      sourceLoadError.value = '上传报表列表加载失败，请重试';
+    }
+  }
+  finally {
+    if (version === sourceLoadVersion && loadingFactoryId === factoryId.value) loadingSources.value = false;
+  }
+}
+
+function resetVisibleData() {
+  data.value = null;
+  selectedIds.value = [];
+  selectionReady = false;
+  error.value = '';
+}
+
+async function loadRecommendations() {
+  requestVersion += 1;
+  const version = requestVersion;
+  resetVisibleData();
+  loading.value = false;
+  if (!factoryId.value) {
+    error.value = '当前账号没有所属工厂，无法加载工厂图表';
+    return;
+  }
+  const query = factoryChartRequestFromSelection({
+    factoryId: factoryId.value,
+    source: source.value,
+    uploadId: uploadId.value,
+    period: periodSelection.value,
+    includeOptional: includeOptional.value,
+    useAi: useAi.value,
+  });
+  if ('error' in query) {
+    error.value = query.error;
+    return;
+  }
+  loading.value = true;
+  try {
+    const result = await getFactoryChartRecommendations(query);
+    if (version !== requestVersion) return;
+    if (!result.success || !result.data) {
+      error.value = result.message || '工厂图表推荐加载失败';
+      return;
+    }
+    if (result.data.factoryId !== query.factory_id || result.data.source !== query.source) {
+      error.value = '返回的数据源与当前工厂不一致，请刷新重试';
+      return;
+    }
+    data.value = result.data;
+    selectedIds.value = loadFactoryChartSelection(factoryId.value, source.value, result.data.recommendations.map(item => item.id));
+    selectionReady = result.data.recommendations.length > 0;
+  } catch (err) {
+    if (version === requestVersion) error.value = errorText(err, '工厂图表推荐加载失败');
+  } finally {
+    if (version === requestVersion) loading.value = false;
+  }
+}
+
+function refresh() { void loadRecommendations(); }
+
+function onSourceChange(next: FactoryChartSource) {
+  source.value = next;
+  if (next === 'business') uploadId.value = null;
+  else if (!uploadId.value) uploadId.value = dataSources.value[0]?.id ?? null;
+}
+
+function onFactoryChanged() {
+  requestVersion += 1;
+  sourceLoadVersion += 1;
+  dataSources.value = [];
+  loading.value = false;
+  loadingSources.value = false;
+  suppressSelectionWatch = true;
+  uploadId.value = null;
+  resetVisibleData();
+  suppressSelectionWatch = false;
+  if (initialLoadDone) {
+    void loadDataSources();
+    if (source.value === 'business') void loadRecommendations();
+  }
+}
+
+watch(factoryId, onFactoryChanged);
+watch([source, uploadId, includeOptional, useAi], () => {
+  if (initialLoadDone && !suppressSelectionWatch) void loadRecommendations();
+}, { deep: true });
+watch(selectedIds, ids => {
+  if (selectionReady && factoryId.value) saveFactoryChartSelection(factoryId.value, source.value, ids);
+}, { deep: true });
+
+function onPeriodChange(value: PeriodSelection) {
+  periodSelection.value = value;
+  if (initialLoadDone && !initialRequestScheduled) void loadRecommendations();
+}
+
+onMounted(() => {
+  initialLoadDone = true;
+  if (!factoryId.value) {
+    error.value = '当前账号没有所属工厂，无法加载工厂图表';
+    return;
+  }
+  void loadDataSources();
+  initialRequestScheduled = true;
+  void nextTick(() => {
+    initialRequestScheduled = false;
+    void loadRecommendations();
+  });
+});
+
+function findingsFor(item: FactoryRecommendation) {
+  return [
+    { key: 'good', title: '做得好的', items: item.findings?.good ?? [], type: 'success' },
+    { key: 'attention', title: '需要关注', items: item.findings?.attention ?? [], type: 'warning' },
+    { key: 'suggestions', title: '建议', items: item.findings?.suggestions ?? [], type: 'info' },
+  ].filter(section => section.items.length > 0);
+}
+</script>
+
+<template>
+  <div class="factory-chart-recommendations">
+    <div class="page-header">
+      <div>
+        <h2>工厂图表推荐</h2>
+        <p class="page-subtitle">按本厂当前数据推荐图表，缺少的数据会明确列出</p>
+      </div>
+      <el-button type="primary" :icon="Refresh" :loading="loading" :disabled="!factoryId" data-testid="factory-chart-refresh" @click="refresh">刷新</el-button>
+    </div>
+
+    <el-card shadow="never" class="filter-card">
+      <div class="filter-row">
+        <div class="filter-item">
+          <span class="filter-label">数据源</span>
+          <el-select :model-value="source" data-testid="factory-chart-source" style="width: 150px" @update:model-value="onSourceChange">
+            <el-option label="业务系统" value="business" />
+            <el-option label="上传报表" value="upload" />
+          </el-select>
+        </div>
+        <div v-if="source === 'upload'" class="filter-item upload-source">
+          <span class="filter-label">报表</span>
+          <el-select v-model="uploadId" :loading="loadingSources" placeholder="选择已上传报表" data-testid="factory-chart-upload" style="min-width: 240px">
+            <el-option v-for="item in dataSources" :key="item.id" :label="uploadLabel(item)" :value="item.id">
+              <span>{{ uploadLabel(item) }}</span><small>{{ item.rowCount }} 行</small>
+            </el-option>
+          </el-select>
+        </div>
+        <el-checkbox v-model="includeOptional" data-testid="factory-chart-optional">包含可选图表</el-checkbox>
+        <el-checkbox v-model="useAi" data-testid="factory-chart-ai">请求 AI 排序（仅调整顺序）</el-checkbox>
+      </div>
+      <div class="period-row">
+        <span class="filter-label">期间</span>
+        <PeriodSelector v-model="periodSelection" :show-all-history="true" :show-compare="false" data-testid="factory-chart-period" @change="onPeriodChange" />
+      </div>
+      <div class="scope-note">此浏览器记住本厂的显示选择（按工厂和数据源分别保存）。</div>
+    </el-card>
+
+    <el-alert v-if="sourceLoadError" type="warning" show-icon :closable="false" class="state-alert" data-testid="factory-chart-source-load-error">
+      <template #title>{{ sourceLoadError }}</template>
+      <el-button size="small" type="primary" @click="loadDataSources">重试</el-button>
+    </el-alert>
+
+    <el-alert v-if="error" type="error" show-icon :closable="false" class="state-alert" data-testid="factory-chart-error">
+      <template #title>{{ error }}</template>
+      <el-button size="small" type="primary" @click="refresh">重试</el-button>
+    </el-alert>
+
+    <el-alert v-if="data?.sourceErrors?.length" type="warning" show-icon :closable="false" class="state-alert" data-testid="factory-chart-source-errors">
+      <template #title>{{ sourceLabel }}部分数据源读取失败</template>
+      <ul class="source-errors"><li v-for="item in data.sourceErrors" :key="`${item.source}-${item.message}`">{{ item.message }}</li></ul>
+      <el-button size="small" type="primary" @click="refresh">重试</el-button>
+    </el-alert>
+
+    <div v-if="loading" class="loading-state" data-testid="factory-chart-loading">
+      <el-skeleton :rows="4" animated /><el-skeleton :rows="4" animated /><el-skeleton :rows="4" animated />
+    </div>
+
+    <template v-else-if="data">
+      <div class="result-meta">
+        <span>{{ data.sourceLabel || sourceLabel }} · {{ data.period?.label || '当前期间' }}</span>
+        <el-tag :type="data.ranking.mode === 'ai' ? 'success' : 'info'" size="small" data-testid="factory-chart-ranking">
+          {{ data.ranking.mode === 'ai' ? 'AI 已排序' : '规则排序（未经AI排序）' }}
+        </el-tag>
+        <span class="ranking-reason">{{ data.ranking.reason }}</span>
+      </div>
+
+      <div v-if="recommendations.length" class="selection-panel">
+        <div class="selection-title">显示图表 <span>（{{ displayedRecommendations.length }}/{{ recommendations.length }}）</span></div>
+        <el-checkbox-group v-model="selectedIds" data-testid="factory-chart-selection">
+          <el-checkbox v-for="item in recommendations" :key="item.id" :value="item.id">{{ item.title }} · {{ chartTypeLabel(item) }}</el-checkbox>
+        </el-checkbox-group>
+      </div>
+      <el-empty v-if="hasNoSelectedCharts" description="已隐藏全部推荐图表，请勾选要显示的图表" data-testid="factory-chart-no-selection" />
+
+      <div v-if="displayedRecommendations.length" class="recommendation-grid">
+        <el-card v-for="item in displayedRecommendations" :key="item.id" shadow="never" class="recommendation-card" :data-testid="`factory-chart-card-${item.id}`">
+          <template #header>
+            <div class="card-header"><div><h3>{{ item.title }}</h3><span class="metric-label">{{ chartTypeLabel(item) }} · {{ item.metric }} · {{ item.unit }}</span></div><el-tag :type="item.priority === 'required' ? 'primary' : 'warning'" size="small">{{ item.priority === 'required' ? '必需' : '可选' }}</el-tag></div>
+          </template>
+          <div class="rule-reason"><strong>规则依据</strong><span>{{ item.reason }}</span></div>
+          <p class="scope-note">来源：{{ item.source }}</p>
+          <FactoryChartCanvas :option="item.chart.echartsOption" />
+          <div class="kpi-grid"><div v-for="kpi in item.kpis" :key="`${item.id}-${kpi.label}`" class="kpi-item"><span>{{ kpi.label }}</span><strong>{{ kpi.value ?? '—' }} <small>{{ kpi.unit }}</small></strong></div></div>
+          <div v-for="section in findingsFor(item)" :key="section.key" class="finding-section"><div class="finding-title" :class="`finding-title--${section.type}`">{{ section.title }}</div><ul><li v-for="text in section.items" :key="text">{{ text }}</li></ul></div>
+          <div v-if="item.aiReason" class="ai-reason"><el-tag type="success" size="small">AI 补充</el-tag><span>{{ item.aiReason }}</span></div>
+        </el-card>
+      </div>
+
+      <el-card v-if="data.unavailable?.length" shadow="never" class="unavailable-card" data-testid="factory-chart-unavailable">
+        <template #header><div class="unavailable-title"><el-icon><TrendCharts /></el-icon>当前数据暂不具备的图表</div></template>
+        <div v-for="item in data.unavailable" :key="item.id" class="unavailable-item"><strong>{{ item.title }}</strong><span>缺少：{{ item.missing.join('、') }}</span></div>
+      </el-card>
+      <el-empty v-if="!recommendations.length && !data.unavailable?.length && !data.sourceErrors?.length" description="当前期间没有合资格的工厂图表" data-testid="factory-chart-empty" />
+    </template>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.factory-chart-recommendations { padding: 8px 0 24px; }
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+h2 { margin: 0; color: var(--el-text-color-primary, #1a2332); font-size: 20px; }
+.page-subtitle { margin: 6px 0 0; color: var(--el-text-color-secondary, #7a8599); font-size: 13px; }
+.filter-card, .recommendation-card, .unavailable-card { border-radius: 10px; }
+.filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; }
+.filter-item, .period-row { display: flex; align-items: center; gap: 8px; }
+.filter-label { color: var(--el-text-color-secondary, #7a8599); font-size: 13px; white-space: nowrap; }
+.upload-source small { margin-left: auto; color: var(--el-text-color-secondary, #909399); }
+.period-row { align-items: flex-start; margin-top: 14px; }
+.period-row :deep(.period-selector) { flex: 1; min-width: 0; }
+.scope-note { margin-top: 12px; color: var(--el-text-color-secondary, #7a8599); font-size: 12px; }
+.state-alert { margin-top: 16px; }
+.source-errors { margin: 6px 0; padding-left: 18px; }
+.loading-state { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.result-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 18px 0 10px; color: var(--el-text-color-secondary, #7a8599); font-size: 13px; }
+.ranking-reason { flex-basis: 100%; font-size: 12px; }
+.selection-panel { padding: 12px 14px; border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 8px; background: var(--el-fill-color-extra-light, #fafafa); }
+.selection-title { margin-bottom: 8px; color: var(--el-text-color-primary, #303133); font-weight: 600; }
+.selection-title span { color: var(--el-text-color-secondary, #909399); font-weight: 400; }
+.selection-panel :deep(.el-checkbox-group) { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.recommendation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.card-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.card-header h3 { margin: 0; color: var(--el-text-color-primary, #303133); font-size: 16px; }
+.metric-label { display: block; margin-top: 4px; color: var(--el-text-color-secondary, #909399); font-size: 12px; }
+.rule-reason, .ai-reason { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; color: var(--el-text-color-regular, #606266); font-size: 13px; line-height: 1.55; }
+.rule-reason strong { color: var(--el-text-color-primary, #303133); white-space: nowrap; }
+.ai-reason { padding: 8px; border-radius: 6px; background: #f0f9eb; color: #529b2e; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-top: 8px; }
+.kpi-item { padding: 8px; border-radius: 6px; background: var(--el-fill-color-light, #f5f7fa); }
+.kpi-item span { display: block; color: var(--el-text-color-secondary, #909399); font-size: 12px; }
+.kpi-item strong { display: block; margin-top: 4px; color: var(--el-text-color-primary, #303133); font-size: 16px; }
+.kpi-item small { font-size: 11px; font-weight: 400; }
+.finding-section { margin-top: 12px; }
+.finding-title { margin-bottom: 4px; font-size: 13px; font-weight: 600; }
+.finding-title--success { color: #67c23a; }.finding-title--warning { color: #e6a23c; }.finding-title--info { color: #409eff; }
+.finding-section ul { margin: 0; padding-left: 18px; color: var(--el-text-color-regular, #606266); font-size: 12px; line-height: 1.6; }
+.unavailable-card { margin-top: 16px; }
+.unavailable-title { display: flex; align-items: center; gap: 6px; color: var(--el-text-color-primary, #303133); font-weight: 600; }
+.unavailable-item { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 8px 0; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5); color: var(--el-text-color-regular, #606266); font-size: 13px; }
+.unavailable-item:last-child { border-bottom: 0; }
+@media (max-width: 800px) { .recommendation-grid, .loading-state { grid-template-columns: 1fr; } .page-header { align-items: flex-start; } .filter-row { align-items: flex-start; flex-direction: column; } .filter-item { width: 100%; } .filter-item :deep(.el-select) { flex: 1; } }
+</style>

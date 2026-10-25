@@ -1,6 +1,6 @@
 """Financial Dashboard API — Chart generation, batch, analysis, PPT/PDF/Excel export."""
 import logging
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -16,6 +16,66 @@ router = APIRouter()
 
 # Service singleton
 dashboard_service = FinancialDashboardService()
+
+
+class FactoryRecommendationRequest(BaseModel):
+    source: Literal['upload', 'business'] = 'business'
+    upload_id: Optional[int] = Field(None, ge=1)
+    factory_id: Optional[str] = None
+    year: int = Field(2026, ge=1900, le=2100)
+    period_type: Literal['all', 'year', 'month_range'] = 'all'
+    start_month: int = Field(1, ge=1, le=12)
+    end_month: int = Field(12, ge=1, le=12)
+    include_optional: bool = True
+    use_ai: bool = True
+
+
+@router.post('/factory-recommendations')
+async def factory_recommendations(request: FactoryRecommendationRequest, http_request: Request):
+    from common.tenant_identity import require_same_factory
+    from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
+    from smartbi.api.factory_production_gold import _can_view_cost
+    from starlette.concurrency import run_in_threadpool
+    from smartbi.services.factory_charts import engine, sources, ranking
+
+    factory_id = require_same_factory(http_request, request.factory_id)
+    role = getattr(http_request.state, 'role', None)
+    if role not in ANALYTICS_READ_ROLES:
+        raise HTTPException(403, '当前身份没有经营分析查看权限')
+    if request.start_month > request.end_month:
+        raise HTTPException(422, '开始月份不能晚于结束月份')
+    if request.period_type == 'year' and (request.start_month != 1 or request.end_month != 12):
+        raise HTTPException(422, '全年口径必须为1至12月')
+    can_price = _can_view_cost(role)
+    errors, extra_gaps = [], []
+    if request.source == 'upload':
+        if not request.upload_id:
+            raise HTTPException(422, '请先选择本厂上传报表')
+        load_request = FinancialDashboardRequest(upload_id=request.upload_id)
+        try:
+            frame = await _load_data(load_request, factory_id)
+        except DataSourceError as e:
+            return e.response()
+        if len(frame) > 20000:
+            raise HTTPException(422, '报表超过两万行安全上限，请拆分报表后重试')
+        datasets = [engine.Dataset(frame, f'upload-{request.upload_id} · 本厂上传报表',
+                                   engine.is_financial(frame), load_request.sheet_name or '')]
+    else:
+        datasets, errors, extra_gaps = await sources.load(factory_id, request, can_price)
+        if not datasets and errors:
+            return JSONResponse(status_code=503, content={'success': False, 'message': '工厂数据来源读取失败，请重试', 'data': {'sourceErrors': errors}})
+    candidates, gaps = await run_in_threadpool(engine.build, datasets, request, can_price)
+    errors.extend({'source': gap['title'], 'message': gap['missing'][0]} for gap in gaps if gap.get('error'))
+    gaps = [gap for gap in gaps if not gap.get('error')]
+    candidates, order = await ranking.rank(candidates, request.use_ai)
+    label = '全部历史' if request.period_type == 'all' else f'{request.year}年{request.start_month}–{request.end_month}月'
+    return _sanitize_for_json({'success': True, 'data': {
+        'factoryId': factory_id, 'source': request.source,
+        'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
+        'period': {'label': label}, 'ranking': order,
+        'recommendations': candidates, 'unavailable': gaps + extra_gaps,
+        'sourceErrors': errors,
+    }})
 
 
 class FinancialDashboardRequest(BaseModel):

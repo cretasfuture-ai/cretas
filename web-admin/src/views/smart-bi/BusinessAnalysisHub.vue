@@ -35,6 +35,7 @@ import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import FinancialDashboardPBI from './FinancialDashboardPBI.vue';
+import FactoryChartRecommendations from './FactoryChartRecommendations.vue';
 import SalesAnalysis from './SalesAnalysis.vue';
 import TrendsView from '@/views/analytics/trends/index.vue';
 import KpiView from '@/views/analytics/kpi/index.vue';
@@ -228,6 +229,9 @@ async function focusChart(key: string) {
                 <IndicatorCenterDashboard />
               </el-tab-pane>
             </el-tabs>
+          </el-tab-pane>
+          <el-tab-pane label="工厂图表" name="factory" lazy>
+            <FactoryChartRecommendations />
           </el-tab-pane>
         </el-tabs>
       </div>
