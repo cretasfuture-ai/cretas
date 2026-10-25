@@ -96,10 +96,12 @@ import { enumLabel, traceStatusLabel } from '@/utils/enumDisplay';
 import {
   cancellationAudit,
   formatPlanActualQuantity,
+  planSheetProductLabel,
   sourceOrderBusinessNumber,
   sourceOrderDisplay,
   sourceOrderTarget,
 } from './productionPlanListPresentation';
+import { RAW_WORKFLOW_OWNER_ANCHOR_LABEL, isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
 import {
   DEFAULT_PRODUCTION_DOCUMENT_CHAPTERS,
   PRODUCTION_DOCUMENT_CHAPTERS,
@@ -561,6 +563,9 @@ function planFinishedProductNames(row: TableRow): string[] {
   if (names.length > 0) return names;
   // ⚠️ 与上面同一条路径: targetFinishedGoodIds 为空时走这里, 原来同样会打出裸 UUID。
   // productTypeId 本身为空是合法的(没指定成品), 那种情况给 '-' 才诚实, 不要说「未识别 SKU」。
+  if (isRawWorkflowOwnerAnchorName(row.productTypeName) || isRawWorkflowOwnerAnchorName(row.productName)) {
+    return [RAW_WORKFLOW_OWNER_ANCHOR_LABEL];
+  }
   return [String(
     row.productTypeName
     || row.productName
@@ -1845,6 +1850,9 @@ async function handleStart(row: TableRow) {
 // ==================== 逐工序电子表格抽屉 (SP-F) ====================
 const entryDrawerVisible = ref(false);
 const entryRow = ref<any>(null);
+// 与列表「生产成品」列同源; 多产出计划的 productTypeName 是内部锚点名, 不能直接显示。
+const entryProductLabel = computed(() =>
+  (entryRow.value ? planSheetProductLabel(planFinishedProductNames(entryRow.value)) : ''));
 // 防呆: 关抽屉前若有未保存草稿行 (ProcessDataTable 聚合上报) 二次确认, 见 handleEntryDrawerBeforeClose
 const processSheetRef = ref<{ hasUnsavedRows: boolean } | null>(null);
 
@@ -6658,7 +6666,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
     <!-- SP-F: 逐工序电子表格抽屉 -->
     <el-drawer
       v-model="entryDrawerVisible"
-      :title="`逐工序录入 — ${entryRow?.productTypeName || entryRow?.productName || entryRow?.productTypeId || ''}`"
+      :title="`逐工序录入 — ${entryProductLabel}`"
       size="80%"
       :close-on-click-modal="false"
       :destroy-on-close="false"
@@ -6670,7 +6678,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         :factory-id="String(factoryId)"
         :plan-id="String(entryRow?.id || '')"
         :product-type-id="String(entryRow?.productTypeId || '')"
-        :product-name="entryRow?.productTypeName || entryRow?.productName"
+        :product-name="entryProductLabel"
         :planned-quantity="Number(entryRow?.plannedQuantity || 0)"
         :planned-unit="entryRow?.plannedUnit || null"
         @submitted="onEntrySubmitted"
