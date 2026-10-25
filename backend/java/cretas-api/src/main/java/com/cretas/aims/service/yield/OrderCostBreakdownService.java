@@ -159,6 +159,30 @@ public class OrderCostBreakdownService {
     }
 
     /**
+     * 一组生产批合起来算一份成本 —— 给「多产出且产出都是正式批」的那道工序算联合成本用:
+     * 投入只记在组里第一个产出批上, 其余成员批没有领料, 单独算每个成员要么吃掉全部、要么算不出
+     * (F006【演示L5】组装 4→2: 单层批 ¥8302 / 双层批无成本)。合在一起算时包材覆盖、「是否一点没归集」
+     * 都按整组判, 与 {@link #computeByPlan} 同一个内核。
+     *
+     * @return 任一批次不存在或不属于本厂 → {@code null} (调用方按「拿不到」处理, ⛔ 不当 0)
+     */
+    public OrderCostBreakdownDTO computeByBatchIds(String factoryId, String label,
+                                                    List<Long> batchIds, boolean maskPrice) {
+        if (batchIds == null || batchIds.isEmpty()) {
+            return null;
+        }
+        List<ProductionBatch> batches = new ArrayList<>();
+        for (Long id : batchIds.stream().distinct().toList()) {
+            ProductionBatch b = batchRepository.findByIdAndFactoryId(id, factoryId).orElse(null);
+            if (b == null) {
+                return null;
+            }
+            batches.add(b);
+        }
+        return computeForBatches(factoryId, label, batches, maskPrice);
+    }
+
+    /**
      * 内核: 已有 batches 列表 → 成本归集 → OrderCostBreakdownDTO.
      * by-order 与 by-batch 共用此方法; {@code label} 填入 DTO.orderId (展示用, by-order=orderId, by-batch=batchNumber).
      * <p>纯 extract-method: 无任何逻辑变更, by-order 行为零回归。
