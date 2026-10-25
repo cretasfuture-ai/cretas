@@ -1,10 +1,10 @@
 # Dispatch 台账 — ACTIVE
-**最后更新**：2026-10-22（S1原QA按原判据10/10通过；S0未完成，S2独立推进；S1-07交付归档见archive/2026-10-22-s107-purchase-timer.md）
-**历史**：旧版背景保留在 archive/2026-10-22-native-date-v72-registration.md 的旧页眉记录；本页只保留在飞任务。
+旧页眉见 archive/2026-10-25-smartbi-catalog-closure.md。
 
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
+
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 - `ERP-S2-08A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确6文件/无迁移；待办恢复及真实JPA，见archive/2026-10-24-s245-next-slices.md。

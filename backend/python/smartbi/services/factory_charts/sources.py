@@ -22,8 +22,9 @@ WHERE factory_id = $1 AND status = 'COMPLETED'
 ORDER BY stat_date, source_pk LIMIT 10001
 """
 SALES_SQL = """
-SELECT so.order_date AS "日期", so.total_amount AS "销售金额"
+SELECT so.order_date AS "日期", so.customer_id AS "客户ID", COALESCE(c.name, so.customer_id) AS "客户", so.total_amount AS "销售金额"
 FROM sales_orders so
+LEFT JOIN customers c ON c.id = so.customer_id AND c.factory_id = so.factory_id AND c.deleted_at IS NULL
 WHERE so.factory_id = $1 AND so.deleted_at IS NULL
  AND so.status NOT IN ('CANCELLED', 'DRAFT', 'FINANCE_REJECTED')
  AND ($2::date IS NULL OR so.order_date >= $2) AND ($3::date IS NULL OR so.order_date < $3 + INTERVAL '1 day')
@@ -32,7 +33,7 @@ ORDER BY so.order_date, so.id LIMIT 10001
 PURCHASE_SQL = """
 SELECT pr.receive_date AS "日期", COALESCE(pri.material_name, pri.material_type_id, '未关联物料') AS "原料",
        COALESCE(s.name, pr.supplier_id, '未登记供应商') AS "供应商", pri.unit AS "单位",
-       pri.received_quantity AS "入库数量",
+       pri.received_quantity AS "入库数量", pri.unit_price AS "入库单价", pri.price_unit AS "价格单位",
        CASE WHEN pri.price_unit = pri.unit THEN ROUND(pri.received_quantity * pri.unit_price, 2) ELSE NULL END AS "入库金额"
 FROM purchase_receive_records pr
 JOIN purchase_receive_items pri ON pri.receive_record_id=pr.id AND pri.deleted_at IS NULL

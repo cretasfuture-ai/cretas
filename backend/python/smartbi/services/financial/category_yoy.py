@@ -1,5 +1,6 @@
 """Category YoY Comparison Chart Builder — 各品类同期对比."""
 import logging
+import math
 from typing import Dict, Any
 import pandas as pd
 
@@ -29,9 +30,51 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
         end_month = period.get('end_month', 12)
         labels = self._month_labels(start_month, end_month)
 
+        # The normaliser usually adds ``month``.  Raw factory frames can reach
+        # this builder with only a Chinese period column, so derive it here
+        # without changing the source frame.  Reindex below is deliberate:
+        # absent months remain unknown for both compared periods,
+        # while malformed numeric operands remain unavailable.
+        if 'month' not in df.columns:
+            period_col = next((c for c in ('月份', '期间', '日期') if c in df.columns), None)
+            if period_col is None:
+                return self._insufficient(period, year, '缺少月份/日期列，无法补齐所选期间')
+            raw = df[period_col].astype(str)
+            def month_value(value):
+                if str(value).endswith('月') and str(value)[:-1].isdigit():
+                    return int(str(value)[:-1])
+                parsed = pd.to_datetime(value, errors='coerce')
+                return parsed.month if pd.notna(parsed) and parsed.year == year else None
+            derived = raw.map(month_value)
+            df = df.copy()
+            df['month'] = pd.to_numeric(derived, errors='coerce')
+        df = df.copy()
+        # Accept the raw upload aliases when this builder is exercised without
+        # FinancialDashboardService's column mapping.
+        aliases = {'实际': 'actual', '本年': 'actual', '上年': 'last_year', '品类': 'category'}
+        for raw, canonical in aliases.items():
+            if canonical not in df.columns and raw in df.columns:
+                df[canonical] = df[raw]
+        if not {'actual', 'last_year', 'category'}.issubset(df.columns):
+            return self._insufficient(period, year, '缺少实际/上年/品类列，无法进行同期对比')
+        df['month'] = pd.to_numeric(df['month'], errors='coerce')
+        if df['month'].isna().any() or not df['month'].between(1, 12).all():
+            return self._insufficient(period, year, '月份缺失或非法，无法核对同期期间')
+        df = df[df['month'].between(start_month, end_month)]
+        for col in ('actual', 'last_year'):
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        if df.empty:
+            return self._insufficient(period, year, '所选期间没有可用品类记录')
+
         # Get unique categories
         categories = df['category'].dropna().unique().tolist()
-        categories = [c for c in categories if c and str(c).strip() and str(c).lower() != 'nan'][:8]
+        categories = [c for c in categories if c and str(c).strip() and str(c).lower() != 'nan']
+        if len(categories) > 8:
+            return self._insufficient(period, year, '品类超过8个，请先明确筛选范围；不静默截断品类')
+        if df[['actual', 'last_year']].isna().any().any() or not df[['actual', 'last_year']].apply(lambda c: c.map(math.isfinite)).all().all():
+            return self._insufficient(period, year, '同期对比含缺失或非法金额，不能部分汇总')
+        if df['category'].isna().any() or df['category'].astype(str).str.strip().eq('').any():
+            return self._insufficient(period, year, '品类缺失，不能静默丢弃金额')
 
         if not categories:
             return {
@@ -44,23 +87,27 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
                 "metadata": {"period": period, "dataQuality": "insufficient"},
             }
 
+        def known_sum(values):
+            valid = [float(v) for v in values if pd.notna(v)]
+            return sum(valid) if valid else None
+
         # Pivot: month x category for actual and last_year
         cat_monthly_actual = {}
         cat_monthly_ly = {}
         for cat in categories:
             cat_df = df[df['category'] == cat]
             monthly = cat_df.groupby('month').agg(
-                actual=('actual', 'sum'),
-                last_year=('last_year', 'sum'),
-            ).reindex(range(start_month, end_month + 1)).fillna(0)
+                actual=('actual', lambda s: s.sum(min_count=1)),
+                last_year=('last_year', lambda s: s.sum(min_count=1)),
+            ).reindex(range(start_month, end_month + 1))
             cat_monthly_actual[cat] = monthly['actual'].tolist()
             cat_monthly_ly[cat] = monthly['last_year'].tolist()
 
         # Category totals for KPIs
         cat_totals = {}
         for cat in categories:
-            total_actual = sum(v or 0 for v in cat_monthly_actual[cat])
-            total_ly = sum(v or 0 for v in cat_monthly_ly[cat])
+            total_actual = known_sum(cat_monthly_actual[cat])
+            total_ly = known_sum(cat_monthly_ly[cat])
             yoy_rate = self._calc_growth_rate(total_actual, total_ly)
             cat_totals[cat] = {
                 "actual": total_actual,
@@ -70,38 +117,39 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
             }
 
         # Overall totals
-        total_actual = sum(ct['actual'] for ct in cat_totals.values())
-        total_ly = sum(ct['last_year'] for ct in cat_totals.values())
+        total_actual = known_sum([ct['actual'] for ct in cat_totals.values()])
+        total_ly = known_sum([ct['last_year'] for ct in cat_totals.values()])
         total_yoy = self._calc_growth_rate(total_actual, total_ly)
-        scale = _detect_value_scale([total_actual, total_ly])
+        scale = _detect_value_scale([v for v in (total_actual, total_ly) if v is not None])
 
         # Find biggest growth category
-        max_growth_cat = max(cat_totals.items(), key=lambda x: x[1].get('yoy_rate', 0) or 0)
+        comparable = [(name, values) for name, values in cat_totals.items() if values.get('yoy_rate') is not None]
+        max_growth_cat = max(comparable, key=lambda item: item[1]['yoy_rate']) if comparable else ('-', {'yoy_rate': None})
 
         # Scale values
         divisor = scale['divisor']
 
         # Monthly totals for sparkline
         monthly_total_actual_raw = [
-            sum(cat_monthly_actual[cat][m] or 0 for cat in categories)
+            known_sum(cat_monthly_actual[cat][m] for cat in categories)
             for m in range(end_month - start_month + 1)
         ]
         monthly_total_ly_raw = [
-            sum(cat_monthly_ly[cat][m] or 0 for cat in categories)
+            known_sum(cat_monthly_ly[cat][m] for cat in categories)
             for m in range(end_month - start_month + 1)
         ]
 
         kpis = [
             {"label": "本年总额", "value": self._format_value(total_actual, scale), "unit": "元",
-             "trend": self._trend_from_value(total_actual - total_ly),
-             "sparkline": [round(v / divisor, 2) if v else 0 for v in monthly_total_actual_raw]},
+             "trend": self._trend_from_value(total_actual - total_ly) if total_actual is not None and total_ly is not None else 'flat',
+             "sparkline": [round(v / divisor, 2) if v is not None else None for v in monthly_total_actual_raw]},
             {"label": "上年总额", "value": self._format_value(total_ly, scale), "unit": "元", "trend": "flat",
-             "sparkline": [round(v / divisor, 2) if v else 0 for v in monthly_total_ly_raw]},
+             "sparkline": [round(v / divisor, 2) if v is not None else None for v in monthly_total_ly_raw]},
             {"label": "同比增长", "value": f"{total_yoy:.1f}" if total_yoy is not None else '-',
              "unit": "%", "trend": self._trend_from_value(total_yoy)},
-            {"label": "最大增长品类", "value": f"{max_growth_cat[0]} ({max_growth_cat[1]['yoy_rate']:.1f}%)"
+            {"label": "同比表现最高品类", "value": f"{max_growth_cat[0]} ({max_growth_cat[1]['yoy_rate']:.1f}%)"
              if max_growth_cat[1].get('yoy_rate') is not None else max_growth_cat[0],
-             "unit": "", "trend": "up"},
+             "unit": "", "trend": self._trend_from_value(max_growth_cat[1].get('yoy_rate'))},
         ]
         chart_colors = COLORS['charts']
 
@@ -112,18 +160,18 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
 
         # Pre-calculate monthly totals for top-of-stack labels
         monthly_total_actual_scaled = [
-            round(sum(cat_monthly_actual[cat][m] or 0 for cat in categories) / divisor, 1)
-            for m in range(end_month - start_month + 1)
+            round(v / divisor, 1) if v is not None else None
+            for v in monthly_total_actual_raw
         ]
         monthly_total_ly_scaled = [
-            round(sum(cat_monthly_ly[cat][m] or 0 for cat in categories) / divisor, 1)
-            for m in range(end_month - start_month + 1)
+            round(v / divisor, 1) if v is not None else None
+            for v in monthly_total_ly_raw
         ]
 
         # Current year stacked bars (left bar in each pair)
         for ci, cat in enumerate(categories):
             color = chart_colors[ci % len(chart_colors)]
-            actual_scaled = [round(v / divisor, 2) if v else 0 for v in cat_monthly_actual[cat]]
+            actual_scaled = [round(v / divisor, 2) if pd.notna(v) else None for v in cat_monthly_actual[cat]]
             series_item = {
                 "name": f"{cat}(本年)",
                 "type": "bar",
@@ -154,7 +202,7 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
         # Last year stacked bars (right bar in each pair)
         for ci, cat in enumerate(categories):
             color = chart_colors[ci % len(chart_colors)]
-            ly_scaled = [round(v / divisor, 2) if v else 0 for v in cat_monthly_ly[cat]]
+            ly_scaled = [round(v / divisor, 2) if pd.notna(v) else None for v in cat_monthly_ly[cat]]
             series_item = {
                 "name": f"{cat}(上年)",
                 "type": "bar",
@@ -187,11 +235,11 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
 
         # Monthly total YoY% labels
         monthly_total_actual = [
-            sum(cat_monthly_actual[cat][m] or 0 for cat in categories)
+            known_sum(cat_monthly_actual[cat][m] for cat in categories)
             for m in range(end_month - start_month + 1)
         ]
         monthly_total_ly = [
-            sum(cat_monthly_ly[cat][m] or 0 for cat in categories)
+            known_sum(cat_monthly_ly[cat][m] for cat in categories)
             for m in range(end_month - start_month + 1)
         ]
         monthly_yoy = [
@@ -204,7 +252,7 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
         option["grid"] = {"left": "3%", "right": "8%", "bottom": "10%", "top": "15%", "containLabel": True}
         option.update({
             "legend": {
-                "data": [f"{cat}(本年)" for cat in categories],
+                "data": [series['name'] for series in series_list],
                 "top": "2%",
                 "textStyle": {"fontSize": 10},
                 "type": "scroll",
@@ -294,8 +342,8 @@ class CategoryYoyComparisonBuilder(AbstractFinancialChartBuilder):
             # Stack them vertically, offset slightly right of the bar pair center
             cat_x_pct = x_pct + chart_width_pct / num_months * 0.32
             for ci, cat in enumerate(categories):
-                cat_actual_val = cat_monthly_actual[cat][i] if i < len(cat_monthly_actual[cat]) else 0
-                cat_ly_val = cat_monthly_ly[cat][i] if i < len(cat_monthly_ly[cat]) else 0
+                cat_actual_val = cat_monthly_actual[cat][i] if i < len(cat_monthly_actual[cat]) else None
+                cat_ly_val = cat_monthly_ly[cat][i] if i < len(cat_monthly_ly[cat]) else None
                 cat_yoy = self._calc_growth_rate(cat_actual_val, cat_ly_val)
                 if cat_yoy is not None:
                     cat_color = COLORS['yoy_up'] if cat_yoy > 0 else COLORS['yoy_down']

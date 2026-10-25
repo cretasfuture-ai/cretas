@@ -20,6 +20,11 @@ FINDINGS = {
 
 def export(kind, **payload):
     app = FastAPI()
+    @app.middleware('http')
+    async def authenticated_factory(request,call_next):
+        request.state.factory_id='F006'
+        request.state.role='factory_super_admin'
+        return await call_next(request)
     app.include_router(router)
     response = TestClient(app).post(f'/export-{kind}', json=payload)
     assert response.status_code == 200
