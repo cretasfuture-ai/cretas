@@ -60,9 +60,25 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class LineageGraphAssembler {
 
-    /** 与 {@code LineageQueryTool} 同一个上限，别让一次溯源把整张图拉回来。 */
-    public static final int MAX_DEPTH_CAP = 10;
-    public static final int DEFAULT_MAX_DEPTH = 5;
+    /**
+     * 血缘跳数上限 —— <b>全仓唯一来源</b>：召回影响面 / 完整溯源 / 公开溯源 / AI {@code lineage_query} /
+     * 指标中心批次溯源都从这里取，⛔ 不要在别处再写一个数字。
+     *
+     * <p>为什么是 50 而不是原来的 10：每过一道工序链上多 <b>2 跳</b>
+     * （生产批 → 在制库存批 → 下一道生产批）。prod 样例 LIUSHANMEN 生产批 10898（10 道工序）
+     * 闭包补齐后首道原料在 depth 19；原来的默认 5 / 上限 10 只看得到最后 2~5 道工序 ——
+     * 召回会漏掉更远的成品，溯源页看不到首道原料。50 跳 ≈ 24 道工序，留足余量。
+     *
+     * <p>成本：{@code findFullGraph} 走 {@code (factory_id, ancestor_id, ancestor_type)} /
+     * {@code (factory_id, descendant_id, descendant_type)} 两个索引（V20260821_02），
+     * depth 不在索引里、只是取回后的过滤条件 —— 上限只影响返回行数，不改变访问路径。
+     */
+    public static final int MAX_DEPTH_CAP = 50;
+    /**
+     * 缺省跳数 = 上限。召回「漏一个成品」是食品安全事故，溯源「看不到首道原料」等于没溯源，
+     * 所以没有「先给个浅的」这一档；调用方真想看浅的就显式传。
+     */
+    public static final int DEFAULT_MAX_DEPTH = MAX_DEPTH_CAP;
 
     /** 公开接口上耳标号保留的末位数。 */
     static final int TAG_SUFFIX_VISIBLE = 4;
@@ -262,6 +278,7 @@ public class LineageGraphAssembler {
                 + trimmed.substring(trimmed.length() - TAG_SUFFIX_VISIBLE);
     }
 
+    /** 非正数取缺省（= 上限），超过上限夹到上限。 */
     public static int clampDepth(int requested) {
         if (requested <= 0) {
             return DEFAULT_MAX_DEPTH;

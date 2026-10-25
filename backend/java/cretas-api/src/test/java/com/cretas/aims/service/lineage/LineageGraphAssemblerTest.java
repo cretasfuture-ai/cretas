@@ -552,12 +552,162 @@ class LineageGraphAssemblerTest {
         return si;
     }
 
+    // ── ⑤ 跳数上限: 必须盖得住多道工序的整条链 ─────────────────────────────────
+    //
+    // 每过一道工序链上多 2 跳 (生产批 → 在制库存批 → 下一道生产批)。prod 样例 LIUSHANMEN
+    // 生产批 10898 (10 道工序) 首道原料在 depth 19; 原来默认 5 / 上限 10 ⇒ 召回漏成品、溯源看不到首道原料。
+    // ⚠️ 期望值写字面量, ⛔ 不写 LineageGraphAssembler.MAX_DEPTH_CAP —— 那是拿常量和自己比, 恒真。
+
     @Test
-    @DisplayName("maxDepth 超上限被夹到 10, 非正数取默认 5")
+    @DisplayName("请求 30 跳不再被截到 10; 超上限夹到 50; 非正数(缺省)= 上限 50")
     void depthIsClamped() {
-        assertThat(LineageGraphAssembler.clampDepth(99)).isEqualTo(10);
-        assertThat(LineageGraphAssembler.clampDepth(0)).isEqualTo(5);
+        assertThat(LineageGraphAssembler.clampDepth(30)).isEqualTo(30);
+        assertThat(LineageGraphAssembler.clampDepth(99)).isEqualTo(50);
+        assertThat(LineageGraphAssembler.clampDepth(0)).isEqualTo(50);
+        assertThat(LineageGraphAssembler.clampDepth(-1)).isEqualTo(50);
         assertThat(LineageGraphAssembler.clampDepth(3)).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("缺省跳数 = 上限 (召回/溯源没有「先给个浅的」这一档)")
+    void defaultDepthEqualsCap() {
+        assertThat(LineageGraphAssembler.MAX_DEPTH_CAP).isEqualTo(50);
+        assertThat(LineageGraphAssembler.DEFAULT_MAX_DEPTH)
+                .isEqualTo(LineageGraphAssembler.MAX_DEPTH_CAP);
+    }
+
+    /** 产品真实入口上的跳数: assemble 收到 30 时, 打到闭包表查询上的也必须是 30。 */
+    @Test
+    @DisplayName("assemble(maxDepth=30) ⇒ findFullGraph 收到 30, 不是 10")
+    void assemblePassesRequestedDepthToClosureQuery() {
+        when(closureRepository.findFullGraph(anyString(), anyString(), anyString(), any()))
+                .thenReturn(List.of());
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "8967", 30, true, false);
+
+        verify(closureRepository).findFullGraph(FACTORY, "8967", "PRODUCTION_BATCH", 30);
+        assertThat(section.getMaxDepth()).isEqualTo(30);
+    }
+
+    private static final int STEPS = 10;
+    private static final long FIRST_STEP_ID = 10889L;     // 第 1 道 … 第 10 道 = 10898 (根)
+
+    /**
+     * 10 道工序的线性链: raw-cmr → PB 10889 → wip-1 → PB 10890 → wip-2 → … → wip-9 → PB 10898 → fg → dr。
+     * 闭包表 mock 按传入的 maxDepth <b>过滤</b> —— 模拟数据库那条 {@code depth <= :maxDepth},
+     * 否则 mock 不管传几都整图返回, 上限改回 10 测试也照样绿 (守空气)。
+     */
+    private void wireTenStepChain() {
+        List<BatchLineageClosure> rootRows = new java.util.ArrayList<>();
+        List<BatchLineageClosure> rawRows = new java.util.ArrayList<>();
+        String root = String.valueOf(FIRST_STEP_ID + STEPS - 1);
+        for (int k = 1; k <= STEPS; k++) {
+            String pb = String.valueOf(FIRST_STEP_ID + k - 1);
+            if (k < STEPS) {
+                rootRows.add(closure(2 * (STEPS - k), "PRODUCTION_BATCH", pb, "PRODUCTION_BATCH", root));
+                rootRows.add(closure(2 * (STEPS - k) - 1, "MATERIAL_BATCH", "wip-" + k, "PRODUCTION_BATCH", root));
+                rawRows.add(closure(2 * k, "MATERIAL_BATCH", "raw-cmr", "MATERIAL_BATCH", "wip-" + k));
+            }
+            rawRows.add(closure(2 * k - 1, "MATERIAL_BATCH", "raw-cmr", "PRODUCTION_BATCH", pb));
+        }
+        rootRows.add(closure(2 * STEPS - 1, "MATERIAL_BATCH", "raw-cmr", "PRODUCTION_BATCH", root));
+        rootRows.add(closure(1, "PRODUCTION_BATCH", root, "FINISHED_BATCH", "fg-10898"));
+        rootRows.add(closure(2, "PRODUCTION_BATCH", root, "SHIPMENT_RECORD", "dr-10898"));
+        rawRows.add(closure(2 * STEPS, "MATERIAL_BATCH", "raw-cmr", "FINISHED_BATCH", "fg-10898"));
+        rawRows.add(closure(2 * STEPS + 1, "MATERIAL_BATCH", "raw-cmr", "SHIPMENT_RECORD", "dr-10898"));
+
+        when(closureRepository.findFullGraph(eq(FACTORY), eq(root), eq("PRODUCTION_BATCH"), any()))
+                .thenAnswer(inv -> rootRows.stream()
+                        .filter(r -> r.getDepth() <= (Integer) inv.getArgument(3)).toList());
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("raw-cmr"), eq("MATERIAL_BATCH"), any()))
+                .thenAnswer(inv -> rawRows.stream()
+                        .filter(r -> r.getDepth() <= (Integer) inv.getArgument(3)).toList());
+
+        List<MaterialBatch> materials = new java.util.ArrayList<>();
+        materials.add(materialBatchWithIndividual("raw-cmr", "CMR-0001", "整牛", "sup-1", "si-1"));
+        List<ProductionBatch> productions = new java.util.ArrayList<>();
+        for (int k = 1; k <= STEPS; k++) {
+            productions.add(productionBatch(FIRST_STEP_ID + k - 1, "PB-STEP-" + k, "第" + k + "道半成品"));
+            if (k < STEPS) {
+                materials.add(materialBatch("wip-" + k, "WIP-" + k, "第" + k + "道在制品", null));
+            }
+        }
+        when(materialBatchRepository.findAllById(any())).thenReturn(materials);
+        when(productionBatchRepository.findAllById(any())).thenReturn(productions);
+        when(supplierRepository.findAllById(any())).thenReturn(List.of(supplier("sup-1", "胜龙牛业")));
+        when(sourceIndividualRepository.findAllById(any())).thenReturn(List.of(individual(
+                "si-1", "IND-001", "CN-2026-00012345", "牛", "西门塔尔", "胜龙一场",
+                DnaVerificationStatus.values()[0])));
+        when(finishedGoodsBatchRepository.findAllById(any()))
+                .thenReturn(List.of(finishedBatch("fg-10898", "FG-10898", "卤牛肉")));
+        when(salesDeliveryRecordRepository.findAllById(any()))
+                .thenReturn(List.of(deliveryRecord("dr-10898", "DN-10898", "六膳门中央厨房")));
+        when(edgeRepository.findByFactoryIdAndSourceIdIn(anyString(), any())).thenReturn(List.of());
+        when(edgeRepository.findByFactoryIdAndTargetIdIn(anyString(), any())).thenReturn(List.of());
+    }
+
+    @Test
+    @DisplayName("10 道工序: 缺省跳数下内部溯源看得到 depth 19 的首道原料 (含供应商)")
+    void defaultDepthReachesFirstRawMaterialOfTenStepChain() {
+        wireTenStepChain();
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "10898", 0, true, false);
+
+        System.out.println("[depth-cap] internal ancestor depths = "
+                + section.getAncestors().stream().map(TraceabilityDTO.LineageDepthGroup::getDepth).toList());
+        TraceabilityDTO.LineageNode raw = nodeAt(section, 19, "raw-cmr");
+        assertThat(raw.getBatchNumber()).isEqualTo("CMR-0001");
+        assertThat(raw.getSupplierName()).isEqualTo("胜龙牛业");   // 阴性对照的正面: 内部侧看得到
+        assertThat(section.getAncestors()).hasSize(19);
+    }
+
+    @Test
+    @DisplayName("🔴 10 道工序公开溯源: 放大后多出来的节点同样脱敏 (nodeId/供应商/个体主键/完整耳标都没有)")
+    void publicTraceOfTenStepChainIsDesensitizedAllTheWay() {
+        wireTenStepChain();
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "10898", 0, false, true);
+
+        List<TraceabilityDTO.LineageNode> nodes = section.getAncestors().stream()
+                .flatMap(g -> g.getNodes().stream()).toList();
+        System.out.println("[depth-cap] public ancestor nodes = " + nodes.size()
+                + " types=" + nodes.stream().map(TraceabilityDTO.LineageNode::getNodeType).distinct().toList());
+        // 首道原料这一层公开侧也到得了 —— 放大的目的
+        TraceabilityDTO.LineageNode raw = publicNode(section, "CMR-0001");
+        assertThat(raw.getSourceIndividual()).isNotNull();
+        assertThat(raw.getSourceIndividual().getTagNumber()).isEqualTo("************2345");
+        assertThat(raw.getSourceIndividual().getId()).isNull();
+        assertThat(raw.getSourceIndividual().getIndividualCode()).isNull();
+        // 每一个节点 (含 depth > 10 的在制库存批 / 生产批) 都脱敏
+        assertThat(nodes).hasSize(19);
+        assertThat(nodes).allSatisfy(n -> {
+            assertThat(n.getNodeId()).isNull();
+            assertThat(n.getSupplierName()).isNull();
+        });
+        assertThat(section.getDescendants()).isNull();
+    }
+
+    @Test
+    @DisplayName("10 道工序召回: 从首道原料缺省跳数能追到 depth 20 的成品和 depth 21 的出货")
+    void recallFromFirstRawMaterialReachesFinishedGoodsOfTenStepChain() {
+        wireTenStepChain();
+        when(materialBatchRepository.findById("raw-cmr"))
+                .thenReturn(java.util.Optional.of(materialBatch("raw-cmr", "CMR-0001", "整牛", "sup-1")));
+
+        TraceabilityDTO.ImpactResponse impact =
+                newAssembler().assembleImpact(FACTORY, "MATERIAL_BATCH", "raw-cmr", 0);
+
+        System.out.println("[depth-cap] impact maxDepth=" + impact.getMaxDepth()
+                + " production=" + impact.getProductionBatchCount()
+                + " finished=" + impact.getFinishedBatchCount()
+                + " shipments=" + impact.getShipmentCount());
+        assertThat(impact.getMaxDepth()).isEqualTo(50);
+        assertThat(impact.getProductionBatchCount()).isEqualTo(STEPS);
+        assertThat(impact.getFinishedBatchCount()).isEqualTo(1);
+        assertThat(impact.getShipmentCount()).isEqualTo(1);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

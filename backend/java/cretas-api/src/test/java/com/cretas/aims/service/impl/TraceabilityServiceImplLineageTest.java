@@ -117,8 +117,9 @@ class TraceabilityServiceImplLineageTest {
         TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, BATCH_NUMBER);
 
         // 真入口上确实接了线（而不是只有 assembler 自己的单测绿）
+        // 跳数 = 上限 50 (字面量): 10 道工序的首道原料在 depth 19, 原来的 5 跳只看得到最后两道。
         verify(lineageGraphAssembler).assemble(eq(FACTORY), eq("PRODUCTION_BATCH"), eq("8967"),
-                anyInt(), eq(true), eq(false));
+                eq(50), eq(true), eq(false));
         assertThat(response.getLineage()).isNotNull();
         assertThat(response.getLineage().getNodeCount()).isEqualTo(3);
         // 加法式: 既有字段仍在
@@ -135,8 +136,9 @@ class TraceabilityServiceImplLineageTest {
         TraceabilityDTO.PublicTraceResponse response = service.getPublicTrace(BATCH_NUMBER);
 
         // 🔴 这两个 flag 是消费者侧唯一的脱敏闸门。传反了 = 把「同一批还发给了谁」露给扫码的人。
+        //    公开侧也取整条链 (50): 消费者扫码要看到的是首道原料 / 来自哪头牛那一层。
         verify(lineageGraphAssembler).assemble(eq(FACTORY), eq("PRODUCTION_BATCH"), eq("8967"),
-                anyInt(), eq(false), eq(true));
+                eq(50), eq(false), eq(true));
         assertThat(response.getLineage()).isNotNull();
         assertThat(response.getIsValid()).isTrue();
     }

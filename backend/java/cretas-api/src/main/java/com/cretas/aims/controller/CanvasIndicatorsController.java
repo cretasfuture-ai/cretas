@@ -16,6 +16,7 @@ import com.cretas.aims.repository.indicator.IndicatorTreeNodeRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.repository.lineage.BatchLineageClosureRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
 import io.swagger.v3.oas.annotations.Operation;
@@ -586,8 +587,9 @@ public class CanvasIndicatorsController {
             @PathVariable String factoryId,
             @PathVariable String batchType,
             @PathVariable String batchId,
-            @RequestParam(defaultValue = "5") int maxDepth) {
-        int cap = Math.min(Math.max(1, maxDepth), 10);
+            @RequestParam(required = false) Integer maxDepth) {
+        // 上限与缺省同 TraceabilityController / lineage_query 一份 (LineageGraphAssembler), ⛔ 不另写数字。
+        int cap = LineageGraphAssembler.clampDepth(maxDepth == null ? 0 : maxDepth);
         List<BatchLineageClosure> graph =
                 closureRepository.findFullGraph(factoryId, batchId, batchType.toUpperCase(), cap);
 

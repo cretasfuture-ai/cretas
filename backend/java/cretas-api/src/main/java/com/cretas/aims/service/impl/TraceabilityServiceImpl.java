@@ -328,8 +328,11 @@ public class TraceabilityServiceImpl implements TraceabilityService {
             return null;
         }
         try {
+            // 内部完整溯源与公开溯源都取整条链（上限）。公开侧放大后多出来的只有
+            // MATERIAL_BATCH（含在制库存批）/ PRODUCTION_BATCH 两类节点, 与原来 5 跳内的节点同类型,
+            // 走同一个 NodeResolver 的 desensitize 分支: nodeId 置 null、不取供应商、耳标打码。
             return lineageGraphAssembler.assemble(factoryId, rootType, rootId,
-                    com.cretas.aims.service.lineage.LineageGraphAssembler.DEFAULT_MAX_DEPTH,
+                    com.cretas.aims.service.lineage.LineageGraphAssembler.MAX_DEPTH_CAP,
                     includeDescendants, desensitize);
         } catch (Exception e) {
             log.warn("[lineage] 溯源页血缘组装失败, 本次不带 lineage 字段: factory={} root={}:{}",
