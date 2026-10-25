@@ -56,4 +56,11 @@ describe('factoryChartState', () => {
     expect(loadFactoryChartSelection('F006', 'business', ['yield', 'margin'])).toEqual(['yield']);
     expect(loadFactoryChartSelection('F007', 'business', ['yield', 'margin'])).toEqual(['margin']);
   });
+  it('uses readable defaults for a different report without erasing saved intent or an explicit empty choice', () => {
+    saveFactoryChartSelection('F006', 'upload', ['old-report']);
+    expect(loadFactoryChartSelection('F006', 'upload', ['new-report'])).toEqual(['new-report']);
+    expect(localStorage.getItem(factoryChartStorageKey('F006', 'upload'))).toBe('["old-report"]');
+    saveFactoryChartSelection('F006', 'upload', []);
+    expect(loadFactoryChartSelection('F006', 'upload', ['new-report'])).toEqual([]);
+  });
 });

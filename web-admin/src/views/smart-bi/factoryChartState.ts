@@ -29,7 +29,8 @@ export function loadFactoryChartSelection(
     const stored = raw ? JSON.parse(raw) : null;
     if (!Array.isArray(stored)) return [...eligibleIds].slice(0, defaultVisible);
     const eligible = new Set(eligibleIds);
-    return stored.filter((id): id is string => typeof id === 'string' && eligible.has(id));
+    const selected = stored.filter((id): id is string => typeof id === 'string' && eligible.has(id));
+    return stored.length > 0 && selected.length === 0 ? [...eligibleIds].slice(0, defaultVisible) : selected;
   } catch { return [...eligibleIds].slice(0, defaultVisible); }
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { Refresh, TrendCharts } from '@element-plus/icons-vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import PeriodSelector, { type PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 import { getUploadHistory, type UploadHistoryItem } from '@/api/smartbi/upload';
@@ -19,6 +19,7 @@ import {
 } from './factoryChartState';
 
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId || '');
 
@@ -176,11 +177,17 @@ function onFactoryChanged() {
 
 watch(factoryId, onFactoryChanged);
 watch([source, uploadId, includeOptional, useAi], () => {
-  if (initialLoadDone && !suppressSelectionWatch) void loadRecommendations();
+  if (initialLoadDone && !suppressSelectionWatch) {
+    const query = { ...route.query };
+    if (source.value === 'upload' && uploadId.value) query.upload_id = String(uploadId.value);
+    else delete query.upload_id;
+    if (query.upload_id !== route.query.upload_id) void router.replace({ query });
+    void loadRecommendations();
+  }
 }, { deep: true });
-watch(selectedIds, ids => {
-  if (selectionReady && factoryId.value) saveFactoryChartSelection(factoryId.value, source.value, ids);
-}, { deep: true });
+function persistUserSelection() {
+  if (selectionReady && factoryId.value) saveFactoryChartSelection(factoryId.value, source.value, selectedIds.value);
+}
 
 function onPeriodChange(value: PeriodSelection) {
   periodSelection.value = value;
@@ -278,7 +285,7 @@ function findingsFor(item: FactoryRecommendation) {
 
       <div v-if="recommendations.length" class="selection-panel">
         <div class="selection-title">显示图表 <span>（{{ displayedRecommendations.length }}/{{ recommendations.length }}）</span></div>
-        <el-checkbox-group v-model="selectedIds" data-testid="factory-chart-selection">
+        <el-checkbox-group v-model="selectedIds" data-testid="factory-chart-selection" @change="persistUserSelection">
           <el-checkbox v-for="item in recommendations" :key="item.id" :value="item.id">{{ item.title }} · {{ chartTypeLabel(item) }}</el-checkbox>
         </el-checkbox-group>
       </div>
