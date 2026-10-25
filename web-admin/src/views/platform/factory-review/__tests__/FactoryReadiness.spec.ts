@@ -189,3 +189,30 @@ describe('建厂交付核对', () => {
     expect(purchase).not.toContain('补齐')
   })
 })
+
+describe('建厂交付核对 — injected loader', () => {
+  it('reads through an injected loader and never calls the platform route', async () => {
+    const loader = vi.fn().mockResolvedValue(fixture())
+    const wrapper = mount(FactoryReadiness, { props: { factoryId: 'FA', blueprintId: 'candidate', rowVersion: 5, loader },
+      global: { plugins: [ElementPlus], stubs: { IndicatorApplicability: true, RouterLink: true } } })
+    wrappers.push(wrapper)
+    await flushPromises()
+    expect(loader).toHaveBeenCalledWith('FA', 'candidate')
+    expect(getFactoryReadiness).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('当前候选：第2版')
+    await wrapper.find('.readiness-header button').trigger('click')
+    await flushPromises()
+    expect(loader).toHaveBeenCalledTimes(2)
+    expect(getFactoryReadiness).not.toHaveBeenCalled()
+  })
+
+  it('still refuses a report for another blueprint version from an injected loader', async () => {
+    const loader = vi.fn().mockResolvedValue({ ...fixture(), rowVersion: 6 })
+    const wrapper = mount(FactoryReadiness, { props: { factoryId: 'FA', blueprintId: 'candidate', rowVersion: 5, loader },
+      global: { plugins: [ElementPlus], stubs: { IndicatorApplicability: true, RouterLink: true } } })
+    wrappers.push(wrapper)
+    await flushPromises()
+    expect(wrapper.text()).toContain('工厂或配置版本已变化')
+    expect(wrapper.text()).not.toContain('当前候选：第2版')
+  })
+})

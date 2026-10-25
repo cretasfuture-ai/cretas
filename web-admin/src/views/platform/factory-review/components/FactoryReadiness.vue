@@ -4,7 +4,11 @@ import { getFactoryReadiness, type FactoryReadinessReport, type FactoryRemedyKey
 import IndicatorApplicability from '@/components/indicators/IndicatorApplicability.vue'
 import { useAuthStore } from '@/store/modules/auth'
 
-const props = defineProps<{ factoryId: string; blueprintId: string; rowVersion: number; actorKey?: string; refreshKey?: number }>()
+type ReadinessLoader = (factoryId: string, blueprintId: string) => Promise<FactoryReadinessReport>
+// The platform review host keeps the platform route; the factory's own host passes its own reader.
+const props = defineProps<{
+  factoryId: string; blueprintId: string; rowVersion: number; actorKey?: string; refreshKey?: number; loader?: ReadinessLoader
+}>()
 const report = ref<FactoryReadinessReport | null>(null)
 const loading = ref(false)
 const error = ref('')
@@ -45,7 +49,7 @@ async function load() {
   const current = () => alive && own === sequence && identity === context()
   loading.value = true
   try {
-    const next = await getFactoryReadiness(props.factoryId, props.blueprintId)
+    const next = await (props.loader ?? getFactoryReadiness)(props.factoryId, props.blueprintId)
     if (!current()) return
     if (next.schemaVersion !== 'factory-readiness/v1' || next.factoryId !== props.factoryId
       || next.blueprintId !== props.blueprintId || next.rowVersion !== props.rowVersion
