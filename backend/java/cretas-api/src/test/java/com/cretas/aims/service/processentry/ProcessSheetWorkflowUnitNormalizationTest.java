@@ -435,4 +435,98 @@ class ProcessSheetWorkflowUnitNormalizationTest {
                 () -> apply(newImpl(svc), req));
         assertEquals("PROCESS_SHEET_WORKFLOW_INPUT_PORT_REQUIRED", error.getErrorCode());
     }
+
+    // ── 自动回料 × 多投入 (F006【演示L5】绞肉搅拌, 2026-10-24 线上实证) ───────────────────────
+    // ReworkPolicyAutoDeduction 追加的回料引用来自回料 Cell, 不是投入端口, 没有 workflowPortId。
+    // 修复前: 回料库存一存在, 多投入工序的同一报工请求就 409「多投入报工必须逐项指定 Workflow 投入端口」。
+
+    private ProcessSheetRowRequest multiInputRowWithAutoRework(String sfiBatchNo, String reworkSku) {
+        ProcessSheetRowRequest.MaterialInputTotal a = new ProcessSheetRowRequest.MaterialInputTotal();
+        a.setMaterialTypeId("RAW-A");
+        a.setWorkflowPortId("in-a");
+        a.setQuantity(new BigDecimal("140"));
+        a.setUnit("kg");
+        ProcessSheetRowRequest.MaterialInputTotal b = new ProcessSheetRowRequest.MaterialInputTotal();
+        b.setMaterialTypeId("RAW-B");
+        b.setWorkflowPortId("in-b");
+        b.setQuantity(new BigDecimal("60"));
+        b.setUnit("kg");
+        ProcessSheetRowRequest.UpstreamRef rework = new ProcessSheetRowRequest.UpstreamRef();
+        rework.setSourceBatchNumber(sfiBatchNo);
+        rework.setFeedQuantityKg(new BigDecimal("4"));
+        rework.setSemiFinished(true);
+        rework.setAutomaticRework(true);
+        rework.setSkuId(reworkSku);
+        rework.setMaterialNodeId("m:rework");
+        ProcessSheetRowRequest req = row(2, "kg", "kg", "kg");
+        req.setMaterialInputTotals(List.of(a, b));
+        req.setUpstreamSources(new java.util.ArrayList<>(List.of(rework)));
+        return req;
+    }
+
+    private ProcessSheetServiceImpl implWithTwoRawPorts(com.cretas.aims.entity.SemiFinishedInventory sfi)
+            throws Exception {
+        WorkflowClerkSheetService svc = mock(WorkflowClerkSheetService.class);
+        PortDescriptor firstPort = PortDescriptor.builder()
+                .workflowPortId("in-a").materialNodeId("raw-a").materialKind("RAW_MATERIAL")
+                .skuId("RAW-A").unit("kg").required(true).build();
+        PortDescriptor secondPort = PortDescriptor.builder()
+                .workflowPortId("in-b").materialNodeId("raw-b").materialKind("RAW_MATERIAL")
+                .skuId("RAW-B").unit("kg").required(true).build();
+        PortDescriptor output = PortDescriptor.builder()
+                .workflowPortId("out").materialKind("SEMI_FINISHED")
+                .skuId("PT-OUT").unit("kg").required(true).finished(false).build();
+        ProcessDescriptor descriptor = ProcessDescriptor.builder()
+                .processOrder(2).inputs(List.of(firstPort, secondPort))
+                .output(output).outputs(List.of(output)).build();
+        when(svc.getWorkflowSheetConfig(FACTORY_ID, PLAN_ID)).thenReturn(
+                WorkflowClerkSheetConfigDTO.builder().processes(List.of(descriptor)).build());
+        ProcessSheetServiceImpl impl = newImpl(svc);
+        com.cretas.aims.repository.SemiFinishedInventoryRepository wipRepo =
+                mock(com.cretas.aims.repository.SemiFinishedInventoryRepository.class);
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(eq(FACTORY_ID), anyString()))
+                .thenReturn(java.util.Optional.ofNullable(sfi));
+        Field f = ProcessSheetServiceImpl.class.getDeclaredField("wipRepo");
+        f.setAccessible(true);
+        f.set(impl, wipRepo);
+        return impl;
+    }
+
+    private static com.cretas.aims.entity.SemiFinishedInventory sfi(boolean rework, String sku) {
+        com.cretas.aims.entity.SemiFinishedInventory s = new com.cretas.aims.entity.SemiFinishedInventory();
+        s.setIsRework(rework);
+        s.setProductTypeId(sku);
+        return s;
+    }
+
+    @Test
+    @DisplayName("多投入工序带服务端可证实的自动回料：回料不走端口解析，报工放行")
+    void multiInput_verifiedAutomaticRework_isNotForcedThroughInputPorts() throws Throwable {
+        ProcessSheetRowRequest req = multiInputRowWithAutoRework("CLK-SEMI-rework", "PT-REWORK");
+
+        assertTrue(apply(implWithTwoRawPorts(sfi(true, "PT-REWORK")), req));
+        assertEquals("kg", req.getInputUnit());
+        // 回料引用不被兜底到任何投入端口 —— 它本来就不属于端口
+        assertNull(req.getUpstreamSources().get(0).getWorkflowPortId());
+    }
+
+    @Test
+    @DisplayName("阴性：标了 automaticRework 但来源不是回料库存，仍按普通端口校验阻断")
+    void multiInput_automaticReworkFlagOnNonReworkStock_stillFailsClosed() throws Exception {
+        ProcessSheetRowRequest req = multiInputRowWithAutoRework("CLK-SEMI-normal", "PT-REWORK");
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> apply(implWithTwoRawPorts(sfi(false, "PT-REWORK")), req));
+        assertEquals("PROCESS_SHEET_WORKFLOW_INPUT_PORT_REQUIRED", error.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("阴性：回料库存的 SKU 与引用不一致，不放行")
+    void multiInput_automaticReworkSkuMismatch_stillFailsClosed() throws Exception {
+        ProcessSheetRowRequest req = multiInputRowWithAutoRework("CLK-SEMI-rework", "PT-OTHER");
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> apply(implWithTwoRawPorts(sfi(true, "PT-REWORK")), req));
+        assertEquals("PROCESS_SHEET_WORKFLOW_INPUT_PORT_REQUIRED", error.getErrorCode());
+    }
 }

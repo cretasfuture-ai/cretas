@@ -28,6 +28,28 @@ import java.util.List;
 public class CostVarianceReportDTO {
 
     /**
+     * 不可比较时的统一说法。前端 / AI 工具照这句显示，⛔ 不要各写各的。
+     */
+    public static final String NO_INDEPENDENT_STANDARD_REASON = "缺少独立标准成本，无法比较";
+
+    /**
+     * 可比性：只有存在<b>独立于实际成本</b>的标准成本时为 true。
+     *
+     * <p>🔴 原实现拿「实际成本 × 0.95」当 BOM 标准成本，于是差异率恒约 5.26%，
+     * 与工厂真实成本控制毫无关系。在版本化标准成本（批次锁定的配方版本 × 当期价格）
+     * 落地之前，一律 false，且 {@link #totalBomCost} / {@link #totalVariance} /
+     * {@link #totalVarianceRate} 为 null。⛔ 不要用「当前配方」去算历史批次。</p>
+     *
+     * <p>新增字段（向后兼容）：旧客户端忽略它，看到的是 null 的差异与差异率。</p>
+     */
+    private Boolean comparable;
+
+    /**
+     * 不可比较的原因（{@link #comparable} 为 false 时非空）
+     */
+    private String comparabilityReason;
+
+    /**
      * 工厂ID
      */
     private String factoryId;
@@ -196,6 +218,16 @@ public class CostVarianceReportDTO {
          * 批次数
          */
         private Integer batchCount;
+
+        /**
+         * 该产品是否有独立标准成本可比（含义同报表级 {@code comparable}）
+         */
+        private Boolean comparable;
+
+        /**
+         * 不可比较的原因
+         */
+        private String comparabilityReason;
 
         /**
          * 材料成本差异

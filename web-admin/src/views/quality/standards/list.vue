@@ -37,6 +37,11 @@ const statistics = ref<{
   criticalCount: null
 });
 const categoryStats = ref<Record<string, number>>({});
+const productTypes = ref<Array<{ id: string; name?: string }>>([]);
+const bindingVisible = ref(false);
+const bindingLoading = ref(false);
+const bindingItem = ref<TableRow | null>(null);
+const bindingForm = ref({ productTypeId: '', overrideMinValue: null as number | null, overrideMaxValue: null as number | null, overrideStandardValue: '', overrideIsRequired: null as boolean | null });
 
 // 新建/编辑对话框
 const dialogVisible = ref(false);
@@ -73,10 +78,45 @@ const severities = [
   { value: 'MINOR', label: '次要' }
 ];
 
+const valueTypes = [
+  { value: 'RANGE', label: '范围' },
+  { value: 'NUMERIC', label: '数值' },
+  { value: 'TEXT', label: '文本' },
+  { value: 'BOOLEAN', label: '是/否' },
+];
+
 onMounted(() => {
   loadData();
   loadStatistics();
+  loadProductTypes();
 });
+
+async function loadProductTypes() {
+  if (!factoryId.value) return;
+  try {
+    const response = await get(`/${factoryId.value}/product-types`, { params: { page: 1, size: 200 } });
+    const data = response.data as { content?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>;
+    const rows = Array.isArray(data) ? data : (data?.content || []);
+    productTypes.value = rows.map((row) => ({ id: String(row.id || ''), name: String(row.name || row.productName || '') }));
+  } catch (error) { console.error('加载产品失败:', error); }
+}
+
+function openBinding(row: TableRow) {
+  bindingItem.value = row;
+  bindingForm.value = { productTypeId: '', overrideMinValue: null, overrideMaxValue: null, overrideStandardValue: '', overrideIsRequired: null };
+  bindingVisible.value = true;
+}
+
+async function submitBinding() {
+  if (!factoryId.value || !bindingItem.value?.id || !bindingForm.value.productTypeId) return;
+  bindingLoading.value = true;
+  try {
+    const response = await post(`/${factoryId.value}/quality-check-items/bindings`, { qualityCheckItemId: bindingItem.value.id, ...bindingForm.value, enabled: true });
+    if (!response.success) throw new Error(response.message || '绑定失败');
+    ElMessage.success('产品标准绑定成功'); bindingVisible.value = false; loadData();
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '绑定失败'); }
+  finally { bindingLoading.value = false; }
+}
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -197,11 +237,17 @@ async function submitForm() {
 
   dialogLoading.value = true;
   try {
+    const payload = { ...itemForm.value };
+    if (payload.valueType !== 'RANGE' && payload.valueType !== 'NUMERIC') {
+      payload.minValue = null;
+      payload.maxValue = null;
+      payload.unit = '';
+    }
     let response;
     if (editingId.value) {
-      response = await put(`/${factoryId.value}/quality-check-items/${editingId.value}`, itemForm.value);
+      response = await put(`/${factoryId.value}/quality-check-items/${editingId.value}`, payload);
     } else {
-      response = await post(`/${factoryId.value}/quality-check-items`, itemForm.value);
+      response = await post(`/${factoryId.value}/quality-check-items`, payload);
     }
     if (response.success) {
       ElMessage.success(editingId.value ? '更新成功' : '创建成功');
@@ -456,6 +502,7 @@ const filteredData = computed(() => {
               size="small"
               @click="handleDelete(row)"
             >删除</el-button>
+            <el-button v-if="canWrite" type="primary" link size="small" @click="openBinding(row)">绑定产品</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -480,7 +527,7 @@ const filteredData = computed(() => {
           <el-input v-model="itemForm.itemName" placeholder="如：菌落总数" />
         </el-form-item>
         <el-form-item label="检测类别" required>
-          <el-select v-model="itemForm.category" placeholder="选择类别" style="width: 100%">
+          <el-select v-model="itemForm.category" placeholder="选择类别" data-testid="quality-category" style="width: 100%">
             <el-option
               v-for="cat in categories"
               :key="cat.value"
@@ -495,10 +542,19 @@ const filteredData = computed(() => {
         <el-form-item label="标准依据">
           <el-input v-model="itemForm.standardReference" placeholder="如：GB 4789.2-2022" />
         </el-form-item>
-        <el-form-item label="标准值">
-          <el-input v-model="itemForm.standardValue" placeholder="如：≤10000 CFU/g" />
+        <el-form-item label="值类型" required>
+          <el-select v-model="itemForm.valueType" data-testid="quality-value-type" style="width: 100%">
+            <el-option v-for="type in valueTypes" :key="type.value" :label="type.label" :value="type.value" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="范围值">
+        <el-form-item label="标准值">
+          <el-select v-if="itemForm.valueType === 'BOOLEAN'" v-model="itemForm.standardValue" data-testid="quality-boolean-value" style="width: 100%">
+            <el-option label="是" value="true" />
+            <el-option label="否" value="false" />
+          </el-select>
+          <el-input v-else v-model="itemForm.standardValue" placeholder="如：≤10000 CFU/g" />
+        </el-form-item>
+        <el-form-item v-if="itemForm.valueType === 'RANGE' || itemForm.valueType === 'NUMERIC'" label="范围值">
           <div style="display: flex; gap: 8px; align-items: center;">
             <el-input-number v-model="itemForm.minValue" :precision="2" placeholder="最小值" style="flex: 1" />
             <span>~</span>
@@ -530,6 +586,21 @@ const filteredData = computed(() => {
           {{ editingId ? '更新' : '创建' }}
         </el-button>
       </template>
+    </el-dialog>
+    <el-dialog v-model="bindingVisible" title="绑定产品质检标准" width="520px">
+      <el-form label-width="120px">
+        <el-form-item label="质检项目"><span>{{ bindingItem?.itemName }}</span></el-form-item>
+        <el-form-item label="产品" required>
+          <el-select v-model="bindingForm.productTypeId" filterable style="width: 100%" placeholder="选择产品">
+            <el-option v-for="product in productTypes" :key="product.id" :label="product.name || product.id" :value="product.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="覆盖最小值"><el-input-number v-model="bindingForm.overrideMinValue" :precision="2" /></el-form-item>
+        <el-form-item label="覆盖最大值"><el-input-number v-model="bindingForm.overrideMaxValue" :precision="2" /></el-form-item>
+        <el-form-item label="覆盖标准值"><el-input v-model="bindingForm.overrideStandardValue" /></el-form-item>
+        <el-form-item label="必检覆盖"><el-select v-model="bindingForm.overrideIsRequired" clearable><el-option label="必检" :value="true" /><el-option label="非必检" :value="false" /></el-select></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="bindingVisible = false">取消</el-button><el-button type="primary" :loading="bindingLoading" @click="submitBinding">绑定</el-button></template>
     </el-dialog>
   </div>
 </template>

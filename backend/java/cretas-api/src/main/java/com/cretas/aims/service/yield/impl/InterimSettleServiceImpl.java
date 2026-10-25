@@ -107,6 +107,25 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /** 小结 SFI 投料 (§② A) 的 WIP_CONSUME 写边点; required=false 理由同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
+
+    /**
+     * 小结严格扣减常驻半成品之后写「产出它的生产批次 → 本行生产批次」边。
+     * 目标 = 本未结行物化的生产批次 (纯 SFI 道 SAVED_SFI 没有批次 ⇒ recorder 记 SKIPPED)。
+     * 幂等键带计划/小结序号/行 id/库存号: 撤销后重新小结复用同序号 ⇒ 同键 ⇒ 不重复写。
+     */
+    private void recordSemiFeedLineage(String factoryId, String planId, int sessionSeq, UnsettledRow ur,
+                                       String srcBatchNo, BigDecimal drawn, Long userId) {
+        if (semiFeedLineageRecorder == null) {
+            return;
+        }
+        semiFeedLineageRecorder.recordSemiFeed(factoryId, srcBatchNo, ur.row.getBatchId(), drawn, null, userId,
+                "interimSfiFeed:" + planId + ":s" + sessionSeq + ":row" + ur.row.getId() + ":" + srcBatchNo,
+                "INTERIM_SETTLE_SFI_FEED");
+    }
+
     @Override
     @Transactional
     public Map<String, Object> interimSettle(String factoryId, String planId, Long userId) {
@@ -319,6 +338,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                                 .consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
                         semiOutQuantity = semiOutQuantity.add(nz(drawn)); // 实际出库量, 非 pre-clamp feed
                         sfiOutStrictDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
+                        recordSemiFeedLineage(factoryId, planId, sessionSeq, ur, srcBatchNo, drawn, userId);
                     }
                     continue; // SFI 投料不走 priorStocked anchor 路径 (避免重复扣减)
                 }
@@ -466,6 +486,9 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         .withHintTarget("小结");
             }
             agg.qty = agg.qty.add(qty);
+            if (ur.row.getBatchId() != null) {
+                agg.contributors.merge(ur.row.getBatchId(), qty, BigDecimal::add);
+            }
             // 加权成本 (诚实 null): 任一行成本未知 → 整批标记未知, 不以已知行伪造均价。
             if (agg.costKnown) {
                 if (rowUnitCost != null) {
@@ -485,7 +508,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                     ? agg.costWeightedSum.divide(agg.qty, 4, RoundingMode.HALF_UP)
                     : null;
             FinishedGoodsBatch fg = createFinishedGoodsForInterim(
-                    plan, productTypeId, agg.qty, agg.unit, sessionSeq, userId, fgUnitCost);
+                    plan, productTypeId, agg.qty, agg.unit, sessionSeq, userId, fgUnitCost, agg.contributors);
             finishedBatchNumbers.add(fg.getBatchNumber());
             finishedQuantity = finishedQuantity.add(agg.qty);
             // 撤销明细: 每批次一条, 记聚合全量 → reverseInterimCreate 精确逆转 (含 2+ 行累加量, 撤销不留残)。
@@ -563,7 +586,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
 
     private FinishedGoodsBatch createFinishedGoodsForInterim(ProductionPlan plan, String productTypeId,
                                                              BigDecimal qty, String unit, int sessionSeq,
-                                                             Long userId, BigDecimal unitCost) {
+                                                             Long userId, BigDecimal unitCost,
+                                                             Map<Long, BigDecimal> contributors) {
         if (productTypeId == null || productTypeId.isBlank()) {
             throw new BusinessException(409, "生产计划/工序行缺少产品类型, 不能生成成品库存")
                     .withHint("请先补全产品类型")
@@ -597,7 +621,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
                 batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库(撤销后重做): " + plan.getPlanNumber());
                 FinishedGoodsBatch revived = finishedGoodsBatchRepository.save(batch);
-                recordInterimFinishedLineage(revived, qty, userId, "INTERIM_SETTLE_REVIVED");
+                recordInterimFinishedLineage(revived, qty, userId, "INTERIM_SETTLE_REVIVED", contributors);
                 return revived;
             }
             // 非 REVERSED (真实已产 AVAILABLE/DEPLETED) → 原样返回 (幂等安全网, 不覆盖真实数据)。
@@ -613,7 +637,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         populateInterimFinishedGoods(batch, plan, productType, productTypeId, qty, unit, userId, unitCost);
         batch.setRemark("库存生产小结第 " + sessionSeq + " 次入库: " + plan.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
-        recordInterimFinishedLineage(saved, qty, userId, "INTERIM_SETTLE");
+        recordInterimFinishedLineage(saved, qty, userId, "INTERIM_SETTLE", contributors);
         return saved;
     }
 
@@ -625,13 +649,30 @@ public class InterimSettleServiceImpl implements InterimSettleService {
      * 而不是造第二条边。
      */
     private void recordInterimFinishedLineage(FinishedGoodsBatch saved, BigDecimal quantity,
-                                              Long operatorId, String origin) {
+                                              Long operatorId, String origin,
+                                              Map<Long, BigDecimal> contributors) {
         if (lineageEdgeRecorder == null || saved == null) {
             return;
         }
         Map<String, Object> meta = new HashMap<>();
         meta.put("origin", origin);
         meta.put("finishedBatchNumber", saved.getBatchNumber());
+        // 🔴 2026-10-24 prod 实测: 小结成品批 FG-…-S1-… 所在计划有 2 个同产品正式批次 ⇒ by-plan 必然
+        //    AMBIGUOUS ⇒ 一条 PRODUCTION_TO_FINISHED 都没有。而「这批成品是哪些成品行的产量合成的」
+        //    在本次小结里是<b>已知事实</b> (行上的 batchId) —— 用它, 不按计划猜。
+        //    单贡献者: 幂等键沿用 finishedBatch:<id> (与回填 / by-plan 同键, 不会双写);
+        //    多贡献者: 每个贡献批次一条, 键带批次 id, 数量 = 该批次入库量 (Σ = 本批成品量)。
+        if (contributors != null && !contributors.isEmpty()) {
+            meta.put("contributorCount", contributors.size());
+            for (Map.Entry<Long, BigDecimal> c : contributors.entrySet()) {
+                String refKey = contributors.size() == 1
+                        ? "finishedBatch:" + saved.getId()
+                        : "finishedBatch:" + saved.getId() + ":pb:" + c.getKey();
+                lineageEdgeRecorder.recordProductionToFinished(saved.getFactoryId(), c.getKey(), saved.getId(),
+                        c.getValue(), saved.getUnit(), operatorId, refKey, meta);
+            }
+            return;
+        }
         lineageEdgeRecorder.recordProductionToFinishedByPlan(
                 saved.getFactoryId(), saved.getProductionPlanId(), saved.getProductTypeId(),
                 saved.getId(), quantity, saved.getUnit(), operatorId,
@@ -946,6 +987,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         BigDecimal qty = BigDecimal.ZERO;                   // 聚合数量 (Σ 行 qty)
         BigDecimal costWeightedSum = BigDecimal.ZERO;       // Σ(行 unitCost × 行 qty)
         boolean costKnown = true;                           // 诚实 null: 任一行成本未知即 false
+        /** 血缘: 贡献本组产量的成品行生产批次 → 各自入库量 (精确, 不按计划猜)。 */
+        final Map<Long, BigDecimal> contributors = new LinkedHashMap<>();
 
         FinishedAgg(String unit) {
             this.unit = unit;

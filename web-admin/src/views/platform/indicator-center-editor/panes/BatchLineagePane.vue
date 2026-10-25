@@ -28,7 +28,8 @@
         <el-input v-model="form.batchId" placeholder="输入批次 ID" style="width: 280px" />
       </el-form-item>
       <el-form-item label="最大跳数">
-        <el-input-number v-model="form.maxDepth" :min="1" :max="10" />
+        <!-- 上限 50 = 后端 LineageGraphAssembler.MAX_DEPTH_CAP; 每道工序占 2 跳 -->
+        <el-input-number v-model="form.maxDepth" :min="1" :max="50" />
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :icon="Search" :loading="loading" @click="onQuery">
@@ -125,7 +126,8 @@ const props = defineProps<Props>()
 const form = ref({
   batchType: 'PRODUCTION_BATCH',
   batchId: '',
-  maxDepth: 5,
+  // 缺省取整条链 (= 后端上限 50); 原来的 5 只看得到最后两道工序
+  maxDepth: 50,
 })
 const result = ref<BatchLineageGraph | null>(null)
 const loading = ref(false)

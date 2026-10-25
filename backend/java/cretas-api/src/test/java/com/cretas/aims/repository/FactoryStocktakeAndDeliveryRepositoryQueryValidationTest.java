@@ -58,6 +58,8 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
                 FactoryStocktake.InventoryScope.RAW_MATERIAL, now.minusMinutes(1));
         persistStocktake("ST-ENDED", FactoryStocktake.Status.APPLIED,
                 FactoryStocktake.InventoryScope.RAW_MATERIAL, now);
+        persistStocktake("ST-RECOUNTED", FactoryStocktake.Status.RECOUNT_REQUIRED,
+                FactoryStocktake.InventoryScope.RAW_MATERIAL, now.plusMinutes(2));
         persistStocktake("ST-OTHER-SCOPE", FactoryStocktake.Status.PENDING_APPROVAL,
                 FactoryStocktake.InventoryScope.FINISHED_GOODS, now.plusMinutes(1));
         entityManager.flush();
@@ -68,7 +70,7 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
 
         assertThat(active).extracting(FactoryStocktake::getStocktakeNo)
                 .containsExactly("ST-BLOCKING", "ST-OLD")
-                .doesNotContain("ST-ENDED", "ST-OTHER-SCOPE");
+                .doesNotContain("ST-ENDED", "ST-RECOUNTED", "ST-OTHER-SCOPE");
     }
 
     private void persistStocktake(String stocktakeNo, FactoryStocktake.Status status,

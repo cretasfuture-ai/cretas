@@ -349,6 +349,181 @@ class TestBudgetChartIsReadable:
         assert '累计达成率(%)' in rows
 
 
+def _charts(rows, **kw):
+    r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, **kw)
+    return r, {c['chartType']: c for c in r['charts']}
+
+
+class TestMonthOverMonth:
+    """客户需求「实际与同期、环比」: 环比原来只在图顶部一排没标签的小字里 (环比线因默认「综合」模式永远不画)。"""
+
+    ROWS = [{'月份': f'{m}月', '实际': a, '上年': ly} for m, a, ly in [(1, 100, 90), (2, 120, 100), (3, 90, 95), (4, 108, 100)]]
+
+    def test_mom_line_is_drawn_and_named(self):
+        opt = _charts(self.ROWS)[1]['yoy_mom_comparison']['echartsOption']
+        mom = next(s for s in opt['series'] if s['name'] == '环比增长率')
+        assert mom['type'] == 'line'
+        assert mom['data'][:4] == [None, 20.0, -25.0, 20.0]
+        assert all(v is None for v in mom['data'][4:])  # 没上传的月份是空, 不是 0
+        assert '环比增长率' in opt['legend']['data']
+
+    def test_latest_mom_is_a_kpi_with_its_month(self):
+        kpis = {k['label']: k for k in _charts(self.ROWS)[1]['yoy_mom_comparison']['kpis']}
+        assert kpis['最近月环比']['value'] == '4月 +20.0'
+        assert kpis['最近月环比']['unit'] == '%'
+
+    def test_unlabeled_mom_row_is_gone(self):
+        opt = _charts(self.ROWS)[1]['yoy_mom_comparison']['echartsOption']
+        top_row = [g for g in opt.get('graphic', []) if g.get('top') == '7%']
+        assert top_row == []
+
+    def test_single_month_has_no_mom_kpi(self):
+        kpis = {k['label']: k for k in _charts(self.ROWS[:1])[1]['yoy_mom_comparison']['kpis']}
+        assert kpis['最近月环比']['value'] == '-'
+
+
+class TestBusinessUnits:
+    """客户需求「从各业务单元」: 能识别事业部 / 部门列, 但原来没有对应的图。"""
+
+    ROWS = [
+        {'月份': f'{m}月', '事业部': bu, '预算': b, '实际': a, '上年': ly}
+        for m in (1, 2)
+        for bu, b, a, ly in [('华东', 500, 600, 450), ('华南', 400, 300, 320), ('西南', 100, 100, 50)]
+    ]
+
+    def test_units_are_compared_by_actual_share_achievement_and_yoy(self):
+        chart = _charts(self.ROWS)[1]['business_unit_analysis']
+        kpis = {k['label']: k['value'] for k in chart['kpis']}
+        assert kpis['业务单元数'] == '3个'
+        assert kpis['实际最大'] == '华东 (60.0%)'
+        assert kpis['达成最低'] == '华南 (75.0%)'
+        assert kpis['同比增长最快'] == '西南 (+100.0%)'
+        opt = chart['echartsOption']
+        assert opt['yAxis']['data'] == ['西南', '华南', '华东']  # 横向条形, 最大的在最上面
+        assert [s['name'] for s in opt['series']][:2] == ['实际', '预算']
+
+    def test_pnl_sheet_counts_revenue_rows_only(self):
+        rows = [{'月份': '1月', '事业部': bu, '项目': item, '实际': v}
+                for bu, item, v in [('华东', '营业收入', 1000), ('华东', '营业成本', 600), ('华南', '营业收入', 500), ('华南', '营业成本', 450)]]
+        chart = _charts(rows)[1]['business_unit_analysis']
+        kpis = {k['label']: k['value'] for k in chart['kpis']}
+        assert kpis['实际最大'] == '华东 (66.7%)'
+
+    def test_missing_unit_column_is_explained(self):
+        r, charts = _charts(BUDGET_12)
+        assert 'business_unit_analysis' not in charts
+        gap = next(u for u in r['unavailableCharts'] if u['chartType'] == 'business_unit_analysis')
+        assert gap['gapKind'] == 'column' and '「事业部' in gap['reason']
+
+
+class TestFindings:
+    """客户需求「好的与不好的、建议」: 原来只有 AI 生成; 现在先给规则算出来的, 每条都带数字。"""
+
+    def test_budget_sheet_names_good_quarters_and_the_weak_one(self):
+        f = svc.generate_dashboard(pd.DataFrame(BUDGET_12), 2026, 'all', 1, 12)['findings']
+        assert any('Q4 达成 110.0%' in g for g in f['good'])
+        assert any('Q1 只达成 20.0%' in a for a in f['attention'])
+        assert any(s.startswith('Q1') and '缺口' in s for s in f['suggestions'])
+        for line in f['good'] + f['attention'] + f['suggestions']:
+            assert re.search(r'\d', line), line
+
+    def test_best_month_is_good_news_even_when_no_quarter_reaches_target(self):
+        # 线上 5250 (2026-10-24): 四个季度都没达标, 但 8 月 124.4%, 「做得好的」原来是空的
+        actuals = [100, 200, 300, 400, 500, 600, 700, 1244, 900, 500, 500, 500]
+        rows = [{'月份': f'{m}月', '预算': 1000, '实际': a} for m, a in zip(range(1, 13), actuals)]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert not any(g.startswith('Q') for g in f['good'])
+        assert '8月 达成 124.4%，各月里最好' in f['good']
+
+    def test_no_month_reaches_target_means_no_month_good_news(self):
+        rows = [{'月份': f'{m}月', '预算': 1000, '实际': 500} for m in range(1, 13)]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert not any('各月里最好' in g for g in f['good'])
+
+    def test_expense_sheet_flags_the_overrun_months(self):
+        rows = [{'月份': f'{m}月', '预算': 100, '实际': a, '上年': 110} for m, a in [(1, 90), (2, 280), (3, 120)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12, sheet_name='费用预算')['findings']
+        assert any('超预算' in a and '163.3%' in a for a in f['attention'])
+        assert any('2月' in s and '280.0%' in s for s in f['suggestions'])
+        assert not any('超支' in g for g in f['good'])
+
+    def test_yoy_decline_months_are_attention(self):
+        f = svc.generate_dashboard(pd.DataFrame(TestMonthOverMonth.ROWS), 2026, 'all', 1, 12)['findings']
+        assert any('同比增长' in g for g in f['good'])
+        assert any('3月' in a and '比上年' in a for a in f['attention'])
+
+    def test_business_unit_below_target_gets_a_suggestion(self):
+        f = svc.generate_dashboard(pd.DataFrame(TestBusinessUnits.ROWS), 2026, 'all', 1, 12)['findings']
+        assert any('华南' in a and '75.0%' in a for a in f['attention'])
+        assert any('华南' in s for s in f['suggestions'])
+
+    def test_ratio_sheet_has_no_amount_findings(self):
+        rows = [{'月份': '1月', '本年毛利率': '25%', '上年毛利率': '20%'}]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert f is None
+
+    # 样图⑤「各月毛利率」(比率表) 原来没有规则结论, 结论区只能靠 AI。
+    MARGIN_CUR = [24, 25, 26, 27, 28, 25, 25, 27, 29, 28, 24, 25]
+    MARGIN_LY = [25, 24, 25, 26, 27, 27, 26, 26, 27, 27, 27, 24]
+    MARGIN_ROWS = [{'月份': f'{m}月', '本年毛利率': f'{c}%', '上年毛利率': f'{ly}%'}
+                   for m, c, ly in zip(range(1, 13), MARGIN_CUR, MARGIN_LY)]
+
+    def test_margin_sheet_names_average_best_worst_and_declines(self):
+        r = svc.generate_dashboard(pd.DataFrame(self.MARGIN_ROWS), 2026, 'all', 1, 12)
+        f = r['findings']
+        assert '各月平均毛利率 26.1%，比上年 +0.2 个百分点（各月简单平均）' in f['good']
+        assert '9月毛利率最高，29.0%' in f['good']
+        assert '1月毛利率最低，24.0%，比最高月低 5.0 个百分点' in f['attention']
+        declines = [a for a in f['attention'] if '比上年低' in a]
+        assert declines == ['11月比上年低 3.0 个百分点（24.0%，上年 27.0%）',
+                            '6月比上年低 2.0 个百分点（25.0%，上年 27.0%）']
+        assert f['suggestions'] and f['suggestions'][0].startswith('复盘 11月')
+        for line in f['good'] + f['attention'] + f['suggestions']:
+            assert '万' not in line, line  # 比率表不出金额结论
+        # 与毛利率趋势图同一口径: 月均毛利率 KPI 也是 26.1
+        kpis = {k['label']: k['value'] for k in _charts(self.MARGIN_ROWS)[1]['gross_margin_trend']['kpis']}
+        assert kpis['本年月均毛利率'] == '26.1'
+
+    def test_margin_sheet_headline_states_the_average_gap(self):
+        h = svc.generate_dashboard(pd.DataFrame(self.MARGIN_ROWS), 2026, 'all', 1, 12)['headline']
+        assert '各月平均毛利率 26.1%，上年 25.9%，+0.2 个百分点（各月简单平均）' in h['text']
+        assert h['tone'] == 'good'
+        worse = [{**row, '本年毛利率': '20%'} for row in self.MARGIN_ROWS]
+        assert svc.generate_dashboard(pd.DataFrame(worse), 2026, 'all', 1, 12)['headline']['tone'] == 'bad'
+
+    def test_pnl_sheet_states_margin_expense_share_and_biggest_item(self):
+        # 线上 5252 (2026-10-25): 损益表只有「净利润」一条结论
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v} for k, v in PNL_REFERENCE]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert '净利润 3,308.00万，净利率 39.7%' in f['good']
+        assert '毛利率 82.3%（毛利 6,862.00万 / 营业收入 8,333.00万）' in f['good']
+        assert ('期间费用 2,472.00万，占营业收入 29.7%，最大一项是研发费用 999.00万（占 40%）'
+                in f['attention'])
+        assert '营业外收支净减少 44.00万（收入 42.00万，支出 86.00万）' in f['attention']
+        assert f['suggestions'] == ['先看研发费用：999.00万，占期间费用 40%，是期间费用里最大的一项']
+
+    def test_pnl_with_last_year_states_net_profit_growth(self):
+        rows = [{'月份': '1月', '项目': k, '实际（万元）': v, '上年（万元）': v * 0.8} for k, v in PNL_REFERENCE]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert any(g.startswith('净利润同比 +25.0%') for g in f['good'])
+
+    def test_yoy_sheet_names_best_month_and_suggests_reviewing_the_biggest_drop(self):
+        # 线上 5251 (2026-10-25): 同比表没有「建议」
+        rows = [{'月份': f'{m}月', '实际': a, '上年': ly}
+                for m, a, ly in [(1, 100, 90), (2, 150, 100), (3, 80, 120), (4, 95, 100)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert '2月同比 +50.0%（多 50.00），各月里增长最多' in f['good']
+        assert f['suggestions'] == ['复盘 3月：比上年少 40.00，各月里减少的金额最多']
+
+    def test_latest_mom_finding_matches_the_kpi_month(self):
+        f = svc.generate_dashboard(pd.DataFrame(TestMonthOverMonth.ROWS), 2026, 'all', 1, 12)['findings']
+        assert '4月环比 +20.0%（上月 90.00 → 本月 108.00）' in f['good']  # 列名没写单位, 金额不带「万」
+        falling = TestMonthOverMonth.ROWS[:3]  # 最近一月是 3 月: 120 → 90
+        f = svc.generate_dashboard(pd.DataFrame(falling), 2026, 'all', 1, 12)['findings']
+        assert any(a.startswith('3月环比 -25.0%') for a in f['attention'])
+        assert not any('环比' in g for g in f['good'])
+
+
 class TestSlicerScope:
     """线上验收 (2026-10-22): 点筛选器「3月」后数字已是 3 月的, 页首结论和期间标签仍写「全部历史」。
     期间标签要说清楚这些数字是哪一部分数据。走真实 /batch 入口 (筛选在接口层生效)。"""

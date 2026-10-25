@@ -1,5 +1,7 @@
 package com.cretas.aims.service.mqtt;
 
+import org.springframework.context.annotation.Profile;
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -22,6 +24,8 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+// 回填进程不向设备下发指令(同 MqttConfig)。
+@Profile(LineageBackfillMode.NOT_ACTIVE)
 @ConditionalOnProperty(name = "mqtt.enabled", havingValue = "true", matchIfMissing = false)
 public class MqttCommandPublisher {
 

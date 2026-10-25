@@ -198,6 +198,10 @@ export interface CorrectableReportItem {
   reportDate?: string | null;
   approvalStatus?: string | null;
   outputQuantity?: number | null;
+  reportKind?: 'INPUT' | 'SEGMENT' | 'OUTPUT' | string | null;
+  outputUnit?: string | null;
+  correctionEligible?: boolean;
+  correctionEligibilityReason?: string | null;
   goodQuantity?: number | null;
   defectQuantity?: number | null;
   totalWorkers?: number | null;

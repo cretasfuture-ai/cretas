@@ -1,5 +1,7 @@
 package com.cretas.aims.service.startup;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.service.SemanticIntentMatcher;
 import com.cretas.aims.service.SemanticRouterService;
 import com.cretas.aims.service.impl.IntentEmbeddingCacheServiceImpl;
@@ -34,7 +36,7 @@ public class StartupWarmupCoordinator {
         this.statusRegistry = statusRegistry;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
+    @EventListener(value = ApplicationReadyEvent.class, condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void afterApplicationReady() {
         executor.execute(this::runSerialWarmups);
     }

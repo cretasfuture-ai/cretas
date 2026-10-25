@@ -1,5 +1,7 @@
 package com.cretas.aims.service.mqtt;
 
+import org.springframework.context.annotation.Profile;
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import com.cretas.aims.service.IotDataService;
 import com.cretas.aims.websocket.EquipmentMonitoringHandler;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -32,6 +34,8 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+// 回填进程不订阅设备消息(同 MqttConfig)。
+@Profile(LineageBackfillMode.NOT_ACTIVE)
 @ConditionalOnProperty(name = "mqtt.enabled", havingValue = "true", matchIfMissing = false)
 public class MqttSubscriber {
 

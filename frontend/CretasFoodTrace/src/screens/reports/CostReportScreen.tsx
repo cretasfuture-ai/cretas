@@ -23,6 +23,14 @@ import { ReportStackParamList } from '../../types/navigation';
 import { handleError , getErrorMsg} from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { formatDate } from '../../utils/formatters';
+import {
+  COST_VARIANCE_NOT_COMPARABLE_TEXT,
+  formatSignedPercentOrNotComparable,
+  formatYuanOrDash,
+  isCostVarianceComparable,
+  isReading,
+  standardCostOf,
+} from '../../utils/costVarianceComparability';
 
 // 创建CostReport专用logger
 const costReportLogger = logger.createContextLogger('CostReport');
@@ -247,6 +255,11 @@ export default function CostReportScreen() {
     navigation.navigate('CostVarianceReport');
   };
 
+  // 成本差异可比性: 没有独立标准成本时后端给 comparable=false, 差异为 null
+  const varianceComparable = isCostVarianceComparable(costVarianceData);
+  const varianceStandardCost = costVarianceData ? standardCostOf(costVarianceData) : null;
+  const varianceTotal = costVarianceData?.totalVariance ?? null;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <Appbar.Header elevated>
@@ -415,32 +428,45 @@ export default function CostReportScreen() {
                 </View>
               ) : costVarianceData ? (
                 <>
-                  {/* 计划vs实际对比 - 使用真实数据 */}
+                  {/* 标准vs实际对比 - 使用真实数据; 不可比较时 ⛔ 不显示差异 (原来 `?? 0` 兜底 + 后端 ×0.95) */}
                   <View style={styles.varianceCompareSection}>
                     <Text variant="bodyMedium" style={styles.varianceSectionTitle}>
-                      计划成本 vs 实际成本
+                      标准成本 vs 实际成本
                     </Text>
+                    {!varianceComparable && (
+                      <Text style={styles.emptyText} testID="cost-report-variance-not-comparable">
+                        {COST_VARIANCE_NOT_COMPARABLE_TEXT}
+                      </Text>
+                    )}
                     <View style={styles.varianceCompareRow}>
                       <View style={styles.varianceCompareItem}>
-                        <Text style={styles.varianceCompareLabel}>计划成本</Text>
+                        <Text style={styles.varianceCompareLabel}>标准成本</Text>
                         <Text style={[styles.varianceCompareValue, { color: '#2196F3' }]}>
-                          ¥{(costVarianceData.totalPlannedCost ?? 0).toFixed(2)}
+                          {varianceComparable && varianceStandardCost !== null
+                            ? `¥${varianceStandardCost.toFixed(2)}`
+                            : '无法比较'}
                         </Text>
                       </View>
                       <View style={styles.varianceCompareItem}>
                         <Text style={styles.varianceCompareLabel}>实际成本</Text>
                         <Text style={[styles.varianceCompareValue, { color: '#FF9800' }]}>
-                          ¥{(costVarianceData.totalActualCost ?? 0).toFixed(2)}
+                          {costVarianceData.totalActualCost !== null && costVarianceData.totalActualCost !== undefined
+                            ? `¥${costVarianceData.totalActualCost.toFixed(2)}`
+                            : '-'}
                         </Text>
                       </View>
                       <View style={styles.varianceCompareItem}>
                         <Text style={styles.varianceCompareLabel}>差异</Text>
-                        <Text style={[styles.varianceCompareValue, {
-                          color: (costVarianceData.totalVariance ?? 0) > 0 ? '#F44336' : '#4CAF50'
-                        }]}>
-                          {(costVarianceData.totalVariance ?? 0) > 0 ? '+' : ''}
-                          ¥{(costVarianceData.totalVariance ?? 0).toFixed(2)}
-                        </Text>
+                        {varianceComparable && varianceTotal !== null ? (
+                          <Text style={[styles.varianceCompareValue, {
+                            color: varianceTotal > 0 ? '#F44336' : '#4CAF50'
+                          }]}>
+                            {varianceTotal > 0 ? '+' : ''}
+                            ¥{varianceTotal.toFixed(2)}
+                          </Text>
+                        ) : (
+                          <Text style={styles.varianceCompareValue}>无法比较</Text>
+                        )}
                       </View>
                     </View>
                   </View>
@@ -461,13 +487,16 @@ export default function CostReportScreen() {
                             <Text style={styles.varianceCategoryName}>{category.category}</Text>
                           </View>
                           <View style={styles.varianceCategoryRight}>
+                            {/* 没有读数时显示「—」/「无法比较」, ⛔ 不用 `?? 0` 显示成 ¥0.00 / 0.0% */}
                             <Text style={styles.varianceCategoryValue}>
-                              ¥{(category.actualCost ?? 0).toFixed(2)}
+                              {formatYuanOrDash(category.actualCost)}
                             </Text>
                             <Text style={[styles.varianceCategoryDiff, {
-                              color: (category.varianceRate ?? 0) > 0 ? '#F44336' : '#4CAF50'
+                              color: !isReading(category.varianceRate)
+                                ? '#9E9E9E'
+                                : category.varianceRate > 0 ? '#F44336' : '#4CAF50'
                             }]}>
-                              {(category.varianceRate ?? 0) > 0 ? '+' : ''}{(category.varianceRate ?? 0).toFixed(1)}%
+                              {formatSignedPercentOrNotComparable(category.varianceRate)}
                             </Text>
                           </View>
                         </View>
@@ -488,13 +517,17 @@ export default function CostReportScreen() {
                     {(costVarianceData.topVarianceItems || []).slice(0, 3).map((item, index) => (
                       <View key={item.itemName || index} style={styles.varianceReasonItem}>
                         <Icon
-                          source={(item.variance ?? 0) > 0 ? "alert-circle" : "check-circle"}
+                          source={!isReading(item.variance)
+                            ? 'help-circle'
+                            : item.variance > 0 ? 'alert-circle' : 'check-circle'}
                           size={18}
-                          color={(item.variance ?? 0) > 0 ? '#F44336' : '#4CAF50'}
+                          color={!isReading(item.variance)
+                            ? '#9E9E9E'
+                            : item.variance > 0 ? '#F44336' : '#4CAF50'}
                         />
                         <Text style={styles.varianceReasonText}>
-                          {item.itemName}: {(item.varianceRate ?? 0) > 0 ? '+' : ''}{(item.varianceRate ?? 0).toFixed(1)}%
-                          (¥{Math.abs(item.variance ?? 0).toFixed(2)})
+                          {item.itemName}: {formatSignedPercentOrNotComparable(item.varianceRate)}
+                          {isReading(item.variance) ? ` (${formatYuanOrDash(Math.abs(item.variance))})` : ''}
                         </Text>
                       </View>
                     ))}

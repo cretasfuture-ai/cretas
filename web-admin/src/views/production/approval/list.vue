@@ -125,6 +125,22 @@ function hasPendingCorrection(row: CorrectableReportItem): boolean {
   return row.lastCorrection?.status === 'PENDING_APPROVAL';
 }
 
+function correctionKindLabel(kind: string | null | undefined): string {
+  if (kind === 'INPUT') return '投入';
+  if (kind === 'SEGMENT') return '过程';
+  if (kind === 'OUTPUT') return '完工';
+  if (!kind) return '旧式整合';
+  return `未知(${kind})`;
+}
+
+function correctionKindAllowed(row: CorrectableReportItem): boolean {
+  return row.correctionEligible !== false && (row.reportKind == null || row.reportKind === 'OUTPUT');
+}
+
+function trustedCorrectionUnit(row: CorrectableReportItem): string {
+  return row.outputUnit?.trim() || '单位未知';
+}
+
 // 筛选: 报工模式/报工阶段/工序 (实时按当前待审批队列里实际存在的值生成选项, 非固定枚举)
 const filterReportMode = ref('');
 const filterReportKind = ref('');
@@ -624,7 +640,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
         <el-table-column prop="processCategory" label="工序" min-width="110" />
         <el-table-column label="当前有效结果" min-width="250">
           <template #default="{ row }">
-            产出 {{ formatQty(row.outputQuantity) }} · 良品 {{ formatQty(row.goodQuantity) }} · 不良 {{ formatQty(row.defectQuantity) }}
+            产出 {{ formatQty(row.outputQuantity) }} · 良品 {{ formatQty(row.goodQuantity) }} · 不良 {{ formatQty(row.defectQuantity) }} · {{ correctionKindLabel(row.reportKind) }} · {{ trustedCorrectionUnit(row) }}
           </template>
         </el-table-column>
         <el-table-column label="修正状态" min-width="150">
@@ -637,7 +653,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
             <el-button
               type="primary"
               text
-              :disabled="hasPendingCorrection(row)"
+              :disabled="hasPendingCorrection(row) || !correctionKindAllowed(row)"
               @click="openCorrection(row)"
             >核对修正</el-button>
           </template>
@@ -930,6 +946,8 @@ function evidenceImageIndex(urls: string[], url: string): number {
           <el-descriptions-item label="报工 ID">{{ correctionTarget.id }}</el-descriptions-item>
           <el-descriptions-item label="批次 ID">{{ correctionTarget.batchId ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="任务 ID">{{ correctionTarget.workProcessTaskId ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="报工阶段">{{ correctionKindLabel(correctionTarget.reportKind) }}</el-descriptions-item>
+          <el-descriptions-item label="可信产出单位">{{ trustedCorrectionUnit(correctionTarget) }}</el-descriptions-item>
           <el-descriptions-item label="原实际产出">{{ formatQty(correctionTarget.outputQuantity) }}</el-descriptions-item>
           <el-descriptions-item label="原良品">{{ formatQty(correctionTarget.goodQuantity) }}</el-descriptions-item>
           <el-descriptions-item label="原不良品">{{ formatQty(correctionTarget.defectQuantity) }}</el-descriptions-item>
