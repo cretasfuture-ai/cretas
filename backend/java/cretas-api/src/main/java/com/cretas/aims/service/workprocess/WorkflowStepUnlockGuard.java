@@ -144,6 +144,40 @@ public class WorkflowStepUnlockGuard {
         return out;
     }
 
+    /**
+     * 按工艺图, 本道半成品投入是哪几道更早工序产出的 (它们的 processOrder)。
+     * App 报工算「可领源 WIP」时用它代替「前一道」—— 网状工艺里并行分支的上游不是前一道。
+     * 无工艺图 (旧式任务) 或本道只吃原料 → 空集, 调用方回落「前一道」。
+     */
+    public java.util.SortedSet<Integer> upstreamProcessOrders(String factoryId, WorkProcessTask task) {
+        java.util.SortedSet<Integer> orders = new java.util.TreeSet<>();
+        if (task == null || task.getWorkflowInstanceId() == null || task.getProcessOrder() == null) {
+            return orders;
+        }
+        List<WorkProcessTask> siblings = taskRepository
+                .findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(factoryId, task.getWorkflowInstanceId());
+        Map<Long, WorkProcessTask> byId = siblings.stream()
+                .collect(Collectors.toMap(WorkProcessTask::getId, t -> t, (a, b) -> a));
+        List<WorkflowTaskPort> ports = portRepository
+                .findByFactoryIdAndWorkflowInstanceId(factoryId, task.getWorkflowInstanceId());
+        Set<String> inputs = ports.stream()
+                .filter(p -> Objects.equals(p.getTaskId(), task.getId())
+                        && p.getDirection() == WorkflowTaskPort.Direction.INPUT && p.getMaterialNodeId() != null)
+                .map(WorkflowTaskPort::getMaterialNodeId)
+                .collect(Collectors.toSet());
+        for (WorkflowTaskPort p : ports) {
+            if (p.getDirection() != WorkflowTaskPort.Direction.OUTPUT || !inputs.contains(p.getMaterialNodeId())) {
+                continue;
+            }
+            WorkProcessTask producer = byId.get(p.getTaskId());
+            if (producer != null && producer.getProcessOrder() != null
+                    && producer.getProcessOrder() < task.getProcessOrder()) {
+                orders.add(producer.getProcessOrder());
+            }
+        }
+        return orders;
+    }
+
     /** 上游「有产出」: 报过正数产出, 或已到终态。 */
     static boolean hasProduced(WorkProcessTask t) {
         if (t.getStatus() != null && t.getStatus().isTerminal()) {

@@ -238,6 +238,16 @@ class WorkflowStepUnlockGuardContractTest {
                 .findByFactoryIdAndWorkflowInstanceId(any(), any());
     }
 
+    @Test
+    @DisplayName("上游工序号: ③ 的上游是 ① ②; 只吃原料的 ② 没有上游 (调用方回落前一道)")
+    void upstreamProcessOrdersFollowTheGraph() {
+        assertThat(guard.upstreamProcessOrders(F, braise)).containsExactly(1, 2);
+        assertThat(guard.upstreamProcessOrders(F, spice)).isEmpty();
+        // 并行分支: ③ 只吃 ① 的料时, 上游只有 ① (⛔ 不是前一道 ②)
+        ports.removeIf(p -> p.getTaskId().equals(3L) && "SEMI-Y".equals(p.getMaterialNodeId()));
+        assertThat(guard.upstreamProcessOrders(F, braise)).containsExactly(1);
+    }
+
     // ---------------------------------------------------------------------
 
     private static WorkProcessTask task(long id, int order, String processId) {

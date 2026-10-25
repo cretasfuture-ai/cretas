@@ -840,11 +840,13 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // G7 防呆 Rule 1: 本道可领的源 WIP 余额 = Σ 上道工序产出的 AVAILABLE WIP available_quantity。
         // 首道 (processOrder<=1 或上道无 WIP 行) → null (领原料, 不受 WIP 约束)。
-        BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder());
+        // 缺口 04: 源 WIP 取工艺图上真正的上游 (并行分支的上游不是前一道); 无图 / 只吃原料回落前一道
+        java.util.Set<Integer> sourceOrders = sourceProcessOrders(factoryId, t);
+        BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder(), sourceOrders);
         // G7 跨单位防呆: 源 WIP 余额的真实单位 (= 上道 outputUnit), RN banner/:max 用它而非本道 unit。
-        String wipAvailableUnit = resolveSourceWipUnit(factoryId, batchId, t.getProcessOrder());
+        String wipAvailableUnit = resolveSourceWipUnit(factoryId, batchId, t.getProcessOrder(), sourceOrders);
         // G7 Wave 4: 上道恰有一笔可领 WIP → 回显其工序批次号, RN 报工直接带 sourceWipNo。
-        String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder());
+        String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder(), sourceOrders);
 
         return YieldLimitsDTO.builder()
                 .workProcessTaskId(workProcessTaskId)
@@ -958,15 +960,15 @@ public class YieldReportServiceImpl implements YieldReportService {
      * <p>首道 (processOrder=null 或 ≤1) 或上道无 WIP 行 → null (领原料, 不受 WIP 余额约束)。
      * 上道有 WIP 行但已领空 → 0。</p>
      */
-    private BigDecimal resolveSourceWipAvailable(String factoryId, Long batchId, Integer processOrder) {
+    private BigDecimal resolveSourceWipAvailable(String factoryId, Long batchId, Integer processOrder,
+                                            java.util.Set<Integer> sourceOrders) {
         if (processOrder == null || processOrder <= 1 || batchId == null) {
             return null;  // 首道领原料, 无源 WIP
         }
-        int prevOrder = processOrder - 1;
         List<SemiFinishedInventory> wips =
                 wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
         List<SemiFinishedInventory> prev = wips.stream()
-                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> w.getProcessOrder() != null && sourceOrders.contains(w.getProcessOrder()))
                 .filter(w -> !SemiFinishedInventory.Status.RETURNED.equals(w.getStatus()))
                 .collect(Collectors.toList());
         if (prev.isEmpty()) {
@@ -985,13 +987,13 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 避免跨单位 (kg→份) 场景下 :max 显示错误单位误导操作员。
      * 与 {@link #resolveSourceWipAvailable} 同口径过滤 (首道 / 上道无 WIP → null)。</p>
      */
-    private String resolveSourceWipUnit(String factoryId, Long batchId, Integer processOrder) {
+    private String resolveSourceWipUnit(String factoryId, Long batchId, Integer processOrder,
+                                            java.util.Set<Integer> sourceOrders) {
         if (processOrder == null || processOrder <= 1 || batchId == null) {
             return null;  // 首道领原料, 无源 WIP
         }
-        int prevOrder = processOrder - 1;
         return wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId).stream()
-                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> w.getProcessOrder() != null && sourceOrders.contains(w.getProcessOrder()))
                 .filter(w -> !SemiFinishedInventory.Status.RETURNED.equals(w.getStatus()))
                 .map(SemiFinishedInventory::getUnit)
                 .filter(Objects::nonNull)
@@ -1006,14 +1008,14 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 回显其 {@code intermediate_batch_no} (RN 报工 req 直接带它)。零笔或多笔 (歧义) → null:
      * 首道领原料无源 WIP; 多笔时不自动猜, 由前端经 {@code GET /wip} 显式选择。</p>
      */
-    private String resolveSourceWipNo(String factoryId, Long batchId, Integer processOrder) {
+    private String resolveSourceWipNo(String factoryId, Long batchId, Integer processOrder,
+                                            java.util.Set<Integer> sourceOrders) {
         if (processOrder == null || processOrder <= 1 || batchId == null) {
             return null;  // 首道领原料, 无源 WIP
         }
-        int prevOrder = processOrder - 1;
         List<SemiFinishedInventory> available = wipRepo
                 .findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId).stream()
-                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> w.getProcessOrder() != null && sourceOrders.contains(w.getProcessOrder()))
                 .filter(w -> SemiFinishedInventory.Status.AVAILABLE.equals(w.getStatus()))
                 .filter(w -> nz(w.getAvailableQuantity()).compareTo(BigDecimal.ZERO) > 0)
                 .collect(Collectors.toList());
@@ -1021,6 +1023,23 @@ public class YieldReportServiceImpl implements YieldReportService {
             return null;  // 0 笔 (无可领) 或 多笔 (歧义, 前端经 GET /wip 显式选)
         }
         return available.get(0).getIntermediateBatchNo();
+    }
+
+    /**
+     * 本道源 WIP 来自哪几道: 按工艺图的上游 (WorkflowStepUnlockGuard#upstreamProcessOrders);
+     * 无工艺图 / 只吃原料 / guard 未注入 → 前一道 (processOrder-1), 与原口径一致。
+     */
+    private java.util.Set<Integer> sourceProcessOrders(String factoryId, WorkProcessTask t) {
+        if (t.getProcessOrder() == null) {
+            return java.util.Set.of();
+        }
+        if (unlockGuard != null) {
+            java.util.Set<Integer> graph = unlockGuard.upstreamProcessOrders(factoryId, t);
+            if (!graph.isEmpty()) {
+                return graph;
+            }
+        }
+        return java.util.Set.of(t.getProcessOrder() - 1);
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {
