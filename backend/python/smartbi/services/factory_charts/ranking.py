@@ -20,6 +20,11 @@ _CACHE = {}
 def allowed_codes(candidate):
     kind = candidate.get('chart', {}).get('chartType')
     if kind is None: return set(REASONS)  # compatibility for semantic-only callers
+    # Legacy financial registry aliases carry the same structure/plan semantics
+    # as their generic chart counterparts; retain their earlier comparison codes.
+    if kind in ('waterfall', 'pnl_waterfall', 'cash_flow_waterfall', 'ar_aging', 'hr_cost_analysis', 'channel_analysis'):
+        return {'compare', 'observe', 'structure'}
+    if kind == 'expense_yoy_budget': return {'compare', 'observe', 'plan'}
     if kind in ('sankey','gantt','funnel'): return {'trace','compare'}
     if kind in ('pie','donut','nested_donut','sunburst','treemap','pareto','category_structure_donut','cost_flow_sankey'): return {'structure','compare'}
     if kind in ('budget_comparison','budget_achievement','bullet','bullet_chart','gauge','variance_analysis'): return {'plan','compare'}
