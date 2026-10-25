@@ -50,6 +50,11 @@ const port = (id: string, kind: string, sku: string, name: string) => ({
   unit: 'kg', required: true, skuResolved: true, finished: false,
 });
 
+const portWithNode = (id: string, nodeId: string) => ({
+  ...port(id, 'SEMI_FINISHED', `SKU-${nodeId}`, nodeId),
+  materialNodeId: nodeId,
+});
+
 function step(order: number, name: string, inputKind: string, unlocked: boolean | null, blockedReason: string | null = null) {
   const out = port(`OUT${order}`, 'SEMI_FINISHED', `SEMI-${order}`, `${name}半成品`);
   return {
@@ -163,5 +168,34 @@ describe('ProcessSheet.vue 按工艺图解锁 (缺口 04)', () => {
     expect(tables[0].props('upstreamSubmissionReady')).toBe(true);
     expect(tables[1].props('upstreamSubmissionReady')).toBe(false);
     expect(tables[1].props('upstreamSubmissionMessage')).toContain('解冻');
+  });
+
+  it('parallel branch takes its source batches from the step that actually produces its input, not the previous tab', async () => {
+    // 分割 一出三 (鸡胸 sB / 鸡腿 sL); 熟制 吃 sB, 滚揉 吃 sL —— 滚揉的上游是 分割, 不是前一道 熟制
+    const node = (port: ReturnType<typeof portWithNode>) => port;
+    getWorkflowSheetConfig.mockResolvedValue({
+      success: true,
+      data: {
+        workflowBatchId: 100, workflowInstanceId: 200, productTypeId: 'PT-1',
+        processes: [
+          { ...step(1, '分割', 'RAW_MATERIAL', true),
+            outputs: [node(portWithNode('O1a', 'sB')), node(portWithNode('O1b', 'sL'))] },
+          { ...step(2, '熟制', 'SEMI_FINISHED', true), inputs: [portWithNode('I2', 'sB')] },
+          { ...step(3, '滚揉', 'SEMI_FINISHED', true), inputs: [portWithNode('I3', 'sL')] },
+        ],
+      },
+    });
+    getInventory.mockImplementation((_f: string, _p: string, _code: string, order: number) =>
+      Promise.resolve({ success: true, data: order === 1 ? [{ batchNumber: 'CLK-SPLIT-1' }] : [] }));
+
+    const wrapper = mountSheet();
+    await flushPromises();
+    await flushPromises();
+
+    const tables = wrapper.findAllComponents(ProcessDataTableStub);
+    expect(tables[2].props('upstreamProcessLabel')).toBe('分割');
+    expect(tables[2].props('upstreamItems')).toEqual([{ batchNumber: 'CLK-SPLIT-1' }]);
+    // 熟制 本来就挨着 分割, 两种算法一致
+    expect(tables[1].props('upstreamProcessLabel')).toBe('分割');
   });
 });

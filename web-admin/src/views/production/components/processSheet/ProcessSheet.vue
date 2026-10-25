@@ -127,10 +127,35 @@ const terminalWorkflowOutput = computed(() => {
 const upstreamKeyOf = computed<Record<string, string | null>>(() => {
   const map: Record<string, string | null> = {};
   PROCESSES.value.forEach((p, i) => {
-    map[procKey(p)] = i > 0 ? procKey(PROCESSES.value[i - 1]) : null;
+    map[procKey(p)] = workflowUpstreamKey(p, i) ?? (i > 0 ? procKey(PROCESSES.value[i - 1]) : null);
   });
   return map;
 });
+
+/**
+ * 缺口 04: Workflow 计划按工艺图找上游 —— 本道半成品投入 (materialNodeId) 是哪一道更早工序的产出,
+ * 来源批次就从那一道取。原来一律取「前一道」, 网状工艺里并行分支 (分割 → 熟制 / 滚揉 / 卤制) 的
+ * 第二、三支会去前一道 (另一条分支) 找料, 永远显示「暂无可用上游库存」。
+ * 汇合工序有多个上游时取最早的那一道 (来源下拉一次只挂一个上游)。找不到 (legacy / 只吃原料) 返回 null,
+ * 调用方回落「前一道」。
+ */
+function workflowUpstreamKey(proc: ProcEntry, idx: number): string | null {
+  const ctx = proc.workflowContext;
+  if (!ctx) return null;
+  const needed = new Set(
+    ctx.inputs
+      .filter((port) => port.materialKind === 'SEMI_FINISHED' && port.materialNodeId)
+      .map((port) => port.materialNodeId as string),
+  );
+  if (needed.size === 0) return null;
+  for (let j = 0; j < idx; j++) {
+    const outputs = PROCESSES.value[j].workflowContext?.outputs ?? [];
+    if (outputs.some((port) => port.materialNodeId && needed.has(port.materialNodeId))) {
+      return procKey(PROCESSES.value[j]);
+    }
+  }
+  return null;
+}
 
 /**
  * 2B Task F1 (additive): workflow 快照 (WorkflowProcessDescriptor[]) → ProcEntry[]。
@@ -515,8 +540,9 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
 // role-mode/关键词回退下同一 archetype 可能对应不同真实工序名, 硬编码必错。改为按 PROCESSES
 // 实际顺序取前一道的真实 label(工序真实名称), 传给子组件动态渲染, 不再由子组件自己猜测。
 function upstreamLabelOf(proc: ProcEntry): string | undefined {
-  const idx = PROCESSES.value.findIndex((p) => procKey(p) === procKey(proc));
-  return idx > 0 ? PROCESSES.value[idx - 1].label : undefined;
+  // 与 upstreamItems 同一个上游 (Workflow 按工艺图, legacy 取前一道)
+  const upKey = upstreamKeyOf.value[procKey(proc)];
+  return upKey ? PROCESSES.value.find((p) => procKey(p) === upKey)?.label : undefined;
 }
 
 function hasSubmittedRow(proc: ProcEntry): boolean {

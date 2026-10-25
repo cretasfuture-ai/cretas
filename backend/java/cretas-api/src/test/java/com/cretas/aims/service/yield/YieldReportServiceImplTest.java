@@ -2773,6 +2773,37 @@ class YieldReportServiceImplTest {
     // ── G7 getLimits 返回 wipAvailable ────────────────────────────────────────────
 
     @Test
+    void getLimits_parallelBranch_takesWipFromItsWorkflowUpstreamNotThePreviousStep() {
+        // 缺口 04: 分割(道1) 一出三 → 熟制(道2) / 滚揉(道3) 并行。滚揉的源 WIP 是道1 的产出,
+        // 不是前一道熟制 (道2) 的。原来一律取 processOrder-1 —— 滚揉会读到熟制的余额 (或没有), 领不到料。
+        WorkProcessTask t = task(130L, 3, "WP-L1");
+        // 工艺图上游由 guard 给出 (它的规则在 WorkflowStepUnlockGuardContractTest 里测)
+        when(taskRepo.findByFactoryIdAndId("F006", 130L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L1").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L1")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 130L)).thenReturn(List.of());
+        SemiFinishedInventory splitWip = SemiFinishedInventory.builder()
+                .processOrder(1).availableQuantity(new BigDecimal("52")).unit("kg").intermediateBatchNo("WIP-SPLIT")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory siblingBranchWip = SemiFinishedInventory.builder()
+                .processOrder(2).availableQuantity(new BigDecimal("7")).unit("kg").intermediateBatchNo("WIP-COOK")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
+                .thenReturn(List.of(splitWip, siblingBranchWip));
+        com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard guard =
+                org.mockito.Mockito.mock(com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard.class);
+        when(guard.upstreamProcessOrders("F006", t)).thenReturn(new java.util.TreeSet<>(java.util.Set.of(1)));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "unlockGuard", guard);
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 130L, new BigDecimal("40"));
+
+        assertThat(dto.getWipAvailable()).as("取工艺图上游 道1, 不是前一道 道2").isEqualByComparingTo("52");
+        assertThat(dto.getSourceWipNo()).isEqualTo("WIP-SPLIT");
+    }
+
+    @Test
     void getLimits_secondProcess_returnsWipAvailableFromPrevProcess() {
         // 道2 getLimits: 上道 (processOrder=1) 有 WIP available=400 → wipAvailable=400
         WorkProcessTask t = task(110L, 2, "WP-L1");
