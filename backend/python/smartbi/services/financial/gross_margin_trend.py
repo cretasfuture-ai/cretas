@@ -98,7 +98,7 @@ class GrossMarginTrendBuilder(AbstractFinancialChartBuilder):
                 "label": {
                     "show": True,
                     "position": "top" if d >= 0 else "bottom",
-                    "formatter": f"{arrow}{abs(d):.2f}%",
+                    "formatter": f"{arrow}{abs(d):.2f}个百分点",
                     "fontSize": 10,
                     "color": color,
                     "fontWeight": "bold",
