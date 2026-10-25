@@ -6,6 +6,7 @@ import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowActivation;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.repository.ProductProcessWorkflowActivationRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -127,6 +128,13 @@ public class WorkflowOutputDirectoryServiceImpl implements WorkflowOutputDirecto
         if (ids.isEmpty()) return names;
         List<String> lookup = new ArrayList<>(ids);
         for (ProductType product : productTypeRepository.findByIdIn(lookup)) {
+            // 原料归属的图挂在一个同 id 的占位成品上 (category=RAW_MATERIAL, 名字是
+            // "__RAW_WORKFLOW_OWNER__<原料id>"), 名字要取原料本身的 —— 否则界面上写着
+            // 「存放在「__RAW_WORKFLOW_OWNER__RMT_…」下」(F006【演示L4/L5】, 2026-10-25)。
+            // 与 ProductWorkflowResolutionServiceImpl#buildCandidate 同一条判据。
+            if (ProductCategory.RAW_MATERIAL.equals(product.getProductCategory())) {
+                continue;
+            }
             if (factoryId.equals(product.getFactoryId()) && product.getName() != null) {
                 names.put(product.getId(), product.getName());
             }

@@ -38,6 +38,7 @@ class WorkflowOutputDirectoryTest {
     private ProductProcessWorkflowActivationRepository activations;
     private ProductProcessWorkflowRepository workflows;
     private ProductTypeRepository products;
+    private RawMaterialTypeRepository materials;
     private WorkflowOutputDirectoryService service;
     private final List<ProductProcessWorkflowActivation> enabled = new ArrayList<>();
 
@@ -46,7 +47,7 @@ class WorkflowOutputDirectoryTest {
         activations = mock(ProductProcessWorkflowActivationRepository.class);
         workflows = mock(ProductProcessWorkflowRepository.class);
         products = mock(ProductTypeRepository.class);
-        RawMaterialTypeRepository materials = mock(RawMaterialTypeRepository.class);
+        materials = mock(RawMaterialTypeRepository.class);
         // 忠实模拟仓储方法名的语义 —— findByFactoryIdAndEnabledTrue 在 SQL 层就把 enabled=false
         // 滤掉了。若这里原样返回全部行, 用例会去测一个真实世界不存在的输入, 然后拿「服务没再滤一遍」
         // 当缺陷报出来(本用例第一版就是这么假红的)。
@@ -153,6 +154,31 @@ class WorkflowOutputDirectoryTest {
 
         assertTrue(service.findWorkflowsProducing("F1", "  ").getWorkflows().isEmpty());
         assertTrue(service.findWorkflowsProducing("F1", null).getWorkflows().isEmpty());
+    }
+
+    /** 原料归属的图 (L4 整鸡分割挂在原料「西装鸡」下): 锚点名字取原料, ⛔ 不露占位成品的内部名。 */
+    @Test
+    void rawMaterialAnchorShowsTheRawMaterialNameNotThePlaceholderProductName() {
+        activate(200L, "RMT-CHICKEN", List.of("RMT-CHICKEN"), List.of("P1", "P2"), true, 1, 1);
+        when(products.findByIdIn(anyList())).thenAnswer(invocation -> invocation
+                .<List<String>>getArgument(0).stream().map(id -> {
+                    ProductType product = product(id);
+                    if ("RMT-CHICKEN".equals(id)) {
+                        product.setName("__RAW_WORKFLOW_OWNER__RMT-CHICKEN");
+                        product.setProductCategory(ProductCategory.RAW_MATERIAL);
+                    }
+                    return product;
+                }).toList());
+        com.cretas.aims.entity.RawMaterialType chicken = new com.cretas.aims.entity.RawMaterialType();
+        chicken.setId("RMT-CHICKEN");
+        chicken.setFactoryId("F1");
+        chicken.setName("西装鸡（16只）");
+        when(materials.findByIdIn(anyList())).thenReturn(List.of(chicken));
+
+        WorkflowOutputDirectoryDTO.Entry entry = service.findWorkflowsProducing("F1", "P1").getWorkflows().getFirst();
+
+        assertEquals("西装鸡（16只）", entry.getOwnerProductName());
+        assertEquals("P1 名称", entry.getTerminalOutputs().getFirst().getProductName());
     }
 
     private List<Long> workflowIds(WorkflowOutputDirectoryDTO result) {
