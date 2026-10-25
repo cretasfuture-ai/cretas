@@ -136,8 +136,7 @@ def gross_margins(df: pd.DataFrame, value_kind: str = 'amount',
             dimensions = ['year', 'month', '_category', 'product', 'channel', 'business_unit']
             pieces = {}
             for key, group in frame.groupby(dimensions, dropna=False):
-                per_alias = [total(part[field_name]) for _, part in group.groupby('item')]
-                values = [v for v in per_alias if v is not None]
+                values = [float(v) for v in group[field_name] if v is not None and not pd.isna(v)]
                 conflicting = values and any(abs(v - values[0]) > 0.005 for v in values)
                 ambiguous_profit = ambiguous_profit or bool(conflicting)
                 pieces.setdefault(key[:2], []).append(None if conflicting or not values else values[0])
@@ -172,7 +171,7 @@ def gross_margins(df: pd.DataFrame, value_kind: str = 'amount',
     if last_periods and current_periods != last_periods:
         last_total = None
         last_note = '上年与本年收入期间不一致，无法比较累计毛利率'
-    if last_note and last_periods:
+    if last_note:
         note = '；'.join(part for part in (note, last_note) if part)
     return GrossMargins(cur, last, cur_total, last_total, True, rev, profit, note)
 

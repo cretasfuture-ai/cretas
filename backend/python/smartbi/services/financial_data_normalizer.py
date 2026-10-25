@@ -330,7 +330,7 @@ class FinancialDataNormalizer:
         has_role_rows = any(r in ('budget', 'actual', 'last_year') for r in row_roles.values())
 
         for period_col in mapping.period_cols:
-            year_num, month_num = self._extract_year_month(period_col)
+            year_num, month_num = self._extract_year_month(header_unit(period_col)[0])
             if month_num is None:
                 continue
             year_num = year_num or mapping.year
@@ -346,7 +346,8 @@ class FinancialDataNormalizer:
                         continue
                     label = str(row.get(label_col, '')) if label_col else ''
                     _, label_factor = header_unit(label)
-                    val = self._scaled(row.get(period_col), col_factor * label_factor)
+                    val = self._scaled(row.get(period_col),
+                                       label_factor if _UNIT_PATTERN.search(label) else col_factor)
                     if val is not None:
                         merged[role] = (merged[role] or 0.0) + val
                 rows.append({

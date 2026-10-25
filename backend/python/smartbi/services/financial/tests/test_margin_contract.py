@@ -83,9 +83,10 @@ def test_zero_revenue_does_not_claim_a_zero_margin():
 
 
 @pytest.mark.parametrize('profit', [40, 45])
-def test_reported_gross_profit_aliases_are_one_fact_or_an_explicit_conflict(profit):
+@pytest.mark.parametrize('second_label', ['毛利润', '毛利'])
+def test_reported_gross_profit_aliases_are_one_fact_or_an_explicit_conflict(profit, second_label):
     rows = [{'月份': '1月', '项目': subject, '实际': amount, '上年': amount}
-            for subject, amount in [('营业收入', 100), ('毛利', 40), ('毛利润', profit)]]
+            for subject, amount in [('营业收入', 100), ('毛利', 40), (second_label, profit)]]
     result = FinancialDashboardService().generate_dashboard(pd.DataFrame(rows), 2026, 'month_range', 1, 1)
     text = (result['headline'] or {}).get('text', '')
     if profit == 40:
@@ -106,6 +107,14 @@ def test_incomplete_last_year_cannot_be_compared_with_a_full_current_period():
     assert kpis['上年累计毛利率'] == '-'
     assert kpis['累计差异'] == '-'
     assert '上年与本年收入期间不一致' in chart['metadata']['note']
+
+
+def test_absent_last_year_reports_why_comparison_is_unavailable():
+    rows = [{**r, '上年': None} for r in cost_rows()]
+    _, chart, kpis = dashboard(rows)
+    assert kpis['上年累计毛利率'] == '-'
+    assert kpis['累计差异'] == '-'
+    assert '缺少毛利率对比期金额' in chart['metadata']['note']
 
 
 @pytest.mark.parametrize('column', ['实际', '实际（万元）'])
@@ -131,3 +140,22 @@ def test_explicit_year_columns_follow_requested_year_and_not_column_order():
     assert kpis['上年累计毛利率'] == '40.0'
     assert '毛利率 14.0%' in result['headline']['text']
     assert chart['tableData']['rows'][1]['values'] == [50.0, 10.0, 14.0]
+
+
+def test_wide_month_headers_and_subject_units_are_normalized_once():
+    rows = [{'项目': '营业收入（万元）', '1月（万元）': 1, '2月（万元）': 9},
+            {'项目': '营业成本（元）', '1月（万元）': 5000, '2月（万元）': 81000}]
+    result = FinancialDashboardService().generate_dashboard(pd.DataFrame(rows), 2026, 'month_range', 1, 2)
+    assert '毛利率 14.0%' in result['headline']['text']
+    assert any('毛利率 14.0%' in text for text in result['findings']['good'])
+
+
+def test_wide_role_rows_do_not_multiply_column_and_row_units_twice():
+    rows = [{'项目': '预算（万元）', '1月（万元）': 2, '2月（万元）': 4},
+            {'项目': '实际（万元）', '1月（万元）': 1, '2月（万元）': 2}]
+    result = FinancialDashboardService().generate_dashboard(pd.DataFrame(rows), 2026, 'month_range', 1, 2)
+    chart = next(c for c in result['charts'] if c['chartType'] == 'budget_achievement')
+    kpis = {k['label']: k['value'] for k in chart['kpis']}
+    assert kpis['年度目标'] == '6.00万'
+    assert kpis['年度实际'] == '3.00万'
+    assert '实际 3.00万 / 目标 6.00万' in result['headline']['text']
