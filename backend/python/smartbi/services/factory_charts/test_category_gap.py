@@ -24,4 +24,3 @@ def test_category_yoy_missing_period_column_is_a_gap():
         None, {'start_month': 1, 'end_month': 3}, 2026)
     assert result['metadata']['dataQuality'] == 'insufficient'
     assert '月份' in result['metadata']['reason']
-

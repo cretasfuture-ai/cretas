@@ -101,4 +101,3 @@ def test_ar_requires_consistent_asof_and_keeps_not_due_bucket():
     candidates, gaps = build(mismatch, req(period_type='year'), True)
     assert not any(c['id'] == 'finance.ar_aging' for c in candidates)
     assert any('一致' in m for g in gaps for m in g['missing'])
-
