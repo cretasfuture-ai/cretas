@@ -14,6 +14,7 @@ import { initialProcessSheetViewMode } from './processSheetViewMode';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
 import { formatWorkflowPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
+import { RAW_WORKFLOW_OWNER_ANCHOR_LABEL, isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -47,6 +48,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'submitted'): void;
 }>();
+// 多产出计划的 productTypeId 是内部原料锚点; 调用方若误传锚点名, 这里也不露给用户。
+const displayProductName = computed(() =>
+  (isRawWorkflowOwnerAnchorName(props.productName) ? RAW_WORKFLOW_OWNER_ANCHOR_LABEL : props.productName));
 
 // -------------------------------------------------------------------------
 // 工序链 — 动态从产品工序配置(ProductWorkProcess)解析 (G0)
@@ -610,7 +614,7 @@ defineExpose({ hasUnsavedRows });
       <div>
         <div style="font-size:15px;font-weight:600;color:#303133">
           逐工序报工
-          <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
+          <span v-if="displayProductName" data-testid="process-sheet-product-name" style="font-weight:400;color:#606266;margin-left:8px">{{ displayProductName }}</span>
           <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
             {{ formatWorkflowPlannedOutput(plannedQuantity, plannedUnit, terminalWorkflowOutput) }}
             <el-tooltip content="计划成品数量按产品单位记录；首道投料数量以逐工序报工和配方出成率为准" placement="top">
