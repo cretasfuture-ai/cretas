@@ -10,10 +10,11 @@ import {
   getFactoryChartSelection,
   saveFactoryChartSelection as saveFactoryChartSelectionRemote,
   type FactoryChartSource,
+  type FactoryChartExportFormat,
   type FactoryRecommendation,
   type FactoryRecommendationsData,
 } from '@/api/smartbi/factory-charts';
-import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport, type FactoryChartExportFormat } from './factoryChartExport';
+import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport } from './factoryChartExport';
 import FactoryChartCanvas from './FactoryChartCanvas.vue';
 import {
   factoryChartRequestFromSelection,
