@@ -182,6 +182,57 @@ class ProductionPlanStopProductionTest {
                         .divide(new BigDecimal("692.4610").add(new BigDecimal("1998.5860")), 6, java.math.RoundingMode.HALF_UP));
     }
 
+    private com.cretas.aims.entity.processentry.ProcessSheetRow memberRow(Long batchId, String ratio) {
+        com.cretas.aims.entity.processentry.ProcessSheetRow row = new com.cretas.aims.entity.processentry.ProcessSheetRow();
+        row.setFactoryId(FACTORY_ID);
+        row.setPlanId("PLAN-L5");
+        row.setBatchId(batchId);
+        row.setProcessCode("zuzhuang");
+        row.setProcessOrder(4);
+        row.setSubmissionStatus(com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_SUBMITTED);
+        row.setRowPayload("{\"multiOutputMember\":true,\"multiOutputBaseRowId\":\"g4\",\"costAllocationRatio\":" + ratio + "}");
+        return row;
+    }
+
+    @Test
+    @DisplayName("末道多产出且产出都是成品批 (L5 组装 4→2): 投入只记在单层批上 ⇒ 单层/双层 = 整组联合成本 8302.05 × 报工比例 "
+            + "49.090909% / 50.909091%; 不在组里的牛肉饼照旧取自己那道批")
+    void finalMultiOutputStepSplitsTheGroupJointCostByTheReportedRatios() {
+        com.cretas.aims.service.yield.OrderCostBreakdownService breakdowns =
+                org.mockito.Mockito.mock(com.cretas.aims.service.yield.OrderCostBreakdownService.class);
+        ReflectionTestUtils.setField(service, "orderCostBreakdownService", breakdowns);
+        com.cretas.aims.entity.ProductionBatch single = branchBatch("SKU-SINGLE", "CLK-B-SINGLE");
+        single.setId(10989L);
+        com.cretas.aims.entity.ProductionBatch dbl = branchBatch("SKU-DOUBLE", "CLK-B-DOUBLE");
+        dbl.setId(10990L);
+        com.cretas.aims.entity.ProductionBatch patty = branchBatch("SKU-PATTY", "CLK-B-PATTY");
+        patty.setId(10991L);
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, "PLAN-L5"))
+                .thenReturn(List.of(single, dbl, patty));
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, "PLAN-L5"))
+                .thenReturn(List.of(memberRow(10989L, "49.090909"), memberRow(10990L, "50.909091")));
+        when(breakdowns.computeByBatchIds(eq(FACTORY_ID), any(), eq(List.of(10989L, 10990L)), eq(false)))
+                .thenReturn(breakdownOf("8302.05"));
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-PATTY", false)).thenReturn(breakdownOf("875.73"));
+        // 若按批单算: 单层批吃掉全部, 双层批算不出 —— 这两个桩不该被用到
+        when(breakdowns.computeByBatch(FACTORY_ID, "CLK-B-SINGLE", false)).thenReturn(breakdownOf("8302.05"));
+        List<FinishedGoodsBatch> fgs = List.of(fgOf("FG-SINGLE", "SKU-SINGLE", "600", "7.4549"),
+                fgOf("FG-DOUBLE", "SKU-DOUBLE", "400", "9.3118"), fgOf("FG-PATTY", "SKU-PATTY", "83", "10.5509"));
+
+        java.util.Map<String, BigDecimal> ratios = ReflectionTestUtils.invokeMethod(
+                service, "byStockBranchCostRatios", FACTORY_ID, "PLAN-L5", fgs);
+
+        // 单层 8302.05×49.090909% = 4075.552 ; 双层 4226.498 ; 牛肉饼 875.73 ; 合计 9177.78
+        BigDecimal total = new BigDecimal("9177.78");
+        org.assertj.core.api.Assertions.assertThat(ratios.get("FG-SINGLE")).isCloseTo(
+                new BigDecimal("4075.552").multiply(new BigDecimal("100")).divide(total, 6, java.math.RoundingMode.HALF_UP),
+                org.assertj.core.data.Offset.offset(new BigDecimal("0.0001")));
+        org.assertj.core.api.Assertions.assertThat(ratios.get("FG-DOUBLE")).isCloseTo(
+                new BigDecimal("4226.498").multiply(new BigDecimal("100")).divide(total, 6, java.math.RoundingMode.HALF_UP),
+                org.assertj.core.data.Offset.offset(new BigDecimal("0.0001")));
+        org.mockito.Mockito.verify(breakdowns, org.mockito.Mockito.never()).computeByBatch(FACTORY_ID, "CLK-B-SINGLE", false);
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     private ProductionPlan byStockPlan() {

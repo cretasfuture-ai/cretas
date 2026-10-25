@@ -7662,6 +7662,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             List<ProductionBatch> batches = Optional.ofNullable(
                     productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)).orElseGet(List::of);
             Map<String, BigDecimal> costs = new LinkedHashMap<>();
+            List<com.cretas.aims.entity.processentry.ProcessSheetRow> planRows = processSheetRowRepository == null
+                    ? List.of() : Optional.ofNullable(processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId))
+                    .orElseGet(List::of);
+            Map<String, BigDecimal> jointCostByGroup = new HashMap<>();
             for (FinishedGoodsBatch fg : finishedGoodsBatches) {
                 List<ProductionBatch> branch = batches.stream()
                         .filter(b -> b.getStatus() != ProductionBatchStatus.CANCELLED)
@@ -7671,16 +7675,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     costs = null;
                     break;
                 }
-                com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown;
+                BigDecimal branchCost;
                 try {
-                    breakdown = orderCostBreakdownService.computeByBatch(factoryId, branch.get(0).getBatchNumber(), false);
+                    branchCost = byStockBranchCost(factoryId, planId, branch.get(0), planRows, jointCostByGroup);
                 } catch (RuntimeException e) {
                     log.warn("BY_STOCK 分支成本读不出, 退回小结单位成本 (planId={}, batch={}): {}",
                             planId, branch.get(0).getBatchNumber(), e.getMessage());
                     costs = null;
                     break;
                 }
-                costs.put(fg.getId(), breakdown == null || !breakdown.isCostComplete() ? null : breakdown.getTotalCost());
+                costs.put(fg.getId(), branchCost);
             }
             Map<String, BigDecimal> ratios = costs == null ? null : ratiosFromCosts(costs);
             if (ratios != null) {
@@ -7688,6 +7692,84 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             }
         }
         return byStockTracedCostRatios(finishedGoodsBatches);
+    }
+
+    /**
+     * 一个成品的分支成本。成品批若是某道「多产出且有 ≥2 个正式产出批」工序的成员 (L5 组装 4→2:
+     * 单层/双层两个成品批), 投入只记在第一个成员批上 —— 按批单算会让一个吃掉全部、另一个算不出。
+     * 这时 = 整组合起来的联合成本 × 本成员报工落库的 {@code costAllocationRatio} (与报工页那次分摊同一组比例)。
+     * 其余成品照旧取自己那道批的成本分解。
+     *
+     * @return 成本未知 → null (由调用方整体退回兜底口径)
+     */
+    private BigDecimal byStockBranchCost(String factoryId, String planId, ProductionBatch branchBatch,
+                                         List<com.cretas.aims.entity.processentry.ProcessSheetRow> planRows,
+                                         Map<String, BigDecimal> jointCostByGroup) {
+        MultiOutputMembership membership = null;
+        for (com.cretas.aims.entity.processentry.ProcessSheetRow row : planRows) {
+            if (Objects.equals(branchBatch.getId(), row.getBatchId())) {
+                membership = multiOutputMembership(row);
+                if (membership != null) {
+                    break;
+                }
+            }
+        }
+        if (membership != null) {
+            String groupKey = membership.groupKey();
+            List<Long> memberBatchIds = planRows.stream()
+                    .filter(row -> row.getBatchId() != null)
+                    .filter(row -> {
+                        MultiOutputMembership other = multiOutputMembership(row);
+                        return other != null && other.groupKey().equals(groupKey);
+                    })
+                    .map(com.cretas.aims.entity.processentry.ProcessSheetRow::getBatchId)
+                    .distinct().toList();
+            if (memberBatchIds.size() >= 2) {
+                BigDecimal joint = jointCostByGroup.computeIfAbsent(groupKey, key -> {
+                    com.cretas.aims.dto.yield.OrderCostBreakdownDTO group =
+                            orderCostBreakdownService.computeByBatchIds(factoryId, planId + "|" + key, memberBatchIds, false);
+                    return group == null || !group.isCostComplete() || group.getTotalCost() == null
+                            ? BigDecimal.ZERO : group.getTotalCost();
+                });
+                return joint.signum() <= 0 ? null
+                        : joint.multiply(membership.ratioPercent()).divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP);
+            }
+        }
+        com.cretas.aims.dto.yield.OrderCostBreakdownDTO breakdown =
+                orderCostBreakdownService.computeByBatch(factoryId, branchBatch.getBatchNumber(), false);
+        return breakdown == null || !breakdown.isCostComplete() ? null : breakdown.getTotalCost();
+    }
+
+    private record MultiOutputMembership(String groupKey, BigDecimal ratioPercent) {}
+
+    /** 已提交的多产出成员行 → (组键, 分摊比例%); 不是 / 比例不在 (0,100] → null。 */
+    static MultiOutputMembership multiOutputMembership(com.cretas.aims.entity.processentry.ProcessSheetRow row) {
+        if (row == null || row.getRowPayload() == null
+                || !com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus())) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode p = PROCESS_SHEET_ROW_MAPPER.readTree(row.getRowPayload());
+            if (p == null || !p.path("multiOutputMember").asBoolean(false)) {
+                return null;
+            }
+            String base = trimStatic(p.path("multiOutputBaseRowId").asText(null));
+            com.fasterxml.jackson.databind.JsonNode ratio = p.get("costAllocationRatio");
+            if (base == null || ratio == null || ratio.isNull()) {
+                return null;
+            }
+            BigDecimal percent = new BigDecimal(ratio.asText());
+            if (percent.signum() <= 0 || percent.compareTo(BigDecimal.valueOf(100)) > 0) {
+                return null;
+            }
+            return new MultiOutputMembership(row.getProcessCode() + "|" + row.getProcessOrder() + "|" + base, percent);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String trimStatic(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     /** 兜底口径: FG 小结单位成本 × 产量 的占比 (见 {@link #byStockBranchCostRatios} 为什么只是兜底)。 */
