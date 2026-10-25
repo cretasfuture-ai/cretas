@@ -1573,13 +1573,15 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
-    @Scheduled(cron = "0 0 2 * * ?") // 每天凌晨2点执行
+    @Scheduled(cron = "0 0 2 * * ?", zone = "Asia/Shanghai") // 每天东八区凌晨2点执行
     @SchedulerLock(name = "MaterialBatchServiceImpl.autoCheckAndUpdateExpiredBatches", lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     public void autoCheckAndUpdateExpiredBatches() {
         log.info("开始自动检查过期批次");
 
         // 使用优化查询直接获取过期批次，避免全表扫描后过滤
-        List<MaterialBatch> expiredBatches = materialBatchRepository.findAllExpiredAvailableBatches(LocalDate.now());
+        // 「今天」取东八区业务日 (InventoryExpiry), 不跟 JVM 默认时区走; 口径 expireDate < today 不变
+        List<MaterialBatch> expiredBatches = materialBatchRepository.findAllExpiredAvailableBatches(
+                com.cretas.aims.util.InventoryExpiry.today());
 
         for (MaterialBatch batch : expiredBatches) {
             batch.setStatus(MaterialBatchStatus.EXPIRED);

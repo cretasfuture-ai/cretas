@@ -44,6 +44,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     private final RequestScopedEmbeddingCache requestScopedCache;
     private final IntentEmbeddingCacheService embeddingCacheService;
     private final TrainingConsentService trainingConsentService;
+    private final com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
 
     // 自引用代理 - 用于解决 Spring @Transactional 自调用不走代理的问题
     @Autowired
@@ -513,9 +514,15 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         if (userInput == null || userInput.trim().isEmpty()) {
             return null;
         }
-        // 训练规则 (2026-10-24): 配方 / 工艺参数类原话任何工厂都不存; 未授权工厂脱敏后存
+        // 训练规则 (2026-10-24): 撤回 / 查不到的工厂不存; 配方、工艺参数、客户名、人名不存;
+        // 未授权工厂脱敏后存
+        TrainingConsentService.Status status = trainingConsentService.status(factoryId);
+        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本
+        if (!status.storable() || processSecretSampleFilter.mentionsProtectedProduct(factoryId, userInput)) {
+            return null;
+        }
         String textToStore = TrainingSampleRules.textToStore(
-                userInput.trim(), trainingConsentService.isAuthorized(factoryId));
+                userInput.trim(), status == TrainingConsentService.Status.AUTHORIZED);
         if (textToStore == null) {
             return null;
         }

@@ -540,6 +540,47 @@ export interface UrgentInsertImpactAnalysis {
   recommendation: string;
   requiresApproval: boolean;
   approverRole?: string;
+  /**
+   * 以下字段与后端 analyzeInsertImpact 实际返回一致 (2026-10-24 止血)。
+   * 都是可选: 旧后端不返回它们 —— 前端一律按「资源未验证」处理, ⛔ 不得默认可行。
+   */
+  isFeasible?: boolean;
+  /** FEASIBLE=核对过且够 / INFEASIBLE=核对过且确定不够 / UNVERIFIED=有项没有真实数据可核对 */
+  feasibilityStatus?: UrgentInsertFeasibilityStatus;
+  resourcesVerified?: boolean;
+  unverifiedReasons?: string[];
+  infeasibleReason?: string;
+  resourceStatus?: UrgentInsertResourceStatus;
+}
+
+export type UrgentInsertFeasibilityStatus = 'FEASIBLE' | 'INFEASIBLE' | 'UNVERIFIED';
+
+/** 后端 analyzeInsertImpact 的 resourceStatus */
+export interface UrgentInsertResourceStatus {
+  materialAvailable?: boolean;
+  materialVerified?: boolean;
+  materialMessage?: string | null;
+  equipmentAvailable?: boolean;
+  equipmentVerified?: boolean;
+  equipmentMessage?: string | null;
+  hasEnoughWorkers?: boolean;
+  workerVerified?: boolean;
+  workerMessage?: string | null;
+  requiredWorkers?: number | null;
+  availableWorkers?: number | null;
+}
+
+/**
+ * 把影响分析结果收敛成界面要显示的三态。缺字段 / 没拿到分析 ⇒ UNVERIFIED,
+ * 只有后端明确 isFeasible === true 且 feasibilityStatus === 'FEASIBLE' 才算可行。
+ */
+export function resolveUrgentInsertFeasibility(
+  impact: UrgentInsertImpactAnalysis | null | undefined
+): UrgentInsertFeasibilityStatus {
+  if (!impact) return 'UNVERIFIED';
+  if (impact.isFeasible === true && impact.feasibilityStatus === 'FEASIBLE') return 'FEASIBLE';
+  if (impact.feasibilityStatus === 'INFEASIBLE') return 'INFEASIBLE';
+  return 'UNVERIFIED';
 }
 
 // ==================== 混批排产 ====================

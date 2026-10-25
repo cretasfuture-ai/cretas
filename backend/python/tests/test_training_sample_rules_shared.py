@@ -48,3 +48,17 @@ def test_java_parameter_markers_match_python():
 def test_every_parameter_marker_blocks_an_utterance():
     for m in tc.PARAMETER_MARKERS:
         assert tc.utterance_has_blocked_content(f"问一下{m}的情况"), m
+
+
+def _java_string_constant(src: str, name: str) -> str:
+    """Concatenated value of `static final String NAME = "..." + "...";` in Java source."""
+    m = re.search(rf"static final String {name} =(.*?);", src, re.S)
+    assert m, f"{name} not found in TrainingSampleRules.java"
+    return "".join(re.findall(r'"([^"]*)"', m.group(1)))  # these constants hold no escapes
+
+
+def test_java_name_rules_match_python():
+    src = _JAVA_RULES.read_text(encoding="utf-8")
+    assert _java_string_constant(src, "SURNAMES") == tc._SURNAMES
+    assert _java_string_constant(src, "ORG_SUFFIX") == tc._ORG_SUFFIX
+    assert _java_string_constant(src, "PERSON_ROLE") == tc._PERSON_ROLE

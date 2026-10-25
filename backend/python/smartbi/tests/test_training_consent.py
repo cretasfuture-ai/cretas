@@ -39,6 +39,15 @@ export_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(export_mod)
 
 
+@pytest.fixture(autouse=True)
+def _no_protected_products(monkeypatch):
+    """The export reads process-secret product names from the Cretas database;
+    unit tests have none (tests about the rule set their own names)."""
+    async def _none_map(*_a, **_k):
+        return {}
+    monkeypatch.setattr(export_mod, "all_protected_product_names", _none_map)
+
+
 # ===========================================================================
 # 1. Anonymization: bucket absolute ¥, pseudonymize labels, KEEP %/shape
 # ===========================================================================
@@ -195,8 +204,9 @@ class TestSharedGating:
         assert item["input_text"] is not None
         assert "星巴克" not in item["input_text"]
         assert "2500000" not in item["input_text"]
-        assert "35%" in item["input_text"]   # shape kept
-        assert "18%" in item["teacher_output"]
+        # numbers masked in shared exports too (Steve 2026-10-24)
+        assert item["input_text"] == "门店A营收¥<数值>，占比<数值>%"
+        assert item["teacher_output"] == "门店A环比增长<数值>%"
 
     def test_desensitized_row_of_unauthorized_factory_is_included(self):
         rows = [_row("F001", metadata={"desensitized": True}, input_text="门店A营收¥10-50万")]
@@ -342,10 +352,7 @@ class TestMigration:
         return max(versions)
 
     def test_migration_defines_table_and_policy(self):
-        target = None
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if "training_consent" in fn:
-                target = os.path.join(self.MIGRATIONS_DIR, fn)
+        target = os.path.join(self.MIGRATIONS_DIR, "V20261001_01__training_consent.sql")
         sql = open(target, encoding="utf-8").read()
         assert "CREATE TABLE IF NOT EXISTS training_consent" in sql
         assert "consent_scope" in sql
@@ -367,3 +374,61 @@ class TestParse:
         ):
             p = os.path.join(PYTHON_ROOT, rel)
             ast.parse(open(p, encoding="utf-8").read())
+
+
+def test_customer_names_are_pseudonymized_but_generic_customer_words_kept():
+    from smartbi.services.corpus_anonymize import anonymize_for_shared
+
+    a_in, a_out = anonymize_for_shared("张记食品客户本月回款 ¥250000", "客户：张记食品 欠款；大客户占比 35%")
+    assert "张记" not in a_in and "张记" not in a_out
+    assert "客户A" in a_in and "客户A" in a_out          # same customer, same placeholder
+    assert "大客户占比 35%" in a_out                      # generic word untouched
+
+
+def test_withdrawn_factory_is_excluded_from_shared_export():
+    rows = [_row("F001", metadata={"desensitized": True}),
+            _row("F002", metadata={"desensitized": True})]
+    gated = export_mod.gate_shared_rows(rows, consent={"F001": "withdrawn"})
+    assert [g["row"]["factory_id"] for g in gated] == ["F002"]
+
+
+def test_effective_scope_sql_reads_withdrawal():
+    from smartbi.services import training_consent as tc
+
+    assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_SCOPE_SQL
+    assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_ALL_SQL
+    assert tc.normalize_scope("withdrawn") == "withdrawn"
+    assert tc.desensitize_utterance("withdrawn", "库存多少") == (False, None)
+
+
+def test_registration_requires_a_contract_and_withdraw_is_exclusive():
+    import pytest as _pytest
+    from scripts import set_training_consent as cli
+
+    cli.validate("private", "HT-2026-001", False)
+    cli.validate("none", None, False)
+    cli.validate(None, None, True)
+    for args in [("private", None, False), ("shared_anon", "  ", False),
+                 ("none", None, True), (None, None, False)]:
+        with _pytest.raises(ValueError):
+            cli.validate(*args)
+
+
+def test_migration_enforces_contract_and_adds_withdrawal_columns():
+    mig = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database",
+                       "migrations", "V20261101_17__training_consent_contract_and_withdrawal.sql")
+    sql = open(mig, encoding="utf-8").read()
+    for col in ("contract_no", "withdrawn_at", "withdrawn_by", "withdrawal_note"):
+        assert f"ADD COLUMN IF NOT EXISTS {col}" in sql
+    assert "CHECK (consent_scope = 'none' OR (contract_no IS NOT NULL" in sql
+
+
+def test_rows_naming_a_process_secret_product_are_not_exported():
+    protected = {"F001": frozenset({"秘制牛肉干"})}
+    rows = [_row("F001", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量"),
+            _row("F001", metadata={"desensitized": True}, input_text="普通牛肉干本月销量"),
+            _row("F002", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量")]
+    gated = export_mod.gate_shared_rows(rows, consent={}, protected_names=protected)
+    # F001's protected product is out; the same name in F002 is not F002's protected product
+    assert [(g["row"]["factory_id"], g["row"]["input_text"]) for g in gated] == [
+        ("F001", "普通牛肉干本月销量"), ("F002", "秘制牛肉干本月销量")]

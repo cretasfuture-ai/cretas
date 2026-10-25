@@ -186,6 +186,41 @@ public class SemiFinishedInventory {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    // ===================== 余额口径 (唯一实现) =====================
+    //
+    // G02 (2026-10-24): 扣减校验曾用 produced − consumed (漏了 adjustment), 写回却用
+    // produced − consumed + adjustment —— 盘亏 −30 时领 60 被放行、写回 −10; 盘盈 +30 时领 100 被错拒。
+    // ⇒ 校验 / 扣减 / 撤回 / 流水 balanceAfter 一律走下面这几个方法, ⛔ 不在调用方再手写一遍减法。
+    //
+    // 方法名刻意不用 get/is 前缀: 本实体在部分接口里被直接序列化, 带 get 前缀会凭空多出 JSON 字段。
+    // null 视为 0: 与历史全部重算站点一致 (占位行建行时三列都落 0; adjustment 列 default 0)。
+
+    /** 余额公式本体: {@code produced − consumed + adjustment}。 */
+    public static BigDecimal balanceOf(BigDecimal produced, BigDecimal consumed, BigDecimal adjustment) {
+        return zeroIfNull(produced).subtract(zeroIfNull(consumed)).add(zeroIfNull(adjustment));
+    }
+
+    /** 按当前 produced / consumed / adjustment 现算的余额 (不读 availableQuantity 存量列)。 */
+    public BigDecimal computeBalance() {
+        return balanceOf(producedQuantity, consumedQuantity, adjustmentQuantity);
+    }
+
+    /** 若再消耗 {@code extraConsumed} (原生单位) 之后的余额; 不改任何字段。 */
+    public BigDecimal balanceAfterConsuming(BigDecimal extraConsumed) {
+        return balanceOf(producedQuantity, zeroIfNull(consumedQuantity).add(zeroIfNull(extraConsumed)),
+                adjustmentQuantity);
+    }
+
+    /** 把 availableQuantity 刷成公式值并返回 —— produced / consumed 改完之后调用。 */
+    public BigDecimal refreshAvailableQuantity() {
+        this.availableQuantity = computeBalance();
+        return this.availableQuantity;
+    }
+
+    private static BigDecimal zeroIfNull(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();

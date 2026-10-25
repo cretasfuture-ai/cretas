@@ -151,6 +151,21 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         result.put("generatedAt", LocalDate.now().format(DateTimeFormatter.ISO_DATE));
         result.put("data", costVarianceData);
 
+        // 不可比较时明说「无法比较」, ⛔ 不让模型从 null 字段里自己编一个差异率。
+        boolean comparable = !Boolean.FALSE.equals(costVarianceData.getComparable())
+                && costVarianceData.getTotalVarianceRate() != null;
+        result.put("comparable", comparable);
+        if (!comparable) {
+            StringBuilder msg = new StringBuilder(
+                    "成本差异无法比较：缺少独立标准成本，本期不给出差异金额与差异率。");
+            if (costVarianceData.getTotalActualCost() != null) {
+                msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
+                        .append(" 实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
+                        .append("，批次数 ").append(costVarianceData.getBatchCount()).append("。");
+            }
+            result.put("message", msg.toString());
+        }
+
         // 添加查询条件摘要
         Map<String, Object> queryConditions = new HashMap<>();
         queryConditions.put("period", period);

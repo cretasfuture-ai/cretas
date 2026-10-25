@@ -76,9 +76,12 @@ public class LineageQueryTool extends AbstractBusinessTool {
     /** 允许的 direction 取值. */
     private static final Set<String> ALLOWED_DIRECTIONS = Set.of("ANCESTORS", "DESCENDANTS", "BOTH");
 
-    /** maxDepth 上限. */
-    private static final int MAX_DEPTH_CAP = 10;
-    private static final int DEFAULT_MAX_DEPTH = 5;
+    /**
+     * 跳数上限与缺省都取 {@link LineageGraphAssembler} 的那一份（全仓唯一来源），⛔ 不在这里另写数字。
+     * 缺省 = 上限：本工具回答的是「来自哪几头牛」「召回要查哪些客户」，截半条链给出的是一个假的「全部」。
+     */
+    private static final int MAX_DEPTH_CAP = LineageGraphAssembler.MAX_DEPTH_CAP;
+    private static final int DEFAULT_MAX_DEPTH = LineageGraphAssembler.DEFAULT_MAX_DEPTH;
 
     private static final Map<String, String> TYPE_LABELS = Map.of(
             "MATERIAL_BATCH", "原料批次",
@@ -134,7 +137,8 @@ public class LineageQueryTool extends AbstractBusinessTool {
 
         Map<String, Object> maxDepth = new HashMap<>();
         maxDepth.put("type", "integer");
-        maxDepth.put("description", "最大跳数 (1-10, 默认 5)");
+        maxDepth.put("description", "最大跳数 (1-" + MAX_DEPTH_CAP + ", 默认 " + DEFAULT_MAX_DEPTH
+                + " 即整条链; 每道工序占 2 跳, 一般不用填)");
         maxDepth.put("default", DEFAULT_MAX_DEPTH);
         maxDepth.put("minimum", 1);
         maxDepth.put("maximum", MAX_DEPTH_CAP);

@@ -82,6 +82,24 @@ class CanvasIndicatorsControllerTest {
                 closureRepository, spelEvaluator);
     }
 
+    @Test
+    @DisplayName("批次溯源: 不传 maxDepth ⇒ 闭包查询收到上限 50; 传 30 ⇒ 收到 30 (不再被截到 10)")
+    void batchLineageDepthDefaultsToCapAndIsNotTruncatedAtTen() {
+        when(closureRepository.findFullGraph(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
+
+        ApiResponse<Map<String, Object>> byDefault =
+                controller.batchLineage("F006", "production_batch", "10898", null);
+        ApiResponse<Map<String, Object>> asked30 =
+                controller.batchLineage("F006", "production_batch", "10898", 30);
+
+        org.mockito.Mockito.verify(closureRepository).findFullGraph("F006", "10898", "PRODUCTION_BATCH", 50);
+        org.mockito.Mockito.verify(closureRepository).findFullGraph("F006", "10898", "PRODUCTION_BATCH", 30);
+        assertEquals(50, byDefault.getData().get("maxDepth"));
+        assertEquals(30, asked30.getData().get("maxDepth"));
+    }
+
     private Indicator sampleIndicator() {
         Indicator i = new Indicator();
         i.setId("ind-test-1");

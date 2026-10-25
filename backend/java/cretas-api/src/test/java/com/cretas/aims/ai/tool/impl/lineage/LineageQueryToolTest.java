@@ -221,23 +221,66 @@ class LineageQueryToolTest {
         assertTrue(((String) result.get("message")).contains("未找到"));
     }
 
+    // 10 道工序的首道原料在 depth 19 (每道工序 2 跳)。期望值写字面量, ⛔ 不引用常量 (那是自己和自己比)。
+
     @Test
-    @DisplayName("UT-LQT-07: max_depth=15 → 自动 cap 到 10, 传给 assembler 的也是 10")
+    @DisplayName("UT-LQT-07: max_depth=30 → 不再被截到 10, 传给 assembler 的就是 30")
+    @SuppressWarnings("unchecked")
+    void maxDepthThirtyIsNotTruncatedToTen() throws Exception {
+        stubEmptyGraphAndEdges();
+
+        Map<String, Object> result = invoke(Map.of(
+                "batch_type", BATCH_TYPE,
+                "batch_id", BATCH_ID,
+                "max_depth", 30));
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        verify(lineageGraphAssembler).assemble(any(), any(), any(), eq(30), anyBoolean(), anyBoolean());
+        assertEquals(30, data.get("maxDepth"), "max_depth=30 不应被截到 10");
+    }
+
+    @Test
+    @DisplayName("UT-LQT-07b: max_depth=99 → cap 到上限 50")
     @SuppressWarnings("unchecked")
     void maxDepthCap() throws Exception {
-        when(lineageGraphAssembler.assemble(any(), any(), any(), eq(10), anyBoolean(), anyBoolean()))
+        stubEmptyGraphAndEdges();
+
+        Map<String, Object> result = invoke(Map.of(
+                "batch_type", BATCH_TYPE,
+                "batch_id", BATCH_ID,
+                "max_depth", 99));
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        verify(lineageGraphAssembler).assemble(any(), any(), any(), eq(50), anyBoolean(), anyBoolean());
+        assertEquals(50, data.get("maxDepth"), "max_depth=99 应被 cap 到 50");
+    }
+
+    @Test
+    @DisplayName("UT-LQT-07c: 不给 max_depth → 缺省 = 上限 50 (「来自哪几头牛 / 召回发给了谁」要整条链); schema 同口径")
+    @SuppressWarnings("unchecked")
+    void defaultDepthEqualsCap() throws Exception {
+        stubEmptyGraphAndEdges();
+
+        Map<String, Object> result = invoke(Map.of(
+                "batch_type", BATCH_TYPE,
+                "batch_id", BATCH_ID));
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        verify(lineageGraphAssembler).assemble(any(), any(), any(), eq(50), anyBoolean(), anyBoolean());
+        assertEquals(50, data.get("maxDepth"));
+
+        Map<String, Object> props = (Map<String, Object>) tool.getParametersSchema().get("properties");
+        Map<String, Object> maxDepth = (Map<String, Object>) props.get("max_depth");
+        assertEquals(50, maxDepth.get("default"));
+        assertEquals(50, maxDepth.get("maximum"));
+        assertTrue(String.valueOf(maxDepth.get("description")).contains("1-50"),
+                "给 LLM 的范围描述要跟上限一致: " + maxDepth.get("description"));
+    }
+
+    private void stubEmptyGraphAndEdges() {
+        when(lineageGraphAssembler.assemble(any(), any(), any(), anyInt(), anyBoolean(), anyBoolean()))
                 .thenReturn(section(List.of(), List.of(), 0));
         when(edgeRepository.findByFactoryIdAndTargetIdAndTargetType(any(), any(), any()))
                 .thenReturn(List.of());
         when(edgeRepository.findByFactoryIdAndSourceIdAndSourceType(any(), any(), any()))
                 .thenReturn(List.of());
-
-        Map<String, Object> result = invoke(Map.of(
-                "batch_type", BATCH_TYPE,
-                "batch_id", BATCH_ID,
-                "max_depth", 15));
-        Map<String, Object> data = (Map<String, Object>) result.get("data");
-        assertEquals(10, data.get("maxDepth"), "max_depth=15 应被 cap 到 10");
     }
 
     // ============================================================
@@ -262,7 +305,8 @@ class LineageQueryToolTest {
                             "山东胜龙自有育肥场", "MATCHED")));
         }
         TraceabilityDTO.LineageSection section = section(List.of(group(1, materials)), List.of(), 6);
-        when(lineageGraphAssembler.assemble(FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(DEMO_BATCH_PK), 5, true, false))
+        // 不给 max_depth ⇒ 缺省 = 上限 50 (整条链; 原来是 5)
+        when(lineageGraphAssembler.assemble(FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(DEMO_BATCH_PK), 50, true, false))
                 .thenReturn(section);
         when(edgeRepository.findByFactoryIdAndTargetIdAndTargetType(FACTORY_ID, String.valueOf(DEMO_BATCH_PK), "PRODUCTION_BATCH"))
                 .thenReturn(List.of());

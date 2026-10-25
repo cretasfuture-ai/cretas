@@ -4,11 +4,15 @@ what a factory sample may carry into a training / distillation / labeling set.
 Owner rule (Steve, 2026-10-24; replaces the 2026-10-22 "nothing without consent").
 Customer wording: docs sent to the website session the same day.
 
-  * Structured operating figures (scheduling features: headcount, equipment,
-    durations, efficiency ...) are general capability: used by default.
+  * Scheduling features (headcount, equipment, durations, efficiency) are used
+    by default ONLY for that factory's own scheduling model — never for a
+    general model, never merged across factories (training is off today; any
+    future trainer must partition by factory_id).
   * AI Q&A samples (question + the data the model saw -> answer) are used by
-    default after desensitization (entity placeholders, amount buckets, phone /
-    ID / bank numbers removed). Factories with ``training_consent`` 'private' /
+    default after desensitization (``corpus_anonymize.desensitize_for_training``:
+    generic name placeholders, phone / ID / bank numbers removed, EVERY number
+    -> <数值> — revenue, cost, margins and other ratios, output, inventory; only
+    the question form and the reasoning remain). Factories with ``training_consent`` 'private' /
     'shared_anon' are stored without desensitization.
   * Intent mappings (utterance -> intent) are used by default with numbers and
     phone / ID / bank numbers masked. They teach UNDERSTANDING, so an utterance
@@ -20,7 +24,10 @@ Customer wording: docs sent to the website session the same day.
         that GENERATES advice, and a factory's own order must never be
         suggested to another factory (recommendations only come from a
         reviewed template library);
-      - per-person pay / attendance (``PERSONNEL_MARKERS``).
+      - per-person pay / attendance (``PERSONNEL_MARKERS``);
+      - in Q&A and in intent utterances, a specific customer name
+        (``mentions_specific_customer``) or a person's name (``mentions_person_name``; surnames 于/向/付/万 are left out
+        because they are mostly function words, so "于经理" is not caught).
     A hit drops the whole sample; masking is no substitute (商业秘密保护规定
     第五至七、十一至十二条: protection is not limited to numbers).
 
@@ -52,6 +59,10 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 CONSENT_SCOPES = ("none", "private", "shared_anon")
 DEFAULT_SCOPE = "none"
+# Not a stored consent_scope: what a factory reads as once ``withdrawn_at`` is set
+# (training clause 10, migration V20261101_17). A withdrawn factory leaves
+# training entirely: nothing captured, exported, judged or sampled.
+WITHDRAWN = "withdrawn"
 
 # Sentinel tenants of the synthetic seed corpus (seed_chart_insight_corpus.py).
 SYNTHETIC_FACTORY_IDS = frozenset({"SEED_R", "SEED_F"})
@@ -71,8 +82,9 @@ DESENSITIZED_KEY = "desensitized"
 
 # asyncpg placeholder style; the finetune scripts use SELECT_ALL_SQL only
 # (no parameters, so it runs unchanged on psycopg2).
-SELECT_SCOPE_SQL = "SELECT consent_scope FROM training_consent WHERE factory_id = $1"
-SELECT_ALL_SQL = "SELECT factory_id, consent_scope FROM training_consent"
+_EFFECTIVE_SCOPE = f"CASE WHEN withdrawn_at IS NOT NULL THEN '{WITHDRAWN}' ELSE consent_scope END"
+SELECT_SCOPE_SQL = f"SELECT {_EFFECTIVE_SCOPE} FROM training_consent WHERE factory_id = $1"
+SELECT_ALL_SQL = f"SELECT factory_id, {_EFFECTIVE_SCOPE} AS consent_scope FROM training_consent"
 
 # Keep every tuple below identical to TrainingSampleRules (Java); a test compares.
 #
@@ -110,18 +122,60 @@ _PHONE_RE = re.compile(r"(?<![0-9A-Za-z])1[3-9]\d{9}(?![0-9A-Za-z])", re.ASCII)
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.<])\d+(?:\.\d+)?", re.ASCII)
 
 
+# Specific customer names and person names (Steve 2026-10-24): a Q&A sample that
+# names one is not stored at all. Marked proxies tuned to over-block.
+_HAN = "一-龥"
+_ORG_SUFFIX = r"(?:股份有限公司|有限公司|公司|集团|超市|商贸|商行|批发部|门市部|连锁|酒店|饭店|食品厂)"
+_ORG_NAME_RE = re.compile(rf"[{_HAN}A-Za-z0-9]{{2,12}}{_ORG_SUFFIX}")
+_CUSTOMER_NAMED_RE = re.compile(
+    rf"客户(?:名称|名)?\s*[:：]\s*[{_HAN}A-Za-z0-9]{{2,}}"   # 客户：张记 / 客户名称: XX
+    rf"|客户\s*[「“\"『][^」”\"』]{{2,}}[」”\"』]"               # 客户「张记」
+    rf"|[「“\"『][^」”\"』]{{2,}}[」”\"』]\s*客户"               # 「张记」客户
+)
+_SURNAMES = (
+    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘蒋蔡余杜叶程苏"
+    "魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵"
+    "钱严覃武戴莫孔汤"  # 于 / 向 / 付 / 万 left out: mostly function words / units (测 2026-10-24: "负责人于今日")
+)
+_PERSON_ROLE = (r"(?:联系人|负责人|经办人|业务员|销售员|司机|操作员|质检员|审核人|审批人|签收人|"
+                r"收货人|制单人|姓名|员工|工人|班长|组长|主管|仓管员?)")
+_PERSON_RE = re.compile(
+    rf"{_PERSON_ROLE}\s*[:：|]?\s*[{_SURNAMES}][{_HAN}]{{1,2}}"                       # 操作员：王五
+    rf"|(?<![{_HAN}])[{_SURNAMES}][{_HAN}]?(?:先生|女士|小姐|经理|总监|老板|师傅|厂长)"  # 李经理 / 王老板
+    rf"|(?<![{_HAN}])[{_SURNAMES}]总(?![量额数计成产体部结和监经])"                      # 王总
+    rf"|(?:联系|找|通知|叫|告诉)(?!方式|方法|方面|电话|人)[{_SURNAMES}][{_HAN}]{{1,2}}(?=[\s，,。；;、:：（(]|$|\d)"  # 联系张三
+)
+
+
+def mentions_specific_customer(text: Optional[str]) -> bool:
+    """「客户」together with a specific name (company-like name, 客户：XX, quoted name)."""
+    if not text or "客户" not in text:
+        return False
+    return bool(_CUSTOMER_NAMED_RE.search(text) or _ORG_NAME_RE.search(text))
+
+
+def mentions_person_name(text: Optional[str]) -> bool:
+    """A person's name in a role / title / contact context (张三经理, 操作员：王五)."""
+    return bool(text) and bool(_PERSON_RE.search(text))
+
+
 def _hit(text: Optional[str], markers: Tuple[str, ...]) -> bool:
     return bool(text) and any(m in text for m in markers)
 
 
 def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str]) -> bool:
     """True when a Q&A / insight sample must not be stored (any factory)."""
-    return _hit(input_text, QA_INPUT_MARKERS) or _hit(answer, QA_ANSWER_MARKERS)
+    if _hit(input_text, QA_INPUT_MARKERS) or _hit(answer, QA_ANSWER_MARKERS):
+        return True
+    return any(mentions_specific_customer(t) or mentions_person_name(t)
+               for t in (input_text, answer))
 
 
 def utterance_has_blocked_content(text: Optional[str]) -> bool:
-    """True when an intent utterance must not be stored (any factory)."""
-    return _hit(text, UTTERANCE_MARKERS)
+    """True when an intent utterance must not be stored (any factory): recipe /
+    parameter content, a specific customer, or a person's name."""
+    return (_hit(text, UTTERANCE_MARKERS) or mentions_specific_customer(text)
+            or mentions_person_name(text))
 
 
 def remove_personal_identifiers(text: Optional[str]) -> Optional[str]:
@@ -145,28 +199,39 @@ def keeps_raw(scope: str) -> bool:
     return scope in CORPUS_CAPTURE_SCOPES
 
 
+def is_withdrawn(scope: str) -> bool:
+    return scope == WITHDRAWN
+
+
 def desensitize_utterance(scope: str, text: Optional[str]) -> Tuple[bool, Optional[str]]:
-    """Intent-mapping rule: ``(keep, text)``. Parameter / recipe content is dropped
-    for every factory; authorized -> raw; otherwise numbers and identifiers masked."""
-    if utterance_has_blocked_content(text):
+    """Intent-mapping rule: ``(keep, text)``. Withdrawn factories and parameter /
+    recipe content are dropped; authorized -> raw; otherwise numbers masked."""
+    if is_withdrawn(scope) or utterance_has_blocked_content(text):
         return False, None
     if keeps_raw(scope):
         return True, text
     return True, mask_numbers(text)
 
 
-def usable_rows_sql(column: str = "factory_id", metadata: str = "metadata") -> str:
+def usable_rows_sql(column: str = "smart_bi_distillation_samples.factory_id",
+                    metadata: str = "smart_bi_distillation_samples.metadata") -> str:
     """SQL predicate for corpus scripts (judge, eval freeze, review sampling):
     synthetic seed rows and rows that passed this rule at capture. Rows captured
     before 2026-10-24 stay out until a backfill re-checks them. Built only from
     constants, never from input."""
     synthetic = ", ".join(f"'{f}'" for f in sorted(SYNTHETIC_FACTORY_IDS))
-    return f"({column} IN ({synthetic}) OR ({metadata} ? '{RULE_KEY}'))"
+    # NOT EXISTS (not NOT IN): rows without a factory must stay usable. The outer
+    # column MUST be table-qualified: an unqualified factory_id inside the
+    # subquery would bind to training_consent itself and exclude every row as
+    # soon as any factory withdrew.
+    not_withdrawn = (f"NOT EXISTS (SELECT 1 FROM training_consent tw "
+                     f"WHERE tw.factory_id = {column} AND tw.withdrawn_at IS NOT NULL)")
+    return f"(({column} IN ({synthetic}) OR ({metadata} ? '{RULE_KEY}')) AND {not_withdrawn})"
 
 
 def normalize_scope(raw: Any) -> str:
     """Map a stored value to a known scope. Anything unexpected is 'none'."""
-    if isinstance(raw, str) and raw in CONSENT_SCOPES:
+    if isinstance(raw, str) and (raw in CONSENT_SCOPES or raw == WITHDRAWN):
         return raw
     return DEFAULT_SCOPE
 
