@@ -3,8 +3,9 @@
 客户需求 8、9 (好的与不好的、建议) 原来只能靠 AI 生成。这里先用规则从同一套指标库算出来,
 每条都带数字、只说表里能算出来的事实; AI 的段落放在它下面作补充。
 
-覆盖: 预算达成 (全期 / 季度) · 同比 (全期 / 下滑月份) · 费用 (超预算 / 超支月份 / 同比) ·
-业务单元 (达成 / 同比) · 品类占比变化 · 损益 (净利率)。比率表 (只有百分比) 不出金额结论。
+覆盖: 预算达成 (全期 / 季度 / 最好月) · 同比 (全期 / 增长最多与下滑月份 / 复盘建议) · 环比 (最近一月) ·
+费用 (超预算 / 超支月份 / 同比) · 业务单元 (达成 / 同比) · 品类占比变化 · 损益 (净利率 / 毛利率 / 期间费用占比与最大一项 / 营业外 / 净利润同比) ·
+比率表 (各月毛利率: 平均差异 / 最高最低月 / 比上年下降的月份, 只说百分点, 不出金额结论)。
 """
 from typing import Dict, List, Optional
 
@@ -89,13 +90,81 @@ def _yoy(rows: pd.DataFrame, out: _Findings, noun: str = '') -> None:
 
     monthly_actual = M.monthly(rows, 'actual', MONTHS)
     monthly_last = M.monthly(rows, 'last_year', MONTHS)
-    declines = []
+    declines, rises = [], []
     for m, a, ly in zip(MONTHS, monthly_actual, monthly_last):
         g = M.growth(a, ly).value
-        if a is not None and ly is not None and g is not None and a < ly:
-            declines.append((g, m, ly - a))
+        if a is None or ly is None or g is None:
+            continue
+        (declines if a < ly else rises).append((g, m, abs(a - ly)))
+    if len(rises) + len(declines) >= 2 and rises:
+        g, m, diff = max(rises)
+        out.good.append(f"{m}月同比 {g:+.1f}%（多 {format_amount(diff)}），各月里增长最多")
     for g, m, diff in sorted(declines)[:2]:
         out.attention.append(f"{m}月比上年少 {format_amount(diff)}（{g:+.1f}%）")
+    if declines:
+        worst = max(declines, key=lambda d: d[2])
+        out.suggestions.append(f"复盘 {worst[1]}月：比上年少 {format_amount(worst[2])}，各月里减少的金额最多")
+
+
+def _mom(rows: pd.DataFrame, out: _Findings) -> None:
+    """最近一个算得出环比的月份 —— 与同比环比图的「最近月环比」KPI 同一取法。"""
+    series = M.monthly(rows, 'actual', MONTHS)
+    rates = M.month_over_month(series)
+    latest = next((i for i in reversed(range(len(rates))) if rates[i] is not None), None)
+    if latest is None:
+        return
+    rate, prev, cur = rates[latest], series[latest - 1], series[latest]
+    if rate is None:
+        return
+    text = f"{MONTHS[latest]}月环比 {rate:+.1f}%（上月 {format_amount(prev)} → 本月 {format_amount(cur)}）"
+    (out.good if rate >= 0 else out.attention).append(text)
+
+
+def ratio_months(df: pd.DataFrame) -> Optional[Dict[str, List[Optional[float]]]]:
+    """比率表 (各月直接给百分比) 的本年 / 上年各月值; 不像百分比 (超过 100) 时返回 None。
+
+    与毛利率趋势图口径 2 一致: 没有收入做权重, 合计只能是各月简单平均。"""
+    current = M.monthly(df, 'actual', MONTHS)
+    last: List[Optional[float]] = (M.monthly(df, 'last_year', MONTHS) if 'last_year' in df
+                                   else [None] * len(MONTHS))
+    present = [abs(v) for v in current + last if v is not None]
+    if not present or max(present) > 100:
+        return None
+    return {"current": current, "last": last}
+
+
+def _mean(values: List[Optional[float]]) -> Optional[float]:
+    vals = [v for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _ratio(df: pd.DataFrame, out: _Findings) -> None:
+    series = ratio_months(df)
+    if series is None:
+        return
+    cur, last = series["current"], series["last"]
+    months = [(m, c) for m, c in zip(MONTHS, cur) if c is not None]
+    if len(months) < 2:
+        return
+    mean_cur, mean_last = _mean(cur), _mean(last)
+    if mean_cur is not None and mean_last is not None:
+        diff = mean_cur - mean_last
+        text = f"各月平均毛利率 {_pct(mean_cur)}，比上年 {diff:+.1f} 个百分点（各月简单平均）"
+        (out.good if diff >= 0 else out.attention).append(text)
+
+    best = max(months, key=lambda x: x[1])
+    worst = min(months, key=lambda x: x[1])
+    out.good.append(f"{best[0]}月毛利率最高，{_pct(best[1])}")
+    if best[1] - worst[1] >= 2:
+        out.attention.append(f"{worst[0]}月毛利率最低，{_pct(worst[1])}，比最高月低 {best[1] - worst[1]:.1f} 个百分点")
+
+    drops = sorted(((ly - c, m, c, ly) for m, c, ly in zip(MONTHS, cur, last)
+                    if c is not None and ly is not None and c < ly), reverse=True)
+    for d, m, c, ly in drops[:2]:
+        out.attention.append(f"{m}月比上年低 {d:.1f} 个百分点（{_pct(c)}，上年 {_pct(ly)}）")
+    if drops:
+        d, m, _, _ = drops[0]
+        out.suggestions.append(f"复盘 {m}月的售价、原料成本和产品结构：毛利率比上年低 {d:.1f} 个百分点，各月里降得最多")
 
 
 def _expenses(rows: pd.DataFrame, out: _Findings) -> None:
@@ -196,12 +265,46 @@ def _pnl(df: pd.DataFrame, out: _Findings) -> None:
     else:
         out.attention.append(f"净亏损 {format_amount(-pnl.net_profit)}（营业收入 {format_amount(pnl.revenue)}）")
 
+    gross_margin = pnl.gross_margin().value
+    if gross_margin is not None and pnl.gross_profit is not None:
+        (out.good if gross_margin >= 0 else out.attention).append(
+            f"毛利率 {_pct(gross_margin)}（毛利 {format_amount(pnl.gross_profit)} / 营业收入 {format_amount(pnl.revenue)}）")
+
+    expense_total = pnl.expense_total
+    if expense_total and pnl.revenue:
+        share_of_revenue = expense_total / pnl.revenue * 100
+        text = f"期间费用 {format_amount(expense_total)}，占营业收入 {_pct(share_of_revenue)}"
+        if len(pnl.expenses) >= 2:
+            cls, amount = max(pnl.expenses.items(), key=lambda kv: kv[1])
+            name = S.CLASS_LABELS.get(cls, cls)
+            share = amount / expense_total * 100
+            text += f"，最大一项是{name} {format_amount(amount)}（占 {share:.0f}%）"
+            out.suggestions.append(f"先看{name}：{format_amount(amount)}，占期间费用 {share:.0f}%，是期间费用里最大的一项")
+        out.attention.append(text)
+
+    non_op = (pnl.non_op_income or 0) - (pnl.non_op_expense or 0)
+    if (pnl.non_op_income is not None or pnl.non_op_expense is not None) and non_op < 0:
+        out.attention.append(f"营业外收支净减少 {format_amount(-non_op)}（收入 {format_amount(pnl.non_op_income or 0)}，"
+                             f"支出 {format_amount(pnl.non_op_expense or 0)}）")
+
+    if 'last_year' in df:
+        last = M.pnl(df, 'last_year')
+        growth = M.growth(pnl.net_profit, last.net_profit).value
+        if last.net_profit is not None and growth is not None:
+            (out.good if growth >= 0 else out.attention).append(
+                f"净利润同比 {growth:+.1f}%（上年 {format_amount(last.net_profit)}）")
+
 
 def build_findings(df: pd.DataFrame, value_kind: str) -> Optional[Dict[str, List[str]]]:
     """df 为已按期间过滤、只含明细行的标准明细。说不出任何一条时返回 None。"""
-    if df is None or df.empty or value_kind == 'ratio':
+    if df is None or df.empty:
         return None
     out = _Findings()
+    if value_kind == 'ratio':
+        _ratio(df, out)
+        if not out.any():
+            return None
+        return {"good": out.good, "attention": out.attention, "suggestions": out.suggestions}
     expense_rows = M.select(df, S.EXPENSE_CLASSES) if M.has_subjects(df) else df.iloc[0:0]
     only_expense = not expense_rows.empty and M.select(df, [S.REVENUE]).empty
     if only_expense:
@@ -211,6 +314,7 @@ def build_findings(df: pd.DataFrame, value_kind: str) -> Optional[Dict[str, List
         if not perf.empty:
             _budget(perf, out)
             _yoy(perf, out)
+            _mom(perf, out)
             _units(perf, out)
             _categories(perf, out)
         if M.has_subjects(df):

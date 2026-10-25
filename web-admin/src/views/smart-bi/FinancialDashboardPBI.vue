@@ -2155,7 +2155,7 @@ onBeforeUnmount(() => {
               </section>
               <p class="findings__source">以上按表内数据算出。下面是 AI 汇总各图后的补充，可以重新生成。</p>
             </div>
-            <p v-else class="findings__none" data-testid="findings-none">这份数据算不出规则结论（例如只有百分比的比率表）。可以让 AI 汇总各图的分析。</p>
+            <p v-else class="findings__none" data-testid="findings-none">这份数据算不出规则结论（例如只有一个月的数据）。可以让 AI 汇总各图的分析。</p>
 
             <h4 class="findings__ai-title">AI 补充</h4>
             <ChartSkeleton v-if="conclusionsLoading" type="ai" />
