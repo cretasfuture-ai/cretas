@@ -592,6 +592,7 @@ class LineageGraphAssemblerTest {
 
     private static final int STEPS = 10;
     private static final long FIRST_STEP_ID = 10889L;     // 第 1 道 … 第 10 道 = 10898 (根)
+    private static final int SALT_STEP = 5;               // 外购盐投在第 5 道 ⇒ 对根 depth 11
 
     /**
      * 10 道工序的线性链: raw-cmr → PB 10889 → wip-1 → PB 10890 → wip-2 → … → wip-9 → PB 10898 → fg → dr。
@@ -612,6 +613,8 @@ class LineageGraphAssemblerTest {
             rawRows.add(closure(2 * k - 1, "MATERIAL_BATCH", "raw-cmr", "PRODUCTION_BATCH", pb));
         }
         rootRows.add(closure(2 * STEPS - 1, "MATERIAL_BATCH", "raw-cmr", "PRODUCTION_BATCH", root));
+        // 链中间(第 5 道)另投了一批外购的盐 —— 「链上其他真正的原料」, 公开侧也要给
+        rootRows.add(closure(2 * (STEPS - SALT_STEP) + 1, "MATERIAL_BATCH", "raw-salt", "PRODUCTION_BATCH", root));
         rootRows.add(closure(1, "PRODUCTION_BATCH", root, "FINISHED_BATCH", "fg-10898"));
         rootRows.add(closure(2, "PRODUCTION_BATCH", root, "SHIPMENT_RECORD", "dr-10898"));
         rawRows.add(closure(2 * STEPS, "MATERIAL_BATCH", "raw-cmr", "FINISHED_BATCH", "fg-10898"));
@@ -625,12 +628,20 @@ class LineageGraphAssemblerTest {
                         .filter(r -> r.getDepth() <= (Integer) inv.getArgument(3)).toList());
 
         List<MaterialBatch> materials = new java.util.ArrayList<>();
-        materials.add(materialBatchWithIndividual("raw-cmr", "CMR-0001", "整牛", "sup-1", "si-1"));
+        MaterialBatch cmr = materialBatchWithIndividual("raw-cmr", "CMR-0001", "整牛", "sup-1", "si-1");
+        cmr.setSourceDocType("PURCHASE_RECEIVE");
+        materials.add(cmr);
+        MaterialBatch salt = materialBatch("raw-salt", "SALT-0001", "食盐", "sup-1");
+        salt.setSourceDocType("CUSTOMER_MATERIAL_RECEIPT");
+        materials.add(salt);
         List<ProductionBatch> productions = new java.util.ArrayList<>();
         for (int k = 1; k <= STEPS; k++) {
             productions.add(productionBatch(FIRST_STEP_ID + k - 1, "PB-STEP-" + k, "第" + k + "道半成品"));
             if (k < STEPS) {
-                materials.add(materialBatch("wip-" + k, "WIP-" + k, "第" + k + "道在制品", null));
+                // 批号故意不用 WIP- 前缀: 判据必须是数据字段, 不是批号
+                MaterialBatch wip = materialBatch("wip-" + k, "MID-" + k, "第" + k + "道在制品", null);
+                wip.setSourceDocType("PRODUCTION_BATCH");
+                materials.add(wip);
             }
         }
         when(materialBatchRepository.findAllById(any())).thenReturn(materials);
@@ -661,33 +672,103 @@ class LineageGraphAssemblerTest {
         assertThat(raw.getBatchNumber()).isEqualTo("CMR-0001");
         assertThat(raw.getSupplierName()).isEqualTo("胜龙牛业");   // 阴性对照的正面: 内部侧看得到
         assertThat(section.getAncestors()).hasSize(19);
+        // 反向断言: 内部完整溯源仍然拿得到**全部**中间节点 (公开侧的过滤不许漏进内部视图)
+        List<String> internalIds = section.getAncestors().stream()
+                .flatMap(g -> g.getNodes().stream()).map(TraceabilityDTO.LineageNode::getNodeId).toList();
+        for (int k = 1; k < STEPS; k++) {
+            assertThat(internalIds).contains("wip-" + k, String.valueOf(FIRST_STEP_ID + k - 1));
+        }
+        assertThat(internalIds).contains("raw-cmr", "raw-salt").hasSize(2 * (STEPS - 1) + 2);
     }
 
+    /**
+     * 🔴 Steve 2026-10-25 裁定: 公开溯源只显示原料来源, 不显示中间工序。
+     * 产品真实入口 {@code assemblePublic} (TraceabilityServiceImpl 公开路径调的就是它)。
+     */
     @Test
-    @DisplayName("🔴 10 道工序公开溯源: 放大后多出来的节点同样脱敏 (nodeId/供应商/个体主键/完整耳标都没有)")
-    void publicTraceOfTenStepChainIsDesensitizedAllTheWay() {
+    @DisplayName("🔴 10 道工序公开溯源: 只有原料 (首道整牛 + 链中间外购的盐), 没有任何在制批 / 中间生产批 / depth / 工序数")
+    void publicTraceOfTenStepChainShowsOnlyRawMaterials() throws Exception {
         wireTenStepChain();
 
-        TraceabilityDTO.LineageSection section =
-                newAssembler().assemble(FACTORY, "PRODUCTION_BATCH", "10898", 0, false, true);
+        LineageGraphAssembler.PublicLineage publicLineage =
+                newAssembler().assemblePublic(FACTORY, "PRODUCTION_BATCH", "10898");
+        TraceabilityDTO.LineageSection section = publicLineage.section();
 
+        verify(closureRepository).findFullGraph(FACTORY, "10898", "PRODUCTION_BATCH", 50);   // 照旧查完整闭包
         List<TraceabilityDTO.LineageNode> nodes = section.getAncestors().stream()
                 .flatMap(g -> g.getNodes().stream()).toList();
-        System.out.println("[depth-cap] public ancestor nodes = " + nodes.size()
-                + " types=" + nodes.stream().map(TraceabilityDTO.LineageNode::getNodeType).distinct().toList());
-        // 首道原料这一层公开侧也到得了 —— 放大的目的
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()
+                .writeValueAsString(section);
+        System.out.println("[public-raw-only] nodes=" + nodes.stream().map(TraceabilityDTO.LineageNode::getBatchNumber).toList()
+                + " groups=" + section.getAncestors().size() + " json=" + json);
+
+        // 只有原料: 首道原料 + 链上其他真正的原料, 按名称排序 (整牛 < 食盐, 按 UTF-16 码点)
+        assertThat(nodes).extracting(TraceabilityDTO.LineageNode::getBatchNumber)
+                .containsExactly("CMR-0001", "SALT-0001");
+        assertThat(nodes).extracting(TraceabilityDTO.LineageNode::getNodeType).containsOnly("MATERIAL_BATCH");
+        assertThat(publicLineage.rawMaterials()).extracting(MaterialBatch::getId)
+                .containsExactlyInAnyOrder("raw-cmr", "raw-salt");
+        // 没有任何在制批、任何中间生产批 —— 落到真正发出去的字节流上
+        assertThat(json).doesNotContain("PB-STEP").doesNotContain("MID-")
+                .doesNotContain("在制品").doesNotContain("半成品").doesNotContain("10898").doesNotContain("1089");
+        // 没有能暴露工序数 / 先后的字段: 一组、不带 depth, maxDepth 空, 计数只数原料
+        assertThat(section.getAncestors()).hasSize(1);
+        assertThat(section.getAncestors().get(0).getDepth()).isNull();
+        assertThat(section.getMaxDepth()).isNull();
+        assertThat(section.getNodeCount()).isEqualTo(2);
+        assertThat(section.getRootId()).isNull();
+        java.util.Set<String> numbers = new java.util.TreeSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\":(-?\\d+)").matcher(json);
+        while (m.find()) {
+            numbers.add(m.group(1));
+        }
+        assertThat(numbers).as("公开 JSON 里的数字只能是原料数(2)和个体数(1), 否则能反推工序数: " + json)
+                .isSubsetOf("2", "1");
+        // 节点上不贴数量 / 时间 (谁有数量 = 谁直接投进最后一道, 数量本身也是配比)
+        assertThat(nodes).allSatisfy(n -> {
+            assertThat(n.getQuantity()).isNull();
+            assertThat(n.getEventTime()).isNull();
+        });
+        // 原料节点保持原来的脱敏
         TraceabilityDTO.LineageNode raw = publicNode(section, "CMR-0001");
-        assertThat(raw.getSourceIndividual()).isNotNull();
         assertThat(raw.getSourceIndividual().getTagNumber()).isEqualTo("************2345");
         assertThat(raw.getSourceIndividual().getId()).isNull();
         assertThat(raw.getSourceIndividual().getIndividualCode()).isNull();
-        // 每一个节点 (含 depth > 10 的在制库存批 / 生产批) 都脱敏
-        assertThat(nodes).hasSize(19);
         assertThat(nodes).allSatisfy(n -> {
             assertThat(n.getNodeId()).isNull();
             assertThat(n.getSupplierName()).isNull();
         });
+        assertThat(section.getSourceIndividualCount()).isEqualTo(1);
         assertThat(section.getDescendants()).isNull();
+    }
+
+    @Test
+    @DisplayName("公开侧判据看数据不看批号: 没填 source_doc_type 但有「生产批 → 它」边的在制批、副产批都不算原料")
+    void publicRawMaterialJudgementUsesDataFieldsAndEdges() {
+        when(closureRepository.findFullGraph(eq(FACTORY), eq("ROOT"), eq("PRODUCTION_BATCH"), any()))
+                .thenReturn(List.of(
+                        closure(1, "MATERIAL_BATCH", "legacy-wip", "PRODUCTION_BATCH", "ROOT"),
+                        closure(1, "MATERIAL_BATCH", "byproduct", "PRODUCTION_BATCH", "ROOT"),
+                        closure(1, "MATERIAL_BATCH", "wip-looking-raw", "PRODUCTION_BATCH", "ROOT"),
+                        closure(2, "PRODUCTION_BATCH", "77", "PRODUCTION_BATCH", "ROOT")));
+        MaterialBatch legacyWip = materialBatch("legacy-wip", "LEGACY-1", "老在制品", null);   // source_doc_type 为空
+        MaterialBatch byproduct = materialBatch("byproduct", "BYP-1", "牛骨", null);
+        byproduct.setByproductSourceReportId(9L);
+        MaterialBatch wipLookingRaw = materialBatch("wip-looking-raw", "WIP-but-purchased", "外购肉", "sup-1");
+        wipLookingRaw.setSourceDocType("PURCHASE_RECEIVE");
+        when(materialBatchRepository.findAllById(any())).thenReturn(List.of(legacyWip, byproduct, wipLookingRaw));
+        when(productionBatchRepository.findAllById(any())).thenReturn(List.of(productionBatch(77L, "PB-77", "半成品")));
+        BatchLineageEdge produced = edge("PRODUCTION_BATCH", "77", "MATERIAL_BATCH", "legacy-wip", null, null);
+        produced.setEdgeType("PRODUCTION_TO_WIP");
+        when(edgeRepository.findByFactoryIdAndTargetIdIn(anyString(), any())).thenReturn(List.of(produced));
+
+        TraceabilityDTO.LineageSection section =
+                newAssembler().assemblePublic(FACTORY, "PRODUCTION_BATCH", "ROOT").section();
+
+        // 批号以 WIP- 开头但确是外购的, 照样是原料 —— 证明判据不是批号前缀
+        assertThat(section.getAncestors()).flatExtracting(TraceabilityDTO.LineageDepthGroup::getNodes)
+                .extracting(TraceabilityDTO.LineageNode::getBatchNumber)
+                .containsExactly("WIP-but-purchased");
     }
 
     @Test

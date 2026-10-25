@@ -127,20 +127,60 @@ class TraceabilityServiceImplLineageTest {
     }
 
     @Test
-    @DisplayName("公开溯源: 调 assembler 时 includeDescendants=false, desensitize=true")
-    void publicTraceAsksForAncestorsOnlyAndDesensitized() {
+    @DisplayName("公开溯源: 走 assemblePublic (只给原料), ⛔ 不走内部的 assemble")
+    void publicTraceUsesThePublicRawMaterialView() {
         stubBatch();
-        when(lineageGraphAssembler.assemble(anyString(), anyString(), anyString(), anyInt(),
-                anyBoolean(), anyBoolean())).thenReturn(section(2));
+        when(lineageGraphAssembler.assemblePublic(anyString(), anyString(), anyString()))
+                .thenReturn(new LineageGraphAssembler.PublicLineage(section(2), List.of()));
 
         TraceabilityDTO.PublicTraceResponse response = service.getPublicTrace(BATCH_NUMBER);
 
-        // 🔴 这两个 flag 是消费者侧唯一的脱敏闸门。传反了 = 把「同一批还发给了谁」露给扫码的人。
-        //    公开侧也取整条链 (50): 消费者扫码要看到的是首道原料 / 来自哪头牛那一层。
-        verify(lineageGraphAssembler).assemble(eq(FACTORY), eq("PRODUCTION_BATCH"), eq("8967"),
-                eq(50), eq(false), eq(true));
+        // 🔴 这是消费者侧唯一的脱敏闸门。走成内部 assemble = 把中间工序 / 同一批还发给了谁露给扫码的人。
+        verify(lineageGraphAssembler).assemblePublic(FACTORY, "PRODUCTION_BATCH", "8967");
+        org.mockito.Mockito.verify(lineageGraphAssembler, org.mockito.Mockito.never())
+                .assemble(anyString(), anyString(), anyString(), anyInt(), anyBoolean(), anyBoolean());
         assertThat(response.getLineage()).isNotNull();
         assertThat(response.getIsValid()).isTrue();
+    }
+
+    /**
+     * Steve 2026-10-25: 公开溯源只显示原料来源。多道工序的产品, 最后一道直接投料的是上一道的在制库存批 ——
+     * 「原材料来源」卡原来会把它当原料露出来 (名字就是工序半成品)。
+     */
+    @Test
+    @DisplayName("公开「原材料来源」: 直接投料里的在制批 / 副产不出, 链上的原料并进来, 按批去重")
+    void publicMaterialsShowOnlyRawMaterials() {
+        stubBatch();
+        com.cretas.aims.entity.MaterialConsumption wipUse = new com.cretas.aims.entity.MaterialConsumption();
+        wipUse.setBatchId("wip-9");
+        com.cretas.aims.entity.MaterialConsumption rawUse = new com.cretas.aims.entity.MaterialConsumption();
+        rawUse.setBatchId("raw-spice");
+        com.cretas.aims.entity.MaterialConsumption rawUseAgain = new com.cretas.aims.entity.MaterialConsumption();
+        rawUseAgain.setBatchId("raw-spice");
+        when(materialConsumptionRepository.findByProductionBatchId(8967L))
+                .thenReturn(List.of(wipUse, rawUse, rawUseAgain));
+        com.cretas.aims.entity.MaterialBatch wip = materialBatch("wip-9", "第9道在制品", "PRODUCTION_BATCH");
+        com.cretas.aims.entity.MaterialBatch spice = materialBatch("raw-spice", "八角", "PURCHASE_RECEIVE");
+        com.cretas.aims.entity.MaterialBatch cattle = materialBatch("raw-cmr", "整牛", "PURCHASE_RECEIVE");
+        when(materialBatchRepository.findAllById(any())).thenReturn(List.of(wip, spice));
+        when(lineageGraphAssembler.assemblePublic(anyString(), anyString(), anyString()))
+                .thenReturn(new LineageGraphAssembler.PublicLineage(section(1), List.of(cattle)));
+
+        TraceabilityDTO.PublicTraceResponse response = service.getPublicTrace(BATCH_NUMBER);
+
+        System.out.println("[public-raw-only] materials=" + response.getMaterials());
+        assertThat(response.getMaterials()).extracting(TraceabilityDTO.PublicMaterialInfo::getMaterialType)
+                .containsExactly("八角", "整牛");
+    }
+
+    private static com.cretas.aims.entity.MaterialBatch materialBatch(String id, String typeName, String sourceDocType) {
+        com.cretas.aims.entity.MaterialBatch mb = new com.cretas.aims.entity.MaterialBatch();
+        mb.setId(id);
+        mb.setSourceDocType(sourceDocType);
+        com.cretas.aims.entity.RawMaterialType type = new com.cretas.aims.entity.RawMaterialType();
+        type.setName(typeName);
+        mb.setMaterialType(type);
+        return mb;
     }
 
     @Test
