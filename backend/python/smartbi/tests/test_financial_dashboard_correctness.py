@@ -742,6 +742,29 @@ class TestExcelExport:
         flat = [c for row in _sheet_cells(resp.content) for c in row]
         assert '产品A' in flat
 
+    def test_report_carries_the_headline_and_rule_findings_first(self):
+        # 导出报告原来只有 KPI / 明细 / AI 分析, 页面上的页首结论和规则结论带不出去
+        r = svc.generate_dashboard(pd.DataFrame(TestFindings.CATEGORY_ROWS), 2026, 'all', 1, 12)
+        resp = _export_client().post('/export-excel', json={
+            'charts': r['charts'], 'headline': r['headline'], 'findings': r['findings']})
+        assert resp.status_code == 200
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        assert wb.sheetnames[0] == '分析结论'
+        rows = [list(x) for x in wb['分析结论'].values][1:]
+        assert rows[0] == ['页首结论', r['headline']['text']]
+        expected = ([['做得好的', g] for g in r['findings']['good']]
+                    + [['需要关注', a] for a in r['findings']['attention']]
+                    + [['建议', s] for s in r['findings']['suggestions']])
+        assert rows[1:] == expected
+        assert ['建议', '复盘汤料：比上年少 50.00，各品类里减少的金额最多'] in rows
+
+    def test_no_conclusions_means_no_conclusion_sheet(self):
+        chart = build('budget_achievement', [{'月份': '1月', '预算': 200, '实际': 100}])
+        resp = _export_client().post('/export-excel', json={'charts': [chart], 'findings': None})
+        import openpyxl
+        assert openpyxl.load_workbook(io.BytesIO(resp.content)).sheetnames[0] == 'KPI汇总'
+
     def test_export_failure_is_not_http_200(self, monkeypatch):
         import openpyxl
 
