@@ -14,19 +14,26 @@
 
     <el-card shadow="never">
       <el-table v-loading="loading" :data="rows" stripe border>
-        <el-table-column label="访问时间" width="160">
-          <template #default="{ row }">{{ formatTime(row.accessedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="访问人" min-width="120">
+        <!-- 窄屏: 时间 / 访问人 / 身份合成一列、隐藏来源 IP, 把宽度让给「访问内容」 -->
+        <el-table-column v-if="compact" label="时间 / 访问人" width="160">
           <template #default="{ row }">
-            <span v-if="row.actorUsername">{{ row.actorUsername }}</span>
-            <span v-else-if="row.actorUserId" class="muted">#{{ row.actorUserId }}</span>
-            <span v-else class="muted">—</span>
+            <div>{{ formatTime(row.accessedAt) }}</div>
+            <div class="muted sub">{{ actorText(row) }} · {{ roleLabel(row.actorRole) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="身份" min-width="100">
-          <template #default="{ row }">{{ roleLabel(row.actorRole) }}</template>
-        </el-table-column>
+        <template v-else>
+          <el-table-column label="访问时间" width="160">
+            <template #default="{ row }">{{ formatTime(row.accessedAt) }}</template>
+          </el-table-column>
+          <el-table-column label="访问人" min-width="120">
+            <template #default="{ row }">
+              <span :class="{ muted: !row.actorUsername }">{{ actorText(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="身份" min-width="100">
+            <template #default="{ row }">{{ roleLabel(row.actorRole) }}</template>
+          </el-table-column>
+        </template>
         <el-table-column label="操作" width="96">
           <template #default="{ row }">
             <el-tag size="small" :type="methodTagType(row)">{{ methodLabel(row) }}</el-tag>
@@ -42,14 +49,14 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="结果" width="90">
+        <el-table-column label="结果" width="80">
           <template #default="{ row }">
             <el-tag v-if="row.responseStatus != null && row.responseStatus < 400" size="small" type="success">成功</el-tag>
             <el-tag v-else-if="row.responseStatus != null" size="small" type="danger">被拒绝</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="来源 IP" width="140">
+        <el-table-column v-if="!compact" label="来源 IP" width="140">
           <template #default="{ row }">{{ row.clientIp || '—' }}</template>
         </el-table-column>
         <template #empty>
@@ -72,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { listPlatformAccessLog, type PlatformAccessLogEntry } from '@/api/platformAccessLog';
@@ -93,6 +100,18 @@ const ROLE_LABELS: Record<string, string> = {
   platform_super_admin: '平台管理员',
   developer: '平台技术人员',
 };
+
+// 侧边栏约 220px, 视口 < 1100 时表格可用宽度不够放下全部 7 列
+const viewportWidth = ref(window.innerWidth);
+function onResize() { viewportWidth.value = window.innerWidth; }
+window.addEventListener('resize', onResize);
+onBeforeUnmount(() => window.removeEventListener('resize', onResize));
+const compact = computed(() => viewportWidth.value < 1100);
+
+function actorText(row: PlatformAccessLogEntry): string {
+  if (row.actorUsername) return row.actorUsername;
+  return row.actorUserId ? `#${row.actorUserId}` : '—';
+}
 
 function roleLabel(role?: string | null): string {
   if (!role) return '—';
@@ -141,6 +160,7 @@ onMounted(load);
 .intro { margin-bottom: 12px; }
 .path { font-family: Consolas, monospace; font-size: 11px; word-break: break-all; margin-top: 2px; }
 .muted { color: #909399; }
+.sub { font-size: 12px; margin-top: 2px; }
 .empty { padding: 24px 0; color: #909399; }
 .pager { margin-top: 12px; justify-content: flex-end; }
 </style>
