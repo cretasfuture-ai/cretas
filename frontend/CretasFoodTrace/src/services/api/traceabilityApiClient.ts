@@ -233,7 +233,8 @@ export interface PublicTraceResponse {
   productName: string;
   batchNumber: string;
   productionDate?: string;
-  factoryName: string;
+  /** 找不到工厂时为 null(后端不再回落成写死的「认证工厂」); 为 null 时不渲染这一行 */
+  factoryName: string | null;
   qualityStatus: string;
   /**
    * 认证信息。没有真实来源时为 null(后端不再对所有批次写死「食品安全认证」);

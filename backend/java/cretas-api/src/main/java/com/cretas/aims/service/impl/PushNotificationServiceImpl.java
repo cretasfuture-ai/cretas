@@ -138,7 +138,7 @@ public class PushNotificationServiceImpl implements PushNotificationService {
     }
 
     @Override
-    public void sendApprovalNotification(Long userId, String approvalType, Long approvalId, String message) {
+    public void sendApprovalNotification(Long userId, String approvalType, String approvalId, String message) {
         Map<String, Object> data = new HashMap<>();
         data.put("type", "approval");
         data.put("approvalType", approvalType);
@@ -171,7 +171,7 @@ public class PushNotificationServiceImpl implements PushNotificationService {
     }
 
     @Override
-    public void sendUrgentInsertNotification(Long userId, Long planId, String message) {
+    public void sendUrgentInsertNotification(Long userId, String planId, String message) {
         Map<String, Object> data = new HashMap<>();
         data.put("type", "urgent_insert");
         data.put("planId", planId);
