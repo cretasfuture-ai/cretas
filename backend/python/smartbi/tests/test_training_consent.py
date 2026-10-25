@@ -39,6 +39,15 @@ export_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(export_mod)
 
 
+@pytest.fixture(autouse=True)
+def _no_protected_products(monkeypatch):
+    """The export reads process-secret product names from the Cretas database;
+    unit tests have none (tests about the rule set their own names)."""
+    async def _none_map(*_a, **_k):
+        return {}
+    monkeypatch.setattr(export_mod, "all_protected_product_names", _none_map)
+
+
 # ===========================================================================
 # 1. Anonymization: bucket absolute ¥, pseudonymize labels, KEEP %/shape
 # ===========================================================================
@@ -121,11 +130,20 @@ class TestAnonymizePseudonymize:
 
 
 # ===========================================================================
-# 2. Export shared-gating: synthetic always; shared_anon in; none/private out
+# 2. Export shared-gating (rule 2026-10-24): synthetic in; real rows only if
+#    captured under the rule; desensitized in; shared_anon anonymized in;
+#    private / none raw out; process content out for everyone
 # ===========================================================================
 
+RULE = {"training_rule": "2026-10-24"}
+
+
 def _row(factory_id, *, metadata=None, input_text="问题X", teacher_output="答案Y",
-         business_type="restaurant", system_prompt=None):
+         business_type="restaurant", system_prompt=None, rule=True):
+    """Real-tenant rows carry the capture-time rule tag unless rule=False."""
+    real = factory_id and factory_id not in ("SEED_R", "SEED_F")
+    if rule and real:
+        metadata = {**RULE, **(metadata or {})}
     return {
         "id": 1,
         "source": "chat_qa",
@@ -152,10 +170,17 @@ class TestSharedGating:
         assert all(g["input_text"] is None for g in gated)
 
     def test_synthetic_by_metadata_source_kind(self):
-        rows = [_row("F001", metadata={"source_kind": "synthetic_seed"})]
+        rows = [_row(None, metadata={"source_kind": "synthetic_seed"})]
         gated = export_mod.gate_shared_rows(rows, consent={})  # no consent at all
         assert len(gated) == 1
         assert gated[0]["consent_class"] == "synthetic"
+
+    def test_real_tenant_row_is_never_synthetic_by_metadata(self):
+        # metadata is caller-supplied; a row tagged with a real tenant stays that
+        # tenant's data and needs that tenant's consent (2026-10-22).
+        rows = [_row("F001", metadata={"source_kind": "synthetic_seed"}),
+                _row("F001", metadata={"seeded": True})]
+        assert export_mod.gate_shared_rows(rows, consent={}) == []
 
     def test_real_none_excluded_default_deny(self):
         rows = [_row("F001")]  # no metadata, real tenant
@@ -179,22 +204,41 @@ class TestSharedGating:
         assert item["input_text"] is not None
         assert "星巴克" not in item["input_text"]
         assert "2500000" not in item["input_text"]
-        assert "35%" in item["input_text"]   # shape kept
-        assert "18%" in item["teacher_output"]
+        # numbers masked in shared exports too (Steve 2026-10-24)
+        assert item["input_text"] == "门店A营收¥<数值>，占比<数值>%"
+        assert item["teacher_output"] == "门店A环比增长<数值>%"
+
+    def test_desensitized_row_of_unauthorized_factory_is_included(self):
+        rows = [_row("F001", metadata={"desensitized": True}, input_text="门店A营收¥10-50万")]
+        gated = export_mod.gate_shared_rows(rows, consent={})
+        assert [g["consent_class"] for g in gated] == ["desensitized"]
+
+    def test_row_captured_before_the_rule_is_excluded_even_when_authorized(self):
+        rows = [_row("F001", rule=False), _row("F002", rule=False, metadata={"desensitized": True})]
+        assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
+
+    def test_process_content_is_excluded_even_for_shared_anon(self):
+        rows = [_row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+                _row("F001", input_text="怎么提升出成率", teacher_output="把腌制时间延长到 24 小时"),
+                _row("F002", metadata={"desensitized": True}, input_text="为什么返工多")]
+        assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
 
     def test_mixed_population(self):
         rows = [
             _row("SEED_R"),                                    # synthetic → in
-            _row("F001", metadata={"seeded": True}),           # synthetic → in
+            _row(None, metadata={"seeded": True}),             # synthetic → in
+            _row("F005", metadata={"seeded": True}),           # real tenant, no consent → out
             _row("F002"),                                      # none → out
             _row("F003"),                                      # private → out
             _row("F004"),                                      # shared_anon → in
+            _row("F006", metadata={"desensitized": True}),     # desensitized → in
+            _row("F007", rule=False),                          # pre-rule row → out
         ]
-        consent = {"F002": "none", "F003": "private", "F004": "shared_anon"}
+        consent = {"F002": "none", "F003": "private", "F004": "shared_anon", "F007": "shared_anon"}
         gated = export_mod.gate_shared_rows(rows, consent)
         classes = sorted(g["consent_class"] for g in gated)
-        assert classes == ["shared_anon", "synthetic", "synthetic"]
-        assert len(gated) == 3
+        assert classes == ["desensitized", "shared_anon", "synthetic", "synthetic"]
+        assert len(gated) == 4
 
 
 # ===========================================================================
@@ -267,6 +311,18 @@ async def test_private_export_raw_when_consented(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_private_export_skips_process_content_and_pre_rule_rows(tmp_path):
+    consent = [{"factory_id": "F001", "consent_scope": "private"}]
+    samples = [_row("F001", input_text="本月营收多少", teacher_output="128 万"),
+               _row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+               _row("F001", input_text="上月库存", teacher_output="350 箱", rule=False)]
+    conn = _FakeConn(consent_rows=consent, sample_rows=samples)
+    await export_mod._export_private(_Args(factory="F001", out=str(tmp_path)), _FakePool(conn))
+    lines = open(os.path.join(str(tmp_path), "dataset_private_F001.jsonl"), encoding="utf-8").read().splitlines()
+    assert len(lines) == 1 and "本月营收多少" in lines[0]
+
+
+@pytest.mark.asyncio
 async def test_private_export_refused_when_shared_anon_only(tmp_path, caplog):
     # shared_anon is NOT private → private raw export must refuse
     consent = [{"factory_id": "F001", "consent_scope": "shared_anon"}]
@@ -295,30 +351,8 @@ class TestMigration:
                 versions.append((m.group(1), m.group(2)))
         return max(versions)
 
-    def test_consent_migration_above_frontier(self):
-        target = None
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if "training_consent" in fn:
-                target = fn
-        assert target is not None, "training_consent migration not found"
-        m = re.match(r"V(\d{8})_(\d{2})__", target)
-        assert m
-        this_ver = (m.group(1), m.group(2))
-        # strictly greater than any OTHER migration
-        others = []
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if fn == target:
-                continue
-            mm = re.match(r"V(\d{8})_(\d{2})__", fn)
-            if mm:
-                others.append((mm.group(1), mm.group(2)))
-        assert this_ver > max(others), f"{this_ver} must be > frontier {max(others)}"
-
     def test_migration_defines_table_and_policy(self):
-        target = None
-        for fn in os.listdir(self.MIGRATIONS_DIR):
-            if "training_consent" in fn:
-                target = os.path.join(self.MIGRATIONS_DIR, fn)
+        target = os.path.join(self.MIGRATIONS_DIR, "V20261001_01__training_consent.sql")
         sql = open(target, encoding="utf-8").read()
         assert "CREATE TABLE IF NOT EXISTS training_consent" in sql
         assert "consent_scope" in sql
@@ -340,3 +374,61 @@ class TestParse:
         ):
             p = os.path.join(PYTHON_ROOT, rel)
             ast.parse(open(p, encoding="utf-8").read())
+
+
+def test_customer_names_are_pseudonymized_but_generic_customer_words_kept():
+    from smartbi.services.corpus_anonymize import anonymize_for_shared
+
+    a_in, a_out = anonymize_for_shared("张记食品客户本月回款 ¥250000", "客户：张记食品 欠款；大客户占比 35%")
+    assert "张记" not in a_in and "张记" not in a_out
+    assert "客户A" in a_in and "客户A" in a_out          # same customer, same placeholder
+    assert "大客户占比 35%" in a_out                      # generic word untouched
+
+
+def test_withdrawn_factory_is_excluded_from_shared_export():
+    rows = [_row("F001", metadata={"desensitized": True}),
+            _row("F002", metadata={"desensitized": True})]
+    gated = export_mod.gate_shared_rows(rows, consent={"F001": "withdrawn"})
+    assert [g["row"]["factory_id"] for g in gated] == ["F002"]
+
+
+def test_effective_scope_sql_reads_withdrawal():
+    from smartbi.services import training_consent as tc
+
+    assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_SCOPE_SQL
+    assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_ALL_SQL
+    assert tc.normalize_scope("withdrawn") == "withdrawn"
+    assert tc.desensitize_utterance("withdrawn", "库存多少") == (False, None)
+
+
+def test_registration_requires_a_contract_and_withdraw_is_exclusive():
+    import pytest as _pytest
+    from scripts import set_training_consent as cli
+
+    cli.validate("private", "HT-2026-001", False)
+    cli.validate("none", None, False)
+    cli.validate(None, None, True)
+    for args in [("private", None, False), ("shared_anon", "  ", False),
+                 ("none", None, True), (None, None, False)]:
+        with _pytest.raises(ValueError):
+            cli.validate(*args)
+
+
+def test_migration_enforces_contract_and_adds_withdrawal_columns():
+    mig = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database",
+                       "migrations", "V20261101_17__training_consent_contract_and_withdrawal.sql")
+    sql = open(mig, encoding="utf-8").read()
+    for col in ("contract_no", "withdrawn_at", "withdrawn_by", "withdrawal_note"):
+        assert f"ADD COLUMN IF NOT EXISTS {col}" in sql
+    assert "CHECK (consent_scope = 'none' OR (contract_no IS NOT NULL" in sql
+
+
+def test_rows_naming_a_process_secret_product_are_not_exported():
+    protected = {"F001": frozenset({"秘制牛肉干"})}
+    rows = [_row("F001", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量"),
+            _row("F001", metadata={"desensitized": True}, input_text="普通牛肉干本月销量"),
+            _row("F002", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量")]
+    gated = export_mod.gate_shared_rows(rows, consent={}, protected_names=protected)
+    # F001's protected product is out; the same name in F002 is not F002's protected product
+    assert [(g["row"]["factory_id"], g["row"]["input_text"]) for g in gated] == [
+        ("F001", "普通牛肉干本月销量"), ("F002", "秘制牛肉干本月销量")]

@@ -15,6 +15,7 @@ import java.util.UUID;
  *
  * <p>状态机: INITIATED → COUNTING → PENDING_APPROVAL → APPROVED → APPLIED
  *                                                    ↘ REJECTED → 可重提 PENDING_APPROVAL
+ *                                                    ↘ RECOUNT_REQUIRED → 新盘点单
  *
  * <p>红线 §3.4: 盘点生效(apply)必须在财务审批通过后执行，仓管无法绕过直接修改库存。
  */
@@ -46,7 +47,8 @@ public class FactoryStocktake extends BaseEntity {
         PENDING_APPROVAL("待审批"),
         APPROVED("已审批"),
         APPLIED("已生效"),
-        REJECTED("已驳回");
+        REJECTED("已驳回"),
+        RECOUNT_REQUIRED("需重新盘点");
 
         private final String displayLabel;
     }
@@ -168,6 +170,28 @@ public class FactoryStocktake extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "import_mode", length = 20)
     private ImportMode importMode;
+
+    /** Drift recovery audit: the approved evidence remains unchanged; only the lifecycle state moves. */
+    @Column(name = "recount_requested_by")
+    private Long recountRequestedBy;
+
+    @Column(name = "recount_requested_at")
+    private LocalDateTime recountRequestedAt;
+
+    @Column(name = "recount_reason", columnDefinition = "TEXT")
+    private String recountReason;
+
+    /** The version supplied for the one-time recovery request, used for safe idempotent retry. */
+    @Column(name = "recount_source_version")
+    private Long recountSourceVersion;
+
+    /** New counting task created by this recovery request. */
+    @Column(name = "recount_stocktake_id", length = 64)
+    private String recountStocktakeId;
+
+    /** Approved task from which this fresh counting task was created. */
+    @Column(name = "recount_source_stocktake_id", length = 64)
+    private String recountSourceStocktakeId;
 
     @OneToMany(mappedBy = "stocktake", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<FactoryStocktakeItem> items = new ArrayList<>();

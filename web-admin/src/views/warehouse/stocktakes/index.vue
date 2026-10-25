@@ -122,6 +122,7 @@ const statusMap: Record<string, { label: string; type: string }> = {
   APPROVED: { label: '已审批', type: 'success' },
   APPLIED: { label: '已应用', type: 'success' },
   REJECTED: { label: '已驳回', type: 'danger' },
+  RECOUNT_REQUIRED: { label: '需重新盘点', type: 'warning' },
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -175,6 +176,10 @@ function handlePageChange(page: number) {
 function handleFilterChange() {
   pagination.value.page = 1;
   loadData();
+}
+
+function openRecountDetail(id: unknown) {
+  if (id) openDetail({ id: String(id) } as TableRow);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -747,17 +752,19 @@ const detailData = ref<TableRow | null>(null);
 const detailLoading = ref(false);
 const diffPreview = ref<DiffPreviewLine[]>([]);
 const diffLoading = ref(false);
+const diffLoadError = ref('');
 
 async function openDetail(row: TableRow) {
   detailData.value = row;
   detailDialogVisible.value = true;
   diffPreview.value = [];
+  diffLoadError.value = '';
   detailLoading.value = true;
   try {
     const res = await get(`/${factoryId.value}/stocktakes/${row.id}`);
     if (res.success && res.data) detailData.value = res.data;
     const status = String(detailData.value?.status || row.status || '');
-    if (status === 'APPROVED' || status === 'APPLIED') {
+    if (status === 'APPROVED' || status === 'APPLIED' || status === 'RECOUNT_REQUIRED') {
       await loadDiffPreview(String(row.id));
     }
   } catch (e) {
@@ -780,14 +787,19 @@ function correctionStatusLabel(status: unknown): string {
 
 async function loadDiffPreview(stocktakeId: string) {
   diffLoading.value = true;
+  diffLoadError.value = '';
   try {
     // ⚠️ Bug fix (2026-07): 后端 DTO 字段是 `diffLines`（StocktakeDiffPreviewDTO.diffLines）,
     // 之前误读 `res.data.items`（不存在的字段）→ 差异预览表格一直渲染"暂无数据"。
     const res = await get<DiffPreviewResponse>(`/${factoryId.value}/stocktakes/${stocktakeId}/diff-preview`);
-    if (res.success && res.data) {
-      diffPreview.value = Array.isArray(res.data.diffLines) ? res.data.diffLines : [];
+    if (!res.success || !res.data || !Array.isArray(res.data.diffLines)) {
+      throw new Error(res.message || '差异预览加载失败');
     }
-  } catch { /* silent */ } finally {
+    diffPreview.value = res.data.diffLines;
+  } catch (e) {
+    diffPreview.value = [];
+    diffLoadError.value = String((e as Error).message || '差异预览加载失败');
+  } finally {
     diffLoading.value = false;
   }
 }
@@ -1180,6 +1192,63 @@ async function applyDiff(row: TableRow) {
   }
 }
 
+const recountLoading = ref(false);
+
+async function recountAfterDrift(row: TableRow) {
+  let detail: TableRow;
+  try {
+    const detailRes = await get(`/${factoryId.value}/stocktakes/${row.id}`);
+    if (!detailRes.success || !detailRes.data) {
+      throw new Error(detailRes.message || '盘点详情加载失败，无法确认版本');
+    }
+    detail = detailRes.data as TableRow;
+  } catch (e) {
+    ElMessage({
+      message: String((e as Error).message || '盘点详情加载失败，无法发起重盘'),
+      type: 'error', duration: 0, showClose: true,
+    });
+    return;
+  }
+
+  let reason: string;
+  try {
+    const prompt = await ElMessageBox.prompt(
+      '系统会先复核盘点快照与当前库存；只有确认发生漂移时才会保留原审批证据并新建盘点任务。',
+      '漂移后重新盘点',
+      {
+        confirmButtonText: '确认重盘',
+        cancelButtonText: '取消',
+        inputPlaceholder: '请填写本次库存漂移原因',
+        inputValidator: (value: string) => value.trim() ? true : '重盘原因不能为空',
+        inputErrorMessage: '重盘原因不能为空',
+        type: 'warning',
+      },
+    );
+    reason = prompt.value.trim();
+  } catch {
+    return;
+  }
+
+  recountLoading.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/stocktakes/${row.id}/recount-after-drift`, {
+      expectedVersion: detail.version,
+      reason,
+    });
+    if (res.success && res.data) {
+      ElMessage.success('已保留原审批证据并发起新的盘点任务');
+      await loadData();
+      await openDetail(res.data as TableRow);
+    } else {
+      ElMessage({ message: res.message || '重新盘点失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '重新盘点失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    recountLoading.value = false;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Init
 // ────────────────────────────────────────────────────────────────────────────
@@ -1401,6 +1470,19 @@ onMounted(async () => {
               :loading="applyLoading"
               @click="applyDiff(row)"
             >应用差异</el-button>
+            <el-button
+              v-if="canWrite && row.status === 'APPROVED'"
+              size="small"
+              type="warning"
+              :loading="recountLoading"
+              @click="recountAfterDrift(row)"
+            >漂移后重盘</el-button>
+            <el-button
+              v-if="row.status === 'RECOUNT_REQUIRED' && row.recountStocktakeId"
+              size="small"
+              type="warning"
+              @click="openRecountDetail(row.recountStocktakeId)"
+            >查看新盘点</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -1830,16 +1912,45 @@ onMounted(async () => {
           <el-descriptions-item v-if="detailData.rejectReason" label="驳回原因" :span="2">
             <el-text type="danger">{{ detailData.rejectReason }}</el-text>
           </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.recountReason" label="重盘原因" :span="2">
+            <el-text type="warning">{{ detailData.recountReason }}</el-text>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.recountStocktakeId" label="新盘点任务" :span="2">
+            <el-link type="warning" @click="openRecountDetail(detailData.recountStocktakeId)">
+              {{ detailData.recountStocktakeId }}
+            </el-link>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.recountSourceStocktakeId" label="来源盘点任务" :span="2">
+            {{ detailData.recountSourceStocktakeId }}
+          </el-descriptions-item>
           <el-descriptions-item v-if="detailData.notes" label="备注" :span="2">{{ detailData.notes }}</el-descriptions-item>
         </el-descriptions>
 
-        <!-- 差异预览 (APPROVED / APPLIED) -->
-        <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED'" style="margin-top: 20px">
+        <el-alert
+          v-if="detailData.status === 'RECOUNT_REQUIRED'"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="该盘点已归档为需重新盘点"
+          description="原盘点快照、实盘数量和审批证据仅供历史追溯；库存未由该旧单自动应用，请查看并处理关联的新盘点任务。"
+          style="margin-top: 20px"
+        />
+
+        <!-- 差异预览 (APPROVED / APPLIED / RECOUNT_REQUIRED，均为只读) -->
+        <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED' || detailData.status === 'RECOUNT_REQUIRED'" style="margin-top: 20px">
           <div style="font-weight: 600; margin-bottom: 8px; color: #1B65A8">
             盘点差异预览
             <el-text v-if="detailData.status === 'APPLIED'" type="success" style="font-size: 12px; margin-left: 8px">（盘点已完成）</el-text>
+            <el-text v-else-if="detailData.status === 'RECOUNT_REQUIRED'" type="warning" style="font-size: 12px; margin-left: 8px">（已归档，只读追溯；不可应用）</el-text>
             <el-text v-else type="warning" style="font-size: 12px; margin-left: 8px">（已审批，应用差异后调整库存；零差异应用时库存不调整）</el-text>
           </div>
+          <el-alert
+            v-if="diffLoadError"
+            type="error"
+            show-icon
+            :closable="false"
+            :title="diffLoadError"
+          />
           <el-table v-loading="diffLoading" :data="diffPreview" size="small" border>
             <el-table-column label="批次/物料" min-width="220">
               <template #default="{ row }">
@@ -1870,7 +1981,7 @@ onMounted(async () => {
             </el-table-column>
           </el-table>
           <el-empty
-            v-if="!diffLoading && diffPreview.length === 0"
+            v-if="!diffLoading && !diffLoadError && diffPreview.length === 0"
             description="无实际差异，无库存影响"
             :image-size="56"
           />

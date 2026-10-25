@@ -17,23 +17,36 @@
  *   '/inventory/by-warehouse' '/warehouse/inventory-total'
  *   '/warehouse/inventory' '/warehouse/semi-finished'
  */
-import { ref, watch } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import InventoryByWarehouse from '@/views/inventory/by-warehouse/index.vue';
 import WarehouseInventoryTotal from '@/views/warehouse/inventory-total/index.vue';
 import WarehouseInventoryBatch from '@/views/warehouse/inventory/index.vue';
 import WarehouseSemiFinished from '@/views/warehouse/semi-finished/list.vue';
 import { resolveInventoryQueryTab, type InventoryQueryTab } from '../inventoryQueryTab';
 
+// A lazy tab must also defer the child module and its chart dependencies.
+const FinishedGoodsInventory = defineAsyncComponent(() => import('@/views/sales/finished-goods/list.vue'));
 const route = useRoute();
 const router = useRouter();
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+// Preserve both guards on the existing sales/finished-goods route.
+const showFinishedGoods = computed(() =>
+  authStore.factoryType !== 'RESTAURANT' && permissionStore.canAccess('sales'));
+function resolveVisibleTab(): InventoryQueryTab {
+  const tab = resolveInventoryQueryTab(route.query);
+  return tab === 'finished-goods' && !showFinishedGoods.value ? 'by-warehouse' : tab;
+}
 
-const activeTab = ref<InventoryQueryTab>(resolveInventoryQueryTab(route.query));
+const activeTab = ref<InventoryQueryTab>(resolveVisibleTab());
 
 // 外部 query 变化 (e.g. 旧路径 redirect 带入 ?tab=) → 同步激活 tab。
 watch(
-  () => route.query.tab,
-  () => { activeTab.value = resolveInventoryQueryTab(route.query); },
+  () => [route.query.tab, showFinishedGoods.value],
+  () => { activeTab.value = resolveVisibleTab(); },
 );
 
 function syncQuery(name: string | number) {
@@ -56,6 +69,9 @@ function syncQuery(name: string | number) {
       </el-tab-pane>
       <el-tab-pane label="半成品库存" name="semi-finished" lazy>
         <WarehouseSemiFinished />
+      </el-tab-pane>
+      <el-tab-pane v-if="showFinishedGoods" label="成品库存" name="finished-goods" lazy>
+        <FinishedGoodsInventory />
       </el-tab-pane>
     </el-tabs>
   </div>

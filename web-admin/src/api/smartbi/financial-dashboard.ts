@@ -73,6 +73,8 @@ export interface DashboardHeadline {
 export interface DashboardResponse {
   success: boolean;
   headline?: DashboardHeadline | null;
+  /** 规则算出来的 好的 / 需要关注 / 建议; 说不出任何一条时为 null */
+  findings?: { good: string[]; attention: string[]; suggestions: string[] } | null;
   charts: ChartResult[];
   availableTypes: AvailableChartType[];
   /** 这份数据出不了的图: 缺哪一列 (column) / 要另一张表 (statement) */

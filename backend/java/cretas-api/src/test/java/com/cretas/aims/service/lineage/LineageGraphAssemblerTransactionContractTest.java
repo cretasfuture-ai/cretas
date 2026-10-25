@@ -35,9 +35,9 @@ class LineageGraphAssemblerTransactionContractTest {
     }
 
     @Test
-    @DisplayName("assemble / assembleImpact 都带 @Transactional(readOnly = true)")
+    @DisplayName("assemble / assembleImpact / assemblePublic 都带 @Transactional(readOnly = true)")
     void bothEntryPointsCarryReadOnlyTransaction() {
-        for (String name : List.of("assemble", "assembleImpact")) {
+        for (String name : List.of("assemble", "assembleImpact", "assemblePublic")) {
             Transactional tx = AnnotatedElementUtils.findMergedAnnotation(entry(name), Transactional.class);
             assertThat(tx).as("%s 缺 @Transactional —— SSE 线程上会 LazyInitializationException", name).isNotNull();
             assertThat(tx.readOnly()).as("%s 是纯读, 必须 readOnly", name).isTrue();
@@ -49,7 +49,8 @@ class LineageGraphAssemblerTransactionContractTest {
     @DisplayName("对照: 非入口方法不带事务注解")
     void helpersDoNotCarryTransaction() {
         long annotatedNonEntry = Arrays.stream(LineageGraphAssembler.class.getDeclaredMethods())
-                .filter(m -> !m.getName().equals("assemble") && !m.getName().equals("assembleImpact"))
+                .filter(m -> !m.getName().equals("assemble") && !m.getName().equals("assembleImpact")
+                        && !m.getName().equals("assemblePublic"))
                 .filter(m -> AnnotatedElementUtils.findMergedAnnotation(m, Transactional.class) != null)
                 .count();
         assertThat(annotatedNonEntry).isZero();

@@ -25,6 +25,33 @@ near-duplicate samples. This matches the materializer exactly (its
 ``_get_cached_teacher_output`` content-hash cache looks the row up by
 ``sha256(prompt)`` where ``prompt == input_text`` — so the hash MUST stay
 ``sha256(input_text)`` or that cache would silently miss).
+
+Training rule (owner, 2026-10-24; see ``training_consent`` for the full text):
+  * a sample whose input (question + the data the model was given) touches
+    process parameters / structure / problem handling or per-person pay, or
+    whose answer names a specific one, is NOT written — for every factory,
+    authorized or not (``qa_has_blocked_content``);
+  * otherwise a factory with ``training_consent`` 'private' / 'shared_anon' is
+    stored as-is, a withdrawn factory or an unreadable consent row is not
+    stored at all, and everyone else (no row, 'none', no factory)
+    is stored desensitized (``desensitize_for_training``: generic name
+    placeholders, phone / ID / bank numbers removed, every number -> <数值>),
+    tagged ``metadata.desensitized``;
+  * every real sample written is tagged ``metadata.training_rule`` (the corpus
+    scripts only read tagged rows); synthetic seed tenants are stored as-is.
+Skips are logged once per (reason, factory).
+Inside a request the factory is the authenticated one from
+``smartbi.tenant_ctx`` (set by auth_middleware from the JWT or the
+internal-secret header); a caller-supplied factory_id that disagrees with it
+is refused. Background jobs and scripts have no request tenant, so their
+factory_id (read from server-side records) is used. The env kill switch
+``SMARTBI_DISTILL_CAPTURE=0`` still turns everything off on top of this.
+
+Side effect worth knowing: the materializer / chart-insight / agent-insight
+read this table back as a content-hash cache keyed by sha256(input_text). A
+desensitized row is stored under the hash of its desensitized text, so it is
+never served back as a cached answer (that would show placeholders to a user);
+un-authorized factories miss the cache and call the LLM.
 """
 from __future__ import annotations
 
@@ -34,11 +61,67 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from smartbi.services.corpus_anonymize import desensitize_for_training
+from smartbi.services.process_secret_names import mentions_any, protected_product_names
+from smartbi.services.training_consent import (
+    DESENSITIZED_KEY,
+    RULE_KEY,
+    RULE_VERSION,
+    fetch_consent_scope,
+    is_synthetic_factory,
+    is_withdrawn,
+    keeps_raw,
+    qa_has_blocked_content,
+)
+
 logger = logging.getLogger(__name__)
 
 # Same env kill-switch the materializer used — set to "0" to disable all
 # distillation capture without a redeploy.
 _CAPTURE_ENV = "SMARTBI_DISTILL_CAPTURE"
+
+# (reason, factory) pairs already logged — "log once" per process so a busy
+# un-consented tenant does not flood the log.
+_SKIP_LOGGED: set = set()
+
+
+def _log_skip_once(reason: str, factory_id: Optional[str], detail: str = "") -> None:
+    key = (reason, factory_id)
+    if key in _SKIP_LOGGED:
+        return
+    _SKIP_LOGGED.add(key)
+    logger.info(
+        "[distill] capture skipped: %s (factory=%s)%s — further skips for this "
+        "factory/reason are not logged", reason, factory_id,
+        f" {detail}" if detail else "",
+    )
+
+
+def _request_factory_id() -> Optional[str]:
+    """Authenticated tenant of the current request, or None outside a request."""
+    try:
+        from smartbi import tenant_ctx
+    except Exception:  # pragma: no cover - module always present in-app
+        return None
+    fid = tenant_ctx.get_factory_id()
+    if not fid or fid == tenant_ctx.INTERNAL_SENTINEL:
+        return None
+    return fid
+
+
+def _resolve_capture_factory(factory_id: Optional[str]) -> tuple:
+    """``(ok, factory)``: ok=False when the caller names a factory other than
+    the authenticated one (refused); factory may be None (no owner)."""
+    authenticated = _request_factory_id()
+    if authenticated is not None:
+        if factory_id and factory_id != authenticated:
+            _log_skip_once(
+                "factory_id does not match the authenticated tenant",
+                factory_id, f"authenticated={authenticated}",
+            )
+            return False, None
+        return True, authenticated
+    return True, (factory_id or None)
 
 _INSERT_SQL = """
     INSERT INTO smart_bi_distillation_samples (
@@ -99,7 +182,9 @@ async def persist_distillation_sample(
         business_type: 业态分桶 (restaurant/factory/unknown). Defaults
             ``"unknown"``; ``None`` is also normalized to ``"unknown"`` since
             the column is NOT NULL.
-        factory_id: optional tenant id tag.
+        factory_id: tenant the sample belongs to. Inside a request the
+            authenticated tenant wins and a different value is refused; a
+            sample with no factory is stored desensitized.
         system_prompt: the teacher's system role, if readily available.
         teacher_model: e.g. ``"qwen3-max"``, if readily known.
         template_codes: applicable template codes (materialization); stored as a
@@ -115,13 +200,52 @@ async def persist_distillation_sample(
     # Guard the NOT NULL columns: never attempt an INSERT we know will fail.
     if not input_text or not teacher_output:
         return
+    ok, factory_id = _resolve_capture_factory(factory_id)
+    if not ok:
+        return
+    synthetic = is_synthetic_factory(factory_id)
+    if not synthetic and qa_has_blocked_content(input_text, teacher_output):
+        _log_skip_once("process / personnel content is never used for training",
+                       factory_id, f"source={source}")
+        return
     try:
-        input_hash = compute_input_hash(input_text)
-        codes_str = ",".join(template_codes) if template_codes else None
-        metadata_json = (
-            json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
-        )
         async with pool.acquire() as conn:
+            scope = "none"
+            if factory_id and not synthetic:
+                try:
+                    scope = await fetch_consent_scope(conn, factory_id)
+                except Exception as e:
+                    # unreadable consent could hide a withdrawal -> do not store
+                    _log_skip_once("training_consent lookup failed, sample not stored",
+                                   factory_id, f"({type(e).__name__}: {e})")
+                    return
+            if is_withdrawn(scope):
+                _log_skip_once("factory withdrew from training", factory_id)
+                return
+            if factory_id and not synthetic:
+                # privacy clause 6: a sample naming one of the factory's
+                # process-secret products is not used for training
+                try:
+                    names = await protected_product_names(factory_id)
+                except Exception as e:
+                    _log_skip_once("process-secret product lookup failed, sample not stored",
+                                   factory_id, f"({type(e).__name__}: {e})")
+                    return
+                if mentions_any(names, input_text, teacher_output):
+                    _log_skip_once("sample names a process-secret product", factory_id)
+                    return
+            if not synthetic:
+                tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
+                if not keeps_raw(scope):
+                    input_text, teacher_output = desensitize_for_training(
+                        input_text, teacher_output)
+                    tags[DESENSITIZED_KEY] = True
+                metadata = {**(metadata or {}), **tags}
+            input_hash = compute_input_hash(input_text)
+            codes_str = ",".join(template_codes) if template_codes else None
+            metadata_json = (
+                json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
+            )
             await conn.execute(
                 _INSERT_SQL,
                 source,

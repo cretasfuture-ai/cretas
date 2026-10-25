@@ -198,6 +198,23 @@ export function buildChartNav<T extends ChartNavEntry>(
   return { groups, missing, missingByKind };
 }
 
+/** 后端 findings: 规则算出来的 好的 / 需要关注 / 建议 (每条都带数字) */
+export interface DashboardFindings {
+  good: string[];
+  attention: string[];
+  suggestions: string[];
+}
+
+/** 「分析结论与建议」页的规则部分, 按 做得好的 / 需要关注 / 建议 分组; 空组不出现。 */
+export function findingSections(findings: DashboardFindings | null | undefined) {
+  if (!findings) return [];
+  return [
+    { key: 'good', title: '做得好的', items: findings.good ?? [] },
+    { key: 'attention', title: '需要关注', items: findings.attention ?? [] },
+    { key: 'suggestions', title: '建议', items: findings.suggestions ?? [] },
+  ].filter(s => s.items.length > 0);
+}
+
 /**
  * 记住页面上正显示的那一次查询 (筛选 + 期间)。月份芯片 / 期间是先改再请求的,
  * 请求失败时用它退回, 否则芯片显示「3月」而页面还是全年的数 (设计复评 2026-10-23)。

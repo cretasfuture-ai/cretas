@@ -18,6 +18,14 @@ public interface ProductPackagingSpecService {
     PackagingSelection resolveSelection(
             String factoryId, String productTypeId, String transactionUnit, String packagingSpecId);
 
+    /**
+     * Resolves a finished-goods opening entry. Opening quantities may be entered
+     * in either side of an explicitly selected package specification; normal
+     * sales transactions continue to use {@link #resolveSelection}.
+     */
+    PackagingSelection resolveOpeningSelection(
+            String factoryId, String productTypeId, String transactionUnit, String packagingSpecId);
+
     record PackagingSelection(ProductPackagingSpec spec, boolean required) {
         public static PackagingSelection none() {
             return new PackagingSelection(null, false);

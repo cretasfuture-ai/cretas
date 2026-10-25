@@ -5,7 +5,6 @@ import com.cretas.aims.repository.FactoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -33,7 +32,6 @@ import java.util.List;
  * @since 2025-11-04
  */
 @Component
-@EnableScheduling
 public class AIReportScheduler {
     private static final Logger log = LoggerFactory.getLogger(AIReportScheduler.class);
 

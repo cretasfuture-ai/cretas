@@ -14,6 +14,7 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.uom.MaterialUomConverter;
+import com.cretas.aims.util.InventoryExpiry;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -218,6 +220,7 @@ public class BomExpansionService {
         // (生产先用车间仓余料, 不够回 LOG 拿). 在循环外解析 warehouse_id 避免重复 lookup.
         String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
         String logisticsId = warehouseResolver.resolveLogisticsId(factoryId);
+        LocalDate expiryToday = InventoryExpiry.today();
 
         for (MaterialRequirement req : requirements) {
             // WH-WKS 优先, 不足再合并 WH-LOG
@@ -227,6 +230,10 @@ public class BomExpansionService {
                     .findAvailableBatchesFEFOByWarehouse(factoryId, req.getMaterialTypeId(), logisticsId);
             List<MaterialBatch> batches = new ArrayList<>(workshopBatches);
             batches.addAll(logisticsBatches);
+            // 过期批 (到期日 < 东八区今天) 不算可用: 状态还是 AVAILABLE 的过期批在每日 02:05
+            // 置 EXPIRED 之前会被查询返回, 且按 FEFO 排在最前 —— 预留 / 插单核对会先吃它。
+            // 口径与投料拦截同一个 (InventoryExpiry)。
+            batches.removeIf(b -> InventoryExpiry.isExpired(b.getExpireDate(), expiryToday));
 
             // 汇总可用数量 (库存单位, e.g. 箱)
             BigDecimal totalAvailable = batches.stream()

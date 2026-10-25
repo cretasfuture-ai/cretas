@@ -697,4 +697,11 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     List<Object[]> findPlanStatusesByFactoryIdAndIdIn(
             @Param("factoryId") String factoryId,
             @Param("planIds") Collection<String> planIds);
+
+    /**
+     * 本厂有没有一份未取消的计划从这个时刻开始 —— 插单时段没有存计划 id,
+     * 确认插单时计划的 startTime 取自时段 (与强制插单被拒时找时段的判据同一个)。
+     */
+    boolean existsByFactoryIdAndStartTimeAndStatusNot(
+            String factoryId, LocalDateTime startTime, ProductionPlanStatus status);
 }

@@ -4,7 +4,8 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
-import org.springframework.scheduling.annotation.EnableScheduling;
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+import com.cretas.aims.dev.lineage.LineageBackfillRunner;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -15,11 +16,19 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * @version 1.0.0
  */
 @SpringBootApplication
-@EnableScheduling
 @EnableJpaAuditing
 public class CretasBackendApplication {
 
+    // ⚠️ @EnableScheduling 不在这里 —— 在 config.SchedulingConfig, 带 @Profile("!lineage-backfill")。
+    //    挂回主类上 = 一次性回填进程也会把全部定时任务再跑一份 (见 LineageBackfillRunner javadoc)。
+
     public static void main(String[] args) {
+        if (LineageBackfillMode.requested(args)) {
+            // 一次性回填进程: 跑完即退, 退出码就是结论 (0 / 1 / 2 / 3, 见 LineageBackfillRunner)。
+            // ⛔ 不能让它落到下面的「Server running」那条路: 那条路不退出。
+            System.exit(LineageBackfillRunner.runAndExit(CretasBackendApplication.class, args));
+            return;
+        }
         SpringApplication.run(CretasBackendApplication.class, args);
         System.out.println("\n========================================");
         System.out.println("  Cretas Backend System Started!");

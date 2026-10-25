@@ -58,8 +58,19 @@ require_maven_major_at_least() {
     [ "$major" -ge "$minimum" ] || fail "Maven major version $major is below required $minimum"
 }
 
+# 2026-10-25: repo is public and CI runs on GitHub-hosted ubuntu-latest (x64, 4 vCPU / 16 GB).
+# The Aurora identity checks (name / ARM64 / colima-ci daemon) only apply to self-hosted runs;
+# resources, Docker, JDK and Maven are still checked everywhere.
+github_hosted() { [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; }
+
 require_route() {
     [ "$(uname -s)" = Linux ] || fail "runner OS must be Linux"
+    if github_hosted; then
+        [ "${RUNNER_OS:-}" = Linux ] || fail "RUNNER_OS must be Linux"
+        printf '[fresh-db-preflight] route: github-hosted name=%s arch=%s
+' "${RUNNER_NAME:-?}" "${RUNNER_ARCH:-?}"
+        return 0
+    fi
     [ "$(uname -m)" = aarch64 ] || fail "runner machine must be aarch64/ARM64"
     [ "${RUNNER_OS:-}" = Linux ] || fail "RUNNER_OS must be Linux"
     [ "${RUNNER_ARCH:-}" = ARM64 ] || fail "RUNNER_ARCH must be ARM64"
@@ -97,15 +108,17 @@ require_docker() {
     local docker_version compose_version context daemon_info daemon_name daemon_os daemon_arch daemon_mem
     require_command docker
     docker_version="$(docker --version 2>&1)" || fail "Docker CLI is unavailable"
-    require_major_at_least Docker "$docker_version" 29
+    if github_hosted; then require_major_at_least Docker "$docker_version" 28; else require_major_at_least Docker "$docker_version" 29; fi
     context="$(docker context show 2>&1)" || fail "Docker context could not be read"
     [ "$context" = default ] || fail "Docker context must be default, got $context"
     daemon_info="$(docker info --format '{{.Name}}|{{.OSType}}|{{.Architecture}}|{{.MemTotal}}' 2>&1)" \
         || fail "Docker daemon is unavailable: $daemon_info"
     IFS='|' read -r daemon_name daemon_os daemon_arch daemon_mem <<<"$daemon_info"
-    [ "$daemon_name" = colima-ci ] || fail "Docker daemon must be colima-ci, got ${daemon_name:-<empty>}"
     [ "$daemon_os" = linux ] || fail "Docker daemon OS must be linux, got ${daemon_os:-<empty>}"
-    [ "$daemon_arch" = aarch64 ] || fail "Docker daemon architecture must be aarch64, got ${daemon_arch:-<empty>}"
+    if ! github_hosted; then
+        [ "$daemon_name" = colima-ci ] || fail "Docker daemon must be colima-ci, got ${daemon_name:-<empty>}"
+        [ "$daemon_arch" = aarch64 ] || fail "Docker daemon architecture must be aarch64, got ${daemon_arch:-<empty>}"
+    fi
     [[ "$daemon_mem" =~ ^[0-9]+$ ]] || fail "Docker daemon memory is unreadable: ${daemon_mem:-<empty>}"
     [ "$daemon_mem" -ge $((7 * 1024 * 1024 * 1024)) ] \
         || fail "Docker daemon memory ${daemon_mem} is below 7 GiB"

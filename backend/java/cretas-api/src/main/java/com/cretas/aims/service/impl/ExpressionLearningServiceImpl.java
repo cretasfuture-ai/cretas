@@ -11,6 +11,8 @@ import com.cretas.aims.service.ExpressionLearningService;
 import com.cretas.aims.service.IntentEmbeddingCacheService;
 import com.cretas.aims.service.RequestScopedEmbeddingCache;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
+import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleRules;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +43,8 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     private final EmbeddingClient embeddingClient;
     private final RequestScopedEmbeddingCache requestScopedCache;
     private final IntentEmbeddingCacheService embeddingCacheService;
+    private final TrainingConsentService trainingConsentService;
+    private final com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
 
     // 自引用代理 - 用于解决 Spring @Transactional 自调用不走代理的问题
     @Autowired
@@ -510,10 +514,22 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         if (userInput == null || userInput.trim().isEmpty()) {
             return null;
         }
+        // 训练规则 (2026-10-24): 撤回 / 查不到的工厂不存; 配方、工艺参数、客户名、人名不存;
+        // 未授权工厂脱敏后存
+        TrainingConsentService.Status status = trainingConsentService.status(factoryId);
+        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本
+        if (!status.storable() || processSecretSampleFilter.mentionsProtectedProduct(factoryId, userInput)) {
+            return null;
+        }
+        String textToStore = TrainingSampleRules.textToStore(
+                userInput.trim(), status == TrainingConsentService.Status.AUTHORIZED);
+        if (textToStore == null) {
+            return null;
+        }
 
         TrainingSample sample = TrainingSample.create(
                 factoryId,
-                userInput.trim(),
+                textToStore,
                 intentCode,
                 method,
                 confidence,

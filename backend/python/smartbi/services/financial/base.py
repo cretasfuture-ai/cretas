@@ -124,6 +124,7 @@ ROLE_HINTS = {
     'category': '「品类 / 产品」列',
     'item': '「项目」列（科目名称，如 营业收入、营业成本）',
     'period': '「月份」列（如 1月、2026-03）',
+    'business_unit': '「事业部 / 部门」列（如 华东事业部、分公司、大区）',
 }
 
 
@@ -175,6 +176,8 @@ class AbstractFinancialChartBuilder(ABC):
             available.add('item')
         if column_mapping.period_cols:
             available.add('period')
+        if getattr(column_mapping, 'business_unit_col', None):
+            available.add('business_unit')
         return available
 
     @abstractmethod

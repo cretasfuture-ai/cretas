@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#fdfcfa">
 <title>数据安全 · 白垩纪 Cretas</title>
-<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看需授权并留痕，未经授权不用核心数据训练模型。每一条都写明是怎么做到的。">
+<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看会留下记录，工艺和配方任何情况下都不用于训练模型。每一条都写明是怎么做到的。">
 <link rel="canonical" href="https://cretaceousfuture.com/data-security/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="数据安全 · 白垩纪 Cretas">
@@ -152,8 +152,8 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <a href="#q-platform">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
     <li class="v6-reveal">
-      <b>不拿去训练</b>
-      <p>没有你的书面授权，核心数据不进任何模型。</p>
+      <b>工艺配方不进训练</b>
+      <p>工艺参数、配方和工序做法，任何情况下都不用于训练。</p>
       <a href="#q-training">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
   </ol>
@@ -265,12 +265,15 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="qrow v6-reveal" id="q-training">
     <h3>我的数据会被拿去训练模型吗？</h3>
     <div>
-      <p class="ans" data-claim="C3-core-data" data-claim-status="live">核心数据不会。没有你的书面授权，我们不用你的配方、工艺参数、成本和经营数字训练模型。</p>
+      <p class="ans" data-claim="C3-process-never" data-claim-status="live">工艺内容不会，任何情况下都不会。</p>
       <span class="how-label">怎么做到</span>
       <ul>
-        <li data-claim="C3-consent-gate" data-claim-status="live">训练授权默认关闭。授权分两档由你选：只用于你自己工厂的模型；或者匿名化之后才能共享。没有授权，系统拒绝把你工厂的数据导出成训练数据。</li>
-        <li data-claim="C3-no-capture" data-claim-status="commitment">不授权时，你工厂的 AI 问答连训练素材都不会记录。</li>
-        <li data-claim="C3-general-knowledge" data-claim-status="live">我们改进模型，靠的是通用的业务流程和公开的行业知识，不是某一家工厂的具体数字和配方。</li>
+        <li data-claim="C3-process-never" data-claim-status="live">工艺参数（温度、时间、配比、用量等）、配方和原料用量、工序顺序和合并方式、问题的处理办法、薪酬考勤、客户名称和人员姓名：含有这些内容的记录整条不进训练，授权了也一样。</li>
+        <li data-claim="C3-default-train" data-claim-status="commitment">默认用于训练的包括 AI 问答的提问方式和分析思路、说法与功能的对应关系。训练副本里经营数字换成占位符，名称换成通用标记，电话、证件号、银行卡号删除；你系统里的原始数据不受影响。</li>
+        <li data-claim="C3-scheduling-own" data-claim-status="commitment">排程数据默认不用于训练；只有你书面授权，才会用来训练只给你用的排程模型。</li>
+        <li data-claim="C3-excluded" data-claim-status="live">价格与交易对象的对应关系、客户名单、合同、录音、账户凭证和访问日志，都不用于训练。</li>
+        <li data-claim="C3-no-cross-process" data-claim-status="live">平台不分析、不比对任何工厂的工艺流程，你的工艺只用来运行你自己的系统。</li>
+        <li data-claim="C3-secret-product" data-claim-status="commitment">你可以把任一产品设为工艺保密：它的工序、物料、成本不用于任何训练，不纳入跨客户的统计和对比，平台人员也看不到它的配方和工艺；你自己系统里的报表不受影响。</li>
       </ul>
     </div>
   </div>

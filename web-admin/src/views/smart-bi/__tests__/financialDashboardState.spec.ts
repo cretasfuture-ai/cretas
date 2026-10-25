@@ -6,6 +6,7 @@ import {
   periodRequestLabel,
   dashboardRenderKey,
   createQueryHistory,
+  findingSections,
   chartGapReason,
   chartNotes,
   createDataVersion,
@@ -238,8 +239,18 @@ describe('看板组件接上了失败回滚 (源码断言)', () => {
   const start = src.indexOf('async function generate(');
   const body = src.slice(start, src.indexOf('\n}\n', start));
 
-  it('成功时记下这次的筛选和期间', () => {
-    expect(body).toContain('queryHistory.commit({ slicers: slicerFilters.value, period: periodSelection.value })');
+  it('成功时记下这次的数据源、筛选和期间', () => {
+    // 线上验收 (2026-10-23): 数据源编号输错时, 页面还是 5250 的数, 标签却变成「数据源 #99999999」
+    expect(body).toContain('queryHistory.commit(currentQuery())');
+    const fn = src.slice(src.indexOf('function currentQuery('), src.indexOf('function restoreLastApplied('));
+    for (const field of ['uploadId', 'uploadIdInput', 'isInDemoMode', 'slicerFilters', 'periodSelection']) {
+      expect(fn).toContain(`${field}.value`);
+    }
+    const restoreStart = src.indexOf('function restoreLastApplied(');
+    const restore = src.slice(restoreStart, src.indexOf('function ', restoreStart + 10));
+    for (const field of ['uploadId', 'uploadIdInput', 'isInDemoMode', 'slicerFilters', 'periodSelection']) {
+      expect(restore).toContain(`${field}.value =`);
+    }
   });
 
   it('接口返回失败和请求抛错两条路都退回', () => {
@@ -247,5 +258,34 @@ describe('看板组件接上了失败回滚 (源码断言)', () => {
     const catchBranch = body.slice(body.indexOf('} catch (err) {'), body.indexOf('} finally {'));
     expect(elseBranch).toContain('restoreLastApplied()');
     expect(catchBranch).toContain('restoreLastApplied()');
+  });
+});
+
+describe('findingSections (分析结论与建议的规则部分)', () => {
+  it('按 做得好的 / 需要关注 / 建议 分组, 空组不出现', () => {
+    const s = findingSections({ good: ['Q4 达成 110.0%'], attention: [], suggestions: ['Q1 缺口 2,400.00：先复盘'] });
+    expect(s.map(x => [x.title, x.items])).toEqual([
+      ['做得好的', ['Q4 达成 110.0%']],
+      ['建议', ['Q1 缺口 2,400.00：先复盘']],
+    ]);
+  });
+
+  it('后端说不出结论 (比率表) 时为空', () => {
+    expect(findingSections(null)).toEqual([]);
+    expect(findingSections(undefined)).toEqual([]);
+  });
+});
+
+describe('看板列出了业务单元分析 (源码断言)', () => {
+  it('chartTypes 里有 business_unit_analysis', () => {
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    expect(src).toMatch(/key: 'business_unit_analysis', label: '业务单元分析'/);
+  });
+
+  it('结论页先显示规则结论, 再显示 AI 补充', () => {
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    const tab = src.slice(src.indexOf("<template v-if=\"activeTab === 'conclusions'\">"));
+    expect(tab.indexOf('data-testid="findings"')).toBeGreaterThan(0);
+    expect(tab.indexOf('data-testid="findings"')).toBeLessThan(tab.indexOf('renderAnalysis(conclusionsText)'));
   });
 });

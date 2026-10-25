@@ -44,7 +44,8 @@ public interface TraceabilityService {
      * 「没有波及」和「没查成」在召回场景里是天差地别的两件事。
      *
      * @param batchType MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD
-     * @param maxDepth  最大跳数（&lt;=0 取默认 5，上限 10）
+     * @param maxDepth  最大跳数（&lt;=0 取缺省 = 上限，即整条链；上限见
+     *                  {@link com.cretas.aims.service.lineage.LineageGraphAssembler#MAX_DEPTH_CAP}）
      */
     TraceabilityDTO.ImpactResponse getImpact(String factoryId, String batchType, String batchId, int maxDepth);
 }

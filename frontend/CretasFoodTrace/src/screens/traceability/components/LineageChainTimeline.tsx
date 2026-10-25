@@ -48,6 +48,8 @@ import { DnaStatusChip, DNA_STATUS_LABEL, dnaStatusLabel } from './dnaStatus';
 export const LINEAGE_TIMELINE_TEST_ID = 'lineage-chain-timeline';
 export const LINEAGE_EMPTY_TEST_ID = 'lineage-chain-empty';
 export const LINEAGE_UNAVAILABLE_TEST_ID = 'lineage-chain-unavailable';
+/** 公开溯源那一组原料（不带 depth）的 testID。 */
+export const RAW_MATERIAL_GROUP_TEST_ID = 'lineage-raw-materials';
 /** 段与段之间那根连续竖线的 testID（每段一根，最后一段没有 ⇒ 数量 = 段数 − 1）。 */
 export const CHAIN_CONNECTOR_TEST_ID = 'chain-group-connector';
 
@@ -449,12 +451,16 @@ const LineageChainTimeline: React.FC<LineageChainTimelineProps> = ({
         <Divider style={dividerStyle} />
         {groups.map((group, index) => (
           <ChainGroup
-            key={`depth-${group.depth}`}
-            testID={`lineage-depth-${group.depth}`}
+            key={group.depth == null ? RAW_MATERIAL_GROUP_TEST_ID : `depth-${group.depth}`}
+            testID={group.depth == null ? RAW_MATERIAL_GROUP_TEST_ID : `lineage-depth-${group.depth}`}
             label={
-              group.depth === 1
-                ? t('traceability.lineage.directSource')
-                : t('traceability.lineage.upstreamLevel', { depth: group.depth })
+              // 公开溯源（Steve 2026-10-25）只下发一组原料、不带 depth：标题就叫「原料来源」，
+              // ⛔ 不显示「往上第 N 层」—— 那会把工序数露出来，也会出现「第 null 层」。
+              group.depth == null
+                ? t('traceability.lineage.rawSource')
+                : group.depth === 1
+                  ? t('traceability.lineage.directSource')
+                  : t('traceability.lineage.upstreamLevel', { depth: group.depth })
             }
             last={index === groups.length - 1}
           >

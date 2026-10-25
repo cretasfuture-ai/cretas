@@ -60,9 +60,25 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class LineageGraphAssembler {
 
-    /** 与 {@code LineageQueryTool} 同一个上限，别让一次溯源把整张图拉回来。 */
-    public static final int MAX_DEPTH_CAP = 10;
-    public static final int DEFAULT_MAX_DEPTH = 5;
+    /**
+     * 血缘跳数上限 —— <b>全仓唯一来源</b>：召回影响面 / 完整溯源 / 公开溯源 / AI {@code lineage_query} /
+     * 指标中心批次溯源都从这里取，⛔ 不要在别处再写一个数字。
+     *
+     * <p>为什么是 50 而不是原来的 10：每过一道工序链上多 <b>2 跳</b>
+     * （生产批 → 在制库存批 → 下一道生产批）。prod 样例 LIUSHANMEN 生产批 10898（10 道工序）
+     * 闭包补齐后首道原料在 depth 19；原来的默认 5 / 上限 10 只看得到最后 2~5 道工序 ——
+     * 召回会漏掉更远的成品，溯源页看不到首道原料。50 跳 ≈ 24 道工序，留足余量。
+     *
+     * <p>成本：{@code findFullGraph} 走 {@code (factory_id, ancestor_id, ancestor_type)} /
+     * {@code (factory_id, descendant_id, descendant_type)} 两个索引（V20260821_02），
+     * depth 不在索引里、只是取回后的过滤条件 —— 上限只影响返回行数，不改变访问路径。
+     */
+    public static final int MAX_DEPTH_CAP = 50;
+    /**
+     * 缺省跳数 = 上限。召回「漏一个成品」是食品安全事故，溯源「看不到首道原料」等于没溯源，
+     * 所以没有「先给个浅的」这一档；调用方真想看浅的就显式传。
+     */
+    public static final int DEFAULT_MAX_DEPTH = MAX_DEPTH_CAP;
 
     /** 公开接口上耳标号保留的末位数。 */
     static final int TAG_SUFFIX_VISIBLE = 4;
@@ -84,7 +100,8 @@ public class LineageGraphAssembler {
      * 组装一个批次的血缘视图。
      *
      * @param includeDescendants 是否给下游（公开接口不给）
-     * @param desensitize        是否抹掉供应商等内部信息（公开接口给 true）
+     * @param desensitize        公开视图开关（公开接口给 true）：抹掉供应商等内部信息，并且
+     *                           上游<b>只给原料批、不给中间工序</b>（见 {@link #assemblePublic}）
      * @return 永远非 null；没有任何血缘记录时 {@code ancestors} 是空列表、{@code nodeCount} 为 0
      */
     // 🔴 自带只读事务: 结点解析会碰 MaterialBatch.materialType 这类懒加载代理。
@@ -97,6 +114,44 @@ public class LineageGraphAssembler {
     public TraceabilityDTO.LineageSection assemble(String factoryId, String rootType, String rootId,
                                                    int maxDepth, boolean includeDescendants,
                                                    boolean desensitize) {
+        return assembleView(factoryId, rootType, rootId, maxDepth, includeDescendants, desensitize).section();
+    }
+
+    /**
+     * 公开溯源（消费者扫码）的血缘视图 —— <b>只有原料来源，没有中间工序</b>。
+     *
+     * <p>🔴 Steve 2026-10-25 裁定：公开溯源只显示原料来源，不显示中间工序。往上照样按上限查完整闭包
+     * （首道原料在 10 道工序的链上是 depth 19），但对外只给链上的<b>原料批</b>
+     * （判据见 {@link #isRawMaterialForPublic}）；中间生产批、在制库存批的名称 / 批号 / 数量 /
+     * depth 一律不出。成品本身由公开响应的顶层字段（品名 / 批号）表达。
+     *
+     * @return 永远非 null。{@code rawMaterials} 是同一批原料的实体，只给服务层拼「原材料来源」卡用，
+     *         ⛔ 不直接序列化（它带供应商 id 等内部字段）。
+     */
+    @Transactional(readOnly = true)
+    public PublicLineage assemblePublic(String factoryId, String rootType, String rootId) {
+        return assembleView(factoryId, rootType, rootId, MAX_DEPTH_CAP, false, true);
+    }
+
+    /** 公开视图 + 它背后的原料实体（同一次查询里得到的同一批，⛔ 不另查一份）。 */
+    public record PublicLineage(TraceabilityDTO.LineageSection section, List<MaterialBatch> rawMaterials) {}
+
+    /**
+     * 公开侧算不算「原料批」—— 真正外购 / 客供进来的原材料。
+     *
+     * <p>⛔ 不是原料：{@code source_doc_type='PRODUCTION_BATCH'}（逐道录入时某道工序产出的在制库存批，
+     * 也是副产批次走的那条路）、{@code byproduct_source_report_id} 非空（副产）。
+     * 判据只看数据字段，⛔ 不靠批号前缀（WIP-）猜。链上另有「生产批 → 它」的边时，
+     * {@link #assembleView} 还会按边再排除一次（老数据没填 source_doc_type 也挡得住）。
+     */
+    public static boolean isRawMaterialForPublic(MaterialBatch mb) {
+        return mb != null
+                && !LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(mb.getSourceDocType())
+                && mb.getByproductSourceReportId() == null;
+    }
+
+    private PublicLineage assembleView(String factoryId, String rootType, String rootId,
+                                       int maxDepth, boolean includeDescendants, boolean desensitize) {
         int depthCap = clampDepth(maxDepth);
         List<BatchLineageClosure> graph =
                 closureRepository.findFullGraph(factoryId, rootId, rootType, depthCap);
@@ -115,6 +170,10 @@ public class LineageGraphAssembler {
         }
 
         NodeResolver resolver = resolveNodes(factoryId, ancestorRows, descendantRows, desensitize);
+        if (desensitize) {
+            // 脱敏视图 = 公开视图: 只给原料, 不给中间工序 (Steve 2026-10-25)。
+            return publicRawMaterialView(factoryId, rootType, ancestorRows, resolver);
+        }
         EdgeIndex edges = loadEdges(factoryId, rootType, rootId, ancestorRows, descendantRows);
 
         List<TraceabilityDTO.LineageDepthGroup> ancestors = groupByDepth(
@@ -130,7 +189,7 @@ public class LineageGraphAssembler {
         // ⚠️ 按**真实个体 id** 去重, 不是按节点上那个（公开侧已被遮过的）耳标号 ——
         //    末 4 位相同的两头牛会被数成一头, 而「来自几头牛」少报一头就是假话。
         int individualCount = countDistinctIndividuals(ancestorRows, resolver);
-        return TraceabilityDTO.LineageSection.builder()
+        return new PublicLineage(TraceabilityDTO.LineageSection.builder()
                 .rootType(rootType)
                 .rootId(rootId)
                 .ancestors(ancestors)
@@ -138,7 +197,79 @@ public class LineageGraphAssembler {
                 .maxDepth(depthCap)
                 .nodeCount(nodeCount)
                 .sourceIndividualCount(individualCount)
+                .build(), List.of());
+    }
+
+    /**
+     * 公开视图：上游里只留原料批，压成<b>一组、不带 depth</b>。
+     *
+     * <p>⛔ 什么都不许让人反推出工序数或先后：
+     * <ul>
+     *   <li>不按 depth 分组（组数 / depth 值 = 工序数）、{@code maxDepth} 置 null；</li>
+     *   <li>{@code nodeCount} 只数原料；</li>
+     *   <li>节点上不贴边上的数量 / 时间（只有直接投进最后一道的原料才有那条边 ——
+     *       「谁有数量」本身就泄漏了先后，数量也是配比）；</li>
+     *   <li>按名称 + 批号排序，⛔ 不按链上的远近；</li>
+     *   <li>{@code rootId}（生产批的自增主键）与 nodeId 同一条纪律，置 null。</li>
+     * </ul>
+     * 实体查不到的原料节点（软删）判不了是不是在制批 ⇒ 不给（公开侧宁缺）。
+     */
+    private PublicLineage publicRawMaterialView(String factoryId, String rootType,
+                                                List<BatchLineageClosure> ancestorRows, NodeResolver resolver) {
+        Set<String> materialIds = ancestorRows.stream()
+                .filter(r -> LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(r.getAncestorType()))
+                .map(BatchLineageClosure::getAncestorId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> producedByProduction = producedByProduction(factoryId, materialIds);
+
+        List<MaterialBatch> raws = materialIds.stream()
+                .map(id -> resolver.materials().get(id))
+                .filter(LineageGraphAssembler::isRawMaterialForPublic)
+                .filter(mb -> !producedByProduction.contains(mb.getId()))
+                .sorted(Comparator
+                        .comparing((MaterialBatch mb) -> mb.getMaterialType() == null ? null
+                                : mb.getMaterialType().getName(), Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(MaterialBatch::getBatchNumber, Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+
+        List<TraceabilityDTO.LineageNode> nodes = raws.stream()
+                .map(mb -> resolver.toNode(LineageEdgeRecorder.NODE_MATERIAL_BATCH, mb.getId(), null))
+                .toList();
+        List<TraceabilityDTO.LineageDepthGroup> ancestors = nodes.isEmpty()
+                ? List.of()
+                : List.of(TraceabilityDTO.LineageDepthGroup.builder().depth(null).nodes(nodes).build());
+
+        Set<String> individuals = new LinkedHashSet<>();
+        for (MaterialBatch mb : raws) {
+            String individualId = mb.getSourceIndividualId();
+            if (individualId != null && resolver.individuals().containsKey(individualId)) {
+                individuals.add(individualId);
+            }
+        }
+        TraceabilityDTO.LineageSection section = TraceabilityDTO.LineageSection.builder()
+                .rootType(rootType)
+                .rootId(null)
+                .ancestors(ancestors)
+                .descendants(null)
+                .maxDepth(null)
+                .nodeCount(nodes.size())
+                .sourceIndividualCount(individuals.size())
                 .build();
+        return new PublicLineage(section, raws);
+    }
+
+    /** 这些物料批里，链上有「生产批 → 它」边的那些（= 某道工序产出的，不是原料）。 */
+    private Set<String> producedByProduction(String factoryId, Set<String> materialIds) {
+        if (materialIds.isEmpty()) {
+            return Set.of();
+        }
+        List<BatchLineageEdge> incoming = edgeRepository.findByFactoryIdAndTargetIdIn(factoryId, materialIds);
+        return (incoming == null ? List.<BatchLineageEdge>of() : incoming).stream()
+                .filter(e -> LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(e.getTargetType()))
+                .filter(e -> LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(e.getSourceType()))
+                .map(BatchLineageEdge::getTargetId)
+                .collect(Collectors.toSet());
     }
 
     /** 上游原料批次挂到的、去重后的源头个体数。没有就是 0（⛔ 不是 null）。 */
@@ -262,6 +393,7 @@ public class LineageGraphAssembler {
                 + trimmed.substring(trimmed.length() - TAG_SUFFIX_VISIBLE);
     }
 
+    /** 非正数取缺省（= 上限），超过上限夹到上限。 */
     public static int clampDepth(int requested) {
         if (requested <= 0) {
             return DEFAULT_MAX_DEPTH;

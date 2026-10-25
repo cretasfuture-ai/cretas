@@ -141,6 +141,64 @@ public class YieldReportServiceImpl implements YieldReportService {
     private com.cretas.aims.service.production.WorkshopReportReservationService workshopReservationService;
 
     /**
+     * RAW_TO_PRODUCTION 血缘边接线点 (App 报工领料)。字段注入 (required=false) 不改构造器 ——
+     * 与 ClerkProcessEntryServiceImpl 同款, 见 LineageEdgeWiringContractTest。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
+    /**
+     * App 报工 {@code material_batch_refs} → RAW_TO_PRODUCTION 边。本类建带领料引用报工的
+     * <b>两处</b> (submitReport / recordMaterialInput) 都调这里。
+     *
+     * <p>🔴 2026-10-24 prod 实测: 近 60 天 14 个投入元素只有 1 个有边 —— 这条路从来没写过。
+     *
+     * <p>时机 = 提交 (与「提交即进账/占用」同一时机, 见 WorkshopReportReservationService)。
+     * 「每个批次用了多少」⛔ 不在这里另算: 取 {@code reservationOf} (占用与三条释放共用的唯一口径,
+     * 同报工同批次多条引用已求和, 0/负数/非数字不计)。单位: 该批次所有引用单位一致才写, 否则 null (不知道)。
+     * 幂等键 report:&lt;id&gt;:material:&lt;批次&gt;, 与回填同一个键。
+     *
+     * <p>⚠️ 已知限制: 边表 append-only, 报工之后被驳回/冲销时这条边不会撤回 (meta 带 reportId 可回查状态)。
+     */
+    private void recordReportMaterialLineage(String factoryId, ProductionReport saved, Long workerId, String origin) {
+        if (lineageEdgeRecorder == null || saved == null || saved.getBatchId() == null) {
+            return;
+        }
+        Map<String, BigDecimal> byBatch =
+                com.cretas.aims.service.production.WorkshopReportReservationService.reservationOf(saved);
+        for (Map.Entry<String, BigDecimal> e : byBatch.entrySet()) {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("origin", origin);
+            meta.put("reportId", saved.getId());
+            if (saved.getWorkProcessTaskId() != null) {
+                meta.put("workProcessTaskId", saved.getWorkProcessTaskId());
+            }
+            lineageEdgeRecorder.recordRawToProduction(factoryId, e.getKey(), saved.getBatchId(),
+                    e.getValue(), uniformRefUnit(saved, e.getKey()), workerId,
+                    com.cretas.aims.service.lineage.LineageEdgeRecorder.reportMaterialRefKey(saved.getId(), e.getKey()),
+                    meta);
+        }
+    }
+
+    /** 某批次在本报工所有引用上的单位；不一致或缺失 ⇒ null (未知), ⛔ 不挑一个。 */
+    private static String uniformRefUnit(ProductionReport report, String materialBatchId) {
+        String unit = null;
+        for (Map<String, Object> ref : report.getMaterialBatchRefs()) {
+            if (ref == null || ref.get("materialBatchId") == null
+                    || !materialBatchId.equals(ref.get("materialBatchId").toString().trim())) {
+                continue;
+            }
+            Object u = ref.get("unit");
+            String s = u == null ? null : u.toString().trim();
+            if (s == null || s.isEmpty() || (unit != null && !unit.equals(s))) {
+                return null;
+            }
+            unit = s;
+        }
+        return unit;
+    }
+
+    /**
      * A-F1/F2: 报工/领料前校验批次已开工。
      *
      * <p>六扇门需求 (requirements-catalog 行288/289): "开工前先看匹配工序和负责人再开工; 开工后批次工序
@@ -476,6 +534,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         //    释放由同一个 service 的三条路负责 (驳回 / 冲销 / 结单扣减), ⛔ 不许在这里各写各的。
         if (saved.getMaterialBatchRefs() != null && !saved.getMaterialBatchRefs().isEmpty()) {
             workshopReservationService.reserveForReport(factoryId, saved);
+            recordReportMaterialLineage(factoryId, saved, workerId, "APP_YIELD_REPORT");
         }
 
         // A2b: 报工单保存后, 对每个关联批次独立检查自动结清 (order: save → settle); 三阶段: 仅 INPUT/legacy 有领料
@@ -1453,6 +1512,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         //    这条路 (recordMaterialInput) 是纯领料单, materialBatchRefs 恒来自请求。
         if (saved.getMaterialBatchRefs() != null && !saved.getMaterialBatchRefs().isEmpty()) {
             workshopReservationService.reserveForReport(factoryId, saved);
+            recordReportMaterialLineage(factoryId, saved, workerId, "APP_MATERIAL_INPUT");
         }
 
         // A2b: 保存后对每个关联批次独立检查自动结清
@@ -2046,12 +2106,45 @@ public class YieldReportServiceImpl implements YieldReportService {
                 : dto.getSteps().stream()
                         .filter(step -> step.getProcessOrder() != null)
                         .collect(Collectors.toMap(StepYieldDTO::getProcessOrder, step -> step, (left, right) -> left));
+        // dto.steps 来自目标批次(末道)自己的 YIELD 报工; Workflow 逐道录入时每道是**各自的批次**
+        // (CLK-W-…), 它们的人工金额记在各自批次的 YIELD 报工上。只按目标批次合并 ⇒ 上游道 laborCost
+        // 恒 null ⇒ 成本明细判 LABOR_COST_UNKNOWN, 多道工艺图 costComplete 永远 false
+        // (F006【演示L1】计划 836010b8, 2026-10-24: 四道报工 labor_cost 104/273/78/208 都在, 前三道判未知)。
+        Map<Long, List<ProductionReport>> upstreamReportsByBatch = new HashMap<>();
         dto.setSteps(sheetRows.stream()
-                .map(this::toStepYield)
-                .map(step -> mergeStepAudit(step, reportStepsByOrder.get(step.getProcessOrder())))
+                .map(row -> {
+                    StepYieldDTO step = mergeStepAudit(
+                            toStepYield(row), reportStepsByOrder.get(row.processOrder()));
+                    if (step.getLaborCost() == null && row.batchId() != null
+                            && !Objects.equals(row.batchId(), batchId)) {
+                        step.setLaborCost(upstreamRowLaborCost(factoryId, row, upstreamReportsByBatch));
+                    }
+                    return step;
+                })
                 .toList());
         dto.setComplete(sheetRows.stream()
                 .allMatch(row -> positive(row.inputQuantity()) && row.outputQuantity() != null));
+    }
+
+    /**
+     * 上游行自己批次上的 YIELD 报工人工合计。⛔ 一条都没有金额时返回 null(未知), 不兜 0 ——
+     * 0 会被成本明细当成「已采集的零人工」。
+     */
+    private BigDecimal upstreamRowLaborCost(String factoryId, SheetYieldRow row,
+                                            Map<Long, List<ProductionReport>> cache) {
+        List<ProductionReport> reports = cache.computeIfAbsent(row.batchId(),
+                id -> reportRepo.findYieldReportsByBatch(factoryId, id));
+        if (reports == null) {
+            return null;
+        }
+        BigDecimal total = null;
+        for (ProductionReport report : reports) {
+            if (report.getLaborCost() == null) continue;
+            if (row.processOrder() != null && report.getProcessOrder() != null
+                    && !row.processOrder().equals(report.getProcessOrder())) continue;
+            total = total == null ? report.getLaborCost() : total.add(report.getLaborCost());
+        }
+        return total;
     }
 
     /**

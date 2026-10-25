@@ -8,6 +8,7 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.TraceabilityService;
+import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import com.cretas.aims.util.ErrorSanitizer;
 import com.cretas.aims.exception.BusinessException;
 import io.swagger.v3.oas.annotations.Operation;
@@ -203,7 +204,12 @@ public class TraceabilityController {
             @PathVariable @Parameter(description = "批次类型: MATERIAL_BATCH / PRODUCTION_BATCH / FINISHED_BATCH / SHIPMENT_RECORD",
                     example = "MATERIAL_BATCH", required = true) String batchType,
             @PathVariable @Parameter(description = "批次ID（UUID 或生产批次的数字ID）", required = true) String batchId,
-            @RequestParam(defaultValue = "5") @Parameter(description = "最大跳数（1-10）", example = "5") Integer maxDepth) {
+            // 不写 defaultValue: 缺省交给 LineageGraphAssembler.clampDepth (= 上限, 整条链),
+            // 召回漏一个成品就是事故, ⛔ 不在这里另写一个更浅的数字。
+            @RequestParam(required = false)
+            @Parameter(description = "最大跳数（1-" + LineageGraphAssembler.MAX_DEPTH_CAP
+                    + "，缺省=" + LineageGraphAssembler.MAX_DEPTH_CAP
+                    + " 即整条链；每道工序占 2 跳，召回一般不要填）") Integer maxDepth) {
         log.info("召回影响面查询: factoryId={}, batchType={}, batchId={}, maxDepth={}",
                 factoryId, batchType, batchId, maxDepth);
         return ApiResponse.success(traceabilityService.getImpact(
