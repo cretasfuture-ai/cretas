@@ -149,7 +149,17 @@ def _natural_sort_key(value: Any):
 def _extract_dimensions(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Fix 72: Extract available filter dimensions from DataFrame."""
     dims = []
+    mapping = dashboard_service.normalizer.detect_columns(df.columns.tolist(), df)
+    measures = set(mapping.actual_cols + mapping.budget_cols + mapping.last_year_cols
+                   + mapping.last_year_budget_cols)
+    # Amount-aware normalization may prefer revenue/cost over the ratio columns.
+    # Those original percentage measures are still measures, never dimensions.
+    measures.update(col for col in df.columns
+                    if any(key in str(col).lower() for key in
+                           dashboard_service.normalizer.RATIO_HEADER_KEYWORDS + ('ratio', 'margin', 'percent')))
     for col in df.columns:
+        if col in measures:
+            continue
         if df[col].dtype == 'object':
             unique_vals = df[col].dropna().unique().tolist()
             if 2 <= len(unique_vals) <= 20:

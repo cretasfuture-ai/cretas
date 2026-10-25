@@ -11,12 +11,25 @@ import {
   chartNotes,
   createDataVersion,
   buildChartNav,
+  kpiDisplayParts,
 } from '../financialDashboardState';
 import type { ChartStateLike as ChartLike } from '../financialDashboardState';
 import type { PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 
 const sel = (s: Partial<PeriodSelection>): PeriodSelection =>
   ({ type: 'year', year: 2026, value: '2026', ...s }) as PeriodSelection;
+
+describe('KPI 金额与完整单位分开排版', () => {
+  it.each([
+    ['35,430.33万', '元', '35,430.33', '万元'],
+    ['-1.20亿', '元', '-1.20', '亿元'],
+    ['26.3', '%', '26.3', '%'],
+    ['+0.1', '个百分点', '+0.1', '个百分点'],
+    ['8月 (124.4%)', '', '8月 (124.4%)', ''],
+  ])('%s %s 保留金额与单位', (value, unit, expectedValue, expectedUnit) => {
+    expect(kpiDisplayParts(value, unit)).toMatchObject({ value: expectedValue, unit: expectedUnit });
+  });
+});
 
 describe('periodSelectionToRequest (期间选择 → 后端参数)', () => {
   it('全部历史 → period_type=all, 不按年过滤', () => {

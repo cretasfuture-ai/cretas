@@ -21,8 +21,10 @@ import {
   dashboardRenderKey,
   createQueryHistory,
   findingSections,
+  kpiDisplayParts,
 } from './financialDashboardState';
 import type { PeriodRequest } from './financialDashboardState';
+import { collectExportChartImages, withChartAnnotations } from './financialDashboardExport';
 // A3: 工厂成本卡 — 仅工厂租户 (FACTORY) 显示此 tab
 import FactoryCostAnalysis from '@/views/production-analytics/FactoryCostAnalysis.vue';
 import { DataAnalysis, Download, ArrowDown, Delete, Calendar, MoreFilled } from '@element-plus/icons-vue';
@@ -724,30 +726,24 @@ function setChartDomRef(chartType: string, el: Element | null) {
 }
 
 function collectChartImages(): Record<string, string> {
-  const images: Record<string, string> = {};
-
-  // Collect from SankeyChart
-  if (chartRefSankey.value?.chartInstance) {
+  return collectExportChartImages(dashboardResponse.value?.charts ?? [], chart => {
+    const container = document.createElement('div');
+    container.setAttribute('aria-hidden', 'true');
+    Object.assign(container.style, {
+      position: 'fixed', left: '-10000px', top: '0', width: '1100px', height: '600px',
+    });
+    document.body.appendChild(container);
+    const instance = echarts.init(container);
     try {
-      images['cost_flow_sankey'] = chartRefSankey.value.chartInstance.getDataURL({
-        type: 'png', pixelRatio: 2, backgroundColor: '#fff',
-      });
-    } catch (e) { console.warn('Failed to get Sankey image:', e); }
-  }
-
-  // Collect from generic DOM refs
-  for (const [chartType, domEl] of chartDomRefs.value.entries()) {
-    const instance = echarts.getInstanceByDom(domEl);
-    if (instance) {
-      try {
-        images[chartType] = instance.getDataURL({
-          type: 'png', pixelRatio: 2, backgroundColor: '#fff',
-        });
-      } catch (e) { console.warn(`Failed to get image for ${chartType}:`, e); }
+      const option = safeClone(chart.echartsOption ?? {});
+      option.animation = false;
+      instance.setOption(withChartAnnotations(processEChartsOptions(option), annotations.value[chart.chartType] || []));
+      return instance.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' });
+    } finally {
+      instance.dispose();
+      container.remove();
     }
-  }
-
-  return images;
+  });
 }
 
 function handleExportCommand(command: string) {
@@ -940,47 +936,8 @@ function renderGenericChart(chartType: string, domEl: Element | null, retries = 
     const renderer = useSvgRenderer.value ? 'svg' : 'canvas';
     instance = echarts.init(domEl, isDarkMode.value ? 'cretas-dark' : undefined, { renderer });
   }
-  const processed = processEChartsOptions(safeClone(chart.echartsOption) as Record<string, unknown>);
+  const processed = withChartAnnotations(processEChartsOptions(safeClone(chart.echartsOption) as Record<string, unknown>), annotations.value[chartType] || []);
 
-  // D2: Merge user annotations as ECharts graphic elements
-  const chartAnnotations = annotations.value[chartType] || [];
-  if (chartAnnotations.length > 0) {
-    const graphicItems = chartAnnotations.flatMap((ann) => [
-      // Pin icon background
-      {
-        type: 'circle' as const,
-        shape: { r: 4, cx: 0, cy: 0 },
-        left: `${ann.x}%`,
-        top: `${ann.y}%`,
-        style: { fill: ann.color || '#e6a23c', stroke: '#fff', lineWidth: 1.5 },
-        silent: true,
-        z: 100,
-      },
-      // Annotation text label
-      {
-        type: 'text' as const,
-        left: `${ann.x + 1}%`,
-        top: `${ann.y - 1}%`,
-        style: {
-          text: ann.text,
-          fontSize: 11,
-          fill: ann.color || '#e6a23c',
-          fontWeight: 'bold' as const,
-          backgroundColor: 'rgba(255,255,255,0.92)',
-          padding: [3, 8],
-          borderRadius: 4,
-          borderColor: ann.color || '#e6a23c',
-          borderWidth: 1,
-          shadowColor: 'rgba(0,0,0,0.1)',
-          shadowBlur: 4,
-        },
-        silent: true,
-        z: 100,
-      },
-    ]);
-    const existing = (processed.graphic as unknown[]) || [];
-    processed.graphic = [...(Array.isArray(existing) ? existing : [existing]), ...graphicItems];
-  }
 
   try {
     instance.setOption(processed, { notMerge: true });
@@ -1498,11 +1455,6 @@ function renderAnalysis(text: string | null | undefined): string {
   return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 }
 
-// KPI 原样显示后端格式化好的值 (千分位、单位由后端统一), 不做计数动画
-function kpiText(original: string | number): string {
-  return typeof original === 'number' ? original.toLocaleString('zh-CN') : String(original);
-}
-
 // ---- Fix 64: Spotlight / Focus mode (Power BI) ----
 const spotlightChart = ref<string | null>(null);
 
@@ -1935,7 +1887,7 @@ onBeforeUnmount(() => {
             tabindex="0"
             :aria-label="`${kpi.label}: ${kpi.value}${kpi.unit || ''}`"
           >
-            <span class="kpi-val">{{ kpiText(kpi.value) }}{{ kpi.unit }}</span>
+            <span class="kpi-val"><span :class="{ 'kpi-number': kpiDisplayParts(kpi.value, kpi.unit).numeric }">{{ kpiDisplayParts(kpi.value, kpi.unit).value }}</span><span v-if="kpi.unit" class="kpi-unit">{{ kpiDisplayParts(kpi.value, kpi.unit).unit }}</span></span>
             <span class="kpi-lbl">{{ kpi.label }}</span>
             <!-- A3: KPI sparkline -->
             <svg v-if="kpi.sparkline?.length >= 2" class="kpi-sparkline" viewBox="0 0 60 20" preserveAspectRatio="none">
@@ -2182,7 +2134,7 @@ onBeforeUnmount(() => {
               class="generic-kpi-chip"
               :class="{ 'kpi-up': kpi.trend === 'up', 'kpi-down': kpi.trend === 'down' }"
             >
-              <span class="kpi-val">{{ kpiText(kpi.value) }}{{ kpi.unit }}</span>
+              <span class="kpi-val"><span :class="{ 'kpi-number': kpiDisplayParts(kpi.value, kpi.unit).numeric }">{{ kpiDisplayParts(kpi.value, kpi.unit).value }}</span><span v-if="kpi.unit" class="kpi-unit">{{ kpiDisplayParts(kpi.value, kpi.unit).unit }}</span></span>
               <span class="kpi-lbl">{{ kpi.label }}</span>
               <svg v-if="kpi.sparkline?.length >= 2" class="kpi-sparkline" viewBox="0 0 60 20" preserveAspectRatio="none">
                 <path :d="sparklinePath(kpi.sparkline)" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -2673,13 +2625,20 @@ onBeforeUnmount(() => {
 }
 
 .kpi-val {
-  font-size: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  font-size: clamp(18px, 1.7vw, 24px);
   font-weight: 700;
   color: var(--el-text-color-primary, #303133);
   font-feature-settings: "tnum";
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
+
+.kpi-number { white-space: nowrap; }
+.kpi-unit { font-size: 0.65em; font-weight: 500; white-space: nowrap; }
 
 .kpi-lbl {
   font-size: 13px;
@@ -2695,7 +2654,8 @@ onBeforeUnmount(() => {
 
 /* Quarterly progress bars (budget_achievement) */
 .quarterly-progress-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
   padding: 4px 16px 8px;
 }
@@ -3463,7 +3423,7 @@ onBeforeUnmount(() => {
 
 .tab-kpi-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }

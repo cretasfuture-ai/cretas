@@ -4,6 +4,17 @@
  */
 import type { PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 
+/** Keep formatted amounts unchanged while making the full unit one readable token. */
+export function kpiDisplayParts(original: string | number, unit = '') {
+  const value = typeof original === 'number' ? original.toLocaleString('zh-CN') : String(original);
+  const scaledAmount = unit === '元' ? /^([+-]?[\d,.]+)(万|亿)$/.exec(value) : null;
+  return {
+    value: scaledAmount ? scaledAmount[1] : value,
+    unit: scaledAmount ? `${scaledAmount[2]}元` : unit,
+    numeric: /^[+-]?[\d,.]+$/.test(scaledAmount ? scaledAmount[1] : value),
+  };
+}
+
 /** 后端 /financial-dashboard/batch 的期间参数 (period_type 见 financial_data_normalizer._apply_period_filter) */
 export interface PeriodRequest {
   periodType: 'all' | 'year' | 'month_range';
