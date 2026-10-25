@@ -6,14 +6,12 @@
 
 ## 在飞任务
 
+- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 - `ERP-S2-08A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确6文件/无迁移；待办恢复及真实JPA，见archive/2026-10-24-s245-next-slices.md。
 - `ERP-S4-03A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确5文件/无迁移；可行性拒绝及真实JPA，见archive/2026-10-24-s245-next-slices.md。
 
 
-
-- `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — archive/2026-10-23-s0-s3-acceptance.md。
-
-- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 已收实际会话/独立WT，精确11文件与命令见archive/2026-10-23-s2-entry-scope.md；只读工厂入口，原QA验收。
+- `ERP-S2-READINESS-ENTRY-CLAUDE-20261022` — `in-progress` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 4a48c5b49c3a5f5214c68a3add5081ee409d88b2 — 10月24日实际ACK并实施；精确11文件见archive/2026-10-23-s2-entry-scope.md；原QA验收。
 
 - `ERP-S6-B3C-CLAUDE-20261022` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 13874247c5b47897e86511cd095dc3bebe6447e1 — C2/C3整改7可写+5冻结，见archive/2026-10-23-s6-c2c3-atomic-scope.md；原HEAD/生产仍HOLD。
 
@@ -125,7 +123,7 @@
 
 
 
-- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：原Owner精确5文件V78/9文件V79按裁决续验；V80仅候选未释放，C3/Gateway/采购/Orchestrator仍HOLD；S2仍待独立scope ACK。
+- `ERP-S6-V72-PASSIVE-CLAUDE-20261022`：原Owner精确5文件V78/9文件V79续验；B3C仅独立登记7可写+5冻结（含V80），原HEAD/生产HOLD；S2已登记11文件待Owner回读；Gateway/采购/Orchestrator不释放。
 
 - `ERP-S6-B2-CLAUDE-20261021`：实际28文件整体review/HOLD；runtime writeScope=[]；V72被动5另列队列待独立WT确认；不放开采购/供应商/Gateway/共享DataScope/runtime policy。
 

@@ -8,6 +8,7 @@ import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
 import com.cretas.aims.dto.factory.StocktakeRecountRequest;
+import com.cretas.aims.dto.factory.StocktakeCancelRequest;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.exception.BusinessException;
@@ -45,6 +46,7 @@ import java.util.Map;
  *   <li>POST /stocktakes/{id}/apply — 生效（写差异）</li>
  *   <li>GET  /stocktakes/{id}/diff-preview — 差异预览</li>
  *   <li>POST /stocktakes/{id}/recount-after-drift — 漂移后保留旧证据并发起新盘点</li>
+ *   <li>POST /stocktakes/{id}/cancel — 发起人取消未提交盘点</li>
  * </ol>
  *
  * <p>⚠️ 角色检查用 {@code request.getAttribute("role")}，非 SecurityContext（C1 孪生坑）。
@@ -82,6 +84,20 @@ public class StocktakeController {
         StocktakeDTO result = stocktakeService.recountAfterDrift(
                 stocktakeId, factoryId, body, extractUserId(request), extractRole(request));
         return ApiResponse.success("已保留原盘点证据并发起新的盘点任务", result);
+    }
+
+    @PostMapping("/{stocktakeId}/cancel")
+    @RequirePermission("warehouse:read_write")
+    @Operation(summary = "取消未提交盘点",
+            description = "仅盘点发起人在 INITIATED/COUNTING 且尚未提交审批时可取消")
+    public ApiResponse<StocktakeDTO> cancel(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "盘点任务ID") String stocktakeId,
+            @RequestBody @Valid StocktakeCancelRequest body,
+            HttpServletRequest request) {
+        StocktakeDTO result = stocktakeService.cancel(
+                stocktakeId, factoryId, body, extractUserId(request));
+        return ApiResponse.success("盘点任务已取消", result);
     }
 
     /**

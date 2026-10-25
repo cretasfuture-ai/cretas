@@ -53,4 +53,22 @@ describe('质检提交结果契约', () => {
     expect(getQualityInspectionSubmitErrorMessage({}, '请检查网络后重试'))
       .toBe('请检查网络后重试');
   });
+
+  it.each([
+    { message: 'Network Error' },
+    { message: 'Network request failed' },
+    { message: 'timeout of 10000ms exceeded', code: 'ECONNABORTED' },
+    { code: 'ERR_NETWORK' },
+  ])('uses the localized retry message for a transport failure: %j', (error) => {
+    expect(getQualityInspectionSubmitErrorMessage(error, '提交失败', '请检查网络连接后重试'))
+      .toBe('请检查网络连接后重试');
+  });
+
+  it('preserves authoritative business refusals and non-transport error messages', () => {
+    expect(getQualityInspectionSubmitErrorMessage({
+      code: 'ERR_NETWORK', message: 'Network Error', response: { data: { message: '没有质检权限' } },
+    }, '提交失败', '请检查网络连接后重试')).toBe('没有质检权限');
+    expect(getQualityInspectionSubmitErrorMessage(new Error('质检标准已更新，请刷新'), '提交失败', '请检查网络连接后重试'))
+      .toBe('质检标准已更新，请刷新');
+  });
 });

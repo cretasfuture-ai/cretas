@@ -218,11 +218,13 @@ class WorkflowClerkSheetServiceTest {
                 2, "SEMI_FINISHED", "PT-SEMI", "kg", true);
         WorkflowTaskPort packIn = port(802L, "pack-in", WorkflowTaskPort.Direction.INPUT,
                 1, "SEMI_FINISHED", "PT-SEMI", "kg", true);
+        WorkflowTaskPort packExternal = port(802L, "pack-external", WorkflowTaskPort.Direction.INPUT,
+                2, "SEMI_FINISHED", "PT-EXTERNAL-SEMI", "kg", true);
         WorkflowTaskPort packOut = port(802L, "pack-out", WorkflowTaskPort.Direction.OUTPUT,
-                2, "FINISHED_GOOD", "PT-FG", "box", true);
+                3, "FINISHED_GOOD", "PT-FG", "box", true);
         packOut.setNetWeightGramsSnapshot(new BigDecimal("200"));
         when(portRepository.findByFactoryIdAndWorkflowInstanceId("F006", 501L))
-                .thenReturn(List.of(trimIn, trimOut, packIn, packOut));
+                .thenReturn(List.of(trimIn, trimOut, packIn, packExternal, packOut));
 
         WorkProcess trimProcess = workProcess("TRIM", "修整", List.of(Map.of("key", "note")));
         WorkProcess packProcess = workProcess("PACK", "包装", null);
@@ -247,6 +249,9 @@ class WorkflowClerkSheetServiceTest {
         ProductType finishedProduct = productType("PT-FG", "F006", "卤猪蹄成品", "box");
         when(productTypeRepository.findByIdAndFactoryId("PT-SEMI", "F006"))
                 .thenReturn(Optional.of(semiProduct));
+        ProductType externalSemiProduct = productType("PT-EXTERNAL-SEMI", "F006", "外部半成品", "kg");
+        when(productTypeRepository.findByIdAndFactoryId("PT-EXTERNAL-SEMI", "F006"))
+                .thenReturn(Optional.of(externalSemiProduct));
         when(productTypeRepository.findByIdAndFactoryId("PT-FG", "F006"))
                 .thenReturn(Optional.of(finishedProduct));
 
@@ -282,6 +287,12 @@ class WorkflowClerkSheetServiceTest {
         assertTrue(packDescriptor.getOutput().getFinished());
         assertEquals("box", packDescriptor.getOutput().getUnit());
         assertEquals(0, new BigDecimal("200").compareTo(packDescriptor.getOutput().getGramsPerUnit()));
+        WorkflowClerkSheetConfigDTO.PortDescriptor externalInput = packDescriptor.getInputs().stream()
+                .filter(input -> "PT-EXTERNAL-SEMI".equals(input.getSkuId()))
+                .findFirst().orElseThrow();
+        assertEquals("SEMI_FINISHED", externalInput.getMaterialKind());
+        assertEquals("kg", externalInput.getUnit());
+        assertEquals(List.of("PT-EXTERNAL-SEMI"), externalInput.getAllowedSkuIds());
     }
 
     @Test

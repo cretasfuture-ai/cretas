@@ -965,27 +965,74 @@
       @click.self="closeRawInputDialog"
     >
       <div class="raw-input-panel">
-        <h3 class="raw-input-title">新增原料 Cell · {{ rawInputDialog.processName }}</h3>
+        <h3 class="raw-input-title">新增来源 Cell · {{ rawInputDialog.processName }}</h3>
 
         <div class="raw-input-field">
-          <label class="raw-input-label">选择原料 SKU</label>
+          <label class="raw-input-label">来源类型</label>
+          <div class="raw-input-modes">
+            <label
+              class="raw-input-mode"
+              :class="{ 'is-active': rawInputDialog.inputSource === 'RAW_MATERIAL' }"
+            >
+              <input
+                v-model="rawInputDialog.inputSource"
+                type="radio"
+                name="workflow-input-source"
+                value="RAW_MATERIAL"
+                data-testid="input-source-raw"
+              />
+              <span>原料</span>
+            </label>
+            <label
+              class="raw-input-mode"
+              :class="{ 'is-active': rawInputDialog.inputSource === 'EXTERNAL' }"
+            >
+              <input
+                v-model="rawInputDialog.inputSource"
+                type="radio"
+                name="workflow-input-source"
+                value="EXTERNAL"
+                data-testid="input-source-external-semi"
+              />
+              <span>外部半成品</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="raw-input-field">
+          <label class="raw-input-label">
+            {{ rawInputDialog.inputSource === 'EXTERNAL' ? '选择外部半成品 SKU' : '选择原料 SKU' }}
+          </label>
+          <p
+            v-if="rawInputDialog.inputSource === 'EXTERNAL'"
+            class="raw-input-route-hint"
+            data-testid="external-semi-route-hint"
+          >
+            目前支持按公斤投入外部半成品，工艺中仍需保留原料投入。
+          </p>
           <el-select
             v-model="rawInputDialog.skuId"
             filterable
-            placeholder="从工厂原料档案选择"
+            :placeholder="rawInputDialog.inputSource === 'EXTERNAL'
+              ? '从当前工厂启用的半成品 SKU 选择'
+              : '从工厂原料档案选择'"
             style="width: 100%"
-            data-testid="raw-input-sku"
+            :data-testid="rawInputDialog.inputSource === 'EXTERNAL'
+              ? 'external-semi-input-sku' : 'raw-input-sku'"
           >
             <el-option
-              v-for="option in rawMaterialOptions"
+              v-for="option in rawInputDialog.inputSource === 'EXTERNAL'
+                ? externalSemiInputOptions : rawMaterialOptions"
               :key="option.id"
-              :label="option.name"
+              :label="rawInputDialog.inputSource === 'EXTERNAL'
+                ? `${option.code || option.id} — ${option.name} · ${option.unit || '-'}`
+                : option.name"
               :value="option.id"
             />
           </el-select>
         </div>
 
-        <div class="raw-input-field">
+        <div v-if="rawInputDialog.inputSource === 'RAW_MATERIAL'" class="raw-input-field">
           <label class="raw-input-label">
             它和「{{ rawInputDialog.mainMaterialName }}」是什么关系
           </label>
@@ -1264,6 +1311,7 @@ interface SkuOption {
   unit?: string;
   specification?: string;
   productCategory?: string;
+  isActive?: boolean;
   gramsPerUnit?: number | null;
   detailLoaded?: boolean;
 }
@@ -1423,11 +1471,15 @@ const rawInputDialog = reactive({
   mainMaterialNodeId: '',
   mainMaterialName: '',
   skuId: '',
+  inputSource: 'RAW_MATERIAL' as 'RAW_MATERIAL' | 'EXTERNAL',
   relation: '' as '' | 'SUBSTITUTE' | 'PARALLEL',
 });
 /** 两项都选齐才能确定 —— 关系选项没有默认值, 默认值等于替用户做了决定。 */
 const rawInputDialogReady = computed(
-  () => Boolean(rawInputDialog.skuId) && Boolean(rawInputDialog.relation),
+  () => Boolean(rawInputDialog.skuId)
+    && (rawInputDialog.inputSource === 'EXTERNAL'
+      || Boolean(rawInputDialog.relation)
+      || !rawInputDialog.mainMaterialNodeId),
 );
 const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
@@ -2286,7 +2338,12 @@ const outputSkuOptions = computed(() => skuOptions.value.filter(
 // 两级选择器用：把可作产出的 SKU 按分类拆成「半成品」「成品」两组，供物料 Cell 和
 // 工序 Cell 产出行共用同一份数据源（WorkflowSkuPicker 组件负责渲染两级分组 UI）。
 const semiFinishedSkuOptions = computed(() => skuOptions.value.filter(
-  (option) => classifyOutputSkuCategory(option.productCategory) === 'SEMI_FINISHED',
+  (option) => classifyOutputSkuCategory(option.productCategory) === 'SEMI_FINISHED'
+));
+const externalSemiInputOptions = computed(() => semiFinishedSkuOptions.value.filter(
+  (option) => option.isActive !== false
+    && Boolean(option.unit?.trim())
+    && workflowReportingUnit('SEMI_FINISHED', option.unit) === 'kg',
 ));
 const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) === 'FINISHED_GOOD',
@@ -5189,8 +5246,6 @@ function confirmAddProcess(): void {
  * 的算法完全不同: 替代料是二选一, 合成一个逻辑投入; 并列投入各自是独立需求。
  * 系统以前不问, 于是两种情况长得一模一样, `logicalRootCount()` 只能一律按 +1 算。
  *
- * ⚠️ 这道工序**还没有任何原料**时不弹窗 —— 没有可替代的对象, 问了也只有一个答案。
- *
  * ⛔ 弹窗只是录入体验, **不是约束**: AI 画布工具是第二个写图入口, 完全绕过这里。
  *    合法性(自引用/悬空/指向非原料/成链)由后端 ProductProcessWorkflowValidator 保证。
  */
@@ -5198,7 +5253,11 @@ function addInputToProcess(processId: string): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   const mainMaterial = primaryRawInputOf(process);
-  if (!mainMaterial) {
+  const inputPorts = ((process.data as ProcessNodeData).ports || [])
+    .filter((port) => port.direction === 'INPUT');
+  // Existing non-RAW upstreams keep the legacy direct RAW route. A truly empty
+  // process still opens the chooser so the external SEMI_FINISHED route remains reachable.
+  if (!mainMaterial && inputPorts.length > 0) {
     createRawInputCell(processId, { skuId: '', substituteOfNodeId: '' });
     return;
   }
@@ -5206,9 +5265,10 @@ function addInputToProcess(processId: string): void {
     visible: true,
     processId,
     processName: String((process.data as ProcessNodeData).processName || '工序'),
-    mainMaterialNodeId: mainMaterial.id,
-    mainMaterialName: String(mainMaterial.data?.name || '主料'),
+    mainMaterialNodeId: mainMaterial?.id || '',
+    mainMaterialName: String(mainMaterial?.data?.name || '主料'),
     skuId: '',
+    inputSource: 'RAW_MATERIAL',
     relation: '',
   });
 }
@@ -5238,6 +5298,27 @@ function closeRawInputDialog(): void {
 
 function confirmAddRawInput(): void {
   if (!rawInputDialogReady.value) return;
+  if (rawInputDialog.inputSource === 'EXTERNAL') {
+    const option = externalSemiInputOptions.value.find((item) => item.id === rawInputDialog.skuId);
+    if (!option || classifyOutputSkuCategory(option.productCategory) !== 'SEMI_FINISHED'
+      || option.isActive === false || !option.unit?.trim()
+      || workflowReportingUnit('SEMI_FINISHED', option.unit) !== 'kg') {
+      ElMessage.warning('请选择当前工厂启用且按 kg 投入的半成品 SKU');
+      return;
+    }
+    const duplicate = flowNodes.value.some((node) => (
+      node.data?.kind === 'SEMI_FINISHED'
+      && (node.data as MaterialNodeData).inputSource === 'EXTERNAL'
+      && String(node.data?.skuId || '') === option.id
+    ));
+    if (duplicate) {
+      ElMessage.warning('该外部半成品 SKU 已在当前 Workflow 中使用');
+      return;
+    }
+    createExternalSemiInputCell(rawInputDialog.processId, option);
+    closeRawInputDialog();
+    return;
+  }
   const option = rawMaterialOptions.value.find((item) => item.id === rawInputDialog.skuId);
   if (!option) {
     ElMessage.warning('请选择一个原料 SKU');
@@ -5258,6 +5339,52 @@ function confirmAddRawInput(): void {
       : '',
   });
   closeRawInputDialog();
+}
+
+function createExternalSemiInputCell(processId: string, option: SkuOption): void {
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process || !option.unit?.trim()) return;
+  mutate(() => {
+    const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+    const inputCount = data.ports.filter((port) => port.direction === 'INPUT').length;
+    const timestamp = nextGraphIdSeed();
+    const materialId = `material:external-semi:${timestamp}`;
+    const portId = `input:${timestamp}`;
+    const unit = workflowReportingUnit('SEMI_FINISHED', option.unit);
+    const materialData: MaterialNodeData & {
+      kind: 'SEMI_FINISHED';
+      inputSource: 'EXTERNAL';
+    } = {
+      kind: 'SEMI_FINISHED',
+      inputSource: 'EXTERNAL',
+      name: option.name,
+      skuId: option.id,
+      skuCode: option.code || option.id,
+      specification: option.specification,
+      bound: true,
+      baseUnit: unit,
+    };
+    flowNodes.value.push({
+      id: materialId,
+      type: 'material',
+      position: snapPosition({ x: process.position.x - 240, y: process.position.y + inputCount * 160 }),
+      data: materialData,
+    });
+    data.ports = [
+      ...data.ports,
+      {
+        id: portId,
+        direction: 'INPUT',
+        materialNodeId: materialId,
+        materialKind: 'SEMI_FINISHED',
+        skuId: option.id,
+        materialName: option.name,
+        unit,
+        ordinal: inputCount,
+      },
+    ];
+    flowEdges.value.push(flowEdge(materialId, 'output', processId, portId));
+  });
 }
 
 /**
@@ -7767,6 +7894,23 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   margin-bottom: 8px;
   font-size: 13px;
   color: var(--el-text-color-regular, #606266);
+}
+.raw-input-modes { display: flex; gap: 8px; }
+.raw-input-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--el-text-color-regular, #606266);
+  font-size: 13px;
+}
+.raw-input-mode.is-active {
+  border-color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
 }
 .raw-input-relations { display: grid; gap: 8px; }
 .raw-input-relation {

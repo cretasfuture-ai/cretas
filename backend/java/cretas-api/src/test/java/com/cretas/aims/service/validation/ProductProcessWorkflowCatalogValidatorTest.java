@@ -13,6 +13,9 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.unit.CanonicalUnit;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDimension;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,9 +26,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.ArrayList;
+import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -57,13 +63,18 @@ class ProductProcessWorkflowCatalogValidatorTest {
     @Mock
     private BomRecipeRepository bomRecipeRepository;
 
+    @Mock
+    private UnitContractService unitContractService;
+
     private ProductProcessWorkflowCatalogValidator validator;
 
     @BeforeEach
     void setUp() {
         validator = new ProductProcessWorkflowCatalogValidator(
                 workProcessRepository, productTypeRepository, rawMaterialTypeRepository,
-                bomRecipeRepository, bomItemRepository);
+                bomRecipeRepository, bomItemRepository, unitContractService);
+        lenient().when(unitContractService.describe(anyString(), anyString())).thenReturn(Optional.of(
+                new CanonicalUnit("kg", UnitDimension.MASS, "kg", BigDecimal.ONE, "千克", 3)));
         lenient().when(bomRecipeRepository.existsByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
                         anyString(), anyString(), org.mockito.ArgumentMatchers.eq(BomRecipe.Status.ACTIVE)))
                 .thenReturn(true);
@@ -510,6 +521,150 @@ class ProductProcessWorkflowCatalogValidatorTest {
     }
 
     @Test
+    void acceptsExternalSemiFinishedInputWithExactInputBinding() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+        when(productTypeRepository.findByIdIn(List.of(PRODUCT_ID))).thenReturn(List.of(
+                product(PRODUCT_ID, FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
+
+        assertDoesNotThrow(() -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+    }
+
+    @Test
+    void rejectsExternalInputForInactiveOrWrongCategorySku() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        ProductType inactive = product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED);
+        inactive.setIsActive(false);
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(inactive));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+
+        ProductProcessWorkflowDTO wrongCategory = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.FINISHED_PRODUCT)));
+        error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, wrongCategory));
+        assertCatalogMismatch(error, "External Semi Input");
+
+        ProductProcessWorkflowDTO wrongFactory = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", "F999", ProductCategory.SEMI_FINISHED)));
+        error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, wrongFactory));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputForSoftDeletedSku() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        ProductType deleted = product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED);
+        deleted.setDeletedAt(LocalDateTime.now());
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(deleted));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputWithoutExactIncomingInputBinding() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        definition.getEdges().removeIf(edge -> "edge:external-input".equals(edge.getId()));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputWithProducerOutputBinding() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().stream()
+                .filter(node -> "process:packing".equals(node.getId())).findFirst().orElseThrow();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> ports = (List<Map<String, Object>>) process.getData().get("ports");
+        ports.add(new LinkedHashMap<>(Map.of(
+                "id", "out-external",
+                "direction", "OUTPUT",
+                "materialNodeId", "material:external-semi",
+                "materialKind", "SEMI_FINISHED",
+                "unit", "kg",
+                "ordinal", 1)));
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:external-producer", "process:packing", "out-external",
+                "material:external-semi", "input"));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputWithWrongInputPortHandle() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        definition.getEdges().stream()
+                .filter(edge -> "edge:external-input".equals(edge.getId()))
+                .findFirst().orElseThrow().setTargetHandle("wrong-input-handle");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(
+                product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void rejectsExternalInputForCountUnit() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "只");
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+        ProductType product = product("SFI-EXTERNAL", FACTORY_ID, ProductCategory.SEMI_FINISHED);
+        product.setUnit("只");
+        when(productTypeRepository.findByIdIn(List.of("SFI-EXTERNAL"))).thenReturn(List.of(product));
+
+        when(unitContractService.describe(FACTORY_ID, "只")).thenReturn(Optional.of(
+                new CanonicalUnit("只", UnitDimension.COUNT, "只", BigDecimal.ONE, "只", 0)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
+    void unknownInputSourceDoesNotBypassProducerGate() {
+        ProductProcessWorkflowDTO definition = externalSemiInputWorkflow("SFI-EXTERNAL", "kg");
+        definition.getNodes().stream()
+                .filter(node -> "material:external-semi".equals(node.getId()))
+                .findFirst().orElseThrow().getData().put("inputSource", "UNKNOWN");
+        definition.getEdges().removeIf(edge -> "edge:external-input".equals(edge.getId()));
+        when(workProcessRepository.findByFactoryIdAndIdIn(FACTORY_ID, List.of("WP-PACK")))
+                .thenReturn(List.of(workProcess("WP-PACK", WorkProcessOutputMaterialKind.FINISHED_GOOD)));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> validator.validateForPublish(FACTORY_ID, PRODUCT_ID, definition));
+        assertCatalogMismatch(error, "External Semi Input");
+    }
+
+    @Test
     void acceptsMultipleTerminalFinishedGoodsRegardlessOfLegacyAnchorCategory() {
         ProductProcessWorkflowDTO definition = validTwoProcessChain();
         definition.getNodes().add(processNodeWithInput(
@@ -609,6 +764,33 @@ class ProductProcessWorkflowCatalogValidatorTest {
         definition.getNodes().stream()
                 .filter(node -> "material:output".equals(node.getId()))
                 .forEach(node -> node.getData().put("isByproduct", Boolean.TRUE));
+        return definition;
+    }
+
+    @SuppressWarnings("unchecked")
+    private ProductProcessWorkflowDTO externalSemiInputWorkflow(String skuId, String unit) {
+        ProductProcessWorkflowDTO definition = workflowWithPrimaryOutput(
+                "WP-PACK", "FINISHED_GOOD", PRODUCT_ID);
+        ProductProcessWorkflowDTO.Node process = definition.getNodes().getFirst();
+        List<Map<String, Object>> ports = (List<Map<String, Object>>) process.getData().get("ports");
+        ports.add(new LinkedHashMap<>(Map.of(
+                "id", "in-external",
+                "direction", "INPUT",
+                "materialNodeId", "material:external-semi",
+                "materialKind", "SEMI_FINISHED",
+                "unit", unit,
+                "ordinal", 0)));
+        Map<String, Object> inputData = new LinkedHashMap<>();
+        inputData.put("name", "External Semi Input");
+        inputData.put("skuId", skuId);
+        inputData.put("baseUnit", unit);
+        inputData.put("inputSource", "EXTERNAL");
+        definition.getNodes().add(new ProductProcessWorkflowDTO.Node(
+                "material:external-semi", "SEMI_FINISHED",
+                new ProductProcessWorkflowDTO.Position(-200D, 0D), inputData));
+        definition.getEdges().add(new ProductProcessWorkflowDTO.Edge(
+                "edge:external-input", "material:external-semi", "output",
+                "process:packing", "in-external"));
         return definition;
     }
 
@@ -812,6 +994,7 @@ class ProductProcessWorkflowCatalogValidatorTest {
         product.setId(id);
         product.setFactoryId(factoryId);
         product.setProductCategory(category);
+        product.setUnit("kg");
         return product;
     }
 

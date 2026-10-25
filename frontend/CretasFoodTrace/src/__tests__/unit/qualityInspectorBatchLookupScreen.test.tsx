@@ -1,13 +1,16 @@
 import React from 'react';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import QIScanScreen from '../../screens/quality-inspector/QIScanScreen';
 
 const mockReplace = jest.fn();
+const mockNavigate = jest.fn();
+const mockRequestPermission = jest.fn();
+let mockPermissionGranted = true;
 let scanPayload = '';
 
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ replace: mockReplace, navigate: jest.fn() }),
+  useNavigation: () => ({ replace: mockReplace, navigate: mockNavigate }),
 }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -24,7 +27,7 @@ jest.mock('expo-camera', () => {
       />
     ),
     Camera: {},
-    useCameraPermissions: () => [{ granted: true }, jest.fn()],
+    useCameraPermissions: () => [{ granted: mockPermissionGranted }, mockRequestPermission],
   };
 });
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -38,9 +41,11 @@ jest.mock('../../services/api/qualityInspectorApi', () => ({
 
 describe('QIScanScreen batch lookup callback', () => {
   const api = jest.requireMock('../../services/api/qualityInspectorApi').qualityInspectorApi;
+  const dialogs = jest.requireMock('../../components/ui/AppDialog');
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPermissionGranted = true;
     scanPayload = '';
     api.getBatchByQRCode.mockResolvedValue({ id: 'B-LOOKUP', batchNumber: 'PB-LOOKUP', factoryId: 'F006' });
     api.getBatchDetail.mockResolvedValue({ id: 'B-ID', batchNumber: 'PB-ID', factoryId: 'F006' });
@@ -69,5 +74,38 @@ describe('QIScanScreen batch lookup callback', () => {
     await waitFor(() => expect(api.getBatchDetail).toHaveBeenCalledWith('B-ID'));
     expect(api.getBatchByQRCode).not.toHaveBeenCalled();
     expect(mockReplace).toHaveBeenCalledWith('QIForm', { batchId: 'B-ID', batchNumber: 'PB-ID' });
+  });
+
+  it('allows exact manual batch lookup without camera permission', async () => {
+    mockPermissionGranted = false;
+    const screen = render(<QIScanScreen />);
+    expect(screen.queryByTestId('mock-camera-scan')).toBeNull();
+    fireEvent.press(screen.getByTestId('qiscan-denied-manual-input'));
+    expect(dialogs.appPrompt).toHaveBeenCalledWith(
+      'scan.enterBatchNumber', 'scan.pleaseEnterBatchNumber', expect.any(Function),
+      expect.objectContaining({ testID: 'qiscan-manual-batch-input' }),
+    );
+    expect(api.getBatchByQRCode).not.toHaveBeenCalled();
+    const submit = dialogs.appPrompt.mock.calls[0][2] as (value: string) => Promise<void>;
+    await act(async () => { await submit('  PB-MANUAL  '); });
+    expect(api.getBatchByQRCode).toHaveBeenCalledTimes(1);
+    expect(api.getBatchByQRCode).toHaveBeenCalledWith('PB-MANUAL');
+    expect(mockReplace).toHaveBeenCalledWith('QIForm', { batchId: 'B-LOOKUP', batchNumber: 'PB-LOOKUP' });
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockRequestPermission).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unknown manually entered batch rejected without a camera grant', async () => {
+    mockPermissionGranted = false;
+    api.getBatchByQRCode.mockRejectedValueOnce(new Error('batch not found'));
+    const screen = render(<QIScanScreen />);
+    fireEvent.press(screen.getByTestId('qiscan-denied-manual-input'));
+    const submit = dialogs.appPrompt.mock.calls[0][2] as (value: string) => Promise<void>;
+    await act(async () => { await submit('PB-MISSING'); });
+    expect(dialogs.appAlert).toHaveBeenCalledWith('scan.scanFailed', 'scan.batchNotFound');
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockRequestPermission).not.toHaveBeenCalled();
+    expect(screen.getByTestId('qiscan-denied-manual-input').props.disabled).toBe(false);
   });
 });

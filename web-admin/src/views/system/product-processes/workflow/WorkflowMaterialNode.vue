@@ -11,6 +11,7 @@
       'validation-attention': validationAttention,
       byproduct: data?.isByproduct === true,
       defective: data?.isDefective === true,
+      'external-source': data?.inputSource === 'EXTERNAL',
     }]"
     :data-testid="data?.isByproduct === true
       ? 'byproduct-cell'
@@ -51,6 +52,12 @@
         <el-tag size="small" :type="data.skuId ? 'success' : 'warning'">
           {{ data.skuId ? '已绑定' : '待绑定' }}
         </el-tag>
+        <el-tag
+          v-if="data.inputSource === 'EXTERNAL'"
+          size="small"
+          type="info"
+          data-testid="external-source-badge"
+        >外部来源</el-tag>
         <button
           v-if="canWrite && data.skuId && (kind === 'SEMI_FINISHED' || kind === 'FINISHED_GOOD')"
           type="button"
