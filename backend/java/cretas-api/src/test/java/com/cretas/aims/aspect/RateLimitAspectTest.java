@@ -5,6 +5,7 @@ import com.cretas.aims.annotation.RateLimit.LimitType;
 import com.cretas.aims.exception.RateLimitExceededException;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.reflect.MethodSignature;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,6 +57,13 @@ class RateLimitAspectTest {
         Method dummyMethod = DummyController.class.getMethod("dummyEndpoint");
         when(methodSignature.getMethod()).thenReturn(dummyMethod);
         when(joinPoint.proceed()).thenReturn("OK");
+    }
+
+    @AfterEach
+    void tearDown() {
+        // The request context is thread-local; leaving it set makes later tests in the same fork
+        // believe they run inside an HTTP request (WarehouseReceivingController then refuses with 503).
+        RequestContextHolder.resetRequestAttributes();
     }
 
     // ── Allows requests within limit ────────────────────────────

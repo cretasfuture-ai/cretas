@@ -15,14 +15,16 @@
     <el-card shadow="never">
       <el-table v-loading="loading" :data="rows" stripe border>
         <!-- 窄屏: 时间 / 访问人 / 身份合成一列、隐藏来源 IP, 把宽度让给「访问内容」 -->
-        <el-table-column v-if="compact" label="时间 / 访问人" width="160">
+        <el-table-column v-if="compact" label="时间 / 访问人" width="170">
           <template #default="{ row }">
-            <div>{{ formatTime(row.accessedAt) }}</div>
-            <div class="muted sub">{{ actorText(row) }} · {{ roleLabel(row.actorRole) }}</div>
+            <div class="one-line">{{ formatTime(row.accessedAt) }}</div>
+            <div class="muted sub one-line" :title="`${actorText(row)} · ${roleLabel(row.actorRole)}`">
+              {{ actorText(row) }} · {{ roleLabel(row.actorRole) }}
+            </div>
           </template>
         </el-table-column>
         <template v-else>
-          <el-table-column label="访问时间" width="160">
+          <el-table-column label="访问时间" width="170">
             <template #default="{ row }">{{ formatTime(row.accessedAt) }}</template>
           </el-table-column>
           <el-table-column label="访问人" min-width="120">
@@ -34,25 +36,24 @@
             <template #default="{ row }">{{ roleLabel(row.actorRole) }}</template>
           </el-table-column>
         </template>
-        <el-table-column label="操作" width="96">
+        <el-table-column label="操作" :width="compact ? 92 : 96">
           <template #default="{ row }">
-            <el-tag size="small" :type="methodTagType(row)">{{ methodLabel(row) }}</el-tag>
+            <el-tag size="small" disable-transitions :type="methodTagType(row)">{{ methodLabel(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="访问内容" min-width="220">
+        <el-table-column label="访问内容" :min-width="compact ? 110 : 260">
           <template #default="{ row }">
             <div :class="{ muted: describeAccessPath(row.requestPath).background }">
               {{ describeAccessPath(row.requestPath).label }}
             </div>
-            <div class="path muted">
-              {{ row.requestPath }}<span v-if="row.queryParamNames">（参数：{{ row.queryParamNames }}）</span>
-            </div>
+            <!-- 原始路径只占一行, 超出用省略号, 悬停看完整路径 (长 UUID 曾把一行撑到 4-5 行) -->
+            <div class="path muted one-line" :title="fullPath(row)">{{ fullPath(row) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="结果" width="80">
+        <el-table-column label="结果" :width="compact ? 70 : 80">
           <template #default="{ row }">
-            <el-tag v-if="row.responseStatus != null && row.responseStatus < 400" size="small" type="success">成功</el-tag>
-            <el-tag v-else-if="row.responseStatus != null" size="small" type="danger">被拒绝</el-tag>
+            <el-tag v-if="row.responseStatus != null && row.responseStatus < 400" size="small" disable-transitions type="success">成功</el-tag>
+            <el-tag v-else-if="row.responseStatus != null" size="small" disable-transitions type="danger">被拒绝</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
@@ -108,6 +109,10 @@ window.addEventListener('resize', onResize);
 onBeforeUnmount(() => window.removeEventListener('resize', onResize));
 const compact = computed(() => viewportWidth.value < 1100);
 
+function fullPath(row: PlatformAccessLogEntry): string {
+  return row.queryParamNames ? `${row.requestPath}（参数：${row.queryParamNames}）` : row.requestPath;
+}
+
 function actorText(row: PlatformAccessLogEntry): string {
   if (row.actorUsername) return row.actorUsername;
   return row.actorUserId ? `#${row.actorUserId}` : '—';
@@ -158,7 +163,8 @@ onMounted(load);
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .page-header h2 { margin: 0; font-size: 18px; }
 .intro { margin-bottom: 12px; }
-.path { font-family: Consolas, monospace; font-size: 11px; word-break: break-all; margin-top: 2px; }
+.path { font-family: Consolas, monospace; font-size: 11px; margin-top: 2px; }
+.one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .muted { color: #909399; }
 .sub { font-size: 12px; margin-top: 2px; }
 .empty { padding: 24px 0; color: #909399; }

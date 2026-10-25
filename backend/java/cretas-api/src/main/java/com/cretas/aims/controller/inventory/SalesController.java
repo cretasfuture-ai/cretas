@@ -22,6 +22,7 @@ import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.service.inventory.SalesPriceAdjustmentService;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
@@ -931,7 +932,7 @@ public class SalesController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<FinishedGoodsBatch> result = salesService.getFinishedGoodsBatches(factoryId, page, size);
-        return ApiResponse.success("查询成功", detachedFinishedGoodsPage(result));
+        return ApiResponse.success("查询成功", detachedFinishedGoodsPage(factoryId, result));
     }
 
     @GetMapping("/finished-goods/available")
@@ -948,12 +949,13 @@ public class SalesController {
     }
 
     private PageResponse<FinishedGoodsBatch> detachedFinishedGoodsPage(
+            String factoryId,
             PageResponse<FinishedGoodsBatch> source) {
         if (source == null) {
             return null;
         }
         PageResponse<FinishedGoodsBatch> copy = new PageResponse<>();
-        copy.setContent(detachedFinishedGoodsList(source.getContent()));
+        copy.setContent(detachedFinishedGoodsList(factoryId, source.getContent()));
         copy.setPage(source.getPage());
         copy.setCurrentPage(source.getCurrentPage());
         copy.setSize(source.getSize());
@@ -971,12 +973,49 @@ public class SalesController {
         return source.stream().map(this::detachedFinishedGoods).toList();
     }
 
+    private List<FinishedGoodsBatch> detachedFinishedGoodsList(
+            String factoryId,
+            List<FinishedGoodsBatch> source) {
+        if (source == null) {
+            return null;
+        }
+        Set<String> productTypeIds = source.stream()
+                .map(FinishedGoodsBatch::getProductTypeId)
+                .filter(id -> id != null && !id.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Map<String, String> productNamesById = productTypeIds.isEmpty()
+                ? Map.of()
+                : productTypeRepository.findByFactoryIdAndIdIn(factoryId, productTypeIds).stream()
+                        .filter(product -> product != null
+                                && product.getId() != null
+                                && product.getName() != null
+                                && !product.getName().isBlank())
+                        .collect(java.util.stream.Collectors.toMap(
+                                ProductType::getId,
+                                ProductType::getName,
+                                (left, right) -> left,
+                                LinkedHashMap::new));
+        return source.stream()
+                .map(batch -> detachedFinishedGoods(batch, productNamesById.get(batch.getProductTypeId())))
+                .toList();
+    }
+
     private FinishedGoodsBatch detachedFinishedGoods(FinishedGoodsBatch source) {
+        return detachedFinishedGoods(source, null);
+    }
+
+    private FinishedGoodsBatch detachedFinishedGoods(
+            FinishedGoodsBatch source,
+            String resolvedProductName) {
         if (source == null) {
             return null;
         }
         FinishedGoodsBatch copy = new FinishedGoodsBatch();
         BeanUtils.copyProperties(source, copy, "factory", "productType");
+        if ((copy.getProductName() == null || copy.getProductName().isBlank())
+                && resolvedProductName != null && !resolvedProductName.isBlank()) {
+            copy.setProductName(resolvedProductName);
+        }
         return copy;
     }
 

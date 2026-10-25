@@ -40,7 +40,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -68,6 +71,10 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
 
     private final List<String> createdSlotIds = new ArrayList<>();
     private final AtomicInteger planSaves = new AtomicInteger();
+    private final List<ProductionPlan> savedPlans = new CopyOnWriteArrayList<>();
+    private PushNotificationService push;
+    /** 释放时段时「本厂有没有从这个时刻开始的未取消计划」的答案 */
+    private volatile boolean planOccupiesSlot;
 
     @AfterEach
     void cleanup() {
@@ -79,13 +86,12 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
     /**
      * @param insideTx barrier awaited inside plan save (i.e. inside the confirm transaction,
      *                 after the slot claim) so both transactions are open at once; null = no wait.
-     *                 (Push notification can't be the hook: confirmInsert does Long.valueOf(uuid)
-     *                 on the plan id before calling it, so it is never reached.)
      */
     private UrgentInsertServiceImpl service(CyclicBarrier insideTx) {
         ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
         when(planRepo.save(any(ProductionPlan.class))).thenAnswer(inv -> {
             planSaves.incrementAndGet();
+            savedPlans.add(inv.getArgument(0));
             if (insideTx != null) {
                 try {
                     // shorter than H2's row-lock timeout, so the loser waits out the winner
@@ -97,7 +103,9 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
             }
             return inv.getArgument(0);
         });
-        PushNotificationService push = mock(PushNotificationService.class);
+        when(planRepo.existsByFactoryIdAndStartTimeAndStatusNot(any(), any(), any()))
+                .thenAnswer(inv -> planOccupiesSlot);
+        push = mock(PushNotificationService.class);
         return UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
                 InsertSlotRepository.class, insertSlotRepository,
                 ProductionPlanRepository.class, planRepo,
@@ -206,5 +214,88 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
         System.out.println("URGENT_INSERT_CROSS_FACTORY status=" + statusInDb(slotId) + " planSaves=" + planSaves.get());
         assertThat(statusInDb(slotId)).as("other factory must not flip the slot").isEqualTo("available");
         assertThat(planSaves.get()).as("no plan may be created for another factory's slot").isZero();
+    }
+
+    /**
+     * 计划 id 是 UUID。原来推送前做 Long.valueOf(uuid) 恒抛异常, 被 catch 吞掉 ⇒ 插单通知从没发出去过。
+     * 判据: 确认插单之后, 推送真的被调用, 且带的就是那份计划的 UUID。
+     */
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void confirmSendsTheUrgentInsertPushWithTheUuidPlanId() {
+        String factoryId = "F-UI-PUSH-" + UUID.randomUUID().toString().substring(0, 8);
+        String slotId = insertCommittedSlot(factoryId);
+        UrgentInsertServiceImpl service = service(null);
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.confirmInsert(factoryId, 1L, request(slotId)));
+
+        // 一定会发生的读数: 计划确实保存了, 且 id 是 UUID (不是数字)
+        assertThat(savedPlans).hasSize(1);
+        String planId = savedPlans.get(0).getId();
+        assertThat(planId).isNotBlank().doesNotMatch("\\d+");
+        verify(push).sendUrgentInsertNotification(eq(1L), eq(planId), anyString());
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void selectingASlotTwiceIsAConflictNotASecondSuccess() {
+        String factoryId = "F-UI-SEL-" + UUID.randomUUID().toString().substring(0, 8);
+        String slotId = insertCommittedSlot(factoryId);
+        UrgentInsertServiceImpl service = service(null);
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.markSlotAsSelected(factoryId, slotId));
+        assertThat(statusInDb(slotId)).as("一定会发生: 第一次选中生效").isEqualTo("selected");
+
+        // 原来无条件 setStatus("selected"), 第二次照样「成功」
+        assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.markSlotAsSelected(factoryId, slotId)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+
+        // 他厂: 404, 不改数据
+        assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.releaseSlot("F-UI-OTHER", slotId)))
+                .isInstanceOf(EntityNotFoundException.class);
+        assertThat(statusInDb(slotId)).isEqualTo("selected");
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void anExpiredSlotCannotBeSelected() {
+        String factoryId = "F-UI-EXP-" + UUID.randomUUID().toString().substring(0, 8);
+        String slotId = insertCommittedSlot(factoryId);
+        jdbcTemplate.update("UPDATE insert_slots SET status = 'expired' WHERE id = ?", slotId);
+        UrgentInsertServiceImpl service = service(null);
+
+        assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.markSlotAsSelected(factoryId, slotId)))
+                .isInstanceOf(BusinessException.class);
+        assertThat(statusInDb(slotId)).as("原来过期时段也会被改成 selected").isEqualTo("expired");
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void aSlotHoldingAConfirmedPlanCannotBeReleased() {
+        String factoryId = "F-UI-REL-" + UUID.randomUUID().toString().substring(0, 8);
+        String slotId = insertCommittedSlot(factoryId);
+        UrgentInsertServiceImpl service = service(null);
+        new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.confirmInsert(factoryId, 1L, request(slotId)));
+        assertThat(statusInDb(slotId)).isEqualTo("selected");
+
+        planOccupiesSlot = true;
+        assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.releaseSlot(factoryId, slotId)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+        assertThat(statusInDb(slotId)).as("原来能释放 ⇒ 同一时段可以再排第二份计划").isEqualTo("selected");
+
+        // 阴性对照: 计划取消了 (不再占用) ⇒ 可以释放
+        planOccupiesSlot = false;
+        new TransactionTemplate(transactionManager).executeWithoutResult(s ->
+                service.releaseSlot(factoryId, slotId));
+        assertThat(statusInDb(slotId)).isEqualTo("available");
     }
 }

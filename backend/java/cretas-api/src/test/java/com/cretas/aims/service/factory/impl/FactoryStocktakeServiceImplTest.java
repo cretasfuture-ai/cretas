@@ -3,11 +3,15 @@ package com.cretas.aims.service.factory.impl;
 import com.cretas.aims.dto.factory.CreateStocktakeRequest;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
+import com.cretas.aims.dto.factory.StocktakeRecountRequest;
+import com.cretas.aims.dto.factory.StocktakeCancelRequest;
 import com.cretas.aims.dto.finance.VoucherEntrySpec;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialBatchAdjustment;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.VoucherType;
+import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.factory.FactoryStocktakeItem;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -17,6 +21,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeItemRepository;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
@@ -85,6 +90,7 @@ class FactoryStocktakeServiceImplTest {
     @Mock private ProductTypeRepository productTypeRepo;
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private VoucherService voucherService;
+    @Mock private UserRepository userRepository;
 
     @InjectMocks private FactoryStocktakeServiceImpl service;
 
@@ -97,6 +103,7 @@ class FactoryStocktakeServiceImplTest {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         // voucherService 是 @Autowired(required=false) 字段, @InjectMocks 走构造器注入不会填充它 → 手动注入
         ReflectionTestUtils.setField(service, "voucherService", voucherService);
+        ReflectionTestUtils.setField(service, "userRepository", userRepository);
         lenient().when(stocktakeRepo.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY_ID)))
                 .thenAnswer(invocation -> stocktakeRepo.findById(invocation.getArgument(0)));
         lenient().when(materialBatchRepo.findByIdAndFactoryId(anyString(), eq(FACTORY_ID)))
@@ -1172,10 +1179,14 @@ class FactoryStocktakeServiceImplTest {
 
         // 核心断言：OPENING 无论今天几号都跳过月底约束 → 创建成功
         when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
-        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any())).thenReturn(Collections.emptyList());
+        MaterialBatch openingBatch = materialBatch("OPENING-TEST", "10");
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(any(), any())).thenReturn(List.of(openingBatch));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
         when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        StocktakeDTO opened = service.initiate(FACTORY_ID, req, USER_ID, FactoryStocktake.ImportMode.OPENING);
+        StocktakeDTO opened = service.initiateOpeningScoped(
+                FACTORY_ID, req, USER_ID, List.of("OPENING-TEST"));
         assertThat(opened).isNotNull();
         assertThat(opened.getStatus()).isEqualTo(FactoryStocktake.Status.INITIATED.name());
 
@@ -1186,6 +1197,250 @@ class FactoryStocktakeServiceImplTest {
                     .isInstanceOf(BusinessException.class)
                     .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
         }
+    }
+
+    @Test
+    @DisplayName("OPENING 内部入口只快照导入已解析的批次 ID")
+    void initiateOpeningScoped_snapshotsOnlySelectedBatches() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 28);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        req.setPeriodMonth("2026-07");
+
+        MaterialBatch first = materialBatch("OPEN-A", "100");
+        MaterialBatch second = materialBatch("OPEN-B", "50");
+        MaterialBatch unrelated = materialBatch("OPEN-UNRELATED", "25");
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(first, second, unrelated));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeDTO result = service.initiateOpeningScoped(
+                FACTORY_ID, req, USER_ID, List.of("OPEN-A", "OPEN-B"));
+
+        assertThat(result.getItems()).extracting(StocktakeDTO.StocktakeItemDTO::getMaterialBatchId)
+                .containsExactlyInAnyOrder("OPEN-A", "OPEN-B");
+        ArgumentCaptor<FactoryStocktake> saved = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(saved.capture());
+        assertThat(saved.getValue().getItems()).extracting(FactoryStocktakeItem::getMaterialBatchId)
+                .containsExactlyInAnyOrder("OPEN-A", "OPEN-B");
+    }
+
+    @Test
+    @DisplayName("OPENING 批次范围缺失、重复、跨工厂/仓库或软删除时拒绝")
+    void initiateOpeningScoped_rejectsInvalidBatchScope() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any()))
+                .thenReturn(List.of());
+        MaterialBatch valid = materialBatch("OPEN-A", "100");
+        MaterialBatch foreign = materialBatch("OPEN-FOREIGN", "10");
+        foreign.setFactoryId("F999");
+        MaterialBatch otherWarehouse = materialBatch("OPEN-OTHER-WH", "10");
+        otherWarehouse.setWarehouseId("WH-999");
+        MaterialBatch deleted = materialBatch("OPEN-DELETED", "10");
+        deleted.setDeletedAt(LocalDateTime.now());
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(valid, foreign, otherWarehouse, deleted));
+
+        assertThatThrownBy(() -> service.initiateOpeningScoped(
+                FACTORY_ID, req, USER_ID, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+
+        List<List<String>> invalidScopes = List.of(
+                List.of(),
+                List.of(""),
+                List.of("OPEN-A", "OPEN-A"),
+                List.of("OPEN-MISSING"),
+                List.of("OPEN-FOREIGN"),
+                List.of("OPEN-OTHER-WH"),
+                List.of("OPEN-DELETED"));
+        for (List<String> invalidScope : invalidScopes) {
+            assertThatThrownBy(() -> service.initiateOpeningScoped(
+                    FACTORY_ID, req, USER_ID, invalidScope))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                    .isEqualTo("STOCKTAKE_OPENING_BATCH_SCOPE_INVALID");
+        }
+        verify(stocktakeRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("未提交盘点由同厂激活发起人取消并保留审计与明细")
+    void cancel_unsubmittedByActiveMaker_persistsAuditOnly() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.COUNTING);
+        stocktake.setId("CANCEL-ME");
+        stocktake.setInitiatedBy(USER_ID);
+        stocktake.setVersion(4L);
+        FactoryStocktakeItem item = buildItem(stocktake, new BigDecimal("10"));
+        stocktake.setItems(new ArrayList<>(List.of(item)));
+        User actor = activeUser(USER_ID, FACTORY_ID);
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate("CANCEL-ME", FACTORY_ID))
+                .thenReturn(Optional.of(stocktake));
+        when(userRepository.findByIdAndFactoryId(USER_ID, FACTORY_ID)).thenReturn(Optional.of(actor));
+        when(stocktakeRepo.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeCancelRequest request = cancelRequest("  修正盘点范围  ", 4L);
+        StocktakeDTO result = service.cancel("CANCEL-ME", FACTORY_ID, request, USER_ID);
+
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.CANCELLED);
+        assertThat(stocktake.getCancelledBy()).isEqualTo(USER_ID);
+        assertThat(stocktake.getCancelledAt()).isNotNull();
+        assertThat(stocktake.getCancelReason()).isEqualTo("修正盘点范围");
+        assertThat(result.getStatus()).isEqualTo("CANCELLED");
+        assertThat(result.getCancelReason()).isEqualTo("修正盘点范围");
+        assertThat(stocktake.getItems()).containsExactly(item);
+        verify(stocktakeRepo).saveAndFlush(stocktake);
+        verify(stocktakeItemRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+        verify(adjustmentRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("盘点取消拒绝非发起人、停用用户和跨工厂用户")
+    void cancel_rejectsNonMakerInactiveAndForeignActor() {
+        FactoryStocktake stocktake = cancelableStocktake();
+        User inactive = activeUser(43L, FACTORY_ID);
+        inactive.setIsActive(false);
+        User foreign = activeUser(44L, "F999");
+        when(userRepository.findByIdAndFactoryId(43L, FACTORY_ID)).thenReturn(Optional.of(inactive));
+        when(userRepository.findByIdAndFactoryId(44L, FACTORY_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("inactive", 2L), 43L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_MAKER_ONLY");
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("foreign", 2L), 44L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_MAKER_ONLY");
+
+        stocktake.setInitiatedBy(43L);
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("inactive", 2L), 43L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_ACTOR_INVALID");
+        stocktake.setInitiatedBy(44L);
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("foreign", 2L), 44L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_ACTOR_INVALID");
+        verify(stocktakeRepo, never()).save(any());
+        verify(stocktakeRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("取消拒绝缺失/过期版本、空原因和超长原因")
+    void cancel_rejectsInvalidRequestAndStaleVersion() {
+        FactoryStocktake stocktake = cancelableStocktake();
+
+        StocktakeCancelRequest missingVersion = cancelRequest("reason", null);
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID, missingVersion, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_VERSION_REQUIRED");
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("reason", 1L), USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STALE_STOCKTAKE_VERSION");
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("   ", 2L), USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_REASON_REQUIRED");
+        assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                cancelRequest("x".repeat(501), 2L), USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_REASON_TOO_LONG");
+        verify(stocktakeRepo, never()).save(any());
+        verify(stocktakeRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("取消拒绝已提交/已审批/已生效/已取消及矛盾证据")
+    void cancel_rejectsTerminalAndSubmittedEvidence() {
+        for (FactoryStocktake.Status status : List.of(
+                FactoryStocktake.Status.PENDING_APPROVAL,
+                FactoryStocktake.Status.APPROVED,
+                FactoryStocktake.Status.APPLIED,
+                FactoryStocktake.Status.REJECTED,
+                FactoryStocktake.Status.CANCELLED)) {
+            FactoryStocktake stocktake = cancelableStocktake();
+            stocktake.setStatus(status);
+            assertThatThrownBy(() -> service.cancel(stocktake.getId(), FACTORY_ID,
+                    cancelRequest("no", 2L), USER_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                    .isEqualTo("STOCKTAKE_CANCEL_STATE_INVALID");
+        }
+        FactoryStocktake contradictory = cancelableStocktake();
+        contradictory.setWorkflowInstanceId("wf-1");
+        assertThatThrownBy(() -> service.cancel(contradictory.getId(), FACTORY_ID,
+                cancelRequest("no", 2L), USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(ex -> ((BusinessException) ex).getErrorCode())
+                .isEqualTo("STOCKTAKE_CANCEL_SUBMITTED");
+        verify(stocktakeRepo, never()).save(any());
+        verify(stocktakeRepo, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("OPENING 漂移重盘保留原始选中批次，不扩展到全仓")
+    void recountOpeningAfterDrift_preservesOriginalBatchScope() {
+        FactoryStocktake source = buildStocktake(FactoryStocktake.Status.APPROVED);
+        source.setId("OPEN-SOURCE");
+        source.setVersion(7L);
+        source.setImportMode(FactoryStocktake.ImportMode.OPENING);
+        FactoryStocktakeItem selected = buildItem(source, new BigDecimal("100"));
+        selected.setId("ITEM-OPEN-A");
+        selected.setMaterialBatchId("OPEN-A");
+        selected.setActualQty(new BigDecimal("110"));
+        selected.setDifferenceQty(new BigDecimal("10"));
+        selected.setDifferenceType(FactoryStocktakeItem.DifferenceType.SURPLUS);
+        FactoryStocktakeItem secondSelected = buildItem(source, new BigDecimal("50"));
+        secondSelected.setId("ITEM-OPEN-B");
+        secondSelected.setMaterialBatchId("OPEN-B");
+        source.setItems(new ArrayList<>(List.of(selected, secondSelected)));
+
+        MaterialBatch liveSelected = materialBatch("OPEN-A", "95");
+        MaterialBatch liveSecond = materialBatch("OPEN-B", "50");
+        MaterialBatch unrelated = materialBatch("OPEN-UNRELATED", "25");
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate("OPEN-SOURCE", FACTORY_ID))
+                .thenReturn(Optional.of(source));
+        when(materialBatchRepo.findByIdAndFactoryIdForUpdate("OPEN-A", FACTORY_ID))
+                .thenReturn(Optional.of(liveSelected));
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(liveSelected, liveSecond, unrelated));
+        when(materialConsumptionRepo.sumUnsettledConsumptionGroupedByBatch(eq(FACTORY_ID), anyList()))
+                .thenReturn(Collections.emptyList());
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StocktakeRecountRequest request = new StocktakeRecountRequest();
+        request.setExpectedVersion(7L);
+        request.setReason("OPENING 期初批次发生漂移");
+        StocktakeDTO result = service.recountAfterDrift(
+                "OPEN-SOURCE", FACTORY_ID, request, USER_ID, "warehouse_manager");
+
+        assertThat(result.getId()).isNotEqualTo("OPEN-SOURCE");
+        ArgumentCaptor<FactoryStocktake> saved = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo, times(2)).save(saved.capture());
+        FactoryStocktake recount = saved.getAllValues().stream()
+                .filter(stocktake -> !"OPEN-SOURCE".equals(stocktake.getId()))
+                .findFirst().orElseThrow();
+        assertThat(recount.getItems()).extracting(FactoryStocktakeItem::getMaterialBatchId)
+                .containsExactlyInAnyOrder("OPEN-A", "OPEN-B");
     }
 
     // -------------------------------------------------------
@@ -1435,6 +1690,46 @@ class FactoryStocktakeServiceImplTest {
         batch.setWarehouseId(WAREHOUSE_ID);
         batch.setMaterialTypeId(item.getRawMaterialTypeId());
         return batch;
+    }
+
+    private MaterialBatch materialBatch(String id, String receiptQuantity) {
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId(id);
+        batch.setFactoryId(FACTORY_ID);
+        batch.setWarehouseId(WAREHOUSE_ID);
+        batch.setMaterialTypeId("TYPE-" + id);
+        batch.setReceiptQuantity(new BigDecimal(receiptQuantity));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit("kg");
+        batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        return batch;
+    }
+
+    private FactoryStocktake cancelableStocktake() {
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.COUNTING);
+        stocktake.setId("CANCEL-TARGET");
+        stocktake.setInitiatedBy(USER_ID);
+        stocktake.setVersion(2L);
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate("CANCEL-TARGET", FACTORY_ID))
+                .thenReturn(Optional.of(stocktake));
+        return stocktake;
+    }
+
+    private StocktakeCancelRequest cancelRequest(String reason, Long expectedVersion) {
+        StocktakeCancelRequest request = new StocktakeCancelRequest();
+        request.setReason(reason);
+        request.setExpectedVersion(expectedVersion);
+        return request;
+    }
+
+    private User activeUser(Long id, String factoryId) {
+        User user = new User();
+        user.setId(id);
+        user.setFactoryId(factoryId);
+        user.setIsActive(true);
+        user.setUsername("user-" + id);
+        return user;
     }
 
     private FactoryStocktake buildStocktake(FactoryStocktake.Status status) {

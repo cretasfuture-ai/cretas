@@ -602,6 +602,7 @@ export default function QIFormScreen() {
 
 function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard }: { batch: QIBatch; form: DynamicQualityForm; batchNumber: string; onRefreshStandard: () => Promise<DynamicQualityForm> }) {
   const navigation = useNavigation<NavigationProp>();
+  const { t } = useTranslation('quality');
   const insets = useSafeAreaInsets();
   const [values, setValues] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState('');
@@ -633,7 +634,7 @@ function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard 
       }
       navigation.replace('QIResult', { recordId: String(inspectionId), passed: result === 'PASS' });
     } catch (e) {
-      const message = getQualityInspectionSubmitErrorMessage(e, '提交失败，请检查标准版本后重试');
+      const message = getQualityInspectionSubmitErrorMessage(e, '提交失败，请检查标准版本后重试', t('form.checkNetworkAndRetry'));
       const isStaleError = typeof e === 'object' && e !== null
         && 'response' in e && Boolean((e as { response?: { data?: { code?: string } } }).response?.data?.code === 'QUALITY_STANDARD_STALE');
       setStale(isStaleError || message.includes('标准已更新'));
@@ -648,7 +649,7 @@ function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard 
       await onRefreshStandard();
       setStale(false);
     } catch (e) {
-      setError(getQualityInspectionSubmitErrorMessage(e, '刷新标准失败，当前填写内容已保留'));
+      setError(getQualityInspectionSubmitErrorMessage(e, '刷新标准失败，当前填写内容已保留', t('form.checkNetworkAndRetry')));
     }
   };
 

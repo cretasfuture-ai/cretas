@@ -247,6 +247,20 @@ describe('WorkflowMaterialNode raw material picker — BOM priority grouping (#3
     expect(wrapper.get('[data-testid="unit-error"]').text()).toContain('缺少规范主单位');
   });
 
+  it('marks an external semi-finished input distinctly from a produced cell', () => {
+    const wrapper = mountNode({
+      kind: 'SEMI_FINISHED',
+      data: {
+        name: '外部半成品', skuId: 'SFI-EXT', skuCode: 'SFI-EXT', baseUnit: '只', bound: true,
+        inputSource: 'EXTERNAL',
+      },
+    });
+
+    expect(wrapper.classes()).toContain('external-source');
+    expect(wrapper.get('[data-testid="external-source-badge"]').text()).toBe('外部来源');
+    expect(wrapper.find('[data-testid="external-source-badge"]').exists()).toBe(true);
+  });
+
   it('gives material names a full-width heading row with a hover title', () => {
     const name = 'E2E-替代链-处理后半成品';
     const wrapper = mountNode({

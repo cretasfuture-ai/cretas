@@ -994,7 +994,7 @@ public class IntentExecutionOrchestrator {
         applyResultFormatting(response);
 
         // 6.9. formattedText 兜底
-        applyFormattedTextFallback(response);
+        applyFormattedTextFallback(factoryId, response);
 
         // 6.95. P1 读写分块: 终点统一补 aiMode (前端据此选卡片形态)
         applyAiModeStamp(response, intent, toolName);
@@ -1183,7 +1183,7 @@ public class IntentExecutionOrchestrator {
         }
 
         applyResultFormatting(response);
-        applyFormattedTextFallback(response);
+        applyFormattedTextFallback(factoryId, response);
 
         // P1 读写分块: 显式意图路径同样终点补 aiMode
         applyAiModeStamp(response, intent, toolName);
@@ -4336,7 +4336,7 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    private void applyFormattedTextFallback(IntentExecuteResponse response) {
+    private void applyFormattedTextFallback(String factoryId, IntentExecuteResponse response) {
         sanitizeInternalReasoningLeak(response);
         String currentFT = response.getFormattedText();
         String msg = response.getMessage();
@@ -4374,7 +4374,7 @@ public class IntentExecutionOrchestrator {
         // Opt-out via cretas.ai.workdesk-summarizer.enabled=false.
         if (workdeskOutputSummarizer != null) {
             try {
-                workdeskOutputSummarizer.apply(response);
+                workdeskOutputSummarizer.apply(response, factoryId);
             } catch (Exception e) {
                 log.warn("WorkdeskOutputSummarizer 应用失败 (non-blocking): {}", e.getMessage());
             }

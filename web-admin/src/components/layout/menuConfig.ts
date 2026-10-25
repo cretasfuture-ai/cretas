@@ -512,6 +512,10 @@ const rawMenuConfig: MenuItem[] = [
         roles: FACTORY_ASSEMBLY_ROLES, assemblyFeature: true, groupLabel: '平台建厂' },
       { path: '/factory-review', title: '建厂复核', icon: 'DocumentChecked', module: 'system',
         roles: FACTORY_ASSEMBLY_ROLES, assemblyFeature: true },
+      // The factory's own read-only readiness. No assemblyFeature: the sidebar enables that flag for
+      // platform super admins only, so it would hide this entry from every factory account.
+      { path: '/factory-readiness', title: '建厂就绪', icon: 'DocumentChecked', module: 'system',
+        roles: ['factory_super_admin'] },
     ]
   },
   {

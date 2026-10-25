@@ -207,6 +207,9 @@ export async function exportPPT(data: PPTExportRequest): Promise<Blob | null> {
 export interface ExcelExportRequest {
   charts: Record<string, unknown>[];
   analysis_results: Record<string, string>;
+  /** 页面上的页首结论与规则结论, 导出到「分析结论」工作表 */
+  headline?: DashboardHeadline | null;
+  findings?: DashboardResponse['findings'];
   company_name?: string;
   year?: number;
   period_type?: string;

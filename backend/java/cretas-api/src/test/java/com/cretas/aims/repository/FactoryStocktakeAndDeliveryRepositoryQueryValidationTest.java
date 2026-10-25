@@ -44,6 +44,9 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
         assertNotNull(finishedGoodsBatchRepository);
         assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("version")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("inventoryScope")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("cancelledBy")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("cancelledAt")).isNotNull();
+        assertThat(entityManager.getMetamodel().entity(FactoryStocktake.class).getAttribute("cancelReason")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(FactoryStocktakeItem.class).getAttribute("finishedGoodsBatchId")).isNotNull();
         assertThat(entityManager.getMetamodel().entity(SalesDeliveryItem.class).getAttribute("salesOrderItemId")).isNotNull();
     }
@@ -60,6 +63,8 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
                 FactoryStocktake.InventoryScope.RAW_MATERIAL, now);
         persistStocktake("ST-RECOUNTED", FactoryStocktake.Status.RECOUNT_REQUIRED,
                 FactoryStocktake.InventoryScope.RAW_MATERIAL, now.plusMinutes(2));
+        persistStocktake("ST-CANCELLED", FactoryStocktake.Status.CANCELLED,
+                FactoryStocktake.InventoryScope.RAW_MATERIAL, now.plusMinutes(3));
         persistStocktake("ST-OTHER-SCOPE", FactoryStocktake.Status.PENDING_APPROVAL,
                 FactoryStocktake.InventoryScope.FINISHED_GOODS, now.plusMinutes(1));
         entityManager.flush();
@@ -70,7 +75,7 @@ class FactoryStocktakeAndDeliveryRepositoryQueryValidationTest {
 
         assertThat(active).extracting(FactoryStocktake::getStocktakeNo)
                 .containsExactly("ST-BLOCKING", "ST-OLD")
-                .doesNotContain("ST-ENDED", "ST-RECOUNTED", "ST-OTHER-SCOPE");
+                .doesNotContain("ST-ENDED", "ST-RECOUNTED", "ST-CANCELLED", "ST-OTHER-SCOPE");
     }
 
     private void persistStocktake(String stocktakeNo, FactoryStocktake.Status status,

@@ -54,6 +54,19 @@ public interface InsertSlotRepository extends JpaRepository<InsertSlot, String> 
             @Param("now") LocalDateTime now);
 
     /**
+     * 原子释放: 只有「本厂 + 当前 selected + 未删除」那一行会被改回 available。
+     * 返回影响行数; 0 = 不是 selected / 不属于本厂 / 已被别人改过。
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE InsertSlot s SET s.status = 'available', s.updatedAt = :now " +
+           "WHERE s.id = :id AND s.factoryId = :factoryId " +
+           "AND s.status = 'selected' AND s.deletedAt IS NULL")
+    int releaseSelectedSlot(
+            @Param("id") String id,
+            @Param("factoryId") String factoryId,
+            @Param("now") LocalDateTime now);
+
+    /**
      * 查找工厂在指定时间范围内的时段
      *
      * @param factoryId 工厂ID

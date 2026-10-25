@@ -167,7 +167,7 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
             }
         }
 
-        // 1) 创建盘点任务（复用 initiate：快照账面 + 月底约束 + 同仓同月防重）
+        // 1) 创建盘点任务（OPENING 只快照本次已填实盘的导入行；NORMAL 仍复用全仓 initiate）
         CreateStocktakeRequest req = new CreateStocktakeRequest();
         req.setWarehouseId(warehouseId);
         req.setPeriodMonth(periodMonth);
@@ -175,7 +175,16 @@ public class StocktakeBulkImportServiceImpl implements StocktakeBulkImportServic
                 ? notes
                 : "批量导入盘点（匹配 " + preview.getMatchedCount() + " / 失败 " + preview.getErrorCount() + "）");
         // initiate 直接落 importMode（驱动 apply 过账科目）+ OPENING 跳过月底约束（Decision 4）。
-        StocktakeDTO created = stocktakeService.initiate(factoryId, req, userId, mode);
+        // OPENING 的 scope 来自已解析且已填实盘数量的行，不能让 initiate 再次扩展为全仓快照。
+        List<String> openingBatchIds = opening
+                ? preview.getMatchedLines().stream()
+                        .filter(line -> line.getActualQty() != null)
+                        .map(StocktakeBulkImportPreviewDTO.MatchedLine::getMaterialBatchId)
+                        .toList()
+                : List.of();
+        StocktakeDTO created = opening
+                ? stocktakeService.initiateOpeningScoped(factoryId, req, userId, openingBatchIds)
+                : stocktakeService.initiate(factoryId, req, userId, mode);
 
         // 2) 建 materialBatchId → itemId 映射（来自 initiate 的快照明细）
         Map<String, String> itemIdByBatchId = new HashMap<>();

@@ -41,11 +41,13 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -235,6 +237,48 @@ class SalesFinishedGoodsPriceContractTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.unitPrice").value(0))
                 .andExpect(jsonPath("$.data.unitCost").value(0));
+    }
+
+    @Test
+    @DisplayName("finished-goods list enriches a blank snapshot from the same-factory product name")
+    void listEnrichesBlankProductNameWithoutMutatingSource() throws Exception {
+        source.setProductName(null);
+        FinishedGoodsBatch preserved = sampleBatch();
+        preserved.setId("FGB-2");
+        preserved.setProductTypeId("PT-2");
+        preserved.setProductName("已存快照名称");
+        FinishedGoodsBatch missing = sampleBatch();
+        missing.setId("FGB-3");
+        missing.setProductTypeId("PT-MISSING");
+        missing.setProductName(null);
+        when(salesService.getFinishedGoodsBatches("F006", 1, 20))
+                .thenReturn(PageResponse.of(List.of(source, preserved, missing), 1, 20, 3L));
+        ProductType resolved = new ProductType();
+        resolved.setId("PT-1");
+        resolved.setName("同厂成品名称");
+        ProductType conflicting = new ProductType();
+        conflicting.setId("PT-2");
+        conflicting.setName("目录新名称");
+        when(productTypeRepository.findByFactoryIdAndIdIn(
+                "F006", Set.of("PT-1", "PT-2", "PT-MISSING")))
+                .thenReturn(List.of(resolved, conflicting));
+
+        mockMvc.perform(get("/api/mobile/F006/sales/finished-goods")
+                        .requestAttr("userId", 10L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].productTypeId").value("PT-1"))
+                .andExpect(jsonPath("$.data.content[0].productName").value("同厂成品名称"))
+                .andExpect(jsonPath("$.data.content[1].productTypeId").value("PT-2"))
+                .andExpect(jsonPath("$.data.content[1].productName").value("已存快照名称"))
+                .andExpect(jsonPath("$.data.content[2].productTypeId").value("PT-MISSING"))
+                .andExpect(jsonPath("$.data.content[2].productName").value(nullValue()));
+
+        verify(productTypeRepository, times(1)).findByFactoryIdAndIdIn(
+                "F006", Set.of("PT-1", "PT-2", "PT-MISSING"));
+        org.junit.jupiter.api.Assertions.assertNull(source.getProductName());
+        org.junit.jupiter.api.Assertions.assertSame(productType, source.getProductType());
+        org.junit.jupiter.api.Assertions.assertEquals("已存快照名称", preserved.getProductName());
+        org.junit.jupiter.api.Assertions.assertNull(missing.getProductName());
     }
 
     @Test

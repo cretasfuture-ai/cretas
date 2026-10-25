@@ -132,10 +132,15 @@ export default function QIScanScreen() {
           <Text style={styles.permissionBtnText}>{t('scan.authorize')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
+          testID="qiscan-denied-manual-input"
+          accessibilityRole="button"
           style={styles.manualBtn}
-          onPress={() => navigation.navigate('QIInspectList')}
+          disabled={loading}
+          onPress={handleManualInput}
         >
-          <Text style={styles.manualBtnText}>{t('scan.manualSelect')}</Text>
+          {loading ? <ActivityIndicator color={QI_COLORS.primary} /> : (
+            <Text style={styles.manualBtnText}>{t('scan.manualInput')}</Text>
+          )}
         </TouchableOpacity>
       </View>
     );
@@ -261,6 +266,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   manualBtn: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
     paddingVertical: 12,
   },
   manualBtnText: {

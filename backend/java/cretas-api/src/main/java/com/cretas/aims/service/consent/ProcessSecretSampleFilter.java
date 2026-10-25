@@ -5,6 +5,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -29,25 +30,34 @@ public class ProcessSecretSampleFilter {
 
     /** 文本是否提到本厂某个工艺保密产品。 */
     public boolean mentionsProtectedProduct(String factoryId, String... texts) {
+        for (String name : protectedProductNames(factoryId)) {
+            for (String text : texts) {
+                if (text != null && text.contains(name)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 本厂工艺保密产品名 (只含本厂、长度够的名字; 已 trim)。 */
+    public Set<String> protectedProductNames(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) {
-            return false;
+            return Set.of();
         }
         Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
         if (protectedIds.isEmpty()) {
-            return false;
+            return Set.of();
         }
+        Set<String> names = new LinkedHashSet<>();
         List<ProductType> products = productTypeRepository.findAllById(protectedIds);
         for (ProductType product : products) {
             String name = product.getName();
             if (!factoryId.equals(product.getFactoryId()) || name == null || name.trim().length() < MIN_NAME_LENGTH) {
                 continue;
             }
-            for (String text : texts) {
-                if (text != null && text.contains(name.trim())) {
-                    return true;
-                }
-            }
+            names.add(name.trim());
         }
-        return false;
+        return names;
     }
 }
