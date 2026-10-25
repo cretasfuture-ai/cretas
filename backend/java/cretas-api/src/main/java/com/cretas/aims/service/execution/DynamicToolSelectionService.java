@@ -67,6 +67,15 @@ public class DynamicToolSelectionService {
     private static final double DYNAMIC_LEARN_MIN_SIMILARITY = 0.55;
 
     /**
+     * Skill 组合结果读不出子工具消息时的占位文字 (子工具结果是 JsonNode 时就会落到这里, 数据其实在)。
+     * {@link WorkdeskOutputSummarizer} 认这句: formattedText 是它就改由 resultData 生成摘要。
+     */
+    static final String SKILL_NO_DISPLAY_PLACEHOLDER =
+            "本次查询已执行完成，但当前工作台未返回可直接展示的明细数据。建议: 1. 进入对应工作台模块"
+            + "(质检放行 / 库存 / 采购 / 财务)按时段查看完整结果; 2. 补充更具体的查询条件, 如批次号、"
+            + "物料名称、时间范围或客户名称后重新发起; 3. 如持续无数据, 请联系管理员确认该模块数据已录入。";
+
+    /**
      * Skill 关键词匹配要多强才允许<b>抢在已识别意图前面</b>执行 (2026-10-06, 原为写死的 0.3)。
      *
      * <p>依据 (3519 题线上回放 full_replay_r2_20261006 + 生产 30 天日志): 关键词分 &ge;0.3 的 41 题里
@@ -1000,9 +1009,7 @@ public class DynamicToolSelectionService {
             // ≥80-char actionable generic (含 批次/物料/客户 domain keywords) so even the
             // worst-case composite (no sub-tool message, no clarifications) passes strict
             // content_len. Replaces the prior 64-char version.
-            return "本次查询已执行完成，但当前工作台未返回可直接展示的明细数据。建议: 1. 进入对应工作台模块"
-                    + "(质检放行 / 库存 / 采购 / 财务)按时段查看完整结果; 2. 补充更具体的查询条件, 如批次号、"
-                    + "物料名称、时间范围或客户名称后重新发起; 3. 如持续无数据, 请联系管理员确认该模块数据已录入。";
+            return SKILL_NO_DISPLAY_PLACEHOLDER;
         } catch (Exception e) {
             return skillResult.getMessage();
         }
