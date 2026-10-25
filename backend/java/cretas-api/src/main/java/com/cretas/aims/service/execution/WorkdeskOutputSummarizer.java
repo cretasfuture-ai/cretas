@@ -111,7 +111,18 @@ public class WorkdeskOutputSummarizer {
 
         String formattedText = response.getFormattedText();
         String message = response.getMessage();
-        Object resultData = response.getResultData();
+        // Skill 组合结果里的工具输出是 JsonNode (SkillExecutorImpl readTree): JsonNode 也是 Iterable,
+        // 直接走 stripUnderscoreKeys 会被拆成空列表 —— 先统一转成 Map / List / 标量
+        Object rawResultData = response.getResultData();
+        boolean treeFailed = false;
+        Object plain;
+        try {
+            plain = LlmEgressRedactor.toPlainTree(objectMapper, rawResultData);
+        } catch (RuntimeException e) {
+            plain = rawResultData;
+            treeFailed = true;
+        }
+        final Object resultData = plain;
 
         boolean ftDirty = isDirty(formattedText);
         boolean msgDirty = isDirty(message);
@@ -120,7 +131,7 @@ public class WorkdeskOutputSummarizer {
             return; // both clean, nothing to do
         }
 
-        Attempt attempt = tryLlmSummarize(resultData, response, factoryId);
+        Attempt attempt = treeFailed ? Attempt.REFUSED : tryLlmSummarize(resultData, response, factoryId);
         if (attempt.privacyRefused()) {
             // 脱敏不了就不发: 结构化摘要只在本机拼, 不出服务器
             String local = buildDeterministicFallback(resultData, response, PRIVACY_FALLBACK_HEADER);
@@ -359,7 +370,8 @@ public class WorkdeskOutputSummarizer {
 
     /**
      * Call LLM to summarize resultData into a Chinese natural-language summary.
-     * 发出前先经 {@link LlmEgressRedactor} 脱敏; 脱敏不了 (或查不到保密产品名) 就不发。
+     * 发出前先经 {@link LlmEgressRedactor} 脱敏; 脱敏不了、或查保密产品名出错, 就不发。
+     * factoryId 为 null (没有工厂上下文) 时没有「本厂保密产品」可查, 只做通用脱敏。
      */
     private Attempt tryLlmSummarize(Object resultData, IntentExecuteResponse response, String factoryId) {
         if (resultData == null) {

@@ -105,6 +105,28 @@ class WorkdeskOutputSummarizerRedactionTest {
                 .doesNotContain("_toolCount");
     }
 
+    /** Skill 组合: 工具结果是 JsonNode。以前被拆成空列表, 模型只能答「暂无数据」。 */
+    @Test
+    void skillCompositeJsonNodeResultsReachTheModelRedacted() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("_toolCount", 1);
+        data.put("customer_followup",
+                mapper.readTree("{\"customers\":[{\"customerName\":\"张记食品有限公司\",\"receivableAmount\":12800}]}"));
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
+                .intentName("每日客户跟进")
+                .formattedText("{\"_toolCount\":1}")
+                .resultData(data)
+                .build();
+        ArgumentCaptor<String> sent = ArgumentCaptor.forClass(String.class);
+        when(llm.chatFast(anyString(), sent.capture())).thenReturn("今日跟进: [客户A] 应收 12800 元, 请尽快催收回款。");
+
+        summarizer.apply(response, "F006");
+
+        assertThat(sent.getValue()).contains("[客户A]", "12800").doesNotContain("张记食品有限公司", "[[]");
+        assertThat(response.getFormattedText()).contains("张记食品有限公司 应收 12800 元");
+    }
+
     @Test
     void whenRedactionRefusesNothingIsSent() {
         // 手机号做了字段名, 字段名不改写 → 脱敏器拒绝 → 不得发给模型

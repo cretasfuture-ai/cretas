@@ -129,6 +129,134 @@ class LlmEgressRedactorTest {
         assertThat(sent).doesNotContain("钱七").contains("[名称A]");
     }
 
+    // ---------------------------------------------------------------- 独立审查找出的形状
+
+    /** SupplierPriceAlertTool / QualityCheckCreateTool 用中文字段名。 */
+    @Test
+    void chineseKeysArePartiesOrDropped() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("供应商", "和盛牛业");
+        row.put("检验员", "孙八");
+        row.put("备注", "孙八说明天到");
+        row.put("请假原因", "家里有事");
+        row.put("物料", "牛腩");
+        row.put("涨幅", "12.5%");
+
+        String sent = redactor.redact(Map.of("alerts", List.of(row)), Set.of()).payload();
+
+        assertThat(sent).doesNotContain("和盛牛业", "孙八", "明天到", "家里有事", "备注", "请假原因");
+        assertThat(sent).contains("[供应商A]", "[人员A]", "牛腩", "12.5%");
+    }
+
+    /** CustomerNotifyBatchTool 的 sampleCustomerNames 是字符串列表。 */
+    @Test
+    void pluralAndListKeysAreTokenised() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("sampleCustomerNames", List.of("老王烧烤", "张记"));
+        data.put("operators", List.of("钱七"));
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("老王烧烤", "张记", "钱七").contains("[客户A]", "[客户B]", "[人员A]");
+    }
+
+    /** AlertAcknowledgeTool / AlertResolveTool 把登录名放在 acknowledgedBy / resolvedBy。 */
+    @Test
+    void byKeysAreTokenisedEvenWhenTheValueLooksLikeACode() {
+        Map<String, Object> data = Map.of("acknowledgedBy", "zhangsan", "resolvedBy", "factory_demo");
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("zhangsan", "factory_demo").contains("[人员");
+    }
+
+    @Test
+    void bareNameUsesTheNearestContainer() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("data", Map.of("items", List.of(Map.of("name", "王建国"))));
+        data.put("batch", Map.of("supervisor", Map.of("name", "张三")));
+        data.put("products", List.of(Map.of("name", "卤猪蹄")));
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("王建国", "张三").contains("卤猪蹄");
+    }
+
+    @Test
+    void moreContactAndFreeTextKeysAreDropped() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        for (String key : List.of("phoneNumber", "contactTel", "mobileNo", "idCardNo", "bankAccountNo", "wechatId",
+                "issueDescription", "customerFeedback", "reason", "content", "addr")) {
+            data.put(key, "王建国 x");
+        }
+        data.put("orderCount", 3);
+
+        LlmEgressRedactor.Result r = redactor.redact(data, Set.of());
+
+        assertThat(r.payload()).isEqualTo("{\"orderCount\":3}");
+        assertThat(r.droppedFields()).isEqualTo(11);
+    }
+
+    @Test
+    void otherPhoneFormatsAreBlankedInTextAndANumericMobileRefuses() {
+        String sent = redactor.redact(Map.of("message", "电话 138-1234-5678 / 021-58881234 / +8613812345678"),
+                Set.of()).payload();
+        assertThat(sent).doesNotContain("1234-5678", "58881234", "13812345678");
+
+        LlmEgressRedactor.Result r = redactor.redact(Map.of("value", 13812345678L), Set.of());
+        assertThat(r.refused()).isTrue();
+        assertThat(r.refusal()).isEqualTo("残留手机号");
+    }
+
+    /** SkillExecutorImpl 把工具结果存成 JsonNode: 不能被拆成空列表, 也不能绕过脱敏。 */
+    @Test
+    void jsonNodeResultsAreRedactedNotEmptied() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        Map<String, Object> data = Map.of("customer_followup",
+                mapper.readTree("{\"customers\":[{\"customerName\":\"张记食品有限公司\",\"receivableAmount\":12800}]}"));
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).contains("[客户A]", "12800").doesNotContain("张记食品有限公司");
+    }
+
+    record EmployeeView(String fullName, String phone, String department, int monthlyOrders) {
+    }
+
+    @Test
+    void pojoAndRecordFieldsAreRedactedNotSerialisedWhole() {
+        Map<String, Object> data = Map.of("profile", new EmployeeView("王建国", "13812345678", "仓储部", 7));
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("王建国", "13812345678").contains("[人员A]", "仓储部", "7");
+    }
+
+    @Test
+    void genericWordsAndCodesAreNotSpreadAcrossFields() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("resolvedBy", "系统");
+        data.put("factory", "F006");
+        data.put("batchNumber", "F006-20261025-0007");
+        data.put("message", "系统已自动关闭告警");
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).contains("\"resolvedBy\":\"系统\"", "\"batchNumber\":\"F006-20261025-0007\"",
+                "系统已自动关闭告警");
+    }
+
+    @Test
+    void unknownKeysWithFreeTextAreTokenisedByDefault() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("progress", "老王那边进行中");
+        data.put("progressCode", "IN_PROGRESS");
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("老王").contains("[名称A]", "IN_PROGRESS");
+    }
+
     @Test
     void lettersSequence() {
         assertThat(LlmEgressRedactor.letters(1)).isEqualTo("A");
