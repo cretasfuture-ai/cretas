@@ -389,6 +389,53 @@ def factory_candidates(dataset, request, can_price):
     return eligible, gaps
 
 
+def _card_layout(option):
+    """Reserve room for axis units and a separate legend in mounted/exported cards."""
+    pies = [s for s in option.get('series', []) if s.get('type') == 'pie']
+    for series in pies:
+        label = series.setdefault('label', {})
+        if label.get('position', 'outside') not in ('inside', 'inner', 'center'):
+            # Keep outside category/percentage text within narrow card edges.
+            label.update({'alignTo': 'edge', 'edgeDistance': 8, 'bleedMargin': 4})
+    if len(pies) == 1 and isinstance(option.get('legend'), dict):
+        pies[0].setdefault('center', ['50%', '42%'])
+        legend = option['legend']
+        legend.pop('top', None)
+        legend.pop('right', None)
+        legend.update({'orient': 'horizontal', 'left': 'center', 'bottom': 0})
+    if 'xAxis' not in option or 'yAxis' not in option:
+        return
+    grid = option.setdefault('grid', {})
+    if not isinstance(grid, dict):
+        return  # Multi-panel charts own their individual grid layouts.
+
+    def reserve(value, minimum):
+        if isinstance(value, (int, float)):
+            return max(value, minimum)
+        # Cards are at least about 320px; retain larger intentional percentage margins.
+        if isinstance(value, str) and value.endswith('%'):
+            try:
+                if float(value[:-1]) * 3.2 >= minimum:
+                    return value
+            except ValueError:
+                pass
+        return minimum
+
+    for side, minimum in [('left', 12), ('right', 40), ('top', 40), ('bottom', 64)]:
+        grid[side] = reserve(grid.get(side), minimum)
+    grid['containLabel'] = True
+    legend = option.get('legend')
+    if isinstance(legend, dict) and legend.get('orient', 'horizontal') == 'horizontal':
+        legend.pop('top', None)
+        legend['bottom'] = 0
+    axes = option['xAxis'] if isinstance(option['xAxis'], list) else [option['xAxis']]
+    for axis in axes:
+        if axis.get('type') == 'value' and axis.get('name'):
+            # End-position names extend beyond the final tick and can be cropped.
+            axis['nameLocation'] = 'middle'
+            axis['nameGap'] = 28
+
+
 def build(datasets, request, can_price):
     candidates, unavailable = [], []
     for dataset in datasets:
@@ -431,6 +478,7 @@ def build(datasets, request, can_price):
                     for value in node: safe_tooltips(value)
             safe_tooltips(chart['chart']['echartsOption'])
             chart['chart']['echartsOption'].setdefault('tooltip', {})['renderMode'] = 'richText'
+            _card_layout(chart['chart']['echartsOption'])
             if '@' in chart['id']:
                 head, suffix = chart['id'].split('@', 1)
                 chart['id'] = head + '@' + hashlib.sha256(suffix.encode()).hexdigest()[:12]
