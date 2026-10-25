@@ -494,9 +494,19 @@ class TestFindings:
     def test_margin_gap_is_computed_from_the_displayed_averages(self):
         # 线上 5254 (2026-10-25): 「各月平均毛利率 26.3%，上年 26.3%，+0.1 个百分点」读起来对不上
         rows = [{'月份': f'{m}月', '本年毛利率': '26.34%', '上年毛利率': '26.26%'} for m in (1, 2)]
+        # 改成「与上年持平」(2026-10-25): 「+0.0 个百分点」放在「做得好的」里读起来像在表扬持平
         r = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)
-        assert '各月平均毛利率 26.3%，上年 26.3%，+0.0 个百分点' in r['headline']['text']
-        assert '各月平均毛利率 26.3%，比上年 +0.0 个百分点（各月简单平均）' in r['findings']['good']
+        assert '各月平均毛利率 26.3%，与上年持平（各月简单平均）' in r['headline']['text']
+        assert '+0.0' not in r['headline']['text']
+        assert r['headline']['tone'] == 'neutral'
+        f = r['findings']
+        assert not any('平均毛利率' in line for line in f['good'] + f['attention'] + f['suggestions'])
+        # 阳性对照: 差 0.1 个百分点时照常给出差值并算好消息
+        up = [{**row, '本年毛利率': '26.44%'} for row in rows]
+        r = svc.generate_dashboard(pd.DataFrame(up), 2026, 'all', 1, 12)
+        assert '各月平均毛利率 26.4%，上年 26.3%，+0.1 个百分点' in r['headline']['text']
+        assert r['headline']['tone'] == 'good'
+        assert '各月平均毛利率 26.4%，比上年 +0.1 个百分点（各月简单平均）' in r['findings']['good']
 
     def test_pnl_sheet_states_margin_expense_share_and_biggest_item(self):
         # 线上 5252 (2026-10-25): 损益表只有「净利润」一条结论

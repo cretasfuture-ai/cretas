@@ -149,8 +149,10 @@ def _ratio(df: pd.DataFrame, out: _Findings) -> None:
     mean_cur, mean_last = _mean(cur), _mean(last)
     if mean_cur is not None and mean_last is not None:
         diff = round(mean_cur, 1) - round(mean_last, 1)  # 与页首同一取法: 用显示出来的两个数相减
-        text = f"各月平均毛利率 {_pct(mean_cur)}，比上年 {diff:+.1f} 个百分点（各月简单平均）"
-        (out.good if diff >= 0 else out.attention).append(text)
+        # 持平既不是好消息也不需要关注: 不进结论 (页首已用中性语气说「与上年持平」)
+        if abs(diff) >= 0.05:
+            text = f"各月平均毛利率 {_pct(mean_cur)}，比上年 {diff:+.1f} 个百分点（各月简单平均）"
+            (out.good if diff > 0 else out.attention).append(text)
 
     best = max(months, key=lambda x: x[1])
     worst = min(months, key=lambda x: x[1])
