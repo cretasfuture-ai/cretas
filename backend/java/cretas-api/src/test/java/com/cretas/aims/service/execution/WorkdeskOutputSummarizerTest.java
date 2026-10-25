@@ -373,7 +373,8 @@ class WorkdeskOutputSummarizerTest {
         assertThat(response.getFormattedText())
                 .doesNotContain("43568")
                 .contains(WorkdeskOutputSummarizer.PROVENANCE_FALLBACK_HEADER.trim())
-                .contains("16 项");
+                // 工具算出的客户数在 (措辞随工具消息, 只钉数字本身)
+                .containsPattern("(?<!\\d)16(?!\\d)");
         assertThat(response.getMessage()).isEqualTo(response.getFormattedText());
         assertThat(summarizer.isDirty(response.getFormattedText())).isFalse();
         assertThat(gate.count(WorkdeskOutputSummarizer.PROVENANCE_SITE,

@@ -151,6 +151,46 @@ class IntentExecutionOrchestratorFreeTextWorkdeskTest {
                 .doesNotContain("[客户A]", "[人员A]");
     }
 
+    /**
+     * 2026-10-25 17:54 线上: 模型自己数出「6 位 VIP」, 数字出处闸退回结构化结果, 而那个结果只有
+     * 「客户跟进: 2 个字段」「wechat record recent query: 2 个字段」。退回时也要列出客户。
+     */
+    @Test
+    @DisplayName("模型摘要被数字出处闸拒绝时, 退回的本地摘要列出客户名单, 不报「N 个字段」、不漏英文工具名")
+    void provenanceFallbackListsTheCustomers() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("customer_priority_query", mapper.readTree(
+                "{\"customers\":[{\"customerName\":\"叮咚-上海松江冷藏仓\",\"contactPerson\":\"侍总\","
+                        + "\"importanceDisplay\":\"VIP\",\"priorityScore\":40},"
+                        + "{\"customerName\":\"叮咚-台州临海冷藏仓\",\"importanceDisplay\":\"VIP\",\"priorityScore\":40}],"
+                        + "\"count\":2}"));
+        data.put("wechat_record_recent_query", mapper.readTree("{\"records\":[],\"count\":0}"));
+        data.put("_toolCount", 2);
+        IntentExecuteResponse skill = skillResponseAsInProduction();
+        skill.setResultData(data);
+
+        AIIntentConfig intent = workdeskIntent();
+        when(aiIntentService.recognizeIntentWithConfidence(eq(QUESTION), eq(FACTORY), anyInt(), any(), any(), any(),
+                any(), any()))
+                .thenReturn(IntentMatchResult.builder().bestMatch(intent).confidence(0.9)
+                        .matchMethod(IntentMatchResult.MatchMethod.LLM).requiresConfirmation(false).build());
+        when(aiIntentService.hasPermission("DAILY_CUSTOMER_FOLLOWUP", ROLE)).thenReturn(true);
+        when(dynamic.isSkillsEnabled()).thenReturn(true);
+        when(dynamic.tryExplicitSkillRouteForIntent(eq(intent), eq(QUESTION), eq(FACTORY), eq(USER), eq(ROLE)))
+                .thenReturn(skill);
+        // 「6 个」在数据里找不到出处 → 闸拒绝 (「前 6 位」这种窗口说法闸会放过, 不能拿来测)
+        when(llm.chatFast(anyString(), anyString())).thenReturn("其中 6 个是 VIP 客户, 优先跟进 [客户A]。");
+
+        IntentExecuteResponse response = orchestrator.execute(FACTORY,
+                IntentExecuteRequest.builder().userInput(QUESTION).build(), USER, ROLE);
+
+        assertThat(response.getFormattedText())
+                .contains(WorkdeskOutputSummarizer.PROVENANCE_FALLBACK_HEADER.trim())
+                .contains("重点客户", "叮咚-上海松江冷藏仓（联系人 侍总，VIP，评分 40）", "叮咚-台州临海冷藏仓", "微信沟通记录")
+                .doesNotContain("个字段", "wechat record", "6 个是");
+    }
+
     @Test
     @DisplayName("占位文字只换 formattedText: message 不换成带真名的摘要 (它会进对话记忆)")
     void placeholderOnlyReplacesFormattedText() throws Exception {

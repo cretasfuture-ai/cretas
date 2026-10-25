@@ -150,7 +150,8 @@ class IntentExecutionOrchestratorNumberProvenanceTest {
 
         assertThat(response.getFormattedText()).doesNotContain("43568");
         assertThat(response.getMessage()).doesNotContain("43568");
-        assertThat(response.getFormattedText()).contains("16 项");
+        // 退回的确定性摘要带着工具算出的客户数 (措辞随工具消息, 只钉数字本身)
+        assertThat(response.getFormattedText()).containsPattern("(?<!\\d)16(?!\\d)");
         assertThat(gate.count(WorkdeskOutputSummarizer.PROVENANCE_SITE,
                 FactoryNumberProvenance.Decision.FALLBACK_TEMPLATE)).isEqualTo(1);
     }
