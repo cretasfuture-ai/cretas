@@ -33,3 +33,17 @@ def test_mixed_amount_and_ratio_measures_are_not_slicers(current, previous):
          '营业收入': 900, '营业成本': 810, '上年营业收入': 100, '上年营业成本': 60},
     ]))
     assert dimensions == [{'name': '月份', 'values': ['1月', '2月']}]
+
+
+def test_exported_scorecard_matches_visible_amount_units_and_fits_canvas():
+    chart = FinancialDashboardService().generate_chart('kpi_scorecard', pd.DataFrame([
+        {'月份': '1月', '实际': 178910000, '预算': 354303300},
+    ]), 2026, 'year', 1, 12)
+    assert chart['success'] is True
+    series = chart['echartsOption']['series']
+    assert series[0]['detail']['formatter'] == '17,891.00万元'
+    assert series[0]['detail']['formatter'] == chart['kpis'][0]['value'] + chart['kpis'][0]['unit']
+    for gauge in series:
+        center_x = float(gauge['center'][0].rstrip('%')) / 100 * 1100
+        radius = float(gauge['radius'].rstrip('%')) / 100 * 600 / 2
+        assert radius < center_x < 1100 - radius

@@ -142,6 +142,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
 
         # Use a series of gauge charts arranged horizontally
         gauges = []
+        gauge_count = min(len(cards), 6)
         for i, card in enumerate(cards[:6]):
             val = 0
             try:
@@ -153,8 +154,8 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
             gauge_max = 100 if card['unit'] == '%' else val * 1.5 if val > 0 else 100
             gauges.append({
                 "type": "gauge",
-                "center": [f"{8 + i * 17}%", "55%"],
-                "radius": "40%",
+                "center": [f"{(i + 0.5) * 100 / gauge_count:g}%", "55%"],
+                "radius": f"{min(40, 75 / gauge_count):g}%",
                 "min": 0,
                 "max": gauge_max,
                 "startAngle": 200,
@@ -176,7 +177,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
                     "fontWeight": "bold",
                     "color": COLORS['primary'],
                     "offsetCenter": [0, "30%"],
-                    "formatter": f"{{value}}{scale['suffix']}{card['unit']}" if card['unit'] == '元' else f"{{value}}{card['unit']}",  # noqa: E501
+                    "formatter": f"{card['value']}{card['unit']}",
                 },
                 "data": [{"value": round(val, 1), "name": card['label']}],
             })
