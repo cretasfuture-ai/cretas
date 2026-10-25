@@ -24,12 +24,16 @@ Run on the server (DB env from the app's .env):
 Rows are already deduped at write time (UNIQUE input_hash, ON CONFLICT refresh),
 so no dedup needed here. NO RLS on the table → reads all factories cross-business.
 
-数据主权门控 (training-consent foundation, 2026-06-11):
+训练规则 (Steve 2026-10-24, 见 smartbi/services/training_consent.py):
+  - 真实行必须带 metadata.training_rule (采集时已过新规则); 之前采集的旧行一律排除,
+    等补检。导出时再查一次 qa_has_blocked_content (工艺参数 / 结构 / 问题处理 /
+    人员薪酬), 命中排除 —— 任何工厂, 授权与否。
   - SHARED 导出 (默认, 按 business_type 分桶):
-      * 合成行 (SEED_R/SEED_F / metadata.source_kind='synthetic_seed') → **无条件**收入。
-      * 真实行 → 仅当其 factory_id 的 training_consent.consent_scope='shared_anon' 时收入,
-        且**必经 anonymize_for_shared 脱敏** (数值分桶 + 实体伪名化, 保留 %/形状)。
-      * consent='none'/'private' 或无授权行的真实租户 → **排除** (default-deny)。
+      * 合成行 (SEED_R/SEED_F / metadata.source_kind='synthetic_seed') → 收入。
+      * metadata.desensitized 行 (未授权工厂, 采集时已脱敏) → 收入。
+      * shared_anon 工厂的原始行 → 经 desensitize_for_training 脱敏 (名称换通用标记、
+        数字全部换占位符) 后收入。
+      * private 工厂的原始行 → 不进共享导出 (只给它自己的专属模型)。
   - PRIVATE 导出 (--factory F001): 仅当该工厂 consent_scope='private' 时导出其**原始**行
     (不脱敏), 输出 dataset_private_{factory}.jsonl; 否则拒绝并给出清晰提示。
 """
@@ -41,7 +45,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 # Path bootstrap — importing smartbi.services.corpus_anonymize triggers smartbi/services/__init__
 # which uses bare `from services.X import ...`; mirror main.py so it resolves to smartbi/services/X.
@@ -49,6 +53,20 @@ _PYTHON_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__f
 for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    mentions_any,
+)
+from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
+    DESENSITIZED_KEY,
+    RULE_KEY,
+    SYNTHETIC_FACTORY_IDS,
+    WITHDRAWN,
+    fetch_consent_map,
+    qa_has_blocked_content,
+    scope_from_map,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("export_distill")
@@ -113,16 +131,21 @@ async def _fetch_rows(
 
 
 # Sentinel factory IDs marking synthetic seed corpus (see seed_chart_insight_corpus.py).
-_SENTINEL_FACTORIES = frozenset({"SEED_R", "SEED_F"})
+# Defined once in smartbi.services.training_consent (capture uses the same set).
+_SENTINEL_FACTORIES = SYNTHETIC_FACTORY_IDS
 
 
 def _is_synthetic(row: Dict[str, Any]) -> bool:
     """Synthetic-seed rows are UNCONDITIONALLY usable for shared training — they
     belong to no real tenant. Detection mirrors corpus_census / seeder tagging:
     metadata.source_kind == 'synthetic_seed' / metadata.seeded == true / factory
-    id in SEED_R/SEED_F."""
-    if (row.get("factory_id") or "") in _SENTINEL_FACTORIES:
+    id in SEED_R/SEED_F. A row tagged with a real tenant's factory_id is never
+    synthetic, whatever its metadata says (metadata is caller-supplied)."""
+    fid = row.get("factory_id") or ""
+    if fid in _SENTINEL_FACTORIES:
         return True
+    if fid:
+        return False
     meta = row.get("metadata")
     if isinstance(meta, str):
         try:
@@ -145,11 +168,9 @@ async def _load_consent(pool) -> Dict[str, str]:
     exist yet (migration not applied), returns {} → every real tenant is
     treated as 'none' (still default-deny, never a fail-open).
     """
-    sql = "SELECT factory_id, consent_scope FROM training_consent"
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql)
-        return {r["factory_id"]: r["consent_scope"] for r in rows}
+            return await fetch_consent_map(conn)
     except Exception as e:  # table absent / permission → treat as no consent
         logger.warning(
             "training_consent unreadable (%s) — treating ALL real tenants as "
@@ -161,7 +182,7 @@ async def _load_consent(pool) -> Dict[str, str]:
 
 def _consent_of(row: Dict[str, Any], consent: Dict[str, str]) -> str:
     """consent_scope for a row's tenant; absent factory → 'none' (default-deny)."""
-    return consent.get(row.get("factory_id") or "", "none")
+    return scope_from_map(consent, row.get("factory_id"))
 
 
 def _to_sft_line(
@@ -196,24 +217,49 @@ def _to_sft_line(
             "teacher_model": row.get("teacher_model"),
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
             "consent_class": consent_class,
-            "anonymized": consent_class == "shared_anon",
+            "anonymized": consent_class in ("shared_anon", "desensitized"),
         },
     }
+
+
+def _metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+    meta = row.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            meta = None
+    return meta if isinstance(meta, dict) else {}
+
+
+def passes_training_rule(row: Dict[str, Any],
+                         protected_names: Optional[Mapping[str, Any]] = None) -> bool:
+    """A real row may be exported only if it was captured under the 2026-10-24
+    rule and still has no blocked content (re-checked here, defense in depth),
+    and it does not name one of its factory's process-secret products (privacy
+    clause 6; rows captured before the product was protected are caught here)."""
+    if RULE_KEY not in _metadata(row):
+        return False
+    if qa_has_blocked_content(row.get("input_text"), row.get("teacher_output")):
+        return False
+    names = (protected_names or {}).get(row.get("factory_id") or "", ())
+    return not mentions_any(names, row.get("input_text"), row.get("teacher_output"))
 
 
 def gate_shared_rows(
     rows: List[Dict[str, Any]],
     consent: Dict[str, str],
+    protected_names: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Consent-gate rows for the SHARED (cross-tenant) export.
+    """Gate rows for the SHARED (cross-tenant) export.
 
-    Returns list of (row, input_text, teacher_output, consent_class) tuples as
-    dicts ready for _to_sft_line. Synthetic → unconditional raw. Real
-    shared_anon → anonymized. Real none/private → excluded (default-deny).
+    Synthetic -> raw. Real rows must pass the training rule; then desensitized
+    rows -> as stored, shared_anon raw rows -> anonymized, private raw rows ->
+    excluded (own model only).
 
     Returned items: {"row", "input_text", "teacher_output", "consent_class"}.
     """
-    from smartbi.services.corpus_anonymize import anonymize_for_shared
+    from smartbi.services.corpus_anonymize import desensitize_for_training
 
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -221,16 +267,23 @@ def gate_shared_rows(
             out.append({"row": r, "input_text": None, "teacher_output": None,
                         "consent_class": "synthetic"})
             continue
+        if not passes_training_rule(r, protected_names):
+            continue
+        if _consent_of(r, consent) == WITHDRAWN:
+            continue  # withdrawn factories leave every model update (clause 10)
+        if _metadata(r).get(DESENSITIZED_KEY):
+            out.append({"row": r, "input_text": None, "teacher_output": None,
+                        "consent_class": "desensitized"})
+            continue
         scope = _consent_of(r, consent)
         if scope == "shared_anon":
-            anon_in, anon_out = anonymize_for_shared(
+            anon_in, anon_out = desensitize_for_training(
                 r.get("input_text") or "",
                 r.get("teacher_output") or "",
-                r.get("business_type"),
             )
             out.append({"row": r, "input_text": anon_in, "teacher_output": anon_out,
                         "consent_class": "shared_anon"})
-        # scope in ('none', 'private') → real row NOT in shared export (default-deny)
+        # private raw rows stay out of the shared export
     return out
 
 
@@ -238,7 +291,7 @@ async def _export_private(args, pool) -> None:
     """PRIVATE single-tenant export: raw rows for one factory, ONLY if it has
     consent_scope='private'. Else refuse with a clear message."""
     consent = await _load_consent(pool)
-    scope = consent.get(args.factory, "none")
+    scope = scope_from_map(consent, args.factory)
     if scope != "private":
         logger.error(
             "REFUSED: factory %s has consent_scope=%r — private raw export "
@@ -250,6 +303,10 @@ async def _export_private(args, pool) -> None:
 
     rows = await _fetch_rows(args.source, args.business_type, args.min_quality,
                              pool=pool, factory_id=args.factory)
+    # process content and process-secret products never enter any set, the
+    # factory's own model included
+    protected = await all_protected_product_names()
+    rows = [r for r in rows if passes_training_rule(r, protected)]
     if not rows:
         logger.info("No samples for factory %s — nothing to export.", args.factory)
         return
@@ -297,7 +354,8 @@ async def main() -> None:
         logger.info("No samples matched — nothing to export.")
         return
 
-    gated = gate_shared_rows(rows, consent)
+    protected = await all_protected_product_names()   # failure aborts the export
+    gated = gate_shared_rows(rows, consent, protected)
     excluded = len(rows) - len(gated)
     if not gated:
         logger.info(

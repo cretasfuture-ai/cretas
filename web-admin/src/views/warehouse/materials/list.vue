@@ -1049,7 +1049,7 @@ async function handleGenerateLabel(row: TableRow) {
         <el-descriptions-item label="批次号">{{ viewRecord.batchNumber || '-' }}</el-descriptions-item>
         <el-descriptions-item label="原料类型">{{ viewRecord.materialTypeName || viewRecord.materialName || '-' }}</el-descriptions-item>
         <el-descriptions-item label="供应商">{{ viewRecord.supplierName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="数量">{{ viewRecord.quantity ?? viewRecord.currentQuantity ?? '-' }} {{ viewRecord.unit || '' }}</el-descriptions-item>
+        <el-descriptions-item label="数量">{{ viewRecord.quantity ?? viewRecord.currentQuantity ?? '-' }} {{ displayUnit(viewRecord.quantityUnit || viewRecord.unit) || '' }}</el-descriptions-item>
         <el-descriptions-item label="箱数">
           <span v-if="viewRecord.boxCount != null">约 {{ viewRecord.boxCount }} 箱 <span class="text-secondary">(粗略统计, 实际库存以称重 kg 为准)</span></span>
           <span v-else>-</span>

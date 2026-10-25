@@ -166,6 +166,44 @@ class LineageEdgeWiringContractTest {
                 .contains("Propagation.REQUIRES_NEW");
     }
 
+    /**
+     * 2026-10-24 半成品层补的写点 —— 同一个文件可能已在上表登记了另一个 recorder 方法，所以单列。
+     * 行为本身由各自的服务层测试覆盖（ClerkChainLineageConnectivityTest / YieldReportMaterialLineageTest /
+     * InterimSettleLineageWiringTest / SettlementLineageWiringTest / ProcessSheetServiceImplTest），
+     * 这里只防「整段接线被删」。
+     */
+    @Test
+    @DisplayName("半成品层写点: WIP 库存批 / App 报工领料 / 三个 SFI 扣减点 都接上了")
+    void semiFinishedLayerWritePathsAreWired() throws IOException {
+        Map<String, String[]> calls = new LinkedHashMap<>();
+        calls.put("com/cretas/aims/service/processentry/impl/ClerkProcessEntryServiceImpl.java",
+                new String[]{"lineageEdgeRecorder.recordProductionToWipStock(", "LineageEdgeRecorder lineageEdgeRecorder"});
+        calls.put("com/cretas/aims/service/yield/impl/YieldReportServiceImpl.java",
+                new String[]{"lineageEdgeRecorder.recordRawToProduction(", "LineageEdgeRecorder lineageEdgeRecorder"});
+        calls.put("com/cretas/aims/service/processentry/impl/ProcessSheetServiceImpl.java",
+                new String[]{"semiFeedLineageRecorder.recordSemiFeed(", "SemiFeedLineageRecorder semiFeedLineageRecorder"});
+        calls.put("com/cretas/aims/service/yield/impl/InterimSettleServiceImpl.java",
+                new String[]{"semiFeedLineageRecorder.recordSemiFeed(", "SemiFeedLineageRecorder semiFeedLineageRecorder"});
+        calls.put("com/cretas/aims/service/impl/ProductionPlanServiceImpl.java",
+                new String[]{"semiFeedLineageRecorder.recordSemiFeed(", "SemiFeedLineageRecorder semiFeedLineageRecorder"});
+        calls.put("com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java",
+                new String[]{"semiSourceBatchResolver.resolve(", "SemiSourceBatchResolver semiSourceBatchResolver"});
+        for (Map.Entry<String, String[]> e : calls.entrySet()) {
+            String source = Files.readString(MAIN_ROOT.resolve(e.getKey()), StandardCharsets.UTF_8);
+            for (String needle : e.getValue()) {
+                assertThat(source).as("%s 里找不到 %s", e.getKey(), needle).contains(needle);
+            }
+        }
+        // ⛔ 自环回退不许回来: 来源未知时拿目标批次顶替 = 伪造「这批半成品是自己产的」
+        String wip = Files.readString(MAIN_ROOT.resolve(
+                "com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java"), StandardCharsets.UTF_8);
+        assertThat(wip).doesNotContain("? task.getProductionBatchId() : sourceWip.getBatchId()");
+        assertThat(com.cretas.aims.service.lineage.SemiFeedLineageRecorder.class
+                .getAnnotation(org.springframework.stereotype.Component.class)).isNotNull();
+        assertThat(com.cretas.aims.service.lineage.SemiSourceBatchResolver.class
+                .getAnnotation(org.springframework.stereotype.Component.class)).isNotNull();
+    }
+
     @Test
     @DisplayName("LineageEdgeRecorder 必须是 @Service —— required=false 注入失败是静默的")
     void recorderIsASpringBean() {

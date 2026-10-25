@@ -13,6 +13,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.QualityCheckItemBindingRepository;
 import com.cretas.aims.repository.QualityCheckItemRepository;
 import com.cretas.aims.service.QualityCheckItemService;
+import com.cretas.aims.service.quality.QualityStandardValueResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -315,7 +316,7 @@ public class QualityCheckItemServiceImpl implements QualityCheckItemService {
         QualityCheckItem item = findByIdAndFactory(request.getQualityCheckItemId(), factoryId);
 
         // 验证产品类型存在
-        if (!productTypeRepository.existsById(request.getProductTypeId())) {
+        if (!productTypeRepository.existsByIdAndFactoryId(request.getProductTypeId(), factoryId)) {
             throw new ValidationException("Product type not found: " + request.getProductTypeId());
         }
 
@@ -535,8 +536,8 @@ public class QualityCheckItemServiceImpl implements QualityCheckItemService {
             builder.qualityCheckItem(toDTO(item));
 
             // 计算生效值
-            builder.effectiveStandardValue(binding.getOverrideStandardValue() != null ?
-                    binding.getOverrideStandardValue() : item.getStandardValue());
+            builder.effectiveStandardValue(QualityStandardValueResolver.inheritBlank(
+                    binding.getOverrideStandardValue(), item.getStandardValue()));
             builder.effectiveMinValue(binding.getOverrideMinValue() != null ?
                     binding.getOverrideMinValue() : item.getMinValue());
             builder.effectiveMaxValue(binding.getOverrideMaxValue() != null ?

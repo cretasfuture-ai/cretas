@@ -1654,6 +1654,25 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: { requiresAuth: true, title: '操作日志', module: 'system' }
           },
           {
+            // 训练/隐私条款第六条 (2026-10-24): 工艺保密对客户开启。后端 ProcessSecretController
+            // (PR #1096) 早已上线, 此前没有任何页面。谁能设/改由服务端决定 (工厂总监首次设置,
+            // 之后仅负责人), 负责人未必有系统管理权限 → modulesAny 放宽到生产 / 研发。
+            path: 'process-secret',
+            name: 'SystemProcessSecret',
+            component: () => import('@/views/system/process-secret/index.vue'),
+            meta: { requiresAuth: true, title: '工艺保密', module: 'system',
+                    modulesAny: ['system', 'production', 'rd'] }
+          },
+          {
+            // 隐私条款第十一条: 工厂可查看平台人员访问记录。后端 PlatformDataAccessLogController
+            // (PR #1109) 只允许 factory_super_admin / permission_admin。
+            path: 'platform-access-log',
+            name: 'SystemPlatformAccessLog',
+            component: () => import('@/views/system/platform-access-log/index.vue'),
+            meta: { requiresAuth: true, title: '平台访问记录', module: 'system',
+                    roles: ['factory_super_admin', 'permission_admin'] }
+          },
+          {
             // Sprint 4 Chat K C-EXPORT-CENTER-1 (2026-05-16): 用户可配置的跨模块导出规则.
             // backend: ExportRuleController + ExportExecutor (EntityManager + SpEL + EasyExcel).
             path: 'export-center',

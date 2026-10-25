@@ -85,6 +85,24 @@ export interface AssignDefectRequest {
   assignedTo?: number | null;
 }
 
+export interface QualityInspectionSource {
+  id: string;
+  productionBatchId?: number | null;
+  batchNumber?: string | null;
+  productName?: string | null;
+  inspectionDate?: string | null;
+  result?: string | null;
+}
+
+export interface QualityAssigneeDirectoryUser {
+  id: number;
+  fullName?: string | null;
+  username?: string | null;
+  department?: string | null;
+  roleCode?: string | null;
+  isActive?: boolean;
+}
+
 export interface CloseDefectRequest {
   closeNotes?: string | null;
 }
@@ -151,4 +169,29 @@ export function closeDefect(
   request: CloseDefectRequest = {},
 ): Promise<ApiResponse<QualityDefect>> {
   return put<QualityDefect>(`/${factoryId}/quality-defects/${defectId}/close`, request);
+}
+
+/** Current-factory inspection sources used by the defect registration picker. */
+export function listQualityInspectionSources(
+  factoryId: string,
+): Promise<ApiResponse<PageResponse<QualityInspectionSource>>> {
+  return get<PageResponse<QualityInspectionSource>>(`/${factoryId}/processing/quality/inspections`, {
+    params: { page: 1, size: 200 },
+  });
+}
+
+export function getQualityInspectionSource(
+  factoryId: string,
+  inspectionId: string,
+): Promise<ApiResponse<QualityInspectionSource>> {
+  return get<QualityInspectionSource>(
+    `/${factoryId}/processing/quality/inspections/${encodeURIComponent(inspectionId)}`,
+  );
+}
+
+/** Minimal same-factory active directory; no HR details are exposed here. */
+export function listQualityAssigneeDirectory(
+  factoryId: string,
+): Promise<ApiResponse<QualityAssigneeDirectoryUser[]>> {
+  return get<QualityAssigneeDirectoryUser[]>(`/${factoryId}/users/directory`);
 }

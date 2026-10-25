@@ -45,7 +45,7 @@ public interface FactoryStocktakeRepository extends JpaRepository<FactoryStockta
     @Query("SELECT s FROM FactoryStocktake s WHERE s.factoryId = :factoryId " +
            "AND s.warehouseId = :warehouseId AND s.periodMonth = :periodMonth " +
            "AND s.inventoryScope = :inventoryScope " +
-           "AND s.status NOT IN ('APPLIED', 'REJECTED') " +
+           "AND s.status NOT IN ('APPLIED', 'REJECTED', 'RECOUNT_REQUIRED') " +
            "ORDER BY s.createdAt DESC")
     List<FactoryStocktake> findActiveStocktakesForWarehouseAndMonth(
             @Param("factoryId") String factoryId,

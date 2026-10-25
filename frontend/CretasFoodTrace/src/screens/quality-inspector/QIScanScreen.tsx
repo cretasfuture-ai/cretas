@@ -59,7 +59,7 @@ export default function QIScanScreen() {
         });
       } else if (batchData.batchNumber) {
         // 只有批次号，通过扫码API获取
-        const batch = await qualityInspectorApi.getBatchByQRCode(data);
+        const batch = await qualityInspectorApi.getBatchByQRCode(batchData.batchNumber);
         navigation.replace('QIForm', {
           batchId: batch.id,
           batchNumber: batch.batchNumber,

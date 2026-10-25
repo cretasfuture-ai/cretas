@@ -1,0 +1,73 @@
+# 平台自编工艺模板（隐私条款第七条：仅来源于公开资料、行业标准及平台自编模板）
+# 依据：食品生产许可审查细则（糕点 / 面包）中的基本生产流程与行业通用做法整理。
+# 不含任何客户的工艺：只有工序名称、先后、各步投入/产出与参数名称，不含参数数值与得率。
+industryHint: 烘焙
+intro: 这是平台按公开的糕点、面包生产流程整理的通用起点，只列常见工序和要记录的参数名称，不含任何工厂的具体做法。请按你们工厂的实际情况逐项确认或修改。
+variants:
+  - 不发酵的糕点去掉「醒发」
+  - 夹馅或装饰类产品在「冷却」后增加夹馅、裱花
+  - 冷冻面团产品在「成型」后改为速冻
+steps:
+  - name: 原料称量
+    input: 面粉等原辅料
+    aux: []
+    pack: []
+    output: 备好的原料
+    outputUnit: kg
+    params: [称量核对]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 和面
+    input: 备好的原料
+    aux: [水, 油脂, 糖, 酵母或膨松剂]
+    pack: []
+    output: 面团或面糊
+    outputUnit: kg
+    params: [搅拌时长, 面团温度]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 成型
+    input: 面团或面糊
+    aux: []
+    pack: []
+    output: 生坯
+    outputUnit: 个
+    params: [单个重量要求]
+    yieldNote: 按本厂实际填写
+    byproducts: [边角面团]
+  - name: 醒发
+    input: 生坯
+    aux: []
+    pack: []
+    output: 醒发生坯
+    outputUnit: 个
+    params: [醒发温度, 醒发湿度, 醒发时长]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 烘烤
+    input: 醒发生坯
+    aux: []
+    pack: []
+    output: 烘烤成品
+    outputUnit: 个
+    params: [炉温, 烘烤时长]
+    yieldNote: 按本厂实际填写
+    byproducts: [不合格品]
+  - name: 冷却
+    input: 烘烤成品
+    aux: []
+    pack: []
+    output: 冷却成品
+    outputUnit: 个
+    params: [冷却时长]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 包装
+    input: 冷却成品
+    aux: []
+    pack: [包装袋, 标签, 外箱]
+    output: 包装成品
+    outputUnit: 袋
+    params: [每袋规格]
+    yieldNote: 包装工序一般不计得率
+    byproducts: []

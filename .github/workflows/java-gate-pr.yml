@@ -35,8 +35,13 @@ jobs:
   fast-contracts:
     # 最终候选的全量已经包含这些测试；2 台 runner 上再跑一份只会与全量争槽。
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
-    runs-on: [self-hosted, java]
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 12g.
+    # Measured 2026-10-25: a shared fork reached 3759 tests in 13 min but OOMed at 6g; one fresh JVM per
+    # class (-DreuseForks=false) took 44 min with 2 forks and >60 min with 3 (~700 Spring startups).
+    env:
+      CRETAS_JAVA_FORK_XMX: 12g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -142,8 +147,12 @@ jobs:
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
   postgres-reversal-concurrency:
-    runs-on: [self-hosted, java]
+    runs-on: ubuntu-latest
     timeout-minutes: 25
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB). -DreuseForks=false gives each test class a fresh JVM, as
+    # Aurora's Maven wrapper did: one shared fork accumulated Spring contexts and OOMed at 6g.
+    env:
+      CRETAS_JAVA_FORK_XMX: 6g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -243,8 +252,9 @@ jobs:
           echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" "$MVN" -B test \
-            -Dtest=ProductionScopePostgresContractTest,FinanceScopePostgresContractTest,VoucherLedgerScopePostgresContractTest,ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest,InventoryAuditTransactionContractTest,RoleDataScopePostgresContractTest,UserOrganizationConcurrencyPostgresContractTest,PurchaseReturnConcurrencyPostgresContractTest,BatchAdjustmentAtomicityPostgresContractTest,PurchaseExceptionConcurrencyPostgresContractTest,PurchaseExceptionRepositoryQueryValidationTest,OperationalQuoteOrderPostgresContractTest,AiPurchaseTaskGrantServiceContractTest,AiPurchaseTaskGrantRepositoryQueryValidationTest,ProcessSecretRepositoryQueryValidationTest,PlatformDataAccessLogRepositoryQueryValidationTest,TransferWarehouseDeliveryPostgresContractTest,WarehouseTransferMovementMigrationPostgresContractTest \
+            -Dtest=ProductionScopePostgresContractTest,FinanceScopePostgresContractTest,VoucherLedgerScopePostgresContractTest,ReportReversalLogRepositoryPostgresConcurrencyIT,ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT,ProductionSettlementPartialUniqueIndexPostgresContractTest,WorkflowEngineRestartWithCurrentDefinitionOrderingPostgresIT,SoftDeletePartialUniqueIndexPostgresContractTest,InventoryAuditTransactionContractTest,RoleDataScopePostgresContractTest,UserOrganizationConcurrencyPostgresContractTest,PurchaseReturnConcurrencyPostgresContractTest,BatchAdjustmentAtomicityPostgresContractTest,PurchaseExceptionConcurrencyPostgresContractTest,PurchaseExceptionRepositoryQueryValidationTest,OperationalQuoteOrderPostgresContractTest,AiPurchaseTaskGrantServiceContractTest,AiPurchaseTaskGrantRepositoryQueryValidationTest,ProcessSecretRepositoryQueryValidationTest,PlatformDataAccessLogRepositoryQueryValidationTest,TransferWarehouseDeliveryPostgresContractTest,WarehouseTransferMovementMigrationPostgresContractTest,WipOutputCorrectionPostgresContractTest,ProductionReportCorrectionLockedStatePostgresContractTest,StocktakeDriftRecoveryPostgresContractTest,ProductionBatchSearchPostgresRepositoryQueryValidationTest,LineageClosureCrossJoinPostgresContractTest \
             -Dspring.profiles.active=test \
+            -DreuseForks=false \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
       - name: Prove activity event migration and committed JDBC writes

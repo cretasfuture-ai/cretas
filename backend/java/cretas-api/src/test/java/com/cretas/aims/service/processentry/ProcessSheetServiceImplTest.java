@@ -650,6 +650,46 @@ class ProcessSheetServiceImplTest {
     }
 
     @Test
+    @DisplayName("血缘: 正式报工扣回料之后写 回料来源 → 本行物化生产批 的 WIP_CONSUME (量 = 实际扣减量)")
+    void submitRow_reworkSfi_writesWipConsumeLineageToTheMaterializedBatch() {
+        String reworkBatchNo = "CLK-SEMI-REWORK-LINEAGE";
+        seedReworkSfi(reworkBatchNo, "1");
+        com.cretas.aims.service.lineage.SemiFeedLineageRecorder lineageMock =
+                org.mockito.Mockito.mock(com.cretas.aims.service.lineage.SemiFeedLineageRecorder.class);
+        Object target = org.springframework.test.util.AopTestUtils.getUltimateTargetObject(processSheetServiceImpl);
+        Object original = org.springframework.test.util.ReflectionTestUtils.getField(target, "semiFeedLineageRecorder");
+        org.springframework.test.util.ReflectionTestUtils.setField(target, "semiFeedLineageRecorder", lineageMock);
+        try {
+            ProcessSheetRowRequest req = baseReq("row-rework-lineage", "qidiao", 2, "1");
+            req.setFinished(true);
+            req.setProcessDate(LocalDate.of(2026, 7, 20));
+            req.setInputQuantity(new BigDecimal("1"));
+            UpstreamRef rework = upstreamRef(reworkBatchNo, "1");
+            rework.setSemiFinished(true);
+            req.setUpstreamSources(List.of(rework));
+
+            processSheetService.submitRow(FACTORY_ID, planId, req, operatorId);
+
+            ProcessSheetRow persisted = rowRepo
+                    .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                            FACTORY_ID, planId, "qidiao", "row-rework-lineage")
+                    .orElseThrow();
+            assertThat(persisted.getBatchId()).as("成品行必须物化出生产批 (边的目标)").isNotNull();
+            org.mockito.Mockito.verify(lineageMock).recordSemiFeed(
+                    org.mockito.ArgumentMatchers.eq(FACTORY_ID),
+                    org.mockito.ArgumentMatchers.eq(reworkBatchNo),
+                    org.mockito.ArgumentMatchers.eq(persisted.getBatchId()),
+                    org.mockito.ArgumentMatchers.argThat(q -> q != null && q.compareTo(BigDecimal.ONE) == 0),
+                    org.mockito.ArgumentMatchers.eq("kg"),
+                    org.mockito.ArgumentMatchers.eq(operatorId),
+                    org.mockito.ArgumentMatchers.eq("reworkSubmit:row" + persisted.getId() + ":" + reworkBatchNo),
+                    org.mockito.ArgumentMatchers.eq("PROCESS_SHEET_REWORK_SUBMIT"));
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(target, "semiFeedLineageRecorder", original);
+        }
+    }
+
+    @Test
     @DisplayName("正式报工接线: ReworkPolicyAutoDeduction 追加的回料引用与手工回料同路严格扣减, allocation 标 REWORK_AUTO, payload 带 automaticRework+stockConsumedAtSubmit")
     void submitRow_autoReworkRefsAreConsumedOnTheSamePath() {
         String autoBatchNo = "CLK-SEMI-REWORK-AUTO";

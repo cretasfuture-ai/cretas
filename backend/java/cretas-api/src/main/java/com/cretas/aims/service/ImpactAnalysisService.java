@@ -273,10 +273,17 @@ public interface ImpactAnalysisService {
     );
 
     /**
-     * 资源检查结果
+     * 资源检查结果 —— 三态:
+     * <ul>
+     *   <li>{@code verified=true, available=true}  用真实数据核对过, 够用</li>
+     *   <li>{@code verified=true, available=false} 用真实数据核对过, 不够</li>
+     *   <li>{@code verified=false} (此时 available 恒为 false) 没有真实数据可核对 / 数据源异常 ——
+     *       ⛔ 不得被当成「可用」, 也不是「不足」; message 写明为什么没核对</li>
+     * </ul>
      */
     class ResourceCheckResult {
         private boolean available;
+        private boolean verified = true;
         private String resourceType;      // MATERIAL/EQUIPMENT/WORKER
         private String message;
         private BigDecimal requiredAmount;
@@ -289,7 +296,8 @@ public interface ImpactAnalysisService {
             result.resourceType = resourceType;
             result.availableAmount = available;
             result.requiredAmount = required;
-            if (required != null && required.compareTo(BigDecimal.ZERO) > 0) {
+            if (required != null && required.compareTo(BigDecimal.ZERO) > 0
+                    && available != null && available.compareTo(BigDecimal.ZERO) > 0) {
                 result.utilizationRate = required.divide(available, 4, java.math.RoundingMode.HALF_UP)
                         .doubleValue();
             }
@@ -306,8 +314,20 @@ public interface ImpactAnalysisService {
             return result;
         }
 
+        /** 没有真实数据可核对 / 数据源异常: available=false, verified=false, reason 必填。 */
+        public static ResourceCheckResult unverified(String resourceType, String reason, BigDecimal required) {
+            ResourceCheckResult result = new ResourceCheckResult();
+            result.available = false;
+            result.verified = false;
+            result.resourceType = resourceType;
+            result.message = reason;
+            result.requiredAmount = required;
+            return result;
+        }
+
         // Getters
         public boolean isAvailable() { return available; }
+        public boolean isVerified() { return verified; }
         public String getResourceType() { return resourceType; }
         public String getMessage() { return message; }
         public BigDecimal getRequiredAmount() { return requiredAmount; }

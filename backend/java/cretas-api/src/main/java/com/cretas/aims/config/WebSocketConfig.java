@@ -1,5 +1,7 @@
 package com.cretas.aims.config;
 
+import org.springframework.context.annotation.Profile;
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import com.cretas.aims.websocket.EquipmentMonitoringHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
@@ -16,6 +18,8 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
  * @since 2026-01-02
  */
 @Configuration
+// 回填进程 web-application-type=none, 不开 WebSocket 端点。
+@Profile(LineageBackfillMode.NOT_ACTIVE)
 @EnableWebSocket
 @RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketConfigurer {

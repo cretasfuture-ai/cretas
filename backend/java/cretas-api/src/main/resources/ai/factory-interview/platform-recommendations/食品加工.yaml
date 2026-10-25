@@ -1,0 +1,54 @@
+# 平台自编工艺模板（隐私条款第七条：仅来源于公开资料、行业标准及平台自编模板）
+# 依据：食品生产许可通则中各类食品共有的基本生产环节整理，作为没有细分模板时的通用起点。
+# 不含任何客户的工艺：只有工序名称、先后、各步投入/产出与参数名称，不含参数数值与得率。
+industryHint: 食品加工
+intro: 这是平台按公开的食品生产通用环节整理的起点，只列大多数食品工厂都有的工序和要记录的参数名称，不含任何工厂的具体做法。请按你们工厂的实际工序逐项增删、确认。
+variants:
+  - 不需要熟制的产品去掉「加工熟制」，或改成你们的实际加工方式
+  - 冷藏或常温产品把「冷却」改成对应的储存要求
+steps:
+  - name: 原料验收
+    input: 主要原料
+    aux: []
+    pack: []
+    output: 合格原料
+    outputUnit: kg
+    params: [感官检查, 原料温度]
+    yieldNote: 按本厂实际填写
+    byproducts: [不合格原料]
+  - name: 前处理
+    input: 合格原料
+    aux: [加工用水]
+    pack: []
+    output: 前处理半成品
+    outputUnit: kg
+    params: [处理方式]
+    yieldNote: 按本厂实际填写
+    byproducts: [边角料]
+  - name: 加工熟制
+    input: 前处理半成品
+    aux: [调味料]
+    pack: []
+    output: 加工半成品
+    outputUnit: kg
+    params: [加工方式, 中心温度]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 冷却
+    input: 加工半成品
+    aux: []
+    pack: []
+    output: 冷却半成品
+    outputUnit: kg
+    params: [冷却方式]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 包装
+    input: 冷却半成品
+    aux: []
+    pack: [包装袋, 标签, 外箱]
+    output: 包装成品
+    outputUnit: 袋
+    params: [每袋规格]
+    yieldNote: 包装工序一般不计得率
+    byproducts: []

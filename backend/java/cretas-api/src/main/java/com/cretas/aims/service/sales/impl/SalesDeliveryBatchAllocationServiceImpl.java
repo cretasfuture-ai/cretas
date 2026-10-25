@@ -356,6 +356,12 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     : finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
                             factoryId, productTypeId, WarehouseCodes.WH_RD);
         }
+        // 过期批次不推荐 (到期日早于今天, 东八区; 到期日当天仍可发): 分配对话框里选不到它,
+        // autoAllocateFifo 也挑不到它。即使绕过推荐直接提交, allocateBatches 的 saleability 闸照样拒。
+        int expiredSkipped = batches.size();
+        batches = FinishedGoodsBatchSaleabilityGuard.excludeExpired(
+                batches, com.cretas.aims.util.InventoryExpiry.today());
+        expiredSkipped -= batches.size();
 
         List<Map<String, Object>> result = new ArrayList<>();
         BigDecimal remaining = requiredQty;
@@ -403,9 +409,9 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             remaining = remaining.subtract(allocate);
         }
 
-        log.info("FIFO 成品推荐: factoryId={}, productTypeId={}, requiredQty={}, unit={}, batches={}, skippedUnitMismatch={}, fulfilled={}",
+        log.info("FIFO 成品推荐: factoryId={}, productTypeId={}, requiredQty={}, unit={}, batches={}, skippedUnitMismatch={}, skippedExpired={}, fulfilled={}",
                 factoryId, productTypeId, requiredQty, targetUnit, result.size(), skippedUnitMismatch,
-                remaining.compareTo(BigDecimal.ZERO) <= 0);
+                expiredSkipped, remaining.compareTo(BigDecimal.ZERO) <= 0);
 
         return result;
     }

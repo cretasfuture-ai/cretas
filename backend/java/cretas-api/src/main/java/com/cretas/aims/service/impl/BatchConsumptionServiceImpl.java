@@ -17,6 +17,7 @@ import com.cretas.aims.service.BatchConsumptionService;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.orchestration.BomExpansionService;
+import com.cretas.aims.util.InventoryExpiry;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -233,9 +235,12 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
             List<MaterialBatch> fefoBatches = materialBatchRepository
                     .findAvailableBatchesFEFOByWarehouse(factoryId, materialTypeId, warehouseId);
             BigDecimal remaining = delta;
+            LocalDate expiryToday = InventoryExpiry.today();
 
             for (MaterialBatch mb : fefoBatches) {
                 if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+                // 过期批不扣 (到期次日 00:00–02:05 状态还是 AVAILABLE, 且 FEFO 排在最前)
+                if (InventoryExpiry.isExpired(mb.getExpireDate(), expiryToday)) continue;
 
                 BigDecimal available = mb.getReceiptQuantity()
                         .subtract(mb.getUsedQuantity() != null ? mb.getUsedQuantity() : BigDecimal.ZERO)

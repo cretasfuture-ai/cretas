@@ -137,6 +137,9 @@ _archived/
 frontend/CretasFoodTrace/android/C:/
 frontend/CretasFoodTrace/android/.cxx/
 
+# 本地生成的演示/路演材料 (PDF、拼版脚本、定价页等, 2026-10-25 本机 456MB); 只在根目录
+/output/
+
 # 截图和图片文件
 *.png
 *.jpeg

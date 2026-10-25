@@ -118,4 +118,54 @@ class BomExpansionServiceTest {
         item.setIsOptional(false);
         return item;
     }
+
+    /**
+     * 到期次日 00:00–02:05 之间, 过期批的状态还是 AVAILABLE, 查询照样返回且按 FEFO 排在最前。
+     * 原来预留 / 插单核对会先把它分出去。判据: 过期批既不算可用量也不出现在分配里;
+     * 阴性对照: 到期日 = 今天的批次仍然可用。
+     */
+    @Test
+    void expiredAvailableBatchesAreNeitherCountedNorAllocated() {
+        java.time.LocalDate today = com.cretas.aims.util.InventoryExpiry.today();
+        com.cretas.aims.entity.MaterialBatch expired = stockBatch("MB-EXP", "40", today.minusDays(1));
+        com.cretas.aims.entity.MaterialBatch dueToday = stockBatch("MB-TODAY", "30", today);
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
+        when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-PORK", "WH-WKS"))
+                .thenReturn(List.of(expired, dueToday));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-PORK", "WH-LOG"))
+                .thenReturn(List.of());
+
+        com.cretas.aims.dto.orchestration.MaterialRequirement req =
+                new com.cretas.aims.dto.orchestration.MaterialRequirement();
+        req.setMaterialTypeId("MAT-PORK");
+        req.setMaterialTypeName("猪蹄");
+        req.setRequiredQuantity(new BigDecimal("50"));
+        req.setSourceUnit("kg");
+
+        com.cretas.aims.dto.orchestration.MaterialCheckResult result =
+                service.checkMaterialAvailability("F006", List.of(req));
+
+        // 过期的 40 不算 ⇒ 只有 30 可用 < 50, 是短缺 (原来 70 ≥ 50 判满足, 且先分过期批)
+        assertEquals(false, result.isAllSatisfied());
+        assertEquals(0, new BigDecimal("30").compareTo(result.getShortfalls().get(0).getAvailableQuantity()));
+
+        req.setRequiredQuantity(new BigDecimal("20"));
+        result = service.checkMaterialAvailability("F006", List.of(req));
+        assertEquals(true, result.isAllSatisfied());
+        assertEquals(List.of("MB-TODAY"), result.getAllocations().stream()
+                .map(com.cretas.aims.dto.orchestration.MaterialAllocation::getMaterialBatchId).toList());
+    }
+
+    private static com.cretas.aims.entity.MaterialBatch stockBatch(String id, String qty, java.time.LocalDate expire) {
+        com.cretas.aims.entity.MaterialBatch b = new com.cretas.aims.entity.MaterialBatch();
+        b.setId(id);
+        b.setBatchNumber(id);
+        b.setReceiptQuantity(new BigDecimal(qty));
+        b.setUsedQuantity(BigDecimal.ZERO);
+        b.setReservedQuantity(BigDecimal.ZERO);
+        b.setQuantityUnit("kg");
+        b.setExpireDate(expire);
+        return b;
+    }
 }
