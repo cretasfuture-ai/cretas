@@ -31,16 +31,19 @@ public class FactoryAssemblyActivationController {
     private final ObjectMapper json;
     private final FactoryActivationExecutionStore executionStore;
     private final FactoryFormalRuntimeReadback committedReadback;
+    private final com.cretas.aims.blueprint.canonical.CanonicalFactoryBlueprintService canonicalBlueprints;
 
     public FactoryAssemblyActivationController(FactoryAssemblyPlanFactory plans,
             FactoryBlueprintActivationCenter center, FactoryAssemblyApprovalLifecycle lifecycle,
             FactoryAssemblyApprovalRepository approvals, AssemblyActivationActorResolver actors,
             List<FactoryFormalModuleActivationCommand> commands, ObjectMapper json,
-            FactoryActivationExecutionStore executionStore, FactoryFormalRuntimeReadback committedReadback) {
+            FactoryActivationExecutionStore executionStore, FactoryFormalRuntimeReadback committedReadback,
+            com.cretas.aims.blueprint.canonical.CanonicalFactoryBlueprintService canonicalBlueprints) {
         this.plans = plans; this.center = center; this.lifecycle = lifecycle;
         this.approvals = approvals; this.actors = actors; this.json = json;
         this.executionStore = executionStore;
         this.committedReadback = java.util.Objects.requireNonNull(committedReadback);
+        this.canonicalBlueprints = java.util.Objects.requireNonNull(canonicalBlueprints);
         this.commands = commands.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                 FactoryFormalModuleActivationCommand::capabilityId, command -> command));
         if (!this.commands.keySet().equals(Set.of("modules", "workflow"))) {
@@ -70,6 +73,78 @@ public class FactoryAssemblyActivationController {
         only(body, Set.of("selection", "confirmedPlanDigest"));
         var request = serverPlan(factoryId, blueprintId, body.get("selection"), login);
         return ApiResponse.success(view(lifecycle.request(login, request, text(body, "confirmedPlanDigest"))));
+    }
+
+    /** What a persisted approval may be used for now; only the first two continue the original flow. */
+    public enum Recoverability { CONTINUE_APPROVAL, CONTINUE_EXECUTION, RECEIPT_ONLY, EXPIRED,
+        HISTORICAL_VERSION, BLUEPRINT_CHANGED, SNAPSHOT_UNREADABLE }
+    public record RecoverableApproval(ApprovalView approval, Integer blueprintVersion, Recoverability recoverability) {}
+    public record RecoverableApprovals(Integer currentBlueprintVersion, List<RecoverableApproval> approvals) {}
+
+    static final Set<String> RECOVERABLE_STATUSES = Set.of("REQUESTED", "APPROVED", "EXECUTED");
+    static final int RECOVERABLE_LIMIT = 50;
+
+    /**
+     * This blueprint's persisted approvals so a request can be resumed after a reload without typing
+     * its number. Listing never authorizes anything: approve and execute still run every server check
+     * (re-preview, current blueprint identity, version and digest, expiry, separation of actors).
+     */
+    @GetMapping("/requests")
+    public ApiResponse<RecoverableApprovals> recoverable(@PathVariable String factoryId,
+            @PathVariable String blueprintId, @RequestParam(required = false) String capabilityId,
+            HttpServletRequest login) {
+        actors.authenticated(login, factoryId, Set.of(FactoryBlueprintActivationCenter.EXECUTE_PERMISSION));
+        if (capabilityId != null && !commands.containsKey(capabilityId)) throw invalid("只支持配置应用和 Workflow 发布");
+        var current = canonicalBlueprints.current(factoryId);
+        boolean isCurrent = current != null && blueprintId.equals(current.getId()) && current.getVersion() != null;
+        Integer currentVersion = isCurrent ? current.getVersion() : null;
+        String currentDigest = isCurrent ? center.serverBlueprintDigest(current) : null;
+        Instant now = Instant.now();
+        var rows = approvals.findRecoverable(factoryId, blueprintId, RECOVERABLE_STATUSES,
+                org.springframework.data.domain.PageRequest.of(0, RECOVERABLE_LIMIT));
+        var items = rows.stream()
+                .filter(row -> capabilityId == null || capabilityId.equals(row.getCapabilityId()))
+                .map(row -> {
+                    ActivationPlan snapshot = snapshot(row, json);
+                    return new RecoverableApproval(view(row), snapshot == null ? null : snapshot.blueprintVersion(),
+                            classify(row, snapshot, currentVersion, currentDigest, now));
+                })
+                .toList();
+        return ApiResponse.success(new RecoverableApprovals(currentVersion, items));
+    }
+
+    /** The stored plan, only when it is this row's own: factory, blueprint, digest and single module match. */
+    static ActivationPlan snapshot(FactoryAssemblyApproval row, ObjectMapper json) {
+        try {
+            ActivationPlan plan = json.readValue(row.getPlanJson(), ActivationPlan.class);
+            boolean own = plan != null && row.getFactoryId().equals(plan.factoryId())
+                    && row.getBlueprintId().equals(plan.blueprintId())
+                    && row.getPlanDigest() != null && row.getPlanDigest().equals(plan.planDigest())
+                    && plan.modules() != null && plan.modules().size() == 1
+                    && row.getCapabilityId().equals(plan.modules().get(0).capabilityId());
+            return own ? plan : null;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException | IllegalArgumentException | NullPointerException unreadable) {
+            return null;
+        }
+    }
+
+    /**
+     * An unreadable or foreign snapshot never continues; an executed request only shows its receipt; a
+     * request for another blueprint version, or for this version after the blueprint changed, is
+     * history; an approval continues only while its expiry exists and is in the future; a request
+     * awaiting approval has no expiry yet, which is normal.
+     */
+    static Recoverability classify(FactoryAssemblyApproval row, ActivationPlan snapshot, Integer currentVersion,
+            String currentDigest, Instant now) {
+        if (snapshot == null) return Recoverability.SNAPSHOT_UNREADABLE;
+        if ("EXECUTED".equals(row.getStatus())) return Recoverability.RECEIPT_ONLY;
+        if (currentVersion == null || snapshot.blueprintVersion() != currentVersion) return Recoverability.HISTORICAL_VERSION;
+        if (currentDigest == null || !currentDigest.equals(snapshot.blueprintDigest())) return Recoverability.BLUEPRINT_CHANGED;
+        if ("APPROVED".equals(row.getStatus())) {
+            return row.getExpiresAt() != null && now.isBefore(row.getExpiresAt())
+                    ? Recoverability.CONTINUE_EXECUTION : Recoverability.EXPIRED;
+        }
+        return "REQUESTED".equals(row.getStatus()) ? Recoverability.CONTINUE_APPROVAL : Recoverability.SNAPSHOT_UNREADABLE;
     }
 
     @GetMapping("/requests/{approvalId}")
