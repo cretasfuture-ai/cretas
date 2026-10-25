@@ -5,7 +5,15 @@ import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.entity.workprocess.WorkProcessTask.Status;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,11 +52,15 @@ class WorkflowStepUnlockGuardContractTest {
     private WorkProcessTaskRepository taskRepo;
     private WorkflowTaskPortRepository portRepo;
     private WorkflowStepUnlockGuard guard;
+    private ProcessSheetRowRepository rowRepo;
+    private ProductionReportRepository reportRepo;
+    private final ObjectMapper mapper = new ObjectMapper();
 
     private WorkProcessTask thaw;    // ①
     private WorkProcessTask spice;   // ②
     private WorkProcessTask braise;  // ③
     private final List<WorkflowTaskPort> ports = new ArrayList<>();
+    private final List<ProcessSheetRow> rows = new ArrayList<>();
     private long portSeq = 1;
 
     @BeforeEach
@@ -56,7 +68,14 @@ class WorkflowStepUnlockGuardContractTest {
         taskRepo = mock(WorkProcessTaskRepository.class);
         portRepo = mock(WorkflowTaskPortRepository.class);
         WorkProcessRepository wpRepo = mock(WorkProcessRepository.class);
-        guard = new WorkflowStepUnlockGuard(taskRepo, portRepo, wpRepo);
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        rowRepo = mock(ProcessSheetRowRepository.class);
+        reportRepo = mock(ProductionReportRepository.class);
+        guard = new WorkflowStepUnlockGuard(taskRepo, portRepo, wpRepo, batchRepo, rowRepo, reportRepo, mapper);
+        ProductionBatch batch = new ProductionBatch();
+        batch.setProductionPlanId("PLAN-1");
+        when(batchRepo.findById(500L)).thenReturn(java.util.Optional.of(batch));
+        when(rowRepo.findByFactoryIdAndPlanId(F, "PLAN-1")).thenReturn(rows);
 
         thaw = task(1L, 1, "WP-THAW");
         spice = task(2L, 2, "WP-SPICE");
@@ -246,6 +265,85 @@ class WorkflowStepUnlockGuardContractTest {
         // 并行分支: ③ 只吃 ① 的料时, 上游只有 ① (⛔ 不是前一道 ②)
         ports.removeIf(p -> p.getTaskId().equals(3L) && "SEMI-Y".equals(p.getMaterialNodeId()));
         assertThat(guard.upstreamProcessOrders(F, braise)).containsExactly(1);
+    }
+
+    // ---------------- 按物料 (Steve 2026-10-25 追加: 上游有没有出本道要的那种料) ----------------
+
+    /** ① 改成一出二: 解冻蹄 X (给 ③) + 蹄筋 Z (给 ②'); ② 改吃 Z。 */
+    private void thawSplitsIntoTwo() {
+        ports.removeIf(p -> p.getTaskId().equals(2L) && p.getDirection() == WorkflowTaskPort.Direction.INPUT);
+        port(spice, WorkflowTaskPort.Direction.INPUT, "SEMI-Z", null, true);
+        WorkflowTaskPort z = port(thaw, WorkflowTaskPort.Direction.OUTPUT, "SEMI-Z", null, true);
+        z.setWorkflowPortId("out:thaw:1");
+        z.setSkuId("SKU-Z");
+        ports.stream().filter(p -> p.getTaskId().equals(1L) && "SEMI-X".equals(p.getMaterialNodeId()))
+                .forEach(p -> { p.setWorkflowPortId("out:thaw:0"); p.setSkuId("SKU-X"); });
+        thaw.setStatus(Status.IN_PROGRESS);
+        thaw.setActualQuantity(new BigDecimal("45"));   // ① 整体有产出 —— 旧判据下所有下游都会解锁
+    }
+
+    private void webRow(int order, String portId, String qty) throws Exception {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setWorkflowPortId(portId);
+        req.setOutputQuantity(new BigDecimal(qty));
+        ProcessSheetRow r = new ProcessSheetRow();
+        r.setProcessOrder(order);
+        r.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        r.setRowPayload(mapper.writeValueAsString(req));
+        rows.add(r);
+    }
+
+    @Test
+    @DisplayName("一出多: 上游只出了 X 没出 Z ⇒ 吃 Z 的那道锁住, 吃 X 的那道解锁 (⛔ 不能因为上游「有产出」就都放)")
+    void multiOutputUpstreamUnlocksOnlyTheMaterialItProduced() throws Exception {
+        thawSplitsIntoTwo();
+        spice.setActualQuantity(new BigDecimal("2"));   // ③ 的另一路料 Y 已到
+        webRow(1, "out:thaw:0", "45");                  // web 正式录入: ① 只出了 X
+
+        assertThat(guard.evaluate(F, braise).unlocked()).as("③ 吃 X, X 出了").isTrue();
+        WorkflowStepUnlockGuard.Readiness z = guard.evaluate(F, spice);
+        assertThat(z.unlocked()).as("② 吃 Z, ① 没出 Z").isFalse();
+        assertThat(z.waitingFor()).containsExactly("解冻");
+        assertThat(z.blockedReason()).contains("本道要用的料");
+
+        webRow(1, "out:thaw:1", "8");                   // ① 补报了 Z
+        assertThat(guard.evaluate(F, spice).unlocked()).isTrue();
+    }
+
+    @Test
+    @DisplayName("一出多: 草稿行 / 数量 0 的行不算出了料")
+    void draftOrZeroRowsDoNotCount() throws Exception {
+        thawSplitsIntoTwo();
+        webRow(1, "out:thaw:1", "0");
+        webRow(1, "out:thaw:1", "8");
+        rows.get(1).setSubmissionStatus(ProcessSheetRow.SUBMISSION_DRAFT);
+
+        assertThat(guard.evaluate(F, spice).unlocked()).isFalse();
+    }
+
+    @Test
+    @DisplayName("一出多: App 报工按 SKU 认出了哪种料")
+    void appReportSkuCountsAsTheMaterial() {
+        thawSplitsIntoTwo();
+        ProductionReport r = new ProductionReport();
+        r.setProductTypeId("SKU-Z");
+        r.setOutputQuantity(new BigDecimal("3"));
+        when(reportRepo.findYieldReportsByTask(F, 1L)).thenReturn(List.of(r));
+
+        assertThat(guard.evaluate(F, spice).unlocked()).isTrue();
+    }
+
+    @Test
+    @DisplayName("上游完工了却没出料 (产量 0) ⇒ 锁住 (没料就是没料); 上游跳过 ⇒ 放行 (料从别处来)")
+    void completedWithoutOutputStaysLocked() {
+        thaw.setStatus(Status.COMPLETED);
+        thaw.setActualQuantity(BigDecimal.ZERO);
+        spice.setActualQuantity(new BigDecimal("2"));
+
+        assertThat(guard.evaluate(F, braise).unlocked()).isFalse();
+
+        thaw.setStatus(Status.SKIPPED);
+        assertThat(guard.evaluate(F, braise).unlocked()).isTrue();
     }
 
     // ---------------------------------------------------------------------

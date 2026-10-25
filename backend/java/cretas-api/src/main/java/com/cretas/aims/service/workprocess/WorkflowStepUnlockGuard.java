@@ -1,12 +1,19 @@
 package com.cretas.aims.service.workprocess;
 
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -27,10 +34,15 @@ import java.util.stream.Collectors;
  *
  * <h3>规则</h3>
  * 一道工序的每个必需投入, 如果它是图里<b>另一道更早的工序产出的</b> (该道 OUTPUT 端口与本道 INPUT 端口
- * 指向同一个 {@code materialNodeId}), 那么至少要有一个这样的上游已经<b>有产出</b>, 本道才解锁:
+ * 指向同一个 {@code materialNodeId}), 那么至少要有一个这样的上游已经<b>产出了这种料</b>, 本道才解锁
+ * (Steve 2026-10-25 追加: 「上游有没有出本道要的那种料, 没有就锁住」):
  * <ul>
- *   <li>「有产出」= 上游 {@code actualQuantity > 0} (web 逐道录入与 App 报工都会回写它),
- *       或上游已到终态 (完成 / 跳过 / 取消 —— 终态不会再产出, 不能让下游永远锁死)。</li>
+ *   <li>上游只有一个产出口: {@code actualQuantity > 0} 就算出了 (web 逐道录入与 App 报工都会回写它)。</li>
+ *   <li>上游一出多 (如分割出鸡胸 / 鸡腿 / 鸡翅): 按<b>这一种料</b>找证据 —— web 正式录入的行
+ *       (产出端口 / 物料节点 / SKU 对得上且数量 &gt; 0), 或 App 报工 (SKU 对得上且产出 &gt; 0)。
+ *       分割只出了鸡胸鸡翅时, 吃鸡腿的滚揉照样锁住。</li>
+ *   <li>上游跳过 / 取消: 不会再产出, 料只能从别处来 ⇒ 不锁 (否则下游永远锁死)。
+ *       上游<b>完工了却没出这种料</b>: 锁住 (没料就是没料)。</li>
  *   <li>⛔ 不要求上游「全部完工」: 分批产出时, 上游先出的那部分就能让下游开工。
  *       够不够这一次投的量, 由各条路径已有的按来源余额校验负责 (WIP_INSUFFICIENT / SFI_INSUFFICIENT)。</li>
  *   <li>只吃原料、没有上游工序产出的投入不设闸 ⇒ 并行分支各报各的。</li>
@@ -52,6 +64,10 @@ public class WorkflowStepUnlockGuard {
     private final WorkProcessTaskRepository taskRepository;
     private final WorkflowTaskPortRepository portRepository;
     private final WorkProcessRepository workProcessRepository;
+    private final ProductionBatchRepository productionBatchRepository;
+    private final ProcessSheetRowRepository processSheetRowRepository;
+    private final ProductionReportRepository productionReportRepository;
+    private final ObjectMapper objectMapper;
 
     /** 判定结果。{@code waitingFor} 是还没有产出的上游工序名 (去重、按工序顺序)。 */
     public record Readiness(boolean unlocked, List<String> waitingFor) {
@@ -61,7 +77,7 @@ public class WorkflowStepUnlockGuard {
             if (unlocked) {
                 return null;
             }
-            return "上游工序「" + String.join("」「", waitingFor) + "」还没有产出，本道要用它的产出，暂时不能报工";
+            return "上游工序「" + String.join("」「", waitingFor) + "」还没有产出本道要用的料，暂时不能报工";
         }
     }
 
@@ -102,6 +118,7 @@ public class WorkflowStepUnlockGuard {
 
         Map<Long, List<WorkProcessTask>> waiting = new HashMap<>();
         Set<String> processIds = new LinkedHashSet<>();
+        Evidence evidence = new Evidence(factoryId);
 
         for (Map.Entry<Long, List<WorkProcessTask>> e : byInstance.entrySet()) {
             List<WorkProcessTask> siblings = taskRepository
@@ -109,7 +126,7 @@ public class WorkflowStepUnlockGuard {
             List<WorkflowTaskPort> ports = portRepository
                     .findByFactoryIdAndWorkflowInstanceId(factoryId, e.getKey());
             for (WorkProcessTask t : e.getValue()) {
-                List<WorkProcessTask> blockers = workflowBlockers(t, siblings, ports);
+                List<WorkProcessTask> blockers = workflowBlockers(t, siblings, ports, evidence);
                 waiting.put(t.getId(), blockers);
                 blockers.forEach(b -> processIds.add(b.getWorkProcessId()));
             }
@@ -187,14 +204,17 @@ public class WorkflowStepUnlockGuard {
         return q != null && q.signum() > 0;
     }
 
-    private static List<WorkProcessTask> workflowBlockers(
-            WorkProcessTask task, List<WorkProcessTask> siblings, List<WorkflowTaskPort> ports) {
+    private List<WorkProcessTask> workflowBlockers(
+            WorkProcessTask task, List<WorkProcessTask> siblings, List<WorkflowTaskPort> ports, Evidence evidence) {
         Map<Long, WorkProcessTask> taskById = siblings.stream()
                 .collect(Collectors.toMap(WorkProcessTask::getId, t -> t, (a, b) -> a));
         int myOrder = task.getProcessOrder() == null ? Integer.MAX_VALUE : task.getProcessOrder();
 
-        // materialNodeId -> 产出它的更早工序
-        Map<String, List<WorkProcessTask>> producers = new HashMap<>();
+        // materialNodeId -> 产出它的更早工序的那个产出口; 以及每道工序有几个产出口
+        Map<String, List<WorkflowTaskPort>> producers = new HashMap<>();
+        Map<Long, Long> outputCount = ports.stream()
+                .filter(p -> p.getDirection() == WorkflowTaskPort.Direction.OUTPUT && p.getTaskId() != null)
+                .collect(Collectors.groupingBy(WorkflowTaskPort::getTaskId, Collectors.counting()));
         for (WorkflowTaskPort p : ports) {
             if (p.getDirection() != WorkflowTaskPort.Direction.OUTPUT || p.getMaterialNodeId() == null) {
                 continue;
@@ -204,7 +224,7 @@ public class WorkflowStepUnlockGuard {
                     || producer.getProcessOrder() == null || producer.getProcessOrder() >= myOrder) {
                 continue;
             }
-            producers.computeIfAbsent(p.getMaterialNodeId(), k -> new ArrayList<>()).add(producer);
+            producers.computeIfAbsent(p.getMaterialNodeId(), k -> new ArrayList<>()).add(p);
         }
 
         // 本道投入, 按选择组归并。
@@ -241,12 +261,14 @@ public class WorkflowStepUnlockGuard {
             List<WorkProcessTask> groupWaiting = new ArrayList<>();
             int satisfiedMembers = 0;
             for (WorkflowTaskPort in : group) {
-                List<WorkProcessTask> from = producers.getOrDefault(in.getMaterialNodeId(), List.of());
-                if (from.isEmpty() || from.stream().anyMatch(WorkflowStepUnlockGuard::hasProduced)) {
-                    // 没有上游工序产出它 (原料 / 外购) 或者已经有上游产出了
+                List<WorkflowTaskPort> from = producers.getOrDefault(in.getMaterialNodeId(), List.of());
+                if (from.isEmpty() || from.stream().anyMatch(out -> producedMaterial(
+                        taskById.get(out.getTaskId()), out,
+                        outputCount.getOrDefault(out.getTaskId(), 1L), evidence))) {
+                    // 没有上游工序产出它 (原料 / 外购) 或者上游已经出了这种料
                     satisfiedMembers++;
                 } else {
-                    groupWaiting.addAll(from);
+                    from.forEach(out -> groupWaiting.add(taskById.get(out.getTaskId())));
                 }
             }
             boolean groupSatisfied = needsEvery ? groupWaiting.isEmpty() : satisfiedMembers > 0;
@@ -257,6 +279,104 @@ public class WorkflowStepUnlockGuard {
         List<WorkProcessTask> sorted = new ArrayList<>(blockers);
         sorted.sort((a, b) -> Integer.compare(a.getProcessOrder(), b.getProcessOrder()));
         return sorted;
+    }
+
+    /**
+     * 上游 producer 有没有出 {@code out} 这一种料。
+     * 跳过 / 取消 → 算 (不会再产出, 料从别处来); 只有一个产出口 → actualQuantity &gt; 0;
+     * 一出多 → 按这一种料找 web 行 / App 报工证据。
+     */
+    private boolean producedMaterial(WorkProcessTask producer, WorkflowTaskPort out, long producerOutputs,
+                                     Evidence evidence) {
+        if (producer == null) {
+            return false;
+        }
+        if (producer.getStatus() == WorkProcessTask.Status.SKIPPED
+                || producer.getStatus() == WorkProcessTask.Status.CANCELLED) {
+            return true;
+        }
+        if (producerOutputs <= 1) {
+            return positive(producer.getActualQuantity());
+        }
+        return evidence.webRows(producer).stream().anyMatch(r -> rowProduces(r, out))
+                || evidence.appReports(producer).stream().anyMatch(r -> positive(r.getOutputQuantity())
+                        && out.getSkuId() != null && out.getSkuId().equals(r.getProductTypeId()));
+    }
+
+    /** web 正式录入行是不是出了这一种料 (多产出组拆成的成员行各自带端口)。 */
+    private boolean rowProduces(ProcessSheetRow row, WorkflowTaskPort out) {
+        if (ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())) {
+            return false;
+        }
+        ProcessSheetRowRequest req = parse(row.getRowPayload());
+        if (req == null) {
+            return false;
+        }
+        if (positive(req.getOutputQuantity()) && matches(out, req.getWorkflowPortId(),
+                req.getMaterialNodeId(), req.getProductTypeId())) {
+            return true;
+        }
+        return req.getOutputs() != null && req.getOutputs().stream().anyMatch(o -> positive(o.getQuantity())
+                && matches(out, o.getWorkflowPortId(), null, o.getProductTypeId()));
+    }
+
+    /** 端口身份优先 (端口 id / 物料节点), 都没有时才比 SKU。 */
+    private static boolean matches(WorkflowTaskPort out, String portId, String materialNodeId, String skuId) {
+        if (portId != null) {
+            return portId.equals(out.getWorkflowPortId());
+        }
+        if (materialNodeId != null) {
+            return materialNodeId.equals(out.getMaterialNodeId());
+        }
+        return skuId != null && skuId.equals(out.getSkuId());
+    }
+
+    private static boolean positive(BigDecimal q) {
+        return q != null && q.signum() > 0;
+    }
+
+    private ProcessSheetRowRequest parse(String payload) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(payload, ProcessSheetRowRequest.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 一次判定内的证据缓存: 同一道上游的 web 行 / App 报工只查一次。 */
+    private final class Evidence {
+        private final String factoryId;
+        private final Map<Long, List<ProcessSheetRow>> rows = new HashMap<>();
+        private final Map<Long, List<ProductionReport>> reports = new HashMap<>();
+
+        Evidence(String factoryId) {
+            this.factoryId = factoryId;
+        }
+
+        List<ProcessSheetRow> webRows(WorkProcessTask producer) {
+            return rows.computeIfAbsent(producer.getId(), id -> {
+                if (producer.getProductionBatchId() == null || producer.getProcessOrder() == null) {
+                    return List.of();
+                }
+                String planId = productionBatchRepository.findById(producer.getProductionBatchId())
+                        .map(b -> b.getProductionPlanId())
+                        .orElse(null);
+                if (planId == null) {
+                    return List.of();
+                }
+                return processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                        .filter(r -> producer.getProcessOrder().equals(r.getProcessOrder()))
+                        .collect(Collectors.toList());
+            });
+        }
+
+        List<ProductionReport> appReports(WorkProcessTask producer) {
+            return reports.computeIfAbsent(producer.getId(),
+                    id -> productionReportRepository.findYieldReportsByTask(factoryId, id));
+        }
     }
 
     private static List<WorkProcessTask> legacyBlockers(WorkProcessTask task, List<WorkProcessTask> siblings) {
