@@ -4,7 +4,7 @@
 每条都带数字、只说表里能算出来的事实; AI 的段落放在它下面作补充。
 
 覆盖: 预算达成 (全期 / 季度 / 最好月) · 同比 (全期 / 增长最多与下滑月份 / 复盘建议) · 环比 (最近一月) ·
-费用 (超预算 / 超支月份 / 同比) · 业务单元 (达成 / 同比) · 品类占比变化 · 损益 (净利率 / 毛利率 / 期间费用占比与最大一项 / 营业外 / 净利润同比) ·
+费用 (超预算 / 超支月份 / 同比) · 业务单元 (达成 / 同比) · 品类 (占比变化 / 集中度 / 增减金额与复盘建议) · 损益 (净利率 / 毛利率 / 期间费用占比与最大一项 / 营业外 / 净利润同比) ·
 比率表 (各月毛利率: 平均差异 / 最高最低月 / 比上年下降的月份, 只说百分点, 不出金额结论)。
 """
 from typing import Dict, List, Optional
@@ -252,6 +252,28 @@ def _categories(rows: pd.DataFrame, out: _Findings) -> None:
         out.good.append(f"{up[1]}占比 {_pct(up[2])}，比上年 +{up[0]:.1f} 个百分点")
     if down[0] <= -1:
         out.attention.append(f"{down[1]}占比 {_pct(down[2])}，比上年 {down[0]:.1f} 个百分点")
+
+    top_share, top = max((c / cur_total * 100, k) for k, c in cur.items() if c is not None)
+    if top_share >= 50:
+        out.attention.append(f"{top}占本期 {_pct(top_share)}，一半以上来自这一个品类")
+
+    # 各品类比上年多 / 少了多少 (金额): 占比只说结构, 说不出哪个品类在掉
+    changes = [(c - last[k], k, M.growth(c, last[k]).value) for k, c in cur.items()
+               if c is not None and last.get(k) is not None]
+    rising = [x for x in changes if x[0] > 0 and x[2] is not None]
+    falling = sorted(x for x in changes if x[0] < 0 and x[2] is not None)
+    if rising:
+        diff, k, g = max(rising)
+        out.good.append(f"{k}比上年多 {format_amount(diff)}（{g:+.1f}%），各品类里增长最多")
+    for diff, k, g in falling[:2]:
+        out.attention.append(f"{k}比上年少 {format_amount(-diff)}（{g:+.1f}%）")
+    if falling:
+        diff, k, _ = falling[0]
+        out.suggestions.append(f"复盘{k}：比上年少 {format_amount(-diff)}，各品类里减少的金额最多")
+    elif down[0] <= -1:
+        g = M.growth(cur[down[1]], last[down[1]]).value
+        tail = f"，金额同比 {g:+.1f}%" if g is not None else ''
+        out.suggestions.append(f"关注{down[1]}：占比比上年低 {-down[0]:.1f} 个百分点{tail}，增长慢于整体")
 
 
 def _pnl(df: pd.DataFrame, out: _Findings) -> None:

@@ -524,6 +524,26 @@ class TestFindings:
         assert not any('环比' in g for g in f['good'])
 
 
+    # 样图⑥ 品类结构: 原来只有「占比变化」两条, 没有建议 (线上 5255, 2026-10-25)
+    CATEGORY_ROWS = [{'品类': k, '月份': '1月', '本年': c, '上年': ly}
+                     for k, c, ly in [('酱料', 600, 400), ('汤料', 250, 300), ('底料', 150, 100)]]
+
+    def test_category_sheet_names_growth_decline_concentration_and_suggests_review(self):
+        f = svc.generate_dashboard(pd.DataFrame(self.CATEGORY_ROWS), 2026, 'all', 1, 12)['findings']
+        assert '酱料比上年多 200.00（+50.0%），各品类里增长最多' in f['good']
+        assert '汤料比上年少 50.00（-16.7%）' in f['attention']
+        assert '酱料占本期 60.0%，一半以上来自这一个品类' in f['attention']
+        assert '复盘汤料：比上年少 50.00，各品类里减少的金额最多' in f['suggestions']
+
+    def test_category_without_decline_suggests_the_share_loser_not_a_review(self):
+        rows = [{'品类': k, '月份': '1月', '本年': c, '上年': ly}
+                for k, c, ly in [('酱料', 300, 200), ('汤料', 220, 200), ('底料', 280, 200)]]
+        f = svc.generate_dashboard(pd.DataFrame(rows), 2026, 'all', 1, 12)['findings']
+        assert not any('复盘' in s and '品类' in s for s in f['suggestions'])
+        assert '关注汤料：占比比上年低 5.8 个百分点，金额同比 +10.0%，增长慢于整体' in f['suggestions']
+        assert not any('一半以上' in a for a in f['attention'])
+
+
 class TestSlicerScope:
     """线上验收 (2026-10-22): 点筛选器「3月」后数字已是 3 月的, 页首结论和期间标签仍写「全部历史」。
     期间标签要说清楚这些数字是哪一部分数据。走真实 /batch 入口 (筛选在接口层生效)。"""
