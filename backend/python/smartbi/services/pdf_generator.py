@@ -2,7 +2,10 @@
 import base64
 import io
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from xml.sax.saxutils import escape
+
+from smartbi.services.financial.export_conclusions import conclusion_rows
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,7 +23,9 @@ class FinancialPDFGenerator:
                  year: int = 2026,
                  period_type: str = "year",
                  start_month: int = 1, end_month: int = 12,
-                 kpi_summary: Optional[Dict] = None) -> bytes:
+                 kpi_summary: Optional[Dict] = None,
+                 headline: Optional[Dict] = None,
+                 findings: Optional[Dict[str, List[str]]] = None) -> bytes:
         """Generate PDF bytes from chart images and analysis results."""
         try:
             from reportlab.lib.pagesizes import A4, landscape
@@ -37,7 +42,9 @@ class FinancialPDFGenerator:
             raise ImportError("reportlab not installed. Run: pip install reportlab>=4.0")
 
         # Try to register Chinese font
-        chinese_font = 'Helvetica'  # fallback
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        chinese_font = 'STSong-Light'
         for font_path in [
             '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
@@ -96,6 +103,15 @@ class FinancialPDFGenerator:
         elements.append(Paragraph(period_label, subtitle_style))
         elements.append(Paragraph(f"生成日期: {datetime.now().strftime('%Y-%m-%d')}", subtitle_style))
         elements.append(PageBreak())
+
+        # Page text is data, not reportlab markup; preserve <, > and & literally.
+        rows = conclusion_rows(headline, findings)
+        if rows:
+            elements.append(Paragraph("分析结论", heading_style))
+            for title, text in rows:
+                elements.append(Paragraph(escape(title), heading_style))
+                elements.append(Paragraph(escape(text).replace('\n', '<br/>'), body_style))
+            elements.append(PageBreak())
 
         # --- KPI Summary ---
         if kpi_summary and kpi_summary.get('items'):

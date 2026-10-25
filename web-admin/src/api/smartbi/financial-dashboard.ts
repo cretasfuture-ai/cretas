@@ -88,6 +88,8 @@ export interface DashboardResponse {
 }
 
 export interface PPTExportRequest {
+  headline?: DashboardHeadline | null;
+  findings?: DashboardResponse['findings'];
   upload_id?: number;
   year?: number;
   period_type?: string;
@@ -218,6 +220,8 @@ export interface ExcelExportRequest {
 }
 
 export interface PDFExportRequest {
+  headline?: DashboardHeadline | null;
+  findings?: DashboardResponse['findings'];
   chart_images: Record<string, string>;
   analysis_results: Record<string, string>;
   company_name?: string;

@@ -287,6 +287,16 @@ describe('Excel 导出带上页首结论与规则结论 (源码断言)', () => {
   });
 });
 
+describe('PPT/PDF 导出带上页面上的规则结论', () => {
+  it.each(['exportPPT', 'exportPDF'])('%s 传递当前 headline 和 findings', name => {
+    const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
+    const start = src.indexOf(`await ${name}({`);
+    const call = src.slice(start, src.indexOf('});', start));
+    expect(call).toContain('headline: dashboardResponse.value?.headline ?? null');
+    expect(call).toContain('findings: dashboardResponse.value?.findings ?? null');
+  });
+});
+
 describe('看板列出了业务单元分析 (源码断言)', () => {
   it('chartTypes 里有 business_unit_analysis', () => {
     const src = readFileSync(resolve(__dirname, '../FinancialDashboardPBI.vue'), 'utf8');
