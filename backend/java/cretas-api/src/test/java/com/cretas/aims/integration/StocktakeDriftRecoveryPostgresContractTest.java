@@ -213,7 +213,7 @@ class StocktakeDriftRecoveryPostgresContractTest {
         }
 
         ClassPathResource migration = new ClassPathResource(
-                "db/flyway/V20261103_77_2__stocktake_cancellation_audit.sql");
+                "db/flyway/V20261103_82__stocktake_cancellation_audit.sql");
         String migrationSql = new String(migration.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             statement.execute(migrationSql);
