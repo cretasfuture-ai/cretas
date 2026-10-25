@@ -3,16 +3,17 @@ import logging
 from typing import Optional, Dict, List, Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator, root_validator
 import pandas as pd
 import io
 
 from smartbi.services.financial_dashboard import FinancialDashboardService
 from smartbi.services.financial.base import _sanitize_for_json
 from smartbi.services.financial.export_conclusions import conclusion_rows as _conclusion_rows
+from smartbi.services.factory_charts.export_guard import ExportGuardRoute, validate_export
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(route_class=ExportGuardRoute)
 
 # Service singleton
 dashboard_service = FinancialDashboardService()
@@ -30,13 +31,37 @@ class FactoryRecommendationRequest(BaseModel):
     use_ai: bool = True
 
 
+class FactorySelectionRequest(BaseModel):
+    factory_id: Optional[str] = None
+    source: Literal['upload', 'business']
+    selected_ids: List[str] = Field(..., max_items=100)
+
+    @validator('selected_ids')
+    def valid_selection(cls, value):
+        if any(not item or len(item) > 300 for item in value) or len(value) != len(set(value)):
+            raise ValueError('图表标识必须非空、唯一且不超过300字符')
+        return value
+
+
+@router.get('/factory-selection')
+async def load_factory_selection(http_request: Request, source: Literal['upload', 'business'], factory_id: Optional[str] = None):
+    from smartbi.services.factory_charts.selection import access
+    return await access(http_request, factory_id, source)
+
+
+@router.put('/factory-selection')
+async def save_factory_selection(request: FactorySelectionRequest, http_request: Request):
+    from smartbi.services.factory_charts.selection import access
+    return await access(http_request, request.factory_id, request.source, request.selected_ids)
+
+
 @router.post('/factory-recommendations')
 async def factory_recommendations(request: FactoryRecommendationRequest, http_request: Request):
     from common.tenant_identity import require_same_factory
     from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
     from smartbi.api.factory_production_gold import _can_view_cost
     from starlette.concurrency import run_in_threadpool
-    from smartbi.services.factory_charts import engine, sources, ranking
+    from smartbi.services.factory_charts import engine, sources, ranking, finance_sources
 
     factory_id = require_same_factory(http_request, request.factory_id)
     role = getattr(http_request.state, 'role', None)
@@ -62,18 +87,25 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
                                    engine.is_financial(frame), load_request.sheet_name or '')]
     else:
         datasets, errors, extra_gaps = await sources.load(factory_id, request, can_price)
+        from smartbi.services.factory_charts.finance_auth import full_factory_finance_access
+        finance_allowed = can_price and await full_factory_finance_access(http_request, factory_id)
+        extra_data, extra_errors, more_gaps = await finance_sources.load(factory_id, request, finance_allowed)
+        datasets.extend(extra_data)
+        errors.extend(extra_errors)
+        extra_gaps.extend(more_gaps)
         if not datasets and errors:
             return JSONResponse(status_code=503, content={'success': False, 'message': '工厂数据来源读取失败，请重试', 'data': {'sourceErrors': errors}})
     candidates, gaps = await run_in_threadpool(engine.build, datasets, request, can_price)
     errors.extend({'source': gap['title'], 'message': gap['missing'][0]} for gap in gaps if gap.get('error'))
     gaps = [gap for gap in gaps if not gap.get('error')]
-    candidates, order = await ranking.rank(candidates, request.use_ai)
+    candidates, order = await ranking.rank(candidates, request.use_ai, cache_scope=f'{factory_id}:{role}')
+    from smartbi.services.factory_charts.selection_groups import default_selection
     label = '全部历史' if request.period_type == 'all' else f'{request.year}年{request.start_month}–{request.end_month}月'
     return _sanitize_for_json({'success': True, 'data': {
         'factoryId': factory_id, 'source': request.source,
         'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
         'period': {'label': label}, 'ranking': order,
-        'recommendations': candidates, 'unavailable': gaps + extra_gaps,
+        'recommendations': candidates, 'defaultSelection': default_selection(candidates), 'unavailable': gaps + extra_gaps,
         'sourceErrors': errors,
     }})
 
@@ -102,6 +134,10 @@ class AnalyzeRequest(BaseModel):
 
 
 class PPTExportRequest(BaseModel):
+    _export_limits = root_validator(pre=True, allow_reuse=True)(validate_export)
+    chart_titles: Dict[str, str] = Field(default_factory=dict)
+    period_label: Optional[str] = None
+    report_title: Optional[str] = None
     upload_id: Optional[int] = None
     year: int = 2026
     period_type: str = "year"
@@ -373,6 +409,9 @@ async def export_ppt(request: PPTExportRequest):
             end_month=request.end_month,
             kpi_summary=request.kpi_summary,
             template=request.template,
+            chart_titles=request.chart_titles,
+            period_label=request.period_label,
+            report_title=request.report_title,
         )
         from urllib.parse import quote
         filename = f"财务分析报告_{request.year}年{request.start_month}-{request.end_month}月.pptx"
@@ -391,6 +430,10 @@ async def export_ppt(request: PPTExportRequest):
 
 
 class ExcelExportRequest(BaseModel):
+    _export_limits = root_validator(pre=True, allow_reuse=True)(validate_export)
+    chart_titles: Dict[str, str] = Field(default_factory=dict)
+    period_label: Optional[str] = None
+    report_title: Optional[str] = None
     charts: List[Dict[str, Any]] = Field(default_factory=list)  # Chart results from batch
     analysis_results: Dict[str, str] = Field(default_factory=dict)
     # 看板上的页首结论与规则结论 (/batch 原样回传): 导出报告里要和页面上读到的是同一组话
@@ -411,6 +454,12 @@ async def export_excel(request: ExcelExportRequest):
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
         wb = openpyxl.Workbook()
+        if request.report_title:
+            info = wb.create_sheet('报告信息')
+            info.append(['报告', request.report_title])
+            info.append(['工厂', request.company_name])
+            info.append(['期间', request.period_label or f'{request.year}年{request.start_month}–{request.end_month}月'])
+            info.append(['说明', '仅包含页面当前显示且选中的图表；逐图来源、单位与规则分析见明细及分析表'])
 
         # Header styles
         header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -472,16 +521,21 @@ async def export_excel(request: ExcelExportRequest):
             if not table_data:
                 continue
 
-            display_name = CHART_DISPLAY_NAMES.get(chart_type, chart_type)
+            display_name = chart.get('title') or request.chart_titles.get(chart_type) or CHART_DISPLAY_NAMES.get(chart_type, chart_type)
             # Sheet name max 31 chars
-            sheet_name = display_name[:31]
+            import re
+            sheet_name = re.sub(r'[\\/*?:\[\]]', ' ', str(display_name)).strip()[:31] or '图表明细'
             ws = wb.create_sheet(title=sheet_name)
+            if request.report_title:
+                for label, value in [('来源',chart.get('source','')),('期间',chart.get('period',request.period_label or '')),
+                                     ('单位',chart.get('unit','')),('规则依据',chart.get('reason',''))]:
+                    ws.append([label,value])
 
             # 明细表里的金额按图表显示倍率缩放过 (万/亿), 必须写明单位, 否则拿去求和对账会错一万倍
             unit_note = _table_unit_note(chart)
             if unit_note:
                 ws.append([unit_note])
-            header_row = ws.max_row + 1 if unit_note else 1
+            header_row = ws.max_row + 1 if unit_note or request.report_title else 1
             ws.append(table_data.get("headers", []))
             for cell in ws[header_row]:
                 cell.font = header_font
@@ -503,17 +557,25 @@ async def export_excel(request: ExcelExportRequest):
 
         # Sheet: AI Analysis
         if request.analysis_results:
-            ws_ai = wb.create_sheet(title="AI分析")
+            ws_ai = wb.create_sheet(title="逐图规则与来源" if request.report_title else "AI分析")
             ws_ai.append(["图表", "分析内容"])
             for cell in ws_ai[1]:
                 cell.font = header_font
                 cell.fill = header_fill
             for chart_type, analysis in request.analysis_results.items():
-                display_name = CHART_DISPLAY_NAMES.get(chart_type, chart_type)
-                ws_ai.append([display_name, analysis[:5000]])
+                display_name = request.chart_titles.get(chart_type) or CHART_DISPLAY_NAMES.get(chart_type, chart_type)
+                ws_ai.append([display_name, analysis if request.report_title else analysis[:5000]])
             ws_ai.column_dimensions["A"].width = 20
             ws_ai.column_dimensions["B"].width = 80
 
+        if request.report_title:
+            # Treat uploaded strings as text in every sheet, including metadata.
+            import re
+            for sheet in wb:
+                for row in sheet:
+                    for cell in row:
+                        if isinstance(cell.value, str) and re.match(r'^\s*[=+@-]', cell.value):
+                            cell.value = "'" + cell.value
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
@@ -553,6 +615,10 @@ def _table_unit_note(chart: Dict[str, Any]) -> Optional[str]:
 
 
 class PDFExportRequest(BaseModel):
+    _export_limits = root_validator(pre=True, allow_reuse=True)(validate_export)
+    chart_titles: Dict[str, str] = Field(default_factory=dict)
+    period_label: Optional[str] = None
+    report_title: Optional[str] = None
     chart_images: Dict[str, str] = Field(default_factory=dict)  # {chartType: base64PNG}
     headline: Optional[Dict[str, Any]] = None
     findings: Optional[Dict[str, List[str]]] = None
@@ -582,6 +648,9 @@ async def export_pdf(request: PDFExportRequest):
             start_month=request.start_month,
             end_month=request.end_month,
             kpi_summary=request.kpi_summary,
+            chart_titles=request.chart_titles,
+            period_label=request.period_label,
+            report_title=request.report_title,
         )
 
         from urllib.parse import quote

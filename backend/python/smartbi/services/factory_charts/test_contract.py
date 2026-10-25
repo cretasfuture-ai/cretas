@@ -35,12 +35,12 @@ def test_shared_weighted_quality_cost_and_graph_values():
     quality = chart(items, 'production.quality')
     assert quality['kpis'][0]['value'] == '91.25'
     assert [v for _, v in [(r['label'], r['value']) for r in quality['tableData']]] == [95, 90]
-    assert '91.25%' in quality['findings']['good'][0]
+    assert '91.25%' in quality['findings']['attention'][0]
     unit = chart(items, 'cost.unit')
     assert unit['kpis'][0]['value'] == '2.75'
     assert unit['unit'] == '元/kg'
     assert unit['chart']['echartsOption']['series'][0]['data'] == [3.0, 2.0]
-    assert '2.75元/kg' in unit['findings']['good'][0]
+    assert '2.75元/kg' in unit['findings']['attention'][0]
     structure = chart(items, 'cost.structure:donut')
     assert structure['kpis'][0]['value'] == '1,100'
     assert sum(x['value'] for x in structure['chart']['echartsOption']['series'][0]['data']) == 1100

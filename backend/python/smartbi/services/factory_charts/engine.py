@@ -18,7 +18,7 @@ from .metrics import Series, display, grouped, number
 
 
 ALIASES = {
-    'date': ('日期', '月份', '生产日期', '入库日期', '销售日期'),
+    'date': ('日期', '月份', '生产日期', '入库日期', '销售日期', '会计期间'),
     'product': ('产品', '产品名称', 'SKU', '品类'),
     'process': ('工序', '工序名称', '产线'),
     'material': ('原料', '原料名称', '物料'),
@@ -212,11 +212,14 @@ def factory_candidates(dataset, request, can_price):
     frame = dataset.frame.copy()
     cols = columns(frame)
     eligible, gaps = [], []
-    for key in ('cost', 'material_cost', 'labor_cost', 'equipment_cost', 'other_cost', 'sales', 'purchase'):
-        col = cols[key]
-        if col and re.search(r'[（(].*?(亿|万|千)元', str(col)):
-            factor = 1e8 if '亿元' in str(col) else 1e4 if '万元' in str(col) else 1e3
-            frame[col] = frame[col].map(lambda v: None if number(v) is None else number(v) * factor)
+    monetary = {'总成本','材料成本','原料成本','人工成本','设备成本','其他成本','销售金额','销售额','采购金额','入库金额',
+                '平均库存金额','同期销货成本','同期领料成本','订单行小计','SKU折后金额','订单总额','销售订单总额','入库单价','采购单价'}
+    sheet_factor = 1e8 if '亿元' in dataset.sheet_name else 1e4 if '万元' in dataset.sheet_name else 1e3 if '千元' in dataset.sheet_name else 1
+    for col in frame.columns:
+        if re.sub(r'[（(].*?[）)]','',str(col)).strip() in monetary:
+            factor = (1e8 if '亿元' in str(col) else 1e4 if '万元' in str(col) else 1e3 if '千元' in str(col)
+                      else 1 if re.search(r'[（(](?:人民币)?元[）)]',str(col)) else sheet_factor)
+            frame[col] = frame[col].map(lambda v: None if number(v) is None else number(v)*factor)
     if not money_allowed(dataset):
         can_price = False
         gaps.append({'id': 'currency', 'title': '金额指标', 'missing': ['明确且一致的人民币币种列或人民币单位表头；不能把外币或未知币种标为元']})
@@ -372,6 +375,10 @@ def factory_candidates(dataset, request, can_price):
     extra, extra_gaps = specialized(frame, cols, request, can_price, dataset.source)
     eligible.extend(extra)
     gaps.extend(extra_gaps)
+    from .business_metrics import build as business_metrics
+    extra, extra_gaps = business_metrics(frame, cols, request, can_price, dataset.source)
+    eligible.extend(extra)
+    gaps.extend(extra_gaps)
     allowed = {
         'production': ('production.', 'cost.', 'quality.counts'), 'quality': ('quality.',),
         'sales': ('sales.',), 'purchase': ('purchase.',), 'inventory': ('stock.',), 'process': ('process.',),
@@ -387,10 +394,20 @@ def build(datasets, request, can_price):
     for dataset in datasets:
         if dataset.frame.empty:
             charts, gaps = [], [{'id': dataset.source, 'title': dataset.source, 'missing': ['所选期间没有来源记录']}]
+        elif dataset.source.startswith(('cashflow ·', 'receivables ·')):
+            charts, gaps = [], []
+        elif dataset.source.startswith('historical-inventory ·'):
+            charts, gaps = historical_inventory(dataset)
         elif dataset.financial:
             charts, gaps = financial_candidates(dataset, request, can_price)
         else:
             charts, gaps = factory_candidates(dataset, request, can_price)
+        business_source = dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory'}
+        if not dataset.frame.empty and not business_source:
+            from .financial_addons import build as financial_addons
+            extra, extra_gaps = financial_addons(dataset, request, can_price)
+            charts.extend(extra)
+            gaps.extend(extra_gaps)
         # Sources with the same metric stay distinct and auditable.
         prefix = re.sub(r'[^a-z0-9]+', '-', dataset.source.split(' · ')[0].lower()).strip('-')
         for chart in charts:
@@ -431,6 +448,27 @@ def build(datasets, request, can_price):
         key = gap['id'] + ':' + hashlib.sha256(json.dumps(gap['missing'], ensure_ascii=False).encode()).hexdigest()[:8]
         unique_gaps[key] = {**gap, 'id': key}
     return _sanitize_for_json(candidates), _sanitize_for_json(list(unique_gaps.values()))
+
+
+def historical_inventory(dataset):
+    """Balances across months are observations, never summed as inventory."""
+    frame = dataset.frame
+    required = ['日期', '原料', '单位', '库存数量']
+    if any(c not in frame for c in required) or frame[required].isna().any().any():
+        return [], [{'id': 'stock.history', 'title': '历史库存', 'missing': ['完整关账期间、原料、单位和余额快照']}]
+    work = frame.copy()
+    work['库存数量'] = work['库存数量'].map(number)
+    if work['库存数量'].isna().any() or work.duplicated(['日期', '原料', '单位']).any():
+        return [], [{'id': 'stock.history', 'title': '历史库存', 'missing': ['每原料每单位每期间唯一且有效的余额快照']}]
+    charts = []
+    for (material, unit), group in work.groupby(['原料', '单位']):
+        points = [(str(r['日期']), float(r['库存数量'])) for _, r in group.sort_values('日期').iterrows()]
+        series = Series('stock.history@'+str(material)+'@'+str(unit), str(material)+'关账库存余额', '库存', str(unit), points, dataset.source, 'nonadditive')
+        chart = series_candidate(series, 'line' if len(points) > 1 else 'bar')
+        chart['kpis'] = [{'label': '最后关账余额', 'value': display(points[-1][1]), 'unit': str(unit)}]
+        chart['findings']['attention'].append('关账期间余额快照；不同月份余额不累加，不代表当前可用库存')
+        charts.append(chart)
+    return charts, []
 
 
 def chart_size(chart):

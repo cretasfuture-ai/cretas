@@ -3,6 +3,8 @@ import asyncio
 import json
 import logging
 import re
+import hashlib
+import time
 
 logger = logging.getLogger(__name__)
 REASONS = {
@@ -12,20 +14,41 @@ REASONS = {
     'plan': '用于核对实际与来源明确的计划目标',
     'trace': '用于核对已记录流程与批次，保留来源边界',
 }
+_CACHE = {}
 
 
-async def rank(candidates: list[dict], use_ai: bool):
+def allowed_codes(candidate):
+    kind = candidate.get('chart', {}).get('chartType')
+    if kind is None: return set(REASONS)  # compatibility for semantic-only callers
+    if kind in ('sankey','gantt','funnel'): return {'trace','compare'}
+    if kind in ('pie','donut','nested_donut','sunburst','treemap','pareto','category_structure_donut','cost_flow_sankey'): return {'structure','compare'}
+    if kind in ('budget_comparison','budget_achievement','bullet','bullet_chart','gauge','variance_analysis'): return {'plan','compare'}
+    if kind in ('line','area','dual_axis','combination','cashflow_trend','gross_margin_trend'): return {'observe','compare'}
+    return {'compare','observe'}
+
+
+async def rank(candidates: list[dict], use_ai: bool, cache_scope=None):
     fallback = {'mode': 'rule', 'reason': '未经AI排序，按规则优先级显示'}
     if not use_ai or not candidates:
         return candidates, fallback
     if len(candidates) > 60:
         return candidates, {**fallback, 'reason': '未经AI排序：合格候选较多，按规则优先级显示'}
+    key = None
+    if cache_scope:
+        snapshot = json.dumps(candidates, ensure_ascii=False, sort_keys=True, default=str)
+        key = (str(cache_scope), hashlib.sha256(snapshot.encode()).hexdigest())
+        cached = _CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < 600:
+            lookup = {c['id']:c for c in candidates}
+            ordered = [{**lookup[cid], 'aiReason':REASONS[code]} for cid,code in cached[1]]
+            return ordered, {'mode':'ai','reason':'AI仅对合格图表排序；复用本厂相同数据的已校验排序','cacheHit':True}
     from common.llm_router import call_chain, SLOT
     payload = {
         'messages': [
             {'role': 'system', 'content': '你只给合格工厂图表排序。返回JSON数组，每项仅id和reason_code。必须包含所有候选且各一次；不能增加候选或自由文本。reason_code仅选observe(观察变化)、compare(项目比较)、structure(构成集中度)、plan(目标核对)、trace(流程追溯)。不分析经营现状或原因。'},
             {'role': 'user', 'content': json.dumps([
-                {'id': c['id'], 'metric': c.get('aiMetric', c['metric']), 'domain': c['domain']}
+                {'id': c['id'], 'metric': c.get('aiMetric', c['metric']), 'domain': c['domain'],
+                 'allowed_reason_codes':sorted(allowed_codes(c))}
                 for c in candidates], ensure_ascii=False)},
         ], 'temperature': 0, 'max_tokens': 3000, 'enable_thinking': False,
     }
@@ -46,11 +69,15 @@ async def rank(candidates: list[dict], use_ai: bool):
         ordered = []
         for r in rows:
             code = r.get('reason_code')
-            if set(r) != {'id', 'reason_code'} or code not in REASONS:
+            if set(r) != {'id', 'reason_code'} or code not in allowed_codes(lookup[r['id']]):
                 raise ValueError('invalid reason code')
             ordered.append({**lookup[r['id']], 'aiReason': REASONS[code]})
         # Required entries remain the first delivery group, even if AI put an optional first.
         ordered.sort(key=lambda c: c['priority'] != 'required')
+        if key:
+            if len(_CACHE) >= 32: _CACHE.pop(next(iter(_CACHE)))
+            codes = {r['id']:r['reason_code'] for r in rows}
+            _CACHE[key] = (time.monotonic(),[(c['id'],codes[c['id']]) for c in ordered])
         return ordered, {'mode': 'ai', 'reason': 'AI仅对合格图表排序；数值与结论均来自规则'}
     except Exception as exc:
         logger.info('Factory chart AI ordering unavailable (%s)', type(exc).__name__)

@@ -17,6 +17,14 @@ export function factoryChartStorageKey(factoryId: string, source: FactoryChartSo
   return `smartbi.factory-chart-selection:${factoryId}:${source}`;
 }
 
+export function loadFactoryChartSelectionIntent(factoryId: string, source: FactoryChartSource): string[] | null {
+  try {
+    const raw = localStorage.getItem(factoryChartStorageKey(factoryId, source));
+    const value: unknown = raw === null ? null : JSON.parse(raw);
+    return Array.isArray(value) && value.every(id => typeof id === 'string') ? value : null;
+  } catch { return null; }
+}
+
 export function loadFactoryChartSelection(
   factoryId: string,
   source: FactoryChartSource,
@@ -42,6 +50,16 @@ export function saveFactoryChartSelection(factoryId: string, source: FactoryChar
 export function eligibleFactoryChartIds(ids: readonly string[], selected: readonly string[]): string[] {
   const allowed = new Set(ids);
   return selected.filter(id => allowed.has(id));
+}
+
+export function selectionForEligibleIds(
+  eligibleIds: readonly string[],
+  selectedIds: readonly string[] | null,
+  defaultVisible = DEFAULT_VISIBLE_FACTORY_CHARTS,
+): string[] {
+  if (selectedIds === null) return [...eligibleIds].slice(0, defaultVisible);
+  const eligible = new Set(eligibleIds);
+  return selectedIds.filter(id => eligible.has(id));
 }
 
 export function factoryChartRequestFromSelection(selection: FactoryChartSelectionQuery): FactoryChartQueryResult {

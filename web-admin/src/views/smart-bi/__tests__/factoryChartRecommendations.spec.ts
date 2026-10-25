@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   authStore: null as { factoryId: string } | null,
-  api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn() },
+  api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn(), getFactoryChartSelection: vi.fn(), saveFactoryChartSelection: vi.fn() },
   route: { query: {} as Record<string, unknown> },
   replace: vi.fn(),
 }));
@@ -18,7 +18,7 @@ vi.mock('@/store/modules/auth', async () => {
 vi.mock('vue-router', () => ({ useRoute: () => h.route, useRouter: () => ({ replace: h.replace }) }));
 vi.mock('@/api/smartbi/factory-charts', async () => {
   const actual = await vi.importActual<typeof import('@/api/smartbi/factory-charts')>('@/api/smartbi/factory-charts');
-  return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations };
+  return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations, getFactoryChartSelection: h.api.getFactoryChartSelection, saveFactoryChartSelection: h.api.saveFactoryChartSelection };
 });
 vi.mock('@/api/smartbi/upload', () => ({
   getUploadHistory: h.api.getUploadHistory,
@@ -75,10 +75,69 @@ beforeEach(() => {
     { id: 42, fileName: '生产报表.xlsx', sheetName: '产量', rowCount: 8, columnCount: 4, status: 'COMPLETED', createdAt: '2026-10-01' },
   ] });
   h.api.getFactoryChartRecommendations.mockReset().mockResolvedValue(response());
+  h.api.getFactoryChartSelection.mockReset().mockResolvedValue({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: null, updatedAt: null } });
+  h.api.saveFactoryChartSelection.mockReset().mockResolvedValue({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: [], updatedAt: 'now' } });
 });
 afterEach(() => { wrapper?.unmount(); wrapper = null; document.body.innerHTML = ''; });
 
 describe('FactoryChartRecommendations mounted workflow', () => {
+  it('uses distinct server defaults without claiming an unset preference was saved', async () => {
+    h.api.getFactoryChartRecommendations.mockResolvedValue(response({ defaultSelection: ['margin'] }));
+    const page = await mountPage();
+    expect(page!.findAll('.chart-stub')).toHaveLength(1);
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('毛利趋势');
+    expect(page!.text()).toContain('尚未保存选择');
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
+    await page!.get('[data-testid="factory-chart-save-selection"]').trigger('click');
+    await flushPromises();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenCalledWith('F006', 'business', ['margin']);
+    expect(page!.text()).toContain('选择已同步');
+  });
+  it('keeps authoritative intent across a late GET and period changes', async () => {
+    let resolvePreference!: (value: unknown) => void;
+    h.api.getFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { resolvePreference = resolve; }));
+    const page = await mountPage();
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ recommendations: [response().data.recommendations[1]] }));
+    page!.findComponent(PeriodSelector).vm.$emit('change', { type: 'year', year: 2026, value: '2026', allHistory: false, compareEnabled: false });
+    await flushPromises();
+    resolvePreference({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['yield'], updatedAt: 'now' } });
+    await flushPromises();
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('毛利趋势');
+    page!.findComponent(PeriodSelector).vm.$emit('change', { type: 'year', year: 2026, value: '2026', allHistory: true, compareEnabled: false });
+    await flushPromises();
+    expect(page!.findAll('.chart-stub')).toHaveLength(1);
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('产量趋势');
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
+  });
+  it('serializes explicit saves and captures their source before a source switch', async () => {
+    let finishFirst!: (value: unknown) => void;
+    h.api.saveFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }));
+    const page = await mountPage();
+    const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
+    await boxes[0].setValue(false);
+    await boxes[1].setValue(false);
+    await flushPromises();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenCalledTimes(1);
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ source: 'upload' }));
+    page!.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', 'upload');
+    await flushPromises();
+    finishFirst({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['margin'], updatedAt: 'now' } });
+    await flushPromises();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenNthCalledWith(2, 'F006', 'business', []);
+  });
+  it('does not let a stale preference GET overwrite a newer checkbox choice', async () => {
+    let resolvePreference!: (value: unknown) => void;
+    h.api.getFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { resolvePreference = resolve; }));
+    const page = await mountPage();
+    const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
+    await boxes[0].setValue(false);
+    await nextTick();
+    resolvePreference({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['yield'], updatedAt: null } });
+    await flushPromises();
+    expect(JSON.parse(localStorage.getItem('smartbi.factory-chart-selection:F006:business')!)).toEqual(['margin']);
+    expect(page!.findAll('.chart-stub')).toHaveLength(1);
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('毛利趋势');
+  });
   it('keeps user intent when a period temporarily excludes the selected chart', async () => {
     const page = await mountPage();
     await page!.findAll('.selection-panel input[type="checkbox"]')[1].setValue(false);

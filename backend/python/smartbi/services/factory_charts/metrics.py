@@ -65,11 +65,31 @@ class Series:
         low = min(self.points, key=lambda p: p[1])
         if self.total is not None:
             label = '期末口径' if self.aggregate == 'balance' else '累计口径' if self.aggregate != 'sum' else '合计'
-            out['good'].append(f'{self.title}{label} {display(self.total)}{self.unit}')
+            # A recorded total is neutral: larger cost, defects or expiry is not success.
+            out['attention'].append(f'{self.title}{label} {display(self.total)}{self.unit}')
         if self.denominator is not None:
-            out['good'].append(f'按分子 {display(self.numerator)} / 分母 {display(self.denominator)} 计算，未平均各组比率')
+            out['attention'].append(f'按分子 {display(self.numerator)} / 分母 {display(self.denominator)} 计算，未平均各组比率')
         out['attention'].append(f'最高为{high[0]} {display(high[1])}{self.unit}；最低为{low[0]} {display(low[1])}{self.unit}')
-        out['suggestions'].append(f'复核{high[0]}对应的{self.title}记录（{display(high[1])}{self.unit}），与来源明细核对')
+        # Compare time observations only; comparing two products is not a time trend.
+        dated = all(re.fullmatch(r'\d{4}-\d{2}(?:-\d{2})?', label) for label, _ in self.points)
+        if dated and len(self.points) >= 2:
+            first, last = sorted(self.points)[0], sorted(self.points)[-1]
+            change = last[1] - first[1]
+            direction = '上升' if change > 0 else '下降' if change < 0 else '持平'
+            text = f'{last[0]}较{first[0]}{direction}'
+            if change:
+                text += f' {display(abs(change))}{"个百分点" if self.unit == "%" else self.unit}'
+            lower_better = self.key.startswith(('cost.unit', 'quality.defect', 'process.loss'))
+            higher_better = self.key.startswith(('production.quality', 'quality.pass'))
+            proven_improvement = (change < 0 and lower_better) or (change > 0 and higher_better)
+            out['good' if proven_improvement else 'attention'].append(text + '；仅比较有记录的两期')
+        action = ('核查不良记录、检验分母和对应批次' if self.domain == '质量' else
+                  '核查成本归集、对应产量和计价单位' if self.domain == '成本' else
+                  '核对批次余额、到期日并安排库存处理' if self.domain == '库存' else
+                  '对照确认收货明细复核供应商、数量和价格单位' if self.domain == '采购' else
+                  '核对订单状态、退货与保存金额' if self.domain == '销售' else
+                  '核对批次、报工记录和实际单位')
+        out['suggestions'].append(f'{action}；优先回查{high[0]}（{display(high[1])}{self.unit}），不据此推测原因')
         return out
 
 
