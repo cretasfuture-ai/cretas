@@ -104,7 +104,7 @@ public class HaccpCheckpoint extends BaseEntity {
     private String recordKeeping;
 
     /**
-     * 挂在哪个工序上 (缺口 13, V20261103_85): {@code work_processes.id}。
+     * 挂在哪个工序上 (缺口 13, V20261103_88): {@code work_processes.id}。
      *
      * <p>Workflow 画布的工序节点引用的就是 {@code data.workProcessId} —— 挂在工序上 = 画布里所有用到
      * 这个工序的节点报工时都要录这个 CCP (App 报工按 {@code WorkProcessTask.workProcessId},

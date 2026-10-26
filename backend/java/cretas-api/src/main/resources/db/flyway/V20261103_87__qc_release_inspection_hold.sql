@@ -1,4 +1,4 @@
--- V20261103_84__qc_release_inspection_hold.sql
+-- V20261103_87__qc_release_inspection_hold.sql
 --
 -- 缺口 11 质检放行 (owner 2026-10-25)
 --   1. product_types.inspection_required   产品/半成品「需检」开关, NOT NULL DEFAULT FALSE
