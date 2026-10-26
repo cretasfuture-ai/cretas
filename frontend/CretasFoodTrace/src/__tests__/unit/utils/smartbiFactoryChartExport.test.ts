@@ -41,6 +41,15 @@ describe('smartbiFactoryChartExport', () => {
     expect(payload.charts[0]!.kpis).toEqual(item.kpis);
   });
 
+  it('labels exported facts with the actual selected product scope', () => {
+    const payload = buildFactoryChartExportPayload([item], {}, {
+      factoryId: 'F006', source: 'business', sourceLabel: '业务数据', scopeLabel: '所选产品：黄油鸡 [SKU-1]', periodLabel: '全部期间', selectedIds: ['channel'],
+    });
+    expect(payload.charts[0]!.source).toBe('business · 所选产品：黄油鸡 [SKU-1]');
+    expect(payload.analysis_results.channel).toContain('所选产品：黄油鸡 [SKU-1]');
+    expect(payload.charts[0]!.kpis).toEqual(item.kpis);
+  });
+
   it('verifies PDF signature/size before caching and returns a cache file', async () => {
     const bytes = new Uint8Array(120); bytes.set([0x25, 0x50, 0x44, 0x46]);
     client.post.mockResolvedValueOnce(bytes as never);

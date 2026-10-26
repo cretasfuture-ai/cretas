@@ -1,9 +1,9 @@
 import React from 'react';
 import { Text } from 'react-native';
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import FactoryChartsScreen from '../../../screens/smartbi/FactoryChartsScreen';
 import { useAuthStore } from '../../../store/authStore';
-import { exportFactoryCharts, shareFactoryChartFile, getFactoryChartSelection, getFactoryChartUploads, getFactoryRecommendations } from '../../../services/api/smartbiFactoryCharts';
+import { exportFactoryCharts, shareFactoryChartFile, getFactoryChartSelection, getFactoryChartUploads, getFactoryRecommendations, saveFactoryChartSelection } from '../../../services/api/smartbiFactoryCharts';
 
 const mockCapturePng = jest.fn<Promise<string>, [string]>();
 const firstPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lK0AAAAASUVORK5CYII=';
@@ -35,7 +35,7 @@ const recommendation = {
 const optionalRecommendation = { ...recommendation, id: 'optional', title: '可选分析', priority: 'optional' as const, chart: { chartType: 'bar_horizontal', echartsOption: { testCandidate: 'optional', series: [] } } };
 
 function successData() {
-  return { factoryId: 'F006', source: 'business', sourceLabel: '业务数据', period: { label: '全部历史' }, defaultSelection: ['sales'], ranking: { mode: 'rule', reason: '' }, recommendations: [recommendation, optionalRecommendation], unavailable: [], sourceErrors: [] };
+  return { factoryId: 'F006', source: 'business', analysisSubject: null, sourceLabel: '业务数据', period: { label: '全部历史' }, defaultSelection: ['sales'], ranking: { mode: 'rule', reason: '' }, recommendations: [recommendation, optionalRecommendation], unavailable: [], sourceErrors: [] };
 }
 
 describe('FactoryChartsScreen', () => {
@@ -52,14 +52,71 @@ describe('FactoryChartsScreen', () => {
   it('shows retry after recommendation failure and recovers asynchronously', async () => {
     (getFactoryRecommendations as jest.Mock).mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce({ success: true, data: successData() });
     const screen = render(<FactoryChartsScreen />);
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledWith(expect.objectContaining({ guided: true, analysis_subject: null })));
     await waitFor(() => expect(screen.getByText('network down')).toBeTruthy());
     fireEvent.press(screen.getByText('重试'));
     await waitFor(() => expect(screen.getAllByText('销售渠道').length).toBeGreaterThan(0));
     expect(screen.queryByTestId('factory-chart-card-optional')).toBeNull();
     fireEvent.press(screen.getByTestId('factory-chart-selection-toggle'));
-    fireEvent.press(screen.getByText('可选分析'));
+    fireEvent.press(within(screen.getByTestId('factory-family-optional')).getByText('加入分析'));
     await waitFor(() => expect(screen.getByTestId('factory-chart-card-optional')).toBeTruthy());
     expect(getFactoryRecommendations).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the guided category and subject flow local while bounding product choices', async () => {
+    const guidedData = {
+      ...successData(),
+      subjects: Array.from({ length: 100 }, (_, index) => ({ id: `product-${index}`, label: `产品${index}` })),
+      recommendations: [
+        { ...recommendation, analysis: { familyId: 'sales', familyLabel: '销售表现' } },
+        { ...optionalRecommendation, id: 'sales@box', title: '销售表现-箱', analysis: { familyId: 'sales', familyLabel: '销售表现' } },
+      ],
+    };
+    (getFactoryRecommendations as jest.Mock).mockImplementation(async request => ({ success: true, data: { ...guidedData, analysisSubject: request.analysis_subject } }));
+    const screen = render(<FactoryChartsScreen />);
+    await waitFor(() => expect(screen.getByText('销售')).toBeTruthy());
+    fireEvent.press(screen.getByText('销售'));
+    expect(screen.getByText('销售表现')).toBeTruthy();
+    fireEvent.press(screen.getByText('销售表现'));
+    expect(screen.getByLabelText('搜索产品')).toBeTruthy();
+    expect(screen.queryByText('产品99')).toBeNull();
+    fireEvent.changeText(screen.getByLabelText('搜索产品'), '产品99');
+    fireEvent.press(screen.getByText('产品99'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ guided: true, analysis_subject: 'product-99' })));
+  });
+
+  it('uses the business answer and selected topic to choose local charts without fetching or saving', async () => {
+    const items = Array.from({ length: 7 }, (_, index) => ({ ...recommendation, id: `cost-${index}`, domain: '成本', title: `成本图${index}`, analysis: { familyId: `cost-${index}`, familyLabel: `成本主题${index}` } }));
+    (getFactoryRecommendations as jest.Mock).mockResolvedValue({ success: true, data: { ...successData(), recommendations: [recommendation, ...items] } });
+    const screen = render(<FactoryChartsScreen />);
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-sales')).toBeTruthy());
+    fireEvent.press(screen.getByText('成本'));
+    fireEvent.press(screen.getByText('推荐组合（最多 4 张）'));
+    fireEvent.press(screen.getByTestId('factory-chart-load'));
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-cost-0')).toBeTruthy());
+    expect(screen.queryByTestId('factory-chart-card-sales')).toBeNull();
+    expect(screen.queryByTestId('factory-chart-card-cost-4')).toBeNull();
+    expect(getFactoryRecommendations).toHaveBeenCalledTimes(1);
+    expect(saveFactoryChartSelection).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByText('成本主题5'));
+    fireEvent.press(screen.getByTestId('factory-chart-load'));
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-cost-5')).toBeTruthy());
+    expect(screen.queryByTestId('factory-chart-card-cost-0')).toBeNull();
+  });
+
+  it('rejects unscoped product results and keeps controls to return to factory data', async () => {
+    (getFactoryRecommendations as jest.Mock).mockResolvedValue({ success: true, data: { ...successData(), subjects: [{ id: 'p1', label: '黄油鸡' }] } });
+    const screen = render(<FactoryChartsScreen />);
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-sales')).toBeTruthy());
+    fireEvent.press(screen.getByText('先看整体情况'));
+    fireEvent.press(screen.getByText('推荐组合（最多 4 张）'));
+    fireEvent.press(screen.getByText('黄油鸡'));
+    await waitFor(() => expect(screen.getByText('返回的分析产品与当前选择不一致')).toBeTruthy());
+    expect(screen.queryByTestId('factory-chart-card-sales')).toBeNull();
+    fireEvent.press(screen.getByTestId('factory-guide-all-products'));
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-sales')).toBeTruthy());
+    expect(getFactoryRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ analysis_subject: null, guided: true }));
+    expect(saveFactoryChartSelection).not.toHaveBeenCalled();
   });
 
   it('keeps explicit empty selection empty and does not save implicitly', async () => {

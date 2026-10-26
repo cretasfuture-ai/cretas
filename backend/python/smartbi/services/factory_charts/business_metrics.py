@@ -129,7 +129,7 @@ def build(frame, cols, request, can_price, source):
                     emit(Series(key+'@'+str(u), title, '质量', '%', points, source, 'ratio', M.total(group[num]), M.total(group[den])))
                 else: gap(key, title, '至少两个有效日期；单点不画趋势')
 
-    if date and product and output and good and cost:
+    if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and date and product and output and good and cost:
         vals = numeric([output, good, cost])
         valid = can_price and batch and unit and vals is not None
         valid = valid and not frame[[batch, unit, date, product]].isna().any().any() and not frame[batch].duplicated().any()
@@ -214,7 +214,7 @@ def build(frame, cols, request, can_price, source):
                 c['findings']['attention'].append('每会计期间使用一次同期销货/领料成本÷该期间提供的平均库存金额；重复快照不累加成本')
             else: gap('stock.turnover', '库存周转', '会计期间、同币种平均库存金额、唯一同期销货/领料成本事实及金额权限；采购金额不能代替消耗成本')
 
-        if all([batch, date, product, unit, output]):
+        if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and all([batch, date, product, unit, output]):
             vals = numeric([output])
             if vals is not None and not frame[[batch, date, product, unit]].isna().any().any() and not frame[batch].duplicated().any():
                 work = frame.copy(); work[output] = vals[output]

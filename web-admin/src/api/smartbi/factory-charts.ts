@@ -14,6 +14,8 @@ export interface FactoryRecommendationRequest {
   end_month: number;
   include_optional: boolean;
   use_ai: boolean;
+  guided?: boolean;
+  analysis_subject?: string | null;
 }
 
 export interface FactoryChartKpi { label: string; value: number | string | null; unit: string; }
@@ -35,6 +37,7 @@ export interface FactoryRecommendation {
   /** Financial candidates may return a structured table object; rendering is intentionally deferred. */
   tableData: Record<string, unknown> | Array<Record<string, unknown> | { label: string; value: number | string | null }> | null;
   detailContext?: FactoryChartDetailContext;
+  analysis?: { familyId: string; familyLabel: string };
 }
 
 export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: Record<string, unknown>; }
@@ -61,6 +64,9 @@ export interface FactoryRecommendationsData {
   recommendations: FactoryRecommendation[];
   unavailable: FactoryUnavailableChart[];
   sourceErrors: FactorySourceError[];
+  subjects?: Array<{ id: string; label: string }>;
+  analysisScopeLabel?: string;
+  analysisSubject?: string | null;
 }
 
 export interface FactoryRecommendationsResponse {

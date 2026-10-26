@@ -23,7 +23,7 @@ def build(frame, cols, request, can_price, source):
         return c
 
     # Quantity / unit cost dual axes: one product and unit, aligned by period.
-    if can_price and all(cols[k] for k in ('product', 'date', 'unit', 'cost', 'output')):
+    if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and can_price and all(cols[k] for k in ('product', 'date', 'unit', 'cost', 'output')):
         for (sku, unit), group in frame.groupby([cols['product'], cols['unit']], dropna=False):
             if pd.isna(sku) or pd.isna(unit) or group[cols['date']].nunique() < 2:
                 continue
@@ -65,7 +65,7 @@ def build(frame, cols, request, can_price, source):
                 emit(s, 'nested_donut', option, '内外环分别为两期同一产品集合，金额/数量单位一致')
 
     # Batch distributions need actual identified observations, not period averages.
-    if can_price and all(cols[k] for k in ('product', 'unit', 'cost', 'output')) and '批次' in frame:
+    if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and can_price and all(cols[k] for k in ('product', 'unit', 'cost', 'output')) and '批次' in frame:
         for (sku, unit), group in frame.groupby([cols['product'], cols['unit']], dropna=False):
             if pd.isna(sku) or pd.isna(unit) or len(group) < 5 or group['批次'].isna().any() or group['批次'].nunique() != len(group): continue
             costs, qty = group[cols['cost']].map(number), group[cols['output']].map(number)
@@ -167,7 +167,7 @@ def build(frame, cols, request, can_price, source):
                 option = get_strategy('treemap').build(work, '二级类别', ['金额（元）'], options={})
                 emit(s, 'treemap', option)
 
-    if all(cols[k] for k in ('product', 'unit', 'date', 'output')):
+    if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and all(cols[k] for k in ('product', 'unit', 'date', 'output')):
         for (sku, unit), group in frame.groupby([cols['product'], cols['unit']], dropna=False):
             if pd.isna(sku) or pd.isna(unit) or group[cols['date']].nunique() < 12 or group[cols['output']].map(number).isna().any(): continue
             work = group[[cols['date'], cols['output']]].copy()
