@@ -139,7 +139,7 @@ async def test_captured_sources_real_pg_migration_load_engine_and_negative_guard
         await conn.execute("INSERT INTO production_plans VALUES ('plan-sheet','F006','p1','ACTIVE',NULL)")
         await conn.execute("INSERT INTO production_batches VALUES ('batch-sheet','F006','plan-sheet','p1','ACTIVE',NULL)")
         sheet_payload = {
-            "processDate": "2026-10-03", "productTypeId": "p1", "productName": "产品",
+            "processDate": "2026-10-03", "productTypeId": "p1",
             "outputQuantity": 20, "outputUnit": "kg", "customFields": {
                 "smartbi_oee_planned_minutes": 30, "smartbi_oee_running_minutes": 20,
                 "smartbi_oee_ideal_cycle_seconds": 30, "smartbi_oee_equipment_id": str(eq3),
@@ -149,6 +149,9 @@ async def test_captured_sources_real_pg_migration_load_engine_and_negative_guard
         await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-sheet','client-sheet',$1::jsonb,'SUBMITTED',NULL)", json.dumps(sheet_payload))
         bad_sheet = dict(sheet_payload, processDate="not-a-date")
         await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-sheet','client-bad',$1::jsonb,'SUBMITTED',NULL)", json.dumps(bad_sheet))
+        await conn.execute("INSERT INTO production_plans VALUES ('plan-other','F006','p1','ACTIVE',NULL)")
+        await conn.execute("INSERT INTO production_batches VALUES ('batch-wrong-plan','F006','plan-other','p1','ACTIVE',NULL)")
+        await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-wrong-plan','client-wrong-plan',$1::jsonb,'SUBMITTED',NULL)", json.dumps(sheet_payload))
         for plan_id, batch_id, status, deleted_at, batch_product in [
             ("plan-cancel", "batch-cancel", "CANCELLED", "NULL", "p1"),
             ("plan-deleted", "batch-deleted", "ACTIVE", "now()", "p1"),
@@ -193,8 +196,10 @@ async def test_captured_sources_real_pg_migration_load_engine_and_negative_guard
         assert any(d.source.startswith("oee") and (d.frame["良品数"] == 0).any() for d in datasets)
         sheet = next(d for d in datasets if d.source.startswith("oee-sheet"))
         assert len(sheet.frame) == 1 and sheet.frame.iloc[0]["报工ID"].endswith(":1")
+        assert sheet.frame.iloc[0]["产品"] == "产品"
+        assert sheet.frame.iloc[0]["良品数"] == 0 and sheet.frame.iloc[0]["总数"] == 20
         sheet_charts, sheet_gaps = engine.build([sheet], request, True)
-        assert any(any(k.get("label") == "OEE" for k in c.get("kpis", [])) for c in sheet_charts), sheet_gaps
+        assert any(any(k.get("label") == "OEE" and float(k["value"]) == 0 for k in c.get("kpis", [])) for c in sheet_charts), sheet_gaps
 
         denied, denied_errors, denied_gaps = await captured_sources.load("F006", request, False)
         assert denied_errors == [] and not any(d.source.startswith("sales-") for d in denied)
