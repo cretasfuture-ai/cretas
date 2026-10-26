@@ -26,10 +26,17 @@ const AI_UPLOAD_ENTRIES: Record<string, string> = {
   'views/warehouse/storage-locations/index.vue': '<AiUploadHint', // 上传底图 → AI 识别库位
 };
 
+/**
+ * 去掉模板注释 `<!-- -->` 与整行的 `//` 注释 (只留在注释里的提示不算)。
+ * 不剥 `/* *\/`: 源码字符串里常有 `/*` (路径通配等), 正则剥会误伤真代码。
+ */
+const withoutComments = (src: string) => src
+  .replace(/<!--[\s\S]*?-->/g, '').replace(/^[ \t]*\/\/[^\n]*$/gm, '');
+
 describe('AI 识别上传入口都带提示', () => {
   for (const [file, marker] of Object.entries(AI_UPLOAD_ENTRIES)) {
     it(file, () => {
-      const src = readFileSync(resolve(__dirname, '../../..', file), 'utf-8');
+      const src = withoutComments(readFileSync(resolve(__dirname, '../../..', file), 'utf-8'));
       expect(src).toContain(marker);
       expect(src).toContain("import AiUploadHint from '@/components/common/AiUploadHint.vue'");
     });

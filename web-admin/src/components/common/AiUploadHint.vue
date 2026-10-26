@@ -18,6 +18,7 @@ withDefaults(defineProps<{ kind?: 'image' | 'pdf' }>(), { kind: 'image' });
 .ai-upload-hint {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 13px; line-height: 1.6;
+  white-space: nowrap; /* 放进不换行的工具栏 (库位页) 也不被挤成一字一行 */
   /* 对白底 6:1 (#909399 只有 3:1, 不够) */
   color: var(--el-text-color-regular, #606266);
 }
