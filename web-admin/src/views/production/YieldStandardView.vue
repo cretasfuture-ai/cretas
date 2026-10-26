@@ -246,12 +246,16 @@ onMounted(loadData);
         </el-table-column>
         <el-table-column label="操作" width="140" align="center" fixed="right">
           <template #default="{ row }">
+            <!-- 工艺保密: 标准出成率对当前账号隐藏的行不给修改入口 (会把「已保密」当成「未填」去填) -->
+            <el-tooltip v-if="isProcessSecretRow(row)" :content="processSecretMessage(row)">
+              <el-tag type="info" effect="plain" size="small">需授权才能修改</el-tag>
+            </el-tooltip>
             <el-button
+              v-else
               link
               type="primary"
               :icon="EditPen"
-              :disabled="!canEdit || isProcessSecretRow(row)"
-              :title="isProcessSecretRow(row) ? '工艺已保密，需保密负责人授权才能修改' : undefined"
+              :disabled="!canEdit"
               :loading="saving[row.recipeId]"
               @click="handleEdit(row)"
             >
