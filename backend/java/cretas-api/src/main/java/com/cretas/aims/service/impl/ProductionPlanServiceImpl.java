@@ -194,6 +194,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SemiFinishedInventoryTransactionRepository semiFinishedInventoryTransactionRepository;
 
+    /** 质检放行 (缺口 11/13): 成品入库时叠加「待检」。未注入 (单测) ⇒ 与以前一样 AVAILABLE。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
+
+    private String finishedGoodsOutputStatus(String factoryId, String productTypeId, String batchNumber,
+                                             String planId, String baseStatus) {
+        return qcInspectionPolicy == null ? baseStatus
+                : qcInspectionPolicy.finishedGoodsStatusForOutput(
+                        factoryId, productTypeId, planId, baseStatus, batchNumber);
+    }
+
     /** SP12 T3: 生产撤回审批流引擎. required=false 兼容无 WorkflowEngine 环境 (e.g. 单测). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowEngineService workflowEngine;
@@ -8003,6 +8014,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .withCode("FINISHED_GOODS_BATCH_CONFLICT");
             }
             batch.setProducedQuantity(zeroIfNull(batch.getProducedQuantity()).add(receiptDelta));
+            // 质检放行: 同批号追加入库 = 一笔新的产出, 需检产品重新待检 (只动 AVAILABLE)。
+            batch.setStatus(finishedGoodsOutputStatus(settlement.getFactoryId(), batch.getProductTypeId(),
+                    batch.getBatchNumber(), plan.getId(), batch.getStatus()));
             return finishedGoodsBatchRepository.save(batch);
         }
 
@@ -8042,7 +8056,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setSourceSalesOrderId(plan.getSourceOrderId());
         batch.setSourceSalesOrderItemId(plan.getSourceOrderItemId());
         batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(settlement.getFactoryId()));
-        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        // 质检放行 (缺口 11/13): 需检产品 / 有未处理 CCP 偏离 ⇒ 待检, 其余照旧 AVAILABLE。
+        batch.setStatus(finishedGoodsOutputStatus(settlement.getFactoryId(), output.getProductTypeId(),
+                output.getReportedBatchNumber(), plan.getId(), FinishedGoodsBatch.Status.AVAILABLE));
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("Workflow output receipt: " + settlement.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
@@ -8141,7 +8157,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setSourceSalesOrderId(plan.getSourceOrderId());
         batch.setSourceSalesOrderItemId(plan.getSourceOrderItemId());
         batch.setWarehouseId(warehouseResolver.resolveFinishedGoodsId(settlement.getFactoryId()));
-        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        // 质检放行 (缺口 11/13): 需检产品 / 有未处理 CCP 偏离 ⇒ 待检, 其余照旧 AVAILABLE。
+        batch.setStatus(finishedGoodsOutputStatus(settlement.getFactoryId(), finishedProductTypeId,
+                batchNumber, plan.getId(), FinishedGoodsBatch.Status.AVAILABLE));
         batch.setCreatedBy(receivedBy != null ? receivedBy : 0L);
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);

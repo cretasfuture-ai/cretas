@@ -204,6 +204,8 @@ export const FINISHED_GOODS_BATCH_STATUS_LABELS: Record<string, string> = {
   AVAILABLE: '可用',
   DEFECTIVE: '不良品',
   DEPLETED: '已耗尽',
+  // 缺口 11 质检放行: 需检产品入库先待检, 放行后才可分配/发货
+  PENDING_INSPECTION: '待检',
 };
 
 /**

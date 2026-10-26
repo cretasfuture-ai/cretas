@@ -186,6 +186,8 @@ export interface SemiFinishedInventoryItem {
   availableQuantity: number;
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=待检(不可领) / RELEASED / REJECTED(不可领) */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
 }
 
 // ============ WipRowDTO (mirror backend dto/yield/WipRowDTO.java) ============
@@ -201,6 +203,8 @@ export interface WipRowDTO {
   availableQuantity: number | null;        // 余额 = produced − consumed (下道 :max)
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=待检(不可领) / RELEASED / REJECTED(不可领) */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
 }
 
 // ============ 请求 DTO ============

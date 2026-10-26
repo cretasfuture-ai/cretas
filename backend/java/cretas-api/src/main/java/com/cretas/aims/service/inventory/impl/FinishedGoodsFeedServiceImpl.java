@@ -125,6 +125,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                         .withHint("请重新选择仍有库存的成品批次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(batchNumber));
+        // 质检放行 (缺口 11): 待检成品不能作投料来源 (下拉本来就只列 AVAILABLE, 这里兜住直接引用批号的情况)。
+        com.cretas.aims.service.quality.release.QcInspectionGuard.assertFinishedGoodsFeedable(fg, batchNumber);
 
         // 🟠 单位折算 (禁止降级): 气调成品常按 盒/托 计量, 逐道投料量 feedUnit 为 kg。
         //   (a) 计数单位成品 (盒/个/件/只) + kg 投料: 依据 ProductType.gramsPerUnit 把 kg 折算为盒数扣减

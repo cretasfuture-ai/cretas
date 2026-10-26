@@ -101,6 +101,12 @@ public class WipRowDTO {
 
     /** 状态: AVAILABLE / DEPLETED / RETURNED。 */
     private String status;
+
+    /**
+     * 质检放行状态 (缺口 11, 镜像 {@code SemiFinishedInventory.inspectionStatus}):
+     * null = 不需检 / PENDING = 待检 (下拉里显示「待检」且不可选) / RELEASED / REJECTED。
+     */
+    private String inspectionStatus;
     // ==================== C3: 工厂级半成品重量库存视图扩展字段 ====================
 
     /**

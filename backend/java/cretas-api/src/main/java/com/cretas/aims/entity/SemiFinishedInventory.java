@@ -167,6 +167,31 @@ public class SemiFinishedInventory {
     @Builder.Default
     private String status = Status.AVAILABLE;
 
+    /** 质检放行状态 (缺口 11) —— 与按余额自动翻转的 {@link #status} 正交, 所以单独一列。 */
+    public static final class InspectionStatus {
+        /** 待检: 下道不能领用, 等质检放行。 */
+        public static final String PENDING = "PENDING";
+        /** 已放行 (或放行后未再入新产出)。 */
+        public static final String RELEASED = "RELEASED";
+        /** 质检不合格: 不能领用。 */
+        public static final String REJECTED = "REJECTED";
+
+        private InspectionStatus() {
+        }
+    }
+
+    /**
+     * 质检放行状态: {@code null} = 不需检 (存量全部 null, 行为与以前完全一样) /
+     * PENDING / RELEASED / REJECTED。
+     *
+     * <p>由产出入账时按「产品需检 或 该批次/计划有未处理 CCP 偏离」置 PENDING
+     * ({@code QcInspectionPolicy}), 由 {@code QcReleaseService} 放行/判不合格。
+     * ⛔ 不放进 {@link #status}: status 会在每次入账/扣减时按余额重算成 AVAILABLE/DEPLETED,
+     * 待检状态放在那里会被下一次入账静默抹掉。
+     */
+    @Column(name = "inspection_status", length = 20)
+    private String inspectionStatus;
+
     /**
      * 溯源 (从产出报工继承)。
      * 格式镜像 {@link ProductionReport#getMaterialBatchRefs()}:

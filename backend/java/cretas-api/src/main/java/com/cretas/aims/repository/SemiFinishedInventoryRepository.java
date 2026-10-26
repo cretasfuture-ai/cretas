@@ -131,4 +131,48 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     List<SemiFinishedInventory> findByFactoryIdForWeightViewAndSourceOwnerIn(
             @Param("factoryId") String factoryId,
             @Param("owners") java.util.Collection<Long> owners);
+
+    // ==================== 质检放行 (缺口 11/13) ====================
+
+    /** 质检放行待办: 本厂处于某一质检状态 (通常 PENDING) 的未软删半成品行。 */
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId " +
+           "AND w.inspectionStatus = :inspectionStatus AND w.deletedAt IS NULL " +
+           "ORDER BY w.updatedAt DESC")
+    List<SemiFinishedInventory> findByFactoryIdAndInspectionStatusForRelease(
+            @Param("factoryId") String factoryId,
+            @Param("inspectionStatus") String inspectionStatus);
+
+    /** 放行决定时按 id + 工厂加写锁 (防两个质检员同时放行/判不合格同一行)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.id = :id AND w.factoryId = :factoryId " +
+           "AND w.deletedAt IS NULL")
+    Optional<SemiFinishedInventory> findByIdAndFactoryIdForUpdate(
+            @Param("id") Long id, @Param("factoryId") String factoryId);
+
+    /** CCP 偏离扣留: 这些生产批次直接产出的半成品行。 */
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId " +
+           "AND w.batchId IN :batchIds AND w.deletedAt IS NULL")
+    List<SemiFinishedInventory> findByFactoryIdAndBatchIdInForHold(
+            @Param("factoryId") String factoryId,
+            @Param("batchIds") java.util.Collection<Long> batchIds);
+
+    /** CCP 偏离扣留: 按工序批次号 (逐道录入纯库存道的锚 / 计划锚前缀) 找行。 */
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId " +
+           "AND (w.intermediateBatchNo IN :batchNos OR w.intermediateBatchNo LIKE CONCAT(:anchorPrefix, '%')) " +
+           "AND w.deletedAt IS NULL")
+    List<SemiFinishedInventory> findByFactoryIdAndBatchNoOrAnchorPrefixForHold(
+            @Param("factoryId") String factoryId,
+            @Param("batchNos") java.util.Collection<String> batchNos,
+            @Param("anchorPrefix") String anchorPrefix);
+
+    /**
+     * CCP 偏离扣留: App 报工的半成品行按产品码<b>跨批次累加</b>, 行上的 batchId 只是第一次建行的批次 ——
+     * 所以要从入库流水反查「这些生产批次的报工入过哪些行」。
+     */
+    @Query("SELECT DISTINCT t.semiFinishedId FROM SemiFinishedInventoryTransaction t " +
+           "WHERE t.factoryId = :factoryId AND t.txnType = 'IN' AND t.reportId IN " +
+           "(SELECT r.id FROM ProductionReport r WHERE r.batchId IN :batchIds)")
+    List<Long> findSemiIdsPostedByProductionBatches(
+            @Param("factoryId") String factoryId,
+            @Param("batchIds") java.util.Collection<Long> batchIds);
 }

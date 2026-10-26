@@ -761,6 +761,8 @@ export interface SemiFinishedStockItem {
   isRework?: boolean | null;
   /** picker 上下文中的纯度闸判定状态，例如 ENFORCED。 */
   reworkPurityStatus?: string | null;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=待检 (不可选) / RELEASED / REJECTED (不可选)。 */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
 }
 
 /**

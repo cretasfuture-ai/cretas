@@ -522,6 +522,20 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      */
     List<FinishedGoodsBatch> findByFactoryIdAndWarehouseId(String factoryId, String warehouseId);
 
+    /** 质检放行待办 (缺口 11): 本厂处于某状态 (PENDING_INSPECTION) 的成品批次, 新的在前。 */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.status = :status ORDER BY b.createdAt DESC")
+    List<FinishedGoodsBatch> findByFactoryIdAndStatusForRelease(
+            @Param("factoryId") String factoryId,
+            @Param("status") String status);
+
+    /** CCP 偏离扣留 (缺口 13): 按批次号找成品 (逐道录入/结单入库的成品批号 = 报工生产批号)。 */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.batchNumber IN :batchNumbers")
+    List<FinishedGoodsBatch> findByFactoryIdAndBatchNumberInForHold(
+            @Param("factoryId") String factoryId,
+            @Param("batchNumbers") java.util.Collection<String> batchNumbers);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.id = :id AND b.factoryId = :factoryId")
     Optional<FinishedGoodsBatch> findStocktakeBatchForUpdate(

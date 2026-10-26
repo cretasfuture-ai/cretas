@@ -3991,6 +3991,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
                     assertLiveSemiSourceStatus(source, ur.getSourceBatchNumber(), req.getProcessCode());
+                    com.cretas.aims.service.quality.release.QcInspectionGuard
+                            .assertSemiDrawable(source, req.getProcessCode());   // 质检放行: 待检不可领
                     assertWorkflowSourceSku(ur.getSourceBatchNumber(), ur.getSkuId(), source.getProductTypeId());
                     continue;
                 }
@@ -4018,6 +4020,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
+                com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
+                        srcMb, ur.getSourceBatchNumber(), req.getProcessCode());   // 质检放行: 待检不可投
+
                 BigDecimal storageQuantity = convertReportingQuantityToStorage(
                         factoryId, nz(ur.getFeedQuantityKg()), requestInputUnit(req),
                         srcMb.getQuantityUnit(), "上游批次");

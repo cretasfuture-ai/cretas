@@ -111,6 +111,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
 
+    /** 质检放行 (缺口 11/13): 小结成品入库时叠加「待检」; required=false 理由同上 (未注入 = 旧行为)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
+
     /**
      * 小结严格扣减常驻半成品之后写「产出它的生产批次 → 本行生产批次」边。
      * 目标 = 本未结行物化的生产批次 (纯 SFI 道 SAVED_SFI 没有批次 ⇒ recorder 记 SKIPPED)。
@@ -725,6 +729,11 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         batch.setStatus(isPlanQcFailed(plan.getFactoryId(), plan.getId())
                 ? FinishedGoodsBatch.Status.DEFECTIVE
                 : FinishedGoodsBatch.Status.AVAILABLE);
+        // 质检放行 (缺口 11/13): 需检产品 / 有未处理 CCP 偏离 ⇒ AVAILABLE 改为待检 (DEFECTIVE 不动)。
+        if (qcInspectionPolicy != null) {
+            batch.setStatus(qcInspectionPolicy.finishedGoodsStatusForOutput(plan.getFactoryId(), productTypeId,
+                    plan.getId(), batch.getStatus(), batch.getBatchNumber()));
+        }
         batch.setCreatedBy(userId != null ? userId : 0L);
     }
 

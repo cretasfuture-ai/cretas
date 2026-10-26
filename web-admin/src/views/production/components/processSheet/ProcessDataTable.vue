@@ -59,6 +59,7 @@ import {
 } from '@/utils/processSheetUnits';
 import { buildEqualPotWeightsKg } from './potAllocation';
 import { isProcessSecretHidden } from '@/utils/processSecretField';
+import { loadHeldBatchNumbers } from '@/api/qcRelease';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
 
@@ -2769,7 +2770,33 @@ function wipLabel(item: ProcessSheetInventoryItem): string {
   const name = item.productTypeName || '在制';
   const parts = [name, item.batchNumber, dateText(item.productionDate),
     `余${item.remaining}${item.unit || processUnits.value.inputUnit}`, costText(item.unitPrice)];
-  return parts.join(' | ');
+  const block = wipQcBlock(item);
+  return (block ? `【${block}】` : '') + parts.join(' | ');
+}
+
+// -------------------------------------------------------------------------
+// 质检放行 (缺口 11): 待检 / 不合格的上游批次照样列出, 但不可选, 并在标签里写明原因 ——
+// 藏起来会让操作员以为系统坏了 (同「余量 0 仍列出」的口径)。后端保存时还有同一道闸兜底。
+// -------------------------------------------------------------------------
+const qcHeldBatchNumbers = ref<Set<string>>(new Set());
+async function loadQcHeldBatches() {
+  if (!props.factoryId) return;
+  const result = await loadHeldBatchNumbers(props.factoryId);
+  qcHeldBatchNumbers.value = result.held;
+}
+function wipQcBlock(item: ProcessSheetInventoryItem): string | null {
+  return qcHeldBatchNumbers.value.has(item.batchNumber) ? '待检·质检放行后可选' : null;
+}
+function sfiQcBlock(item: SemiFinishedStockItem): string | null {
+  if (item.inspectionStatus === 'PENDING') return '待检·质检放行后可选';
+  if (item.inspectionStatus === 'REJECTED') return '质检不合格';
+  return null;
+}
+function wipDisabled(item: ProcessSheetInventoryItem): boolean {
+  return item.remaining <= 0 || wipQcBlock(item) != null;
+}
+function sfiDisabled(item: SemiFinishedStockItem): boolean {
+  return sfiAvailable(item) <= 0 || sfiQcBlock(item) != null;
 }
 
 /**
@@ -2803,7 +2830,8 @@ function sfiLabel(item: SemiFinishedStockItem): string {
   const unit = item.unit || 'kg';
   // 盒装半成品作 kg 道投料来源时展示折算 (余 N 盒 ≈ M kg) 或缺克重警告 (防呆 pre-display)。
   const conv = countUnitLabelSuffix(item.unit, item.gramsPerUnit, sfiAvailable(item));
-  return `半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
+  const block = sfiQcBlock(item);
+  return `${block ? `【${block}】` : ''}半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
     + `| 余${sfiAvailable(item)}${unit}${conv} | ${costText(item.unitCost)}`;
 }
 
@@ -3041,14 +3069,14 @@ function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
 function wipCandidate(item: ProcessSheetInventoryItem): UpstreamBatchOption {
   return {
     kind: 'wip', batchNumber: item.batchNumber, value: srcKey(SRC_WIP, item.batchNumber),
-    label: wipLabel(item), disabled: item.remaining <= 0,
+    label: wipLabel(item), disabled: wipDisabled(item),
   };
 }
 
 function sfiCandidate(item: SemiFinishedStockItem): UpstreamBatchOption {
   return {
     kind: 'sfi', batchNumber: item.intermediateBatchNo, value: srcKey(SRC_SFI, item.intermediateBatchNo),
-    label: sfiLabel(item), disabled: sfiAvailable(item) <= 0,
+    label: sfiLabel(item), disabled: sfiDisabled(item),
   };
 }
 
@@ -3249,6 +3277,7 @@ watch(
     sfiLoadSeq++;
     sfiLoading.value = false;
     if (showSfi.value) void loadSfiOptions();
+    void loadQcHeldBatches();
     // ①c 同工序集加载常驻成品库存供 FG 投料下拉
     fgOptions.value = [];
     fgLoadSeq++;
@@ -3336,6 +3365,7 @@ function refreshSharedInventories() {
   if (isXiuYou.value || workflowRawInputs.value.length > 0) { void loadRawBatches(); void loadInputAvailability(); }
   if (showSfi.value) void loadSfiOptions();
   if (showFg.value) void loadFgOptions();
+  void loadQcHeldBatches();
 }
 
 defineExpose({ hasUnsavedRows, refreshSharedInventories });
@@ -3729,14 +3759,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                     :label="wipLabel(item)"
                     :value="srcKey(SRC_WIP, item.batchNumber)"
-                    :disabled="item.remaining <= 0" />
+                    :disabled="wipDisabled(item)" />
                 </el-option-group>
                 <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                   <el-option
                     v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                     :label="sfiLabel(s)"
                     :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                    :disabled="sfiAvailable(s) <= 0" />
+                    :disabled="sfiDisabled(s)" />
                 </el-option-group>
                 <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                   <el-option
@@ -4368,14 +4398,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :key="item.batchNumber"
                         :label="wipLabel(item)"
                         :value="srcKey(SRC_WIP, item.batchNumber)"
-                        :disabled="item.remaining <= 0" />
+                        :disabled="wipDisabled(item)" />
                     </el-option-group>
                     <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                       <el-option
                         v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                         :label="sfiLabel(s)"
                         :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                        :disabled="sfiAvailable(s) <= 0" />
+                        :disabled="sfiDisabled(s)" />
                     </el-option-group>
                     <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                       <el-option
