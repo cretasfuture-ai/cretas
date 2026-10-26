@@ -133,7 +133,7 @@ def _cash(frame, source, request, gaps):
     by_item = work.assign(_v=vals).groupby(item, sort=True)['_v'].sum()
     points = [(name,float(by_item[name])) for name in ('经营活动','投资活动','筹资活动') if name in by_item.index]
     candidate = _candidate('finance.cash_flow_waterfall', '现金流量瀑布图', 'cash_flow_waterfall', points, '元', source,
-                       reason='现金流科目、金额、期间和人民币口径均由上传明细证明', dimension='现金流科目')
+                       reason='现金流科目、金额、期间和人民币口径均由来源明细证明', dimension='现金流科目')
     running = 0.0
     offset, bars = [], []
     for _, value in points:

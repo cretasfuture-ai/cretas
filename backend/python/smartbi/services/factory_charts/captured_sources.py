@@ -129,15 +129,32 @@ FROM sheet_rows r
 JOIN production_plans pp ON pp.id=r.plan_id AND pp.factory_id=r.factory_id
  AND pp.product_type_id=r.row_payload->>'productTypeId'
  AND pp.deleted_at IS NULL AND COALESCE(pp.status,'') NOT IN ('CANCELLED','CANCELED')
+ AND pp.workflow_selection_mode='WORKFLOW'
 JOIN production_batches pb ON pb.id=r.batch_id AND pb.factory_id=r.factory_id
  AND pb.production_plan_id=r.plan_id AND pb.product_type_id=r.row_payload->>'productTypeId'
  AND pb.deleted_at IS NULL AND COALESCE(pb.status,'') NOT IN ('CANCELLED','CANCELED')
+ AND pb.workflow_selection_mode='WORKFLOW'
+ AND pb.selected_workflow_id=pp.selected_workflow_id
+ AND pb.selected_workflow_version=pp.selected_workflow_version
+ AND pb.selected_workflow_revision_id=pp.selected_workflow_revision_id
+ AND pb.selected_workflow_revision_hash=pp.selected_workflow_revision_hash
+JOIN product_process_workflow_revisions pwr ON pwr.id=pp.selected_workflow_revision_id
+ AND pwr.factory_id=pp.factory_id AND pwr.workflow_id=pp.selected_workflow_id
+ AND pwr.definition_version=pp.selected_workflow_version
+ AND pwr.revision_hash=pp.selected_workflow_revision_hash
+ AND pwr.status='PUBLISHED' AND pwr.deleted_at IS NULL
+JOIN production_workflow_instances pwi ON pwi.production_batch_id=pb.id
+ AND pwi.factory_id=pb.factory_id AND pwi.product_type_id=pb.product_type_id
+ AND pwi.workflow_id=pb.selected_workflow_id
+ AND pwi.definition_version=pb.selected_workflow_version
+ AND pwi.status IN ('ACTIVE','COMPLETED') AND pwi.deleted_at IS NULL
+JOIN work_process_tasks wpt ON wpt.workflow_instance_id=pwi.id
+ AND wpt.production_batch_id=pb.id
+ AND wpt.factory_id=pwi.factory_id AND wpt.product_type_id=pwi.product_type_id
+ AND wpt.process_order=r.process_order AND wpt.deleted_at IS NULL
 JOIN product_types pt ON pt.id=r.row_payload->>'productTypeId' AND pt.factory_id=r.factory_id
  AND pt.is_active=true AND pt.deleted_at IS NULL
-JOIN product_work_processes pwp ON pwp.factory_id=r.factory_id
- AND pwp.product_type_id=r.row_payload->>'productTypeId'
- AND pwp.process_order=r.process_order AND pwp.is_active=true
-JOIN work_processes wp ON wp.id=pwp.work_process_id AND wp.factory_id=r.factory_id
+JOIN work_processes wp ON wp.id=wpt.work_process_id AND wp.factory_id=r.factory_id
  AND wp.is_active=true AND wp.deleted_at IS NULL
 LEFT JOIN factory_equipment fe ON fe.factory_id=r.factory_id
  AND fe.id::text=r.row_payload->'customFields'->>'smartbi_oee_equipment_id'
