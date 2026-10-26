@@ -1835,23 +1835,25 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         try {
             // 1. 构建提示词
             String prompt = buildClarificationPrompt(userInput, intent, missingParameters);
+            // 提示词里嵌着原话: 两份一起脱敏, 生成的问题里的代号换回; 脱敏不了抛错 → 下面的模板问题
+            LlmEgressRedactor.Result redacted = redactedOrThrow(factoryId, prompt, userInput);
 
             // 2. 调用 LLM（优先使用 DashScope 直接调用）
             String responseText;
             if (shouldUseDashScopeDirect()) {
                 log.debug("Using DashScope direct for clarification questions");
-                responseText = dashScopeClient.chat(prompt, userInput);
+                responseText = redacted.restore(dashScopeClient.chat(redacted.text(0), redacted.text(1)));
             } else {
                 log.debug("Using Python service for clarification questions");
                 Map<String, Object> clarificationContext = new LinkedHashMap<>();
                 clarificationContext.put("intent_code", intent.getIntentCode());
                 clarificationContext.put("intent_name", intent.getIntentName());
                 clarificationContext.put("missing_parameters", List.copyOf(missingParameters));
-                responseText = callTypedGeneralAnalysis(
+                responseText = redacted.restore(callTypedGeneralAnalysis(
                         factoryId,
-                        prompt + "\n\n用户输入:\n" + userInput,
+                        redacted.text(0) + "\n\n用户输入:\n" + redacted.text(1),
                         List.of(clarificationContext),
-                        "intent_clarification");
+                        "intent_clarification"));
             }
 
             // 3. 解析 LLM 返回的问题列表

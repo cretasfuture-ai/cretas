@@ -162,7 +162,7 @@ public class DecorationServiceImpl implements DecorationService {
 
             // 描述里的号码 / 人名 / 公司名换代号再发, 布局 JSON 里换回; 脱敏不了按规则布局 (下面的 catch)
             com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
-                    llmEgressGuard.texts(EGRESS_SITE, null, systemPrompt, userPrompt);
+                    llmEgressGuard.texts(EGRESS_SITE, factoryId, systemPrompt, userPrompt);
             if (redacted.refused()) {
                 throw new IllegalStateException("layout prompt could not be redacted, not sending");
             }
