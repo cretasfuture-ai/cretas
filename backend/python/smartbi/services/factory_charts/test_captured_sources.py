@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from decimal import Decimal
 import json
+from datetime import date
 
 import pytest
 
@@ -8,8 +9,9 @@ from smartbi.services.factory_charts import captured_sources as sources
 
 
 class Conn:
-    def __init__(self, definitions, sales, department, oee):
+    def __init__(self, definitions, sales, department, oee, sheet_oee=None):
         self.definitions, self.sales, self.department, self.oee = definitions, sales, department, oee
+        self.sheet_oee = sheet_oee or []
         self.calls = []
 
     async def execute(self, sql, *params):
@@ -27,6 +29,8 @@ class Conn:
             return self.department
         if "production_reports pr" in sql:
             return self.oee
+        if "process_sheet_rows r" in sql:
+            return self.sheet_oee
         return self.sales
 
 
@@ -172,3 +176,68 @@ def test_source_expression_mutants_are_pinned_by_contract_assertions():
     assert "report_type='YIELD'" in sql
     assert "report_type IN ('PROGRESS','HOURS')" not in sql
     assert "pwp.process_order=pr.process_order" in sql
+
+
+def _sheet_row(schema=None, **overrides):
+    row = {
+        "电子报工行ID": "row-1", "批次ID": "batch-1", "产品ID": "p1", "产品": "产品1",
+        "日期文本": "2026-10-01", "总数文本": "10", "良品数文本": "0", "单位": "kg",
+        "计划运行分钟": "20", "实际运行分钟": "15", "理想周期秒": "60", "设备ID": "eq-sheet",
+        "设备主键": 8, "工序字段schema": schema or [
+            {"key": key, "enabled": True, "type": typ, "label": label}
+            for key, typ, label in sources._REQUIRED_SHEET_OEE_SCHEMA
+        ],
+        "多产出成员": None, "多产出组ID": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_sheet_oee_uses_explicit_good_quantity_and_real_row_provenance():
+    clean, gaps = sources._sheet_oee_rows([_sheet_row()], "F006")
+    assert gaps == []
+    assert len(clean) == 1 and clean[0]["报工ID"] == "sheet-row:row-1"
+    assert clean[0]["良品数"] == 0 and clean[0]["总数"] == 10
+    assert "process_sheet_rows r" in sources.SHEET_OEE_SQL
+    assert "production_batches pb" in sources.SHEET_OEE_SQL
+    assert "pb.production_plan_id=r.plan_id" in sources.SHEET_OEE_SQL
+    assert "pp.product_type_id=r.row_payload->>'productTypeId'" in sources.SHEET_OEE_SQL
+    assert "r.row_payload->'customFields'->>'smartbi_oee_good_quantity'" in sources.SHEET_OEE_SQL
+
+
+@pytest.mark.parametrize("bad", [
+    {"电子报工行ID": None},
+    {"批次ID": None},
+    {"产品ID": None},
+    {"日期文本": "not-a-date"},
+    {"多产出成员": "true"},
+    {"多产出组ID": "group-1"},
+    {"设备主键": None},
+])
+def test_sheet_oee_quarantines_untrusted_rows(bad):
+    clean, gaps = sources._sheet_oee_rows([_sheet_row(**bad)], "F006")
+    assert clean == [] and gaps
+
+
+def test_sheet_oee_requires_fifth_schema_and_period_filter():
+    old_schema = [{"key": key, "enabled": True, "type": typ, "label": label}
+                  for key, typ, label in sources._REQUIRED_OEE_SCHEMA]
+    clean, gaps = sources._sheet_oee_rows([_sheet_row(schema=old_schema)], "F006")
+    assert clean == [] and any("schema" in gap for gap in gaps)
+    clean, gaps = sources._sheet_oee_rows([_sheet_row()], "F006", date(2026, 10, 2), date(2026, 10, 31))
+    assert clean == [] and gaps == []
+
+
+@pytest.mark.asyncio
+async def test_sheet_native_overlap_removes_both_sources(monkeypatch):
+    native_schema = [{"key": key, "enabled": True, "type": typ, "label": label}
+                     for key, typ, label in sources._REQUIRED_OEE_SCHEMA]
+    native = [{"报工ID": 1, "日期": date(2026, 10, 1), "产品ID": "p1", "产品": "产品1", "总数": 10,
+               "良品数": 9, "单位": "kg", "计划运行分钟": 20, "实际运行分钟": 15,
+               "理想周期秒": 60, "设备ID": "eq-sheet", "设备主键": 1, "工序字段schema": native_schema}]
+    conn = Conn([], [], [], native, [_sheet_row()])
+    async def pool(): return Pool(conn)
+    monkeypatch.setattr(sources.config, "get_cretas_pool", pool)
+    datasets, errors, gaps = await sources.load("F006", Request(), True)
+    assert errors == [] and not any(d.source.startswith(("oee ·", "oee-sheet")) for d in datasets)
+    assert any("重复观察窗口" in str(g) for g in gaps)
