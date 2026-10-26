@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import AiUploadHint from '@/components/common/AiUploadHint.vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Box, Close, Delete, FullScreen, Grid, Location, Plus, Search, Upload } from '@element-plus/icons-vue';
@@ -821,6 +822,7 @@ onUnmounted(() => {
           <el-button v-if="canEditLayout" :icon="Grid" @click="addRack">添加货架</el-button>
           <el-button v-if="canEditLayout" :icon="Upload" @click="fileInput?.click()">上传底图 / AI 识别</el-button>
           <input ref="fileInput" type="file" accept="image/*" hidden @change="handleImageUpload">
+          <AiUploadHint v-if="canEditLayout" />
           <el-button v-if="!mapFullscreen" type="primary" :icon="FullScreen" @click="openMapFullscreen">{{ mapFullscreenLabel }}</el-button>
           <el-button v-else :icon="Close" @click="closeMapFullscreen">退出全屏</el-button>
         </div>

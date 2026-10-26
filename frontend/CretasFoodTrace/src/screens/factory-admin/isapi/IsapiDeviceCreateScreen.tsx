@@ -4,6 +4,7 @@
  * 支持 AI 辅助添加（拍照识别设备配置）
  */
 import React, { useState } from 'react';
+import AiImageNotice from '../../../components/common/AiImageNotice';
 import {
   View,
   Text,
@@ -493,6 +494,7 @@ export function IsapiDeviceCreateScreen() {
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>AI 智能添加设备</Text>
             <Text style={styles.modalSubtitle}>选择输入方式</Text>
+            <AiImageNotice style={{ marginBottom: 8 }} />
 
             <View style={styles.inputOptionsRow}>
               <TouchableOpacity

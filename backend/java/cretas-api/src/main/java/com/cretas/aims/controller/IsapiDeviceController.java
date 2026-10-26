@@ -530,7 +530,7 @@ public class IsapiDeviceController {
             @PathVariable Long eventId) {
 
         try {
-            var result = alertAnalysisService.reanalyzeEvent(eventId);
+            var result = alertAnalysisService.reanalyzeEvent(factoryId, eventId);
             if (result.isSuccess()) {
                 IsapiEventLog event = eventLogRepository.findById(eventId).orElse(null);
                 if (event != null) {
@@ -540,6 +540,8 @@ public class IsapiDeviceController {
             throw new BusinessException(500, result.getMessage() != null ? result.getMessage() : "重新分析失败");
         } catch (BusinessException be) {
             throw be;
+        } catch (IllegalArgumentException notFound) {
+            throw new BusinessException(404, "事件不存在: " + eventId).withHint("请检查 eventId 是否正确");
 
         } catch (Exception e) {
             log.error("重新分析事件失败: eventId={}, error={}", eventId, e.getMessage());

@@ -3,6 +3,7 @@
  * 支持拍照识别、语音输入、手动输入三种方式
  */
 import React, { useState, useCallback } from 'react';
+import AiImageNotice from '../../../components/common/AiImageNotice';
 import {
   View,
   Text,
@@ -395,6 +396,7 @@ export function AIDeviceInputScreen() {
             </TouchableOpacity>
           </View>
 
+          {inputMode === 'photo' && <AiImageNotice style={{ marginBottom: 8 }} />}
           {/* AI Input Actions */}
           {inputMode !== 'manual' && (
             <View style={styles.aiActionsContainer}>
