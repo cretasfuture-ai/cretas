@@ -8,6 +8,7 @@ import { post } from '@/api/request'
 import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
 import { toDateString } from '@/utils/dateFormat'
+import { PROCESS_SECRET_LABEL, isProcessSecretHidden } from '@/utils/processSecretField'
 
 const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
@@ -84,6 +85,11 @@ function fmt(value: number | null | undefined, digits = 2) {
   if (value === null || value === undefined) return '-'
   if (!Number.isFinite(value)) return '-'
   return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: digits })
+}
+
+/** 出成率: 保密产品无授权时后端置空并带标记, 显示「已保密」而不是「-」(否则看起来像没配置) */
+function yieldText(row: RestockHorizonProductRow, field: 'rawToWipYield' | 'wipToFgYield' | 'rawToFgYield') {
+  return isProcessSecretHidden(row, field) ? PROCESS_SECRET_LABEL : fmt(row[field], 4)
 }
 
 function dayCell(row: RestockHorizonProductRow, date: string): RestockHorizonDayCell | undefined {
@@ -213,7 +219,7 @@ onMounted(load)
                     <el-icon class="head-help"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </span>
-                : {{ fmt(row.rawToWipYield, 4) }}
+                : {{ yieldText(row, 'rawToWipYield') }}
               </div>
               <div>
                 <span class="term">
@@ -222,7 +228,7 @@ onMounted(load)
                     <el-icon class="head-help"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </span>
-                : {{ fmt(row.wipToFgYield, 4) }}
+                : {{ yieldText(row, 'wipToFgYield') }}
               </div>
               <div>
                 <span class="term">
@@ -231,7 +237,7 @@ onMounted(load)
                     <el-icon class="head-help"><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </span>
-                : {{ fmt(row.rawToFgYield, 4) }}
+                : {{ yieldText(row, 'rawToFgYield') }}
               </div>
             </div>
             <!-- T136: 出成率未配置等告警 + 权限门控「去配置」跳转 (fool-proof Rule 5) -->

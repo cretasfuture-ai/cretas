@@ -23,6 +23,8 @@ export interface BlendLineInput {
   share: number | null | undefined;
   quantity: number | null | undefined;
   unit: string | null | undefined;
+  /** 工艺保密: 份额对当前账号隐藏 (后端仍按真实份额校验)。 */
+  shareHidden?: boolean;
 }
 
 export interface BlendLineView {
@@ -36,6 +38,8 @@ export interface BlendLineView {
 
 export type BlendEvaluation =
   | { status: 'NOT_APPLICABLE' }
+  /** 工艺保密: 看不到份额, 不能预先核对; 后端超差会要求原因, 所以原因要一直能选 (否则卡死)。 */
+  | { status: 'SECRET' }
   | { status: 'SKIPPED'; reason: string }
   | { status: 'WITHIN' | 'OVER'; tolerancePp: number; maxDeviationPp: number; lines: BlendLineView[] };
 
@@ -44,6 +48,8 @@ export interface BlendMaterialOption {
   materialTypeId: string;
   materialName?: string | null;
   inputShareRatio?: number | null;
+  /** 工艺保密: 后端隐藏了这个料的份额。 */
+  inputShareHidden?: boolean;
 }
 
 const GRAMS_PER_MASS_UNIT: Record<string, number> = {
@@ -62,6 +68,11 @@ function normUnit(unit: string | null | undefined): string {
 }
 
 export function evaluateBlend(inputs: BlendLineInput[], tolerancePp: number = BLEND_TOLERANCE_PP): BlendEvaluation {
+  const fedAny = inputs.filter((l) => l.quantity != null && l.quantity > 0
+    && (l.shareHidden || (l.share != null && l.share > 0)));
+  if (fedAny.some((l) => l.shareHidden) && new Set(fedAny.map((l) => l.id)).size >= 2) {
+    return { status: 'SECRET' };
+  }
   const fed = inputs.filter((l) => l.share != null && l.share > 0 && l.quantity != null && l.quantity > 0);
   const ids = [...new Set(fed.map((l) => l.id))];
   if (ids.length < 2) return { status: 'NOT_APPLICABLE' };
@@ -115,6 +126,7 @@ export function blendInputsFromRefs(
       id: option.materialTypeId,
       name: option.materialName || option.materialTypeId,
       share: option.inputShareRatio ?? null,
+      shareHidden: option.inputShareHidden === true,
       quantity: ref.quantity,
       unit: ref.unit || fallbackUnit,
     });
@@ -124,6 +136,9 @@ export function blendInputsFromRefs(
 
 /** 提交前的拦截文案; null = 不拦。 */
 export function blendReasonBlockedReason(evaluation: BlendEvaluation, reason: string, note: string): string | null {
+  if (evaluation.status === 'SECRET') {
+    return reason === BLEND_REASON_OTHER && !note.trim() ? '原因选了「其他」，请写一句具体原因' : null;
+  }
   if (evaluation.status !== 'OVER') return null;
   const over = evaluation.lines.filter((l) => l.over).map((l) => `${l.name} ${formatPp(l.deviationPp)}`).join('、');
   if (!reason) return `原料配比超出 ±${evaluation.tolerancePp} 个百分点（${over}），请在「配比核对」里选一个原因`;
@@ -137,7 +152,8 @@ export function blendRatioPayload(
   reason: string,
   note: string,
 ): { reason: string; note?: string } | undefined {
-  if (evaluation.status !== 'OVER' || !reason) return undefined;
+  // 工艺保密 (SECRET): 本页核对不了, 选了原因就带上, 由后端按真实份额裁决
+  if ((evaluation.status !== 'OVER' && evaluation.status !== 'SECRET') || !reason) return undefined;
   return note.trim() ? { reason, note: note.trim() } : { reason };
 }
 

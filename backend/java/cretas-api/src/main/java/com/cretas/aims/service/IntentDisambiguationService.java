@@ -33,6 +33,13 @@ public class IntentDisambiguationService {
     private final DashScopeConfig dashScopeConfig;
     private final ObjectMapper objectMapper;
 
+    /** 原话发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "intent-disambiguation";
+
     @Value("${cretas.ai.disambiguation.enabled:true}")
     private boolean enabled;
 
@@ -146,7 +153,13 @@ public class IntentDisambiguationService {
 
         // 调用 LLM
         try {
-            String userPrompt = String.format("用户输入：\"%s\"\n系统初步匹配到的意图：%s", originalInput, matchedIntent);
+            // 原话里的号码 / 人名 / 公司名换代号再发 (只要模型判断类别, 不需要还原); 脱敏不了按原有默认处理
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                    llmEgressGuard.texts(EGRESS_SITE, null, originalInput);
+            if (redacted.refused()) {
+                return new DisambiguationResult(Choice.FOOD_KNOWLEDGE, "原话无法脱敏, 未发给模型", 0, true);
+            }
+            String userPrompt = String.format("用户输入：\"%s\"\n系统初步匹配到的意图：%s", redacted.text(0), matchedIntent);
 
             ChatCompletionRequest request = ChatCompletionRequest.builder()
                     .model(dashScopeConfig.getCorrectionModel())
@@ -166,7 +179,7 @@ public class IntentDisambiguationService {
                 return new DisambiguationResult(Choice.FOOD_KNOWLEDGE, "LLM错误: " + response.getErrorMessage(), latency, true);
             }
 
-            String content = response.getContent();
+            String content = redacted.restoreJsonText(response.getContent());
             if (content == null || content.isBlank()) {
                 log.warn("[Disambiguation] LLM返回空内容，默认FOOD_KNOWLEDGE");
                 return new DisambiguationResult(Choice.FOOD_KNOWLEDGE, "LLM返回空", latency, true);

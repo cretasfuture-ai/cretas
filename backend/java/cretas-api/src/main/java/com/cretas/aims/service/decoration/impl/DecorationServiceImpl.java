@@ -36,6 +36,13 @@ public class DecorationServiceImpl implements DecorationService {
     private final PythonLLMClient pythonLLMClient;
     private final LayoutValidator layoutValidator;
 
+    /** 布局描述发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "home-layout-generate";
+
     /** 5 种允许的模块 type — LayoutValidator.VALID_MODULE_IDS 镜像 (id == type 约定)。 */
     private static final Set<String> ALLOWED_TYPES = Set.of(
             "welcome", "ai_insight", "stats_grid", "quick_actions", "dev_tools");
@@ -153,7 +160,13 @@ public class DecorationServiceImpl implements DecorationService {
             String userPrompt = buildLayoutGenerateUserPrompt(request);
             log.debug("LLM systemPrompt 长度={}, userPrompt={}", systemPrompt.length(), userPrompt);
 
-            String llmResponse = pythonLLMClient.chatLowTemp(systemPrompt, userPrompt);
+            // 描述里的号码 / 人名 / 公司名换代号再发, 布局 JSON 里换回; 脱敏不了按规则布局 (下面的 catch)
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                    llmEgressGuard.texts(EGRESS_SITE, factoryId, systemPrompt, userPrompt);
+            if (redacted.refused()) {
+                throw new IllegalStateException("layout prompt could not be redacted, not sending");
+            }
+            String llmResponse = redacted.restoreJsonText(pythonLLMClient.chatLowTemp(redacted.text(0), redacted.text(1)));
             log.debug("LLM 响应: {}", llmResponse);
 
             ParsedLayout parsed = parseAndValidateLayout(llmResponse);

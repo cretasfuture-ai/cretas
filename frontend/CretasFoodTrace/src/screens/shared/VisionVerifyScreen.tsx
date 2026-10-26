@@ -11,6 +11,7 @@
  *    服务不可用就说服务不可用。⛔ 不显示一个空的结果卡片假装成功。
  */
 import React, { useCallback, useMemo, useState } from 'react';
+import AiImageNotice from '../../components/common/AiImageNotice';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import {
   ActivityIndicator,
@@ -282,6 +283,7 @@ export default function VisionVerifyScreen() {
             {t('sourceIndividual.vision.gallery')}
           </Button>
         </View>
+        <AiImageNotice style={{ marginTop: spacing.s }} />
 
         {templateCode === 'EAR_TAG' && (
           // 这句直接躺在 background 上(不在卡里): onSurfaceVariant 对 background 只有 4.43:1,

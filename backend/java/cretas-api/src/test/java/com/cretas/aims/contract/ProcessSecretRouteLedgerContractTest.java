@@ -75,20 +75,20 @@ class ProcessSecretRouteLedgerContractTest {
             Map.entry("BomRecipeController#getCurrentByProduct", "响应裁剪: 同上"),
             Map.entry("BomRecipeController#getVersionsByProduct", "响应裁剪: 版本列表每条换成摘要"),
             Map.entry("BomRecipeController#getCopyCandidates",
-                    "V1 未纳管 (高): 返回其他产品共享工序上的 bomItems 用量与调味 g/kg, 下一片在配方数据层统一拦截"),
+                    "V2 统一裁剪: 按 sourceProductTypeId / sourceRecipeId 归属, 用量与调味配比去掉 (DataLayerExits 测试)"),
             Map.entry("ProductProcessWorkflowController#getEditorDefinition", "响应裁剪: DTO 换成摘要, 节点不下发"),
             Map.entry("ProductProcessWorkflowController#listVersions", "只有版本号/状态/时间元信息"),
             Map.entry("ProductProcessWorkflowController#getActivation", "只有激活状态元信息"),
             Map.entry("ProductProcessWorkflowController#resolveByOutputs", "V1 未纳管: 按产出反查工艺, S1 补"),
             Map.entry("ProductProcessWorkflowController#findWorkflowsProducing", "V1 未纳管: 产出目录, S1 补"),
             Map.entry("BomController#getProductTypesWithBom", "只有产品 ID 列表"),
-            Map.entry("BomController#recalculatePreview", "V1 未纳管: 出成率重算预览 (需 bom:yield_standard 权限), S1 补"),
-            Map.entry("BomController#recalculateApply", "V1 未纳管: 出成率批量应用 (需 bom:yield_standard:write), S1 补"),
-            Map.entry("BomController#listYieldSuggestions", "V1 未纳管: 全厂出成率建议, S1 补"),
+            Map.entry("BomController#recalculatePreview", "V2 统一裁剪: currentYieldRate 等标准出成率按产品归属去掉"),
+            Map.entry("BomController#recalculateApply", "V1 未纳管: 出成率批量应用是写入 (需 bom:yield_standard:write), 写入绕过 EDIT 另立一片"),
+            Map.entry("BomController#listYieldSuggestions", "V2 统一裁剪: previous/suggestedYieldRate 按产品归属去掉"),
             Map.entry("BomReverseQueryController#findRecipesByMaterial", "响应裁剪: 配方实体换成摘要"),
             Map.entry("BomReverseQueryController#findUsageByMaterial", "响应裁剪: BomItemUsage 换成摘要"),
             Map.entry("BomReverseQueryController#analyzeReplacement",
-                    "V1 未纳管: 每配方成本差额 (价格另受价格权限), S1 补"));
+                    "V2 统一裁剪: 每配方成本差额 (差额 ÷ 价差 = 用量) 按 recipeId 归属去掉"));
 
     @Test
     void everyEndpointIsGuardedCheckedInBodyOrLedgered() {

@@ -2,6 +2,7 @@ package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
     private final ProductionReportRepository reportRepo;
+    private final ProcessSecretAggregateExclusions aggregateExclusions;
 
     @Override
     public List<ProcessYieldAggDTO> aggregateByProcess(String factoryId, LocalDate startDate, LocalDate endDate, String productTypeId) {
@@ -28,7 +30,13 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         LocalDate end = endDate != null ? endDate : LocalDate.of(2999, 12, 31);
         String pt = productTypeId != null ? productTypeId : "";
 
-        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt);
+        // 工艺保密: 厂级按工序汇总里, 调用者无完整查看权的保密产品 (连同多产出计划的原料锚点) 整个不参与 ——
+        // 一道只有保密产品在用的工序, 汇总出来就是它的出成率。点名受保护产品由路由闸拦 (403);
+        // 点名别的产品 (例如锚点) 时同样排除
+        ProcessSecretAggregateExclusions.Scope excluded =
+                aggregateExclusions.forCurrentCaller(factoryId, "yield by-process aggregate");
+        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt,
+                excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
         List<ProcessYieldAggDTO> result = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             BigDecimal totalInput = toBig(r.get("total_input"));

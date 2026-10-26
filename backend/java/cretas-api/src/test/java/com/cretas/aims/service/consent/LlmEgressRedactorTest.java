@@ -420,6 +420,20 @@ class LlmEgressRedactorTest {
     }
 
     @Test
+    void timeOrVerbPlusIndustryWordIsBusinessTalkNotAnOrg() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(
+                "本周物流成本是多少", "查看冷链运输记录", "所有养殖场的存栏", "顺丰物流明天来提货"),
+                Map.of(), Set.of(), true);
+
+        // 意图里的关键词 (物流 / 冷链 / 养殖场) 不能被换成代号
+        assertThat(r.text(0)).isEqualTo("本周物流成本是多少");
+        assertThat(r.text(1)).isEqualTo("查看冷链运输记录");
+        assertThat(r.text(2)).isEqualTo("所有养殖场的存栏");
+        // 真有名字的照样换
+        assertThat(r.text(3)).startsWith("[单位").doesNotContain("顺丰");
+    }
+
+    @Test
     void namesInsideShopNamesAreNotCutInHalf() {
         LlmEgressRedactor.Result r = redactor.redactTexts(List.of("美的集团和和盛牛业有限公司"), Map.of(), Set.of(), true);
 

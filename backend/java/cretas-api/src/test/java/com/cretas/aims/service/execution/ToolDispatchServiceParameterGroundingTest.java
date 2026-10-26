@@ -439,6 +439,69 @@ class ToolDispatchServiceParameterGroundingTest {
         assertCallerIdentity(args.get(1));
     }
 
+    // ==================== 外发脱敏 (抽参发给模型的是代号, 落地校验用的是换回的真值) ====================
+
+    @Test
+    @DisplayName("抽参: 原话里的电话 / 人名换代号再发; 模型照抄的备注换回真值后仍落得了地")
+    void extractionSendsTokensAndRestoresThemBeforeGrounding() throws Exception {
+        String said = "1827 做完了 100 公斤，质检员赵铁柱 13912345678 已签字";
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        ChatCompletionResponse resp = mock(ChatCompletionResponse.class);
+        when(llm.chatWithTools(anyString(), user.capture(), anyList())).thenReturn(resp);
+        when(llm.hasToolCalls(resp)).thenReturn(true);
+        when(llm.getFirstToolCall(resp)).thenAnswer(inv -> ToolCall.of("c1", "extract_parameters",
+                mapper.writeValueAsString(Map.of("taskId", 1827, "actualQuantity", 100, "notes", user.getValue()))));
+
+        dispatch.executeToolPreview(completeTool, FACTORY, preview(said), completeIntent, 42L, "operator");
+
+        assertThat(user.getValue()).doesNotContain("赵铁柱", "13912345678").contains("已签字");
+        assertThat(boundParams()).containsEntry("notes", said);
+    }
+
+    @Test
+    @DisplayName("抽参在流式工作线程上 (没有 Servlet 请求): 按控制器绑的可信身份查本厂保密产品名, 不原样外发")
+    void extractionOnTheSseWorkerThreadStillHidesProtectedProductNames() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter secrets =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(secrets.protectedProductNames(FACTORY)).thenReturn(java.util.Set.of("秘制酱牛肉"));
+        ReflectionTestUtils.setField(dispatch, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(mapper, secrets));
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        ChatCompletionResponse resp = mock(ChatCompletionResponse.class);
+        when(llm.chatWithTools(anyString(), user.capture(), anyList())).thenReturn(resp);
+
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 42L, FACTORY, "operator"))) {
+            dispatch.executeToolPreview(completeTool, FACTORY, preview("1827 秘制酱牛肉做完了 100 公斤"),
+                    completeIntent, 42L, "operator");
+        }
+
+        assertThat(user.getValue()).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+    }
+
+    @Test
+    @DisplayName("抽参: 脱敏不了就不调模型, 缺的参数照常追问")
+    void extractionIsSkippedWhenRedactionFails() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter broken =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(broken.protectedProductNames(anyString())).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(dispatch, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(mapper, broken) {
+                    @Override
+                    public com.cretas.aims.service.consent.LlmEgressRedactor.Result texts(String site,
+                            String factoryId, String... texts) {
+                        return super.texts(site, FACTORY, texts);   // 测试里没有请求线程, 用本厂代替
+                    }
+                });
+
+        IntentExecuteResponse r = dispatch.executeToolPreview(completeTool, FACTORY,
+                preview("1827 质检员赵铁柱 13912345678"), completeIntent, 42L, "operator");
+
+        verify(llm, never()).chatWithTools(anyString(), anyString(), anyList());
+        assertThat(r.getStatus()).isEqualTo("NEED_MORE_INFO");
+    }
+
     // ==================== helpers ====================
 
     private void llmReturns(String argumentsJson) {

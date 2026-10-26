@@ -46,6 +46,16 @@ public class ProductCreateTool extends AbstractBusinessTool {
     private ProductWorkProcessService productWorkProcessService;
     @Autowired
     private BomRecipeService bomRecipeService;
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    private boolean mayInheritFrom(String factoryId, String sourceProductId) {
+        String ref = "AI tool product_create inherit " + sourceProductId;
+        return processSecretGuard.permitsProduct(factoryId, sourceProductId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL, ref)
+                && processSecretGuard.permitsProduct(factoryId, sourceProductId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EXPORT, ref);
+    }
 
     @Override
     public String getToolName() {
@@ -220,13 +230,22 @@ public class ProductCreateTool extends AbstractBusinessTool {
         if (explicitUnit != null) p.defaults.put("unit", explicitUnit);
 
         // 解析源产品 (inheritFrom 优先, 否则飞轮最相似)
-        String sourceName = getString(params, "inheritFrom");
-        if (sourceName == null) sourceName = p.matchedFrom;
+        String explicitSource = getString(params, "inheritFrom");
+        String sourceName = explicitSource != null ? explicitSource : p.matchedFrom;
         if (sourceName != null) {
             p.source = productTypeRepository.findByFactoryIdAndName(factoryId, sourceName).orElse(null);
             if (p.source != null && !requestedCategory.equals(p.source.getProductCategory())) {
                 log.info("[PRODUCT-CREATE] 忽略跨类别继承: requested={}, source={}({})",
                         requestedCategory, p.source.getName(), p.source.getProductCategory());
+                p.source = null;
+            }
+            // 工艺保密: 预览会带出源产品的 BOM 用量 / 调料配比, 执行会复制它的工序链。
+            // 受保护的源要求完整查看 + 导出授权 (与复制配方同一口径); 点名的直接拒绝, 飞轮自动挑的换成不继承
+            if (p.source != null && !mayInheritFrom(factoryId, p.source.getId())) {
+                if (explicitSource != null) {
+                    throw new com.cretas.aims.exception.BusinessException(403,
+                            "「" + p.source.getName() + "」的工艺已设为保密，不能作为继承来源");
+                }
                 p.source = null;
             }
             if (p.source != null) p.sourceName = p.source.getName();

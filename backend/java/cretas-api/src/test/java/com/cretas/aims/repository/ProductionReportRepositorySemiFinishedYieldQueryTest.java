@@ -15,7 +15,7 @@ class ProductionReportRepositorySemiFinishedYieldQueryTest {
     @DisplayName("只聚合已小结、未删除、非成品且投入产出为正数的全历史行")
     void queryCarriesEveryValidityGuardWithoutDateWindow() throws Exception {
         Method method = ProductionReportRepository.class.getMethod(
-                "aggregateSettledSemiFinishedYield", String.class, String.class);
+                "aggregateSettledSemiFinishedYield", String.class, String.class, java.util.Collection.class);
         Query query = method.getAnnotation(Query.class);
 
         assertThat(query).isNotNull();
@@ -26,6 +26,8 @@ class ProductionReportRepositorySemiFinishedYieldQueryTest {
         assertThat(sql).contains("row_status <> 'draft'");
         assertThat(sql).contains("row_payload ->> 'producttypeid' = :semifinishedskuid");
         assertThat(sql).contains("row_payload ->> 'finished' = 'false'");
+        // 工艺保密: 用在无权保密产品计划里的行不参与 (独立审查第三轮 B)
+        assertThat(sql).contains("plan_id not in (:excludedplanids)");
         assertThat(sql).contains("input_quantity > 0");
         assertThat(sql).contains("output_quantity > 0");
         assertThat(sql).contains("sum(input_kg)");

@@ -4,7 +4,10 @@ import com.cretas.aims.ai.client.DashScopeVisionClient;
 import com.cretas.aims.ai.client.DashScopeVisionClient.CameraAlertAnalysisResult;
 import com.cretas.aims.entity.isapi.IsapiDevice;
 import com.cretas.aims.entity.isapi.IsapiEventLog;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.isapi.IsapiEventLogRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -35,6 +38,10 @@ public class IsapiAlertAnalysisService {
 
     private final DashScopeVisionClient visionClient;
     private final IsapiEventLogRepository eventLogRepository;
+    private final FactorySettingsRepository factorySettingsRepository;
+    private final ObjectMapper objectMapper;
+
+    static final String CAMERA_AI_DISABLED_MESSAGE = "本厂未开启摄像头抓拍 AI 识别";
 
     // 图片下载HTTP客户端
     private static final OkHttpClient HTTP_CLIENT = new OkHttpClient.Builder()
@@ -66,6 +73,13 @@ public class IsapiAlertAnalysisService {
      */
     @Transactional
     public CameraAlertAnalysisResult analyzeAlert(IsapiEventLog eventLog, IsapiDevice device) {
+        // 抓拍里可能有人, 图片识别不做名称脱敏: 默认不发, 本厂在 AI 设置里打开才发 (连下载都不做)
+        String factoryId = device != null ? device.getFactoryId() : null;
+        if (!cameraSnapshotAnalysisEnabled(factoryId)) {
+            log.info("本厂未开启摄像头抓拍 AI 识别, 不发给模型: eventId={}, factoryId={}", eventLog.getId(), factoryId);
+            return CameraAlertAnalysisResult.error(CAMERA_AI_DISABLED_MESSAGE);
+        }
+
         // 检查是否有图片数据
         byte[] pictureData = eventLog.getPictureData();
         String imageBase64 = null;
@@ -153,8 +167,10 @@ public class IsapiAlertAnalysisService {
      * @return 分析结果
      */
     @Transactional
-    public CameraAlertAnalysisResult reanalyzeEvent(Long eventId) {
+    public CameraAlertAnalysisResult reanalyzeEvent(String factoryId, Long eventId) {
+        // 事件表没有租户过滤: 别厂的事件按「不存在」处理, 否则 A 厂能让 B 厂的抓拍再发一次模型并拿回结果
         IsapiEventLog eventLog = eventLogRepository.findById(eventId)
+                .filter(e -> factoryId != null && factoryId.equals(e.getFactoryId()))
                 .orElseThrow(() -> new IllegalArgumentException("事件不存在: " + eventId));
 
         IsapiDevice device = eventLog.getDevice();
@@ -197,6 +213,27 @@ public class IsapiAlertAnalysisService {
                  "scenechangedetection" -> true;  // 场景变化
             default -> false;
         };
+    }
+
+    /**
+     * 本厂 AI 设置里的 {@code cameraSnapshotAnalysis} 是否为 true。只读 (不像设置服务那样顺手建行);
+     * 没有设置行 / 没写这一项 / 解析失败 / 查不了, 一律当关。
+     */
+    boolean cameraSnapshotAnalysisEnabled(String factoryId) {
+        if (factoryId == null) {
+            return false;
+        }
+        try {
+            String json = factorySettingsRepository.findAiSettingsByFactoryId(factoryId);
+            if (json == null || json.isBlank()) {
+                return false;
+            }
+            JsonNode flag = objectMapper.readTree(json).path("cameraSnapshotAnalysis");
+            return flag.isBoolean() && flag.booleanValue();
+        } catch (Exception e) {
+            log.warn("读取摄像头抓拍 AI 识别开关失败, 按关闭处理: factoryId={}, error={}", factoryId, e.getMessage());
+            return false;
+        }
     }
 
     /**

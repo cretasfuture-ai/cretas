@@ -28,6 +28,7 @@ import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
 import com.cretas.aims.service.calibration.SelfCorrectionService;
 import com.cretas.aims.service.calibration.ToolCallRedundancyService;
@@ -68,6 +69,13 @@ public class ToolDispatchService {
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
     private final DashScopeClient dashScopeClient;
+
+    /** 参数抽取发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String PARAM_EGRESS_SITE = "tool-param-extraction";
     private final ToolCallRedundancyService redundancyService;
     private final SelfCorrectionService selfCorrectionService;
     private final CorrectionAgentService correctionAgentService;
@@ -1570,13 +1578,18 @@ public class ToolDispatchService {
                 请使用 extract_parameters 工具返回提取的参数。
                 """, tool.getToolName(), tool.getDescription() != null ? tool.getDescription() : "执行业务操作");
 
+            // 原话里的号码 / 人名 / 公司名 / 保密产品名换代号再发; 抽出的参数换回真值后再做落地校验; 脱敏不了就不抽
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, null, systemPrompt, userInput);
+            if (redacted.refused()) {
+                return extractedParams;
+            }
             ChatCompletionResponse response = dashScopeClient.chatWithTools(
-                    systemPrompt, userInput, List.of(extractionTool));
+                    redacted.text(0), redacted.text(1), List.of(extractionTool));
 
             if (dashScopeClient.hasToolCalls(response)) {
                 ToolCall toolCall = dashScopeClient.getFirstToolCall(response);
                 if (toolCall != null && toolCall.getFunction() != null) {
-                    String argumentsJson = toolCall.getFunction().getArguments();
+                    String argumentsJson = redacted.restoreJsonText(toolCall.getFunction().getArguments());
                     if (argumentsJson != null && !argumentsJson.isEmpty()) {
                         try {
                             @SuppressWarnings("unchecked")

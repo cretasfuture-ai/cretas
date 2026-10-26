@@ -148,6 +148,26 @@ describe('BlendRatioCard', () => {
     render(<BlendRatioCard evaluation={{ status: 'NOT_APPLICABLE' }} reason="" note="" onReasonChange={() => undefined} onNoteChange={() => undefined} />);
     expect(screen.queryByTestId('blend-ratio-card')).toBeNull();
   });
+
+  it('工艺保密: 份额被隐藏 → 不显示配方份额, 但原因按钮一直在 (后端超差时不卡死), 选了原因就发 payload', () => {
+    const hidden = new Map<string, BlendMaterialOption>([
+      ['MB-BEEF-1', { materialTypeId: 'RM-BEEF', materialName: '牛肉', inputShareRatio: null, inputShareHidden: true }],
+      ['MB-PORK', { materialTypeId: 'RM-PORK', materialName: '猪肉', inputShareRatio: null, inputShareHidden: true }],
+    ]);
+    const ev = evaluateBlend(blendInputsFromRefs([
+      { materialBatchId: 'MB-BEEF-1', quantity: 25, unit: 'kg' },
+      { materialBatchId: 'MB-PORK', quantity: 75, unit: 'kg' },
+    ], hidden, 'kg'));
+    expect(ev.status).toBe('SECRET');
+    expect(blendReasonBlockedReason(ev, '', '')).toBeNull();
+    expect(blendRatioPayload(ev, '称重误差', '')).toEqual({ reason: '称重误差' });
+    expect(blendRatioPayload(ev, '', '')).toBeUndefined();
+
+    render(<BlendRatioCard evaluation={ev} reason="" note="" onReasonChange={() => undefined} onNoteChange={() => undefined} />);
+    expect(screen.getByTestId('blend-ratio-secret')).toBeTruthy();
+    expect(screen.getByTestId('blend-ratio-reason-area')).toBeTruthy();
+    expect(screen.queryByTestId('blend-ratio-line-RM-BEEF')).toBeNull();
+  });
 });
 
 describe('MaterialBatchPicker → 配比核对 接线', () => {
