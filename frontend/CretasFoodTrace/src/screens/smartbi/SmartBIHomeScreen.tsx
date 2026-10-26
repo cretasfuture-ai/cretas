@@ -150,6 +150,14 @@ export function SmartBIHomeScreen() {
       screen: 'FinancialRatios',
       onPress: () => navigation.navigate('FinancialRatios', {}),
     },
+    {
+      icon: 'factory',
+      title: '工厂经营分析',
+      description: '推荐图表、事实与原始明细',
+      color: '#1890FF',
+      screen: 'SmartBI',
+      onPress: () => navigation.navigate('FactoryCharts'),
+    },
   ].filter(item => isScreenEnabled(item.screen));
 
   return (
