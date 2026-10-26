@@ -29,7 +29,7 @@ const confirmDisabledReason = computed(() => (missing.value.length
 
 function collect(cps: CcpStepCheckpoint[], dialogTitle: string): Promise<CcpReading[] | null> {
   checkpoints.value = cps;
-  values.value = Object.fromEntries(cps.map((c) => [c.checkpointId, null]));
+  values.value = Object.fromEntries(cps.map((c): [number, number | null] => [c.checkpointId, null]));
   notes.value = '';
   title.value = dialogTitle;
   visible.value = true;

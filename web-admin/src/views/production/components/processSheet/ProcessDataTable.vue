@@ -60,7 +60,7 @@ import {
 import { buildEqualPotWeightsKg } from './potAllocation';
 import { isProcessSecretHidden } from '@/utils/processSecretField';
 import { loadHeldBatchNumbers } from '@/api/qcRelease';
-import { recordCcp, type CcpReading } from '@/api/ccp';
+import type { CcpReading } from '@/api/ccp';
 import CcpEntryDialog from './CcpEntryDialog.vue';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
@@ -2497,55 +2497,13 @@ function formalSubmitSummary(row: SheetRow): string {
 }
 
 // -------------------------------------------------------------------------
-// 缺口 13 CCP: 本工序挂了关键控制点时, 正式报工前先录实测值, 报工成功后提交。
+// 缺口 13 CCP: 本工序挂了关键控制点时, 正式报工前先录实测值, 随报工请求一起提交 (后端同一事务落库,
+// 缺值整笔拒绝, 审查中 7); 超限偏离由后端写进返回的 warnings, 走下面统一的「正式报工成功(含提示)」。
 // CCP 定义随 Workflow 录入配置下发 (workflowContext.ccpCheckpoints) —— 配置加载失败时整张表不可用,
 // 不存在「CCP 没查到却照常报工」的半态。legacy 计划没有工序身份 → 不出现 CCP 录入。
 // -------------------------------------------------------------------------
 const ccpDialogRef = ref<InstanceType<typeof CcpEntryDialog> | null>(null);
 const stepCheckpoints = computed(() => props.workflowContext?.ccpCheckpoints ?? []);
-
-/** 报工已成功后提交 CCP; 失败给「重试」, 不吞 (4 位一体: 后端原话 + 下一步)。 */
-async function submitStepCcp(row: SheetRow, result: { batchId?: number | null; batchNumber?: string | null } | undefined,
-  readings: CcpReading[]) {
-  const workProcessId = props.workflowContext?.workProcessId;
-  if (!workProcessId) return;
-  for (;;) {
-    try {
-      const res = await recordCcp(props.factoryId, {
-        batchNumber: result?.batchNumber ?? row.batchNumber,
-        productionBatchId: result?.batchId ?? null,
-        planId: props.planId,
-        workProcessId,
-        processOrder: props.processOrder,
-        source: 'WEB_PROCESS_SHEET',
-        readings,
-      });
-      if (res.success && res.data) {
-        if (res.data.deviationCount > 0) {
-          ElMessage({ message: res.data.message, type: 'warning', duration: 0, showClose: true });
-        } else {
-          ElMessage.success(res.data.message || 'CCP 已记录');
-        }
-      }
-      return;
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'CCP 记录提交失败';
-      try {
-        await ElMessageBox.confirm(
-          `报工已保存，但关键控制点（CCP）记录没有保存成功：${msg}
-
-不补交会缺这道工序的 CCP 记录。是否重试？`,
-          'CCP 记录未保存', { confirmButtonText: '重试', cancelButtonText: '稍后处理', type: 'error' });
-      } catch {
-        ElMessage({
-          message: `批次 ${result?.batchNumber ?? row.batchNumber ?? ''} 缺少 CCP 记录：请重新正式报工本行，或联系质检员在「质量管理 → CCP 监控记录」核对`,
-          type: 'error', duration: 0, showClose: true,
-        });
-        return;
-      }
-    }
-  }
-}
 
 async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   if (row.saving) return;
@@ -2584,6 +2542,7 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   row.saving = true;
   try {
     const req = buildRequest(row);
+    if (action === 'submit' && ccpReadings) req.ccpReadings = ccpReadings;
     const resp = action === 'draft'
       ? await saveDraftRow(props.factoryId, props.planId, req)
       : await submitRow(props.factoryId, props.planId, req);
@@ -2616,9 +2575,6 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
       ElMessage({ message: `${action === 'draft' ? '草稿已保存' : '正式报工成功'}(含提示): ` + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
     } else {
       ElMessage.success(`${action === 'draft' ? '草稿已保存' : '正式报工成功'}${row.batchNumber ? ' — ' + row.batchNumber : ''}`);
-    }
-    if (action === 'submit' && ccpReadings) {
-      await submitStepCcp(row, result, ccpReadings);
     }
     emit('row-saved', row.submissionStatus);
   } catch (e: unknown) {
@@ -2807,8 +2763,21 @@ function srcKey(kind: string, batchNo: string): string {
   return `${kind}::${batchNo}`;
 }
 
+/**
+ * 半成品现在能投的量 = 余额 − 待检数量 (缺口 11 审查高 2: 一行跨批次累加, 待检的只是其中一部分;
+ * 与后端 SemiFinishedInventory#drawableBalance 同一口径)。用量上限 / 标签 / 可选与否都按它。
+ */
 function sfiAvailable(item: SemiFinishedStockItem): number {
-  return Number(item.availableQuantity ?? 0) || 0;
+  const balance = Number(item.availableQuantity ?? 0) || 0;
+  return Math.max(0, balance - sfiPending(item));
+}
+
+/** 这一行里待检的数量: 不在待检 → 0; 待检但没给数量 (旧数据) → 整个余额都算待检。 */
+function sfiPending(item: SemiFinishedStockItem): number {
+  if (item.inspectionStatus !== 'PENDING') return 0;
+  const balance = Math.max(0, Number(item.availableQuantity ?? 0) || 0);
+  const pending = item.inspectionPendingQuantity == null ? balance : Number(item.inspectionPendingQuantity) || 0;
+  return Math.min(balance, Math.max(0, pending));
 }
 
 function fgAvailable(item: FinishedGoodsStockItem): number {
@@ -2842,17 +2811,20 @@ function wipLabel(item: ProcessSheetInventoryItem): string {
 // 藏起来会让操作员以为系统坏了 (同「余量 0 仍列出」的口径)。后端保存时还有同一道闸兜底。
 // -------------------------------------------------------------------------
 const qcHeldBatchNumbers = ref<Set<string>>(new Set());
+/** 待检清单没取到 (审查低 11): 不能当成「都不待检」—— 界面写明状态未知, 后端保存时仍会按同一道闸拒绝。 */
+const qcHeldStatusUnknown = ref(false);
 async function loadQcHeldBatches() {
   if (!props.factoryId) return;
   const result = await loadHeldBatchNumbers(props.factoryId);
   qcHeldBatchNumbers.value = result.held;
+  qcHeldStatusUnknown.value = !result.ok;
 }
 function wipQcBlock(item: ProcessSheetInventoryItem): string | null {
   return qcHeldBatchNumbers.value.has(item.batchNumber) ? '待检·质检放行后可选' : null;
 }
 function sfiQcBlock(item: SemiFinishedStockItem): string | null {
-  if (item.inspectionStatus === 'PENDING') return '待检·质检放行后可选';
   if (item.inspectionStatus === 'REJECTED') return '质检不合格';
+  if (item.inspectionStatus === 'PENDING' && sfiAvailable(item) <= 0) return '待检·质检放行后可选';
   return null;
 }
 function wipDisabled(item: ProcessSheetInventoryItem): boolean {
@@ -2894,8 +2866,10 @@ function sfiLabel(item: SemiFinishedStockItem): string {
   // 盒装半成品作 kg 道投料来源时展示折算 (余 N 盒 ≈ M kg) 或缺克重警告 (防呆 pre-display)。
   const conv = countUnitLabelSuffix(item.unit, item.gramsPerUnit, sfiAvailable(item));
   const block = sfiQcBlock(item);
+  const pending = sfiPending(item);
+  const pendingText = !block && pending > 0 ? ` (另有${pending}${unit}待检)` : '';
   return `${block ? `【${block}】` : ''}半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
-    + `| 余${sfiAvailable(item)}${unit}${conv} | ${costText(item.unitCost)}`;
+    + `| 余${sfiAvailable(item)}${unit}${conv}${pendingText} | ${costText(item.unitCost)}`;
 }
 
 /** ②/①c 成品库存选项标签: "成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
@@ -2947,7 +2921,8 @@ async function loadSfiOptions() {
     const resp = await getSemiFinishedInventory(props.factoryId, filter);
     if (seq !== sfiLoadSeq) return;
     const all = Array.isArray(resp.data) ? resp.data : [];
-    sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0).filter(sfiMatchesUpstreamPort);
+    // 按余额过滤 (不是按可投量): 整行待检的照样列出、灰显并写原因 —— 藏起来操作员会以为系统坏了
+    sfiOptions.value = all.filter((s) => (Number(s.availableQuantity ?? 0) || 0) > 0).filter(sfiMatchesUpstreamPort);
   } catch (err) {
     if (seq !== sfiLoadSeq) return;
     sfiOptions.value = [];
@@ -3476,6 +3451,22 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
       show-icon
       title="该产品工艺已保密：配比不显示，按配比自动带出已关闭，请逐项填写本单实际投入量"
     />
+    <el-alert
+      v-if="qcHeldStatusUnknown"
+      data-testid="qc-held-status-unknown"
+      class="sp-workflow-banner sp-workflow-banner-warning"
+      type="warning"
+      :closable="false"
+      show-icon
+    >
+      <template #title>
+        <span>待检状态未知：上道在制批次的质检状态没加载出来</span>
+      </template>
+      <div>
+        下拉里不会标出哪些批次在等质检放行；选中待检批次时保存会被拒绝。
+        <el-link type="primary" underline="always" data-testid="qc-held-reload" @click="loadQcHeldBatches">重新加载</el-link>
+      </div>
+    </el-alert>
     <el-alert
       v-if="outputPorts.some((p) => p.skuResolved === false)"
       class="sp-workflow-banner sp-workflow-banner-warning"
