@@ -405,6 +405,18 @@ class LlmEgressRedactorTest {
     }
 
     @Test
+    void singleCharacterVerbBeforeAnOrgIsNotPartOfTheName() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(
+                "给华东冷链商贸有限公司下单", "向阳食品有限公司来货了"), Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).startsWith("给[单位").endsWith("]下单");
+        assertThat(r.restore(r.text(0).substring(1, r.text(0).length() - 2))).isEqualTo("华东冷链商贸有限公司");
+        // 「向」可以是单位名的首字, 不剥
+        assertThat(r.text(1)).startsWith("[单位").doesNotContain("向阳");
+        assertThat(r.restore(r.text(1))).isEqualTo("向阳食品有限公司来货了");
+    }
+
+    @Test
     void namesInsideShopNamesAreNotCutInHalf() {
         LlmEgressRedactor.Result r = redactor.redactTexts(List.of("美的集团和和盛牛业有限公司"), Map.of(), Set.of(), true);
 
@@ -453,6 +465,46 @@ class LlmEgressRedactorTest {
 
         assertThat(r.text(0)).contains("[客户A]").contains("[客户B]").doesNotContain("张记");
         assertThat(r.restore("[客户A]")).isEqualTo("[客户A]");
+    }
+
+    @Test
+    void tokensTheModelRewroteAreRestoredToo() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("客户是 张记食品有限公司, 电话 13812345678"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.CUSTOMER), Set.of(), true);
+        assertThat(r.text(0)).contains("[客户A]").contains("[电话A]");
+
+        // 去括号 / 全角括号 / 括号里加空格 / 类别与字母之间加空格
+        assertThat(r.restore("客户A 电话A")).isEqualTo("张记食品有限公司 13812345678");
+        assertThat(r.restore("【客户A】、［电话A］")).isEqualTo("张记食品有限公司、13812345678");
+        assertThat(r.restore("[ 客户 A ] 的单")).isEqualTo("张记食品有限公司 的单");
+        assertThat(r.restoreJsonText("{\"c\":\"客户A\"}")).isEqualTo("{\"c\":\"张记食品有限公司\"}");
+        assertThat(r.restoreDeep(Map.of("c", "客户A"))).isEqualTo(Map.of("c", "张记食品有限公司"));
+        // 对不上本次代号的不动; 单字母代号不吃掉更长代号的前半
+        assertThat(r.restore("客户B 客户AB 客户A1")).isEqualTo("客户B 客户AB 客户A1");
+    }
+
+    @Test
+    void bareTokenWordingAlreadyInTheInputIsNotReused() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("送到单位A栋, 客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.ORG), Set.of(), true);
+
+        assertThat(r.text(0)).contains("单位A栋").contains("[单位B]").doesNotContain("张记");
+        assertThat(r.restore("送到单位A栋")).isEqualTo("送到单位A栋");
+    }
+
+    @Test
+    void streamRestoresBareTokensSplitAcrossChunks() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.CUSTOMER), Set.of(), true);
+        StringBuilder out = new StringBuilder();
+        LlmEgressRedactor.StreamRestorer s = r.streamRestorer(out::append);
+
+        for (String chunk : List.of("已联系", "客", "户", "A", "，人们都说好", "。客户")) {
+            s.accept(chunk);
+        }
+        s.flush();
+
+        assertThat(out.toString()).isEqualTo("已联系张记食品有限公司，人们都说好。客户");
     }
 
     @Test
