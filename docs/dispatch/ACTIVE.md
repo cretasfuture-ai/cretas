@@ -5,7 +5,8 @@
 
 ## 在飞任务
 
-- `SMARTBI-OEE-TEXT-20261026` — `in-progress` — Owner Root — Base f69086dd0f55504011c5a79aeafd42a767ca4798 — scope: archive/2026-10-26-smartbi-oee-text.md；补齐报工文本输入，续做F006验收。
+- `SMARTBI-FULL-QA-20261026` — `in-progress` — Root；F006验收见archive/2026-10-26-smartbi-full-closure.md。
+- `SMARTBI-OEE-TEXT-20261026` — `review` — Root；PR1194，Base/scope见archive/2026-10-26-smartbi-oee-text.md。
 
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
