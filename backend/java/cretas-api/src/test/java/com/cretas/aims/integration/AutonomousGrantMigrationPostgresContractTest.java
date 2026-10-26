@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261103_84 on real PostgreSQL: the database itself refuses a budget overrun, any source other
+ * V20261103_85 on real PostgreSQL: the database itself refuses a budget overrun, any source other
  * than SCHEDULER, a run for an unknown grant and a second consumption of the same run key.
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
@@ -39,7 +39,7 @@ class AutonomousGrantMigrationPostgresContractTest {
             statement.execute("CREATE SCHEMA " + schema);
             statement.execute("SET search_path TO " + schema);
             ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/flyway/V20261103_84__autonomous_tool_grants.sql"));
+                    new ClassPathResource("db/flyway/V20261103_85__autonomous_tool_grants.sql"));
 
             assertDoesNotThrow(() -> statement.execute(GRANT.formatted("g1", "SCHEDULER", 2, 0)));
             assertDoesNotThrow(() -> statement.execute(RUN.formatted("r1", "g1", "fire:1")));
