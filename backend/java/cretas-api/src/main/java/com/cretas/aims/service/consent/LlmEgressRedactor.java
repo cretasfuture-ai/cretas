@@ -158,7 +158,8 @@ public final class LlmEgressRedactor {
      */
     private static final Pattern ORG_LEAD_IN = Pattern.compile(
             "^.*(?:一下|我们是|我们|是|给|向|从|找|查|问|跟|让|叫|请|把|往|跟进|联系|通知|客户|供应商)");
-    private static final String SINGLE_CHAR_ORG_LEAD_INS = "给跟让叫请把往找";
+    /** 不剥「找 / 跟 / 叫」: 找钢网、跟谁学这类单位名就以它们开头。 */
+    private static final String SINGLE_CHAR_ORG_LEAD_INS = "给让请把往";
     /** 人名正则带着岗位 / 动词前缀 (「质检员：赵铁柱」「通知张三」): 只换名字本身。 */
     private static final Pattern PERSON_LEAD_IN = Pattern.compile(
             "^(?:" + TrainingSampleRules.PERSON_ROLE + "|联系|找|通知|叫|告诉)\\s*[:：|]?\\s*");
@@ -196,12 +197,22 @@ public final class LlmEgressRedactor {
     private static final String KIND_LABELS = java.util.Arrays.stream(Kind.values())
             .map(k -> Pattern.quote(k.label)).collect(java.util.stream.Collectors.joining("|"));
 
+    /** 去括号的代号后面若跟着这些字, 是普通说法 (「客户A类」「人员A班」「单位A栋」), 不是代号。 */
+    private static final String BARE_TOKEN_CLASSIFIERS = "类级班组区栋座型款档线号层楼室段队";
+
     /**
-     * 代号及模型常见的改写: 去掉方括号、全角括号、括号 / 字母前后的空格。字母后不能紧跟字母数字
-     * ({@code 单位A} 不会吃掉 {@code 单位AB} 的前半)。只换回本次请求发出去的代号, 对不上的原样保留。
+     * 代号及模型常见的改写, 两种形状: 成对的括号 (方括号 / 全角括号, 括号里可以有空格) 或去掉括号
+     * ({@code 单位A}, 类别名与字母紧挨着)。字母后不能紧跟字母数字 ({@code 单位A} 不会吃掉 {@code 单位AB}
+     * 的前半), 去括号的还不能紧跟量词 ({@link #BARE_TOKEN_CLASSIFIERS})。只换回本次请求发出去的代号。
+     * 分组: 1/2 = 带括号的类别名 / 字母, 3/4 = 去括号的; 用 {@link #canonicalToken} 取标准写法。
      */
     static final Pattern LOOSE_TOKEN = Pattern.compile(
-            "(?:[\\[【［]\\s*)?(" + KIND_LABELS + ")\\s*([A-Z]+)(?![A-Za-z0-9])(?:\\s*[\\]】］])?");
+            "[\\[【［][ \\t]*(" + KIND_LABELS + ")[ \\t]*([A-Z]+)[ \\t]*[\\]】］]"
+                    + "|(" + KIND_LABELS + ")([A-Z]+)(?![A-Za-z0-9" + BARE_TOKEN_CLASSIFIERS + "])");
+
+    static String canonicalToken(Matcher m) {
+        return m.group(1) != null ? "[" + m.group(1) + m.group(2) + "]" : "[" + m.group(3) + m.group(4) + "]";
+    }
 
     /** 流式: 结尾可能是半个代号 (括号 / 类别名的前几个字 / 类别名 + 字母), 先攒着等下一段。 */
     private static final String KIND_LABEL_PREFIXES = java.util.Arrays.stream(Kind.values())
@@ -209,7 +220,8 @@ public final class LlmEgressRedactor {
                     .mapToObj(n -> Pattern.quote(k.label.substring(0, n))))
             .collect(java.util.stream.Collectors.joining("|"));
     private static final Pattern PARTIAL_TOKEN_TAIL = Pattern.compile(
-            "(?:[\\[【［]\\s*(?:" + KIND_LABEL_PREFIXES + ")?|(?:" + KIND_LABEL_PREFIXES + "))\\s*[A-Z]*$");
+            "(?:[\\[【［][ \\t]*(?:(?:" + KIND_LABEL_PREFIXES + ")(?:[ \\t]*[A-Z]+)?[ \\t]*)?"
+                    + "|(?:" + KIND_LABEL_PREFIXES + ")[A-Z]*)$");
 
     /** 调用方已知的交易对象 / 人 (从记录里取出的客户名等), 文本模式下整串换代号。 */
     public enum Party {
@@ -302,7 +314,7 @@ public final class LlmEgressRedactor {
             Matcher m = LOOSE_TOKEN.matcher(text);
             StringBuilder out = new StringBuilder(text.length());
             while (m.find()) {
-                String real = tokenToReal.get("[" + m.group(1) + m.group(2) + "]");
+                String real = tokenToReal.get(canonicalToken(m));
                 m.appendReplacement(out, Matcher.quoteReplacement(real != null ? encode.apply(real) : m.group()));
             }
             m.appendTail(out);
@@ -367,9 +379,11 @@ public final class LlmEgressRedactor {
             int open = pending.lastIndexOf("[");
             int cut = open >= 0 && pending.indexOf("]", open) < 0 && pending.length() - open <= MAX_PENDING
                     ? open : pending.length();
-            // 去括号的代号也可能被拆开 ("单位" + "A" + "B"): 结尾是半个代号就先不发
-            Matcher tail = PARTIAL_TOKEN_TAIL.matcher(pending);
-            if (tail.find() && pending.length() - tail.start() <= MAX_PENDING) {
+            // 半个代号 (全角括号开头、去括号、被拆开的 "单位" + "A" + "B"): 只看最后 MAX_PENDING 个字,
+            // 结尾是半个代号就先不发
+            int from = Math.max(0, pending.length() - MAX_PENDING);
+            Matcher tail = PARTIAL_TOKEN_TAIL.matcher(pending).region(from, pending.length());
+            if (tail.find()) {
                 cut = Math.min(cut, tail.start());
             }
             if (cut > 0) {
@@ -620,7 +634,7 @@ public final class LlmEgressRedactor {
                 Set<String> found = new java.util.HashSet<>();
                 Matcher m = LOOSE_TOKEN.matcher(reserved);
                 while (m.find()) {
-                    found.add("[" + m.group(1) + m.group(2) + "]");
+                    found.add(canonicalToken(m));
                 }
                 reservedTokens = found;
                 reservedScanned = reserved;
