@@ -1478,6 +1478,7 @@ function blendInputs(row: SheetRow): BlendLineInput[] {
         id: item.workflowPortId || item.materialTypeId,
         name: item.materialName || item.materialTypeId,
         share: port?.inputShareRatio ?? null,
+        shareHidden: isProcessSecretHidden(port, 'inputShareRatio'),
         quantity: item.quantity,
         unit: item.unit,
         gramsPerUnit: port?.gramsPerUnit ?? null,
@@ -1490,6 +1491,7 @@ function blendInputs(row: SheetRow): BlendLineInput[] {
       id: source.workflowPortId,
       name: port?.materialName || source.skuId || source.workflowPortId,
       share: port?.inputShareRatio ?? null,
+      shareHidden: isProcessSecretHidden(port, 'inputShareRatio'),
       quantity: source.feedQuantityKg,
       unit: (port && workflowPortDisplayUnit(port)) || processUnits.value.inputUnit,
       gramsPerUnit: port?.gramsPerUnit ?? null,
@@ -2454,7 +2456,9 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   }
 
   // 缺口 06: 超差时带上原因 (其余快照字段由后端计算覆盖)。容差内不发, 免得留下没必要的原因。
-  if (blendEvaluation(row).status === 'OVER' && row.blendReason) {
+  // 工艺保密 (SECRET): 本页核对不了, 选了原因就带上, 由后端按真实份额裁决
+  const blendStatus = blendEvaluation(row).status;
+  if ((blendStatus === 'OVER' || blendStatus === 'SECRET') && row.blendReason) {
     base.blendRatio = { reason: row.blendReason, note: row.blendNote.trim() || undefined };
   }
 

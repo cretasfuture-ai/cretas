@@ -80,6 +80,24 @@ public class BlendRatioCheck {
     @Autowired(required = false)
     private MaterialBatchRepository materialBatchRepository;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    /**
+     * 工艺保密: 超差提示里的「配方 30%」就是配比。只有能看完整工艺的人 (或产品不受保护) 才在提示里给配方份额,
+     * 其余人只看到料名、实际份额和偏高 / 偏低 —— 后端照常按真实份额裁决。只在真超差时才判 (免得每次报工都记审计)。
+     * 产品识别不出 (多产出计划的锚点 {@code __...}) 时按不能看处理。
+     */
+    boolean revealRecipeShares(String factoryId, String productTypeId, BlendRatioDeviation evaluation) {
+        if (evaluation == null || !STATUS_OVER_PENDING.equals(evaluation.getStatus())) return true;
+        if (processSecretGuard == null) return true;
+        if (productTypeId == null || productTypeId.startsWith("__")) {
+            return !processSecretGuard.factoryHasProtectedProducts(factoryId);
+        }
+        return processSecretGuard.permitsProduct(factoryId, productTypeId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL, "blend-ratio deviation message");
+    }
+
     /** 带份额的投入端口 (纯数据, 便于两个写入口共用)。 */
     public record SharePort(String portId, String materialName, BigDecimal share, String unit,
                             BigDecimal gramsPerUnit) {
@@ -145,7 +163,8 @@ public class BlendRatioCheck {
             log.warn("[blend-ratio] 跳过配比校验 factory={} processOrder={} clientRowId={}: {}",
                     factoryId, req.getProcessOrder(), req.getClientRowId(), evaluation.getSkipReason());
         }
-        req.setBlendRatio(enforce(evaluation, req.getBlendRatio()));
+        req.setBlendRatio(enforce(evaluation, req.getBlendRatio(),
+                revealRecipeShares(factoryId, productTypeId, evaluation)));
     }
 
     // ------------------------------------------------------------------
@@ -199,7 +218,8 @@ public class BlendRatioCheck {
             log.warn("[blend-ratio] 跳过配比校验 factory={} task={}: {}",
                     factoryId, task.getId(), evaluation.getSkipReason());
         }
-        BlendRatioDeviation snapshot = enforce(evaluation, submitted);
+        BlendRatioDeviation snapshot = enforce(evaluation, submitted,
+                revealRecipeShares(factoryId, task.getProductTypeId(), evaluation));
         if (snapshot == null) {
             return;
         }
@@ -307,6 +327,15 @@ public class BlendRatioCheck {
      * 不适用 ⇒ null; 跳过 / 容差内 ⇒ 原样返回快照 (容差内不留原因, 免得审计里出现没必要的原因)。
      */
     public static BlendRatioDeviation enforce(BlendRatioDeviation evaluation, BlendRatioDeviation submitted) {
+        return enforce(evaluation, submitted, true);
+    }
+
+    /**
+     * @param revealRecipeShares false = 工艺保密且调用者无完整查看权: 提示里不给配方份额和偏差百分点,
+     *                           只给料名、实际份额和偏高 / 偏低 (裁决本身不变)
+     */
+    public static BlendRatioDeviation enforce(BlendRatioDeviation evaluation, BlendRatioDeviation submitted,
+                                              boolean revealRecipeShares) {
         if (evaluation == null) {
             return null;
         }
@@ -320,9 +349,12 @@ public class BlendRatioCheck {
         String tol = plain(evaluation.getTolerancePp());
         String overText = evaluation.getLines().stream()
                 .filter(BlendRatioDeviation.Line::isOverTolerance)
-                .map(l -> "「" + l.getMaterialName() + "」配方 " + pct(l.getRecipeSharePercent())
-                        + " / 实际 " + pct(l.getActualSharePercent())
-                        + "（" + signed(l.getDeviationPp()) + " 个百分点）")
+                .map(l -> revealRecipeShares
+                        ? "「" + l.getMaterialName() + "」配方 " + pct(l.getRecipeSharePercent())
+                                + " / 实际 " + pct(l.getActualSharePercent())
+                                + "（" + signed(l.getDeviationPp()) + " 个百分点）"
+                        : "「" + l.getMaterialName() + "」实际 " + pct(l.getActualSharePercent())
+                                + (l.getDeviationPp() != null && l.getDeviationPp().signum() > 0 ? "，偏高" : "，偏低"))
                 .collect(Collectors.joining("；"));
         if (reason.isEmpty()) {
             throw new BusinessException(409, "主料配比偏差超过 ±" + tol + " 个百分点：" + overText + "，必须填写偏差原因")

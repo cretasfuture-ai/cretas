@@ -124,6 +124,11 @@ public class ProcessSecretRecipeGuard {
         return decision.permitted() && recorded;
     }
 
+    /** 本厂是否有任何保密产品 (缓存名单, 不写审计)。 */
+    public boolean factoryHasProtectedProducts(String factoryId) {
+        return !accessService.protectedProductTypeIds(factoryId).isEmpty();
+    }
+
     /** 按产品判定, 受保护且无权即 403 + 审计 (调用者取当前请求 / 受信异步作用域)。 */
     public void requireProduct(String factoryId, String productTypeId, ProcessSecretAction action,
                                String resourceRef) {

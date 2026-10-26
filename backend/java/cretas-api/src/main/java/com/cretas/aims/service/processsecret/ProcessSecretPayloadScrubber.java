@@ -64,6 +64,8 @@ public class ProcessSecretPayloadScrubber {
             "rawToFgYield", "rawToWipYield", "wipToFgYield",
             "inputSharePercent", "maxSharePercent", "subsequentPotRatio", "yieldPercent", "yieldMin", "yieldMax",
             "suggestedStandardQuantity", "currentRate", "suggestedRate", "conversionRateChange", "wastageRateChange",
+            // 汇合配比校验 (缺口 06) 的落库快照: 配方份额, 以及「实际 − 配方」的偏差
+            "recipeSharePercent", "deviationPp", "maxDeviationPp",
             // 换料影响: 配方成本差额 ÷ 单价差 = 该料的单位用量
             "oldRecipeMaterialCost", "newRecipeMaterialCost", "costDelta");
 
@@ -76,7 +78,7 @@ public class ProcessSecretPayloadScrubber {
             "yieldRate", "actualYieldRate", "stepYieldRate", "cumulativeYieldRate", "realYieldRate",
             "todayYieldRate", "weightedYieldRate", "asOfYieldRate", "netYieldRate", "goodOutputRate",
             "sourceConsumedRatio", "weightSharePct", "inputRatioPercent", "lossRate", "avgLossRate",
-            "lossPercentage", "scrapRate", "scrapLossRate", "overFeedRate");
+            "lossPercentage", "scrapRate", "scrapLossRate", "overFeedRate", "actualSharePercent");
 
     /** 名字含这些片段的字段一并按配比类处理 (统计里的平均转换率、损耗率等)。 */
     static final List<String> RATIO_SUFFIXES = List.of("conversionrate", "conversionratio", "wastagerate");

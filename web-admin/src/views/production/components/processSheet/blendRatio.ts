@@ -23,6 +23,8 @@ export interface BlendLineInput {
   quantity: number | null | undefined;
   unit: string | null | undefined;
   gramsPerUnit?: number | null;
+  /** 工艺保密: 这个端口的配方份额对当前账号隐藏 (后端仍按真实份额校验)。 */
+  shareHidden?: boolean;
 }
 
 export interface BlendLineView {
@@ -37,6 +39,8 @@ export interface BlendLineView {
 
 export type BlendEvaluation =
   | { status: 'NOT_APPLICABLE' }
+  /** 工艺保密: 份额看不到, 本页不能预先核对; 后端照常校验, 超差会要求原因 —— 原因框要一直给, 否则卡死 (防呆 Rule 5)。 */
+  | { status: 'SECRET' }
   | { status: 'SKIPPED'; reason: string }
   | { status: 'WITHIN' | 'OVER'; basis: string; tolerancePp: number; maxDeviationPp: number; lines: BlendLineView[] };
 
@@ -62,6 +66,11 @@ function toGrams(quantity: number, unit: string, gramsPerUnit: number | null | u
 }
 
 export function evaluateBlend(inputs: BlendLineInput[], tolerancePp: number = BLEND_TOLERANCE_PP): BlendEvaluation {
+  const fedAny = inputs.filter((l) => l.quantity != null && l.quantity > 0
+    && (l.shareHidden || (l.share != null && l.share > 0)));
+  if (fedAny.some((l) => l.shareHidden) && new Set(fedAny.map((l) => l.id)).size >= 2) {
+    return { status: 'SECRET' };
+  }
   const fed = inputs.filter((l) => l.share != null && l.share > 0 && l.quantity != null && l.quantity > 0);
   const portIds = [...new Set(fed.map((l) => l.id))];
   if (portIds.length < 2) return { status: 'NOT_APPLICABLE' };
@@ -115,6 +124,10 @@ export function blendReasonBlockedReason(
   reason: string | null | undefined,
   note: string | null | undefined,
 ): string | null {
+  if (evaluation.status === 'SECRET') {
+    // 本页核对不了, 不预先拦; 选了「其他」就要写明 (与后端同一条)
+    return reason === BLEND_REASON_OTHER && !(note && note.trim()) ? '配比偏差原因选了「其他」，请写明具体原因' : null;
+  }
   if (evaluation.status !== 'OVER') return null;
   const over = evaluation.lines.filter((l) => l.over).map((l) => `「${l.name}」偏差 ${formatPp(l.deviationPp)}`).join('、');
   if (!reason) return `主料配比超出 ±${evaluation.tolerancePp} 个百分点（${over}），请在「配比核对」里选择偏差原因`;

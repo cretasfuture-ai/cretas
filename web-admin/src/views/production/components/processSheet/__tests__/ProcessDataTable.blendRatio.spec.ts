@@ -84,6 +84,21 @@ describe('evaluateBlend (与后端 BlendRatioCheck 同口径)', () => {
     expect(skipped.status).toBe('SKIPPED');
     expect(blendReasonBlockedReason(skipped, '', '')).toBeNull();
   });
+
+  it('工艺保密: 份额被隐藏 → SECRET (不是「不适用」), 不预先拦, 选「其他」仍要写说明', () => {
+    const hidden = evaluateBlend([
+      { id: 'beef', name: '牛肉', share: null, shareHidden: true, quantity: 25, unit: 'kg' },
+      { id: 'pork', name: '猪肉', share: null, shareHidden: true, quantity: 75, unit: 'kg' },
+    ]);
+    expect(hidden.status).toBe('SECRET');
+    expect(blendReasonBlockedReason(hidden, '', '')).toBeNull();
+    expect(blendReasonBlockedReason(hidden, '其他', '')).toContain('写明');
+    // 对照: 没配份额 (不是隐藏) 仍是不适用
+    expect(evaluateBlend([
+      { id: 'beef', name: '牛肉', share: null, quantity: 25, unit: 'kg' },
+      { id: 'pork', name: '猪肉', share: null, quantity: 75, unit: 'kg' },
+    ]).status).toBe('NOT_APPLICABLE');
+  });
 });
 
 const outputPort: WorkflowPortDescriptor = {
@@ -108,13 +123,24 @@ function context(): WorkflowProcessDescriptor {
   };
 }
 
-function mountTable(viewMode: 'card' | 'grid' = 'card') {
+/** 工艺保密产品对无授权账号: 后端把端口份额置空并带标记。 */
+function secretContext(): WorkflowProcessDescriptor {
+  const base = context();
+  const hide = (port: WorkflowPortDescriptor) => ({
+    ...port,
+    inputShareRatio: null,
+    processSecret: { visibility: 'TOTALS_ONLY', message: '配比已隐藏', hiddenFields: ['inputShareRatio'] },
+  }) as WorkflowPortDescriptor;
+  return { ...base, inputs: (base.inputs ?? []).map(hide) };
+}
+
+function mountTable(viewMode: 'card' | 'grid' = 'card', workflowContext: WorkflowProcessDescriptor = context()) {
   return mount(ProcessDataTable, {
     props: {
       factoryId: 'F006', planId: 'PLAN-BLEND', processCode: 'xiuyou', processOrder: 1,
       processLabel: '绞肉搅拌', productTypeId: 'SEMI-MIX', inputUnit: 'kg', outputUnit: 'kg',
       isFirstProcess: true, initialRows: [], upstreamItems: [], ownInventoryItems: [],
-      viewMode, workflowContext: context(),
+      viewMode, workflowContext,
     },
     global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
   });
@@ -213,6 +239,27 @@ describe('ProcessDataTable 配比核对', () => {
       },
     });
     expect(panel.findAll('.stub-option').map((o) => o.text())).toEqual([...BLEND_REASONS]);
+  });
+
+  it('工艺保密: 不显示配方份额, 但原因框一直在 (后端超差 409 时不卡死), 选了原因请求带 blendRatio', async () => {
+    const wrapper = mountTable('card', secretContext());
+    await addRow(wrapper);
+    await fillInputs(wrapper, [25, 41.7, 33.3]);
+
+    const panel = wrapper.find('[data-testid="blend-ratio-panel"]');
+    expect(panel.exists()).toBe(true);
+    expect(panel.find('[data-testid="blend-ratio-secret"]').exists()).toBe(true);
+    expect(panel.findAll('[data-testid="blend-ratio-line"]')).toHaveLength(0);
+    expect(panel.text()).not.toContain('30%');
+    expect(wrapper.find('[data-testid="workflow-share-secret"]').exists()).toBe(true);
+    expect(panel.find('[data-testid="blend-ratio-reason-area"]').exists()).toBe(true);
+    expect(button(wrapper, '正式报工').attributes('disabled')).toBeUndefined();
+
+    panel.findComponent({ name: 'ElSelect' }).vm.$emit('update:model-value', '称重误差');
+    await flushPromises();
+    await button(wrapper, '正式报工').trigger('click');
+    await flushPromises();
+    expect((submitRow.mock.calls[0][2] as ProcessSheetRowRequest).blendRatio).toEqual({ reason: '称重误差' });
   });
 
   it('容差内: 显示核对表但不要原因, 正式报工不带 blendRatio', async () => {
