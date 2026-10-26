@@ -4238,13 +4238,16 @@ const scenario = {
       const domainOption = domainGroup.locator('input[value="库存"], input[value="生产"], input[value="销售"], input[value="采购"]').first();
       if (!await domainOption.count()) throw new Error('factory-chart-guide-domain has no usable domain radio');
       const categoryDomain = await domainOption.getAttribute('value');
-      await domainOption.check();
+      await domainOption.locator('..').click();
+      if (!await domainOption.isChecked()) throw new Error('business question did not become selected');
       const generate = page.getByTestId('factory-chart-guide-generate');
       if (await generate.count()) await generate.click();
       await page.waitForTimeout(100);
       const categoryVisible = await readVisibleCards(page, candidateMap);
       const categoryShot = await inspectCtx.screenshot('smartbi-guided-category');
-      await page.getByTestId('factory-chart-mode').locator('input[value="browse"]').check();
+      const browseRadio = page.getByTestId('factory-chart-mode').locator('input[value="browse"]');
+      await browseRadio.locator('..').click();
+      if (!await browseRadio.isChecked()) throw new Error('classified browse mode did not become selected');
       const familyRows = await page.getByTestId('factory-chart-family').count();
       const subject = page.getByTestId('factory-chart-guide-subject');
       let product = null; let baseline = null; let productShot = null;

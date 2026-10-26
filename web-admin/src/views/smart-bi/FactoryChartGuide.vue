@@ -78,7 +78,7 @@ function variant(group: AnalysisFamily, id: string) { emit('selection', replaceF
       </div>
       <div class="guide-field">
         <label for="factory-analysis-subject">{{ mode === 'guide' ? '3. 分析对象' : '分析对象' }}</label>
-        <el-select-v2 id="factory-analysis-subject" :model-value="subject || ''" :options="subjectChoices" filterable :loading="loading" data-testid="factory-chart-guide-subject" aria-label="分析产品" @update:model-value="emit('subject', $event || null)" />
+        <el-select-v2 id="factory-analysis-subject" :model-value="subject || ''" :options="subjectChoices" placeholder="全部产品 / 全厂范围" filterable :loading="loading" data-testid="factory-chart-guide-subject" aria-label="分析产品" @update:model-value="emit('subject', $event || null)" />
       </div>
     </div>
     <template v-if="mode === 'guide'">

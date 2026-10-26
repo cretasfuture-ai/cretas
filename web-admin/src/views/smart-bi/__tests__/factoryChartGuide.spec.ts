@@ -61,6 +61,7 @@ describe('mounted factory analysis guide', () => {
   it('retains the selected opaque product and emits actual product changes', async () => {
     const page = mount(FactoryChartGuide, { props: { ...props(), subject: 'gone-product' }, global: { plugins: [ElementPlus] } });
     const select = page.findComponent({ name: 'ElSelectV2' });
+    expect(select.props('placeholder')).toBe('全部产品 / 全厂范围');
     expect(select.props('modelValue')).toBe('gone-product');
     select.vm.$emit('update:modelValue', 'product-99');
     await nextTick();
