@@ -16,6 +16,15 @@ import MaterialBatchPicker, {
   MaterialBatchRef,
 } from '../../components/processing/MaterialBatchPicker';
 import WipBatchPicker, { WipSelection } from '../../components/processing/WipBatchPicker';
+import BlendRatioCard from '../../components/processing/BlendRatioCard';
+import {
+  evaluateBlend,
+  blendInputsFromRefs,
+  blendReasonBlockedReason,
+  blendRatioPayload,
+  type BlendMaterialOption,
+} from '../../utils/blendRatio';
+import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import {
   yieldReportApi,
   WorkProcessTask,
@@ -656,6 +665,23 @@ const YieldStepReportScreen: React.FC = () => {
   const [materialBatchValidation, setMaterialBatchValidation] = useState<MaterialBatchPickerValidation>({
     hasOverLimit: false,
   });
+  // 缺口 06 配比核对: 批次 → 原料类型/份额 (领料选择器加载后回传), 以及超差时选的原因
+  const [materialOptionsById, setMaterialOptionsById] = useState<ReadonlyMap<string, BlendMaterialOption>>(new Map());
+  const [blendReason, setBlendReason] = useState('');
+  const [blendNote, setBlendNote] = useState('');
+  const handleMaterialOptionsLoaded = useCallback((options: TaskMaterialBatchOption[]) => {
+    setMaterialOptionsById((prev) => {
+      const next = new Map(prev);
+      for (const option of options) {
+        next.set(option.id, {
+          materialTypeId: option.materialTypeId,
+          materialName: option.materialName,
+          inputShareRatio: option.inputShareRatio ?? null,
+        });
+      }
+      return next;
+    });
+  }, []);
   const [materialAdvisory, setMaterialAdvisory] = useState<ProductionPlanMaterialAdvisory | null>(null);
   const [materialAdvisoryError, setMaterialAdvisoryError] = useState<string | null>(null);
   const [materialAdvisoryLoading, setMaterialAdvisoryLoading] = useState(false);
@@ -1085,6 +1111,13 @@ const YieldStepReportScreen: React.FC = () => {
     () => materialBatchRefs.reduce((sum, ref) => sum + ref.quantity, 0),
     [materialBatchRefs],
   );
+  // 缺口 06: 多主料领料的配比核对 (与后端 BlendRatioCheck 同口径, 后端最终裁决)
+  const blendEvaluation = useMemo(
+    () => evaluateBlend(blendInputsFromRefs(materialBatchRefs, materialOptionsById, unit)),
+    [materialBatchRefs, materialOptionsById, unit],
+  );
+  const blendBlocked = blendReasonBlockedReason(blendEvaluation, blendReason, blendNote);
+  const blendPayload = blendRatioPayload(blendEvaluation, blendReason, blendNote);
   // ⛔ 容差未知 (后端还没答/取不到) → plannedMax 为 null, 即"这一刻没有软上限",
   //    不是"上限是计划量本身", 也不是回落到某个写死的倍数。
   const plannedMax =
@@ -1321,6 +1354,10 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请选择领用来源', '请先选择本道要领用的半成品批次, 或在原料批次中填写本次实际领用');
       return;
     }
+    if (blendBlocked) {
+      appAlert('请先核对配比', blendBlocked);
+      return;
+    }
 
     // SP3: 二次加工首道 — 必须先选半成品 WIP 并填领用量
     if (isFirstStep && isSecondaryProcessing) {
@@ -1365,6 +1402,7 @@ const YieldStepReportScreen: React.FC = () => {
               })),
             }
           : {}),
+        ...(blendPayload ? { blendRatio: blendPayload } : {}),
         ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
         ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
       };
@@ -1449,6 +1487,7 @@ const YieldStepReportScreen: React.FC = () => {
             })),
           }
         : {}),
+      ...(blendPayload ? { blendRatio: blendPayload } : {}),
       ...(!isFirstStep && effectiveSourceWipNo ? { sourceWipNo: effectiveSourceWipNo } : {}),
       ...(hasSourceWipInput && sourceWipInput != null ? { sourceWipQuantity: sourceWipInput } : {}),
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
@@ -1487,7 +1526,7 @@ const YieldStepReportScreen: React.FC = () => {
       isSecondaryProcessing, selectedWipItem, wipPickQty, wipPickOverLimit,
       materialBatchRefs, materialBatchValidation, effectiveSourceWipNo, hasSourceWipInput,
       inputOverLimit, inputMaxHint, inputMax, materialInputTotal, uploadedEvidenceUrls, batchId, refetchYield,
-      buildPhotoAnnotations]);
+      buildPhotoAnnotations, blendBlocked, blendPayload]);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
   const handleSubmitSegment = useCallback(async (forceDuplicate?: unknown) => {
@@ -1984,6 +2023,10 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请填写领料量', '各批次领用量之和必须大于 0');
       return;
     }
+    if (blendBlocked) {
+      appAlert('请先核对配比', blendBlocked);
+      return;
+    }
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       reportKind: 'INPUT',
@@ -1995,6 +2038,7 @@ const YieldStepReportScreen: React.FC = () => {
         quantity: r.quantity,
         unit: r.unit ?? unit,
       })),
+      ...(blendPayload ? { blendRatio: blendPayload } : {}),
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
       ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
     };
@@ -2027,7 +2071,7 @@ const YieldStepReportScreen: React.FC = () => {
       setSubmitting(false);
     }
   }, [currentTask, materialBatchRefs, evidenceUploading, unit, uploadedEvidenceUrls,
-      batchId, refetchYield, buildPhotoAnnotations]);
+      batchId, refetchYield, buildPhotoAnnotations, blendBlocked, blendPayload]);
 
   // 产出报工: 使用 submitReport(reportKind=OUTPUT)
   const handleSentinelOutputSubmit = useCallback(async () => {
@@ -2278,8 +2322,18 @@ const YieldStepReportScreen: React.FC = () => {
                 forceIndependentQuantity
                 value={materialBatchRefs}
                 onChange={setMaterialBatchRefs}
+                onOptionsLoaded={handleMaterialOptionsLoaded}
                 disabled={submitting}
                 required
+              />
+              {/* 缺口 06 配比核对 */}
+              <BlendRatioCard
+                evaluation={blendEvaluation}
+                reason={blendReason}
+                note={blendNote}
+                onReasonChange={setBlendReason}
+                onNoteChange={setBlendNote}
+                disabled={submitting}
               />
 
               {/* 合计领量只读显示 (多批次时) */}
@@ -2300,7 +2354,7 @@ const YieldStepReportScreen: React.FC = () => {
             variant="primary"
             size="large"
             onPress={alreadySubmitted ? returnOrRefreshAssignedTask : handleSentinelMaterialSubmit}
-            disabled={submitting || evidenceUploading || !taskUnitsReady || (!alreadySubmitted && materialBatchRefs.length === 0)}
+            disabled={submitting || evidenceUploading || !taskUnitsReady || (!alreadySubmitted && (materialBatchRefs.length === 0 || blendBlocked != null))}
             loading={submitting}
             style={styles.fullBtn}
             testID="sentinel-mat-submit-btn"
@@ -2805,10 +2859,20 @@ const YieldStepReportScreen: React.FC = () => {
                   value={materialBatchRefs}
                   onChange={setMaterialBatchRefs}
                   onValidationChange={setMaterialBatchValidation}
+                  onOptionsLoaded={handleMaterialOptionsLoaded}
                   singleBatchQty={isFirstStep ? inputQty : ''}
                   forceIndependentQuantity={!isFirstStep}
                   disabled={submitting}
                   required={isFirstStep && !isSecondaryProcessing}
+                />
+                {/* 缺口 06 配比核对 */}
+                <BlendRatioCard
+                  evaluation={blendEvaluation}
+                  reason={blendReason}
+                  note={blendNote}
+                  onReasonChange={setBlendReason}
+                  onNoteChange={setBlendNote}
+                  disabled={submitting}
                 />
                 </>
               ) : null}
@@ -2900,7 +2964,7 @@ const YieldStepReportScreen: React.FC = () => {
               variant="primary"
               size="large"
               onPress={handleSubmitInput}
-              disabled={submitting || !taskUnitsReady || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit || inputOverLimit}
+              disabled={submitting || !taskUnitsReady || submitBlockedNoWip || evidenceUploading || wipPickOverLimit || materialBatchValidation.hasOverLimit || inputOverLimit || blendBlocked != null}
               loading={submitting}
               style={styles.fullBtn}
               testID="yield-submit-input-btn"
