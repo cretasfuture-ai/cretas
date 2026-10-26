@@ -153,7 +153,7 @@ class ProcessSecretDataLayerExitsSecurityTest {
     }
 
     MockMvc mvc(Object controller) {
-        ProcessSecretPayloadScrubber scrubber = new ProcessSecretPayloadScrubber(access, recipes,
+        ProcessSecretPayloadScrubber scrubber = com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes,
                 mock(ProductionWorkflowInstanceRepository.class), mock(ProductionPlanRepository.class));
         return MockMvcBuilders.standaloneSetup(controller)
                 .addMappedInterceptors(new String[]{"/api/mobile/**"}, new ProcessSecretGuardInterceptor(access,

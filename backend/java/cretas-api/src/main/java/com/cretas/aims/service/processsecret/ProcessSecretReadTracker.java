@@ -12,7 +12,11 @@ import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.bom.BomYieldSuggestion;
+import com.cretas.aims.entity.bomdraft.BomRecipeDraft;
+import com.cretas.aims.entity.bomdraft.BomRecipeDraftItem;
+import com.cretas.aims.entity.bomdraft.BomRecipeDraftSubstitute;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.inventory.SalesOrderShortageReport;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
@@ -43,7 +47,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     static final String REQUEST_ATTRIBUTE = ProcessSecretReadTracker.class.getName() + ".reads";
 
     /** 读到的工艺内容来源。{@code kind} 决定 {@code id} 怎么换成产品。 */
-    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN }
+    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN, MATERIAL_REQUISITION, BOM_DRAFT }
 
     public record Read(Kind kind, String factoryId, String id) { }
 
@@ -115,6 +119,24 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             if (r.getProductionPlanId() == null || r.getProductionPlanId().isBlank()) return List.of();
             return List.of(new Read(Kind.PRODUCTION_PLAN, r.getFactoryId(), r.getProductionPlanId()));
         }
+        if (entity instanceof FactoryMaterialRequisitionItem item) {
+            // 明细可能脱离主单单独加载; 主单还是代理时不在 PostLoad 里初始化它, 只记主单 ID, 出口再解析
+            Object parent = item.getRequisition();
+            if (parent instanceof FactoryMaterialRequisition r && org.hibernate.Hibernate.isInitialized(r)) {
+                return readsOf(r);
+            }
+            if (parent instanceof org.hibernate.proxy.HibernateProxy proxy) {
+                Object id = proxy.getHibernateLazyInitializer().getInternalIdentifier();
+                return id == null ? List.of() : List.of(new Read(Kind.MATERIAL_REQUISITION, null, String.valueOf(id)));
+            }
+            return List.of();
+        }
+        if (entity instanceof BomRecipeDraft draft) {
+            boolean liveProduct = "LIVE_PRODUCT".equals(draft.getTargetProductRefType());
+            return liveProduct ? product(draft.getFactoryId(), draft.getTargetProductRefId()) : List.of();
+        }
+        if (entity instanceof BomRecipeDraftItem i) return draft(i.getFactoryId(), i.getDraftId());
+        if (entity instanceof BomRecipeDraftSubstitute s) return draft(s.getFactoryId(), s.getDraftId());
         if (entity instanceof SalesOrderShortageReport report) {
             // 缺料是落库的快照, 读快照时不会再读配方: 按快照里的产品打标
             if (report.getAvailable() == null) return List.of();
@@ -131,6 +153,11 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     private static List<Read> product(String factoryId, String productTypeId) {
         if (productTypeId == null || productTypeId.isBlank()) return List.of();
         return List.of(new Read(Kind.PRODUCT, factoryId, productTypeId));
+    }
+
+    private static List<Read> draft(String factoryId, String draftId) {
+        if (draftId == null || draftId.isBlank()) return List.of();
+        return List.of(new Read(Kind.BOM_DRAFT, factoryId, draftId));
     }
 
     private static List<Read> recipe(String factoryId, String recipeId) {

@@ -5,6 +5,8 @@ import com.cretas.aims.entity.processsecret.ProcessSecretAction;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bomdraft.BomRecipeDraftRepository;
+import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
 import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -60,6 +62,8 @@ public class ProcessSecretPayloadScrubber {
             "desiredStandardYieldMin", "desiredStandardYieldMax",
             "currentYieldRate", "previousYieldRate", "suggestedYieldRate", "expectedCurrentYieldRate",
             "rawToFgYield", "rawToWipYield", "wipToFgYield",
+            "inputSharePercent", "maxSharePercent", "subsequentPotRatio", "yieldPercent", "yieldMin", "yieldMax",
+            "suggestedStandardQuantity", "currentRate", "suggestedRate", "conversionRateChange", "wastageRateChange",
             // 换料影响: 配方成本差额 ÷ 单价差 = 该料的单位用量
             "oldRecipeMaterialCost", "newRecipeMaterialCost", "costDelta");
 
@@ -67,10 +71,15 @@ public class ProcessSecretPayloadScrubber {
     static final List<String> RATIO_SUFFIXES = List.of("conversionrate", "conversionratio", "wastagerate");
 
     /**
-     * {@code yieldRate} 在 BOM 明细里是标准出成率, 在报工 / 批次里是实测出成。
-     * 只有同一对象里同时出现配方明细字段时才当作标准值去掉。
+     * 名字本身有歧义的字段: 只有同一对象里出现了标志字段时才按配比类处理。
+     * {@code yieldRate} 在 BOM 明细里是标准出成率, 在报工 / 批次里是实测出成;
+     * {@code rate} / {@code wastage} / {@code avgChange} 在转换率变更趋势里就是转换率和损耗率。
      */
-    static final Set<String> BOM_LINE_MARKERS = Set.of("standardQuantity", "dosagePerKgG", "actualQuantity");
+    static final Map<String, Set<String>> CONTEXTUAL_RATIO_FIELDS = Map.of(
+            "yieldRate", Set.of("standardQuantity", "dosagePerKgG", "actualQuantity"),
+            "rate", Set.of("changeType"),
+            "wastage", Set.of("changeType"),
+            "avgChange", Set.of("currentRate"));
 
     /** 「本单总量」档保留、无权档 (平台 / 他厂) 去掉的总量字段。 */
     public static final Set<String> QUANTITY_FIELDS = Set.of(
@@ -85,15 +94,21 @@ public class ProcessSecretPayloadScrubber {
     private final BomRecipeRepository recipeRepository;
     private final ProductionWorkflowInstanceRepository instanceRepository;
     private final ProductionPlanRepository planRepository;
+    private final FactoryMaterialRequisitionRepository requisitionRepository;
+    private final BomRecipeDraftRepository draftRepository;
 
     public ProcessSecretPayloadScrubber(ProcessSecretAccessService accessService,
                                         BomRecipeRepository recipeRepository,
                                         ProductionWorkflowInstanceRepository instanceRepository,
-                                        ProductionPlanRepository planRepository) {
+                                        ProductionPlanRepository planRepository,
+                                        FactoryMaterialRequisitionRepository requisitionRepository,
+                                        BomRecipeDraftRepository draftRepository) {
         this.accessService = accessService;
         this.recipeRepository = recipeRepository;
         this.instanceRepository = instanceRepository;
         this.planRepository = planRepository;
+        this.requisitionRepository = requisitionRepository;
+        this.draftRepository = draftRepository;
     }
 
     /** 判定档位 (不写审计)。 */
@@ -186,8 +201,9 @@ public class ProcessSecretPayloadScrubber {
         }
 
         void resolveReads(Set<ProcessSecretReadTracker.Read> reads) {
-            for (ProcessSecretReadTracker.Read read : reads) {
-                if (protectedIn(read.factoryId()).isEmpty()) continue;
+            for (ProcessSecretReadTracker.Read original : reads) {
+                ProcessSecretReadTracker.Read read = withFactory(original);
+                if (read == null || protectedIn(read.factoryId()).isEmpty()) continue;
                 List<Key> keys = switch (read.kind()) {
                     case PRODUCT -> List.of(new Key(read.factoryId(), read.id()));
                     case RECIPE -> List.of(recipeKey(read.factoryId(), read.id())
@@ -195,11 +211,30 @@ public class ProcessSecretPayloadScrubber {
                     case WORKFLOW_INSTANCE -> List.of(instanceKey(read.factoryId(), read.id())
                             .orElse(new Key(read.factoryId(), null)));
                     case PRODUCTION_PLAN -> planKeys(read.factoryId(), read.id());
+                    case MATERIAL_REQUISITION -> requisitionRepository.findById(read.id())
+                            .filter(r -> read.factoryId().equals(r.getFactoryId()))
+                            .filter(r -> r.getProductionPlanId() != null && !r.getProductionPlanId().isBlank())
+                            .map(r -> planKeys(read.factoryId(), r.getProductionPlanId()))
+                            .orElse(List.of());
+                    case BOM_DRAFT -> draftRepository.findById(read.id())
+                            .filter(d -> read.factoryId().equals(d.getFactoryId()))
+                            .filter(d -> "LIVE_PRODUCT".equals(d.getTargetProductRefType()))
+                            .map(d -> List.of(new Key(read.factoryId(), d.getTargetProductRefId())))
+                            .orElse(List.of());
                 };
                 for (Key key : keys) {
                     if (isProtected(key) && level(key) != Level.FULL) restrictedReads.add(key);
                 }
             }
+        }
+
+        /** 领料明细在 PostLoad 时主单还是代理, 只知道主单 ID: 这里补上工厂 (查不到就丢弃, 不认他厂的单)。 */
+        ProcessSecretReadTracker.Read withFactory(ProcessSecretReadTracker.Read read) {
+            if (read.factoryId() != null) return read;
+            if (read.kind() != ProcessSecretReadTracker.Kind.MATERIAL_REQUISITION) return null;
+            return requisitionRepository.findById(read.id())
+                    .map(r -> new ProcessSecretReadTracker.Read(read.kind(), r.getFactoryId(), read.id()))
+                    .orElse(null);
         }
 
         /** 计划牵涉的全部产品; 计划查不到 (已删) 时当作「无法确认所属产品」。 */
@@ -288,11 +323,10 @@ public class ProcessSecretPayloadScrubber {
         void scrubObject(ObjectNode object, Key key) {
             List<String> ratioFields = new ArrayList<>();
             List<String> quantityFields = new ArrayList<>();
-            boolean bomLine = BOM_LINE_MARKERS.stream().anyMatch(object::has);
             for (Iterator<String> it = object.fieldNames(); it.hasNext(); ) {
                 String name = it.next();
                 if (object.get(name) == null || object.get(name).isNull()) continue;
-                if (isRatioField(name) || (bomLine && "yieldRate".equals(name))) ratioFields.add(name);
+                if (isRatioField(name) || isContextualRatioField(object, name)) ratioFields.add(name);
                 else if (QUANTITY_FIELDS.contains(name)) quantityFields.add(name);
             }
             if (ratioFields.isEmpty() && quantityFields.isEmpty()) return;
@@ -358,6 +392,11 @@ public class ProcessSecretPayloadScrubber {
             if (lower.endsWith(suffix)) return true;
         }
         return false;
+    }
+
+    static boolean isContextualRatioField(ObjectNode object, String name) {
+        Set<String> markers = CONTEXTUAL_RATIO_FIELDS.get(name);
+        return markers != null && markers.stream().anyMatch(object::has);
     }
 
     private static String text(ObjectNode node, String field) {

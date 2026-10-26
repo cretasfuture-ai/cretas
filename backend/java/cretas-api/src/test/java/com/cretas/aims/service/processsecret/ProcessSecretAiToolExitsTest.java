@@ -86,7 +86,7 @@ class ProcessSecretAiToolExitsTest {
         recipe.setProductTypeId(SECRET);
         when(recipes.findById("r1")).thenReturn(Optional.of(recipe));
         guard = new ProcessSecretRecipeGuard(recipes, access);
-        aspect = new ProcessSecretToolOutputAspect(new ProcessSecretPayloadScrubber(access, recipes,
+        aspect = new ProcessSecretToolOutputAspect(com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes,
                 mock(ProductionWorkflowInstanceRepository.class), mock(ProductionPlanRepository.class)), json);
     }
 

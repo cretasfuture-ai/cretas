@@ -65,7 +65,7 @@ class ProcessSecretPayloadScrubberTest {
         when(recipes.findById("r-secret")).thenReturn(Optional.of(recipe("r-secret", SECRET)));
         when(recipes.findById("r-plain")).thenReturn(Optional.of(recipe("r-plain", PLAIN)));
         plans = mock(ProductionPlanRepository.class);
-        scrubber = new ProcessSecretPayloadScrubber(access, recipes,
+        scrubber = com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes,
                 mock(ProductionWorkflowInstanceRepository.class), plans);
     }
 

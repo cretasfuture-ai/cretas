@@ -197,7 +197,7 @@ class ProcessSecretRereviewSecurityTest {
     @Test
     void requisitionJsonForProtectedPlanIsSummarisedAndPlainRequisitionIsNot() {
         ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
-        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, new com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
+        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
         FactoryMaterialRequisition secretReq = new FactoryMaterialRequisition();
         secretReq.setId("mr-1");
         secretReq.setFactoryId(F);
@@ -222,7 +222,7 @@ class ProcessSecretRereviewSecurityTest {
     @Test
     void unresolvableRecipeLinkedObjectIsRestrictedOnlyWhereTheFactoryUsesProtection() {
         ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
-        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, new com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
+        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
         BomVersion orphan = new BomVersion();
         orphan.setId("v-orphan");
         orphan.setFactoryId(F);
@@ -328,7 +328,7 @@ class ProcessSecretRereviewSecurityTest {
     @Test
     void requisitionWhosePlanWasDeletedIsRestrictedButManualOneIsNot() {
         ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule());
-        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, new com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
+        ProcessSecretResponseAdvice advice = new ProcessSecretResponseAdvice(access, recipes, plans, com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
         FactoryMaterialRequisition orphan = new FactoryMaterialRequisition();
         orphan.setId("mr-9");
         orphan.setFactoryId(F);
