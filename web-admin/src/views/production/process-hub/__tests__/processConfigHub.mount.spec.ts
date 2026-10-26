@@ -15,7 +15,7 @@ vi.mock('vue-router', () => ({
 }));
 
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'LIUSHANMEN', hasRole: () => false }),
+  useAuthStore: () => ({ factoryId: 'LIUSHANMEN', hasRole: () => false, hasMinLevel: () => false }),
 }));
 
 vi.mock('@/store/modules/permission', () => ({
