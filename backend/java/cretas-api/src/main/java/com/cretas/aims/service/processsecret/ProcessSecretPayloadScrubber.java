@@ -67,16 +67,25 @@ public class ProcessSecretPayloadScrubber {
             // 换料影响: 配方成本差额 ÷ 单价差 = 该料的单位用量
             "oldRecipeMaterialCost", "newRecipeMaterialCost", "costDelta");
 
+    /**
+     * 实测出成 / 损耗 / 超投 / 实际配比份额。跨批汇总会逼近标准出成率和配比, 单批又能由「本单投入 ÷ 产出」算出。
+     * Steve 2026-10-26 第三问要求「分权限显示」, 具体分档待定 ⇒ 先 fail-closed: 与配比类同档隐藏, 只留投入产出总量。
+     * 分档定了以后只改这一组 (以及 ProcessSecretDataLayerContractTest 的归类)。
+     */
+    public static final Set<String> ACTUAL_YIELD_FIELDS = Set.of(
+            "yieldRate", "actualYieldRate", "stepYieldRate", "cumulativeYieldRate", "realYieldRate",
+            "todayYieldRate", "weightedYieldRate", "asOfYieldRate", "netYieldRate", "goodOutputRate",
+            "sourceConsumedRatio", "weightSharePct", "inputRatioPercent", "lossRate", "avgLossRate",
+            "lossPercentage", "scrapRate", "scrapLossRate", "overFeedRate");
+
     /** 名字含这些片段的字段一并按配比类处理 (统计里的平均转换率、损耗率等)。 */
     static final List<String> RATIO_SUFFIXES = List.of("conversionrate", "conversionratio", "wastagerate");
 
     /**
      * 名字本身有歧义的字段: 只有同一对象里出现了标志字段时才按配比类处理。
-     * {@code yieldRate} 在 BOM 明细里是标准出成率, 在报工 / 批次里是实测出成;
      * {@code rate} / {@code wastage} / {@code avgChange} 在转换率变更趋势里就是转换率和损耗率。
      */
     static final Map<String, Set<String>> CONTEXTUAL_RATIO_FIELDS = Map.of(
-            "yieldRate", Set.of("standardQuantity", "dosagePerKgG", "actualQuantity"),
             "rate", Set.of("changeType"),
             "wastage", Set.of("changeType"),
             "avgChange", Set.of("currentRate"));
@@ -386,7 +395,7 @@ public class ProcessSecretPayloadScrubber {
     }
 
     static boolean isRatioField(String name) {
-        if (RATIO_FIELDS.contains(name)) return true;
+        if (RATIO_FIELDS.contains(name) || ACTUAL_YIELD_FIELDS.contains(name)) return true;
         String lower = name.toLowerCase(Locale.ROOT);
         for (String suffix : RATIO_SUFFIXES) {
             if (lower.endsWith(suffix)) return true;

@@ -190,15 +190,19 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
-    void yieldRateIsTreatedAsStandardOnlyOnRecipeLines() throws Exception {
-        ObjectNode actual = tree("{'productTypeId':'P17','yieldRate':0.91}");
-        assertThat(scrubber.scrub(actual, user(5), F, Set.of(), "GET /x")).isFalse();
-        assertThat(actual.get("yieldRate").asDouble()).isEqualTo(0.91);
+    void measuredYieldIsHiddenUntilTheTiersAreDecidedButInputAndOutputTotalsStay() throws Exception {
+        // Steve 第三问「分权限显示」分档未定: 实测出成率 fail-closed, 投入 / 产出总量照常
+        ObjectNode batch = tree("{'productTypeId':'P17','yieldRate':0.91,'cumulativeYieldRate':0.38,"
+                + "'inputQuantity':100,'outputQuantity':91}");
+        assertThat(scrubber.scrub(batch, user(5), F, Set.of(), "GET /x")).isTrue();
+        assertThat(batch.get("yieldRate").isNull()).isTrue();
+        assertThat(batch.get("cumulativeYieldRate").isNull()).isTrue();
+        assertThat(batch.get("inputQuantity").asInt()).isEqualTo(100);
+        assertThat(batch.get("outputQuantity").asInt()).isEqualTo(91);
 
-        ObjectNode bomLine = tree("{'productTypeId':'P17','standardQuantity':1.2,'yieldRate':0.91}");
-        assertThat(scrubber.scrub(bomLine, user(5), F, Set.of(), "GET /x")).isTrue();
-        assertThat(bomLine.get("yieldRate").isNull()).isTrue();
-        assertThat(bomLine.get("standardQuantity").isNull()).isTrue();
+        ObjectNode owner = tree("{'productTypeId':'P17','yieldRate':0.91}");
+        assertThat(scrubber.scrub(owner, user(OWNER), F, Set.of(), "GET /x")).isFalse();
+        assertThat(owner.get("yieldRate").asDouble()).isEqualTo(0.91);
     }
 
     @Test

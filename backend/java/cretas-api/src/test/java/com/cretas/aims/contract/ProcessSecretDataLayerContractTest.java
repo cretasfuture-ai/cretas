@@ -64,15 +64,11 @@ class ProcessSecretDataLayerContractTest {
             "(?i)ratio|rate|share|usage|dosage|perkg|perunit|yield|wastage|conversion|pct|percent");
 
     /**
-     * 实测结果 (某一批实际做出来的), 不是标准配方。按 Steve 待定的第三问暂按「本单结果, 照常显示」;
-     * 若改为隐藏, 把它们移进裁剪器的配比类词表。
+     * 实测的量或与出成无关的实测比例: 照常显示 (本单总量那一档)。
+     * 实测出成率 / 损耗率 / 超投率 / 实际配比份额在裁剪器的 ACTUAL_YIELD_FIELDS 里 (Steve 第三问分档前 fail-closed 隐藏)。
      */
     static final Set<String> ACTUAL_RESULT_FIELDS = Set.of(
-            "actualYieldRate", "stepYieldRate", "cumulativeYieldRate", "realYieldRate", "todayYieldRate",
-            "weightedYieldRate", "asOfYieldRate", "netYieldRate", "goodOutputRate", "sourceConsumedRatio",
-            "weightSharePct", "batchSharePct", "batchShare", "inputRatioPercent", "lossRate", "avgLossRate",
-            "lossPercentage", "scrapRate", "scrapLossRate", "reworkRate", "overFeedRate", "wastageQty",
-            "wastageQuantity", "auxiliaryUsage");
+            "batchSharePct", "batchShare", "reworkRate", "wastageQty", "wastageQuantity", "auxiliaryUsage");
 
     /**
      * 与配方无关的比例 / 率: 质量、人事薪资、准时率、系统监控、调度算法、成本与价格 (价格另受价格权限)、
@@ -184,8 +180,8 @@ class ProcessSecretDataLayerContractTest {
             String relative = MAIN.relativize(path).toString().replace('\\', '/');
             Matcher m = NUMERIC_FIELD.matcher(text);
             while (m.find()) {
-                // 有歧义的名字 (如实测的 yieldRate) 不算: 实体按无歧义的配比字段认
-                if (!isRatioField(m.group(1))) continue;
+                // 实体按配方字段认 (实测出成在报工 / 批次实体上, 那是生产结果, 不是配方的载体)
+                if (!isRecipeField(m.group(1))) continue;
                 if (!tracked.contains(relative) && !UNTRACKED_ENTITY_LEDGER.containsKey(relative)) {
                     missing.add(relative + " -> " + m.group(1));
                 }
@@ -240,6 +236,15 @@ class ProcessSecretDataLayerContractTest {
         Map<String, Set<String>> map = (Map<String, Set<String>>) ReflectionTestUtils.getField(
                 ProcessSecretPayloadScrubber.class, "CONTEXTUAL_RATIO_FIELDS");
         return map != null && map.containsKey(name);
+    }
+
+    @SuppressWarnings("unchecked")
+    static boolean isRecipeField(String name) {
+        if (ProcessSecretPayloadScrubber.RATIO_FIELDS.contains(name)) return true;
+        List<String> suffixes = (List<String>) ReflectionTestUtils.getField(ProcessSecretPayloadScrubber.class,
+                "RATIO_SUFFIXES");
+        String lower = name.toLowerCase(java.util.Locale.ROOT);
+        return suffixes != null && suffixes.stream().anyMatch(lower::endsWith);
     }
 
     static boolean isRatioField(String name) {

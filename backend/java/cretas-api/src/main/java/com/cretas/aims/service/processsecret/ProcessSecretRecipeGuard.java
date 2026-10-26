@@ -124,6 +124,13 @@ public class ProcessSecretRecipeGuard {
         return decision.permitted() && recorded;
     }
 
+    /** 按产品判定, 受保护且无权即 403 + 审计 (调用者取当前请求 / 受信异步作用域)。 */
+    public void requireProduct(String factoryId, String productTypeId, ProcessSecretAction action,
+                               String resourceRef) {
+        if (productTypeId == null) return;
+        accessService.require(currentActor(), factoryId, productTypeId, action, resourceRef);
+    }
+
     /**
      * 复制类操作 (组装 SKU、复制工序链、按已有产品建品): 源产品受保护时, 必须同时有完整查看和导出授权
      * —— 复制出来的新产品没有保密策略, 等于把整套工艺搬到不设防的地方 (与 copyToDraft 同一口径)。
