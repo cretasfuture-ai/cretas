@@ -116,6 +116,13 @@ public class ModuleSwitchService {
         List<String> touchedGates = new ArrayList<>();
         if (effective.touchesBackend()) {
             for (String gateCode : entry.gateCodes()) {
+                // 目录里的码不一定都在 module_schemas 里(production / finance / smartbi /
+                // operating_reports / logistics 线上就没有): 没有定义的码运行时恒为开放,
+                // 也写不进 factory_module_configs —— 写它只会抛 ModuleSchema not found,
+                // 让整次切换(含建厂正式激活)失败。与 applyTemplate / importConfig 同口径跳过。
+                if (!factoryConfigService.isModuleGateDefined(gateCode)) {
+                    continue;
+                }
                 gateToggle.toggle(gateCode);
                 touchedGates.add(gateCode);
             }
@@ -193,12 +200,16 @@ public class ModuleSwitchService {
                 .orElse(true);
     }
 
-    /** 后端门禁:任一门禁码开着就算开着(全关才算关)。无门禁码的模块恒为开。 */
+    /**
+     * 后端门禁:任一门禁码开着就算开着(全关才算关)。无门禁码的模块恒为开。
+     * 只看 module_schemas 里有定义的码 —— 未定义的码恒为开, 算进来会让关掉的模块永远显示「接口开放」。
+     */
     private boolean isBackendEnabled(String factoryId, InterviewModuleConfigCatalog.Entry e) {
-        if (e.gateCodes().isEmpty()) {
+        List<String> defined = e.gateCodes().stream().filter(factoryConfigService::isModuleGateDefined).toList();
+        if (defined.isEmpty()) {
             return true;
         }
-        for (String gateCode : e.gateCodes()) {
+        for (String gateCode : defined) {
             if (factoryConfigService.isModuleEnabled(factoryId, gateCode)) {
                 return true;
             }
