@@ -1354,10 +1354,8 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请选择领用来源', '请先选择本道要领用的半成品批次, 或在原料批次中填写本次实际领用');
       return;
     }
-    if (blendBlocked) {
-      appAlert('请先核对配比', blendBlocked);
-      return;
-    }
+    // 配比超差未选原因: 提交按钮已置灰, BlendRatioCard 里写明缺什么; 后端 BLEND_RATIO_REASON_REQUIRED 兜底。
+    // ⛔ 不在这里再弹窗 —— 按钮 disabled 时它永远到不了 (deadValidationGuards 棘轮)。
 
     // SP3: 二次加工首道 — 必须先选半成品 WIP 并填领用量
     if (isFirstStep && isSecondaryProcessing) {
@@ -2023,10 +2021,8 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('请填写领料量', '各批次领用量之和必须大于 0');
       return;
     }
-    if (blendBlocked) {
-      appAlert('请先核对配比', blendBlocked);
-      return;
-    }
+    // 配比超差未选原因: 提交按钮已置灰, BlendRatioCard 里写明缺什么; 后端 BLEND_RATIO_REASON_REQUIRED 兜底。
+    // ⛔ 不在这里再弹窗 —— 按钮 disabled 时它永远到不了 (deadValidationGuards 棘轮)。
     const req: YieldReportRequest = {
       workProcessTaskId: currentTask.id,
       reportKind: 'INPUT',
