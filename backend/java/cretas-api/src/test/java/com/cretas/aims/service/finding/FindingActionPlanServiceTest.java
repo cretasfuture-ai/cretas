@@ -67,6 +67,30 @@ class FindingActionPlanServiceTest {
     }
 
     @Test
+    @DisplayName("外发脱敏: 本厂工艺保密产品名不发给模型, 建议里换回真名; 查名失败就不发")
+    void secretProductNamesAreTokenisedAndLookupFailureSendsNothing() {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.protectedProductNames(FACTORY_ID)).thenReturn(java.util.Set.of("秘制酱牛肉"));
+        FindingActionPlanService svc = service();
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(new com.fasterxml.jackson.databind.ObjectMapper(), filter));
+        when(findingService.detectInline(FACTORY_ID, "inventory"))
+                .thenReturn(result(List.of(lowStock("秘制酱牛肉", 12, 50, 38)), List.of()));
+        ArgumentCaptor<String> facts = ArgumentCaptor.forClass(String.class);
+        when(dashScopeClient.chatLowTemp(anyString(), facts.capture())).thenReturn("· [保密产品A] 尽快补 38kg");
+
+        Map<String, Object> r = svc.generate(FACTORY_ID, "inventory");
+
+        assertFalse(facts.getValue().contains("秘制酱牛肉"), facts.getValue());
+        assertEquals("· 秘制酱牛肉 尽快补 38kg", r.get("plan"));
+
+        when(filter.protectedProductNames(FACTORY_ID)).thenThrow(new IllegalStateException("db down"));
+        assertThrows(IllegalStateException.class, () -> svc.generate(FACTORY_ID, "inventory"));
+        verify(dashScopeClient, times(1)).chatLowTemp(anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("UT-FAP-02: 建议里的数字都有据时正常返回")
     void returnsGroundedPlan() {
         when(findingService.detectInline(FACTORY_ID, "inventory"))

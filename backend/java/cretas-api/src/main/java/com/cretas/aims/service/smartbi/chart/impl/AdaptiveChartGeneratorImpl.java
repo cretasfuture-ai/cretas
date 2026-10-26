@@ -6,6 +6,8 @@ import com.cretas.aims.repository.smartbi.SmartBiExcelUploadRepository;
 import com.cretas.aims.service.smartbi.chart.*;
 import com.cretas.aims.service.smartbi.ChartTemplateService;
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +42,12 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
     private final SmartBiExcelUploadRepository uploadRepository;
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "smartbi-adaptive-chart";
 
     private static final String CHART_GENERATION_SYSTEM_PROMPT = """
         你是一个专业的 ECharts 图表配置专家。请根据提供的数据和需求生成 ECharts 配置。
@@ -172,17 +180,25 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
 
         try {
             // Build LLM prompt for ECharts generation
-            String prompt = buildChartGenerationPrompt(data, features, chartType, purpose);
+            String rawPrompt = buildChartGenerationPrompt(data, features, chartType, purpose);
+            // 样本行里的客户 / 人名 / 电话: 按列名从行里认出来换代号或不发; 图表配置解析后再换回真名
+            // 只有前 MAX_SAMPLE_ROWS 行进了提示词, 就只拿这几行认名字 (整份上传可能上万行)
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null,
+                    data.subList(0, Math.min(MAX_SAMPLE_ROWS, data.size())), Map.of(), List.of(rawPrompt));
+            if (redacted.refused()) {
+                return null;
+            }
 
             // Call LLM to generate ECharts config
-            String response = dashScopeClient.chatLowTemp(CHART_GENERATION_SYSTEM_PROMPT, prompt);
+            String response = dashScopeClient.chatLowTemp(CHART_GENERATION_SYSTEM_PROMPT, redacted.text(0));
 
             // Parse response to Map
             String cleanedJson = cleanJsonResponse(response);
-            Map<String, Object> echartsOption = objectMapper.readValue(
+            @SuppressWarnings("unchecked")
+            Map<String, Object> echartsOption = (Map<String, Object>) redacted.restoreDeep(objectMapper.readValue(
                     cleanedJson,
                     new TypeReference<Map<String, Object>>() {}
-            );
+            ));
 
             return AdaptiveChartResponse.GeneratedChart.builder()
                     .id("chart_" + UUID.randomUUID().toString().substring(0, 8))

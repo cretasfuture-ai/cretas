@@ -136,6 +136,8 @@ class DynamicSchedulerServiceTest {
         FactorySchedulerConfig config = config(51L, "F001", "daily", "report_tool");
         config.setParams(Map.of("limit", 10));
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
+        // report_tool is read-only; undeclared tools are refused for cron runs (AutonomousToolPolicy).
+        when(toolExecutor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         org.mockito.Mockito.doReturn(scheduledFuture).when(taskScheduler)
                 .schedule(any(Runnable.class), any(Trigger.class));
         when(toolExecutor.execute(any(ToolCall.class), any())).thenReturn("{\"success\":true,\"data\":[]}");
@@ -163,6 +165,8 @@ class DynamicSchedulerServiceTest {
     void validSchedule_businessFailure_isRecorded() throws Exception {
         FactorySchedulerConfig config = config(61L, "F001", "daily", "report_tool");
         when(toolRegistry.getExecutor("report_tool")).thenReturn(Optional.of(toolExecutor));
+        // report_tool is read-only; undeclared tools are refused for cron runs (AutonomousToolPolicy).
+        when(toolExecutor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
         when(toolExecutor.execute(any(ToolCall.class), any())).thenReturn(
                 "{\"success\":false,\"error\":\"access_token=secret password=abc\"}");
         when(schedulerRepo.findById(61L)).thenReturn(Optional.of(config));

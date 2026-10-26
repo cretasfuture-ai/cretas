@@ -158,6 +158,18 @@ public class DynamicSchedulerService {
 
     public int getActiveTaskCount() { return activeTasks.size(); }
 
+    /**
+     * Config-time gate for the scheduler PUT: the same rule {@link #validateConfig} applies before
+     * every run. An unregistered tool is left to the existing TOOL_NOT_FOUND path.
+     */
+    public void requireSchedulable(String toolName, Map<String, Object> params) {
+        if (toolName == null || toolName.isBlank()) return;
+        Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+        if (tool.isEmpty()) return;
+        String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), params);
+        if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
+    }
+
     private void executeTask(FactorySchedulerConfig config) {
         String validationError = validateConfig(config);
         if (validationError != null) {
@@ -273,10 +285,12 @@ public class DynamicSchedulerService {
         if (config.getToolOrMethod() == null || config.getToolOrMethod().isBlank()) {
             return "toolOrMethod is required";
         }
-        if (toolRegistry.getExecutor(config.getToolOrMethod()).isEmpty()) {
+        Optional<ToolExecutor> tool = toolRegistry.getExecutor(config.getToolOrMethod());
+        if (tool.isEmpty()) {
             return "tool not registered: " + config.getToolOrMethod();
         }
-        return null;
+        // Checked at schedule time and again before every run: there is no user behind a cron run.
+        return AutonomousToolPolicy.rejection(config.getToolOrMethod(), tool.get(), config.getParams());
     }
 
     private void markConfigStatus(FactorySchedulerConfig config, String status, String error) {
@@ -320,6 +334,7 @@ public class DynamicSchedulerService {
     }
 
     private String validationStatus(String validationError) {
+        if (AutonomousToolPolicy.isWriteDenial(validationError)) return AutonomousToolPolicy.WRITE_DENIED;
         return validationError.startsWith("tool not registered:")
                 ? "TOOL_NOT_FOUND" : "CONFIG_INVALID";
     }

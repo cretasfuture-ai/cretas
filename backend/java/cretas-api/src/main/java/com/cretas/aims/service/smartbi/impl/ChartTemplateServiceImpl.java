@@ -1,6 +1,8 @@
 package com.cretas.aims.service.smartbi.impl;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.dto.smartbi.DataFeatureResult;
 import com.cretas.aims.dto.smartbi.ExcelParseResponse;
 import com.cretas.aims.dto.smartbi.FieldMappingResult;
@@ -48,6 +50,12 @@ public class ChartTemplateServiceImpl implements ChartTemplateService {
     private final ObjectMapper objectMapper;
     private final PythonLLMClient pythonLLMClient;
     private final AnalysisPromptGenerator analysisPromptGenerator;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "smartbi-chart-analysis";
 
     /**
      * 模板缓存
@@ -540,11 +548,19 @@ public class ChartTemplateServiceImpl implements ChartTemplateService {
             log.debug("开始为模板 {} 生成 AI 分析，数据大小: {} 字节", templateCode,
                     data != null ? data.size() : 0);
 
+            // 聚合数据里的客户 / 供应商 / 人名先从结构里认出来, 提示词正文里一起换代号; 脱敏不了就不分析
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, factoryId, data,
+                    Map.of(), List.of(generatedPrompt.getSystemPrompt(), userPrompt));
+            if (redacted.refused()) {
+                chartConfig.put("aiAnalysis", "数据里有无法脱敏的内容，未发给 AI 分析");
+                return chartConfig;
+            }
+
             // 调用 LLM 生成分析
-            String analysis = pythonLLMClient.chat(
-                    generatedPrompt.getSystemPrompt(),
-                    userPrompt
-            );
+            String analysis = redacted.restore(pythonLLMClient.chat(
+                    redacted.text(0),
+                    redacted.text(1)
+            ));
 
             chartConfig.put("aiAnalysis", analysis);
             chartConfig.put("analysisType", generatedPrompt.getTemplateType().name());

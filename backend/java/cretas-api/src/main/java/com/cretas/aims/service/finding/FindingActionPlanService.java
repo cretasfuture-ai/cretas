@@ -2,6 +2,8 @@ package com.cretas.aims.service.finding;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.grounding.GroundedNumberValidator;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -70,6 +72,12 @@ public class FindingActionPlanService {
     /** 只用它的 {@code renderDigestLines} —— 纯模板零 LLM，见 {@link #renderFacts}。 */
     private final FindingTextRenderer findingTextRenderer;
 
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "finding-action-plan";
+
     /**
      * @param factoryId 租户
      * @param domain    发现层领域（{@code inventory} / {@code restaurant}）
@@ -101,8 +109,13 @@ public class FindingActionPlanService {
         }
 
         List<Object> facts = buildFacts(findings);
-        String plan = dashScopeClient.chatLowTemp(
+        // 事实里的物料 / 菜品名放行, 本厂工艺保密产品名、号码、公司名 / 人名换代号; 脱敏不了不出建议
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, factoryId,
                 systemPrompt(domain), renderFacts(findingResult));
+        if (redacted.refused()) {
+            throw new IllegalStateException("异常事实里有无法脱敏的内容, 未发给 AI 生成行动建议");
+        }
+        String plan = redacted.restore(dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1)));
 
         if (plan == null || plan.isBlank()) {
             throw new IllegalStateException("模型未产出行动建议, 拒绝返回空方案");

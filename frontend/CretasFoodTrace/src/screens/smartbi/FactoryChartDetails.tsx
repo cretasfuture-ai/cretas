@@ -123,7 +123,7 @@ export default function FactoryChartDetails({ route }: Props) {
   );
 
   return (
-    <ScreenWrapper testID="factory-chart-details-screen">
+    <ScreenWrapper testID="factory-chart-details-screen" statusBarTranslucent={false}>
       <View style={styles.header}>
         <Text variant="headlineSmall">{recommendation.title} · 原始明细</Text>
         <Text style={styles.muted}>来源：{contextKey.source} · 周期：{periodLabel}{detailContext?.drilldown !== false && point ? ` · 点位：${point.name}` : ''}</Text>

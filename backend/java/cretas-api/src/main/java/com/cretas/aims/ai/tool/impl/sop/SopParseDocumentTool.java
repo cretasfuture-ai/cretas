@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool.impl.sop;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
@@ -56,6 +58,12 @@ public class SopParseDocumentTool extends AbstractBusinessTool {
     @Autowired
     @Lazy
     private DashScopeConfig dashScopeConfig;
+
+    /** 文档正文发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "sop-parse";
 
     // 中文字符范围的正则表达式
     private static final Pattern CHINESE_CHAR_PATTERN = Pattern.compile("[\\u4e00-\\u9fff]");
@@ -132,7 +140,7 @@ public class SopParseDocumentTool extends AbstractBusinessTool {
                 if (forceOcr) {
                     result = parsePdfWithVision(fileUrl, "用户请求强制使用OCR");
                 } else {
-                    result = parsePdfDocument(fileUrl);
+                    result = parsePdfDocument(fileUrl, factoryId);
                 }
                 break;
             case "EXCEL":
@@ -205,7 +213,7 @@ public class SopParseDocumentTool extends AbstractBusinessTool {
      * 3. 检测中文提取质量，必要时使用Vision AI作为备选
      * 4. 发送文本给AI进行结构化解析
      */
-    private SopParseResult parsePdfDocument(String fileUrl) {
+    private SopParseResult parsePdfDocument(String fileUrl, String factoryId) {
         // 1. 下载并提取PDF文本
         String pdfText;
         try {
@@ -271,9 +279,17 @@ public class SopParseDocumentTool extends AbstractBusinessTool {
         String truncatedText = pdfText.length() > 8000 ? pdfText.substring(0, 8000) + "\n...(内容已截断)" : pdfText;
         String userPrompt = "请解析以下SOP文档内容:\n\n" + truncatedText;
 
+        // 文档里的公司名、负责人、电话、本厂工艺保密产品名换代号再发; 脱敏不了就只返回原文、不做结构化
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, factoryId, userPrompt);
+        if (redacted.refused()) {
+            SopParseResult result = createEmptyResult(fileUrl, "文档里有无法脱敏的内容, 未发给 AI 解析");
+            result.setContent(pdfText);
+            result.setParseMethod("PDFBox文本提取(未发给AI)");
+            return result;
+        }
         try {
-            String response = dashScopeClient.chat(systemPrompt, userPrompt);
-            SopParseResult result = parseAiResponse(response, fileUrl);
+            String response = dashScopeClient.chat(systemPrompt, redacted.text(0));
+            SopParseResult result = parseAiResponse(redacted.restoreJsonText(response), fileUrl);
             // 保存原始PDF文本
             result.setContent(pdfText);
             result.setParseMethod("PDFBox文本提取");
@@ -431,7 +447,8 @@ public class SopParseDocumentTool extends AbstractBusinessTool {
      * 从URL下载PDF并提取文本
      * 针对中文PDF进行了优化配置
      */
-    private String extractPdfText(String fileUrl) throws Exception {
+    /** 包可见: 单测用 spy 替掉下载, 走真实入口验证发给模型的内容。 */
+    String extractPdfText(String fileUrl) throws Exception {
         log.info("开始下载PDF: {}", fileUrl);
 
         try (InputStream is = new URL(fileUrl).openStream();
