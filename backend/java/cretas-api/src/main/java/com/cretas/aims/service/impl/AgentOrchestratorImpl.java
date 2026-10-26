@@ -42,6 +42,13 @@ public class AgentOrchestratorImpl implements AgentOrchestrator {
 
     static final String PROVENANCE_SITE = "agent-orchestrator";
 
+    /** 用户问题发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "analysis-agent";
+
     // 最大重试轮次
     private static final int MAX_RETRY_ROUNDS = 3;
 
@@ -224,7 +231,14 @@ public class AgentOrchestratorImpl implements AgentOrchestrator {
                             "审核意见（请在分析中改进这些问题）:\n" + String.join("\n", message.getReviewComments())
             );
 
-            String analysis = dashScopeClient.chat(systemPrompt, userPrompt);
+            // 用户问题里的号码 / 人名 / 公司名 / 保密产品名换代号再发, 分析换回真名后再过数字出处闸
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE,
+                    context.getFactoryId(), systemPrompt, userPrompt);
+            if (redacted.refused()) {
+                message.setErrorMessage("分析失败: 问题里有无法脱敏的内容, 未发给模型");
+                return message;
+            }
+            String analysis = redacted.restore(dashScopeClient.chat(redacted.text(0), redacted.text(1)));
             message.setAnalysisResult(numberProvenance.enforceText(PROVENANCE_SITE, analysis, userPrompt));
 
             log.debug("分析 Agent 完成: resultLength={}", analysis != null ? analysis.length() : 0);

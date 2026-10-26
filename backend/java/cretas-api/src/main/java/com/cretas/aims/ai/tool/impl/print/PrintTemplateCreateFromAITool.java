@@ -44,6 +44,11 @@ public class PrintTemplateCreateFromAITool extends AbstractBusinessTool {
     @Autowired
     private DashScopeClient dashScopeClient;
 
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
     @Autowired
     private FormTemplateService formTemplateService;
 
@@ -196,7 +201,13 @@ public class PrintTemplateCreateFromAITool extends AbstractBusinessTool {
         String systemPrompt = buildSystemPrompt(entityType, entityLabel);
 
         // 2. Call LLM (low-temp for deterministic JSON)
-        String llmRaw = dashScopeClient.chatLowTemp(systemPrompt, designPrompt);
+        // 用户描述里的号码 / 人名 / 公司名 / 保密产品名换代号再发, 生成的配置里换回 (JSON 安全); 脱敏不了就不生成
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(getToolName(), factoryId, systemPrompt, designPrompt);
+        if (redacted.refused()) {
+            throw new com.cretas.aims.exception.BusinessException("描述里有无法脱敏的内容, 未发给 AI, 请换个说法");
+        }
+        String llmRaw = redacted.restoreJsonText(dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1)));
 
         // 3. Parse + validate the generated schema
         Map<String, Object> printSchema;

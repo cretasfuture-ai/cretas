@@ -88,6 +88,15 @@ public class SseStreamingService {
     private final ToolDispatchService toolDispatchService;
     private final DynamicToolSelectionService dynamicToolSelectionService;
     private final DashScopeClient dashScopeClient;
+
+    /** 流式闲聊 / 咨询发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply-stream";
+    static final String MINI_EGRESS_SITE = "f006-boss-question";
+    static final String EGRESS_REFUSED_REPLY = "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
     private final DashScopeConfig dashScopeConfig;
 
     @Autowired(required = false)
@@ -1847,9 +1856,20 @@ public class SseStreamingService {
         String model = useThinking ? dashScopeConfig.getModel() : dashScopeConfig.getFastModel();
         int maxTokens = useThinking ? 2000 : 500;
 
+        // 原话里的号码 / 人名 / 公司名 / 保密产品名换代号再发; 流式 token 攒到代号闭合再换回; 脱敏不了就不发
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId, systemPrompt, userInput);
+        if (redacted.refused()) {
+            streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                    .intentRecognized(false).status("COMPLETED")
+                    .message(EGRESS_REFUSED_REPLY).formattedText(EGRESS_REFUSED_REPLY)
+                    .executedAt(LocalDateTime.now()).build(), startTime);
+            return;
+        }
+
         ChatCompletionRequest aiRequest = ChatCompletionRequest.builder()
                 .model(model)
-                .messages(List.of(ChatMessage.system(systemPrompt), ChatMessage.user(userInput)))
+                .messages(List.of(ChatMessage.system(redacted.text(0)), ChatMessage.user(redacted.text(1))))
                 .temperature(0.7)
                 .maxTokens(maxTokens)
                 .extraBody(ChatCompletionRequest.ExtraBody.builder()
@@ -1861,18 +1881,21 @@ public class SseStreamingService {
                 "thinking", useThinking,
                 "questionType", questionType.name()));
 
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
+            try {
+                emitter.send(SseEmitter.event().name("token").data(token));
+            } catch (Exception e) {
+                log.debug("Client disconnected during stream token");
+            }
+        });
         try {
             dashScopeClient.chatCompletionStream(aiRequest,
-                token -> {
-                    try {
-                        emitter.send(SseEmitter.event().name("token").data(token));
-                    } catch (Exception e) {
-                        log.debug("Client disconnected during stream token");
-                    }
-                },
+                restorer,
                 response -> {
                     try {
-                        String fullContent = response.getContent() != null ? response.getContent() : "";
+                        restorer.flush();
+                        String fullContent = response.getContent() != null
+                                ? redacted.restore(response.getContent()) : "";
                         Integer tokensUsed = response.getUsage() != null
                                 ? response.getUsage().getTotalTokens() : null;
                         String finishReason = response.getChoices() != null && !response.getChoices().isEmpty()
@@ -1928,8 +1951,25 @@ public class SseStreamingService {
                                         String userRole, String sessionId, String userInput,
                                         boolean thinking, long startTime,
                                         com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation cancellation) throws IOException {
+        // 问题里的号码 / 人名 / 公司名 / 保密产品名换代号再发 (Python 侧取数自己的; 这里只管原话); 脱敏不了就不发
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(MINI_EGRESS_SITE, factoryId, userInput);
+        if (redacted.refused()) {
+            streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                    .intentRecognized(false).status("COMPLETED").sessionId(sessionId)
+                    .message(EGRESS_REFUSED_REPLY).formattedText(EGRESS_REFUSED_REPLY)
+                    .executedAt(LocalDateTime.now()).build(), startTime);
+            return;
+        }
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
+            try {
+                sendSseEvent(emitter, "token", token);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
         try {
-            var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, userInput, thinking,
+            var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
                         try {
                             sendSseEvent(emitter, "meta", Map.of(
@@ -1939,13 +1979,9 @@ public class SseStreamingService {
                         } catch (IOException e) {
                             throw new java.io.UncheckedIOException(e);
                         }
-                    }, token -> {
-                        try {
-                            sendSseEvent(emitter, "token", token);
-                        } catch (IOException e) {
-                            throw new java.io.UncheckedIOException(e);
-                        }
-                    }, cancellation);
+                    }, restorer, cancellation);
+            restorer.flush();
+            String content = redacted.restore(answer.content());
             Map<String, Object> source = new LinkedHashMap<>();
             source.put("provider", answer.provider());
             source.put("model", answer.model());
@@ -1954,12 +1990,12 @@ public class SseStreamingService {
             source.put("usage", answer.usage());
             sendSseEvent(emitter, "result", IntentExecuteResponse.builder()
                     .intentRecognized(false).status("COMPLETED").sessionId(sessionId)
-                    .message(answer.content()).formattedText(answer.content())
+                    .message(content).formattedText(content)
                     .resultData(source).executedAt(LocalDateTime.now()).build());
             Map<String, Object> complete = new LinkedHashMap<>(source);
             complete.put("status", "SUCCESS");
             complete.put("sessionId", sessionId);
-            complete.put("fullContent", answer.content());
+            complete.put("fullContent", content);
             complete.put("tokensUsed", answer.usage() == null ? null : answer.usage().totalTokens());
             complete.put("finishReason", answer.finishReason());
             complete.put("totalLatencyMs", System.currentTimeMillis() - startTime);

@@ -21,8 +21,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -69,6 +71,13 @@ public class AIIntentServiceImpl implements AIIntentService {
      */
     @Autowired(required = false)
     private PythonAiMatcherClient pythonClient;
+
+    /** 发给 Python 识别 (可能回落到大模型) 的原话与历史先脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String PYTHON_MATCH_EGRESS_SITE = "intent-python-match";
 
     /**
      * Phase 2B-α (T20): optional in-process LRU cache for Python results.
@@ -404,14 +413,37 @@ public class AIIntentServiceImpl implements AIIntentService {
             //    but defensive null-check + try/catch covers both the configured-fallback
             //    and any unexpected synchronous throw.
             try {
+                // Python 侧识别可能回落到大模型: 原话与历史 (里面有此前回答换回的真名) 先脱敏;
+                // 脱敏不了抛错, 由下面的 catch 回落到本机管线 —— 不发
+                List<String> egressTexts = new ArrayList<>();
+                egressTexts.add(userInput);
+                for (Map<String, String> turn : turns) {
+                    egressTexts.add(turn == null ? null : turn.get("content"));
+                }
+                com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                        llmEgressGuard.texts(PYTHON_MATCH_EGRESS_SITE, factoryId, Map.of(), egressTexts);
+                if (redacted.refused()) {
+                    throw new IllegalStateException("intent query could not be redacted, not sending");
+                }
+                List<Map<String, String>> sentTurns = new ArrayList<>();
+                for (int i = 0; i < turns.size(); i++) {
+                    if (turns.get(i) == null) {
+                        continue;
+                    }
+                    Map<String, String> copy = new LinkedHashMap<>(turns.get(i));
+                    if (copy.containsKey("content")) {
+                        copy.put("content", redacted.text(i + 1));
+                    }
+                    sentTurns.add(copy);
+                }
                 PythonIntentMatchRequest req = PythonIntentMatchRequest.builder()
-                        .query(userInput)
+                        .query(redacted.text(0))
                         .factoryId(factoryId)
                         .userId(String.valueOf(userId))   // 上面的闸保证非空; Python 侧必填
                         .username(null)
                         .role(role)
                         .businessType(businessType)
-                        .history(turns)
+                        .history(sentTurns)
                         // spec §8.2 洞②接线: 这两个字段自 Phase 2B-α 起就存在且有 javadoc
                         // ("READ=剔除写意图候选 | OPERATE=按 userPermissions 剔除无权限写意图"),
                         // 但在此之前全仓库没有任何一处给它们赋过值 —— Python 侧目录过滤一直是死的。
@@ -425,6 +457,13 @@ public class AIIntentServiceImpl implements AIIntentService {
                         .build();
 
                 IntentMatchResult pyResult = pythonClient.match(req);
+                if (pyResult != null) {
+                    // 原话用回真值; 澄清问题 / 对话回复 / 目标实体里的代号换回
+                    pyResult.setUserInput(userInput);
+                    pyResult.setClarificationQuestion(redacted.restore(pyResult.getClarificationQuestion()));
+                    pyResult.setConversationMessage(redacted.restore(pyResult.getConversationMessage()));
+                    pyResult.setTargetEntity(redacted.restore(pyResult.getTargetEntity()));
+                }
                 if (pyResult != null && pyResult.hasMatch()) {
                     try {
                         if (!contextual) {

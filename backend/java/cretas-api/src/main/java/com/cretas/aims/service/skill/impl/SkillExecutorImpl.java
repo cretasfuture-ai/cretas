@@ -55,6 +55,13 @@ public class SkillExecutorImpl implements SkillExecutor {
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
 
+    /** Skill 提示词 (含已抽参数) 与原话发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "skill-executor";
+
     // W0 write-guard (intent-w0) — SITE D. Skill orchestration calls ToolExecutor.execute() directly
     // (executeSingleTool), bypassing ToolDispatchService (Site B). Field-injected (not in the Lombok
     // @RequiredArgsConstructor) so existing direct-construction tests stay unaffected; tests set it via
@@ -168,7 +175,7 @@ public class SkillExecutorImpl implements SkillExecutor {
             // 5. Call LLM to get parameters and execution plan
             Map<String, Object> params;
             try {
-                String llmResponse = callLlm(prompt, context.getUserQuery());
+                String llmResponse = callLlm(prompt, context.getUserQuery(), context.getFactoryId());
                 log.debug("LLM response for skill {}: length={}", skill.getName(),
                         llmResponse != null ? llmResponse.length() : 0);
                 // 6. Parse LLM response and extract parameters
@@ -562,9 +569,15 @@ public class SkillExecutorImpl implements SkillExecutor {
     /**
      * Call LLM
      */
-    private String callLlm(String prompt, String userQuery) {
+    private String callLlm(String prompt, String userQuery, String factoryId) {
+        // 脱敏不了就当 LLM 不可用 (调用点降级为确定性执行), 不发; 抽出的参数换回真值
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(EGRESS_SITE, factoryId, prompt, userQuery);
+        if (redacted.refused()) {
+            throw new IllegalStateException("skill prompt could not be redacted, not sending");
+        }
         try {
-            return dashScopeClient.chat(prompt, userQuery);
+            return redacted.restoreJsonText(dashScopeClient.chat(redacted.text(0), redacted.text(1)));
         } catch (Exception e) {
             log.error("LLM call failed: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to call LLM: " + e.getMessage(), e);

@@ -32,6 +32,11 @@ public class PageStyleUpdateTool extends AbstractBusinessTool {
     @Autowired
     private DashScopeClient dashScopeClient;
 
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
     private static final String DEFAULT_PAGE_ID = "home_page";
 
     @Override
@@ -88,7 +93,13 @@ public class PageStyleUpdateTool extends AbstractBusinessTool {
 
         // 2. 调用LLM解析样式更新指令
         String systemPrompt = buildStyleUpdatePrompt();
-        String llmResponse = dashScopeClient.chatLowTemp(systemPrompt, userInput);
+        // 用户描述里的号码 / 人名 / 公司名 / 保密产品名换代号再发, 生成的配置里换回 (JSON 安全); 脱敏不了就不生成
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(getToolName(), factoryId, systemPrompt, userInput);
+        if (redacted.refused()) {
+            throw new com.cretas.aims.exception.BusinessException("描述里有无法脱敏的内容, 未发给 AI, 请换个说法");
+        }
+        String llmResponse = redacted.restoreJsonText(dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1)));
 
         // 3. 解析LLM响应
         String cleaned = llmResponse.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
