@@ -53,6 +53,7 @@ old_file "$W/pre-tenant-purge-$OLD/cretas.dump" w                        # due
 new_file "$W/f006-backup-$NEW/f.dump" w                                  # keep
 old_file "$W/postgresql/cretas_db_${OLD}_030001.sql.gz" p                # ignored
 old_file "$W/panel/p.zip" p                                              # ignored
+old_file "$B/release-signing.pem" key                                    # unknown-type: 允许名单外的文件不删
 
 for db in "$MAIN" "$SB" "$CLONE"; do q postgres "CREATE DATABASE $db" >/dev/null || fail "createdb $db"; done
 q "$MAIN" "
@@ -91,6 +92,7 @@ grep -q "tenant_purge_68|20200807\|tenant_purge_68|20260807" "$plan" || fail "te
 grep -q "SCHEMA|$MAIN|tenant_purge_68|20260807|1|5|" "$plan" || fail "tenant_purge_68 表数/行数不对: $(grep tenant_purge_68 "$plan")"
 ! grep -qE "\|(backup.log|analytics|users|postgresql|panel)\||_030001|还原手册|逐表行数" "$plan" || fail "清单里出现了不该管的项"
 [ -f "$B/cretas_prod_db_pre_fix_20200101.dump" ] && [ "$(exists_schema "$MAIN" tenant_purge_68)" = 1 ] || fail "--plan 删了东西"
+grep -q "FILE|$B|release-signing.pem|?|-|-|0|unknown-type" "$plan" || fail "允许名单外的文件没被标成 unknown-type"
 ok "plan 恰好列出 8 个到期项, 每日备份 / 说明文件 / 普通表 / 普通 schema 不在其中"
 
 echo "2) --expect 清单与当场对不上 ⇒ 一项都不删"
@@ -117,7 +119,7 @@ tail -1 <<<"$out" | grep -q "APPLIED deleted=8 rc=0" || fail "判决行: $(tail 
 # 阴性对照
 for f in "$B/cretas_prod_db_pre_fix_recent.dump" "$B/cretas_prod_db_${OLD}_030001.sql.gz" "$B/backup.log" \
          "$B/tenant_purge_68-还原手册-20200101.md" "$B/tenant_purge_68-逐表行数-20200101.csv" "$B/task4-x/a.json" \
-         "$W/f006-backup-$NEW/f.dump" "$W/postgresql/cretas_db_${OLD}_030001.sql.gz" "$W/panel/p.zip"; do
+         "$W/f006-backup-$NEW/f.dump" "$W/postgresql/cretas_db_${OLD}_030001.sql.gz" "$W/panel/p.zip"          "$B/release-signing.pem"; do
     [ -f "$f" ] || fail "阴性对照: $f 被删了"
 done
 [ "$(q "$MAIN" "SELECT count(*) FROM public.users")" = 7 ] && [ "$(q "$MAIN" "SELECT count(*) FROM analytics.t")" = 1 ] \
@@ -150,5 +152,13 @@ out=$(run --apply --auto); rc=$?
 [ "$(exists_table "$MAIN" "bak_bom_recipes_${OLD}")" = 0 ] || fail "auto 没删新到期表"
 grep -q "TABLE|$MAIN|bak_bom_recipes_${OLD}|$OLD|1|1|" "$(latest "$OUT"/*-plan.txt)" || fail "auto 没先落清单"
 ok "auto 删了新到期表, 清单先落盘"
+
+echo "7) public 里有视图依赖副本 schema ⇒ 这一项不删 (不 CASCADE), rc=1, 副本与视图都还在"
+q "$MAIN" "CREATE SCHEMA bak_dep_${OLD}; CREATE TABLE bak_dep_${OLD}.t AS SELECT 1 AS id;
+           CREATE VIEW public.v_uses_copy AS SELECT id FROM bak_dep_${OLD}.t;" >/dev/null
+out=$(run --apply --auto); rc=$?
+[ "$rc" -eq 1 ] || fail "dependent rc=$rc: $out"
+[ "$(exists_schema "$MAIN" "bak_dep_${OLD}")" = 1 ] && [ "$(q "$MAIN" "SELECT count(*) FROM bak_dep_${OLD}.t")" = 1 ]     && [ "$(q "$MAIN" "SELECT count(*) FROM public.v_uses_copy")" = 1 ] || fail "依赖它的视图或副本被删了"
+ok "有外部依赖的副本不删, 视图完好"
 
 echo "PASS backup-copy-retention ($pass checks)"

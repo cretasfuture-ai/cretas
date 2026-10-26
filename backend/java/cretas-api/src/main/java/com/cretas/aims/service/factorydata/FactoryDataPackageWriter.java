@@ -191,6 +191,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
 
     private Entry writeEntry(String path, Body body, boolean bom) throws IOException, SQLException {
         MessageDigest sha = sha256();
+        path = safeEntryPath(path);
         zip.putNextEntry(new ZipEntry(path));
         CountingStream counting = new CountingStream(new NonClosing(zip));
         DigestOutputStream out = new DigestOutputStream(counting, sha);
@@ -206,8 +207,8 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     static String csv(String value) {
         boolean quote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
                 || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
-        // 以 = + - @ 开头的值在 Excel 里会被当公式执行 (CSV 注入): 前置单引号
-        if (!value.isEmpty() && "=+-@".indexOf(value.charAt(0)) >= 0 && !isNumber(value)) {
+        // 以 = + - @ 制表符 回车 开头的值在 Excel 里可能被当公式执行 (CSV 注入): 前置单引号
+        if (!value.isEmpty() && "=+-@\t\r".indexOf(value.charAt(0)) >= 0 && !isNumber(value)) {
             value = "'" + value;
             quote = true;
         }
@@ -216,6 +217,22 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
 
     private static boolean isNumber(String v) {
         return v.matches("[-+]?\\d+(\\.\\d+)?([eE][-+]?\\d+)?");
+    }
+
+    /**
+     * ZIP 条目路径: 对象键里的 {@code ..}、{@code .}、反斜杠、空段都转义掉, 解包时不会跳出目标目录 (zip-slip)。
+     * 对象键可能带用户上传的原文件名。
+     */
+    static String safeEntryPath(String path) {
+        StringBuilder out = new StringBuilder();
+        for (String seg : path.replace("\\", "%5C").split("/")) {
+            if (seg.isEmpty()) continue;
+            if (seg.equals("..")) seg = "%2E%2E";
+            else if (seg.equals(".")) seg = "%2E";
+            if (out.length() > 0) out.append('/');
+            out.append(seg);
+        }
+        return out.toString();
     }
 
     static MessageDigest sha256() {

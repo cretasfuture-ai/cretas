@@ -32,10 +32,10 @@ public class FactoryDataRequestLedger {
 
     public record Row(long id, Type type, String factoryId, Status status, Long relatedRequestId,
                       LocalDateTime notBefore, String summaryJson, String packageSha256, Long packageBytes,
-                      String errorMessage, LocalDateTime createdAt, LocalDateTime completedAt) {}
+                      String errorMessage, LocalDateTime createdAt, LocalDateTime completedAt, String triggerSource) {}
 
     private static final String COLUMNS = "id, request_type, factory_id, status, related_request_id, not_before, "
-            + "summary::text, package_sha256, package_bytes, error_message, created_at, completed_at";
+            + "summary::text, package_sha256, package_bytes, error_message, created_at, completed_at, trigger_source";
 
     private final DataSource dataSource;
     private final Clock clock;
@@ -56,9 +56,15 @@ public class FactoryDataRequestLedger {
 
     public long start(Type type, String factoryId, String factoryName, String actorType, long actorId,
                       String actorRole, Long relatedRequestId, LocalDateTime notBefore) {
+        return start(type, factoryId, factoryName, actorType, actorId, actorRole, relatedRequestId, notBefore,
+                FactoryDataService.MANUAL_TRIGGER);
+    }
+
+    public long start(Type type, String factoryId, String factoryName, String actorType, long actorId,
+                      String actorRole, Long relatedRequestId, LocalDateTime notBefore, String triggerSource) {
         String sql = "INSERT INTO factory_data_requests (request_type, factory_id, factory_name, actor_type, "
-                + "actor_id, actor_role, status, related_request_id, not_before, created_at) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id";
+                + "actor_id, actor_role, status, related_request_id, not_before, created_at, trigger_source) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id";
         return inTx(conn -> {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, type.name());
@@ -71,6 +77,7 @@ public class FactoryDataRequestLedger {
                 if (relatedRequestId == null) ps.setNull(8, Types.BIGINT); else ps.setLong(8, relatedRequestId);
                 ps.setTimestamp(9, notBefore == null ? null : Timestamp.valueOf(notBefore));
                 ps.setTimestamp(10, Timestamp.valueOf(LocalDateTime.now(clock)));
+                ps.setString(11, triggerSource);
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     return rs.getLong(1);
@@ -134,7 +141,7 @@ public class FactoryDataRequestLedger {
                         out.add(new Row(rs.getLong(1), Type.valueOf(rs.getString(2)), rs.getString(3),
                                 Status.valueOf(rs.getString(4)), relatedNull ? null : related, ts(rs, 6),
                                 rs.getString(7), rs.getString(8), bytesNull ? null : bytes, rs.getString(10),
-                                ts(rs, 11), ts(rs, 12)));
+                                ts(rs, 11), ts(rs, 12), rs.getString(13)));
                     }
                     return out;
                 }

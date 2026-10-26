@@ -78,9 +78,12 @@ class FactoryErasurePostgresContractTest {
         exec(smartbiAdmin, "CREATE ROLE " + appRole + " LOGIN PASSWORD 'x' NOSUPERUSER NOBYPASSRLS;"
                 + "GRANT USAGE ON SCHEMA " + schema + " TO " + appRole + ";"
                 + "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA " + schema + " TO " + appRole + ";"
-                + "REVOKE UPDATE, DELETE ON " + schema + ".smart_bi_llm_egress_audit FROM " + appRole + ";"
-                + egressFunction(schema)
-                + "GRANT EXECUTE ON FUNCTION " + schema + ".factory_erase_llm_egress_audit(text) TO " + appRole + ";");
+                + "REVOKE UPDATE, DELETE ON " + schema + ".smart_bi_llm_egress_audit FROM " + appRole + ";");
+        // 定义者函数直接用真实的 SmartBI 迁移, 只把 public 换成本用例的 schema (⛔ 不在测试里另写一份)
+        exec(smartbiAdmin, Files.readString(Path.of(
+                "../../python/smartbi/database/migrations/V20261101_19__factory_erasure_grants.sql"))
+                .replace("public.", schema + ".").replace("search_path = public", "search_path = " + schema));
+        exec(smartbiAdmin, "GRANT EXECUTE ON FUNCTION " + schema + ".factory_erase_llm_egress_audit(text) TO " + appRole + ";");
         smartbiApp = ds(url().replaceAll("/[^/?]+(\\?|$)", "/" + smartbiDb + "$1"), appRole, "x");
         store = new FactoryDataScopePostgresContractTest.FakeStore();
         store.put("cretas-media", FA + "/attachments/a.jpg", "A-PHOTO");
@@ -93,6 +96,8 @@ class FactoryErasurePostgresContractTest {
     void tearDown() throws Exception {
         if (main == null) return;
         exec(main, "DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+        exec(main, "DROP SCHEMA IF EXISTS " + copySchema() + " CASCADE");
+        exec(main, "DROP SCHEMA IF EXISTS " + otherSchema() + " CASCADE");
         exec(main, "DELETE FROM factory_data_requests WHERE factory_id IN ('" + FA + "','" + FB + "','F006')");
         exec(main, "DELETE FROM factory_erasure_audit_retention WHERE factory_id IN ('" + FA + "','" + FB + "')");
         exec(main, "DROP DATABASE IF EXISTS " + smartbiDb + " WITH (FORCE)");
@@ -129,6 +134,12 @@ class FactoryErasurePostgresContractTest {
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_llm_egress_audit WHERE factory_id = '" + FA + "'")).isZero();
         assertThat(store.list(FA + "/")).isEmpty();
         assertThat(store.list(FB + "/")).hasSize(1);
+        // 严格行级安全的表 (只认 app.factory_id = 本厂): 空变量下看不见, 也必须删到
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".agg_supplier_price WHERE factory_id = '" + FA + "'")).isZero();
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".agg_supplier_price WHERE factory_id = '" + FB + "'")).isEqualTo(1);
+        // 登记过的副本 schema: 本厂的行删掉, 别的工厂的留着
+        assertThat(count(main, "SELECT count(*) FROM " + copySchema() + ".sales_orders WHERE factory_id = '" + FA + "'")).isZero();
+        assertThat(count(main, "SELECT count(*) FROM " + copySchema() + ".sales_orders WHERE factory_id = '" + FB + "'")).isEqualTo(1);
 
         // 口径 Q4: 脱敏样本保留且断开工厂编号; 原样存的样本删掉
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE factory_id = '" + FA + "'")).isZero();
@@ -252,7 +263,112 @@ class FactoryErasurePostgresContractTest {
         assertThat(count(main, "SELECT count(*) FROM " + schema + ".platform_data_access_log WHERE id = 91")).isEqualTo(1);
     }
 
+    @Test
+    void exportUnderTheAppAccountIncludesRowsOfStrictRlsTables() throws Exception {
+        FactoryDataService d = data();
+        long id = d.startExport(OPERATOR, FA);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        d.writeExport(id, OPERATOR, FA, AttachmentMode.INDEX_ONLY, Set.of(FactoryDataService.Format.JSON), out);
+        String all = new String(out.toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(all).contains("smartbi/json/agg_supplier_price.json");
+        var preview = d.preview(OPERATOR, FA);
+        assertThat(preview.databases().get(1).tables())
+                .anyMatch(t -> t.table().equals("agg_supplier_price") && t.rows() == 2);
+    }
+
+    @Test
+    void linkRowThatAlsoReferencesAnotherFactoryBlocksErasure() throws Exception {
+        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30)");
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        var preview = data().preview(OPERATOR, FA);
+        assertThat(preview.databases().get(0).foreignHits())
+                .anyMatch(h -> h.table().equals("order_links") && h.kind() == FactoryDataScope.ForeignKind.OTHER_TENANT);
+        Map<String, String> fbBefore = snapshot(main, FB);
+        assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, preview.previewId())))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("跨租户"));
+        assertThat(snapshot(main, FB)).isEqualTo(fbBefore);
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".order_links")).isEqualTo(1);
+    }
+
+    @Test
+    void unregisteredSchemaHoldingTheFactorysRowsBlocksErasure() throws Exception {
+        exec(main, "CREATE SCHEMA " + otherSchema() + "; CREATE TABLE " + otherSchema()
+                + ".notes (id int, factory_id varchar(64)); INSERT INTO " + otherSchema() + ".notes VALUES (1, '" + FA + "')");
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        var preview = data().preview(OPERATOR, FA);
+        assertThat(preview.blockers()).anyMatch(b -> b.contains("不像副本的 schema"));
+        assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, preview.previewId())))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("不像副本的 schema"));
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentOperationOnTheSameFactoryIsRefused() throws Exception {
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        long previewId = data().preview(OPERATOR, FA).previewId();
+        try (Connection c = main.getConnection(); Statement st = c.createStatement()) {
+            c.setAutoCommit(true);
+            st.execute("SELECT pg_advisory_lock(hashtextextended('factory-data:" + FA + "', 0))");
+            assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, previewId)))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("正有另一个"));
+            assertThatThrownBy(() -> erasure.cancel(OPERATOR, FA, requestId)).isInstanceOf(BusinessException.class);
+            st.execute("SELECT pg_advisory_unlock(hashtextextended('factory-data:" + FA + "', 0))");
+        }
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+        erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, previewId));      // 锁放开后照常
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isZero();
+    }
+
+    @Test
+    void factoryReEnabledDuringCoolingOffCannotBeErased() throws Exception {
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        exec(main, "UPDATE " + schema + ".factories SET is_active = true WHERE id = '" + FA + "'");
+        long previewId = data().preview(OPERATOR, FA).previewId();
+        assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, previewId)))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("重新启用"));
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+    }
+
+    @Test
+    void exportRequestMustBeRunningForThisFactoryAndASkippedExportDoesNotCount() throws Exception {
+        FactoryDataService d = data();
+        long id = d.startExport(OPERATOR, FA);
+        assertThatThrownBy(() -> d.writeExport(id, OPERATOR, FB, AttachmentMode.INDEX_ONLY,
+                Set.of(FactoryDataService.Format.CSV), new ByteArrayOutputStream()))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(409));
+        assertThatThrownBy(() -> d.writeExport(id + 999, OPERATOR, FA, AttachmentMode.INDEX_ONLY,
+                Set.of(FactoryDataService.Format.CSV), new ByteArrayOutputStream()))
+                .isInstanceOf(BusinessException.class);
+        d.writeExport(id, OPERATOR, FA, AttachmentMode.SKIP, Set.of(FactoryDataService.Format.CSV), new ByteArrayOutputStream());
+        assertThatThrownBy(() -> erasure().request(OPERATOR, FA, body(id, true)))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("SKIP"));
+        assertThatThrownBy(() -> d.startExport(OPERATOR, FA, "backup scheduler")).isInstanceOf(BusinessException.class);
+        long scheduled = d.startExport(OPERATOR, FA, "BACKUP_SCHEDULER");
+        assertThat(d.ledger().find(scheduled).orElseThrow().triggerSource()).isEqualTo("BACKUP_SCHEDULER");
+        assertThat(d.ledger().find(id).orElseThrow().triggerSource()).isEqualTo("MANUAL");
+    }
+
+    @Test
+    void llmEgressEraseFunctionRefusesWhenTheTenantVariableIsNotThatFactory() throws Exception {
+        try (Connection c = smartbiApp.getConnection(); Statement st = c.createStatement()) {
+            c.setAutoCommit(false);
+            st.execute("SELECT set_config('app.factory_id', '" + FB + "', true)");
+            assertThatThrownBy(() -> st.execute("SELECT " + schema + ".factory_erase_llm_egress_audit('" + FA + "')"))
+                    .hasMessageContaining("app.factory_id");
+            c.rollback();
+        }
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_llm_egress_audit WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+    }
+
     // ---------------------------------------------------------------- fixture
+
+    private String copySchema() { return "bak_" + schema + "_20260101"; }
+
+    private String otherSchema() { return "analytics_" + schema; }
 
     private long requestAndWait(FactoryErasureService erasure, boolean drill) throws Exception {
         return erasure.request(OPERATOR, FA, body(export(), drill)).requestId();
@@ -307,7 +423,10 @@ class FactoryErasurePostgresContractTest {
                 + " (3, '" + FB + "', 'B-RAW', '{}');"
                 + "INSERT INTO smart_bi_llm_egress_audit (id, created_at, call_site, provider, model, factory_id, status_code) VALUES"
                 + " (1, now(), 'chart_insight', 'dashscope', 'qwen', '" + FA + "', 200),"
-                + " (2, now(), 'chart_insight', 'dashscope', 'qwen', '" + FB + "', 200);");
+                + " (2, now(), 'chart_insight', 'dashscope', 'qwen', '" + FB + "', 200);"
+                + "INSERT INTO agg_supplier_price (id, factory_id, price) VALUES (1, '" + FA + "', 1.0), (2, '" + FA + "', 2.0), (3, '" + FB + "', 3.0);");
+        exec(main, "CREATE SCHEMA " + copySchema() + "; CREATE TABLE " + copySchema()
+                + ".sales_orders AS SELECT id, factory_id, note FROM " + schema + ".sales_orders WHERE factory_id IN ('" + FA + "', '" + FB + "')");
     }
 
     static String auditTablesMain(String s) {
@@ -317,7 +436,11 @@ class FactoryErasurePostgresContractTest {
                 + "ALTER TABLE " + s + ".platform_data_access_log ADD COLUMN created_at timestamp DEFAULT now(),"
                 + " ADD COLUMN actor_type varchar(32) DEFAULT 'PLATFORM_ADMIN', ADD COLUMN actor_user_id bigint DEFAULT 1,"
                 + " ADD COLUMN actor_username varchar(64), ADD COLUMN http_method varchar(8) DEFAULT 'GET',"
-                + " ADD COLUMN request_path varchar(255);";
+                + " ADD COLUMN request_path varchar(255);"
+                // 不带 factory_id 的关联表: 一行同时挂两个工厂的订单时, 不能算成 A 厂的
+                + "CREATE TABLE " + s + ".order_links (id bigint PRIMARY KEY,"
+                + " order_id bigint REFERENCES " + s + ".sales_orders(id) ON DELETE CASCADE,"
+                + " other_order_id bigint REFERENCES " + s + ".sales_orders(id));";
     }
 
     static String smartbiExtras(String s) {
@@ -331,14 +454,12 @@ class FactoryErasurePostgresContractTest {
                 + " OR current_setting('app.factory_id', true) = '' OR current_setting('app.factory_id', true) IS NULL);"
                 + "CREATE POLICY del ON smart_bi_uploads FOR DELETE USING (factory_id = current_setting('app.factory_id', true));"
                 + "CREATE POLICY ins ON smart_bi_uploads FOR INSERT WITH CHECK (true);"
-                + "CREATE POLICY upd ON smart_bi_uploads FOR UPDATE USING (true);";
-    }
-
-    static String egressFunction(String s) {
-        return "CREATE FUNCTION " + s + ".factory_erase_llm_egress_audit(p text) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER"
-                + " SET search_path = " + s + " AS $$ DECLARE n bigint; BEGIN IF p IS NULL OR btrim(p) = '' THEN RAISE EXCEPTION 'empty'; END IF;"
-                + " DELETE FROM " + s + ".smart_bi_llm_egress_audit WHERE factory_id = p; GET DIAGNOSTICS n = ROW_COUNT; RETURN n; END $$;"
-                + "REVOKE ALL ON FUNCTION " + s + ".factory_erase_llm_egress_audit(text) FROM PUBLIC;";
+                + "CREATE POLICY upd ON smart_bi_uploads FOR UPDATE USING (true);"
+                // prod 有 95 张表是严格策略 (例 agg_supplier_price): 只认 factory_id = app.factory_id, 空变量下一行都看不见
+                + "CREATE TABLE agg_supplier_price (id bigint PRIMARY KEY, factory_id varchar(64), price numeric);"
+                + "ALTER TABLE agg_supplier_price ENABLE ROW LEVEL SECURITY; ALTER TABLE agg_supplier_price FORCE ROW LEVEL SECURITY;"
+                + "CREATE POLICY strict_all ON agg_supplier_price FOR ALL USING (factory_id = current_setting('app.factory_id', true))"
+                + " WITH CHECK (factory_id = current_setting('app.factory_id', true));";
     }
 
     /**
@@ -357,7 +478,9 @@ class FactoryErasurePostgresContractTest {
                 "sales_item_lots", "x.item_id IN (SELECT i.id FROM " + s + ".sales_order_items i JOIN " + s
                         + ".sales_orders o ON o.id = i.order_id WHERE o.factory_id = " + f + ")",
                 "notes", "x.author_id IN (SELECT id FROM " + s + ".users WHERE factory_id = " + f + ")",
-                "smart_bi_field_defs", "x.upload_id IN (SELECT id FROM " + s + ".smart_bi_uploads WHERE factory_id = " + f + ")");
+                "smart_bi_field_defs", "x.upload_id IN (SELECT id FROM " + s + ".smart_bi_uploads WHERE factory_id = " + f + ")",
+                "order_links", "x.order_id IN (SELECT id FROM " + s + ".sales_orders WHERE factory_id = " + f + ")"
+                        + " OR x.other_order_id IN (SELECT id FROM " + s + ".sales_orders WHERE factory_id = " + f + ")");
         Map<String, String> out = new TreeMap<>();
         try (Connection c = ds.getConnection(); Statement st = c.createStatement()) {
             Map<String, Boolean> tables = new LinkedHashMap<>();

@@ -160,8 +160,9 @@ class FactoryDataScopePostgresContractTest {
         seedCleanTenants();
         try (Connection c = main.getConnection()) {
             Map<String, Long> totals = FactoryDataScopeResolver.rowsPerFactory(c, schema);
-            // users 1 + sales_orders 2 + activity_events 2 + backup 1 = 6 (factories / 别名租户列的表不在内)
-            assertThat(totals).containsEntry(FA, 6L).containsEntry(FB, 3L);
+            // 每个租户列各算一次: users 1 + sales_orders 2 + activity_events 2 + backup 1
+            // + internal_transfers (source / target 都是 FA) 2 + platform_data_access_log.target 1 = 9
+            assertThat(totals).containsEntry(FA, 9L).containsEntry(FB, 3L);
         }
     }
 
@@ -235,6 +236,15 @@ class FactoryDataScopePostgresContractTest {
             while (rs.next()) rows.add(rs.getString(1) + "/" + rs.getString(2) + "/" + rs.getBoolean(3));
             assertThat(rows).containsExactly("PREVIEW/SUCCEEDED/false", "EXPORT/SUCCEEDED/true");
         }
+    }
+
+    @Test
+    void attachmentKeysCannotEscapeTheArchiveDirectory() throws Exception {
+        seedCleanTenants();
+        store.put("cretas-media", FA + "/../../etc/evil.txt", "X");
+        Map<String, byte[]> zip = export(service(Set.of(1L)), FA, AttachmentMode.INCLUDE, Set.of(FactoryDataService.Format.CSV));
+        assertThat(zip.keySet()).noneMatch(k -> k.contains("..") || k.startsWith("/"));
+        assertThat(zip).containsKey("attachments/cretas-media/" + FA + "/%2E%2E/%2E%2E/etc/evil.txt");
     }
 
     @Test

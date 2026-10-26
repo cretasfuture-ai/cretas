@@ -8,7 +8,8 @@
 # 「彻底删除」承诺写的是「备份按保留期自然过期」, 对这些副本原本不成立。
 #
 # ── 管什么 (只管这些, 其余一概不碰) ──────────────────────────────────────
-#   FILE      /www/wwwroot/cretas/backups 顶层的每个文件 / 目录 (目录按其中最新文件的时间算)
+#   FILE      /www/wwwroot/cretas/backups 顶层的目录 (按其中最新文件的时间算) 与扩展名在 BACKUP_FILE_RE
+#             允许名单里的文件; 其余文件列为 unknown-type, ⛔ 不删
 #             /www/backup 顶层名字形如 pre-*-YYYYMMDD / prod-clean-YYYYMMDD / <x>-backup-YYYYMMDD 的目录
 #             ⛔ 不管: 每日备份 *_YYYYMMDD_HHMMSS.sql.gz (backup-db.sh 自己保留 7 天)、backup.log、
 #                *.md、*逐表行数*.csv (只有说明和计数, Steve 选择保留)
@@ -56,6 +57,8 @@ COPY_SCHEMA_RE='^(tenant_purge_[0-9]+|f006_clear_[0-9]+|f006_clean_[0-9]{8}|lega
 COPY_TABLE_RE='^(backup_|repair_backup_|bak_|mock_rest_bak_)[a-z0-9_]*[0-9]{8}[a-z0-9_]*$'
 DAILY_BACKUP_RE='^(cretas_prod_db|smartbi_prod_db|cretas_db_test)_[0-9]{8}_[0-9]{6}\.sql\.gz$'
 WWW_BACKUP_DIR_RE='^(pre-[a-z0-9-]+|prod-clean|[a-z0-9]+-backup)-[0-9]{8}$'
+# backups 顶层的文件只认这些扩展名 (允许名单)
+BACKUP_FILE_RE='\.(dump|sql|sql\.gz|csv|csv\.gz|json|tar|tar\.gz|tgz|zip)$'
 
 mode="" expect="" auto=0
 while [ $# -gt 0 ]; do
@@ -113,9 +116,16 @@ plan_files() {
             [[ "$name" =~ $DAILY_BACKUP_RE ]] && continue
             [[ "$name" == *.md ]] && continue
             [[ "$name" == *逐表行数*.csv ]] && continue
+            # 文件只认已知的备份扩展名 (允许名单); 别的文件 (密钥、说明、长期归档……) 只列出来, ⛔ 不删
+            if [ ! -d "$entry" ] && ! [[ "$name" =~ $BACKUP_FILE_RE ]]; then
+                echo "FILE|$root|$name|?|-|-|0|unknown-type"
+                continue
+            fi
         else
             [[ "$name" =~ $WWW_BACKUP_DIR_RE ]] || continue
         fi
+        # 名字里有 | 或换行会弄乱清单格式 (删错东西), 一律不删
+        case "$name" in *'|'*|*$'\n'*) echo "FILE|$root|(名字含特殊字符)|?|-|-|0|undated"; continue ;; esac
         if [ -L "$entry" ]; then
             echo "FILE|$root|$name|?|-|-|0|undated"
             continue
@@ -245,7 +255,10 @@ while IFS='|' read -r kind loc name day tables rows bytes flag; do
             rm -rf -- "${loc:?}/${name:?}" || failures=$((failures+1)) ;;
         SCHEMA)
             [[ "$name" =~ $COPY_SCHEMA_RE ]] || { echo "拒绝: 不像副本 schema $name"; failures=$((failures+1)); continue; }
-            psql_at "$loc" "DROP SCHEMA \"$name\" CASCADE" >/dev/null || failures=$((failures+1)) ;;
+            # 先 RESTRICT 删掉 schema 里的全部表, 再 RESTRICT 删 schema: public 里若有视图 / 外键依赖这份副本,
+            # 整条语句报错、一样都不删 (⛔ 不用 CASCADE, 那会顺手删掉 schema 外依赖它的东西)
+            drop_sql='DO $do$ DECLARE l text; BEGIN SELECT string_agg(format('"'"'%I.%I'"'"', schemaname, tablename), '"'"', '"'"') INTO l FROM pg_tables WHERE schemaname = '"'$name'"'; IF l IS NOT NULL THEN EXECUTE '"'"'DROP TABLE '"'"' || l || '"'"' RESTRICT'"'"'; END IF; EXECUTE format('"'"'DROP SCHEMA %I RESTRICT'"'"', '"'$name'"'); END $do$'
+            psql_at "$loc" "$drop_sql" >/dev/null || failures=$((failures+1)) ;;
         TABLE)
             [[ "$name" =~ $COPY_TABLE_RE ]] || { echo "拒绝: 不像副本表 $name"; failures=$((failures+1)); continue; }
             psql_at "$loc" "DROP TABLE public.\"$name\"" >/dev/null || failures=$((failures+1)) ;;

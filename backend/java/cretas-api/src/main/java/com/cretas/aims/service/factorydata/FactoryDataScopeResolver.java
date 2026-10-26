@@ -49,7 +49,8 @@ public final class FactoryDataScopeResolver {
         boolean expands() { return deleteAction == 'a' || deleteAction == 'r' || deleteAction == 'c'; }
     }
 
-    private record Meta(Map<String, List<String>> columns, Map<String, String> singlePk, List<Fk> fks) {}
+    private record Meta(Map<String, List<String>> columns, Map<String, String> singlePk, List<Fk> fks,
+                        List<Fk> droppedFks) {}
 
     private FactoryDataScopeResolver() {}
 
@@ -104,7 +105,94 @@ public final class FactoryDataScopeResolver {
             if (parent == null || parent.keys().isEmpty()) continue;
             countNulled(conn, schema, meta, fk, parent.keys(), scope);
         }
+
+        // 4) 顺外键认领的子行 (不带租户列) 若同时引用了别的工厂的行 (例: 两厂订单之间的关联行), 不能算本厂的
+        for (Fk fk : meta.fks()) {
+            TableScope child = scope.table(fk.child());
+            if (child == null || child.depth() == 0 || child.keys().isEmpty()) continue;
+            checkOtherParents(conn, schema, meta, fk, child, scope);
+        }
+
+        // 5) 父表没有单列主键的外键算不了闭包: 父表里有本厂行、子表又不带租户列 ⇒ 子行归属判不了, 记为无法判定
+        for (Fk fk : meta.droppedFks()) {
+            if (!fk.expands()) continue;
+            TableScope parent = scope.table(fk.parent());
+            if (parent == null || parent.rows() == 0) continue;
+            if (!FactoryDataCatalog.tenantColumns(fk.child(), new LinkedHashSet<>(meta.columns().get(fk.child()))).isEmpty()) {
+                continue;
+            }
+            scope.addForeign(new ForeignHit(fk.child(), rowKey(null), ForeignKind.UNSUPPORTED,
+                    "父表 " + fk.parent() + " 无单列主键, 无法逐行判定引用它的子行", fk.parent()));
+        }
         return scope;
+    }
+
+    /**
+     * 按「谁能看见」正确地算范围。SmartBI 有行级安全 (2026-10-26 prod: 95 张表是严格策略, 只认
+     * {@code factory_id = app.factory_id}; 30 张是宽松策略, app.factory_id 为空时可见全部):
+     * <ul>
+     *   <li>本厂的行在 app.factory_id = 本厂 时算 —— 严格表只有这样才看得见本厂的行;</li>
+     *   <li>跨租户命中再在 app.factory_id 为空时算一遍并入 —— 宽松表只有这样才看得见别的工厂的行。</li>
+     * </ul>
+     * 两次设置都是事务内 ({@code set_config(..., true)})。返回时连接停在「本厂可见」, 后续导出 / 删除直接读写本厂行。
+     */
+    public static FactoryDataScope resolveVisible(Connection conn, Database database, String schema, String factoryId)
+            throws SQLException {
+        if (database != Database.SMARTBI) return resolve(conn, database, schema, factoryId);
+        setTenant(conn, "");
+        FactoryDataScope wide = resolve(conn, database, schema, factoryId);
+        setTenant(conn, factoryId);
+        FactoryDataScope own = resolve(conn, database, schema, factoryId);
+        own.mergeForeignHits(wide.foreignHits());
+        return own;
+    }
+
+    /** SmartBI 行级安全的租户变量, 只在本事务内有效。 */
+    public static void setTenant(Connection conn, String factoryId) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT set_config('app.factory_id', ?, true)")) {
+            ps.setString(1, factoryId);
+            ps.execute();
+        }
+    }
+
+    private static void checkOtherParents(Connection conn, String schema, Meta meta, Fk fk, TableScope child,
+                                          FactoryDataScope scope) throws SQLException {
+        List<String> parentTenant = FactoryDataCatalog.tenantColumns(fk.parent(),
+                new LinkedHashSet<>(meta.columns().get(fk.parent())));
+        if (parentTenant.isEmpty()) return;     // 父表是平台共享 / 无租户的表: 引用它不改变子行归属
+        TableScope ownParent = scope.table(fk.parent());
+        String parentPk = meta.singlePk().get(fk.parent());
+        StringJoiner select = new StringJoiner(", ");
+        select.add("c." + q(child.pkColumn()) + "::text");
+        parentTenant.forEach(col -> select.add("p." + q(col) + "::text"));
+        StringJoiner on = new StringJoiner(" AND ");
+        for (int i = 0; i < fk.childColumns().size(); i++) {
+            on.add("c." + q(fk.childColumns().get(i)) + " = p." + q(fk.parentColumns().get(i)));
+        }
+        String sql = "SELECT " + select + " FROM " + q(schema) + "." + q(fk.child()) + " c JOIN " + q(schema) + "."
+                + q(fk.parent()) + " p ON " + on + " WHERE c." + q(child.pkColumn()) + "::text = ANY(?)"
+                + " AND NOT (p." + q(parentPk) + "::text = ANY(?))";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setArray(1, conn.createArrayOf("text", child.keys().toArray(new String[0])));
+            ps.setArray(2, conn.createArrayOf("text",
+                    ownParent == null ? new String[0] : ownParent.keys().toArray(new String[0])));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String other = null;
+                    boolean own = false;
+                    for (int i = 0; i < parentTenant.size(); i++) {
+                        String v = rs.getString(2 + i);
+                        if (v == null) continue;
+                        if (v.equals(scope.factoryId())) own = true;
+                        else if (other == null) other = parentTenant.get(i) + "=" + v;
+                    }
+                    if (own && other == null) continue;
+                    scope.addForeign(new ForeignHit(fk.child(), rowKey(rs.getString(1)),
+                            other != null ? ForeignKind.OTHER_TENANT : ForeignKind.UNSCOPED,
+                            "同时引用 " + fk.parent() + " 的行 (" + (other != null ? other : "租户列为空") + ")", fk.parent()));
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ seeds
@@ -313,10 +401,15 @@ public final class FactoryDataScopeResolver {
                 }
             }
         }
-        // 只保留两端都在 columns 里的外键 (分区子表已被排除)
-        fks.removeIf(fk -> !columns.containsKey(fk.child()) || !columns.containsKey(fk.parent())
-                || !singlePk.containsKey(fk.parent()));
-        return new Meta(columns, singlePk, fks);
+        // 只保留两端都在 columns 里的外键 (分区子表已被排除); 父表没有单列主键的另放一边, 不能做闭包但要报出来
+        fks.removeIf(fk -> !columns.containsKey(fk.child()) || !columns.containsKey(fk.parent()));
+        List<Fk> dropped = new ArrayList<>();
+        fks.removeIf(fk -> {
+            if (singlePk.containsKey(fk.parent())) return false;
+            dropped.add(fk);
+            return true;
+        });
+        return new Meta(columns, singlePk, fks, dropped);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -371,19 +464,69 @@ public final class FactoryDataScopeResolver {
         for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
     }
 
-    /** 按工厂分组的行数 (所有带 factory_id 列的表求和): 删除前后用它做「其他工厂一行都没少」的阴性对照。 */
-    public static Map<String, Long> rowsPerFactory(Connection conn, String schema) throws SQLException {
+    /**
+     * 按工厂分组的行数 (每张表的每个租户列各算一次再求和): 删除前后用它做「其他工厂一行都没少」的阴性对照。
+     *
+     * @param rlsTenants 非空时 (SmartBI) 逐个工厂把 app.factory_id 设成它再数 —— 严格行级安全的表只有这样
+     *                   才数得到它的行; 为空时 (主库, 无行级安全) 直接 GROUP BY
+     */
+    public static Map<String, Long> rowsPerFactory(Connection conn, String schema, Set<String> rlsTenants)
+            throws SQLException {
         Meta meta = loadMeta(conn, schema);
-        Map<String, Long> totals = new LinkedHashMap<>();
-        Set<String> seen = new HashSet<>();
+        List<String[]> pairs = new ArrayList<>();      // {table, tenantColumn}
         for (Map.Entry<String, List<String>> e : meta.columns().entrySet()) {
-            if (!e.getValue().contains(FactoryDataCatalog.FACTORY_ID) || !seen.add(e.getKey())) continue;
-            String sql = "SELECT " + q(FactoryDataCatalog.FACTORY_ID) + "::text, count(*) FROM " + q(schema) + "."
-                    + q(e.getKey()) + " WHERE " + q(FactoryDataCatalog.FACTORY_ID) + " IS NOT NULL GROUP BY 1";
-            try (PreparedStatement ps = conn.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) totals.merge(rs.getString(1), rs.getLong(2), Long::sum);
+            for (String c : FactoryDataCatalog.tenantColumns(e.getKey(), new LinkedHashSet<>(e.getValue()))) {
+                pairs.add(new String[]{e.getKey(), c});
             }
         }
+        Map<String, Long> totals = new TreeMap<>();
+        if (rlsTenants == null) {
+            for (String[] p : pairs) {
+                String sql = "SELECT " + q(p[1]) + "::text, count(*) FROM " + q(schema) + "." + q(p[0])
+                        + " WHERE " + q(p[1]) + " IS NOT NULL GROUP BY 1";
+                try (PreparedStatement ps = conn.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) totals.merge(rs.getString(1), rs.getLong(2), Long::sum);
+                }
+            }
+            return totals;
+        }
+        for (String tenant : rlsTenants) {
+            setTenant(conn, tenant);
+            long n = 0;
+            for (String[] p : pairs) {
+                try (PreparedStatement ps = conn.prepareStatement("SELECT count(*) FROM " + q(schema) + "." + q(p[0])
+                        + " WHERE " + q(p[1]) + "::text = ?")) {
+                    ps.setString(1, tenant);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        n += rs.getLong(1);
+                    }
+                }
+            }
+            if (n > 0) totals.put(tenant, n);
+        }
+        setTenant(conn, "");
         return totals;
+    }
+
+    /** 主库无行级安全时的旧签名。 */
+    public static Map<String, Long> rowsPerFactory(Connection conn, String schema) throws SQLException {
+        return rowsPerFactory(conn, schema, null);
+    }
+
+    /** 库里出现过的全部租户编号 (各租户列的去重值; 行级安全下只看得见宽松表里的)。 */
+    public static Set<String> tenantValues(Connection conn, String schema) throws SQLException {
+        Meta meta = loadMeta(conn, schema);
+        Set<String> out = new java.util.TreeSet<>();
+        for (Map.Entry<String, List<String>> e : meta.columns().entrySet()) {
+            for (String c : FactoryDataCatalog.tenantColumns(e.getKey(), new LinkedHashSet<>(e.getValue()))) {
+                try (PreparedStatement ps = conn.prepareStatement("SELECT DISTINCT " + q(c) + "::text FROM "
+                        + q(schema) + "." + q(e.getKey()) + " WHERE " + q(c) + " IS NOT NULL");
+                     ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) out.add(rs.getString(1));
+                }
+            }
+        }
+        return out;
     }
 }

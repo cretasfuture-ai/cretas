@@ -77,7 +77,8 @@ public class FactoryDataService {
                                   long rowsToErase, long auditRowsToRetain, long trainingSamplesToRetain,
                                   List<TableRow> tables, long foreignHitCount, List<ForeignHit> foreignHits,
                                   List<NulledReference> nulledReferences, List<String> suspectTenantColumns,
-                                  List<String> missingDeletePrivileges, List<CopyCount> copiesOutsideSchema) {}
+                                  List<String> missingDeletePrivileges, List<CopyCount> copiesOutsideSchema,
+                                  List<CopyCount> unregisteredSchemas) {}
 
     public record CopyCount(String table, long rows) {}
 
@@ -154,7 +155,7 @@ public class FactoryDataService {
     }
 
     private DatabasePreview previewOf(Connection conn, Database db, String factoryId) throws SQLException {
-        FactoryDataScope scope = FactoryDataScopeResolver.resolve(conn, db, schema, factoryId);
+        FactoryDataScope scope = FactoryDataScopeResolver.resolveVisible(conn, db, schema, factoryId);
         List<TableRow> rows = new ArrayList<>();
         long training = 0;
         for (TableScope t : scope.nonEmpty()) {
@@ -170,7 +171,8 @@ public class FactoryDataService {
         return new DatabasePreview(db, schema, scope.closurePasses(), scope.totalRows(), erased, audit, training,
                 rows, hits.size(), hits.subList(0, Math.min(hits.size(), MAX_LISTED_FOREIGN_HITS)),
                 scope.nulledReferences(), scope.suspectTenantColumns(),
-                FactoryErasureService.missingPrivileges(conn, schema, toErase), copiesOutside(conn, schema, factoryId));
+                FactoryErasureService.missingPrivileges(conn, schema, toErase), copiesOutside(conn, schema, factoryId),
+                copiesOutside(conn, schema, factoryId, false));
     }
 
     private long countRetained(Connection conn, TableScope t, String factoryId) throws SQLException {
@@ -191,6 +193,15 @@ public class FactoryDataService {
      * 本功能自己的回执 / 留存表 (RECEIPT) 与迁移台账不算副本。
      */
     static List<CopyCount> copiesOutside(Connection conn, String schema, String factoryId) throws SQLException {
+        return copiesOutside(conn, schema, factoryId, true);
+    }
+
+    /**
+     * @param copiesOnly true = 只数名字像副本的 schema ({@link FactoryDataCatalog#isCopySchema}); false = 只数其余的
+     *                   (不像副本、却有该厂行的 schema: 预演报出来, 删除拒绝, 由人判断)
+     */
+    static List<CopyCount> copiesOutside(Connection conn, String schema, String factoryId, boolean copiesOnly)
+            throws SQLException {
         List<String[]> tables = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT n.nspname, c.relname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
@@ -204,6 +215,7 @@ public class FactoryDataService {
                 while (rs.next()) {
                     Category c = FactoryDataCatalog.categorize(rs.getString(2));
                     if (c == Category.RECEIPT || c == Category.LEDGER) continue;
+                    if (FactoryDataCatalog.isCopySchema(rs.getString(1)) != copiesOnly) continue;
                     tables.add(new String[]{rs.getString(1), rs.getString(2)});
                 }
             }
@@ -247,6 +259,9 @@ public class FactoryDataService {
             if (!db.missingDeletePrivileges().isEmpty()) {
                 out.add(db.database() + " 库账号对这些表没有删除权限: " + db.missingDeletePrivileges());
             }
+            if (!db.unregisteredSchemas().isEmpty()) {
+                out.add(db.database() + " 库有不像副本的 schema 也存着该厂的行, 先查清是什么: " + db.unregisteredSchemas());
+            }
         }
         if (!"AVAILABLE".equals(attachments.status())) out.add("附件列举失败: " + attachments.error());
         return out;
@@ -263,11 +278,25 @@ public class FactoryDataService {
 
     /** 开始导出: 先写回执, 返回编号 (控制器把它放进响应头, 再调用 {@link #writeExport})。 */
     public long startExport(AuthenticatedActor actor, String factoryId) {
+        return startExport(actor, factoryId, MANUAL_TRIGGER);
+    }
+
+    /**
+     * @param triggerSource 谁触发的 (写进回执): 接口调用是 {@value #MANUAL_TRIGGER}; 定时任务传自己的名字,
+     *                      如 {@code BACKUP_SCHEDULER}。只允许大写字母、数字、下划线, 最长 32。
+     */
+    public long startExport(AuthenticatedActor actor, String factoryId, String triggerSource) {
         requireOperator(actor);
+        if (triggerSource == null || !TRIGGER_FORMAT.matcher(triggerSource).matches()) {
+            throw new BusinessException(400, "triggerSource 只能是大写字母、数字、下划线, 最长 32");
+        }
         FactoryRow factory = requireFactory(factoryId);
         return ledger.start(FactoryDataRequestLedger.Type.EXPORT, factoryId, factory.name(),
-                actor.type().name(), actor.id(), actor.role());
+                actor.type().name(), actor.id(), actor.role(), null, null, triggerSource);
     }
+
+    public static final String MANUAL_TRIGGER = "MANUAL";
+    private static final java.util.regex.Pattern TRIGGER_FORMAT = java.util.regex.Pattern.compile("^[A-Z0-9_]{1,32}$");
 
     /**
      * 把整厂数据写成 ZIP 流。出错时回执标 FAILED 并抛出 —— 流已经开始写的话, 包里没有 manifest.json,
@@ -275,7 +304,13 @@ public class FactoryDataService {
      */
     public void writeExport(long requestId, AuthenticatedActor actor, String factoryId, AttachmentMode mode,
                             Set<Format> formats, OutputStream rawOut) throws IOException {
+        requireOperator(actor);
         if (formats == null || formats.isEmpty()) throw new BusinessException(400, "至少选择一种导出格式 (CSV / XLSX / JSON)");
+        FactoryDataRequestLedger.Row started = ledger.find(requestId).orElse(null);
+        if (started == null || started.type() != FactoryDataRequestLedger.Type.EXPORT
+                || started.status() != FactoryDataRequestLedger.Status.RUNNING || !factoryId.equals(started.factoryId())) {
+            throw new BusinessException(409, "requestId 不是该厂一次进行中的导出 (先调用 startExport)");
+        }
         FactoryRow factory = requireFactory(factoryId);
         Set<Format> fmt = EnumSet.copyOf(formats);
         MessageDigest whole = FactoryDataPackageWriter.sha256();
@@ -328,7 +363,7 @@ public class FactoryDataService {
 
     private Map<String, Object> exportDatabase(Connection conn, Database db, String factoryId, Set<Format> formats,
                                                FactoryDataPackageWriter writer) throws SQLException {
-        FactoryDataScope scope = FactoryDataScopeResolver.resolve(conn, db, schema, factoryId);
+        FactoryDataScope scope = FactoryDataScopeResolver.resolveVisible(conn, db, schema, factoryId);
         String dir = db.name().toLowerCase();
         List<Map<String, Object>> tables = new ArrayList<>();
         List<Map<String, Object>> notExported = new ArrayList<>();
@@ -525,6 +560,57 @@ public class FactoryDataService {
 
     FactoryObjectStore objectStore() { return objectStore; }
 
+    /**
+     * 同一个工厂的删除申请 / 撤销 / 删除串行执行 (PostgreSQL 会话级咨询锁, 拿不到立即 409, ⛔ 不排队等)。
+     * 锁连接用自动提交: 主库连接池有 idle_in_transaction_session_timeout=30s, 事务里干等会被服务器断开、锁跟着丢。
+     */
+    <T> T withFactoryLock(String factoryId, java.util.function.Supplier<T> work) {
+        String key = "factory-data:" + factoryId;
+        try (Connection conn = cretasDataSource.getConnection()) {
+            boolean auto = conn.getAutoCommit();
+            conn.setAutoCommit(true);
+            try {
+                boolean locked;
+                try (PreparedStatement ps = conn.prepareStatement("SELECT pg_try_advisory_lock(hashtextextended(?, 0))")) {
+                    ps.setString(1, key);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        locked = rs.getBoolean(1);
+                    }
+                }
+                if (!locked) throw new BusinessException(409, "该厂正有另一个删除申请 / 撤销 / 删除在进行, 请稍后再试");
+                try {
+                    return work.get();
+                } finally {
+                    try (PreparedStatement ps = conn.prepareStatement("SELECT pg_advisory_unlock(hashtextextended(?, 0))")) {
+                        ps.setString(1, key);
+                        ps.execute();
+                    }
+                }
+            } finally {
+                conn.setAutoCommit(auto);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("工厂操作锁失败: " + e.getMessage(), e);
+        }
+    }
+
+    /** 主库里全部工厂编号: SmartBI 阴性对照逐个工厂设置行级安全变量去数。 */
+    Set<String> knownFactoryIds() {
+        try (Connection conn = cretasDataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement("SELECT id FROM " + FactoryDataScopeResolver.q(schema) + ".factories")) {
+            Set<String> out = new java.util.TreeSet<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) out.add(rs.getString(1));
+            } finally {
+                if (!conn.getAutoCommit()) conn.rollback();
+            }
+            return out;
+        } catch (SQLException e) {
+            throw new IllegalStateException("读取工厂列表失败: " + e.getMessage(), e);
+        }
+    }
+
     FactoryDataRequestLedger ledger() { return ledger; }
 
     String schema() { return schema; }
@@ -547,13 +633,12 @@ public class FactoryDataService {
             conn.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
             conn.setReadOnly(true);
             try {
-                // SmartBI 有行级安全: 本事务内把 app.factory_id 置空 = 看得见全部行 (跨租户命中才查得出来),
-                // 只读事务, 不会经池化连接泄漏 (is_local=true)
-                if (db == Database.SMARTBI) {
-                    try (PreparedStatement ps = conn.prepareStatement("SELECT set_config('app.factory_id', '', true)")) {
-                        ps.execute();
-                    }
+                // 主库连接池设了 idle_in_transaction_session_timeout=30s: 导出边读边往 HTTP 客户端写,
+                // 客户端慢时这个只读事务会「空闲」超过 30 秒被服务器杀掉。本事务内放宽到 15 分钟。
+                try (PreparedStatement ps = conn.prepareStatement("SET LOCAL idle_in_transaction_session_timeout = '15min'")) {
+                    ps.execute();
                 }
+                // SmartBI 行级安全的租户变量由 FactoryDataScopeResolver.resolveVisible 在本事务内设置
                 return work.run(conn);
             } finally {
                 conn.rollback();

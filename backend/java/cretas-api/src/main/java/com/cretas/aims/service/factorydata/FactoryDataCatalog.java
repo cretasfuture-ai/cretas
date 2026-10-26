@@ -99,7 +99,8 @@ public final class FactoryDataCatalog {
 
     /** 导出包会离开平台: 这些列的值一律替换成 {@link #REDACTED}。 */
     private static final Pattern CREDENTIAL_COLUMN = Pattern.compile(
-            "(password|passwd|secret|token|api_?key|credential|private_?key|salt)", Pattern.CASE_INSENSITIVE);
+            "(password|passwd|secret|token|api_?key|app_?key|access_?key|aes_?key|credential|private_?key|salt|(^|_)otp($|_))",
+            Pattern.CASE_INSENSITIVE);
     public static final String REDACTED = "[已移除]";
 
     /** 以 factory_id 结尾或叫 tenant_id 的列: 用于把「疑似租户列」列出来。 */
@@ -136,6 +137,18 @@ public final class FactoryDataCatalog {
 
     public static boolean isCredentialColumn(String column) {
         return CREDENTIAL_COLUMN.matcher(column).find();
+    }
+
+    /**
+     * 名字像删前备份 / 临时副本的 schema —— ⚠️ 必须与 scripts/cron/backup-copy-retention.sh 的 COPY_SCHEMA_RE
+     * 逐字相同 (FactoryDataCatalogTest 钉着): 这里删该厂在副本里的行, 那边按 30 天保留期整份清掉, 两边认的必须是同一批。
+     */
+    public static final String COPY_SCHEMA_REGEX =
+            "^(tenant_purge_[0-9]+|f006_clear_[0-9]+|f006_clean_[0-9]{8}|legacy_retired|backup_[a-z0-9_]+|bak_[a-z0-9_]+|[a-z0-9_]+_bak_[0-9]{8})$";
+    private static final Pattern COPY_SCHEMA = Pattern.compile(COPY_SCHEMA_REGEX);
+
+    public static boolean isCopySchema(String schema) {
+        return schema != null && COPY_SCHEMA.matcher(schema).matches();
     }
 
     public static boolean looksLikeTenantColumn(String column) {

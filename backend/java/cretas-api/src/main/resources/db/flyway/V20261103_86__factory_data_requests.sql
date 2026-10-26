@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS factory_data_requests (
     error_message       TEXT,
     created_at          TIMESTAMP    NOT NULL,
     completed_at        TIMESTAMP,
+    -- 谁触发的: 接口调用 MANUAL; 定时任务写自己的名字 (如 BACKUP_SCHEDULER), 审计里能区分
+    trigger_source      VARCHAR(32)  NOT NULL DEFAULT 'MANUAL',
     CONSTRAINT ck_factory_data_requests_type
         CHECK (request_type IN ('PREVIEW', 'EXPORT', 'ERASURE_REQUEST', 'ERASURE_CANCEL', 'ERASURE')),
     CONSTRAINT ck_factory_data_requests_status CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED'))

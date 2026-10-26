@@ -114,6 +114,11 @@ public final class FactoryDataScope {
     }
 
     void addForeign(ForeignHit hit) { foreignHits.add(hit); }
+
+    /** 并入另一次 (不同可见性下) 算出的跨租户命中, 去重。 */
+    void mergeForeignHits(List<ForeignHit> hits) {
+        for (ForeignHit h : hits) if (!foreignHits.contains(h)) foreignHits.add(h);
+    }
     void addNulled(NulledReference ref) { nulledReferences.add(ref); }
     void addSuspect(String tableDotColumn) { suspectTenantColumns.add(tableDotColumn); }
     void setClosurePasses(int passes) { this.closurePasses = passes; }
