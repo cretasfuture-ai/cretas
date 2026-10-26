@@ -182,6 +182,13 @@ public class FactorySettingsDTO {
 
         @Schema(description = "自定义提示")
         private String customPrompt;
+
+        /**
+         * 摄像头告警抓拍是否交给 AI 识别 (抓拍里可能有人, 图片识别不做名称脱敏)。
+         * 默认关闭: 不填 / null / false 都不发, 只有本厂显式设为 true 才发。
+         */
+        @Schema(description = "摄像头告警抓拍交给 AI 识别 (默认关闭, 按工厂打开)", example = "false")
+        private Boolean cameraSnapshotAnalysis;
     }
 
     /**
