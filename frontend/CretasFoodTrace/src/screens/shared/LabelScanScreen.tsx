@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useRef, useCallback } from 'react';
+import AiImageNotice from '../../components/common/AiImageNotice';
 import {
   View,
   Text,
@@ -431,6 +432,7 @@ export default function LabelScanScreen() {
             <View style={[styles.guideCorner, styles.guideCornerBR]} />
           </View>
           <Text style={styles.scanHintText}>将标签放入框内</Text>
+          <AiImageNotice tone="dark" />
         </View>
 
         {/* 底部控制栏 */}

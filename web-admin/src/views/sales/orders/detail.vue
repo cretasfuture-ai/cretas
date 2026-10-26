@@ -8,6 +8,7 @@ import { get, post, put } from '@/api/request';
 import OrderItemsEditor, { type OrderItemRow } from './components/OrderItemsEditor.vue';
 import { initialTaxIncludedUnitPrice } from './salesOrderNewLineContract';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
+import AiUploadHint from '@/components/common/AiUploadHint.vue';
 import DocumentTraceDrawer from '@/components/DocumentTraceDrawer.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import DeliverySignatureReceipt from './components/DeliverySignatureReceipt.vue';
@@ -2971,6 +2972,7 @@ async function handleQuickPayFull() {
         <div class="el-upload__text">将 PDF 文件拖到此处, 或<em>点击选择</em></div>
         <template #tip>
           <div class="el-upload__tip">仅支持 .pdf 格式, 单文件 ≤ 10MB</div>
+          <AiUploadHint kind="pdf" />
         </template>
       </el-upload>
       <template #footer>
