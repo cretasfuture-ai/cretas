@@ -155,4 +155,3 @@ async def test_captured_sources_real_pg_migration_load_engine_and_negative_guard
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.execute(f"DROP ROLE IF EXISTS {reader_role}")
         await conn.close()
-

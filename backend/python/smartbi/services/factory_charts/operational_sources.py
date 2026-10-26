@@ -87,7 +87,7 @@ LIMIT 10001
 
 # ProductionReport is an operational fact table, not a cost allocation table.
 WIP_REPORT_SQL = """
-SELECT pr.id AS "报工ID", pr.factory_id AS "__factory_id", pr.report_date AS "日期", pr.batch_id AS "批次ID", 
+SELECT pr.id AS "报工ID", pr.factory_id AS "__factory_id", pr.report_date AS "日期", pr.batch_id AS "批次ID",
        pr.process_category AS "工序", pr.process_order AS "工序序",
        pr.product_type_id AS "产品ID", pr.product_name AS "产品",
        pr.input_quantity AS "投入量", pr.input_unit AS "投入单位",

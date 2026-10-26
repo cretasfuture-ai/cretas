@@ -172,4 +172,3 @@ def test_source_expression_mutants_are_pinned_by_contract_assertions():
     assert "report_type='YIELD'" in sql
     assert "report_type IN ('PROGRESS','HOURS')" not in sql
     assert "pwp.process_order=pr.process_order" in sql
-

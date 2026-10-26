@@ -196,4 +196,3 @@ def test_cache_eviction_expiry_and_2000_row_first_last_pages(monkeypatch):
     with pytest.raises(details.DetailError) as exc:
         details.requires_finance(contexts[1], owner)
     assert exc.value.status_code == 410
-

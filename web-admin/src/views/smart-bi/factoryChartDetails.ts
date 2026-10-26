@@ -11,5 +11,3 @@ export function appendDetailPage(current: readonly Record<string, unknown>[], re
   if (!response.success || !response.data) return [...current];
   return [...current, ...response.data.rows];
 }
-
-

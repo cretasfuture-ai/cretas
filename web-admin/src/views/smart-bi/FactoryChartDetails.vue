@@ -73,5 +73,3 @@ function display(value: unknown) { return value === null || value === undefined 
 .filter-control label { white-space:nowrap; font-size:12px; color:var(--el-text-color-secondary); }
 @media (max-width: 768px) { .details-table-wrap { margin: 0 -12px; } .details-meta { line-height:1.6; } }
 </style>
-
-
