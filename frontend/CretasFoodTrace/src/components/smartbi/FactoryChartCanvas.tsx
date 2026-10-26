@@ -3,8 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewMessageEvent, type WebViewNavigation } from 'react-native-webview';
 import type { FactoryChartPoint } from '../../types/factoryCharts';
 import { FACTORY_CHART_RUNTIME } from '../../utils/smartbiFactoryChartRuntime';
-
-const ECHARTS_URL = 'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js';
+import { loadSmartbiChartEngine } from '../../utils/smartbiChartEngine';
 
 export interface FactoryChartCanvasProps {
   option: Record<string, unknown>;
@@ -35,9 +34,10 @@ function escapeJsonForScript(value: Record<string, unknown>): string {
     .replace(/\u2029/g, '\\u2029');
 }
 
-export function buildFactoryChartHtml(option: Record<string, unknown>, nonce = 'render-test-nonce'): string {
+export function buildFactoryChartHtml(option: Record<string, unknown>, nonce = 'render-test-nonce', engineScript = ''): string {
   const serialized = escapeJsonForScript(option);
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><style>html,body,#chart{margin:0;width:100%;height:100%;background:#fff;overflow:hidden}</style></head><body><div id="chart"></div><script src="${ECHARTS_URL}"></script><script>(function(){
+  const safeEngine = engineScript.replace(/<\/script/gi, '<\\/script');
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'"/><meta name="viewport" content="width=device-width,initial-scale=1"/><style>html,body,#chart{margin:0;width:100%;height:100%;background:#fff;overflow:hidden}</style></head><body><div id="chart"></div><script>${safeEngine}</script><script>(function(){
   var option=${serialized}, renderNonce=${JSON.stringify(nonce)};
   var chart;
   function post(message){if(window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify(message));}}
@@ -60,7 +60,19 @@ export const FactoryChartCanvas = forwardRef<FactoryChartCanvasHandle, FactoryCh
   const renderNonce = useMemo(() => `render-${Date.now()}-${Math.random().toString(36).slice(2)}`, [option]);
   const [ready, setReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const html = useMemo(() => buildFactoryChartHtml(option, renderNonce), [option, renderNonce]);
+  const [engine, setEngine] = useState<string | null>(null);
+  const html = useMemo(() => engine ? buildFactoryChartHtml(option, renderNonce, engine) : '', [option, renderNonce, engine]);
+
+  useEffect(() => {
+    let active = true;
+    loadSmartbiChartEngine().then(value => { if (active) setEngine(value); }).catch(error => {
+      if (!active) return;
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalError(`图表引擎加载失败：${message}`);
+      onError?.(message);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     setReady(false);
@@ -137,7 +149,7 @@ export const FactoryChartCanvas = forwardRef<FactoryChartCanvasHandle, FactoryCh
 
   return (
     <View testID={testID} style={[styles.container, { height }]}>
-      <WebView
+      {engine && <WebView
         ref={webViewRef}
         originWhitelist={['about:blank']}
         source={{ html, baseUrl: 'about:blank' }}
@@ -155,7 +167,7 @@ export const FactoryChartCanvas = forwardRef<FactoryChartCanvasHandle, FactoryCh
           onError?.(message);
         }}
         accessibilityLabel={title || 'SmartBI图表'}
-      />
+      />}
       {localError && <View style={styles.error}><Text style={styles.errorText}>{localError}</Text></View>}
     </View>
   );
