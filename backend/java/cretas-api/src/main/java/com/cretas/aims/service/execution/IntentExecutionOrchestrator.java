@@ -2590,8 +2590,9 @@ public class IntentExecutionOrchestrator {
         }
 
         // 经营报告 + 原话发给模型前脱敏 (报告里有客户 / 供应商 / 人名); 报告脱敏不了就不带报告, 原话也脱敏不了就不发
-        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId,
-                systemPrompt, userInput);
+        // 报告存的是快照 JSON: 能解析的段当结构化记录, 先从里面认出客户 / 人员名与联系方式, 再脱敏整段提示词
+        LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(CONVERSATIONAL_EGRESS_SITE, factoryId,
+                reportRecords(factoryAnalysisContext), Map.of(), Arrays.asList(systemPrompt, userInput));
         if (redacted.refused() && factoryAnalysisContext != null) {
             factoryAnalysisContext = null;
             redacted = llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId,
@@ -2632,6 +2633,25 @@ public class IntentExecutionOrchestrator {
                     ? "抱歉，我暂时无法回答您的问题。您可以尝试询问具体的系统操作。"
                     : "您好！有什么可以帮您的吗？";
         }
+    }
+
+    /** 「## 日报\n{...}」这样的段落里能解析成 JSON 的部分; 解析不了的段只按文本脱敏。 */
+    private List<Object> reportRecords(String reportContext) {
+        List<Object> records = new ArrayList<>();
+        if (reportContext == null) {
+            return records;
+        }
+        for (String section : reportContext.split("(?m)^## [^\\n]*\\n")) {
+            String body = section.trim();
+            if (body.startsWith("{") || body.startsWith("[")) {
+                try {
+                    records.add(objectMapper.readValue(body, Object.class));
+                } catch (JsonProcessingException ignored) {
+                    // 不是 JSON 的报告正文: 交给文本脱敏
+                }
+            }
+        }
+        return records;
     }
 
     // ==================== 响应构建 ====================

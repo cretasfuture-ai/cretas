@@ -439,6 +439,22 @@ public final class LlmEgressRedactor {
      */
     public Result redact(Object data, List<String> texts, Map<String, Party> knownParties,
                          Collection<String> protectedNames, boolean detectNames) {
+        return redact(data, texts, knownParties, protectedNames, detectNames, false);
+    }
+
+    /**
+     * 只发文本、文本是从 {@code record} 拼出来的 (记录本身不发): 记录里认出的一切 —— 人和交易对象名、
+     * 不认识字段里换了代号的值、不发字段 (地址 / 备注 / 电话) 的值 —— 在文本里出现都换掉, 发前也按这些查。
+     * 记录展开不了就拒绝 (不退回只按文本猜)。
+     */
+    public Result redactTextsWithRecord(Object record, List<String> texts, Map<String, Party> knownParties,
+                                        Collection<String> protectedNames) {
+        Result r = redact(record, texts, knownParties, protectedNames, true, true);
+        return r.refused() ? r : new Result(null, r.texts, r.tokenToReal, null, r.droppedFields);
+    }
+
+    private Result redact(Object data, List<String> texts, Map<String, Party> knownParties,
+                          Collection<String> protectedNames, boolean detectNames, boolean recordOnly) {
         Object tree = null;
         if (data != null) {
             try {
@@ -448,6 +464,7 @@ public final class LlmEgressRedactor {
             }
         }
         Session s = new Session(protectedNames);
+        s.recordOnly = recordOnly;
         // 入参里本来就写着「[客户A]」这种字样时, 生成的代号要避开它, 否则还原时会被换成别人的真名
         StringBuilder corpus = new StringBuilder();
         for (String text : texts) {
@@ -477,12 +494,19 @@ public final class LlmEgressRedactor {
         // 第二遍: 后面才认出的真名, 在前面的字段 / 段落里也换掉
         cleanedTree = s.replaceKnownEverywhere(cleanedTree);
         List<String> cleanedTexts = new ArrayList<>();
+        List<String> textReals = s.textReals();
         for (String text : scrubbed) {
-            cleanedTexts.add(text == null ? null : (String) s.replaceKnownEverywhere(text));
+            cleanedTexts.add(text == null ? null : s.replaceKnownText(text, textReals));
         }
+        // 记录不发时只查要发的文本 (外加: 不发字段的值一个都不许留下)
         List<Object> all = new ArrayList<>(cleanedTexts);
-        all.add(cleanedTree);
+        if (!recordOnly) {
+            all.add(cleanedTree);
+        }
         String leak = s.findLeak(all);
+        if (leak == null && recordOnly) {
+            leak = s.findDroppedValue(cleanedTexts);
+        }
         if (leak != null) {
             return new Result(null, Map.of(), leak, s.dropped);
         }
@@ -507,6 +531,8 @@ public final class LlmEgressRedactor {
         final Set<String> explicitReals = new java.util.HashSet<>();
         /** 入参原文 (含结构化结果里的字符串): 生成的代号不能和里面已有的字样相同。 */
         String reserved = "";
+        /** 记录只用来认名字、不发: 不认识字段里的值 (名称代号) 也要在文本里换掉。 */
+        boolean recordOnly;
         int dropped;
         String unsupported;
 
@@ -771,12 +797,16 @@ public final class LlmEgressRedactor {
 
         /** 文本模式: 已知真名 / 保密产品名先换, 再把号码换成可还原的代号, 按需再认公司名与人名。 */
         String scrubText(String value, boolean detectNames) {
-            String out = replaceKnownText(value, spreadableReals());
+            // 不发字段的值先换 (地址里常含客户名: 先换名字, 整串地址就对不上了); 文本是 JSON 时值是转义后的写法
+            String out = value;
             for (String hidden : droppedValues) {
-                if (out.contains(hidden)) {
-                    out = out.replace(hidden, token(Kind.HIDDEN_FIELD, hidden));
+                for (String form : forms(hidden)) {
+                    if (out.contains(form)) {
+                        out = out.replace(form, token(Kind.HIDDEN_FIELD, hidden));
+                    }
                 }
             }
+            out = replaceKnownText(out, textReals());
             out = replaceSpans(out, ID_GROUPED, Kind.ID_NUMBER);
             out = replaceSpans(out, TrainingSampleRules.ID_CARD, Kind.ID_NUMBER);
             out = replaceSpans(out, CARD_GROUPED, Kind.CARD);
@@ -806,7 +836,11 @@ public final class LlmEgressRedactor {
         String replaceSpans(String text, Pattern pattern, Kind kind, java.util.function.UnaryOperator<String> core) {
             Matcher m = pattern.matcher(text);
             StringBuilder sb = new StringBuilder();
+            boolean numeric = kind == Kind.PHONE || kind == Kind.CARD || kind == Kind.ID_NUMBER;
             while (m.find()) {
+                if (numeric && afterDecimalPoint(text, m.start())) {
+                    continue; // 0.0523809524 / 0.30000000000000004 的小数部分不是号码
+                }
                 String span = m.group();
                 String name = core.apply(span);
                 String lead = span.substring(0, span.length() - name.length());
@@ -814,6 +848,21 @@ public final class LlmEgressRedactor {
             }
             m.appendTail(sb);
             return sb.toString();
+        }
+
+        static boolean afterDecimalPoint(String text, int start) {
+            return start >= 2 && text.charAt(start - 1) == '.' && Character.isDigit(text.charAt(start - 2));
+        }
+
+        /** 与 {@code find()} 相同, 但跳过紧跟在小数点后面的数字串。 */
+        static boolean findNumber(Pattern pattern, String text) {
+            Matcher m = pattern.matcher(text);
+            while (m.find()) {
+                if (!afterDecimalPoint(text, m.start())) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /** 「查一下永辉超市」→「永辉超市」; 去掉之后不再像单位名 (「美的集团」) 就保留整段。 */
@@ -854,6 +903,23 @@ public final class LlmEgressRedactor {
         }
 
         /**
+         * 文本 (原话 / 提示词) 里要换掉的: 上面那些, 再加结构化结果里不认识字段的值 (名称代号) ——
+         * 用户提到排名里的「周晓明」时, 数据里是 [名称A], 原话里也得是 [名称A]。只用于文本, 不扩散进结构化结果。
+         */
+        List<String> textReals() {
+            List<String> reals = new ArrayList<>(spreadableReals());
+            for (Map.Entry<String, Kind> e : realKind.entrySet()) {
+                String real = e.getKey();
+                if (e.getValue() == Kind.NAME && !reals.contains(real) && real.length() >= 2
+                        && !real.matches("\\d+") && !isCode(real)) {
+                    reals.add(real);
+                }
+            }
+            reals.sort(Comparator.comparingInt(String::length).reversed());
+            return reals;
+        }
+
+        /**
          * 哪些真名要在其它字段里也换掉 (以及最后一遍要查):
          * 人 / 客户 / 供应商 / 单位 / 保密产品 —— 包括 wangjg 这类拼音登录名 (UserCreateTool 会在 message 里重复它);
          * 按字段推断出的「名称」代号不扩散 (多为状态 / 说明短语, 扩散会把「合格」换进「合格率」)。
@@ -863,6 +929,10 @@ public final class LlmEgressRedactor {
             Kind kind = realKind.get(real);
             if (explicitReals.contains(real)) {
                 return real.length() >= 2 && !real.matches("\\d+");
+            }
+            // 记录不发时, 不认识字段里的值 (经销商 / 收款方 / 裸 name …) 也是要在文本里换掉的名字
+            if (kind == Kind.NAME && recordOnly) {
+                return real.length() >= 2 && !real.matches("\\d+") && !isCode(real);
             }
             // 隐藏内容只在文本模式里替换 (scrubText), 不扩散进结构化结果
             if (kind == null || kind == Kind.NAME || kind == Kind.HIDDEN_FIELD || real.length() < 2
@@ -904,14 +974,22 @@ public final class LlmEgressRedactor {
                 }
             }
             for (String real : reals) {
-                if (!out.contains(real)) {
-                    continue;
+                for (String form : forms(real)) {
+                    if (!out.contains(form)) {
+                        continue;
+                    }
+                    out = isAscii(form)
+                            ? asciiWord(form).matcher(out).replaceAll(Matcher.quoteReplacement(realToToken.get(real)))
+                            : out.replace(form, realToToken.get(real));
                 }
-                out = isAscii(real)
-                        ? asciiWord(real).matcher(out).replaceAll(Matcher.quoteReplacement(realToToken.get(real)))
-                        : out.replace(real, realToToken.get(real));
             }
             return out;
+        }
+
+        /** 原样, 以及放进 JSON 字符串后的写法 (换行 / 引号 / 反斜杠被转义); 中文不变。 */
+        static List<String> forms(String real) {
+            String escaped = new String(com.fasterxml.jackson.core.io.JsonStringEncoder.getInstance().quoteAsString(real));
+            return escaped.equals(real) ? List.of(real) : List.of(real, escaped);
         }
 
         /** 拼音 / 英文名按整词匹配 (wangjg 不该匹配 wangjgx), 中文按子串。 */
@@ -924,7 +1002,12 @@ public final class LlmEgressRedactor {
         }
 
         boolean stillContains(String s, String real) {
-            return isAscii(real) ? asciiWord(real).matcher(s).find() : s.contains(real);
+            for (String form : forms(real)) {
+                if (isAscii(form) ? asciiWord(form).matcher(s).find() : s.contains(form)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         boolean isToken(String text) {
@@ -943,24 +1026,38 @@ public final class LlmEgressRedactor {
                 if (MOBILE_NUMBER.matcher(n.toString()).matches()) return "残留手机号";
             }
             for (String s : strings) {
-                if (TrainingSampleRules.PHONE.matcher(s).find() || MOBILE_LOOSE.matcher(s).find()
-                        || MOBILE_DOTTED.matcher(s).find() || MOBILE_FULLWIDTH.matcher(s).find()) return "残留手机号";
-                if (TrainingSampleRules.ID_CARD.matcher(s).find()) return "残留证件号";
+                if (findNumber(TrainingSampleRules.PHONE, s) || findNumber(MOBILE_LOOSE, s)
+                        || findNumber(MOBILE_DOTTED, s) || MOBILE_FULLWIDTH.matcher(s).find()) return "残留手机号";
+                if (findNumber(TrainingSampleRules.ID_CARD, s)) return "残留证件号";
                 // 编码类字符串 (批次号 / 单号) 不按「含座机 / 含卡号」判, 只看整个值 (卡号已在字段级按字段名处理)
                 if (Session.isCode(s)) {
                     if (LANDLINE_WHOLE.matcher(s.trim()).matches()) return "残留电话号码";
                 } else {
-                    if (LANDLINE.matcher(s).find() || LANDLINE_SEGMENTED.matcher(s).find()) return "残留电话号码";
-                    if (TrainingSampleRules.BANK_CARD.matcher(s).find() || CARD_GROUPED.matcher(s).find()) {
+                    if (findNumber(LANDLINE, s) || findNumber(LANDLINE_SEGMENTED, s)) return "残留电话号码";
+                    if (findNumber(TrainingSampleRules.BANK_CARD, s) || findNumber(CARD_GROUPED, s)) {
                         return "残留银行卡号";
                     }
-                    if (ID_GROUPED.matcher(s).find() || ID_15.matcher(s).find()) return "残留证件号";
+                    if (findNumber(ID_GROUPED, s) || findNumber(ID_15, s)) return "残留证件号";
                 }
                 for (String name : protectedNames) {
                     if (s.contains(name)) return "残留工艺保密产品名";
                 }
                 for (String real : realToToken.keySet()) {
                     if (replaceableEverywhere(real) && stillContains(s, real)) return "残留已脱敏的名称";
+                }
+            }
+            return null;
+        }
+
+        String findDroppedValue(List<String> texts) {
+            for (String text : texts) {
+                if (text == null) {
+                    continue;
+                }
+                for (String hidden : droppedValues) {
+                    for (String form : forms(hidden)) {
+                        if (text.contains(form)) return "残留不发送的字段内容";
+                    }
                 }
             }
             return null;

@@ -75,6 +75,20 @@ class SopEgressRedactionTest {
     }
 
     @Test
+    void pdfTextIsNotSentWhenSecretLookupFails() throws Exception {
+        when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
+        SopParseDocumentTool tool = spy(new SopParseDocumentTool());
+        wire(tool);
+        doReturn(SOP).when(tool).extractPdfText("https://oss.example/sop.pdf");
+
+        String out = tool.execute(call(tool.getToolName(), Map.of("fileUrl", "https://oss.example/sop.pdf",
+                "fileType", "PDF")), Map.of("factoryId", FACTORY, "userId", 1L));
+
+        verify(llm, never()).chat(anyString(), anyString());
+        assertThat(out).contains("未发给 AI");
+    }
+
+    @Test
     void complexityAnalysisIsRedactedAndFallsBackToRulesWhenLookupFails() throws Exception {
         SopAnalyzeComplexityTool tool = new SopAnalyzeComplexityTool();
         wire(tool);

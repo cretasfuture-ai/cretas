@@ -91,6 +91,19 @@ class FormAssistantEgressRedactionTest {
     }
 
     @Test
+    void schemaGenerationHidesNamesInTheDescriptionAndJustification() {
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> said = ArgumentCaptor.forClass(String.class);
+        when(llm.chatLowTemp(system.capture(), said.capture())).thenReturn("{\"relevant\":true,\"fields\":[]}");
+
+        service.generateSchemaWithJustification("给客户张记食品有限公司加一个对接人字段, 默认填联系人：王建国",
+                "CUSTOMER", List.of("customerName"), "李经理要求, 电话 13812345678", "F006", false, 20);
+
+        assertThat(system.getValue() + said.getValue())
+                .doesNotContain("张记食品", "王建国", "李经理", "13812345678").contains("对接人");
+    }
+
+    @Test
     void secretLookupFailureMeansTheFormIsNotSent() {
         when(processSecret.protectedProductNames("F006")).thenThrow(new IllegalStateException("db down"));
 

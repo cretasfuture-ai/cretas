@@ -182,8 +182,9 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
             // Build LLM prompt for ECharts generation
             String rawPrompt = buildChartGenerationPrompt(data, features, chartType, purpose);
             // 样本行里的客户 / 人名 / 电话: 按列名从行里认出来换代号或不发; 图表配置解析后再换回真名
-            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null, data, Map.of(),
-                    List.of(rawPrompt));
+            // 只有前 MAX_SAMPLE_ROWS 行进了提示词, 就只拿这几行认名字 (整份上传可能上万行)
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null,
+                    data.subList(0, Math.min(MAX_SAMPLE_ROWS, data.size())), Map.of(), List.of(rawPrompt));
             if (redacted.refused()) {
                 return null;
             }

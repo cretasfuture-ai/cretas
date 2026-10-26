@@ -69,7 +69,7 @@ public class OperatingReportGenerator {
             if(config!=null)prompt+="工厂关注方向（不改变上述输出合同）："+config.getPromptTemplate()+"\n";
             prompt+="经营指标快照：\n"+codec.encode(snapshot);
             // 快照里的指标标签 / 工厂关注方向可能带客户、人名、保密产品名: 换代号再发, 脱敏不了按模型不可用记失败
-            var redacted=llmEgressGuard.texts(EGRESS_SITE,context.factoryId(),system,prompt);
+            var redacted=llmEgressGuard.textsWithRecord(EGRESS_SITE,context.factoryId(),snapshot,java.util.Map.of(),java.util.List.of(system,prompt));
             if(redacted.refused())throw new IllegalStateException("Operating report prompt could not be redacted");
             // Existing configured application model client; no process, credential or provider override.
             String output=redacted.restoreJsonText(model.chat(redacted.text(0),redacted.text(1)));

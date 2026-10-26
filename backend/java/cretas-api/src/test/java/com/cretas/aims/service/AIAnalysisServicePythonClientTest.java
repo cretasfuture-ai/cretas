@@ -447,6 +447,22 @@ class AIAnalysisServicePythonClientTest {
         assertEquals("赵铁柱 本期无打卡记录", result.getAiInsight());
     }
 
+    @Test
+    void employeeAnalysisIsNotSentWhenSecretLookupFails() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.protectedProductNames("FACTORY-EMP")).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(service, "llmEgressGuard", new com.cretas.aims.service.consent.LlmEgressGuard(
+                new com.fasterxml.jackson.databind.ObjectMapper(), filter));
+        User employee = employee(5L, "FACTORY-EMP");
+        when(userRepository.findByIdAndFactoryId(5L, "FACTORY-EMP")).thenReturn(Optional.of(employee));
+        stubEmployeeFacts(employee, List.of(), 0, 0L, 0L, 0L, 0, 0L, 0L, 0L);
+
+        assertThrows(RuntimeException.class,
+                () -> service.analyzeEmployee("FACTORY-EMP", 99L, 5L, 30, null, null));
+        verify(pythonClient, never()).analyzeGeneral(anyString(), any(), any());
+    }
+
     private static boolean containsAny(String text, String... needles) {
         for (String n : needles) {
             if (text.contains(n)) {

@@ -49,11 +49,13 @@ class CorrectionAgentEgressRedactionTest {
 
         CorrectionAgentService.CorrectionResult result = agent.analyzeAndCorrect(
                 "查张记食品有限公司的应收, 联系人：王建国 13812345678", "customer_receivable_query",
-                Map.of("customerName", "张记食品有限公司 ", "contactPhone", "13812345678"),
+                Map.of("customerName", "张记食品有限公司 ", "contactPhone", "13812345678",
+                        "name", "老街坊", "keyword", "李记"),
                 "找不到客户 张记食品有限公司", null, 1);
 
         String prompt = String.valueOf(sent.getValue().getMessages().get(0).getContent());
-        assertThat(prompt).doesNotContain("张记食品", "王建国", "13812345678");
+        // 不认识的参数 (裸 name / keyword) 里的值也是名字: 记录不发, 正文里一并换掉
+        assertThat(prompt).doesNotContain("张记食品", "王建国", "13812345678", "老街坊", "李记");
         assertThat(result.correctedParams()).containsEntry("customerName", "张记食品有限公司");
         ArgumentCaptor<ReflectionMemory> saved = ArgumentCaptor.forClass(ReflectionMemory.class);
         verify(reflections).save(saved.capture());

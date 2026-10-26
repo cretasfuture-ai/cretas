@@ -119,6 +119,7 @@ public class SmartBIServiceImpl implements SmartBIService {
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
     static final String INSIGHT_EGRESS_SITE = "smartbi-dashboard-insight";
+    static final String RESPONSE_TEXT_EGRESS_SITE = "smartbi-response-text";
 
     /**
      * 预测服务 - 用于 FORECAST 意图处理
@@ -1327,7 +1328,8 @@ public class SmartBIServiceImpl implements SmartBIService {
         }
         dashboard.getRankings().forEach((key, rankings) -> {
             String k = key == null ? "" : key.toLowerCase();
-            LlmEgressRedactor.Party party = k.contains("customer") || k.contains("store") || k.contains("客户")
+            LlmEgressRedactor.Party party = k.contains("customer") || k.contains("store") || k.contains("dealer")
+                    || k.contains("distributor") || k.contains("客户") || k.contains("经销商") || k.contains("门店")
                     ? LlmEgressRedactor.Party.CUSTOMER
                     : k.contains("supplier") || k.contains("vendor") || k.contains("供应商")
                     ? LlmEgressRedactor.Party.SUPPLIER
@@ -1736,12 +1738,14 @@ public class SmartBIServiceImpl implements SmartBIService {
         if (!checkQuota(factoryId)) return null;
 
         try {
-            String dataJson;
-            try {
-                dataJson = objectMapper.writeValueAsString(data);
-            } catch (Exception e) {
+            // 数据按结构脱敏 (门店 / 客户 / 人名换代号, 联系方式与备注不发), 老板原话同一套代号; 脱敏不了回退模板
+            LlmEgressRedactor.Result redacted = llmEgressGuard.combined(RESPONSE_TEXT_EGRESS_SITE, factoryId, data,
+                    Map.of(), List.of(userQuery == null ? "" : userQuery));
+            if (redacted.refused() || redacted.payload() == null) {
                 return null;
             }
+            String dataJson = redacted.payload();
+            userQuery = redacted.text(0);
             // Avoid huge payloads — truncate if needed
             if (dataJson.length() > 6000) {
                 dataJson = dataJson.substring(0, 6000) + "...(truncated)";
@@ -1776,7 +1780,7 @@ public class SmartBIServiceImpl implements SmartBIService {
                 if (content != null && !content.isBlank() && content.length() > 30) {
                     log.info("LLM responseText 生成成功: factoryId={}, intent={}, len={}",
                             factoryId, intentName, content.length());
-                    return content.trim();
+                    return redacted.restore(content.trim());
                 }
             }
         } catch (Exception e) {

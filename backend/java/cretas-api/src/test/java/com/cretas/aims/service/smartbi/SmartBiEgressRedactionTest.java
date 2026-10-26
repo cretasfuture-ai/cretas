@@ -10,7 +10,12 @@ import com.cretas.aims.service.smartbi.chart.ChartSufficiencyEvaluator;
 import com.cretas.aims.service.smartbi.chart.DataFeatureExtractor;
 import com.cretas.aims.service.smartbi.chart.impl.AdaptiveChartGeneratorImpl;
 import com.cretas.aims.service.smartbi.chart.impl.ChartSufficiencyEvaluatorImpl;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.cretas.aims.service.smartbi.impl.LLMFieldMappingServiceImpl;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -20,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -43,17 +49,30 @@ class SmartBiEgressRedactionTest {
         LLMFieldMappingServiceImpl service = new LLMFieldMappingServiceImpl();
         ReflectionTestUtils.setField(service, "dashScopeClient", llm);
         ReflectionTestUtils.setField(service, "fieldMappingDictionary", dictionary);
+        // 字段映射这层不带工厂: 保密产品名按本次请求登录 token 里的工厂查
+        ProcessSecretSampleFilter processSecret = mock(ProcessSecretSampleFilter.class);
+        when(processSecret.protectedProductNames("F006")).thenReturn(Set.of("秘制酱牛肉"));
+        ReflectionTestUtils.setField(service, "llmEgressGuard", new LlmEgressGuard(mapper, processSecret));
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        http.setAttribute("factoryId", "F006");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(http));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         when(llm.chatLowTemp(anyString(), prompt.capture())).thenReturn("[]");
 
-        service.analyzeFields(List.of(
-                new LLMFieldMappingService.FieldInfo("联系人", "STRING", List.of("王建国", "钱大海"), 2),
-                new LLMFieldMappingService.FieldInfo("客户名称", "STRING", List.of("老街坊餐饮"), 1),
-                new LLMFieldMappingService.FieldInfo("手机", "STRING", List.of("13812345678"), 1),
-                new LLMFieldMappingService.FieldInfo("送货地址", "STRING", List.of("上海市松江区某路 88 号"), 1),
-                new LLMFieldMappingService.FieldInfo("产品", "STRING", List.of("五香虎皮猪肘"), 1)));
+        try {
+            service.analyzeFields(List.of(
+                    new LLMFieldMappingService.FieldInfo("联系人", "STRING", List.of("王建国", "钱大海"), 2),
+                    new LLMFieldMappingService.FieldInfo("客户名称", "STRING", List.of("老街坊餐饮"), 1),
+                    new LLMFieldMappingService.FieldInfo("手机", "STRING", List.of("13812345678"), 1),
+                    new LLMFieldMappingService.FieldInfo("送货地址", "STRING", List.of("上海市松江区某路 88 号"), 1),
+                    new LLMFieldMappingService.FieldInfo("经销商", "STRING", List.of("老王批发"), 1),
+                    new LLMFieldMappingService.FieldInfo("产品", "STRING", List.of("五香虎皮猪肘", "秘制酱牛肉"), 2)));
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
 
-        assertThat(prompt.getValue()).doesNotContain("王建国", "钱大海", "老街坊", "13812345678", "松江")
+        assertThat(prompt.getValue())
+                .doesNotContain("王建国", "钱大海", "老街坊", "13812345678", "松江", "老王批发", "秘制酱牛肉")
                 .contains("联系人", "客户名称", "五香虎皮猪肘");
     }
 

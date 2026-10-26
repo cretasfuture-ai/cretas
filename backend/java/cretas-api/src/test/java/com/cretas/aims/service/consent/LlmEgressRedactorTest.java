@@ -485,6 +485,57 @@ class LlmEgressRedactorTest {
         assertThat(sent).doesNotContain("张三", "李四", "老街坊", "王五").contains("进行中", "12");
     }
 
+    // ------------------------------------------------------------------ 记录只用来认名字 (第二轮审查)
+
+    @Test
+    void recordOnlyModeAlsoReplacesValuesOfUnrecognisedFields() {
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("经销商", "老王批发");
+        record.put("name", "老街坊");
+        record.put("keyword", "李记");
+        record.put("productName", "五香虎皮猪肘");
+
+        LlmEgressRedactor.Result r = redactor.redactTextsWithRecord(record,
+                List.of("参数: {\"经销商\":\"老王批发\",\"name\":\"老街坊\",\"keyword\":\"李记\"} 五香虎皮猪肘"),
+                Map.of(), Set.of());
+
+        assertThat(r.refused()).isFalse();
+        assertThat(r.payload()).isNull();
+        assertThat(r.text(0)).doesNotContain("老王批发", "老街坊", "李记").contains("五香虎皮猪肘", "经销商");
+    }
+
+    @Test
+    void hiddenFieldValuesAreReplacedBeforeNamesAndInTheirJsonEscapedForm() throws Exception {
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("customerName", "张记食品有限公司");
+        record.put("shippingAddress", "张记食品有限公司仓库 上海市松江区某路88号");
+        record.put("remark", "第一行: 王总说\n第二行: 下周付款");
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(record);
+
+        LlmEgressRedactor.Result r = redactor.redactTextsWithRecord(record, List.of("提交值: " + json),
+                Map.of(), Set.of());
+
+        assertThat(r.text(0)).doesNotContain("张记", "松江", "王总说", "下周付款");
+        assertThat(r.restore(r.text(0))).isEqualTo("提交值: " + json.replace("\\n", "\n"));
+    }
+
+    @Test
+    void recordThatCannotBeExpandedIsRefused() {
+        LlmEgressRedactor.Result r = redactor.redactTextsWithRecord(new Object(), List.of("x"), Map.of(), Set.of());
+
+        assertThat(r.refused()).isTrue();
+    }
+
+    @Test
+    void decimalsAreNotMistakenForPhonesOrCards() {
+        String text = "毛利率 0.0523809524, 浮点误差 0.30000000000000004, 电话 13812345678";
+
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(text), Map.of(), Set.of(), true);
+
+        assertThat(r.refused()).isFalse();
+        assertThat(r.text(0)).contains("0.0523809524", "0.30000000000000004").doesNotContain("13812345678");
+    }
+
     @Test
     void textModeTokensCarryNoDigits() {
         LlmEgressRedactor.Result r = redactor.redactTexts(List.of("13812345678 13912345678 6222021234567890123"),

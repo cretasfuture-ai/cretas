@@ -83,6 +83,61 @@ class SmartBiAnalysisEgressRedactionTest {
 
         assertThat(user.getValue()).doesNotContain("张记食品", "周晓明", "13912345678", "秘制酱牛肉").contains("12800");
         assertThat(chart.get("aiAnalysis")).isEqualTo("张记食品有限公司 贡献最大");
+
+        // 查保密产品名失败: 不发, 分析栏给明确提示
+        ProcessSecretSampleFilter failing = mock(ProcessSecretSampleFilter.class);
+        when(failing.protectedProductNames("F006")).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(service, "llmEgressGuard", new LlmEgressGuard(mapper, failing));
+        PythonLLMClient silent = mock(PythonLLMClient.class);
+        when(silent.isAvailable()).thenReturn(true);
+        ReflectionTestUtils.setField(service, "pythonLLMClient", silent);
+
+        Map<String, Object> refused = service.buildChartWithAnalysis("sales_by_customer", data, "F006");
+
+        org.mockito.Mockito.verify(silent, org.mockito.Mockito.never()).chat(anyString(), anyString());
+        assertThat(String.valueOf(refused.get("aiAnalysis"))).contains("未发给 AI");
+    }
+
+    @Test
+    void naturalLanguageQueryAnswerHidesRankedNamesAndRestoresThem() {
+        PythonLLMClient llm = mock(PythonLLMClient.class);
+        SalesAnalysisService sales = mock(SalesAnalysisService.class);
+        when(sales.getSalespersonRanking(eq("F006"), any(), any())).thenReturn(List.of(
+                RankingItem.builder().name("周晓明").value(new BigDecimal("12800")).build()));
+        SmartBIIntentService intents = mock(SmartBIIntentService.class);
+        when(intents.recognizeIntent(anyString())).thenReturn(com.cretas.aims.dto.smartbi.IntentResult.builder()
+                .intent(com.cretas.aims.entity.smartbi.enums.SmartBIIntent.QUERY_SALES_RANKING).confidence(0.9).build());
+        SmartBiUsageRecordRepository usage = mock(SmartBiUsageRecordRepository.class);
+        when(usage.countTodayUsage(eq("F006"), any(LocalDate.class))).thenReturn(0L);
+        SmartBiBillingConfigRepository billing = mock(SmartBiBillingConfigRepository.class);
+        when(billing.findByFactoryId("F006")).thenReturn(Optional.empty());
+        SmartBIServiceImpl service = new SmartBIServiceImpl(sales, mock(DepartmentAnalysisService.class),
+                mock(RegionAnalysisService.class), mock(FinanceAnalysisService.class), intents,
+                mock(SmartBIPromptService.class), mock(RecommendationService.class),
+                mock(SmartBiAnalysisCacheRepository.class), usage, billing, mock(SmartBiQueryHistoryRepository.class),
+                mock(SmartBiSalesDataRepository.class), mapper);
+        ReflectionTestUtils.setField(service, "llmInsightEnabled", true);
+        ReflectionTestUtils.setField(service, "pythonLLMClient", llm);
+        ReflectionTestUtils.setField(service, "llmEgressGuard", guard());
+        ArgumentCaptor<ChatCompletionRequest> sent = ArgumentCaptor.forClass(ChatCompletionRequest.class);
+        when(llm.chatCompletion(sent.capture())).thenAnswer(inv -> {
+            String p = String.valueOf(inv.getArgument(0, ChatCompletionRequest.class).getMessages().get(1).getContent());
+            String person = p.replaceAll("(?s).*?(\\[(人员|名称)[A-Z]+]).*", "$1");
+            ChatCompletionResponse r = new ChatCompletionResponse();
+            ChatCompletionResponse.Message m = new ChatCompletionResponse.Message();
+            m.setContent("本月业绩第一是 " + person + "，销售额 12800 元，建议请他分享客户跟进经验。");
+            ChatCompletionResponse.Choice c = new ChatCompletionResponse.Choice();
+            c.setMessage(m);
+            r.setChoices(List.of(c));
+            return r;
+        });
+
+        var response = service.processQuery("F006", 7L, com.cretas.aims.dto.smartbi.NLQueryRequest.builder()
+                .query("周晓明 这个月卖得怎么样, 他电话 13812345678").build());
+
+        String prompt = String.valueOf(sent.getValue().getMessages().get(1).getContent());
+        assertThat(prompt).doesNotContain("周晓明", "13812345678").contains("12800");
+        assertThat(response.getResponseText()).contains("本月业绩第一是 周晓明").doesNotContain("[人员", "[名称");
     }
 
     @Test
