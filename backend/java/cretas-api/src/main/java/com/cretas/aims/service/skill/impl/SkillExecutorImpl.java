@@ -55,8 +55,12 @@ public class SkillExecutorImpl implements SkillExecutor {
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
 
-    /** Skill 提示词 (含已抽参数) 与原话发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
-    @Autowired
+    /**
+     * Skill 提示词 (含已抽参数) 与原话发给模型前脱敏; 单测直接 new 本类时用默认实例。
+     * required=false: 采购授权的 Postgres 切片测试 (@DataJpaTest + @Import) 把本类装进没有守卫 bean 的上下文;
+     * 完整应用里守卫 bean 总在, 切片里沿用默认实例 (号码 / 人名照样脱敏, 只是不查保密产品名)。
+     */
+    @Autowired(required = false)
     private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
             com.cretas.aims.service.consent.LlmEgressGuard.standalone();
 
