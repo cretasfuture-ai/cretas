@@ -32,6 +32,8 @@ import WorkHoursTable from './WorkHoursTable.vue';
 import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
+import BlendRatioPanel from './BlendRatioPanel.vue';
+import { evaluateBlend, blendReasonBlockedReason, type BlendEvaluation, type BlendLineInput } from './blendRatio';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
 import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
 import { deriveByShare } from '@/views/system/product-processes/workflow/workflowInputShare';
@@ -188,6 +190,10 @@ interface SheetRow {
   rawBatchQty: number | null;
   /** 新报工路径：只录各原料总投料量，由后端正式提交时自动分摊生产库批次。 */
   materialInputTotals: MaterialInputTotalLine[];
+  /** 缺口 06 配比核对: 多主料偏离配方份额 >±2pp 时必选的原因 (正式报工才要求)。 */
+  blendReason: string;
+  /** 原因 = 「其他」时的说明。 */
+  blendNote: string;
   /** 已存在显式原料批次的旧行保持原选择器，不能在回显时改写为新契约。 */
   legacyExplicitRawInput: boolean;
   /** 焯水: single upstream WIP batch number (WIP batchNumber 或 SFI intermediateBatchNo) */
@@ -877,6 +883,8 @@ function blankRow(): SheetRow {
       selected: portSelectedByDefault(port),
     })),
     legacyExplicitRawInput: false,
+    blendReason: '',
+    blendNote: '',
     upstreamBatch: '',
     finishedInputKg: null,
     upstreamSemiFinished: false,
@@ -1003,6 +1011,8 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   row.persistedOutputUnit = p.outputUnit || p.unit || processUnits.value.outputUnit;
   row.interimSettledAt = view.interimSettledAt ?? null;
   row.productionDate = p.processDate || todayStr();
+  row.blendReason = p.blendRatio?.reason ?? '';
+  row.blendNote = p.blendRatio?.note ?? '';
 
   if (isXiuYou.value) {
     const explicitRaw = p.rawMaterialInputs?.[0];
@@ -1450,11 +1460,50 @@ function finishedInputOverAvailableHint(row: SheetRow): string | null {
   return `填写的投入 ${entered}kg 超过所选批次可用量 ${available}kg；如确实多投请核对批次，账实差异由盘点纠正。`;
 }
 
+/**
+ * 缺口 06: 本行带份额主料的实际投料 —— 原料总量行 + 已选上游来源, 端口份额取自工艺端口。
+ * 与后端 BlendRatioCheck.enforceProcessSheet 收集的是同一批投入。
+ */
+function blendInputs(row: SheetRow): BlendLineInput[] {
+  const lines: BlendLineInput[] = row.materialInputTotals
+    .filter((item) => item.selected)
+    .map((item) => {
+      const port = portById(item.workflowPortId);
+      return {
+        id: item.workflowPortId || item.materialTypeId,
+        name: item.materialName || item.materialTypeId,
+        share: port?.inputShareRatio ?? null,
+        quantity: item.quantity,
+        unit: item.unit,
+        gramsPerUnit: port?.gramsPerUnit ?? null,
+      };
+    });
+  for (const source of row.upstreamSources) {
+    if (!source.selected || !source.workflowPortId || source.automaticRework) continue;
+    const port = portById(source.workflowPortId);
+    lines.push({
+      id: source.workflowPortId,
+      name: port?.materialName || source.skuId || source.workflowPortId,
+      share: port?.inputShareRatio ?? null,
+      quantity: source.feedQuantityKg,
+      unit: (port && workflowPortDisplayUnit(port)) || processUnits.value.inputUnit,
+      gramsPerUnit: port?.gramsPerUnit ?? null,
+    });
+  }
+  return lines;
+}
+
+function blendEvaluation(row: SheetRow): BlendEvaluation {
+  return evaluateBlend(blendInputs(row));
+}
+
 function formalSubmitBlockedReason(row: SheetRow): string | null {
   if (props.upstreamSubmissionReady === false) {
     return props.upstreamSubmissionMessage
       || `上游工序尚未正式报工，请先完成「${upstreamProcessName.value}」后再提交本道工序`;
   }
+  const blendBlocked = blendReasonBlockedReason(blendEvaluation(row), row.blendReason, row.blendNote);
+  if (blendBlocked) return blendBlocked;
   if (requiresManualCostAllocation(row)) {
     const activeOutputs = row.multiOutputs.filter((output) => output.selected && output.quantity != null && output.quantity > 0);
     if (activeOutputs.some((output) => output.costAllocationRatio == null || output.costAllocationRatio <= 0)) {
@@ -2397,6 +2446,11 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
   if (!isXiuYou.value && usesAutoMaterialTotals(row)) {
     const totals = submittedMaterialInputTotals(row);
     if (totals.length) base.materialInputTotals = totals;
+  }
+
+  // 缺口 06: 超差时带上原因 (其余快照字段由后端计算覆盖)。容差内不发, 免得留下没必要的原因。
+  if (blendEvaluation(row).status === 'OVER' && row.blendReason) {
+    base.blendRatio = { reason: row.blendReason, note: row.blendNote.trim() || undefined };
   }
 
   return base;
@@ -3440,6 +3494,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           type="error"
           :closable="false"
           show-icon
+          style="margin:8px 12px 0"
+        />
+        <!-- 缺口 06 配比核对 (表格模板有同一块, 改动需同步) -->
+        <BlendRatioPanel
+          :evaluation="blendEvaluation(row)"
+          v-model:reason="row.blendReason"
+          v-model:note="row.blendNote"
+          :disabled="row.submissionStatus === 'SUBMITTED'"
           style="margin:8px 12px 0"
         />
 
@@ -4540,6 +4602,22 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @batch-picker-visible="onBatchSelectVisibleChange"
                   />
                 </div>
+              </td>
+            </tr>
+
+            <!-- 缺口 06 配比核对 (卡片模板有同一块, 改动需同步) -->
+            <tr
+              v-if="blendEvaluation(row).status !== 'NOT_APPLICABLE'"
+              :key="row.clientRowId + '-blend'"
+              class="sp-tr-expand"
+            >
+              <td :colspan="999" class="sp-td-expand">
+                <BlendRatioPanel
+                  :evaluation="blendEvaluation(row)"
+                  v-model:reason="row.blendReason"
+                  v-model:note="row.blendNote"
+                  :disabled="row.submissionStatus === 'SUBMITTED'"
+                />
               </td>
             </tr>
 

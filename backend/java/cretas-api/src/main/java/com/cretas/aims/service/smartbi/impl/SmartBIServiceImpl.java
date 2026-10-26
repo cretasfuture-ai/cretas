@@ -1,6 +1,8 @@
 package com.cretas.aims.service.smartbi.impl;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
@@ -111,6 +113,13 @@ public class SmartBIServiceImpl implements SmartBIService {
      */
     @Autowired(required = false)
     private PythonLLMClient pythonLLMClient;
+
+    /** LLM 洞察发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String INSIGHT_EGRESS_SITE = "smartbi-dashboard-insight";
+    static final String RESPONSE_TEXT_EGRESS_SITE = "smartbi-response-text";
 
     /**
      * 预测服务 - 用于 FORECAST 意图处理
@@ -1269,7 +1278,13 @@ public class SmartBIServiceImpl implements SmartBIService {
         try {
             // 构建分析提示词
             String dataJson = objectMapper.writeValueAsString(dashboard.getKpiCards());
-            String prompt = buildInsightPrompt(dashboard, dataJson);
+            // 排名里的业务员 / 欠款客户 / 供应商名是已知名字, 换代号再发; 洞察解析前换回; 脱敏不了就不出 LLM 洞察
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(INSIGHT_EGRESS_SITE, factoryId,
+                    rankingPartyNames(dashboard), List.of(buildInsightPrompt(dashboard, dataJson)));
+            if (redacted.refused()) {
+                return Collections.emptyList();
+            }
+            String prompt = redacted.text(0);
 
             // 系统提示词
             String systemPrompt = "你是一位专业的BI分析师，请基于给定的业务数据生成3-5条关键洞察。\n" +
@@ -1296,13 +1311,40 @@ public class SmartBIServiceImpl implements SmartBIService {
 
             if (response != null && response.getChoices() != null && !response.getChoices().isEmpty()) {
                 String content = response.getChoices().get(0).getMessage().getContent();
-                return parseLLMInsights(content);
+                return parseLLMInsights(redacted.restoreJsonText(content));
             }
         } catch (Exception e) {
             log.error("LLM 洞察生成异常: {}", e.getMessage(), e);
         }
 
         return Collections.emptyList();
+    }
+
+    /** 排名表的键说明了名字是谁: salesperson → 人, *customer* / *store* → 客户, *supplier* → 供应商。 */
+    static Map<String, LlmEgressRedactor.Party> rankingPartyNames(DashboardResponse dashboard) {
+        Map<String, LlmEgressRedactor.Party> names = new LinkedHashMap<>();
+        if (dashboard.getRankings() == null) {
+            return names;
+        }
+        dashboard.getRankings().forEach((key, rankings) -> {
+            String k = key == null ? "" : key.toLowerCase();
+            LlmEgressRedactor.Party party = k.contains("customer") || k.contains("store") || k.contains("dealer")
+                    || k.contains("distributor") || k.contains("客户") || k.contains("经销商") || k.contains("门店")
+                    ? LlmEgressRedactor.Party.CUSTOMER
+                    : k.contains("supplier") || k.contains("vendor") || k.contains("供应商")
+                    ? LlmEgressRedactor.Party.SUPPLIER
+                    : k.contains("sales") || k.contains("person") || k.contains("employee") || k.contains("operator")
+                            || k.contains("员") || k.contains("人")
+                    ? LlmEgressRedactor.Party.PERSON : null;
+            if (party != null && rankings != null) {
+                rankings.forEach(r -> {
+                    if (r != null && r.getName() != null && !r.getName().isBlank()) {
+                        names.put(r.getName(), party);
+                    }
+                });
+            }
+        });
+        return names;
     }
 
     /**
@@ -1696,12 +1738,14 @@ public class SmartBIServiceImpl implements SmartBIService {
         if (!checkQuota(factoryId)) return null;
 
         try {
-            String dataJson;
-            try {
-                dataJson = objectMapper.writeValueAsString(data);
-            } catch (Exception e) {
+            // 数据按结构脱敏 (门店 / 客户 / 人名换代号, 联系方式与备注不发), 老板原话同一套代号; 脱敏不了回退模板
+            LlmEgressRedactor.Result redacted = llmEgressGuard.combined(RESPONSE_TEXT_EGRESS_SITE, factoryId, data,
+                    Map.of(), List.of(userQuery == null ? "" : userQuery));
+            if (redacted.refused() || redacted.payload() == null) {
                 return null;
             }
+            String dataJson = redacted.payload();
+            userQuery = redacted.text(0);
             // Avoid huge payloads — truncate if needed
             if (dataJson.length() > 6000) {
                 dataJson = dataJson.substring(0, 6000) + "...(truncated)";
@@ -1736,7 +1780,7 @@ public class SmartBIServiceImpl implements SmartBIService {
                 if (content != null && !content.isBlank() && content.length() > 30) {
                     log.info("LLM responseText 生成成功: factoryId={}, intent={}, len={}",
                             factoryId, intentName, content.length());
-                    return content.trim();
+                    return redacted.restore(content.trim());
                 }
             }
         } catch (Exception e) {

@@ -71,7 +71,7 @@ class FactoryDataScopePostgresContractTest {
         main = dataSource(url());
         exec(main, "CREATE SCHEMA " + schema);
         exec(main, Files.readString(Path.of(
-                "src/main/resources/db/flyway/V20261103_86__factory_data_requests.sql")));
+                "src/main/resources/db/flyway/V20261103_87__factory_data_requests.sql")));
         exec(main, mainSchema(schema));
         smartbiDb = schema + "_sb";
         exec(main, "CREATE DATABASE " + smartbiDb);

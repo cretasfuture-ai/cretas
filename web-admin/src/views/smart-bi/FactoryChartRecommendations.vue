@@ -17,6 +17,8 @@ import {
 import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport } from './factoryChartExport';
 import FactoryChartCanvas from './FactoryChartCanvas.vue';
 import FactoryChartDetails from './FactoryChartDetails.vue';
+import FactoryChartGuide from './FactoryChartGuide.vue';
+import { chartTypeLabel, recommendedAnalysisIds } from './factoryChartGuide';
 import {
   factoryChartRequestFromSelection,
   loadFactoryChartSelectionIntent,
@@ -28,6 +30,7 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId || '');
+const authEpoch = computed(() => JSON.stringify([factoryId.value, authStore.currentRole, authStore.user]));
 
 function queryUploadId(): number | null {
   const value = route.query.upload_id;
@@ -49,7 +52,9 @@ const periodSelection = ref<PeriodSelection>({
 const includeOptional = ref(true);
 const useAi = ref(true);
 const selectedIds = ref<string[]>([]);
-const domainFilter = ref('all');
+const analysisSubject = ref<string | null>(null);
+const guideContext = ref({ mode: 'guide', domain: 'all', family: 'all' });
+const showUnavailable = ref(false);
 const exportLoading = ref<FactoryChartExportFormat | ''>('');
 const exportError = ref('');
 const selectionSyncState = ref<'loading' | 'local' | 'synced' | 'fallback' | 'saving' | 'error'>('loading');
@@ -58,6 +63,9 @@ const loadingSources = ref(false);
 const error = ref('');
 const sourceLoadError = ref('');
 const data = ref<FactoryRecommendationsData | null>(null);
+const guideItems = ref<FactoryRecommendation[]>([]);
+const subjectOptions = ref<Array<{ id: string; label: string }>>([]);
+const generatedGuideIntent = ref<{ domain: string; family: string } | null>(null);
 let initialLoadDone = false;
 let requestVersion = 0;
 let selectionReady = false;
@@ -72,20 +80,11 @@ let selectionSaveQueue: Promise<void> = Promise.resolve();
 
 const recommendations = computed(() => data.value?.recommendations ?? []);
 const displayedRecommendations = computed(() => recommendations.value.filter(item => selectedIds.value.includes(item.id)));
-const domains = computed(() => [...new Set(recommendations.value.map(item => item.domain).filter(Boolean))]);
-const filteredDisplayedRecommendations = computed(() => displayedRecommendations.value.filter(item => domainFilter.value === 'all' || item.domain === domainFilter.value));
+const filteredDisplayedRecommendations = displayedRecommendations;
 const detailsVisible = ref(false); const detailsCandidate = ref<FactoryRecommendation | null>(null); const detailsPoint = ref<{ name: string; seriesName?: string; dataIndex?: number }>();
 const hasNoSelectedCharts = computed(() => recommendations.value.length > 0 && displayedRecommendations.value.length === 0);
 const sourceLabel = computed(() => source.value === 'business' ? '业务系统' : '上传报表');
 const uploadLabel = (item: UploadHistoryItem) => `${item.originalFileName || item.fileName}${item.sheetName ? ` · ${item.sheetName}` : ''}`;
-const chartTypeNames: Record<string, string> = {
-  line: '折线', bar: '柱形', bar_horizontal: '横条', area: '面积', pie: '饼图', donut: '环形',
-  nested_donut: '双环', scatter: '散点', waterfall: '瀑布', sankey: '流向', bullet: '子弹图',
-  dual_axis: '双轴', budget_comparison: '计划对比', combination: '组合', funnel: '漏斗', gantt: '时间安排',
-  gauge: '仪表', pareto: '帕累托', radar: '雷达', slope: '两期变化', sunburst: '旭日', treemap: '矩形树图',
-  boxplot: '箱线', heatmap: '热力', matrix_heatmap: '矩阵热力', correlation_matrix: '相关矩阵', parallel: '平行坐标',
-};
-const chartTypeLabel = (item: FactoryRecommendation) => chartTypeNames[item.chart.chartType] || '财务图表';
 
 function errorText(value: unknown, fallback: string): string {
   const serverMessage = (value as { serverMessage?: unknown } | null)?.serverMessage;
@@ -121,6 +120,8 @@ async function loadDataSources() {
 
 function resetVisibleData() {
   data.value = null;
+  detailsVisible.value = false;
+  detailsCandidate.value = null;
   selectionReady = false;
   error.value = '';
   exportError.value = '';
@@ -128,10 +129,20 @@ function resetVisibleData() {
 
 function applySelectionIntent(key: string, eligibleIds: string[]) {
   const intent = selectionIntentByScope.get(key) ?? null;
-  const defaults = data.value?.defaultSelection ?? eligibleIds.slice(0, 6);
+  const defaults = (data.value?.defaultSelection ?? eligibleIds).slice(0, 4);
   const visible = selectionForEligibleIds(eligibleIds, intent);
   selectedIds.value = intent === null || (intent.length > 0 && visible.length === 0)
     ? selectionForEligibleIds(eligibleIds, defaults) : visible;
+}
+
+function applyGeneratedGuideIntent(items: readonly FactoryRecommendation[]) {
+  if (!generatedGuideIntent.value) return false;
+  selectedIds.value = recommendedAnalysisIds(items, generatedGuideIntent.value.domain, generatedGuideIntent.value.family);
+  return true;
+}
+
+function applyCurrentSelection(key: string, eligibleIds: string[]) {
+  if (!generatedGuideIntent.value) applySelectionIntent(key, eligibleIds);
 }
 
 function loadSelectionPreference(eligibleIds: string[], _capturedRequestVersion: number) {
@@ -144,12 +155,12 @@ function loadSelectionPreference(eligibleIds: string[], _capturedRequestVersion:
     const dirtyAtRequest = selectionDirtyVersion;
     const localIntent = selectionIntentByScope.get(key) ?? loadFactoryChartSelectionIntent(factoryId.value, source.value);
     if (localIntent !== null) selectionIntentByScope.set(key, [...localIntent]);
-    applySelectionIntent(key, eligibleIds);
+    applyCurrentSelection(key, eligibleIds);
     void getFactoryChartSelection(factoryId.value, source.value).then(result => {
       if (requestId !== selectionPreferenceRequestVersion || selectionScopeKey !== key || dirtyAtRequest !== selectionDirtyVersion) return;
       if (result.success && result.data.factoryId === factoryId.value && result.data.source === source.value) {
         if (result.data.selectedIds !== null) selectionIntentByScope.set(key, [...result.data.selectedIds]);
-        applySelectionIntent(key, recommendations.value.map(item => item.id));
+        applyCurrentSelection(key, recommendations.value.map(item => item.id));
         selectionSyncState.value = result.data.selectedIds === null ? 'local' : 'synced';
         return;
       }
@@ -161,7 +172,7 @@ function loadSelectionPreference(eligibleIds: string[], _capturedRequestVersion:
     return;
   }
   // Derive the current view from the retained intent; never persist filtering.
-  applySelectionIntent(key, eligibleIds);
+  applyCurrentSelection(key, eligibleIds);
 }
 
 async function loadRecommendations() {
@@ -174,7 +185,7 @@ async function loadRecommendations() {
     error.value = '当前账号没有所属工厂，无法加载工厂图表';
     return;
   }
-  const query = factoryChartRequestFromSelection({
+  const baseQuery = factoryChartRequestFromSelection({
     factoryId: factoryId.value,
     source: source.value,
     uploadId: uploadId.value,
@@ -182,10 +193,11 @@ async function loadRecommendations() {
     includeOptional: includeOptional.value,
     useAi: useAi.value,
   });
-  if ('error' in query) {
-    error.value = query.error;
+  if ('error' in baseQuery) {
+    error.value = baseQuery.error;
     return;
   }
+  const query = { ...baseQuery, guided: true, analysis_subject: analysisSubject.value };
   loading.value = true;
   try {
     const result = await getFactoryChartRecommendations(query);
@@ -194,11 +206,15 @@ async function loadRecommendations() {
       error.value = result.message || '工厂图表推荐加载失败';
       return;
     }
-    if (result.data.factoryId !== query.factory_id || result.data.source !== query.source) {
+    if (result.data.factoryId !== query.factory_id || result.data.source !== query.source
+      || result.data.analysisSubject !== query.analysis_subject) {
       error.value = '返回的数据源与当前工厂不一致，请刷新重试';
       return;
     }
     data.value = result.data;
+    guideItems.value = result.data.recommendations;
+    subjectOptions.value = result.data.subjects || [];
+    applyGeneratedGuideIntent(result.data.recommendations);
     if (result.data.recommendations.length === 0) selectionScopeKey = '';
     if (result.data.recommendations.length > 0) {
       loadSelectionPreference(result.data.recommendations.map(item => item.id), capturedRequestVersion);
@@ -220,6 +236,11 @@ function openDetails(item: FactoryRecommendation, point?: { name?: string; serie
 }
 
 function onSourceChange(next: FactoryChartSource) {
+  analysisSubject.value = null;
+  generatedGuideIntent.value = null;
+  guideContext.value = { mode: 'guide', domain: 'all', family: 'all' };
+  guideItems.value = [];
+  subjectOptions.value = [];
   source.value = next;
   selectionScopeKey = '';
   selectedIds.value = [];
@@ -235,6 +256,11 @@ function onFactoryChanged() {
   loadingSources.value = false;
   suppressSelectionWatch = true;
   uploadId.value = null;
+  analysisSubject.value = null;
+  generatedGuideIntent.value = null;
+  guideContext.value = { mode: 'guide', domain: 'all', family: 'all' };
+  guideItems.value = [];
+  subjectOptions.value = [];
   selectedIds.value = [];
   resetVisibleData();
   selectionScopeKey = '';
@@ -245,8 +271,9 @@ function onFactoryChanged() {
   }
 }
 
-watch(factoryId, onFactoryChanged);
-watch([source, uploadId, includeOptional, useAi], () => {
+watch(authEpoch, onFactoryChanged, { flush: 'sync' });
+watch(uploadId, () => { analysisSubject.value = null; generatedGuideIntent.value = null; guideContext.value = { mode: 'guide', domain: 'all', family: 'all' }; guideItems.value = []; subjectOptions.value = []; }, { flush: 'sync' });
+watch([source, uploadId, includeOptional, useAi, analysisSubject], () => {
   if (initialLoadDone && !suppressSelectionWatch) {
     const query = { ...route.query };
     if (source.value === 'upload' && uploadId.value) query.upload_id = String(uploadId.value);
@@ -255,6 +282,21 @@ watch([source, uploadId, includeOptional, useAi], () => {
     void loadRecommendations();
   }
 }, { deep: true });
+function applyGuidedSelection(ids: string[], save = false) {
+  if (!data.value || loading.value) return;
+  if (save) generatedGuideIntent.value = null;
+  else generatedGuideIntent.value = { domain: guideContext.value.domain, family: guideContext.value.family };
+  const eligible = new Set(recommendations.value.map(item => item.id));
+  const nextIds = [...new Set(ids.filter(id => eligible.has(id)))];
+  selectedIds.value = save ? nextIds : nextIds.slice(0, 4);
+  const key = `${factoryId.value}:${source.value}:${uploadId.value ?? 'business'}`;
+  ++selectionDirtyVersion;
+  if (save) {
+    selectionIntentByScope.set(key, [...selectedIds.value]);
+  }
+  selectionSyncState.value = 'local';
+  if (save) void persistUserSelection();
+}
 async function persistUserSelection() {
   if (!selectionReady || !factoryId.value) return;
   const saveFactoryId = factoryId.value;
@@ -278,7 +320,9 @@ async function persistUserSelection() {
 }
 
 async function exportSelected(format: FactoryChartExportFormat) {
-  if (!data.value || !filteredDisplayedRecommendations.value.length) return;
+  if (!data.value || !filteredDisplayedRecommendations.value.length || exportLoading.value) return;
+  const exportVersion = requestVersion;
+  const exportFactory = factoryId.value;
   exportLoading.value = format;
   exportError.value = '';
   try {
@@ -288,10 +332,12 @@ async function exportSelected(format: FactoryChartExportFormat) {
       period: periodSelection.value, includeOptional: includeOptional.value, useAi: useAi.value,
     });
     const images = await captureFactoryChartImages(items);
+    if (exportVersion !== requestVersion || exportFactory !== factoryId.value) throw new Error('分析范围已变化，请重新导出当前图表');
     const payload = buildFactoryChartExportPayload(items, images, {
       factoryId: factoryId.value,
       source: source.value,
       sourceLabel: data.value.sourceLabel || sourceLabel.value,
+      scopeLabel: data.value.analysisScopeLabel,
       periodLabel: data.value.period?.label || '当前期间',
       selectedIds: selectedIds.value,
       ...( 'error' in periodQuery ? {} : {
@@ -342,8 +388,8 @@ function findingsFor(item: FactoryRecommendation) {
   <div class="factory-chart-recommendations">
     <div class="page-header">
       <div>
-        <h2>工厂图表推荐</h2>
-        <p class="page-subtitle">按本厂当前数据推荐图表，缺少的数据会明确列出</p>
+        <h2>工厂分析</h2>
+        <p class="page-subtitle">先选业务问题，再按数据查看图表与结论</p>
       </div>
       <el-button type="primary" :icon="Refresh" :loading="loading" :disabled="!factoryId" data-testid="factory-chart-refresh" @click="refresh">刷新</el-button>
     </div>
@@ -372,8 +418,10 @@ function findingsFor(item: FactoryRecommendation) {
         <span class="filter-label">期间</span>
         <PeriodSelector v-model="periodSelection" :show-all-history="true" :show-compare="false" data-testid="factory-chart-period" @change="onPeriodChange" />
       </div>
-      <div class="scope-note">此浏览器记住本厂的显示选择（按工厂和数据源分别保存）。</div>
+      <div class="scope-note">选择期间和数据源后，在下方按问题查看分析，或按业务分类浏览。</div>
     </el-card>
+
+    <FactoryChartGuide v-if="guideItems.length || subjectOptions.length || analysisSubject" :key="`${factoryId}:${source}:${uploadId}`" :items="guideItems" :selected-ids="selectedIds" :subjects="subjectOptions" :subject="analysisSubject" :loading="loading || !data" :context="guideContext" @context="guideContext = $event" @analysis="applyGuidedSelection($event)" @selection="applyGuidedSelection($event, true)" @subject="analysisSubject = $event" />
 
     <el-alert v-if="sourceLoadError" type="warning" show-icon :closable="false" class="state-alert" data-testid="factory-chart-source-load-error">
       <template #title>{{ sourceLoadError }}</template>
@@ -397,7 +445,7 @@ function findingsFor(item: FactoryRecommendation) {
 
     <template v-else-if="data">
       <div class="result-meta">
-        <span>{{ data.sourceLabel || sourceLabel }} · {{ data.period?.label || '当前期间' }}</span>
+        <span>{{ data.sourceLabel || sourceLabel }} · {{ data.period?.label || '当前期间' }} · {{ data.analysisScopeLabel || '全厂范围' }}</span>
         <el-tag :type="data.ranking.mode === 'ai' ? 'success' : 'info'" size="small" data-testid="factory-chart-ranking">
           {{ data.ranking.mode === 'ai' ? 'AI 已排序' : '规则排序（未经AI排序）' }}
         </el-tag>
@@ -405,10 +453,7 @@ function findingsFor(item: FactoryRecommendation) {
       </div>
 
       <div v-if="recommendations.length" class="export-toolbar">
-        <el-select v-model="domainFilter" size="small" style="width: 160px" data-testid="factory-chart-domain-filter">
-          <el-option label="全部领域" value="all" />
-          <el-option v-for="domain in domains" :key="domain" :label="domain" :value="domain" />
-        </el-select>
+        <span>当前显示 {{ displayedRecommendations.length }} 张图表</span>
         <el-button size="small" :loading="exportLoading === 'excel'" :disabled="!filteredDisplayedRecommendations.length" @click="exportSelected('excel')">导出当前显示图表 Excel</el-button>
         <el-button size="small" :loading="exportLoading === 'pdf'" :disabled="!filteredDisplayedRecommendations.length" @click="exportSelected('pdf')">导出当前显示图表 PDF</el-button>
         <el-button size="small" :loading="exportLoading === 'ppt'" :disabled="!filteredDisplayedRecommendations.length" @click="exportSelected('ppt')">导出当前显示图表 PPT</el-button>
@@ -417,13 +462,7 @@ function findingsFor(item: FactoryRecommendation) {
       </div>
       <el-alert v-if="exportError" type="error" show-icon :closable="false" class="state-alert" data-testid="factory-chart-export-error">{{ exportError }}</el-alert>
 
-      <div v-if="recommendations.length" class="selection-panel">
-        <div class="selection-title">显示图表 <span>（{{ displayedRecommendations.length }}/{{ recommendations.length }}）</span></div>
-        <el-checkbox-group v-model="selectedIds" data-testid="factory-chart-selection" @change="persistUserSelection">
-          <el-checkbox v-for="item in recommendations" :key="item.id" :value="item.id">{{ item.title }} · {{ chartTypeLabel(item) }}</el-checkbox>
-        </el-checkbox-group>
-      </div>
-      <el-empty v-if="hasNoSelectedCharts" description="已隐藏全部推荐图表，请勾选要显示的图表" data-testid="factory-chart-no-selection" />
+      <el-empty v-if="hasNoSelectedCharts" description="请按问题查看分析，或在分类中选择图表" data-testid="factory-chart-no-selection" />
 
       <div v-if="filteredDisplayedRecommendations.length" class="recommendation-grid">
         <el-card v-for="item in filteredDisplayedRecommendations" :key="item.id" shadow="never" class="recommendation-card" :data-testid="`factory-chart-card-${item.id}`">
@@ -443,8 +482,8 @@ function findingsFor(item: FactoryRecommendation) {
       <FactoryChartDetails v-model="detailsVisible" :candidate="detailsCandidate" :point="detailsPoint" />
 
       <el-card v-if="data.unavailable?.length" shadow="never" class="unavailable-card" data-testid="factory-chart-unavailable">
-        <template #header><div class="unavailable-title"><el-icon><TrendCharts /></el-icon>当前数据暂不具备的图表</div></template>
-        <div v-for="item in data.unavailable" :key="item.id" class="unavailable-item"><strong>{{ item.title }}</strong><span>缺少：{{ item.missing.join('、') }}</span></div>
+        <template #header><div class="unavailable-title"><el-icon><TrendCharts /></el-icon><el-button text @click="showUnavailable = !showUnavailable">{{ showUnavailable ? '收起条件说明' : `查看未满足条件说明（${data.unavailable.length}）` }}</el-button></div></template>
+        <template v-if="showUnavailable"><div v-for="item in data.unavailable" :key="item.id" class="unavailable-item"><strong>{{ item.title }}</strong><span>缺少：{{ item.missing.join('、') }}</span></div></template>
       </el-card>
       <el-empty v-if="!recommendations.length && !data.unavailable?.length && !data.sourceErrors?.length" description="当前期间没有合资格的工厂图表" data-testid="factory-chart-empty" />
     </template>

@@ -151,6 +151,12 @@ public class ProcessSheetRowRequest {
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     private Boolean rework;
 
+    /**
+     * 缺口 06 汇合配比: 客户端只填 reason/note (超差时必填); 其余由 BlendRatioCheck 在正式提交时计算并覆盖,
+     * 随 row_payload 落库留痕。草稿不校验。
+     */
+    private com.cretas.aims.dto.workflow.BlendRatioDeviation blendRatio;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {

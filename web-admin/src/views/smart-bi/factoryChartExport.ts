@@ -14,6 +14,7 @@ export interface FactoryChartExportContext {
   endMonth?: number;
   factoryId: string;
   selectedIds: readonly string[];
+  scopeLabel?: string;
 }
 
 export interface FactoryChartExportPayload {
@@ -87,7 +88,7 @@ export function buildFactoryChartExportPayload(
     title: item.title,
     metric: item.metric,
     domain: item.domain,
-    source: item.source || context.sourceLabel,
+    source: [item.source || context.sourceLabel, context.scopeLabel].filter(Boolean).join(' · '),
     period: context.periodLabel,
     unit: item.unit,
     kpis: item.kpis,
@@ -99,7 +100,7 @@ export function buildFactoryChartExportPayload(
   }));
   const analysisResults = Object.fromEntries(items.map(item => [item.id, [
     `标题：${item.title}`,
-    `来源：${item.source || context.sourceLabel}`,
+    `来源：${[item.source || context.sourceLabel, context.scopeLabel].filter(Boolean).join(' · ')}`,
     `期间：${context.periodLabel}`,
     `单位：${item.unit}`,
     `规则依据：${item.reason}`,

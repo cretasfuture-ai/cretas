@@ -184,6 +184,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 缺口 06 汇合配比校验 (正式提交才校验, 草稿不拦)。字段注入, 见 BlendRatioWiringContractTest。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveDraft(String factoryId, String planId,
@@ -1456,6 +1460,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         applyWorkflowInputPorts(factoryId, config.getProductTypeId(), descriptor, req, true);
+        // 缺口 06: 多主料按份额汇合时, 偏差 >±2pp 必须带原因 (端口已在上一行归位)。
+        if (blendRatioCheck != null) {
+            blendRatioCheck.enforceProcessSheet(factoryId, config.getProductTypeId(), descriptor, req);
+        }
 
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputs = workflowOutputs(descriptor);
         Map<String, WorkflowClerkSheetConfigDTO.PortDescriptor> outputsById = new LinkedHashMap<>();
@@ -1947,6 +1955,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setInputLineageRawMaterialInputs(base.getRawMaterialInputs());
         one.setInputLineageUpstreamSources(base.getUpstreamSources());
         one.setMaterialInputTotals(base.getMaterialInputTotals());
+        one.setBlendRatio(base.getBlendRatio());   // 缺口 06 配比快照随每个产出行留痕
         List<com.cretas.aims.dto.processentry.LaborSegment> outputLabor = o.getLaborSegments();
         List<com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct> outputByproducts = o.getByproducts();
         // 旧客户端只在顶层传工时/副产：仍由首产出承载一次；新客户端逐产出字段各自落行。

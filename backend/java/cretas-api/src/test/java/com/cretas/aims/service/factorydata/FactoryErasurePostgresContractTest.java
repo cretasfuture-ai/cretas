@@ -67,7 +67,7 @@ class FactoryErasurePostgresContractTest {
         appRole = "fe_app_" + tag;
         main = ds(url(), user(), password());
         exec(main, "CREATE SCHEMA " + schema);
-        exec(main, Files.readString(Path.of("src/main/resources/db/flyway/V20261103_86__factory_data_requests.sql")));
+        exec(main, Files.readString(Path.of("src/main/resources/db/flyway/V20261103_87__factory_data_requests.sql")));
         exec(main, FactoryDataScopePostgresContractTest.mainSchema(schema) + auditTablesMain(schema));
         smartbiDb = schema + "_sb";
         exec(main, "CREATE DATABASE " + smartbiDb);

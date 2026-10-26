@@ -307,6 +307,322 @@ class LlmEgressRedactorTest {
         assertThat(sent).doesNotContain("华东分公司");
     }
 
+    // ------------------------------------------------------------------ 文本模式
+
+    @Test
+    void textModeTokenisesNumbersNamesAndKnownPartiesAcrossSegmentsAndRestores() {
+        List<String> texts = new java.util.ArrayList<>();
+        texts.add("上一轮: 已给老街坊下单, 由司机：钱大海送货");
+        texts.add("老街坊的联系人：赵铁柱 手机 139-1234-5678, 座机 (021)58881234, 卡号 6222021234567890123");
+        texts.add(null);
+        texts.add("华东冷链商贸有限公司 的 秘制酱牛肉 身份证 31010119900101123X");
+
+        LlmEgressRedactor.Result r = redactor.redactTexts(texts,
+                Map.of("老街坊", LlmEgressRedactor.Party.CUSTOMER), Set.of("秘制酱牛肉"), true);
+
+        assertThat(r.refused()).isFalse();
+        String sent = String.join("\n", r.texts().subList(0, 2)) + "\n" + r.text(3);
+        assertThat(sent).doesNotContain("老街坊", "钱大海", "赵铁柱", "139-1234-5678", "58881234",
+                "6222021234567890123", "华东冷链商贸", "秘制酱牛肉", "31010119900101123X");
+        assertThat(r.text(0)).contains("[客户A]");
+        assertThat(r.text(2)).isNull();
+        // 模型照抄代号, 用户看到的是原文
+        assertThat(r.restore(r.text(1))).isEqualTo(texts.get(1));
+        assertThat(r.restore(r.text(3))).isEqualTo(texts.get(3));
+    }
+
+    @Test
+    void utteranceModeOnlyTokenisesNumbersAndKeepsWording() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("把客户张记食品有限公司的电话改成13812345678"),
+                Map.of(), Set.of(), false);
+
+        assertThat(r.text(0)).isEqualTo("把客户张记食品有限公司的电话改成[电话A]");
+        assertThat(r.restore("{\"phone\":\"[电话A]\"}")).isEqualTo("{\"phone\":\"13812345678\"}");
+    }
+
+    @Test
+    void streamRestorerWaitsForSplitTokensAndFlushesTheTail() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("联系人：王建国 13812345678"),
+                Map.of(), Set.of(), true);
+        List<String> out = new java.util.ArrayList<>();
+        LlmEgressRedactor.StreamRestorer restorer = r.streamRestorer(out::add);
+
+        for (String chunk : List.of("请找 [人", "员A]", " 电话 [电话A] [", "备注")) {
+            restorer.accept(chunk);
+        }
+        restorer.flush();
+
+        // 代号只盖住名字本身 (「联系人：」留在明文里), 还原回来就是名字
+        assertThat(String.join("", out)).isEqualTo("请找 王建国 电话 13812345678 [备注");
+        assertThat(out).noneMatch(s -> s.contains("[人") || s.contains("员A]"));
+    }
+
+    @Test
+    void restoreJsonTextEscapesRealNamesWithQuotes() throws Exception {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("x"),
+                Map.of("\"老王\"牛肉", LlmEgressRedactor.Party.CUSTOMER), Set.of(), false);
+
+        String json = r.restoreJsonText("{\"customer\":\"[客户A]\"}");
+
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(json).get("customer").asText())
+                .isEqualTo("\"老王\"牛肉");
+    }
+
+    @Test
+    void structuredAndTextShareTokens() {
+        Map<String, Object> directory = Map.of("users", List.of(Map.of("id", "42", "name", "赵铁柱")));
+
+        LlmEgressRedactor.Result r = redactor.redact(directory, List.of("让赵铁柱审批"), Map.of(), Set.of(), true);
+
+        assertThat(r.payload()).contains("[人员A]", "\"42\"").doesNotContain("赵铁柱");
+        assertThat(r.text(0)).isEqualTo("让[人员A]审批");
+    }
+
+    @Test
+    void titledNamesAfterChineseTextAreTokenisedToo() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("加一道卤制, 找李经理确认, 再问王师傅"),
+                Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContain("李经理", "王师傅").contains("加一道卤制");
+        assertThat(r.restore(r.text(0))).isEqualTo("加一道卤制, 找李经理确认, 再问王师傅");
+    }
+
+    // ------------------------------------------------------------------ 独立审查发现的漏洞 (2026-10-26)
+
+    @Test
+    void orgAndPersonTokensDoNotSwallowLeadingVerbsOrRoles() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(
+                "查一下永辉超市的订单", "供应商是华东冷链商贸有限公司", "质检员：赵铁柱 复检, 通知钱大海,"),
+                Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).startsWith("查一下[单位").endsWith("]的订单").doesNotContain("永辉");
+        assertThat(r.text(1)).startsWith("供应商是[单位").doesNotContain("华东冷链");
+        assertThat(r.text(2)).startsWith("质检员：[人员").contains("通知[人员").doesNotContain("赵铁柱", "钱大海");
+        // 模型把代号填进字段时, 还原出来的是名字本身, 不带「供应商是」「质检员：」
+        assertThat(r.restore("{\"supplier\":\"" + r.text(1).substring("供应商是".length()) + "\"}"))
+                .isEqualTo("{\"supplier\":\"华东冷链商贸有限公司\"}");
+        assertThat(r.restore(r.text(2).substring("质检员：".length(), "质检员：".length() + 5))).isEqualTo("赵铁柱");
+    }
+
+    @Test
+    void singleCharacterVerbBeforeAnOrgIsNotPartOfTheName() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(
+                "给华东冷链商贸有限公司下单", "向阳食品有限公司来货了"), Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).startsWith("给[单位").endsWith("]下单");
+        assertThat(r.restore(r.text(0).substring(1, r.text(0).length() - 2))).isEqualTo("华东冷链商贸有限公司");
+        // 「向 / 找」可以是单位名的首字, 不剥
+        assertThat(r.text(1)).startsWith("[单位").doesNotContain("向阳");
+        assertThat(r.restore(r.text(1))).isEqualTo("向阳食品有限公司来货了");
+        LlmEgressRedactor.Result zhao = redactor.redactTexts(List.of("找钢网科技有限公司来货了"), Map.of(), Set.of(), true);
+        assertThat(zhao.text(0)).startsWith("[单位").doesNotContain("钢网");
+        assertThat(zhao.restore(zhao.text(0))).isEqualTo("找钢网科技有限公司来货了");
+    }
+
+    @Test
+    void namesInsideShopNamesAreNotCutInHalf() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("美的集团和和盛牛业有限公司"), Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContain("美的", "和盛");
+    }
+
+    @Test
+    void otherNumberFormatsAreTokenisedAndCheckedBeforeSending() {
+        String text = "卡 6222 0212 3456 7890 123, 证 310101 19900101 123X, 旧证 310101900101123, "
+                + "座机 021-5888-1234 / 400-820-8820, 手机 138.0013.8000 / １３８００１３８０００";
+
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(text), Map.of(), Set.of(), false);
+
+        assertThat(r.refused()).isFalse();
+        assertThat(r.text(0)).doesNotContainPattern("[0-9０-９]{3}");
+        assertThat(r.restore(r.text(0))).isEqualTo(text);
+    }
+
+    @Test
+    void titledNamesWithSurnamesOutsideTheTrainingListAreTokenised() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("找牛经理和欧阳经理, 再问常师傅"), Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContain("牛经理", "欧阳经理", "常师傅");
+    }
+
+    @Test
+    void shortFormsAndJsonEscapedFormsOfKnownNamesAreTokenisedToo() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(
+                List.of("老街坊要求少盐", "{\"name\":\"\\\"老王\\\"牛肉\"}", "审批人 lw"),
+                Map.of("老街坊餐饮有限公司", LlmEgressRedactor.Party.CUSTOMER,
+                        "\"老王\"牛肉", LlmEgressRedactor.Party.CUSTOMER,
+                        "lw", LlmEgressRedactor.Party.PERSON),
+                Set.of(), true);
+
+        // Map.of 的遍历顺序每个 JVM 都不同, 哪个客户先拿到 A 不固定: 只断言换成了客户代号、且还原回全称
+        assertThat(r.text(0)).matches("\\[客户[A-Z]+]要求少盐");
+        assertThat(r.restore(r.text(0))).isEqualTo("老街坊餐饮有限公司要求少盐");
+        assertThat(r.text(1)).doesNotContain("老王");
+        assertThat(r.text(2)).doesNotContain("lw");
+    }
+
+    @Test
+    void literalTokensAlreadyInTheInputAreNotReused() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("用户自己写了 [客户A], 客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.CUSTOMER), Set.of(), true);
+
+        assertThat(r.text(0)).contains("[客户A]").contains("[客户B]").doesNotContain("张记");
+        assertThat(r.restore("[客户A]")).isEqualTo("[客户A]");
+    }
+
+    @Test
+    void tokensTheModelRewroteAreRestoredToo() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("客户是 张记食品有限公司, 电话 13812345678"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.CUSTOMER), Set.of(), true);
+        assertThat(r.text(0)).contains("[客户A]").contains("[电话A]");
+
+        // 去括号 / 全角括号 / 括号里加空格 / 类别与字母之间加空格
+        assertThat(r.restore("客户A 电话A")).isEqualTo("张记食品有限公司 13812345678");
+        assertThat(r.restore("【客户A】、［电话A］")).isEqualTo("张记食品有限公司、13812345678");
+        assertThat(r.restore("[ 客户 A ] 的单")).isEqualTo("张记食品有限公司 的单");
+        assertThat(r.restoreJsonText("{\"c\":\"客户A\"}")).isEqualTo("{\"c\":\"张记食品有限公司\"}");
+        assertThat(r.restoreDeep(Map.of("c", "客户A"))).isEqualTo(Map.of("c", "张记食品有限公司"));
+        // 对不上本次代号的不动; 单字母代号不吃掉更长代号的前半
+        assertThat(r.restore("客户B 客户AB 客户A1")).isEqualTo("客户B 客户AB 客户A1");
+        // 模型自己写的普通说法不是代号: 后面跟量词、或类别名与字母之间隔着空白 / 换行
+        assertThat(r.restore("建议把该客户A类管理, 客户A级, 客户 A")).isEqualTo("建议把该客户A类管理, 客户A级, 客户 A");
+        assertThat(r.restore("负责客户\nA. 早班")).isEqualTo("负责客户\nA. 早班");
+        // 括号只成对消费: Markdown 链接里的括号不被吃掉
+        assertThat(r.restore("[见客户A](tel:x)")).isEqualTo("[见张记食品有限公司](tel:x)");
+    }
+
+    @Test
+    void streamHoldsFullWidthBracketsUntilTheyClose() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.CUSTOMER), Set.of(), true);
+        StringBuilder out = new StringBuilder();
+        LlmEgressRedactor.StreamRestorer s = r.streamRestorer(out::append);
+
+        s.accept("联系【 客户 A ");
+        s.accept("】即可");
+        s.flush();
+
+        assertThat(out.toString()).isEqualTo("联系张记食品有限公司即可");
+    }
+
+    @Test
+    void bareTokenWordingAlreadyInTheInputIsNotReused() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("交给单位A处理, 客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.ORG), Set.of(), true);
+
+        assertThat(r.text(0)).contains("单位A处理").contains("[单位B]").doesNotContain("张记");
+        assertThat(r.restore("交给单位A处理")).isEqualTo("交给单位A处理");
+
+        // 「单位A栋」带量词, 还原时本来就不动, 不必避让
+        LlmEgressRedactor.Result building = redactor.redactTexts(List.of("送到单位A栋, 客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.ORG), Set.of(), true);
+        assertThat(building.restore(building.text(0))).isEqualTo("送到单位A栋, 客户是 张记食品有限公司");
+    }
+
+    @Test
+    void streamRestoresBareTokensSplitAcrossChunks() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("客户是 张记食品有限公司"),
+                Map.of("张记食品有限公司", LlmEgressRedactor.Party.CUSTOMER), Set.of(), true);
+        StringBuilder out = new StringBuilder();
+        LlmEgressRedactor.StreamRestorer s = r.streamRestorer(out::append);
+
+        for (String chunk : List.of("已联系", "客", "户", "A", "，人们都说好", "。客户")) {
+            s.accept(chunk);
+        }
+        s.flush();
+
+        assertThat(out.toString()).isEqualTo("已联系张记食品有限公司，人们都说好。客户");
+    }
+
+    @Test
+    void droppedFieldValuesAreHiddenWhenTheyAlsoAppearInThePromptText() {
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("customerName", "张记食品有限公司");
+        record.put("shippingAddress", "上海市松江区某路 88 号");
+        record.put("remark", "王总说下周付款");
+        String prompt = "提交值: 张记食品有限公司 / 上海市松江区某路 88 号 / 王总说下周付款";
+
+        LlmEgressRedactor.Result r = redactor.redact(record, List.of(prompt), Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContain("张记", "松江", "下周付款");
+        assertThat(r.restore(r.text(0))).isEqualTo(prompt);
+    }
+
+    @Test
+    void personDisplayFieldsAndPersonNamedMapKeysAreTokenised() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("displayName", "张三");
+        row.put("assigneeDisplay", "李四");
+        row.put("customerLabel", "老街坊");
+        row.put("statusDisplay", "进行中");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("rows", List.of(row));
+        data.put("operatorCounts", Map.of("王五", 12));
+
+        String sent = redactor.redact(data, Set.of()).payload();
+
+        assertThat(sent).doesNotContain("张三", "李四", "老街坊", "王五").contains("进行中", "12");
+    }
+
+    // ------------------------------------------------------------------ 记录只用来认名字 (第二轮审查)
+
+    @Test
+    void recordOnlyModeAlsoReplacesValuesOfUnrecognisedFields() {
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("经销商", "老王批发");
+        record.put("name", "老街坊");
+        record.put("keyword", "李记");
+        record.put("productName", "五香虎皮猪肘");
+
+        LlmEgressRedactor.Result r = redactor.redactTextsWithRecord(record,
+                List.of("参数: {\"经销商\":\"老王批发\",\"name\":\"老街坊\",\"keyword\":\"李记\"} 五香虎皮猪肘"),
+                Map.of(), Set.of());
+
+        assertThat(r.refused()).isFalse();
+        assertThat(r.payload()).isNull();
+        assertThat(r.text(0)).doesNotContain("老王批发", "老街坊", "李记").contains("五香虎皮猪肘", "经销商");
+    }
+
+    @Test
+    void hiddenFieldValuesAreReplacedBeforeNamesAndInTheirJsonEscapedForm() throws Exception {
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("customerName", "张记食品有限公司");
+        record.put("shippingAddress", "张记食品有限公司仓库 上海市松江区某路88号");
+        record.put("remark", "第一行: 王总说\n第二行: 下周付款");
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(record);
+
+        LlmEgressRedactor.Result r = redactor.redactTextsWithRecord(record, List.of("提交值: " + json),
+                Map.of(), Set.of());
+
+        assertThat(r.text(0)).doesNotContain("张记", "松江", "王总说", "下周付款");
+        assertThat(r.restore(r.text(0))).isEqualTo("提交值: " + json.replace("\\n", "\n"));
+    }
+
+    @Test
+    void recordThatCannotBeExpandedIsRefused() {
+        LlmEgressRedactor.Result r = redactor.redactTextsWithRecord(new Object(), List.of("x"), Map.of(), Set.of());
+
+        assertThat(r.refused()).isTrue();
+    }
+
+    @Test
+    void decimalsAreNotMistakenForPhonesOrCards() {
+        String text = "毛利率 0.0523809524, 浮点误差 0.30000000000000004, 电话 13812345678";
+
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of(text), Map.of(), Set.of(), true);
+
+        assertThat(r.refused()).isFalse();
+        assertThat(r.text(0)).contains("0.0523809524", "0.30000000000000004").doesNotContain("13812345678");
+    }
+
+    @Test
+    void textModeTokensCarryNoDigits() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("13812345678 13912345678 6222021234567890123"),
+                Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContainPattern("[0-9]");
+    }
+
     @Test
     void lettersSequence() {
         assertThat(LlmEgressRedactor.letters(1)).isEqualTo("A");

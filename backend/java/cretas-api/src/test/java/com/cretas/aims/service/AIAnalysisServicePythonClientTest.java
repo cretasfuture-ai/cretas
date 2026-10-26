@@ -374,6 +374,104 @@ class AIAnalysisServicePythonClientTest {
         assertFalse(result.containsKey("serviceInfo"));
     }
 
+    // ------------------------------------------------------------------ 外发脱敏 (官网「数据安全」)
+
+    private static com.cretas.aims.service.consent.LlmEgressGuard guardWithSecret(String factoryId, String secret) {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.protectedProductNames(factoryId)).thenReturn(java.util.Set.of(secret));
+        return new com.cretas.aims.service.consent.LlmEgressGuard(new com.fasterxml.jackson.databind.ObjectMapper(),
+                filter);
+    }
+
+    @Test
+    void costAnalysisSendsNoSupplierPhoneOrSecretProductAndRestoresTheAnswer() throws Exception {
+        ReflectionTestUtils.setField(service, "llmEgressGuard", guardWithSecret("F006", "秘制酱牛肉"));
+        when(pythonClient.analyzeGeneral(anyString(), anyString(), any())).thenAnswer(inv -> {
+            String sent = inv.getArgument(2, PythonGeneralAnalysisRequest.class).getMessage();
+            String supplier = sent.replaceAll("(?s).*?(\\[(供应商|单位)[A-Z]+]).*", "$1");
+            return PythonGeneralAnalysisResponse.builder().success(true)
+                    .answer("建议与 " + supplier + " 重谈价格").build();
+        });
+        Map<String, Object> costData = new HashMap<>();
+        costData.put("supplierName", "华东冷链商贸有限公司");
+        costData.put("supplierPhone", "13812345678");
+        costData.put("productName", "秘制酱牛肉");
+
+        Map<String, Object> result = service.analyzeCost("F006", 42L, "batch-7", costData, null,
+                "华东冷链商贸有限公司 的牛腱子涨价了, 联系人：王建国 13812345678, 秘制酱牛肉 成本怎么控", true, 50);
+
+        ArgumentCaptor<PythonGeneralAnalysisRequest> sent = ArgumentCaptor.forClass(PythonGeneralAnalysisRequest.class);
+        verify(pythonClient).analyzeGeneral(eq("F006"), eq("42"), sent.capture());
+        assertFalse(containsAny(sent.getValue().getMessage(), "华东冷链", "王建国", "13812345678", "秘制酱牛肉"),
+                sent.getValue().getMessage());
+        assertEquals("建议与 华东冷链商贸有限公司 重谈价格", result.get("aiAnalysis"));
+    }
+
+    @Test
+    void costAnalysisIsNotSentWhenSecretLookupFails() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.protectedProductNames("F006")).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(service, "llmEgressGuard", new com.cretas.aims.service.consent.LlmEgressGuard(
+                new com.fasterxml.jackson.databind.ObjectMapper(), filter));
+
+        Map<String, Object> result = service.analyzeCost("F006", 42L, "batch-7", new HashMap<>(), null, "分析一下", true, 50);
+
+        verify(pythonClient, never()).analyzeGeneral(anyString(), any(), any());
+        assertEquals(false, result.get("success"));
+        assertEquals(AIAnalysisService.EGRESS_REFUSED_MESSAGE, result.get("error"));
+    }
+
+    @Test
+    void employeeAnalysisSendsNoEmployeeNameAndRestoresTheInsight() throws Exception {
+        ReflectionTestUtils.setField(service, "llmEgressGuard", guardWithSecret("FACTORY-EMP", "秘制酱牛肉"));
+        User employee = employee(5L, "FACTORY-EMP");
+        employee.setFullName("赵铁柱");
+        employee.setUsername("zhaotiezhu");
+        when(userRepository.findByIdAndFactoryId(5L, "FACTORY-EMP")).thenReturn(Optional.of(employee));
+        stubEmployeeFacts(employee, List.of(), 0, 0L, 0L, 0L, 0, 0L, 0L, 0L);
+        when(pythonClient.analyzeGeneral(anyString(), anyString(), any())).thenAnswer(inv -> {
+            String sent = inv.getArgument(2, PythonGeneralAnalysisRequest.class).getMessage();
+            String person = sent.replaceAll("(?s).*?(\\[人员[A-Z]+]).*", "$1");
+            return PythonGeneralAnalysisResponse.builder().success(true).aiAnalysis(person + " 本期无打卡记录").build();
+        });
+
+        AIResponseDTO.EmployeeAnalysisResponse result = service.analyzeEmployee(
+                "FACTORY-EMP", 99L, 5L, 30, "赵铁柱 最近怎么样, 他电话 13912345678", null);
+
+        ArgumentCaptor<PythonGeneralAnalysisRequest> sent = ArgumentCaptor.forClass(PythonGeneralAnalysisRequest.class);
+        verify(pythonClient).analyzeGeneral(eq("FACTORY-EMP"), eq("99"), sent.capture());
+        assertFalse(containsAny(sent.getValue().getMessage(), "赵铁柱", "zhaotiezhu", "13912345678"),
+                sent.getValue().getMessage());
+        assertEquals("赵铁柱 本期无打卡记录", result.getAiInsight());
+    }
+
+    @Test
+    void employeeAnalysisIsNotSentWhenSecretLookupFails() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.protectedProductNames("FACTORY-EMP")).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(service, "llmEgressGuard", new com.cretas.aims.service.consent.LlmEgressGuard(
+                new com.fasterxml.jackson.databind.ObjectMapper(), filter));
+        User employee = employee(5L, "FACTORY-EMP");
+        when(userRepository.findByIdAndFactoryId(5L, "FACTORY-EMP")).thenReturn(Optional.of(employee));
+        stubEmployeeFacts(employee, List.of(), 0, 0L, 0L, 0L, 0, 0L, 0L, 0L);
+
+        assertThrows(RuntimeException.class,
+                () -> service.analyzeEmployee("FACTORY-EMP", 99L, 5L, 30, null, null));
+        verify(pythonClient, never()).analyzeGeneral(anyString(), any(), any());
+    }
+
+    private static boolean containsAny(String text, String... needles) {
+        for (String n : needles) {
+            if (text.contains(n)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private User employee(Long id, String factoryId) {
         User employee = new User();
         employee.setId(id);

@@ -16,4 +16,6 @@ public class TaskMaterialBatchOptionDTO {
     BigDecimal currentQuantity;
     String quantityUnit;
     String warehouseId;
+    /** 该原料端口的主料份额(%) —— App 报工「配比核对」用 (缺口 06); null = 不参与配比。 */
+    BigDecimal inputShareRatio;
 }

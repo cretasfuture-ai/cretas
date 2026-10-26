@@ -37,6 +37,15 @@ describe('factory chart export contract', () => {
     expect(safeSpreadsheetValue('plain')).toBe('plain');
   });
 
+  it('preserves the selected product scope alongside the original source', () => {
+    const payload = buildFactoryChartExportPayload([chart('a')], {}, {
+      factoryId: 'F006', source: 'business', sourceLabel: '业务系统', scopeLabel: '所选产品：黄油鸡 [SKU-1]', periodLabel: '2026年', selectedIds: ['a'],
+    });
+    expect(payload.charts[0].source).toBe('业务系统 · 所选产品：黄油鸡 [SKU-1]');
+    expect(payload.analysis_results.a).toContain('所选产品：黄油鸡 [SKU-1]');
+    expect(payload.charts[0].kpis).toEqual(chart('a').kpis);
+  });
+
   it('rejects JSON/error blobs before creating a download', async () => {
     const api = await import('@/api/smartbi/factory-charts');
     vi.spyOn(api, 'exportFactoryCharts').mockResolvedValue(new Blob(['{"error":"bad"}'], { type: 'application/json' }));

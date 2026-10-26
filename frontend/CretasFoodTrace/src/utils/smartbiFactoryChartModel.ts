@@ -46,6 +46,8 @@ export function buildRecommendationRequest(
   includeOptional: boolean,
   useAi: boolean,
   uploadId?: number,
+  guided = false,
+  analysisSubject: string | null = null,
 ): FactoryRecommendationRequest {
   if (!isValidPeriod(period)) {
     throw new Error('请选择有效的时间范围');
@@ -59,6 +61,8 @@ export function buildRecommendationRequest(
     end_month: period.endMonth,
     include_optional: includeOptional,
     use_ai: useAi,
+    guided,
+    analysis_subject: analysisSubject,
   };
 }
 

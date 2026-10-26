@@ -12,6 +12,8 @@ import com.cretas.aims.repository.conversation.FactoryAssemblyConversationSessio
 import com.cretas.aims.service.FactoryAssemblyConversationService;
 import com.cretas.aims.service.FactoryAssemblyConversationService.ConversationActor;
 import com.cretas.aims.service.ExpressionLearningService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.blueprint.interview.ChoiceAnswerMatcher;
 import com.cretas.aims.blueprint.interview.FactoryInterviewExpansion;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -58,6 +60,13 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
     private final ExpressionLearningService learningService;
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String CONVERSATION_EGRESS_SITE = "factory-assembly-conversation";
+    static final String PARAMETER_EGRESS_SITE = "factory-assembly-params";
 
     @Value("${cretas.ai.conversation.max-rounds:5}")
     private int maxRounds;
@@ -683,9 +692,16 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
                     ? userInput
                     : conversationHistory + "用户: " + userInput;
 
+            // 多轮历史 + 原话: 号码、公司名、岗位 + 人名换代号, 脱敏不了就不发
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(CONVERSATION_EGRESS_SITE,
+                    session.getFactoryId(), Map.of(), Arrays.asList(systemPrompt, userMessage));
+            if (redacted.refused()) {
+                return generateDefaultResponse(availableIntents);
+            }
+
             // R2+R4: 使用 fastModel (flash) 并记录耗时
             long t0 = System.currentTimeMillis();
-            String response = dashScopeClient.chatFast(systemPrompt, userMessage);
+            String response = redacted.restoreJsonText(dashScopeClient.chatFast(redacted.text(0), redacted.text(1)));
             long elapsed = System.currentTimeMillis() - t0;
             log.info("Conv LLM 调用: model=flash, intents={}/{}, promptLen={}, elapsed={}ms",
                     relevantIntents.size(), availableIntents.size(),
@@ -1182,9 +1198,14 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
 
         try {
             String prompt = buildParameterExtractionPrompt(candidates, session);
+            // 原话里的号码换成可还原的代号 (抽出的参数里换回真值); 脱敏不了按「模型不可用」闭合
+            LlmEgressRedactor.Result masked = llmEgressGuard.texts(PARAMETER_EGRESS_SITE, session.getFactoryId(), userReply);
+            if (masked.refused()) {
+                throw new IllegalStateException("utterance could not be redacted");
+            }
             var call = dashScopeClient.chatCompletion(com.cretas.aims.ai.dto.ChatCompletionRequest.builder()
                     .messages(List.of(com.cretas.aims.ai.dto.ChatMessage.system(prompt),
-                            com.cretas.aims.ai.dto.ChatMessage.user("用户输入: " + userReply)))
+                            com.cretas.aims.ai.dto.ChatMessage.user("用户输入: " + masked.text(0))))
                     .temperature(0.1).enableThinking(false).build());
             if (call == null || call.hasError() || call.getContent() == null || call.getContent().isBlank()) {
                 throw new IllegalStateException("provider returned no extraction result");
@@ -1198,7 +1219,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
                     .retryable(false)
                     .build();
             LlmParameterExtractionResult parsed =
-                    parseParameterExtractionResponseTyped(call.getContent(), candidates);
+                    parseParameterExtractionResponseTyped(masked.restoreJsonText(call.getContent()), candidates);
             parsed.setProviderAttempt(metadata);
             return parsed;
         } catch (RuntimeException e) {

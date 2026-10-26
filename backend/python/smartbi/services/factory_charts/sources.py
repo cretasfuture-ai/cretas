@@ -12,7 +12,8 @@ import smartbi.config as config
 from .engine import Dataset
 
 PRODUCTION_SQL = """
-SELECT stat_date AS "日期", batch_number AS "批次", COALESCE(product_name, product_type_id, '未关联产品') AS "产品",
+SELECT stat_date AS "日期", batch_number AS "批次", product_type_id AS "产品ID",
+       COALESCE(product_name, product_type_id, '未关联产品') AS "产品",
        unit AS "单位", planned_qty AS "计划产量", actual_qty AS "产量", good_qty AS "良品数",
        defect_qty AS "不良数", material_cost AS "材料成本", labor_cost AS "人工成本",
        equipment_cost AS "设备成本", other_cost AS "其他成本", total_cost AS "总成本", updated_at AS "数据同步时间"
@@ -53,7 +54,8 @@ WHERE mb.factory_id=$1 AND mb.deleted_at IS NULL AND mb.status='AVAILABLE'
 ORDER BY mb.id LIMIT 10001
 """
 QUALITY_SQL = """
-SELECT qi.inspection_date AS "日期", COALESCE(pt.name, '未关联产品') AS "产品", '样本' AS "单位",
+SELECT qi.inspection_date AS "日期", pb.product_type_id AS "产品ID",
+       COALESCE(pt.name, '未关联产品') AS "产品", '样本' AS "单位",
        qi.sample_size AS "检验数", qi.pass_count AS "合格数", qi.fail_count AS "不良数"
 FROM quality_inspections qi
 LEFT JOIN production_batches pb ON pb.id=qi.production_batch_id AND pb.factory_id=qi.factory_id AND pb.deleted_at IS NULL
