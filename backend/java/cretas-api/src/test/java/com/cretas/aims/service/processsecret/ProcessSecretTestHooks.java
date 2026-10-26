@@ -1,5 +1,6 @@
 package com.cretas.aims.service.processsecret;
 
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bomdraft.BomRecipeDraftRepository;
@@ -24,6 +25,16 @@ public final class ProcessSecretTestHooks {
                                                        ProductionWorkflowInstanceRepository instances,
                                                        ProductionPlanRepository plans) {
         return new ProcessSecretPayloadScrubber(access, recipes, instances, plans,
-                mock(FactoryMaterialRequisitionRepository.class), mock(BomRecipeDraftRepository.class));
+                mock(FactoryMaterialRequisitionRepository.class), mock(BomRecipeDraftRepository.class),
+                mock(ProductionBatchRepository.class));
+    }
+
+    /** 报工行经批次解析计划时用。 */
+    public static ProcessSecretPayloadScrubber scrubber(ProcessSecretAccessService access, BomRecipeRepository recipes,
+                                                       ProductionWorkflowInstanceRepository instances,
+                                                       ProductionPlanRepository plans,
+                                                       ProductionBatchRepository batches) {
+        return new ProcessSecretPayloadScrubber(access, recipes, instances, plans,
+                mock(FactoryMaterialRequisitionRepository.class), mock(BomRecipeDraftRepository.class), batches);
     }
 }

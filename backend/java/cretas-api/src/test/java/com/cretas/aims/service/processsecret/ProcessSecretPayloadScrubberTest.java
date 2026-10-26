@@ -48,6 +48,7 @@ class ProcessSecretPayloadScrubberTest {
     ProcessSecretAuditRecorder recorder;
     ProcessSecretPayloadScrubber scrubber;
     ProductionPlanRepository plans;
+    com.cretas.aims.repository.ProductionBatchRepository batches;
 
     @BeforeEach
     void setUp() {
@@ -65,8 +66,9 @@ class ProcessSecretPayloadScrubberTest {
         when(recipes.findById("r-secret")).thenReturn(Optional.of(recipe("r-secret", SECRET)));
         when(recipes.findById("r-plain")).thenReturn(Optional.of(recipe("r-plain", PLAIN)));
         plans = mock(ProductionPlanRepository.class);
+        batches = mock(com.cretas.aims.repository.ProductionBatchRepository.class);
         scrubber = com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes,
-                mock(ProductionWorkflowInstanceRepository.class), plans);
+                mock(ProductionWorkflowInstanceRepository.class), plans, batches);
     }
 
     static BomRecipe recipe(String id, String product) {
@@ -165,7 +167,8 @@ class ProcessSecretPayloadScrubberTest {
 
     @Test
     void multiOutputAnchorIsNotAnAttribution() throws Exception {
-        ObjectNode t = tree("{'productTypeId':'__RAW_WORKFLOW_OWNER__x','processes':[{'inputs':"
+        // 锚点的 id 就是原料 id (只有名字带 __RAW_WORKFLOW_OWNER__); 读过受保护产品而它没作为归属出现 → 整份受限
+        ObjectNode t = tree("{'productTypeId':'RM-BEEF','processes':[{'inputs':"
                 + "[{'materialName':'牛肉','inputShareRatio':0.65}]}]}");
         assertThat(scrubber.scrub(t, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, SECRET), "GET /x", false))
                 .isTrue();
@@ -286,6 +289,43 @@ class ProcessSecretPayloadScrubberTest {
         assertThat(t.at("/rows/0/blendRatio/lines/0/recipeSharePercent").isNull()).isTrue();
         assertThat(t.at("/rows/1/blendRatio/lines/0/recipeSharePercent").isNull()).isTrue();
         assertThat(t.at("/rows/1/blendRatio/lines/0/deviationPp").isNull()).isTrue();
+    }
+
+    @Test
+    void reportRowsOfAMultiOutputPlanResolveThroughTheBatchNotTheRawMaterialAnchor() throws Exception {
+        // 独立审查第三轮 A: 多产出计划的报工行 productTypeId = 原料锚点 (id 就是原料 id, 不受保护);
+        // 只按它记读数, 受保护成品的配比快照会原样放出。报工行再按批次记一笔, 经批次 → 计划解析全部产品
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("plan-3");
+        plan.setFactoryId(F);
+        plan.setProductTypeId("RM-BEEF");
+        plan.setTargetFinishedGoodIds(List.of("Q-SIZE-2", SECRET));
+        when(plans.findByIdAndFactoryId("plan-3", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+        batch.setFactoryId(F);
+        batch.setProductTypeId("RM-BEEF");
+        batch.setProductionPlanId("plan-3");
+        when(batches.findByIdAndFactoryId(31L, F)).thenReturn(Optional.of(batch));
+        com.cretas.aims.entity.ProductionReport report = new com.cretas.aims.entity.ProductionReport();
+        report.setFactoryId(F);
+        report.setProductTypeId("RM-BEEF");
+        report.setBatchId(31L);
+        Set<ProcessSecretReadTracker.Read> reads = Set.copyOf(ProcessSecretReadTracker.readsOf(report));
+        String body = "{'reports':[{'productTypeId':'RM-BEEF','batchId':31,'customFields':{'blendRatio':{'lines':"
+                + "[{'materialName':'牛肉','recipeSharePercent':30,'deviationPp':-5,'actualSharePercent':25}]}}}]}";
+
+        ObjectNode operator = tree(body);
+        assertThat(scrubber.scrub(operator, user(5), F, reads, "GET /reports/batch/31", false)).isTrue();
+        JsonNode line = operator.at("/reports/0/customFields/blendRatio/lines/0");
+        assertThat(line.get("recipeSharePercent").isNull()).isTrue();
+        assertThat(line.get("deviationPp").isNull()).isTrue();
+        assertThat(line.get("actualSharePercent").asInt()).as("单批实测, 单据视图照常").isEqualTo(25);
+        verify(recorder).record(eq(F), eq(SECRET), eq(user(5)), eq(ProcessSecretAction.VIEW_FULL), eq("DENY"),
+                anyString(), eq("GET /reports/batch/31"));
+
+        ObjectNode owner = tree(body);
+        assertThat(scrubber.scrub(owner, user(OWNER), F, reads, "GET /reports/batch/31", false)).isFalse();
+        assertThat(owner.at("/reports/0/customFields/blendRatio/lines/0/recipeSharePercent").asInt()).isEqualTo(30);
     }
 
     @Test

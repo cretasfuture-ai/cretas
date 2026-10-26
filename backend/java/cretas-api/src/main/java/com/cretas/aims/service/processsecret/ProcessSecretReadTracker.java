@@ -50,7 +50,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     static final String REQUEST_ATTRIBUTE = ProcessSecretReadTracker.class.getName() + ".reads";
 
     /** 读到的工艺内容来源。{@code kind} 决定 {@code id} 怎么换成产品。 */
-    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN, MATERIAL_REQUISITION, BOM_DRAFT }
+    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN, PRODUCTION_BATCH, MATERIAL_REQUISITION, BOM_DRAFT }
 
     public record Read(Kind kind, String factoryId, String id) { }
 
@@ -130,7 +130,15 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             }
             return found;
         }
-        if (entity instanceof ProductionReport r) return product(r.getFactoryId(), r.getProductTypeId());
+        if (entity instanceof ProductionReport r) {
+            // 多产出计划的报工行 productTypeId 是原料锚点 (id 就是原料 id), 只按它记会把受保护成品漏掉
+            // (独立审查第三轮 A): 再按批次记一笔, 出口经批次 → 计划解析计划牵涉的全部产品
+            List<Read> found = new java.util.ArrayList<>(product(r.getFactoryId(), r.getProductTypeId()));
+            if (r.getBatchId() != null) {
+                found.add(new Read(Kind.PRODUCTION_BATCH, r.getFactoryId(), String.valueOf(r.getBatchId())));
+            }
+            return found;
+        }
         if (entity instanceof FactoryMaterialRequisition r) {
             // 领料单明细带配比 / 单位需求量, 属于它的生产计划 (多产出计划牵涉多个产品, 由出口解析)
             if (r.getProductionPlanId() == null || r.getProductionPlanId().isBlank()) return List.of();

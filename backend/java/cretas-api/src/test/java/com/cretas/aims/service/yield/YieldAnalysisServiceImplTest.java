@@ -34,6 +34,9 @@ class YieldAnalysisServiceImplTest {
     @Mock
     com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
 
+    @Mock
+    com.cretas.aims.repository.ProductionPlanRepository planRepository;
+
     @InjectMocks
     YieldAnalysisServiceImpl service;
 
@@ -140,13 +143,39 @@ class YieldAnalysisServiceImplTest {
     }
 
     @Test
-    void aggregate_namedProductIsLeftToTheRouteGuard() {
+    void aggregate_namedProductStillExcludesHiddenProducts() {
+        // 点名受保护产品由路由闸拦; 点名别的产品 (例如多产出计划的原料锚点) 时, 无权的保密产品照样排除
         when(processSecretAccessService.protectedProductTypeIds("F006")).thenReturn(java.util.Set.of("P17"));
         when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
                 .thenReturn(Collections.emptyList());
 
         service.aggregateByProcess("F006", null, null, "P1");
 
-        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq("P1"), eq(List.of("__none__")));
+        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq("P1"), eq(List.of("P17")));
+    }
+
+    @Test
+    void aggregate_multiOutputAnchorsOfPlansWithHiddenProductsAreExcludedToo() {
+        // 独立审查第三轮 A: 多产出计划的工序任务挂在原料锚点 (id 就是原料 id) 上
+        when(processSecretAccessService.protectedProductTypeIds("F006")).thenReturn(java.util.Set.of("P17", "P18"));
+        when(processSecretAccessService.filterPermitted(any(), eq("F006"), anyList(),
+                eq(com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL), eq(false), anyString()))
+                .thenReturn(List.of("P18"));
+        com.cretas.aims.entity.ProductionPlan hiddenPlan = new com.cretas.aims.entity.ProductionPlan();
+        hiddenPlan.setProductTypeId("RM-BEEF");
+        hiddenPlan.setTargetFinishedGoodIds(List.of("Q-OPEN", "P17"));
+        com.cretas.aims.entity.ProductionPlan permittedPlan = new com.cretas.aims.entity.ProductionPlan();
+        permittedPlan.setProductTypeId("RM-PORK");
+        permittedPlan.setTargetFinishedGoodIds(List.of("Q-OPEN", "P18"));
+        com.cretas.aims.entity.ProductionPlan openPlan = new com.cretas.aims.entity.ProductionPlan();
+        openPlan.setProductTypeId("Q-OPEN");
+        when(planRepository.findByFactoryId("F006")).thenReturn(List.of(hiddenPlan, permittedPlan, openPlan));
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+                .thenReturn(Collections.emptyList());
+
+        service.aggregateByProcess("F006", null, null, "RM-BEEF");
+
+        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq("RM-BEEF"),
+                eq(List.of("P17", "RM-BEEF")));
     }
 }

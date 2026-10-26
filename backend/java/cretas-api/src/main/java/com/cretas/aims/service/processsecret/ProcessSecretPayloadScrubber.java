@@ -3,6 +3,7 @@ package com.cretas.aims.service.processsecret;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.processsecret.ProcessSecretAction;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bomdraft.BomRecipeDraftRepository;
@@ -133,7 +134,10 @@ public class ProcessSecretPayloadScrubber {
             "requiredQuantity", "requiredQty", "plannedQty", "plannedQuantityKg", "rawInputKg", "quantity",
             "shortfallQuantity", "standardKg", "actualQuantity", "totalRequired");
 
-    /** 对象归属的产品字段 (按顺序取第一个); 多产出计划的锚点 {@code __...} 不算归属。 */
+    /**
+     * 对象归属的产品字段 (按顺序取第一个)。多产出计划的锚点 id 就是原料 id, 不受保护:
+     * 它在受限计划的产品集合里, 由 planSiblings 按受限处理 (独立审查第三轮 A), 不靠 id 前缀认。
+     */
     static final List<String> PRODUCT_KEYS = List.of("productTypeId", "sourceProductTypeId");
     static final List<String> RECIPE_KEYS = List.of("recipeId", "bomRecipeId", "sourceRecipeId");
 
@@ -143,19 +147,22 @@ public class ProcessSecretPayloadScrubber {
     private final ProductionPlanRepository planRepository;
     private final FactoryMaterialRequisitionRepository requisitionRepository;
     private final BomRecipeDraftRepository draftRepository;
+    private final ProductionBatchRepository batchRepository;
 
     public ProcessSecretPayloadScrubber(ProcessSecretAccessService accessService,
                                         BomRecipeRepository recipeRepository,
                                         ProductionWorkflowInstanceRepository instanceRepository,
                                         ProductionPlanRepository planRepository,
                                         FactoryMaterialRequisitionRepository requisitionRepository,
-                                        BomRecipeDraftRepository draftRepository) {
+                                        BomRecipeDraftRepository draftRepository,
+                                        ProductionBatchRepository batchRepository) {
         this.accessService = accessService;
         this.recipeRepository = recipeRepository;
         this.instanceRepository = instanceRepository;
         this.planRepository = planRepository;
         this.requisitionRepository = requisitionRepository;
         this.draftRepository = draftRepository;
+        this.batchRepository = batchRepository;
     }
 
     /** 判定档位 (不写审计)。 */
@@ -285,6 +292,7 @@ public class ProcessSecretPayloadScrubber {
                     case WORKFLOW_INSTANCE -> List.of(instanceKey(read.factoryId(), read.id())
                             .orElse(new Key(read.factoryId(), null)));
                     case PRODUCTION_PLAN -> planKeys(read.factoryId(), read.id());
+                    case PRODUCTION_BATCH -> batchKeys(read.factoryId(), read.id());
                     case MATERIAL_REQUISITION -> requisitionRepository.findById(read.id())
                             .filter(r -> read.factoryId().equals(r.getFactoryId()))
                             .filter(r -> r.getProductionPlanId() != null && !r.getProductionPlanId().isBlank())
@@ -350,13 +358,33 @@ public class ProcessSecretPayloadScrubber {
             }
         }
 
+        /** 报工行的批次: 批次的产品 + 它所属计划牵涉的全部产品; 批次查不到时不加 (报工行另记了产品)。 */
+        List<Key> batchKeys(String factoryId, String batchId) {
+            final Long id;
+            try {
+                id = Long.valueOf(batchId);
+            } catch (NumberFormatException e) {
+                return List.of();
+            }
+            return batchRepository.findByIdAndFactoryId(id, factoryId).map(batch -> {
+                Set<Key> keys = new LinkedHashSet<>();
+                if (batch.getProductTypeId() != null && !batch.getProductTypeId().isBlank()) {
+                    keys.add(new Key(factoryId, batch.getProductTypeId()));
+                }
+                if (batch.getProductionPlanId() != null && !batch.getProductionPlanId().isBlank()) {
+                    keys.addAll(planKeys(factoryId, batch.getProductionPlanId()));
+                }
+                return List.copyOf(keys);
+            }).orElse(List.of());
+        }
+
         /** 对象自身的归属 (没有则 null, 由上层继承)。 */
         Key ownKey(ObjectNode node, Key inherited) {
             String factory = text(node, "factoryId");
             if (factory == null) factory = inherited != null ? inherited.factoryId() : requestFactory;
             for (String field : PRODUCT_KEYS) {
                 String product = text(node, field);
-                if (product != null && !product.startsWith("__")) return new Key(factory, product);
+                if (product != null) return new Key(factory, product);
             }
             for (String field : RECIPE_KEYS) {
                 String recipeId = text(node, field);

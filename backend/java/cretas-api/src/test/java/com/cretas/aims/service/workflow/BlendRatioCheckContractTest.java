@@ -293,6 +293,8 @@ class BlendRatioCheckContractTest {
 
         private ProcessSheetRowRepository rowRepo;
         private ProcessSheetServiceImpl svc;
+        /** 逐道录入配置里的产品; 多产出计划时是原料锚点 (id 就是原料 id)。 */
+        private String configProductTypeId = "SEMI-MIX";
 
         private WorkflowClerkSheetConfigDTO.PortDescriptor input(String id, String sku, String name, String share) {
             WorkflowClerkSheetConfigDTO.PortDescriptor p = new WorkflowClerkSheetConfigDTO.PortDescriptor();
@@ -325,7 +327,7 @@ class BlendRatioCheckContractTest {
             d.setOutput(out);
             d.setOutputs(List.of(out));
             WorkflowClerkSheetConfigDTO cfg = new WorkflowClerkSheetConfigDTO();
-            cfg.setProductTypeId("SEMI-MIX");
+            cfg.setProductTypeId(configProductTypeId);
             cfg.setProcesses(List.of(d));
             WorkflowClerkSheetService sheet = mock(WorkflowClerkSheetService.class);
             when(sheet.getWorkflowSheetConfig(F, PLAN)).thenReturn(cfg);
@@ -382,6 +384,13 @@ class BlendRatioCheckContractTest {
 
         /** 工艺保密: SEMI-MIX 受保护, 负责人 10 号; 判定服务是真的。 */
         private BlendRatioCheck secretAwareCheck() {
+            // 单产出计划: 计划本身没有别的产品, 只看配置里的产品
+            ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
+            when(plans.findByIdAndFactoryId(PLAN, F)).thenReturn(Optional.of(new ProductionPlan()));
+            return secretAwareCheck("SEMI-MIX", plans);
+        }
+
+        private BlendRatioCheck secretAwareCheck(String protectedProduct, ProductionPlanRepository planRepo) {
             com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository policies =
                     mock(com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository.class);
             com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository grants =
@@ -389,10 +398,10 @@ class BlendRatioCheckContractTest {
             when(grants.findActive(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
             com.cretas.aims.entity.processsecret.ProcessSecretPolicy policy =
                     com.cretas.aims.entity.processsecret.ProcessSecretPolicy.builder().id(1L).factoryId(F)
-                            .productTypeId("SEMI-MIX")
+                            .productTypeId(protectedProduct)
                             .storageMode(com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CLOUD_RESTRICTED)
                             .ownerUserId(10L).createdBy(10L).build();
-            when(policies.findByFactoryIdAndProductTypeId(F, "SEMI-MIX")).thenReturn(Optional.of(policy));
+            when(policies.findByFactoryIdAndProductTypeId(F, protectedProduct)).thenReturn(Optional.of(policy));
             when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
             com.cretas.aims.service.processsecret.ProcessSecretAccessService access =
                     new com.cretas.aims.service.processsecret.ProcessSecretAccessService(policies, grants,
@@ -401,11 +410,16 @@ class BlendRatioCheckContractTest {
             ReflectionTestUtils.setField(check, "processSecretGuard",
                     new com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard(
                             mock(com.cretas.aims.repository.bom.BomRecipeRepository.class), access));
+            if (planRepo != null) ReflectionTestUtils.setField(check, "planRepository", planRepo);
             return check;
         }
 
         private String rejectionMessageFor(long userId) {
-            ReflectionTestUtils.setField(svc, "blendRatioCheck", secretAwareCheck());
+            return rejectionMessageFor(userId, secretAwareCheck());
+        }
+
+        private String rejectionMessageFor(long userId, BlendRatioCheck check) {
+            ReflectionTestUtils.setField(svc, "blendRatioCheck", check);
             com.cretas.aims.security.AuthenticatedActor actor = new com.cretas.aims.security.AuthenticatedActor(
                     com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, F, "operator");
             try (com.cretas.aims.security.AuthenticatedActor.ActorScope ignored =
@@ -429,6 +443,69 @@ class BlendRatioCheckContractTest {
 
             String ownerMessage = rejectionMessageFor(10L);
             assertThat(ownerMessage).contains("配方 30%").contains("+11.7");
+        }
+
+        @Test
+        @DisplayName("工艺保密: 多产出计划的产品是原料锚点 (id = 原料 id) —— 按计划牵涉的成品判, 无权的人照样看不到配方份额")
+        void multiOutputAnchorIsResolvedThroughThePlan() {
+            configProductTypeId = "RM-ANCHOR";
+            build(null);
+            ProductionPlan plan = new ProductionPlan();
+            plan.setProductTypeId("RM-ANCHOR");
+            plan.setTargetFinishedGoodIds(List.of("FG-OPEN", "FG-SECRET"));
+            ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
+            when(plans.findByIdAndFactoryId(PLAN, F)).thenReturn(Optional.of(plan));
+
+            String operatorMessage = rejectionMessageFor(5L, secretAwareCheck("FG-SECRET", plans));
+            assertThat(operatorMessage).contains("猪肉").contains("实际 41.7%").contains("偏高")
+                    .doesNotContain("配方").doesNotContain("30%").doesNotContain("11.7");
+
+            String ownerMessage = rejectionMessageFor(10L, secretAwareCheck("FG-SECRET", plans));
+            assertThat(ownerMessage).contains("配方 30%").contains("+11.7");
+
+            // 计划查不到 (已删 / 他厂) 时, 本厂有保密产品就不给份额
+            ProductionPlanRepository missing = mock(ProductionPlanRepository.class);
+            when(missing.findByIdAndFactoryId(PLAN, F)).thenReturn(Optional.empty());
+            BlendRatioCheck check = secretAwareCheck("FG-SECRET", missing);
+            BlendRatioDeviation over = BlendRatioDeviation.builder().status("OVER").build();
+            assertThat(check.revealRecipeShares(F, PLAN, "RM-ANCHOR", over)).isFalse();
+        }
+
+        @Test
+        @DisplayName("工艺保密: App 报工按任务 → 批次 → 计划找产品, 多产出锚点不会被当成不受保护")
+        void appReportResolvesThePlanThroughTheBatch() {
+            ProductionPlan plan = new ProductionPlan();
+            plan.setProductTypeId("RM-ANCHOR");
+            plan.setTargetFinishedGoodIds(List.of("FG-OPEN", "FG-SECRET"));
+            ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
+            when(plans.findByIdAndFactoryId(PLAN, F)).thenReturn(Optional.of(plan));
+            com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+            batch.setProductionPlanId(PLAN);
+            com.cretas.aims.repository.ProductionBatchRepository batches =
+                    mock(com.cretas.aims.repository.ProductionBatchRepository.class);
+            when(batches.findByIdAndFactoryId(77L, F)).thenReturn(Optional.of(batch));
+            BlendRatioCheck check = secretAwareCheck("FG-SECRET", plans);
+            ReflectionTestUtils.setField(check, "batchRepository", batches);
+            WorkProcessTask task = new WorkProcessTask();
+            task.setProductionBatchId(77L);
+            task.setProductTypeId("RM-ANCHOR");
+            BlendRatioDeviation over = BlendRatioDeviation.builder().status("OVER").build();
+
+            assertThat(check.planIdOf(F, task)).isEqualTo(PLAN);
+            com.cretas.aims.security.AuthenticatedActor operator = new com.cretas.aims.security.AuthenticatedActor(
+                    com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 5L, F, "operator");
+            try (com.cretas.aims.security.AuthenticatedActor.ActorScope ignored =
+                         com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(operator)) {
+                assertThat(check.revealRecipeShares(F, check.planIdOf(F, task), task.getProductTypeId(), over))
+                        .isFalse();
+            }
+            com.cretas.aims.security.AuthenticatedActor owner = new com.cretas.aims.security.AuthenticatedActor(
+                    com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 10L, F, "owner");
+            try (com.cretas.aims.security.AuthenticatedActor.ActorScope ignored =
+                         com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(owner)) {
+                assertThat(check.revealRecipeShares(F, check.planIdOf(F, task), task.getProductTypeId(), over))
+                        .isTrue();
+            }
         }
 
         @Test
@@ -485,7 +562,7 @@ class BlendRatioCheckContractTest {
             // 「一定会发生」的读数 (硬约束 9): 草稿确实跑过了校验段、走到了查已有行 —— 否则 never() 无意义
             verify(rowRepo, Mockito.atLeastOnce())
                     .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(eq(F), eq(PLAN), anyString(), anyString());
-            verify(spy, never()).enforceProcessSheet(any(), any(), any(), any());
+            verify(spy, never()).enforceProcessSheet(any(), any(), any(), any(), any());
         }
 
         @Test

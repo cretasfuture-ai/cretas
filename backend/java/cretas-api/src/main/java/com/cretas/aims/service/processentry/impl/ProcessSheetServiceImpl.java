@@ -1462,7 +1462,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         applyWorkflowInputPorts(factoryId, config.getProductTypeId(), descriptor, req, true);
         // 缺口 06: 多主料按份额汇合时, 偏差 >±2pp 必须带原因 (端口已在上一行归位)。
         if (blendRatioCheck != null) {
-            blendRatioCheck.enforceProcessSheet(factoryId, config.getProductTypeId(), descriptor, req);
+            blendRatioCheck.enforceProcessSheet(factoryId, planId, config.getProductTypeId(), descriptor, req);
         }
 
         List<WorkflowClerkSheetConfigDTO.PortDescriptor> outputs = workflowOutputs(descriptor);
