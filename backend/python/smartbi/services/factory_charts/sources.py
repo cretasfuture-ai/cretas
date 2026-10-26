@@ -90,7 +90,7 @@ async def load(factory_id, request, can_price):
     ]
     gaps = []
     if request.period_type == 'all':
-        sources.append(('inventory', f'可用库存快照 · 截至{date.today()}', config.get_cretas_pool, INVENTORY_SQL))
+        sources.append(('inventory', f'物料批次可用库存快照（不含独立成品库存） · 截至{date.today()}', config.get_cretas_pool, INVENTORY_SQL))
     else:
         gaps.append({'id': 'stock.snapshot', 'title': '历史库存', 'missing': ['所选期间库存余额快照；当前余额不能倒推历史库存']})
 

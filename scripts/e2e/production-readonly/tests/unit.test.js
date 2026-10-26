@@ -27,7 +27,13 @@ require('./smartbi-factory-details.test');
 
 const {
   clickAttempts,
+  detailCellEvidence,
+  echartsAssetUrl,
   estimateVirtualRowCount,
+  mountedEChartsPointCoordinate,
+  readVirtualTableMetrics,
+  selectEChartsAssetUrls,
+  selectPointCandidate,
   availablePointAttempts,
   POINT_CLICK_BUDGET_MS,
 } = require('../scenarios/smartbi-factory-readonly');
@@ -68,4 +74,90 @@ test('bar point coordinates honor the ECharts grid and value axis', () => {
   candidate.chart.echartsOption.yAxis.inverse = true;
   const inverseAttempts = clickAttempts({ x: 10, y: 20, width: 500, height: 400 }, candidate, point);
   assert.ok(Math.abs(inverseAttempts[0].y - 127.5) < 0.001);
+});
+
+test('same-origin ECharts asset selection is exact and bounded', () => {
+  const origin = 'https://smartbi.example.test';
+  assert.equal(echartsAssetUrl('/assets/echarts-ab12.js', origin), `${origin}/assets/echarts-ab12.js`);
+  assert.equal(echartsAssetUrl('/assets/other-ab12.js', origin), null);
+  assert.equal(echartsAssetUrl('https://elsewhere.test/assets/echarts-ab12.js', origin), null);
+  const selected = selectEChartsAssetUrls([
+    { name: `${origin}/assets/echarts-a.js` },
+    { name: `${origin}/assets/echarts-b.js` },
+    { name: `${origin}/assets/echarts-c.js` },
+    { name: `${origin}/assets/echarts-d.js` },
+    { name: `${origin}/assets/echarts-e.js` },
+    { name: `${origin}/assets/not-echarts.js` },
+  ], origin);
+  assert.deepEqual(selected, ['https://smartbi.example.test/assets/echarts-a.js', 'https://smartbi.example.test/assets/echarts-b.js', 'https://smartbi.example.test/assets/echarts-c.js', 'https://smartbi.example.test/assets/echarts-d.js']);
+});
+
+test('virtual table metrics use ElementPlus inner content and visible concrete cells', () => {
+  const cell = text => ({ textContent: text });
+  const row = {
+    getBoundingClientRect: () => ({ height: 44 }),
+    querySelectorAll: () => [cell('B1'), cell('0'), cell('{"来源":"业务系统"}'), cell('—')],
+  };
+  const content = { firstElementChild: null, scrollHeight: 2156, getBoundingClientRect: () => ({ height: 2156 }) };
+  const viewport = { firstElementChild: content, getBoundingClientRect: () => ({ height: 576 }) };
+  const body = { firstElementChild: viewport, getBoundingClientRect: () => ({ height: 576 }) };
+  const requestedSelectors = [];
+  const table = { querySelector: selector => {
+    requestedSelectors.push(selector);
+    if (selector === '.el-table-v2__main > .el-vl__wrapper.el-table-v2__body') return body;
+    if (selector === '.el-table-v2__row') return row;
+    return null;
+  } };
+  const metrics = readVirtualTableMetrics(table);
+  assert.deepEqual(metrics.visibleCellTexts, ['B1', '0', '{"来源":"业务系统"}', '—']);
+  assert.equal(metrics.contentHeight, 2156);
+  assert.equal(metrics.viewportHeight, 576);
+  assert.equal(metrics.rowHeight, 44);
+  assert.ok(requestedSelectors.includes('.el-table-v2__main > .el-vl__wrapper.el-table-v2__body'));
+  assert.ok(!requestedSelectors.includes('.el-table-v2__main .el-vl__wrapper > .el-table-v2__body'));
+  const evidence = detailCellEvidence({ columns: ['批次', '数量', '备注', '空值'], rows: [{ 批次: 'B1', 数量: 0, 备注: { 来源: '业务系统' }, 空值: null }] }, metrics.visibleCellTexts);
+  assert.equal(evidence.displayedValues, true);
+  assert.equal(evidence.concreteValueVisible, true);
+  assert.equal(detailCellEvidence({ columns: ['批次'], rows: [{ 批次: 'B1' }] }, ['—']).displayedValues, false);
+});
+
+test('point selection carries the matching series index and prefers a small nonzero mounted chart', () => {
+  const multiSeries = {
+    chart: { chartType: 'bar', echartsOption: { xAxis: { data: ['A'] }, series: [{ type: 'line', name: '基线', data: [1] }, { type: 'bar', name: '收入', data: [30] }] } },
+    detailContext: { id: 'ctx-1' },
+  };
+  assert.equal(require('../scenarios/smartbi-factory-readonly').chartPointForCandidate(multiSeries).seriesIndex, 1);
+  const wide = { candidate: { id: 'wide', chart: { chartType: 'bar_horizontal', echartsOption: { yAxis: { data: Array.from({ length: 47 }, (_, i) => `W${i}`) }, series: [{ type: 'bar', data: [30] }] } } } };
+  const small = { candidate: { id: 'small', chart: { chartType: 'bar_horizontal', echartsOption: { yAxis: { data: ['S'] }, series: [{ type: 'bar', data: [30] }] } } } };
+  assert.equal(selectPointCandidate([wide, small]).candidate.id, 'small');
+  const pie = { candidate: { id: 'pie', chart: { chartType: 'pie', echartsOption: { series: [{ type: 'pie', data: [{ name: '部门', value: 30 }] }] } } } };
+  assert.equal(selectPointCandidate([pie, small]).candidate.id, 'small');
+  assert.equal(selectPointCandidate([pie]).candidate.id, 'pie');
+});
+
+test('mounted ECharts lookup filters resources in Node and wires seriesIndex into the browser callback', async () => {
+  const calls = [];
+  let callbackTarget;
+  const host = {
+    count: async () => 1,
+    evaluate: async (_callback, target) => {
+      calls.push(target);
+      if (!target) return {
+        origin: 'https://smartbi.example.test',
+        resources: [
+          'https://smartbi.example.test/assets/echarts-a.js',
+          'https://other.example.test/assets/echarts-b.js',
+          'https://smartbi.example.test/assets/not-echarts.js',
+          'https://smartbi.example.test/assets/echarts-c.js',
+        ],
+      };
+      callbackTarget = target;
+      return { x: 251.4, y: 138, source: 'mounted-echarts-convertToPixel' };
+    },
+  };
+  const result = await mountedEChartsPointCoordinate(host, { kind: 'bar_horizontal', name: 'QA直营', seriesIndex: 1 }, 30);
+  assert.deepEqual(result, { x: 251.4, y: 138, source: 'mounted-echarts-convertToPixel' });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(callbackTarget.resources, ['https://smartbi.example.test/assets/echarts-a.js', 'https://smartbi.example.test/assets/echarts-c.js']);
+  assert.equal(callbackTarget.seriesIndex, 1);
 });

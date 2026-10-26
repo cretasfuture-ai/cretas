@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { getFactoryChartDetails, type FactoryChartDetailsData, type FactoryRecommendation } from '@/api/smartbi/factory-charts';
 import { appendDetailPage, detailColumns, FACTORY_DETAIL_PAGE_SIZE } from './factoryChartDetails';
@@ -7,7 +7,10 @@ import { appendDetailPage, detailColumns, FACTORY_DETAIL_PAGE_SIZE } from './fac
 const props = defineProps<{ modelValue: boolean; candidate: FactoryRecommendation | null; point?: { name: string; seriesName?: string; dataIndex?: number } }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>();
 const loading = ref(false); const error = ref(''); const data = ref<FactoryChartDetailsData | null>(null); const rows = ref<Record<string, unknown>[]>([]); const page = ref(1); const requestVersion = ref(0); const mode = ref<'continuous' | 'paged'>('continuous');
-const columns = computed(() => detailColumns(data.value));
+const columns = computed(() => detailColumns(data.value).map((column) => ({
+  ...column,
+  cellRenderer: ({ cellData }: { cellData: unknown }) => h('span', display(cellData)),
+})));
 const viewport = ref({ width: 1024, height: 720 });
 const width = computed(() => Math.max(280, Math.min(900, Math.floor(viewport.value.width * 0.9 - 24))));
 const height = computed(() => Math.min(620, Math.max(280, viewport.value.height - 260)));
@@ -55,9 +58,7 @@ function display(value: unknown) { return value === null || value === undefined 
       <el-alert v-if="error" type="error" show-icon :closable="false">{{ error }}</el-alert>
       <el-empty v-else-if="!loading && !rows.length" description="没有可用原始行" />
       <div v-else class="details-table-wrap">
-        <el-table-v2 v-if="columns.length" :columns="columns" :data="displayedRows" :width="width" :height="height" :row-height="44" :header-height="44" row-key="__detailRowKey" :on-end-reached="mode === 'continuous' ? onEndReached : undefined">
-          <template #cell="{ cellData }">{{ display(cellData) }}</template>
-        </el-table-v2>
+        <el-table-v2 v-if="columns.length" :columns="columns" :data="displayedRows" :width="width" :height="height" :row-height="44" :header-height="44" row-key="__detailRowKey" :on-end-reached="mode === 'continuous' ? onEndReached : undefined" />
       </div>
       <div class="details-actions"><template v-if="mode === 'paged'"><el-button :disabled="page <= 1 || loading" @click="loadPrevious">上一页</el-button><span>第 {{ page }} 页</span><el-button :disabled="!hasMore || loading" @click="loadNext">下一页</el-button></template><el-button v-else-if="hasMore" :loading="loading" @click="loadMore">加载更多</el-button><span v-if="loading">正在读取原始明细…</span><span v-else-if="!hasMore && rows.length">已加载全部 {{ rows.length }} 行</span></div>
     </div>

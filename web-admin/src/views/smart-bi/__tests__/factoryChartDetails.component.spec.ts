@@ -10,7 +10,7 @@ vi.mock('@/api/smartbi/factory-charts', async () => {
 import FactoryChartDetails from '../FactoryChartDetails.vue';
 
 const candidate = { id: 'cost', title: '单位成本', metric: 'cost', domain: '成本', priority: 'required', reason: '规则', source: '业务系统', unit: '元/kg', findings: { good: [], attention: [], suggestions: [] }, chart: { chartType: 'bar', echartsOption: {} }, kpis: [], tableData: null, detailContext: { id: 'ctx-1', expiresAt: '2099-01-01T00:00:00Z' } } as const;
-const page = (pageNumber: number, rows: Record<string, unknown>[], hasMore: boolean) => ({ success: true, data: { factoryId: 'F006', candidateId: 'cost', title: '单位成本', source: '业务系统', period: '2026年3月', columns: ['批次', '金额'], rows, total: 2, page: pageNumber, pageSize: 1, hasMore, appliedFilters: [], availableFilters: [], snapshotAt: '2026-10-26T00:00:00Z' } });
+const page = (pageNumber: number, rows: Record<string, unknown>[], hasMore: boolean, columns = ['批次', '金额'], total = 2) => ({ success: true, data: { factoryId: 'F006', candidateId: 'cost', title: '单位成本', source: '业务系统', period: '2026年3月', columns, rows, total, page: pageNumber, pageSize: 1, hasMore, appliedFilters: [], availableFilters: [], snapshotAt: '2026-10-26T00:00:00Z' } });
 
 describe('FactoryChartDetails mounted workflow', () => {
   beforeEach(() => h.get.mockReset());
@@ -43,5 +43,17 @@ describe('FactoryChartDetails mounted workflow', () => {
     await flushPromises();
     expect(h.get).toHaveBeenLastCalledWith(expect.objectContaining({ context_id: 'ctx-2' }));
     expect(wrapper.text()).toContain('已加载全部 1 行');
+  });
+
+  it('renders mounted virtual-table cells from row values including zero, null, and structured Chinese data', async () => {
+    const columns = ['批次', '数量', '备注', '空值'];
+    h.get.mockResolvedValueOnce(page(1, [{ 批次: 'B1', 数量: 0, 备注: { 来源: '业务系统' }, 空值: null }], false, columns, 1));
+    const wrapper = mount(FactoryChartDetails, { props: { modelValue: true, candidate }, global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    const tableText = wrapper.find('.el-table-v2').text();
+    expect(tableText).toContain('B1');
+    expect(tableText).toContain('0');
+    expect(tableText).toContain('{"来源":"业务系统"}');
+    expect(tableText).toContain('—');
   });
 });

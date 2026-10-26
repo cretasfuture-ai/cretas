@@ -124,3 +124,25 @@ async def test_load_distinguishes_source_failure_from_successful_empty_source_an
     assert all(dataset.frame.empty for dataset in datasets)
     assert any(g['id'] == 'stock.snapshot' for g in gaps)
     assert all(call[1] != 'inventory' for call in calls if call[0] == 'fetch')
+
+
+@pytest.mark.asyncio
+async def test_inventory_provenance_names_material_batches_and_excludes_independent_finished_stock(monkeypatch):
+    calls = []
+    rows_by_source = [
+        ('production', 'fact_production_batch', []),
+        ('sales', 'sales_orders so', []),
+        ('purchase', 'purchase_receive_records pr', []),
+        ('quality', 'quality_inspections qi', []),
+        ('process', 'fact_production_report', []),
+        ('inventory', 'material_batches mb', [{'日期': '2026-10-26', '原料': 'QA原料', '库存数量': 7, '单位': 'kg'}]),
+    ]
+    get_pool = await fake_loader(rows_by_source, calls)
+    monkeypatch.setattr(sources.config, 'get_pg_pool', get_pool)
+    monkeypatch.setattr(sources.config, 'get_cretas_pool', get_pool)
+    datasets, errors, _ = await sources.load('F006', request(period_type='all'), False)
+    inventory = next(dataset for dataset in datasets if dataset.source.startswith('inventory ·'))
+    assert errors == []
+    assert '物料批次可用库存快照（不含独立成品库存）' in inventory.source
+    assert inventory.frame.iloc[0]['库存数量'] == 7
+    assert 'finished_goods_batches' not in sources.INVENTORY_SQL
