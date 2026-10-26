@@ -41,6 +41,18 @@ export interface FormalExecution {
     activeDigest: string; runtimeState: string }>
   approval: FormalApproval
 }
+/** What a listed approval may be used for now. Only the first two continue the original flow. */
+export type FormalRecoverability = 'CONTINUE_APPROVAL' | 'CONTINUE_EXECUTION' | 'RECEIPT_ONLY' | 'EXPIRED'
+  | 'HISTORICAL_VERSION' | 'BLUEPRINT_CHANGED' | 'SNAPSHOT_UNREADABLE'
+export interface FormalRecoverable {
+  approval: FormalApproval
+  blueprintVersion: number | null
+  recoverability: FormalRecoverability
+}
+export interface FormalRecoverableList {
+  currentBlueprintVersion: number | null
+  approvals: FormalRecoverable[]
+}
 const options = { baseURL: '', _silent: true } as const
 type Envelope<T> = { success: boolean; data: T; message?: string }
 const base = (factoryId: string, blueprintId: string) =>
@@ -51,6 +63,10 @@ export function previewFormal(factoryId: string, blueprintId: string, selection:
 }
 export function requestFormal(factoryId: string, blueprintId: string, selection: FormalSelection, confirmedPlanDigest: string): Promise<Envelope<FormalApproval>> {
   return request.post(`${base(factoryId, blueprintId)}/requests`, { selection, confirmedPlanDigest }, options)
+}
+/** This blueprint's persisted approvals for resuming after a reload; the server judges each one. */
+export function listRecoverableFormal(factoryId: string, blueprintId: string): Promise<Envelope<FormalRecoverableList>> {
+  return request.get(`${base(factoryId, blueprintId)}/requests`, options)
 }
 export function readFormal(factoryId: string, blueprintId: string, approvalId: string): Promise<Envelope<FormalApproval>> {
   return request.get(`${base(factoryId, blueprintId)}/requests/${encodeURIComponent(approvalId)}`, options)

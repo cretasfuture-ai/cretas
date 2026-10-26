@@ -1,5 +1,7 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
@@ -50,6 +52,7 @@ public class BomController {
     private final RecursiveBomExpansionService recursiveBomExpansionService;
     private final BomYieldEstimateService bomYieldEstimateService;
     private final com.cretas.aims.service.bom.WorkflowBomExportService workflowBomExportService;
+    private final com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
 
     /** P1-9 BOM 变更痕迹查询 Repository (可选注入, 老环境未部署 migration 时不阻塞) */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -67,6 +70,7 @@ public class BomController {
      * (半成品 → 原料), 返回完整树结构 + maxDepth / leafCount / shortfallLeafCount 统计 +
      * 循环检测 (cycleDetected + cycleTypeIds)。</p>
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @GetMapping("/tree/{productTypeId}")
     @Operation(summary = "多级 BOM 树展开 (M-MATTREE-1)",
             description = "递归展开成品 BOM 到原料叶子, 叶子节点附加库存可用量 + 短缺数量")
@@ -85,6 +89,7 @@ public class BomController {
      * P1-9 BOM 变更痕迹查询 (v1 §2.2.6).
      * 返回指定产品 BOM 的所有变更历史 (CREATE/UPDATE/DELETE), 按时间倒序.
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @GetMapping("/change-logs/{recipeId}")
     @Operation(summary = "获取 BOM 变更痕迹 (P1-9)")
     public ApiResponse<List<BomChangeLog>> getBomChangeLogs(
@@ -99,6 +104,7 @@ public class BomController {
 
     // ========== Cost Calculation (成本计算) ==========
 
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @GetMapping("/cost-summary/{productTypeId}")
     @Operation(summary = "计算产品成本汇总")
     public ApiResponse<BomCostSummaryDTO> calculateCost(
@@ -113,7 +119,12 @@ public class BomController {
     @Operation(summary = "批量计算产品成本")
     public ApiResponse<List<BomCostSummaryDTO>> calculateCostsBatch(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
-            @RequestBody List<String> productTypeIds) {
+            @RequestBody List<String> productTypeIds,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // 工艺保密: 点名要的受保护产品, 任一无完整查看权即 403
+        processSecretAccessService.filterPermitted(
+                com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null), factoryId,
+                productTypeIds, ProcessSecretAction.VIEW_FULL, true, "POST /bom/cost-summary/batch");
         log.info("Calculating batch product costs: factoryId={}, count={}", factoryId, productTypeIds.size());
         return ApiResponse.success(bomService.calculateProductCosts(factoryId, productTypeIds));
     }
@@ -132,6 +143,7 @@ public class BomController {
      * 单产品出成率评估 (只读).
      * GET /api/mobile/{factoryId}/bom/yield-estimate?productTypeId={id}&materialCategory=RAW
      */
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PARAM, name = "productTypeId")
     @GetMapping("/yield-estimate")
     @Operation(summary = "BOM 出成率评估 (单产品)",
             description = "基于最近 10 个已完成批次的 cumulativeYieldRate 中位数推荐出成率. 样本 <3 时返回 null + reason.")
@@ -184,10 +196,17 @@ public class BomController {
     public void exportWorkflowBom(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam(required = false) @Parameter(description = "成品ID, 逗号分隔; 不传=全厂") List<String> productTypeIds,
+            jakarta.servlet.http.HttpServletRequest httpRequest,
             jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         log.info("[WorkflowBomExport] factoryId={}, productTypeIds size={}",
                 factoryId, productTypeIds == null ? 0 : productTypeIds.size());
-        byte[] data = workflowBomExportService.export(factoryId, productTypeIds);
+        // 工艺保密: 点名导出 → 任一无导出权即 403; 全厂导出 → 无权的受保护产品被排除 (逐个记审计)
+        boolean explicit = productTypeIds != null && !productTypeIds.isEmpty();
+        List<String> targets = processSecretAccessService.filterPermitted(
+                com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null), factoryId,
+                workflowBomExportService.resolveTargets(factoryId, productTypeIds),
+                ProcessSecretAction.EXPORT, explicit, "GET /bom/workflow-export");
+        byte[] data = workflowBomExportService.exportResolved(factoryId, targets);
         String filename = java.net.URLEncoder.encode(
                 "工艺与BOM.xlsx", java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

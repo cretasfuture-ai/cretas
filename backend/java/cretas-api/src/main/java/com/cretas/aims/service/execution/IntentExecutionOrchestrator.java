@@ -36,6 +36,8 @@ import com.cretas.aims.exception.LlmSchemaValidationException;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
 import com.cretas.aims.repository.IntentMatchRecordRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
 import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
@@ -351,6 +353,11 @@ public class IntentExecutionOrchestrator {
             return buildFactoryPackNoMatch(factoryPackRoute, factoryPackRoute.reason());
         }
         boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+
+        if (hasNamedSession(request) && !hasTrustedConversationIdentity(
+                factoryId, userId, request.getSessionId())) {
+            return sessionAdmissionDeniedResponse();
+        }
 
         if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             hydrateRestaurantComparisonContext(factoryId, userId, request);
@@ -732,13 +739,26 @@ public class IntentExecutionOrchestrator {
                 // spec §8.2 洞②: 把 tab 模式带进识别层, 让写意图在咨询 tab 根本不进候选集,
                 // 而不是靠下面 #4.4 的"识别后拦"。bestMatch 仍会保留写意图, 那是有意的 ——
                 // 拦截卡需要它来渲染"请切换到【操作】页"的导航。
+                Long recognizerUserId = hasTrustedConversationIdentity(
+                        factoryId, userId, request.getSessionId()) ? userId : null;
+                String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        request.getUserInput(), factoryId, 3, userId, userRole, request.getSessionId(),
+                        request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                         request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
                 return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
             }
+        }
+
+        if (matchResult != null && matchResult.hasMatch()
+                && SupplierComparisonReadIntent.CODE.equals(matchResult.getBestMatch().getIntentCode())) {
+            Optional<AIIntentConfig> canonical = SupplierComparisonReadIntent.resolve(
+                    factoryId, toolRegistry, intentConfigRepository);
+            if (canonical.isEmpty()) return buildNoPermissionResponse(matchResult.getBestMatch());
+            matchResult.setBestMatch(canonical.get());
+            IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
+            if (denied != null) return denied;
         }
 
         if (factoryPackConstrained
@@ -792,7 +812,7 @@ public class IntentExecutionOrchestrator {
         }
 
         if (factoryPackConstrained) {
-            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
             if (permissionDenied != null) {
                 return permissionDenied;
             }
@@ -818,7 +838,7 @@ public class IntentExecutionOrchestrator {
 
         // 权限检查 (P1: required_permission 权限码优先, 空回落 requiredRoles 旧逻辑)
         if (!factoryPackConstrained) {
-            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+            IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
             if (permissionDenied != null) {
                 return permissionDenied;
             }
@@ -867,7 +887,7 @@ public class IntentExecutionOrchestrator {
             if (skillResponse != null) {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] Skill 优先匹配成功: total={}", count);
-                return skillResponse;
+                return finishSkillBranchResponse(factoryId, request, intent, userId, skillResponse);
             }
 
             // Sprint 9 P0.1 fix (2026-05-21): Sprint 8 WORKDESK intents (DAILY_CUSTOMER_FOLLOWUP /
@@ -885,7 +905,7 @@ public class IntentExecutionOrchestrator {
                 long count = branchSkill.incrementAndGet();
                 log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
                         intent.getIntentCode(), count);
-                return explicitSkillResponse;
+                return finishSkillBranchResponse(factoryId, request, intent, userId, explicitSkillResponse);
             }
         }
 
@@ -904,7 +924,8 @@ public class IntentExecutionOrchestrator {
         }
 
         // 3.6. Slot Filling
-        if (userId != null && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
+        if (canUseStatefulConversation(factoryId, userId, request)
+                && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
             IntentExecuteResponse slotFillingResponse = slotFillingService.checkAndStartSlotFilling(
                     factoryId, userId, intent, request, matchResult);
             if (slotFillingResponse != null) {
@@ -973,7 +994,7 @@ public class IntentExecutionOrchestrator {
         applyResultFormatting(response);
 
         // 6.9. formattedText 兜底
-        applyFormattedTextFallback(response);
+        applyFormattedTextFallback(factoryId, response);
 
         // 6.95. P1 读写分块: 终点统一补 aiMode (前端据此选卡片形态)
         applyAiModeStamp(response, intent, toolName);
@@ -988,14 +1009,17 @@ public class IntentExecutionOrchestrator {
         // path (executeWithExplicitIntent → persistConversationMemoryForExplicitIntent)
         // already calls getOrCreateContext first; mirror that guarantee here so DISH /
         // STORE slots written by extractAndUpdateEntitySlots are actually persisted.
-        if (request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+        if (hasBoundSupplierFactoryActor(factoryId, userId)
+                && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             try {
-                conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+                ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+                if (ownsConversationMemory(owner, factoryId, userId, request.getSessionId())) {
+                    updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
+                }
             } catch (Exception e) {
                 log.warn("对话记忆 getOrCreateContext 失败 (非阻断): sessionId={}, error={}",
                         request.getSessionId(), e.getMessage());
             }
-            updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
         }
 
         return response;
@@ -1006,6 +1030,10 @@ public class IntentExecutionOrchestrator {
      */
     public IntentExecuteResponse executeWithExplicitIntent(String factoryId, IntentExecuteRequest request,
                                                              Long userId, String userRole) {
+        if (hasNamedSession(request) && !hasTrustedConversationIdentity(
+                factoryId, userId, request.getSessionId())) {
+            return sessionAdmissionDeniedResponse();
+        }
         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute =
                 evaluateFactoryPackRoute(factoryId, request, userRole);
         if (factoryPackRoute.shouldBlock()) {
@@ -1046,7 +1074,7 @@ public class IntentExecutionOrchestrator {
 
         AIIntentConfig intent = intentOpt.get();
 
-        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
         if (permissionDenied != null) {
             return permissionDenied;
         }
@@ -1155,7 +1183,7 @@ public class IntentExecutionOrchestrator {
         }
 
         applyResultFormatting(response);
-        applyFormattedTextFallback(response);
+        applyFormattedTextFallback(factoryId, response);
 
         // P1 读写分块: 显式意图路径同样终点补 aiMode
         applyAiModeStamp(response, intent, toolName);
@@ -1377,7 +1405,7 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse confirmControlledPurchase(String factoryId,
             com.cretas.aims.entity.intent.IntentPreviewToken token, String claimId,
             ConfirmationProof proof, AIIntentConfig intent, Long userId, String userRole) {
-        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, userId, userRole);
+        IntentExecuteResponse permissionDenied = checkIntentPermission(intent, factoryId, userId, userRole);
         if (permissionDenied != null) {
             previewTokenService.resolveClaim(proof.proofToken(), claimId, false, "当前意图权限不足");
             return permissionDenied;
@@ -1414,7 +1442,24 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse handleConversationContinuation(String factoryId, IntentExecuteRequest request,
                                                                    Long userId, String userRole) {
         log.info("检测到会话延续: sessionId={}", request.getSessionId());
+        // Session rows are keyed by factory-user numeric IDs, never by platform identity.
+        if (!hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())) {
+            return sessionAdmissionDeniedResponse();
+        }
         try {
+            Optional<ConversationSession> pending = conversationService.getSession(
+                    factoryId, userId, request.getSessionId());
+            if (pending.isPresent()
+                    && SupplierComparisonReadIntent.CODE.equals(pending.get().getKnownIntentCode())) {
+                AIIntentConfig supplier = AIIntentConfig.builder()
+                        .intentCode(SupplierComparisonReadIntent.CODE).intentName("供应商报价比较").build();
+                if (!hasBoundSupplierFactoryActor(factoryId, userId)) return buildNoPermissionResponse(supplier);
+                Optional<AIIntentConfig> canonical = SupplierComparisonReadIntent.resolve(
+                        factoryId, toolRegistry, intentConfigRepository);
+                if (canonical.isEmpty()) return buildNoPermissionResponse(supplier);
+                IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
+                if (denied != null) return denied;
+            }
             ConversationService.ConversationResponse conversationResp =
                     conversationService.continueConversation(
                             factoryId, userId, request.getSessionId(), request.getUserInput());
@@ -1770,6 +1815,9 @@ public class IntentExecutionOrchestrator {
     }
 
     private Optional<AIIntentConfig> getIntentByCodeWithPlatformFallback(String factoryId, String intentCode) {
+        if (SupplierComparisonReadIntent.CODE.equals(intentCode)) {
+            return SupplierComparisonReadIntent.resolve(factoryId, toolRegistry, intentConfigRepository);
+        }
         if ("PURCHASE_ORDER_CREATE".equals(intentCode)) {
             return controlledPurchaseIntent(factoryId);
         }
@@ -2674,7 +2722,12 @@ public class IntentExecutionOrchestrator {
      *
      * @return null=放行; 非 null=拒绝响应
      */
-    private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, Long userId, String userRole) {
+    private IntentExecuteResponse checkIntentPermission(AIIntentConfig intent, String factoryId,
+                                                        Long userId, String userRole) {
+        if (SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                && !hasBoundSupplierFactoryActor(factoryId, userId)) {
+            return buildNoPermissionResponse(intent);
+        }
         if ("PURCHASE_ORDER_CREATE".equals(intent.getIntentCode()) && intentPermissionGate == null) {
             return buildNoPermissionResponse(intent);
         }
@@ -2696,10 +2749,43 @@ public class IntentExecutionOrchestrator {
             }
             return null;
         }
-        if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+        if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
+                : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
             return buildNoPermissionResponse(intent);
         }
         return null;
+    }
+
+    private boolean hasBoundSupplierFactoryActor(String factoryId, Long userId) {
+        return AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER)
+                .filter(actor -> Objects.equals(actor.id(), userId))
+                .filter(actor -> Objects.equals(actor.factoryId(), factoryId))
+                .isPresent();
+    }
+
+    private boolean hasNamedSession(IntentExecuteRequest request) {
+        return request != null && request.getSessionId() != null && !request.getSessionId().isBlank();
+    }
+
+    private boolean hasTrustedConversationIdentity(String factoryId, Long userId, String sessionId) {
+        return hasBoundSupplierFactoryActor(factoryId, userId)
+                || DemoConversationScope.allows(factoryId, userId, sessionId);
+    }
+
+    private boolean canUseStatefulConversation(String factoryId, Long userId, IntentExecuteRequest request) {
+        return hasBoundSupplierFactoryActor(factoryId, userId)
+                || (request != null && DemoConversationScope.allows(
+                        factoryId, userId, request.getSessionId()));
+    }
+
+    private IntentExecuteResponse sessionAdmissionDeniedResponse() {
+        String message = "当前会话身份未通过工厂/演示会话绑定校验，未执行操作。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false).status("NO_PERMISSION")
+                .message(message).formattedText(message)
+                .executedAt(java.time.LocalDateTime.now()).build();
     }
 
     /**
@@ -2897,7 +2983,8 @@ public class IntentExecutionOrchestrator {
 
     void hydrateRestaurantComparisonContext(
             String factoryId, Long userId, IntentExecuteRequest request) {
-        if (request == null || request.getSessionId() == null || request.getSessionId().isBlank()
+        if (!hasBoundSupplierFactoryActor(factoryId, userId)
+                || request == null || request.getSessionId() == null || request.getSessionId().isBlank()
                 || request.getUserInput() == null
                 || !RESTAURANT_COMPARISON_REFERENCE_PATTERN.matcher(request.getUserInput()).find()
                 || RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN.matcher(request.getUserInput()).find()) {
@@ -2906,9 +2993,7 @@ public class IntentExecutionOrchestrator {
         String sessionId = request.getSessionId();
         try {
             ConversationContext owner = conversationMemoryService.getContext(sessionId);
-            if (owner != null
-                    && (!Objects.equals(factoryId, owner.getFactoryId())
-                    || !Objects.equals(userId, owner.getUserId()))) {
+            if (!ownsConversationMemory(owner, factoryId, userId, sessionId)) {
                 log.warn("[restaurant-context] rejected foreign session: sessionId={}, factoryId={}, userId={}",
                         sessionId, factoryId, userId);
                 request.setSessionId(null);
@@ -4215,6 +4300,27 @@ public class IntentExecutionOrchestrator {
         return actions;
     }
 
+    /**
+     * 自由提问识别到工作台意图、走 Skill 分支时的收尾: 与显式意图路径 ({@link #executeWithExplicitIntent})
+     * 同一套展示处理 —— 补问引导 → 结果格式化 → formattedText 兜底 (含 {@link WorkdeskOutputSummarizer}
+     * 脱敏摘要) → aiMode。以前这里直接 return, 组合结果的子工具是 JsonNode 时用户只拿到
+     * 「未返回可直接展示的明细数据」那句通用话 (2026-10-25 F006「今天要跟进哪些客户」线上实测)。
+     *
+     * <p>缓存与对话记忆刻意不在这里补: 对话记忆会把还原后的真名写进历史, 带历史的模型调用尚未接入脱敏。
+     */
+    private IntentExecuteResponse finishSkillBranchResponse(String factoryId, IntentExecuteRequest request,
+                                                            AIIntentConfig intent, Long userId,
+                                                            IntentExecuteResponse response) {
+        IntentExecuteResponse finished = response;
+        if ("NEED_MORE_INFO".equals(finished.getStatus())) {
+            finished = enrichWithClarificationQuestions(finished, request, intent, factoryId, userId);
+        }
+        applyResultFormatting(finished);
+        applyFormattedTextFallback(factoryId, finished);
+        applyAiModeStamp(finished, intent, intent.getToolName());
+        return finished;
+    }
+
     private void applyResultFormatting(IntentExecuteResponse response) {
         String status = response.getStatus();
         boolean isSuccessStatus = "SUCCESS".equals(status) || "COMPLETED".equals(status);
@@ -4251,7 +4357,7 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    private void applyFormattedTextFallback(IntentExecuteResponse response) {
+    private void applyFormattedTextFallback(String factoryId, IntentExecuteResponse response) {
         sanitizeInternalReasoningLeak(response);
         String currentFT = response.getFormattedText();
         String msg = response.getMessage();
@@ -4289,7 +4395,7 @@ public class IntentExecutionOrchestrator {
         // Opt-out via cretas.ai.workdesk-summarizer.enabled=false.
         if (workdeskOutputSummarizer != null) {
             try {
-                workdeskOutputSummarizer.apply(response);
+                workdeskOutputSummarizer.apply(response, factoryId);
             } catch (Exception e) {
                 log.warn("WorkdeskOutputSummarizer 应用失败 (non-blocking): {}", e.getMessage());
             }
@@ -4325,14 +4431,21 @@ public class IntentExecutionOrchestrator {
      * 仅当 sessionId 非空时生效(无 session 的独立查询 parity/golden 完全不受影响)。fail-soft。
      * 包级可见便于单测。
      */
+    private boolean ownsConversationMemory(ConversationContext owner, String factoryId, Long userId, String sessionId) {
+        return owner != null && Objects.equals(factoryId, owner.getFactoryId())
+                && Objects.equals(userId, owner.getUserId()) && Objects.equals(sessionId, owner.getSessionId());
+    }
+
     void persistConversationMemoryForExplicitIntent(String factoryId, IntentExecuteRequest request,
                                                     IntentExecuteResponse response,
                                                     AIIntentConfig intent, Long userId) {
-        if (request.getSessionId() == null || request.getSessionId().isEmpty()) {
+        if (request == null || !hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())
+                || request.getSessionId() == null || request.getSessionId().isEmpty()) {
             return;
         }
         try {
-            conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+            ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+            if (!ownsConversationMemory(owner, factoryId, userId, request.getSessionId())) return;
             IntentMatchResult syntheticMatch = IntentMatchResult.builder()
                     .bestMatch(intent)
                     .build();
@@ -4568,7 +4681,7 @@ public class IntentExecutionOrchestrator {
                     .collect(Collectors.toList());
 
             String sessionId = null;
-            if (userId != null) {
+            if (hasBoundSupplierFactoryActor(factoryId, userId)) {
                 try {
                     var conversationResp = conversationService.startParameterCollection(
                             factoryId, userId, intent.getIntentCode(), intent.getIntentName(),

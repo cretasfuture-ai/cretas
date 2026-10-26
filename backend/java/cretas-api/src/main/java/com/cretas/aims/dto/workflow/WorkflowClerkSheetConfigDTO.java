@@ -53,6 +53,13 @@ public class WorkflowClerkSheetConfigDTO {
          * 2B.2: 全部产出端口 (按 ordinal 排序)。单产出时 size==1。多产出时 FE 逐端口录入 N 条产出。
          */
         private List<PortDescriptor> outputs;
+        /**
+         * 缺口 04: 按工艺图这一道能不能正式报 (上游产出的料到了就是 true)。与正式录入时后端拦截
+         * 用的是同一份判定 (WorkflowStepUnlockGuard)。{@code null} = 没算, 前端退回旧的「上一道已提交」规则。
+         */
+        private Boolean unlocked;
+        /** unlocked=false 时给人看的原因 (等哪一道上游)。 */
+        private String blockedReason;
     }
 
     @Data

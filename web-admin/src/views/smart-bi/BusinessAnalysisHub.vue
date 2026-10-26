@@ -7,7 +7,7 @@
  *
  * - ?tab= query 同步 (保书签 + 旧路径 redirect 落点, 参考 financeDashboardSection 的
  *   ?section= 同步模式)。
- * - 各子视图已在 WS1/WS4 Task 1 gold 化 + 默认全部历史 — 此 hub 仅做容器编排, 不改子视图逻辑。
+ * - 此 hub 只做容器编排 + 顶部概览卡, 不改子视图逻辑。
  *
  * ============================================================
  * 混合式图表分析 (2026-07-12) — 与 CRM 会员分析/运营分析/平台分析 同一套
@@ -23,18 +23,19 @@
  * "当前激活 tab 的真实图表数据" 风险很高 (5000+ 行且各自 gate 逻辑不同,
  * 容易在 additive 的名义下无意间破坏已有 tab/图表行为)。
  *
- * 所以这里选择 Hub 级别的、完全独立、只读的做法: Hub 自己直接调用 gold.ts
- * 里已经在别处验证过的、后端已按角色 RBAC 脱敏的全历史 summary 端点
- * (getFinanceSummary/getTopProducts/getTrendBundle/getKpiSummary) —— 不读取、
- * 不触碰上面 5 个子视图的内部状态或渲染逻辑，零打破其现有行为的风险。
- * 代价: 这里展示的是"全部历史"粗粒度概览，与各 tab 内部可自定义时间范围筛选
- * 后的图表数字不一定完全一致 —— 已在 UI 上诚实标注，不伪装成对应 tab 的实时口径。
+ * 所以这里选择 Hub 级别的、完全独立、只读的做法: Hub 自己调用工厂数据接口
+ * (api/smartbi/factoryOverview.ts: 销售订单汇总 + Java 工厂报表的往来余额 / 近一年生产 /
+ * 按产品产量 / KPI, 后端已按角色 RBAC 脱敏) —— 不读取、不触碰上面 5 个子视图的内部状态或
+ * 渲染逻辑。每张卡写明自己的口径 (全部历史 / 近 365 天 / 截至今天), 与各 tab 内部可自定义
+ * 时间范围筛选后的数字不一定一致 —— 不伪装成对应 tab 的实时口径。
+ * (2026-10-23 前这里读餐饮 gold 汇总 (账单/门店), 工厂账号下全空; 餐饮已废弃。)
  * ============================================================
  */
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import FinancialDashboardPBI from './FinancialDashboardPBI.vue';
+import FactoryChartRecommendations from './FactoryChartRecommendations.vue';
 import SalesAnalysis from './SalesAnalysis.vue';
 import TrendsView from '@/views/analytics/trends/index.vue';
 import KpiView from '@/views/analytics/kpi/index.vue';
@@ -42,30 +43,23 @@ import IndicatorCenterDashboard from '@/views/indicator-center/IndicatorCenterDa
 import { resolveBusinessAnalysisTab, type BusinessAnalysisTab } from './businessAnalysisTab';
 import ChartInsights from './components/analysis/ChartInsights.vue';
 import AnalysisChatPanel from './components/analysis/AnalysisChatPanel.vue';
+import { ChatDotRound, Close } from '@element-plus/icons-vue';
 import { vReveal } from '@/composables/useReveal';
+import type { AnalysisChartContext } from './components/analysis/analysisBullets';
 import {
-  financeOverviewBullets,
-  financeOverviewSummary,
-  salesOverviewBullets,
-  salesOverviewSummary,
-  trendOverviewBullets,
-  trendOverviewSummary,
-  kpiOverviewBullets,
-  kpiOverviewSummary,
-  type AnalysisChartContext,
-} from './components/analysis/analysisBullets';
+  factoryFinanceOverview,
+  factorySalesOverview,
+  factoryTrendOverview,
+  factoryKpiOverview,
+  type OverviewBlock,
+} from './components/analysis/factoryOverviewBullets';
 import {
-  getFinanceSummary,
-  getTopProducts,
-  getTrendBundle,
-  getKpiSummary,
-  type FinanceSummary,
-  type TopProducts,
-  type TrendBundle,
-  type KpiSummary,
-} from '@/api/smartbi/gold';
-import { getGoldDataRange } from '@/api/smartbi/dataRange';
-import { resolveAllHistoryRange } from '@/views/smart-bi/analysisDefaults';
+  getFactorySalesSummary,
+  getFactoryFinance,
+  getFactoryTrend,
+  getFactoryProductionByProduct,
+  getFactoryKpi,
+} from '@/api/smartbi/factoryOverview';
 
 const route = useRoute();
 const router = useRouter();
@@ -90,166 +84,83 @@ function syncKpiSubQuery(name: string) {
 }
 
 // ============================================================
-// Hub 级全历史概览 (独立于 5 个子视图, 只读, 见文件头说明) — 各自 loading/error
-// 彻底隔离 (一个 500 不连累另一个, fool-proof-design 跨规则铁律)。
+// Hub 级概览: 本厂业务系统的真实读数 (销售订单 / 往来余额 / 近一年生产 / KPI), 与下方各看板同源。
+// 原来读餐饮 POS 汇总 (账单/门店), 工厂账号下四张卡全空、还写着「¥0」(2026-10-23 设计复评)。
+// 四张卡各自 loading / error 隔离 (一个失败不连累另一个, fool-proof-design 跨规则铁律)。
 // ============================================================
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId || '');
 
-const financeLoading = ref(false);
-const financeError = ref('');
-const financeData = ref<FinanceSummary | null>(null);
-async function loadFinanceOverview() {
-  if (!factoryId.value) return;
-  financeLoading.value = true;
-  financeError.value = '';
-  try {
-    financeData.value = await getFinanceSummary({ factoryId: factoryId.value });
-  } catch (e) {
-    financeError.value = e instanceof Error ? e.message : '财务概览加载失败';
-    financeData.value = null;
-  } finally {
-    financeLoading.value = false;
-  }
+type CardKey = 'finance' | 'sales' | 'trend' | 'kpi';
+const CARD_ORDER: CardKey[] = ['finance', 'sales', 'trend', 'kpi'];
+const CARD_TITLES: Record<CardKey, string> = {
+  finance: '往来余额',
+  sales: '销售订单',
+  trend: '近一年生产',
+  kpi: 'KPI',
+};
+
+interface CardState { loading: boolean; error: string; block: OverviewBlock | null }
+const cards = reactive<Record<CardKey, CardState>>({
+  finance: { loading: false, error: '', block: null },
+  sales: { loading: false, error: '', block: null },
+  trend: { loading: false, error: '', block: null },
+  kpi: { loading: false, error: '', block: null },
+});
+
+function errorText(e: unknown, fallback: string): string {
+  const server = (e as { serverMessage?: string } | null)?.serverMessage;
+  return server || (e instanceof Error && e.message) || fallback;
 }
 
-const salesLoading = ref(false);
-const salesError = ref('');
-const salesData = ref<TopProducts | null>(null);
-async function loadSalesOverview() {
-  if (!factoryId.value) return;
-  salesLoading.value = true;
-  salesError.value = '';
+async function loadCard(key: CardKey, load: () => Promise<OverviewBlock>) {
+  const card = cards[key];
+  card.loading = true;
+  card.error = '';
   try {
-    // getTopProducts 要求具体日期区间 (非 optional) — 探测全部历史窗, 绝不回退"近30天"。
-    const dr = await getGoldDataRange(factoryId.value).catch((): null => null);
-    const [startDate, endDate] = resolveAllHistoryRange(dr);
-    salesData.value = await getTopProducts({ factoryId: factoryId.value, startDate, endDate, topN: 5 });
+    card.block = await load();
   } catch (e) {
-    salesError.value = e instanceof Error ? e.message : '销售概览加载失败';
-    salesData.value = null;
+    card.block = null;
+    card.error = errorText(e, `${CARD_TITLES[key]}加载失败`);
   } finally {
-    salesLoading.value = false;
-  }
-}
-
-const trendLoading = ref(false);
-const trendError = ref('');
-const trendData = ref<TrendBundle | null>(null);
-async function loadTrendOverview(): Promise<void> {
-  if (!factoryId.value) return;
-  trendLoading.value = true;
-  trendError.value = '';
-  try {
-    trendData.value = await getTrendBundle({ factoryId: factoryId.value });
-  } catch (e) {
-    trendError.value = e instanceof Error ? e.message : '趋势概览加载失败';
-    trendData.value = null;
-  } finally {
-    trendLoading.value = false;
-  }
-}
-
-const kpiLoading = ref(false);
-const kpiError = ref('');
-const kpiData = ref<KpiSummary | null>(null);
-async function loadKpiOverview() {
-  if (!factoryId.value) return;
-  kpiLoading.value = true;
-  kpiError.value = '';
-  try {
-    kpiData.value = await getKpiSummary({ factoryId: factoryId.value });
-  } catch (e) {
-    kpiError.value = e instanceof Error ? e.message : 'KPI 概览加载失败';
-    kpiData.value = null;
-  } finally {
-    kpiLoading.value = false;
+    card.loading = false;
   }
 }
 
 onMounted(() => {
-  void loadFinanceOverview();
-  void loadSalesOverview();
-  void loadTrendOverview();
-  void loadKpiOverview();
+  const fid = factoryId.value;
+  if (!fid) {
+    for (const key of CARD_ORDER) cards[key].error = '当前账号没有所属工厂，请用工厂账号查看';
+    return;
+  }
+  void loadCard('finance', async () => factoryFinanceOverview(await getFactoryFinance(fid)));
+  void loadCard('sales', async () => factorySalesOverview(await getFactorySalesSummary()));
+  void loadCard('trend', async () => {
+    const [trend, products] = await Promise.all([getFactoryTrend(fid), getFactoryProductionByProduct(fid)]);
+    return factoryTrendOverview(trend, products);
+  });
+  void loadCard('kpi', async () => factoryKpiOverview(await getFactoryKpi(fid)));
 });
 
-const financeBulletsInput = computed(() => ({
-  totalRevenue: financeData.value?.totalRevenue ?? null,
-  billCount: financeData.value?.billCount ?? 0,
-  avgBillValue: financeData.value?.avgBillValue ?? null,
-  storeCount: financeData.value?.storeCount ?? 0,
-  topStores: financeData.value?.topStores ?? [],
+const analysisContexts = computed<AnalysisChartContext[]>(() => CARD_ORDER.map((key) => {
+  const block = cards[key].block;
+  return {
+    key,
+    title: CARD_TITLES[key],
+    dataSummary: block?.summary ?? (cards[key].error || '尚未加载'),
+    dataScope: block?.dataScope ?? '',
+    unavailableMetrics: block?.unavailableMetrics ?? [],
+  };
 }));
-const financeBullets = computed(() => financeOverviewBullets(financeBulletsInput.value));
-const financeSummaryStr = computed(() => financeOverviewSummary(financeBulletsInput.value));
 
-const salesBulletsInput = computed(() => ({ topProducts: salesData.value?.topProducts ?? [] }));
-const salesBullets = computed(() => salesOverviewBullets(salesBulletsInput.value));
-const salesSummaryStr = computed(() => salesOverviewSummary(salesBulletsInput.value));
-
-const trendBulletsInput = computed(() => ({
-  dailyTrend: trendData.value?.dailyTrend ?? [],
-  monthlyTrend: trendData.value?.monthlyTrend ?? [],
-  weekdayWeekend: trendData.value?.weekdayWeekend ?? { weekdayAvg: null, weekendAvg: null, weekdayDays: 0, weekendDays: 0 },
-}));
-const trendBullets = computed(() => trendOverviewBullets(trendBulletsInput.value));
-const trendSummaryStr = computed(() => trendOverviewSummary(trendBulletsInput.value));
-
-const kpiBulletsInput = computed(() => ({
-  revenue: kpiData.value?.revenue ?? 0,
-  billCount: kpiData.value?.billCount ?? 0,
-  itemCount: kpiData.value?.itemCount ?? 0,
-  customerCount: kpiData.value?.customerCount ?? 0,
-  storeCount: kpiData.value?.storeCount ?? 0,
-  avgBillValue: kpiData.value?.avgBillValue ?? null,
-  itemsPerBill: kpiData.value?.itemsPerBill ?? null,
-  avgPerCapita: kpiData.value?.avgPerCapita ?? null,
-}));
-const kpiBullets = computed(() => kpiOverviewBullets(kpiBulletsInput.value));
-const kpiSummaryStr = computed(() => kpiOverviewSummary(kpiBulletsInput.value));
-
-const analysisContexts = computed<AnalysisChartContext[]>(() => [
-  {
-    key: 'finance',
-    title: '财务概览',
-    dataSummary: financeSummaryStr.value,
-    dataScope: financeData.value
-      ? `Gold 销售汇总 ${financeData.value.startDate} 至 ${financeData.value.endDate}；仅含营收、订单、客单价和门店排行，不是利润表`
-      : 'Gold 销售汇总；当前未返回有效期间',
-    unavailableMetrics: ['营业成本', '毛利', '毛利率', '营业利润', '净利润'],
-  },
-  {
-    key: 'sales',
-    title: '销售概览',
-    dataSummary: salesSummaryStr.value,
-    dataScope: salesData.value
-      ? `Gold 菜品销量与营收汇总 ${salesData.value.startMonth} 至 ${salesData.value.endMonth}`
-      : 'Gold 菜品销量与营收汇总；当前未返回有效期间',
-    unavailableMetrics: ['菜品成本', '菜品毛利率'],
-  },
-  {
-    key: 'trend',
-    title: '趋势概览',
-    dataSummary: trendSummaryStr.value,
-    dataScope: trendData.value
-      ? `Gold 营收趋势 ${trendData.value.startDate ?? '未知起始日'} 至 ${trendData.value.endDate ?? '未知结束日'}`
-      : 'Gold 营收趋势；当前未返回有效期间',
-    unavailableMetrics: ['成本趋势', '毛利率趋势'],
-  },
-  {
-    key: 'kpi',
-    title: 'KPI概览',
-    dataSummary: kpiSummaryStr.value,
-    dataScope: kpiData.value
-      ? `Gold 经营 KPI ${kpiData.value.startDate} 至 ${kpiData.value.endDate}`
-      : 'Gold 经营 KPI；当前未返回有效期间',
-    unavailableMetrics: ['成本', '毛利率', '利润'],
-  },
-]);
-
+// AI 分析面板放在右侧抽屉里, 默认收起: 看板占满宽度, 要问再打开 (不遮罩, 打开时仍可操作图表)。
+// 抽屉首次打开才渲染面板, 之后保留 (对话不丢)。
+const aiPanelOpen = ref(false);
 const analysisChatPanelRef = ref<InstanceType<typeof AnalysisChatPanel> | null>(null);
-function focusChart(key: string) {
+async function focusChart(key: string) {
+  aiPanelOpen.value = true;
+  await nextTick();
+  if (!analysisChatPanelRef.value) await nextTick();
   analysisChatPanelRef.value?.setFocus(key);
 }
 </script>
@@ -260,59 +171,40 @@ function focusChart(key: string) {
       <div class="bah-main">
         <!-- 财务/销售/趋势/KPI 全历史概览卡 (Hub 独立请求, 与下方各 tab 内部
              可自定义时间范围的图表相互独立 — 见 <script> 顶部说明) -->
-        <div class="bah-overview-note">
-          以下概览为全部历史数据的简要口径，独立于下方各标签页内的时间范围筛选，仅供 AI 分析面板参考。
+        <div class="bah-topbar">
+          <div class="bah-overview-note">
+            以下是本厂业务系统里的数据（往来余额、销售订单、近一年生产、KPI），和下方看板上传的报表互不影响。
+          </div>
+          <el-button
+            :type="aiPanelOpen ? 'primary' : 'default'"
+            :plain="aiPanelOpen"
+            :icon="ChatDotRound"
+            :aria-expanded="aiPanelOpen"
+            data-testid="bah-ai-toggle"
+            @click="aiPanelOpen = !aiPanelOpen"
+          >
+            AI 分析
+          </el-button>
         </div>
         <div class="bah-overview-grid">
-          <el-card v-reveal="0" shadow="never" class="bah-overview-card">
-            <template #header><div class="bah-overview-header">财务概览</div></template>
-            <el-skeleton v-if="financeLoading" :rows="2" animated />
-            <div v-else-if="financeError" class="bah-inline-error">{{ financeError }}</div>
+          <el-card
+            v-for="(key, i) in CARD_ORDER"
+            :key="key"
+            v-reveal="i"
+            shadow="never"
+            class="bah-overview-card"
+            :data-testid="`bah-card-${key}`"
+          >
+            <template #header><div class="bah-overview-header">{{ CARD_TITLES[key] }}</div></template>
+            <el-skeleton v-if="cards[key].loading" :rows="2" animated />
+            <div v-else-if="cards[key].error" class="bah-inline-error">{{ cards[key].error }}</div>
+            <p v-else-if="cards[key].block?.empty" class="bah-empty">{{ cards[key].block?.empty }}</p>
             <ChartInsights
-              v-else
-              :bullets="financeBullets"
-              chart-key="finance"
-              chart-title="财务概览"
-              :data-summary="financeSummaryStr"
-              @focus="focusChart"
-            />
-          </el-card>
-          <el-card v-reveal="1" shadow="never" class="bah-overview-card">
-            <template #header><div class="bah-overview-header">销售概览</div></template>
-            <el-skeleton v-if="salesLoading" :rows="2" animated />
-            <div v-else-if="salesError" class="bah-inline-error">{{ salesError }}</div>
-            <ChartInsights
-              v-else
-              :bullets="salesBullets"
-              chart-key="sales"
-              chart-title="销售概览"
-              :data-summary="salesSummaryStr"
-              @focus="focusChart"
-            />
-          </el-card>
-          <el-card v-reveal="2" shadow="never" class="bah-overview-card">
-            <template #header><div class="bah-overview-header">趋势概览</div></template>
-            <el-skeleton v-if="trendLoading" :rows="2" animated />
-            <div v-else-if="trendError" class="bah-inline-error">{{ trendError }}</div>
-            <ChartInsights
-              v-else
-              :bullets="trendBullets"
-              chart-key="trend"
-              chart-title="趋势概览"
-              :data-summary="trendSummaryStr"
-              @focus="focusChart"
-            />
-          </el-card>
-          <el-card v-reveal="3" shadow="never" class="bah-overview-card">
-            <template #header><div class="bah-overview-header">KPI 概览</div></template>
-            <el-skeleton v-if="kpiLoading" :rows="2" animated />
-            <div v-else-if="kpiError" class="bah-inline-error">{{ kpiError }}</div>
-            <ChartInsights
-              v-else
-              :bullets="kpiBullets"
-              chart-key="kpi"
-              chart-title="KPI 概览"
-              :data-summary="kpiSummaryStr"
+              v-else-if="cards[key].block"
+              :bullets="cards[key].block!.bullets"
+              :chart-key="key"
+              :chart-title="CARD_TITLES[key]"
+              :data-summary="cards[key].block!.summary"
               @focus="focusChart"
             />
           </el-card>
@@ -338,13 +230,42 @@ function focusChart(key: string) {
               </el-tab-pane>
             </el-tabs>
           </el-tab-pane>
+          <el-tab-pane label="工厂图表" name="factory" lazy>
+            <FactoryChartRecommendations />
+          </el-tab-pane>
         </el-tabs>
       </div>
 
-      <div class="bah-side">
-        <AnalysisChatPanel ref="analysisChatPanelRef" :factory-id="factoryId" :contexts="analysisContexts" page-title="经营分析" />
-      </div>
     </div>
+
+    <el-drawer
+      v-model="aiPanelOpen"
+      direction="rtl"
+      size="min(440px, 100vw)"
+      :with-header="false"
+      :modal="false"
+      modal-penetrable
+      :lock-scroll="false"
+      resizable
+      class="bah-ai-drawer"
+      data-testid="bah-ai-drawer"
+    >
+      <!-- 面板是共享组件 (餐饮页有逐字节版式对照), 关闭按钮放在抽屉这一层, 不改面板 -->
+      <el-button
+        class="bah-ai-close"
+        :icon="Close"
+        link
+        aria-label="关闭 AI 分析"
+        data-testid="bah-ai-close"
+        @click="aiPanelOpen = false"
+      />
+      <AnalysisChatPanel
+        ref="analysisChatPanelRef"
+        :factory-id="factoryId"
+        :contexts="analysisContexts"
+        page-title="经营分析"
+      />
+    </el-drawer>
   </div>
 </template>
 
@@ -363,30 +284,20 @@ function focusChart(key: string) {
   }
 }
 
-/* 主列(概览卡 + 原有 tabs) + 侧列(AI 分析面板) 响应式布局
-   (mirrors CRM member-analysis / 运营分析 / 平台分析) */
-.bah-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
-  gap: 16px;
-  align-items: start;
-}
-@media (max-width: 1280px) {
-  .bah-layout { grid-template-columns: 1fr; }
-}
+/* 看板占满宽度; AI 分析面板在右侧抽屉 (见 <el-drawer>), 不再固定占一列 */
 .bah-main { min-width: 0; }
-.bah-side {
-  position: sticky;
-  top: 16px;
-}
-@media (max-width: 1280px) {
-  .bah-side { position: static; }
+
+.bah-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
 }
 
 .bah-overview-note {
   font-size: 12px;
   color: var(--el-text-color-secondary, #909399);
-  margin-bottom: 10px;
   line-height: 1.5;
 }
 .bah-overview-grid {
@@ -414,9 +325,42 @@ function focusChart(key: string) {
   font-weight: 600;
   color: var(--el-text-color-primary, #303133);
 }
+.bah-empty {
+  margin: 0;
+  color: var(--el-text-color-regular, #606266);
+  font-size: 13px;
+  line-height: 1.6;
+}
 .bah-inline-error {
   color: #f56c6c;
   font-size: 12px;
   padding: 4px 0;
+}
+</style>
+
+<style lang="scss">
+/* 抽屉挂在 body 上, scoped 样式够不着; 面板自己有边框和标题, 抽屉只给高度 */
+.bah-ai-drawer {
+  .el-drawer__body {
+    position: relative;
+    padding: 0;
+    display: flex;
+  }
+  .acp-panel {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+  }
+  /* 给右上角的关闭按钮让出位置 */
+  .acp-header {
+    padding-right: 52px;
+  }
+  .bah-ai-close {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    z-index: 1;
+    font-size: 18px;
+  }
 }
 </style>

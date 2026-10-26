@@ -481,6 +481,11 @@ const rawMenuConfig: MenuItem[] = [
       // 操作日志 —— 2026-08-27 补入口。审计用途, 生产已有 758 条且 2026-08-25 仍在写,
       //   而此前【没有任何界面能查】。审计记录查不到, 等于没有审计。
       { path: '/system/operation-log', title: '操作日志', icon: '', module: 'system' },
+      // 2026-10-24 隐私条款第六、十一条对客户开启: 工艺保密管理 / 平台人员访问记录
+      { path: '/system/process-secret', title: '工艺保密', icon: '', module: 'system',
+        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/system/platform-access-log', title: '平台访问记录', icon: '', module: 'system',
+        roles: ['factory_super_admin', 'permission_admin'] },
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY, groupLabel: '平台治理' },
       { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
@@ -507,6 +512,10 @@ const rawMenuConfig: MenuItem[] = [
         roles: FACTORY_ASSEMBLY_ROLES, assemblyFeature: true, groupLabel: '平台建厂' },
       { path: '/factory-review', title: '建厂复核', icon: 'DocumentChecked', module: 'system',
         roles: FACTORY_ASSEMBLY_ROLES, assemblyFeature: true },
+      // The factory's own read-only readiness. No assemblyFeature: the sidebar enables that flag for
+      // platform super admins only, so it would hide this entry from every factory account.
+      { path: '/factory-readiness', title: '建厂就绪', icon: 'DocumentChecked', module: 'system',
+        roles: ['factory_super_admin'] },
     ]
   },
   {

@@ -6,6 +6,7 @@ import pandas as pd
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,10 @@ class BulletChartBuilder(AbstractFinancialChartBuilder):
             }
 
     def _do_build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int) -> Dict[str, Any]:
+        # 业绩口径: 损益表只取收入科目, 不把成本费用一起算进品类/目标
+        df, reason = M.performance_rows(df)
+        if reason:
+            return self._insufficient(period, year, reason)
         # --- Determine grouping ---
         has_category = 'category' in df.columns and df['category'].notna().any()
 

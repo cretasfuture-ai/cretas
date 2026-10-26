@@ -18,11 +18,13 @@ import com.cretas.aims.service.processentry.ProductionStockAllocationService;
 import com.cretas.aims.service.processentry.ProductionStockShortageException;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
+import com.cretas.aims.util.InventoryExpiry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -223,8 +225,9 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
     private BigDecimal factoryOnHandFor(
             String factoryId, String materialTypeId, String inputUnit, boolean massInput) {
         BigDecimal total = BigDecimal.ZERO;
-        for (MaterialBatch batch : materialBatchRepository.findAvailableBatchesFEFO(
-                factoryId, materialTypeId)) {
+        // 过期批次不算「在手」: 「有货没领 → 去领料」对过期料是一条走不通的指引。
+        for (MaterialBatch batch : excludeExpired(materialBatchRepository.findAvailableBatchesFEFO(
+                factoryId, materialTypeId), InventoryExpiry.today())) {
             if (!unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                 continue;
             }
@@ -300,6 +303,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
         List<PlannedAllocation> allocations = new ArrayList<>();
         List<ProductionStockShortageDTO.Item> shortageItems = new ArrayList<>();
         int allocationOrder = 0;
+        LocalDate expiryToday = InventoryExpiry.today();
         for (Map.Entry<String, BigDecimal> entry : requiredByBatch.entrySet()) {
             String batchId = entry.getKey();
             BigDecimal required = entry.getValue();
@@ -313,6 +317,17 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                         .withCode("PRODUCTION_INPUT_BATCH_IS_OUTPUT")
                         .withHint("请改选采购入库或领料进入生产仓的原料批次；"
                                 + "产出批次若要再加工，需先建下一道工序的生产计划")
+                        .withHintTarget("rawMaterialInputs")
+                        .withSeverity("BLOCKING");
+            }
+            // 投料当下比到期日 —— 不依赖 02:00 定时任务是否已把它置 EXPIRED (到期次日 00:00–02:00
+            // 状态仍是 AVAILABLE, 定时任务没跑成时更久)。口径见 InventoryExpiry: 到期日当天仍可投。
+            if (InventoryExpiry.isExpired(batch.getExpireDate(), expiryToday)) {
+                throw new BusinessException(409,
+                        "批次 " + batch.getBatchNumber() + " 已过期（到期日 " + batch.getExpireDate()
+                                + "），不能投料")
+                        .withCode("PRODUCTION_INPUT_BATCH_EXPIRED")
+                        .withHint("到期日当天仍可投料，次日起不可再投；请改选未过期的批次，过期批次请走报损处理")
                         .withHintTarget("rawMaterialInputs")
                         .withSeverity("BLOCKING");
             }
@@ -701,7 +716,10 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
 
             // 同物料在别的仓 —— 「有货但没调过来」和「真没货」必须分得开
             Map<String, BigDecimal> byWarehouse = new LinkedHashMap<>();
-            for (MaterialBatch batch : materialBatchRepository.findAvailableBatchesFEFO(factoryId, materialTypeId)) {
+            LocalDate expiryToday = InventoryExpiry.today();
+            // 过期但状态仍 AVAILABLE 的批次归下面的 expiredElsewhere, 不在这里重复算一遍
+            for (MaterialBatch batch : excludeExpired(
+                    materialBatchRepository.findAvailableBatchesFEFO(factoryId, materialTypeId), expiryToday)) {
                 if (Objects.equals(batch.getWarehouseId(), workshopId)) {
                     continue;
                 }
@@ -726,7 +744,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             // 目的是让「真没货」和「货过期了」在界面上分得开, 并提示去处理。
             BigDecimal expired = BigDecimal.ZERO;
             for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesByWarehouse(
-                    factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
+                    factoryId, materialTypeId, workshopId, expiryToday)) {
                 // 展示口径: 同上 —— 过期提醒本就是纯信息, 漏掉按箱存量的批次等于瞒着仓管
                 if (!ownershipAllows(plan, batch, materialMainCategory)
                         || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
@@ -739,7 +757,7 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
             // 「别的仓有货但过期了」这一种形态原来两边都不覆盖, 整批从界面消失。
             Map<String, BigDecimal> expiredByWarehouse = new LinkedHashMap<>();
             for (MaterialBatch batch : materialBatchRepository.findExpiredBatchesOutsideWarehouse(
-                    factoryId, materialTypeId, workshopId, java.time.LocalDate.now())) {
+                    factoryId, materialTypeId, workshopId, expiryToday)) {
                 if (!ownershipAllows(plan, batch, materialMainCategory)
                         || !unitMatchesForDisplay(factoryId, batch, inputUnit, massInput)) {
                     continue;
@@ -773,6 +791,31 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
      */
     private List<MaterialBatch> findEligibleBatches(String factoryId, ProductionPlan plan,
                                                     String materialTypeId, String warehouseId) {
+        return excludeExpired(
+                findStatusEligibleBatches(factoryId, plan, materialTypeId, warehouseId),
+                InventoryExpiry.today());
+    }
+
+    /**
+     * 可投候选里剔除<b>已过期</b>的批次 (到期日早于今天, 东八区; 到期日当天仍可投)。
+     *
+     * <p>候选查询只按 {@code status='AVAILABLE'} 筛选, 而状态要等 02:00 定时任务才翻成 EXPIRED ——
+     * 到期次日 00:00–02:00 (以及定时任务没跑成的日子) 过期料仍是 AVAILABLE, 而且 FEFO 排序
+     * 会把它排在<b>最前面</b>、最先被自动分摊吃掉。展示口径与提交口径同走这一处:
+     * 可投量 / 自动分摊 / BOM 自动投料都不含它; 它在 {@code findExpiredBatches*} 那两条里
+     * 以「过期 X, 不可投料」报出来, 不会凭空消失。
+     */
+    private static List<MaterialBatch> excludeExpired(List<MaterialBatch> batches, LocalDate today) {
+        if (batches == null || batches.isEmpty()) {
+            return batches;
+        }
+        return batches.stream()
+                .filter(batch -> !InventoryExpiry.isExpired(batch.getExpireDate(), today))
+                .toList();
+    }
+
+    private List<MaterialBatch> findStatusEligibleBatches(String factoryId, ProductionPlan plan,
+                                                          String materialTypeId, String warehouseId) {
         if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED
                 || ProductionInventoryOwnershipGuard.isCompanyStockEligibleCategory(
                         mainCategoryOf(factoryId, materialTypeId))) {
@@ -931,6 +974,16 @@ public class ProductionStockAllocationServiceImpl implements ProductionStockAllo
                                                               ProductionPlan plan,
                                                               String materialTypeId,
                                                               String warehouseId) {
+        // 与 findEligibleBatches 同一条过期剔除 —— 展示说「可投 X」, 提交就必须真能投 X。
+        return excludeExpired(
+                findStatusEligibleBatchesForUpdate(factoryId, plan, materialTypeId, warehouseId),
+                InventoryExpiry.today());
+    }
+
+    private List<MaterialBatch> findStatusEligibleBatchesForUpdate(String factoryId,
+                                                                    ProductionPlan plan,
+                                                                    String materialTypeId,
+                                                                    String warehouseId) {
         // 🔒 2026-09-02 owner 裁定: 辅料/包材(含调料)不受客户库存限制 —— 与「工厂备料生产」
         // 同一条件, 直接走公司 FEFO。⛔ RAW 逐字不变: 仍必须走下面的客户库存严格分支。
         if (plan.getMaterialSupplyMode() != MaterialSupplyMode.CUSTOMER_SUPPLIED

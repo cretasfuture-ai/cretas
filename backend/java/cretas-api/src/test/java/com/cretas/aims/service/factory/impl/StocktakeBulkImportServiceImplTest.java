@@ -31,6 +31,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -248,6 +250,19 @@ class StocktakeBulkImportServiceImplTest {
     }
 
     @Test
+    @DisplayName("OPENING 选中的导入行未填写实盘数量 → 拒绝，不创建 scoped snapshot")
+    void confirm_openingUncountedSelectedLine_rejected() {
+        stubWarehouseAndBatches();
+        List<StocktakeImportRowDTO> rows = List.of(openingRow("猪蹄", "B001", null, null));
+
+        assertThatThrownBy(() -> service.confirm(FACTORY_ID, WAREHOUSE_ID, "2026-07",
+                null, FactoryStocktake.ImportMode.OPENING, toExcel(rows), 1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("没有任何有效的实盘数量");
+        verify(stocktakeService, never()).initiateOpeningScoped(anyString(), any(), anyLong(), anyList());
+    }
+
+    @Test
     @DisplayName("未知仓库 → 404")
     void preview_unknownWarehouse_404() {
         when(warehouseRepo.findByIdAndFactoryIdAndDeletedAtIsNull(anyString(), anyString()))
@@ -392,7 +407,7 @@ class StocktakeBulkImportServiceImplTest {
         itExisting.setId("item-B001");
         itExisting.setMaterialBatchId("id-A");
         created.setItems(List.of(itShell, itExisting));
-        when(stocktakeService.initiate(eq(FACTORY_ID), any(), any(), eq(FactoryStocktake.ImportMode.OPENING)))
+        when(stocktakeService.initiateOpeningScoped(eq(FACTORY_ID), any(), eq(1L), eq(List.of("id-A", "shell-1"))))
                 .thenReturn(created);
 
         List<StocktakeImportRowDTO> rows = new ArrayList<>();
@@ -405,6 +420,10 @@ class StocktakeBulkImportServiceImplTest {
         // 建壳被调用一次 (仅新物料行)。
         verify(openingInventoryService).createOpeningBatchShell(
                 eq(FACTORY_ID), any(OpeningInventoryItem.class), anyString(), any());
+        verify(stocktakeService).initiateOpeningScoped(
+                eq(FACTORY_ID), any(), eq(1L), eq(List.of("id-A", "shell-1")));
+        verify(stocktakeService, never()).initiate(
+                eq(FACTORY_ID), any(), any(), eq(FactoryStocktake.ImportMode.OPENING));
         // 回填实盘：两行都有 actualQty → updateItems 收到 2 条 (shell 映射 item-shell, 既有映射 item-B001)。
         verify(stocktakeService).updateItems(eq("stk-1"), eq(FACTORY_ID), any(), eq(1L));
         assertThat(dto.getStocktakeId()).isEqualTo("stk-1");

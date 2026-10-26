@@ -334,6 +334,243 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return postedAny;
     }
 
+    @Override
+    @Transactional
+    public void validateApprovedOutputQuantityCorrection(String factoryId, ProductionReport report,
+                                                         WorkProcessTask task, BigDecimal originalOutput,
+                                                         BigDecimal proposedOutput, String correctionId) {
+        if (quantityCorrectionDelta(originalOutput, proposedOutput).signum() == 0) {
+            return;
+        }
+        validateOutputQuantityCorrection(factoryId, report, task, originalOutput, proposedOutput, correctionId);
+    }
+
+    @Override
+    @Transactional
+    public void correctApprovedOutputQuantity(String factoryId, ProductionReport report,
+                                              WorkProcessTask task, BigDecimal originalOutput,
+                                              BigDecimal proposedOutput, String correctionId,
+                                              Long operatorId) {
+        BigDecimal delta = quantityCorrectionDelta(originalOutput, proposedOutput);
+        if (delta.signum() == 0) {
+            return;
+        }
+        SemiFinishedInventory wip = validateOutputQuantityCorrection(
+                factoryId, report, task, originalOutput, proposedOutput, correctionId);
+        String correctionRef = correctionRef(correctionId, report);
+        List<SemiFinishedInventoryTransaction> ledger = txnRepo
+                .findBySemiFinishedIdOrderByCreatedAtAsc(wip.getId());
+        if (ledger.stream().anyMatch(txn -> WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())
+                && correctionRef.equals(txn.getSourceRef()))) {
+            return;
+        }
+
+        BigDecimal produced = nz(wip.getProducedQuantity()).add(delta);
+        wip.setProducedQuantity(produced);
+        wip.refreshAvailableQuantity();
+        wip.setStatus(wip.getAvailableQuantity().signum() > 0
+                ? SemiFinishedInventory.Status.AVAILABLE : SemiFinishedInventory.Status.DEPLETED);
+        // 更正没有可证明的成本 delta；累计成本保持不变，已知成本按新产出量派生，未知成本继续为 null。
+        if (wip.getAccumulatedCost() != null && produced.signum() > 0) {
+            wip.setUnitCost(wip.getAccumulatedCost().divide(produced, 4, RoundingMode.HALF_UP));
+        } else {
+            wip.setUnitCost(null);
+        }
+        SemiFinishedInventory saved = wipRepo.save(wip);
+        SemiFinishedInventoryTransaction correction = WipLedgerEntries.correctionRow(
+                saved, delta, null, report, correctionId, operatorId);
+        if (correction == null) {
+            throw new BusinessException(409, "报工数量更正缺少有效流水标识")
+                    .withCode("WIP_CORRECTION_LEDGER_INVALID")
+                    .withHint("请重新生成有效的报工修正记录后再审批")
+                    .withHintTarget("报工修正记录");
+        }
+        txnRepo.save(correction);
+    }
+
+    private SemiFinishedInventory validateOutputQuantityCorrection(
+            String factoryId, ProductionReport report, WorkProcessTask task,
+            BigDecimal originalOutput, BigDecimal proposedOutput, String correctionId) {
+        BigDecimal delta = quantityCorrectionDelta(originalOutput, proposedOutput);
+        if (report == null || report.getId() == null || task == null || task.getId() == null
+                || correctionId == null || correctionId.isBlank()) {
+            throw new BusinessException(409, "报工数量更正缺少可锁定的报工或工序任务")
+                    .withCode("WIP_CORRECTION_CONTEXT_INVALID")
+                    .withHint("请确认报工、工序任务和修正单仍属于同一条已审批报工")
+                    .withHintTarget("报工修正记录");
+        }
+        if (!factoryId.equals(report.getFactoryId()) || !factoryId.equals(task.getFactoryId())) {
+            throw new BusinessException(409, "报工数量更正不属于当前工厂")
+                    .withCode("WIP_CORRECTION_FACTORY_MISMATCH")
+                    .withHint("请回到当前工厂重新读取报工修正，不要跨工厂提交")
+                    .withHintTarget("当前工厂报工");
+        }
+        if (report.getOutputKind() != null && !"FINISHED".equals(report.getOutputKind())) {
+            throw new BusinessException(409, "半成品或双产出报工不能直接更正 WIP 产出数量")
+                    .withCode("WIP_CORRECTION_COMPLEX_OUTPUT")
+                    .withHint("请按对应半成品或多产出流程核对各产出，不要把复杂报工改作单一 WIP 产出")
+                    .withHintTarget("报工产出路径");
+        }
+        if (report.getSemiOutputs() != null && !report.getSemiOutputs().isEmpty()) {
+            throw new BusinessException(409, "多产出报工不能直接更正 WIP 产出数量")
+                    .withCode("WIP_CORRECTION_MULTI_OUTPUT")
+                    .withHint("请先核对每个产出项的实际过账，再走对应的多产出更正流程")
+                    .withHintTarget("多产出明细");
+        }
+        if (originalOutput == null || proposedOutput == null) {
+            throw new BusinessException(409, "报工原始与更正产出数量必须同时存在")
+                    .withCode("WIP_CORRECTION_QUANTITY_UNKNOWN")
+                    .withHint("请补齐原始产出和更正后产出数量，系统不会猜测数量")
+                    .withHintTarget("产出数量");
+        }
+        if (unsupportedQuantityPrecision(originalOutput) || unsupportedQuantityPrecision(proposedOutput)) {
+            throw new BusinessException(409, "报工数量超过持久化支持的两位小数，已拒绝更正")
+                    .withCode("WIP_CORRECTION_PRECISION_UNSUPPORTED")
+                    .withHint("请按报工数量最多两位小数重新提交，系统不会静默四舍五入")
+                    .withHintTarget("产出数量");
+        }
+
+        String wipNo = generateBatchNo(task);
+        SemiFinishedInventory wip = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, wipNo)
+                .orElseThrow(() -> new BusinessException(409, "找不到该报工对应的 WIP 库存行，已拒绝数量更正")
+                        .withCode("WIP_CORRECTION_WIP_NOT_FOUND")
+                        .withHint("请先核对报工对应的 WIP 入账与流水"));
+        String outputUnit = firstNonBlank(report.getOutputUnit(), task.getPlannedUnit());
+        if (!sameOutputUnit(outputUnit, wip.getUnit())) {
+            throw new BusinessException(409, "报工与 WIP 单位不一致，已拒绝数量更正")
+                    .withCode("WIP_CORRECTION_UNIT_MISMATCH")
+                    .withHint("请核对报工和 WIP 的原始单位；系统不做 kg、盒等单位猜测换算")
+                    .withHintTarget("报工单位");
+        }
+        if (SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
+            throw new BusinessException(409, "WIP 已退回，不能直接更正其报工产出")
+                    .withCode("WIP_CORRECTION_RETURNED")
+                    .withHint("请先核对退回记录；需要修正时重新走已授权的报工流程")
+                    .withHintTarget("WIP 退回记录");
+        }
+        if (nz(wip.getAdjustmentQuantity()).signum() != 0) {
+            throw new BusinessException(409, "WIP 存在盘点调整，无法安全归属报工数量更正")
+                    .withCode("WIP_CORRECTION_ADJUSTMENT_PRESENT")
+                    .withHint("请先完成盘点调整归属核对，再提交报工数量更正")
+                    .withHintTarget("WIP 盘点调整");
+        }
+        if (nz(wip.getConsumedQuantity()).signum() > 0) {
+            throw new BusinessException(409, "该 WIP 已被下游消费，数量更正会破坏库存账")
+                    .withCode("WIP_CORRECTION_DOWNSTREAM_CONSUMED")
+                    .withHint("请先处理下游消费或走正式冲销流程");
+        }
+        if (wip.getProducedQuantity() == null) {
+            throw new BusinessException(409, "WIP 产出数量缺失，已拒绝猜测性更正")
+                    .withCode("WIP_CORRECTION_QUANTITY_UNKNOWN")
+                    .withHint("请先补齐或核对 WIP 产出数量及其原始入账流水")
+                    .withHintTarget("WIP 产出数量");
+        }
+
+        List<SemiFinishedInventoryTransaction> reportLedger = txnRepo
+                .findByFactoryIdAndReportId(factoryId, report.getId());
+        if (reportLedger == null) {
+            throw new BusinessException(409, "无法读取报工 WIP 流水，已拒绝数量更正")
+                    .withCode("WIP_CORRECTION_LEDGER_UNAVAILABLE")
+                    .withHint("请稍后重新读取报工 WIP 流水；流水不可读时不要重复提交更正")
+                    .withHintTarget("WIP 流水");
+        }
+        List<SemiFinishedInventoryTransaction> originalRows = reportLedger.stream()
+                .filter(txn -> txn != null
+                        && SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())
+                        && SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT.equals(txn.getSourceType())
+                        && java.util.Objects.equals(wip.getId(), txn.getSemiFinishedId()))
+                .toList();
+        if (originalRows.size() != 1) {
+            throw new BusinessException(409, "该报工缺少唯一原始 WIP 入账，已拒绝数量更正")
+                    .withCode("WIP_CORRECTION_LEDGER_AMBIGUOUS")
+                    .withHint("请核对唯一的生产入库流水；多条或缺失时改走人工盘点/冲销核查")
+                    .withHintTarget("WIP 原始入账");
+        }
+        List<SemiFinishedInventoryTransaction> ledger = txnRepo
+                .findBySemiFinishedIdOrderByCreatedAtAsc(wip.getId());
+        if (ledger == null) {
+            throw new BusinessException(409, "无法读取完整 WIP 流水，已拒绝数量更正")
+                    .withCode("WIP_CORRECTION_LEDGER_UNAVAILABLE")
+                    .withHint("请先恢复完整 WIP 流水读回，再提交数量更正")
+                    .withHintTarget("WIP 完整流水");
+        }
+        String correctionRef = correctionRef(correctionId, report);
+        long sameCorrectionCount = ledger.stream()
+                .filter(txn -> WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())
+                        && correctionRef.equals(txn.getSourceRef()))
+                .count();
+        if (sameCorrectionCount > 1) {
+            throw new BusinessException(409, "该报工更正流水重复，已拒绝继续写账")
+                    .withCode("WIP_CORRECTION_LEDGER_AMBIGUOUS")
+                    .withHint("请保留现有更正流水并交由财务核对，不要再次写入同一 correctionId")
+                    .withHintTarget("报工更正流水");
+        }
+        if (sameCorrectionCount == 1) {
+            return wip;
+        }
+        BigDecimal effectiveReportOutput = originalRows.get(0).getQuantity();
+        for (SemiFinishedInventoryTransaction txn : ledger) {
+            if (WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())
+                    && java.util.Objects.equals(report.getId(), txn.getReportId())
+                    && txn.getQuantity() != null) {
+                effectiveReportOutput = effectiveReportOutput.add(txn.getQuantity());
+            }
+        }
+        if (effectiveReportOutput.compareTo(originalOutput) != 0) {
+            throw new BusinessException(409, "报工原始产出与 WIP 流水不一致，已拒绝数量更正")
+                    .withCode("WIP_CORRECTION_LEDGER_DRIFT")
+                    .withHint("请先核对报工原始数量与 WIP 更正流水，确认无并发更正后再提交")
+                    .withHintTarget("报工与 WIP 对账");
+        }
+        BigDecimal newProduced = nz(wip.getProducedQuantity()).add(delta);
+        if (newProduced.signum() < 0) {
+            throw new BusinessException(409, "更正后 WIP 产出不能为负")
+                    .withCode("WIP_CORRECTION_NEGATIVE_PRODUCED")
+                    .withHint("请填写不小于已确认 WIP 产出的更正数量")
+                    .withHintTarget("更正后产出数量");
+        }
+        validateCorrectionCostRepresentability(wip.getAccumulatedCost(), newProduced);
+        return wip;
+    }
+
+    private static void validateCorrectionCostRepresentability(BigDecimal accumulatedCost,
+                                                               BigDecimal newProduced) {
+        if (accumulatedCost == null) {
+            return;
+        }
+        if (newProduced.signum() <= 0) {
+            throw unsupportedCorrectionCost("更正后产出为零但仍有已知累计成本，系统拒绝丢失成本");
+        }
+        BigDecimal derivedUnitCost = accumulatedCost.divide(newProduced, 4, RoundingMode.HALF_UP);
+        BigDecimal representedCost = derivedUnitCost.multiply(newProduced).setScale(2, RoundingMode.HALF_UP);
+        if (representedCost.compareTo(accumulatedCost.setScale(2, RoundingMode.HALF_UP)) != 0) {
+            throw unsupportedCorrectionCost("已知累计成本无法由四位小数单价无损表示");
+        }
+    }
+
+    private static BusinessException unsupportedCorrectionCost(String detail) {
+        return new BusinessException(409, "报工数量更正的成本精度不受支持: " + detail)
+                .withCode("WIP_CORRECTION_COST_PRECISION_UNSUPPORTED")
+                .withHint("请核对累计成本与更正后产出数量，改走财务人工核对流程")
+                .withHintTarget("WIP 成本");
+    }
+
+    private static BigDecimal quantityCorrectionDelta(BigDecimal originalOutput, BigDecimal proposedOutput) {
+        if (originalOutput == null || proposedOutput == null) {
+            return BigDecimal.ONE;
+        }
+        return proposedOutput.subtract(originalOutput);
+    }
+
+    private static boolean unsupportedQuantityPrecision(BigDecimal quantity) {
+        return quantity != null && quantity.stripTrailingZeros().scale() > 2;
+    }
+
+    private static String correctionRef(String correctionId, ProductionReport report) {
+        return WipLedgerEntries.REPORT_CORRECTION_REF_PREFIX + correctionId + ":report:" + report.getId();
+    }
+
     /**
      * 本任务的画布产出端口里, 被标记为<b>回料</b>的那些半成品:
      * {@code ProductType.code} (= {@code semiCode}) → {@code ProductType.id}。
@@ -559,9 +796,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal oldUnitCost = sfi.getUnitCost();        // 累加前旧单价 (可能 null), 不在此处强制 ZERO
         BigDecimal newProduced = oldQty.add(inQty);
         sfi.setProducedQuantity(newProduced);
-        BigDecimal consumed = nz(sfi.getConsumedQuantity());
         // 盘点修正量 (default 0) 纳入余额 (禁止盘点修正被产出重算覆盖; produced/成本不动)
-        sfi.setAvailableQuantity(newProduced.subtract(consumed).add(nz(sfi.getAdjustmentQuantity())));
+        sfi.refreshAvailableQuantity();
         if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
             sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
@@ -766,7 +1002,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * G3 小结半成品出库 (SFI OUT) — 见接口 Javadoc。
      *
      * <p>{@code findForUpdate} 悲观行锁 → {@code consumedQuantity += qty} →
-     * {@code availableQuantity = produced - consumed}。守卫 not-below-zero (行缺失 no-op / 超扣 clamp)。
+     * {@code availableQuantity = produced - consumed + adjustment} (实体 refreshAvailableQuantity)。
+     * 守卫 not-below-zero (行缺失 no-op / 超扣 clamp 到余额)。
      */
     @Override
     @Transactional
@@ -783,17 +1020,19 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return;
         }
         SemiFinishedInventory sfi = opt.get();
-        BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal priorConsumed = nz(sfi.getConsumedQuantity());
-        BigDecimal newConsumed = priorConsumed.add(qty);
-        if (newConsumed.compareTo(produced) > 0) {
-            // 守卫 not-below-zero: 超扣 clamp 到 produced (available 不为负)。诚实告警, 不静默吞。
-            log.warn("[wip] consumeClerkSemi over-draw: batchNo={}, attemptConsumed={} > produced={} — clamping",
-                    intermediateBatchNo, newConsumed, produced);
-            newConsumed = produced;
+        // G02: clamp 的上限是【余额】(含盘点修正), ⛔ 不是 produced —— 旧版按 consumed ≤ produced 夹,
+        //   盘亏 −30 时照样能把余额扣成 −30; 盘盈 +30 时又少扣 30。
+        BigDecimal balance = sfi.computeBalance();
+        BigDecimal actualOut = qty.min(balance.max(BigDecimal.ZERO));
+        if (actualOut.compareTo(qty) < 0) {
+            // 守卫 not-below-zero: 超扣 clamp 到余额 (available 不为负)。诚实告警, 不静默吞。
+            log.warn("[wip] consumeClerkSemi over-draw: batchNo={}, requested={} > balance={} — clamping to {}",
+                    intermediateBatchNo, qty, balance, actualOut);
         }
+        BigDecimal newConsumed = priorConsumed.add(actualOut);
         sfi.setConsumedQuantity(newConsumed);
-        sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
+        sfi.refreshAvailableQuantity();
         if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
             sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
@@ -804,7 +1043,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         //    🔴 记的是【实际扣减量】(newConsumed − priorConsumed), ⛔ 不是入参 qty:
         //    上面那道 clamp 会让真正扣掉的比请求的少, 按 qty 记就等于账本自己说了一个没发生的数。
         //    clamp 到一点都没扣时 actualOut = 0 ⇒ clerkConsumptionRow 返回 null ⇒ 不造空流水。
-        BigDecimal actualOut = newConsumed.subtract(priorConsumed);
         SemiFinishedInventoryTransaction outTxn =
                 WipLedgerEntries.clerkConsumptionRow(factoryId, sfi, actualOut, null);
         if (outTxn != null) {
@@ -850,9 +1088,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
-        BigDecimal produced = nz(sfi.getProducedQuantity());
-        BigDecimal consumed = nz(sfi.getConsumedQuantity());
-        BigDecimal available = produced.subtract(consumed);
+        // G02: 校验与写回用同一个余额 (含盘点修正 adjustment)。旧版这里是 produced − consumed,
+        //   写回却是 produced − consumed + adjustment: 盘亏 −30 时领 60 放行、写回 −10; 盘盈 +30 时领 100 被错拒。
+        BigDecimal available = sfi.computeBalance();
         if (deductQty.compareTo(available) > 0) {
             // 禁止降级: 不足即抛 (不 clamp), 防 phantom/不足库存生产成品。余/需按来源原生单位 (盒装时为盒数)。
             String u = sfi.getUnit() != null ? sfi.getUnit() : "";
@@ -868,9 +1106,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
-        BigDecimal newConsumed = consumed.add(deductQty);
-        sfi.setConsumedQuantity(newConsumed);
-        sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
+        sfi.setConsumedQuantity(nz(sfi.getConsumedQuantity()).add(deductQty));
+        sfi.refreshAvailableQuantity();
         if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
             sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
@@ -921,7 +1158,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
-        BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(restoreQty);
         if (newConsumed.signum() < 0) {
             String u = com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit());
@@ -933,7 +1169,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHintTarget(intermediateBatchNo);
         }
         sfi.setConsumedQuantity(newConsumed);
-        sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
+        sfi.refreshAvailableQuantity();
         if (sfi.getAvailableQuantity().signum() > 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
             sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
@@ -1040,14 +1276,14 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal consumed = nz(sfi.getConsumedQuantity());
         BigDecimal adj = nz(sfi.getAdjustmentQuantity());
         BigDecimal newProduced = produced.subtract(qty);
-        BigDecimal newAvailable = newProduced.subtract(consumed).add(adj);
+        BigDecimal newAvailable = SemiFinishedInventory.balanceOf(newProduced, consumed, adj);
         if (newAvailable.signum() < 0) {
             // 🔴 冲销会致负库存 (禁止降级): loud-fail, 不产 phantom。
             // 消息准确性修复 (fool-proof Rule 4/5): 短缺真实原因可能是 下游已消耗(consumed>0) 和/或
             // 盘点已发生盘亏(adjustmentQuantity<0, adj) —— 旧版只报"已被下游消耗", 在纯盘亏场景(consumed=0
             // 而 adj<0)会把真因错报给不存在的"下游消耗", remedy("请先撤销下游消耗")也是不存在的 dead-end。
             // 可撤销上限 = 撤销前当前可用量 = produced − consumed + adj (不能只减 consumed)。
-            BigDecimal reversibleNow = produced.subtract(consumed).add(adj).max(BigDecimal.ZERO);
+            BigDecimal reversibleNow = sfi.computeBalance().max(BigDecimal.ZERO);
             StringBuilder cause = new StringBuilder();
             if (consumed.signum() > 0) {
                 cause.append("已被下游消耗 ").append(consumed.stripTrailingZeros().toPlainString());
@@ -1088,7 +1324,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         //   应延续)。F006 罕见 (同锚 IN 通常成本口径一致/全 null)。可 re-derive, 故留作已知限制不在此处修。
         sfi.setUnitCost((newProduced.signum() > 0 && acc != null)
                 ? acc.divide(newProduced, 4, RoundingMode.HALF_UP) : null);
-        sfi.setAvailableQuantity(newAvailable);
+        sfi.refreshAvailableQuantity();   // == newAvailable (produced 已写回)
         if (newAvailable.signum() <= 0) {
             if (!SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
                 sfi.setStatus(SemiFinishedInventory.Status.DEPLETED);
@@ -1136,7 +1372,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             return;
         }
         SemiFinishedInventory sfi = opt.get();
-        BigDecimal produced = nz(sfi.getProducedQuantity());
         BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(qty);
         if (newConsumed.signum() < 0) {
             // 诚实: 还量超过历史消耗量 → 报错而非静默置 0。
@@ -1148,7 +1383,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHintTarget(intermediateBatchNo);
         }
         sfi.setConsumedQuantity(newConsumed);
-        sfi.setAvailableQuantity(produced.subtract(newConsumed).add(nz(sfi.getAdjustmentQuantity())));
+        sfi.refreshAvailableQuantity();
         if (sfi.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(sfi.getStatus())) {
             sfi.setStatus(SemiFinishedInventory.Status.AVAILABLE);
@@ -1238,9 +1473,23 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                             .withHint("请先处理领用它的那道工序的报工, 再回来驳回本条");
                 }
                 BigDecimal produced = nz(wip.getProducedQuantity()).subtract(out).max(BigDecimal.ZERO);
+                // G02: 盘亏 (adjustment<0) 已过账时, 退回全部产出会把余额推成负数 —— 与 reverseClerkOutput
+                //   同一道闸, 同一个公式。下游已领 (consumed>0) 在上面已拒, 这里只剩盘亏这一种成因。
+                BigDecimal availableAfter = SemiFinishedInventory.balanceOf(
+                        produced, consumed, wip.getAdjustmentQuantity());
+                if (availableAfter.signum() < 0) {
+                    BigDecimal loss = nz(wip.getAdjustmentQuantity()).negate();
+                    throw new BusinessException(409, "这笔产出已发生半成品盘亏 "
+                            + loss.stripTrailingZeros().toPlainString()
+                            + com.cretas.aims.service.unit.UnitDisplayNames.display(firstNonBlank(wip.getUnit(), ""))
+                            + " (盘点损耗), 驳回会让余额变成负数")
+                            .withCode("WIP_REVERSE_STOCKTAKE_LOSS")
+                            .withHint("盘亏已过账, 不随驳回自动冲销; 请先按实际库存重新盘点该半成品, 再回来驳回本条")
+                            .withSeverity("BLOCKING")
+                            .withHintTarget(wip.getIntermediateBatchNo());
+                }
                 wip.setProducedQuantity(produced);
-                wip.setAvailableQuantity(
-                        produced.subtract(consumed).add(nz(wip.getAdjustmentQuantity())));
+                wip.refreshAvailableQuantity();
                 if (wip.getAvailableQuantity().signum() <= 0
                         && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
                     wip.setStatus(SemiFinishedInventory.Status.DEPLETED);
@@ -1272,8 +1521,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 if (src != null) {
                     BigDecimal consumed = nz(src.getConsumedQuantity()).subtract(back).max(BigDecimal.ZERO);
                     src.setConsumedQuantity(consumed);
-                    src.setAvailableQuantity(nz(src.getProducedQuantity())
-                            .subtract(consumed).add(nz(src.getAdjustmentQuantity())));
+                    src.refreshAvailableQuantity();
                     if (src.getAvailableQuantity().signum() > 0
                             && !SemiFinishedInventory.Status.RETURNED.equals(src.getStatus())) {
                         src.setStatus(SemiFinishedInventory.Status.AVAILABLE);
@@ -1319,9 +1567,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
         // 统一累加路径 (占位行 producedQuantity=0 → 累加结果与历史全量新行字节一致; 既有行直接累加)。
         BigDecimal produced = nz(wip.getProducedQuantity()).add(out);
-        BigDecimal consumed = nz(wip.getConsumedQuantity());
         wip.setProducedQuantity(produced);
-        wip.setAvailableQuantity(produced.subtract(consumed).add(nz(wip.getAdjustmentQuantity())));
+        wip.refreshAvailableQuantity();
         if (wip.getAvailableQuantity().compareTo(BigDecimal.ZERO) > 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
             wip.setStatus(SemiFinishedInventory.Status.AVAILABLE);
@@ -1536,10 +1783,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         SemiFinishedInventoryTransaction outTxn = com.cretas.aims.service.wip.WipLedgerEntries
                 .consumptionRow(sourceWip, input, report, task, operatorId);
 
-        BigDecimal consumed = nz(sourceWip.getConsumedQuantity()).add(input);
-        BigDecimal produced = nz(sourceWip.getProducedQuantity());
-        sourceWip.setConsumedQuantity(consumed);
-        sourceWip.setAvailableQuantity(produced.subtract(consumed).add(nz(sourceWip.getAdjustmentQuantity())));
+        sourceWip.setConsumedQuantity(nz(sourceWip.getConsumedQuantity()).add(input));
+        sourceWip.refreshAvailableQuantity();
         if (sourceWip.getAvailableQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             sourceWip.setStatus(SemiFinishedInventory.Status.DEPLETED);
         }
@@ -1611,7 +1856,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (inputQuantity == null) {
             return;
         }
-        BigDecimal avail = nz(sourceWip.getAvailableQuantity());
+        // G02: 与 consumeSourceWip 写回同一个余额公式 (现算), 不读 availableQuantity 存量列。
+        BigDecimal avail = sourceWip.computeBalance();
         BigDecimal reserved = nz(pendingReserved);
         BigDecimal claimable = avail.subtract(reserved).max(BigDecimal.ZERO);
         if (inputQuantity.compareTo(claimable) > 0) {
@@ -1637,15 +1883,48 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
     }
 
+    /**
+     * 来源生产批次解析 —— 与 web 三个半成品扣减点共用同一份规则 ({@code SemiFeedLineageRecorder})。
+     * 声明在这里而不是类头: 它只服务 {@link #recordWipLineageEdge}。
+     * {@code required=false}: 既有单测按位置参数 new 本类 / {@code @InjectMocks}, 不注入时
+     * 退回「只信行上 batch_id」, 行上为空就不写边 (⛔ 不再拿目标批次顶替)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.SemiSourceBatchResolver semiSourceBatchResolver;
+
+    /**
+     * 🔴 2026-10-24: 原来 {@code sourceWip.getBatchId() == null} 时拿<b>目标</b>批次顶替来源
+     * ({@code task.getProductionBatchId()}), 写出「这批半成品是自己产的」自环 ——
+     * prod F006 备份 57 条 WIP_CONSUME 里 51 条自环, 其中 39 条来自行上 batch_id 为空。
+     * 现在: 行上有 batch_id 照旧用它 (同批工序间领用的自环是真的, 保留);
+     * 没有就按共享规则解析 (工序任务 / App 工序批次号 / 同号生产批次);
+     * 解析不了就<b>不写</b>, 由解析器留 warn + 计数。
+     */
     private void recordWipLineageEdge(String factoryId, SemiFinishedInventory sourceWip,
                                       WorkProcessTask task, BigDecimal qty, Long operatorId) {
         try {
+            Long sourceBatchId = sourceWip.getBatchId();
+            String resolvedBy = com.cretas.aims.service.lineage.SemiSourceBatchResolver.BY_ROW_BATCH;
+            if (sourceBatchId == null) {
+                if (semiSourceBatchResolver == null) {
+                    log.warn("[lineage] SEMI_SOURCE_UNRESOLVED 行上无 batch_id 且解析器未注入, 不写 WIP 领用边: "
+                                    + "factory={} sourceWipNo={} targetBatch={}",
+                            factoryId, sourceWip.getIntermediateBatchNo(), task.getProductionBatchId());
+                    return;
+                }
+                com.cretas.aims.service.lineage.SemiSourceBatchResolver.Resolution resolution =
+                        semiSourceBatchResolver.resolve(factoryId, sourceWip, "APP_WIP_CONSUME");
+                if (!resolution.isResolved()) {
+                    return;   // 解析器已 warn + 计数
+                }
+                sourceBatchId = resolution.productionBatchId();
+                resolvedBy = resolution.method();
+            }
             BatchLineageEdge edge = new BatchLineageEdge();
             edge.setFactoryId(factoryId);
             edge.setEdgeType("WIP_CONSUME");
             edge.setSourceType("PRODUCTION_BATCH");
-            edge.setSourceId(String.valueOf(sourceWip.getBatchId() == null
-                    ? task.getProductionBatchId() : sourceWip.getBatchId()));
+            edge.setSourceId(String.valueOf(sourceBatchId));
             edge.setTargetType("PRODUCTION_BATCH");
             edge.setTargetId(String.valueOf(task.getProductionBatchId()));
             edge.setQuantityUsed(qty);
@@ -1656,6 +1935,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             meta.put("sourceWipNo", sourceWip.getIntermediateBatchNo());
             meta.put("targetWorkProcessTaskId", task.getId());
             meta.put("targetProcessOrder", task.getProcessOrder());
+            meta.put("sourceResolvedBy", resolvedBy);
             edge.setMeta(meta);
             lineageEdgeRepo.save(edge);
         } catch (Exception e) {
@@ -1711,7 +1991,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
-        BigDecimal avail = nz(wip.getAvailableQuantity());
+        // G02: 校验与写回同一个余额公式 (现算 produced − consumed + adjustment)。
+        BigDecimal avail = wip.computeBalance();
         if (qty.compareTo(avail) > 0) {
             throw new BusinessException(409, String.format(
                     "WIP 余量不足: 请求 %.2f, 可用 %.2f (批次号: %s)",
@@ -1719,9 +2000,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withCode("WIP_INSUFFICIENT")
                     .withHint("请减少领用数量或选择其他 WIP 批次");
         }
-        BigDecimal newAvail = avail.subtract(qty);
-        wip.setAvailableQuantity(newAvail);
         wip.setConsumedQuantity(nz(wip.getConsumedQuantity()).add(qty));
+        BigDecimal newAvail = wip.refreshAvailableQuantity();
         if (newAvail.compareTo(BigDecimal.ZERO) == 0) {
             wip.setStatus(SemiFinishedInventory.Status.DEPLETED);
         }
@@ -1761,7 +2041,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
-        BigDecimal newAvail = nz(wip.getAvailableQuantity()).add(qty);
         BigDecimal newConsumed = nz(wip.getConsumedQuantity()).subtract(qty);
         // 防御: consumed 不应反冲到负 (反冲量超过历史扣减量)。诚实报错而非静默置 0。
         if (newConsumed.compareTo(BigDecimal.ZERO) < 0) {
@@ -1770,8 +2049,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     qty, nz(wip.getConsumedQuantity()), wip.getIntermediateBatchNo()))
                     .withCode("WIP_REVERSE_OVER_CONSUMED");
         }
-        wip.setAvailableQuantity(newAvail);
         wip.setConsumedQuantity(newConsumed);
+        BigDecimal newAvail = wip.refreshAvailableQuantity();
         // 还量后有余量 → 从 DEPLETED 恢复 AVAILABLE (RETURNED 终态不动)。
         if (newAvail.compareTo(BigDecimal.ZERO) > 0
                 && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {

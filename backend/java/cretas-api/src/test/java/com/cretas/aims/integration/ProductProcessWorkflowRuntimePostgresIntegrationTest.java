@@ -25,6 +25,7 @@ import com.cretas.aims.service.workflow.CompiledProductProcessWorkflow;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeService;
+import com.cretas.aims.service.workflow.WorkflowReportingUnitResolver;
 import com.cretas.aims.service.workflow.impl.ProductProcessWorkflowActivationServiceImpl;
 import com.cretas.aims.service.workflow.impl.ProductProcessWorkflowRuntimeServiceImpl;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
@@ -33,7 +34,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -42,13 +42,13 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.sql.DataSource;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -82,15 +82,17 @@ import static org.mockito.Mockito.when;
  */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "spring.datasource.hikari.maximum-pool-size=4",
+        "spring.datasource.hikari.minimum-idle=1"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
-@EntityScan(basePackages = "com.cretas.aims.entity")
 @Import({
         ProductProcessWorkflowRuntimeServiceImpl.class,
         ProductProcessWorkflowActivationServiceImpl.class,
         ProductProcessWorkflowRuntimeCompiler.class,
+        WorkflowReportingUnitResolver.class,
         ProductProcessWorkflowValidator.class,
         WorkProcessTaskServiceImpl.class,
         ProductProcessWorkflowRuntimePostgresIntegrationTest.TestBeans.class
@@ -170,10 +172,10 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                       id BIGINT PRIMARY KEY, factory_id VARCHAR(64) NOT NULL,
                       product_work_process_id BIGINT NOT NULL, deleted_at TIMESTAMP)
                     """);
-            ScriptUtils.executeSqlScript(connection,
+            executePostgresScript(connection,
                     new ClassPathResource(
                             "db/flyway/V20261028_52__product_process_workflow_runtime.sql"));
-            ScriptUtils.executeSqlScript(connection,
+            executePostgresScript(connection,
                     new ClassPathResource(
                             "db/flyway/V20261028_53__pin_batch_workflow_selection.sql"));
 
@@ -274,7 +276,7 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                     VALUES ('F', 20, 30, 'legacy-port', 'INPUT', 0,
                             'raw', 'RAW_MATERIAL', 'SKU', repeat('x', 32))
                     """);
-            ScriptUtils.executeSqlScript(connection,
+            executePostgresScript(connection,
                     new ClassPathResource(
                             "db/flyway/V20261028_63__workflow_port_unit_conversion_snapshot.sql"));
             assertEquals(32, scalarInt(connection, """
@@ -327,9 +329,9 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
                           id BIGINT PRIMARY KEY, factory_id VARCHAR(64) NOT NULL,
                           product_work_process_id BIGINT NOT NULL, deleted_at TIMESTAMP)
                         """);
-                ScriptUtils.executeSqlScript(setup, new ClassPathResource(
+                executePostgresScript(setup, new ClassPathResource(
                         "db/flyway/V20261028_52__product_process_workflow_runtime.sql"));
-                ScriptUtils.executeSqlScript(setup, new ClassPathResource(
+                executePostgresScript(setup, new ClassPathResource(
                         "db/flyway/V20261028_53__pin_batch_workflow_selection.sql"));
                 statement.execute("""
                         INSERT INTO product_process_workflows
@@ -411,6 +413,15 @@ class ProductProcessWorkflowRuntimePostgresIntegrationTest {
         } finally {
             executor.shutdownNow();
             dropSchema(schema);
+        }
+    }
+
+    private static void executePostgresScript(Connection connection, ClassPathResource migration)
+            throws Exception {
+        // Let the real PostgreSQL driver parse dollar-quoted PL/pgSQL bodies.
+        // Generic semicolon splitting truncates V53's function before its closing $$.
+        try (var input = migration.getInputStream(); Statement statement = connection.createStatement()) {
+            statement.execute(new String(input.readAllBytes(), StandardCharsets.UTF_8));
         }
     }
 

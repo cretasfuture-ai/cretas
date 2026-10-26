@@ -405,6 +405,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ctx.getFactoryId(), batch,
                     requireOutputMaterialIdentity(ctx.getRawMaterialTypeId(), batch.getBatchNumber()),
                     lastOutputQty, lastOutputUnit, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
+            recordWipStockLineage(ctx.getFactoryId(), batch.getId(), wipMbId,
+                    lastOutputQty, lastOutputUnit, ctx.getUserId(), "CLERK_PROCESS_ENTRY");
         }
         applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost,
                 firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
@@ -522,6 +524,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             wip.setUnitPrice(wipUnitPrice);
             // 立即 flush，确保身份/FK 错误在写审计日志前暴露，避免污染 Hibernate Session。
             materialBatchRepo.saveAndFlush(wip);
+            // 重物化保 id: 边的幂等键只看库存批 id, 已有边 ⇒ ALREADY_EXISTS (不重复写);
+            // 本次接线前物化、从没有边的存量批次在这里补上。
+            recordWipStockLineage(ctx.getFactoryId(), existingBatchId, existingWipMbId,
+                    lastOutputQty, wip.getQuantityUnit(), ctx.getUserId(), "CLERK_PROCESS_ENTRY_REMATERIALIZE");
         }
 
         // 4. 更新 ProductionBatch.quantity (保 id) —— factory-scoped (🔒).
@@ -898,6 +904,28 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         lineageEdgeRecorder.recordRawToProduction(factoryId, upstreamBatchId, productionBatchId,
                 qty, null, operatorId,
                 consumptionId == null ? null : "consumption:" + consumptionId, meta);
+    }
+
+    /**
+     * 生产批次 → 它产出的在制库存批 (PRODUCTION_TO_WIP) —— 文员录入这条路上唯一的写点。
+     *
+     * <p>🔴 2026-10-24 prod 实测: 中间道产出的 WIP 库存批只用 {@code source_doc_id} 指回生产批,
+     * 没有边 ⇒ 闭包在每一道中间产出处断开 (10 道工序的批只追到 depth 1)。下一道投入它时的
+     * RAW_TO_PRODUCTION 一直有, 缺的就是这一跳。
+     *
+     * <p>新建 ({@link #materializeBatch}) 与原地重物化 ({@link #rematerializeInPlace}) 两条路都调这里 ——
+     * 两份实现写在哪一份上另一份就漏 (形态 D)。幂等键 = 库存批 id (与回填同一个键)。
+     */
+    private void recordWipStockLineage(String factoryId, Long productionBatchId, String wipMaterialBatchId,
+                                       BigDecimal quantity, String unit, Long operatorId, String origin) {
+        if (lineageEdgeRecorder == null || wipMaterialBatchId == null) {
+            return;
+        }
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("origin", origin);
+        lineageEdgeRecorder.recordProductionToWipStock(factoryId, productionBatchId, wipMaterialBatchId,
+                quantity, unit, operatorId,
+                com.cretas.aims.service.lineage.LineageEdgeRecorder.wipStockRefKey(wipMaterialBatchId), meta);
     }
 
     // ─────────────────────────────────────────────────────────────

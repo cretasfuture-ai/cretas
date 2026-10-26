@@ -1,5 +1,6 @@
 import type { RouteLocationRaw } from 'vue-router';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
+import { RAW_WORKFLOW_OWNER_ANCHOR_LABEL, isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
 
 export type ProductionPlanListRow = {
   id?: unknown;
@@ -68,4 +69,24 @@ export function cancellationAudit(
   const rawTime = String(row?.cancelledAt ?? '').trim();
   const time = rawTime ? rawTime.replace('T', ' ').slice(0, 19) : '历史记录未标记时间';
   return { reason, actor, time };
+}
+
+/**
+ * 逐道录入抽屉标题 /「逐工序报工」后面的产品文字。
+ *
+ * 2026-10-25 线上实拍(F006【演示L4】多产品计划): 这里显示成
+ * `__RAW_WORKFLOW_OWNER__RMT_F006_LSM_…` —— 多产出计划的 productTypeId 是原料锚点,
+ * 后端下发的 productTypeName 就是锚点名。列表「生产成品」列走 targetFinishedGoodIds
+ * 显示正常, 这里改为吃同一份名字(planFinishedProductNames 的结果)。
+ *
+ * - 多个成品 → 「多产出计划：A、B、C」
+ * - 一个成品 → 成品名
+ * - 只剩锚点 → 「多产出计划」(拿不到真名时不编名字, 也不露内部编码)
+ */
+export function planSheetProductLabel(names: readonly unknown[]): string {
+  const cleaned = names.map((n) => String(n ?? '').trim()).filter((n) => n && n !== '-');
+  const real = cleaned.filter((n) => !isRawWorkflowOwnerAnchorName(n) && n !== RAW_WORKFLOW_OWNER_ANCHOR_LABEL);
+  if (real.length > 1) return `${RAW_WORKFLOW_OWNER_ANCHOR_LABEL}：${real.join('、')}`;
+  if (real.length === 1) return real[0];
+  return cleaned.length > 0 ? RAW_WORKFLOW_OWNER_ANCHOR_LABEL : '';
 }

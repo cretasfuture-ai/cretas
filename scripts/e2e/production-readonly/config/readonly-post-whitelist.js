@@ -15,6 +15,24 @@ const AUTH_REQUESTS = [
 // execute tools with side effects behind a single HTTP request.
 const READONLY_POST_WHITELIST = [
   {
+    id: 'smartbi-factory-details',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/factory-details\/?$/,
+    rationale: 'Read-only tenant-qualified original-row details from a short-lived server snapshot.',
+  },
+  {
+    id: 'smartbi-factory-recommendations',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/factory-recommendations\/?$/,
+    rationale: 'Read-only tenant-qualified metrics and bounded chart ranking; handler performs no business writes.',
+  },
+  {
+    id: 'smartbi-factory-document-export',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/export-(?:excel|pdf|ppt)\/?$/,
+    rationale: 'Pure in-memory document generation from supplied qualified chart snapshots; no database writes.',
+  },
+  {
     id: 'purchase-order-list-summary',
     method: 'POST',
     path: /^\/api\/mobile\/[^/]+\/list-summary\/purchaseOrder\/?$/,

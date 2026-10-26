@@ -165,7 +165,7 @@ class FactoryReadinessContractTest {
         candidate.setCapabilities(List.of(capability));
         candidate.setLifecycleState("PUBLISHED");
         var notApplied = new FactoryReadinessReport.AppliedVersion(null, null, true, "未绑定");
-        var stages = FactoryReadinessService.stages(candidate, notApplied, List.of(), List.of(domain("READY", "RECORDED")));
+        var stages = FactoryReadinessService.stages(candidate, notApplied, List.of(), List.of(domain("READY", "COMPLETED")));
         assertThat(stages).extracting(FactoryReadinessReport.Stage::key).containsExactly("CONFIRMATION",
                 "BLUEPRINT_PUBLISHED", "CONFIGURATION_APPLIED", "FORMAL_RUNTIME", "BUSINESS_READY", "FIRST_BUSINESS");
         assertThat(stages).extracting(FactoryReadinessReport.Stage::state)
@@ -173,6 +173,17 @@ class FactoryReadinessContractTest {
         candidate.setLifecycleState("VALIDATED");
         assertThat(FactoryReadinessService.stages(candidate, notApplied, List.of(), List.of()).get(1).state())
                 .isEqualTo("PENDING");
+    }
+
+    @Test void documentsThatExistButNeverCompletedDoNotCompleteTheFirstBusiness() {
+        candidate.setCapabilities(List.of(CapabilityView.builder().id("materials").included(true).confirmationState("CONFIRMED").build()));
+        var applied = new FactoryReadinessReport.AppliedVersion("candidate", 2, false, "当前");
+        var draftsOnly = FactoryReadinessService.stages(candidate, applied, List.of(), List.of(domain("READY", "RECORDED")));
+        assertThat(draftsOnly.get(5).state()).isEqualTo("PENDING");
+        assertThat(draftsOnly.get(5).evidence()).contains("尚未完成");
+        var oneDomainCompleted = FactoryReadinessService.stages(candidate, applied, List.of(),
+                List.of(domain("READY", "COMPLETED"), domain("READY", "RECORDED")));
+        assertThat(oneDomainCompleted.get(5).state()).isEqualTo("PENDING");
     }
 
     @Test void appliedOldVersionAndPartlyLiveRuntimeStayPending() {
@@ -192,12 +203,12 @@ class FactoryReadinessContractTest {
     @Test void unknownBusinessFactsNeverRollUpToDoneAndNoApplicableBusinessIsNotApplicable() {
         candidate.setCapabilities(List.of());
         var applied = new FactoryReadinessReport.AppliedVersion("candidate", 2, false, "当前");
-        var stages = FactoryReadinessService.stages(candidate, applied, List.of(), List.of(domain("UNKNOWN", "UNKNOWN"), domain("READY", "RECORDED")));
+        var stages = FactoryReadinessService.stages(candidate, applied, List.of(), List.of(domain("UNKNOWN", "UNKNOWN"), domain("READY", "COMPLETED")));
         assertThat(stages.get(0).state()).isEqualTo("UNKNOWN");
         assertThat(stages.get(4).state()).isEqualTo("UNKNOWN");
         assertThat(stages.get(5).state()).isEqualTo("UNKNOWN");
         var none = new FactoryReadinessReport.BusinessDomain("PURCHASE", "采购", "NOT_APPLICABLE", "未选择",
-                "NOT_APPLICABLE", List.of(), List.of(), new FactoryReadinessReport.FirstRecord("NONE", 0L, "无"));
+                "NOT_APPLICABLE", List.of(), List.of(), new FactoryReadinessReport.FirstRecord("NONE", 0L, 0L, "无"));
         assertThat(FactoryReadinessService.stages(candidate, applied, List.of(), List.of(none)).get(4).state())
                 .isEqualTo("NOT_APPLICABLE");
     }
@@ -213,7 +224,8 @@ class FactoryReadinessContractTest {
 
     private static FactoryReadinessReport.BusinessDomain domain(String state, String first) {
         return new FactoryReadinessReport.BusinessDomain("PURCHASE", "采购", "APPLICABLE", "蓝图已选择 materials",
-                state, List.of(), List.of(), new FactoryReadinessReport.FirstRecord(first, "NONE".equals(first) ? 0L : 1L, ""));
+                state, List.of(), List.of(), new FactoryReadinessReport.FirstRecord(first, "NONE".equals(first) ? 0L : 1L,
+                        "COMPLETED".equals(first) ? 1L : 0L, ""));
     }
 
     @Test void plannedMultipleTerminalsPreserveMultiOutputAndMissingByproductFactsStayUnknown() {

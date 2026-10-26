@@ -3,7 +3,7 @@
  * Quality Inspector - Inspection Form Screen
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { appAlert } from '../../components/ui/AppDialog';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +22,8 @@ import {
   GRADE_LABELS,
   calculateGrade,
   calculateTotalScore,
+  DynamicQualityForm,
+  DynamicQualityAnswer,
 } from '../../types/qualityInspector';
 import { qualityInspectorApi } from '../../services/api/qualityInspectorApi';
 import { useAuthStore } from '../../store/authStore';
@@ -108,6 +110,8 @@ export default function QIFormScreen() {
   const [sampleSize, setSampleSize] = useState('10');
   const [remarks, setRemarks] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [dynamicForm, setDynamicForm] = useState<DynamicQualityForm | null>(null);
+  const [dynamicFormError, setDynamicFormError] = useState<string | null>(null);
 
   /**
    * 评分数据 —— **空开局**。
@@ -144,12 +148,21 @@ export default function QIFormScreen() {
       setLoading(true);
       const data = await qualityInspectorApi.getBatchDetail(batchId);
       setBatch(data);
+      const standard = await qualityInspectorApi.getDynamicQualityForm(batchId);
+      setDynamicForm(standard);
     } catch (error) {
       console.error('加载批次失败:', error);
+      setDynamicFormError(error instanceof Error ? error.message : t('form.cannotLoadBatch'));
       appAlert(t('form.loadBatchFailed'), t('form.cannotLoadBatch'));
     } finally {
       setLoading(false);
     }
+  };
+
+  const refreshDynamicForm = async () => {
+    const standard = await qualityInspectorApi.getDynamicQualityForm(batchId);
+    setDynamicForm(standard);
+    return standard;
   };
 
   /**
@@ -351,6 +364,20 @@ export default function QIFormScreen() {
     );
   }
 
+  if (dynamicFormError || !dynamicForm || !batch) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Ionicons name="alert-circle" size={34} color={QI_COLORS.danger} />
+        <Text style={styles.loadingText}>{dynamicFormError || '当前批次没有可用的动态质检标准'}</Text>
+        <TouchableOpacity style={styles.submitBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.submitBtnText}>返回批次</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return <DynamicQualityFormScreen batch={batch} form={dynamicForm} batchNumber={batchNumber} onRefreshStandard={refreshDynamicForm} />;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -505,13 +532,13 @@ export default function QIFormScreen() {
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.passedCount')}</Text>
               <Text style={[styles.summaryValue, { color: QI_COLORS.success }]}>
-                {derived ? `${derived.passCount}/${sampleSizeNum}${t('form.sampleUnit')}` : '—'}
+                {derived?.passCount == null ? '—' : `${derived!.passCount}/${sampleSizeNum}${t('form.sampleUnit')}`}
               </Text>
             </View>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>{t('form.passRate')}</Text>
               <Text style={[styles.summaryValue, { color: QI_COLORS.success }]}>
-                {derived ? `${Math.round(derived.passRate)}%` : '—'}
+                {derived?.passRate == null ? '—' : `${Math.round(derived!.passRate)}%`}
               </Text>
             </View>
             <View style={styles.summaryItem}>
@@ -519,7 +546,7 @@ export default function QIFormScreen() {
               {grade === null ? (
                 <Text style={styles.summaryValue}>—</Text>
               ) : (
-                <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[grade] }]}>
+                <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[grade as QualityGrade] }]}>
                   <Text style={styles.gradeBadgeText}>{grade}</Text>
                 </View>
               )}
@@ -569,6 +596,75 @@ export default function QIFormScreen() {
           )}
         </TouchableOpacity>
       </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard }: { batch: QIBatch; form: DynamicQualityForm; batchNumber: string; onRefreshStandard: () => Promise<DynamicQualityForm> }) {
+  const navigation = useNavigation<NavigationProp>();
+  const { t } = useTranslation('quality');
+  const insets = useSafeAreaInsets();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const submitGuard = useRef(false);
+  const requiredMissing = form.items.filter((item) => item.effectiveIsRequired && !values[item.bindingId]?.trim());
+  const invalid = form.items.some((item) => {
+    const raw = values[item.bindingId];
+    if (!raw || raw.trim() === '') return false;
+    const n = Number(raw);
+    return (item.effectiveMinValue != null && Number.isFinite(n) && n < item.effectiveMinValue)
+      || (item.effectiveMaxValue != null && Number.isFinite(n) && n > item.effectiveMaxValue);
+  });
+
+  const submit = async () => {
+    if (submitGuard.current) return;
+    if (requiredMissing.length) { setError(`请填写必检项目：${requiredMissing.map((i) => i.label).join('、')}`); return; }
+    try {
+      submitGuard.current = true;
+      setSubmitting(true); setError(null);
+      const answers: DynamicQualityAnswer[] = form.items.map((item) => ({ bindingId: item.bindingId, itemId: item.itemId, itemVersion: item.itemVersion, value: values[item.bindingId] || '' }));
+      const response = await qualityInspectorApi.submitDynamicInspection(batch.id, { standardRevision: form.standardRevision, sampleSize: 1, answers, notes });
+      const inspectionId = response.inspection?.id;
+      const result = response.inspection?.result;
+      if (inspectionId == null || !['PASS', 'FAIL'].includes(result)) {
+        throw new Error('服务端未返回完整的质检结果，请保留当前填写内容后重试');
+      }
+      navigation.replace('QIResult', { recordId: String(inspectionId), passed: result === 'PASS' });
+    } catch (e) {
+      const message = getQualityInspectionSubmitErrorMessage(e, '提交失败，请检查标准版本后重试', t('form.checkNetworkAndRetry'));
+      const isStaleError = typeof e === 'object' && e !== null
+        && 'response' in e && Boolean((e as { response?: { data?: { code?: string } } }).response?.data?.code === 'QUALITY_STANDARD_STALE');
+      setStale(isStaleError || message.includes('标准已更新'));
+      setError(message);
+    }
+    finally { submitGuard.current = false; setSubmitting(false); }
+  };
+
+  const refreshStandard = async () => {
+    try {
+      setError(null);
+      await onRefreshStandard();
+      setStale(false);
+    } catch (e) {
+      setError(getQualityInspectionSubmitErrorMessage(e, '刷新标准失败，当前填写内容已保留', t('form.checkNetworkAndRetry')));
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 }]} keyboardShouldPersistTaps="handled">
+        <View style={styles.batchCard}><Text style={styles.batchNumber}>{batchNumber}</Text><Text style={styles.batchInfo}>{batch.productName} · {batch.unit} {batch.quantity}</Text><Text style={styles.batchInfo}>标准版本：{form.standardRevision}</Text></View>
+        <View style={styles.sampleSection}><Text style={styles.sampleTitle}>抽样组数</Text><Text style={styles.batchInfo}>1 组（当前动态质检表按一组样本提交）</Text></View>
+        {form.items.map((item, index) => <View key={item.bindingId} style={styles.checkCard}><Text style={styles.checkName}>{index + 1}. {item.label}{item.effectiveIsRequired ? '（必检）' : ''}</Text><Text style={styles.batchInfo}>{item.unit || '无单位'} · {item.effectiveMinValue ?? '无下限'} ~ {item.effectiveMaxValue ?? '无上限'}{item.effectiveStandardValue ? ` · ${item.effectiveStandardValue}` : ''}</Text>{item.valueType === 'BOOLEAN' ? <View style={styles.booleanChoices}><TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.label} 是`} style={[styles.booleanChoice, values[item.bindingId] === 'true' && styles.booleanChoiceSelected]} onPress={() => setValues((prev) => ({ ...prev, [item.bindingId]: 'true' }))}><Text style={values[item.bindingId] === 'true' ? styles.booleanChoiceTextSelected : undefined}>是</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.label} 否`} style={[styles.booleanChoice, values[item.bindingId] === 'false' && styles.booleanChoiceSelected]} onPress={() => setValues((prev) => ({ ...prev, [item.bindingId]: 'false' }))}><Text style={values[item.bindingId] === 'false' ? styles.booleanChoiceTextSelected : undefined}>否</Text></TouchableOpacity></View> : <TextInput style={styles.dynamicInput} value={values[item.bindingId] || ''} onChangeText={(value) => setValues((prev) => ({ ...prev, [item.bindingId]: value }))} keyboardType={item.valueType === 'TEXT' ? 'default' : 'decimal-pad'} placeholder="填写实测值" />} </View>)}
+        <TextInput style={styles.remarksInput} value={notes} onChangeText={setNotes} placeholder="备注（可选）" multiline />
+        {invalid && <Text style={styles.submitErrorText}>存在超出标准范围的实测值，提交后将记录为 FAIL。</Text>}
+        {error && <Text style={styles.submitErrorText} accessibilityRole="alert">{error}</Text>}
+        {stale && <TouchableOpacity accessibilityRole="button" style={styles.refreshStandardButton} onPress={refreshStandard}><Text style={styles.refreshStandardText}>刷新标准（保留已填写答案）</Text></TouchableOpacity>}
+      </ScrollView>
+      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}><TouchableOpacity style={[styles.submitBtn, submitting && styles.submitBtnDisabled]} onPress={submit} disabled={submitting}><Text style={styles.submitBtnText}>{submitting ? '提交中…' : '提交质检结果'}</Text></TouchableOpacity></View>
     </KeyboardAvoidingView>
   );
 }
@@ -680,6 +776,13 @@ const styles = StyleSheet.create({
     color: QI_COLORS.text,
     backgroundColor: QI_COLORS.background,
   },
+  booleanChoices: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  booleanChoice: { minWidth: 88, minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, borderRadius: 8, backgroundColor: QI_COLORS.background, borderWidth: 1, borderColor: QI_COLORS.border },
+  booleanChoiceSelected: { backgroundColor: '#E8F5E9', borderColor: QI_COLORS.primary },
+  booleanChoiceTextSelected: { color: QI_COLORS.primary, fontWeight: '700', fontSize: 24 },
+  dynamicInput: { minHeight: 44, borderWidth: 1, borderColor: QI_COLORS.border, borderRadius: 8, paddingHorizontal: 12, fontSize: 24, color: QI_COLORS.text, backgroundColor: QI_COLORS.background },
+  refreshStandardButton: { minHeight: 44, marginTop: 8, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center', borderRadius: 8, backgroundColor: '#FFF7E6', borderWidth: 1, borderColor: '#F0B429' },
+  refreshStandardText: { color: '#8A5A00', fontSize: 16, fontWeight: '600' },
   sampleUnit: {
     fontSize: 14,
     color: QI_COLORS.textSecondary,

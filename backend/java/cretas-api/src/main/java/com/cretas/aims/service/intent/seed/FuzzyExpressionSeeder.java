@@ -1,5 +1,7 @@
 package com.cretas.aims.service.intent.seed;
 
+import org.springframework.context.annotation.Profile;
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import com.cretas.aims.entity.learning.LearnedExpression;
 import com.cretas.aims.service.EmbeddingClient;
 import com.cretas.aims.service.ExpressionLearningService;
@@ -43,6 +45,8 @@ import java.util.Map;
  */
 @Slf4j
 @Component
+// 启动即种库(ApplicationRunner); 回填进程里不该写 ai_learned_expressions。
+@Profile(LineageBackfillMode.NOT_ACTIVE)
 @Order(100)
 public class FuzzyExpressionSeeder implements ApplicationRunner {
 

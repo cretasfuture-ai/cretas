@@ -102,6 +102,25 @@ class CustomerRevenueTrendToolTest {
         assertFalse(series.isEmpty(), "series should always have month buckets even when 0 orders");
     }
 
+    @Test
+    @DisplayName("UT-CRT-04: 文案写实际起止月份与点数, 全厂说「全厂客户」(不再「全 factory」「近 2 个月 / 3 个点」对不上)")
+    @SuppressWarnings("unchecked")
+    void messageMatchesTheSeries() throws Exception {
+        when(salesOrderRepository.findByFactoryIdAndDateRange(
+                anyString(), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of());
+
+        Map<String, Object> result = invokeDoExecute(tool, FACTORY_ID, Map.of("periodMonths", 2), ctx());
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        List<Map<String, Object>> series = (List<Map<String, Object>>) data.get("series");
+        String message = String.valueOf(result.get("message"));
+
+        assertEquals(3, series.size(), "前 2 个月 + 本月");
+        assertEquals("全厂客户 " + series.get(0).get("month") + " 至 " + series.get(2).get("month")
+                + " 销售趋势（含本月，共 3 个月）", message);
+        assertFalse(message.contains("factory"), message);
+    }
+
     // ── helpers ──
     private SalesOrder newSalesOrder(LocalDate date, BigDecimal amount) {
         SalesOrder so = new SalesOrder();

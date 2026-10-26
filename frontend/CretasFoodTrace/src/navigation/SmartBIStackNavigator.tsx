@@ -38,6 +38,8 @@ import CustomerRFMScreen from '../screens/smartbi/CustomerRFMScreen';
 // 屏幕组件 - 财务深度分析
 import CashFlowScreen from '../screens/smartbi/CashFlowScreen';
 import FinancialRatiosScreen from '../screens/smartbi/FinancialRatiosScreen';
+import FactoryChartsScreen from '../screens/smartbi/FactoryChartsScreen';
+import FactoryChartDetails from '../screens/smartbi/FactoryChartDetails';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<SmartBIStackParamList>();
@@ -164,6 +166,17 @@ export function SmartBIStackNavigator() {
         name="FinancialRatios"
         component={FinancialRatiosScreen}
         options={{ title: '财务比率分析' }}
+      />
+
+      <Stack.Screen
+        name="FactoryCharts"
+        component={FactoryChartsScreen}
+        options={{ title: '工厂经营分析' }}
+      />
+      <Stack.Screen
+        name="FactoryChartDetails"
+        component={FactoryChartDetails}
+        options={{ title: '原始明细' }}
       />
     </Stack.Navigator>
   );

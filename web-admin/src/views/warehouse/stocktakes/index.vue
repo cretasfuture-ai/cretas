@@ -118,10 +118,12 @@ const statusFilter = ref('');
 const statusMap: Record<string, { label: string; type: string }> = {
   INITIATED: { label: '已发起', type: 'info' },
   COUNTING: { label: '盘点中', type: 'warning' },
+  CANCELLED: { label: '已取消', type: 'info' },
   PENDING_APPROVAL: { label: '待审批', type: 'warning' },
   APPROVED: { label: '已审批', type: 'success' },
   APPLIED: { label: '已应用', type: 'success' },
   REJECTED: { label: '已驳回', type: 'danger' },
+  RECOUNT_REQUIRED: { label: '需重新盘点', type: 'warning' },
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -140,6 +142,18 @@ async function loadWarehouses() {
 function warehouseName(id: string) {
   const w = warehouses.value.find((x) => String(x.id) === String(id));
   return w ? String(w.name || id) : id;
+}
+
+const currentUserId = computed(() => String(authStore.user?.id ?? ''));
+
+function canCancelStocktake(row: TableRow | null | undefined): boolean {
+  if (!row || !canWrite.value) return false;
+  const status = String(row.status || '');
+  const actorId = currentUserId.value.trim();
+  const initiatedBy = String(row.initiatedBy ?? '').trim();
+  return actorId !== '' && initiatedBy !== ''
+    && (status === 'INITIATED' || status === 'COUNTING')
+    && initiatedBy === actorId;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -175,6 +189,10 @@ function handlePageChange(page: number) {
 function handleFilterChange() {
   pagination.value.page = 1;
   loadData();
+}
+
+function openRecountDetail(id: unknown) {
+  if (id) openDetail({ id: String(id) } as TableRow);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -747,17 +765,19 @@ const detailData = ref<TableRow | null>(null);
 const detailLoading = ref(false);
 const diffPreview = ref<DiffPreviewLine[]>([]);
 const diffLoading = ref(false);
+const diffLoadError = ref('');
 
 async function openDetail(row: TableRow) {
   detailData.value = row;
   detailDialogVisible.value = true;
   diffPreview.value = [];
+  diffLoadError.value = '';
   detailLoading.value = true;
   try {
     const res = await get(`/${factoryId.value}/stocktakes/${row.id}`);
     if (res.success && res.data) detailData.value = res.data;
     const status = String(detailData.value?.status || row.status || '');
-    if (status === 'APPROVED' || status === 'APPLIED') {
+    if (status === 'APPROVED' || status === 'APPLIED' || status === 'RECOUNT_REQUIRED') {
       await loadDiffPreview(String(row.id));
     }
   } catch (e) {
@@ -780,14 +800,19 @@ function correctionStatusLabel(status: unknown): string {
 
 async function loadDiffPreview(stocktakeId: string) {
   diffLoading.value = true;
+  diffLoadError.value = '';
   try {
     // ⚠️ Bug fix (2026-07): 后端 DTO 字段是 `diffLines`（StocktakeDiffPreviewDTO.diffLines）,
     // 之前误读 `res.data.items`（不存在的字段）→ 差异预览表格一直渲染"暂无数据"。
     const res = await get<DiffPreviewResponse>(`/${factoryId.value}/stocktakes/${stocktakeId}/diff-preview`);
-    if (res.success && res.data) {
-      diffPreview.value = Array.isArray(res.data.diffLines) ? res.data.diffLines : [];
+    if (!res.success || !res.data || !Array.isArray(res.data.diffLines)) {
+      throw new Error(res.message || '差异预览加载失败');
     }
-  } catch { /* silent */ } finally {
+    diffPreview.value = res.data.diffLines;
+  } catch (e) {
+    diffPreview.value = [];
+    diffLoadError.value = String((e as Error).message || '差异预览加载失败');
+  } finally {
     diffLoading.value = false;
   }
 }
@@ -1135,6 +1160,78 @@ async function submitReject() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Cancel unsubmitted stocktake
+// ────────────────────────────────────────────────────────────────────────────
+const cancelDialogVisible = ref(false);
+const cancelLoading = ref(false);
+const cancelRow = ref<TableRow | null>(null);
+const cancelReasonSelect = ref('');
+const cancelReasonOther = ref('');
+const cancelError = ref('');
+
+const cancelReasonOptions = [
+  { value: 'DUPLICATE_TASK', label: '重复发起盘点' },
+  { value: 'WRONG_WAREHOUSE', label: '仓库选择有误' },
+  { value: 'WRONG_PERIOD', label: '盘点月份有误' },
+  { value: 'PLAN_CHANGED', label: '盘点计划已调整' },
+  { value: 'OTHER', label: '其他' },
+];
+
+function openCancelDialog(row: TableRow) {
+  if (!canCancelStocktake(row)) return;
+  cancelRow.value = row;
+  cancelReasonSelect.value = '';
+  cancelReasonOther.value = '';
+  cancelError.value = '';
+  cancelDialogVisible.value = true;
+}
+
+function resolveCancelReason(): string {
+  return cancelReasonSelect.value === 'OTHER'
+    ? cancelReasonOther.value.trim()
+    : cancelReasonOptions.find((option) => option.value === cancelReasonSelect.value)?.label || '';
+}
+
+async function submitCancel() {
+  const row = cancelRow.value;
+  if (!row || cancelLoading.value) return;
+  const reason = resolveCancelReason();
+  if (!reason) {
+    cancelError.value = '请选择取消原因；如选择“其他”，请填写具体说明。';
+    return;
+  }
+  cancelLoading.value = true;
+  cancelError.value = '';
+  try {
+    const res = await post(`/${factoryId.value}/stocktakes/${row.id}/cancel`, {
+      reason,
+      expectedVersion: row.version,
+    });
+    if (!res.success || String(res.data?.status || '') !== 'CANCELLED') {
+      const message = res.success
+        ? '取消未完成：服务器没有返回已取消状态，请保持窗口打开并重试。'
+        : (res.message || '取消失败，请保持窗口打开并重试。');
+      cancelError.value = message;
+      ElMessage({ message, type: 'error', duration: 0, showClose: true });
+      return;
+    }
+    ElMessage.success('盘点任务已取消，库存未发生变化');
+    cancelDialogVisible.value = false;
+    await loadData();
+    if (detailDialogVisible.value && detailData.value?.id === row.id) {
+      await openDetail({ ...row, ...(res.data as TableRow) });
+    }
+  } catch (error: unknown) {
+    const response = (error as { response?: { data?: { message?: string } } })?.response?.data;
+    const message = response?.message || (error instanceof Error ? error.message : '取消失败，请保持窗口打开并重试。');
+    cancelError.value = message;
+    ElMessage({ message, type: 'error', duration: 0, showClose: true });
+  } finally {
+    cancelLoading.value = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Apply diff to inventory (财务审批后)
 // ────────────────────────────────────────────────────────────────────────────
 const applyLoading = ref(false);
@@ -1177,6 +1274,63 @@ async function applyDiff(row: TableRow) {
     }
   } finally {
     applyLoading.value = false;
+  }
+}
+
+const recountLoading = ref(false);
+
+async function recountAfterDrift(row: TableRow) {
+  let detail: TableRow;
+  try {
+    const detailRes = await get(`/${factoryId.value}/stocktakes/${row.id}`);
+    if (!detailRes.success || !detailRes.data) {
+      throw new Error(detailRes.message || '盘点详情加载失败，无法确认版本');
+    }
+    detail = detailRes.data as TableRow;
+  } catch (e) {
+    ElMessage({
+      message: String((e as Error).message || '盘点详情加载失败，无法发起重盘'),
+      type: 'error', duration: 0, showClose: true,
+    });
+    return;
+  }
+
+  let reason: string;
+  try {
+    const prompt = await ElMessageBox.prompt(
+      '系统会先复核盘点快照与当前库存；只有确认发生漂移时才会保留原审批证据并新建盘点任务。',
+      '漂移后重新盘点',
+      {
+        confirmButtonText: '确认重盘',
+        cancelButtonText: '取消',
+        inputPlaceholder: '请填写本次库存漂移原因',
+        inputValidator: (value: string) => value.trim() ? true : '重盘原因不能为空',
+        inputErrorMessage: '重盘原因不能为空',
+        type: 'warning',
+      },
+    );
+    reason = prompt.value.trim();
+  } catch {
+    return;
+  }
+
+  recountLoading.value = true;
+  try {
+    const res = await post(`/${factoryId.value}/stocktakes/${row.id}/recount-after-drift`, {
+      expectedVersion: detail.version,
+      reason,
+    });
+    if (res.success && res.data) {
+      ElMessage.success('已保留原审批证据并发起新的盘点任务');
+      await loadData();
+      await openDetail(res.data as TableRow);
+    } else {
+      ElMessage({ message: res.message || '重新盘点失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (e) {
+    ElMessage({ message: String((e as Error).message || '重新盘点失败'), type: 'error', duration: 0, showClose: true });
+  } finally {
+    recountLoading.value = false;
   }
 }
 
@@ -1388,6 +1542,12 @@ onMounted(async () => {
               @click="submitForApproval(row)"
             >提交审批</el-button>
             <el-button
+              v-if="canCancelStocktake(row)"
+              size="small"
+              type="danger"
+              @click="openCancelDialog(row)"
+            >取消盘点</el-button>
+            <el-button
               v-if="row.status === 'PENDING_APPROVAL'"
               size="small"
               type="primary"
@@ -1401,6 +1561,19 @@ onMounted(async () => {
               :loading="applyLoading"
               @click="applyDiff(row)"
             >应用差异</el-button>
+            <el-button
+              v-if="canWrite && row.status === 'APPROVED'"
+              size="small"
+              type="warning"
+              :loading="recountLoading"
+              @click="recountAfterDrift(row)"
+            >漂移后重盘</el-button>
+            <el-button
+              v-if="row.status === 'RECOUNT_REQUIRED' && row.recountStocktakeId"
+              size="small"
+              type="warning"
+              @click="openRecountDetail(row.recountStocktakeId)"
+            >查看新盘点</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -1827,19 +2000,57 @@ onMounted(async () => {
             <el-tag v-if="detailData.selfConfirmedZeroDifference" type="warning" size="small">零差异自确认</el-tag>
           </el-descriptions-item>
           <el-descriptions-item v-if="detailData.appliedAt" label="应用时间">{{ formatBusinessDateTime(detailData.appliedAt) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detailData.cancelledBy" label="取消人">
+            用户 {{ detailData.cancelledBy }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.cancelledAt" label="取消时间">
+            {{ formatBusinessDateTime(detailData.cancelledAt) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.cancelReason" label="取消原因" :span="2">
+            <el-text type="warning">{{ detailData.cancelReason }}</el-text>
+          </el-descriptions-item>
           <el-descriptions-item v-if="detailData.rejectReason" label="驳回原因" :span="2">
             <el-text type="danger">{{ detailData.rejectReason }}</el-text>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.recountReason" label="重盘原因" :span="2">
+            <el-text type="warning">{{ detailData.recountReason }}</el-text>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.recountStocktakeId" label="新盘点任务" :span="2">
+            <el-link type="warning" @click="openRecountDetail(detailData.recountStocktakeId)">
+              {{ detailData.recountStocktakeId }}
+            </el-link>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailData.recountSourceStocktakeId" label="来源盘点任务" :span="2">
+            {{ detailData.recountSourceStocktakeId }}
           </el-descriptions-item>
           <el-descriptions-item v-if="detailData.notes" label="备注" :span="2">{{ detailData.notes }}</el-descriptions-item>
         </el-descriptions>
 
-        <!-- 差异预览 (APPROVED / APPLIED) -->
-        <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED'" style="margin-top: 20px">
+        <el-alert
+          v-if="detailData.status === 'RECOUNT_REQUIRED'"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="该盘点已归档为需重新盘点"
+          description="原盘点快照、实盘数量和审批证据仅供历史追溯；库存未由该旧单自动应用，请查看并处理关联的新盘点任务。"
+          style="margin-top: 20px"
+        />
+
+        <!-- 差异预览 (APPROVED / APPLIED / RECOUNT_REQUIRED，均为只读) -->
+        <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED' || detailData.status === 'RECOUNT_REQUIRED'" style="margin-top: 20px">
           <div style="font-weight: 600; margin-bottom: 8px; color: #1B65A8">
             盘点差异预览
             <el-text v-if="detailData.status === 'APPLIED'" type="success" style="font-size: 12px; margin-left: 8px">（盘点已完成）</el-text>
+            <el-text v-else-if="detailData.status === 'RECOUNT_REQUIRED'" type="warning" style="font-size: 12px; margin-left: 8px">（已归档，只读追溯；不可应用）</el-text>
             <el-text v-else type="warning" style="font-size: 12px; margin-left: 8px">（已审批，应用差异后调整库存；零差异应用时库存不调整）</el-text>
           </div>
+          <el-alert
+            v-if="diffLoadError"
+            type="error"
+            show-icon
+            :closable="false"
+            :title="diffLoadError"
+          />
           <el-table v-loading="diffLoading" :data="diffPreview" size="small" border>
             <el-table-column label="批次/物料" min-width="220">
               <template #default="{ row }">
@@ -1870,7 +2081,7 @@ onMounted(async () => {
             </el-table-column>
           </el-table>
           <el-empty
-            v-if="!diffLoading && diffPreview.length === 0"
+            v-if="!diffLoading && !diffLoadError && diffPreview.length === 0"
             description="无实际差异，无库存影响"
             :image-size="56"
           />
@@ -1878,6 +2089,12 @@ onMounted(async () => {
         </div>
       </template>
       <template #footer>
+        <el-button
+          v-if="canCancelStocktake(detailData)"
+          type="danger"
+          :loading="cancelLoading"
+          @click="openCancelDialog(detailData)"
+        >取消盘点</el-button>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
@@ -2135,6 +2352,39 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="rejectDialogVisible = false">取消</el-button>
         <el-button type="danger" :loading="rejectLoading" @click="submitReject">确认驳回</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ──────────────── Cancel Dialog ──────────────── -->
+    <el-dialog v-model="cancelDialogVisible" title="取消盘点任务" width="520px">
+      <template v-if="cancelRow">
+        <el-descriptions :column="2" border style="margin-bottom: 16px">
+          <el-descriptions-item label="盘点单号">{{ cancelRow.stocktakeNo || cancelRow.id }}</el-descriptions-item>
+          <el-descriptions-item label="当前状态">{{ statusMap[String(cancelRow.status)]?.label || cancelRow.status }}</el-descriptions-item>
+          <el-descriptions-item label="仓库" :span="2">{{ warehouseName(String(cancelRow.warehouseId)) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-alert
+          type="warning"
+          show-icon
+          :closable="false"
+          title="取消后将保留盘点记录和审计信息，库存不会发生变化。"
+          style="margin-bottom: 16px"
+        />
+        <el-form label-width="100px">
+          <el-form-item label="取消原因" required>
+            <el-select v-model="cancelReasonSelect" placeholder="请选择取消原因" style="width: 100%">
+              <el-option v-for="option in cancelReasonOptions" :key="option.value" :label="option.label" :value="option.value" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="cancelReasonSelect === 'OTHER'" label="补充说明" required>
+            <el-input v-model="cancelReasonOther" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="请填写具体取消原因" />
+          </el-form-item>
+        </el-form>
+        <el-alert v-if="cancelError" type="error" show-icon :closable="false" :title="cancelError" />
+      </template>
+      <template #footer>
+        <el-button @click="cancelDialogVisible = false">返回</el-button>
+        <el-button type="danger" :loading="cancelLoading" @click="submitCancel">确认取消</el-button>
       </template>
     </el-dialog>
   </div>

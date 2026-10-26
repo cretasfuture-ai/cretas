@@ -43,18 +43,27 @@ public class FinishedBatchProductionAligner {
      * 对齐结果 —— 三态。{@code batch} 为空时，{@code ambiguous} 区分
      * 「计划下压根没有生产批次（没有载体）」与「有多个但分不出是哪个（对不齐）」。
      */
-    public record Alignment(Optional<ProductionBatch> batch, boolean ambiguous, int candidateCount) {
+    public record Alignment(Optional<ProductionBatch> batch, boolean ambiguous, int candidateCount, String method) {
+
+        /** 计划下唯一 / 按产品筛剩唯一。 */
+        public static final String BY_PLAN = "PLAN";
+        /** 成品批次带的生产批次号精确命中（同厂、同计划）。 */
+        public static final String BY_BATCH_NUMBER = "BATCH_NUMBER";
 
         public static Alignment resolved(ProductionBatch batch, int candidateCount) {
-            return new Alignment(Optional.of(batch), false, candidateCount);
+            return resolved(batch, candidateCount, BY_PLAN);
+        }
+
+        public static Alignment resolved(ProductionBatch batch, int candidateCount, String method) {
+            return new Alignment(Optional.of(batch), false, candidateCount, method);
         }
 
         public static Alignment noCarrier() {
-            return new Alignment(Optional.empty(), false, 0);
+            return new Alignment(Optional.empty(), false, 0, null);
         }
 
         public static Alignment ambiguous(int candidateCount) {
-            return new Alignment(Optional.empty(), true, candidateCount);
+            return new Alignment(Optional.empty(), true, candidateCount, null);
         }
 
         /** 对不齐（有候选但分不出）→ AMBIGUOUS；没有候选 → SKIPPED。 */
@@ -68,8 +77,32 @@ public class FinishedBatchProductionAligner {
      * @param finishedProductTypeId  成品批次的产品类型（多批次时用来二次筛选，可为 null）
      */
     public Alignment align(String factoryId, String productionPlanId, String finishedProductTypeId) {
+        return align(factoryId, productionPlanId, finishedProductTypeId, null);
+    }
+
+    /**
+     * 带「产出它的生产批次号」线索的对齐。
+     *
+     * <p>第 0 条规则（先于计划级规则）：线索非空，且本厂有<b>同号</b>生产批次，且该批次挂在<b>同一个计划</b>上
+     * → 就是它。这是精确键，不是猜：结单「按终端产出逐行入库」的成品批次号就是报工生产批次号
+     * （{@code production_settlement_output_lines.reported_batch_number}）。
+     *
+     * <p>⚠️ 计划不一致时<b>不采纳</b>线索（同号但别的计划的批次 = 撞号，不是同一件事），退回计划级规则。
+     * 线索对不上任何批次也退回计划级规则 —— 那是「线索无效」，不是「对不齐」。
+     *
+     * @param producingBatchNumberHint 可为 null（等价于三参版本）
+     */
+    public Alignment align(String factoryId, String productionPlanId, String finishedProductTypeId,
+                           String producingBatchNumberHint) {
         if (isBlank(factoryId) || isBlank(productionPlanId)) {
             return Alignment.noCarrier();
+        }
+        if (!isBlank(producingBatchNumberHint)) {
+            Optional<ProductionBatch> exact = productionBatchRepository
+                    .findByFactoryIdAndBatchNumber(factoryId, producingBatchNumberHint.trim());
+            if (exact.isPresent() && Objects.equals(exact.get().getProductionPlanId(), productionPlanId)) {
+                return Alignment.resolved(exact.get(), 1, Alignment.BY_BATCH_NUMBER);
+            }
         }
         List<ProductionBatch> candidates =
                 productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, productionPlanId);

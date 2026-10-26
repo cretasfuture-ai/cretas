@@ -8,6 +8,7 @@ test('allows only exact authentication and documented query POST contracts', () 
   assert.equal(classifyMutation('GET', 'https://admin.example/api/mobile/F006/skus').kind, 'safe-method');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/auth/unified-login').kind, 'auth');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/purchaseOrder').kind, 'readonly-post');
+  assert.equal(classifyMutation('POST', 'https://admin.example/smartbi-api/api/smartbi/financial-dashboard/factory-details').kind, 'readonly-post');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/internalTransfer').kind, 'readonly-post');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/inventory').kind, 'readonly-post');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/shipment').kind, 'readonly-post');
@@ -149,6 +150,8 @@ test('rejects altered purchaser forecast and price-history query payloads', () =
 });
 
 test('does not allow a suffix or prefix near an allowlisted path', () => {
+  assert.equal(classifyMutation('POST', 'https://admin.example/smartbi-api/api/smartbi/financial-dashboard/factory-details/extra').kind, 'business-mutation');
+  assert.equal(classifyMutation('GET', 'https://admin.example/smartbi-api/api/smartbi/financial-dashboard/factory-details').kind, 'safe-method');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/purchaseOrder/delete').kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/not-list-summary/purchaseOrder').kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/product-process-workflows/resolve-by-outputs/delete').kind, 'business-mutation');

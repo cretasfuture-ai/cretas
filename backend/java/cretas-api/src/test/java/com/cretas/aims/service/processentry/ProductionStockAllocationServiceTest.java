@@ -110,8 +110,8 @@ class ProductionStockAllocationServiceTest {
     @Test
     void allocatesWorkshopStockInFefoOrderAndSubtractsPendingFormalAllocations() {
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "6");
-        MaterialBatch first = batch("B1", "RAW-1", "WKS-1", "3", LocalDate.of(2026, 7, 20));
-        MaterialBatch second = batch("B2", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 25));
+        MaterialBatch first = batch("B1", "RAW-1", "WKS-1", "3", shelf(2026, 7, 20));
+        MaterialBatch second = batch("B2", "RAW-1", "WKS-1", "5", shelf(2026, 7, 25));
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
@@ -134,7 +134,7 @@ class ProductionStockAllocationServiceTest {
     @Test
     void allocatesLegacyGramStockUsingKgReportingQuantity() {
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "2");
-        MaterialBatch grams = batch("B1", "RAW-1", "WKS-1", "5000", LocalDate.of(2026, 7, 20));
+        MaterialBatch grams = batch("B1", "RAW-1", "WKS-1", "5000", shelf(2026, 7, 20));
         grams.setQuantityUnit("g");
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
@@ -157,7 +157,7 @@ class ProductionStockAllocationServiceTest {
     void convertsWorkflowGramReportingQuantityToCanonicalKgAllocation() {
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "2000");
         input.setUnit("g");
-        MaterialBatch stock = batch("B1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+        MaterialBatch stock = batch("B1", "RAW-1", "WKS-1", "5", shelf(2026, 7, 20));
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
@@ -176,11 +176,11 @@ class ProductionStockAllocationServiceTest {
 
     @Test
     void allocatesPackagingInNativeUnitsWithFefoCostAndLineageMetadata() {
-        MaterialBatch first = batch("BOX-1", "PKG-BOX", "WKS-1", "6", LocalDate.of(2026, 8, 1));
+        MaterialBatch first = batch("BOX-1", "PKG-BOX", "WKS-1", "6", shelf(2026, 8, 1));
         first.setQuantityUnit("盒");
         first.setBatchNumber("PKG-BOX-B1");
         first.setUnitPrice(new BigDecimal("0.40"));
-        MaterialBatch second = batch("BOX-2", "PKG-BOX", "WKS-1", "10", LocalDate.of(2026, 9, 1));
+        MaterialBatch second = batch("BOX-2", "PKG-BOX", "WKS-1", "10", shelf(2026, 9, 1));
         // 非科学单位按字面比 —— 两个批次都必须写「盒」才会被同一笔需求吃到
         second.setQuantityUnit("盒");
         second.setBatchNumber("PKG-BOX-B2");
@@ -224,7 +224,7 @@ class ProductionStockAllocationServiceTest {
     @Test
     void allocatesSeasoningFromLegacyGramBatchWithKgReservationAndExactCost() {
         MaterialBatch seasoning = batch(
-                "SEASONING-G-1", "SEASONING-1", "WKS-1", "1500", LocalDate.of(2026, 8, 1));
+                "SEASONING-G-1", "SEASONING-1", "WKS-1", "1500", shelf(2026, 8, 1));
         seasoning.setQuantityUnit("g");
         seasoning.setBatchNumber("SEASONING-20260724-G");
         seasoning.setUnitPrice(new BigDecimal("0.02"));
@@ -308,7 +308,7 @@ class ProductionStockAllocationServiceTest {
 
     @Test
     void nativePackagingShortageReportsTheRequestedUnitWithoutMassConversion() {
-        MaterialBatch only = batch("CASE-1", "PKG-CASE", "WKS-1", "1", LocalDate.of(2026, 8, 1));
+        MaterialBatch only = batch("CASE-1", "PKG-CASE", "WKS-1", "1", shelf(2026, 8, 1));
         only.setQuantityUnit("箱");
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
@@ -373,7 +373,7 @@ class ProductionStockAllocationServiceTest {
     @Test
     void rejectsFormalSubmissionWithStructuredShortageAndExactOperatorMessage() {
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "10");
-        MaterialBatch only = batch("B1", "RAW-1", "WKS-1", "7", LocalDate.of(2026, 7, 20));
+        MaterialBatch only = batch("B1", "RAW-1", "WKS-1", "7", shelf(2026, 7, 20));
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
@@ -412,7 +412,7 @@ class ProductionStockAllocationServiceTest {
 
     @Test
     void legacyExplicitBatchIsLockedAndPendingAllocationPreventsDoubleUse() {
-        MaterialBatch batch = batch("B1", "RAW-1", "WKS-1", "7", LocalDate.of(2026, 7, 20));
+        MaterialBatch batch = batch("B1", "RAW-1", "WKS-1", "7", shelf(2026, 7, 20));
         ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
         input.setMaterialBatchId("B1");
         input.setSkuId("RAW-1");
@@ -434,7 +434,7 @@ class ProductionStockAllocationServiceTest {
 
     @Test
     void legacyExplicitGramBatchIsComparedAndReservedInKg() {
-        MaterialBatch grams = batch("B1", "RAW-1", "WKS-1", "5000", LocalDate.of(2026, 7, 20));
+        MaterialBatch grams = batch("B1", "RAW-1", "WKS-1", "5000", shelf(2026, 7, 20));
         grams.setQuantityUnit("g");
         ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
         input.setMaterialBatchId("B1");
@@ -459,7 +459,7 @@ class ProductionStockAllocationServiceTest {
     void explicitCountedBatchAllocatesInItsOwnUnit() {
         // 手选批次也要能投非质量单位 —— 旧代码直接 409
         // "所选投料批次不是 kg 计量, 不能直接报工"
-        MaterialBatch counted = batch("B1", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
+        MaterialBatch counted = batch("B1", "RAW-CHICKEN", "WKS-1", "300", shelf(2026, 7, 20));
         counted.setQuantityUnit("只");
         ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
         input.setMaterialBatchId("B1");
@@ -484,7 +484,7 @@ class ProductionStockAllocationServiceTest {
     @Test
     void explicitBatchRejectsUnitMismatchInsteadOfSilentlyDeducting() {
         // 拿「只」的数量去扣一个 kg 批次是无声的错账, 必须拦住
-        MaterialBatch massBatch = batch("B1", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
+        MaterialBatch massBatch = batch("B1", "RAW-CHICKEN", "WKS-1", "300", shelf(2026, 7, 20));
         ProcessSheetRowRequest.RawInput input = new ProcessSheetRowRequest.RawInput();
         input.setMaterialBatchId("B1");
         input.setSkuId("RAW-CHICKEN");
@@ -504,7 +504,7 @@ class ProductionStockAllocationServiceTest {
     void customerSuppliedPlanAllocatesOnlySameCustomerAndSalesOrderStock() {
         ProductionPlan plan = customerSuppliedPlan();
         MaterialBatch customerBatch = batch(
-                "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+                "CB1", "RAW-1", "WKS-1", "5", shelf(2026, 7, 20));
         customerBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
         customerBatch.setOwnerCustomerId("CUS-1");
         customerBatch.setSourceSalesOrderId("SO-1");
@@ -542,7 +542,7 @@ class ProductionStockAllocationServiceTest {
         // ⚠️ 阳性对照的关键: 批次是 COMPANY_OWNED (batch() 默认值, 未包一层 CUSTOMER_OWNED) ——
         // 证明真的走了公司 FEFO, 不是恰好满足了客户归属检查。
         MaterialBatch companyAuxiliaryBatch = batch(
-                "AUXB1", "AUX-1", "WKS-1", "8", LocalDate.of(2026, 7, 20));
+                "AUXB1", "AUX-1", "WKS-1", "8", shelf(2026, 7, 20));
 
         when(productionPlanRepository.findByIdAndFactoryId("PLAN-1", "F006"))
                 .thenReturn(Optional.of(plan));
@@ -580,7 +580,7 @@ class ProductionStockAllocationServiceTest {
                 .thenReturn(Optional.of(raw));
 
         MaterialBatch wrongCustomer = batch(
-                "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+                "CB1", "RAW-1", "WKS-1", "5", shelf(2026, 7, 20));
         wrongCustomer.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
         wrongCustomer.setOwnerCustomerId("CUS-OTHER");
         wrongCustomer.setSourceSalesOrderId("SO-OTHER");
@@ -621,7 +621,7 @@ class ProductionStockAllocationServiceTest {
                 .thenReturn(Optional.of(auxiliary));
 
         MaterialBatch otherCustomerAuxiliary = batch(
-                "AUXCB1", "AUX-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+                "AUXCB1", "AUX-1", "WKS-1", "5", shelf(2026, 7, 20));
         otherCustomerAuxiliary.setOwnership(InventoryOwnership.CUSTOMER_OWNED); // 别的客户的客供辅料
         otherCustomerAuxiliary.setOwnerCustomerId("CUS-OTHER");
         otherCustomerAuxiliary.setSourceSalesOrderId("SO-OTHER");
@@ -647,7 +647,7 @@ class ProductionStockAllocationServiceTest {
     @Test
     void factorySuppliedPlanCannotExplicitlyConsumeCustomerOwnedStock() {
         MaterialBatch customerBatch = batch(
-                "CB1", "RAW-1", "WKS-1", "5", LocalDate.of(2026, 7, 20));
+                "CB1", "RAW-1", "WKS-1", "5", shelf(2026, 7, 20));
         customerBatch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
         customerBatch.setOwnerCustomerId("CUS-1");
         customerBatch.setSourceSalesOrderId("SO-1");
@@ -677,6 +677,18 @@ class ProductionStockAllocationServiceTest {
                 "F006", "MISSING", List.of(total("RAW-1", "1"))))
                 .isInstanceOfSatisfying(BusinessException.class, error ->
                         assertThat(error.getErrorCode()).isEqualTo("PRODUCTION_PLAN_NOT_FOUND"));
+    }
+
+    /**
+     * 夹具里写死的到期日 (2026-07-20 起) 按原有先后次序整体平移到未来。
+     * 投料闸现在在动作当下比较到期日 (InventoryExpiry, 东八区业务日), 写死的过去日期会让
+     * 这些批次全部被当成过期拦下 —— 本类测的是分摊/单位/成本, 不是过期, 所以让它们保持未过期。
+     */
+    private static final long SHELF_SHIFT_DAYS = java.time.temporal.ChronoUnit.DAYS.between(
+            LocalDate.of(2026, 7, 20), com.cretas.aims.util.InventoryExpiry.today().plusDays(30));
+
+    private static LocalDate shelf(int year, int month, int day) {
+        return LocalDate.of(year, month, day).plusDays(SHELF_SHIFT_DAYS);
     }
 
     private static ProductionPlan factorySuppliedPlan() {
@@ -729,7 +741,7 @@ class ProductionStockAllocationServiceTest {
     void countedInputSkipsBatchesStoredInADifferentUnit() {
         // 非质量单位不停跨单位折算: kg 库存不能拿来充「只」的投料
         ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "5");
-        MaterialBatch massBatch = batch("B-KG", "RAW-CHICKEN", "WKS-1", "100", LocalDate.of(2026, 7, 20));
+        MaterialBatch massBatch = batch("B-KG", "RAW-CHICKEN", "WKS-1", "100", shelf(2026, 7, 20));
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouseForUpdate(
@@ -750,7 +762,7 @@ class ProductionStockAllocationServiceTest {
     void massInputStillConvertsAndStillRejectsNonMassBatches() {
         // 原意图不变: 质量单位继续自动折算
         ProcessSheetRowRequest.MaterialInputTotal input = total("RAW-1", "2");
-        MaterialBatch gramBatch = batch("B1", "RAW-1", "WKS-1", "5000", LocalDate.of(2026, 7, 20));
+        MaterialBatch gramBatch = batch("B1", "RAW-1", "WKS-1", "5000", shelf(2026, 7, 20));
         gramBatch.setQuantityUnit("g");
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
@@ -775,7 +787,7 @@ class ProductionStockAllocationServiceTest {
         // 旧本地 switch 把它们分别算成 只 / slice, 于是明明有 201 只库存
         // 却报 "需要 1slice, 可用 0slice"。同义单位必须只有一套 code。
         ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "201");
-        MaterialBatch pcsBatch = batch("B-PCS", "RAW-CHICKEN", "WKS-1", "300", LocalDate.of(2026, 7, 20));
+        MaterialBatch pcsBatch = batch("B-PCS", "RAW-CHICKEN", "WKS-1", "300", shelf(2026, 7, 20));
         pcsBatch.setQuantityUnit("只");
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
@@ -796,7 +808,7 @@ class ProductionStockAllocationServiceTest {
     void countUnitStillDoesNotEatABagBatch() {
         // 袋 是另一个单位(一袋几只是另一层换算, 配置里没有), 不能混用
         ProcessSheetRowRequest.MaterialInputTotal input = countedTotal("RAW-CHICKEN", "5");
-        MaterialBatch bagBatch = batch("B-BAG", "RAW-CHICKEN", "WKS-1", "800", LocalDate.of(2026, 7, 20));
+        MaterialBatch bagBatch = batch("B-BAG", "RAW-CHICKEN", "WKS-1", "800", shelf(2026, 7, 20));
         bagBatch.setQuantityUnit("袋");
 
         when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WKS-1");
@@ -849,7 +861,7 @@ class ProductionStockAllocationServiceTest {
 
     private static MaterialBatch countedBatch(
             String id, String materialTypeId, String warehouseId, String quantity) {
-        MaterialBatch batch = batch(id, materialTypeId, warehouseId, quantity, LocalDate.of(2026, 7, 20));
+        MaterialBatch batch = batch(id, materialTypeId, warehouseId, quantity, shelf(2026, 7, 20));
         batch.setQuantityUnit("只");
         return batch;
     }

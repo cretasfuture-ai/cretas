@@ -44,6 +44,11 @@ public class QualityCheckItemBindingDTO {
     private BigDecimal effectiveSamplingRatio;
     private Boolean effectiveIsRequired;
 
+    private Integer itemVersion;
+    private String itemName;
+    private String valueType;
+    private String unit;
+
     private Integer sortOrder;
     private Boolean enabled;
     private String notes;

@@ -35,10 +35,17 @@ export interface ChartResult {
   metadata: {
     period: string | Record<string, unknown>;
     dataQuality: string;
+    /** 数据不足时给用户看的原因 (dataQuality=insufficient) */
+    reason?: string;
+    /** 口径说明, 如「合计为各月简单平均」 */
+    note?: string;
+    /** 表内合计 / 利润行与明细对账的差异说明 */
+    reconciliation?: string[];
   };
   success: boolean;
   error?: string;
-  quarterlyProgress?: { quarter: string; budget: number; actual: number; rate: number }[];
+  /** rate 为 null: 预算为 0 等原因无法计算 */
+  quarterlyProgress?: { quarter: string; budget: number; actual: number; rate: number | null }[];
   monthlyDataRows?: { currentYear: number[]; lastYear: number[]; labels: string[] };
 }
 
@@ -56,17 +63,33 @@ export interface PeriodInfo {
   label: string;
 }
 
+/** 页首一句话结论 (后端按规则生成, 与图表同一指标库) */
+export interface DashboardHeadline {
+  text: string;
+  tone: 'good' | 'warn' | 'bad' | 'neutral';
+  facts: string[];
+}
+
 export interface DashboardResponse {
   success: boolean;
+  headline?: DashboardHeadline | null;
+  /** 规则算出来的 好的 / 需要关注 / 建议; 说不出任何一条时为 null */
+  findings?: { good: string[]; attention: string[]; suggestions: string[] } | null;
   charts: ChartResult[];
   availableTypes: AvailableChartType[];
+  /** 这份数据出不了的图: 缺哪一列 (column) / 要另一张表 (statement) */
+  unavailableCharts?: { chartType: string; displayName: string; reason: string; gapKind: 'column' | 'statement' }[];
   period: PeriodInfo;
   totalCharts: number;
   successCount: number;
   availableDimensions?: { name: string; values: string[] }[]; // Fix 72: Slicer dimensions
+  error?: string;
+  message?: string;
 }
 
 export interface PPTExportRequest {
+  headline?: DashboardHeadline | null;
+  findings?: DashboardResponse['findings'];
   upload_id?: number;
   year?: number;
   period_type?: string;
@@ -186,6 +209,9 @@ export async function exportPPT(data: PPTExportRequest): Promise<Blob | null> {
 export interface ExcelExportRequest {
   charts: Record<string, unknown>[];
   analysis_results: Record<string, string>;
+  /** 页面上的页首结论与规则结论, 导出到「分析结论」工作表 */
+  headline?: DashboardHeadline | null;
+  findings?: DashboardResponse['findings'];
   company_name?: string;
   year?: number;
   period_type?: string;
@@ -194,6 +220,8 @@ export interface ExcelExportRequest {
 }
 
 export interface PDFExportRequest {
+  headline?: DashboardHeadline | null;
+  findings?: DashboardResponse['findings'];
   chart_images: Record<string, string>;
   analysis_results: Record<string, string>;
   company_name?: string;
@@ -225,6 +253,11 @@ export async function exportExcel(data: ExcelExportRequest): Promise<Blob | null
     });
     if (!response.ok) {
       throw new Error(`Excel导出失败: HTTP ${response.status}`);
+    }
+    // 只有真的是表格文件才下载; 返回 JSON 说明导出失败, 不能存成 .xlsx 再提示成功
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('spreadsheetml')) {
+      throw new Error(`Excel导出失败: 返回的不是表格文件 (${contentType || '无类型'})`);
     }
     return await response.blob();
   } catch (error) {

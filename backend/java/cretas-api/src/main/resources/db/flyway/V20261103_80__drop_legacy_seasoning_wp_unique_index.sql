@@ -1,0 +1,21 @@
+-- =============================================================================
+-- V20261103_80: 删除调料绑定的旧唯一索引 uq_bsi_recipe_wp_material
+--
+-- 旧索引 (recipe_id, work_process_id, material_type_id) 来自 V20261028_66, 那时调料绑定按
+-- 「工序目录条目」存。画布化之后绑定按**画布节点**存, 节点级唯一键
+-- uk_bsi_recipe_node_material_section (recipe_id, workflow_process_node_id, material_type_id, section)
+-- 已经存在。两把锁并存时旧的那把更严: 同一个工序目录条目在一张图里用在多个节点上
+-- (例: 卤味三拼的牛腱/猪舌/肥肠三个「卤制」节点), 第二个节点再绑同一种调料就撞 409「数据已存在」。
+-- 实测 F006【演示L3】2026-10-24: 卤猪舌、卤肥肠因此绑不上八角/老抽/盐。
+--
+-- 为什么可以删:
+--   - Workflow 报工按节点取调料 (ProcessSheetServiceImpl.resolveProcessSeasoningItems 优先
+--     findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc), 不依赖 (recipe, 工序, 物料) 唯一;
+--   - 按工序取的旧路径 (ClerkProcessEntryServiceImpl) 只服务 legacy 线性工序链, 同一工序在链上只出现一次;
+--   - findByRecipeIdAndWorkProcessIdAndMaterialTypeId (Optional) 无调用方。
+--   同一节点内的重复仍由 uk_bsi_recipe_node_material_section 拦住。
+--
+-- 回滚: CREATE UNIQUE INDEX 前须先确认没有跨节点重复, 否则建不起来 —— 见 manual-rollback 同名文件。
+-- =============================================================================
+
+DROP INDEX IF EXISTS uq_bsi_recipe_wp_material;

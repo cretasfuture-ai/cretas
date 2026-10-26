@@ -54,6 +54,12 @@ public interface ProcessingService {
      * 获取批次详情
       */
     ProductionBatch getBatchById(String factoryId, String batchId);
+
+    /**
+     * Resolve a persisted production batch by its exact batch number within a factory.
+     * This is a read-only lookup used by quality inspection scan/manual entry.
+     */
+    ProductionBatch getBatchByNumber(String factoryId, String batchNumber);
      /**
      * 获取批次列表
       */
@@ -120,6 +126,10 @@ public interface ProcessingService {
      * 提交质检记录
       */
     Map<String, Object> submitInspection(String factoryId, String batchId, Map<String, Object> inspection);
+    Map<String, Object> getDynamicQualityForm(String factoryId, String batchId);
+    Map<String, Object> submitDynamicInspection(String factoryId, String batchId,
+                                                 com.cretas.aims.dto.quality.DynamicQualityInspectionRequest request,
+                                                 Long inspectorId);
      /**
      * 获取质检记录
       */

@@ -14,7 +14,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from common.tenant_identity import scoped_factory
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
@@ -63,12 +64,15 @@ SEGMENT_DEFINITIONS = [
 
 @router.get("/rfm-analysis")
 async def get_rfm_analysis(
+    request: Request,
     factory_id: Optional[str] = Query(None, alias="factoryId"),
 ):
     """
     Calculate RFM segmentation for all customers.
     Returns connected=false (not fake data) when source table is empty.
     """
+    # 工厂隔离: 不传 factoryId 曾经汇总全部工厂; 现在一律限定为登录身份的工厂
+    factory_id = scoped_factory(request, factory_id)
     try:
         conn = _get_db_connection()
         if conn:

@@ -129,6 +129,9 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             if (!expression.hasEmbedding()) {
                 continue;
             }
+            if (learnedGlobalExpression(expression)) {
+                continue;
+            }
             String factoryId = expression.getFactoryId() == null ? "*" : expression.getFactoryId();
             next.computeIfAbsent(factoryId, ignored -> new ConcurrentHashMap<>())
                     .put(expression.getId(), new CachedExpressionEmbedding(
@@ -451,7 +454,19 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
     /**
      * 缓存表达 embedding (内部方法)
      */
+    /**
+     * 只有人工维护 (MANUAL) 的说法可以是全局的。系统从某家工厂学来的说法若没有工厂字段 (空或 "*"),
+     * 不进全局池 —— 否则它会被合并到每一家工厂的识别里 (Steve 2026-10-22: 工厂之间不共享学到的说法)。
+     */
+    static boolean learnedGlobalExpression(LearnedExpression expression) {
+        boolean global = expression.getFactoryId() == null || "*".equals(expression.getFactoryId());
+        return global && expression.getSourceType() != LearnedExpression.SourceType.MANUAL;
+    }
+
     private void cacheExpressionInternal(LearnedExpression expression) {
+        if (learnedGlobalExpression(expression)) {
+            return;
+        }
         String factoryId = expression.getFactoryId();
         if (factoryId == null) {
             factoryId = "*"; // 全局表达

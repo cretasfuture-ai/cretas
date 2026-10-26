@@ -65,6 +65,12 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
+# 2026-10-24 training rule at capture are read / labeled / sent out here.
+from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
+
+_USABLE_ROWS = usable_rows_sql()
+
 logger = logging.getLogger("corpus_g3_sample")
 
 # ---------------------------------------------------------------------------
@@ -76,6 +82,7 @@ _SAMPLE_SQL = """
            COALESCE(metadata->>'business_type', 'all') AS business_type
     FROM smart_bi_distillation_samples
     WHERE quality >= 4
+      AND """ + _USABLE_ROWS + """
     {source_clause}
     ORDER BY RANDOM()
     LIMIT $1
@@ -91,12 +98,14 @@ _SAMPLE_GROUPED_SQL = """
                COALESCE(metadata->>'business_type', 'all') AS bt
         FROM smart_bi_distillation_samples
         WHERE quality >= 4
+          AND """ + _USABLE_ROWS + """
         {source_clause}
     ) buckets
     JOIN LATERAL (
         SELECT id, input_text, teacher_output, metadata, source
         FROM smart_bi_distillation_samples
         WHERE quality >= 4
+          AND """ + _USABLE_ROWS + """
           AND source = buckets.source
           AND COALESCE(metadata->>'business_type', 'all') = buckets.bt
           {source_inner_clause}

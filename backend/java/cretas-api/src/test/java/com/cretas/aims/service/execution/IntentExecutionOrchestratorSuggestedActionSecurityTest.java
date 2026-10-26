@@ -10,6 +10,8 @@ import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AgentOrchestrator;
 import com.cretas.aims.service.AgenticRAGRouterService;
@@ -123,8 +125,12 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
                 .sessionId("session-1")
                 .userInput("choose")
                 .build();
-        IntentExecuteResponse response = ReflectionTestUtils.invokeMethod(
-                orchestrator, "handleConversationContinuation", FACTORY_ID, request, 1L, "ADMIN");
+        IntentExecuteResponse response;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1L, FACTORY_ID, "ADMIN"))) {
+            response = ReflectionTestUtils.invokeMethod(
+                    orchestrator, "handleConversationContinuation", FACTORY_ID, request, 1L, "ADMIN");
+        }
 
         assertThat(response).isNotNull();
         assertThat(response.getSuggestedActions()).hasSize(1);

@@ -3,26 +3,40 @@
  * Used by Dashboard, FinancialDashboardPBI, and other SmartBI views.
  */
 
+/** 序列值: null / undefined 表示该点没有数据 (如没上传的月份)。 */
+export type SparklineValue = number | null | undefined;
+
+const isValue = (v: SparklineValue): v is number => typeof v === 'number' && Number.isFinite(v);
+
 /**
  * Generate an SVG path string for a sparkline from a numeric data array.
- * Returns an empty string if fewer than 2 data points are provided.
+ * Missing values leave a gap in the line (never drawn as 0).
+ * Returns an empty string if fewer than 2 real data points are provided.
  */
 export function sparklinePath(
-  data: number[],
+  data: SparklineValue[],
   width = 60,
   height = 22,
   pad = 2,
 ): string {
-  if (!data || data.length < 2) return '';
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  if (!data || data.filter(isValue).length < 2) return '';
+  const values = data.filter(isValue);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const range = max - min || 1;
-  const points = data.map((v, i) => {
+  const parts: string[] = [];
+  let penDown = false;
+  data.forEach((v, i) => {
+    if (!isValue(v)) {
+      penDown = false;
+      return;
+    }
     const x = pad + (i / (data.length - 1)) * (width - pad * 2);
     const y = height - pad - ((v - min) / range) * (height - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
+    parts.push(`${penDown ? 'L' : 'M'} ${x.toFixed(1)},${y.toFixed(1)}`);
+    penDown = true;
   });
-  return `M ${points.join(' L ')}`;
+  return parts.join(' ');
 }
 
 /**
@@ -36,13 +50,15 @@ export function sparklinePath(
  * @param color - Stroke color
  */
 export function sparklineSVG(
-  data: number[],
+  rawData: SparklineValue[],
   highlightIndex = -1,
   width = 120,
   height = 30,
   color = '#2D8B57',
 ): string {
-  if (!data || data.length < 2) return '';
+  // 缺失点直接去掉 (提示框里的小图不画断线), ⛔ 不当成 0
+  const data = (rawData || []).filter(isValue);
+  if (data.length < 2) return '';
   const pad = 3;
   const min = Math.min(...data);
   const max = Math.max(...data);

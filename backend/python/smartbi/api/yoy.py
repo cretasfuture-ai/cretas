@@ -8,8 +8,10 @@ Aligns rows by financial keywords and computes YoY growth rates.
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
+
+from common.tenant_identity import require_same_factory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["YoY Comparison"])
@@ -19,7 +21,8 @@ class YoYRequest(BaseModel):
     """Request for YoY comparison"""
     upload_id: int = Field(..., description="Current period upload ID")
     compare_upload_id: Optional[int] = Field(None, description="Previous period upload ID (auto-detect if omitted)")
-    factory_id: str = Field(default="F001", description="Factory ID")
+    # 已废弃: 工厂取登录身份 (这里还用来设 RLS 租户 GUC, 绝不能信任客户端); 传了就必须一致
+    factory_id: Optional[str] = Field(default=None, description="Deprecated; taken from the login")
 
 
 class ComparisonItem(BaseModel):
@@ -87,7 +90,7 @@ def _sum_numeric_values(row: Dict[str, Any], exclude_keys: set) -> float:
 
 
 @router.post("/yoy-comparison", response_model=YoYResponse)
-async def yoy_comparison(request: YoYRequest):
+async def yoy_comparison(request: YoYRequest, http_request: Request):
     """
     Compare two uploads for Year-over-Year analysis.
 
@@ -95,6 +98,7 @@ async def yoy_comparison(request: YoYRequest):
     If compare_upload_id is not provided, attempts to find the most recent
     previous upload with a similar sheet structure.
     """
+    factory_id = require_same_factory(http_request, request.factory_id)
     try:
         from smartbi.config import get_settings
         settings = get_settings()
@@ -121,7 +125,7 @@ async def yoy_comparison(request: YoYRequest):
             # the correct factory_id the SELECT returns 0 rows silently.
             await conn.execute(
                 "SELECT set_config('app.factory_id', $1, false)",
-                request.factory_id
+                factory_id
             )
 
             # 1. Load current upload metadata
@@ -143,7 +147,7 @@ async def yoy_comparison(request: YoYRequest):
                     """SELECT id, created_at FROM smart_bi_pg_excel_uploads
                        WHERE factory_id = $1 AND sheet_name = $2 AND id != $3
                        ORDER BY created_at DESC LIMIT 5""",
-                    request.factory_id, current_meta['sheet_name'], request.upload_id
+                    factory_id, current_meta['sheet_name'], request.upload_id
                 )
                 if candidates:
                     compare_id = candidates[0]['id']

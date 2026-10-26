@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient';
 import { getCurrentFactoryId } from '../../utils/factoryIdHelper';
+import type { WarehouseTransferDelivery } from '../../utils/warehouseTransferDelivery';
 
 /**
  * 调拨管理API客户端
@@ -114,6 +115,16 @@ class TransferApiClient {
   /** 确认发运 */
   async shipTransfer(transferId: string, factoryId?: string): Promise<{ success: boolean; data: InternalTransfer }> {
     return apiClient.post(this.getPath(factoryId) + `/${transferId}/ship`);
+  }
+
+  async getWarehouseDelivery(transferId: string, factoryId?: string): Promise<{ success: boolean; data: WarehouseTransferDelivery }> {
+    return apiClient.get(`${this.getPath(factoryId)}/${transferId}/warehouse-delivery`);
+  }
+  async dispatchWarehouseTransfer(transferId: string, factoryId?: string): Promise<{ success: boolean; data: InternalTransfer; message?: string }> {
+    return apiClient.post(`${this.getPath(factoryId)}/${transferId}/warehouse-dispatch`);
+  }
+  async receiveWarehouseTransfer(transferId: string, body: { requestKey: string; itemQuantities: Record<number, number> }, factoryId?: string): Promise<{ success: boolean; data: WarehouseTransferDelivery; message?: string }> {
+    return apiClient.post(`${this.getPath(factoryId)}/${transferId}/warehouse-receipts`, body);
   }
 
   /** 确认签收 */

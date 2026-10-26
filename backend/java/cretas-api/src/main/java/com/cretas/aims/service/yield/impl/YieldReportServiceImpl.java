@@ -141,6 +141,68 @@ public class YieldReportServiceImpl implements YieldReportService {
     private com.cretas.aims.service.production.WorkshopReportReservationService workshopReservationService;
 
     /**
+     * RAW_TO_PRODUCTION 血缘边接线点 (App 报工领料)。字段注入 (required=false) 不改构造器 ——
+     * 与 ClerkProcessEntryServiceImpl 同款, 见 LineageEdgeWiringContractTest。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
+
+    /** 按工艺图解锁 (缺口 04)。字段注入 (required=false) 不改构造器, 见 WorkflowStepUnlockWiringContractTest。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
+    /**
+     * App 报工 {@code material_batch_refs} → RAW_TO_PRODUCTION 边。本类建带领料引用报工的
+     * <b>两处</b> (submitReport / recordMaterialInput) 都调这里。
+     *
+     * <p>🔴 2026-10-24 prod 实测: 近 60 天 14 个投入元素只有 1 个有边 —— 这条路从来没写过。
+     *
+     * <p>时机 = 提交 (与「提交即进账/占用」同一时机, 见 WorkshopReportReservationService)。
+     * 「每个批次用了多少」⛔ 不在这里另算: 取 {@code reservationOf} (占用与三条释放共用的唯一口径,
+     * 同报工同批次多条引用已求和, 0/负数/非数字不计)。单位: 该批次所有引用单位一致才写, 否则 null (不知道)。
+     * 幂等键 report:&lt;id&gt;:material:&lt;批次&gt;, 与回填同一个键。
+     *
+     * <p>⚠️ 已知限制: 边表 append-only, 报工之后被驳回/冲销时这条边不会撤回 (meta 带 reportId 可回查状态)。
+     */
+    private void recordReportMaterialLineage(String factoryId, ProductionReport saved, Long workerId, String origin) {
+        if (lineageEdgeRecorder == null || saved == null || saved.getBatchId() == null) {
+            return;
+        }
+        Map<String, BigDecimal> byBatch =
+                com.cretas.aims.service.production.WorkshopReportReservationService.reservationOf(saved);
+        for (Map.Entry<String, BigDecimal> e : byBatch.entrySet()) {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("origin", origin);
+            meta.put("reportId", saved.getId());
+            if (saved.getWorkProcessTaskId() != null) {
+                meta.put("workProcessTaskId", saved.getWorkProcessTaskId());
+            }
+            lineageEdgeRecorder.recordRawToProduction(factoryId, e.getKey(), saved.getBatchId(),
+                    e.getValue(), uniformRefUnit(saved, e.getKey()), workerId,
+                    com.cretas.aims.service.lineage.LineageEdgeRecorder.reportMaterialRefKey(saved.getId(), e.getKey()),
+                    meta);
+        }
+    }
+
+    /** 某批次在本报工所有引用上的单位；不一致或缺失 ⇒ null (未知), ⛔ 不挑一个。 */
+    private static String uniformRefUnit(ProductionReport report, String materialBatchId) {
+        String unit = null;
+        for (Map<String, Object> ref : report.getMaterialBatchRefs()) {
+            if (ref == null || ref.get("materialBatchId") == null
+                    || !materialBatchId.equals(ref.get("materialBatchId").toString().trim())) {
+                continue;
+            }
+            Object u = ref.get("unit");
+            String s = u == null ? null : u.toString().trim();
+            if (s == null || s.isEmpty() || (unit != null && !unit.equals(s))) {
+                return null;
+            }
+            unit = s;
+        }
+        return unit;
+    }
+
+    /**
      * A-F1/F2: 报工/领料前校验批次已开工。
      *
      * <p>六扇门需求 (requirements-catalog 行288/289): "开工前先看匹配工序和负责人再开工; 开工后批次工序
@@ -237,6 +299,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (!Objects.equals(batchId, t.getProductionBatchId())) {
             throw new BusinessException(409, "工序任务不属于当前生产批次")
                     .withHint("请从该工序任务所属的生产批次重新打开报工，核对批次与任务后再提交");
+        }
+        // 缺口 04: 按工艺图解锁 —— 上游产出的料还没到, 这一道不能报 (领料 / 工时段 / 产出都算)。
+        // 写在任何落库之前; 幂等重放已在上面提前返回, 不受影响。
+        if (unlockGuard != null) {
+            unlockGuard.assertUnlocked(factoryId, t);
         }
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值
@@ -476,6 +543,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         //    释放由同一个 service 的三条路负责 (驳回 / 冲销 / 结单扣减), ⛔ 不许在这里各写各的。
         if (saved.getMaterialBatchRefs() != null && !saved.getMaterialBatchRefs().isEmpty()) {
             workshopReservationService.reserveForReport(factoryId, saved);
+            recordReportMaterialLineage(factoryId, saved, workerId, "APP_YIELD_REPORT");
         }
 
         // A2b: 报工单保存后, 对每个关联批次独立检查自动结清 (order: save → settle); 三阶段: 仅 INPUT/legacy 有领料
@@ -772,11 +840,13 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // G7 防呆 Rule 1: 本道可领的源 WIP 余额 = Σ 上道工序产出的 AVAILABLE WIP available_quantity。
         // 首道 (processOrder<=1 或上道无 WIP 行) → null (领原料, 不受 WIP 约束)。
-        BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder());
+        // 缺口 04: 源 WIP 取工艺图上真正的上游 (并行分支的上游不是前一道); 无图 / 只吃原料回落前一道
+        java.util.Set<Integer> sourceOrders = sourceProcessOrders(factoryId, t);
+        BigDecimal wipAvailable = resolveSourceWipAvailable(factoryId, batchId, t.getProcessOrder(), sourceOrders);
         // G7 跨单位防呆: 源 WIP 余额的真实单位 (= 上道 outputUnit), RN banner/:max 用它而非本道 unit。
-        String wipAvailableUnit = resolveSourceWipUnit(factoryId, batchId, t.getProcessOrder());
+        String wipAvailableUnit = resolveSourceWipUnit(factoryId, batchId, t.getProcessOrder(), sourceOrders);
         // G7 Wave 4: 上道恰有一笔可领 WIP → 回显其工序批次号, RN 报工直接带 sourceWipNo。
-        String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder());
+        String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder(), sourceOrders);
 
         return YieldLimitsDTO.builder()
                 .workProcessTaskId(workProcessTaskId)
@@ -890,15 +960,15 @@ public class YieldReportServiceImpl implements YieldReportService {
      * <p>首道 (processOrder=null 或 ≤1) 或上道无 WIP 行 → null (领原料, 不受 WIP 余额约束)。
      * 上道有 WIP 行但已领空 → 0。</p>
      */
-    private BigDecimal resolveSourceWipAvailable(String factoryId, Long batchId, Integer processOrder) {
+    private BigDecimal resolveSourceWipAvailable(String factoryId, Long batchId, Integer processOrder,
+                                            java.util.Set<Integer> sourceOrders) {
         if (processOrder == null || processOrder <= 1 || batchId == null) {
             return null;  // 首道领原料, 无源 WIP
         }
-        int prevOrder = processOrder - 1;
         List<SemiFinishedInventory> wips =
                 wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
         List<SemiFinishedInventory> prev = wips.stream()
-                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> w.getProcessOrder() != null && sourceOrders.contains(w.getProcessOrder()))
                 .filter(w -> !SemiFinishedInventory.Status.RETURNED.equals(w.getStatus()))
                 .collect(Collectors.toList());
         if (prev.isEmpty()) {
@@ -917,13 +987,13 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 避免跨单位 (kg→份) 场景下 :max 显示错误单位误导操作员。
      * 与 {@link #resolveSourceWipAvailable} 同口径过滤 (首道 / 上道无 WIP → null)。</p>
      */
-    private String resolveSourceWipUnit(String factoryId, Long batchId, Integer processOrder) {
+    private String resolveSourceWipUnit(String factoryId, Long batchId, Integer processOrder,
+                                            java.util.Set<Integer> sourceOrders) {
         if (processOrder == null || processOrder <= 1 || batchId == null) {
             return null;  // 首道领原料, 无源 WIP
         }
-        int prevOrder = processOrder - 1;
         return wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId).stream()
-                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> w.getProcessOrder() != null && sourceOrders.contains(w.getProcessOrder()))
                 .filter(w -> !SemiFinishedInventory.Status.RETURNED.equals(w.getStatus()))
                 .map(SemiFinishedInventory::getUnit)
                 .filter(Objects::nonNull)
@@ -938,14 +1008,14 @@ public class YieldReportServiceImpl implements YieldReportService {
      * 回显其 {@code intermediate_batch_no} (RN 报工 req 直接带它)。零笔或多笔 (歧义) → null:
      * 首道领原料无源 WIP; 多笔时不自动猜, 由前端经 {@code GET /wip} 显式选择。</p>
      */
-    private String resolveSourceWipNo(String factoryId, Long batchId, Integer processOrder) {
+    private String resolveSourceWipNo(String factoryId, Long batchId, Integer processOrder,
+                                            java.util.Set<Integer> sourceOrders) {
         if (processOrder == null || processOrder <= 1 || batchId == null) {
             return null;  // 首道领原料, 无源 WIP
         }
-        int prevOrder = processOrder - 1;
         List<SemiFinishedInventory> available = wipRepo
                 .findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId).stream()
-                .filter(w -> w.getProcessOrder() != null && w.getProcessOrder() == prevOrder)
+                .filter(w -> w.getProcessOrder() != null && sourceOrders.contains(w.getProcessOrder()))
                 .filter(w -> SemiFinishedInventory.Status.AVAILABLE.equals(w.getStatus()))
                 .filter(w -> nz(w.getAvailableQuantity()).compareTo(BigDecimal.ZERO) > 0)
                 .collect(Collectors.toList());
@@ -953,6 +1023,23 @@ public class YieldReportServiceImpl implements YieldReportService {
             return null;  // 0 笔 (无可领) 或 多笔 (歧义, 前端经 GET /wip 显式选)
         }
         return available.get(0).getIntermediateBatchNo();
+    }
+
+    /**
+     * 本道源 WIP 来自哪几道: 按工艺图的上游 (WorkflowStepUnlockGuard#upstreamProcessOrders);
+     * 无工艺图 / 只吃原料 / guard 未注入 → 前一道 (processOrder-1), 与原口径一致。
+     */
+    private java.util.Set<Integer> sourceProcessOrders(String factoryId, WorkProcessTask t) {
+        if (t.getProcessOrder() == null) {
+            return java.util.Set.of();
+        }
+        if (unlockGuard != null) {
+            java.util.Set<Integer> graph = unlockGuard.upstreamProcessOrders(factoryId, t);
+            if (!graph.isEmpty()) {
+                return graph;
+            }
+        }
+        return java.util.Set.of(t.getProcessOrder() - 1);
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {
@@ -1453,6 +1540,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         //    这条路 (recordMaterialInput) 是纯领料单, materialBatchRefs 恒来自请求。
         if (saved.getMaterialBatchRefs() != null && !saved.getMaterialBatchRefs().isEmpty()) {
             workshopReservationService.reserveForReport(factoryId, saved);
+            recordReportMaterialLineage(factoryId, saved, workerId, "APP_MATERIAL_INPUT");
         }
 
         // A2b: 保存后对每个关联批次独立检查自动结清
@@ -2046,12 +2134,45 @@ public class YieldReportServiceImpl implements YieldReportService {
                 : dto.getSteps().stream()
                         .filter(step -> step.getProcessOrder() != null)
                         .collect(Collectors.toMap(StepYieldDTO::getProcessOrder, step -> step, (left, right) -> left));
+        // dto.steps 来自目标批次(末道)自己的 YIELD 报工; Workflow 逐道录入时每道是**各自的批次**
+        // (CLK-W-…), 它们的人工金额记在各自批次的 YIELD 报工上。只按目标批次合并 ⇒ 上游道 laborCost
+        // 恒 null ⇒ 成本明细判 LABOR_COST_UNKNOWN, 多道工艺图 costComplete 永远 false
+        // (F006【演示L1】计划 836010b8, 2026-10-24: 四道报工 labor_cost 104/273/78/208 都在, 前三道判未知)。
+        Map<Long, List<ProductionReport>> upstreamReportsByBatch = new HashMap<>();
         dto.setSteps(sheetRows.stream()
-                .map(this::toStepYield)
-                .map(step -> mergeStepAudit(step, reportStepsByOrder.get(step.getProcessOrder())))
+                .map(row -> {
+                    StepYieldDTO step = mergeStepAudit(
+                            toStepYield(row), reportStepsByOrder.get(row.processOrder()));
+                    if (step.getLaborCost() == null && row.batchId() != null
+                            && !Objects.equals(row.batchId(), batchId)) {
+                        step.setLaborCost(upstreamRowLaborCost(factoryId, row, upstreamReportsByBatch));
+                    }
+                    return step;
+                })
                 .toList());
         dto.setComplete(sheetRows.stream()
                 .allMatch(row -> positive(row.inputQuantity()) && row.outputQuantity() != null));
+    }
+
+    /**
+     * 上游行自己批次上的 YIELD 报工人工合计。⛔ 一条都没有金额时返回 null(未知), 不兜 0 ——
+     * 0 会被成本明细当成「已采集的零人工」。
+     */
+    private BigDecimal upstreamRowLaborCost(String factoryId, SheetYieldRow row,
+                                            Map<Long, List<ProductionReport>> cache) {
+        List<ProductionReport> reports = cache.computeIfAbsent(row.batchId(),
+                id -> reportRepo.findYieldReportsByBatch(factoryId, id));
+        if (reports == null) {
+            return null;
+        }
+        BigDecimal total = null;
+        for (ProductionReport report : reports) {
+            if (report.getLaborCost() == null) continue;
+            if (row.processOrder() != null && report.getProcessOrder() != null
+                    && !row.processOrder().equals(report.getProcessOrder())) continue;
+            total = total == null ? report.getLaborCost() : total.add(report.getLaborCost());
+        }
+        return total;
     }
 
     /**

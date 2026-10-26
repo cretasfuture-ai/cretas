@@ -1547,3 +1547,62 @@ def test_entry_precheck_reports_an_empty_chain_as_unusable(monkeypatch):
     for env in ("LLM_ALIYUN_C_API_KEY", "LLM_ALIYUN_A_API_KEY", "LLM_ALIYUN_B_API_KEY"):
         monkeypatch.setenv(env, "")
     assert llm_router.slot_has_usable_provider(SLOT.REVIEW) is True        # 对照 ②
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 工艺保密 V1: 脱敏失败 fail-closed —— 不换候选、不记熔断、一个字节都不出境
+# ════════════════════════════════════════════════════════════════════════
+
+def _redaction_blows_up(monkeypatch):
+    def _boom(_payload):
+        raise RuntimeError("redactor exploded")
+    monkeypatch.setattr("common.llm_redactor.redact_payload_for_egress", _boom)
+
+
+@pytest.mark.asyncio
+async def test_call_chain_redaction_failure_blocks_without_fallback_or_cb(monkeypatch):
+    from common.llm_client import EgressRedactionError, _RedactingLLMClient
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
+    ok = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
+    inner = _ScriptedClient({"aliyun_c": _fake_response(200, json_payload=ok),
+                             "aliyun_a": _fake_response(200, json_payload=ok)})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _RedactingLLMClient(inner))
+    _redaction_blows_up(monkeypatch)
+    with pytest.raises(EgressRedactionError):
+        await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "P17 配比 3:2"}]})
+    assert inner.call_log == [], f"脱敏失败后仍有请求出境: {inner.call_log}"
+    assert dict(llm_router._CB_FAILURES) == {}, "本地脱敏失败被记成了供应商故障"
+
+
+@pytest.mark.asyncio
+async def test_call_chain_still_routes_when_redaction_works(monkeypatch):
+    """阳性对照: 同一套接线、脱敏正常时请求照常出境并返回 (证明拦截不是入口整体坏了)。"""
+    from common.llm_client import _RedactingLLMClient
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
+    ok = {"choices": [{"message": {"content": "今日入库3批，均合格。"}}]}
+    inner = _ScriptedClient({"aliyun_c": _fake_response(200, json_payload=ok)})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _RedactingLLMClient(inner))
+    result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+    assert result == ok
+    assert inner.call_log == [("aliyun_c", "qwen3.8-flash")]
+
+
+@pytest.mark.asyncio
+async def test_call_chain_stream_redaction_failure_blocks_without_fallback(monkeypatch):
+    from common.llm_client import EgressRedactionError, _RedactingLLMClient
+    _patch_keys(monkeypatch)
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 8, 9))
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAT_SMOKE_CHAIN)
+    inner = _ScriptedClient({})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _RedactingLLMClient(inner))
+    _redaction_blows_up(monkeypatch)
+    with pytest.raises(EgressRedactionError):
+        async for _ev in llm_router.call_chain_stream(
+                SLOT.CHAT, {"messages": [{"role": "user", "content": "P17 配比 3:2"}]}):
+            pass
+    assert inner.call_log == []
+    assert dict(llm_router._CB_FAILURES) == {}

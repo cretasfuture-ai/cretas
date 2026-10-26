@@ -17,6 +17,13 @@ import QILabelQcQueueScreen from '../screens/quality-inspector/QILabelQcQueueScr
 import QILabelQcSubmittedScreen from '../screens/quality-inspector/QILabelQcSubmittedScreen';
 import QIProfileScreen from '../screens/quality-inspector/QIProfileScreen';
 import QISettingsScreen from '../screens/quality-inspector/QISettingsScreen';
+import QIBatchSelectScreen from '../screens/quality-inspector/QIBatchSelectScreen';
+import QIFormScreen from '../screens/quality-inspector/QIFormScreen';
+import QIInspectListScreen from '../screens/quality-inspector/QIInspectListScreen';
+import QIScanScreen from '../screens/quality-inspector/QIScanScreen';
+import QIRecordsScreen from '../screens/quality-inspector/QIRecordsScreen';
+import QIRecordDetailScreen from '../screens/quality-inspector/QIRecordDetailScreen';
+import QIResultScreen from '../screens/quality-inspector/QIResultScreen';
 import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspector';
 // 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
@@ -39,6 +46,7 @@ function HomeStack() {
   return (
     <HomeStackNavigator.Navigator screenLayout={screenErrorBoundary} screenOptions={stackScreenOptions}>
       <HomeStackNavigator.Screen name="QIHome" component={QIHomeScreen} options={{ title: '质检拍照' }} />
+      <HomeStackNavigator.Screen name="QIInspectList" component={QIInspectListScreen} options={{ title: '待检批次' }} />
     </HomeStackNavigator.Navigator>
   );
 }
@@ -51,6 +59,11 @@ function CaptureStack() {
         component={QILabelQcCreateScreen}
         options={{ title: '发起标签拍检' }}
       />
+      <CaptureStackNavigator.Screen name="QIInspectList" component={QIInspectListScreen} options={{ title: '待检批次' }} />
+      <CaptureStackNavigator.Screen name="QIBatchSelect" component={QIBatchSelectScreen} options={{ title: '选择批次' }} />
+      <CaptureStackNavigator.Screen name="QIScan" component={QIScanScreen} options={{ title: '扫描批次' }} />
+      <CaptureStackNavigator.Screen name="QIForm" component={QIFormScreen} options={{ title: '动态质检' }} />
+      <CaptureStackNavigator.Screen name="QIResult" component={QIResultScreen} options={{ title: '质检结果' }} />
       <CaptureStackNavigator.Screen
         name="QILabelQcSubmitted"
         component={QILabelQcSubmittedScreen}
@@ -68,6 +81,8 @@ function RecordsStack() {
         component={QILabelQcQueueScreen}
         options={{ title: '拍检记录' }}
       />
+      <RecordsStackNavigator.Screen name="QIRecords" component={QIRecordsScreen} options={{ title: '质检记录' }} />
+      <RecordsStackNavigator.Screen name="QIRecordDetail" component={QIRecordDetailScreen} options={{ title: '质检详情' }} />
       <RecordsStackNavigator.Screen
         name="QILabelQcSubmitted"
         component={QILabelQcSubmittedScreen}

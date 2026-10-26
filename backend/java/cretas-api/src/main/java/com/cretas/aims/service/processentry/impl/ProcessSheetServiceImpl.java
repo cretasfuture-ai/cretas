@@ -159,6 +159,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     /** 回料按配比自动扣减 (正式提交时在 consumeReworkInputs 之前追加回料投料)。 */
     @Autowired(required = false)
     private ReworkPolicyAutoDeduction reworkPolicyAutoDeduction;
+    /** 多产出分摊时读副产 SKU 单价 (副产按可变现净值先扣)。未注入 → 副产照常按重量分摊并告警。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
     /** Workflow progress is projected only after the process-sheet transaction commits. */
     @Autowired(required = false)
@@ -176,6 +179,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     @Autowired(required = false)
     private BomSeasoningItemRepository bomSeasoningItemRepository;
+
+    /** 按工艺图解锁 (缺口 04)。字段注入 (required=false) 不改构造器, 见 WorkflowStepUnlockWiringContractTest。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
     @Override
     @Transactional
@@ -236,6 +243,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         //    ⚠️ 这正是「变异没打到被测行为上」的同一形状: 探针没到达那行, 读数就不作数。
         //    ⇒ 前置校验必须放在**这条路径的最前面**, 否则它只是名义上的"前置"。
         assertColumnLimits(req);
+        // 缺口 04: 同理放在最前面 —— 下面的端口校验 / 领料分配都不该在上游没料时先跑。
+        assertWorkflowUpstreamReady(factoryId, planId, req);
         if (req.getProcessDate() == null) {
             throw new BusinessException(400, "正式报工必须填写生产日期")
                     .withCode("PROCESS_SHEET_PROCESS_DATE_REQUIRED")
@@ -380,6 +389,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
             rowRepo.save(row);
         }
+        recordReworkFeedLineage(factoryId, submittedRows, reworkAllocations, userId);
         if (!allocations.isEmpty()) {
             productionStockAllocationService.persist(
                     factoryId, planId, submittedRows.get(0).getId(), userId, allocations);
@@ -401,6 +411,43 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             result.setWarnings(merged);
         }
         return result;
+    }
+
+    /** 正式报工回料扣减的 WIP_CONSUME 写点 (与小结 / 结单共用 SemiFeedLineageRecorder)。required=false: 单测直接 new 本类。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
+
+    /**
+     * 回料严格扣减之后写「产出它的生产批次 → 本次报工物化的生产批次」边。
+     *
+     * <p>扣减发生在 {@code saveRow} 之前 (那时还没有目标批次), 所以边写在 saveRow 之后、拿到行的 batchId 时。
+     * 目标唯一 ⇒ 带实际扣减量; 多产出组物化成多个批次 ⇒ 每个批次一条、数量为 null
+     * (这次投料在各产出间怎么分没有记录, ⛔ 不平均摊一个假数)。没有物化批次 ⇒ recorder 记 SKIPPED。
+     */
+    private void recordReworkFeedLineage(String factoryId, List<ProcessSheetRow> submittedRows,
+                                         List<ProcessSheetRowResult.InputAllocation> reworkAllocations,
+                                         Long userId) {
+        if (semiFeedLineageRecorder == null || reworkAllocations == null || reworkAllocations.isEmpty()) {
+            return;
+        }
+        List<ProcessSheetRow> targets = submittedRows.stream()
+                .filter(r -> r.getBatchId() != null)
+                .collect(java.util.stream.Collectors.toMap(ProcessSheetRow::getBatchId, r -> r, (a, b) -> a,
+                        LinkedHashMap::new))
+                .values().stream().toList();
+        for (ProcessSheetRowResult.InputAllocation a : reworkAllocations) {
+            if (targets.isEmpty()) {
+                semiFeedLineageRecorder.recordSemiFeed(factoryId, a.getBatchNumber(), null, a.getQuantity(),
+                        a.getUnit(), userId, null, "PROCESS_SHEET_REWORK_SUBMIT");
+                continue;
+            }
+            for (ProcessSheetRow target : targets) {
+                semiFeedLineageRecorder.recordSemiFeed(factoryId, a.getBatchNumber(), target.getBatchId(),
+                        targets.size() == 1 ? a.getQuantity() : null, a.getUnit(), userId,
+                        "reworkSubmit:row" + target.getId() + ":" + a.getBatchNumber(),
+                        "PROCESS_SHEET_REWORK_SUBMIT");
+            }
+        }
     }
 
     /**
@@ -613,8 +660,6 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal totalPotKg = potRawKgs.stream().filter(Objects::nonNull)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             int potCount = potRawKgs.size();
-            BigDecimal equalPotKg = potCount == 0 ? BigDecimal.ZERO
-                    : totalPotKg.divide(BigDecimal.valueOf(potCount), 12, RoundingMode.HALF_UP);
             for (BomSeasoningItem item : seasoningItems) {
                 if (item.getMaterialTypeId() == null || item.getDosagePerKgG() == null
                         || item.getDosagePerKgG().signum() <= 0) {
@@ -635,9 +680,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         ? inputKg : totalPotKg;
                 if (BomSeasoningItem.SECTION_COOKING.equals(item.getSection())
                         && item.getSubsequentPotRatio() != null && potCount > 0) {
-                    BigDecimal factor = BigDecimal.ONE.add(
-                            BigDecimal.valueOf(potCount - 1L).multiply(item.getSubsequentPotRatio()));
-                    effectiveRawKg = equalPotKg.multiply(factor);
+                    // 锅序口径唯一真值在 RecipeCostCalculator: 扣料与成本必须同一个数
+                    effectiveRawKg = com.cretas.aims.service.recipe.RecipeCostCalculator
+                            .effectivePotRawKg(potRawKgs, item.getSubsequentPotRatio());
                 }
                 BigDecimal quantityKg = effectiveRawKg
                         .multiply(item.getDosagePerKgG())
@@ -1075,6 +1120,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 1a. 列长前置校验 —— 事先拦住, 而不是等数据库拒绝后包成一句误导的话。
         assertColumnLimits(req);
+
+        // 1b. 缺口 04: 按工艺图解锁。有正数产出的行会把这道工序记成已报 (WorkflowTaskProgressWriter),
+        //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
+        assertWorkflowUpstreamReady(factoryId, planId, req);
 
         // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
         //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
@@ -1523,36 +1572,105 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     /**
      * 2B B3 (F3 回写): workflow 批次行产出后, 把对应 workflow 工序任务 (WorkProcessTask) 标记为 COMPLETED
-     * 并回写实际产量, 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
+     * 并重算实际产量 (G08: 该道全部有效行主产出合计, 由 WorkflowTaskProgressWriter 聚合, 不再用本行覆盖),
+     * 使 workflow 运行时视图反映文员逐道录入的进度 (否则任务永远 PENDING)。
      *
      * <p><b>fail-soft</b>: 主事务只发布携带精确 Workflow 快照的事件；提交后再用独立事务回写任务进度。
      * 回写异常由监听器隔离，绝不反向回滚已保存的逐道行、物化批次或库存。
      * legacy 计划 / 未注入 / 找不到对应工序描述 → 静默跳过。仅在行确有产出后调用。
      */
+    /**
+     * 缺口 04: Workflow 计划的正式行, 本道上游产出的料还没到 → 409 WORKFLOW_UPSTREAM_NOT_READY。
+     * 判定与开工 / App 报工同一份 ({@link com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard})。
+     * 无产出的行 (存草稿行) 和非 Workflow 计划不拦 —— 后者前端的「上一道已提交」照旧。
+     */
+    private void assertWorkflowUpstreamReady(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (unlockGuard == null || workflowClerkSheetService == null || req.getProcessOrder() == null) {
+            return;
+        }
+        boolean positiveOutput = req.getOutputs() != null && !req.getOutputs().isEmpty()
+                ? req.getOutputs().stream().anyMatch(o -> o.getQuantity() != null && o.getQuantity().signum() > 0)
+                : req.getOutputQuantity() != null && req.getOutputQuantity().signum() > 0;
+        if (!positiveOutput) {
+            return;
+        }
+        WorkflowClerkSheetConfigDTO config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        if (config == null || config.getWorkflowInstanceId() == null || config.getProcesses() == null) {
+            return;
+        }
+        String nodeId = config.getProcesses().stream()
+                .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                .map(WorkflowClerkSheetConfigDTO.ProcessDescriptor::getWorkflowNodeId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (nodeId == null) {
+            return;
+        }
+        taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(factoryId, config.getWorkflowInstanceId())
+                .stream()
+                .filter(t -> nodeId.equals(t.getWorkflowNodeId()))
+                .findFirst()
+                .ifPresent(task -> unlockGuard.assertUnlocked(factoryId, task));
+    }
+
     private void stampWorkflowTaskIfApplicable(
             String factoryId,
             String planId,
             ProcessSheetRowRequest req,
             WorkflowClerkSheetConfigDTO config) {
+        publishWorkflowTaskProgress(factoryId, planId, req.getProcessOrder(), req.getOutputQuantity(),
+                config, true);
+    }
+
+    /**
+     * G08 (2026-10-24): 删除 / 撤回成草稿之后也要让 Workflow 任务产量重算 —— 否则删掉的那行产出永远留在
+     * {@code WorkProcessTask.actualQuantity} 里。只改产量, 不动状态 ({@code markCompleted=false})。
+     *
+     * <p>这些路径上 {@code validateWorkflowRowIfApplicable} 对产出≤0 直接返 null, 拿不到快照,
+     * 所以这里自己读一次。读失败只告警不阻断: 删除是主操作, 进度回写本来就是提交后 best-effort 的投影。
+     */
+    private void requestWorkflowTaskRecompute(String factoryId, String planId, Integer processOrder) {
+        if (applicationEventPublisher == null || workflowClerkSheetService == null || processOrder == null) {
+            return;
+        }
+        WorkflowClerkSheetConfigDTO config;
+        try {
+            config = workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId);
+        } catch (Exception e) {
+            log.warn("[workflow-progress] 读 Workflow 快照失败, 本次删除/撤回后未重算工序产量: plan={}, processOrder={}, err={}",
+                    planId, processOrder, e.getMessage());
+            return;
+        }
+        publishWorkflowTaskProgress(factoryId, planId, processOrder, null, config, false);
+    }
+
+    /** 唯一的进度事件出口: 只发「请重算这道工序」, 产量由 WorkflowTaskProgressWriter 从全部有效行聚合。 */
+    private void publishWorkflowTaskProgress(String factoryId, String planId, Integer processOrder,
+                                             BigDecimal triggerRowQuantity,
+                                             WorkflowClerkSheetConfigDTO config, boolean markCompleted) {
         if (applicationEventPublisher == null || config == null
                 || config.getProcesses() == null || config.getWorkflowInstanceId() == null) {
             return;
         }
         WorkflowClerkSheetConfigDTO.ProcessDescriptor desc = config.getProcesses().stream()
                 .filter(p -> p.getProcessOrder() != null
-                        && p.getProcessOrder().equals(req.getProcessOrder()))
+                        && p.getProcessOrder().equals(processOrder))
                 .findFirst()
                 .orElse(null);
         if (desc == null || desc.getWorkflowNodeId() == null) {
             return;
         }
+        String primaryOutputPortId = desc.getOutput() != null ? desc.getOutput().getWorkflowPortId() : null;
         applicationEventPublisher.publishEvent(new WorkflowTaskProgressRequestedEvent(
                 factoryId,
                 planId,
                 config.getWorkflowInstanceId(),
                 desc.getWorkflowNodeId(),
-                req.getProcessOrder(),
-                req.getOutputQuantity()));
+                processOrder,
+                triggerRowQuantity,
+                primaryOutputPortId,
+                markCompleted));
     }
 
     /**
@@ -1727,7 +1845,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
         // 4. 成本只汇总一次，再按可追溯规则分到每个产出。副产回收不冲减库存批成本，
         //    仍由既有 OrderCostBreakdownService 按各产出 YIELD 报工单独冲减，避免重复计价。
-        applyMultiOutputCostAllocation(factoryId, planId, materializations);
+        applyMultiOutputCostAllocation(factoryId, planId, materializations,
+                byproductPortIds(workflowConfig, req.getProcessOrder()), warnings);
 
         // 5. workflow 任务进度回写一次 (整道工序完成)
         stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
@@ -1930,10 +2049,76 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return minutes.divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP);
     }
 
+    private static Set<String> byproductPortIds(WorkflowClerkSheetConfigDTO config, Integer processOrder) {
+        if (config == null || config.getProcesses() == null || processOrder == null) {
+            return Set.of();
+        }
+        return config.getProcesses().stream()
+                .filter(p -> processOrder.equals(p.getProcessOrder()))
+                .flatMap(p -> workflowOutputs(p).stream())
+                .filter(port -> Boolean.TRUE.equals(port.getByproduct()) && port.getWorkflowPortId() != null)
+                .map(WorkflowClerkSheetConfigDTO.PortDescriptor::getWorkflowPortId)
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * 副产先按可变现净值(数量 × 副产 SKU 单价)取走固定份额, 剩余按原有口径(重量)分给其余产出。
+     * owner 2026-10-24 裁定「一进多出按产出重量比例分摊, 副产按可变现净值先扣除」。
+     *
+     * <p>副产单价未知 → 该副产保留原比例(重量)并告警 —— ⛔ 不编一个 0 价把副产成本压成 0,
+     * 那会让主产出成本虚高。单价往往是事后在副产定价确认里补的, 所以这条告警是常态不是异常。
+     */
+    private CostAllocationPlan applyByproductNrv(String factoryId, CostAllocationPlan base,
+                                                 List<MultiOutputMaterialization> materializations,
+                                                 BigDecimal jointCost,
+                                                 Set<String> byproductPortIds,
+                                                 List<String> warnings) {
+        if (byproductPortIds.isEmpty() || jointCost == null || jointCost.signum() <= 0
+                || "EXPLICIT_RATIO".equals(base.basis())) {
+            return base;
+        }
+        int n = materializations.size();
+        List<BigDecimal> nrvValues = new ArrayList<>(java.util.Collections.nCopies(n, null));
+        BigDecimal fixedTotal = BigDecimal.ZERO;
+        for (int i = 0; i < n; i++) {
+            ProcessSheetRowRequest.OutputLine output = materializations.get(i).output();
+            if (!byproductPortIds.contains(output.getWorkflowPortId())) {
+                continue;
+            }
+            BigDecimal price = rawMaterialTypeRepository == null ? null
+                    : rawMaterialTypeRepository.findByIdAndFactoryId(output.getProductTypeId(), factoryId)
+                            .map(m -> m.getUnitPrice() != null && m.getUnitPrice().signum() > 0
+                                    ? m.getUnitPrice() : m.getMovingAvgPrice())
+                            .filter(p -> p != null && p.signum() > 0)
+                            .orElse(null);
+            if (price == null) {
+                warnings.add("副产「" + output.getProductTypeId() + "」没有单价, 本次按重量分摊成本; "
+                        + "确认副产单价后可按可变现净值重算");
+                continue;
+            }
+            BigDecimal value = output.getQuantity().multiply(price);
+            nrvValues.set(i, value);
+            fixedTotal = fixedTotal.add(value);
+        }
+        if (fixedTotal.signum() == 0) {
+            return base;
+        }
+        List<BigDecimal> ratios = ByproductNrvAllocation.ratios(base.ratios(), nrvValues, jointCost);
+        if (ratios == null) {
+            // 副产净值超过本道总成本: 说明价或量录错了, 不让主产出成本变负 —— 回到重量口径并告警。
+            warnings.add("副产可变现净值合计 ¥" + fixedTotal.setScale(2, RoundingMode.HALF_UP)
+                    + " 超过本道总成本 ¥" + jointCost.setScale(2, RoundingMode.HALF_UP) + ", 本次按重量分摊");
+            return base;
+        }
+        return new CostAllocationPlan(ratios, base.basis() + "+BYPRODUCT_NRV");
+    }
+
     private void applyMultiOutputCostAllocation(
             String factoryId,
             String planId,
-            List<MultiOutputMaterialization> materializations) {
+            List<MultiOutputMaterialization> materializations,
+            Set<String> byproductPortIds,
+            List<String> warnings) {
         CostAllocationPlan plan = resolveCostAllocationPlan(materializations);
         BigDecimal jointCost = BigDecimal.ZERO;
         boolean costKnown = true;
@@ -1963,6 +2148,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
         }
 
+        if (costKnown) {
+            plan = applyByproductNrv(factoryId, plan, materializations, jointCost, byproductPortIds, warnings);
+        }
         List<BigDecimal> allocatedTotals = allocateMoney(costKnown ? jointCost : null, plan.ratios());
         List<BigDecimal> allocatedMaterial = allocateMoney(costKnown ? materialPool : null, plan.ratios());
         List<BigDecimal> allocatedLabor = allocateMoney(costKnown ? laborPool : null, plan.ratios());
@@ -2508,13 +2696,18 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             // #1252 中段起步: 旧行若为 SAVED_SFI (保存时已 SFI IN 入库), 任何重存 (改产出/转 DRAFT/转物化)
             //   前先冲销旧 SFI IN (reverseClerkOutput; 下游已消耗则 409 SFI_DOWNSTREAM_CONSUMED 拒绝, 防超扣),
             //   再按新 req 重新入库 —— 避免重复 SFI IN 造幽灵库存。旧行 DRAFT (无入库) 则无冲销。
-            if (ProcessSheetRow.STATUS_SAVED_SFI.equals(existing.getRowStatus())) {
+            boolean wasSavedSfi = ProcessSheetRow.STATUS_SAVED_SFI.equals(existing.getRowStatus());
+            if (wasSavedSfi) {
                 reverseSfiOutput(factoryId, planId, beforeReq);
             }
             if (!hasOutput) {
                 // 仍是 DRAFT —— 仅更新行 payload, 保持 DRAFT, 不物化。
                 updateRowInPlace(existing, req, null, null, "DRAFT");
                 logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+                if (wasSavedSfi) {
+                    // G08: 有产出的行撤回成草稿 → 它的产出不再算进任务产量, 重算。
+                    requestWorkflowTaskRecompute(factoryId, planId, req.getProcessOrder());
+                }
                 return buildResult(req, null, null, null, null, null, true, false, warnings);
             }
             // #1252 纯外部库存 (SFI/FG) 非成品道 (output>0) → 保存时即 SFI IN 入库 (同 create 路径);
@@ -2575,6 +2768,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             reverseMaterialization(factoryId, existing.getBatchId(), wipOpt);
             updateRowInPlace(existing, req, null, null, "DRAFT");
             logChange(factoryId, planId, req, "UPDATE", beforeReq, req, userId);
+            // G08: 已物化的行改成产出≤0 (撤回成草稿) → 重算任务产量。
+            requestWorkflowTaskRecompute(factoryId, planId, req.getProcessOrder());
             return buildResult(req, null, null, null, null, null, true, false, warnings);
         }
 
@@ -2639,8 +2834,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                 || r.getClientRowId().startsWith(baseRowId + "#")))
                         .toList()
                 : rows;
+        // G08: 记下删掉的「有效」行属于哪几道 —— 删完让对应 Workflow 任务产量重算。
+        //   草稿行从没计进任务产量, 删它不触发重算 (避免无谓地覆盖同一任务上 App 报工写的产量)。
+        java.util.Set<Integer> recomputeOrders = new java.util.LinkedHashSet<>();
         for (ProcessSheetRow row : targets) {
+            boolean contributed = !"DRAFT".equals(row.getRowStatus())
+                    && !ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus());
             deleteOneRow(factoryId, planId, row, userId);
+            if (contributed && row.getProcessOrder() != null) {
+                recomputeOrders.add(row.getProcessOrder());
+            }
+        }
+        for (Integer order : recomputeOrders) {
+            requestWorkflowTaskRecompute(factoryId, planId, order);
         }
     }
 
@@ -2720,11 +2926,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Override
     public List<ProcessSheetInventoryItem> getInventory(String factoryId, String planId,
                                                         String processCode, Integer processOrder) {
-        // SP-F role-mode fix: processOrder 非空 → 双键过滤 (隔离同 archetype 多工序);
+        // processOrder 非空 → 只按 processOrder 取 (链内唯一; processCode 推导会漂, 见 repository 注释);
         // null → code-only 回退 (向后兼容旧客户端)。
         List<ProcessSheetRow> rows = processOrder != null
-                ? rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
-                        factoryId, planId, processCode, processOrder)
+                ? rowRepo.findByFactoryIdAndPlanIdAndProcessOrder(factoryId, planId, processOrder)
                 : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
 
         List<ProcessSheetInventoryItem> result = new ArrayList<>();
@@ -3534,10 +3739,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Override
     public List<ProcessSheetRowView> getRows(String factoryId, String planId,
                                              String processCode, Integer processOrder) {
-        // SP-F role-mode fix: processOrder 非空 → 双键过滤; null → code-only 回退 (向后兼容)。
+        // processOrder 非空 → 只按 processOrder 取 (见 repository 注释); null → code-only 回退 (向后兼容)。
         List<ProcessSheetRow> rows = processOrder != null
-                ? rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndProcessOrder(
-                        factoryId, planId, processCode, processOrder)
+                ? rowRepo.findByFactoryIdAndPlanIdAndProcessOrder(factoryId, planId, processOrder)
                 : rowRepo.findByFactoryIdAndPlanIdAndProcessCode(factoryId, planId, processCode);
         return rows.stream()
                 .map(row -> new ProcessSheetRowView(
@@ -4209,6 +4413,19 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         if (req.getUpstreamSources() != null) {
             for (ProcessSheetRowRequest.UpstreamRef input : req.getUpstreamSources()) {
+                // 按画布 reworkPolicy 自动追加的回料(ReworkPolicyAutoDeduction)来自回料 Cell, 回料 Cell
+                // 不是本工序的投入端口(它是下游金检的产出, 连回来会成环), 天生没有 workflowPortId。
+                // 送进 resolveInputPort 时: 多投入工序必抛「多投入报工必须逐项指定 Workflow 投入端口」,
+                // 单投入工序则被兜底到那个端口再撞 SKU 白名单 —— 与上面自动分摊的包材/调料同形。
+                //
+                // 线上实证 (F006【演示L5】绞肉搅拌 4 个投入端口, 2026-10-24): 同一报工请求在回料库存为 0 时成功,
+                // 上一批产出回料入 SFI 后同一请求必 409 —— 回料库存一存在, 这道工序就再也报不了工。
+                //
+                // ⛔ 只放行服务端能证实是回料的来源: automaticRework 是客户端也能回显的字段,
+                //    不核验就等于给任意上游开了绕过端口白名单的口子。
+                if (isVerifiedAutomaticRework(factoryId, input)) {
+                    continue;
+                }
                 com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor port =
                         resolveInputPort(byId, ports, input.getWorkflowPortId());
                 String selectedSkuId = resolveAllowedUpstreamSku(
@@ -4256,6 +4473,23 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .withCode("PROCESS_SHEET_INPUT_QUANTITY_INVALID")
                     .withSeverity("BLOCKING");
         }
+    }
+
+    /**
+     * 自动回料引用是否经服务端证实: 标了 automaticRework、指向常驻 SFI、该 SFI 确为回料
+     * ({@code is_rework=true}) 且 SKU 与引用一致。任何一条不满足都回到普通端口校验。
+     */
+    private boolean isVerifiedAutomaticRework(String factoryId, ProcessSheetRowRequest.UpstreamRef input) {
+        if (input == null || !input.isAutomaticRework() || !input.isSemiFinished()
+                || input.getSourceBatchNumber() == null || input.getSourceBatchNumber().isBlank()
+                || wipRepo == null) {
+            return false;
+        }
+        return wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
+                        factoryId, input.getSourceBatchNumber().trim())
+                .filter(source -> Boolean.TRUE.equals(source.getIsRework()))
+                .filter(source -> input.getSkuId() == null || input.getSkuId().equals(source.getProductTypeId()))
+                .isPresent();
     }
 
     private static com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor resolveInputPort(

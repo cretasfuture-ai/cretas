@@ -7,11 +7,13 @@ import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.product.ProductPackagingSpec;
 import com.cretas.aims.repository.BusinessLinkRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
+import com.cretas.aims.repository.product.ProductPackagingSpecRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
@@ -20,6 +22,8 @@ import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.pricing.EstimatePriceCheckService;
 import com.cretas.aims.service.pricing.GrossMarginRedlineService;
 import com.cretas.aims.service.product.ProductPackagingSpecService;
+import com.cretas.aims.service.product.impl.ProductPackagingSpecServiceImpl;
+import com.cretas.aims.service.unit.TestUnitContractFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,11 +41,13 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -64,6 +70,7 @@ class SalesFinishedGoodsPriceContractTest {
     @Mock private EstimatePriceCheckService estimatePriceCheckService;
     @Mock private SalesPriceAdjustmentService priceAdjustmentService;
     @Mock private ProductPackagingSpecService productPackagingSpecService;
+    @Mock private ProductPackagingSpecRepository productPackagingSpecRepository;
     @Mock private Factory factory;
     @Mock private ProductType productType;
 
@@ -233,6 +240,48 @@ class SalesFinishedGoodsPriceContractTest {
     }
 
     @Test
+    @DisplayName("finished-goods list enriches a blank snapshot from the same-factory product name")
+    void listEnrichesBlankProductNameWithoutMutatingSource() throws Exception {
+        source.setProductName(null);
+        FinishedGoodsBatch preserved = sampleBatch();
+        preserved.setId("FGB-2");
+        preserved.setProductTypeId("PT-2");
+        preserved.setProductName("已存快照名称");
+        FinishedGoodsBatch missing = sampleBatch();
+        missing.setId("FGB-3");
+        missing.setProductTypeId("PT-MISSING");
+        missing.setProductName(null);
+        when(salesService.getFinishedGoodsBatches("F006", 1, 20))
+                .thenReturn(PageResponse.of(List.of(source, preserved, missing), 1, 20, 3L));
+        ProductType resolved = new ProductType();
+        resolved.setId("PT-1");
+        resolved.setName("同厂成品名称");
+        ProductType conflicting = new ProductType();
+        conflicting.setId("PT-2");
+        conflicting.setName("目录新名称");
+        when(productTypeRepository.findByFactoryIdAndIdIn(
+                "F006", Set.of("PT-1", "PT-2", "PT-MISSING")))
+                .thenReturn(List.of(resolved, conflicting));
+
+        mockMvc.perform(get("/api/mobile/F006/sales/finished-goods")
+                        .requestAttr("userId", 10L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].productTypeId").value("PT-1"))
+                .andExpect(jsonPath("$.data.content[0].productName").value("同厂成品名称"))
+                .andExpect(jsonPath("$.data.content[1].productTypeId").value("PT-2"))
+                .andExpect(jsonPath("$.data.content[1].productName").value("已存快照名称"))
+                .andExpect(jsonPath("$.data.content[2].productTypeId").value("PT-MISSING"))
+                .andExpect(jsonPath("$.data.content[2].productName").value(nullValue()));
+
+        verify(productTypeRepository, times(1)).findByFactoryIdAndIdIn(
+                "F006", Set.of("PT-1", "PT-2", "PT-MISSING"));
+        org.junit.jupiter.api.Assertions.assertNull(source.getProductName());
+        org.junit.jupiter.api.Assertions.assertSame(productType, source.getProductType());
+        org.junit.jupiter.api.Assertions.assertEquals("已存快照名称", preserved.getProductName());
+        org.junit.jupiter.api.Assertions.assertNull(missing.getProductName());
+    }
+
+    @Test
     @DisplayName("all write responses also use detached copies")
     void writeRoutesDoNotExposeOrMutateServiceEntity() {
         when(mobileService.getUserFromToken("token"))
@@ -241,7 +290,7 @@ class SalesFinishedGoodsPriceContractTest {
                 .thenReturn(Optional.empty());
         when(productTypeRepository.findByIdAndFactoryId("PT-1", "F006"))
                 .thenReturn(Optional.of(productType));
-        when(productPackagingSpecService.resolveSelection(any(), any(), any(), any()))
+        when(productPackagingSpecService.resolveOpeningSelection(any(), any(), any(), any()))
                 .thenReturn(ProductPackagingSpecService.PackagingSelection.none());
         when(salesService.createOpeningFinishedGoodsBatch(eq("F006"), any(FinishedGoodsBatch.class), eq(99L)))
                 .thenReturn(source);
@@ -257,6 +306,7 @@ class SalesFinishedGoodsPriceContractTest {
                         "PT-1", "OPEN-1", new BigDecimal("37"), "kg",
                         null, java.time.LocalDate.of(2026, 10, 4), null,
                         null, null, null));
+        verify(productPackagingSpecService).resolveOpeningSelection("F006", "PT-1", "kg", null);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("userId", 99L);
         ApiResponse<FinishedGoodsBatch> edit = controller.editFinishedGoods(
@@ -280,6 +330,60 @@ class SalesFinishedGoodsPriceContractTest {
         org.junit.jupiter.api.Assertions.assertSame(productType, source.getProductType());
         org.junit.jupiter.api.Assertions.assertEquals(new BigDecimal("12.34"), source.getUnitPrice());
         org.junit.jupiter.api.Assertions.assertEquals(new BigDecimal("8.76"), source.getUnitCost());
+    }
+
+    @Test
+    @DisplayName("opening controller resolves base-unit packaging and preserves quantity plus snapshot")
+    void openingUsesRealResolverForBaseUnitSnapshot() {
+        ProductPackagingSpec spec = new ProductPackagingSpec();
+        spec.setId("SPEC-8");
+        spec.setFactoryId("F006");
+        spec.setProductTypeId("PT-1");
+        spec.setName("8盒/箱");
+        spec.setPackageUnit("箱");
+        spec.setBaseUnit("盒");
+        spec.setConversionFactor(new BigDecimal("8"));
+        spec.setActive(true);
+        spec.setSortOrder(0);
+        when(productPackagingSpecRepository.findByFactoryIdAndProductTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                "F006", "PT-1")).thenReturn(List.of(spec));
+        when(productPackagingSpecRepository.findByIdAndFactoryIdAndProductTypeIdAndActiveTrue(
+                "SPEC-8", "F006", "PT-1")).thenReturn(Optional.of(spec));
+        when(mobileService.getUserFromToken("token"))
+                .thenReturn(UserDTO.builder().id(99L).build());
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber("F006", "OPEN-16"))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findByIdAndFactoryId("PT-1", "F006"))
+                .thenReturn(Optional.of(productType));
+        when(salesService.createOpeningFinishedGoodsBatch(eq("F006"), any(FinishedGoodsBatch.class), eq(99L)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+
+        ProductPackagingSpecService realResolver = new ProductPackagingSpecServiceImpl(
+                productPackagingSpecRepository,
+                productTypeRepository,
+                TestUnitContractFactory.contract());
+        SalesController realResolverController = new SalesController(
+                salesService, mobileService, permissionService, userRepository, salesOrderRepository,
+                businessLinkRepository, productTypeRepository, finishedGoodsBatchRepository,
+                grossMarginRedlineService, estimatePriceCheckService, priceAdjustmentService, realResolver);
+
+        realResolverController.createOpeningFinishedGoods(
+                "F006", "Bearer token",
+                new SalesController.OpeningFinishedGoodsRequest(
+                        "PT-1", "OPEN-16", new BigDecimal("16"), "盒", "SPEC-8",
+                        java.time.LocalDate.of(2026, 10, 24), null, null, null, null));
+
+        org.mockito.ArgumentCaptor<FinishedGoodsBatch> captured =
+                org.mockito.ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(salesService).createOpeningFinishedGoodsBatch(eq("F006"), captured.capture(), eq(99L));
+        FinishedGoodsBatch batch = captured.getValue();
+        org.junit.jupiter.api.Assertions.assertEquals(new BigDecimal("16"), batch.getProducedQuantity());
+        org.junit.jupiter.api.Assertions.assertEquals("盒", batch.getUnit());
+        org.junit.jupiter.api.Assertions.assertEquals("SPEC-8", batch.getPackagingSpecId());
+        org.junit.jupiter.api.Assertions.assertEquals("8盒/箱", batch.getPackagingSpecName());
+        org.junit.jupiter.api.Assertions.assertEquals("箱", batch.getPackagingUnit());
+        org.junit.jupiter.api.Assertions.assertEquals("盒", batch.getPackagingBaseUnit());
+        org.junit.jupiter.api.Assertions.assertEquals(new BigDecimal("8"), batch.getPackagingFactor());
     }
 
     private FinishedGoodsBatch sampleBatch() {

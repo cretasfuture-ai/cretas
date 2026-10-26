@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cancellationAudit,
   formatPlanActualQuantity,
+  planSheetProductLabel,
   sourceOrderDisplay,
   sourceOrderTarget,
 } from '../productionPlanListPresentation';
@@ -41,4 +42,15 @@ describe('production plan list presentation', () => {
     expect(cancellationAudit({ status: 'PENDING' })).toBeNull();
   });
 
+  it('labels the process-entry sheet like the 生产成品 column, never with the raw-workflow anchor', () => {
+    const anchor = '__RAW_WORKFLOW_OWNER__RMT_F006_LSM_2bce8bda718ed689';
+    expect(planSheetProductLabel(['香酥炸鸡腿', '盐酥鸡块', '鸡骨高汤']))
+      .toBe('多产出计划：香酥炸鸡腿、盐酥鸡块、鸡骨高汤');
+    expect(planSheetProductLabel(['猪蹄'])).toBe('猪蹄');
+    expect(planSheetProductLabel([anchor])).toBe('多产出计划');
+    expect(planSheetProductLabel(['多产出计划'])).toBe('多产出计划');
+    expect(planSheetProductLabel([anchor, '香酥炸鸡腿'])).toBe('香酥炸鸡腿');
+    expect(planSheetProductLabel(['-'])).toBe('');
+    expect(planSheetProductLabel([])).toBe('');
+  });
 });

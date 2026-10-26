@@ -1,12 +1,49 @@
-"""Financial Data Normalizer — Smart column role detection and data standardization."""
+"""Financial Data Normalizer — 上传表格 → 标准明细。
+
+财务看板所有图表只读这里产出的标准明细, 不再各自解析原始表格。每一行:
+
+    year, month, quarter      期间 (表里没写年份时取请求年份)
+    item                      科目或行标签原文
+    subject_class, subject_level   科目类别与层级, 见 financial_subjects.py
+    category, product, channel, business_unit   维度 (没有就是空串)
+    budget, actual, last_year, last_year_budget 金额, 统一换算成「元」; 缺失为 None, 不补 0
+
+解析时处理的格式: 表头单位「（万元）/(千元)/亿元」、日期「2026-01-15 / 2026/1/15 / 2026年1月」、
+百分比文本「25%」、千分位「1,234」、会计负数「(100)」。
+"""
 import re
 import logging
-from typing import Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 import pandas as pd
 import numpy as np
 
+from . import financial_subjects as S
+
+if TYPE_CHECKING:
+    from .financial.metrics import GrossMargins
+
 logger = logging.getLogger(__name__)
+
+STANDARD_COLUMNS = [
+    'year', 'month', 'quarter', 'category', 'item', 'product', 'channel', 'business_unit',
+    'budget', 'actual', 'last_year', 'last_year_budget', 'subject_class', 'subject_level',
+]
+
+_UNIT_PATTERN = re.compile(r'[（(]\s*(亿元|万元|千元|元|亿|万|千)\s*[)）]|(亿元|万元|千元)$')
+_UNIT_FACTORS = {'亿元': 1e8, '亿': 1e8, '万元': 1e4, '万': 1e4, '千元': 1e3, '千': 1e3, '元': 1.0}
+
+
+def header_unit(header: str) -> Tuple[str, float]:
+    """「实际（万元）」 -> ("实际", 10000)。没有单位时倍率为 1。"""
+    text = str(header)
+    m = _UNIT_PATTERN.search(text)
+    if not m:
+        return text.strip(), 1.0
+    unit = m.group(1) or m.group(2)
+    base = (text[:m.start()] + text[m.end():]).strip()
+    return base or text.strip(), _UNIT_FACTORS.get(unit, 1.0)
 
 
 @dataclass
@@ -20,8 +57,23 @@ class ColumnMapping:
     category_col: Optional[str] = None                         # Category/Product line
     item_col: Optional[str] = None                             # P&L item name
     label_col: Optional[str] = None                            # First text column (row label)
+    product_col: Optional[str] = None                          # 具体产品 / SKU
+    channel_col: Optional[str] = None                          # 销售渠道
+    business_unit_col: Optional[str] = None                    # 事业部 / 部门 / 分公司
+    year_col: Optional[str] = None                             # 单独的年份列
     year: int = 2026
     data_layout: str = "wide"  # "wide" (months as columns) or "long" (month as row values)
+    unit_multipliers: Dict[str, float] = field(default_factory=dict)  # 列 -> 换算成元的倍率
+    # 数值列是金额 (amount) 还是比率 (ratio, 如「本年毛利率」「25%」); 比率不能进金额类图表
+    value_kind: str = "amount"
+    # 不参与汇总、只用来对账的行 (小计/合计/表内利润), 由 FinancialDashboardService 填入
+    reported_rows: Optional[pd.DataFrame] = None
+    # 原始表格: 只给需要读标准明细之外的原始列的图表用 (如账龄分段列)
+    raw_frame: Optional[pd.DataFrame] = None
+    # 解析中发现、需要告诉用户的问题
+    issues: List[str] = field(default_factory=list)
+    amount_subject_cols: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    margin_summary: Optional['GrossMargins'] = None
 
 
 class FinancialDataNormalizer:
@@ -36,6 +88,8 @@ class FinancialDataNormalizer:
         re.compile(r'^M(\d{1,2})$', re.I),       # M1-M12
         re.compile(r'^Month\s*(\d{1,2})$', re.I),
     ]
+    # 带日的日期: 2026-01-15 / 2026/1/15 / 2026年1月15日 / 2026-01-15 00:00:00
+    DATE_PATTERN = re.compile(r'^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?:[ T].*)?$')
     QUARTER_PATTERNS = [
         re.compile(r'^Q([1-4])$', re.I),
         re.compile(r'^第([一二三四])季度$'),
@@ -44,36 +98,40 @@ class FinancialDataNormalizer:
 
     # Column NAME keywords for period columns (not value patterns — these match the header itself)
     PERIOD_COL_KEYWORDS = ['月份', '月', 'month', '期间', '时间', 'period', '日期', 'date']
+    YEAR_COL_KEYWORDS = ['年份', '年度', 'year']
 
     # Column role keywords
     BUDGET_KEYWORDS = ['预算', '目标', 'budget', 'target', 'plan', '计划', '指标']
     ACTUAL_KEYWORDS = ['实际', '完成', 'actual', 'achieved', '达成', '本年', '本期']
     LAST_YEAR_KEYWORDS = ['上年', '去年', '同期', '上期', 'last year', 'prior', 'ly', 'previous']
     CATEGORY_KEYWORDS = ['品类', '类别', '产品线', 'category', '分类', '品种', '系列']
+    PRODUCT_KEYWORDS = ['产品名称', '产品', '品名', '商品名称', '商品', 'sku', '货品', 'product']
+    CHANNEL_KEYWORDS = ['渠道', 'channel']
+    BUSINESS_UNIT_KEYWORDS = ['事业部', '业务单元', '部门', '分公司', '子公司', '经营单元', '大区', '区域']
     ITEM_KEYWORDS = ['项目', '科目', 'item', '名称', '摘要', '费用项']
-
-    # P&L classification (reuse from finance_extract.py)
-    PNL_REVENUE = ['营业收入', '主营业务收入', '其他业务收入', '收入合计', '销售收入']
-    PNL_COST = ['营业成本', '主营业务成本', '制造费用', '直接材料', '直接人工']
-    PNL_EXPENSE = ['销售费用', '管理费用', '财务费用', '研发费用', '营业费用']
-    PNL_PROFIT = ['毛利润', '毛利', '营业利润', '利润总额', '净利润', '税后利润']
-    PNL_TAX = ['所得税', '税金', '附加税']
 
     QUARTER_CN = {1: 'Q1', 2: 'Q2', 3: 'Q3', 4: 'Q4'}
 
-    def detect_columns(self, columns: List[str], sample_data: Optional[pd.DataFrame] = None) -> ColumnMapping:
+    # ------------------------------------------------------------------ detect
+    def detect_columns(self, columns: List[str], sample_data: Optional[pd.DataFrame] = None,
+                       year: Optional[int] = None) -> ColumnMapping:
         """Auto-detect column roles from column names and sample data."""
         mapping = ColumnMapping()
-        cols_lower = {c: str(c).lower().strip() for c in columns}
 
         for col in columns:
-            cl = cols_lower[col]
+            base, factor = header_unit(col)
+            if factor != 1.0:
+                mapping.unit_multipliers[col] = factor
+            cl = base.lower().strip()
             # Check period columns — first by value pattern (e.g. "1月", "2026-1")
             if self._is_month_col(cl):
                 mapping.period_cols.append(col)
                 continue
             if self._is_quarter_col(cl):
                 mapping.period_cols.append(col)
+                continue
+            if mapping.year_col is None and cl in self.YEAR_COL_KEYWORDS:
+                mapping.year_col = col
                 continue
             # Then by column NAME keyword (e.g. "月份", "月", "month", "期间")
             # This column contains period values in its cells, not in the header
@@ -94,20 +152,30 @@ class FinancialDataNormalizer:
                 mapping.budget_cols.append(col)
             elif is_actual:
                 mapping.actual_cols.append(col)
-            elif any(kw in cl for kw in self.CATEGORY_KEYWORDS):
+            elif mapping.category_col is None and any(kw in cl for kw in self.CATEGORY_KEYWORDS):
                 mapping.category_col = col
-            elif any(kw in cl for kw in self.ITEM_KEYWORDS):
+            elif mapping.channel_col is None and any(kw in cl for kw in self.CHANNEL_KEYWORDS):
+                mapping.channel_col = col
+            elif mapping.business_unit_col is None and any(kw in cl for kw in self.BUSINESS_UNIT_KEYWORDS):
+                mapping.business_unit_col = col
+            elif mapping.product_col is None and any(kw in cl for kw in self.PRODUCT_KEYWORDS):
+                mapping.product_col = col
+            elif mapping.item_col is None and any(kw in cl for kw in self.ITEM_KEYWORDS):
                 mapping.item_col = col
 
         # Auto-detect label column (first non-numeric, non-period text column)
         if sample_data is not None:
+            dims = {mapping.category_col, mapping.item_col, mapping.product_col}
             for col in columns:
-                if col in mapping.period_cols:
+                if col in mapping.period_cols or col == mapping.year_col:
                     continue
-                if col == mapping.category_col or col == mapping.item_col:
+                if col in (mapping.channel_col, mapping.business_unit_col):
+                    continue
+                if col in dims and col is not None:
                     mapping.label_col = col
                     break
-                if sample_data[col].dtype == 'object':
+                if col in sample_data.columns and sample_data[col].dtype == 'object' \
+                        and not self._looks_numeric(sample_data[col]):
                     mapping.label_col = col
                     break
 
@@ -124,16 +192,13 @@ class FinancialDataNormalizer:
             label_col = mapping.label_col or mapping.item_col or mapping.category_col
             if label_col and label_col in sample_data.columns:
                 for label_val in sample_data[label_col].dropna().astype(str):
-                    ll = label_val.lower()
-                    if any(kw in ll for kw in ['预算', '目标', 'budget', 'target', '计划']):
-                        if not mapping.budget_cols:
-                            mapping.budget_cols.append(f'__row_role__:{label_val}')
-                    elif any(kw in ll for kw in ['上年', '去年', '同期', 'last year', '上期']):
-                        if not mapping.last_year_cols:
-                            mapping.last_year_cols.append(f'__row_role__:{label_val}')
-                    elif any(kw in ll for kw in ['实际', '完成', 'actual', '达成', '本年']):
-                        if not mapping.actual_cols:
-                            mapping.actual_cols.append(f'__row_role__:{label_val}')
+                    role = self._row_role(label_val)
+                    if role == 'budget' and not mapping.budget_cols:
+                        mapping.budget_cols.append(f'__row_role__:{label_val}')
+                    elif role == 'last_year' and not mapping.last_year_cols:
+                        mapping.last_year_cols.append(f'__row_role__:{label_val}')
+                    elif role == 'actual' and not mapping.actual_cols:
+                        mapping.actual_cols.append(f'__row_role__:{label_val}')
 
         # Detect year from column names
         for col in columns:
@@ -141,112 +206,176 @@ class FinancialDataNormalizer:
             if m:
                 mapping.year = int(m.group(1))
                 break
+        if year is not None:
+            mapping.year = year
+
+        mapping.value_kind = self._value_kind(mapping, sample_data)
+
+        # A monthly table may put income/cost/profit in separate columns,
+        # alongside the supplied percentages. Normalize the amounts into the
+        # same subject rows used by a P&L instead of averaging the percentages.
+        subjects: Dict[str, Dict[str, str]] = {}
+        for col in columns:
+            base, _ = header_unit(col)
+            if any(word in base for word in self.RATIO_HEADER_KEYWORDS):
+                continue
+            role = 'last_year' if any(word in base for word in self.LAST_YEAR_KEYWORDS) else 'actual'
+            explicit_year = re.search(r'(20\d{2})年?', base)
+            if explicit_year:
+                column_year = int(explicit_year.group(1))
+                if column_year not in (mapping.year, mapping.year - 1):
+                    continue
+                role = 'actual' if column_year == mapping.year else 'last_year'
+            if any(word in base for word in self.BUDGET_KEYWORDS):
+                role = 'last_year_budget' if role == 'last_year' else 'budget'
+            name = re.sub(r'20\d{2}年?|本年|本期|实际|上年|去年|同期|上期|预算|目标', '', base).strip()
+            subject = S.classify_subject(name)
+            if subject in (S.REVENUE, S.COST, S.PROFIT_GROSS):
+                subjects.setdefault(subject, {})[role] = col
+        if S.REVENUE in subjects and (S.COST in subjects or S.PROFIT_GROSS in subjects):
+            mapping.amount_subject_cols = subjects
+            mapping.actual_cols = [cols['actual'] for cols in subjects.values() if 'actual' in cols]
+            mapping.last_year_cols = [cols['last_year'] for cols in subjects.values() if 'last_year' in cols]
+            mapping.value_kind = 'amount'
 
         logger.info(f"Column mapping detected: periods={len(mapping.period_cols)}, "
                     f"budget={len(mapping.budget_cols)}, actual={len(mapping.actual_cols)}, "
-                    f"lastYear={len(mapping.last_year_cols)}, layout={mapping.data_layout}")
+                    f"lastYear={len(mapping.last_year_cols)}, layout={mapping.data_layout}, "
+                    f"units={mapping.unit_multipliers}")
         return mapping
 
+    # --------------------------------------------------------------- normalize
     def normalize(self, raw_data: pd.DataFrame, column_mapping: ColumnMapping,
-                  period_filter: Optional[Dict] = None) -> pd.DataFrame:
-        """Normalize raw data to standard format based on column mapping.
+                  period_filter: Optional[Dict] = None, subject_hint: Optional[str] = None) -> pd.DataFrame:
+        """Normalize raw data to the standard detail format (see module docstring).
 
-        Output columns: month, quarter, category, item, budget, actual, last_year, last_year_budget
+        subject_hint: 工作表名暗示的科目 (financial_subjects.classify_sheet_name); 只有表内各行都
+        认不出科目时才套用, 例如没有「项目」列的「费用预算」表整表按费用处理。
         """
         if column_mapping.data_layout == "wide":
-            df = self._normalize_wide(raw_data, column_mapping)
+            rows = self._normalize_wide(raw_data, column_mapping)
         else:
-            df = self._normalize_long(raw_data, column_mapping)
+            rows = self._normalize_long(raw_data, column_mapping)
+
+        df = pd.DataFrame(rows, columns=[c for c in STANDARD_COLUMNS if c not in ('subject_class', 'subject_level')])
+        df = self._classify_subjects(df)
+        if subject_hint and not df.empty and (df['subject_class'] == S.UNKNOWN).all():
+            df.loc[df['subject_level'] == S.DETAIL, 'subject_class'] = subject_hint
 
         # Apply period filter
         if period_filter:
             df = self._apply_period_filter(df, period_filter)
 
+        return df.reset_index(drop=True)
+
+    @staticmethod
+    def split_detail(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """(参与汇总的明细, 只用来对账的小计/合计/表内利润行)。"""
+        if df.empty or 'subject_level' not in df.columns:
+            return df, df.iloc[0:0]
+        detail_mask = df['subject_level'] == S.DETAIL
+        return df[detail_mask].reset_index(drop=True), df[~detail_mask].reset_index(drop=True)
+
+    def _classify_subjects(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            df['subject_class'] = pd.Series(dtype=object)
+            df['subject_level'] = pd.Series(dtype=object)
+            return df
+        infos = S.classify_items(df['item'].fillna('').astype(str).tolist())
+        df['subject_class'] = [infos[str(v)].subject_class if str(v) in infos else S.UNKNOWN
+                               for v in df['item'].fillna('')]
+        df['subject_level'] = [infos[str(v)].level if str(v) in infos else S.DETAIL
+                               for v in df['item'].fillna('')]
+        # 行标签同时出现在品类/产品列里的普通销售表: 「合计」行一样不参与汇总
+        for dim in ('category', 'product'):
+            if dim in df.columns:
+                total_mask = df[dim].fillna('').astype(str).map(S.is_total_label)
+                df.loc[total_mask, 'subject_level'] = S.SUBTOTAL
         return df
 
-    def _normalize_wide(self, raw_data: pd.DataFrame, mapping: ColumnMapping) -> pd.DataFrame:
+    def _row_dims(self, row: pd.Series, mapping: ColumnMapping, label: str) -> Dict[str, str]:
+        def text(col: Optional[str]) -> str:
+            if not col:
+                return ''
+            v = row.get(col)
+            return '' if v is None or (isinstance(v, float) and np.isnan(v)) else str(v).strip()
+
+        category = text(mapping.category_col) if mapping.category_col else ''
+        product = text(mapping.product_col)
+        item = text(mapping.item_col) if mapping.item_col else ''
+        if not item:
+            item = product or label
+        if not category and not mapping.category_col and not product:
+            # 旧行为: 没有品类列时, 行标签同时当品类用 (品类结构类图表依赖它)
+            category = label
+        return {
+            'category': category,
+            'item': item,
+            'product': product,
+            'channel': text(mapping.channel_col),
+            'business_unit': text(mapping.business_unit_col),
+        }
+
+    def _normalize_wide(self, raw_data: pd.DataFrame, mapping: ColumnMapping) -> List[Dict[str, Any]]:
         """Normalize wide-format data (months as columns)."""
-        rows = []
+        rows: List[Dict[str, Any]] = []
         label_col = mapping.label_col or mapping.item_col or mapping.category_col
 
         # First pass: detect row roles from labels (budget/actual/last_year)
         row_roles = {}  # index -> 'budget'|'actual'|'last_year'|'item'
         for idx, row in raw_data.iterrows():
             label = str(row.get(label_col, '')) if label_col else ''
-            label_lower = label.lower()
-            if any(kw in label_lower for kw in ['预算', '目标', 'budget', 'target', '计划']):
-                row_roles[idx] = 'budget'
-            elif any(kw in label_lower for kw in ['上年', '去年', '同期', 'last year', '上期']):
-                row_roles[idx] = 'last_year'
-            elif any(kw in label_lower for kw in ['实际', '完成', 'actual', '达成', '本年']):
-                row_roles[idx] = 'actual'
-            else:
-                row_roles[idx] = 'item'
+            row_roles[idx] = self._row_role(label)
 
         has_role_rows = any(r in ('budget', 'actual', 'last_year') for r in row_roles.values())
 
-        if has_role_rows:
-            # Group by category, merge budget/actual/last_year per period
-            for period_col in mapping.period_cols:
-                month_num = self._extract_month(str(period_col))
-                if month_num is None:
-                    continue
-                quarter = f"Q{(month_num - 1) // 3 + 1}"
+        for period_col in mapping.period_cols:
+            year_num, month_num = self._extract_year_month(header_unit(period_col)[0])
+            if month_num is None:
+                continue
+            year_num = year_num or mapping.year
+            quarter = f"Q{(month_num - 1) // 3 + 1}"
+            col_factor = mapping.unit_multipliers.get(period_col, 1.0)
 
-                budget_val = None
-                actual_val = None
-                last_year_val = None
-
+            if has_role_rows:
+                # 每一行是「预算 / 实际 / 上年」中的一种: 同一期间按角色合并成一行
+                merged: Dict[str, Optional[float]] = {'budget': None, 'actual': None, 'last_year': None}
                 for idx, row in raw_data.iterrows():
-                    val = self._safe_float(row.get(period_col))
                     role = row_roles.get(idx, 'item')
-                    if role == 'budget':
-                        budget_val = val
-                    elif role == 'actual':
-                        actual_val = val
-                    elif role == 'last_year':
-                        last_year_val = val
-
+                    if role not in merged:
+                        continue
+                    label = str(row.get(label_col, '')) if label_col else ''
+                    _, label_factor = header_unit(label)
+                    val = self._scaled(row.get(period_col),
+                                       label_factor if _UNIT_PATTERN.search(label) else col_factor)
+                    if val is not None:
+                        merged[role] = (merged[role] or 0.0) + val
                 rows.append({
-                    'month': month_num,
-                    'quarter': quarter,
-                    'category': '',
-                    'item': '',
-                    'budget': budget_val,
-                    'actual': actual_val,
-                    'last_year': last_year_val,
-                    'last_year_budget': None,
+                    'year': year_num, 'month': month_num, 'quarter': quarter,
+                    'category': '', 'item': '', 'product': '', 'channel': '', 'business_unit': '',
+                    'budget': merged['budget'], 'actual': merged['actual'],
+                    'last_year': merged['last_year'], 'last_year_budget': None,
                 })
-        else:
-            # Original behavior: each row is an item, period columns are actual values
+                continue
+
+            # 每一行是一个科目/品类, 期间列是实际值
             for _, row in raw_data.iterrows():
                 label = str(row.get(label_col, '')) if label_col else ''
-                category = str(row.get(mapping.category_col, '')) if mapping.category_col else label
-                item = str(row.get(mapping.item_col, '')) if mapping.item_col else label
+                _, label_factor = header_unit(label)
+                dims = self._row_dims(row, mapping, label)
+                rows.append({
+                    'year': year_num, 'month': month_num, 'quarter': quarter, **dims,
+                    'budget': None,
+                    'actual': self._scaled(row.get(period_col),
+                                           label_factor if _UNIT_PATTERN.search(label) else col_factor),
+                    'last_year': None, 'last_year_budget': None,
+                })
 
-                for period_col in mapping.period_cols:
-                    month_num = self._extract_month(str(period_col))
-                    if month_num is None:
-                        continue
-                    quarter = f"Q{(month_num - 1) // 3 + 1}"
+        return rows
 
-                    val = self._safe_float(row.get(period_col))
-                    rows.append({
-                        'month': month_num,
-                        'quarter': quarter,
-                        'category': category,
-                        'item': item,
-                        'budget': None,
-                        'actual': val,
-                        'last_year': None,
-                        'last_year_budget': None,
-                    })
-
-        return pd.DataFrame(rows)
-
-    def _normalize_long(self, raw_data: pd.DataFrame, mapping: ColumnMapping) -> pd.DataFrame:
+    def _normalize_long(self, raw_data: pd.DataFrame, mapping: ColumnMapping) -> List[Dict[str, Any]]:
         """Normalize long-format data (separate budget/actual/last_year columns)."""
-        rows = []
+        rows: List[Dict[str, Any]] = []
         label_col = mapping.label_col or mapping.item_col or mapping.category_col
 
         # Fallback: if no role columns detected, use first numeric column as actual
@@ -258,102 +387,215 @@ class FinancialDataNormalizer:
         if not actual_col and not budget_col and not last_year_col:
             # No role columns found — pick first numeric column as actual
             known_cols = set(mapping.period_cols)
-            if mapping.category_col:
-                known_cols.add(mapping.category_col)
-            if mapping.item_col:
-                known_cols.add(mapping.item_col)
-            if mapping.label_col:
-                known_cols.add(mapping.label_col)
+            for c in (mapping.category_col, mapping.item_col, mapping.label_col, mapping.product_col,
+                      mapping.channel_col, mapping.business_unit_col, mapping.year_col):
+                if c:
+                    known_cols.add(c)
             for c in raw_data.columns:
-                if c not in known_cols and raw_data[c].dtype in ('int64', 'float64'):
+                if c not in known_cols and (raw_data[c].dtype in ('int64', 'float64')
+                                            or self._looks_numeric(raw_data[c])):
                     actual_col = c
                     break
 
+        def value(row: pd.Series, col: Optional[str], label: str = '') -> Optional[float]:
+            if not col:
+                return None
+            base, label_factor = header_unit(label)
+            factor = label_factor if _UNIT_PATTERN.search(label) else mapping.unit_multipliers.get(col, 1.0)
+            return self._scaled(row.get(col), factor)
+
         for _, row in raw_data.iterrows():
             label = str(row.get(label_col, '')) if label_col else ''
-            category = str(row.get(mapping.category_col, '')) if mapping.category_col else label
-            item = str(row.get(mapping.item_col, '')) if mapping.item_col else label
+            dims = self._row_dims(row, mapping, label)
 
-            # Extract month from period column if exists
-            month_num = None
+            # Extract month (and year) from period column if exists
+            year_num, month_num = None, None
             if mapping.period_cols:
-                period_val = str(row.get(mapping.period_cols[0], ''))
-                month_num = self._extract_month(period_val)
+                year_num, month_num = self._extract_year_month(row.get(mapping.period_cols[0]))
+            if mapping.year_col:
+                explicit = self._parse_year(row.get(mapping.year_col))
+                if explicit:
+                    year_num = explicit
 
-            budget = self._safe_float(row.get(budget_col)) if budget_col else None
-            actual = self._safe_float(row.get(actual_col)) if actual_col else None
-            last_year = self._safe_float(row.get(last_year_col)) if last_year_col else None
-            ly_budget = self._safe_float(row.get(ly_budget_col)) if ly_budget_col else None
-
-            rows.append({
+            period_dims = {
+                'year': year_num or mapping.year,
                 'month': month_num or 0,
                 'quarter': f"Q{(month_num - 1) // 3 + 1}" if month_num else '',
-                'category': category,
-                'item': item,
-                'budget': budget,
-                'actual': actual,
-                'last_year': last_year,
-                'last_year_budget': ly_budget,
+                **dims,
+            }
+            if mapping.amount_subject_cols:
+                for subject, cols in mapping.amount_subject_cols.items():
+                    rows.append({**period_dims, 'item': S.CLASS_LABELS[subject],
+                                 **{role: value(row, cols.get(role)) for role in
+                                    ('actual', 'last_year', 'budget', 'last_year_budget')}})
+                continue
+            rows.append({
+                **period_dims,
+                'budget': value(row, budget_col, label),
+                'actual': value(row, actual_col, label),
+                'last_year': value(row, last_year_col, label),
+                'last_year_budget': value(row, ly_budget_col, label),
             })
 
-        return pd.DataFrame(rows)
+        return rows
 
     def _apply_period_filter(self, df: pd.DataFrame, period_filter: Dict) -> pd.DataFrame:
-        """Filter by period: {type: month|quarter|year|month_range, start_month, end_month}"""
+        """Filter by period.
+
+        period_type:
+          all          全部数据, 不按年也不按月过滤 (「全部历史」)
+          year         只保留 year 那一年
+          month        year 年的 start_month 月
+          quarter      year 年的 quarter (Q1..Q4) 或 start_month 所在季度
+          month_range  year 年的 start_month..end_month
+        """
         ptype = period_filter.get('period_type', 'year')
+        if df.empty or ptype == 'all':
+            return df
+        year = period_filter.get('year')
+        if year is not None and 'year' in df.columns:
+            df = df[df['year'] == int(year)]
         if ptype == 'year':
             return df
-        elif ptype == 'month':
+        if ptype == 'month':
             m = period_filter.get('start_month', 1)
             return df[df['month'] == m]
-        elif ptype == 'quarter':
-            q = period_filter.get('quarter', 'Q1')
+        if ptype == 'quarter':
+            q = period_filter.get('quarter') or f"Q{(int(period_filter.get('start_month', 1)) - 1) // 3 + 1}"
             return df[df['quarter'] == q]
-        elif ptype == 'month_range':
+        if ptype == 'month_range':
             s = period_filter.get('start_month', 1)
             e = period_filter.get('end_month', 12)
             return df[(df['month'] >= s) & (df['month'] <= e)]
         return df
 
+    RATIO_HEADER_KEYWORDS = ('率', '%', '％', '占比', '比重')
+
+    def _value_kind(self, mapping: ColumnMapping, sample_data: Optional[pd.DataFrame]) -> str:
+        """所有数值角色列都是比率 (表头带「率/%/占比」或单元格是百分比文本) 时为 ratio。"""
+        value_cols = [c for c in (mapping.actual_cols + mapping.last_year_cols + mapping.budget_cols)
+                      if not str(c).startswith('__row_role__')]
+        if not value_cols:
+            return "amount"
+
+        def is_ratio(col: str) -> bool:
+            base, _ = header_unit(col)
+            if any(kw in base for kw in self.RATIO_HEADER_KEYWORDS):
+                return True
+            if sample_data is None or col not in sample_data.columns:
+                return False
+            texts = [str(v).strip() for v in sample_data[col].dropna().tolist() if str(v).strip()]
+            return bool(texts) and sum(t.endswith(('%', '％')) for t in texts) >= max(1, int(len(texts) * 0.8))
+
+        return "ratio" if all(is_ratio(c) for c in value_cols) else "amount"
+
+    # ------------------------------------------------------------ primitives
+    def _row_role(self, label: str) -> str:
+        ll = str(label).lower()
+        if any(kw in ll for kw in ['预算', '目标', 'budget', 'target', '计划']):
+            return 'budget'
+        if any(kw in ll for kw in ['上年', '去年', '同期', 'last year', '上期']):
+            return 'last_year'
+        if any(kw in ll for kw in ['实际', '完成', 'actual', '达成', '本年']):
+            return 'actual'
+        return 'item'
+
     def _is_month_col(self, col_lower: str) -> bool:
-        return any(p.match(col_lower) for p in self.MONTH_PATTERNS)
+        return any(p.match(col_lower) for p in self.MONTH_PATTERNS) or bool(self.DATE_PATTERN.match(col_lower))
 
     def _is_quarter_col(self, col_lower: str) -> bool:
         return any(p.match(col_lower) for p in self.QUARTER_PATTERNS)
 
-    def _extract_month(self, text: str) -> Optional[int]:
-        text = text.strip()
+    def _extract_month(self, text: Any) -> Optional[int]:
+        return self._extract_year_month(text)[1]
+
+    def _extract_year_month(self, value: Any) -> Tuple[Optional[int], Optional[int]]:
+        """「1月」→(None,1); 「2026年1月」「2026-01」「2026-01-15」→(2026,1); 日期对象同理。"""
+        if value is None:
+            return None, None
+        if isinstance(value, (pd.Timestamp, datetime, date)):
+            if isinstance(value, pd.Timestamp) and pd.isna(value):
+                return None, None
+            return value.year, value.month
+        if isinstance(value, float) and np.isnan(value):
+            return None, None
+        text = str(value).strip()
+        m = self.DATE_PATTERN.match(text)
+        if m:
+            month = int(m.group(2))
+            return (int(m.group(1)), month) if 1 <= month <= 12 else (None, None)
         for p in self.MONTH_PATTERNS:
             m = p.match(text)
             if m:
                 groups = m.groups()
                 month = int(groups[-1])  # Last group is always month
-                if 1 <= month <= 12:
-                    return month
-        return None
+                if not 1 <= month <= 12:
+                    return None, None
+                year = int(groups[0]) if len(groups) == 2 else None
+                return year, month
+        return None, None
+
+    @staticmethod
+    def _parse_year(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        m = re.search(r'(19|20)\d{2}', str(value))
+        return int(m.group(0)) if m else None
+
+    @classmethod
+    def _scaled(cls, val: Any, factor: float) -> Optional[float]:
+        v = cls._safe_float(val)
+        if v is None:
+            return None
+        return v * factor if factor != 1.0 else v
 
     @staticmethod
     def _safe_float(val) -> Optional[float]:
+        """数字文本 -> float。「25%」→ 25.0 (百分点); 「(100)」→ -100; 「-」/空 → None。"""
         if val is None or (isinstance(val, float) and np.isnan(val)):
             return None
-        try:
-            v = float(str(val).replace(',', '').replace('，', ''))
+        if isinstance(val, (int, float, np.integer, np.floating)) and not isinstance(val, bool):
+            v = float(val)
             return v if not np.isnan(v) else None
+        text = str(val).strip().replace(',', '').replace('，', '').replace('¥', '').replace('￥', '')
+        if text in ('', '-', '—', '--', 'N/A', 'n/a', 'nan', 'None'):
+            return None
+        negative = False
+        if (text.startswith('(') and text.endswith(')')) or (text.startswith('（') and text.endswith('）')):
+            negative, text = True, text[1:-1]
+        if text.endswith('%'):
+            text = text[:-1]
+        try:
+            v = float(text)
         except (ValueError, TypeError):
             return None
+        if np.isnan(v):
+            return None
+        return -v if negative else v
+
+    @classmethod
+    def _looks_numeric(cls, series: pd.Series) -> bool:
+        vals = [v for v in series.dropna().tolist() if str(v).strip() != '']
+        if not vals:
+            return False
+        parsed = [cls._safe_float(v) for v in vals]
+        return sum(p is not None for p in parsed) >= max(1, int(len(vals) * 0.8))
 
     def classify_pnl_item(self, item_name: str) -> str:
-        """Classify a P&L item into: revenue, cost, expense, profit, tax, other."""
-        name = item_name.strip()
-        if any(kw in name for kw in self.PNL_REVENUE):
+        """Classify a P&L item into: revenue, cost, expense, profit, tax, other.
+
+        兼容旧调用方的粗分类; 判定本身只在 financial_subjects.py 里。
+        """
+        cls = S.classify_subject(item_name)
+        if cls == S.REVENUE:
             return 'revenue'
-        if any(kw in name for kw in self.PNL_COST):
+        if cls == S.COST:
             return 'cost'
-        if any(kw in name for kw in self.PNL_EXPENSE):
+        if cls in S.EXPENSE_CLASSES:
             return 'expense'
-        if any(kw in name for kw in self.PNL_PROFIT):
+        if cls in S.REPORTED_PROFIT_CLASSES:
             return 'profit'
-        if any(kw in name for kw in self.PNL_TAX):
+        if cls in (S.INCOME_TAX, S.SURCHARGE):
             return 'tax'
         return 'other'
 

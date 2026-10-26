@@ -27,6 +27,17 @@ public class BomReverseQueryTool extends AbstractBusinessTool {
     @Autowired
     private BomReverseQueryService reverseQueryService;
 
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    private static Map<String, Object> restrictedSummary(String recipeId, String productTypeId) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("recipeId", recipeId);
+        m.put("productTypeId", productTypeId);
+        m.put("processSecret", Map.of("visibility", "RESTRICTED"));
+        return m;
+    }
+
     @Override
     public String getToolName() {
         return "bom_reverse_query";
@@ -72,13 +83,24 @@ public class BomReverseQueryTool extends AbstractBusinessTool {
         switch (mode.toUpperCase()) {
             case "RECIPES": {
                 List<BomRecipe> recipes = reverseQueryService.findRecipesByMaterial(factoryId, materialId);
+                // 工艺保密: 受保护且无权的配方只给摘要 (AI 工具结果不能比人直接调接口更宽)
+                List<Object> visible = new java.util.ArrayList<>();
+                for (BomRecipe r : recipes) {
+                    visible.add(processSecretGuard.permitsFullContent(factoryId, r.getId(), "AI tool bom_reverse_query")
+                            ? r : restrictedSummary(r.getId(), r.getProductTypeId()));
+                }
                 return buildSimpleResult("反查 " + recipes.size() + " 个 BOM 配方",
-                        Map.of("count", recipes.size(), "recipes", recipes));
+                        Map.of("count", recipes.size(), "recipes", visible));
             }
             case "USAGE": {
                 List<BomItemUsage> usages = reverseQueryService.findUsageByMaterial(factoryId, materialId);
+                List<Object> visible = new java.util.ArrayList<>();
+                for (BomItemUsage u : usages) {
+                    visible.add(processSecretGuard.permitsFullContent(factoryId, u.getRecipeId(), "AI tool bom_reverse_query")
+                            ? u : restrictedSummary(u.getRecipeId(), u.getProductTypeId()));
+                }
                 return buildSimpleResult("反查 " + usages.size() + " 条用量明细",
-                        Map.of("count", usages.size(), "usages", usages));
+                        Map.of("count", usages.size(), "usages", visible));
             }
             case "REPLACE_ANALYSIS": {
                 String newMaterialId = getString(params, "newMaterialId");
@@ -87,6 +109,25 @@ public class BomReverseQueryTool extends AbstractBusinessTool {
                 }
                 MaterialReplacementImpact impact = reverseQueryService.analyzeReplacement(
                         factoryId, materialId, newMaterialId);
+                // 工艺保密: 成本差 ÷ 价差 = 用量, 受保护且无权的配方不出现在明细里
+                if (impact.getRecipeBreakdown() != null) {
+                    int before = impact.getRecipeBreakdown().size();
+                    impact.getRecipeBreakdown().removeIf(ri -> !processSecretGuard.permitsFullContent(
+                            factoryId, ri.getRecipeId(), "AI tool bom_reverse_query"));
+                    int hidden = before - impact.getRecipeBreakdown().size();
+                    if (hidden > 0) {
+                        // 总量只汇总可见配方: 否则「总差额 − 可见之和」就是隐藏配方的差额, 再除价差即用量
+                        impact.setTotalCostDelta(impact.getRecipeBreakdown().stream()
+                                .map(MaterialReplacementImpact.RecipeImpact::getCostDelta)
+                                .filter(java.util.Objects::nonNull)
+                                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add));
+                        impact.setAffectedRecipeCount(impact.getRecipeBreakdown().size());
+                        impact.setAffectedItemCount(0);
+                        if (impact.getWarnings() != null) {
+                            impact.getWarnings().add(hidden + " 个保密配方未计入，合计只含可见配方");
+                        }
+                    }
+                }
                 return buildSimpleResult("替换影响: " + impact.getAffectedRecipeCount() + " BOM 受影响, "
                         + "totalCostDelta=" + impact.getTotalCostDelta(), impact);
             }

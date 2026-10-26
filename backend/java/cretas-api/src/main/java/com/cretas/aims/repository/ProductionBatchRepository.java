@@ -96,8 +96,8 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * {@code ProcessingServiceImpl#getBatchPage}) —— 空搜索词继续走既有 6 个分支, 零改动。
      */
     @Query("SELECT p FROM ProductionBatch p WHERE p.factoryId = :factoryId "
-         + "AND (:status IS NULL OR p.status = :status) "
-         + "AND (:supervisorId IS NULL OR p.supervisorId = :supervisorId) "
+         + "AND (:#{#status == null} = true OR p.status = :status) "
+         + "AND (:#{#supervisorId == null} = true OR p.supervisorId = :supervisorId) "
          + "AND (:includeClerkWip = true OR p.batchType <> 'CLERK_WIP') "
          + "AND (LOWER(p.batchNumber) LIKE LOWER(CONCAT('%', :batchNumber, '%')) "
          + "     OR p.id IN (SELECT r.batchId FROM ProcessSheetRow r, ProductionPlan pl "
@@ -356,6 +356,20 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
      * 统计指定状态的批次数量（跨所有工厂）
      */
     long countByStatus(ProductionBatchStatus status);
+
+    /**
+     * 跨工厂批次总数, 不含工艺保密产品的批次 (隐私条款第六条: 保密产品不纳入跨客户统计)。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE NOT EXISTS (SELECT 1 FROM ProcessSecretPolicy p "
+            + "WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId)")
+    long countExcludingProcessSecretProducts();
+
+    /**
+     * 跨工厂某状态批次数, 不含工艺保密产品的批次 (隐私条款第六条)。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.status = :status AND NOT EXISTS ("
+            + "SELECT 1 FROM ProcessSecretPolicy p WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId)")
+    long countByStatusExcludingProcessSecretProducts(@Param("status") ProductionBatchStatus status);
 
     /**
      * 获取时间范围内的批次（用于成本分析和绩效计算）

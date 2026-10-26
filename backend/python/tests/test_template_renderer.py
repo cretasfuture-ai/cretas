@@ -319,6 +319,17 @@ def client():
     app = FastAPI()
     from printing.api import print as printing_api
 
+    @app.middleware("http")
+    async def _authenticated(request, call_next):
+        # 生产上 Java 转发用户 JWT, AuthMiddleware 把身份写进 request.state;
+        # 这里按测试头模拟 (默认 F001 工厂用户)
+        request.state.auth_method = "jwt"
+        request.state.role = request.headers.get("X-Test-Role", "factory_super_admin")
+        factory = request.headers.get("X-Test-Factory", "F001")
+        if factory:
+            request.state.factory_id = factory
+        return await call_next(request)
+
     app.include_router(printing_api.router, prefix="/api/printing")
     return TestClient(app)
 
@@ -366,9 +377,20 @@ class TestEndpoint:
         )
         assert resp.status_code == 400
 
-    def test_missing_factory_id_returns_400(self, client):
+    def test_foreign_factory_id_returns_403(self, client):
+        # 工厂隔离: 载荷里的 factoryId 决定模板查询的 RLS 租户, 不能借它读别厂模板
         resp = client.post(
             "/api/printing/preview-template",
+            json={"factoryId": "F002", "inlineSchemaJson": _VALID_SCHEMA_JSON,
+                  "entityType": "PRINT_SALES_ORDER"},
+        )
+        assert resp.status_code == 403
+
+    def test_missing_factory_id_returns_400(self, client):
+        # 平台模板编辑器 (平台角色, 身份里没有工厂) 必须点名工厂
+        resp = client.post(
+            "/api/printing/preview-template",
+            headers={"X-Test-Role": "super_admin", "X-Test-Factory": ""},
             json={
                 "inlineSchemaJson": _VALID_SCHEMA_JSON,
                 "entityType": "PRINT_SALES_ORDER",

@@ -58,7 +58,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
-from common.llm_client import get_llm_http_client
+from common.llm_client import EgressRedactionError, get_llm_http_client
 # ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
 #    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
 #    llm_budget 不 import llm_router, 无循环依赖。
@@ -2536,6 +2536,9 @@ async def call_chain(
             )
             errors.append(f"{account}/{model}: timeout")
             continue
+        except EgressRedactionError:
+            # 本地脱敏失败: 没有任何内容出境; 换候选只会再失败, 也不是供应商故障 → 不记熔断, 直接抛
+            raise
         except Exception as e:
             _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
@@ -2801,6 +2804,8 @@ async def call_chain_stream(
             )
             errors.append(f"{account}/{model}: timeout")
             continue
+        except EgressRedactionError:
+            raise
         except Exception as e:
             if first_delta_yielded:
                 # Mid-stream errors don't trip CB (we got partial value from this provider)

@@ -33,6 +33,8 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2
 import psycopg2.extras
 
+from training_consent_gate import apply_utterance_rule
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -178,7 +180,7 @@ def fetch_shadow_disagreements(conn, since_days: int) -> List[Dict]:
     We only include records where shadow_confidence is reasonably high.
     """
     query = """
-        SELECT user_input, matched_intent_code,
+        SELECT factory_id, user_input, matched_intent_code,
                shadow_intent_code, shadow_confidence,
                confidence_score, match_method
         FROM intent_match_records
@@ -191,7 +193,7 @@ def fetch_shadow_disagreements(conn, since_days: int) -> List[Dict]:
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(query, [since_days])
-        rows = cur.fetchall()
+        rows = apply_utterance_rule([dict(r) for r in cur.fetchall()], ("user_input",))
 
     records = []
     for row in rows:
@@ -232,7 +234,7 @@ def fetch_user_confirmed(conn, since_days: int) -> List[Dict]:
     instead of matched_intent_code.
     """
     query = """
-        SELECT user_input, matched_intent_code,
+        SELECT factory_id, user_input, matched_intent_code,
                user_selected_intent, confidence_score
         FROM intent_match_records
         WHERE user_confirmed = true
@@ -241,7 +243,7 @@ def fetch_user_confirmed(conn, since_days: int) -> List[Dict]:
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(query, [since_days])
-        rows = cur.fetchall()
+        rows = apply_utterance_rule([dict(r) for r in cur.fetchall()], ("user_input",))
 
     records = []
     for row in rows:

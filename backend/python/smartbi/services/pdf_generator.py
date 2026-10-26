@@ -2,7 +2,10 @@
 import base64
 import io
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from xml.sax.saxutils import escape
+
+from smartbi.services.financial.export_conclusions import conclusion_rows
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,7 +23,12 @@ class FinancialPDFGenerator:
                  year: int = 2026,
                  period_type: str = "year",
                  start_month: int = 1, end_month: int = 12,
-                 kpi_summary: Optional[Dict] = None) -> bytes:
+                 kpi_summary: Optional[Dict] = None,
+                 headline: Optional[Dict] = None,
+                 findings: Optional[Dict[str, List[str]]] = None,
+                 chart_titles: Optional[Dict[str, str]] = None,
+                 period_label: Optional[str] = None,
+                 report_title: Optional[str] = None) -> bytes:
         """Generate PDF bytes from chart images and analysis results."""
         try:
             from reportlab.lib.pagesizes import A4, landscape
@@ -37,7 +45,9 @@ class FinancialPDFGenerator:
             raise ImportError("reportlab not installed. Run: pip install reportlab>=4.0")
 
         # Try to register Chinese font
-        chinese_font = 'Helvetica'  # fallback
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        chinese_font = 'STSong-Light'
         for font_path in [
             '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
@@ -83,19 +93,28 @@ class FinancialPDFGenerator:
             leading=14, spaceAfter=6,
         )
 
-        period_label = self._period_label(year, period_type, start_month, end_month)
+        period_label = period_label or self._period_label(year, period_type, start_month, end_month)
         elements = []
 
         # --- Cover ---
         elements.append(Spacer(1, 2*inch))
-        elements.append(Paragraph(company_name, title_style))
-        elements.append(Paragraph("财务分析报告", ParagraphStyle(
+        elements.append(Paragraph(escape(company_name), title_style))
+        elements.append(Paragraph(escape(report_title or "财务分析报告"), ParagraphStyle(
             'ReportTitle', parent=title_style, fontSize=22,
         )))
         elements.append(Spacer(1, 0.3*inch))
-        elements.append(Paragraph(period_label, subtitle_style))
+        elements.append(Paragraph(escape(period_label), subtitle_style))
         elements.append(Paragraph(f"生成日期: {datetime.now().strftime('%Y-%m-%d')}", subtitle_style))
         elements.append(PageBreak())
+
+        # Page text is data, not reportlab markup; preserve <, > and & literally.
+        rows = conclusion_rows(headline, findings)
+        if rows:
+            elements.append(Paragraph("分析结论", heading_style))
+            for title, text in rows:
+                elements.append(Paragraph(escape(title), heading_style))
+                elements.append(Paragraph(escape(text).replace('\n', '<br/>'), body_style))
+            elements.append(PageBreak())
 
         # --- KPI Summary ---
         if kpi_summary and kpi_summary.get('items'):
@@ -138,10 +157,10 @@ class FinancialPDFGenerator:
         for chart_type in ordered_types:
             img_b64 = chart_images.get(chart_type, '')
             analysis = analysis_results.get(chart_type, '')
-            display_name = CHART_DISPLAY_NAMES.get(chart_type, chart_type)
+            display_name = (chart_titles or {}).get(chart_type) or CHART_DISPLAY_NAMES.get(chart_type, chart_type)
 
             chart_elements = []
-            chart_elements.append(Paragraph(display_name, heading_style))
+            chart_elements.append(Paragraph(escape(display_name), heading_style))
 
             # Chart image
             if img_b64:
@@ -159,14 +178,14 @@ class FinancialPDFGenerator:
             # AI Analysis
             if analysis:
                 chart_elements.append(Spacer(1, 0.2*inch))
-                chart_elements.append(Paragraph("AI 分析", ParagraphStyle(
+                chart_elements.append(Paragraph("规则分析与来源" if report_title else "AI 分析", ParagraphStyle(
                     'AnalysisTitle', parent=heading_style, fontSize=13,
                 )))
                 # Split into paragraphs
-                for line in analysis[:2000].split('\n'):
+                for line in (analysis if report_title else analysis[:2000]).split('\n'):
                     line = line.strip()
                     if line:
-                        chart_elements.append(Paragraph(line, body_style))
+                        chart_elements.append(Paragraph(escape(line), body_style))
 
             elements.extend(chart_elements)
             elements.append(PageBreak())
@@ -178,7 +197,7 @@ class FinancialPDFGenerator:
         )))
         elements.append(Spacer(1, 0.3*inch))
         elements.append(Paragraph(
-            f"{company_name} · {period_label} · 由 SmartBI 智能生成",
+            escape(f"{company_name} · {period_label} · 由 SmartBI 智能生成"),
             subtitle_style,
         ))
 

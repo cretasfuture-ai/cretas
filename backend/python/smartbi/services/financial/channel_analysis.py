@@ -2,21 +2,16 @@
 import logging
 from typing import Dict, Any
 import pandas as pd
-import numpy as np
 
 from .base import (
     AbstractFinancialChartBuilder, COLORS, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
+from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
 
-# Default channel split ratios when no explicit channel column exists
-DEFAULT_CHANNEL_SPLITS = {
-    "直营": 0.35,
-    "经销": 0.30,
-    "电商": 0.25,
-    "其他": 0.10,
-}
+NO_CHANNEL_MESSAGE = "上传的数据里没有「渠道」列，无法做渠道分析。请在表格中加一列「渠道」（如商超、经销、电商）后重新上传。"
 
 
 class ChannelAnalysisBuilder(AbstractFinancialChartBuilder):
@@ -25,7 +20,8 @@ class ChannelAnalysisBuilder(AbstractFinancialChartBuilder):
     chart_type = "channel_analysis"
     display_name = "渠道分析"
     description = "展示各销售渠道的收入构成，水平堆叠柱状图呈现渠道贡献与占比"
-    required_columns = ['actual', 'category']
+    # 没有渠道列也要出这张卡片, 用来明确告诉用户缺什么 (⛔ 不按比例编造渠道)
+    required_columns = ['actual']
     display_order = 11
 
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
@@ -44,43 +40,20 @@ class ChannelAnalysisBuilder(AbstractFinancialChartBuilder):
             }
 
     def _do_build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int) -> Dict[str, Any]:
-        # --- Detect channel column ---
-        channel_col = None
-        for col in df.columns:
-            col_lower = str(col).lower()
-            if col_lower in ('channel', '渠道', '销售渠道', 'sales_channel'):
-                channel_col = col
-                break
+        if not getattr(column_mapping, 'channel_col', None) or 'channel' not in df.columns:
+            return self._empty_result(period, year, NO_CHANNEL_MESSAGE)
 
-        if channel_col is not None:
-            # Use explicit channel data
-            channel_data = df.groupby(channel_col).agg(
-                revenue=('actual', 'sum')
-            ).reset_index()
-            channel_data.columns = ['channel', 'revenue']
-            channel_data = channel_data[
-                (channel_data['channel'].notna()) &
-                (channel_data['channel'].str.strip() != '') &
-                (channel_data['revenue'].fillna(0) != 0)
-            ]
-        else:
-            # Synthesize channel data from category totals
-            total_revenue = df['actual'].sum()
-            if total_revenue == 0 or pd.isna(total_revenue):
-                return self._empty_result(period, year)
+        # 有科目时只取收入行; 普通销售表 (没有科目) 每一行就是收入
+        source = M.select(df, [S.REVENUE]) if M.has_subjects(df) else df
+        source = source[source['channel'].fillna('').astype(str).str.strip() != '']
+        if source.empty or source['actual'].notna().sum() == 0:
+            return self._empty_result(period, year, "所选期间没有带渠道的收入数据")
 
-            rows = []
-            for ch_name, ratio in DEFAULT_CHANNEL_SPLITS.items():
-                # Add small random variance (±5%) for realism
-                variance = np.random.uniform(-0.05, 0.05)
-                rows.append({
-                    "channel": ch_name,
-                    "revenue": round(total_revenue * ratio * (1 + variance), 2),
-                })
-            channel_data = pd.DataFrame(rows)
+        channel_data = source.groupby('channel').agg(revenue=('actual', 'sum')).reset_index()
+        channel_data = channel_data[channel_data['revenue'] != 0]
 
         if channel_data.empty:
-            return self._empty_result(period, year)
+            return self._empty_result(period, year, "所选期间各渠道收入均为 0")
 
         # Sort descending by revenue
         channel_data = channel_data.sort_values('revenue', ascending=False).reset_index(drop=True)
@@ -240,22 +213,22 @@ class ChannelAnalysisBuilder(AbstractFinancialChartBuilder):
             "analysisContext": analysis_context,
             "metadata": {
                 "period": period,
-                "dataQuality": "good" if channel_col else "synthesized",
+                "dataQuality": "good",
                 "channelCount": len(channels),
                 "scale": scale['suffix'],
             },
         }
         return _sanitize_for_json(result)
 
-    def _empty_result(self, period: Dict, year: int) -> Dict:
+    def _empty_result(self, period: Dict, year: int, reason: str = "无渠道分析数据") -> Dict:
         return {
             "chartType": self.chart_type,
             "title": f"{year}年{self.display_name}",
             "kpis": [],
             "echartsOption": {},
             "tableData": None,
-            "analysisContext": "无渠道分析数据",
-            "metadata": {"period": period, "dataQuality": "insufficient"},
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
         }
 
 

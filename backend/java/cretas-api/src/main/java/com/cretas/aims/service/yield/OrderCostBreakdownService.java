@@ -159,6 +159,30 @@ public class OrderCostBreakdownService {
     }
 
     /**
+     * 一组生产批合起来算一份成本 —— 给「多产出且产出都是正式批」的那道工序算联合成本用:
+     * 投入只记在组里第一个产出批上, 其余成员批没有领料, 单独算每个成员要么吃掉全部、要么算不出
+     * (F006【演示L5】组装 4→2: 单层批 ¥8302 / 双层批无成本)。合在一起算时包材覆盖、「是否一点没归集」
+     * 都按整组判, 与 {@link #computeByPlan} 同一个内核。
+     *
+     * @return 任一批次不存在或不属于本厂 → {@code null} (调用方按「拿不到」处理, ⛔ 不当 0)
+     */
+    public OrderCostBreakdownDTO computeByBatchIds(String factoryId, String label,
+                                                    List<Long> batchIds, boolean maskPrice) {
+        if (batchIds == null || batchIds.isEmpty()) {
+            return null;
+        }
+        List<ProductionBatch> batches = new ArrayList<>();
+        for (Long id : batchIds.stream().distinct().toList()) {
+            ProductionBatch b = batchRepository.findByIdAndFactoryId(id, factoryId).orElse(null);
+            if (b == null) {
+                return null;
+            }
+            batches.add(b);
+        }
+        return computeForBatches(factoryId, label, batches, maskPrice);
+    }
+
+    /**
      * 内核: 已有 batches 列表 → 成本归集 → OrderCostBreakdownDTO.
      * by-order 与 by-batch 共用此方法; {@code label} 填入 DTO.orderId (展示用, by-order=orderId, by-batch=batchNumber).
      * <p>纯 extract-method: 无任何逻辑变更, by-order 行为零回归。
@@ -229,6 +253,40 @@ public class OrderCostBreakdownService {
                     .findByProductionBatchIdAndFactoryId(batch.getId(), factoryId);
             directConsumptionsByBatch.put(batch.getId(), rows == null ? List.of() : rows);
         }
+        // 辅料先估的「有没有记录」按【计划】问, 不按批次问: 逐道录入的 Workflow 计划一道工序一个批次,
+        // 调料只在绑了它的那道(卤制)上实耗, 前处理批(修油/清洗)有主料投入却没有调料 ——
+        // 按批次问就会在每个前处理批上把整张 BOM 的调料再估一遍(双计), 无价的那几味还会阻断成本
+        // (F006【演示L3】c644d590: 猪舌/猪大肠两批各估 10 味, 2026-10-25)。
+        // ⚠️ 必须连 CLERK_WIP 批一起看: 计划成本的批次清单 (findByFactoryIdAndProductionPlanId) 排除了逐道录入的
+        //    中间 WIP 批, 调料恰恰实耗在它们身上, 到末道只以半成品投料单价的形式进来 —— 只看清单里的批次,
+        //    末道仍会把整张 BOM 再估一遍 (#1150 上线后 L3A 实测仍 409, 2026-10-25)。
+        Map<String, java.util.Set<String>> recordedMaterialTypeIdsByPlan = new LinkedHashMap<>();
+        for (ProductionBatch batch : batches) {
+            String planId = batch.getProductionPlanId();
+            if (planId == null || recordedMaterialTypeIdsByPlan.containsKey(planId)) {
+                continue;
+            }
+            java.util.Set<String> planRecorded = new java.util.HashSet<>();
+            recordedMaterialTypeIdsByPlan.put(planId, planRecorded);
+            java.util.Map<Long, ProductionBatch> planBatches = new LinkedHashMap<>();
+            batches.stream().filter(x -> planId.equals(x.getProductionPlanId()))
+                    .forEach(x -> planBatches.put(x.getId(), x));
+            List<ProductionBatch> withWip = batchRepository
+                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId);
+            if (withWip != null) {
+                withWip.forEach(x -> planBatches.putIfAbsent(x.getId(), x));
+            }
+            for (Long batchId : planBatches.keySet()) {
+                List<MaterialConsumption> rows = directConsumptionsByBatch.containsKey(batchId)
+                        ? directConsumptionsByBatch.get(batchId)
+                        : consumptionRepository.findByProductionBatchIdAndFactoryId(batchId, factoryId);
+                for (MaterialConsumption c : rows == null ? List.<MaterialConsumption>of() : rows) {
+                    if (c.getMaterialTypeId() != null) {
+                        planRecorded.add(c.getMaterialTypeId());
+                    }
+                }
+            }
+        }
         MultiOutputPackagingScope multiOutputPackagingScope = resolveMultiOutputPackagingScope(
                 factoryId, batches, directConsumptionsByBatch);
 
@@ -254,7 +312,9 @@ public class OrderCostBreakdownService {
             boolean batchRawInputConvertible = true;
             // 本批任何类别下已经有耗用记录的物料 —— 有记录就不估 (含 quantity=0 的记录, 见
             // estimateAuxByBomRatio javadoc「什么叫没有实际耗用」)。
-            java.util.Set<String> recordedMaterialTypeIds = new java.util.HashSet<>();
+            java.util.Set<String> recordedMaterialTypeIds = new java.util.HashSet<>(
+                    b.getProductionPlanId() == null ? java.util.Set.of()
+                            : recordedMaterialTypeIdsByPlan.getOrDefault(b.getProductionPlanId(), java.util.Set.of()));
             List<MaterialConsumption> batchConsumptions = new ArrayList<>(
                     directConsumptionsByBatch.getOrDefault(b.getId(), List.of()));
             batchConsumptions.addAll(
@@ -490,6 +550,9 @@ public class OrderCostBreakdownService {
                 labor = labor.add(up[0]);
                 seasoning = seasoning.add(up[1]);
                 upstreamByproductCredit = upstreamByproductCredit.add(up[2]);
+                semiFeedCost = semiFeedCost.add(up[3]);
+                anySemiFeed = anySemiFeed || up[4].signum() > 0;
+                semiFeedUnknown = semiFeedUnknown || up[5].signum() > 0;
             }
 
             // ── R4: 本批 process-row 的 SFI/FG 投料成本 (MaterialConsumption 之外的边) ──
@@ -1442,12 +1505,55 @@ public class OrderCostBreakdownService {
         BigDecimal apportioned;
         if (sum.signum() > 0 && consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
             apportioned = sum.multiply(consumedQty)
+                    .multiply(multiOutputOwnerShare(factoryId, upstreamBatchId))
                     .divide(upstreamQty, 4, java.math.RoundingMode.HALF_UP);
         } else {
             apportioned = legacy;   // 缺量数据 → 改前行为, 既有数据零回归
         }
         visited.remove(upstreamBatchId);   // 路径作用域出栈 (见上方 diamond 注释)
         return new BigDecimal[]{apportioned.signum() > 0 ? apportioned : own, BigDecimal.valueOf(maxChildDepth)};
+    }
+
+    /**
+     * 一进多出拆分批的 WIP 产出只承担它那一份联合成本: 拆分批把<b>全部</b>投入吃进来, 再分成「主产出 →
+     * 本批 WIP」+「其余产出 → 半成品库存(各带分摊成本)」。按 consumedQty/receiptQty 回溯时比例是 1,
+     * 主产出那条链会把拆分批的全部投入和人工都算走, 而其余产出又随半成品投料单价各算一份 ⇒ 双计
+     * (F006【演示L4】整鸡分割: 炸鸡腿链追到整只鸡 ¥2800 + 全部人工, 计划总成本 ¥7188 对实际投入 ¥5096,
+     * 2026-10-25)。份额取拆分批主行报工时落库的 {@code costAllocationRatio} —— 与分给半成品的那几份
+     * 是同一次分摊, 合计 100%。
+     *
+     * @return (0,1]; 不是多产出主行 / 找不到唯一主行 / 比例不在 (0,100) → 1 (原行为)
+     */
+    BigDecimal multiOutputOwnerShare(String factoryId, Long productionBatchId) {
+        if (processSheetRowRepository == null || objectMapper == null || productionBatchId == null) {
+            return BigDecimal.ONE;
+        }
+        List<com.cretas.aims.entity.processentry.ProcessSheetRow> rows =
+                processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, productionBatchId);
+        BigDecimal ratio = null;
+        int owners = 0;
+        for (com.cretas.aims.entity.processentry.ProcessSheetRow row : rows == null
+                ? List.<com.cretas.aims.entity.processentry.ProcessSheetRow>of() : rows) {
+            if (!com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_SUBMITTED
+                    .equals(row.getSubmissionStatus()) || row.getRowPayload() == null) {
+                continue;
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode p = objectMapper.readTree(row.getRowPayload());
+                if (p == null || !p.path("multiOutputMember").asBoolean(false)) {
+                    continue;
+                }
+                com.fasterxml.jackson.databind.JsonNode r = p.get("costAllocationRatio");
+                owners++;
+                ratio = r == null || r.isNull() ? null : new BigDecimal(r.asText());
+            } catch (Exception e) {
+                return BigDecimal.ONE;
+            }
+        }
+        if (owners != 1 || ratio == null || ratio.signum() <= 0 || ratio.compareTo(BigDecimal.valueOf(100)) >= 0) {
+            return BigDecimal.ONE;
+        }
+        return ratio.divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
     }
 
     /**
@@ -1469,7 +1575,9 @@ public class OrderCostBreakdownService {
      */
     private BigDecimal[] aggregateUpstreamLaborSeasoning(String factoryId, MaterialConsumption c,
                                                          int depth, java.util.Set<Long> visited) {
-        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
+        // [labor, seasoning, byproductCredit, semiFeedKnown, semiFeedAny(0/1), semiFeedUnknown(0/1)]
+        BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
         if (c.getBatchId() == null || depth >= MAX_DEPTH) {
             return zero;
         }
@@ -1486,26 +1594,42 @@ public class OrderCostBreakdownService {
         BigDecimal labor = self[0];
         BigDecimal seasoning = self[1];
         BigDecimal byproductCredit = self[2];   // ★ 副产回收沿 WIP 链传播 (严格审计 2026-06-25)
-        // 再递归该上游批的消耗 → 更上游的 人工/调料/副产
+        // 上游生产批自身 process-row 的 SFI/FG 投料 —— 从前只算末道批自身(accumulateStockFeedCost(b)),
+        // 上游 WIP 批吃进的常驻半成品成本沿链丢失 (F006【演示L4】8d77ec57: 鸡胸分割后入 SFI ¥1142.90,
+        // 熟制批投它, 白切鸡胸成品成本只剩本道 ¥692.46)。与本批同一个计价服务, 不双计:
+        // SFI/FG 投料边不写 MaterialConsumption, traceCost 永远看不到它们。
+        ProductionBatch upstreamBatch = new ProductionBatch();
+        upstreamBatch.setId(upstreamBatchId);
+        BigDecimal[] feed = accumulateStockFeedCost(factoryId, upstreamBatch);
+        BigDecimal semiFeed = feed[0];
+        boolean semiAny = feed[1].signum() > 0;
+        boolean semiUnknown = feed[2].signum() > 0;
+        // 再递归该上游批的消耗 → 更上游的 人工/调料/副产/投料
         for (MaterialConsumption u : consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId)) {
             BigDecimal[] r = aggregateUpstreamLaborSeasoning(factoryId, u, depth + 1, visited);
             labor = labor.add(r[0]);
             seasoning = seasoning.add(r[1]);
             byproductCredit = byproductCredit.add(r[2]);
+            semiFeed = semiFeed.add(r[3]);
+            semiAny = semiAny || r[4].signum() > 0;
+            semiUnknown = semiUnknown || r[5].signum() > 0;
         }
-        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料/副产 × consumedQty/upstreamReceiptQty。
+        // ★ 按消耗比例分摊 (镜像 traceCost): 上游(含更上游)的 人工/调料/副产/投料 × consumedQty/upstreamReceiptQty。
         BigDecimal consumedQty = nz(c.getQuantity());
         BigDecimal upstreamQty = nz(mb.getReceiptQuantity());
         if (consumedQty.signum() > 0 && upstreamQty.signum() > 0) {
-            labor = labor.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
-            seasoning = seasoning.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
-            byproductCredit = byproductCredit.multiply(consumedQty).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            BigDecimal share = consumedQty.multiply(multiOutputOwnerShare(factoryId, upstreamBatchId));
+            labor = labor.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            seasoning = seasoning.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            byproductCredit = byproductCredit.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+            semiFeed = semiFeed.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
         }
         // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
         // ★ 严格审计 2026-06-25: 路径作用域出栈 — 允许兄弟 diamond 路径遍历同上游
         // (否则第二条路径被误判为环 → 返 zero → diamond 下 labor/调料/副产少计; 镜像 traceCost)。
         visited.remove(upstreamBatchId);
-        return new BigDecimal[]{labor, seasoning, byproductCredit};
+        return new BigDecimal[]{labor, seasoning, byproductCredit, semiFeed,
+                semiAny ? BigDecimal.ONE : BigDecimal.ZERO, semiUnknown ? BigDecimal.ONE : BigDecimal.ZERO};
     }
 
     /**

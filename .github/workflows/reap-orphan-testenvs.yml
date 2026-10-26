@@ -48,7 +48,7 @@ concurrency:
 jobs:
   reap:
     # 必须落在自建 runner 上 —— 孤儿进程在那台机器上, 托管 runner 上什么都没有。
-    runs-on: [self-hosted, cretas]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

@@ -6,6 +6,8 @@ import com.cretas.aims.dto.factory.ByproductCreditDTO;
 import com.cretas.aims.dto.factory.StocktakeDTO;
 import com.cretas.aims.dto.factory.StocktakeItemUpdateDTO;
 import com.cretas.aims.dto.factory.StocktakeDefectCountRequest;
+import com.cretas.aims.dto.factory.StocktakeRecountRequest;
+import com.cretas.aims.dto.factory.StocktakeCancelRequest;
 import com.cretas.aims.entity.factory.FactoryStocktake;
 import com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction;
 import org.springframework.data.domain.Page;
@@ -43,6 +45,16 @@ public interface FactoryStocktakeService {
      */
     StocktakeDTO initiate(String factoryId, CreateStocktakeRequest req, Long userId,
                           FactoryStocktake.ImportMode importMode);
+
+    /**
+     * Internal OPENING import entry: snapshot exactly the already-resolved batch identities.
+     * This is intentionally not exposed through the public REST request DTO.
+     */
+    StocktakeDTO initiateOpeningScoped(String factoryId, CreateStocktakeRequest req, Long userId,
+            List<String> materialBatchIds);
+
+    /** Cancel an unsubmitted task by its active same-factory maker. */
+    StocktakeDTO cancel(String stocktakeId, String factoryId, StocktakeCancelRequest request, Long actorId);
 
     /**
      * 查询"发起盘点"的月底约束展示态 (fool-proof-design Rule 1: 边界必须在用户填表前展示,
@@ -149,6 +161,13 @@ public interface FactoryStocktakeService {
      * @return 盘点任务 DTO
      */
     StocktakeDTO getDetail(String stocktakeId, String factoryId);
+
+    /**
+     * Recover an approved stocktake whose live inventory drifted before apply.
+     * The approved evidence is retained and a new counting task is created.
+     */
+    StocktakeDTO recountAfterDrift(String stocktakeId, String factoryId,
+            StocktakeRecountRequest request, Long userId, String requestRole);
 
     /**
      * SP12 §5.2: 提交审批并启动 INVENTORY_ADJUSTMENT workflow。

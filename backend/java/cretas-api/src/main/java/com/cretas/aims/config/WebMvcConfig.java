@@ -4,6 +4,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import com.cretas.aims.security.DataScopeRouteInterceptor;
+import com.cretas.aims.security.ProcessSecretGuardInterceptor;
 
 /**
  * Spring MVC配置
@@ -22,6 +23,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final RequireRoleInterceptor requireRoleInterceptor;
     private final ModuleEnabledInterceptor moduleEnabledInterceptor;
     private final DataScopeRouteInterceptor dataScopeRouteInterceptor;
+    private final ProcessSecretGuardInterceptor processSecretGuardInterceptor;
+    private final com.cretas.aims.audit.PlatformDataAccessLogInterceptor platformDataAccessLogInterceptor;
+
 
     // 构造器注入 - Spring 确保依赖已就绪
     public WebMvcConfig(JwtAuthInterceptor jwtAuthInterceptor,
@@ -29,13 +33,17 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         PermissionInterceptor permissionInterceptor,
                         RequireRoleInterceptor requireRoleInterceptor,
                         ModuleEnabledInterceptor moduleEnabledInterceptor,
-                        DataScopeRouteInterceptor dataScopeRouteInterceptor) {
+                        DataScopeRouteInterceptor dataScopeRouteInterceptor,
+                        ProcessSecretGuardInterceptor processSecretGuardInterceptor,
+                        com.cretas.aims.audit.PlatformDataAccessLogInterceptor platformDataAccessLogInterceptor) {
         this.jwtAuthInterceptor = jwtAuthInterceptor;
         this.demoReadOnlyInterceptor = demoReadOnlyInterceptor;
         this.permissionInterceptor = permissionInterceptor;
         this.requireRoleInterceptor = requireRoleInterceptor;
         this.moduleEnabledInterceptor = moduleEnabledInterceptor;
         this.dataScopeRouteInterceptor = dataScopeRouteInterceptor;
+        this.processSecretGuardInterceptor = processSecretGuardInterceptor;
+        this.platformDataAccessLogInterceptor = platformDataAccessLogInterceptor;
     }
 
     @Override
@@ -108,6 +116,23 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns(swaggerWhitelist)
                 .excludePathPatterns(publicWhitelist)
                 .order(6);
+
+        // 7. 工艺保密: @ProcessSecretGuard 接口按产品保密策略判定 (无策略的产品不受影响)
+        registry.addInterceptor(processSecretGuardInterceptor)
+                .addPathPatterns("/api/mobile/**")
+                .excludePathPatterns(swaggerWhitelist)
+                .excludePathPatterns(publicWhitelist)
+                .order(7);
+
+        // Platform staff → factory data access record (reads included). Same order as JWT and
+        // registered after it: the stable sort puts it directly behind JWT, ahead of every guard,
+        // so its afterCompletion also sees later 403s. See PlatformDataAccessLogInterceptor.
+        registry.addInterceptor(platformDataAccessLogInterceptor)
+                .addPathPatterns("/api/mobile/**", "/api/platform/**", "/api/admin/**",
+                                 "/api/camera/**", "/api/ai/**")
+                .excludePathPatterns(swaggerWhitelist)
+                .excludePathPatterns(publicWhitelist)
+                .order(1);
 
         WebMvcConfigurer.super.addInterceptors(registry);
     }

@@ -8,7 +8,10 @@ import com.cretas.aims.service.execution.IntentExecutionOrchestrator;
 import com.cretas.aims.service.execution.MultiIntentExecutionService;
 import com.cretas.aims.service.execution.SseStreamingService;
 import com.cretas.aims.service.impl.IntentExecutorServiceImpl;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -37,6 +40,7 @@ class IntentExecutorConversationRoundTest {
     private IntentExecutionOrchestrator orchestrator;
     private ConversationMemoryService conversationMemoryService;
     private IntentExecutorServiceImpl facade;
+    private AuthenticatedActor.ActorScope actorScope;
 
     @BeforeEach
     void setUp() {
@@ -47,6 +51,13 @@ class IntentExecutorConversationRoundTest {
         // @RequiredArgsConstructor field order: orchestrator, sse, multiIntent, memory.
         facade = new IntentExecutorServiceImpl(
                 orchestrator, sseStreamingService, multiIntentExecutionService, conversationMemoryService);
+        actorScope = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, 9L, "RES_3101_009", "restaurant_admin"));
+    }
+
+    @AfterEach
+    void tearDown() {
+        actorScope.close();
     }
 
     private IntentExecuteRequest requestWithSession(String sessionId) {
