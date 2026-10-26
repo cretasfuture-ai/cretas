@@ -1,6 +1,6 @@
 # SMARTBI-SKU-WIRING-20261026
 
-Base: f69086dd0f55504011c5a79aeafd42a767ca4798. Owner: Root. Worktree: C:/Users/Steve/cretas-smartbi-rule-export-20261025. Branch: codex/smartbi-sku-source-wiring-20261026. Status: in-progress.
+Base: f69086dd0f55504011c5a79aeafd42a767ca4798. Owner: Root. Worktree: C:/Users/Steve/cretas-smartbi-rule-export-20261025. Branch: codex/smartbi-sku-source-wiring-20261026. Status: merged. PR1195 merged as aa14119f40967a61afc56c7568ad085550da6212; exact b374c3c9 head passed all four required checks. Source scopes released; production deployment and live F006 acceptance continue under SMARTBI-FULL-QA-20261026.
 
 Live F006 order line851 reconciles to saved untaxed total30.00, while SKU chart remains unavailable: operational adapter emits 行ID, but business metric and original-details contract consume 订单行ID. Fix the adapter contract and verify real loader-to-engine-to-details wiring, without relaxing reconciliation or price permissions.
 
