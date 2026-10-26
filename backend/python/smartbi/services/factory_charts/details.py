@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
+from .newstock_buckets import CONTRACT_KEY, prepare_rows as prepare_stock_rows
 
 
 TTL_SECONDS = 300.0
@@ -334,6 +335,23 @@ def register(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], r
                 continue
             financial = _is_financial(source, item)
             unit_column = next((c for c in columns if _base_name(c) in _UNIT_NAMES), None)
+            stock_contract = item.get("engine", {}).get(CONTRACT_KEY) if isinstance(item.get("engine"), Mapping) else None
+            if stock_contract is not None:
+                expected_kind = {"inventory.stock.age:bar": "age", "inventory.stock.expiry:bar": "expiry"}.get(str(item.get("id", "")))
+                candidate_unit = str(item.get("unit", "") or "").rsplit("/", 1)[-1].strip()
+                if (not isinstance(stock_contract, Mapping) or expected_kind is None
+                        or candidate_unit != "批" or stock_contract.get("bucketKind") != expected_kind):
+                    output.append(item)
+                    continue
+                prepared_stock, bucket_column = prepare_stock_rows(rows, stock_contract)
+                if not prepared_stock or not bucket_column:
+                    output.append(item)
+                    continue
+                rows = prepared_stock
+                if bucket_column not in columns:
+                    columns = tuple(columns) + (bucket_column,)
+                dimensions = tuple(dict.fromkeys((*dimensions, bucket_column)))
+                unit_column = None
             candidate_unit = str(item.get("unit", "") or "")
             if "/" in candidate_unit:
                 candidate_unit = candidate_unit.rsplit("/", 1)[-1]

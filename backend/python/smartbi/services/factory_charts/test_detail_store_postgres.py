@@ -16,6 +16,8 @@ import pandas as pd
 import pytest
 
 from . import detail_store, details
+from . import engine
+from .engine import Dataset
 
 
 ROOT = Path(__file__).parents[3]  # backend/python
@@ -160,4 +162,68 @@ asyncio.run(main())
         detail_store.config.get_pg_pool = original
         await pool.close()
         await admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        await admin.close()
+
+
+@pytest.mark.asyncio
+async def test_real_shared_store_stock_count_mixed_units_and_bucket_point(monkeypatch):
+    dsn = os.getenv("FACTORY_SELECTION_TEST_PG_URL") or os.getenv("DETAIL_STORE_TEST_PG_URL")
+    if not dsn:
+        pytest.skip("set FACTORY_SELECTION_TEST_PG_URL for disposable PostgreSQL")
+    target = urlparse(dsn)
+    assert target.hostname in ("localhost", "127.0.0.1") and target.port == 55439
+    asyncpg = pytest.importorskip("asyncpg")
+    admin = await asyncpg.connect(dsn)
+    schema = "stock_detail_" + uuid.uuid4().hex
+    role = "stock_reader_" + uuid.uuid4().hex[:12]
+    await admin.execute(f"CREATE SCHEMA {schema}")
+    await admin.execute(f"CREATE ROLE {role} NOLOGIN")
+    await admin.execute(f"SET search_path TO {schema},public")
+    await admin.execute(MIGRATION.read_text(encoding="utf-8"))
+    await admin.execute(f"GRANT USAGE ON SCHEMA {schema} TO {role}")
+    await admin.execute(f"GRANT SELECT,INSERT,DELETE ON ALL TABLES IN SCHEMA {schema} TO {role}")
+    await admin.execute(f"GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA {schema} TO {role}")
+
+    async def setup(connection):
+        await connection.execute(f"SET ROLE {role}")
+        await connection.execute(f"SET search_path TO {schema},public")
+
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1, setup=setup,
+                                     server_settings={"search_path": f"{schema},public"})
+    original = detail_store.config.get_pg_pool
+    detail_store.config.get_pg_pool = lambda: pool
+    try:
+        units = (["kg"] * 34) + (["个"] * 17) + (["袋"] * 16)
+        ages = ([10] * 20) + ([45] * 20) + ([120] * 27)
+        frame = pd.DataFrame([
+            {"批次": f"pg-b-{i:03d}", "日期": "2026-10-01", "单位": unit,
+             "产品": "混单位原料", "库存数量": 1, "库龄天数": age}
+            for i, (unit, age) in enumerate(zip(units, ages), 1)
+        ])
+        dataset = Dataset(frame, "inventory · PG正余额批次")
+        request = type("Request", (), {"period_type": "all", "include_optional": False})()
+        candidates, _ = engine.build([dataset], request, True)
+        candidate = next(item for item in candidates if item["id"] == "inventory.stock.age:bar")
+        owner = ("F006", 771, "factory_super_admin")
+        registered = await detail_store.register_shared([candidate], [dataset], request, owner, True)
+        context_id = registered[0]["detailContext"]["id"]
+        first = await detail_store.page_shared({"context_id": context_id, "page": 1, "page_size": 50}, owner, True, True)
+        second = await detail_store.page_shared({"context_id": context_id, "page": 2, "page_size": 50}, owner, True, True)
+        assert first["data"]["total"] == 67 and len(first["data"]["rows"]) == 50
+        assert second["data"]["total"] == 67 and len(second["data"]["rows"]) == 17
+        assert {row["单位"] for row in first["data"]["rows"]} | {row["单位"] for row in second["data"]["rows"]} == {"kg", "个", "袋"}
+        filtered = await detail_store.page_shared({"context_id": context_id, "point": {"name": "不超过30天"}, "page_size": 50}, owner, True, True)
+        assert filtered["data"]["total"] == 20
+        tampered = dict(candidate)
+        tampered["engine"] = {"stockCountContract": dict(candidate["engine"]["stockCountContract"], bucketColumn="单位")}
+        rejected = await detail_store.register_shared([tampered], [dataset], request, owner, True)
+        assert "detailContext" not in rejected[0]
+        with pytest.raises(details.DetailError) as denied:
+            await detail_store.page_shared({"context_id": context_id, "page": 1}, ("F999", 771, "factory_super_admin"), True, True)
+        assert denied.value.status_code == 410
+    finally:
+        detail_store.config.get_pg_pool = original
+        await pool.close()
+        await admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        await admin.execute(f"DROP ROLE {role}")
         await admin.close()
