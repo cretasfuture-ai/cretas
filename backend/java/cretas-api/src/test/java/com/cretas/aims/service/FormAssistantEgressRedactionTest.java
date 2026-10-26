@@ -71,6 +71,51 @@ class FormAssistantEgressRedactionTest {
                 .containsEntry("contactPhone", "13812345678");
     }
 
+    /** 线上 2026-10-27 01:47 复现句: 模型把代号去掉方括号填进字段, 预览卡片显示了「单位A」。 */
+    private static final String PROD_SENTENCE = "给华东冷链商贸有限公司下单，联系人赵铁柱 13912345678，牛腱 100 公斤";
+    private static final java.util.regex.Pattern ANY_PLACEHOLDER = java.util.regex.Pattern.compile(
+            "(客户|供应商|单位|人员|名称|保密产品|电话|证件号|卡号|隐藏内容)\\s*[A-Z]+(?![A-Za-z])");
+
+    private static List<Map<String, Object>> salesOrderFields() {
+        return List.of(Map.of("name", "customerName", "title", "客户", "type", "string"),
+                Map.of("name", "contactPerson", "title", "联系人", "type", "string"),
+                Map.of("name", "contactPhone", "title", "联系电话", "type", "string"),
+                Map.of("name", "remark", "title", "备注", "type", "string"));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "模型写成 {0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"bare", "fullwidth", "spaced"})
+    void parseFormRestoresTokensTheModelRewrote(String style) throws Exception {
+        ArgumentCaptor<String> said = ArgumentCaptor.forClass(String.class);
+        when(llm.chatLowTemp(anyString(), said.capture())).thenAnswer(inv -> {
+            String s = inv.getArgument(1);
+            java.util.function.Function<String, String> rewrite = tok -> {
+                String core = tok.substring(1, tok.length() - 1);
+                return switch (style) {
+                    case "bare" -> core;
+                    case "fullwidth" -> "【" + core + "】";
+                    default -> "[ " + core.replaceAll("([A-Z]+)$", " $1") + " ]";
+                };
+            };
+            String org = rewrite.apply(s.replaceAll("(?s).*?(\\[单位[A-Z]+]).*", "$1"));
+            String person = rewrite.apply(s.replaceAll("(?s).*?(\\[人员[A-Z]+]).*", "$1"));
+            String phone = rewrite.apply(s.replaceAll("(?s).*?(\\[电话[A-Z]+]).*", "$1"));
+            return "{\"field_values\":{\"customerName\":\"" + org + "\",\"contactPerson\":\"" + person
+                    + "\",\"contactPhone\":\"" + phone + "\",\"remark\":\"联系人 " + person + "，电话 " + phone
+                    + "\"},\"confidence\":0.95}";
+        });
+
+        FormAssistantService.FormParseResult r = service.parseFormInput(
+                PROD_SENTENCE, "SALES_ORDER", salesOrderFields(), "F006");
+
+        assertThat(said.getValue()).doesNotContain("华东冷链", "赵铁柱", "13912345678").contains("牛腱");
+        assertThat(r.getFieldValues()).containsEntry("customerName", "华东冷链商贸有限公司")
+                .containsEntry("contactPerson", "赵铁柱").containsEntry("contactPhone", "13912345678")
+                .containsEntry("remark", "联系人 赵铁柱，电话 13912345678");
+        String body = new ObjectMapper().writeValueAsString(r);
+        assertThat(ANY_PLACEHOLDER.matcher(body).find()).as(body).isFalse();
+    }
+
     @Test
     void validationFeedbackHidesSubmittedNamesAddressesAndRemarks() {
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);

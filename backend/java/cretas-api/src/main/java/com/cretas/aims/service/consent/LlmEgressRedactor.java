@@ -158,6 +158,8 @@ public final class LlmEgressRedactor {
      */
     private static final Pattern ORG_LEAD_IN = Pattern.compile(
             "^.*(?:一下|我们是|我们|是|给|向|从|找|查|问|跟|让|叫|请|把|往|跟进|联系|通知|客户|供应商)");
+    /** 不剥「找 / 跟 / 叫」: 找钢网、跟谁学这类单位名就以它们开头。 */
+    private static final String SINGLE_CHAR_ORG_LEAD_INS = "给让请把往";
     /** 人名正则带着岗位 / 动词前缀 (「质检员：赵铁柱」「通知张三」): 只换名字本身。 */
     private static final Pattern PERSON_LEAD_IN = Pattern.compile(
             "^(?:" + TrainingSampleRules.PERSON_ROLE + "|联系|找|通知|叫|告诉)\\s*[:：|]?\\s*");
@@ -191,6 +193,35 @@ public final class LlmEgressRedactor {
             this.label = label;
         }
     }
+
+    private static final String KIND_LABELS = java.util.Arrays.stream(Kind.values())
+            .map(k -> Pattern.quote(k.label)).collect(java.util.stream.Collectors.joining("|"));
+
+    /** 去括号的代号后面若跟着这些字, 是普通说法 (「客户A类」「人员A班」「单位A栋」), 不是代号。 */
+    private static final String BARE_TOKEN_CLASSIFIERS = "类级班组区栋座型款档线号层楼室段队";
+
+    /**
+     * 代号及模型常见的改写, 两种形状: 成对的括号 (方括号 / 全角括号, 括号里可以有空格) 或去掉括号
+     * ({@code 单位A}, 类别名与字母紧挨着)。字母后不能紧跟字母数字 ({@code 单位A} 不会吃掉 {@code 单位AB}
+     * 的前半), 去括号的还不能紧跟量词 ({@link #BARE_TOKEN_CLASSIFIERS})。只换回本次请求发出去的代号。
+     * 分组: 1/2 = 带括号的类别名 / 字母, 3/4 = 去括号的; 用 {@link #canonicalToken} 取标准写法。
+     */
+    static final Pattern LOOSE_TOKEN = Pattern.compile(
+            "[\\[【［][ \\t]*(" + KIND_LABELS + ")[ \\t]*([A-Z]+)[ \\t]*[\\]】］]"
+                    + "|(" + KIND_LABELS + ")([A-Z]+)(?![A-Za-z0-9" + BARE_TOKEN_CLASSIFIERS + "])");
+
+    static String canonicalToken(Matcher m) {
+        return m.group(1) != null ? "[" + m.group(1) + m.group(2) + "]" : "[" + m.group(3) + m.group(4) + "]";
+    }
+
+    /** 流式: 结尾可能是半个代号 (括号 / 类别名的前几个字 / 类别名 + 字母), 先攒着等下一段。 */
+    private static final String KIND_LABEL_PREFIXES = java.util.Arrays.stream(Kind.values())
+            .flatMap(k -> java.util.stream.IntStream.rangeClosed(1, k.label.length())
+                    .mapToObj(n -> Pattern.quote(k.label.substring(0, n))))
+            .collect(java.util.stream.Collectors.joining("|"));
+    private static final Pattern PARTIAL_TOKEN_TAIL = Pattern.compile(
+            "(?:[\\[【［][ \\t]*(?:(?:" + KIND_LABEL_PREFIXES + ")(?:[ \\t]*[A-Z]+)?[ \\t]*)?"
+                    + "|(?:" + KIND_LABEL_PREFIXES + ")[A-Z]*)$");
 
     /** 调用方已知的交易对象 / 人 (从记录里取出的客户名等), 文本模式下整串换代号。 */
     public enum Party {
@@ -259,32 +290,35 @@ public final class LlmEgressRedactor {
             return droppedFields;
         }
 
-        /** 把模型回答里的代号换回真名。 */
+        /**
+         * 把模型回答里的代号换回真名。模型常把代号改写: 去掉方括号 ({@code 单位A}, 填表字段里最常见)、
+         * 换成全角括号 ({@code 【单位A】}) 或在中间加空格 —— 这些写法只要对得上本次请求发出去的代号, 一律换回。
+         */
         public String restore(String text) {
-            if (text == null || tokenToReal.isEmpty()) {
-                return text;
-            }
-            String out = text;
-            for (Map.Entry<String, String> e : tokenToReal.entrySet()) {
-                out = out.replace(e.getKey(), e.getValue());
-            }
-            return out;
+            return restoreWith(text, real -> real);
         }
 
         /**
          * 模型回的是 JSON 文本、而解析在别处做时: 换回的真名按 JSON 字符串转义 (代号总是出现在 JSON 字符串里),
-         * 真名带引号 / 反斜杠也不会弄坏 JSON。
+         * 真名带引号 / 反斜杠也不会弄坏 JSON。代号的改写形式同 {@link #restore}。
          */
         public String restoreJsonText(String json) {
-            if (json == null || tokenToReal.isEmpty()) {
-                return json;
+            return restoreWith(json, real ->
+                    new String(com.fasterxml.jackson.core.io.JsonStringEncoder.getInstance().quoteAsString(real)));
+        }
+
+        private String restoreWith(String text, java.util.function.UnaryOperator<String> encode) {
+            if (text == null || tokenToReal.isEmpty()) {
+                return text;
             }
-            String out = json;
-            for (Map.Entry<String, String> e : tokenToReal.entrySet()) {
-                out = out.replace(e.getKey(),
-                        new String(com.fasterxml.jackson.core.io.JsonStringEncoder.getInstance().quoteAsString(e.getValue())));
+            Matcher m = LOOSE_TOKEN.matcher(text);
+            StringBuilder out = new StringBuilder(text.length());
+            while (m.find()) {
+                String real = tokenToReal.get(canonicalToken(m));
+                m.appendReplacement(out, Matcher.quoteReplacement(real != null ? encode.apply(real) : m.group()));
             }
-            return out;
+            m.appendTail(out);
+            return out.toString();
         }
 
         /**
@@ -345,6 +379,13 @@ public final class LlmEgressRedactor {
             int open = pending.lastIndexOf("[");
             int cut = open >= 0 && pending.indexOf("]", open) < 0 && pending.length() - open <= MAX_PENDING
                     ? open : pending.length();
+            // 半个代号 (全角括号开头、去括号、被拆开的 "单位" + "A" + "B"): 只看最后 MAX_PENDING 个字,
+            // 结尾是半个代号就先不发
+            int from = Math.max(0, pending.length() - MAX_PENDING);
+            Matcher tail = PARTIAL_TOKEN_TAIL.matcher(pending).region(from, pending.length());
+            if (tail.find()) {
+                cut = Math.min(cut, tail.start());
+            }
             if (cut > 0) {
                 String ready = pending.substring(0, cut);
                 pending.delete(0, cut);
@@ -581,6 +622,26 @@ public final class LlmEgressRedactor {
             }
         }
 
+        private String reservedScanned;
+        private Set<String> reservedTokens = Set.of();
+
+        /**
+         * 入参里已经出现过的代号字样 (含去括号 / 全角括号写法, 如原话里本来就有「单位A栋」):
+         * 这些不能再发, 否则还原时会把原话里的字样错换成真名。
+         */
+        Set<String> reservedTokens() {
+            if (!reserved.equals(reservedScanned)) {
+                Set<String> found = new java.util.HashSet<>();
+                Matcher m = LOOSE_TOKEN.matcher(reserved);
+                while (m.find()) {
+                    found.add(canonicalToken(m));
+                }
+                reservedTokens = found;
+                reservedScanned = reserved;
+            }
+            return reservedTokens;
+        }
+
         String token(Kind kind, String real) {
             String existing = realToToken.get(real);
             if (existing != null) {
@@ -588,7 +649,7 @@ public final class LlmEgressRedactor {
             }
             int n = counters.merge(kind, 1, Integer::sum);
             String t = "[" + kind.label + letters(n) + "]";
-            while (reserved.contains(t)) {
+            while (reservedTokens().contains(t)) {
                 n = counters.merge(kind, 1, Integer::sum);
                 t = "[" + kind.label + letters(n) + "]";
             }
@@ -868,7 +929,10 @@ public final class LlmEgressRedactor {
         /** 「查一下永辉超市」→「永辉超市」; 去掉之后不再像单位名 (「美的集团」) 就保留整段。 */
         static String orgCore(String span) {
             Matcher lead = ORG_LEAD_IN.matcher(span);
-            if (lead.find() && lead.end() >= 2 && lead.end() < span.length()) {
+            // 单字前缀一般不剥 (「向阳食品」「从化…」的首字就是名字), 但这几个动词不会是单位名的首字:
+            // 「给华东冷链…下单」不剥的话, 填表字段会还原成「给华东冷链…」
+            if (lead.find() && (lead.end() >= 2 || SINGLE_CHAR_ORG_LEAD_INS.indexOf(span.charAt(0)) >= 0)
+                    && lead.end() < span.length()) {
                 String rest = span.substring(lead.end());
                 if (TrainingSampleRules.ORG_NAME.matcher(rest).matches() || ORG_NAME_EXTRA.matcher(rest).matches()) {
                     return rest;
