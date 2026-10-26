@@ -33,9 +33,10 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         // 工艺保密: 厂级按工序汇总里, 调用者无完整查看权的保密产品 (连同多产出计划的原料锚点) 整个不参与 ——
         // 一道只有保密产品在用的工序, 汇总出来就是它的出成率。点名受保护产品由路由闸拦 (403);
         // 点名别的产品 (例如锚点) 时同样排除
-        List<String> excluded = aggregateExclusions.forCurrentCaller(factoryId, "yield by-process aggregate")
-                .productTypeIdsOrSentinel();
-        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt, excluded);
+        ProcessSecretAggregateExclusions.Scope excluded =
+                aggregateExclusions.forCurrentCaller(factoryId, "yield by-process aggregate");
+        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt,
+                excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
         List<ProcessYieldAggDTO> result = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             BigDecimal totalInput = toBig(r.get("total_input"));

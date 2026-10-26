@@ -282,9 +282,9 @@ class ProcessSecretDataLayerJpaTest {
         // 原生 SQL 新增 NOT IN (:excludedProductTypeIds): 真实 Hibernate 解析 + 集合参数绑定 (哨兵 / 实际列表两种)
         java.time.LocalDate from = java.time.LocalDate.of(1900, 1, 1);
         java.time.LocalDate to = java.time.LocalDate.of(2999, 12, 31);
-        assertThat(productionReports.aggregateYieldByProcess(F, from, to, "", List.of("__none__"))).isEmpty();
-        assertThat(productionReports.aggregateYieldByProcess(F, from, to, "", List.of(SECRET, TARGET))).isEmpty();
-        assertThat(productionReports.aggregateYieldByProcess(F, from, to, SECRET, List.of("__none__"))).isEmpty();
+        assertThat(productionReports.aggregateYieldByProcess(F, from, to, "", List.of("__none__"), List.of("__none__"))).isEmpty();
+        assertThat(productionReports.aggregateYieldByProcess(F, from, to, "", List.of(SECRET, TARGET), List.of("plan-x"))).isEmpty();
+        assertThat(productionReports.aggregateYieldByProcess(F, from, to, SECRET, List.of("__none__"), List.of("__none__"))).isEmpty();
     }
 
     private List<ProcessSecretAccessEvent> denials(String product) {

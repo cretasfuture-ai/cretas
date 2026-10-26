@@ -492,6 +492,12 @@ class BlendRatioCheckContractTest {
             BlendRatioDeviation over = BlendRatioDeviation.builder().status("OVER").build();
 
             assertThat(check.planIdOf(F, task)).isEqualTo(PLAN);
+            // 第四轮 L1: 批次查不到 (已删 / 他厂) 时不退回只看锚点
+            WorkProcessTask orphan = new WorkProcessTask();
+            orphan.setProductionBatchId(78L);
+            orphan.setProductTypeId("RM-ANCHOR");
+            assertThat(check.planIdOf(F, orphan)).isEqualTo(BlendRatioCheck.UNRESOLVED_PLAN);
+            assertThat(check.revealRecipeShares(F, check.planIdOf(F, orphan), "RM-ANCHOR", over)).isFalse();
             com.cretas.aims.security.AuthenticatedActor operator = new com.cretas.aims.security.AuthenticatedActor(
                     com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 5L, F, "operator");
             try (com.cretas.aims.security.AuthenticatedActor.ActorScope ignored =

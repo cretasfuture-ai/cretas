@@ -101,6 +101,7 @@ public class BlendRatioCheck {
                                BlendRatioDeviation evaluation) {
         if (evaluation == null || !STATUS_OVER_PENDING.equals(evaluation.getStatus())) return true;
         if (processSecretGuard == null) return true;
+        if (UNRESOLVED_PLAN.equals(planId)) return !processSecretGuard.factoryHasProtectedProducts(factoryId);
         Set<String> products = new LinkedHashSet<>();
         if (productTypeId != null && !productTypeId.isBlank()) products.add(productTypeId);
         if (planId != null && !planId.isBlank()) {
@@ -121,12 +122,21 @@ public class BlendRatioCheck {
         return true;
     }
 
-    /** App 报工的任务属于哪张计划 (任务 → 批次 → 计划); 批次没挂计划时为 null。 */
+    /** 任务的批次查不到 (已删 / 他厂 / 未装配仓库) 时的计划: 与「计划查不到」同样按不能看处理。 */
+    static final String UNRESOLVED_PLAN = "\u0000unresolved-plan";
+
+    /**
+     * App 报工的任务属于哪张计划 (任务 → 批次 → 计划); 任务没挂批次、或批次没挂计划时为 null (只按任务产品判);
+     * 批次查不到时为 {@link #UNRESOLVED_PLAN} —— 锚点任务不能因此退回只看锚点 (独立审查第四轮 L1)。
+     */
     String planIdOf(String factoryId, WorkProcessTask task) {
-        if (task == null || task.getProductionBatchId() == null || batchRepository == null) return null;
-        return batchRepository.findByIdAndFactoryId(task.getProductionBatchId(), factoryId)
-                .map(com.cretas.aims.entity.ProductionBatch::getProductionPlanId)
-                .orElse(null);
+        if (task == null || task.getProductionBatchId() == null) return null;
+        if (batchRepository == null) return UNRESOLVED_PLAN;
+        java.util.Optional<com.cretas.aims.entity.ProductionBatch> batch =
+                batchRepository.findByIdAndFactoryId(task.getProductionBatchId(), factoryId);
+        if (batch.isEmpty()) return UNRESOLVED_PLAN;
+        String planId = batch.get().getProductionPlanId();
+        return planId == null || planId.isBlank() ? null : planId;
     }
 
     /** 带份额的投入端口 (纯数据, 便于两个写入口共用)。 */

@@ -44,7 +44,8 @@ class SemiFinishedYieldStatsServiceImplTest {
     @BeforeEach
     void setUp() {
         service = new SemiFinishedYieldStatsServiceImpl(productionReportRepository,
-                new ProcessSecretAggregateExclusions(accessService, planRepository));
+                new ProcessSecretAggregateExclusions(accessService, planRepository,
+                        org.mockito.Mockito.mock(com.cretas.aims.repository.bom.BomRecipeRepository.class)));
     }
 
     @Test

@@ -295,10 +295,8 @@ public class ProcessSecretPayloadScrubber {
                             .orElse(new Key(read.factoryId(), null)));
                     case WORKFLOW_INSTANCE -> List.of(instanceKey(read.factoryId(), read.id())
                             .orElse(new Key(read.factoryId(), null)));
-                    case PRODUCTION_PLAN -> withMember(read,
-                            planKeys(read.factoryId(), ProcessSecretReadTracker.baseId(read.id())));
-                    case PRODUCTION_BATCH -> withMember(read,
-                            batchKeys(read.factoryId(), ProcessSecretReadTracker.baseId(read.id())));
+                    case PRODUCTION_PLAN -> withMember(read, planKeys(read.factoryId(), read.id()));
+                    case PRODUCTION_BATCH -> withMember(read, batchKeys(read.factoryId(), read.id()));
                     case MATERIAL_REQUISITION -> requisitionRepository.findById(read.id())
                             .filter(r -> read.factoryId().equals(r.getFactoryId()))
                             .filter(r -> r.getProductionPlanId() != null && !r.getProductionPlanId().isBlank())
@@ -366,7 +364,7 @@ public class ProcessSecretPayloadScrubber {
 
         /** 读数带了「这一行自己的产品」(半成品 / 副产 / 锚点) 时, 它也算这张计划的成员 (独立审查第三轮 C)。 */
         List<Key> withMember(ProcessSecretReadTracker.Read read, List<Key> keys) {
-            String member = ProcessSecretReadTracker.memberOf(read.id());
+            String member = read.member();
             if (member == null) return keys;
             Key key = new Key(read.factoryId(), member);
             if (keys.contains(key)) return keys;

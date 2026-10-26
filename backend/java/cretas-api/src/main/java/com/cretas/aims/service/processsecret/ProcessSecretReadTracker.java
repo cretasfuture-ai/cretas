@@ -52,7 +52,15 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     /** 读到的工艺内容来源。{@code kind} 决定 {@code id} 怎么换成产品。 */
     public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN, PRODUCTION_BATCH, MATERIAL_REQUISITION, BOM_DRAFT }
 
-    public record Read(Kind kind, String factoryId, String id) { }
+    /**
+     * 一笔读数。{@code member} 只用于计划 / 批次: 这一行自己的产品 (半成品 / 副产 / 锚点), 出口把它当作
+     * 该计划的成员 (兄弟产出, 独立审查第三轮 C)。
+     */
+    public record Read(Kind kind, String factoryId, String id, String member) {
+        public Read(Kind kind, String factoryId, String id) {
+            this(kind, factoryId, id, null);
+        }
+    }
 
     private static final ThreadLocal<Set<Read>> EXPLICIT = new ThreadLocal<>();
 
@@ -126,7 +134,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             // 行上的半成品 / 副产 / 次品 SKU 不在计划的产品集合里, 却挂着配比快照: 记成计划的成员,
             // 计划受限时它们按兄弟产出受限 (独立审查第三轮 C)
             for (String member : payloadProducts(row.getRowPayload())) {
-                found.add(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), withMember(row.getPlanId(), member)));
+                found.add(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), row.getPlanId(), member));
             }
             return found;
         }
@@ -142,8 +150,8 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             // (独立审查第三轮 A): 再按批次记一笔, 出口经批次 → 计划解析计划牵涉的全部产品
             List<Read> found = new java.util.ArrayList<>(product(r.getFactoryId(), r.getProductTypeId()));
             if (r.getBatchId() != null) {
-                found.add(new Read(Kind.PRODUCTION_BATCH, r.getFactoryId(),
-                        withMember(String.valueOf(r.getBatchId()), r.getProductTypeId())));
+                found.add(new Read(Kind.PRODUCTION_BATCH, r.getFactoryId(), String.valueOf(r.getBatchId()),
+                        r.getProductTypeId() == null || r.getProductTypeId().isBlank() ? null : r.getProductTypeId()));
             }
             return found;
         }
@@ -181,23 +189,6 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
                     .toList();
         }
         return List.of();
-    }
-
-    /** 计划 / 批次读数的 id 可以带「这一行自己的产品」, 出口把它当作该计划的成员 (兄弟产出)。 */
-    static final char MEMBER_SEPARATOR = '';
-
-    static String withMember(String id, String member) {
-        return member == null || member.isBlank() ? id : id + MEMBER_SEPARATOR + member;
-    }
-
-    static String baseId(String id) {
-        int i = id.indexOf(MEMBER_SEPARATOR);
-        return i < 0 ? id : id.substring(0, i);
-    }
-
-    static String memberOf(String id) {
-        int i = id.indexOf(MEMBER_SEPARATOR);
-        return i < 0 ? null : id.substring(i + 1);
     }
 
     private static final com.fasterxml.jackson.databind.ObjectMapper PAYLOAD_READER =

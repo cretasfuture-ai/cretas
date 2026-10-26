@@ -489,6 +489,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
           AND pr.report_date BETWEEN :startDate AND :endDate
           AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
           AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
+          AND NOT EXISTS (SELECT 1 FROM production_batches pb
+                          WHERE pb.id = pr.batch_id AND pb.production_plan_id IN (:excludedPlanIds))
         GROUP BY wp.id, wp.process_name, wp.unit, wp.output_unit
         ORDER BY MIN(wpt.process_order)
         """, nativeQuery = true)
@@ -498,7 +500,9 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("endDate") java.time.LocalDate endDate,
             @Param("productTypeId") String productTypeId,
             // 工艺保密: 调用者无完整查看权的保密产品不进厂级汇总; 永不传空列表 (调用方用哨兵)
-            @Param("excludedProductTypeIds") java.util.Collection<String> excludedProductTypeIds);
+            @Param("excludedProductTypeIds") java.util.Collection<String> excludedProductTypeIds,
+            // 牵涉无权保密产品的计划整张不进 (兄弟产出也是这张计划的工艺; 独立审查第四轮 M1)
+            @Param("excludedPlanIds") java.util.Collection<String> excludedPlanIds);
 
     /**
      * D4: 每个工序按批次聚合的自动标准计算样本.

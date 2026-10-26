@@ -1,14 +1,19 @@
 package com.cretas.aims.service.processsecret;
 
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.processsecret.ProcessSecretAction;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.service.bom.PlanBomItems;
 import com.cretas.aims.security.AuthenticatedActor;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -39,11 +44,14 @@ public class ProcessSecretAggregateExclusions {
 
     private final ProcessSecretAccessService accessService;
     private final ProductionPlanRepository planRepository;
+    private final BomRecipeRepository recipeRepository;
 
     public ProcessSecretAggregateExclusions(ProcessSecretAccessService accessService,
-                                            ProductionPlanRepository planRepository) {
+                                            ProductionPlanRepository planRepository,
+                                            BomRecipeRepository recipeRepository) {
         this.accessService = accessService;
         this.planRepository = planRepository;
+        this.recipeRepository = recipeRepository;
     }
 
     public Scope forCurrentCaller(String factoryId, String resourceRef) {
@@ -56,10 +64,13 @@ public class ProcessSecretAggregateExclusions {
         if (hidden.isEmpty()) return Scope.EMPTY;
         TreeSet<String> products = new TreeSet<>(hidden);
         TreeSet<String> plans = new TreeSet<>();
-        for (ProductionPlan plan : planRepository.findByFactoryId(factoryId)) {
-            // 目标成品与按产品钉的配方键已覆盖多产出计划的产出 (钉住的配方不再逐个查库)
-            if (ProcessSecretPlanProducts.of(plan, recipeId -> Optional.empty()).stream()
-                    .noneMatch(hidden::contains)) {
+        List<ProductionPlan> factoryPlans = planRepository.findByFactoryId(factoryId);
+        Map<String, String> productOfRecipe = productsOfPinnedRecipes(factoryId, factoryPlans);
+        for (ProductionPlan plan : factoryPlans) {
+            // 与裁剪器、配比提示同一口径: 锚点、目标成品、按产品钉的配方键, 以及钉住的配方所属产品
+            // (只钉了单个配方的多产出计划, 产品只能从配方查到; 独立审查第四轮 M2)
+            if (ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId)))
+                    .stream().noneMatch(hidden::contains)) {
                 continue;
             }
             if (plan.getId() != null && !plan.getId().isBlank()) plans.add(plan.getId());
@@ -68,5 +79,19 @@ public class ProcessSecretAggregateExclusions {
             }
         }
         return new Scope(List.copyOf(products), List.copyOf(plans));
+    }
+
+    /** 全部计划钉住的配方 → 所属产品 (一次批量查, 只认本厂配方)。 */
+    private Map<String, String> productsOfPinnedRecipes(String factoryId, List<ProductionPlan> plans) {
+        Set<String> recipeIds = new HashSet<>();
+        plans.forEach(plan -> recipeIds.addAll(PlanBomItems.pinnedRecipeIds(plan)));
+        Map<String, String> productOf = new HashMap<>();
+        if (recipeIds.isEmpty()) return productOf;
+        for (BomRecipe recipe : recipeRepository.findAllById(recipeIds)) {
+            if (factoryId.equals(recipe.getFactoryId()) && recipe.getProductTypeId() != null) {
+                productOf.put(recipe.getId(), recipe.getProductTypeId());
+            }
+        }
+        return productOf;
     }
 }

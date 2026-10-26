@@ -37,13 +37,16 @@ class YieldAnalysisServiceImplTest {
     @Mock
     com.cretas.aims.repository.ProductionPlanRepository planRepository;
 
+    @Mock
+    com.cretas.aims.repository.bom.BomRecipeRepository recipeRepository;
+
     YieldAnalysisServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new YieldAnalysisServiceImpl(reportRepo,
                 new com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions(
-                        processSecretAccessService, planRepository));
+                        processSecretAccessService, planRepository, recipeRepository));
     }
 
     /** Build a result row matching the native query projection keys. */
@@ -63,7 +66,7 @@ class YieldAnalysisServiceImplTest {
 
     @Test
     void aggregate_sameUnit_computesConversionAndWastage() {
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(List.of(row("处理", "300", "260", "kg", "kg", 2L)));
 
         List<ProcessYieldAggDTO> result = service.aggregateByProcess(
@@ -85,7 +88,7 @@ class YieldAnalysisServiceImplTest {
 
     @Test
     void aggregate_crossUnit_conversionNull() {
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(List.of(row("末道", "998", "3184", "kg", "盒", 1L)));
 
         List<ProcessYieldAggDTO> result = service.aggregateByProcess(
@@ -104,7 +107,7 @@ class YieldAnalysisServiceImplTest {
     @Test
     void aggregate_nullOutputUnit_treatedAsSameUnit() {
         // 工序未配置 output_unit (绝大多数情况) → 视为与投入同单位 → 出成率应正常计算, 不显 "—"
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(List.of(row("演示工序1", "998", "935.5", "kg", null, 1L)));
 
         List<ProcessYieldAggDTO> result = service.aggregateByProcess("F001", null, null, null);
@@ -118,7 +121,7 @@ class YieldAnalysisServiceImplTest {
 
     @Test
     void aggregate_nullParams_convertedToSentinels() {
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(Collections.emptyList());
 
         List<ProcessYieldAggDTO> result = service.aggregateByProcess("F001", null, null, null);
@@ -129,6 +132,7 @@ class YieldAnalysisServiceImplTest {
                 eq(LocalDate.of(1900, 1, 1)),
                 eq(LocalDate.of(2999, 12, 31)),
                 eq(""),
+                eq(List.of("__none__")),
                 eq(List.of("__none__")));
     }
 
@@ -140,24 +144,24 @@ class YieldAnalysisServiceImplTest {
         when(processSecretAccessService.filterPermitted(any(), eq("F006"), anyList(),
                 eq(com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL), eq(false), anyString()))
                 .thenReturn(List.of("P18"));
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(Collections.emptyList());
 
         service.aggregateByProcess("F006", null, null, null);
 
-        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq(""), eq(List.of("P17")));
+        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq(""), eq(List.of("P17")), any());
     }
 
     @Test
     void aggregate_namedProductStillExcludesHiddenProducts() {
         // 点名受保护产品由路由闸拦; 点名别的产品 (例如多产出计划的原料锚点) 时, 无权的保密产品照样排除
         when(processSecretAccessService.protectedProductTypeIds("F006")).thenReturn(java.util.Set.of("P17"));
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(Collections.emptyList());
 
         service.aggregateByProcess("F006", null, null, "P1");
 
-        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq("P1"), eq(List.of("P17")));
+        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq("P1"), eq(List.of("P17")), any());
     }
 
     @Test
@@ -168,6 +172,7 @@ class YieldAnalysisServiceImplTest {
                 eq(com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL), eq(false), anyString()))
                 .thenReturn(List.of("P18"));
         com.cretas.aims.entity.ProductionPlan hiddenPlan = new com.cretas.aims.entity.ProductionPlan();
+        hiddenPlan.setId("plan-hidden");
         hiddenPlan.setProductTypeId("RM-BEEF");
         hiddenPlan.setTargetFinishedGoodIds(List.of("Q-OPEN", "P17"));
         com.cretas.aims.entity.ProductionPlan permittedPlan = new com.cretas.aims.entity.ProductionPlan();
@@ -176,12 +181,45 @@ class YieldAnalysisServiceImplTest {
         com.cretas.aims.entity.ProductionPlan openPlan = new com.cretas.aims.entity.ProductionPlan();
         openPlan.setProductTypeId("Q-OPEN");
         when(planRepository.findByFactoryId("F006")).thenReturn(List.of(hiddenPlan, permittedPlan, openPlan));
-        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection()))
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
                 .thenReturn(Collections.emptyList());
 
         service.aggregateByProcess("F006", null, null, "RM-BEEF");
 
+        // 第四轮 M1: 整张计划也排除 —— 兄弟产出 Q-OPEN 在这张计划里的行同样不进
         verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq("RM-BEEF"),
-                eq(List.of("P17", "RM-BEEF")));
+                eq(List.of("P17", "RM-BEEF")), eq(List.of("plan-hidden")));
+    }
+
+    @Test
+    void aggregate_plansThatOnlyPinARecipeOfAHiddenProductAreExcludedToo() {
+        // 第四轮 M2: 只钉了单个配方的计划, 产品只能从配方查到 (与裁剪器、配比提示同一口径)
+        when(processSecretAccessService.protectedProductTypeIds("F006")).thenReturn(java.util.Set.of("P17"));
+        com.cretas.aims.entity.ProductionPlan pinned = new com.cretas.aims.entity.ProductionPlan();
+        pinned.setId("plan-pinned");
+        pinned.setProductTypeId("RM-X");
+        pinned.setSelectedBomRecipeId("r-secret");
+        com.cretas.aims.entity.bom.BomRecipe recipe = new com.cretas.aims.entity.bom.BomRecipe();
+        recipe.setId("r-secret");
+        recipe.setFactoryId("F006");
+        recipe.setProductTypeId("P17");
+        com.cretas.aims.entity.bom.BomRecipe foreign = new com.cretas.aims.entity.bom.BomRecipe();
+        foreign.setId("r-foreign");
+        foreign.setFactoryId("F-OTHER");
+        foreign.setProductTypeId("P17");
+        com.cretas.aims.entity.ProductionPlan foreignPinned = new com.cretas.aims.entity.ProductionPlan();
+        foreignPinned.setId("plan-foreign-recipe");
+        foreignPinned.setProductTypeId("RM-Y");
+        foreignPinned.setSelectedBomRecipeId("r-foreign");
+        when(planRepository.findByFactoryId("F006")).thenReturn(List.of(pinned, foreignPinned));
+        when(recipeRepository.findAllById(any())).thenReturn(List.of(recipe, foreign));
+        when(reportRepo.aggregateYieldByProcess(anyString(), any(), any(), anyString(), anyCollection(), anyCollection()))
+                .thenReturn(Collections.emptyList());
+
+        service.aggregateByProcess("F006", null, null, null);
+
+        // 他厂的配方不认 (plan-foreign-recipe 不排除)
+        verify(reportRepo).aggregateYieldByProcess(eq("F006"), any(), any(), eq(""),
+                eq(List.of("P17", "RM-X")), eq(List.of("plan-pinned")));
     }
 }
