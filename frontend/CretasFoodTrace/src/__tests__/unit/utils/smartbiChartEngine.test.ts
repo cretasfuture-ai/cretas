@@ -2,6 +2,9 @@ import { clearSmartbiChartEngineCache, loadSmartbiChartEngine } from '../../../u
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
 
+// Metro registers txt as an asset ID; Jest must not execute the vendor bytes as a Node module.
+jest.mock('../../../../assets/smartbi/echarts-6.1.0.min.txt', () => 23);
+
 jest.mock('expo-asset', () => ({ Asset: { fromModule: jest.fn(() => ({ localUri: 'file:///echarts.txt', downloadAsync: jest.fn(async () => ({ localUri: 'file:///echarts.txt' })) })) } }));
 
 describe('smartbiChartEngine', () => {
@@ -11,6 +14,7 @@ describe('smartbiChartEngine', () => {
     await expect(loadSmartbiChartEngine()).resolves.toContain('echarts');
     await loadSmartbiChartEngine();
     expect(Asset.fromModule).toHaveBeenCalledTimes(1);
+    expect(Asset.fromModule).toHaveBeenCalledWith(23);
     expect(FileSystem.readAsStringAsync).toHaveBeenCalledTimes(1);
   });
   it('clears failed loads and rejects empty or invalid assets', async () => {
