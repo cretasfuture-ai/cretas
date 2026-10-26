@@ -4,7 +4,7 @@ import ElementPlus from 'element-plus';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  authStore: null as { factoryId: string } | null,
+  authStore: null as { factoryId: string; currentRole?: string; user?: { id: number } } | null,
   api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn(), getFactoryChartSelection: vi.fn(), saveFactoryChartSelection: vi.fn() },
   route: { query: {} as Record<string, unknown> },
   replace: vi.fn(),
@@ -32,12 +32,14 @@ vi.mock('../FactoryChartCanvas.vue', () => ({
 }));
 
 import FactoryChartRecommendations from '../FactoryChartRecommendations.vue';
+import FactoryChartGuide from '../FactoryChartGuide.vue';
 import PeriodSelector from '@/components/smartbi/PeriodSelector.vue';
 
 const response = (overrides: Record<string, unknown> = {}) => ({
   success: true,
   data: {
     factoryId: 'F006', source: 'business', sourceLabel: '业务系统', period: { label: '全部历史' },
+    analysisSubject: null,
     ranking: { mode: 'rule', reason: '按规则优先级排序，未经AI排序' },
     recommendations: [
       {
@@ -66,9 +68,17 @@ async function mountPage() {
   return wrapper;
 }
 
+async function openCatalog(page: VueWrapper) {
+  const input = page.get('[data-testid="factory-chart-mode"] input[value="browse"]');
+  await input.setValue(true);
+  await nextTick();
+}
+
 beforeEach(() => {
   localStorage.clear();
   h.authStore!.factoryId = 'F006';
+  h.authStore!.currentRole = 'factory_super_admin';
+  h.authStore!.user = { id: 1309 };
   h.route.query = {};
   h.replace.mockReset();
   h.api.getUploadHistory.mockReset().mockResolvedValue({ success: true, data: [
@@ -113,6 +123,7 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     let finishFirst!: (value: unknown) => void;
     h.api.saveFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }));
     const page = await mountPage();
+    await openCatalog(page!);
     const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
     await boxes[0].setValue(false);
     await boxes[1].setValue(false);
@@ -129,6 +140,7 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     let resolvePreference!: (value: unknown) => void;
     h.api.getFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { resolvePreference = resolve; }));
     const page = await mountPage();
+    await openCatalog(page!);
     const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
     await boxes[0].setValue(false);
     await nextTick();
@@ -140,6 +152,7 @@ describe('FactoryChartRecommendations mounted workflow', () => {
   });
   it('keeps user intent when a period temporarily excludes the selected chart', async () => {
     const page = await mountPage();
+    await openCatalog(page!);
     await page!.findAll('.selection-panel input[type="checkbox"]')[1].setValue(false);
     await nextTick();
     const key = 'smartbi.factory-chart-selection:F006:business';
@@ -179,6 +192,7 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     const cardText = page!.get('[data-testid="factory-chart-card-margin"]').text();
     expect(cardText.indexOf('AI 补充')).toBeGreaterThan(cardText.indexOf('需要关注'));
 
+    await openCatalog(page!);
     const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
     await boxes[0].setValue(false);
     await nextTick();
@@ -250,6 +264,66 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     await flushPromises();
     expect(page!.text()).toContain('F007业务系统');
     expect(page!.text()).not.toContain('旧F006业务系统');
+  });
+
+  it('generates local analysis without a preference write and defeats a late preference response', async () => {
+    let resolvePreference!: (value: unknown) => void;
+    h.api.getFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { resolvePreference = resolve; }));
+    const page = await mountPage();
+    page.findComponent(FactoryChartGuide).vm.$emit('analysis', ['margin']);
+    await nextTick();
+    resolvePreference({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['yield'] } });
+    await flushPromises();
+    expect(page.findAll('.chart-stub')).toHaveLength(1);
+    expect(page.find('.chart-stub').attributes('data-title')).toBe('毛利趋势');
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
+  });
+
+  it('sends the selected product and rejects an unscoped response while keeping recovery controls', async () => {
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ subjects: [{ id: 'p1', label: '黄油鸡' }] }));
+    const page = await mountPage();
+    // Simulate an older or broken server ignoring the new product selector.
+    page.findComponent(FactoryChartGuide).vm.$emit('subject', 'p1');
+    await flushPromises();
+    expect(h.api.getFactoryChartRecommendations.mock.calls.at(-1)?.[0]).toMatchObject({ guided: true, analysis_subject: 'p1' });
+    expect(page.text()).toContain('返回的数据源与当前工厂不一致');
+    expect(page.findAll('.chart-stub')).toHaveLength(0);
+    expect(page.findComponent(FactoryChartGuide).props('subject')).toBe('p1');
+    expect(page.findComponent(FactoryChartGuide).props('subjects')).toEqual([{ id: 'p1', label: '黄油鸡' }]);
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ analysisSubject: null }));
+    page.findComponent(FactoryChartGuide).vm.$emit('subject', null);
+    await flushPromises();
+    expect(page.findAll('.chart-stub')).toHaveLength(2);
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
+  });
+
+  it('retains business questions across product reloads and clears the product when source changes', async () => {
+    const page = await mountPage();
+    page.findComponent(FactoryChartGuide).vm.$emit('context', { mode: 'browse', domain: '生产', family: 'all' });
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ analysisSubject: 'p1', analysisScopeLabel: '黄油鸡', subjects: [{ id: 'p1', label: '黄油鸡' }] }));
+    page.findComponent(FactoryChartGuide).vm.$emit('subject', 'p1');
+    await flushPromises();
+    expect(page.findComponent(FactoryChartGuide).props('context').mode).toBe('browse');
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ source: 'upload' }));
+    page.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', 'upload');
+    await flushPromises();
+    expect(h.api.getFactoryChartRecommendations.mock.calls.at(-1)?.[0]).toMatchObject({ source: 'upload', analysis_subject: null });
+  });
+
+  it.each(['user', 'role'])('drops high-role in-flight data after switching %s within the same factory', async mode => {
+    let resolveOld!: (value: unknown) => void;
+    h.api.getFactoryChartRecommendations.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    const page = await mountPage();
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ recommendations: [], subjects: [], sourceLabel: '新用户受限视图' }));
+    if (mode === 'user') h.authStore!.user = { id: 1558 };
+    else h.authStore!.currentRole = 'quality_inspector';
+    await flushPromises();
+    resolveOld(response({ sourceLabel: '旧管理员金额数据', subjects: [{ id: 'private', label: '旧受限产品' }] }));
+    await flushPromises();
+    expect(page.text()).toContain('新用户受限视图');
+    expect(page.text()).not.toContain('旧管理员金额数据');
+    expect(page.text()).not.toContain('旧受限产品');
+    expect(page.findAll('.chart-stub')).toHaveLength(0);
   });
 
   it('does not request data without a factory', async () => {

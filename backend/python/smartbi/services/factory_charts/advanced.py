@@ -130,7 +130,7 @@ def build(frame, cols, request, can_price, source):
         gaps.append({'id': 'stock.balance', 'title': '库存收发余额', 'missing': ['单一期间同单位的期初、入库、出库、期末余额；单张采购表不足']})
 
     # Statistical variants require identified, same-SKU unit samples, not aggregated means.
-    if request.include_optional and can_price and all(cols[k] for k in ('product', 'unit', 'cost', 'output')) and '批次' in frame:
+    if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and request.include_optional and can_price and all(cols[k] for k in ('product', 'unit', 'cost', 'output')) and '批次' in frame:
         for (sku, unit), group in frame.groupby([cols['product'], cols['unit']], dropna=False):
             if pd.isna(sku) or pd.isna(unit) or len(group) < 5 or group['批次'].isna().any() or group['批次'].nunique() != len(group):
                 continue

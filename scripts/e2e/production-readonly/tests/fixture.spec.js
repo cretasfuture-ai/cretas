@@ -9,6 +9,7 @@ const { createScreenshotWriter, installContactMasks } = require('../core/screens
 const { SCENARIOS } = require('../core/run-suite');
 const { VISUAL_PAGES, runVisualCensus } = require('../scenarios/visual-page-census-readonly');
 const { createScenarioResult } = require('../core/result-schema');
+const guidedScenario = require('../scenarios/smartbi-guided-readonly');
 
 function pageHtml(pathname) {
   if (pathname === '/login') {
@@ -25,6 +26,27 @@ function pageHtml(pathname) {
         });
       </script>
     </body></html>`;
+  }
+  if (pathname === '/smart-bi/analysis-hub') {
+    return wrapWithBootSplash(pathname, `<main><h1>工厂分析</h1>
+      <section data-testid="factory-chart-guide"><h2>1. 想了解什么？</h2>
+        <div data-testid="factory-chart-mode"><label><input type="radio" value="guide" name="mode" checked>问答引导</label><label><input type="radio" value="browse" name="mode">按分类浏览</label></div>
+        <div data-testid="factory-chart-guide-domain"><label><input type="radio" value="库存" name="domain">库存有哪些风险？</label><label><input type="radio" value="生产" name="domain">生产完成情况怎样？</label></div>
+        <button data-testid="factory-chart-refresh">刷新</button><button data-testid="factory-chart-guide-generate">查看分析</button>
+        <div data-testid="factory-chart-guide-subject" role="combobox"><button id="subject-toggle">分析产品</button><div id="subject-options" hidden><button role="option">全部产品 / 全厂范围</button>${Array.from({ length: 100 }, (_, i) => `<button role="option" data-value="product-${i}">产品${i}</button>`).join('')}</div></div>
+        <div data-testid="factory-chart-family"><label><input type="checkbox">库存风险</label><select aria-label="库存风险的画法与单位"><option value="inventory-stock">库存图表</option></select></div>
+      </section><p id="analysis-scope"></p><section data-testid="factory-chart-list"></section>
+      <script>
+        let last = null; let selectedDomain = '库存';
+        const cards = document.querySelector('[data-testid=factory-chart-list]');
+        function render(data) { document.querySelector('#analysis-scope').textContent = data.analysisScopeLabel; cards.innerHTML = (data.recommendations || []).filter(item => !selectedDomain || item.domain === selectedDomain).map(item => '<div class="recommendation-card" data-testid="factory-chart-card-' + item.id + '">' + item.title + '</div>').join(''); }
+        async function load(subject) { const response = await fetch('/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({factory_id:'F006', source:'business', guided:true, analysis_subject:subject || null})}); last = await response.json(); render(last.data); }
+        document.querySelector('[data-testid=factory-chart-refresh]').onclick = () => load(null);
+        document.querySelector('[data-testid=factory-chart-guide-generate]').onclick = () => render(last.data);
+        document.querySelectorAll('[data-testid=factory-chart-guide-domain] input').forEach(input => input.onchange = () => { selectedDomain = input.value; });
+        document.querySelector('#subject-toggle').onclick = () => document.querySelector('#subject-options').hidden = false;
+        document.querySelectorAll('[role=option]').forEach(option => option.onclick = () => { document.querySelector('#subject-options').hidden = true; load(option.dataset.value || null); });
+      </script></main>`);
   }
   const content = pathname === '/quality/label-qc'
     ? '<main><h1>包装标签拍检</h1><p>AI 初筛只提供疑点，人工审核形成最终结论。</p><div class="el-table"></div><button>待人工审核</button><button>已审核整理</button><button>归档记录</button><button>人工审核</button></main>'
@@ -93,12 +115,12 @@ function pageHtml(pathname) {
  *    ⇒ 夹具缺的正是生产上会坏的那一环, 所以「16 个场景里 13 个 UNVERIFIED」
  *      这个仪器缺陷在本地一次都复现不出来。
  *
- * ⛔ `/login` 与 `/sales/orders` 保持原样: 它们的内联 <script> 必须在解析期执行,
- *    而 innerHTML 注入进去的 <script> 不会运行。这两条是【显式登记的例外】,
+ * ⛔ `/login`、`/sales/orders`、`/smart-bi/analysis-hub` 保持原样: 它们的内联 <script> 必须在解析期执行,
+ *    而 innerHTML 注入进去的 <script> 不会运行。这三条是【显式登记的例外】,
  *    不是漏改 —— 其余路径都会走一遍真实的「先闪屏、后挂载」。
  */
 function wrapWithBootSplash(pathname, content, delayMs = 250) {
-  if (pathname === '/login' || pathname === '/sales/orders') {
+  if (pathname === '/login' || pathname === '/sales/orders' || pathname === '/smart-bi/analysis-hub') {
     return `<!doctype html><html><body>${content}</body></html>`;
   }
   return `<!doctype html><html><head><style>
@@ -140,6 +162,23 @@ test.describe('production read-only harness local fixture', () => {
           response.end(JSON.stringify(loginStatus === 200
             ? { success: true, message: 'ok', data: { username: 'f006_admin', factoryId: 'F006', factoryName: '六膳门食品科技', role: 'factory_admin' } }
             : { success: false, message: 'fixture login rejected' }));
+        });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations') {
+        let raw = '';
+        request.on('data', chunk => { raw += chunk; });
+        request.on('end', () => {
+          let body = {};
+          try { body = JSON.parse(raw); } catch {}
+          const analysisSubject = body.analysis_subject || null;
+          const products = Array.from({ length: 100 }, (_, index) => ({ id: `product-${index}`, label: `产品${index}` }));
+          const recommendations = [
+            ['inventory-stock', 'inventory.stock', '库存'], ['production-output', 'production.output', '生产'],
+            ['sales-revenue', 'sales.revenue', '销售'], ['quality-yield', 'quality.yield', '质量'],
+          ].map(([id, familyId, domain]) => ({ id, domain, analysis: { familyId, familyLabel: familyId }, title: id }));
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ success: true, data: { factoryId: 'F006', source: 'business', sourceLabel: '业务数据', period: { label: '全部历史' }, analysisSubject, analysisScopeLabel: analysisSubject ? `产品 ${analysisSubject}` : '全厂范围', recommendations, subjects: products } }));
         });
         return;
       }
@@ -212,6 +251,22 @@ test.describe('production read-only harness local fixture', () => {
     expect(report.scenarios[0].screenshots).toHaveLength(VISUAL_PAGES.length);
     // The fixture deliberately lacks most business landmarks: screenshots do not invent PASS.
     expect(report.scenarios[0].result).toBe('UNVERIFIED');
+  });
+
+  test('guided SmartBI flow uses bounded families, 100-product catalogue, and zero writes', async ({ page }) => {
+    test.setTimeout(120_000);
+    {
+      const report = await runSuiteWithPage(page, {
+        baseUrl, evidenceDir: path.resolve('test-results', 'smartbi-guided-fixture'),
+        scenarios: [guidedScenario.id], username: 'f006_admin', password: 'fixture-only',
+        productionReadonly: true,
+      });
+      expect(report.scenarios[0].result).toBe('PASS');
+      expect(report.scenarios[0].pageEvidence.some(entry => entry.checks?.visibleFamiliesDistinct)).toBe(true);
+      expect(report.scenarios[0].pageEvidence.some(entry => entry.subjectCount === 100)).toBe(true);
+      expect(report.actualBusinessWrites).toBe(0);
+      expect(report.blockedMutationAttempts).toHaveLength(0);
+    }
   });
 
   test('suite stops before the next scenario after a blocked business mutation', async ({ page }) => {

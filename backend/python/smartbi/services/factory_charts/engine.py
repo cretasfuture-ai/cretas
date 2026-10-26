@@ -59,6 +59,194 @@ class Dataset:
     currency: str = ''
 
 
+_UNSCOPABLE_SUBJECT_SOURCES = ('cashflow', 'allfactorycash', 'oee', 'oee-sheet',
+                               'receivables', 'historical-inventory')
+_GUIDED_SPECIALIZED_PREFIXES = ('cost.dual', 'cost.distribution', 'cost.scatter',
+                                 'production.fused', 'production.anomaly')
+_FAMILY_LABELS = {
+    'production.output': '产量趋势', 'production.products': '产品产量',
+    'production.quality': '生产良品率', 'production.yield': '生产出成率',
+    'quality.pass': '检验合格率', 'quality.defect': '检验不良率',
+    'quality.counts': '不良数量排名', 'sales.trend': '销售金额趋势',
+    'sales.products': '产品销售结构', 'purchase.trend': '采购入库金额趋势',
+    'purchase.suppliers': '供应商入库金额', 'purchase.quantity': '采购入库数量',
+    'stock.materials': '可用库存数量', 'cost.structure': '生产成本结构',
+    'cost.unit': '产品单位成本', 'production.plan': '计划与实际产量',
+    'production.heatmap': '日期与维度产量', 'production.oee': '设备OEE',
+    'finance': '财务指标',
+    'cost.dual': '产量与单位成本双轴', 'cost.distribution': '批次单位成本分布',
+    'cost.scatter': '批次产量与单位成本关联', 'production.fused': '生产质量成本联合趋势',
+    'production.anomaly': '批次产量偏离观察', 'production.slope': '两期产品变化',
+    'production.plan-rate': '累计计划达成率', 'stock.turnover': '库存金额周转',
+    'stock.history': '历史库存余额',
+}
+_PRODUCT_ID_NAMES = {
+    '产品id', '产品编号', '产品编码', 'sku', 'sku编码', 'product_id',
+    'productid', 'product_type_id', 'producttypeid', '产品类型id',
+}
+
+
+def _product_columns(frame):
+    """Return product name and identity columns without treating names as IDs."""
+    product_name = columns(frame).get('product')
+    identity = None
+    for column in frame.columns:
+        normalized = re.sub(r'[（(].*?[）)]', '', str(column)).strip().lower()
+        if normalized in _PRODUCT_ID_NAMES:
+            identity = column
+            break
+    # A lone SKU is the only safe dual-purpose column: it is both the exact
+    # displayed label and the source identity.
+    if identity is not None and product_name == identity:
+        return identity, identity
+    return product_name, identity
+
+
+def _subject_identity(identity, name):
+    if identity not in (None, '') and pd.notna(identity):
+        return 'id:' + str(identity).strip()
+    return 'name:' + str(name)
+
+
+def _subject_id(identity_kind, identity_value):
+    return 'product-' + hashlib.sha256(
+        ('smartbi-subject-v2:' + identity_kind + ':' + identity_value).encode('utf-8')).hexdigest()[:16]
+
+
+def _catalog_entries(datasets, can_price):
+    entries = {}
+    names_to_ids = {}
+    for dataset in datasets:
+        source = str(dataset.source).split(' · ', 1)[0].lower()
+        if source.startswith(_UNSCOPABLE_SUBJECT_SOURCES):
+            continue
+        if getattr(dataset, 'financial', False) and not can_price:
+            continue
+        name_col, id_col = _product_columns(dataset.frame)
+        if not name_col or name_col not in dataset.frame:
+            continue
+        for _, row in dataset.frame.iterrows():
+            name = row.get(name_col)
+            if pd.isna(name) or not str(name).strip():
+                continue
+            name = str(name)
+            identity = row.get(id_col) if id_col is not None else None
+            if identity is not None and pd.notna(identity) and str(identity).strip():
+                kind, value = 'id', str(identity).strip()
+            else:
+                kind, value = 'name', name
+            sid = _subject_id(kind, value)
+            entries.setdefault(sid, {'id': sid, 'label': name, 'name': name, 'kind': kind, 'value': value})
+            names_to_ids.setdefault(name, set()).add(sid)
+    # Name-only rows are aliases only when exactly one ID-backed identity owns
+    # that exact name.  This prevents a dead name-only subject and prevents
+    # silently combining two same-name SKUs.
+    id_by_name = {}
+    for sid, entry in entries.items():
+        if entry['kind'] == 'id':
+            id_by_name.setdefault(entry['name'], set()).add(sid)
+    for sid, entry in list(entries.items()):
+        if entry['kind'] != 'name':
+            continue
+        ids = id_by_name.get(entry['name'], set())
+        if len(ids) == 1:
+            names_to_ids[entry['name']] = set(ids)
+            entries.pop(sid, None)
+        elif len(ids) > 1:
+            names_to_ids[entry['name']] = set(ids)
+            entries.pop(sid, None)
+    # Name-only records may join an ID-backed subject only when that name has
+    # exactly one canonical identity in the authorized catalogue.
+    return entries, names_to_ids
+
+
+def _family_key(candidate_id):
+    """Return a semantic family before the per-unit/product opaque suffix."""
+    raw = str(candidate_id or '').split('@', 1)[0]
+    raw = raw.split(':', 1)[0]
+    # Specialized financial IDs have a stable chart type after finance.
+    return raw
+
+
+def _analysis_metadata(candidate):
+    family_id = _family_key(candidate.get('id'))
+    label = _FAMILY_LABELS.get(family_id)
+    if not label:
+        # Titles can contain product names, so they are intentionally not used
+        # as the family label.  Keep an opaque, stable fallback for new views.
+        label = candidate.get('metric') or family_id.rsplit('.', 1)[-1].replace('_', ' ')
+    candidate['analysis'] = {'familyId': family_id, 'familyLabel': label}
+    return candidate
+
+
+def analysis_subjects(datasets, can_price):
+    """Build the guided product catalogue from already-authorized data only."""
+    found, names_to_ids = _catalog_entries(datasets, can_price)
+    labels = {}
+    for name, ids in names_to_ids.items():
+        if len(ids) > 1:
+            for sid in ids:
+                labels[sid] = f'{name} · {sid[-6:]}'
+    return sorted(({ 'id': sid, 'label': labels.get(sid, entry['label']) }
+                   for sid, entry in found.items()), key=lambda item: (item['label'], item['id']))
+
+
+def scope_datasets(datasets, request, subjects, can_price):
+    """Apply an opaque subject to product-bearing frames before build()."""
+    if not getattr(request, 'guided', False):
+        return list(datasets), None, '全厂范围'
+    if not getattr(request, 'analysis_subject', None):
+        return list(datasets), None, '全厂范围'
+    requested = str(request.analysis_subject)
+    entries, names_to_ids = _catalog_entries(datasets, can_price)
+    chosen = entries.get(requested)
+    if not chosen:
+        return [], {'id': 'analysis.subject', 'title': '分析主题',
+                    'missing': ['所选分析主题不在当前授权数据目录中']}, '所选产品当前无数据'
+    label = chosen['label']
+    scoped = []
+    product_data_found = False
+    excluded_sources = []
+    for dataset in datasets:
+        source = str(dataset.source).split(' · ', 1)[0].lower()
+        product_col, identity_col = _product_columns(dataset.frame)
+        if source.startswith(_UNSCOPABLE_SUBJECT_SOURCES):
+            # A product-scoped answer must not retain full-factory OEE/cash
+            # frames: they cannot prove the selected product and would leak
+            # unrelated factory scope into the response.
+            excluded_sources.append(source)
+            continue
+        if not product_col:
+            excluded_sources.append(source)
+            continue
+        def matches(row):
+            name = row.get(product_col)
+            if pd.isna(name):
+                return False
+            identity = row.get(identity_col) if identity_col is not None else None
+            if identity is not None and pd.notna(identity) and str(identity).strip():
+                return _subject_id('id', str(identity).strip()) == requested
+            # A name-only source can join only when its exact name maps to one
+            # canonical catalog identity; ambiguous names are excluded.
+            name = str(name)
+            return len(names_to_ids.get(name, set())) == 1 and requested in names_to_ids.get(name, set())
+        mask = dataset.frame.apply(matches, axis=1)
+        frame = dataset.frame.loc[mask].copy()
+        if not frame.empty:
+            product_data_found = True
+            scoped.append(Dataset(frame, dataset.source, dataset.financial,
+                                  dataset.sheet_name, dataset.currency))
+    if not product_data_found:
+        return [], {'id': 'analysis.subject.data', 'title': '分析主题',
+                    'missing': ['所选产品当前没有可按产品限定的明细数据']}, '所选产品当前无数据'
+    gap = None
+    if excluded_sources:
+        names = '、'.join(sorted(set(excluded_sources)))
+        gap = {'id': 'analysis.subject.scope', 'title': '分析主题范围',
+               'missing': [f'以下来源无法按产品限定，已从本次主题分析排除：{names}']}
+    return scoped, gap, f'已选择分析主题：{label}'
+
+
 def columns(frame):
     clean = [(re.sub(r'[（(].*?[）)]', '', str(c)).strip(), c) for c in frame.columns]
     return {key: matches[0] if len(matches := [c for name, c in clean if name in names]) == 1 else None
@@ -156,6 +344,7 @@ def financial_candidates(dataset, request, can_price):
             'findings': _financial_findings(c, detail, mapping),
             'kpis': c.get('kpis', []), 'tableData': c.get('tableData'),
             'chart': {'chartType': t, 'echartsOption': c['echartsOption']}})
+        _analysis_metadata(eligible[-1])
     return eligible, gaps
 
 
@@ -206,7 +395,7 @@ def series_candidate(series, kind, optional=False):
         'tableData': [{'label': label, 'value': value} for label, value in series.points]}
     if kind in ('line', 'area'):
         candidate['findings']['attention'].append('仅汇总有记录的日期；缺期不补零，空白不表示停产或没有业务')
-    return candidate
+    return _analysis_metadata(candidate)
 
 
 def factory_candidates(dataset, request, can_price):
@@ -466,9 +655,12 @@ def build(datasets, request, can_price):
             extra, extra_gaps = financial_addons(dataset, request, can_price)
             charts.extend(extra)
             gaps.extend(extra_gaps)
+        if getattr(request, 'guided', False) and not getattr(request, 'analysis_subject', None):
+            charts = [chart for chart in charts if not str(chart.get('id', '')).startswith(_GUIDED_SPECIALIZED_PREFIXES)]
         # Sources with the same metric stay distinct and auditable.
         prefix = re.sub(r'[^a-z0-9]+', '-', dataset.source.split(' · ')[0].lower()).strip('-')
         for chart in charts:
+            _analysis_metadata(chart)
             if chart['chart']['echartsOption'].get('_factoryUnavailable'):
                 gaps.append({'id': chart['id'], 'title': chart['title'], 'missing': [chart['chart']['echartsOption']['_factoryUnavailable']]})
                 continue
@@ -494,6 +686,11 @@ def build(datasets, request, can_price):
                 head, suffix = chart['id'].split('@', 1)
                 chart['id'] = head + '@' + hashlib.sha256(suffix.encode()).hexdigest()[:12]
             chart['id'] = f'{prefix}.{chart["id"]}' if prefix else chart['id']
+            # Keep source provenance in the family key while retaining one
+            # family across chart variants and units from that source.
+            family = chart.get('analysis', {}).get('familyId')
+            if family and prefix and not str(family).startswith(prefix + '.'):
+                chart['analysis']['familyId'] = f'{prefix}.{family}'
             # AI receives semantic metric IDs, never SKU names or source-row values.
             chart['aiMetric'] = chart['id'].split('@')[0]
         for gap in gaps:

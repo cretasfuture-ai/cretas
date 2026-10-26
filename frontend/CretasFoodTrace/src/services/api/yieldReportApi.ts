@@ -89,6 +89,8 @@ export interface TaskMaterialBatchOption {
   currentQuantity: number;
   quantityUnit: string;
   warehouseId: string;
+  /** 该原料端口的主料份额(%) —— 配比核对用 (缺口 06); null = 不参与配比。 */
+  inputShareRatio?: number | null;
 }
 
 // ============ BatchYieldDTO (mirror backend dto/yield/BatchYieldDTO.java:16-28) ============
@@ -243,6 +245,11 @@ export interface YieldReportRequest {
   targetWorkerId?: number;          // 代报工 (Phase D operator 自报, 默认不传)
   /** A2b: 首道领料批次引用 (随报工单一起提交, 不再单独调用 recordMaterialInput) */
   materialBatchRefs?: { materialBatchId: string; quantity: number; unit?: string }[];
+  /**
+   * 缺口 06 汇合配比: 多主料领料偏离配方份额超 ±2 个百分点时必填的原因 (note 仅「其他」时必填)。
+   * 其余快照由后端计算, 落在报工单 custom_fields.blendRatio。
+   */
+  blendRatio?: { reason: string; note?: string };
   /**
    * G7 Wave 4 部分领用: 本道领用哪个上道 WIP (semi_finished_inventory.intermediate_batch_no)。
    * 非空 → 后端扣减该 WIP available_quantity (防呆 inputQuantity ≤ available);
