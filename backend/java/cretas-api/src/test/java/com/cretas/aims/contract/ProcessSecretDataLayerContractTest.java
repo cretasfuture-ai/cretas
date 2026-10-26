@@ -142,16 +142,36 @@ class ProcessSecretDataLayerContractTest {
             "entity/workprocess/WorkProcessDraft.java", "同上: 工序目录草稿");
 
     /** 直接用 SQL 读配方表 (Hibernate PostLoad 看不到) 的类。 */
-    static final Map<String, String> DIRECT_SQL_LEDGER = Map.of(
-            "repository/ProductProcessWorkflowRevisionRepository.java", "只取 max(revision_number), 不读工艺内容",
-            "service/bom/impl/BomRecipeServiceImpl.java", "原生查询映射回 BomRecipeItem 实体, PostLoad 照常触发",
-            "repository/bom/BomRecipeRepository.java", "原生 UPDATE seasoning_revision, 不读内容",
-            "entity/bomdraft/BomRecipeDraftItem.java", "@SQLDelete 软删除语句, 不读内容");
+    static final Map<String, String> DIRECT_SQL_LEDGER = Map.ofEntries(
+            Map.entry("repository/ProductProcessWorkflowRevisionRepository.java", "只取 max(revision_number), 不读工艺内容"),
+            Map.entry("service/bom/impl/BomRecipeServiceImpl.java", "原生查询映射回 BomRecipeItem 实体, PostLoad 照常触发"),
+            Map.entry("repository/bom/BomRecipeRepository.java", "原生 UPDATE seasoning_revision, 不读内容"),
+            Map.entry("entity/bomdraft/BomRecipeDraftItem.java", "@SQLDelete 软删除语句, 不读内容"),
+            Map.entry("entity/MaterialProductConversion.java", "@SQLDelete 软删除语句"),
+            Map.entry("entity/ProductionBatch.java", "@SQLDelete 软删除语句"),
+            Map.entry("entity/processentry/ProcessSheetRow.java", "@SQLDelete 软删除语句"),
+            Map.entry("repository/ProductionReportRepository.java",
+                    "产量 / 良品 / 次品 / 工时汇总 (不是配方); aggregateYieldByProcess 在服务层排除无权的保密产品并有路由闸; "
+                            + "半成品加权出成由路由闸按半成品判; findYieldStandardSamples 只给标准出成自动计算 (内部)"),
+            Map.entry("repository/ProductionBatchRepository.java", "计数 / 生产周期 / 完工批次总量 (单批总量, 本单档允许)"),
+            Map.entry("scheduler/AnomalyDetectionScheduler.java", "厂级跨产品混合均值 (异常检测), 不按产品输出"),
+            Map.entry("service/impl/AnomalyDetectionServiceImpl.java", "同上: 厂级跨产品混合均值"),
+            Map.entry("service/finance/ProductionCostConsistency.java", "只取完工日期做成本一致性核对"),
+            Map.entry("service/impl/ProductionPlanServiceImpl.java", "内部 UPDATE / 计数, 不输出配方"),
+            Map.entry("service/impl/RawMaterialTypeServiceImpl.java", "只数转换率条数 (删原料前的引用检查)"),
+            Map.entry("service/indicator/strategy/impl/FactoryActualProductionMetrics.java",
+                    "按产品指标的输出带 productTypeId, 汇总出成字段按归属裁剪"),
+            Map.entry("service/indicator/strategy/impl/FactoryLuDailyOutputStrategy.java", "厂级日产量合计"),
+            Map.entry("service/production/FormalFinishedOutputScope.java", "只取批号做口径过滤"),
+            Map.entry("service/production/ProductionProgressDashboardService.java", "按产品 / 工序的当日产量 (总量)"),
+            Map.entry("service/smartbi/impl/ProductionDataExportServiceImpl.java", "导出 (另一个会话负责)"));
 
+    /** 配方表 + 打标实体的表 (报工 / 批次的直连 SQL 汇总同样绕过打标, 独立审查第二轮 #1 #11)。 */
     static final Pattern RECIPE_TABLE_SQL = Pattern.compile(
-            "(?i)(from|join|update)\\s+(bom_recipe_items|bom_seasoning_items|material_product_conversion|"
-                    + "product_work_process(es)?|workflow_task_ports?|product_process_workflow_revisions|"
-                    + "bom_process_injection_configs?|bom_recipes|bom_recipe_draft_items|factory_material_requisition_items)\\b");
+            "(?i)(from|join|update)\\s+(bom_recipe_items|bom_seasoning_items|material_product_conversions|"
+                    + "product_work_processes|workflow_task_ports|product_process_workflow_revisions|"
+                    + "bom_process_injection_configs|bom_recipes|bom_recipe_draft_items|factory_material_requisition_items|"
+                    + "production_reports|production_batches|process_sheet_rows)\\b");
 
     @Test
     void everyRatioLikeNumericFieldIsClassified() throws IOException {
@@ -176,6 +196,8 @@ class ProcessSecretDataLayerContractTest {
     }
 
     static final Pattern MAP_KEY = Pattern.compile("\\.put\\(\"([a-zA-Z]+)\"");
+    /** Map.of / Map.entry 里的键 (同一行内, 后面紧跟逗号的字符串字面量)。 */
+    static final Pattern INLINE_MAP_KEY = Pattern.compile("\"([a-zA-Z]+)\"\\s*,");
 
     /** Map 键按驼峰拆词判 (子串会把 generatedAt / operation 一类全部扫进来)。 */
     static final Set<String> SUSPICIOUS_WORDS = Set.of("ratio", "rate", "share", "usage", "dosage", "yield",
@@ -212,15 +234,23 @@ class ProcessSecretDataLayerContractTest {
             // 「yield」= 首检良品率 (质量), 不是出成; 其余是单位换算 / 排程 / 意图里的同名词
             "yield", "conversion", "conversionCandidates", "conversionDate", "conversionEvidence",
             // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里
-            "blendRatio");
+            "blendRatio",
+            // 工作流节点配置 schema 里的参数名 (允许超额百分比 / 质检抽样率), 不是配方
+            "maxExceedPercent", "samplingRate");
 
     @Test
     void everyRatioLikeMapKeyIsClassified() throws IOException {
         Map<String, String> unclassified = new TreeMap<>();
         forEachSource(MAIN, (path, text) -> {
-            Matcher m = MAP_KEY.matcher(text);
-            while (m.find()) {
-                String name = m.group(1);
+            List<String> keys = new ArrayList<>();
+            Matcher put = MAP_KEY.matcher(text);
+            while (put.find()) keys.add(put.group(1));
+            for (String line : text.split("\n")) {
+                if (!line.contains("Map.of(") && !line.contains("Map.entry(")) continue;
+                Matcher inline = INLINE_MAP_KEY.matcher(line);
+                while (inline.find()) keys.add(inline.group(1));
+            }
+            for (String name : keys) {
                 if (!hasSuspiciousWord(name)) continue;
                 if (scrubbed(name) || ACTUAL_RESULT_FIELDS.contains(name) || NOT_RECIPE_FIELDS.contains(name)
                         || NOT_RECIPE_MAP_KEYS.contains(name)) continue;

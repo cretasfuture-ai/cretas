@@ -2,6 +2,9 @@ package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -19,7 +22,10 @@ import java.util.Objects;
 public class YieldAnalysisServiceImpl implements YieldAnalysisService {
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    /** 排除列表为空时的哨兵 (NOT IN 不能给空列表)。 */
+    static final String NO_EXCLUSION = "__none__";
     private final ProductionReportRepository reportRepo;
+    private final ProcessSecretAccessService processSecretAccessService;
 
     @Override
     public List<ProcessYieldAggDTO> aggregateByProcess(String factoryId, LocalDate startDate, LocalDate endDate, String productTypeId) {
@@ -28,7 +34,9 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         LocalDate end = endDate != null ? endDate : LocalDate.of(2999, 12, 31);
         String pt = productTypeId != null ? productTypeId : "";
 
-        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt);
+        List<String> excluded = hiddenProtectedProducts(factoryId, pt);
+        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt,
+                excluded.isEmpty() ? List.of(NO_EXCLUSION) : excluded);
         List<ProcessYieldAggDTO> result = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             BigDecimal totalInput = toBig(r.get("total_input"));
@@ -61,6 +69,21 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
                     .build());
         }
         return result;
+    }
+
+    /**
+     * 工艺保密 (Steve 第三问 A: 跨批汇总只给负责人和授权人): 厂级按工序汇总里, 调用者无完整查看权的保密产品
+     * 整个不参与 —— 一道只有保密产品在用的工序, 汇总出来就是它的出成率。点名单个保密产品的请求由路由闸拦 (403)。
+     * 每个被排除的产品记一条 DENY 审计。
+     */
+    List<String> hiddenProtectedProducts(String factoryId, String productTypeId) {
+        java.util.Set<String> protectedIds = processSecretAccessService.protectedProductTypeIds(factoryId);
+        if (protectedIds.isEmpty() || !productTypeId.isEmpty()) return List.of();
+        List<String> all = new ArrayList<>(protectedIds);
+        java.util.Set<String> permitted = new java.util.HashSet<>(processSecretAccessService.filterPermitted(
+                AuthenticatedActor.fromCurrentExecution().orElse(null), factoryId, all,
+                ProcessSecretAction.VIEW_FULL, false, "yield by-process aggregate"));
+        return all.stream().filter(p -> !permitted.contains(p)).sorted().toList();
     }
 
     private static BigDecimal toBig(Object v) {

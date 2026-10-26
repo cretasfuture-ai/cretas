@@ -466,6 +466,21 @@ class ProcessSecretDataLayerExitsSecurityTest {
     }
 
     @Test
+    void crossBatchYieldByProcessForANamedProtectedProductIsOnlyForTheOwner() throws Exception {
+        // 独立审查第二轮 #1: 原生 SQL 汇总不经过打标; 点名保密产品的跨批汇总由路由闸拦 (Steve 第三问 A)
+        com.cretas.aims.service.yield.YieldAnalysisService service = dep(com.cretas.aims.service.yield.YieldAnalysisService.class);
+        when(service.aggregateByProcess(eq(F), any(), any(), eq(SECRET))).thenReturn(List.of());
+        MockMvc mvc = mvc(controller(com.cretas.aims.controller.YieldAnalysisController.class));
+        mvc.perform(get("/api/mobile/F-A/production/yield/by-process").param("productTypeId", SECRET)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OPERATOR)))
+                .andExpect(status().isForbidden());
+        verify(service, never()).aggregateByProcess(any(), any(), any(), any());
+        mvc.perform(get("/api/mobile/F-A/production/yield/by-process").param("productTypeId", SECRET)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OWNER)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void productOutputCalculatorDropsProtectedProductsTheCallerCannotSee() throws Exception {
         JsonNode rows = call(conversions(), post("/api/mobile/F-A/conversions/calculate/product-output")
                 .param("materialTypeId", "M1").param("materialQuantity", "100"), user(OPERATOR));

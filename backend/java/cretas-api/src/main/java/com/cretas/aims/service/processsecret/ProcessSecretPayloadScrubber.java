@@ -66,6 +66,10 @@ public class ProcessSecretPayloadScrubber {
             "suggestedStandardQuantity", "currentRate", "suggestedRate", "conversionRateChange", "wastageRateChange",
             // 汇合配比校验 (缺口 06) 的落库快照: 配方份额, 以及「实际 − 配方」的偏差
             "recipeSharePercent", "deviationPp", "maxDeviationPp",
+            // 每一行「是否超差」+ 实际份额 = 配方份额落在 实际 ± 容差 之内, 攒几次就逼近配方 (第二轮 #8)
+            "overTolerance",
+            // 报工行的回料配方比例 (工艺里配好的份额, 不是实测; 第二轮 #3)
+            "inputRatioPercent",
             // 添加剂合规核对里的添加量 (g/kg) 就是配方用量; 超限倍数 = 添加量 ÷ 国标限量 (国标公开) 同样能还原
             "usageAmount", "exceedRatio",
             // 工艺图节点的投入 → 产出换算规则 (画布配置工具)
@@ -83,7 +87,7 @@ public class ProcessSecretPayloadScrubber {
     /** 单批 / 单单据的实测值: 单据视图里与「本单总量」同档, 汇总视图 ({@code aggregateView}) 里按配比类隐藏。 */
     public static final Set<String> SINGLE_RUN_ACTUAL_FIELDS = Set.of(
             "yieldRate", "actualYieldRate", "stepYieldRate", "cumulativeYieldRate", "realYieldRate",
-            "asOfYieldRate", "sourceConsumedRatio", "weightSharePct", "inputRatioPercent", "lossRate",
+            "asOfYieldRate", "sourceConsumedRatio", "weightSharePct", "lossRate",
             "overFeedRate", "actualSharePercent", "batchYield");
 
     /** 只出现在跨批汇总里的实测值 (日 / 加权 / 平均 / KPI / 按产品指标): 一律按配比类隐藏。 */
@@ -93,12 +97,20 @@ public class ProcessSecretPayloadScrubber {
             "yieldRateChange");
 
     /**
-     * 汇总视图的路由段 (出成率分析页、工厂指标、看板、报表): 这些响应里单批实测值也算「跨批」。
-     * AI 工具的回答一律按汇总视图处理。
+     * 汇总视图: {@code /api/mobile/{factoryId}/<模块>} 的模块段是这些之一 (出成率分析页、工厂指标、看板、报表),
+     * 或路径里任一段是 {@link #AGGREGATE_ANY_SEGMENTS}。这些响应里单批实测值和跨批总量也算「汇总」。
+     * AI 工具的回答一律按汇总视图处理。判定用 Spring 匹配到的路由模板, 不用原始 URI (矩阵参数 / 转义绕不过去)。
      */
-    public static final Set<String> AGGREGATE_ROUTE_SEGMENTS = Set.of(
-            "production-analytics", "indicators", "canvas-indicators", "dashboard", "reports", "report",
-            "kpi", "statistics", "wastage-reports", "analytics", "trend", "daily-trend");
+    public static final Set<String> AGGREGATE_ROUTE_MODULES = Set.of(
+            "production-analytics", "indicators", "canvas-indicators", "dashboard", "reports", "finance",
+            "wastage-reports", "restaurant-dashboard");
+    public static final Set<String> AGGREGATE_ANY_SEGMENTS = Set.of(
+            "kpi", "statistics", "analytics", "trend", "daily-trend", "by-process", "by-product", "semi-finished");
+
+    /** 分页信息 (无权档也保留, 否则列表翻不了页)。 */
+    static final Set<String> PAGING_FIELDS = Set.of(
+            "totalElements", "totalPages", "page", "size", "pageSize", "pageNum", "pageNumber", "current", "pages",
+            "numberOfElements");
 
     /** 名字含这些片段的字段一并按配比类处理 (统计里的平均转换率、损耗率等)。 */
     static final List<String> RATIO_SUFFIXES = List.of("conversionrate", "conversionratio", "wastagerate");
@@ -184,12 +196,23 @@ public class ProcessSecretPayloadScrubber {
         return run.changed;
     }
 
-    /** HTTP 路径是否汇总视图 (见 {@link #AGGREGATE_ROUTE_SEGMENTS})。 */
-    public static boolean isAggregateRoute(String requestUri) {
-        if (requestUri == null) return false;
-        for (String segment : requestUri.split("/")) {
-            String s = segment.toLowerCase(Locale.ROOT);
-            if (AGGREGATE_ROUTE_SEGMENTS.contains(s) || s.endsWith("-trend") || s.endsWith("-statistics")) return true;
+    /**
+     * 路由模板 (如 {@code /api/mobile/{factoryId}/production-analytics/by-product}) 是否汇总视图。
+     * 见 {@link #AGGREGATE_ROUTE_MODULES} / {@link #AGGREGATE_ANY_SEGMENTS}。
+     */
+    public static boolean isAggregateRoute(String routePattern) {
+        if (routePattern == null) return false;
+        String[] segments = routePattern.split("/");
+        for (int i = 0; i < segments.length; i++) {
+            String s = segments[i].toLowerCase(Locale.ROOT);
+            if (AGGREGATE_ANY_SEGMENTS.contains(s) || s.endsWith("-trend") || s.endsWith("-statistics")
+                    || s.endsWith("-stats")) {
+                return true;
+            }
+            if (i > 0 && "{factoryid}".equals(segments[i - 1].toLowerCase(Locale.ROOT))
+                    && AGGREGATE_ROUTE_MODULES.contains(s)) {
+                return true;
+            }
         }
         return false;
     }
@@ -209,6 +232,9 @@ public class ProcessSecretPayloadScrubber {
         /** 本次读过、且对当前调用者受限的产品 (含解析不出产品的读取, productTypeId 为 null)。 */
         final Set<Key> restrictedReads = new LinkedHashSet<>();
         final Set<Key> attributed = new LinkedHashSet<>();
+        /** 受限计划牵涉的全部产品 (含不受保护的兄弟产出): 归属到它们的对象同样按受限处理。 */
+        final Set<Key> planSiblings = new LinkedHashSet<>();
+        final Map<String, List<Key>> planCache = new HashMap<>();
         /** 归属不清时用的档位; null 表示归属不清的对象不用裁剪。 */
         Level fallback;
         /** 读过的受限产品没在输出里出现归属 → 整份按受限处理。 */
@@ -270,9 +296,16 @@ public class ProcessSecretPayloadScrubber {
                             .map(d -> List.of(new Key(read.factoryId(), d.getTargetProductRefId())))
                             .orElse(List.of());
                 };
+                boolean anyRestricted = false;
                 for (Key key : keys) {
-                    if (isProtected(key) && level(key) != Level.FULL) restrictedReads.add(key);
+                    if (isProtected(key) && level(key) != Level.FULL) {
+                        restrictedReads.add(key);
+                        anyRestricted = true;
+                    }
                 }
+                // 计划牵涉多个产品 (多产出 / 半成品 / 副产): 受限计划里的「不受保护的兄弟产品」也不能当归属,
+                // 同一道工序的配比快照会挂在每一个产出行上 (独立审查第二轮 #2)
+                if (anyRestricted && keys.size() > 1) planSiblings.addAll(keys);
             }
         }
 
@@ -287,12 +320,15 @@ public class ProcessSecretPayloadScrubber {
 
         /** 计划牵涉的全部产品; 计划查不到 (已删) 时当作「无法确认所属产品」。 */
         List<Key> planKeys(String factoryId, String planId) {
-            Set<String> products = planRepository.findByIdAndFactoryId(planId, factoryId)
-                    .map(plan -> ProcessSecretPlanProducts.of(plan, recipeId -> recipeKey(factoryId, recipeId)
-                            .map(Key::productTypeId)))
-                    .orElse(Set.of());
-            if (products.isEmpty()) return List.of(new Key(factoryId, null));
-            return products.stream().map(p -> new Key(factoryId, p)).toList();
+            // 同一次输出里多个批次 / 报工行指向同一计划时只查一次 (独立审查第二轮 #10)
+            return planCache.computeIfAbsent(factoryId + "|" + planId, k -> {
+                Set<String> products = planRepository.findByIdAndFactoryId(planId, factoryId)
+                        .map(plan -> ProcessSecretPlanProducts.of(plan, recipeId -> recipeKey(factoryId, recipeId)
+                                .map(Key::productTypeId)))
+                        .orElse(Set.of());
+                if (products.isEmpty()) return List.of(new Key(factoryId, null));
+                return products.stream().map(p -> new Key(factoryId, p)).toList();
+            });
         }
 
         Optional<Key> recipeKey(String factoryId, String recipeId) {
@@ -389,7 +425,11 @@ public class ProcessSecretPayloadScrubber {
 
             Level level;
             Key auditKey;
-            if (key != null && !distrustAttribution) {
+            if (key != null && !distrustAttribution && !isProtected(key) && planSiblings.contains(key)) {
+                // 受限计划里的兄弟产出: 按受限处理, 审计记到被读的受限产品上
+                level = fallback;
+                auditKey = null;
+            } else if (key != null && !distrustAttribution) {
                 if (!isProtected(key)) return;
                 level = level(key);
                 auditKey = key;
@@ -414,7 +454,8 @@ public class ProcessSecretPayloadScrubber {
             }
 
             List<String> hidden = new ArrayList<>(ratioFields);
-            if (level == Level.NONE) {
+            // 汇总视图里跨批的投入 / 产出总量一除就是汇总出成率 (Steve 第三问 A: 汇总不给; 第二轮 #4)
+            if (level == Level.NONE || aggregateView) {
                 hidden.addAll(quantityFields);
                 hidden.addAll(otherNumbers);
             }
@@ -459,7 +500,8 @@ public class ProcessSecretPayloadScrubber {
 
     /** 标识 / 排序 / 计数类数字 (无权档也保留, 页面才能定位行)。 */
     static boolean isIdentifierLike(String name) {
-        return name.equals("id") || name.endsWith("Id") || name.endsWith("Ids") || name.equals("version")
+        return PAGING_FIELDS.contains(name)
+                || name.equals("id") || name.endsWith("Id") || name.endsWith("Ids") || name.equals("version")
                 || name.endsWith("Version") || name.endsWith("Order") || name.equals("seq") || name.endsWith("Seq")
                 || name.endsWith("Count") || name.endsWith("No") || name.endsWith("Number");
     }

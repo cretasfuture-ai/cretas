@@ -204,15 +204,16 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
-    void theSameBatchFiguresAreHiddenInAggregateViewsButTotalsStay() throws Exception {
+    void inAggregateViewsTheSameFiguresAndTheCrossBatchTotalsAreHidden() throws Exception {
+        // 汇总视图里 Σ产出 ÷ Σ投入 就是汇总出成率 (独立审查第二轮 #4), 总量一起不给
         ObjectNode batch = tree(ONE_BATCH);
         assertThat(scrubber.scrub(batch, user(5), F, Set.of(), "GET /production-analytics/by-product", true))
                 .isTrue();
         assertThat(batch.get("yieldRate").isNull()).isTrue();
         assertThat(batch.get("cumulativeYieldRate").isNull()).isTrue();
         assertThat(batch.get("lossRate").isNull()).isTrue();
-        assertThat(batch.get("inputQuantity").asInt()).isEqualTo(100);
-        assertThat(batch.get("outputQuantity").asInt()).isEqualTo(91);
+        assertThat(batch.get("inputQuantity").isNull()).isTrue();
+        assertThat(batch.get("outputQuantity").isNull()).isTrue();
         verify(recorder).record(eq(F), eq(SECRET), eq(user(5)), eq(ProcessSecretAction.VIEW_FULL), eq("DENY"),
                 contains("yieldRate"), eq("GET /production-analytics/by-product"));
     }
@@ -269,15 +270,37 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void anUnprotectedSiblingOutputOfARestrictedPlanCannotCarryTheBlendSnapshotOut() throws Exception {
+        // 独立审查第二轮 #2: 多产出工序给每个产出行都挂同一份配比快照; 兄弟产出 Q 不受保护也不能放
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("plan-2");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        plan.setTargetFinishedGoodIds(List.of(SECRET, "Q-SIZE-2"));
+        when(plans.findByIdAndFactoryId("plan-2", F)).thenReturn(Optional.of(plan));
+        ObjectNode t = tree("{'rows':["
+                + "{'productTypeId':'P17','blendRatio':{'lines':[{'recipeSharePercent':30,'deviationPp':-5}]}},"
+                + "{'productTypeId':'Q-SIZE-2','blendRatio':{'lines':[{'recipeSharePercent':30,'deviationPp':-5}]}}]}");
+        assertThat(scrubber.scrub(t, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-2"),
+                "GET /process-sheet/rows", false)).isTrue();
+        assertThat(t.at("/rows/0/blendRatio/lines/0/recipeSharePercent").isNull()).isTrue();
+        assertThat(t.at("/rows/1/blendRatio/lines/0/recipeSharePercent").isNull()).isTrue();
+        assertThat(t.at("/rows/1/blendRatio/lines/0/deviationPp").isNull()).isTrue();
+    }
+
+    @Test
     void platformStaffLoseEveryNonIdentifierNumberNotJustTheListedTotals() throws Exception {
         // 审查 #6: 总量词表列不全 (pickedQty / totalInput ...), 无权档改为除标识类以外的数字一律去掉
         ObjectNode t = tree("{'productTypeId':'P17','id':7,'processOrder':2,'pickedQty':12,'totalInput':40,"
-                + "'materialName':'牛肉'}");
+                + "'materialName':'牛肉','totalElements':31,'page':2}");
         assertThat(scrubber.scrub(t, platform(), F, Set.of(), "GET /x", false)).isTrue();
         assertThat(t.get("pickedQty").isNull()).isTrue();
         assertThat(t.get("totalInput").isNull()).isTrue();
         assertThat(t.get("id").asInt()).isEqualTo(7);
         assertThat(t.get("processOrder").asInt()).isEqualTo(2);
+        // 第二轮 #9: 分页信息保留, 否则列表翻不了页
+        assertThat(t.get("totalElements").asInt()).isEqualTo(31);
+        assertThat(t.get("page").asInt()).isEqualTo(2);
         // 对照: 本厂账号看得到这些总量
         ObjectNode staff = tree("{'productTypeId':'P17','pickedQty':12,'totalInput':40}");
         assertThat(scrubber.scrub(staff, user(5), F, Set.of(), "GET /x", false)).isFalse();
@@ -303,14 +326,21 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
-    void aggregateRoutesAreRecognisedBySegment() {
-        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute("/api/mobile/F-A/production-analytics/daily-trend"))
-                .isTrue();
-        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute("/api/mobile/F-A/indicators/tree")).isTrue();
-        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute("/api/mobile/F-A/conversions/statistics")).isTrue();
-        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute("/api/mobile/F-A/production/batches/7/yield")).isFalse();
+    void aggregateRoutesAreRecognisedFromTheMatchedRouteTemplate() {
         assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
-                "/api/mobile/F-A/production/orders/o1/cost-breakdown")).isFalse();
+                "/api/mobile/{factoryId}/production-analytics/daily-trend")).isTrue();
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute("/api/mobile/{factoryId}/indicators/tree")).isTrue();
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/conversions/statistics")).isTrue();
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/production/yield/by-process")).isTrue();
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/production/batches/{batchId}/yield")).isFalse();
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/production/orders/{orderId}/cost-breakdown")).isFalse();
+        // 第二轮 #6: 单张报工单不是汇总 (模块段是 process-work-reporting, 不因路径里有 reports 就算)
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/process-work-reporting/reports/{id}")).isFalse();
     }
 
     @Test

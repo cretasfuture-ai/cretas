@@ -255,6 +255,16 @@ class ProcessSecretDataLayerJpaTest {
                     .isInstanceOf(BusinessException.class)
                     .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
             assertThatThrownBy(() -> workProcessService.delete(F, stepId)).isInstanceOf(BusinessException.class);
+            // 第二轮 #7: 批量排序同样是改工序顺序
+            com.cretas.aims.dto.ProductWorkProcessDTO.SortItem sort = new com.cretas.aims.dto.ProductWorkProcessDTO.SortItem();
+            sort.setId(stepId);
+            sort.setProcessOrder(9);
+            assertThatThrownBy(() -> workProcessService.batchSort(F, List.of(sort)))
+                    .isInstanceOf(BusinessException.class);
+            // 第二轮 #7: 复制到受保护的目标也要编辑授权 (源是不受保护的 TARGET)
+            assertThatThrownBy(() -> workProcessService.copyChain(F, TARGET, SECRET))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
             // 只改预计工时 (不碰工艺字段) 照常
             workProcessService.update(F, stepId, com.cretas.aims.dto.ProductWorkProcessDTO.builder()
                     .estimatedMinutesOverride(30).build());
@@ -263,6 +273,18 @@ class ProcessSecretDataLayerJpaTest {
         entityManager.clear();
         assertThat(workProcesses.findById(stepId).orElseThrow().getStandardYieldRate())
                 .isEqualByComparingTo("0.8100");
+    }
+
+    @Autowired com.cretas.aims.repository.ProductionReportRepository productionReports;
+
+    @Test
+    void theByProcessAggregateQueryAcceptsTheExclusionListOnARealDatabase() {
+        // 原生 SQL 新增 NOT IN (:excludedProductTypeIds): 真实 Hibernate 解析 + 集合参数绑定 (哨兵 / 实际列表两种)
+        java.time.LocalDate from = java.time.LocalDate.of(1900, 1, 1);
+        java.time.LocalDate to = java.time.LocalDate.of(2999, 12, 31);
+        assertThat(productionReports.aggregateYieldByProcess(F, from, to, "", List.of("__none__"))).isEmpty();
+        assertThat(productionReports.aggregateYieldByProcess(F, from, to, "", List.of(SECRET, TARGET))).isEmpty();
+        assertThat(productionReports.aggregateYieldByProcess(F, from, to, SECRET, List.of("__none__"))).isEmpty();
     }
 
     private List<ProcessSecretAccessEvent> denials(String product) {

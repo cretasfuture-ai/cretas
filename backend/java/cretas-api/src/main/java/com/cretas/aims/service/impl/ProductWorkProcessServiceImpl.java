@@ -244,6 +244,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         for (ProductWorkProcessDTO.SortItem item : items) {
             repository.findByFactoryIdAndId(factoryId, item.getId())
                     .ifPresent(entity -> {
+                        processSecretGuard.requireProduct(factoryId, entity.getProductTypeId(),
+                                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                                "product-work-process batch-sort " + entity.getId());
                         entity.setProcessOrder(item.getProcessOrder());
                         repository.save(entity);
                     });
@@ -259,6 +262,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         // 工艺保密: 工序链 (含标准出成率) 复制到没有保密策略的产品上 = 搬出保护范围
         processSecretGuard.requireCopySource(factoryId, sourceProductId,
                 "copy-chain " + sourceProductId + " -> " + targetProductId);
+        processSecretGuard.requireProduct(factoryId, targetProductId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                "copy-chain target " + targetProductId);
         List<ProductWorkProcess> source = repository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, sourceProductId);
         if (source.isEmpty()) {

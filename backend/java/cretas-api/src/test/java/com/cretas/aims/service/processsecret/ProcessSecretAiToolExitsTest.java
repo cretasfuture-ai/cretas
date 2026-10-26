@@ -130,7 +130,9 @@ class ProcessSecretAiToolExitsTest {
         }
         JsonNode item = json.readTree(raw).at("/data/items/0");
         assertThat(item.get("inputShareRatio").isNull()).isTrue();
-        assertThat(item.get("requiredQty").asInt()).isEqualTo(42);
+        // AI 的回答分不清是单据还是跨批汇总, 按汇总视图处理 (Steve 第三问 A): 总量也不给, 页面上照常看本单总量
+        assertThat(item.get("requiredQty").isNull()).isTrue();
+        assertThat(item.get("materialName").asText()).isEqualTo("秘方香料");
         assertThat(item.get("processSecret").get("visibility").asText()).isEqualTo("TOTALS_ONLY");
         assertThat(ProcessSecretReadTracker.reads()).isEmpty();
         verify(recorder).record(eq(F), eq(SECRET), eq(actor(OPERATOR)), eq(ProcessSecretAction.VIEW_FULL),

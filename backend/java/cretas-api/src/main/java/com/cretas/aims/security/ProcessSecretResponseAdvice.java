@@ -136,7 +136,7 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         // V2: 派生 DTO / Map 里的配比、单位用量、转换率、标准出成率按字段词表统一裁剪
         boolean scrubbed = payloadScrubber.scrub(filtered, actor, requestFactory,
                 ProcessSecretReadTracker.reads(), http.getMethod() + " " + http.getRequestURI(),
-                ProcessSecretPayloadScrubber.isAggregateRoute(http.getRequestURI()));
+                ProcessSecretPayloadScrubber.isAggregateRoute(routePattern(http)));
         if (!scope.redacted && !scrubbed) return body;
         if (body instanceof ApiResponse<?> api) {
             ((ApiResponse<Object>) api).setData(filtered);
@@ -159,6 +159,15 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         } finally {
             SCOPE.remove();
         }
+    }
+
+    /**
+     * Spring 匹配到的路由模板; 拿不到时 (非 MVC 分发) 按汇总视图处理 —— 宁可多遮
+     * (第二轮 #6: 原始 URI 可以用矩阵参数 / 转义绕开分段判断)。
+     */
+    private static String routePattern(HttpServletRequest http) {
+        Object pattern = http.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        return pattern != null ? pattern.toString() : "/api/mobile/{factoryId}/analytics";
     }
 
     @SuppressWarnings("unchecked")

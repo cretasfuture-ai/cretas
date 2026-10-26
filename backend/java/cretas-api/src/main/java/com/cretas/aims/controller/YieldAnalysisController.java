@@ -25,6 +25,10 @@ public class YieldAnalysisController {
     private final YieldAnalysisService yieldAnalysisService;
 
     @GetMapping("/by-process")
+    // 工艺保密: 点名单个保密产品的跨批汇总只给负责人和授权人 (Steve 第三问 A); 不点名时服务层排除无权的保密产品
+    @com.cretas.aims.annotation.ProcessSecretGuard(
+            action = com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+            from = com.cretas.aims.annotation.ProcessSecretGuard.Source.PRODUCT_PARAM, name = "productTypeId")
     @Operation(summary = "工序级出成率聚合 (厂级跨批, 按报工日期/产品筛选)")
     public ApiResponse<List<ProcessYieldAggDTO>> byProcess(
             @PathVariable String factoryId,
