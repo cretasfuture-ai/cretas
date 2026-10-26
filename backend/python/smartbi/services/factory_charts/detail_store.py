@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from smartbi import config
 from . import details
+from .newstock_buckets import CONTRACT_KEY, prepare_rows as prepare_stock_rows
 
 
 CONTEXT_TTL_SECONDS = 300
@@ -86,6 +87,24 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
         if not rows:
             yield item, None
             continue
+        stock_contract = item.get("engine", {}).get(CONTRACT_KEY) if isinstance(item.get("engine"), Mapping) else None
+        if stock_contract is not None:
+            expected_kind = {"inventory.stock.age:bar": "age", "inventory.stock.expiry:bar": "expiry"}.get(str(item.get("id", "")))
+            candidate_unit = str(item.get("unit", "") or "").rsplit("/", 1)[-1].strip()
+            if (not isinstance(stock_contract, Mapping) or expected_kind is None
+                    or candidate_unit != "批" or stock_contract.get("bucketKind") != expected_kind):
+                yield item, None
+                continue
+            prepared_stock, bucket_column = prepare_stock_rows(rows, stock_contract)
+            if not prepared_stock or not bucket_column:
+                yield item, None
+                continue
+            rows = prepared_stock
+            if bucket_column not in columns:
+                columns = tuple(columns) + (bucket_column,)
+            dimensions = tuple(dict.fromkeys((*dimensions, bucket_column)))
+            unit_col = None
+            units = set()
         unit = str(item.get("unit", "") or "")
         if "/" in unit:
             unit = unit.rsplit("/", 1)[-1]

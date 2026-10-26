@@ -15,6 +15,7 @@ from smartbi.services.financial import metrics as M
 from smartbi.services.financial.base import _sanitize_for_json
 from smartbi.services.financial_dashboard import FinancialDashboardService
 from .metrics import Series, display, grouped, number
+from .newstock_buckets import CONTRACT_KEY, contract as stock_count_contract, positive_balance, prepare_rows as prepare_stock_rows
 
 
 ALIASES = {
@@ -352,19 +353,29 @@ def factory_candidates(dataset, request, can_price):
     else:
         gaps.append({'id': 'cost.unit', 'title': '产品单位成本', 'missing': ['产品、完整产量、成本、单位及金额权限']})
 
-    for key, title, bounds in [('age', '库存账龄', [30, 90, 180]), ('expiry', '库存效期', [0, 7, 30])]:
+    for key, title in [('age', '库存账龄'), ('expiry', '库存效期')]:
         col = cols[key]
-        if col and cols['stock'] and frame[cols['stock']].map(number).notna().all():
-            stock = frame[frame[cols['stock']].map(number) > 0]
-            if stock.empty or stock[col].map(number).isna().any():
+        if col and cols['stock']:
+            all_rows = frame.to_dict('records')
+            positive_rows = [row for row in all_rows if positive_balance(row.get(cols['stock']))]
+            bucket_column = '库存库龄桶' if key == 'age' else '库存效期桶'
+            metadata = stock_count_contract(key, cols['stock'], col, bucket_column)
+            prepared_rows, _ = prepare_stock_rows(all_rows, metadata)
+            # A positive balance with a malformed age/expiry is a source
+            # quality failure. It must invalidate the whole candidate rather
+            # than silently disappearing from the batch count.
+            if not positive_rows or len(prepared_rows) != len(positive_rows):
                 gaps.append({'id': key, 'title': title, 'missing': ['正可用余额与完整日期，不用零补未知日期']})
                 continue
-            bins = [0, 0, 0, 0]
-            for v in stock[col].map(number):
-                bins[next((i for i, limit in enumerate(bounds) if v <= limit), 3)] += 1
             labels = ['不超过30天', '31–90天', '91–180天', '超过180天'] if key == 'age' else ['已到期', '7天内', '8–30天', '超过30天']
-            s = Series(f'stock.{key}', title + '（有余额批次）', '库存', '批', list(zip(labels, bins)), dataset.source)
-            eligible.append(series_candidate(s, 'bar'))
+            counts = {label: 0 for label in labels}
+            for row in prepared_rows:
+                counts[row[bucket_column]] += 1
+            points = [(label, counts[label]) for label in labels]
+            s = Series(f'stock.{key}', title + '（有余额批次）', '库存', '批', points, dataset.source)
+            candidate = series_candidate(s, 'bar')
+            candidate.setdefault('engine', {})[CONTRACT_KEY] = metadata
+            eligible.append(candidate)
         else:
             gaps.append({'id': f'stock.{key}', 'title': title, 'missing': ['可用库存余额及库龄/到期日期']})
     from .advanced import build as advanced
