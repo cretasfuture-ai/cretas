@@ -1,3 +1,21 @@
+# Final F006 closure evidence (2026-10-26)
+
+All unblocked desktop scenarios accepted; scope released after final harness merge. Product PRs1192/1194/1195/1196/1197/1200/1201 are merged. Final deployed product commit8ede2f384a0055b1eaf44198ab46291d5c65b7ce. Java release receiptcretas-1792994957-1763.json; final Web receiptcretas-1792998793-1275.json (DEPLOY_EXIT0,one RELEASE_FINAL_STATUS,deployed,verified four-way hash93bdc64c0746be78f792d3a9500ef70a3505417b5bd18bf9a4161c961028cc14). Official Python deployment exit0; changed source hashes and process-after-files verified. Final script/docs-only changes do not change Java/Python/Web production trees.
+
+F006 desktop matrix10PASS/1externalBLOCKED/1explicitUNVERIFIED. Sales/SKU/channel30; department QA dimension; quality10/10->100% through genuine admin UI; finance1551 posted2 CASH5 vouchers->10; invoice33.90/allocated5/outstanding28.90, unallocated prepayment5 retained, independent AR net23.90; warehouse1554 actual shipment3, finished production10/remaining7. Plan COMPLETED without duplicate consumption. February genuine finance UI close created226 matching PERIOD_CLOSE snapshots, quantity0/unknown amountNULL. Original March snapshot0 FAIL remains frozen; historical10943 ledger untouched.
+
+OEE now reads plan/batch pinned immutable Workflow revision536/hash plus runtime159/task2052, not retired legacy product-work-process rows. Actual gauge50%=80%*62.5%*100%; original row sheet-row:1594 shows10planned minutes/8running/30cycle seconds/10total/10good. Risk review passed, real-PG factory suite213passed0skip, revision-hash/task-batch mutants caught. Quantity/finance/tenant/owner/period guards retained. Optional WIP lacks qualified source-target-ledger facts and stays unavailable. Restaurant-only candidates excluded from the factory recommendation catalogue.
+
+Original cells and native long-value title/ellipsis verified. Inventory source explicitly material-batch stock excluding independent finished goods. Earlier49 limitation applied quantity-unit cohorts and is superseded by67 legitimate positive-balance batch counts (49kg/1m/13individual/2roll/2sheet); different quantity units are preserved, not summed. Actual continuous and paged UI50+17, last row scrolled into view, next-page disabled at end. Latest independent SQL full-value multiset including duplicates matches67. Final canonical basic and real mounted point PASS,0writes/0blocks/no HTTP or console errors; aggregate UNVERIFIED deliberately awaits external SQL completeness, supplied independently by combined-acceptance.json. Previous tool errors/false negatives retained.
+
+Capability mounted consumer received HTTP200,F006,6 canonical fields/36 template evaluations; eligibility is distinct from readiness. Final63 Node/bundle checks and12 local browser fixture checks pass. Full vue-tsc remains FAIL on13 unchanged files; component/helper6 and official Web builds pass. Standalone quality test account did not establish a valid session; quality business PASS is genuine admin-role acceptance, not a claim that every role passed. Admin1309 chart selection restored through actual UI to the task-start observed inventory.stock.age:bar, with per-write readback.
+
+Remaining: receiving receipt447ccb2d stays DRAFT because OSS403 UserDisable (PUT and independent OPTIONS); no fake attachment/inventory posting. Phone explicitly retained unaccepted by Steve. These are not counted PASS. ACTIVE keeps only this external blocked acceptance, without code scope locks.
+
+Private evidence root C:/Users/Steve/my-prototype-logistics/.playwright-mcp/smartbi-full-closure-20261026: RESULTS.md,scenarios.json,combined-acceptance.json,readonly-acceptance/report.json,inventory-completeness.json,acceptance-ui-observed.json,business-ui-final.json,oee-ui-final.json,preference-restored.json,qa screenshots. Worktree test-output holds exact tests/build/deploy/mutant/app-role SQL logs; retain evidence worktrees. No credentials in tracked evidence.
+
+---
+
 # SMARTBI-FULL-CLOSURE-20261026
 
 ## Current closure integration (2026-10-26 13:30)
