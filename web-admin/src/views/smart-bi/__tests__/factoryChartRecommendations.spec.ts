@@ -279,6 +279,35 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
   });
 
+  it('retains a generated inventory question when the selected product only has production data', async () => {
+    const stock = {
+      ...response().data.recommendations[0], id: 'inventory', title: '库存周转', metric: '库存', domain: '库存',
+      analysis: { familyId: 'inventory', familyLabel: '库存周转' },
+    };
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ recommendations: [stock, ...response().data.recommendations] }));
+    h.api.getFactoryChartSelection.mockResolvedValue({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['yield'], updatedAt: 'now' } });
+    const page = await mountPage();
+
+    await page.get('[data-testid="factory-chart-guide-domain"] input[value="库存"]').setValue(true);
+    await nextTick();
+    await page.get('[data-testid="factory-chart-guide-generate"]').trigger('click');
+    await nextTick();
+    expect(page.find('[data-testid="factory-chart-card-inventory"]').exists()).toBe(true);
+
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({
+      recommendations: [response().data.recommendations[0]],
+      subjects: [{ id: 'p1', label: '黄油鸡' }],
+      analysisSubject: 'p1',
+    }));
+    page.findComponent(FactoryChartGuide).vm.$emit('subject', 'p1');
+    await flushPromises();
+
+    expect(page.findComponent(FactoryChartGuide).props('context').domain).toBe('库存');
+    expect(page.findComponent(FactoryChartGuide).props('subject')).toBe('p1');
+    expect(page.findAll('.chart-stub')).toHaveLength(0);
+    expect(page.text()).toContain('当前范围没有满足数据条件');
+  });
+
   it('sends the selected product and rejects an unscoped response while keeping recovery controls', async () => {
     h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ subjects: [{ id: 'p1', label: '黄油鸡' }] }));
     const page = await mountPage();

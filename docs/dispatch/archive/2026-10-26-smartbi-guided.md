@@ -37,3 +37,14 @@ Root 追加窄 scope：Web/RN 的 `factoryChartExport` helper、对应 tests 和
 产品目录来自当前授权数据源；上传报表的对象目录不随期间裁剪，图表结果严格按期间筛选，期间外产品会明确无数据。没有把真实自由输入 AI 问答或所有产品/角色的业务验收宣称完成。原 OSS/历史账本等边界保持不变。
 
 最终代码 `994148a91d754a1aef530ca5cac74cc733d2c122` 的全部七项 CI 已通过（Web/RN 类型与完整测试、Python、field/source/secret/script gates）。本地 canonical fixture 13 PASS，最终真实控件定位补验 1 PASS，unit/drift 66 PASS；实际渲染组件验证了 100 产品中搜索产品99、按业务问题筛选和分类浏览，无 pageerror。后续仅本文和原 OSS blocked 台账恢复，不改变上述已验证源码；通过证据按源码树哈希复用，不手动重跑产品测试。
+
+## GI26 引导问题范围修复登记
+
+状态 in-progress；Base SHA `4ba25f44ea938ccbe94f8dbcc4376c5651bb96b3`；唯一协调者 Root；分支 `codex/smartbi-guide-intent-20261026`。已完成首版 Java/Web/Python 发布，原生 OTA 尚未发布；本批修复产品改变导致库存问题被重置/无关默认图表回填。
+
+- GI26-WEB，Owner web 执行者：仅 Web `src/views/smart-bi/FactoryChartGuide.vue`、`FactoryChartRecommendations.vue`、`__tests__/factoryChartGuide.spec.ts`、`__tests__/factoryChartRecommendations.spec.ts`。先写真实 mounted 红例，再修复保留问题、无匹配显式空结果，不影响未 Generate 的既有收藏偏好。验收相关 Vitest；不得修改导出、依赖、API/auth、后端、台账。
+- GI26-RN，Owner app 执行者：仅 Native `src/screens/smartbi/FactoryChartsScreen.tsx`、`src/__tests__/integration/screens/FactoryChartsScreen.test.tsx`。先红例再修复 Generate 意图跨产品/期间重算，不恢复无关收藏；保留问题提示、来源/身份切换清理。验收对应 Jest；不得修改凭证、依赖、协议、其他页面或台账。
+- Root：diff/目标验证、必要 CI、PR 合入、Web 与 OTA 发布、F006 验收、归档释放。代码执行者互不覆盖；不创建孙代理、不提交、不回滚他人改动。发生公共文件需求则停并回报。
+Root GI26 scope：canonical smartbi-guided-readonly.js、其 unit test、生成 mcp-entry.js，只增加问题保留/无跨类图/来源错误断言；异步问卷在加载后严格验证，静态壳 landmark 不冒充问卷已就绪。原第一次生产 UNVERIFIED 证据保留。
+
+GI26 验证与收尾：RN mounted RED 12 PASS/1 FAIL，修复后 13 PASS；Web mounted RED 24 PASS/1 FAIL，修复后目标测试通过（最终计数见 CI）。Root canonical unit/drift 5 PASS、guided local browser fixture 1 PASS，保留第一轮生产异步 landmark 的 UNVERIFIED 原始证据。生成意图与收藏分离，产品/期间改变按原问题重新选合格图表，无匹配不回填其他问题；显式分类编辑沿用原有收藏行为，旧超过四类选择不截断。Root 将在最终 head CI 通过后合入、释放本批 scope，后续仅 exact-main 发布 Web/OTA 与 F006 验收；未在此处宣称真机已通过。

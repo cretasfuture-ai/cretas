@@ -51,6 +51,31 @@ const initialPeriod: FactoryChartPeriodSelection = {
   endMonth: 12,
 };
 
+interface GuideIntent {
+  scope: string;
+  domain: string | null;
+  family: string | null;
+  familyLabel: string | null;
+}
+
+function selectionForGuideIntent(
+  recommendations: readonly FactoryRecommendation[],
+  intent: GuideIntent,
+  variants: ReadonlyMap<string, string>,
+  selectedIds: readonly string[],
+): string[] {
+  const matchingFamilies = groupChartFamilies(recommendations).filter(family =>
+    (!intent.domain || family.variants.some(item => item.domain === intent.domain))
+    && (!intent.family || family.id === intent.family),
+  );
+  return selectionForFamilies(
+    recommendations,
+    new Set(matchingFamilies.slice(0, 4).map(family => family.id)),
+    variants,
+    selectedIds,
+  );
+}
+
 function asMessage(error: unknown): string {
   return error instanceof Error ? error.message : '请求失败，请稍后重试';
 }
@@ -157,6 +182,14 @@ export default function FactoryChartsScreen() {
   const [activeFamily, setActiveFamily] = useState<string | null>(null);
   const [expandedFamily, setExpandedFamily] = useState<string | null>(null);
   const [variantChoice, setVariantChoice] = useState<Map<string, string>>(new Map());
+  const variantChoiceRef = useRef(variantChoice);
+  variantChoiceRef.current = variantChoice;
+  const [guideIntent, setGuideIntentState] = useState<GuideIntent | null>(null);
+  const guideIntentRef = useRef<GuideIntent | null>(null);
+  const setGuideIntent = (next: GuideIntent | null) => {
+    guideIntentRef.current = next;
+    setGuideIntentState(next);
+  };
   const selectionRef = useRef<string[] | null>(null);
   const dataRef = useRef<FactoryRecommendationsData | null>(null);
   const [guideSnapshot, setGuideSnapshot] = useState<{ scope: string; data: FactoryRecommendationsData } | null>(null);
@@ -212,15 +245,18 @@ export default function FactoryChartsScreen() {
       if (!mounted.current || token !== loadToken.current || requestAuthEpoch !== readAuthEpoch()) return;
       if (recommendationResponse.data.source !== source || selectionResponse.data.source !== source) throw new Error('返回的数据来源与当前选择不一致');
       if (recommendationResponse.data.analysisSubject !== analysisSubject) throw new Error('返回的分析产品与当前选择不一致');
+      const activeGuideIntent = guideIntentRef.current?.scope === guideScope ? guideIntentRef.current : null;
       setData(recommendationResponse.data);
       setGuideSnapshot({ scope: guideScope, data: recommendationResponse.data });
       dataRef.current = recommendationResponse.data;
       selectionScopeRef.current = selectionScope;
       setLoadedKey(queryKey);
       const savedSelection = normalizeSelectedIds(selectionResponse.data.selectedIds);
-      setSelectedIds(preserveSelection && priorSelection !== null
-        ? priorSelection
-        : savedSelection ?? normalizeSelectedIds(recommendationResponse.data.defaultSelection)?.slice(0, 4) ?? []);
+      setSelectedIds(activeGuideIntent
+          ? selectionForGuideIntent(recommendationResponse.data.recommendations, activeGuideIntent, variantChoiceRef.current, priorSelection || [])
+        : preserveSelection && priorSelection !== null
+          ? priorSelection
+          : savedSelection ?? normalizeSelectedIds(recommendationResponse.data.defaultSelection)?.slice(0, 4) ?? []);
     } catch (loadError) {
       if (mounted.current && token === loadToken.current) setError(asMessage(loadError));
     } finally {
@@ -251,6 +287,7 @@ export default function FactoryChartsScreen() {
 
   const changeSource = (next: FactoryChartSource) => {
     setSource(next);
+    setGuideIntent(null);
     setSelectedIds(null);
     setUploadId(undefined);
     setAnalysisSubject(null);
@@ -268,6 +305,13 @@ export default function FactoryChartsScreen() {
 
   const generateAnalysis = () => {
     if (!data || loading) return;
+    const nextIntent: GuideIntent = {
+      scope: guideScope,
+      domain: selectedDomain,
+      family: activeFamily,
+      familyLabel: families.find(family => family.id === activeFamily)?.label || null,
+    };
+    setGuideIntent(nextIntent);
     const scopedFamilies = families.filter(family => (!selectedDomain || family.variants.some(item => item.domain === selectedDomain)) && (!activeFamily || family.id === activeFamily));
     const nextFamilies = new Set(scopedFamilies.slice(0, 4).map(family => family.id));
     const nextSelection = selectionForFamilies(data?.recommendations || [], nextFamilies, variantChoice, selectedIds || []);
@@ -277,6 +321,7 @@ export default function FactoryChartsScreen() {
   };
 
   useEffect(() => {
+    setGuideIntent(null);
     setSelectedDomain(null);
     setActiveFamily(null);
     setGuideStep(1);
@@ -285,6 +330,7 @@ export default function FactoryChartsScreen() {
   }, [authEpoch]);
 
   const toggleFamily = (familyId: string) => {
+    setGuideIntent(null);
     const current = selectedFamilyIds(data?.recommendations || [], selectedIds);
     const next = new Set(current);
     if (next.has(familyId)) next.delete(familyId);
@@ -293,6 +339,7 @@ export default function FactoryChartsScreen() {
   };
 
   const chooseVariant = (familyId: string, itemId: string) => {
+    setGuideIntent(null);
     const next = new Map(variantChoice);
     next.set(familyId, itemId);
     setVariantChoice(next);
@@ -396,7 +443,7 @@ export default function FactoryChartsScreen() {
           <Text variant="headlineSmall">工厂经营分析</Text>
           <Text style={styles.muted}>真实业务/上传数据的推荐图表与可追溯明细</Text>
           <SegmentedButtons value={source} onValueChange={value => changeSource(value as FactoryChartSource)} buttons={[{ value: 'business', label: '业务数据' }, { value: 'upload', label: '上传数据' }]} />
-          {source === 'upload' && <View style={styles.uploadRow}>{uploads.length === 0 ? <Text style={styles.muted}>暂无可用上传文件</Text> : uploads.map(upload => <Chip key={upload.id} selected={uploadId === upload.id} onPress={() => { setSelectedIds(null); selectionRef.current = null; dataRef.current = null; setAnalysisSubject(null); setSelectedDomain(null); setActiveFamily(null); setGuideStep(1); setUploadId(upload.id); }}>{upload.fileName}</Chip>)}</View>}
+          {source === 'upload' && <View style={styles.uploadRow}>{uploads.length === 0 ? <Text style={styles.muted}>暂无可用上传文件</Text> : uploads.map(upload => <Chip key={upload.id} selected={uploadId === upload.id} onPress={() => { setGuideIntent(null); setSelectedIds(null); selectionRef.current = null; dataRef.current = null; setAnalysisSubject(null); setSelectedDomain(null); setActiveFamily(null); setGuideStep(1); setUploadId(upload.id); }}>{upload.fileName}</Chip>)}</View>}
           <SegmentedButtons value={period.periodType} onValueChange={value => setPeriod(current => ({ ...current, periodType: value as FactoryChartPeriodType, ...(value !== 'month_range' ? { startMonth: 1, endMonth: 12 } : {}) }))} buttons={[{ value: 'all', label: '全部历史' }, { value: 'year', label: '指定年度' }, { value: 'month_range', label: '月范围' }]} />
           <View style={styles.periodRow}>
             <TextInput label="年份" accessibilityLabel="年份" disabled={period.periodType === 'all'} value={String(period.year)} keyboardType="number-pad" onChangeText={value => setPeriod(current => ({ ...current, year: Number(value) || current.year }))} style={styles.periodInput} />
@@ -410,13 +457,13 @@ export default function FactoryChartsScreen() {
               <Text style={styles.muted}>分析范围：{data?.analysisScopeLabel || (analysisSubject ? '正在确认所选产品范围' : '全厂范围')}</Text>
               <Text style={styles.guideQuestion}>第 1 步：你想解决哪类经营问题？</Text>
               <View style={styles.chipRow}>
-                <Chip selected={selectedDomain === null} onPress={() => { setSelectedDomain(null); setActiveFamily(null); setGuideStep(2); }}>先看整体情况</Chip>
-                {domains.map(domain => <Chip key={domain} selected={domain === selectedDomain} onPress={() => { setSelectedDomain(domain); setBrowseDomain(domain); setActiveFamily(null); setGuideStep(2); }}>{domain}</Chip>)}
+                <Chip selected={selectedDomain === null} onPress={() => { setGuideIntent(null); setSelectedDomain(null); setActiveFamily(null); setGuideStep(2); }}>先看整体情况</Chip>
+                {domains.map(domain => <Chip key={domain} selected={domain === selectedDomain} onPress={() => { setGuideIntent(null); setSelectedDomain(domain); setBrowseDomain(domain); setActiveFamily(null); setGuideStep(2); }}>{domain}</Chip>)}
               </View>
               {guideStep >= 2 && <>
                 <Text style={styles.guideQuestion}>第 2 步：选择一个分析主题</Text>
-                <Chip selected={activeFamily === null} onPress={() => { setActiveFamily(null); setGuideStep(3); }}>推荐组合（最多 4 张）</Chip>
-                <View style={styles.chipRow}>{families.filter(family => !selectedDomain || family.variants.some(item => item.domain === selectedDomain)).map(family => <Chip key={family.id} selected={activeFamily === family.id} onPress={() => { setActiveFamily(family.id); setGuideStep(3); }}>{family.label}</Chip>)}</View>
+                <Chip selected={activeFamily === null} onPress={() => { setGuideIntent(null); setActiveFamily(null); setGuideStep(3); }}>推荐组合（最多 4 张）</Chip>
+                <View style={styles.chipRow}>{families.filter(family => !selectedDomain || family.variants.some(item => item.domain === selectedDomain)).map(family => <Chip key={family.id} selected={activeFamily === family.id} onPress={() => { setGuideIntent(null); setActiveFamily(family.id); setGuideStep(3); }}>{family.label}</Chip>)}</View>
               </>}
               {guideStep >= 3 && <>
                 <Text style={styles.guideQuestion}>第 3 步：选择产品（可选）</Text>
@@ -427,6 +474,9 @@ export default function FactoryChartsScreen() {
               </>}
               <Button mode="contained" onPress={generateAnalysis} loading={loading} disabled={loading || !data} testID="factory-chart-load">查看分析</Button>
               <Button onPress={() => void load()} disabled={loading} testID="factory-chart-refresh">刷新数据</Button>
+              {guideIntent?.scope === guideScope && guideIntent.domain && <Text style={styles.attention}>已选择问题：{guideIntent.domain}</Text>}
+              {guideIntent?.scope === guideScope && guideIntent.family && <Text style={styles.attention}>已选择主题：{guideIntent.familyLabel || guideIntent.family}</Text>}
+              {guideIntent?.scope === guideScope && guideIntent.domain && !families.some(family => family.variants.some(item => item.domain === guideIntent.domain) && (!guideIntent.family || family.id === guideIntent.family)) && <Text style={styles.attention}>当前条件暂无与“{guideIntent.domain}”匹配的分析，请调整产品或期间。</Text>}
             </Card.Content>
           </Card>
           {data && <View style={styles.selectionBox}><Button onPress={() => setShowSelection(value => !value)} testID="factory-chart-selection-toggle">{showSelection ? '收起分类浏览' : `按分类浏览（已选 ${selectedFamilyIds(data.recommendations, selectedIds).size} 类）`}</Button>{showSelection && <>
