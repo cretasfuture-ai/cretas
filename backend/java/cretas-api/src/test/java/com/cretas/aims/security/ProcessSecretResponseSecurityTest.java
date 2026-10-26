@@ -54,8 +54,9 @@ class ProcessSecretResponseSecurityTest {
         access = mock(ProcessSecretAccessService.class);
         recipes = mock(BomRecipeRepository.class);
         json = new ObjectMapper().registerModule(new JavaTimeModule());
-        advice = new ProcessSecretResponseAdvice(access, recipes, mock(com.cretas.aims.repository.ProductionPlanRepository.class), json);
+        advice = new ProcessSecretResponseAdvice(access, recipes, mock(com.cretas.aims.repository.ProductionPlanRepository.class), new com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber(access, recipes, org.mockito.Mockito.mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class), org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionPlanRepository.class)), json);
         when(access.protectedProductTypeIds(F)).thenReturn(Set.of(SECRET));
+        when(access.audit(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
     }
 
     ServletServerHttpRequest request(AuthenticatedActor actor) {

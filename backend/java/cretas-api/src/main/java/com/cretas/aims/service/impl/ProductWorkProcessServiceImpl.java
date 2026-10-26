@@ -36,6 +36,7 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     private final ProductTypeRepository productTypeRepository;
     private final ProductWorkProcessAssigneeRepository assigneeRepository;
     private final UserRepository userRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
     @Override
     @Transactional
@@ -245,6 +246,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (sourceProductId == null || targetProductId == null || sourceProductId.equals(targetProductId)) {
             throw new BusinessException(400, "源产品与目标产品必须是两个不同的产品");
         }
+        // 工艺保密: 工序链 (含标准出成率) 复制到没有保密策略的产品上 = 搬出保护范围
+        processSecretGuard.requireCopySource(factoryId, sourceProductId,
+                "copy-chain " + sourceProductId + " -> " + targetProductId);
         List<ProductWorkProcess> source = repository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, sourceProductId);
         if (source.isEmpty()) {

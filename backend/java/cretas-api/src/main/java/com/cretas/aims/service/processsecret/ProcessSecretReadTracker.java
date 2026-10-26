@@ -1,0 +1,154 @@
+package com.cretas.aims.service.processsecret;
+
+import com.cretas.aims.dto.orchestration.LineItemMatch;
+import com.cretas.aims.entity.ConversionChangeHistory;
+import com.cretas.aims.entity.MaterialProductConversion;
+import com.cretas.aims.entity.ProductProcessWorkflow;
+import com.cretas.aims.entity.ProductProcessWorkflowRevision;
+import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.bom.BomItemSubstitute;
+import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.entity.bom.BomYieldSuggestion;
+import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
+import com.cretas.aims.entity.inventory.SalesOrderShortageReport;
+import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
+import com.cretas.aims.entity.workflow.WorkflowTaskPort;
+import org.hibernate.event.spi.PostLoadEvent;
+import org.hibernate.event.spi.PostLoadEventListener;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * 工艺保密的数据层打标 (V2): 一次请求 / 一次 AI 工具调用里, 只要从数据库读到某个产品的配方内容
+ * (配方明细、调料、注入、替代料、转换率、工序链、工艺图版本 / 实例 / 端口、出成率建议、缺料快照),
+ * 就把「哪个工厂的哪个产品 (或配方 / 工艺实例)」记进当前作用域。出口 (JSON 响应、AI 工具结果)
+ * 据此判断这次输出里有没有受保护工艺, 交给 {@link ProcessSecretPayloadScrubber} 统一裁剪。
+ *
+ * <p>⛔ 只记录, 不改实体、不抛异常: 实体是托管对象, 在这里改值会被脏检查写回库;
+ * 领料 / 扣料 / 结算 / 报工提交这些内部计算必须照常拿到真实数据。</p>
+ *
+ * <p>作用域: 显式打开的 {@link Scope} (AI 工具) 优先, 否则当前 HTTP 请求的属性;
+ * 两者都没有 (定时任务、后台线程) 时不记录 —— 那里没有对外出口, 也避免线程变量越攒越多。</p>
+ */
+public final class ProcessSecretReadTracker implements PostLoadEventListener {
+
+    static final String REQUEST_ATTRIBUTE = ProcessSecretReadTracker.class.getName() + ".reads";
+
+    /** 读到的工艺内容来源。{@code kind} 决定 {@code id} 怎么换成产品。 */
+    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN }
+
+    public record Read(Kind kind, String factoryId, String id) { }
+
+    private static final ThreadLocal<Set<Read>> EXPLICIT = new ThreadLocal<>();
+
+    /** 打开一个显式作用域 (AI 工具执行)。嵌套时沿用外层, 关闭内层不清外层。 */
+    public static Scope open() {
+        if (EXPLICIT.get() != null) return new Scope(false);
+        EXPLICIT.set(new LinkedHashSet<>());
+        return new Scope(true);
+    }
+
+    public static final class Scope implements AutoCloseable {
+        private final boolean owner;
+
+        private Scope(boolean owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public void close() {
+            if (owner) EXPLICIT.remove();
+        }
+    }
+
+    /** 当前作用域已经读到的工艺内容 (快照)。 */
+    public static Set<Read> reads() {
+        Set<Read> sink = sink(false);
+        return sink == null ? Set.of() : Set.copyOf(sink);
+    }
+
+    @Override
+    public void onPostLoad(PostLoadEvent event) {
+        record(event.getEntity());
+    }
+
+    /** 包内可见, 供测试和不经过 Hibernate 的读取 (如 JSON 快照) 直接调用。 */
+    static void record(Object entity) {
+        if (entity == null) return;
+        List<Read> found = readsOf(entity);
+        if (found.isEmpty()) return;
+        Set<Read> sink = sink(true);
+        if (sink != null) sink.addAll(found);
+    }
+
+    /** 哪些实体算「配方内容」。新增敏感实体要加在这里, 并登记进 ProcessSecretDataLayerContractTest。 */
+    static List<Read> readsOf(Object entity) {
+        if (entity instanceof BomRecipe r) return product(r.getFactoryId(), r.getProductTypeId());
+        if (entity instanceof BomRecipeItem i) return recipe(i.getFactoryId(), i.getRecipeId());
+        if (entity instanceof BomSeasoningItem s) return recipe(s.getFactoryId(), s.getRecipeId());
+        if (entity instanceof BomProcessInjectionConfig c) return recipe(c.getFactoryId(), c.getRecipeId());
+        if (entity instanceof BomItemSubstitute s) return recipe(s.getFactoryId(), s.getRecipeId());
+        if (entity instanceof BomYieldSuggestion y) {
+            return y.getProductTypeId() != null ? product(y.getFactoryId(), y.getProductTypeId())
+                    : recipe(y.getFactoryId(), y.getBomRecipeId());
+        }
+        if (entity instanceof MaterialProductConversion c) return product(c.getFactoryId(), c.getProductTypeId());
+        if (entity instanceof ConversionChangeHistory h) return product(h.getFactoryId(), h.getProductTypeId());
+        if (entity instanceof ProductWorkProcess p) return product(p.getFactoryId(), p.getProductTypeId());
+        if (entity instanceof ProductProcessWorkflow w) return product(w.getFactoryId(), w.getProductTypeId());
+        if (entity instanceof ProductProcessWorkflowRevision w) return product(w.getFactoryId(), w.getProductTypeId());
+        if (entity instanceof ProductionWorkflowInstance w) return product(w.getFactoryId(), w.getProductTypeId());
+        if (entity instanceof WorkflowTaskPort p) {
+            return p.getWorkflowInstanceId() == null ? List.of()
+                    : List.of(new Read(Kind.WORKFLOW_INSTANCE, p.getFactoryId(), String.valueOf(p.getWorkflowInstanceId())));
+        }
+        if (entity instanceof FactoryMaterialRequisition r) {
+            // 领料单明细带配比 / 单位需求量, 属于它的生产计划 (多产出计划牵涉多个产品, 由出口解析)
+            if (r.getProductionPlanId() == null || r.getProductionPlanId().isBlank()) return List.of();
+            return List.of(new Read(Kind.PRODUCTION_PLAN, r.getFactoryId(), r.getProductionPlanId()));
+        }
+        if (entity instanceof SalesOrderShortageReport report) {
+            // 缺料是落库的快照, 读快照时不会再读配方: 按快照里的产品打标
+            if (report.getAvailable() == null) return List.of();
+            return report.getAvailable().stream()
+                    .map(LineItemMatch::getProductTypeId)
+                    .filter(id -> id != null && !id.isBlank())
+                    .distinct()
+                    .map(id -> new Read(Kind.PRODUCT, report.getFactoryId(), id))
+                    .toList();
+        }
+        return List.of();
+    }
+
+    private static List<Read> product(String factoryId, String productTypeId) {
+        if (productTypeId == null || productTypeId.isBlank()) return List.of();
+        return List.of(new Read(Kind.PRODUCT, factoryId, productTypeId));
+    }
+
+    private static List<Read> recipe(String factoryId, String recipeId) {
+        if (recipeId == null || recipeId.isBlank()) return List.of();
+        return List.of(new Read(Kind.RECIPE, factoryId, recipeId));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Read> sink(boolean create) {
+        Set<Read> explicit = EXPLICIT.get();
+        if (explicit != null) return explicit;
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+        if (attributes == null) return null;
+        Object existing = attributes.getAttribute(REQUEST_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+        if (existing instanceof Set<?> set) return (Set<Read>) set;
+        if (!create) return null;
+        Set<Read> created = Collections.synchronizedSet(new LinkedHashSet<>());
+        attributes.setAttribute(REQUEST_ATTRIBUTE, created, RequestAttributes.SCOPE_REQUEST);
+        return created;
+    }
+}

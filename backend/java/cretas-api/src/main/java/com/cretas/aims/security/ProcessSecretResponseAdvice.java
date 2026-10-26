@@ -10,6 +10,8 @@ import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.entity.processsecret.ProcessSecretAction;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
+import com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber;
+import com.cretas.aims.service.processsecret.ProcessSecretReadTracker;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.BeanDescription;
 import com.fasterxml.jackson.databind.BeanProperty;
@@ -69,14 +71,17 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
     private final ObjectMapper filteringMapper;
 
     private final com.cretas.aims.repository.ProductionPlanRepository planRepository;
+    private final ProcessSecretPayloadScrubber payloadScrubber;
 
     public ProcessSecretResponseAdvice(ProcessSecretAccessService accessService,
                                        BomRecipeRepository recipeRepository,
                                        com.cretas.aims.repository.ProductionPlanRepository planRepository,
+                                       ProcessSecretPayloadScrubber payloadScrubber,
                                        ObjectMapper objectMapper) {
         this.accessService = accessService;
         this.recipeRepository = recipeRepository;
         this.planRepository = planRepository;
+        this.payloadScrubber = payloadScrubber;
         ObjectMapper copy = objectMapper.copy();
         copy.setSerializerFactory(copy.getSerializerFactory().withSerializerModifier(new Modifier()));
         this.filteringMapper = copy;
@@ -114,8 +119,13 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         Object payload = body instanceof ApiResponse<?> api ? api.getData() : body;
         if (payload == null) return body;
 
-        JsonNode filtered = filter(payload, actor, pathFactory != null ? pathFactory : actor.factoryId());
-        if (filtered == null) return body;
+        String requestFactory = pathFactory != null ? pathFactory : actor.factoryId();
+        Scope scope = new Scope(actor, requestFactory);
+        JsonNode filtered = toTree(payload, scope);
+        // V2: 派生 DTO / Map 里的配比、单位用量、转换率、标准出成率按字段词表统一裁剪
+        boolean scrubbed = payloadScrubber.scrub(filtered, actor, requestFactory,
+                ProcessSecretReadTracker.reads(), http.getMethod() + " " + http.getRequestURI());
+        if (!scope.redacted && !scrubbed) return body;
         if (body instanceof ApiResponse<?> api) {
             ((ApiResponse<Object>) api).setData(filtered);
             return api;
@@ -126,10 +136,14 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
     /** @return 裁剪后的 JSON 树; 没有任何对象被裁剪时返回 null (调用方保留原响应)。 */
     JsonNode filter(Object payload, AuthenticatedActor actor, String requestFactory) {
         Scope scope = new Scope(actor, requestFactory);
+        JsonNode tree = toTree(payload, scope);
+        return scope.redacted ? tree : null;
+    }
+
+    private JsonNode toTree(Object payload, Scope scope) {
         SCOPE.set(scope);
         try {
-            JsonNode tree = filteringMapper.valueToTree(payload);
-            return scope.redacted ? tree : null;
+            return filteringMapper.valueToTree(payload);
         } finally {
             SCOPE.remove();
         }

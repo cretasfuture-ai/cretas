@@ -112,6 +112,29 @@ public class ProcessSecretRecipeGuard {
         return decision.permitted() && recorded;
     }
 
+    /** 按产品判定 (不抛异常), 受保护产品的判定照常审计; 审计写不进去按无权处理。 */
+    public boolean permitsProduct(String factoryId, String productTypeId, ProcessSecretAction action,
+                                  String resourceRef) {
+        if (productTypeId == null) return true;
+        AuthenticatedActor actor = currentActor();
+        ProcessSecretAccessService.Decision decision = accessService.decide(actor, factoryId, productTypeId, action);
+        if (!decision.isProtected()) return true;
+        boolean recorded = accessService.audit(factoryId, productTypeId, actor, action,
+                decision.permitted() ? "ALLOW" : "DENY", decision.reason(), resourceRef);
+        return decision.permitted() && recorded;
+    }
+
+    /**
+     * 复制类操作 (组装 SKU、复制工序链、按已有产品建品): 源产品受保护时, 必须同时有完整查看和导出授权
+     * —— 复制出来的新产品没有保密策略, 等于把整套工艺搬到不设防的地方 (与 copyToDraft 同一口径)。
+     */
+    public void requireCopySource(String factoryId, String sourceProductTypeId, String resourceRef) {
+        if (sourceProductTypeId == null) return;
+        AuthenticatedActor actor = currentActor();
+        accessService.require(actor, factoryId, sourceProductTypeId, ProcessSecretAction.VIEW_FULL, resourceRef);
+        accessService.require(actor, factoryId, sourceProductTypeId, ProcessSecretAction.EXPORT, resourceRef);
+    }
+
     private static AuthenticatedActor currentActor() {
         return AuthenticatedActor.fromCurrentExecution().orElse(null);
     }

@@ -1,6 +1,10 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.annotation.ProcessSecretGuard;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.dto.ConversionDTO;
 import com.cretas.aims.dto.ConversionChangeHistoryDTO;
 import com.cretas.aims.dto.ConversionHistoryAnalysisDTO;
@@ -22,7 +26,9 @@ import org.springframework.format.annotation.DateTimeFormat;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import com.cretas.aims.annotation.RequireModule;
 
 /**
@@ -40,6 +46,7 @@ import com.cretas.aims.annotation.RequireModule;
 public class ConversionController {
 
     private final ConversionService conversionService;
+    private final ProcessSecretAccessService processSecretAccessService;
 
     @RequirePermission({"production:read_write", "rd:read_write"})
     @RequireModule("production_plan")
@@ -144,6 +151,9 @@ public class ConversionController {
     @RequirePermission({"production:read_write", "rd:read_write"})
     @RequireModule("production_plan")
     @PostMapping("/calculate/material-requirement")
+    // 工艺保密: 数量由调用方随意填, 结果 = 单位用量 × 数量, 不是「本单总量」, 要完整查看权
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PARAM,
+            name = "productTypeId")
     @Operation(summary = "计算原材料需求量", description = "根据产品类型和目标产量，自动计算所需各种原材料的数量，考虑转换率和损耗率")
     public ApiResponse<List<ConversionService.MaterialRequirement>> calculateMaterialRequirement(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
@@ -168,6 +178,12 @@ public class ConversionController {
                 factoryId, materialTypeId, materialQuantity);
         List<ConversionService.ProductOutput> results =
                 conversionService.calculateProductOutput(factoryId, materialTypeId, materialQuantity);
+        // 工艺保密: 投入量由调用方随意填, 算出的产出就是转换率; 无完整查看权的受保护产品不出现在结果里
+        Set<String> permitted = new HashSet<>(processSecretAccessService.filterPermitted(
+                AuthenticatedActor.fromCurrentRequest().orElse(null), factoryId,
+                results.stream().map(ConversionService.ProductOutput::getProductTypeId).distinct().toList(),
+                ProcessSecretAction.VIEW_FULL, false, "POST conversions/calculate/product-output"));
+        results = results.stream().filter(r -> permitted.contains(r.getProductTypeId())).toList();
         return ApiResponse.success(results);
     }
 
