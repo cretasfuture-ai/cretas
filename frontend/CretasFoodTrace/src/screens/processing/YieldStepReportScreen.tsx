@@ -26,6 +26,9 @@ import {
 } from '../../utils/blendRatio';
 import { isProcessSecretHidden } from '../../utils/processSecretField';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
+import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
+import { buildCcpReadings, ccpSubmitBlockReason, CcpLoadStatus } from '../../components/processing/ccpReadings';
+import { ccpApi, CcpStepCheckpoint } from '../../services/api/ccpApi';
 import {
   yieldReportApi,
   WorkProcessTask,
@@ -759,6 +762,57 @@ const YieldStepReportScreen: React.FC = () => {
   const isSentinelMaterial = currentTask?.workProcessId === SENTINEL_MATERIAL_INPUT;
   const isSentinelOutput = currentTask?.workProcessId === SENTINEL_FINAL_OUTPUT;
   const isSentinelBatch = isSentinelMaterial || isSentinelOutput;
+
+  // ── 缺口 13 CCP: 本道挂了关键控制点 → 完工出成前必须录实测值, 报工成功后提交 ──
+  // 加载中 / 失败都挡提交 (fail-closed): 不知道要不要录, 就不能当成不用录。
+  const [ccpStatus, setCcpStatus] = useState<CcpLoadStatus>('loading');
+  const [ccpCheckpoints, setCcpCheckpoints] = useState<CcpStepCheckpoint[]>([]);
+  const [ccpValues, setCcpValues] = useState<Record<number, string>>({});
+  const handleCcpLoaded = useCallback((status: CcpLoadStatus, cps: CcpStepCheckpoint[]) => {
+    setCcpStatus(status);
+    setCcpCheckpoints(cps);
+  }, []);
+  const handleCcpChange = useCallback((checkpointId: number, text: string) => {
+    setCcpValues((prev) => ({ ...prev, [checkpointId]: text }));
+  }, []);
+  useEffect(() => {
+    // 换道: 上一道填的 CCP 值不能带到下一道
+    setCcpValues({});
+    setCcpStatus('loading');
+    setCcpCheckpoints([]);
+  }, [currentTask?.id]);
+  const ccpBlockReason = ccpSubmitBlockReason(ccpStatus, ccpCheckpoints, ccpValues);
+
+  /** 产出报工成功之后提交 CCP。失败给「重试」—— 产出已入账, 只补 CCP, 不要重复报产出。 */
+  const submitCcpAfterReportRef = useRef<() => Promise<void>>(async () => undefined);
+  const submitCcpAfterReport = useCallback(async () => {
+    if (!currentTask?.workProcessId || ccpCheckpoints.length === 0) return;
+    const readings = buildCcpReadings(ccpCheckpoints, ccpValues);
+    try {
+      const res = await ccpApi.record({
+        batchNumber: batchNumber || null,
+        productionBatchId: batchId,
+        planId: productionPlanId,
+        workProcessId: currentTask.workProcessId,
+        processOrder: currentTask.processOrder ?? null,
+        source: 'APP_STEP_REPORT',
+        readings,
+      });
+      setCcpValues({});
+      if (res.success && res.data && res.data.deviationCount > 0) {
+        appAlert('关键控制点超出范围', res.data.message);
+      }
+    } catch (error) {
+      handleError(error, { showAlert: false, logError: true });
+      const { msg } = friendlySubmitError(error);
+      appAlert('关键控制点记录没保存上', '本道产出已经提交成功，但关键控制点记录没保存：' + msg
+        + '\n请点「重试」，不要重复提交产出。', [
+        { text: '稍后再说', style: 'cancel' },
+        { text: '重试', onPress: () => { void submitCcpAfterReportRef.current(); } },
+      ]);
+    }
+  }, [currentTask, ccpCheckpoints, ccpValues, batchNumber, batchId, productionPlanId]);
+  submitCcpAfterReportRef.current = submitCcpAfterReport;
 
   // 当前道的 yield step (从 getYield 取; 无报工时不存在 → undefined → AWAITING_INPUT)
   const currentStepYield = useMemo<StepYieldDTO | undefined>(() => {
@@ -1664,6 +1718,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
+      await submitCcpAfterReport();
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
@@ -1681,7 +1736,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [batchId, refetchYield, outUnit]);
+  }, [batchId, refetchYield, outUnit, submitCcpAfterReport]);
 
   // 同单未完结续报: markComplete 控制本次 OUTPUT 是否完工 (true=标记完工锁出成率; false=保存留单继续产出)。
   const doSubmitOutput = useCallback(async (markComplete: boolean) => {
@@ -1689,6 +1744,10 @@ const YieldStepReportScreen: React.FC = () => {
     if (!requireTaskUnits()) return;
     if (evidenceUploading) {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
+      return;
+    }
+    if (ccpBlockReason) {
+      appAlert('关键控制点还没填完', ccpBlockReason);
       return;
     }
     const output = parseFloat(outputQty);
@@ -1740,6 +1799,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
+      await submitCcpAfterReport();
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
@@ -1806,7 +1866,7 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
-      taskOptions, semiQtyByCode, buildPhotoAnnotations]);
+      taskOptions, semiQtyByCode, buildPhotoAnnotations, ccpBlockReason, submitCcpAfterReport]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {
@@ -3333,12 +3393,24 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
+              {/* 缺口 13: 本道挂了关键控制点才出现; 未填完 / 未加载出来时下面两个按钮不可点 */}
+              <CcpReadingsSection
+                workProcessId={currentTask?.workProcessId}
+                values={ccpValues}
+                onChangeValue={handleCcpChange}
+                onLoaded={handleCcpLoaded}
+                disabled={submitting}
+              />
+              {ccpBlockReason && ccpCheckpoints.length > 0 ? (
+                <Text style={styles.ccpBlockText} testID="ccp-block-reason">{ccpBlockReason}</Text>
+              ) : null}
+
               {/* 同单未完结续报: 留单继续 (保存本次产出, 不锁出成率) — 灰底次按钮 */}
               <NeoButton
                 variant="outline"
                 size="large"
                 onPress={handleSavePartialOutput}
-            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading || !!ccpBlockReason}
                 loading={submitting}
                 style={styles.blockBtn}
                 testID="yield-save-partial-output-btn"
@@ -3350,7 +3422,7 @@ const YieldStepReportScreen: React.FC = () => {
                 variant="primary"
                 size="large"
                 onPress={handleSubmitOutput}
-            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading || !!ccpBlockReason}
                 loading={submitting}
                 style={styles.blockBtn}
                 testID="yield-submit-output-btn"
@@ -3599,6 +3671,7 @@ const styles = StyleSheet.create({
   summaryLine: { fontSize: 16, color: '#303133', fontWeight: '600' },
   // 告警 / 提示条
   alertBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 4 },
+  ccpBlockText: { fontSize: 14, color: '#F56C6C', fontWeight: '600', marginBottom: 8, textAlign: 'center' },
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
   materialAdvisoryCard: {
     backgroundColor: '#FFF7ED',

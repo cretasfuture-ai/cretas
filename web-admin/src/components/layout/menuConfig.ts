@@ -327,6 +327,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/quality/inspections', title: '质检记录', icon: '', module: 'quality', groupLabel: '质量检验' },
       // 缺口 11: 需检产品产出待检 → 质检员在这里放行/判不合格
       { path: '/quality/release', title: '质检放行', icon: '', module: 'quality' },
+      // 缺口 13: 报工录 CCP, 超限偏离在这里处理; 按批次导出 CCP 记录
+      { path: '/quality/ccp', title: 'CCP 监控记录', icon: '', module: 'quality' },
       { path: '/quality/label-qc', title: '包装标签拍检', icon: '', module: 'quality' },
       { path: '/quality/vision-training', title: '视觉质检训练', icon: '', module: 'quality',
         roles: ['factory_super_admin', 'quality_manager'] },

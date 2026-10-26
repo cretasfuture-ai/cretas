@@ -253,16 +253,17 @@ onMounted(() => {
           </el-form-item>
           <el-form-item label="检验结论" required>
             <div class="presets">
-              <el-tag
+              <el-button
                 v-for="p in conclusionPresets"
                 :key="p"
                 class="preset"
-                effect="plain"
+                size="small"
+                plain
                 :type="decision === 'RELEASED' ? 'success' : 'danger'"
                 @click="applyPreset(p)"
               >
                 {{ p }}
-              </el-tag>
+              </el-button>
             </div>
             <el-input
               v-model="conclusion"
@@ -335,7 +336,7 @@ onMounted(() => {
   margin-bottom: 8px;
 }
 .preset {
-  cursor: pointer;
+  margin-left: 0;
 }
 .disabled-reason {
   color: #f56c6c;

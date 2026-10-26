@@ -60,6 +60,8 @@ import {
 import { buildEqualPotWeightsKg } from './potAllocation';
 import { isProcessSecretHidden } from '@/utils/processSecretField';
 import { loadHeldBatchNumbers } from '@/api/qcRelease';
+import { recordCcp, type CcpReading } from '@/api/ccp';
+import CcpEntryDialog from './CcpEntryDialog.vue';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
 
@@ -2494,6 +2496,57 @@ function formalSubmitSummary(row: SheetRow): string {
   ].join('\n');
 }
 
+// -------------------------------------------------------------------------
+// 缺口 13 CCP: 本工序挂了关键控制点时, 正式报工前先录实测值, 报工成功后提交。
+// CCP 定义随 Workflow 录入配置下发 (workflowContext.ccpCheckpoints) —— 配置加载失败时整张表不可用,
+// 不存在「CCP 没查到却照常报工」的半态。legacy 计划没有工序身份 → 不出现 CCP 录入。
+// -------------------------------------------------------------------------
+const ccpDialogRef = ref<InstanceType<typeof CcpEntryDialog> | null>(null);
+const stepCheckpoints = computed(() => props.workflowContext?.ccpCheckpoints ?? []);
+
+/** 报工已成功后提交 CCP; 失败给「重试」, 不吞 (4 位一体: 后端原话 + 下一步)。 */
+async function submitStepCcp(row: SheetRow, result: { batchId?: number | null; batchNumber?: string | null } | undefined,
+  readings: CcpReading[]) {
+  const workProcessId = props.workflowContext?.workProcessId;
+  if (!workProcessId) return;
+  for (;;) {
+    try {
+      const res = await recordCcp(props.factoryId, {
+        batchNumber: result?.batchNumber ?? row.batchNumber,
+        productionBatchId: result?.batchId ?? null,
+        planId: props.planId,
+        workProcessId,
+        processOrder: props.processOrder,
+        source: 'WEB_PROCESS_SHEET',
+        readings,
+      });
+      if (res.success && res.data) {
+        if (res.data.deviationCount > 0) {
+          ElMessage({ message: res.data.message, type: 'warning', duration: 0, showClose: true });
+        } else {
+          ElMessage.success(res.data.message || 'CCP 已记录');
+        }
+      }
+      return;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'CCP 记录提交失败';
+      try {
+        await ElMessageBox.confirm(
+          `报工已保存，但关键控制点（CCP）记录没有保存成功：${msg}
+
+不补交会缺这道工序的 CCP 记录。是否重试？`,
+          'CCP 记录未保存', { confirmButtonText: '重试', cancelButtonText: '稍后处理', type: 'error' });
+      } catch {
+        ElMessage({
+          message: `批次 ${result?.batchNumber ?? row.batchNumber ?? ''} 缺少 CCP 记录：请重新正式报工本行，或联系质检员在「质量管理 → CCP 监控记录」核对`,
+          type: 'error', duration: 0, showClose: true,
+        });
+        return;
+      }
+    }
+  }
+}
+
 async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   if (row.saving) return;
   if (action === 'submit') {
@@ -2507,7 +2560,14 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     ElMessage({ message: reason, type: 'error', duration: 0, showClose: true });
     return;
   }
+  let ccpReadings: CcpReading[] | null = null;
   if (action === 'submit') {
+    const checkpoints = stepCheckpoints.value;
+    if (checkpoints.length > 0) {
+      const label = `${props.processLabel || props.processCode}${row.batchNumber ? ' · ' + row.batchNumber : ''}`;
+      ccpReadings = (await ccpDialogRef.value?.collect(checkpoints, label)) ?? null;
+      if (!ccpReadings) return;   // 取消 = 不报工
+    }
     if (isPortOutputMode.value) {
       try {
         await ElMessageBox.confirm(formalSubmitSummary(row), '确认正式报工', {
@@ -2556,6 +2616,9 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
       ElMessage({ message: `${action === 'draft' ? '草稿已保存' : '正式报工成功'}(含提示): ` + result.warnings.join('; '), type: 'warning', duration: 0, showClose: true });
     } else {
       ElMessage.success(`${action === 'draft' ? '草稿已保存' : '正式报工成功'}${row.batchNumber ? ' — ' + row.batchNumber : ''}`);
+    }
+    if (action === 'submit' && ccpReadings) {
+      await submitStepCcp(row, result, ccpReadings);
     }
     emit('row-saved', row.submissionStatus);
   } catch (e: unknown) {
@@ -3373,6 +3436,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 <template>
   <div class="sp-grid-wrap">
+    <CcpEntryDialog ref="ccpDialogRef" />
 
     <!-- ====================================================================
          2B Task F2 (additive, fool-proof Rule 2/3/5): workflow 计划产出/所需原料只读展示。

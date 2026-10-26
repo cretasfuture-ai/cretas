@@ -60,6 +60,12 @@ public class WorkflowClerkSheetConfigDTO {
         private Boolean unlocked;
         /** unlocked=false 时给人看的原因 (等哪一道上游)。 */
         private String blockedReason;
+        /**
+         * 缺口 13: 挂在本工序上的关键控制点 (含临界限值/单位)。非空 ⇒ 正式报工前必须录实测值。
+         * 随配置一起下发 (而不是前端再单独请求): 配置加载失败时整张录入表本来就不可用, 不会出现
+         * 「CCP 查失败却放行报工」的半态。
+         */
+        private List<com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService.StepCheckpoint> ccpCheckpoints;
     }
 
     @Data

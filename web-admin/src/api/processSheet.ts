@@ -638,6 +638,8 @@ export interface WorkflowPortDescriptor {
 export interface WorkflowProcessDescriptor {
   workflowNodeId: string;
   workProcessId: string;
+  /** 缺口 13: 本工序挂的关键控制点; 非空 ⇒ 正式报工前必须录实测值 (CcpEntryDialog)。 */
+  ccpCheckpoints?: import('./ccp').CcpStepCheckpoint[] | null;
   processName: string | null;
   /** 工序类别 (WorkProcess.processCategory, 熟制/注射/…) — Slice C: workflow 计划报工据此驱动锅数录入。 */
   processCategory: string | null;

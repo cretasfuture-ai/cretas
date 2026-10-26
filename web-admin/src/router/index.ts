@@ -698,6 +698,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/quality/release/index.vue'),
             meta: { requiresAuth: true, title: '质检放行', module: 'quality' }
           },
+          // 缺口 13: CCP 监控记录 (偏离处理 / 按批次导出)
+          {
+            path: 'ccp',
+            name: 'QualityCcp',
+            component: () => import('@/views/quality/ccp/index.vue'),
+            meta: { requiresAuth: true, title: 'CCP 监控记录', module: 'quality' }
+          },
           {
             path: 'disposition',
             name: 'QualityDisposition',

@@ -84,4 +84,54 @@ public class HaccpMonitoringRecord extends BaseEntity {
     /** 备注. */
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
+
+    // ==================== 缺口 13: 工序报工时录入 (V20261103_85) ====================
+
+    /** 报工所在生产批次 (App 报工 = 任务的批次; web 逐道录入 = 本行物化的批次; 纯库存道为 null)。 */
+    @Column(name = "production_batch_id")
+    private Long productionBatchId;
+
+    /** 所属生产计划 —— 「批次或其计划有未处理偏离」挡放行, 判定口径见 CcpOpenDeviationLookup。 */
+    @Column(name = "production_plan_id", length = 191)
+    private String productionPlanId;
+
+    /** 在哪个工序录的 (work_processes.id)。 */
+    @Column(name = "work_process_id", length = 50)
+    private String workProcessId;
+
+    /** 工序序。 */
+    @Column(name = "process_order")
+    private Integer processOrder;
+
+    /** 来源: APP_STEP_REPORT / WEB_PROCESS_SHEET / MANUAL。 */
+    @Column(name = "source", length = 32)
+    private String source;
+
+    /** 录入时的临界限值快照 —— 限值以后改了, 这条记录当时按什么判的仍可追溯。 */
+    @Column(name = "critical_limit_min_snapshot", precision = 19, scale = 4)
+    private BigDecimal criticalLimitMinSnapshot;
+
+    @Column(name = "critical_limit_max_snapshot", precision = 19, scale = 4)
+    private BigDecimal criticalLimitMaxSnapshot;
+
+    @Column(name = "unit_snapshot", length = 20)
+    private String unitSnapshot;
+
+    @Column(name = "operator_name", length = 100)
+    private String operatorName;
+
+    /** 偏离已处理时间; null 且 isDeviation=true = 未处理 (挡放行、挡发货)。 */
+    @Column(name = "deviation_handled_at")
+    private LocalDateTime deviationHandledAt;
+
+    @Column(name = "deviation_handled_by")
+    private Long deviationHandledBy;
+
+    @Column(name = "deviation_handled_by_name", length = 100)
+    private String deviationHandledByName;
+
+    /** 未处理的偏离: 偏离了且还没人填纠偏措施并标记已处理。 */
+    public boolean isOpenDeviation() {
+        return isDeviation && deviationHandledAt == null;
+    }
 }

@@ -20,7 +20,8 @@ import java.util.Objects;
  *
  * <h2>判据</h2>
  * 产出的产品开了「需检」({@link ProductType#getInspectionRequired()}):
- * 半成品形态看 {@link #shouldHoldSemi}, 成品批次看 {@link #shouldHoldFinished}。
+ * 半成品形态看 {@link #shouldHoldSemi}, 成品批次看 {@link #shouldHoldFinished};
+ * 缺口 13 起, 另加「该批次/计划有未处理 CCP 偏离」(口径见 {@code CcpOpenDeviationLookup})。
  *
  * <h2>状态转移 (纯函数, 便于契约测试)</h2>
  * <ul>
@@ -34,6 +35,23 @@ import java.util.Objects;
 public class QcInspectionPolicy {
 
     private final ProductTypeRepository productTypeRepository;
+
+    /**
+     * 缺口 13: 产出所属批次/计划有未处理的 CCP 偏离 ⇒ 不管产品开没开需检都扣成待检。
+     * required=false: 只按产品开关判的单测直接 new 本类, 不注入 = 不看偏离。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.ccp.CcpOpenDeviationLookup deviationLookup;
+
+    /** 测试/装配用: 显式注入偏离判定。 */
+    public void setDeviationLookup(com.cretas.aims.service.foodsafety.ccp.CcpOpenDeviationLookup lookup) {
+        this.deviationLookup = lookup;
+    }
+
+    private boolean hasOpenDeviation(String factoryId, OutputRef ref) {
+        return deviationLookup != null
+                && deviationLookup.hasOpen(factoryId, ref.batchNumbers(), ref.planId(), ref.productionBatchId());
+    }
 
     /**
      * 一次产出的身份。
@@ -63,8 +81,9 @@ public class QcInspectionPolicy {
             return false;
         }
         ProductType pt = resolveProduct(factoryId, ref.productTypeId(), ref.productCode());
-        return pt != null && Boolean.TRUE.equals(pt.getInspectionRequired())
+        boolean byProduct = pt != null && Boolean.TRUE.equals(pt.getInspectionRequired())
                 && !com.cretas.aims.entity.enums.ProductCategory.FINISHED_PRODUCT.equals(pt.getProductCategory());
+        return byProduct || hasOpenDeviation(factoryId, ref);
     }
 
     /** 成品批次入库这一笔产出是否要扣成待检。 */
@@ -73,7 +92,7 @@ public class QcInspectionPolicy {
             return false;
         }
         ProductType pt = resolveProduct(factoryId, ref.productTypeId(), ref.productCode());
-        return pt != null && Boolean.TRUE.equals(pt.getInspectionRequired());
+        return (pt != null && Boolean.TRUE.equals(pt.getInspectionRequired())) || hasOpenDeviation(factoryId, ref);
     }
 
     /**
