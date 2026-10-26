@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import { ref, computed, onMounted, reactive, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -7,11 +7,12 @@ import { Plus, Refresh, Warning } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
 import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
+import WorkProcessCustomFieldsDialog from './WorkProcessCustomFieldsDialog.vue';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
   governWorkProcessDuplicates, getWorkProcessCategories,
-  type WorkProcessItem, type WorkProcessDuplicateGroup,
+  type WorkProcessItem, type WorkProcessDuplicateGroup, type ProcessSheetCustomFieldDef,
   type WorkProcessOutputMaterialKind, type WorkProcessGovernanceMode,
 } from '@/api/processProduction';
 import {
@@ -29,6 +30,26 @@ const loading = ref(false);
 const allData = ref<WorkProcessItem[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const searchKeyword = ref('');
+
+const customFieldsDialogVisible = ref(false);
+const customFieldsRow = ref<WorkProcessItem | null>(null);
+
+function openCustomFields(row: WorkProcessItem): void {
+  if (!canWrite.value || !factoryId.value || !row.id) return;
+  customFieldsRow.value = row;
+  customFieldsDialogVisible.value = true;
+}
+
+function handleCustomFieldsSaved(schema: ProcessSheetCustomFieldDef[]): void {
+  if (!customFieldsRow.value) return;
+  customFieldsRow.value.customFieldSchema = schema;
+  void loadData();
+}
+
+watch(factoryId, () => {
+  customFieldsDialogVisible.value = false;
+  customFieldsRow.value = null;
+});
 
 // 筛选（实时按当前数据里的类别/默认产出类型生成选项，非固定枚举）
 const filterCategory = ref('');
@@ -630,9 +651,16 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right" v-if="canWrite">
+        <el-table-column label="操作" width="300" fixed="right" v-if="canWrite">
           <template #default="{ row }">
             <el-button type="primary" text size="small" @click="handleEdit(row)">编辑</el-button>
+            <el-button
+              type="primary"
+              text
+              size="small"
+              data-testid="work-process-custom-fields-button"
+              @click="openCustomFields(row)"
+            >自定义字段</el-button>
             <el-button type="warning" text size="small" @click="handleToggle(row)">
               {{ row.isActive ? '禁用' : '启用' }}
             </el-button>
@@ -759,6 +787,14 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
         <el-button type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <WorkProcessCustomFieldsDialog
+      v-model="customFieldsDialogVisible"
+      :factory-id="factoryId"
+      :work-process="customFieldsRow"
+      :can-write="canWrite"
+      @saved="handleCustomFieldsSaved"
+    />
 
     <el-dialog
       v-model="categoryDialogVisible"

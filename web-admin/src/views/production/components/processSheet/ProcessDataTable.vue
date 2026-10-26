@@ -3762,6 +3762,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 @update:model-value="(v: number) => row.fields[col.key] = v"
                 :min="0" :precision="fieldPrecision(col.key)"
                 controls-position="right"
+                :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
                 style="width:160px" size="small" />
 
               <el-date-picker
@@ -3782,6 +3783,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 end-placeholder="结束日期"
                 value-format="YYYY-MM-DD"
                 style="width:100%" size="small" />
+
+              <el-input
+                v-else-if="col.type === 'text'"
+                :model-value="(row.fields[col.key] as string) ?? ''"
+                @update:model-value="(v: string) => row.fields[col.key] = v"
+                :disabled="row.submissionStatus === 'SUBMITTED' || isReadOnlyRow(row)"
+                :data-testid="`custom-field-${col.key}`"
+                style="width:160px" size="small" />
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
                 {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
@@ -3816,7 +3825,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 {{ formattedWeight(finishedWeightKg(row, true)) }}
               </span>
 
-              <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+              <span v-else-if="col.type === 'readonly'" class="sp-readonly">
                 {{ row.fields[col.key] ?? '—' }}
               </span>
             </div>
@@ -4362,6 +4371,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @update:model-value="(v: number) => row.fields[col.key] = v"
                     :min="0" :precision="fieldPrecision(col.key)"
                     controls-position="right"
+                    :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
                     style="width:110px" size="small" />
 
                   <!-- date picker (single) -->
@@ -4383,6 +4393,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     end-placeholder="结束"
                     value-format="YYYY-MM-DD"
                     style="width:230px" size="small" />
+
+                  <el-input
+                    v-else-if="col.type === 'text'"
+                    :model-value="(row.fields[col.key] as string) ?? ''"
+                    @update:model-value="(v: string) => row.fields[col.key] = v"
+                    :disabled="row.submissionStatus === 'SUBMITTED' || isReadOnlyRow(row)"
+                    :data-testid="`custom-field-${col.key}`"
+                    style="width:160px" size="small" />
 
                   <!-- auto: reverseInput (去舌苔: input = scrap + output) -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
@@ -4421,7 +4439,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   </span>
 
                   <!-- readonly / text -->
-                  <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+                  <span v-else-if="col.type === 'readonly'" class="sp-readonly">
                     {{ row.fields[col.key] ?? '—' }}
                   </span>
                 </td>
