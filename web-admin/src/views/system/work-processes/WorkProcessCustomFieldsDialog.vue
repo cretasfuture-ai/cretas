@@ -117,21 +117,11 @@ function validateFields(): ProcessSheetCustomFieldDef[] | null {
 }
 
 function buildPayload(row: WorkProcessItem, schema: ProcessSheetCustomFieldDef[]): Partial<WorkProcessItem> {
-  const payload: Partial<WorkProcessItem> = {
+  return {
     processName: row.processName,
     processCategory: row.processCategory,
-    estimatedMinutes: row.estimatedMinutes,
-    standardYieldMin: row.standardYieldMin,
-    standardYieldMax: row.standardYieldMax,
-    needsInput: row.needsInput,
-    defaultOutputMaterialKind: row.defaultOutputMaterialKind,
-    semiFinishedOutputCode: row.semiFinishedOutputCode ?? null,
-    standardHourlyRate: row.standardHourlyRate,
     customFieldSchema: schema,
   };
-  if (row.unit !== undefined) payload.unit = row.unit;
-  if (row.outputUnit !== undefined) payload.outputUnit = row.outputUnit;
-  return payload;
 }
 
 async function save(): Promise<void> {

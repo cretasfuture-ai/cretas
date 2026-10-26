@@ -118,10 +118,7 @@ describe('WorkProcessCustomFieldsDialog', () => {
     await flushPromises();
 
     expect(api.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-42', {
-      processName: '灌装', processCategory: '包装', estimatedMinutes: 18,
-      standardYieldMin: 0.8, standardYieldMax: 1.1, needsInput: true,
-      defaultOutputMaterialKind: 'FINISHED_GOOD', semiFinishedOutputCode: 'FG-42',
-      standardHourlyRate: 35,
+      processName: '灌装', processCategory: '包装',
       customFieldSchema: [
         { key: 'smartbi_oee_equipment_id', label: 'OEE设备ID', type: 'text', enabled: true },
         { key: 'planned_minutes', label: '计划分钟', type: 'number', enabled: true },
@@ -132,6 +129,22 @@ describe('WorkProcessCustomFieldsDialog', () => {
       { key: 'planned_minutes', label: '计划分钟', type: 'number', enabled: true },
     ]);
     expect(wrapper.emitted('update:modelValue')).toContainEqual([false]);
+  });
+
+  it('does not resend stale master fields while saving the schema', async () => {
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="custom-field-save"]').trigger('click');
+    await flushPromises();
+    const payload = api.updateWorkProcess.mock.calls[0][2] as Record<string, unknown>;
+    expect(payload).toEqual({
+      processName: '灌装',
+      processCategory: '包装',
+      customFieldSchema: [{ key: 'old_note', label: '已有备注', type: 'text', enabled: true }],
+    });
+    expect(payload).not.toHaveProperty('estimatedMinutes');
+    expect(payload).not.toHaveProperty('defaultOutputMaterialKind');
+    expect(payload).not.toHaveProperty('semiFinishedOutputCode');
+    expect(payload).not.toHaveProperty('standardHourlyRate');
   });
 
   it('keeps the form and blocks empty, duplicate, and unknown types', async () => {

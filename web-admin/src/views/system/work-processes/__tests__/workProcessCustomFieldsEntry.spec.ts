@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WorkProcessPage from '../index.vue';
 import type { WorkProcessItem } from '@/api/processProduction';
 
-const state = vi.hoisted(() => ({ canWrite: true }));
+const state = vi.hoisted(() => ({
+  canWriteSystem: true,
+  canWriteProduction: true,
+  roleLevel: 10,
+}));
 const api = vi.hoisted(() => ({
   getWorkProcesses: vi.fn(),
   getWorkProcessCategories: vi.fn(),
@@ -17,8 +21,17 @@ const api = vi.hoisted(() => ({
   governWorkProcessDuplicates: vi.fn(),
 }));
 
-vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006' }) }));
-vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => state.canWrite }) }));
+vi.mock('@/store/modules/auth', () => ({
+  useAuthStore: () => ({
+    factoryId: 'F006',
+    hasMinLevel: (level: number) => state.roleLevel <= level,
+  }),
+}));
+vi.mock('@/store/modules/permission', () => ({
+  usePermissionStore: () => ({
+    canWrite: (module: string) => module === 'production' ? state.canWriteProduction : state.canWriteSystem,
+  }),
+}));
 vi.mock('@/api/processProduction', () => api);
 vi.mock('../WorkProcessAIChatPanel.vue', () => ({ default: { template: '<div data-testid="ai-panel" />' } }));
 
@@ -31,7 +44,9 @@ const row: WorkProcessItem = {
 };
 
 beforeEach(() => {
-  state.canWrite = true;
+  state.canWriteSystem = true;
+  state.canWriteProduction = true;
+  state.roleLevel = 10;
   vi.clearAllMocks();
   api.getWorkProcesses.mockResolvedValue({ success: true, data: { content: [row] } });
   api.getWorkProcessCategories.mockResolvedValue({ success: true, data: ['包装'] });
@@ -55,7 +70,8 @@ describe('work process custom fields entry', () => {
   });
 
   it('does not expose the row write entry when system write permission is revoked', async () => {
-    state.canWrite = false;
+    state.canWriteSystem = false;
+    state.canWriteProduction = false;
     const wrapper = mount(WorkProcessPage, {
       global: { plugins: [ElementPlus] },
       attachTo: document.body,
@@ -63,5 +79,41 @@ describe('work process custom fields entry', () => {
     await flushPromises();
     expect(wrapper.find('[data-testid="work-process-custom-fields-button"]').exists()).toBe(false);
     wrapper.unmount();
+  });
+
+  it('keeps the custom-field entry for a production manager even without system write', async () => {
+    state.canWriteSystem = false;
+    state.canWriteProduction = true;
+    state.roleLevel = 10;
+    const wrapper = mount(WorkProcessPage, {
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="work-process-custom-fields-button"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('hides the custom-field entry for system-only or ordinary operator access', async () => {
+    state.canWriteSystem = true;
+    state.canWriteProduction = false;
+    state.roleLevel = 10;
+    const systemOnly = mount(WorkProcessPage, {
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    expect(systemOnly.find('[data-testid="work-process-custom-fields-button"]').exists()).toBe(false);
+    systemOnly.unmount();
+
+    state.canWriteProduction = true;
+    state.roleLevel = 30;
+    const operator = mount(WorkProcessPage, {
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    expect(operator.find('[data-testid="work-process-custom-fields-button"]').exists()).toBe(false);
+    operator.unmount();
   });
 });

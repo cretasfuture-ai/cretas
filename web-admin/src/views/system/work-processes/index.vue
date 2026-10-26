@@ -25,6 +25,9 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
+const canEditCustomFields = computed(() => Boolean(factoryId.value)
+  && permissionStore.canWrite('production')
+  && authStore.hasMinLevel(10));
 
 const loading = ref(false);
 const allData = ref<WorkProcessItem[]>([]);
@@ -35,7 +38,7 @@ const customFieldsDialogVisible = ref(false);
 const customFieldsRow = ref<WorkProcessItem | null>(null);
 
 function openCustomFields(row: WorkProcessItem): void {
-  if (!canWrite.value || !factoryId.value || !row.id) return;
+  if (!canEditCustomFields.value || !factoryId.value || !row.id) return;
   customFieldsRow.value = row;
   customFieldsDialogVisible.value = true;
 }
@@ -651,9 +654,17 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right" v-if="canWrite">
+        <el-table-column label="操作" width="200" fixed="right" v-if="canWrite">
           <template #default="{ row }">
             <el-button type="primary" text size="small" @click="handleEdit(row)">编辑</el-button>
+            <el-button type="warning" text size="small" @click="handleToggle(row)">
+              {{ row.isActive ? '禁用' : '启用' }}
+            </el-button>
+            <el-button type="danger" text size="small" @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="自定义字段" width="110" fixed="right" v-if="canEditCustomFields">
+          <template #default="{ row }">
             <el-button
               type="primary"
               text
@@ -661,10 +672,6 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
               data-testid="work-process-custom-fields-button"
               @click="openCustomFields(row)"
             >自定义字段</el-button>
-            <el-button type="warning" text size="small" @click="handleToggle(row)">
-              {{ row.isActive ? '禁用' : '启用' }}
-            </el-button>
-            <el-button type="danger" text size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -792,7 +799,7 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
       v-model="customFieldsDialogVisible"
       :factory-id="factoryId"
       :work-process="customFieldsRow"
-      :can-write="canWrite"
+      :can-write="canEditCustomFields"
       @saved="handleCustomFieldsSaved"
     />
 
