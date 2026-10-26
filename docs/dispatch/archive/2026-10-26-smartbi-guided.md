@@ -35,3 +35,5 @@ Root 追加窄 scope：Web/RN 的 `factoryChartExport` helper、对应 tests 和
 - 本地浏览器夹具曾因内联脚本和控件定位失败；仅修夹具/场景，未削弱 mutation guard、脱敏深度、业务断言或生产白名单。最终报告须引用重跑结果。
 
 产品目录来自当前授权数据源；上传报表的对象目录不随期间裁剪，图表结果严格按期间筛选，期间外产品会明确无数据。没有把真实自由输入 AI 问答或所有产品/角色的业务验收宣称完成。原 OSS/历史账本等边界保持不变。
+
+最终代码 `994148a91d754a1aef530ca5cac74cc733d2c122` 的全部七项 CI 已通过（Web/RN 类型与完整测试、Python、field/source/secret/script gates）。本地 canonical fixture 13 PASS，最终真实控件定位补验 1 PASS，unit/drift 66 PASS；实际渲染组件验证了 100 产品中搜索产品99、按业务问题筛选和分类浏览，无 pageerror。后续仅本文和原 OSS blocked 台账恢复，不改变上述已验证源码；通过证据按源码树哈希复用，不手动重跑产品测试。
