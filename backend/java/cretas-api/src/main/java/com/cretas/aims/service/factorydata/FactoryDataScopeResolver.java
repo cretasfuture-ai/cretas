@@ -343,8 +343,13 @@ public final class FactoryDataScopeResolver {
     record Where(String sql, List<Object> params) {}
 
     static Where ownedRows(Connection conn, TableScope ts, String factoryId) throws SQLException {
+        return ownedRows(conn, ts, factoryId, "");
+    }
+
+    /** @param alias 列名前缀 (表别名加点, 如 {@code "t."}; 不用别名传空串) */
+    static Where ownedRows(Connection conn, TableScope ts, String factoryId, String alias) throws SQLException {
         if (ts.selection() == FactoryDataScope.Selection.KEYS) {
-            return new Where(q(ts.pkColumn()) + "::text = ANY(?)",
+            return new Where(alias + q(ts.pkColumn()) + "::text = ANY(?)",
                     List.of(conn.createArrayOf("text", ts.keys().toArray(new String[0]))));
         }
         // 无单列主键: 至少一个租户列是本厂, 且没有租户列是别的工厂
@@ -352,11 +357,11 @@ public final class FactoryDataScopeResolver {
         StringJoiner none = new StringJoiner(" AND ");
         List<Object> params = new ArrayList<>();
         for (String c : ts.tenantColumns()) {
-            any.add(q(c) + "::text = ?");
+            any.add(alias + q(c) + "::text = ?");
             params.add(factoryId);
         }
         for (String c : ts.tenantColumns()) {
-            none.add("(" + q(c) + " IS NULL OR " + q(c) + "::text = ?)");
+            none.add("(" + alias + q(c) + " IS NULL OR " + alias + q(c) + "::text = ?)");
             params.add(factoryId);
         }
         return new Where(any + " AND " + none, params);

@@ -1,6 +1,8 @@
 package com.cretas.aims.service.factorydata;
 
 import com.aliyun.oss.OSS;
+import com.aliyun.oss.model.DeleteObjectsRequest;
+import com.aliyun.oss.model.DeleteObjectsResult;
 import com.aliyun.oss.model.ListObjectsV2Request;
 import com.aliyun.oss.model.ListObjectsV2Result;
 import com.aliyun.oss.model.OSSObject;
@@ -13,7 +15,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 媒体桶与音频桶两个都列 —— 上传代码按类别分别写进这两个桶 ({@code OssServiceImpl})。
@@ -53,6 +57,25 @@ public class OssFactoryObjectStore implements FactoryObjectStore {
             } while (token != null);
         }
         return out;
+    }
+
+    @Override
+    public void delete(List<StoredObject> objects) {
+        OSS client = client();
+        Map<String, List<String>> byBucket = new LinkedHashMap<>();
+        for (StoredObject o : objects) byBucket.computeIfAbsent(o.bucket(), b -> new ArrayList<>()).add(o.key());
+        for (Map.Entry<String, List<String>> e : byBucket.entrySet()) {
+            List<String> keys = e.getValue();
+            for (int i = 0; i < keys.size(); i += 1000) {
+                List<String> batch = keys.subList(i, Math.min(keys.size(), i + 1000));
+                DeleteObjectsResult r = client.deleteObjects(
+                        new DeleteObjectsRequest(e.getKey()).withKeys(new ArrayList<>(batch)).withQuiet(false));
+                if (r.getDeletedObjects().size() != batch.size()) {
+                    throw new IllegalStateException("OSS 删除不完整: " + e.getKey() + " 请求 " + batch.size()
+                            + " 个, 回执 " + r.getDeletedObjects().size() + " 个");
+                }
+            }
+        }
     }
 
     @Override

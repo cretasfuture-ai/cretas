@@ -14,4 +14,7 @@ public interface FactoryObjectStore {
 
     /** 把对象内容原样写进 out。 */
     void copyTo(StoredObject object, OutputStream out) throws IOException;
+
+    /** 删除这些对象 (整厂删除); 任何一个删不掉都抛错。 */
+    void delete(List<StoredObject> objects);
 }

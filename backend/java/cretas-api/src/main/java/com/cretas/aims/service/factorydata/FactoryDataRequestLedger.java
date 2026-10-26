@@ -12,10 +12,12 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
- * 回执台账 {@code factory_data_requests}: 每次预演 / 导出 / 删除一行。
+ * 回执台账 {@code factory_data_requests}: 每次预演 / 导出 / 删除申请 / 撤销 / 删除一行。
  *
  * <p>这张表故意 ⛔ 不带外键指向 factories —— 工厂删掉之后它还要在, 证明「删过了、删了多少」。
  * 只存编号、计数、哈希和时间, 不存业务内容 (目录类别 RECEIPT: 不导出、不删除)。
@@ -24,12 +26,16 @@ import java.util.Optional;
 @Component
 public class FactoryDataRequestLedger {
 
-    public enum Type { PREVIEW, EXPORT, ERASURE }
+    public enum Type { PREVIEW, EXPORT, ERASURE_REQUEST, ERASURE_CANCEL, ERASURE }
 
     public enum Status { RUNNING, SUCCEEDED, FAILED }
 
-    public record Row(long id, Type type, String factoryId, Status status, String summaryJson,
-                      LocalDateTime createdAt, LocalDateTime completedAt) {}
+    public record Row(long id, Type type, String factoryId, Status status, Long relatedRequestId,
+                      LocalDateTime notBefore, String summaryJson, String packageSha256, Long packageBytes,
+                      String errorMessage, LocalDateTime createdAt, LocalDateTime completedAt) {}
+
+    private static final String COLUMNS = "id, request_type, factory_id, status, related_request_id, not_before, "
+            + "summary::text, package_sha256, package_bytes, error_message, created_at, completed_at";
 
     private final DataSource dataSource;
     private final Clock clock;
@@ -45,8 +51,14 @@ public class FactoryDataRequestLedger {
 
     public long start(Type type, String factoryId, String factoryName, String actorType, long actorId,
                       String actorRole) {
+        return start(type, factoryId, factoryName, actorType, actorId, actorRole, null, null);
+    }
+
+    public long start(Type type, String factoryId, String factoryName, String actorType, long actorId,
+                      String actorRole, Long relatedRequestId, LocalDateTime notBefore) {
         String sql = "INSERT INTO factory_data_requests (request_type, factory_id, factory_name, actor_type, "
-                + "actor_id, actor_role, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id";
+                + "actor_id, actor_role, status, related_request_id, not_before, created_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id";
         return inTx(conn -> {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, type.name());
@@ -56,7 +68,9 @@ public class FactoryDataRequestLedger {
                 ps.setLong(5, actorId);
                 ps.setString(6, actorRole);
                 ps.setString(7, Status.RUNNING.name());
-                ps.setTimestamp(8, Timestamp.valueOf(LocalDateTime.now(clock)));
+                if (relatedRequestId == null) ps.setNull(8, Types.BIGINT); else ps.setLong(8, relatedRequestId);
+                ps.setTimestamp(9, notBefore == null ? null : Timestamp.valueOf(notBefore));
+                ps.setTimestamp(10, Timestamp.valueOf(LocalDateTime.now(clock)));
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     return rs.getLong(1);
@@ -85,20 +99,52 @@ public class FactoryDataRequestLedger {
     }
 
     public Optional<Row> find(long id) {
-        String sql = "SELECT id, request_type, factory_id, status, summary::text, created_at, completed_at "
-                + "FROM factory_data_requests WHERE id = ?";
+        List<Row> rows = query("SELECT " + COLUMNS + " FROM factory_data_requests WHERE id = ?", id);
+        return rows.stream().findFirst();
+    }
+
+    /** 某厂的全部回执, 新的在前。 */
+    public List<Row> list(String factoryId) {
+        return query("SELECT " + COLUMNS + " FROM factory_data_requests WHERE factory_id = ? ORDER BY id DESC",
+                factoryId);
+    }
+
+    /**
+     * 该厂当前有效的删除申请: 最近一条成功登记的 ERASURE_REQUEST, 且没有被撤销、也没有已成功的删除指向它。
+     */
+    public Optional<Row> findActiveErasureRequest(String factoryId) {
+        List<Row> rows = query("SELECT " + COLUMNS + " FROM factory_data_requests r WHERE r.factory_id = ? "
+                + "AND r.request_type = 'ERASURE_REQUEST' AND r.status = 'SUCCEEDED' AND NOT EXISTS ("
+                + "  SELECT 1 FROM factory_data_requests x WHERE x.related_request_id = r.id AND x.status = 'SUCCEEDED' "
+                + "  AND x.request_type IN ('ERASURE_CANCEL', 'ERASURE')) ORDER BY r.id DESC LIMIT 1", factoryId);
+        return rows.stream().findFirst();
+    }
+
+    private List<Row> query(String sql, Object param) {
         return inTx(conn -> {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setLong(1, id);
+                ps.setObject(1, param);
                 try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) return Optional.empty();
-                    Timestamp done = rs.getTimestamp(7);
-                    return Optional.of(new Row(rs.getLong(1), Type.valueOf(rs.getString(2)), rs.getString(3),
-                            Status.valueOf(rs.getString(4)), rs.getString(5), rs.getTimestamp(6).toLocalDateTime(),
-                            done == null ? null : done.toLocalDateTime()));
+                    List<Row> out = new ArrayList<>();
+                    while (rs.next()) {
+                        long related = rs.getLong(5);
+                        boolean relatedNull = rs.wasNull();
+                        long bytes = rs.getLong(9);
+                        boolean bytesNull = rs.wasNull();
+                        out.add(new Row(rs.getLong(1), Type.valueOf(rs.getString(2)), rs.getString(3),
+                                Status.valueOf(rs.getString(4)), relatedNull ? null : related, ts(rs, 6),
+                                rs.getString(7), rs.getString(8), bytesNull ? null : bytes, rs.getString(10),
+                                ts(rs, 11), ts(rs, 12)));
+                    }
+                    return out;
                 }
             }
         });
+    }
+
+    private static LocalDateTime ts(ResultSet rs, int i) throws SQLException {
+        Timestamp t = rs.getTimestamp(i);
+        return t == null ? null : t.toLocalDateTime();
     }
 
     private interface Work<T> { T run(Connection conn) throws SQLException; }
@@ -118,7 +164,7 @@ public class FactoryDataRequestLedger {
                 conn.setAutoCommit(auto);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("回执台账写入失败: " + e.getMessage(), e);
+            throw new IllegalStateException("回执台账读写失败: " + e.getMessage(), e);
         }
     }
 

@@ -1,6 +1,8 @@
 package com.cretas.aims.service.factorydata;
 
 import com.cretas.aims.service.factorydata.FactoryDataScope.TableScope;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
 
 import java.io.FilterOutputStream;
 import java.io.IOException;
@@ -31,6 +33,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
     public record Entry(String path, long rows, long bytes, String sha256) {}
 
     private static final byte[] BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+    private static final JsonFactory JSON = new JsonFactory();
     private static final int FETCH_SIZE = 1000;
 
     private final ZipOutputStream zip;
@@ -42,18 +45,80 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
 
     public List<Entry> entries() { return List.copyOf(entries); }
 
-    /** 把本厂在这张表里的行写成 {@code <dir>/<table>.csv}; 凭证类列的值替换成 {@link FactoryDataCatalog#REDACTED}。 */
-    public Entry writeTable(Connection conn, String dir, String schema, TableScope ts, String factoryId)
+    @FunctionalInterface
+    interface RowsReader<T> { T read(ResultSet rs) throws SQLException, IOException; }
+
+    /** 在同一个快照里按「本厂拥有的行」查一张表 (按主键排序), 交给 reader。 */
+    static <T> T queryOwned(Connection conn, String schema, TableScope ts, String factoryId, RowsReader<T> reader)
             throws SQLException, IOException {
         FactoryDataScopeResolver.Where where = FactoryDataScopeResolver.ownedRows(conn, ts, factoryId);
         String order = ts.pkColumn() != null ? " ORDER BY " + FactoryDataScopeResolver.q(ts.pkColumn()) : "";
         String sql = "SELECT * FROM " + FactoryDataScopeResolver.q(schema) + "." + FactoryDataScopeResolver.q(ts.table())
                 + " WHERE " + where.sql() + order;
-        String path = dir + "/" + ts.table() + ".csv";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setFetchSize(FETCH_SIZE);
             FactoryDataScopeResolver.bind(ps, where.params());
             try (ResultSet rs = ps.executeQuery()) {
+                return reader.read(rs);
+            }
+        }
+    }
+
+    /** 写成 {@code <dir>/<table>.json}: 对象数组, 值一律是文本或 null (与 CSV 同一套取值); 凭证类列已移除。 */
+    public Entry writeTableJson(Connection conn, String dir, String schema, TableScope ts, String factoryId)
+            throws SQLException, IOException {
+        String path = dir + "/" + ts.table() + ".json";
+        return queryOwned(conn, schema, ts, factoryId, rs -> writeEntry(path, out -> {
+            ResultSetMetaData md = rs.getMetaData();
+            int n = md.getColumnCount();
+            JsonGenerator g = JSON.createGenerator(new FilterOutputStream(out) {
+                @Override public void write(byte[] b, int off, int len) throws IOException { out.write(b, off, len); }
+                @Override public void close() throws IOException { flush(); }
+            });
+            g.writeStartArray();
+            long rows = 0;
+            while (rs.next()) {
+                g.writeStartObject();
+                for (int i = 1; i <= n; i++) {
+                    String name = md.getColumnName(i);
+                    String v = rs.getString(i);
+                    if (v == null) g.writeNullField(name);
+                    else g.writeStringField(name, FactoryDataCatalog.isCredentialColumn(name) ? FactoryDataCatalog.REDACTED : v);
+                }
+                g.writeEndObject();
+                rows++;
+            }
+            g.writeEndArray();
+            g.close();
+            return rows;
+        }, false));
+    }
+
+    /** 把这张表加进该库的 Excel 工作簿 (工作簿在库写完后用 {@link #writeBook} 落进包里)。 */
+    public long addToBook(Connection conn, FactoryDataXlsxBook book, String schema, TableScope ts, String factoryId)
+            throws SQLException, IOException {
+        return queryOwned(conn, schema, ts, factoryId, rs -> book.addTable(ts.table(), rs));
+    }
+
+    public Entry writeBook(String path, FactoryDataXlsxBook book) throws IOException {
+        try {
+            return writeEntry(path, out -> {
+                book.write(new FilterOutputStream(out) {
+                    @Override public void write(byte[] b, int off, int len) throws IOException { out.write(b, off, len); }
+                    @Override public void close() throws IOException { flush(); }
+                });
+                return 0;
+            }, false);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 把本厂在这张表里的行写成 {@code <dir>/<table>.csv}; 凭证类列的值替换成 {@link FactoryDataCatalog#REDACTED}。 */
+    public Entry writeTable(Connection conn, String dir, String schema, TableScope ts, String factoryId)
+            throws SQLException, IOException {
+        String path = dir + "/" + ts.table() + ".csv";
+        return queryOwned(conn, schema, ts, factoryId, rs -> {
                 return writeEntry(path, out -> {
                     ResultSetMetaData md = rs.getMetaData();
                     int n = md.getColumnCount();
@@ -78,8 +143,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
                     w.flush();
                     return rows;
                 }, true);
-            }
-        }
+        });
     }
 
     /** 原样复制一个附件。 */

@@ -18,32 +18,38 @@ public final class FactoryDataCatalog {
 
     public enum Category {
         /** 业务数据 (默认): 导出 + 删除。 */
-        BUSINESS(true, true),
+        BUSINESS(true, true, true),
         /** {@code factories} 里该厂那一行: 导出, 最后删。 */
-        FACTORY_ROOT(true, true),
-        /** 审计 / 留痕: 导出; 删除时的去留按口径 Q3。 */
-        AUDIT(true, false),
-        /** 训练样本 / 授权: 导出; 删除时的去留按口径 Q4。 */
-        TRAINING(true, false),
-        /** 库内副本 (backup_* / repair_backup_* / bak_*): 不导出; 删除时的去留按口径 Q6。 */
-        COPY(false, false),
-        /** 本功能的回执台账: 不导出, 不删 —— 它证明「删过了、删了多少」。 */
-        RECEIPT(false, false),
+        FACTORY_ROOT(true, true, true),
+        /** 审计 / 留痕: 导出; 删除时先把谁 / 何时 / 做了什么 / 对象编号挪进留存区 (口径 Q3), 再删。 */
+        AUDIT(true, true, false),
+        /** 训练样本: 导出; 删除时脱敏样本保留并清空工厂编号, 其余删除 (口径 Q4)。 */
+        TRAINING(true, true, true),
+        /** 库内副本 (public 里的 backup_* / repair_backup_* / bak_*): 不导出; 删除时一并删 (口径 Q6)。 */
+        COPY(false, true, true),
+        /** 本功能的回执台账与审计留存区: 不导出, 不删 —— 它们证明「删过了、删了多少」。 */
+        RECEIPT(false, false, false),
         /** 迁移 / 调度台账: 只有表名和计数, 不导出, 不删。 */
-        LEDGER(false, false);
+        LEDGER(false, false, false);
 
         private final boolean exported;
-        private final boolean erasedByDefault;
+        private final boolean erased;
+        private final boolean strict;
 
-        Category(boolean exported, boolean erasedByDefault) {
+        Category(boolean exported, boolean erased, boolean strict) {
             this.exported = exported;
-            this.erasedByDefault = erasedByDefault;
+            this.erased = erased;
+            this.strict = strict;
         }
 
         public boolean exported() { return exported; }
 
-        /** 口径未拍板前, 只有 BUSINESS / FACTORY_ROOT 计入「将删除」。 */
-        public boolean erasedByDefault() { return erasedByDefault; }
+        public boolean erased() { return erased; }
+
+        /**
+         * 删除时与预演逐表比对的类别。审计 / 留痕不比: 预演、删除接口本身就会让平台访问记录多出几行。
+         */
+        public boolean strict() { return strict; }
     }
 
     /** 主库 (cretas_prod_db) 与 SmartBI 库 (smartbi_prod_db)。 */
@@ -55,7 +61,7 @@ public final class FactoryDataCatalog {
 
     /**
      * 不叫 {@code factory_id} 的租户列。值是工厂编号, 与 {@code factory_id} 同等对待。
-     * 预演会把名字里含 {@code factory} 却不在这里、也不是 {@code factory_id} 的列列出来 (疑似租户列), 由人判断。
+     * 预演会把以 factory_id 结尾或叫 tenant_id、却不在这里登记的列列出来 (疑似租户列), 由人判断。
      */
     private static final Map<String, List<String>> EXTRA_TENANT_COLUMNS = Map.of(
             "internal_transfers", List.of("source_factory_id", "target_factory_id"),
@@ -66,17 +72,26 @@ public final class FactoryDataCatalog {
             "tool_execution_idempotency", List.of("tenant_id"),
             "intent_preview_tokens", List.of("tenant_id"));
 
-    private static final Set<String> AUDIT_TABLES = Set.of(
+    /** 每张都要在 {@link FactoryAuditRetention#MAPPINGS} 里有取数表达式。 */
+    static final Set<String> AUDIT_TABLES = Set.of(
             "platform_data_access_log",
             "operation_logs",
             "tool_execution_audit_events",
             "process_secret_access_events",
             "smart_bi_llm_egress_audit");
 
-    private static final Set<String> TRAINING_TABLES = Set.of(
-            "ai_training_samples",
+    /**
+     * 训练样本表 -> 「保留」条件 (SQL, 对该表的列)。只有 SmartBI 蒸馏样本打了标记:
+     * {@code training_rule} 表示过了训练规则, {@code desensitized=true} 表示是脱敏后存的
+     * (backend/python/smartbi/services/training_consent.py RULE_KEY / DESENSITIZED_KEY)。
+     * 已授权工厂原样存的样本只有 training_rule 没有 desensitized, 属于原始记录, 删除。
+     * Java 侧的意图样本 (ai_training_samples / active_learning_samples) 没有脱敏标记, 按业务数据删除。
+     */
+    private static final Map<String, String> TRAINING_RETAIN = Map.of(
             "smart_bi_distillation_samples",
-            "training_consent");
+            "metadata ->> 'training_rule' IS NOT NULL AND metadata ->> 'desensitized' = 'true'");
+
+    private static final Set<String> RECEIPT_TABLES = Set.of(RECEIPT_TABLE, FactoryAuditRetention.TABLE);
 
     private static final Pattern COPY_TABLE = Pattern.compile("^(backup_|repair_backup_|bak_|mock_rest_bak_).*");
     private static final Pattern LEDGER_TABLE = Pattern.compile(
@@ -93,12 +108,19 @@ public final class FactoryDataCatalog {
     public static Category categorize(String table) {
         String t = table.toLowerCase(Locale.ROOT);
         if (FACTORIES_TABLE.equals(t)) return Category.FACTORY_ROOT;
-        if (RECEIPT_TABLE.equals(t)) return Category.RECEIPT;
+        if (RECEIPT_TABLES.contains(t)) return Category.RECEIPT;
         if (LEDGER_TABLE.matcher(t).matches()) return Category.LEDGER;
         if (COPY_TABLE.matcher(t).matches()) return Category.COPY;
         if (AUDIT_TABLES.contains(t)) return Category.AUDIT;
-        if (TRAINING_TABLES.contains(t)) return Category.TRAINING;
+        if (TRAINING_RETAIN.containsKey(t)) return Category.TRAINING;
         return Category.BUSINESS;
+    }
+
+    /** 训练样本表的「保留」SQL 条件; 不是训练样本表时报错。 */
+    public static String trainingRetainPredicate(String table) {
+        String p = TRAINING_RETAIN.get(table);
+        if (p == null) throw new IllegalArgumentException("不是训练样本表: " + table);
+        return p;
     }
 
     /** 该表的租户列 (只返回表里真实存在的列)。 */

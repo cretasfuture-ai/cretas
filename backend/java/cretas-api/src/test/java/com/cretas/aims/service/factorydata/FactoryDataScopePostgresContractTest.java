@@ -57,6 +57,9 @@ class FactoryDataScopePostgresContractTest {
             new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "super_admin");
 
     String schema;
+    /** 被导出 / 删除的工厂与阴性对照工厂; 删除测试复用这套数据时换成演练编号。 */
+    String fa = FA;
+    String fb = FB;
     String smartbiDb;
     PGSimpleDataSource main;
     PGSimpleDataSource smartbi;
@@ -170,9 +173,10 @@ class FactoryDataScopePostgresContractTest {
         FactoryDataService service = service(Set.of(1L));
 
         FactoryDataService.Preview preview = service.preview(OPERATOR, FA);
-        Map<String, Map<String, String>> zip = export(service, FA, AttachmentMode.INCLUDE);
+        Map<String, byte[]> zip = export(service, FA, AttachmentMode.INCLUDE,
+                Set.of(FactoryDataService.Format.CSV, FactoryDataService.Format.JSON, FactoryDataService.Format.XLSX));
 
-        JsonNode manifest = new ObjectMapper().readTree(zip.get("manifest.json").get(""));
+        JsonNode manifest = new ObjectMapper().readTree(zip.get("manifest.json"));
         Map<String, Long> exported = new LinkedHashMap<>();
         for (JsonNode db : manifest.get("databases")) {
             for (JsonNode t : db.get("tables")) {
@@ -190,20 +194,37 @@ class FactoryDataScopePostgresContractTest {
         // 库内副本不导出
         assertThat(exported).doesNotContainKey("CRETAS.backup_sales_orders_20260801");
 
-        String all = String.join("\n", zip.values().stream().flatMap(m -> m.values().stream()).toList());
-        // 阴性对照: FB 的业务数据、附件一个字都不在包里
-        assertThat(all).doesNotContain("B-SECRET").doesNotContain("B-PHOTO-SECRET").doesNotContain("B-UPLOAD");
-        assertThat(all).contains("A-ORDER-1").contains("A-UPLOAD");
-        assertThat(zip.get("attachments/cretas-media/" + FA + "/attachments/a.jpg").get("")).isEqualTo("A-PHOTO");
-
-        // 凭证类列的值已移除, 列头还在
-        String users = zip.get("cretas/users.csv").get("");
-        assertThat(users).startsWith("﻿").contains("password_hash").contains(FactoryDataCatalog.REDACTED)
+        // 阴性对照: FB 的业务数据、附件一个字都不在包里 (Excel 解出单元格文本再查)
+        StringBuilder all = new StringBuilder();
+        for (Map.Entry<String, byte[]> e : zip.entrySet()) {
+            all.append(e.getKey().endsWith(".xlsx") ? xlsxText(e.getValue()) : text(e.getValue())).append('\n');
+        }
+        assertThat(all.toString()).doesNotContain("B-SECRET").doesNotContain("B-PHOTO-SECRET").doesNotContain("B-UPLOAD")
                 .doesNotContain("hash-of-a");
+        assertThat(all.toString()).contains("A-ORDER-1").contains("A-UPLOAD");
+        assertThat(text(zip.get("attachments/cretas-media/" + FA + "/attachments/a.jpg"))).isEqualTo("A-PHOTO");
+
+        // 凭证类列的值已移除, 列头还在 (三种格式都一样)
+        String users = text(zip.get("cretas/csv/users.csv"));
+        assertThat(users).startsWith("﻿").contains("password_hash").contains(FactoryDataCatalog.REDACTED);
+        JsonNode usersJson = new ObjectMapper().readTree(zip.get("cretas/json/users.json"));
+        assertThat(usersJson).hasSize(1);
+        assertThat(usersJson.get(0).get("password_hash").asText()).isEqualTo(FactoryDataCatalog.REDACTED);
+        assertThat(new ObjectMapper().readTree(zip.get("cretas/json/sales_order_items.json"))).hasSize(2);
+        // CSV 注入: 以 = 开头的文字值前加单引号; JSON 原样
+        assertThat(text(zip.get("cretas/csv/sales_orders.csv"))).contains("\"'=SUM(A1)\"");
+        assertThat(text(zip.get("cretas/json/sales_orders.json"))).contains("\"=SUM(A1)\"");
+        // Excel: 目录 + 每张导出表一个 sheet, 行数对得上
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                     new org.apache.poi.xssf.usermodel.XSSFWorkbook(new ByteArrayInputStream(zip.get("cretas/cretas.xlsx")))) {
+            assertThat(wb.getSheetName(0)).isEqualTo(FactoryDataXlsxBook.INDEX_SHEET);
+            assertThat(wb.getSheet("sales_order_items").getLastRowNum()).isEqualTo(2);   // 表头 + 2 行
+            assertThat(wb.getSheet("users").getRow(1).getCell(3).getStringCellValue()).isEqualTo(FactoryDataCatalog.REDACTED);
+        }
 
         // 每个文件的 SHA256 与 manifest 一致
         for (JsonNode f : manifest.get("files")) {
-            String body = zip.get(f.get("path").asText()).get("");
+            byte[] body = zip.get(f.get("path").asText());
             assertThat(sha(body)).as(f.get("path").asText()).isEqualTo(f.get("sha256").asText());
         }
         // 回执: 预演 + 导出各一行, 导出有包哈希
@@ -213,6 +234,35 @@ class FactoryDataScopePostgresContractTest {
             List<String> rows = new ArrayList<>();
             while (rs.next()) rows.add(rs.getString(1) + "/" + rs.getString(2) + "/" + rs.getBoolean(3));
             assertThat(rows).containsExactly("PREVIEW/SUCCEEDED/false", "EXPORT/SUCCEEDED/true");
+        }
+    }
+
+    @Test
+    void excelSplitsOversizedTablesShortensLongSheetNamesAndTruncatesHugeCells() throws Exception {
+        try (Connection c = main.getConnection(); Statement st = c.createStatement();
+             FactoryDataXlsxBook book = new FactoryDataXlsxBook()) {
+            book.setMaxDataRowsForTest(2);
+            try (ResultSet rs = st.executeQuery("SELECT g AS id, CASE WHEN g = 5 THEN repeat('x', 40000) ELSE 'v' END AS body"
+                    + " FROM generate_series(1, 5) g ORDER BY g")) {
+                assertThat(book.addTable("a_table_name_that_is_longer_than_thirty_one", rs)).isEqualTo(5);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            book.write(out);
+            try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                         new org.apache.poi.xssf.usermodel.XSSFWorkbook(new ByteArrayInputStream(out.toByteArray()))) {
+                assertThat(wb.getNumberOfSheets()).isEqualTo(4);                  // 目录 + 3 部分
+                for (int i = 1; i < 4; i++) assertThat(wb.getSheetName(i).length()).isLessThanOrEqualTo(31);
+                assertThat(wb.getSheetName(2)).endsWith("~2");
+                assertThat(wb.getSheetAt(3).getLastRowNum()).isEqualTo(1);       // 第 5 行单独一个 sheet
+                String big = wb.getSheetAt(3).getRow(1).getCell(1).getStringCellValue();
+                assertThat(big).hasSize(FactoryDataXlsxBook.MAX_CELL_CHARS).endsWith("[已截断]");
+                // 目录写全名
+                assertThat(wb.getSheetAt(0).getRow(1).getCell(1).getStringCellValue())
+                        .isEqualTo("a_table_name_that_is_longer_than_thirty_one");
+            }
+            assertThat(book.truncatedCells()).isEqualTo(1);
+            assertThat(book.sheets()).extracting(m -> m.get("rows")).containsExactly(2, 2, 1);
+            assertThat(book.sheets().get(1).get("note").toString()).contains("拆分第 2 部分");
         }
     }
 
@@ -229,11 +279,14 @@ class FactoryDataScopePostgresContractTest {
                         org.assertj.core.groups.Tuple.tuple("smart_bi_uploads", 1L),
                         org.assertj.core.groups.Tuple.tuple("smart_bi_field_defs", 2L),
                         org.assertj.core.groups.Tuple.tuple("training_consent", 1L));
-        // AUDIT / TRAINING / COPY 不计入「将删除」
-        assertThat(p.databases().get(0).rowsErasedByDefault()).isEqualTo(1 + 1 + 2 + 2 + 1 + 1 + 2);
+        // 将删除: 业务 + 主记录 + 审计 (先挪留存区) + 副本; 回执 / 台账不算
+        assertThat(p.databases().get(0).rowsToErase()).isEqualTo(1 + 1 + 2 + 2 + 1 + 1 + 2 + 1 + 1);
+        assertThat(p.databases().get(0).auditRowsToRetain()).isEqualTo(1);
         assertThat(p.attachments().objects()).isEqualTo(1);
+        // 没有删除申请 ⇒ 不可删
+        assertThat(p.erasureRequest()).isNull();
         assertThat(p.erasable()).isFalse();
-        assertThat(p.blockers()).anyMatch(b -> b.contains("口径"));
+        assertThat(p.blockers()).anyMatch(b -> b.contains("没有有效的删除申请"));
     }
 
     @Test
@@ -261,28 +314,29 @@ class FactoryDataScopePostgresContractTest {
 
     // --------------------------------------------------------------- fixture
 
-    private void seedCleanTenants() throws Exception {
+    void seedCleanTenants() throws Exception {
         exec(main, "SET search_path = " + schema + ";"
-                + "INSERT INTO factories (id, name, type) VALUES ('" + FA + "', 'A厂', 'FACTORY'), ('" + FB + "', 'B厂', 'FACTORY');"
-                + "INSERT INTO users (id, factory_id, username, password_hash) VALUES (1, '" + FA + "', 'a_admin', 'hash-of-a'), (2, '" + FB + "', 'b_admin', 'hash-of-b');"
-                + "INSERT INTO sales_orders (id, factory_id, created_by, note) VALUES (10, '" + FA + "', 1, 'A-ORDER-1'), (11, '" + FA + "', 1, '=SUM(A1)'), (30, '" + FB + "', 2, 'B-SECRET');"
+                + "INSERT INTO factories (id, name, type) VALUES ('" + fa + "', 'A厂', 'FACTORY'), ('" + fb + "', 'B厂', 'FACTORY');"
+                + "INSERT INTO users (id, factory_id, username, password_hash) VALUES (1, '" + fa + "', 'a_admin', 'hash-of-a'), (2, '" + fb + "', 'b_admin', 'hash-of-b');"
+                + "INSERT INTO sales_orders (id, factory_id, created_by, note) VALUES (10, '" + fa + "', 1, 'A-ORDER-1'), (11, '" + fa + "', 1, '=SUM(A1)'), (30, '" + fb + "', 2, 'B-SECRET');"
                 + "INSERT INTO sales_order_items (id, order_id, qty) VALUES (100, 10, 1), (101, 10, 2), (300, 30, 9);"
                 + "INSERT INTO sales_item_lots (id, item_id, lot) VALUES (1000, 100, 'LOT-A');"
-                + "INSERT INTO internal_transfers (id, source_factory_id, target_factory_id) VALUES (50, '" + FA + "', '" + FA + "');"
-                + "INSERT INTO activity_events (factory_id, event) VALUES ('" + FA + "', 'login'), ('" + FA + "', 'view'), ('" + FB + "', 'B-SECRET');"
+                + "INSERT INTO internal_transfers (id, source_factory_id, target_factory_id) VALUES (50, '" + fa + "', '" + fa + "');"
+                + "INSERT INTO activity_events (factory_id, event) VALUES ('" + fa + "', 'login'), ('" + fa + "', 'view'), ('" + fb + "', 'B-SECRET');"
                 + "INSERT INTO notes (id, author_id, body) VALUES (1, 1, 'platform note');"
-                + "INSERT INTO platform_data_access_log (id, target_factory_id, path) VALUES (1, '" + FA + "', '/x');"
-                + "INSERT INTO backup_sales_orders_20260801 (factory_id, note) VALUES ('" + FA + "', 'old');");
+                + "INSERT INTO platform_data_access_log (id, target_factory_id, path) VALUES (1, '" + fa + "', '/x');"
+                + "INSERT INTO backup_sales_orders_20260801 (factory_id, note) VALUES ('" + fa + "', 'old');");
         exec(smartbi, "SET search_path = " + schema + ";"
-                + "INSERT INTO smart_bi_uploads (id, factory_id, file_name) VALUES (1, '" + FA + "', 'A-UPLOAD'), (2, '" + FB + "', 'B-UPLOAD');"
+                + "INSERT INTO smart_bi_uploads (id, factory_id, file_name) VALUES (1, '" + fa + "', 'A-UPLOAD'), (2, '" + fb + "', 'B-UPLOAD');"
                 + "INSERT INTO smart_bi_field_defs (id, upload_id, name) VALUES (1, 1, 'qty'), (2, 1, 'amount'), (3, 2, 'B-UPLOAD-FIELD');"
-                + "INSERT INTO training_consent (factory_id, consent_scope) VALUES ('" + FA + "', 'private');");
+                + "INSERT INTO training_consent (factory_id, consent_scope) VALUES ('" + fa + "', 'private');");
     }
 
     static String mainSchema(String s) {
         return "SET search_path = " + s + ";"
                 + "CREATE TABLE factories (id varchar(64) PRIMARY KEY, name varchar(255), type varchar(32),"
-                + "  parent_id varchar(64) REFERENCES factories(id) ON DELETE SET NULL);"
+                + "  parent_id varchar(64) REFERENCES factories(id) ON DELETE SET NULL,"
+                + "  is_active boolean DEFAULT true, created_at timestamp DEFAULT now());"
                 + "CREATE TABLE users (id bigint PRIMARY KEY, factory_id varchar(64) REFERENCES factories(id),"
                 + "  username varchar(64), password_hash varchar(128));"
                 + "CREATE TABLE sales_orders (id bigint PRIMARY KEY, factory_id varchar(64) REFERENCES factories(id),"
@@ -317,19 +371,36 @@ class FactoryDataScopePostgresContractTest {
                 operators, Clock.systemDefaultZone(), schema);
     }
 
-    private Map<String, Map<String, String>> export(FactoryDataService service, String factory, AttachmentMode mode)
-            throws IOException {
+    private Map<String, byte[]> export(FactoryDataService service, String factory, AttachmentMode mode,
+                                       Set<FactoryDataService.Format> formats) throws IOException {
         long id = service.startExport(OPERATOR, factory);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        service.writeExport(id, OPERATOR, factory, mode, out);
-        Map<String, Map<String, String>> files = new LinkedHashMap<>();
+        service.writeExport(id, OPERATOR, factory, mode, formats, out);
+        Map<String, byte[]> files = new LinkedHashMap<>();
         try (ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(out.toByteArray()), StandardCharsets.UTF_8)) {
             ZipEntry e;
-            while ((e = zin.getNextEntry()) != null) {
-                files.put(e.getName(), Map.of("", new String(zin.readAllBytes(), StandardCharsets.UTF_8)));
-            }
+            while ((e = zin.getNextEntry()) != null) files.put(e.getName(), zin.readAllBytes());
         }
         return files;
+    }
+
+    private static String text(byte[] bytes) {
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    /** Excel 里所有单元格的文本, 用于阴性对照 (别的工厂的值不许出现)。 */
+    private static String xlsxText(byte[] bytes) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                     new org.apache.poi.xssf.usermodel.XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            for (org.apache.poi.ss.usermodel.Sheet s : wb) {
+                for (org.apache.poi.ss.usermodel.Row r : s) {
+                    for (org.apache.poi.ss.usermodel.Cell c : r) sb.append(c.toString()).append('|');
+                    sb.append('\n');
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private FactoryDataScope resolve(DataSource ds, Database db, String factory) throws Exception {
@@ -355,9 +426,8 @@ class FactoryDataScopePostgresContractTest {
         return keys;
     }
 
-    private static String sha(String body) {
-        return java.util.HexFormat.of().formatHex(FactoryDataPackageWriter.sha256()
-                .digest(body.getBytes(StandardCharsets.UTF_8)));
+    private static String sha(byte[] body) {
+        return java.util.HexFormat.of().formatHex(FactoryDataPackageWriter.sha256().digest(body));
     }
 
     private static String url() {
@@ -400,6 +470,13 @@ class FactoryDataScopePostgresContractTest {
         @Override
         public void copyTo(StoredObject object, OutputStream out) throws IOException {
             out.write(objects.get(object.bucket() + "|" + object.key()));
+        }
+
+        @Override
+        public void delete(List<StoredObject> list) {
+            for (StoredObject o : list) {
+                if (objects.remove(o.bucket() + "|" + o.key()) == null) throw new IllegalStateException("no such object " + o);
+            }
         }
     }
 }
