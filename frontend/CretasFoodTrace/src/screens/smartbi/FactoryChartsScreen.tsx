@@ -429,7 +429,7 @@ export default function FactoryChartsScreen() {
   };
 
   return (
-    <ScreenWrapper testID="factory-charts-screen">
+    <ScreenWrapper testID="factory-charts-screen" statusBarTranslucent={false}>
       <FlatList
         testID="factory-chart-list"
         data={visibleItems}
