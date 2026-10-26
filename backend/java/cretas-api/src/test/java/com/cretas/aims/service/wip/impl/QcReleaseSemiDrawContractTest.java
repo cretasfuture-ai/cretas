@@ -119,6 +119,18 @@ class QcReleaseSemiDrawContractTest {
         }
 
         @Test
+        @DisplayName("审查高 2: 部分待检 (50 里 20 待检) → 领 30 通过, 领 31 拒")
+        void partialPendingIsQuantityLevel() {
+            SemiFinishedInventory row = sfi("WIP-PART", SemiFinishedInventory.InspectionStatus.PENDING);
+            row.setInspectionPendingQuantity(new BigDecimal("20"));
+            stubLockedRow(row);
+            assertEquals(row, service.validateSourceWip(FACTORY, "WIP-PART", new BigDecimal("30"), "kg", null));
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.validateSourceWip(FACTORY, "WIP-PART", new BigDecimal("31"), "kg", null));
+            assertEquals(QcInspectionGuard.SEMI_PENDING, ex.getErrorCode());
+        }
+
+        @Test
         @DisplayName("不合格 → 拒绝, errorCode=QC_SEMI_REJECTED")
         void rejectedIsRejected() {
             stubLockedRow(sfi("WIP-R", SemiFinishedInventory.InspectionStatus.REJECTED));
@@ -221,15 +233,45 @@ class QcReleaseSemiDrawContractTest {
         }
 
         @Test
-        @DisplayName("逐道录入: 已放行的行又入一笔需检产出 → 重新 PENDING; 不合格的不被洗白")
-        void newOutputRePendsReleasedButNotRejected() {
+        @DisplayName("审查高 2: 已放行 50 的行又入 20 需检产出 → 只有这 20 待检, 已放行的 50 照常可领")
+        void newOutputHoldsOnlyItsOwnQuantity() {
             when(productTypeRepo.findByIdAndFactoryId("PT-SEMI-Q", FACTORY))
                     .thenReturn(Optional.of(product("PT-SEMI-Q", "SEMI-Q", true, ProductCategory.SEMI_FINISHED)));
-            assertEquals(SemiFinishedInventory.InspectionStatus.PENDING,
-                    postClerk("PT-SEMI-Q", sfi("CLK-SEMI-1", SemiFinishedInventory.InspectionStatus.RELEASED))
-                            .getInspectionStatus());
-            assertEquals(SemiFinishedInventory.InspectionStatus.REJECTED,
-                    QcInspectionPolicy.semiStatusAfterOutput(SemiFinishedInventory.InspectionStatus.REJECTED, true));
+            SemiFinishedInventory row = postClerk("PT-SEMI-Q", sfi("CLK-SEMI-1", null));
+            System.out.println("QTY_HOLD pending=" + row.getInspectionPendingQuantity()
+                    + " balance=" + row.computeBalance() + " drawable=" + row.drawableBalance());
+            assertEquals(SemiFinishedInventory.InspectionStatus.PENDING, row.getInspectionStatus());
+            assertEquals(0, new BigDecimal("20").compareTo(row.getInspectionPendingQuantity()));
+            assertEquals(0, new BigDecimal("50").compareTo(row.drawableBalance()));
+            // 领 50 (已放行的那部分) 通过; 领 51 (碰到待检的 20) 被拒
+            QcInspectionGuard.assertSemiDrawable(row, new BigDecimal("50"), "t");
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> QcInspectionGuard.assertSemiDrawable(row, new BigDecimal("51"), "t"));
+            assertEquals(QcInspectionGuard.SEMI_PENDING, ex.getErrorCode());
+        }
+
+        @Test
+        @DisplayName("审查高 2: 旧数据整行 REJECTED 又来新产出 → 回到 PENDING, 整个余额待检 (旧不合格量不被洗成可领)")
+        void legacyRejectedRowRePendsWholeBalance() {
+            when(productTypeRepo.findByIdAndFactoryId("PT-SEMI-Q", FACTORY))
+                    .thenReturn(Optional.of(product("PT-SEMI-Q", "SEMI-Q", true, ProductCategory.SEMI_FINISHED)));
+            SemiFinishedInventory row = postClerk("PT-SEMI-Q",
+                    sfi("CLK-SEMI-1", SemiFinishedInventory.InspectionStatus.REJECTED));
+            assertEquals(SemiFinishedInventory.InspectionStatus.PENDING, row.getInspectionStatus());
+            assertEquals(0, new BigDecimal("70").compareTo(row.getInspectionPendingQuantity()));
+            assertEquals(0, BigDecimal.ZERO.compareTo(row.drawableBalance()));
+        }
+
+        @Test
+        @DisplayName("审查高 2: 编辑 (撤销 20 + 重入 20) 不让待检翻倍")
+        void editDoesNotDoublePending() {
+            when(productTypeRepo.findByIdAndFactoryId("PT-SEMI-Q", FACTORY))
+                    .thenReturn(Optional.of(product("PT-SEMI-Q", "SEMI-Q", true, ProductCategory.SEMI_FINISHED)));
+            SemiFinishedInventory row = postClerk("PT-SEMI-Q", sfi("CLK-SEMI-1", null));
+            service.reverseClerkOutput(FACTORY, "CLK-SEMI-1", new BigDecimal("20"), null, 1L);
+            service.postClerkOutput(FACTORY, "CLK-SEMI-1", "PT-SEMI-Q", new BigDecimal("20"), "kg", null, null, 2);
+            assertEquals(0, new BigDecimal("20").compareTo(row.getInspectionPendingQuantity()));
+            assertEquals(0, new BigDecimal("50").compareTo(row.drawableBalance()));
         }
 
         @Test

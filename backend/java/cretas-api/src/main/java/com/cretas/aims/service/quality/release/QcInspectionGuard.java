@@ -6,6 +6,8 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 
+import java.math.BigDecimal;
+
 /**
  * 质检放行的「领用 / 投料」闸 (缺口 11, owner 2026-10-25)。纯函数, 只读行上的状态, 不查库。
  *
@@ -37,22 +39,45 @@ public final class QcInspectionGuard {
     private QcInspectionGuard() {
     }
 
-    /** 常驻半成品库存行能否被下道领用。null / RELEASED 放行。 */
+    /**
+     * 常驻半成品库存行能否被下道领用 —— 不知道领多少时 (逐道录入保存时只校验状态):
+     * 有可领余量 (余额 − 待检数量 > 0) 就放行, 精确数量在真正扣减时 ({@link #assertSemiDrawable(SemiFinishedInventory, BigDecimal, String)}) 再判。
+     */
     public static void assertSemiDrawable(SemiFinishedInventory sfi, String hintTarget) {
         if (sfi == null) {
             return;
         }
-        String s = sfi.getInspectionStatus();
-        if (SemiFinishedInventory.InspectionStatus.PENDING.equals(s)) {
-            throw new BusinessException(409, "半成品批次 " + sfi.getIntermediateBatchNo()
-                    + " 待检，质检放行前不能领用")
-                    .withCode(SEMI_PENDING)
-                    .withHint("这批半成品的产品设置了「需检」或有未处理的 CCP 偏离。请质检员在「"
-                            + RELEASE_PATH + "」放行后再领用，或改选已放行的批次")
-                    .withSeverity("BLOCKING")
-                    .withHintTarget(hintTarget);
+        rejectLegacyRejected(sfi, hintTarget);
+        if (SemiFinishedInventory.InspectionStatus.PENDING.equals(sfi.getInspectionStatus())
+                && sfi.drawableBalance().signum() <= 0) {
+            throw pendingSemi(sfi, null, hintTarget);
         }
-        if (SemiFinishedInventory.InspectionStatus.REJECTED.equals(s)) {
+    }
+
+    /**
+     * 按数量判 (缺口 11 审查高 2): 这一行跨批次累加, 待检的只是其中一部分 ——
+     * 领用量不超过「余额 − 待检数量」就放行, 超过就拒 (已放行的存量照常可领)。
+     *
+     * @param quantity 本次要扣的量, 这一行的原生单位; null 退化为只判状态
+     */
+    public static void assertSemiDrawable(SemiFinishedInventory sfi, BigDecimal quantity, String hintTarget) {
+        if (sfi == null) {
+            return;
+        }
+        if (quantity == null) {
+            assertSemiDrawable(sfi, hintTarget);
+            return;
+        }
+        rejectLegacyRejected(sfi, hintTarget);
+        if (SemiFinishedInventory.InspectionStatus.PENDING.equals(sfi.getInspectionStatus())
+                && quantity.compareTo(sfi.drawableBalance()) > 0) {
+            throw pendingSemi(sfi, quantity, hintTarget);
+        }
+    }
+
+    private static void rejectLegacyRejected(SemiFinishedInventory sfi, String hintTarget) {
+        // 现行放行流程判不合格时直接把待检数量转出, 行回到「无待检」; REJECTED 只可能是旧数据, 仍拦。
+        if (SemiFinishedInventory.InspectionStatus.REJECTED.equals(sfi.getInspectionStatus())) {
             throw new BusinessException(409, "半成品批次 " + sfi.getIntermediateBatchNo()
                     + " 质检不合格，不能领用")
                     .withCode(SEMI_REJECTED)
@@ -60,6 +85,26 @@ public final class QcInspectionGuard {
                     .withSeverity("BLOCKING")
                     .withHintTarget(hintTarget);
         }
+    }
+
+    private static BusinessException pendingSemi(SemiFinishedInventory sfi, BigDecimal quantity, String hintTarget) {
+        BigDecimal pending = sfi.pendingInspectionQuantity() == null ? BigDecimal.ZERO : sfi.pendingInspectionQuantity();
+        String unit = sfi.getUnit() == null ? "" : sfi.getUnit();
+        String free = plain(sfi.drawableBalance()) + unit;
+        String msg = quantity == null
+                ? "半成品批次 " + sfi.getIntermediateBatchNo() + " 全部待检（" + plain(pending) + unit + "），质检放行前不能领用"
+                : "半成品批次 " + sfi.getIntermediateBatchNo() + " 有 " + plain(pending) + unit
+                        + " 待检，现在只能领 " + free + "，本次要领 " + plain(quantity) + unit;
+        return new BusinessException(409, msg)
+                .withCode(SEMI_PENDING)
+                .withHint("待检部分要等质检员在「" + RELEASE_PATH + "」放行后才能领；可以先少领（不超过 " + free
+                        + "），或改选已放行的批次")
+                .withSeverity("BLOCKING")
+                .withHintTarget(hintTarget);
+    }
+
+    private static String plain(BigDecimal v) {
+        return v == null ? "0" : v.stripTrailingZeros().toPlainString();
     }
 
     /**

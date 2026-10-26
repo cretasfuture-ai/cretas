@@ -1062,4 +1062,11 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     List<MaterialBatch> findWipBatchesByFactoryIdAndSourceDocIdIn(
             @Param("factoryId") String factoryId,
             @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
+
+    /** CCP 偏离扣留 (审查中 8): 行锁读取这些生产批次物化的在制批次, 锁内再改 (见 SemiFinishedInventoryRepository#lockForDeviationHold)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId AND m.sourceDocType = 'PRODUCTION_BATCH' " +
+           "AND m.sourceDocId IN :productionBatchIds AND m.deletedAt IS NULL")
+    List<MaterialBatch> lockWipBatchesForDeviationHold(@Param("factoryId") String factoryId,
+                                                       @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
 }

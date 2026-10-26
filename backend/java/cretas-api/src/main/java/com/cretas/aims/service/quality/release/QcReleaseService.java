@@ -63,6 +63,26 @@ public class QcReleaseService {
     @Autowired(required = false)
     private QcReleaseBlocker releaseBlocker;
 
+    /** 半成品判不合格时写 QC_REJECT 出库流水 (审查高 2: 不合格量按数量转出, 不洗白)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository semiTxnRepo;
+
+    /** 成品放行前查同计划是否有质检 FAILED 的生产批次 (审查中 5)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepo;
+
+    public static final String CODE_BLOCKED_BY_QC_FAILED = "QC_RELEASE_BLOCKED_BY_QC_FAILED";
+
+    /** 测试 / 装配用。 */
+    public void setSemiTxnRepo(com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository repo) {
+        this.semiTxnRepo = repo;
+    }
+
+    /** 测试 / 装配用。 */
+    public void setProductionBatchRepo(com.cretas.aims.repository.ProductionBatchRepository repo) {
+        this.productionBatchRepo = repo;
+    }
+
     /** 一条待检。 */
     public record PendingItem(
             String targetType,
@@ -85,12 +105,20 @@ public class QcReleaseService {
 
     @Transactional(readOnly = true)
     public List<PendingItem> listPending(String factoryId) {
+        // 审查低 11: 余额为 0 / 已耗尽的不进待办 (没有货可放, 列出来只会让质检员白点)。
         List<SemiFinishedInventory> semis = semiRepo.findByFactoryIdAndInspectionStatusForRelease(
-                factoryId, SemiFinishedInventory.InspectionStatus.PENDING);
+                factoryId, SemiFinishedInventory.InspectionStatus.PENDING).stream()
+                .filter(s -> SemiFinishedInventory.Status.AVAILABLE.equals(s.getStatus()))
+                .filter(s -> pendingQuantityOf(s).signum() > 0)
+                .toList();
         List<MaterialBatch> wips = materialBatchRepo.findWipBatchesByFactoryIdAndStatus(
-                factoryId, MaterialBatchStatus.INSPECTING);
+                factoryId, MaterialBatchStatus.INSPECTING).stream()
+                .filter(w -> w.getCurrentQuantity() != null && w.getCurrentQuantity().signum() > 0)
+                .toList();
         List<FinishedGoodsBatch> fgs = finishedGoodsRepo.findByFactoryIdAndStatusForRelease(
-                factoryId, FinishedGoodsBatch.Status.PENDING_INSPECTION);
+                factoryId, FinishedGoodsBatch.Status.PENDING_INSPECTION).stream()
+                .filter(f -> f.getAvailableQuantity() != null && f.getAvailableQuantity().signum() > 0)
+                .toList();
 
         Set<String> productIds = new HashSet<>();
         semis.forEach(s -> productIds.add(s.getProductTypeId()));
@@ -105,7 +133,7 @@ public class QcReleaseService {
         for (SemiFinishedInventory s : semis) {
             out.add(new PendingItem(QcReleaseRecord.TargetType.SEMI_FINISHED, String.valueOf(s.getId()), "半成品",
                     s.getIntermediateBatchNo(), s.getProductTypeId(), names.get(s.getProductTypeId()),
-                    s.getAvailableQuantity(), s.getUnit(), s.getUpdatedAt(),
+                    pendingQuantityOf(s), s.getUnit(), s.getUpdatedAt(),
                     openDeviations(factoryId, QcReleaseRecord.TargetType.SEMI_FINISHED, s, null, null)));
         }
         for (MaterialBatch w : wips) {
@@ -148,18 +176,24 @@ public class QcReleaseService {
                 Long id = parseLongId(cmd.targetId());
                 SemiFinishedInventory s = semiRepo.findByIdAndFactoryIdForUpdate(id, factoryId)
                         .orElseThrow(() -> notFound("半成品库存行"));
-                if (!SemiFinishedInventory.InspectionStatus.PENDING.equals(s.getInspectionStatus())) {
+                BigDecimal pending = pendingQuantityOf(s);
+                if (!SemiFinishedInventory.InspectionStatus.PENDING.equals(s.getInspectionStatus())
+                        || pending.signum() <= 0) {
                     throw notPending("半成品批次 " + s.getIntermediateBatchNo());
                 }
                 if (release) {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), s, null, null),
                             s.getIntermediateBatchNo());
+                } else {
+                    // 审查高 2: 判不合格 = 把待检的那部分数量从可用余额里转出 (QC_REJECT 出库流水),
+                    // 已放行的存量不动; 这一行回到「无待检」, 之后的新产出照常按需检进待检。
+                    writeOffRejectedSemi(factoryId, s, pending, userId);
                 }
-                s.setInspectionStatus(release ? SemiFinishedInventory.InspectionStatus.RELEASED
-                        : SemiFinishedInventory.InspectionStatus.REJECTED);
+                s.setInspectionStatus(null);
+                s.setInspectionPendingQuantity(null);
                 semiRepo.save(s);
                 record.batchNumber(s.getIntermediateBatchNo()).productTypeId(s.getProductTypeId())
-                        .quantity(s.getAvailableQuantity()).unit(s.getUnit());
+                        .quantity(pending).unit(s.getUnit());
             }
             case QcReleaseRecord.TargetType.WIP_MATERIAL_BATCH -> {
                 MaterialBatch w = materialBatchRepo.findByIdAndFactoryIdForUpdate(cmd.targetId(), factoryId)
@@ -186,6 +220,7 @@ public class QcReleaseService {
                 if (release) {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), null, null, f),
                             f.getBatchNumber());
+                    assertPlanQcNotFailed(factoryId, f);
                 }
                 f.setStatus(release ? FinishedGoodsBatch.Status.AVAILABLE : FinishedGoodsBatch.Status.DEFECTIVE);
                 finishedGoodsRepo.save(f);
@@ -221,6 +256,52 @@ public class QcReleaseService {
             case QcReleaseRecord.TargetType.FINISHED_GOODS -> releaseBlocker.openDeviationsForFinishedGoods(factoryId, f);
             default -> 0L;
         };
+    }
+
+    /** 半成品行的待检数量 (封顶为余额, 不低于 0)。 */
+    static BigDecimal pendingQuantityOf(SemiFinishedInventory s) {
+        BigDecimal pending = s.pendingInspectionQuantity();
+        return pending == null ? BigDecimal.ZERO : pending;
+    }
+
+    private void writeOffRejectedSemi(String factoryId, SemiFinishedInventory s, BigDecimal qty, Long userId) {
+        if (semiTxnRepo == null) {
+            throw new BusinessException(500, "半成品不合格转出缺少流水仓储, 不能判定不合格").withCode(CODE_INVALID);
+        }
+        s.setConsumedQuantity((s.getConsumedQuantity() == null ? BigDecimal.ZERO : s.getConsumedQuantity()).add(qty));
+        BigDecimal after = s.refreshAvailableQuantity();
+        if (after.signum() <= 0 && !SemiFinishedInventory.Status.RETURNED.equals(s.getStatus())) {
+            s.setStatus(SemiFinishedInventory.Status.DEPLETED);
+        }
+        semiTxnRepo.save(com.cretas.aims.entity.SemiFinishedInventoryTransaction.builder()
+                .factoryId(factoryId)
+                .semiFinishedId(s.getId())
+                .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.OUT)
+                .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.QC_REJECT)
+                .sourceRef("qc-reject:" + s.getId())
+                .quantity(qty.negate())
+                .unitCostAtTxn(s.getUnitCost())
+                .balanceAfter(after)
+                .balanceCostAfter(s.getUnitCost())
+                .operatorId(userId)
+                .build());
+    }
+
+    /** 审查中 5: 同计划有生产批次质检判 FAILED ⇒ 成品不能放行 (与质检失败隔离同一口径)。 */
+    private void assertPlanQcNotFailed(String factoryId, FinishedGoodsBatch f) {
+        if (productionBatchRepo == null || f.getProductionPlanId() == null || f.getProductionPlanId().isBlank()) {
+            return;
+        }
+        boolean failed = productionBatchRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                        factoryId, f.getProductionPlanId()).stream()
+                .anyMatch(b -> b.getQualityStatus() == com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        if (failed) {
+            throw new BusinessException(409, "成品批次 " + f.getBatchNumber() + " 所在生产计划有批次质检不合格，不能放行")
+                    .withCode(CODE_BLOCKED_BY_QC_FAILED)
+                    .withHint("请到「质量管理 → 质检记录」复核该计划的不合格批次；确认不合格请选「不合格」")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("decision");
+        }
     }
 
     private static void assertNoOpenDeviation(long open, String batchNumber) {

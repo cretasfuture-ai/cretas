@@ -175,4 +175,23 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
     List<Long> findSemiIdsPostedByProductionBatches(
             @Param("factoryId") String factoryId,
             @Param("batchIds") java.util.Collection<Long> batchIds);
+
+    /** 反向 (审查高 3): 这一行被哪些生产批次的报工入过账 —— 挡放行要把它们的偏离都数上。 */
+    @Query("SELECT DISTINCT r.batchId FROM SemiFinishedInventoryTransaction t, ProductionReport r " +
+           "WHERE t.factoryId = :factoryId AND t.semiFinishedId = :semiId AND t.txnType = 'IN' " +
+           "AND t.reportId = r.id AND r.batchId IS NOT NULL")
+    List<Long> findProductionBatchIdsPostedToSemi(
+            @Param("factoryId") String factoryId,
+            @Param("semiId") Long semiId);
+
+    /**
+     * CCP 偏离扣留 (审查中 8): 先对这些行加行锁 (SELECT … FOR UPDATE) 再改 —— 锁住之后没有别的事务能在
+     * 「读」和「写」之间扣减; 本事务早先读过而已过期的实体在 flush 时撞 @Version 失败回滚, 不会静默覆盖。
+     * (不用批量 UPDATE: 它要清空持久化上下文, 同一事务里随后的读取全部重载, 已持有的实体也会脱管。)
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId AND w.id IN :ids " +
+           "AND w.deletedAt IS NULL")
+    List<SemiFinishedInventory> lockForDeviationHold(@Param("factoryId") String factoryId,
+                                                     @Param("ids") java.util.Collection<Long> ids);
 }

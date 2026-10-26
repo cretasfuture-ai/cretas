@@ -86,6 +86,9 @@ class CcpMonitoringContractTest {
     @Autowired private HaccpCheckpointRepository checkpointRepo;
     @Autowired private HaccpMonitoringRecordRepository recordRepo;
     @Autowired private FinishedGoodsBatchRepository finishedGoodsRepo;
+    @Autowired private CcpReportFacade ccpReportFacade;
+    @Autowired private com.cretas.aims.controller.YieldReportController yieldReportController;
+    @Autowired private com.cretas.aims.controller.ProcessSheetController processSheetController;
 
     private Long operatorId;
     private String planId;
@@ -214,6 +217,25 @@ class CcpMonitoringContractTest {
     private MaterialBatch wipOf(ProcessSheetRowResult row) {
         return materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY_ID, "PRODUCTION_BATCH", String.valueOf(row.getBatchId())).orElseThrow();
+    }
+
+    @Test
+    @DisplayName("审查中 7 接线: 两个报工控制器在真实上下文里拿到的是同一个带事务代理的 CCP 报工门面")
+    void reportControllersAreWiredToTheTransactionalFacade() {
+        Object app = org.springframework.test.util.ReflectionTestUtils.getField(
+                org.springframework.aop.support.AopUtils.isAopProxy(yieldReportController)
+                        ? org.springframework.test.util.AopTestUtils.getUltimateTargetObject(yieldReportController)
+                        : yieldReportController, "ccpReportFacade");
+        Object web = org.springframework.test.util.ReflectionTestUtils.getField(
+                org.springframework.aop.support.AopUtils.isAopProxy(processSheetController)
+                        ? org.springframework.test.util.AopTestUtils.getUltimateTargetObject(processSheetController)
+                        : processSheetController, "ccpReportFacade");
+        System.out.println("FACADE_WIRED app=" + (app != null) + " web=" + (web != null)
+                + " proxy=" + org.springframework.aop.support.AopUtils.isAopProxy(ccpReportFacade));
+        assertThat(app).isSameAs(ccpReportFacade);
+        assertThat(web).isSameAs(ccpReportFacade);
+        assertThat(org.springframework.aop.support.AopUtils.isAopProxy(ccpReportFacade))
+                .as("@Transactional 生效 = 报工与 CCP 同一事务").isTrue();
     }
 
     @Test

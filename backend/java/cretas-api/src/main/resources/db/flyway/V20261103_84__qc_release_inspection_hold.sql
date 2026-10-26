@@ -21,6 +21,11 @@ COMMENT ON COLUMN product_types.inspection_required IS
 ALTER TABLE semi_finished_inventory
     ADD COLUMN IF NOT EXISTS inspection_status VARCHAR(20);
 
+-- 待检数量 (审查高 2): 半成品行跨批次累加, 待检必须落到数量上 —— 放行/判不合格只处理这部分,
+-- 已放行的存量不被新产出打回待检, 不合格量按数量转出 (QC_REJECT 出库流水), 不洗白。
+ALTER TABLE semi_finished_inventory
+    ADD COLUMN IF NOT EXISTS inspection_pending_quantity DECIMAL(12,2);
+
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_sfi_inspection_status') THEN
@@ -36,7 +41,9 @@ CREATE INDEX IF NOT EXISTS idx_sfi_factory_inspection_pending
     WHERE inspection_status = 'PENDING' AND deleted_at IS NULL;
 
 COMMENT ON COLUMN semi_finished_inventory.inspection_status IS
-    '质检放行状态: NULL=不需检 / PENDING=待检(下道不可领) / RELEASED / REJECTED (缺口 11)';
+    '质检放行状态: NULL=无待检 / PENDING=有待检数量 (inspection_pending_quantity 部分不可领) (缺口 11)';
+COMMENT ON COLUMN semi_finished_inventory.inspection_pending_quantity IS
+    '待检数量: 余额中尚未放行的部分; 可领 = available_quantity - 本列 (缺口 11)';
 
 CREATE TABLE IF NOT EXISTS qc_release_records (
     id               BIGSERIAL PRIMARY KEY,

@@ -134,6 +134,25 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(semiRepo.findSemiIdsPostedByProductionBatches(F, List.of(901L))).containsExactly(shared.getId());
         assertThat(semiRepo.findSemiIdsPostedByProductionBatches(F, List.of(999L))).isEmpty();
         assertThat(semiRepo.findSemiIdsPostedByProductionBatches(OTHER, List.of(901L))).isEmpty();
+        // 审查高 3: 反方向 —— 这一行被哪些生产批次入过账 (行上 batchId=900 只是第一次建行的批次)
+        assertThat(semiRepo.findProductionBatchIdsPostedToSemi(F, shared.getId())).containsExactly(901L);
+        assertThat(semiRepo.findProductionBatchIdsPostedToSemi(OTHER, shared.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("审查高 2/中 8: 待检数量列读写; 偏离扣留的加锁读取只取本厂未删除行")
+    void pendingQuantityAndHoldLocks() {
+        SemiFinishedInventory partial = semi(F, "SFI-PART", SemiFinishedInventory.InspectionStatus.PENDING, 601L);
+        partial.setInspectionPendingQuantity(new BigDecimal("3"));
+        semiRepo.saveAndFlush(partial);
+        SemiFinishedInventory other = semi(OTHER, "SFI-PART-O", null, 601L);
+        em.clear();
+
+        SemiFinishedInventory back = semiRepo.findById(partial.getId()).orElseThrow();
+        assertThat(back.getInspectionPendingQuantity()).isEqualByComparingTo("3");
+        assertThat(back.drawableBalance()).isEqualByComparingTo("7");
+        assertThat(semiRepo.lockForDeviationHold(F, List.of(partial.getId(), other.getId())))
+                .extracting(SemiFinishedInventory::getId).containsExactly(partial.getId());
     }
 
     private void material(String id, String sourceDocType, String sourceDocId, MaterialBatchStatus status) {
@@ -166,6 +185,9 @@ class QcReleaseRepositoryQueryValidationTest {
                 .extracting(MaterialBatch::getId).containsExactly("WIP-INSP");
         assertThat(materialBatchRepo.findWipBatchesByFactoryIdAndSourceDocIdIn(F, List.of("701", "702", "PO-1")))
                 .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("WIP-INSP", "WIP-OK");
+        // 审查中 8: 偏离扣留的加锁读取 —— 只取在制批次 (原料 PO-1 不进)
+        assertThat(materialBatchRepo.lockWipBatchesForDeviationHold(F, List.of("701", "702", "PO-1")))
+                .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("WIP-INSP", "WIP-OK");
     }
 
     private void fg(String id, String status) {
@@ -192,6 +214,15 @@ class QcReleaseRepositoryQueryValidationTest {
                 .extracting(FinishedGoodsBatch::getId).containsExactly("FG-PEND");
         assertThat(fgRepo.findByFactoryIdAndBatchNumberInForHold(F, List.of("FGN-FG-PEND", "FGN-FG-AVAIL")))
                 .hasSize(2);
+        // 审查中 8: 偏离扣留的加锁读取 —— 批号命中 或 同一计划
+        FinishedGoodsBatch planned = fgRepo.findById("FG-AVAIL").orElseThrow();
+        planned.setProductionPlanId("PLAN-QCR");
+        fgRepo.saveAndFlush(planned);
+        assertThat(fgRepo.lockForDeviationHold(F, List.of("FGN-FG-PEND"), List.of("PLAN-QCR")))
+                .extracting(FinishedGoodsBatch::getId).containsExactlyInAnyOrder("FG-PEND", "FG-AVAIL");
+        assertThat(fgRepo.lockForDeviationHold(F, List.of("#NO-BATCH#"), List.of("PLAN-QCR")))
+                .extracting(FinishedGoodsBatch::getId).containsExactly("FG-AVAIL");
+        assertThat(fgRepo.lockForDeviationHold(OTHER, List.of("FGN-FG-PEND"), List.of("PLAN-QCR"))).isEmpty();
         // 待检批次不进任何 status='AVAILABLE' 的候选 (这是选状态方案的理由, 钉住它)
         assertThat(fgRepo.findAvailableBatches(F, "PT-FG"))
                 .extracting(FinishedGoodsBatch::getId).containsExactly("FG-AVAIL");

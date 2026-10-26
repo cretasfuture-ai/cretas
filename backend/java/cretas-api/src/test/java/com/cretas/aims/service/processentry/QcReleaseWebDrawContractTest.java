@@ -304,8 +304,11 @@ class QcReleaseWebDrawContractTest {
         qcReleaseService.decide(FACTORY_ID, new QcReleaseService.DecisionCommand(
                 QcReleaseRecord.TargetType.SEMI_FINISHED, String.valueOf(pending.getId()), "RELEASED", "合格"),
                 operatorId, null);
-        assertThat(sfiRepo.findById(pending.getId()).orElseThrow().getInspectionStatus())
-                .isEqualTo(SemiFinishedInventory.InspectionStatus.RELEASED);
+        // 审查高 2 起按数量放行: 放行把待检数量清掉, 这一行回到「无待检」(null), 不再留整行 RELEASED 标记
+        SemiFinishedInventory afterRelease = sfiRepo.findById(pending.getId()).orElseThrow();
+        assertThat(afterRelease.getInspectionStatus()).isNull();
+        assertThat(afterRelease.getInspectionPendingQuantity()).isNull();
+        assertThat(afterRelease.drawableBalance()).isEqualByComparingTo("50");
         assertThat(saveSfiFeed("qcw-sfi-p2", "QCW-SFI-P").isMaterialized()).isTrue();
 
         seedSfi("QCW-SFI-LEGACY", null);

@@ -2030,6 +2030,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                             .unit(w.getUnit())
                             .status(w.getStatus())
                             .inspectionStatus(w.getInspectionStatus())
+                            .inspectionPendingQuantity(w.pendingInspectionQuantity())
                             .stepYieldRate(step != null ? step.getYieldRate() : null)
                             .cumulativeYieldRate(step != null ? step.getCumulativeYieldRate() : null)
                             .build();

@@ -75,7 +75,7 @@ class ProcessSheetSubmissionControllerContractTest {
                 .thenThrow(new ProductionStockShortageException(shortage));
 
         ResponseEntity<ApiResponse<?>> response =
-                controller.submitRow("F006", "PLAN-1", 7L, request);
+                controller.submitRow("F006", "PLAN-1", 7L, null, request);
 
         assertThat(response.getStatusCode().value()).isEqualTo(409);
         assertThat(response.getBody()).isNotNull();

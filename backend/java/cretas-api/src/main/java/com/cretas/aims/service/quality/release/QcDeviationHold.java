@@ -68,65 +68,49 @@ public class QcDeviationHold {
             }
         }
 
-        // ── 半成品库行 ──
-        Map<Long, SemiFinishedInventory> semis = new HashMap<>();
+        // ── 半成品库行: 先只收集 id, 再加行锁读、锁内改 (审查中 8: 锁住之后不会有并发扣减插进来) ──
+        Set<Long> semiIds = new LinkedHashSet<>();
         if (!pbIds.isEmpty()) {
-            semiRepo.findByFactoryIdAndBatchIdInForHold(factoryId, pbIds).forEach(s -> semis.put(s.getId(), s));
-            List<Long> postedIds = semiRepo.findSemiIdsPostedByProductionBatches(factoryId, pbIds);
-            if (!postedIds.isEmpty()) {
-                semiRepo.findAllById(postedIds).stream()
-                        .filter(s -> factoryId.equals(s.getFactoryId()) && s.getDeletedAt() == null)
-                        .forEach(s -> semis.put(s.getId(), s));
-            }
+            semiRepo.findByFactoryIdAndBatchIdInForHold(factoryId, pbIds).forEach(s -> semiIds.add(s.getId()));
+            semiIds.addAll(semiRepo.findSemiIdsPostedByProductionBatches(factoryId, pbIds));
         }
         String anchorPrefix = planId == null || planId.isBlank()
                 ? "#NO-ANCHOR#" : "CLK-SEMI-" + head8(planId) + "-";
-        // 哨兵值不能用 \0: PostgreSQL 文本里不允许 NUL 字节
+        // 哨兵值不能用 NUL 字符: PostgreSQL 文本里不允许 NUL 字节
         semiRepo.findByFactoryIdAndBatchNoOrAnchorPrefixForHold(factoryId,
                         batchNumbers.isEmpty() ? Set.of("#NO-BATCH#") : batchNumbers, anchorPrefix)
-                .forEach(s -> semis.put(s.getId(), s));
+                .forEach(s -> semiIds.add(s.getId()));
+        semiIds.remove(null);
         int semiHeld = 0;
-        for (SemiFinishedInventory s : semis.values()) {
-            String before = s.getInspectionStatus();
-            String after = QcInspectionPolicy.semiStatusAfterOutput(before, true);
-            if (!SemiFinishedInventory.Status.AVAILABLE.equals(s.getStatus()) || after.equals(before)) {
-                continue;
+        for (SemiFinishedInventory s : semiIds.isEmpty() ? List.<SemiFinishedInventory>of()
+                : semiRepo.lockForDeviationHold(factoryId, semiIds)) {
+            if (holdWholeBalance(s)) {
+                semiRepo.save(s);
+                semiHeld++;
             }
-            s.setInspectionStatus(after);
-            semiRepo.save(s);
-            semiHeld++;
         }
 
-        // ── 在制批次 ──
+        // ── 在制批次: 该计划全部生产批次 (含 CLERK_WIP) 物化出来的, 只动 AVAILABLE ──
         int wipHeld = 0;
         if (!pbIds.isEmpty()) {
-            List<String> ids = pbIds.stream().map(String::valueOf).toList();
-            for (MaterialBatch mb : materialBatchRepo.findWipBatchesByFactoryIdAndSourceDocIdIn(factoryId, ids)) {
-                MaterialBatchStatus after = QcInspectionPolicy.wipBatchStatusAfterOutput(mb.getStatus(), true);
-                if (after != mb.getStatus()) {
-                    mb.setStatus(after);
+            for (MaterialBatch mb : materialBatchRepo.lockWipBatchesForDeviationHold(
+                    factoryId, pbIds.stream().map(String::valueOf).toList())) {
+                if (mb.getStatus() == MaterialBatchStatus.AVAILABLE) {
+                    mb.setStatus(MaterialBatchStatus.INSPECTING);
                     materialBatchRepo.save(mb);
                     wipHeld++;
                 }
             }
         }
 
-        // ── 成品批次 ──
-        Map<String, FinishedGoodsBatch> fgs = new HashMap<>();
-        if (!batchNumbers.isEmpty()) {
-            finishedGoodsRepo.findByFactoryIdAndBatchNumberInForHold(factoryId, batchNumbers)
-                    .forEach(f -> fgs.put(f.getId(), f));
-        }
-        if (planId != null && !planId.isBlank()) {
-            finishedGoodsRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
-                    .forEach(f -> fgs.put(f.getId(), f));
-        }
+        // ── 成品批次: 批号命中或同一计划, 只动 AVAILABLE ──
         int fgHeld = 0;
-        for (FinishedGoodsBatch f : fgs.values()) {
-            String after = QcInspectionPolicy.finishedGoodsStatusAfterOutput(f.getStatus(), true);
-            if (!after.equals(f.getStatus())) {
-                f.setStatus(after);
-                finishedGoodsRepo.save(f);
+        for (FinishedGoodsBatch fg : finishedGoodsRepo.lockForDeviationHold(factoryId,
+                batchNumbers.isEmpty() ? Set.of("#NO-BATCH#") : batchNumbers,
+                planId == null || planId.isBlank() ? Set.of("#NO-PLAN#") : Set.of(planId))) {
+            if (FinishedGoodsBatch.Status.AVAILABLE.equals(fg.getStatus())) {
+                fg.setStatus(FinishedGoodsBatch.Status.PENDING_INSPECTION);
+                finishedGoodsRepo.save(fg);
                 fgHeld++;
             }
         }
@@ -134,6 +118,28 @@ public class QcDeviationHold {
         log.warn("[CCP偏离扣留] factory={} batch={} pb={} plan={} → 半成品 {} / 在制 {} / 成品 {} 转待检",
                 factoryId, batchNumber, productionBatchId, planId, semiHeld, wipHeld, fgHeld);
         return result;
+    }
+
+    /**
+     * 偏离归不到具体数量 ⇒ 整个余额转待检。已耗尽 / 余额为 0 / 已全额待检的行不动。
+     * @return 是否改了这一行
+     */
+    static boolean holdWholeBalance(SemiFinishedInventory s) {
+        if (s == null || !SemiFinishedInventory.Status.AVAILABLE.equals(s.getStatus())) {
+            return false;
+        }
+        java.math.BigDecimal balance = s.computeBalance();
+        if (balance.signum() <= 0) {
+            return false;
+        }
+        java.math.BigDecimal pending = s.pendingInspectionQuantity();
+        if (pending != null && pending.compareTo(balance) >= 0
+                && s.getInspectionPendingQuantity() != null) {
+            return false;
+        }
+        s.setInspectionStatus(SemiFinishedInventory.InspectionStatus.PENDING);
+        s.setInspectionPendingQuantity(balance);
+        return true;
     }
 
     private static String head8(String s) {

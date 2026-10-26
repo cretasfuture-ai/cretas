@@ -120,6 +120,10 @@ public class HaccpMonitoringRecord extends BaseEntity {
     @Column(name = "operator_name", length = 100)
     private String operatorName;
 
+    /** 报工凭据 (YR:报工id / PS:计划:行): CCP 与产出同一事务落库。 */
+    @Column(name = "report_ref", length = 160)
+    private String reportRef;
+
     /** 偏离已处理时间; null 且 isDeviation=true = 未处理 (挡放行、挡发货)。 */
     @Column(name = "deviation_handled_at")
     private LocalDateTime deviationHandledAt;

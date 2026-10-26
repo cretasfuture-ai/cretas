@@ -193,6 +193,38 @@ public class SemiFinishedInventory {
     private String inspectionStatus;
 
     /**
+     * 待检数量 (缺口 11 审查高 2): 余额中还没放行的部分。这一行按产品码 / 计划锚<b>跨批次累加</b>,
+     * 所以待检必须落到数量上: 可领 = 余额 − 待检数量; 放行只放这部分, 判不合格只转出这部分。
+     * null / 0 且 inspectionStatus 非 PENDING = 没有待检。
+     */
+    @Column(name = "inspection_pending_quantity", precision = 12, scale = 2)
+    private BigDecimal inspectionPendingQuantity;
+
+    /** 当前可领 (余额 − 待检数量, 不低于 0)。方法名不带 get 前缀: 本实体会被直接序列化。 */
+    public BigDecimal drawableBalance() {
+        BigDecimal balance = computeBalance();
+        BigDecimal pending = pendingInspectionQuantity();
+        if (pending == null) {
+            return balance;
+        }
+        BigDecimal free = balance.subtract(pending);
+        return free.signum() < 0 ? BigDecimal.ZERO : free;
+    }
+
+    /**
+     * 实际待检数量: 不在待检 ⇒ null; 待检但没记数量 (旧数据) ⇒ 整个余额都按待检算 (宁可多挡);
+     * 封顶为余额、不低于 0。⛔ 别处不要再各写一遍这套口径。
+     */
+    public BigDecimal pendingInspectionQuantity() {
+        if (!InspectionStatus.PENDING.equals(inspectionStatus)) {
+            return null;
+        }
+        BigDecimal balance = computeBalance().max(BigDecimal.ZERO);
+        BigDecimal pending = inspectionPendingQuantity == null ? balance : inspectionPendingQuantity;
+        return pending.min(balance).max(BigDecimal.ZERO);
+    }
+
+    /**
      * 溯源 (从产出报工继承)。
      * 格式镜像 {@link ProductionReport#getMaterialBatchRefs()}:
      * [{"materialBatchId": Long, "quantity": Number, "unit": String|null}]。

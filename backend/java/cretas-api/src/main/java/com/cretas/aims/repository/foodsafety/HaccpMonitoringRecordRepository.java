@@ -67,6 +67,10 @@ public interface HaccpMonitoringRecordRepository extends JpaRepository<HaccpMoni
     Optional<HaccpMonitoringRecord> findByIdAndFactoryIdForUpdate(@Param("id") Long id,
                                                                   @Param("factoryId") String factoryId);
 
+    /** 同一次报工 (报工凭据) 已为该控制点落过记录 → 报工幂等重放时不重复记。 */
+    List<HaccpMonitoringRecord> findByFactoryIdAndReportRefAndCheckpointId(
+            String factoryId, String reportRef, Long checkpointId);
+
     /** 防双击: 同批次同 CCP 同值同人在时间窗内已有一条 → 视为重试。 */
     @Query("SELECT r FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
             "AND r.batchNumber = :batchNumber AND r.checkpointId = :checkpointId " +

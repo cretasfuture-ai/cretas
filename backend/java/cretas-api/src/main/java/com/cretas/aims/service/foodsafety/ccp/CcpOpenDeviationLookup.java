@@ -40,6 +40,15 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
     private final HaccpMonitoringRecordRepository recordRepo;
     private final ProductionBatchRepository productionBatchRepo;
 
+    /** 反查半成品行的入账批次 (审查高 3)。required=false: 只用到出货判据的单测可不注入。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SemiFinishedInventoryRepository semiRepo;
+
+    /** 测试 / 装配用。 */
+    public void setSemiRepo(com.cretas.aims.repository.SemiFinishedInventoryRepository semiRepo) {
+        this.semiRepo = semiRepo;
+    }
+
     /** 出货闸等只拿到记录行的地方用这一个判据: 偏离且未处理。 */
     public static boolean isOpenDeviation(HaccpMonitoringRecord r) {
         return r != null && r.isOpenDeviation();
@@ -95,17 +104,33 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
         if (semi.getIntermediateBatchNo() != null) {
             nos.add(semi.getIntermediateBatchNo());
         }
-        String planId = null;
+        // 审查高 3: 这一行可能被多个生产批次入过账 (App 半成品行按产品码跨批次累加) ——
+        // 行上的 batchId 只是第一次建行的批次。⇒ 从入库流水反查全部入账批次, 连同它们的计划一起数。
+        Set<Long> pbIds = new LinkedHashSet<>();
         if (semi.getBatchId() != null) {
-            ProductionBatch pb = productionBatchRepo.findByIdAndFactoryId(semi.getBatchId(), factoryId).orElse(null);
+            pbIds.add(semi.getBatchId());
+        }
+        if (semi.getId() != null && semiRepo != null) {
+            pbIds.addAll(semiRepo.findProductionBatchIdsPostedToSemi(factoryId, semi.getId()));
+        }
+        pbIds.remove(null);
+        Set<String> planIds = new LinkedHashSet<>();
+        for (Long pbId : pbIds) {
+            ProductionBatch pb = productionBatchRepo.findByIdAndFactoryId(pbId, factoryId).orElse(null);
             if (pb != null) {
                 if (pb.getBatchNumber() != null) {
                     nos.add(pb.getBatchNumber());
                 }
-                planId = pb.getProductionPlanId();
+                if (pb.getProductionPlanId() != null && !pb.getProductionPlanId().isBlank()) {
+                    planIds.add(pb.getProductionPlanId());
+                }
             }
         }
-        return countOpen(factoryId, nos, planId) + countOpenByAnchors(factoryId, nos);
+        long n = countOpen(factoryId, nos, null) + countOpenByAnchors(factoryId, nos);
+        if (!planIds.isEmpty()) {
+            n += recordRepo.countOpenDeviationsByPlanIds(factoryId, planIds);
+        }
+        return n;
     }
 
     @Override

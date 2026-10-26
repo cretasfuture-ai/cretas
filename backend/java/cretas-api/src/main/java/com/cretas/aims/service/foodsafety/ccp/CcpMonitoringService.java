@@ -158,6 +158,63 @@ public class CcpMonitoringService {
 
     @Transactional
     public RecordResult record(String factoryId, RecordCommand cmd, Long userId, String userName) {
+        return record(factoryId, cmd, userId, userName, null);
+    }
+
+    /**
+     * 校验一次报工带的 CCP 实测值是否齐全 (审查中 7: 报工落库<b>之前</b>调用, 少录一项整笔拒绝, 一行都不写)。
+     *
+     * @return 本工序启用的 CCP (按 id 有序); 空 = 本工序没挂 CCP, 调用方不必录
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, HaccpCheckpoint> validateReadings(String factoryId, String workProcessId, List<Reading> readings) {
+        Map<Long, HaccpCheckpoint> required = workProcessId == null || workProcessId.isBlank()
+                ? new java.util.LinkedHashMap<>()
+                : checkpointRepo.findByFactoryIdAndWorkProcessIdAndActiveTrueOrderByCheckpointCodeAsc(
+                        factoryId, workProcessId).stream()
+                .collect(Collectors.toMap(HaccpCheckpoint::getId, Function.identity(), (a, b) -> a,
+                        java.util.LinkedHashMap::new));
+        if (required.isEmpty()) {
+            return required;
+        }
+        Map<Long, Reading> byId = indexReadings(required, readings);
+        List<String> missing = new ArrayList<>();
+        for (HaccpCheckpoint c : required.values()) {
+            Reading r = byId.get(c.getId());
+            if (r == null || r.measuredValue() == null) {
+                missing.add(c.getName() + "（" + c.getCriticalLimitMin().stripTrailingZeros().toPlainString()
+                        + "~" + c.getCriticalLimitMax().stripTrailingZeros().toPlainString() + c.getUnit() + "）");
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new BusinessException(400, "本工序是关键控制点，还有实测值没录：" + String.join("、", missing))
+                    .withCode(CODE_MISSING)
+                    .withHint("请按工序规定测量后逐项填写，全部填完再提交；若界面上没有录入栏，请刷新页面或更新 App")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("ccpReadings");
+        }
+        return required;
+    }
+
+    private Map<Long, Reading> indexReadings(Map<Long, HaccpCheckpoint> required, List<Reading> readings) {
+        Map<Long, Reading> byId = new HashMap<>();
+        for (Reading r : readings == null ? List.<Reading>of() : readings) {
+            if (r == null || r.checkpointId() == null) {
+                continue;
+            }
+            if (!required.containsKey(r.checkpointId())) {
+                throw invalid("CCP " + r.checkpointId() + " 不属于本工序或已停用");
+            }
+            byId.put(r.checkpointId(), r);
+        }
+        return byId;
+    }
+
+    /**
+     * @param reportRef 报工凭据 (YR:报工id / PS:计划:行); 非空时与报工同一事务落库, 重放按它去重
+     */
+    @Transactional
+    public RecordResult record(String factoryId, RecordCommand cmd, Long userId, String userName, String reportRef) {
         if (userId == null) {
             throw invalid("未登录，无法录入 CCP");
         }
@@ -191,40 +248,13 @@ public class CcpMonitoringService {
         }
 
         // 2. 本工序必录的 CCP 全部要有值; 不许录不属于本工序的 CCP
-        Map<Long, HaccpCheckpoint> required = checkpointRepo
-                .findByFactoryIdAndWorkProcessIdAndActiveTrueOrderByCheckpointCodeAsc(factoryId, cmd.workProcessId())
-                .stream().collect(Collectors.toMap(HaccpCheckpoint::getId, Function.identity(), (a, b) -> a,
-                        java.util.LinkedHashMap::new));
+        Map<Long, HaccpCheckpoint> required = validateReadings(factoryId, cmd.workProcessId(), cmd.readings());
         if (required.isEmpty()) {
             throw new BusinessException(409, "该工序没有挂关键控制点，无需录入 CCP")
                     .withCode(CODE_INVALID)
                     .withHint("如需监控，请先在「食品安全 → HACCP 关键控制点」给 CCP 选择所属工序");
         }
-        Map<Long, Reading> byId = new HashMap<>();
-        for (Reading r : cmd.readings() == null ? List.<Reading>of() : cmd.readings()) {
-            if (r == null || r.checkpointId() == null) {
-                continue;
-            }
-            if (!required.containsKey(r.checkpointId())) {
-                throw invalid("CCP " + r.checkpointId() + " 不属于本工序或已停用");
-            }
-            byId.put(r.checkpointId(), r);
-        }
-        List<String> missing = new ArrayList<>();
-        for (HaccpCheckpoint c : required.values()) {
-            Reading r = byId.get(c.getId());
-            if (r == null || r.measuredValue() == null) {
-                missing.add(c.getName() + "（" + c.getCriticalLimitMin().stripTrailingZeros().toPlainString()
-                        + "~" + c.getCriticalLimitMax().stripTrailingZeros().toPlainString() + c.getUnit() + "）");
-            }
-        }
-        if (!missing.isEmpty()) {
-            throw new BusinessException(400, "还有关键控制点没录实测值：" + String.join("、", missing))
-                    .withCode(CODE_MISSING)
-                    .withHint("请按工序规定测量后逐项填写，全部填完再提交")
-                    .withSeverity("BLOCKING")
-                    .withHintTarget("ccpReadings");
-        }
+        Map<Long, Reading> byId = indexReadings(required, cmd.readings());
 
         // 3. 落记录 (快照限值), 判偏离
         LocalDateTime now = LocalDateTime.now();
@@ -233,8 +263,11 @@ public class CcpMonitoringService {
         int deviations = 0;
         for (HaccpCheckpoint c : required.values()) {
             Reading r = byId.get(c.getId());
-            List<HaccpMonitoringRecord> dup = recordRepo.findRecentDuplicates(factoryId, batchNumber, c.getId(),
-                    userId, r.measuredValue(), now.minusSeconds(DUPLICATE_WINDOW_SECONDS));
+            // 去重: 带报工凭据的按「同一次报工 + 同一控制点」(报工幂等重放); 不带的沿用双击窗口
+            List<HaccpMonitoringRecord> dup = reportRef != null
+                    ? recordRepo.findByFactoryIdAndReportRefAndCheckpointId(factoryId, reportRef, c.getId())
+                    : recordRepo.findRecentDuplicates(factoryId, batchNumber, c.getId(),
+                            userId, r.measuredValue(), now.minusSeconds(DUPLICATE_WINDOW_SECONDS));
             if (!dup.isEmpty()) {
                 saved.add(dup.get(0));
                 if (dup.get(0).isOpenDeviation()) {
@@ -258,6 +291,7 @@ public class CcpMonitoringService {
                     .workProcessId(cmd.workProcessId())
                     .processOrder(cmd.processOrder())
                     .source(source)
+                    .reportRef(reportRef)
                     .criticalLimitMinSnapshot(c.getCriticalLimitMin())
                     .criticalLimitMaxSnapshot(c.getCriticalLimitMax())
                     .unitSnapshot(c.getUnit())

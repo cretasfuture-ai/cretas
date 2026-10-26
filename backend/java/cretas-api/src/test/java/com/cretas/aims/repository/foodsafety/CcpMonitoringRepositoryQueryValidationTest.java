@@ -121,4 +121,19 @@ class CcpMonitoringRepositoryQueryValidationTest {
         assertThat(recordRepo.findRecentDuplicates(F, "B-DUP", 1L, 5L, new BigDecimal("70"), t.plusMinutes(1)))
                 .isEmpty();
     }
+
+    @Test
+    @DisplayName("审查中 7: 报工凭据 report_ref 落库读回; 同一次报工同一控制点按它查重, 别的报工 / 别的工厂不命中")
+    void reportRefLookup() {
+        LocalDateTime t = LocalDateTime.of(2026, 10, 27, 9, 0);
+        HaccpMonitoringRecord r = rec(F, "B-REF", null, false, false, t);
+        r.setReportRef("YR:9001");
+        recordRepo.saveAndFlush(r);
+        em.clear();
+        assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId(F, "YR:9001", 1L))
+                .singleElement().satisfies(x -> assertThat(x.getReportRef()).isEqualTo("YR:9001"));
+        assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId(F, "YR:9002", 1L)).isEmpty();
+        assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId(F, "YR:9001", 2L)).isEmpty();
+        assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId("F-OTHER", "YR:9001", 1L)).isEmpty();
+    }
 }

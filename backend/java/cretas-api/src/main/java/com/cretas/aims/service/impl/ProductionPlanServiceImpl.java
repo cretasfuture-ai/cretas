@@ -7120,6 +7120,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 大类同上: 从批次的 materialTypeId 查预取好的 map, 不用行自带的字面值。
         assertMaterialBatchOwnershipMatchesPlan(
                 plan, batch, materialMainCategoryByType.get(batch.getMaterialTypeId()), "实际领用");
+        // 质检放行 (缺口 11): 结单领用在制半成品批次 —— 待检 / 不合格不能领 (只作用于 PRODUCTION_BATCH 来源)。
+        com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
+                batch, batch.getBatchNumber(), "实际领用");
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 
@@ -7148,6 +7151,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权领用其他工厂的半成品库存")
                     .withHintTarget("半成品领用");
         }
+        // 质检放行 (缺口 11): 结单领用常驻半成品 —— 待检 / 不合格不能领。
+        com.cretas.aims.service.quality.release.QcInspectionGuard.assertSemiDrawable(
+                inventory, zeroIfNull(line.getQuantity()), "半成品领用");
         BigDecimal available = zeroIfNull(inventory.getAvailableQuantity());
         ensureQuantityWithinAvailable("半成品库存 " + inventory.getIntermediateBatchNo(), line.getQuantity(), available, "半成品领用");
 
@@ -7881,7 +7887,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 FinishedGoodsBatch.Status.DEPLETED,
                 FinishedGoodsBatch.Status.EXPIRED,
                 FinishedGoodsBatch.Status.FROZEN,
-                FinishedGoodsBatch.Status.DEFECTIVE).contains(status)) {
+                FinishedGoodsBatch.Status.DEFECTIVE,
+                // 缺口 11/13: 待检只管出货, 不管结单记账 —— 它是真实入库的成品, 只是还没放行。
+                FinishedGoodsBatch.Status.PENDING_INSPECTION).contains(status)) {
             throw invalidInterimFinishedGoods("小结成品批次不是有效的已入库真值: " + status);
         }
         InventoryOwnership expectedOwnership = Optional.ofNullable(plan.getOutputOwnership())

@@ -34,12 +34,18 @@ ALTER TABLE haccp_monitoring_records
     ADD COLUMN IF NOT EXISTS operator_name VARCHAR(100),
     ADD COLUMN IF NOT EXISTS deviation_handled_at TIMESTAMP,
     ADD COLUMN IF NOT EXISTS deviation_handled_by BIGINT,
-    ADD COLUMN IF NOT EXISTS deviation_handled_by_name VARCHAR(100);
+    ADD COLUMN IF NOT EXISTS deviation_handled_by_name VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS report_ref VARCHAR(160);
 
 -- 挡放行的热路径: 按计划找未处理偏离 (按批次号的已有 idx_haccp_monitoring_factory_batch)
 CREATE INDEX IF NOT EXISTS idx_haccp_monitoring_open_deviation_plan
     ON haccp_monitoring_records (factory_id, production_plan_id)
     WHERE is_deviation = TRUE AND deviation_handled_at IS NULL AND deleted_at IS NULL;
+
+-- 报工凭据 (YR:<报工id> / PS:<计划>:<行>): CCP 与产出在同一事务落库, 按它能对上是哪一次报工
+CREATE INDEX IF NOT EXISTS idx_haccp_monitoring_report_ref
+    ON haccp_monitoring_records (factory_id, report_ref)
+    WHERE report_ref IS NOT NULL;
 
 COMMENT ON COLUMN haccp_monitoring_records.deviation_handled_at IS
     '缺口 13: 偏离已处理时间; is_deviation=TRUE 且本列 NULL = 未处理偏离, 挡质检放行与出货';

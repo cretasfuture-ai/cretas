@@ -122,15 +122,31 @@ public class QcInspectionPolicy {
 
     // ==================== 纯函数状态转移 ====================
 
-    /** 半成品行入账一笔新产出之后的质检状态。 */
-    public static String semiStatusAfterOutput(String current, boolean hold) {
-        if (!hold) {
-            return current;
+    /**
+     * 半成品行刚入账 {@code inQty} 之后, 若这笔要扣留, 把它<b>按数量</b>记进待检 (审查高 2):
+     * 待检数量 += inQty (封顶为当前余额), 状态 PENDING。已放行的存量不动 —— 可领 = 余额 − 待检数量。
+     * 旧数据里残留的整行 REJECTED: 回到 PENDING 且<b>整个余额</b>进待检 (旧的不合格量不被新产出洗成可领, 质检员重判)。
+     * 不扣 ⇒ 原样 (null 仍是 null = 零回归)。
+     */
+    public static void applySemiOutputHold(SemiFinishedInventory sfi, boolean hold, java.math.BigDecimal inQty) {
+        if (!hold || sfi == null) {
+            return;
         }
-        if (SemiFinishedInventory.InspectionStatus.REJECTED.equals(current)) {
-            return current;
+        // 入账前已在待检的量 (口径唯一: SemiFinishedInventory#pendingInspectionQuantity; 不在待检 = 0)
+        java.math.BigDecimal priorView = sfi.pendingInspectionQuantity();
+        java.math.BigDecimal prior = priorView == null ? java.math.BigDecimal.ZERO : priorView;
+        if (SemiFinishedInventory.InspectionStatus.REJECTED.equals(sfi.getInspectionStatus())) {
+            // 旧数据残留的整行不合格: 不能因为来了新产出就把旧的不合格量洗成可领 ⇒ 整个余额都进待检,
+            // 由质检员重新判 (判不合格时连同旧量一起转出)。
+            prior = sfi.computeBalance().max(java.math.BigDecimal.ZERO);
         }
-        return SemiFinishedInventory.InspectionStatus.PENDING;
+        java.math.BigDecimal pending = prior.add(inQty == null ? java.math.BigDecimal.ZERO : inQty);
+        java.math.BigDecimal balance = sfi.computeBalance();
+        if (pending.compareTo(balance) > 0) {
+            pending = balance.max(java.math.BigDecimal.ZERO);
+        }
+        sfi.setInspectionStatus(SemiFinishedInventory.InspectionStatus.PENDING);
+        sfi.setInspectionPendingQuantity(pending);
     }
 
     /** 新建在制半成品批次的初始状态。 */

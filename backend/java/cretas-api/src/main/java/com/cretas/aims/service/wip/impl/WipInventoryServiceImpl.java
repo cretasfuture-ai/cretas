@@ -124,12 +124,12 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private QcInspectionPolicy qcInspectionPolicy;
 
     /** 半成品行入一笔产出后, 按质检策略刷新 {@code inspectionStatus} (不扣 ⇒ 原样)。 */
-    private void applyInspectionHold(SemiFinishedInventory sfi, QcInspectionPolicy.OutputRef ref) {
+    private void applyInspectionHold(SemiFinishedInventory sfi, QcInspectionPolicy.OutputRef ref, BigDecimal inQty) {
         if (qcInspectionPolicy == null || sfi == null) {
             return;
         }
         boolean hold = qcInspectionPolicy.shouldHoldSemi(sfi.getFactoryId(), ref);
-        sfi.setInspectionStatus(QcInspectionPolicy.semiStatusAfterOutput(sfi.getInspectionStatus(), hold));
+        QcInspectionPolicy.applySemiOutputHold(sfi, hold, inQty);
     }
 
     /** App 报工所在生产批次 → 批次号/计划 (给 CCP 偏离判定用); 拿不到就只按产品判。 */
@@ -151,7 +151,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                         .withHint("请重新选择要领用的上道半成品批次")
                         .withHintTarget("sourceWipNo"));
         // 质检放行 (缺口 11): 待检 / 不合格的半成品不能被下道领用 (App 报工领用路径)。
-        QcInspectionGuard.assertSemiDrawable(sourceWip, "sourceWipNo");
+        QcInspectionGuard.assertSemiDrawable(sourceWip, inputQuantity, "sourceWipNo");
         if (inputQuantity == null) {
             throw new BusinessException(409, "领用半成品时必须填写本道投入量")
                     .withCode("WIP_INPUT_REQUIRED")
@@ -768,7 +768,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, outputUnit, report.getMaterialBatchRefs());
         // 质检放行: 这一行装的是 semiCode 那个半成品 (行上的 productTypeId 是批次成品, 存量语义, 不能拿来判);
         // 回料行则是回料自己的产品。
-        applyInspectionHold(sfi, taskOutputRef(task, reworkProductTypeId, semiCode, semiCode));
+        applyInspectionHold(sfi, taskOutputRef(task, reworkProductTypeId, semiCode, semiCode), inQty);
         wipRepo.save(sfi);
 
         // Write immutable ledger entry (R3 — no update ever, only REVERSE rows for cancellation)
@@ -1011,7 +1011,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, unit, materialBatchRefs);
         // 质检放行: 逐道录入的产出产品就是 productTypeId; 锚 = 工序批次号 (CCP 偏离按它和计划判)。
         applyInspectionHold(sfi, new QcInspectionPolicy.OutputRef(productTypeId, null,
-                QcInspectionPolicy.batchNumbers(intermediateBatchNo), null, null));
+                QcInspectionPolicy.batchNumbers(intermediateBatchNo), null, null), inQty);
         wipRepo.save(sfi);
 
         // 🔴 2026-08-18: 这条路一直在改余额却【从不记流水】(PR#2870 登记为「未修」)。
@@ -1055,7 +1055,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         }
         SemiFinishedInventory sfi = opt.get();
         // 质检放行: 计划内前序已入库的半成品被下道领用 —— 待检同样不能领。
-        QcInspectionGuard.assertSemiDrawable(sfi, intermediateBatchNo);
+        QcInspectionGuard.assertSemiDrawable(sfi, qty, intermediateBatchNo);
         BigDecimal priorConsumed = nz(sfi.getConsumedQuantity());
         // G02: clamp 的上限是【余额】(含盘点修正), ⛔ 不是 produced —— 旧版按 consumed ≤ produced 夹,
         //   盘亏 −30 时照样能把余额扣成 −30; 盘盈 +30 时又少扣 30。
@@ -1108,8 +1108,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                         .withHint("请重新选择仍有库存的半成品批次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(intermediateBatchNo));
-        // 质检放行 (缺口 11): 逐道录入 SFI 投料在小结时真正扣减 —— 待检 / 不合格不能领。
-        QcInspectionGuard.assertSemiDrawable(sfi, intermediateBatchNo);
         // 🟠 盒⇄kg 折算: 计数单位半成品 (盒/个/件/只) 作 kg 道投料来源时, 把 kg 投料量折算为盒数扣减
         //   (依据 ProductType.gramsPerUnit)。kg/重量单位来源 → 原样 (deductQty = qty, 行为不变; 不查产品避免多余 IO)。
         //   🔴 诚实 null (禁止降级): 计数单位来源缺每盒克重 → 无法折算 → loud-fail, 绝不臆造 1盒=1kg。
@@ -1126,6 +1124,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
+        // 质检放行 (缺口 11): 逐道录入 SFI 投料在小结时真正扣减 —— 只能领已放行的部分 (按折算后的原生数量判)。
+        QcInspectionGuard.assertSemiDrawable(sfi, deductQty, intermediateBatchNo);
         // G02: 校验与写回用同一个余额 (含盘点修正 adjustment)。旧版这里是 produced − consumed,
         //   写回却是 produced − consumed + adjustment: 盘亏 −30 时领 60 放行、写回 −10; 盘盈 +30 时领 100 被错拒。
         BigDecimal available = sfi.computeBalance();
@@ -1350,6 +1350,12 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHintTarget(intermediateBatchNo);
         }
         sfi.setProducedQuantity(newProduced);
+        // 缺口 11 (审查高 2): 撤销的是最近一次入账 —— 它若在待检里, 待检数量同步减掉,
+        // 否则「撤销 + 重新入账」(编辑) 会让待检翻倍、把已放行的存量也挡住。
+        if (SemiFinishedInventory.InspectionStatus.PENDING.equals(sfi.getInspectionStatus())
+                && sfi.getInspectionPendingQuantity() != null) {
+            sfi.setInspectionPendingQuantity(sfi.getInspectionPendingQuantity().subtract(qty).max(BigDecimal.ZERO));
+        }
         // 成本冲销 (诚实): totalCost null → accumulatedCost 未曾加此段, 不减; 否则减去确切金额。
         BigDecimal acc = sfi.getAccumulatedCost();
         if (acc != null && totalCost != null) {
@@ -1674,7 +1680,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 都要放行一次才能被下道领用。⇒ 这里【不按产品开关扣】(成品的待检在成品入库时扣, 见 4 条成品入库路径),
         // 只按 CCP 偏离扣 (productTypeId/code 传 null, 策略只看批次)。
         if (out.signum() > 0) {
-            applyInspectionHold(wip, taskOutputRef(task, null, null, wipNo));
+            applyInspectionHold(wip, taskOutputRef(task, null, null, wipNo), out);
         }
         SemiFinishedInventory saved = wipRepo.save(wip);
 
@@ -2037,7 +2043,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
         // 质检放行 (缺口 11): 二次加工开工领用半成品 —— 待检 / 不合格不能领。
-        QcInspectionGuard.assertSemiDrawable(wip, "wipId");
+        QcInspectionGuard.assertSemiDrawable(wip, qty, "wipId");
         // G02: 校验与写回同一个余额公式 (现算 produced − consumed + adjustment)。
         BigDecimal avail = wip.computeBalance();
         if (qty.compareTo(avail) > 0) {
@@ -2402,6 +2408,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .unit(w.getUnit())
                 .status(w.getStatus())
                 .inspectionStatus(w.getInspectionStatus())
+                .inspectionPendingQuantity(w.pendingInspectionQuantity())
                 .productTypeName(ptNameMap.get(w.getProductTypeId()))   // null if no match
                 .batchId(w.getBatchId())
                 // ② picker-only: 生产日期 (createdAt 日期) + 成本 (unitCost, 诚实 null)
