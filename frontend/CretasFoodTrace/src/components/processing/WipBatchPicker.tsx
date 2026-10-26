@@ -13,7 +13,8 @@
  *  - 默认展开 (非折叠), 因为这一步是必选的, 不让操作工漏看。
  *  - 每行: 工序批次号 · 工序名 · 可领 X单位; 选中行高亮。
  *  - 未选时父组件 disable 提交 + 显示"请选择要领用的半成品批次"。
- *  - 质检放行 (缺口 11): 待检 / 不合格的批次照样列出 (藏起来操作员会以为系统坏了),
+ *  - 质检放行 (缺口 11): 按数量 —— 一行里只有一部分待检时, 「可领」写的是放行了的那部分, 并写明另有多少待检;
+ *    整行都待检 / 不合格的批次照样列出 (藏起来操作员会以为系统坏了),
  *    但灰显、不可点, 行内写明「待检，质检员放行后才能领用」; 全部待检时提示去找质检员,
  *    且【不】触发 onEmpty —— 那会放开「无半成品可领」的主管兜底, 把待检料绕过去。
  *
@@ -35,10 +36,28 @@ import {
 } from 'react-native';
 import { yieldReportApi, WipRowDTO } from '../../services/api/yieldReportApi';
 
-/** 质检放行 (缺口 11): 这一行能不能领, 不能领的原因 (null = 可领)。 */
-export function wipQcBlockReason(row: Pick<WipRowDTO, 'inspectionStatus'>): string | null {
-  if (row.inspectionStatus === 'PENDING') return '待检，质检员放行后才能领用';
+type WipQcFields = Partial<Pick<WipRowDTO, 'inspectionStatus' | 'availableQuantity' | 'inspectionPendingQuantity'>>;
+
+/**
+ * 这一行里待检的数量 (缺口 11 审查高 2: 一行半成品跨批次累加, 待检的只是其中一部分)。
+ * 不在待检 → 0; 待检但后端没给数量 (旧数据) → 整个余额都算待检 (宁可多挡)。
+ */
+export function wipPendingQuantity(row: WipQcFields): number {
+  if (row.inspectionStatus !== 'PENDING') return 0;
+  const balance = Math.max(0, row.availableQuantity ?? 0);
+  const pending = row.inspectionPendingQuantity ?? balance;
+  return Math.min(balance, Math.max(0, pending));
+}
+
+/** 现在能领的量 = 余额 − 待检数量 (与后端 SemiFinishedInventory#drawableBalance 同一口径)。 */
+export function wipFreeQuantity(row: WipQcFields): number {
+  return Math.max(0, (row.availableQuantity ?? 0) - wipPendingQuantity(row));
+}
+
+/** 质检放行 (缺口 11): 这一行能不能领, 不能领的原因 (null = 可领, 可领多少看 wipFreeQuantity)。 */
+export function wipQcBlockReason(row: WipQcFields): string | null {
   if (row.inspectionStatus === 'REJECTED') return '质检不合格，不能领用';
+  if (row.inspectionStatus === 'PENDING' && wipFreeQuantity(row) <= 0) return '待检，质检员放行后才能领用';
   return null;
 }
 
@@ -129,7 +148,8 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
       onChange({
         sourceWipNo: row.intermediateBatchNo,
         unit: row.unit,
-        availableQuantity: row.availableQuantity,
+        // 待检的那部分不能领 —— 投入上限按「现在能领的量」
+        availableQuantity: wipFreeQuantity(row),
       });
     },
     [disabled, onChange, required, selectedSourceWipNo],
@@ -194,8 +214,13 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
                       {row.processName ?? `第 ${row.processOrder ?? '?'} 道`}
                     </Text>
                     <Text style={styles.wipAvail}>
-                      可领 {row.availableQuantity ?? 0} {row.unit ?? ''}
+                      可领 {wipFreeQuantity(row)} {row.unit ?? ''}
                     </Text>
+                    {wipPendingQuantity(row) > 0 && blockReason == null ? (
+                      <Text style={styles.wipBlocked} testID={`wip-row-pending-${row.intermediateBatchNo}`}>
+                        另有 {wipPendingQuantity(row)} {row.unit ?? ''} 待检，质检员放行后才能领
+                      </Text>
+                    ) : null}
                     {blockReason != null ? (
                       <Text style={styles.wipBlocked} testID={`wip-row-blocked-${row.intermediateBatchNo}`}>
                         {blockReason}

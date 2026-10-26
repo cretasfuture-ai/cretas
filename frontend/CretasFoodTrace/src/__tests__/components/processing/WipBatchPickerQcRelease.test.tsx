@@ -2,11 +2,12 @@
  * 质检放行 (缺口 11) —— 报工屏的上道半成品选择器:
  *  - 待检 / 不合格行照样列出, 但点不动, 行内写明原因;
  *  - 全部待检时给出路 (找质检员 + 重新加载), 且【不】触发 onEmpty (那会放开主管兜底, 把待检料绕过去);
- *  - 阴性对照: 没开需检 (inspectionStatus 缺省/null) 的行照常可选。
+ *  - 阴性对照: 没开需检 (inspectionStatus 缺省/null) 的行照常可选;
+ *  - 审查高 2 / 低 11: 一行里只有一部分待检 → 可选, 「可领」只算放行了的那部分, 投入上限也按它。
  */
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import WipBatchPicker, { wipQcBlockReason } from '../../../components/processing/WipBatchPicker';
+import WipBatchPicker, { wipFreeQuantity, wipQcBlockReason } from '../../../components/processing/WipBatchPicker';
 import { yieldReportApi, WipRowDTO } from '../../../services/api/yieldReportApi';
 
 jest.mock('../../../services/api/yieldReportApi', () => {
@@ -59,6 +60,23 @@ describe('WipBatchPicker 质检放行', () => {
 
     fireEvent.press(screen.getByTestId('wip-row-W-OK'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sourceWipNo: 'W-OK' }));
+  });
+
+  it('部分待检 (50 里 20 待检): 可选, 显示可领 30 和另有 20 待检, 投入上限给 30', async () => {
+    const partial = { ...row('W-PART', 'PENDING'), inspectionPendingQuantity: 20 };
+    expect(wipFreeQuantity(partial)).toBe(30);
+    expect(wipQcBlockReason(partial)).toBeNull();
+    // 旧数据: 待检但没给数量 → 整行都算待检
+    expect(wipFreeQuantity(row('W-OLD', 'PENDING'))).toBe(0);
+    mockedApi.listWip.mockResolvedValue({ success: true, data: [partial] } as never);
+    const onChange = jest.fn();
+    render(<WipBatchPicker batchId={1} factoryId="F006" selectedSourceWipNo={null} onChange={onChange} />);
+
+    expect(await screen.findByTestId('wip-row-pending-W-PART')).toBeTruthy();
+    expect(screen.getByText('可领 30 kg')).toBeTruthy();
+    expect(screen.queryByTestId('wip-row-blocked-W-PART')).toBeNull();
+    fireEvent.press(screen.getByTestId('wip-row-W-PART'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sourceWipNo: 'W-PART', availableQuantity: 30 }));
   });
 
   it('全部待检: 提示找质检员放行, 不触发 onEmpty', async () => {

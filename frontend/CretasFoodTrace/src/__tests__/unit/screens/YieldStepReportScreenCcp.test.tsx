@@ -1,18 +1,22 @@
 /**
  * 缺口 13 CCP —— 报工屏真实入口 (渲染 YieldStepReportScreen 本体, 只桩 API/store):
  *  - 本道挂了 CCP: 没填完时「标记完工」不可点, 并写明还差哪项; 填完可提交;
- *  - 产出提交成功后, 以本批次 / 本工序提交 CCP 实测值 (超限时弹「已转待检」提示);
- *  - 阴性对照: 本道没挂 CCP → 不挡提交, 不发 CCP 请求。
+ *  - CCP 实测值随完工出成请求一起提交 (ccpReadings, 后端同一事务落库), 不再单独补交 (审查中 7);
+ *    后端回报偏离时弹「已转待检」提示;
+ *  - 阴性对照: 本道没挂 CCP → 不挡提交, 请求里不带 ccpReadings;
+ *  - 审查中 9: 换到同一工序的另一道任务 (workProcessId 相同) 后, 按钮不会卡在「正在加载关键控制点」。
  * 测试骨架 (mock 清单 / 任务与出成率桩) 原样取自 YieldStepReportScreenImbalanceConfirm.test.tsx。
  */
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 // ── React Navigation: 与 YieldStepReportScreenAutoWaste.test.tsx 同一套最小 mock ──
+// 路由参数可按用例改 (审查中 9 的用例要从「点开第 1 道」进入)
+let mockRouteParams: Record<string, unknown> = { batchId: 501, batchNumber: 'B-20260817-501' };
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: jest.fn(), goBack: jest.fn(), setOptions: jest.fn(), addListener: jest.fn() }),
   useRoute: () => ({
-    params: { batchId: 501, batchNumber: 'B-20260817-501' },
+    params: mockRouteParams,
   }),
 }));
 
@@ -339,18 +343,22 @@ async function renderToOutputStage(task: WorkProcessTask) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockRouteParams = { batchId: 501, batchNumber: 'B-20260817-501' };
   useAuthStore.setState({ user: mockSupervisor, isAuthenticated: true, tokens: null, isLoading: false });
-  mockRecordCcp.mockResolvedValue({
-    success: true, code: 200, message: 'ok',
-    data: { deviationCount: 1, heldOutputs: 1, message: '有 1 项 CCP 超出限值，已记录偏离；批次 B-20260817-501 的产出已转为待检' },
-  });
 });
 
+const CCP_DEVIATION_RESULT = {
+  reportId: 1, yieldRate: null,
+  ccp: { deviationCount: 1, heldOutputs: 1, recordCount: 1,
+    message: '有 1 项 CCP 超出限值，已记录偏离；批次 B-20260817-501 的产出已转为待检' },
+};
+
 describe('YieldStepReportScreen — 关键控制点 (CCP)', () => {
-  it('挂了 CCP: 没填完不能完工; 填完提交后以本批次/本工序提交 CCP, 超限弹待检提示', async () => {
+  it('挂了 CCP: 没填完不能完工; 实测值随完工出成请求一起提交, 后端回报偏离时弹待检提示', async () => {
     mockListStepCheckpoints.mockResolvedValue({ success: true, code: 200, message: 'ok', data: CPS });
     const task = buildTask({ workProcessId: 'WP-COOK', outputUnit: null });
     await renderToOutputStage(task);
+    mockedYieldApi.submitReport.mockResolvedValue({ success: true, code: 200, message: 'ok', data: CCP_DEVIATION_RESULT as any });
 
     await waitFor(() => expect(screen.getByTestId('ccp-block-reason')).toBeTruthy());
     expect(screen.getByText('请先填写：中心温度')).toBeTruthy();
@@ -365,15 +373,14 @@ describe('YieldStepReportScreen — 关键控制点 (CCP)', () => {
     await waitFor(() => expect(screen.getByTestId('app-dialog-btn-1')).toBeTruthy());
     fireEvent.press(screen.getByTestId('app-dialog-btn-1'));
 
-    await waitFor(() => expect(mockRecordCcp).toHaveBeenCalledTimes(1));
-    expect(mockedYieldApi.submitReport).toHaveBeenCalledTimes(1);
-    expect(mockRecordCcp.mock.calls[0][0]).toEqual(expect.objectContaining({
-      productionBatchId: 501,
-      workProcessId: 'WP-COOK',
-      processOrder: 1,
-      source: 'APP_STEP_REPORT',
-      readings: [{ checkpointId: 1, measuredValue: 70 }],
+    await waitFor(() => expect(mockedYieldApi.submitReport).toHaveBeenCalledTimes(1));
+    const req = mockedYieldApi.submitReport.mock.calls[0]?.[1];
+    expect(req).toEqual(expect.objectContaining({
+      reportKind: 'OUTPUT',
+      ccpReadings: [{ checkpointId: 1, measuredValue: 70 }],
     }));
+    // 不再有「报工之后单独补交 CCP」那一跳 (那一跳失败就是产出入账了、CCP 没交上的半态)
+    expect(mockRecordCcp).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByText('关键控制点超出范围')).toBeTruthy());
   });
 
@@ -387,6 +394,48 @@ describe('YieldStepReportScreen — 关键控制点 (CCP)', () => {
     await waitFor(() => expect(screen.getByTestId('app-dialog-btn-1')).toBeTruthy());
     fireEvent.press(screen.getByTestId('app-dialog-btn-1'));
     await waitFor(() => expect(mockedYieldApi.submitReport).toHaveBeenCalledTimes(1));
+    expect(mockedYieldApi.submitReport.mock.calls[0]?.[1]).not.toHaveProperty('ccpReadings');
     expect(mockRecordCcp).not.toHaveBeenCalled();
+  });
+
+  it('审查中 9: 停在完工出成时被指派到同工序的另一道任务 → 按钮可用, 不卡在「正在加载关键控制点」', async () => {
+    mockListStepCheckpoints.mockResolvedValue({ success: true, code: 200, message: 'ok', data: [] });
+    const t1 = buildTask({ id: 9001, processOrder: 1, workProcessId: 'WP-PACK', outputUnit: null });
+    const t2 = buildTask({ id: 9002, processOrder: 2, workProcessId: 'WP-PACK', outputUnit: null });
+    mockRouteParams = { batchId: 501, batchNumber: 'B-20260817-501', assignedWorkProcessTaskId: 9001 };
+    mockedYieldApi.listWorkProcessTasks.mockResolvedValue({ success: true, code: 200, message: 'ok', data: [t1] });
+    mockedProcessingApi.getBatchById.mockResolvedValue({
+      success: true, code: 200, message: 'ok',
+      data: { id: 501, productType: '卤猪蹄', productTypeId: 'PT-1', batchNumber: 'B-20260817-501', targetQuantity: 99, status: 'IN_PROGRESS' } as any,
+    });
+    mockedYieldApi.getYield.mockResolvedValue({ success: true, code: 200, message: 'ok', data: buildYield(t1, { totalInput: 99, inputUnit: 'kg' }) });
+    mockedYieldApi.getYieldLimits.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { ...emptyLimits, inputUnit: 'kg', outputUnit: 'kg' } });
+    mockedYieldApi.getOutputOptions.mockResolvedValue({ success: true, code: 200, message: 'ok', data: { items: [] } });
+
+    const view = render(<YieldStepReportScreen />);
+    await waitFor(() => expect(screen.getByTestId('yield-go-output-step-btn')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('yield-go-output-step-btn'));
+    await waitFor(() => expect(screen.getByTestId('yield-submit-output-btn')).toBeTruthy());
+    const loadsBefore = mockListStepCheckpoints.mock.calls.length;
+
+    // 同一屏还开着时被改派到同工序的第 2 道 (路由参数变 → 重新加载任务; 第 1 道已不在本人可见列表里)
+    mockRouteParams = { batchId: 501, batchNumber: 'B-20260817-501', assignedWorkProcessTaskId: 9002 };
+    mockedYieldApi.listWorkProcessTasks.mockResolvedValue({ success: true, code: 200, message: 'ok', data: [t2] });
+    mockedYieldApi.getYield.mockResolvedValue({ success: true, code: 200, message: 'ok', data: buildYield(t2, { totalInput: 90, inputUnit: 'kg' }) });
+    view.rerender(<YieldStepReportScreen />);
+    // 必然发生的读数: 确实换到了第 2 道 (任务列表重新拉过)
+    await waitFor(() => expect(mockedYieldApi.listWorkProcessTasks).toHaveBeenCalledTimes(2));
+
+    // 现行界面换道会把阶段切回「过程报工」(CCP 栏卸载); 不依赖这一点 —— 仍停在完工出成 (CCP 栏没卸载,
+    // 正是审查中 9 描述的情形) 就直接往下走。
+    const goOutput = screen.queryByTestId('yield-go-output-step-btn');
+    if (goOutput) fireEvent.press(goOutput);
+    await waitFor(() => expect(screen.getByTestId('yield-output-qty')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('yield-output-qty-tap-to-edit'));
+    fireEvent.changeText(screen.getByTestId('yield-output-qty-modal-input'), '80');
+    fireEvent.press(screen.getByTestId('yield-output-qty-modal-confirm'));
+    await waitFor(() => expect(screen.getByTestId('yield-submit-output-btn').props.disabled).toBe(false));
+    // 第 2 道的 CCP 重新查过 (同工序也要查: 父组件换道时已把 CCP 状态重置)
+    expect(mockListStepCheckpoints.mock.calls.length).toBeGreaterThan(loadsBefore);
   });
 });

@@ -49,7 +49,10 @@ class CcpApi {
     });
   }
 
-  /** 报工成功后提交本次 CCP 实测值; 超限由后端记偏离并把批次转待检。 */
+  /**
+   * 单独补录 CCP 实测值 (质检/管理端用)。⚠️ App 报工不再走这里 —— 实测值随报工请求 (ccpReadings)
+   * 一起提交、同一事务落库 (缺口 13 审查中 7), 不存在「产出入账了、CCP 没交上」的半态。
+   */
   async record(body: CcpRecordCommand, factoryId?: string): Promise<ApiResponse<CcpRecordResponse>> {
     const fid = requireFactoryId(factoryId);
     return apiClient.post<ApiResponse<CcpRecordResponse>>(`/api/mobile/${fid}/ccp/records`, body);
