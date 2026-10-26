@@ -36,12 +36,13 @@ async function assess({ initial, product, baseline, initialVisible, categoryVisi
     initialHttp200: initial?.status === 200, initialSuccess: initial?.body?.success === true,
     factoryF006: initial?.body?.data?.factoryId === 'F006', businessSource: initial?.body?.data?.source === 'business',
     guidedRequest: initial?.request?.guided === true, guidedScope: typeof initial?.body?.data?.analysisScopeLabel === 'string',
-    visibleCardsBounded: initialVisible.count <= MAX_CARDS,
+    visibleCardsBounded: initialVisible.count > 0 && initialVisible.count <= MAX_CARDS,
     visibleCardsAreCandidates: initialVisible.values.every(item => initialCandidates.some(candidate => String(candidate.id) === item.id)),
     visibleFamiliesDistinct: initialFamilies.size === initialVisible.count,
     categoryDomainSelected: typeof categoryDomain === 'string' && categoryDomain.length > 0 && categoryDomain !== 'all',
     familyRowsPresent: familyRows > 0,
     categoryCardsMatchDomain: categoryVisible.count > 0 && categoryVisible.values.every(item => item.domain === categoryDomain),
+    categoryCardsBounded: categoryVisible.count <= MAX_CARDS,
     productConditional: !product || (product.status === 200 && product.body?.success === true && productId !== null && product.body?.data?.analysisSubject === productId),
     baselineReturnedToFactory: !product || (baseline?.status === 200 && baseline.request?.analysis_subject == null && baseline.body?.data?.analysisSubject == null),
     screenshots: Boolean(beforeGuide && categoryShot && (!product || productShot)),
@@ -65,6 +66,8 @@ const scenario = {
       const initialResponse = await responseFor(page, () => page.getByTestId('factory-chart-refresh').click());
       const initial = { status: initialResponse.status(), body: await initialResponse.json().catch(() => ({})), request: requestBody(initialResponse) };
       const candidateMap = new Map(candidates(initial.body.data).map(item => [String(item.id), item]));
+      await page.getByTestId('factory-chart-guide-generate').click();
+      await page.locator('[data-testid^="factory-chart-card-"]:visible').first().waitFor();
       const initialVisible = await readVisibleCards(page, candidateMap);
       const domainGroup = page.getByTestId('factory-chart-guide-domain');
       const domainOption = domainGroup.locator('input[value="库存"], input[value="生产"], input[value="销售"], input[value="采购"]').first();
@@ -80,23 +83,25 @@ const scenario = {
       const familyRows = await page.getByTestId('factory-chart-family').count();
       const subject = page.getByTestId('factory-chart-guide-subject');
       let product = null; let baseline = null; let productShot = null;
-      if (await subject.count()) {
-        await subject.click();
-        const options = page.locator('[role="option"]');
-        if (await options.count() > 1) {
-          const selectedOption = options.nth(1);
+      const firstSubject = initial.body.data?.subjects?.[0];
+      if (await subject.count() && firstSubject) {
+        await subject.locator('input, button').first().click();
+        {
+          const selectedOption = page.getByRole('option', { name: firstSubject.label, exact: true });
           const productResponse = await responseFor(page, () => selectedOption.click());
           product = { status: productResponse.status(), body: await productResponse.json().catch(() => ({})), request: requestBody(productResponse) };
+          await page.getByText(product.body.data.analysisScopeLabel, { exact: false }).first().waitFor();
           productShot = await inspectCtx.screenshot('smartbi-guided-product');
-          await subject.click();
-          const clearOption = page.locator('[role="option"]').filter({ hasText: '全部产品 / 全厂范围' }).first();
+          await subject.locator('input, button').first().click();
+          const clearOption = page.getByRole('option', { name: '全部产品 / 全厂范围', exact: true });
           if (await clearOption.count()) {
             const baselineResponse = await responseFor(page, () => clearOption.click());
             baseline = { status: baselineResponse.status(), body: await baselineResponse.json().catch(() => ({})), request: requestBody(baselineResponse) };
           }
         }
       }
-      return { assessment: await assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot }), screenshots: [beforeGuide, categoryShot, ...(productShot ? [productShot] : [])] };
+      const assessment = await assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot });
+      return { assessment, ...assessment, screenshots: [beforeGuide, categoryShot, ...(productShot ? [productShot] : [])] };
     },
   }),
 };

@@ -35,11 +35,11 @@ function pageHtml(pathname) {
         <button data-testid="factory-chart-refresh">刷新</button><button data-testid="factory-chart-guide-generate">查看分析</button>
         <div data-testid="factory-chart-guide-subject" role="combobox"><button id="subject-toggle">分析产品</button><div id="subject-options" hidden><button role="option">全部产品 / 全厂范围</button>${Array.from({ length: 100 }, (_, i) => `<button role="option" data-value="product-${i}">产品${i}</button>`).join('')}</div></div>
         <div data-testid="factory-chart-family"><label><input type="checkbox">库存风险</label><select aria-label="库存风险的画法与单位"><option value="inventory-stock">库存图表</option></select></div>
-      </section><section data-testid="factory-chart-list"></section>
+      </section><p id="analysis-scope"></p><section data-testid="factory-chart-list"></section>
       <script>
         let last = null; let selectedDomain = '库存';
         const cards = document.querySelector('[data-testid=factory-chart-list]');
-        function render(data) { cards.innerHTML = (data.recommendations || []).filter(item => !selectedDomain || item.domain === selectedDomain).map(item => '<div class="recommendation-card" data-testid="factory-chart-card-' + item.id + '">' + item.title + '</div>').join(''); }
+        function render(data) { document.querySelector('#analysis-scope').textContent = data.analysisScopeLabel; cards.innerHTML = (data.recommendations || []).filter(item => !selectedDomain || item.domain === selectedDomain).map(item => '<div class="recommendation-card" data-testid="factory-chart-card-' + item.id + '">' + item.title + '</div>').join(''); }
         async function load(subject) { const response = await fetch('/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({factory_id:'F006', source:'business', guided:true, analysis_subject:subject || null})}); last = await response.json(); render(last.data); }
         document.querySelector('[data-testid=factory-chart-refresh]').onclick = () => load(null);
         document.querySelector('[data-testid=factory-chart-guide-generate]').onclick = () => render(last.data);
@@ -115,12 +115,12 @@ function pageHtml(pathname) {
  *    ⇒ 夹具缺的正是生产上会坏的那一环, 所以「16 个场景里 13 个 UNVERIFIED」
  *      这个仪器缺陷在本地一次都复现不出来。
  *
- * ⛔ `/login` 与 `/sales/orders` 保持原样: 它们的内联 <script> 必须在解析期执行,
- *    而 innerHTML 注入进去的 <script> 不会运行。这两条是【显式登记的例外】,
+ * ⛔ `/login`、`/sales/orders`、`/smart-bi/analysis-hub` 保持原样: 它们的内联 <script> 必须在解析期执行,
+ *    而 innerHTML 注入进去的 <script> 不会运行。这三条是【显式登记的例外】,
  *    不是漏改 —— 其余路径都会走一遍真实的「先闪屏、后挂载」。
  */
 function wrapWithBootSplash(pathname, content, delayMs = 250) {
-  if (pathname === '/login' || pathname === '/sales/orders') {
+  if (pathname === '/login' || pathname === '/sales/orders' || pathname === '/smart-bi/analysis-hub') {
     return `<!doctype html><html><body>${content}</body></html>`;
   }
   return `<!doctype html><html><head><style>
@@ -255,19 +255,18 @@ test.describe('production read-only harness local fixture', () => {
 
   test('guided SmartBI flow uses bounded families, 100-product catalogue, and zero writes', async ({ page }) => {
     test.setTimeout(120_000);
-    SCENARIOS.push(guidedScenario);
-    try {
+    {
       const report = await runSuiteWithPage(page, {
         baseUrl, evidenceDir: path.resolve('test-results', 'smartbi-guided-fixture'),
         scenarios: [guidedScenario.id], username: 'f006_admin', password: 'fixture-only',
         productionReadonly: true,
       });
       expect(report.scenarios[0].result).toBe('PASS');
-      expect(report.scenarios[0].pageEvidence.some(entry => entry.assessment?.checks?.distinctInitialFamilies)).toBe(true);
-      expect(report.scenarios[0].pageEvidence.some(entry => entry.assessment?.subjectCount === 100)).toBe(true);
+      expect(report.scenarios[0].pageEvidence.some(entry => entry.checks?.visibleFamiliesDistinct)).toBe(true);
+      expect(report.scenarios[0].pageEvidence.some(entry => entry.subjectCount === 100)).toBe(true);
       expect(report.actualBusinessWrites).toBe(0);
       expect(report.blockedMutationAttempts).toHaveLength(0);
-    } finally { SCENARIOS.splice(SCENARIOS.indexOf(guidedScenario), 1); }
+    }
   });
 
   test('suite stops before the next scenario after a blocked business mutation', async ({ page }) => {

@@ -61,5 +61,5 @@ export function guideSubjects(subjects: readonly GuideSubject[] | undefined): Gu
 
 export function filterSubjects(subjects: readonly GuideSubject[], query: string): GuideSubject[] {
   const needle = query.trim().toLowerCase();
-  return subjects.filter(subject => !needle || subject.label.toLowerCase().includes(needle)).slice(0, 30);
+  return subjects.filter(subject => !needle || subject.label.toLowerCase().includes(needle)).slice(0, 8);
 }

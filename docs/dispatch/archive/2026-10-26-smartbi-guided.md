@@ -20,3 +20,18 @@ Root 追加窄 scope：Web/RN 的 `factoryChartExport` helper、对应 tests 和
 ## 跨端兼容契约
 
 请求新增可选 `guided: boolean`（默认 false），`analysis_subject: string | null`（当前数据可选产品的 opaque id）。引导端始终发送 guided=true。响应新增可选 `subjects: {id:string,label:string}[]`、`analysisScopeLabel:string`；候选新增可选 `analysis: {familyId:string,familyLabel:string}`。旧请求/返回保持兼容。未选产品时不逐产品生成专业视图；选产品时只用可识别且匹配产品的来源，不能把全厂金额/OEE冒充该产品。对象选项不得绕过工厂/金额权限。没有对应数据显式说明；不补数。
+
+## 实现与验证回执
+
+实现集中在 PR #1209；代码 scope 在本 PR 合入时释放，由 Root 完成最终合并、发布、F006 Web/原生验收。生产切流和业务验收不得从代码状态推断；真实后续回执写入 gitignored `.playwright-mcp/smartbi-guided-20261026/`。
+
+- Web/RN：业务问题→分析主题→产品对象；新组合最多四类，每主题一行，单位/画法二级切换。Web 产品下拉虚拟化，App 最多八个匹配产品并支持搜索；已有明确保存的旧选择保留。查看分析仅本地选择，保存由用户显式触发。
+- Server：按真实产品 ID 区分同名 SKU；唯一 ID 的同名无 ID 来源才可关联，歧义来源排除；无产品列、全厂 OEE/现金等不进入产品答案。未知产品/所选期间无数据返回真实缺口，不回退全厂。原始明细使用过滤后数据集。
+- 回显 `analysisSubject`（包括 null）在两端严格校验；Web 同工厂换用户/角色、App 身份/上传源变化均清空旧范围并拒收旧响应。
+- 导出沿用原协议，真实产品范围进入 source 和分析结论，数值不重算。
+- 独立风险终审：无剩余可达 P1/P2；仍须取得最终内容的 CI 和发布/真机证据。
+- 本地后端 guided/source/contract/details/financial 62 PASS；目标 Web 34 PASS，目标 Native 22 PASS。旧失败与工具异常日志保留。
+- 首轮提交 `30d4dd2a8b2215b51b4af12458d884e0d8500246` CI：RN TypeScript PASS，329 suites / 3423 tests PASS；Python 10462 PASS /169 SKIP /153 deselected /2 xfail（跳过项不计通过）；source/secret/field/script gates PASS。后续只读 harness 修正与 App 搜索显示上限仍以最终 head 的 CI 为准。
+- 本地浏览器夹具曾因内联脚本和控件定位失败；仅修夹具/场景，未削弱 mutation guard、脱敏深度、业务断言或生产白名单。最终报告须引用重跑结果。
+
+产品目录来自当前授权数据源；上传报表的对象目录不随期间裁剪，图表结果严格按期间筛选，期间外产品会明确无数据。没有把真实自由输入 AI 问答或所有产品/角色的业务验收宣称完成。原 OSS/历史账本等边界保持不变。

@@ -23,7 +23,7 @@ describe('smartbiFactoryChartGuide', () => {
 
   it('bounds searchable subjects instead of rendering a hundred chips', () => {
     const subjects = Array.from({ length: 100 }, (_, index) => ({ id: String(index), label: `产品${index}` }));
-    expect(filterSubjects(subjects, '').length).toBe(30);
+    expect(filterSubjects(subjects, '').length).toBe(8);
     expect(filterSubjects(subjects, '产品99')).toEqual([{ id: '99', label: '产品99' }]);
   });
 });

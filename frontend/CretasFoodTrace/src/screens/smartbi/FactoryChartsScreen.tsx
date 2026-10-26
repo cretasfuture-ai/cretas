@@ -422,7 +422,7 @@ export default function FactoryChartsScreen() {
                 <Text style={styles.guideQuestion}>第 3 步：选择产品（可选）</Text>
                 <TextInput label="搜索产品" value={subjectQuery} onChangeText={setSubjectQuery} accessibilityLabel="搜索产品" />
                 <Button onPress={() => setAnalysisSubject(null)} testID="factory-guide-all-products">全部产品 / 全厂范围</Button>
-                {subjects.length > 30 && <Text style={styles.muted}>仅显示前 30 个匹配项，请搜索产品名称。</Text>}
+                {subjects.length > 8 && filteredSubjects.length === 8 && <Text style={styles.muted}>仅显示前 8 个匹配项，请搜索产品名称。</Text>}
                 {filteredSubjects.length === 0 ? <Text style={styles.muted}>当前范围没有可选产品；可以直接查看分类分析。</Text> : <View style={styles.chipRow}>{filteredSubjects.map(subject => <Chip key={subject.id} selected={analysisSubject === subject.id} onPress={() => chooseSubject(subject.id)}>{subject.label}</Chip>)}</View>}
               </>}
               <Button mode="contained" onPress={generateAnalysis} loading={loading} disabled={loading || !data} testID="factory-chart-load">查看分析</Button>
