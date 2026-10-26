@@ -31,6 +31,8 @@ public class FactorySchedulerConfig {
     @Column(name = "last_execution_status", length = 20) private String lastExecutionStatus; // SUCCESS / FAILED / TOOL_NOT_FOUND
     @Column(name = "last_execution_error", columnDefinition = "TEXT") private String lastExecutionError;
     @Column(name = "execution_count", nullable = false) @Builder.Default private Long executionCount = 0L;
+    /** Factory user the tool runs as through the gateway; null = the run is refused. */
+    @Column(name = "run_as_user_id") private Long runAsUserId;
 
     @PrePersist protected void onCreate() { createdAt = updatedAt = LocalDateTime.now(); }
     @PreUpdate protected void onUpdate() { updatedAt = LocalDateTime.now(); }
