@@ -13,6 +13,8 @@ import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.DialectNormalizationService;
 import com.cretas.aims.service.QueryPreprocessorService;
 import com.cretas.aims.service.SpellCorrectionService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +52,12 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
     private final ObjectMapper objectMapper;
     private final DialectNormalizationService dialectNormalizationService;
     private final SpellCorrectionService spellCorrectionService;
+
+    /** 改写前: 槽位名、对话摘要、原话里的客户 / 人名与号码换代号; 单测直接 new 本类时用默认实例。 */
+    @Autowired(required = false)
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "query-rewrite";
 
     /**
      * 是否启用预处理服务
@@ -432,11 +440,26 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
             // 构建系统提示词
             String systemPrompt = buildRewriteSystemPrompt(context);
 
+            // 摘要和槽位里可能有此前回答里换回的真名: 换代号再发, 脱敏不了就不改写 (保留原话)
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE,
+                    context == null ? null : context.getFactoryId(),
+                    context == null ? Map.of() : LlmEgressGuard.partiesFromSlots(context.getEntitySlots()),
+                    Arrays.asList(systemPrompt, input));
+            if (redacted.refused()) {
+                return LlmRewriteResult.builder()
+                        .originalInput(input)
+                        .rewrittenQuery(input)
+                        .success(false)
+                        .errorMessage("上下文无法脱敏, 未发给模型")
+                        .processingTimeMs(System.currentTimeMillis() - startTime)
+                        .build();
+            }
+
             // 调用 LLM
-            String response = dashScopeClient.chatLowTemp(systemPrompt, input);
+            String response = dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1));
 
             // 解析响应
-            return parseRewriteResponse(input, response, startTime);
+            return parseRewriteResponse(input, redacted.restoreJsonText(response), startTime);
 
         } catch (Exception e) {
             log.error("LLM 改写失败: input={}, error={}", truncate(input, 50), e.getMessage(), e);

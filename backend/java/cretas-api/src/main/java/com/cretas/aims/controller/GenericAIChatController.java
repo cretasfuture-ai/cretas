@@ -9,6 +9,8 @@ import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.dto.ai.GenericChatRequest;
 import com.cretas.aims.dto.ai.GenericChatResponse;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.annotation.RateLimit.LimitType;
@@ -63,6 +65,13 @@ public class GenericAIChatController {
     @Autowired
     private ObjectMapper objectMapper;
 
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired(required = false)
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "generic-ai-chat";
+    static final String EGRESS_REFUSED_MESSAGE = "对话里有无法脱敏的内容, 未发给 AI";
+
     private final ExecutorService sseExecutor = java.util.concurrent.Executors.newFixedThreadPool(
             4, r -> { Thread t = new Thread(r, "ai-chat-sse"); t.setDaemon(true); return t; });
 
@@ -84,8 +93,13 @@ public class GenericAIChatController {
                 request.getMaxTokens());
 
         try {
+            // 脱敏不了就不发
+            LlmEgressRedactor.Result redacted = redactMessages(request.getMessages());
+            if (redacted.refused()) {
+                throw new BusinessException(400, EGRESS_REFUSED_MESSAGE);
+            }
             // 转换消息格式
-            List<ChatMessage> chatMessages = convertMessages(request.getMessages());
+            List<ChatMessage> chatMessages = convertMessages(request.getMessages(), redacted);
 
             // 自动检测是否需要 thinking 模式
             String lastUserMsg = "";
@@ -135,8 +149,8 @@ public class GenericAIChatController {
             ChatCompletionResponse aiResponse = dashScopeClient.chatCompletion(aiRequest);
             long elapsed = System.currentTimeMillis() - t0;
 
-            // 提取响应内容
-            String content = extractContent(aiResponse);
+            // 提取响应内容 (代号换回真名)
+            String content = redacted.restore(extractContent(aiResponse));
             Integer tokensUsed = extractTokensUsed(aiResponse);
             String finishReason = extractFinishReason(aiResponse);
 
@@ -181,7 +195,24 @@ public class GenericAIChatController {
 
         sseExecutor.execute(() -> {
             try {
-                List<ChatMessage> chatMessages = convertMessages(request.getMessages());
+                LlmEgressRedactor.Result redacted = redactMessages(request.getMessages());
+                if (redacted.refused()) {
+                    emitter.send(SseEmitter.event().name("error")
+                            .data("{\"message\":\"" + EGRESS_REFUSED_MESSAGE + "\"}"));
+                    emitter.complete();
+                    return;
+                }
+                List<ChatMessage> chatMessages = convertMessages(request.getMessages(), redacted);
+                // 代号可能被拆在两个 token 里: 攒到闭合再换回真名推给前端
+                LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
+                    try {
+                        emitter.send(SseEmitter.event().name("token").data(token));
+                    } catch (BusinessException be) {
+                        throw be;
+                    } catch (Exception e) {
+                        log.debug("Client disconnected during token send");
+                    }
+                });
 
                 // Same P1+P2 logic as sync endpoint
                 String lastUserMsg = "";
@@ -228,21 +259,14 @@ public class GenericAIChatController {
                 // R4: Stream tokens with timing
                 long streamT0 = System.currentTimeMillis();
                 dashScopeClient.chatCompletionStream(aiRequest,
-                    token -> {
-                        try {
-                            emitter.send(SseEmitter.event().name("token").data(token));
-                        } catch (BusinessException be) {
-                            throw be;
-                        } catch (Exception e) {
-                            log.debug("Client disconnected during token send");
-                        }
-                    },
+                    restorer,
                     response -> {
                         try {
+                            restorer.flush();
                             long streamElapsed = System.currentTimeMillis() - streamT0;
                             Integer tokensUsed = extractTokensUsed(response);
                             String finishReason = extractFinishReason(response);
-                            String fullContent = extractContent(response);
+                            String fullContent = redacted.restore(extractContent(response));
                             log.info("Chat stream done: model={}, thinking={}, tokensUsed={}, elapsed={}ms",
                                     model, enableThinking, tokensUsed, streamElapsed);
                             Map<String, Object> doneData = new java.util.LinkedHashMap<>();
@@ -282,25 +306,39 @@ public class GenericAIChatController {
     /**
      * 转换消息格式
      */
-    private List<ChatMessage> convertMessages(List<GenericChatRequest.Message> messages) {
+    private List<ChatMessage> convertMessages(List<GenericChatRequest.Message> messages,
+                                              LlmEgressRedactor.Result redacted) {
         if (messages == null || messages.isEmpty()) {
             throw new IllegalArgumentException("消息列表不能为空");
         }
 
-        return messages.stream()
-                .map(msg -> {
-                    switch (msg.getRole().toLowerCase()) {
-                        case "system":
-                            return ChatMessage.system(msg.getContent());
-                        case "user":
-                            return ChatMessage.user(msg.getContent());
-                        case "assistant":
-                            return ChatMessage.assistant(msg.getContent());
-                        default:
-                            throw new IllegalArgumentException("不支持的角色: " + msg.getRole());
-                    }
-                })
-                .collect(Collectors.toList());
+        List<ChatMessage> out = new java.util.ArrayList<>();
+        for (int i = 0; i < messages.size(); i++) {
+            GenericChatRequest.Message msg = messages.get(i);
+            String content = redacted.text(i);
+            switch (msg.getRole().toLowerCase()) {
+                case "system" -> out.add(ChatMessage.system(content));
+                case "user" -> out.add(ChatMessage.user(content));
+                case "assistant" -> out.add(ChatMessage.assistant(content));
+                default -> throw new IllegalArgumentException("不支持的角色: " + msg.getRole());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 客户端发来的整段对话 (多轮历史、语音转写、表单里已录的批次 / 质检数据) 发给模型前脱敏:
+     * 号码、公司名、岗位 + 人名换代号, 回答换回真名。这个接口不带工厂, 不查保密产品名。
+     */
+    private LlmEgressRedactor.Result redactMessages(List<GenericChatRequest.Message> messages) {
+        if (messages == null || messages.isEmpty()) {
+            throw new IllegalArgumentException("消息列表不能为空");
+        }
+        List<String> contents = new java.util.ArrayList<>();
+        for (GenericChatRequest.Message msg : messages) {
+            contents.add(msg.getContent());
+        }
+        return llmEgressGuard.texts(EGRESS_SITE, null, Map.of(), contents);
     }
 
     /**

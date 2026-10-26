@@ -307,6 +307,93 @@ class LlmEgressRedactorTest {
         assertThat(sent).doesNotContain("华东分公司");
     }
 
+    // ------------------------------------------------------------------ 文本模式
+
+    @Test
+    void textModeTokenisesNumbersNamesAndKnownPartiesAcrossSegmentsAndRestores() {
+        List<String> texts = new java.util.ArrayList<>();
+        texts.add("上一轮: 已给老街坊下单, 由司机：钱大海送货");
+        texts.add("老街坊的联系人：赵铁柱 手机 139-1234-5678, 座机 (021)58881234, 卡号 6222021234567890123");
+        texts.add(null);
+        texts.add("华东冷链商贸有限公司 的 秘制酱牛肉 身份证 31010119900101123X");
+
+        LlmEgressRedactor.Result r = redactor.redactTexts(texts,
+                Map.of("老街坊", LlmEgressRedactor.Party.CUSTOMER), Set.of("秘制酱牛肉"), true);
+
+        assertThat(r.refused()).isFalse();
+        String sent = String.join("\n", r.texts().subList(0, 2)) + "\n" + r.text(3);
+        assertThat(sent).doesNotContain("老街坊", "钱大海", "赵铁柱", "139-1234-5678", "58881234",
+                "6222021234567890123", "华东冷链商贸", "秘制酱牛肉", "31010119900101123X");
+        assertThat(r.text(0)).contains("[客户A]");
+        assertThat(r.text(2)).isNull();
+        // 模型照抄代号, 用户看到的是原文
+        assertThat(r.restore(r.text(1))).isEqualTo(texts.get(1));
+        assertThat(r.restore(r.text(3))).isEqualTo(texts.get(3));
+    }
+
+    @Test
+    void utteranceModeOnlyTokenisesNumbersAndKeepsWording() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("把客户张记食品有限公司的电话改成13812345678"),
+                Map.of(), Set.of(), false);
+
+        assertThat(r.text(0)).isEqualTo("把客户张记食品有限公司的电话改成[电话A]");
+        assertThat(r.restore("{\"phone\":\"[电话A]\"}")).isEqualTo("{\"phone\":\"13812345678\"}");
+    }
+
+    @Test
+    void streamRestorerWaitsForSplitTokensAndFlushesTheTail() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("联系人：王建国 13812345678"),
+                Map.of(), Set.of(), true);
+        List<String> out = new java.util.ArrayList<>();
+        LlmEgressRedactor.StreamRestorer restorer = r.streamRestorer(out::add);
+
+        for (String chunk : List.of("请找 [人", "员A]", " 电话 [电话A] [", "备注")) {
+            restorer.accept(chunk);
+        }
+        restorer.flush();
+
+        assertThat(String.join("", out)).isEqualTo("请找 联系人：王建国 电话 13812345678 [备注");
+        assertThat(out).noneMatch(s -> s.contains("[人") || s.contains("员A]"));
+    }
+
+    @Test
+    void restoreJsonTextEscapesRealNamesWithQuotes() throws Exception {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("x"),
+                Map.of("\"老王\"牛肉", LlmEgressRedactor.Party.CUSTOMER), Set.of(), false);
+
+        String json = r.restoreJsonText("{\"customer\":\"[客户A]\"}");
+
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().readTree(json).get("customer").asText())
+                .isEqualTo("\"老王\"牛肉");
+    }
+
+    @Test
+    void structuredAndTextShareTokens() {
+        Map<String, Object> directory = Map.of("users", List.of(Map.of("id", "42", "name", "赵铁柱")));
+
+        LlmEgressRedactor.Result r = redactor.redact(directory, List.of("让赵铁柱审批"), Map.of(), Set.of(), true);
+
+        assertThat(r.payload()).contains("[人员A]", "\"42\"").doesNotContain("赵铁柱");
+        assertThat(r.text(0)).isEqualTo("让[人员A]审批");
+    }
+
+    @Test
+    void titledNamesAfterChineseTextAreTokenisedToo() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("加一道卤制, 找李经理确认, 再问王师傅"),
+                Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContain("李经理", "王师傅").contains("加一道卤制");
+        assertThat(r.restore(r.text(0))).isEqualTo("加一道卤制, 找李经理确认, 再问王师傅");
+    }
+
+    @Test
+    void textModeTokensCarryNoDigits() {
+        LlmEgressRedactor.Result r = redactor.redactTexts(List.of("13812345678 13912345678 6222021234567890123"),
+                Map.of(), Set.of(), true);
+
+        assertThat(r.text(0)).doesNotContainPattern("[0-9]");
+    }
+
     @Test
     void lettersSequence() {
         assertThat(LlmEgressRedactor.letters(1)).isEqualTo("A");

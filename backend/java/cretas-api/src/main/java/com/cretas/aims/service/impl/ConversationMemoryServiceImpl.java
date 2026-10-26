@@ -9,6 +9,8 @@ import com.cretas.aims.entity.conversation.ConversationMemory.EntitySlotData;
 import com.cretas.aims.entity.conversation.ConversationMemory.MessageData;
 import com.cretas.aims.repository.conversation.ConversationMemoryRepository;
 import com.cretas.aims.service.ConversationMemoryService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +38,12 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
 
     private final ConversationMemoryRepository memoryRepository;
     private final DashScopeClient dashScopeClient;
+
+    /** 摘要前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired(required = false)
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String SUMMARY_EGRESS_SITE = "conversation-summary";
 
     /**
      * 滑动窗口大小（保留最近 N 轮消息）
@@ -446,7 +454,13 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
                     "保留关键信息（如提到的批次号、供应商、客户、时间范围等）。" +
                     "摘要应该在 100 字以内。只输出摘要内容，不要有其他说明。";
 
-            String summary = dashScopeClient.chat(systemPrompt, conversationHistory.toString());
+            // 历史里有工具回复 / 摘要里换回的真名: 槽位名、公司名、岗位 + 人名、号码换代号, 脱敏不了就不更新摘要
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(SUMMARY_EGRESS_SITE, memory.getFactoryId(),
+                    LlmEgressGuard.partiesFromSlots(memory.getEntitySlots()), List.of(conversationHistory.toString()));
+            if (redacted.refused()) {
+                return;
+            }
+            String summary = redacted.restore(dashScopeClient.chat(systemPrompt, redacted.text(0)));
 
             // 更新摘要
             memory.setConversationSummary(summary.trim());

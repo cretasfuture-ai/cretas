@@ -10,6 +10,8 @@ import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.conversation.ConversationSessionRepository;
 import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.ExpressionLearningService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +49,13 @@ public class ConversationServiceImpl implements ConversationService {
     private final ExpressionLearningService learningService;
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired(required = false)
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String CONVERSATION_EGRESS_SITE = "intent-conversation";
+    static final String PARAMETER_EGRESS_SITE = "intent-conversation-params";
 
     @Value("${cretas.ai.conversation.max-rounds:5}")
     private int maxRounds;
@@ -505,9 +514,16 @@ public class ConversationServiceImpl implements ConversationService {
                     ? userInput
                     : conversationHistory + "用户: " + userInput;
 
+            // 多轮历史 + 原话: 号码、公司名、岗位 + 人名换代号, 脱敏不了就不发
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(CONVERSATION_EGRESS_SITE,
+                    session.getFactoryId(), Map.of(), Arrays.asList(systemPrompt, userMessage));
+            if (redacted.refused()) {
+                return generateDefaultResponse(availableIntents);
+            }
+
             // R2+R4: 使用 fastModel (flash) 并记录耗时
             long t0 = System.currentTimeMillis();
-            String response = dashScopeClient.chatFast(systemPrompt, userMessage);
+            String response = redacted.restoreJsonText(dashScopeClient.chatFast(redacted.text(0), redacted.text(1)));
             long elapsed = System.currentTimeMillis() - t0;
             log.info("Conv LLM 调用: model=flash, intents={}/{}, promptLen={}, elapsed={}ms",
                     relevantIntents.size(), availableIntents.size(),
@@ -1009,7 +1025,13 @@ public class ConversationServiceImpl implements ConversationService {
         try {
             // 构建 LLM 提示词
             String systemPrompt = buildParameterExtractionPrompt(uncollectedParams, session);
-            String response = dashScopeClient.chat(systemPrompt, "用户输入: " + userReply);
+            // 原话里的号码换成可还原的代号 (抽出的参数里换回真值)
+            LlmEgressRedactor.Result masked = llmEgressGuard.utterance(PARAMETER_EGRESS_SITE, userReply);
+            if (masked.refused()) {
+                return extractParametersSimple(uncollectedParams, userReply);
+            }
+            String response = masked.restoreJsonText(
+                    dashScopeClient.chat(systemPrompt, "用户输入: " + masked.text(0)));
 
             // 解析 LLM 响应
             return parseParameterExtractionResponse(response, uncollectedParams);

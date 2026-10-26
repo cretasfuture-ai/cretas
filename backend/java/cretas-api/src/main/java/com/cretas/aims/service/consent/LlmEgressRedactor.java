@@ -137,10 +137,19 @@ public final class LlmEgressRedactor {
     private static final Pattern ID_KEY = Pattern.compile("(?i)^(id|.*id|.*ids)$");
     private static final Pattern MOBILE_NUMBER = Pattern.compile("^1[3-9]\\d{9}$");
 
+    /**
+     * 文本模式补充: 「姓 + 称谓」不管前面是不是汉字 (训练规则要求前面不是汉字, 「找李经理确认」认不出)。
+     * 只用于外发: 代号可还原, 误认一个词只是多一个代号。
+     */
+    private static final Pattern TITLED_NAME = Pattern.compile(
+            "[" + TrainingSampleRules.SURNAMES + "][" + TrainingSampleRules.HAN + "]?"
+            + "(?:经理|总监|老板|师傅|厂长|主任|科长|部长|组长|班长|主管|先生|女士|小姐)");
+
     private static final String HIDDEN = "[已隐藏]";
 
     private enum Kind {
-        CUSTOMER("客户"), SUPPLIER("供应商"), ORG("单位"), PERSON("人员"), NAME("名称"), PRODUCT("保密产品");
+        CUSTOMER("客户"), SUPPLIER("供应商"), ORG("单位"), PERSON("人员"), NAME("名称"), PRODUCT("保密产品"),
+        PHONE("电话"), ID_NUMBER("证件号"), CARD("卡号");
 
         final String label;
 
@@ -149,23 +158,54 @@ public final class LlmEgressRedactor {
         }
     }
 
+    /** 调用方已知的交易对象 / 人 (从记录里取出的客户名等), 文本模式下整串换代号。 */
+    public enum Party {
+        CUSTOMER(Kind.CUSTOMER), SUPPLIER(Kind.SUPPLIER), ORG(Kind.ORG), PERSON(Kind.PERSON);
+
+        private final Kind kind;
+
+        Party(Kind kind) {
+            this.kind = kind;
+        }
+    }
+
     /** 脱敏结果。 */
     public static final class Result {
         private final String payload;
+        private final List<String> texts;
         private final Map<String, String> tokenToReal;
         private final String refusal;
         private final int droppedFields;
 
         Result(String payload, Map<String, String> tokenToReal, String refusal, int droppedFields) {
+            this(payload, List.of(), tokenToReal, refusal, droppedFields);
+        }
+
+        Result(String payload, List<String> texts, Map<String, String> tokenToReal, String refusal, int droppedFields) {
             this.payload = payload;
+            this.texts = texts;
             this.tokenToReal = tokenToReal;
             this.refusal = refusal;
             this.droppedFields = droppedFields;
         }
 
+        static Result refusedFor(String reason) {
+            return new Result(null, Map.of(), reason, 0);
+        }
+
         /** 可以发给模型的 JSON; {@link #refused()} 时为 null。 */
         public String payload() {
             return payload;
+        }
+
+        /** 文本模式: 与入参一一对应、可以发给模型的文本; {@link #refused()} 时为空。 */
+        public List<String> texts() {
+            return texts;
+        }
+
+        /** 文本模式第 i 段 (入参为 null 的段仍为 null)。 */
+        public String text(int i) {
+            return texts.get(i);
         }
 
         public boolean refused() {
@@ -195,6 +235,95 @@ public final class LlmEgressRedactor {
                 out = out.replace(e.getKey(), e.getValue());
             }
             return out;
+        }
+
+        /**
+         * 模型回的是 JSON 文本、而解析在别处做时: 换回的真名按 JSON 字符串转义 (代号总是出现在 JSON 字符串里),
+         * 真名带引号 / 反斜杠也不会弄坏 JSON。
+         */
+        public String restoreJsonText(String json) {
+            if (json == null || tokenToReal.isEmpty()) {
+                return json;
+            }
+            String out = json;
+            for (Map.Entry<String, String> e : tokenToReal.entrySet()) {
+                out = out.replace(e.getKey(),
+                        new String(com.fasterxml.jackson.core.io.JsonStringEncoder.getInstance().quoteAsString(e.getValue())));
+            }
+            return out;
+        }
+
+        /**
+         * 模型回的是 JSON 时, 先解析再逐个字符串换回真名 (真名里有引号 / 反斜杠也不会弄坏 JSON)。
+         * 返回新的 Map / List; 其它值原样返回。
+         */
+        public Object restoreDeep(Object node) {
+            if (tokenToReal.isEmpty()) {
+                return node;
+            }
+            if (node instanceof Map<?, ?> map) {
+                Map<Object, Object> out = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> e : map.entrySet()) {
+                    Object k = e.getKey() instanceof String ks ? restore(ks) : e.getKey();
+                    out.put(k, restoreDeep(e.getValue()));
+                }
+                return out;
+            }
+            if (node instanceof List<?> items) {
+                List<Object> out = new ArrayList<>();
+                for (Object item : items) {
+                    out.add(restoreDeep(item));
+                }
+                return out;
+            }
+            return node instanceof String s ? restore(s) : node;
+        }
+
+        /**
+         * 流式回答: 代号可能被拆在两段 token 里 ({@code "[客"} + {@code "户A]"}), 攒到代号闭合再换回真名往下发。
+         * 流结束时必须调 {@link StreamRestorer#flush()}。
+         */
+        public StreamRestorer streamRestorer(java.util.function.Consumer<String> downstream) {
+            return new StreamRestorer(this, downstream);
+        }
+    }
+
+    /** 见 {@link Result#streamRestorer}。 */
+    public static final class StreamRestorer implements java.util.function.Consumer<String> {
+        /** 最长的代号 ({@code [保密产品AB]}) 远短于此; 超过还没闭合的 "[" 不是代号, 直接放行。 */
+        private static final int MAX_PENDING = 16;
+
+        private final Result result;
+        private final java.util.function.Consumer<String> downstream;
+        private final StringBuilder pending = new StringBuilder();
+
+        StreamRestorer(Result result, java.util.function.Consumer<String> downstream) {
+            this.result = result;
+            this.downstream = downstream;
+        }
+
+        @Override
+        public synchronized void accept(String chunk) {
+            if (chunk == null || chunk.isEmpty()) {
+                return;
+            }
+            pending.append(chunk);
+            int open = pending.lastIndexOf("[");
+            int cut = open >= 0 && pending.indexOf("]", open) < 0 && pending.length() - open <= MAX_PENDING
+                    ? open : pending.length();
+            if (cut > 0) {
+                String ready = pending.substring(0, cut);
+                pending.delete(0, cut);
+                downstream.accept(result.restore(ready));
+            }
+        }
+
+        public synchronized void flush() {
+            if (pending.length() > 0) {
+                String rest = pending.toString();
+                pending.setLength(0);
+                downstream.accept(result.restore(rest));
+            }
         }
     }
 
@@ -251,21 +380,69 @@ public final class LlmEgressRedactor {
      * @param protectedNames 本厂工艺保密产品名 (可为空)
      */
     public Result redact(Object data, Collection<String> protectedNames) {
-        Object tree;
-        try {
-            tree = toPlainTree(objectMapper, data);
-        } catch (RuntimeException e) {
-            return new Result(null, Map.of(), "结果类型无法展开", 0);
+        return redact(data, List.of(), Map.of(), protectedNames, false);
+    }
+
+    /**
+     * 文本模式 (拼好的提示词片段 / 对话历史): 各段共用一套代号, 模型回答用 {@link Result#restore} 换回。
+     * <ul>
+     *     <li>手机号 / 座机 / 身份证号 / 银行卡号 → {@code [电话A]} {@code [证件号A]} {@code [卡号A]} (可还原,
+     *         用户自己说的号码填进表单时不会丢);</li>
+     *     <li>{@code knownParties} (调用方从记录里取出的客户名等) 与工艺保密产品名, 出现在任何一段都换代号;</li>
+     *     <li>{@code detectNames}: 再把「公司类名称」「岗位 + 人名」「李经理」这类片段换代号 —— 历史和带记录的
+     *         提示词要开; 只有用户原话、要按原话识别意图时可以关 (只抹号码)。</li>
+     * </ul>
+     * 发出前同样再扫一遍, 残留就拒绝。
+     */
+    public Result redactTexts(List<String> texts, Map<String, Party> knownParties,
+                              Collection<String> protectedNames, boolean detectNames) {
+        return redact(null, texts, knownParties, protectedNames, detectNames);
+    }
+
+    /**
+     * 结构化结果 + 文本 (如: 候选人名单 + 用户原话) 共用一套代号: 名单里换成 {@code [人员A]} 的人,
+     * 原话里提到时也是 {@code [人员A]}, 模型才能把两边对上。{@code data} 为 null 时只有文本。
+     */
+    public Result redact(Object data, List<String> texts, Map<String, Party> knownParties,
+                         Collection<String> protectedNames, boolean detectNames) {
+        Object tree = null;
+        if (data != null) {
+            try {
+                tree = toPlainTree(objectMapper, data);
+            } catch (RuntimeException e) {
+                return new Result(null, Map.of(), "结果类型无法展开", 0);
+            }
         }
         Session s = new Session(protectedNames);
-        Object cleaned = s.walk(tree, "", null);
-        cleaned = s.replaceKnownEverywhere(cleaned);
-        String leak = s.findLeak(cleaned);
+        if (knownParties != null) {
+            for (Map.Entry<String, Party> e : knownParties.entrySet()) {
+                String real = e.getKey() == null ? "" : e.getKey().trim();
+                if (real.length() >= 2 && !GENERIC.contains(real)) {
+                    s.token(e.getValue().kind, real);
+                }
+            }
+        }
+        Object cleanedTree = tree == null ? null : s.walk(tree, "", null);
+        List<String> scrubbed = new ArrayList<>();
+        for (String text : texts) {
+            scrubbed.add(text == null ? null : s.scrubText(text, detectNames));
+        }
+        // 第二遍: 后面才认出的真名, 在前面的字段 / 段落里也换掉
+        cleanedTree = s.replaceKnownEverywhere(cleanedTree);
+        List<String> cleanedTexts = new ArrayList<>();
+        for (String text : scrubbed) {
+            cleanedTexts.add(text == null ? null : (String) s.replaceKnownEverywhere(text));
+        }
+        List<Object> all = new ArrayList<>(cleanedTexts);
+        all.add(cleanedTree);
+        String leak = s.findLeak(all);
         if (leak != null) {
             return new Result(null, Map.of(), leak, s.dropped);
         }
         try {
-            return new Result(objectMapper.writeValueAsString(cleaned), s.tokenToReal, null, s.dropped);
+            String payload = data == null ? null : objectMapper.writeValueAsString(cleanedTree);
+            return new Result(payload, java.util.Collections.unmodifiableList(cleanedTexts), s.tokenToReal, null,
+                    s.dropped);
         } catch (JsonProcessingException e) {
             return new Result(null, Map.of(), "序列化失败", s.dropped);
         }
@@ -463,6 +640,22 @@ public final class LlmEgressRedactor {
             return out;
         }
 
+        /** 文本模式: 已知真名 / 保密产品名先换, 再把号码换成可还原的代号, 按需再认公司名与人名。 */
+        String scrubText(String value, boolean detectNames) {
+            String out = replaceKnownText(value, spreadableReals());
+            out = replaceSpans(out, TrainingSampleRules.ID_CARD, Kind.ID_NUMBER);
+            out = replaceSpans(out, TrainingSampleRules.BANK_CARD, Kind.CARD);
+            out = replaceSpans(out, MOBILE_LOOSE, Kind.PHONE);
+            out = replaceSpans(out, LANDLINE, Kind.PHONE);
+            out = replaceSpans(out, TrainingSampleRules.PHONE, Kind.PHONE);
+            if (detectNames) {
+                out = replaceSpans(out, TrainingSampleRules.ORG_NAME, Kind.ORG);
+                out = replaceSpans(out, TrainingSampleRules.PERSON, Kind.PERSON);
+                out = replaceSpans(out, TITLED_NAME, Kind.PERSON);
+            }
+            return out;
+        }
+
         String replaceSpans(String text, Pattern pattern, Kind kind) {
             Matcher m = pattern.matcher(text);
             StringBuilder sb = new StringBuilder();
@@ -475,6 +668,10 @@ public final class LlmEgressRedactor {
 
         /** 第二遍: 已换过代号的真名、保密产品名, 在任何字符串 (含业务对象名、字段名) 里出现都换掉。 */
         Object replaceKnownEverywhere(Object node) {
+            return replaceKnown(node, spreadableReals());
+        }
+
+        List<String> spreadableReals() {
             List<String> reals = new ArrayList<>();
             for (String real : realToToken.keySet()) {
                 if (replaceableEverywhere(real)) {
@@ -482,7 +679,7 @@ public final class LlmEgressRedactor {
                 }
             }
             reals.sort(Comparator.comparingInt(String::length).reversed());
-            return replaceKnown(node, reals);
+            return reals;
         }
 
         /**

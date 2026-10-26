@@ -8,6 +8,8 @@ import com.cretas.aims.dto.conversation.ConversationContext;
 import com.cretas.aims.dto.conversation.ConversationMessage;
 import com.cretas.aims.dto.conversation.EntitySlot;
 import com.cretas.aims.service.CoreferenceResolutionService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +40,12 @@ public class CoreferenceResolutionServiceImpl implements CoreferenceResolutionSe
 
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    /** 上下文 (槽位名、最近对话) 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired(required = false)
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "coreference";
 
     /**
      * 是否启用指代消解
@@ -309,11 +317,19 @@ public class CoreferenceResolutionServiceImpl implements CoreferenceResolutionSe
             // 构建 prompt
             String prompt = buildLLMPrompt(userInput, references, contextSummary);
 
-            // 调用 LLM
-            String response = dashScopeClient.chat("你是一个指代消解助手，帮助解析用户输入中的代词和指示词。", prompt);
+            // 历史里的客户 / 供应商 / 员工名 (含此前回答里换回的真名)、号码换代号, 脱敏不了就不发
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, context.getFactoryId(),
+                    LlmEgressGuard.partiesFromSlots(context.getEntitySlots()), List.of(prompt));
+            if (redacted.refused()) {
+                return ReferenceResult.failed(userInput, references);
+            }
 
-            // 解析响应
-            Map<String, String> resolvedMap = parseLLMResponse(response, references);
+            // 调用 LLM
+            String response = dashScopeClient.chat("你是一个指代消解助手，帮助解析用户输入中的代词和指示词。",
+                    redacted.text(0));
+
+            // 解析响应 (代号换回真名后才替换进原话)
+            Map<String, String> resolvedMap = parseLLMResponse(redacted.restoreJsonText(response), references);
 
             if (resolvedMap.isEmpty()) {
                 return ReferenceResult.failed(userInput, references);

@@ -4,7 +4,10 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.rd.ProductSample;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.service.rd.ProductSampleService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +52,12 @@ public class SampleToBomTool extends AbstractBusinessTool {
 
     @Autowired
     private RawMaterialTypeRepository materialTypeRepository;
+
+    /** 发给模型前脱敏 (客户名、号码、人名、工艺保密产品名); 单测直接 new 本类时用默认实例。 */
+    @Autowired(required = false)
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "sample-to-bom";
 
     @Override
     public String getToolName() {
@@ -113,9 +122,20 @@ public class SampleToBomTool extends AbstractBusinessTool {
                 .collect(Collectors.toMap(m -> m.getName().toLowerCase(), m -> m, (a, b) -> a));
 
         // 3. 构建 prompt + 调 LLM
-        String systemPrompt = buildSystemPrompt(dictionary);
-        String userPrompt = buildUserPrompt(sample, referenceSku, adjustments);
-        String llmResponse = dashScopeClient.chatLowTemp(systemPrompt, userPrompt);
+        // 客户名不进提示词 (配 BOM 用不到); 客户要求、调整说明里出现的客户名 / 人名 / 号码换代号, 脱敏不了就不发
+        Map<String, LlmEgressRedactor.Party> known = new LinkedHashMap<>();
+        if (sample.getCustomerName() != null) {
+            known.put(sample.getCustomerName(), LlmEgressRedactor.Party.CUSTOMER);
+        }
+        if (sample.getSalesperson() != null) {
+            known.put(sample.getSalesperson(), LlmEgressRedactor.Party.PERSON);
+        }
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, factoryId, known,
+                List.of(buildSystemPrompt(dictionary), buildUserPrompt(sample, referenceSku, adjustments)));
+        if (redacted.refused()) {
+            throw new BusinessException("样品资料里有无法脱敏的内容, 未发给 AI 生成 BOM, 请手动建 BOM 草稿");
+        }
+        String llmResponse = redacted.restoreJsonText(dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1)));
 
         // 4. 解析 LLM JSON
         Map<String, Object> parsed;
@@ -219,9 +239,6 @@ public class SampleToBomTool extends AbstractBusinessTool {
         }
         if (sample.getMainMaterial() != null) {
             sb.append("- 主原料 (字典名): ").append(sample.getMainMaterial()).append('\n');
-        }
-        if (sample.getCustomerName() != null) {
-            sb.append("- 客户: ").append(sample.getCustomerName()).append('\n');
         }
         if (sample.getCustomerLatestRequirement() != null) {
             sb.append("- 客户最新要求: ").append(sample.getCustomerLatestRequirement()).append('\n');
