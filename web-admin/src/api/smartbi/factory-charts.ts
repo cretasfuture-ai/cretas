@@ -34,7 +34,19 @@ export interface FactoryRecommendation {
   kpis: FactoryChartKpi[];
   /** Financial candidates may return a structured table object; rendering is intentionally deferred. */
   tableData: Record<string, unknown> | Array<Record<string, unknown> | { label: string; value: number | string | null }> | null;
+  detailContext?: FactoryChartDetailContext;
 }
+
+export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: Record<string, unknown>; }
+export interface FactoryChartDetailFilter { field: string; value: string | number | boolean | null; }
+export interface FactoryChartDetailsRequest { context_id: string; page?: number; page_size?: number; filters?: FactoryChartDetailFilter[]; point?: { name: string; seriesName?: string; dataIndex?: number }; }
+export interface FactoryChartDetailsData {
+  factoryId: string; candidateId: string; title: string; source: string; period: string;
+  columns: string[]; rows: Record<string, unknown>[]; total: number; page: number; pageSize: number;
+  hasMore: boolean; appliedFilters: FactoryChartDetailFilter[]; availableFilters: Array<{ field: string; label: string; kind: string }>;
+  snapshotAt: string;
+}
+export interface FactoryChartDetailsResponse { success: boolean; data?: FactoryChartDetailsData; message?: string; }
 
 export interface FactoryUnavailableChart { id: string; title: string; missing: string[]; }
 export interface FactorySourceError { source: string; message: string; }
@@ -70,6 +82,13 @@ export async function getFactoryChartRecommendations(
       preserveResponseKeys: true,
     },
   );
+}
+
+export async function getFactoryChartDetails(payload: FactoryChartDetailsRequest): Promise<FactoryChartDetailsResponse> {
+  return await pythonFetch<FactoryChartDetailsResponse>('/api/smartbi/financial-dashboard/factory-details', {
+    method: 'POST', body: JSON.stringify({ ...payload, page: payload.page ?? 1, page_size: Math.min(payload.page_size ?? 50, 100) }),
+    timeoutMs: PYTHON_LLM_TIMEOUT_MS, preserveResponseKeys: true,
+  });
 }
 
 export interface FactoryChartSelectionResponse {

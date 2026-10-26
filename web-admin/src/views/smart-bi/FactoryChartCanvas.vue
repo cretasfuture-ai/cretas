@@ -2,9 +2,10 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = withDefaults(defineProps<{ option: Record<string, unknown>; height?: number }>(), { height: 320 });
+const emit = defineEmits<{ click: [params: { name?: string; seriesName?: string; dataIndex?: number }] }>();
 const chartEl = ref<HTMLElement | null>(null);
 const chartError = ref('');
-type ChartInstance = { setOption: (option: Record<string, unknown>, opts?: Record<string, unknown>) => void; resize: () => void; dispose: () => void };
+type ChartInstance = { setOption: (option: Record<string, unknown>, opts?: Record<string, unknown>) => void; resize: () => void; dispose: () => void; on?: (event: string, handler: (params: { name?: string; seriesName?: string; dataIndex?: number }) => void) => void; off?: (event: string) => void };
 let instance: ChartInstance | null = null;
 let resizeObserver: ResizeObserver | null = null;
 
@@ -22,6 +23,7 @@ async function render() {
   if (!chartEl.value) return;
   if (!instance) instance = echarts.init(chartEl.value, 'cretas') as unknown as ChartInstance;
   instance.setOption(processEChartsOptions(props.option), { notMerge: true });
+  instance.off?.('click'); instance.on?.('click', (params) => emit('click', params));
   instance.resize();
   } catch {
     instance?.dispose();

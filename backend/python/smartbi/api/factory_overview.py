@@ -56,14 +56,16 @@ PRODUCT_SQL = """
 SELECT i.product_name AS product_name,
        i.unit AS unit,
        SUM(i.quantity) AS quantity,
-       SUM(i.quantity * i.unit_price) AS amount
+       SUM(ROUND(ROUND(i.quantity * i.unit_price, 2)
+           * (1 - COALESCE(i.discount_rate, 0) / 100), 2)) AS amount
 FROM sales_order_items i
 JOIN sales_orders so ON so.id = i.sales_order_id
 WHERE so.factory_id = $1 AND so.deleted_at IS NULL AND i.deleted_at IS NULL
   AND so.status NOT IN ({excluded})
   AND i.quantity IS NOT NULL AND i.unit_price IS NOT NULL
 GROUP BY i.product_name, i.unit
-ORDER BY SUM(i.quantity * i.unit_price) DESC
+ORDER BY SUM(ROUND(ROUND(i.quantity * i.unit_price, 2)
+           * (1 - COALESCE(i.discount_rate, 0) / 100), 2)) DESC
 LIMIT $2
 """.format(excluded=_EXCLUDED_SQL)
 

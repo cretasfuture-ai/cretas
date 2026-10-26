@@ -61,7 +61,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
     from smartbi.api.factory_production_gold import _can_view_cost
     from starlette.concurrency import run_in_threadpool
-    from smartbi.services.factory_charts import engine, sources, ranking, finance_sources
+    from smartbi.services.factory_charts import engine, sources, ranking, finance_sources, operational_sources, captured_sources, detail_store, details
 
     factory_id = require_same_factory(http_request, request.factory_id)
     role = getattr(http_request.state, 'role', None)
@@ -93,12 +93,38 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         datasets.extend(extra_data)
         errors.extend(extra_errors)
         extra_gaps.extend(more_gaps)
+        for loader in (operational_sources.load, captured_sources.load):
+            more_data, more_errors, source_gaps = await loader(factory_id, request, can_price)
+            datasets.extend(more_data)
+            errors.extend(more_errors)
+            extra_gaps.extend(source_gaps)
         if not datasets and errors:
             return JSONResponse(status_code=503, content={'success': False, 'message': '工厂数据来源读取失败，请重试', 'data': {'sourceErrors': errors}})
     candidates, gaps = await run_in_threadpool(engine.build, datasets, request, can_price)
     errors.extend({'source': gap['title'], 'message': gap['missing'][0]} for gap in gaps if gap.get('error'))
     gaps = [gap for gap in gaps if not gap.get('error')]
     candidates, order = await ranking.rank(candidates, request.use_ai, cache_scope=f'{factory_id}:{role}')
+    # These three legacy gaps describe missing capture, not missing data in
+    # unrelated datasets. Remove each only after its trusted business adapter
+    # has produced the corresponding real candidate for this period.
+    proven = set()
+    for candidate in candidates:
+        source = str(candidate.get('source', '')).split(' · ', 1)[0]
+        metric = str(candidate.get('id', ''))
+        if source == 'sales-sales_channel' and 'finance.channel_analysis' in metric:
+            proven.add('sales.channel')
+        if source in ('sales-department_id', 'department') and 'finance.business_unit_analysis' in metric:
+            proven.add('finance.unit-source')
+        if source == 'oee' and 'production.oee' in metric:
+            proven.add('production.oee-source')
+    extra_gaps = [gap for gap in extra_gaps if gap.get('id') not in proven]
+    from common.tenant_identity import caller_user_id
+    user_id = caller_user_id(http_request)
+    if user_id is not None and user_id > 0:
+        try:
+            candidates = await detail_store.register_shared(candidates, datasets, request, (factory_id, user_id, role), can_price)
+        except details.DetailError as exc:
+            raise HTTPException(exc.status_code, exc.detail) from None
     from smartbi.services.factory_charts.selection_groups import default_selection
     label = '全部历史' if request.period_type == 'all' else f'{request.year}年{request.start_month}–{request.end_month}月'
     return _sanitize_for_json({'success': True, 'data': {
@@ -670,3 +696,8 @@ async def export_pdf(request: PDFExportRequest):
     except Exception as e:
         logger.error(f"PDF export failed: {e}", exc_info=True)
         return {"success": False, "error": "PDF 导出失败，请稍后重试"}
+
+
+# Same authenticated namespace; query-only pages never modify source records.
+from smartbi.api.factory_chart_details import router as _factory_details_router
+router.include_router(_factory_details_router)

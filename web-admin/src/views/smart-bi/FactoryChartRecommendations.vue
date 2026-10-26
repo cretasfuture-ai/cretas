@@ -16,6 +16,7 @@ import {
 } from '@/api/smartbi/factory-charts';
 import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport } from './factoryChartExport';
 import FactoryChartCanvas from './FactoryChartCanvas.vue';
+import FactoryChartDetails from './FactoryChartDetails.vue';
 import {
   factoryChartRequestFromSelection,
   loadFactoryChartSelectionIntent,
@@ -73,6 +74,7 @@ const recommendations = computed(() => data.value?.recommendations ?? []);
 const displayedRecommendations = computed(() => recommendations.value.filter(item => selectedIds.value.includes(item.id)));
 const domains = computed(() => [...new Set(recommendations.value.map(item => item.domain).filter(Boolean))]);
 const filteredDisplayedRecommendations = computed(() => displayedRecommendations.value.filter(item => domainFilter.value === 'all' || item.domain === domainFilter.value));
+const detailsVisible = ref(false); const detailsCandidate = ref<FactoryRecommendation | null>(null); const detailsPoint = ref<{ name: string; seriesName?: string; dataIndex?: number }>();
 const hasNoSelectedCharts = computed(() => recommendations.value.length > 0 && displayedRecommendations.value.length === 0);
 const sourceLabel = computed(() => source.value === 'business' ? '业务系统' : '上传报表');
 const uploadLabel = (item: UploadHistoryItem) => `${item.originalFileName || item.fileName}${item.sheetName ? ` · ${item.sheetName}` : ''}`;
@@ -210,6 +212,12 @@ async function loadRecommendations() {
 }
 
 function refresh() { void loadRecommendations(); }
+
+function openDetails(item: FactoryRecommendation, point?: { name?: string; seriesName?: string; dataIndex?: number }) {
+  detailsCandidate.value = item;
+  detailsPoint.value = point?.name ? { name: point.name, seriesName: point.seriesName, dataIndex: point.dataIndex } : undefined;
+  detailsVisible.value = true;
+}
 
 function onSourceChange(next: FactoryChartSource) {
   source.value = next;
@@ -424,13 +432,15 @@ function findingsFor(item: FactoryRecommendation) {
           </template>
           <div class="rule-reason"><strong>规则依据</strong><span>{{ item.reason }}</span></div>
           <p class="scope-note">来源：{{ item.source }}</p>
-          <FactoryChartCanvas :option="item.chart.echartsOption" />
+          <FactoryChartCanvas :option="item.chart.echartsOption" @click="openDetails(item, $event)" />
+          <el-button v-if="item.detailContext" class="details-button" size="small" plain @click="openDetails(item)">查看原始明细</el-button>
           <table class="source-details" aria-label="图表来源详情"><caption>来源详情</caption><tbody><tr><th>工厂</th><td>{{ factoryId }}</td><th>数据源</th><td>{{ item.source || data.sourceLabel }}</td></tr><tr><th>期间</th><td>{{ data.period?.label || '当前期间' }}</td><th>单位</th><td>{{ item.unit || '—' }}</td></tr></tbody></table>
           <div class="kpi-grid"><div v-for="kpi in item.kpis" :key="`${item.id}-${kpi.label}`" class="kpi-item"><span>{{ kpi.label }}</span><strong>{{ kpi.value ?? '—' }} <small>{{ kpi.unit }}</small></strong></div></div>
           <div v-for="section in findingsFor(item)" :key="section.key" class="finding-section"><div class="finding-title" :class="`finding-title--${section.type}`">{{ section.title }}</div><ul><li v-for="text in section.items" :key="text">{{ text }}</li></ul></div>
           <div v-if="item.aiReason" class="ai-reason"><el-tag type="success" size="small">AI 补充</el-tag><span>{{ item.aiReason }}</span></div>
         </el-card>
       </div>
+      <FactoryChartDetails v-model="detailsVisible" :candidate="detailsCandidate" :point="detailsPoint" />
 
       <el-card v-if="data.unavailable?.length" shadow="never" class="unavailable-card" data-testid="factory-chart-unavailable">
         <template #header><div class="unavailable-title"><el-icon><TrendCharts /></el-icon>当前数据暂不具备的图表</div></template>

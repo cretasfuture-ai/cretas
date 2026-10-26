@@ -30,6 +30,7 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 import SalesPackagingSelect from './components/SalesPackagingSelect.vue';
+import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import { canOrderFromQuote, type OrderQuote } from '../quotes/quoteOrderContract';
 const deliveryDatePicker = ref<InstanceType<typeof OrderDeliveryDatePicker>>();
 
@@ -96,6 +97,7 @@ const form = ref({
   deliveryAddress: '',
   salesperson: '',
   remark: '',
+  customFields: {} as TableRow,
   items: [] as SalesLine[],
   suppliedMaterials: [] as SuppliedMaterial[],
 });
@@ -346,6 +348,7 @@ async function submit(): Promise<void> {
       deliveryAddress: form.value.deliveryAddress || undefined,
       salesperson: form.value.salesperson || undefined,
       remark: form.value.remark || undefined,
+      customFields: form.value.customFields,
       processingMode: form.value.processingMode,
       materialSupplyMode: form.value.materialSupplyMode,
       suppliedMaterials: requiresSuppliedMaterials.value ? form.value.suppliedMaterials.map((row) => ({ ...row, unit: storageUnitCode(row.unit), expectedArrivalAt: row.expectedArrivalAt.length === 10 ? `${row.expectedArrivalAt}T00:00:00` : row.expectedArrivalAt })) : [],
@@ -442,6 +445,7 @@ onMounted(async () => {
         </el-row>
         <el-form-item label="交货地址"><el-input v-model="form.deliveryAddress" @input="dirty = true" /></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" @input="dirty = true" /></el-form-item>
+        <CanvasDynamicFields v-model="form.customFields" module-code="sales_order" @update:model-value="dirty = true" />
       </el-card>
 
       <el-card shadow="never" class="content-card">

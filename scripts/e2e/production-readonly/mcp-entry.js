@@ -18,6 +18,12 @@ const AUTH_REQUESTS = [
 // execute tools with side effects behind a single HTTP request.
 const READONLY_POST_WHITELIST = [
   {
+    id: 'smartbi-factory-details',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/factory-details\/?$/,
+    rationale: 'Read-only tenant-qualified original-row details from a short-lived server snapshot.',
+  },
+  {
     id: 'smartbi-factory-recommendations',
     method: 'POST',
     path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/factory-recommendations\/?$/,
