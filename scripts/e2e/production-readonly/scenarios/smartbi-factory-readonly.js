@@ -8,6 +8,7 @@ const MAX_CANVAS_CLICK_ATTEMPTS = 7;
 const MAX_DETAIL_CANDIDATES = 6;
 const DETAIL_ACCEPTANCE_DEADLINE_MS = 85_000;
 const DETAIL_RESPONSE_TIMEOUT_MS = 8_000;
+const POINT_CLICK_BUDGET_MS = (MAX_CANVAS_CLICK_ATTEMPTS * 3_500) + 5_000;
 
 function endpointPath(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
@@ -235,41 +236,148 @@ function numericDataValue(candidate, point) {
   return Number.isFinite(Number(raw)) ? Math.max(0, Number(raw)) : 1;
 }
 
+function resolveOptionInset(value, total, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /%$/.test(value)) {
+    const percent = Number.parseFloat(value);
+    if (Number.isFinite(percent)) return total * percent / 100;
+  }
+  return fallback;
+}
+
+function optionGridRect(option, width, height) {
+  const grid = Array.isArray(option?.grid) ? option.grid[0] || {} : option?.grid || {};
+  const left = resolveOptionInset(grid.left, width, width * 0.08);
+  const right = resolveOptionInset(grid.right, width, width * 0.08);
+  const top = resolveOptionInset(grid.top, height, 45);
+  const bottom = resolveOptionInset(grid.bottom, height, 65);
+  return {
+    left: Math.max(0, Math.min(width, left)),
+    right: Math.max(0, Math.min(width, width - right)),
+    top: Math.max(0, Math.min(height, top)),
+    bottom: Math.max(0, Math.min(height, height - bottom)),
+  };
+}
+
+function axisAt(option, axisName, index = 0) {
+  const axis = option?.[axisName];
+  return Array.isArray(axis) ? axis[index] || {} : axis || {};
+}
+
+function numericValue(value) {
+  const raw = Array.isArray(value) ? value[value.length - 1] : value;
+  const number = Number(raw && typeof raw === 'object' ? raw.value : raw);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function valueAxisBounds(axis, values) {
+  const finite = values.map(numericValue).filter(Number.isFinite);
+  const observedMax = finite.length ? Math.max(...finite) : 1;
+  const observedMin = finite.length ? Math.min(...finite) : 0;
+  let min = Number.isFinite(Number(axis?.min)) ? Number(axis.min) : Math.min(0, observedMin);
+  let max = Number.isFinite(Number(axis?.max)) ? Number(axis.max) : Math.max(1, observedMax);
+  if (max <= min) max = min + 1;
+  return { min, max };
+}
+
+function chartPointCoordinate(box, candidate, point) {
+  const width = Number(box?.width || 0);
+  const height = Number(box?.height || 0);
+  const left = Number(box?.x || 0);
+  const top = Number(box?.y || 0);
+  if (width <= 0 || height <= 0 || !point) return null;
+  const option = candidate?.chart?.echartsOption || {};
+  const series = seriesList(option);
+  const selected = series.find((item) => String(item?.name || '') === String(point.seriesName || ''))
+    || series.find((item) => String(item?.type || '').toLowerCase() === (point.kind === 'pie' ? 'pie' : 'bar'))
+    || series[0];
+  if (!selected) return null;
+
+  if (point.kind === 'pie') {
+    const center = Array.isArray(selected.center) ? selected.center : ['50%', '50%'];
+    const centerX = left + resolveOptionInset(center[0], width, width / 2);
+    const centerY = top + resolveOptionInset(center[1], height, height / 2);
+    const radius = Array.isArray(selected.radius) ? selected.radius : [0, selected.radius || '70%'];
+    const radiusBase = Math.min(width, height) / 2;
+    const inner = resolveOptionInset(radius[0], radiusBase, 0);
+    const outer = resolveOptionInset(radius[1], radiusBase, radiusBase * 0.7);
+    const values = Array.isArray(selected.data) ? selected.data.map(numericValue) : [];
+    const total = values.reduce((sum, value) => sum + Math.max(0, value), 0) || values.length || 1;
+    const before = values.slice(0, point.dataIndex).reduce((sum, value) => sum + Math.max(0, value), 0);
+    const value = Math.max(0, values[point.dataIndex] || numericDataValue(candidate, point));
+    const startAngle = Number.isFinite(Number(selected.startAngle)) ? Number(selected.startAngle) : 90;
+    const angle = -Math.PI / 2 + ((90 - startAngle) * Math.PI / 180) + ((before + value / 2) / total) * Math.PI * 2;
+    const radiusMid = (inner + outer) / 2;
+    return { x: centerX + Math.cos(angle) * radiusMid, y: centerY + Math.sin(angle) * radiusMid };
+  }
+
+  const horizontal = point.kind === 'bar_horizontal';
+  const categories = horizontal ? axisData(option, 'yAxis') : axisData(option, 'xAxis');
+  const index = Math.max(0, Number.isInteger(point.dataIndex) ? point.dataIndex : 0);
+  const count = Math.max(1, categories.length || (Array.isArray(selected.data) ? selected.data.length : 0));
+  const grid = optionGridRect(option, width, height);
+  const gridWidth = Math.max(1, grid.right - grid.left);
+  const gridHeight = Math.max(1, grid.bottom - grid.top);
+  const values = Array.isArray(selected.data) ? selected.data : [];
+  const value = numericValue(values[index]);
+  const axis = axisAt(option, horizontal ? 'xAxis' : 'yAxis');
+  const bounds = valueAxisBounds(axis, values);
+  const baseline = (0 - bounds.min) / (bounds.max - bounds.min);
+  const endpoint = (value - bounds.min) / (bounds.max - bounds.min);
+  if (horizontal) {
+    const categoryAxis = axisAt(option, 'yAxis');
+    const physicalIndex = categoryAxis.inverse === true ? index : count - index - 1;
+    const y = grid.top + gridHeight * ((physicalIndex + 0.5) / count);
+    const x = left + grid.left + gridWidth * ((baseline + endpoint) / 2);
+    return { x, y: top + y };
+  }
+  const categoryAxis = axisAt(option, 'xAxis');
+  const physicalIndex = categoryAxis.inverse === true ? count - index - 1 : index;
+  const x = grid.left + gridWidth * ((physicalIndex + 0.5) / count);
+  const y = grid.bottom - gridHeight * ((baseline + endpoint) / 2);
+  return { x: left + x, y: top + y };
+}
+
 function clickAttempts(box, candidate, point) {
   const width = Number(box?.width || 0);
   const height = Number(box?.height || 0);
   const left = Number(box?.x || 0);
   const top = Number(box?.y || 0);
   if (width <= 0 || height <= 0 || !point) return [];
-  const option = candidate?.chart?.echartsOption || {};
-  const attempts = [];
-  if (point.kind === 'pie') {
-    const series = seriesList(option).find((item) => String(item?.type || '').toLowerCase() === 'pie') || {};
-    const values = Array.isArray(series.data) ? series.data.map((item) => Number(item?.value ?? item) || 0) : [];
-    const total = values.reduce((sum, value) => sum + value, 0) || values.length || 1;
-    const before = values.slice(0, point.dataIndex).reduce((sum, value) => sum + value, 0);
-    const angle = -Math.PI / 2 + ((before + numericDataValue(candidate, point) / 2) / total) * Math.PI * 2;
-    const radius = Math.min(width, height) * 0.28;
-    for (const scale of [1, 0.75, 1.25, 0.5]) attempts.push({ x: left + width / 2 + Math.cos(angle) * radius * scale, y: top + height / 2 + Math.sin(angle) * radius * scale });
-    for (const angleOffset of [Math.PI / 2, Math.PI, -Math.PI / 2]) attempts.push({ x: left + width / 2 + Math.cos(angle + angleOffset) * radius, y: top + height / 2 + Math.sin(angle + angleOffset) * radius });
-  } else {
-    const horizontal = point.kind === 'bar_horizontal';
-    const categories = horizontal ? axisData(option, 'yAxis') : axisData(option, 'xAxis');
-    const count = Math.max(1, categories.length);
-    const index = Math.max(0, point.dataIndex || 0);
-    const plotLeft = width * 0.08;
-    const plotRight = width * 0.08;
-    const plotTop = Math.min(50, height * 0.18);
-    const plotBottom = Math.min(70, height * 0.22);
-    if (horizontal) {
-      const y = top + plotTop + (height - plotTop - plotBottom) * ((index + 0.5) / count);
-      for (const factor of [0.35, 0.55, 0.75, 0.2]) attempts.push({ x: left + plotLeft + (width - plotLeft - plotRight) * factor, y });
-    } else {
-      const x = left + plotLeft + (width - plotLeft - plotRight) * ((index + 0.5) / count);
-      for (const factor of [0.35, 0.55, 0.75, 0.2]) attempts.push({ x, y: top + plotTop + (height - plotTop - plotBottom) * factor });
-    }
-  }
-  return attempts.slice(0, MAX_CANVAS_CLICK_ATTEMPTS);
+  const primary = chartPointCoordinate(box, candidate, point);
+  if (!primary) return [];
+  const offsets = [{ x: 0, y: 0 }, { x: -6, y: 0 }, { x: 6, y: 0 }, { x: 0, y: -6 }, { x: 0, y: 6 }, { x: -6, y: -6 }, { x: 6, y: 6 }];
+  return offsets.slice(0, MAX_CANVAS_CLICK_ATTEMPTS).map(({ x, y }) => ({
+    x: Math.max(left + 1, Math.min(left + width - 1, primary.x + x)),
+    y: Math.max(top + 1, Math.min(top + height - 1, primary.y + y)),
+  }));
+}
+
+function estimateVirtualRowCount({ contentHeight, rowHeight } = {}) {
+  if (!Number.isFinite(contentHeight) || !Number.isFinite(rowHeight) || contentHeight <= 0 || rowHeight <= 0) return null;
+  const ratio = contentHeight / rowHeight;
+  return Number.isInteger(ratio) ? ratio : null;
+}
+
+function availablePointAttempts(now, deadline) {
+  return Math.max(0, Math.floor(Math.max(0, deadline - now) / 3_500));
+}
+
+function summarizeCandidateCheck(candidateId, result) {
+  const checks = result?.checks || {};
+  const ui = result?.ui || {};
+  return {
+    candidateId,
+    result: result?.result || 'UNVERIFIED',
+    rootCauseClass: result?.rootCauseClass || null,
+    total: result?.total ?? null,
+    rowCount: result?.rowCount ?? null,
+    failedChecks: Object.keys(checks).filter((key) => checks[key] === false),
+    drawerVisible: ui.drawerVisible === true,
+    virtualTableVisible: ui.tableVisible === true,
+    virtualTableRowCount: ui.rowCountMatches === true,
+    reason: typeof result?.reason === 'string' ? result.reason : null,
+  };
 }
 
 function unverified(reason, extra = {}) {
@@ -305,21 +413,33 @@ async function inspectDetailsTable(page, expectedRows, timeoutMs = 5_000) {
   const renderedRowCount = await rows.count();
   const ariaRowCount = await table.getAttribute('aria-rowcount').catch(() => null);
   const metrics = await table.evaluate((element) => {
-    const body = element.querySelector('.el-table-v2__body') || element.querySelector('.el-table-v2__body-wrapper');
+    const body = element.querySelector('.el-table-v2__main .el-vl__wrapper > .el-table-v2__body')
+      || element.querySelector('.el-table-v2__body-wrapper');
+    const content = body?.firstElementChild;
     const row = element.querySelector('.el-table-v2__row');
     return {
-      scrollHeight: body?.scrollHeight || 0,
-      rowHeight: row?.getBoundingClientRect().height || 44,
+      contentHeight: content ? Math.max(content.getBoundingClientRect().height || 0, content.scrollHeight || 0) : 0,
+      viewportHeight: body?.getBoundingClientRect().height || 0,
+      rowHeight: row?.getBoundingClientRect().height || 0,
     };
-  }).catch(() => ({ scrollHeight: 0, rowHeight: 44 }));
-  const estimatedRowCount = metrics.scrollHeight > 0 && metrics.rowHeight > 0
-    ? Math.round(metrics.scrollHeight / metrics.rowHeight) : null;
+  }).catch(() => ({ contentHeight: 0, viewportHeight: 0, rowHeight: 0 }));
+  const estimatedRowCount = estimateVirtualRowCount(metrics);
   const rowCountMatches = expectedRows > 0 && (
     renderedRowCount === expectedRows
     || ariaRowCount === String(expectedRows)
     || estimatedRowCount === expectedRows
   );
-  return { drawerVisible, tableVisible, renderedRowCount, ariaRowCount, estimatedRowCount, rowCountMatches };
+  return {
+    drawerVisible,
+    tableVisible,
+    renderedRowCount,
+    ariaRowCount,
+    estimatedRowCount,
+    contentHeight: metrics.contentHeight,
+    viewportHeight: metrics.viewportHeight,
+    rowHeight: metrics.rowHeight,
+    rowCountMatches,
+  };
 }
 
 async function captureBasicDetails(page, card, candidate, expected, deadline = Date.now() + DETAIL_RESPONSE_TIMEOUT_MS) {
@@ -364,11 +484,12 @@ async function capturePointDetails(page, candidate, expected, deadline = Date.no
   await closeDetailsDrawer(page);
   await canvas.scrollIntoViewIfNeeded().catch(() => {});
   const box = await canvas.boundingBox();
-  const availableAttempts = Math.floor(Math.max(0, deadline - Date.now()) / 3_500);
+  const availableAttempts = availablePointAttempts(Date.now(), deadline);
   const attempts = clickAttempts(box, candidate, point).slice(0, Math.min(MAX_CANVAS_CLICK_ATTEMPTS, availableAttempts));
   if (!attempts.length) return unverified('mounted canvas has no usable click coordinates', { candidateId: candidate.id, point });
   const attemptEvidence = [];
   for (const [index, coordinate] of attempts.entries()) {
+    if (Date.now() >= deadline) break;
     const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: Math.max(1_000, Math.min(3_500, deadline - Date.now())) }).catch(() => null);
     await page.mouse.click(coordinate.x, coordinate.y);
     const response = await responsePromise;
@@ -446,15 +567,16 @@ module.exports = {
       let selectedExpected = null;
       const candidateChecks = [];
       const detailDeadline = Date.now() + DETAIL_ACCEPTANCE_DEADLINE_MS;
+      const nonPointDeadline = detailDeadline - POINT_CLICK_BUDGET_MS;
       for (const candidateRef of mountedDetailCandidates.slice(0, MAX_DETAIL_CANDIDATES)) {
-        if (Date.now() >= detailDeadline) break;
+        if (Date.now() >= nonPointDeadline) break;
         await closeDetailsDrawer(page);
         const expected = {
           factoryId: 'F006', candidateId: candidateRef.candidate.id, source: candidateRef.candidate.source,
           period: data?.period?.label, contextId: candidateRef.candidate.detailContext.id,
         };
-        const candidateBasic = await captureBasicDetails(page, candidateRef.card, candidateRef.candidate, expected, detailDeadline);
-        candidateChecks.push({ candidateId: candidateRef.candidate.id, result: candidateBasic.result, total: candidateBasic.total ?? null, rowCount: candidateBasic.rowCount ?? null, ui: candidateBasic.ui || null });
+        const candidateBasic = await captureBasicDetails(page, candidateRef.card, candidateRef.candidate, expected, nonPointDeadline);
+        candidateChecks.push(summarizeCandidateCheck(candidateRef.candidate.id, candidateBasic));
         if (candidateBasic.result === 'PASS' && (!selectedCandidate || (candidateBasic.total || 0) > (basic.total || 0))) {
           selectedCandidate = candidateRef;
           selectedExpected = expected;
@@ -465,11 +587,15 @@ module.exports = {
       if (selectedCandidate && basic.result === 'PASS') {
         const total = basic.total;
         if (total >= DETAIL_PAGE_SIZE + 1) {
+          if (Date.now() >= nonPointDeadline) {
+            pagination = unverified('details pagination could not start while preserving the reserved mounted point-click budget', { total, reservedPointClickMs: POINT_CLICK_BUDGET_MS });
+          } else {
           const drawer = page.locator('.el-drawer:visible').first();
           const loadMore = drawer.getByRole('button', { name: '加载更多' }).first();
+          const remaining = Math.max(1_000, Math.min(DETAIL_RESPONSE_TIMEOUT_MS, nonPointDeadline - Date.now()));
           if (await loadMore.count()) {
-            const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: Math.max(1_000, Math.min(DETAIL_RESPONSE_TIMEOUT_MS, detailDeadline - Date.now())) });
-            await loadMore.click();
+            const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: remaining });
+            await loadMore.click({ timeout: remaining });
             const response = await responsePromise;
             const body = await response.json();
             const request = requestJson(response.request());
@@ -487,6 +613,7 @@ module.exports = {
             pagination.request = { contextIdMatches: request?.context_id === selectedExpected.contextId, page: request?.page ?? null, pageSize: request?.page_size ?? null };
             if (pagination.result === 'PASS') pagination.rootCauseClass = 'none';
           } else pagination = unverified('details response has >=51 rows but mounted drawer has no 加载更多 control', { total });
+          }
         } else pagination = unverified('details total is below the 51-row pagination qualification threshold', { total, requiredTotal: DETAIL_PAGE_SIZE + 1 });
       }
       const pointCandidate = mountedDetailCandidates.slice(0, MAX_DETAIL_CANDIDATES).find(({ candidate }) => chartPointForCandidate(candidate));
@@ -495,7 +622,7 @@ module.exports = {
           factoryId: 'F006', candidateId: pointCandidate.candidate.id, source: pointCandidate.candidate.source,
           period: data?.period?.label, contextId: pointCandidate.candidate.detailContext.id,
         };
-        point = await capturePointDetails(page, pointCandidate.candidate, pointExpected, detailDeadline);
+        point = await capturePointDetails(page, pointCandidate.candidate, pointExpected, Math.min(detailDeadline, Date.now() + POINT_CLICK_BUDGET_MS));
       } else if (!pointCandidate) point = unverified('no mounted candidate exposes a visible pie/bar point target');
       else point = unverified('detail acceptance deadline reached before bounded canvas point probing');
       const summaryPass = scope && cards > 0 && factsMatch && drawingErrors === 0 && summary.sourceErrorCount === 0;
@@ -518,3 +645,8 @@ module.exports = {
 module.exports.assessDetailsResponse = assessDetailsResponse;
 module.exports.assessPageContinuity = assessPageContinuity;
 module.exports.chartPointForCandidate = chartPointForCandidate;
+module.exports.chartPointCoordinate = chartPointCoordinate;
+module.exports.clickAttempts = clickAttempts;
+module.exports.estimateVirtualRowCount = estimateVirtualRowCount;
+module.exports.availablePointAttempts = availablePointAttempts;
+module.exports.POINT_CLICK_BUDGET_MS = POINT_CLICK_BUDGET_MS;
