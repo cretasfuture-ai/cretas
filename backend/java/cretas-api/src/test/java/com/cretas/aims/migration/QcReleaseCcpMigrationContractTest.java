@@ -41,9 +41,9 @@ class QcReleaseCcpMigrationContractTest {
     }
 
     @Test
-    @DisplayName("V20261103_87: 需检默认 FALSE、可重放、CHECK 与 Java 常量一致")
+    @DisplayName("V20261103_88: 需检默认 FALSE、可重放、CHECK 与 Java 常量一致")
     void qcReleaseMigration() throws IOException {
-        String sql = read("V20261103_87__qc_release_inspection_hold.sql");
+        String sql = read("V20261103_88__qc_release_inspection_hold.sql");
         String upper = sql.toUpperCase(Locale.ROOT);
         assertThat(upper).contains("ADD COLUMN IF NOT EXISTS INSPECTION_REQUIRED BOOLEAN NOT NULL DEFAULT FALSE");
         assertThat(upper).contains("ADD COLUMN IF NOT EXISTS INSPECTION_STATUS VARCHAR(20)");
@@ -66,9 +66,9 @@ class QcReleaseCcpMigrationContractTest {
     }
 
     @Test
-    @DisplayName("V20261103_88: CCP 挂工序 + 记录补列全部可重放, 存量偏离不被放松 (不回填 handled_at)")
+    @DisplayName("V20261103_89: CCP 挂工序 + 记录补列全部可重放, 存量偏离不被放松 (不回填 handled_at)")
     void ccpMigration() throws IOException {
-        String sql = read("V20261103_88__ccp_step_monitoring.sql");
+        String sql = read("V20261103_89__ccp_step_monitoring.sql");
         String upper = sql.toUpperCase(Locale.ROOT);
         assertThat(upper).contains("ALTER TABLE HACCP_CHECKPOINTS")
                 .contains("ADD COLUMN IF NOT EXISTS WORK_PROCESS_ID VARCHAR(50)");

@@ -85,7 +85,7 @@ public class HaccpMonitoringRecord extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
-    // ==================== 缺口 13: 工序报工时录入 (V20261103_88) ====================
+    // ==================== 缺口 13: 工序报工时录入 (V20261103_89) ====================
 
     /** 报工所在生产批次 (App 报工 = 任务的批次; web 逐道录入 = 本行物化的批次; 纯库存道为 null)。 */
     @Column(name = "production_batch_id")

@@ -191,7 +191,7 @@ public class FinishedGoodsBatch extends BaseEntity {
          */
         public static final String DEFECTIVE  = "DEFECTIVE";
         /**
-         * 待检 (缺口 11 质检放行, V20261103_87): 「需检」产品的生产产出、或所在批次/计划有未处理的
+         * 待检 (缺口 11 质检放行, V20261103_88): 「需检」产品的生产产出、或所在批次/计划有未处理的
          * CCP 偏离时, 成品入库即为此状态。与 DEFECTIVE 同理 —— 现有可售/FEFO/投料/调拨查询全部过滤
          * status='AVAILABLE', 所以待检批次天然不进任何候选; 手工分配/发货再由
          * {@code FinishedGoodsBatchSaleabilityGuard} 给出专门的错误码。放行 → AVAILABLE, 判不合格 → DEFECTIVE。
