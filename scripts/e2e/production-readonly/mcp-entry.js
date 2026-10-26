@@ -3490,6 +3490,15 @@ function assessPageContinuity(first, second, expected = {}) {
     secondRowCount: secondRows.length,
     loadedRowCount: allRows.length,
     duplicateRowCount: duplicateCount(allRows),
+    request: {
+      contextIdMatches: checks.secondRequestContext,
+      page: secondRequest.page ?? null,
+      pageSize: secondRequest.page_size ?? null,
+      candidateId: secondData?.candidateId ?? null,
+      factoryId: secondData?.factoryId ?? null,
+      source: secondData?.source ?? null,
+      period: secondData?.period ?? null,
+    },
     note: 'Rows are counted in response order; duplicate business rows are not content-deduplicated. Completeness remains UNVERIFIED pending an independent source comparison.',
   };
 }
@@ -3504,6 +3513,17 @@ function seriesList(option) {
   return Array.isArray(option?.series) ? option.series : [];
 }
 
+function echartsAssetUrl(name, origin = '') {
+  try {
+    const url = new URL(name, origin || 'http://localhost');
+    return url.origin === (origin || url.origin) && /^\/assets\/echarts-[A-Za-z0-9_-]+\.js$/.test(url.pathname) ? url.href : null;
+  } catch { return null; }
+}
+
+function selectEChartsAssetUrls(entries, origin) {
+  return (entries || []).map((entry) => echartsAssetUrl(typeof entry === 'string' ? entry : entry?.name, origin)).filter(Boolean).slice(0, 4);
+}
+
 function chartPointForCandidate(candidate) {
   if (candidate?.detailContext && candidate.detailContext.drilldown === false) return null;
   const option = candidate?.chart?.echartsOption;
@@ -3515,7 +3535,10 @@ function chartPointForCandidate(candidate) {
   if (pie && Array.isArray(pie.data)) {
     const index = pie.data.findIndex((value) => value && typeof value === 'object' && String(value.name || '').trim());
     const dimension = pie.encode?.itemName || option.dataset?.dimensions?.[0] || null;
-    if (index >= 0) return { name: String(pie.data[index].name).trim(), seriesName: pie.name, dataIndex: index, dimension, kind: 'pie' };
+    if (index >= 0) {
+      const seriesIndex = series.indexOf(pie);
+      return { name: String(pie.data[index].name).trim(), seriesName: pie.name, dataIndex: index, dimension, kind: 'pie', ...(seriesIndex > 0 ? { seriesIndex } : {}) };
+    }
   }
   const bar = series.find((item) => String(item?.type || '').toLowerCase() === 'bar');
   if (bar) {
@@ -3527,7 +3550,8 @@ function chartPointForCandidate(candidate) {
     const axis = horizontal ? option.yAxis : option.xAxis;
     const dimension = (Array.isArray(axis) ? axis[0]?.name : axis?.name) || null;
     if (name != null && String(name).trim()) {
-      return { name: String(name).trim(), seriesName: bar.name, dataIndex, dimension, kind: horizontal ? 'bar_horizontal' : 'bar' };
+      const seriesIndex = series.indexOf(bar);
+      return { name: String(name).trim(), seriesName: bar.name, dataIndex, dimension, kind: horizontal ? 'bar_horizontal' : 'bar', ...(seriesIndex > 0 ? { seriesIndex } : {}) };
     }
   }
   return null;
@@ -3539,6 +3563,30 @@ function numericDataValue(candidate, point) {
   const value = Array.isArray(item?.data) ? item.data[point?.dataIndex ?? 0] : null;
   const raw = value && typeof value === 'object' ? value.value : value;
   return Number.isFinite(Number(raw)) ? Math.max(0, Number(raw)) : 1;
+}
+
+function pointCandidateCategoryCount(candidate, point) {
+  const option = candidate?.chart?.echartsOption || {};
+  if (point?.kind === 'pie') {
+    const series = seriesList(option).find((item) => String(item?.name || '') === String(point.seriesName || '')) || seriesList(option)[point?.seriesIndex || 0];
+    return Array.isArray(series?.data) ? series.data.length : Number.MAX_SAFE_INTEGER;
+  }
+  return point?.kind === 'bar_horizontal' ? axisData(option, 'yAxis').length : axisData(option, 'xAxis').length;
+}
+
+function selectPointCandidate(mountedCandidates) {
+  return (mountedCandidates || [])
+    .map((entry) => ({ entry, point: chartPointForCandidate(entry?.candidate) }))
+    .filter(({ point }) => point)
+    .sort((a, b) => {
+      const aCartesian = a.point.kind === 'bar' || a.point.kind === 'bar_horizontal' ? 1 : 0;
+      const bCartesian = b.point.kind === 'bar' || b.point.kind === 'bar_horizontal' ? 1 : 0;
+      const aNonZero = numericDataValue(a.entry.candidate, a.point) > 0 ? 1 : 0;
+      const bNonZero = numericDataValue(b.entry.candidate, b.point) > 0 ? 1 : 0;
+      return bCartesian - aCartesian
+        || bNonZero - aNonZero
+        || pointCandidateCategoryCount(a.entry.candidate, a.point) - pointCandidateCategoryCount(b.entry.candidate, b.point);
+    })[0]?.entry || null;
 }
 
 function resolveOptionInset(value, total, fallback) {
@@ -3658,6 +3706,37 @@ function clickAttempts(box, candidate, point) {
   }));
 }
 
+async function mountedEChartsPointCoordinate(chartHost, point, value) {
+  if (!chartHost || !await chartHost.count()) return null;
+  const resourceState = await chartHost.evaluate(() => ({
+    origin: window.location.origin,
+    resources: performance.getEntriesByType('resource').map((entry) => entry.name),
+  })).catch(() => null);
+  if (!resourceState?.origin) return null;
+  const resources = selectEChartsAssetUrls(resourceState.resources, resourceState.origin);
+  if (!resources.length) return null;
+  return chartHost.evaluate(async (element, target) => {
+    for (const resource of target.resources) {
+      try {
+        const url = new URL(resource, window.location.href);
+        if (url.origin !== window.location.origin || !/^\/assets\/echarts-[A-Za-z0-9_-]+\.js$/.test(url.pathname)) continue;
+        const module = await import(resource);
+        const exports = [module, module.default, ...Object.values(module)];
+        const holder = exports.find((candidate) => candidate && typeof candidate.getInstanceByDom === 'function');
+        const instance = holder?.getInstanceByDom(element);
+        if (!instance || typeof instance.convertToPixel !== 'function') continue;
+        const axisValue = Number.isFinite(Number(target.value)) ? Math.max(0, Number(target.value) / 2) : 0;
+        const dataValue = target.kind === 'bar_horizontal' ? [axisValue, target.name] : [target.name, axisValue];
+        const pixel = instance.convertToPixel({ seriesIndex: target.seriesIndex ?? 0 }, dataValue);
+        if (Array.isArray(pixel) && pixel.length >= 2 && Number.isFinite(Number(pixel[0])) && Number.isFinite(Number(pixel[1]))) {
+          return { x: Number(pixel[0]), y: Number(pixel[1]), source: 'mounted-echarts-convertToPixel' };
+        }
+      } catch { /* bounded first-party module probing; geometry remains diagnostic only */ }
+    }
+    return null;
+  }, { kind: point.kind, name: point.name, value, seriesIndex: point.seriesIndex ?? 0, resources });
+}
+
 function estimateVirtualRowCount({ contentHeight, rowHeight } = {}) {
   if (!Number.isFinite(contentHeight) || !Number.isFinite(rowHeight) || contentHeight <= 0 || rowHeight <= 0) return null;
   const ratio = contentHeight / rowHeight;
@@ -3681,6 +3760,8 @@ function summarizeCandidateCheck(candidateId, result) {
     drawerVisible: ui.drawerVisible === true,
     virtualTableVisible: ui.tableVisible === true,
     virtualTableRowCount: ui.rowCountMatches === true,
+    displayedValues: ui.displayedValues === true,
+    concreteValueVisible: ui.concreteValueVisible === true,
     reason: typeof result?.reason === 'string' ? result.reason : null,
   };
 }
@@ -3707,33 +3788,67 @@ async function closeDetailsDrawer(page) {
   await drawer.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
 }
 
-async function inspectDetailsTable(page, expectedRows, timeoutMs = 5_000) {
+function displayDetailCell(value) {
+  return value === null || value === undefined ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function readVirtualTableMetrics(element) {
+  const body = element.querySelector('.el-table-v2__main > .el-vl__wrapper.el-table-v2__body')
+    || element.querySelector('.el-table-v2__main .el-vl__wrapper.el-table-v2__body')
+    || element.querySelector('.el-table-v2__body-wrapper');
+  const viewport = body?.firstElementChild || body;
+  const content = viewport?.firstElementChild || viewport;
+  const row = element.querySelector('.el-table-v2__row');
+  return {
+    contentHeight: content ? Math.max(content.getBoundingClientRect().height || 0, content.scrollHeight || 0) : 0,
+    viewportHeight: viewport?.getBoundingClientRect().height || body?.getBoundingClientRect().height || 0,
+    rowHeight: row?.getBoundingClientRect().height || 0,
+    visibleCellTexts: Array.from(row?.querySelectorAll('.el-table-v2__cell-text, .el-table-v2__row-cell') || [])
+      .map((cell) => String(cell.textContent || '').trim()),
+  };
+}
+
+function detailCellEvidence(expectedData, visibleCellTexts) {
+  const expectedRow = Array.isArray(expectedData?.rows) ? expectedData.rows[0] : null;
+  const expectedColumns = Array.isArray(expectedData?.columns) ? expectedData.columns : [];
+  const expectedCells = expectedRow && expectedColumns.length
+    ? expectedColumns.map((column) => displayDetailCell(expectedRow?.[column]))
+    : [];
+  const visible = Array.isArray(visibleCellTexts) ? visibleCellTexts : [];
+  const displayedValues = expectedCells.length > 0 && expectedCells.every((expectedCell) => visible.includes(expectedCell));
+  const concreteValueVisible = expectedCells.some((expectedCell) => expectedCell !== '—')
+    && expectedCells.some((expectedCell) => expectedCell !== '—' && visible.includes(expectedCell));
+  return {
+    displayedValues,
+    concreteValueVisible,
+    valueEvidenceReason: displayedValues
+      ? 'first mounted virtual row displays the API row values'
+      : 'mounted virtual row cells did not display every expected first-row value',
+  };
+}
+
+async function inspectDetailsTable(page, expectedRows, expectedData = null, timeoutMs = 5_000) {
   const drawer = page.locator('.el-drawer:visible').first();
   const drawerVisible = await drawer.count() > 0 && await drawer.isVisible().catch(() => false);
   const table = drawer.locator('.el-table-v2').first();
   if (drawerVisible && await table.count()) await table.waitFor({ state: 'visible', timeout: Math.max(1_000, timeoutMs) }).catch(() => {});
   const tableVisible = drawerVisible && await table.count() > 0 && await table.isVisible().catch(() => false);
-  if (!tableVisible) return { drawerVisible, tableVisible: false, renderedRowCount: 0, rowCountMatches: false };
+  if (!tableVisible) return {
+    drawerVisible, tableVisible: false, renderedRowCount: 0, rowCountMatches: false,
+    displayedValues: false, concreteValueVisible: false, valueEvidenceReason: 'mounted virtual table is not visible',
+  };
   const rows = table.locator('.el-table-v2__row');
   const renderedRowCount = await rows.count();
   const ariaRowCount = await table.getAttribute('aria-rowcount').catch(() => null);
-  const metrics = await table.evaluate((element) => {
-    const body = element.querySelector('.el-table-v2__main .el-vl__wrapper > .el-table-v2__body')
-      || element.querySelector('.el-table-v2__body-wrapper');
-    const content = body?.firstElementChild;
-    const row = element.querySelector('.el-table-v2__row');
-    return {
-      contentHeight: content ? Math.max(content.getBoundingClientRect().height || 0, content.scrollHeight || 0) : 0,
-      viewportHeight: body?.getBoundingClientRect().height || 0,
-      rowHeight: row?.getBoundingClientRect().height || 0,
-    };
-  }).catch(() => ({ contentHeight: 0, viewportHeight: 0, rowHeight: 0 }));
+  const metrics = await table.evaluate(readVirtualTableMetrics)
+    .catch(() => ({ contentHeight: 0, viewportHeight: 0, rowHeight: 0, visibleCellTexts: [] }));
   const estimatedRowCount = estimateVirtualRowCount(metrics);
   const rowCountMatches = expectedRows > 0 && (
     renderedRowCount === expectedRows
     || ariaRowCount === String(expectedRows)
     || estimatedRowCount === expectedRows
   );
+  const evidence = detailCellEvidence(expectedData, metrics.visibleCellTexts);
   return {
     drawerVisible,
     tableVisible,
@@ -3744,6 +3859,7 @@ async function inspectDetailsTable(page, expectedRows, timeoutMs = 5_000) {
     viewportHeight: metrics.viewportHeight,
     rowHeight: metrics.rowHeight,
     rowCountMatches,
+    ...evidence,
   };
 }
 
@@ -3760,15 +3876,17 @@ async function captureBasicDetails(page, card, candidate, expected, deadline = D
   await page.locator('.el-drawer:visible').first().waitFor({ timeout: Math.max(1, Math.min(5_000, deadline - Date.now())) }).catch(() => {});
   const request = requestJson(response.request());
   const assessment = assessDetailsResponse({ status: response.status(), request, body, expected });
-  const ui = await inspectDetailsTable(page, assessment.rowCount, Math.max(1, Math.min(5_000, deadline - Date.now())));
+  const ui = await inspectDetailsTable(page, assessment.rowCount, body?.data, Math.max(1, Math.min(5_000, deadline - Date.now())));
   assessment.ui = ui;
   assessment.checks.drawerVisible = ui.drawerVisible;
   assessment.checks.virtualTableVisible = ui.tableVisible;
   assessment.checks.virtualTableRowCount = ui.rowCountMatches;
-  if (assessment.result === 'PASS' && (!ui.drawerVisible || !ui.tableVisible || !ui.rowCountMatches)) {
+  assessment.checks.displayedValues = ui.displayedValues === true;
+  assessment.checks.concreteValueVisible = ui.concreteValueVisible === true;
+  if (assessment.result === 'PASS' && (!ui.drawerVisible || !ui.tableVisible || !ui.rowCountMatches || !ui.displayedValues || !ui.concreteValueVisible)) {
     assessment.result = 'UNVERIFIED';
     assessment.rootCauseClass = 'tool';
-    assessment.reason = 'API details passed but drawer/virtual-table visibility or returned-row count could not be proven in the mounted UI';
+    assessment.reason = 'API details passed but mounted drawer, virtual-table row count, or concrete cell values could not be proven';
   }
   // Keep the exact first response only in memory for the page-boundary check;
   // non-enumerable fields cannot enter the sanitized evidence JSON.
@@ -3783,14 +3901,20 @@ async function capturePointDetails(page, candidate, expected, deadline = Date.no
   const point = chartPointForCandidate(candidate);
   const card = await cardForCandidate(page, candidate);
   const canvas = card?.locator('.factory-chart-canvas canvas').first();
+  const chartHost = card?.locator('.factory-chart-canvas').first();
   if (!point) return unverified('no eligible visible pie/bar point in the recommendation echartsOption', { candidateId: candidate.id });
   if (!canvas || !await canvas.count()) return unverified('eligible pie/bar candidate has no mounted canvas', { candidateId: candidate.id, point });
   await canvas.waitFor({ state: 'visible', timeout: Math.max(1_000, Math.min(5_000, deadline - Date.now())) }).catch(() => {});
   await closeDetailsDrawer(page);
   await canvas.scrollIntoViewIfNeeded().catch(() => {});
   const box = await canvas.boundingBox();
+  const mountedPoint = await mountedEChartsPointCoordinate(chartHost, point, numericDataValue(candidate, point));
   const availableAttempts = availablePointAttempts(Date.now(), deadline);
-  const attempts = clickAttempts(box, candidate, point).slice(0, Math.min(MAX_CANVAS_CLICK_ATTEMPTS, availableAttempts));
+  const attempts = (mountedPoint
+    ? clickAttempts(box, candidate, point).map((coordinate, index) => index === 0
+      ? { x: (box?.x || 0) + mountedPoint.x, y: (box?.y || 0) + mountedPoint.y }
+      : coordinate)
+    : clickAttempts(box, candidate, point)).slice(0, Math.min(MAX_CANVAS_CLICK_ATTEMPTS, availableAttempts));
   if (!attempts.length) return unverified('mounted canvas has no usable click coordinates', { candidateId: candidate.id, point });
   const attemptEvidence = [];
   for (const [index, coordinate] of attempts.entries()) {
@@ -3802,15 +3926,19 @@ async function capturePointDetails(page, candidate, expected, deadline = Date.no
     const body = await response.json().catch(() => null);
     const request = requestJson(response.request());
     const assessment = assessDetailsResponse({ status: response.status(), request, body, expected, point });
-    const ui = await inspectDetailsTable(page, assessment.rowCount, Math.max(1_000, Math.min(5_000, deadline - Date.now())));
+    const ui = await inspectDetailsTable(page, assessment.rowCount, body?.data, Math.max(1_000, Math.min(5_000, deadline - Date.now())));
     assessment.ui = ui;
     assessment.checks.drawerVisible = ui.drawerVisible;
     assessment.checks.virtualTableVisible = ui.tableVisible;
     assessment.checks.virtualTableRowCount = ui.rowCountMatches;
-    if (assessment.result === 'PASS' && (!ui.drawerVisible || !ui.tableVisible || !ui.rowCountMatches)) {
+    assessment.checks.displayedValues = ui.displayedValues === true;
+    assessment.checks.concreteValueVisible = ui.concreteValueVisible === true;
+    if (assessment.result === 'PASS' && (!mountedPoint || !ui.drawerVisible || !ui.tableVisible || !ui.rowCountMatches || !ui.displayedValues || !ui.concreteValueVisible)) {
       assessment.result = 'UNVERIFIED';
       assessment.rootCauseClass = 'tool';
-      assessment.reason = 'Point-filtered API response passed but the mounted drawer/virtual-table row evidence was incomplete';
+      assessment.reason = mountedPoint
+        ? 'Point-filtered API response passed but mounted drawer, virtual-table row count, or concrete cell evidence was incomplete'
+        : 'Point-filtered API response passed after geometry fallback; a mounted ECharts convertToPixel coordinate was unavailable';
     }
     attemptEvidence.push({ index, response: true, status: response.status(), result: assessment.result, rowCount: assessment.rowCount, total: assessment.total });
     if (assessment.result === 'PASS') {
@@ -3921,7 +4049,7 @@ module.exports = {
           }
         } else pagination = unverified('details total is below the 51-row pagination qualification threshold', { total, requiredTotal: DETAIL_PAGE_SIZE + 1 });
       }
-      const pointCandidate = mountedDetailCandidates.slice(0, MAX_DETAIL_CANDIDATES).find(({ candidate }) => chartPointForCandidate(candidate));
+      const pointCandidate = selectPointCandidate(mountedDetailCandidates.slice(0, MAX_DETAIL_CANDIDATES));
       if (pointCandidate && Date.now() < detailDeadline) {
         const pointExpected = {
           factoryId: 'F006', candidateId: pointCandidate.candidate.id, source: pointCandidate.candidate.source,
@@ -3939,6 +4067,11 @@ module.exports = {
           : { result: summaryPass ? 'UNVERIFIED' : 'CONFIRMED_DEFECT', rootCauseClass: summaryPass ? 'data' : 'frontend' };
       return {
         ...summary,
+        detailBasicResult: String(basic.result || 'UNVERIFIED'),
+        detailBasicReason: String(basic.reason || basic.ui?.valueEvidenceReason || 'none'),
+        detailPointResult: String(point.result || 'UNVERIFIED'),
+        detailPointReason: String(point.reason || point.ui?.valueEvidenceReason || 'none'),
+        candidateSummary: candidateChecks.map((item) => `${item.candidateId}:${item.result}:cells=${item.displayedValues ? 'visible' : 'missing'}:concrete=${item.concreteValueVisible ? 'yes' : 'no'}`).join('|') || 'none',
         details: { basic, pagination, point, candidateId: selectedCandidate?.candidate.id || null, candidateChecks },
         screenshots: [await context.screenshot('smartbi-factory-business'), await context.screenshot('smartbi-factory-details')],
         assessment,
@@ -3952,6 +4085,12 @@ module.exports.assessPageContinuity = assessPageContinuity;
 module.exports.chartPointForCandidate = chartPointForCandidate;
 module.exports.chartPointCoordinate = chartPointCoordinate;
 module.exports.clickAttempts = clickAttempts;
+module.exports.echartsAssetUrl = echartsAssetUrl;
+module.exports.selectEChartsAssetUrls = selectEChartsAssetUrls;
+module.exports.mountedEChartsPointCoordinate = mountedEChartsPointCoordinate;
+module.exports.readVirtualTableMetrics = readVirtualTableMetrics;
+module.exports.detailCellEvidence = detailCellEvidence;
+module.exports.selectPointCandidate = selectPointCandidate;
 module.exports.estimateVirtualRowCount = estimateVirtualRowCount;
 module.exports.availablePointAttempts = availablePointAttempts;
 module.exports.POINT_CLICK_BUDGET_MS = POINT_CLICK_BUDGET_MS;
