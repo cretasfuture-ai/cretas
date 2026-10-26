@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -99,7 +100,7 @@ class FactoryErasurePostgresContractTest {
         exec(main, "DROP SCHEMA IF EXISTS " + schema + " CASCADE");
         exec(main, "DROP SCHEMA IF EXISTS " + copySchema() + " CASCADE");
         exec(main, "DROP SCHEMA IF EXISTS " + otherSchema() + " CASCADE");
-        exec(main, "DELETE FROM factory_data_requests WHERE factory_id IN ('" + FA + "','" + FB + "','F006')");
+        exec(main, "DELETE FROM factory_data_requests WHERE factory_id IN ('" + FA + "','" + FB + "','F006','NOTDRILL_X','ERASETEST_OLD')");
         exec(main, "DELETE FROM factory_erasure_audit_retention WHERE factory_id IN ('" + FA + "','" + FB + "')");
         exec(main, "DROP DATABASE IF EXISTS " + smartbiDb + " WITH (FORCE)");
         exec(main, "DROP ROLE IF EXISTS " + appRole);
@@ -238,10 +239,23 @@ class FactoryErasurePostgresContractTest {
         // 没有导出就不能申请
         assertThatThrownBy(() -> erasure.request(OPERATOR, FA, new ErasureRequestBody(FA, null, "x", "x", "x", true)))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("导出"));
-        // 非演练编号不能免冷静期
-        exec(main, "INSERT INTO " + schema + ".factories (id, name, type, created_at) VALUES ('NOTDRILL_X', 'X', 'FACTORY', now())");
-        assertThatThrownBy(() -> erasure.request(OPERATOR, "NOTDRILL_X", new ErasureRequestBody("NOTDRILL_X", exportId, "x", "x", "x", true)))
-                .isInstanceOf(BusinessException.class);
+        // 非演练编号 / 超过 3 天的演练工厂不能免冷静期。各自先有一次本厂导出, 这样拒绝只能来自演练这道闸
+        // (之前复用 FA 的导出编号, 被「导出不是本厂的」先拦住, 删掉演练闸也照样绿)
+        exec(main, "INSERT INTO " + schema + ".factories (id, name, type, created_at) VALUES "
+                + "('NOTDRILL_X', 'X', 'FACTORY', now()), ('ERASETEST_OLD', 'O', 'FACTORY', now() - interval '10 days')");
+        for (String f : List.of("NOTDRILL_X", "ERASETEST_OLD")) {
+            long own = export(f);
+            assertThatThrownBy(() -> erasure.request(OPERATOR, f, new ErasureRequestBody(f, own, "x", "x", "x", true)))
+                    .as(f)
+                    .isInstanceOfSatisfying(BusinessException.class, e -> {
+                        assertThat(e.getCode()).isEqualTo(400);
+                        assertThat(e.getMessage()).contains("免冷静期");
+                    });
+            assertThat(isActive(f)).as(f).isTrue();
+            // 归因对照: 同一个申请不要求免冷静期就能登记 (工厂随即停用)
+            erasure.request(OPERATOR, f, new ErasureRequestBody(f, own, "x", "x", "x", false));
+            assertThat(isActive(f)).as(f).isFalse();
+        }
         assertThat(isActive(FA)).isTrue();
     }
 
@@ -431,9 +445,13 @@ class FactoryErasurePostgresContractTest {
     }
 
     private long export() throws Exception {
+        return export(FA);
+    }
+
+    private long export(String factoryId) throws Exception {
         FactoryDataService d = data();
-        long id = d.startExport(OPERATOR, FA);
-        d.writeExport(id, OPERATOR, FA, AttachmentMode.INDEX_ONLY, Set.of(FactoryDataService.Format.CSV),
+        long id = d.startExport(OPERATOR, factoryId);
+        d.writeExport(id, OPERATOR, factoryId, AttachmentMode.INDEX_ONLY, Set.of(FactoryDataService.Format.CSV),
                 new ByteArrayOutputStream());
         return id;
     }
