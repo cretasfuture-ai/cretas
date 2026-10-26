@@ -22,12 +22,13 @@ from .engine import Dataset
 
 _CENT = Decimal("0.01")
 _EXCLUDED_STATUSES = ("CANCELLED", "DRAFT", "FINANCE_REJECTED")
+_SALES_LINE_ID = "订单行ID"
 
 # Required columns are intentionally explicit.  They mirror SalesOrderItem and
 # SalesOrder; the quote column is selected only as provenance and is never used
 # for the untaxed SKU amount (Java uses it only in getLineAmountWithTax()).
 SALES_SKU_SQL = """
-SELECT i.id AS "行ID", so.id AS "订单ID", so.order_date AS "日期",
+SELECT i.id AS "订单行ID", so.id AS "订单ID", so.order_date AS "日期",
        i.product_type_id AS "产品ID", i.product_name AS "产品", i.unit AS "单位",
        i.quantity AS "数量", i.unit_price AS "单价",
        COALESCE(i.discount_rate, 0) AS "折扣率",
@@ -45,7 +46,7 @@ LIMIT 10001
 # A non-price role can still see operational SKU quantities and units.  It does
 # not receive any price/discount/order-total column from this adapter.
 SALES_SKU_NO_PRICE_SQL = """
-SELECT i.id AS "行ID", so.id AS "订单ID", so.order_date AS "日期",
+SELECT i.id AS "订单行ID", so.id AS "订单ID", so.order_date AS "日期",
        i.product_type_id AS "产品ID", i.product_name AS "产品", i.unit AS "单位",
        i.quantity AS "数量"
 FROM sales_order_items i
@@ -186,7 +187,7 @@ def reconcile_sales_rows(rows: Iterable[dict[str, Any]]) -> tuple[list[dict[str,
     seen: dict[Any, Any] = {}
     for row in materialized:
         order_id = row.get("订单ID")
-        line_id = row.get("行ID")
+        line_id = row.get(_SALES_LINE_ID)
         if order_id is None:
             invalid[order_id] = "missing order id"
             continue
@@ -224,7 +225,7 @@ def reconcile_sales_rows(rows: Iterable[dict[str, Any]]) -> tuple[list[dict[str,
             output.append({
                 "日期": row.get("日期"),
                 "订单ID": order_id,
-                "行ID": row.get("行ID"),
+                _SALES_LINE_ID: row.get(_SALES_LINE_ID),
                 "产品ID": row.get("产品ID"),
                 "产品": row.get("产品"),
                 "单位": row.get("单位"),

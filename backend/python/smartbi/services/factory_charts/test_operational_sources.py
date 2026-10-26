@@ -18,10 +18,10 @@ def row(**values):
 
 def test_reconcile_uses_java_discount_rounding_and_never_reuses_quoted_gross_price():
     rows = [
-        row(**{"行ID": "line-1", "订单ID": "order-1", "日期": "2026-10-01", "产品ID": "sku-1",
+        row(**{"订单行ID": "line-1", "订单ID": "order-1", "日期": "2026-10-01", "产品ID": "sku-1",
                "产品": "产品一", "单位": "kg", "数量": Decimal("3"), "单价": Decimal("10.005"),
                "折扣率": Decimal("10"), "报价含税单价": Decimal("99"), "订单总额": Decimal("30.02")}),
-        row(**{"行ID": "line-2", "订单ID": "order-1", "日期": "2026-10-01", "产品ID": None,
+        row(**{"订单行ID": "line-2", "订单ID": "order-1", "日期": "2026-10-01", "产品ID": None,
                "产品": None, "单位": "kg", "数量": Decimal("1"), "单价": Decimal("3"),
                "折扣率": Decimal("0"), "报价含税单价": Decimal("99"), "订单总额": Decimal("30.02")}),
     ]
@@ -35,10 +35,10 @@ def test_reconcile_uses_java_discount_rounding_and_never_reuses_quoted_gross_pri
 
 def test_reconcile_quarantines_missing_id_duplicate_and_unreconciled_orders_without_allocation():
     rows = [
-        row(**{"行ID": "duplicate", "订单ID": "bad-1", "数量": 1, "单价": 10, "折扣率": 0, "订单总额": 10}),
-        row(**{"行ID": "duplicate", "订单ID": "bad-2", "数量": 1, "单价": 10, "折扣率": 0, "订单总额": 9}),
-        row(**{"行ID": None, "订单ID": "bad-3", "数量": 1, "单价": 1, "折扣率": 0, "订单总额": 1}),
-        row(**{"行ID": "unreconciled", "订单ID": "bad-4", "数量": 1, "单价": 10, "折扣率": 0, "订单总额": 9}),
+        row(**{"订单行ID": "duplicate", "订单ID": "bad-1", "数量": 1, "单价": 10, "折扣率": 0, "订单总额": 10}),
+        row(**{"订单行ID": "duplicate", "订单ID": "bad-2", "数量": 1, "单价": 10, "折扣率": 0, "订单总额": 9}),
+        row(**{"订单行ID": None, "订单ID": "bad-3", "数量": 1, "单价": 1, "折扣率": 0, "订单总额": 1}),
+        row(**{"订单行ID": "unreconciled", "订单ID": "bad-4", "数量": 1, "单价": 10, "折扣率": 0, "订单总额": 9}),
     ]
 
     output, gaps = sources.reconcile_sales_rows(rows)
@@ -83,7 +83,7 @@ class FakePool:
 async def test_load_is_tenant_scoped_role_stripped_and_preserves_wip_units(monkeypatch):
     calls = []
     rows = {
-        "sales_order_items i": [{"行ID": "l1", "订单ID": "o1", "日期": "2026-10-01", "产品ID": "p1",
+        "sales_order_items i": [{"订单行ID": "l1", "订单ID": "o1", "日期": "2026-10-01", "产品ID": "p1",
                                   "产品": "A", "单位": "kg", "数量": 2}],
         "smart_bi_department_data": [{"日期": "2026-10-01", "部门": "生产", "部门ID": "d1",
                                         "人数": 3, "销售金额": 100, "销售目标": 120, "部门成本": 20}],
@@ -134,10 +134,10 @@ async def test_load_price_role_emits_only_reconciled_sales_and_cny_metadata(monk
     calls = []
     rows = {
         "sales_order_items i": [
-            {"行ID": "l1", "订单ID": "o1", "日期": "2026-10-01", "产品ID": "p1", "产品": "A",
+            {"订单行ID": "l1", "订单ID": "o1", "日期": "2026-10-01", "产品ID": "p1", "产品": "A",
              "单位": "kg", "数量": Decimal("2"), "单价": Decimal("5"), "折扣率": Decimal("10"),
              "报价含税单价": Decimal("99"), "订单总额": Decimal("9")},
-            {"行ID": "l2", "订单ID": "o2", "日期": "2026-10-01", "产品ID": "p2", "产品": "B",
+            {"订单行ID": "l2", "订单ID": "o2", "日期": "2026-10-01", "产品ID": "p2", "产品": "B",
              "单位": "kg", "数量": Decimal("1"), "单价": Decimal("5"), "折扣率": Decimal("0"),
              "报价含税单价": Decimal("99"), "订单总额": Decimal("6")},
         ],
@@ -179,6 +179,35 @@ def test_sql_contracts_are_parameterized_and_do_not_allocate_costs():
         assert "F006" not in sql
     assert "unit_cost" not in sources.WIP_REPORT_SQL.lower()
     assert "50" not in sources.WIP_REPORT_SQL
+    assert 'i.id AS "订单行ID"' in sources.SALES_SKU_SQL
+    assert 'i.id AS "订单行ID"' in sources.SALES_SKU_NO_PRICE_SQL
+    assert 'i.id AS "行ID"' not in sources.SALES_SKU_SQL
+
+
+@pytest.mark.asyncio
+async def test_actual_operational_load_reaches_engine_sales_sku_candidate_with_canonical_line_id(monkeypatch):
+    calls = []
+    rows = {
+        "sales_order_items i": [{"订单行ID": "line-851", "订单ID": "order-851", "日期": "2026-10-01",
+                                  "产品ID": "sku-851", "产品": "QA SKU", "单位": "kg", "数量": Decimal("3"),
+                                  "单价": Decimal("10"), "折扣率": Decimal("0"), "报价含税单价": Decimal("10"),
+                                  "订单总额": Decimal("30")}],
+        "smart_bi_department_data": [], "production_reports pr": [],
+        "semi_finished_inventory sfi": [], "semi_finished_inventory_transactions tx": [],
+    }
+    async def get_pool():
+        return FakePool(rows, calls)
+    monkeypatch.setattr(sources.config, "get_cretas_pool", get_pool)
+    datasets, errors, gaps = await sources.load("F006", request(period_type="all"), True)
+    assert errors == [] and not gaps
+    sales = next(dataset for dataset in datasets if dataset.source.startswith("sales-sku"))
+    assert list(sales.frame["订单行ID"]) == ["line-851"]
+    from smartbi.services.factory_charts.business_metrics import build as business_build
+    direct, direct_gaps = business_build(sales.frame, engine.columns(sales.frame), request(period_type="all"), True, sales.source)
+    assert direct, direct_gaps
+    sku = next(candidate for candidate in direct if candidate["id"].startswith("sales.sku"))
+    assert sku["source"].startswith("sales-sku")
+    assert sku["kpis"] and sku["kpis"][0]["value"] == "30"
 
 
 def test_wip_flow_emits_only_a_forward_recorded_conservation_edge():

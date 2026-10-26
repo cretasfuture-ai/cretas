@@ -11,6 +11,7 @@ from smartbi.services.financial_dashboard import FinancialDashboardService
 from smartbi.services.financial.base import _sanitize_for_json
 from smartbi.services.financial.export_conclusions import conclusion_rows as _conclusion_rows
 from smartbi.services.factory_charts.export_guard import ExportGuardRoute, validate_export
+from smartbi.services.factory_charts.details import canonical_period_label
 
 logger = logging.getLogger(__name__)
 router = APIRouter(route_class=ExportGuardRoute)
@@ -126,7 +127,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         except details.DetailError as exc:
             raise HTTPException(exc.status_code, exc.detail) from None
     from smartbi.services.factory_charts.selection_groups import default_selection
-    label = '全部历史' if request.period_type == 'all' else f'{request.year}年{request.start_month}–{request.end_month}月'
+    label = canonical_period_label(request)
     return _sanitize_for_json({'success': True, 'data': {
         'factoryId': factory_id, 'source': request.source,
         'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
