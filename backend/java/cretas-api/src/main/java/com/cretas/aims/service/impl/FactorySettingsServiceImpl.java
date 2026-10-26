@@ -101,6 +101,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
     @Transactional
     public FactorySettingsDTO.AISettings updateAiSettings(String factoryId, FactorySettingsDTO.AISettings aiSettings) {
         FactorySettings settings = getSettingsEntity(factoryId);
+        keepCameraSwitchIfOmitted(settings.getAiSettings(), aiSettings);
         settings.setAiSettings(toJsonString(aiSettings));
         settingsRepository.save(settings);
 
@@ -362,6 +363,10 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         try {
             FactorySettingsDTO dto = objectMapper.readValue(settingsJson, FactorySettingsDTO.class);
             dto.setFactoryId(factoryId); // 确保使用正确的工厂ID
+            if (dto.getAiSettings() != null) {
+                // 摄像头抓拍交给 AI 是本厂自己的同意, 不随别厂导出的设置带过来 (沿用本厂原值)
+                dto.getAiSettings().setCameraSnapshotAnalysis(null);
+            }
 
             FactorySettingsDTO result = saveSettings(factoryId, dto);
             log.info("导入工厂设置成功: factoryId={}", factoryId);
@@ -445,11 +450,24 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
     }
 
     /**
+     * AI 设置是整份覆盖的, 而不认识「摄像头抓拍交给 AI 识别」这一项的界面 (如 App 的 AI 设置页) 提交时会把它丢掉:
+     * 提交里没写这一项就沿用本厂原值, 要关掉必须显式写 false。
+     */
+    private void keepCameraSwitchIfOmitted(String existingJson, FactorySettingsDTO.AISettings incoming) {
+        if (incoming == null || incoming.getCameraSnapshotAnalysis() != null) {
+            return;
+        }
+        FactorySettingsDTO.AISettings existing = parseJsonField(existingJson, FactorySettingsDTO.AISettings.class);
+        incoming.setCameraSnapshotAnalysis(existing != null ? existing.getCameraSnapshotAnalysis() : null);
+    }
+
+    /**
      * 将DTO更新到实体
      */
     private void updateEntityFromDTO(FactorySettings settings, FactorySettingsDTO dto) {
         // 更新AI设置
         if (dto.getAiSettings() != null) {
+            keepCameraSwitchIfOmitted(settings.getAiSettings(), dto.getAiSettings());
             settings.setAiSettings(toJsonString(dto.getAiSettings()));
         }
         if (dto.getAiWeeklyQuota() != null) {

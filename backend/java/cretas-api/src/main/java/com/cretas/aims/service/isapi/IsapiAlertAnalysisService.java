@@ -167,8 +167,10 @@ public class IsapiAlertAnalysisService {
      * @return 分析结果
      */
     @Transactional
-    public CameraAlertAnalysisResult reanalyzeEvent(Long eventId) {
+    public CameraAlertAnalysisResult reanalyzeEvent(String factoryId, Long eventId) {
+        // 事件表没有租户过滤: 别厂的事件按「不存在」处理, 否则 A 厂能让 B 厂的抓拍再发一次模型并拿回结果
         IsapiEventLog eventLog = eventLogRepository.findById(eventId)
+                .filter(e -> factoryId != null && factoryId.equals(e.getFactoryId()))
                 .orElseThrow(() -> new IllegalArgumentException("事件不存在: " + eventId));
 
         IsapiDevice device = eventLog.getDevice();

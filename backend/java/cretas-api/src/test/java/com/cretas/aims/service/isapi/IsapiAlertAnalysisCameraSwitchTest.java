@@ -111,12 +111,17 @@ class IsapiAlertAnalysisCameraSwitchTest {
         IsapiDevice device = device(FACTORY);
         when(events.findById(7L)).thenReturn(Optional.of(snapshot(device)));
 
-        assertThat(service.reanalyzeEvent(7L).getMessage())
+        assertThat(service.reanalyzeEvent(FACTORY, 7L).getMessage())
                 .isEqualTo(IsapiAlertAnalysisService.CAMERA_AI_DISABLED_MESSAGE);
         verify(vision, never()).analyzeCameraAlert(anyString(), anyString(), any());
 
         when(settings.findAiSettingsByFactoryId(FACTORY)).thenReturn("{\"cameraSnapshotAnalysis\":true}");
-        service.reanalyzeEvent(7L);
+        service.reanalyzeEvent(FACTORY, 7L);
+        verify(vision).analyzeCameraAlert(anyString(), anyString(), any());
+
+        // 别厂按 URL 里自己的工厂来调, 拿不到这条事件, 也不会让它再发一次模型
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.reanalyzeEvent("F007", 7L))
+                .isInstanceOf(IllegalArgumentException.class);
         verify(vision).analyzeCameraAlert(anyString(), anyString(), any());
     }
 }
