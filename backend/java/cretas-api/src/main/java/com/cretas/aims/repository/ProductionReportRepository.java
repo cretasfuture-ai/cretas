@@ -490,7 +490,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
           AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
           AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
           AND NOT EXISTS (SELECT 1 FROM production_batches pb
-                          WHERE pb.id = pr.batch_id AND pb.production_plan_id IN (:excludedPlanIds))
+                          WHERE pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
+                            AND pb.production_plan_id IN (:excludedPlanIds))
         GROUP BY wp.id, wp.process_name, wp.unit, wp.output_unit
         ORDER BY MIN(wpt.process_order)
         """, nativeQuery = true)

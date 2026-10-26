@@ -82,7 +82,8 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         jdbcTemplate.execute("CREATE TABLE work_processes (id VARCHAR(50) PRIMARY KEY, process_name VARCHAR(100), "
                 + "unit VARCHAR(20), output_unit VARCHAR(20), deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE work_process_tasks (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
-                + "work_process_id VARCHAR(50) NOT NULL, product_type_id VARCHAR(50) NOT NULL, "
+                + "production_batch_id BIGINT NOT NULL, work_process_id VARCHAR(50) NOT NULL, "
+                + "product_type_id VARCHAR(50) NOT NULL, "
                 + "process_order INTEGER NOT NULL, deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE production_reports (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "batch_id BIGINT, work_process_task_id BIGINT, report_type VARCHAR(20), report_date DATE, "
@@ -95,13 +96,17 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-MIX', '拌料', 'kg', 'kg', NULL)");
         batchWithReport(1L, "plan-hidden", "100", "80");
         batchWithReport(2L, "plan-open", "100", "90");
+        // 报工单没记批次 (batch_id 为空) 时按任务的批次判计划 (独立审查第四轮复核)
+        jdbcTemplate.update("INSERT INTO production_reports VALUES (3, ?, NULL, 1, 'YIELD', DATE '2026-10-21', 30, 20, NULL)",
+                FACTORY);
         sheetRow(1L, "plan-hidden", "50", "40");
         sheetRow(2L, "plan-open", "50", "45");
     }
 
     private void batchWithReport(long id, String planId, String input, String output) {
         jdbcTemplate.update("INSERT INTO production_batches VALUES (?, ?)", id, planId);
-        jdbcTemplate.update("INSERT INTO work_process_tasks VALUES (?, ?, 'WP-MIX', 'Q-OPEN', 1, NULL)", id, FACTORY);
+        jdbcTemplate.update("INSERT INTO work_process_tasks VALUES (?, ?, ?, 'WP-MIX', 'Q-OPEN', 1, NULL)",
+                id, FACTORY, id);
         jdbcTemplate.update("INSERT INTO production_reports VALUES (?, ?, ?, ?, 'YIELD', DATE '2026-10-20', ?, ?, NULL)",
                 id, FACTORY, id, id, new BigDecimal(input), new BigDecimal(output));
     }
@@ -117,7 +122,7 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
     void byProcessAggregateLeavesOutEveryRowOfAnExcludedPlanIncludingUnprotectedSiblingOutputs() {
         List<Map<String, Object>> all = repository.aggregateYieldByProcess(FACTORY, FROM, TO, "", NONE, NONE);
         assertThat(all).hasSize(1);
-        assertThat(new BigDecimal(all.get(0).get("total_input").toString())).isEqualByComparingTo("200");
+        assertThat(new BigDecimal(all.get(0).get("total_input").toString())).isEqualByComparingTo("230");
         assertThat(((Number) all.get(0).get("batch_count")).intValue()).isEqualTo(2);
 
         List<Map<String, Object>> withoutHiddenPlan = repository.aggregateYieldByProcess(FACTORY, FROM, TO, "", NONE,
