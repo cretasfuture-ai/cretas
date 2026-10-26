@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool.impl.sop;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +38,12 @@ public class SopAnalyzeComplexityTool extends AbstractBusinessTool {
     @Autowired
     @Lazy
     private DashScopeClient dashScopeClient;
+
+    /** SOP 正文发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "sop-complexity";
 
     @Override
     public String getToolName() {
@@ -100,7 +108,7 @@ public class SopAnalyzeComplexityTool extends AbstractBusinessTool {
 
         if (useAi) {
             // 使用AI分析
-            result = analyzeWithAi(sopContent, steps);
+            result = analyzeWithAi(sopContent, steps, factoryId);
         } else {
             // 使用规则分析
             result = analyzeWithRules(sopContent, steps);
@@ -128,7 +136,8 @@ public class SopAnalyzeComplexityTool extends AbstractBusinessTool {
     /**
      * 使用AI分析复杂度
      */
-    private ComplexityAnalysisResult analyzeWithAi(String sopContent, List<Map<String, Object>> steps) {
+    private ComplexityAnalysisResult analyzeWithAi(String sopContent, List<Map<String, Object>> steps,
+                                                   String factoryId) {
         String prompt = String.format("""
             分析以下SOP文档的复杂度，评估1-5级:
 
@@ -158,13 +167,18 @@ public class SopAnalyzeComplexityTool extends AbstractBusinessTool {
                 steps != null ? "步骤信息: " + steps.toString() : ""
         );
 
+        // SOP 正文里的负责人 / 公司 / 电话 / 本厂工艺保密产品名换代号; 脱敏不了就按规则分析
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, factoryId, prompt);
+        if (redacted.refused()) {
+            return analyzeWithRules(sopContent, steps);
+        }
         try {
             String response = dashScopeClient.chat(
                     "你是一个SOP复杂度分析专家，专门评估食品加工厂的标准操作流程复杂程度。",
-                    prompt
+                    redacted.text(0)
             );
 
-            return parseAiResponse(response);
+            return parseAiResponse(redacted.restoreJsonText(response));
         } catch (Exception e) {
             log.error("AI分析失败，回退到规则分析: {}", e.getMessage());
             return analyzeWithRules(sopContent, steps);

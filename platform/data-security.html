@@ -285,6 +285,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <span class="how-label">怎么做到</span>
       <ul>
         <li data-claim="C4-smartbi-redact" data-claim-status="live">智能报表分析把数据交给模型之前，先把客户、门店、产品名称换成代号；换不成功，这次就不发送，不会带着原文发出去。</li>
+        <li data-claim="C4-image-not-redacted" data-claim-status="live">单据照片、发票、送货单、SOP 图片和 PDF 交给 AI 识别时，按原样识别，不做名称替换；上传时页面会提示。摄像头抓拍默认关闭，由工厂自己决定是否打开。</li>
         <li data-claim="C4-assistant-redact" data-claim-status="commitment">工厂 AI 助手把查询结果交给模型总结之前，同样先把名称换成代号，换不成功就不发送。</li>
       </ul>
     </div>
@@ -298,7 +299,7 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <ul>
         <li data-claim="C5-hosting" data-claim-status="live">服务器位于中国境内（阿里云）；你和系统之间的通信全程 HTTPS 加密。</li>
         <li data-claim="C5-daily-backup" data-claim-status="live">数据库每天凌晨自动备份，保留最近 7 天。</li>
-        <li data-claim="C5-offsite-encrypted" data-claim-status="commitment">备份加密后另存一份在独立的存储里，服务器出问题也能恢复。</li>
+        <li data-claim="C5-offsite-encrypted" data-claim-status="live">备份加密后每天另存一份到独立的异地存储，保留最近 7 天；解密钥匙不放在服务器上，由我们离线保管。已做过从异地备份恢复的演练。</li>
       </ul>
     </div>
   </div>

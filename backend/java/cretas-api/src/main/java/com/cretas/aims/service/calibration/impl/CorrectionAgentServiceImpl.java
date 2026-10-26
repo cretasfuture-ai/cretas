@@ -9,6 +9,8 @@ import com.cretas.aims.entity.calibration.ReflectionMemory;
 import com.cretas.aims.repository.calibration.ReflectionMemoryRepository;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,6 +45,12 @@ public class CorrectionAgentServiceImpl implements CorrectionAgentService {
     private final DashScopeConfig dashScopeConfig;
     private final ReflectionMemoryRepository reflectionMemoryRepository;
     private final ObjectMapper objectMapper;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "correction-agent";
 
     // 最大重试次数
     private static final int MAX_RETRIES = 3;
@@ -133,9 +141,16 @@ public class CorrectionAgentServiceImpl implements CorrectionAgentService {
             String historicalReflections = getHistoricalReflections(null, toolName, 3);
 
             // 3. 构建纠错 Prompt
-            String prompt = buildCorrectionPrompt(
+            String rawPrompt = buildCorrectionPrompt(
                     userIntent, toolName, originalParams, errorMessage,
                     verificationResult, historicalReflections);
+            // 原话 / 工具参数 / 报错 / 历史反思里的客户、人名、号码换代号; 参数里的名字先从结构里认出来
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null, originalParams,
+                    Map.of(), Arrays.asList(rawPrompt, errorMessage));
+            if (redacted.refused()) {
+                return CorrectionResult.noRetry("纠错内容无法脱敏, 未发给模型");
+            }
+            String prompt = redacted.text(0);
 
             // 4. 调用纠错模型（使用轻量模型）
             ChatCompletionRequest request = ChatCompletionRequest.builder()
@@ -161,11 +176,12 @@ public class CorrectionAgentServiceImpl implements CorrectionAgentService {
             String content = response.getContent();
             log.debug("纠错 Agent 响应: {}", content);
 
-            CorrectionResult result = parseCorrectionResponse(content);
+            // 纠正后的参数要还原成真值才能重试; 存进反思库的那份保持代号 (反思库按工具名跨会话复用, 不该存真名)
+            CorrectionResult result = parseCorrectionResponse(redacted.restoreJsonText(content));
 
             // 6. 保存反思到 episodic memory
             if (result.shouldRetry() && result.reflection() != null) {
-                saveReflection(null, toolName, errorMessage, result);
+                saveReflection(null, toolName, redacted.text(1), parseCorrectionResponse(content));
             }
 
             log.info("纠错 Agent 完成: shouldRetry={}, strategy={}, confidence={}",
