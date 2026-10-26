@@ -5,7 +5,8 @@
 
 ## 在飞任务
 
-- `SMARTBI-FULL-QA-20261026` — `in-progress` — Owner Root — Base 2e9c45852a0431a4fd29700e37dc78f2858c0d99 — PR1192已合并，代码scope释放；本行仅F006发布/业务验收，证据见archive/2026-10-26-smartbi-full-closure.md。
+- `SMARTBI-FULL-QA-20261026` — `in-progress` — Root；F006验收见archive/2026-10-26-smartbi-full-closure.md。
+- `SMARTBI-SKU-WIRING-20261026` — `review` — Root；Base/scope/owner/验收见archive/2026-10-26-smartbi-sku-wiring.md。
 
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。

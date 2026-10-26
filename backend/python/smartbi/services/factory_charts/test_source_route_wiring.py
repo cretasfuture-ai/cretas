@@ -5,6 +5,8 @@ from httpx import AsyncClient, ASGITransport
 from .test_detail_api import app_for, clean_details
 from . import sources, finance_sources, operational_sources, captured_sources
 from .engine import Dataset
+from .test_operational_sources import FakePool
+from decimal import Decimal
 
 
 @pytest.mark.asyncio
@@ -54,3 +56,35 @@ async def test_business_route_reconciles_trusted_positive_capture_only(monkeypat
         assert not ids.intersection(expected)
     else:
         assert expected <= ids and data['recommendations']==[]
+
+
+@pytest.mark.asyncio
+async def test_route_loads_canonical_sales_sku_and_detail_preserves_line_provenance(monkeypatch):
+    rows = {
+        "sales_order_items i": [{"订单行ID": "line-851", "订单ID": "order-851", "日期": "2026-10-01",
+                                  "产品ID": "sku-851", "产品": "QA SKU", "单位": "kg", "数量": Decimal("3"),
+                                  "单价": Decimal("10"), "折扣率": Decimal("0"), "报价含税单价": Decimal("10"),
+                                  "订单总额": Decimal("30")}],
+        "smart_bi_department_data": [], "production_reports pr": [],
+        "semi_finished_inventory sfi": [], "semi_finished_inventory_transactions tx": [],
+    }
+    async def get_pool():
+        return FakePool(rows, [])
+    async def empty(*args): return [], [], []
+    monkeypatch.setattr(operational_sources.config, 'get_cretas_pool', get_pool)
+    monkeypatch.setattr(sources, 'load', empty)
+    monkeypatch.setattr(finance_sources, 'load', empty)
+    monkeypatch.setattr(captured_sources, 'load', empty)
+    async def allowed(*args): return True
+    monkeypatch.setattr('smartbi.services.factory_charts.finance_auth.full_factory_finance_access', allowed)
+    async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as c:
+        response = await c.post('/factory-recommendations', json={'use_ai': False})
+        assert response.status_code == 200
+        sku = next(card for card in response.json()['data']['recommendations'] if 'sales.sku' in card['id'])
+        assert sku['detailContext']['drilldown']
+        drilled = await c.post('/factory-details', json={'context_id': sku['detailContext']['id'],
+                                                          'point': {'name': 'QA SKU'}})
+        assert drilled.status_code == 200
+        row = drilled.json()['data']['rows'][0]
+        assert row['订单行ID'] == 'line-851' and row['订单ID'] == 'order-851'
+        assert str(row['订单总额']) in {'30', '30.00'}

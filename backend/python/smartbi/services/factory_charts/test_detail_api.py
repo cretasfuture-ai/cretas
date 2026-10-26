@@ -69,6 +69,39 @@ async def test_actual_recommendation_route_exposes_owner_bound_original_pages(mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('period_type,start_month,end_month,expected_label,expected_total', [
+    ('all', 1, 12, '全部历史', 3),
+    ('month_range', 10, 10, '2026年10–10月', 2),
+    ('month_range', 9, 10, '2026年9–10月', 3),
+])
+async def test_recommendation_and_detail_share_period_label_and_filtered_rows(
+        monkeypatch, period_type, start_month, end_month, expected_label, expected_total):
+    original = pd.DataFrame([
+        {'日期': '2026-09-30', '产品': 'outside', '单位': 'kg', '产量': 9},
+        {'日期': '2026-10-01', '产品': 'inside', '单位': 'kg', '产量': 20},
+        {'日期': '2026-10-02', '产品': 'inside-2', '单位': 'kg', '产量': 21},
+    ])
+    async def load(*args): return original.copy()
+    monkeypatch.setattr(api, '_load_data', load)
+    payload = {'source': 'upload', 'upload_id': 42, 'use_ai': False,
+               'period_type': period_type, 'start_month': start_month, 'end_month': end_month}
+    async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as client:
+        response = await client.post('/factory-recommendations', json=payload)
+        assert response.status_code == 200
+        data = response.json()['data']
+        assert data['period']['label'] == expected_label
+        candidate = next(c for c in data['recommendations'] if '.production.output' in c['id'] and c['unit'] == 'kg')
+        token = candidate['detailContext']['id']
+        detail = await client.post('/factory-details', json={'context_id': token})
+        assert detail.status_code == 200
+        detail_data = detail.json()['data']
+        assert detail_data['period'] == expected_label
+        assert detail_data['total'] == expected_total
+        if expected_total == 2:
+            assert {row['产品'] for row in detail_data['rows']} == {'inside', 'inside-2'}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('factory,user,role,expected',[(None,1309,'factory_super_admin',401),('F006',None,'factory_super_admin',401),('F006',1309,'operator',403)])
 async def test_details_requires_trusted_analytic_user(factory,user,role,expected):
     async with AsyncClient(transport=ASGITransport(app=app_for(factory,user,role)),base_url='http://test') as client:

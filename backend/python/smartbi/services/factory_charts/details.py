@@ -177,18 +177,24 @@ def _period_mask(frame: pd.DataFrame, request: Any) -> pd.Series:
     return parsed.notna()
 
 
-def _period_label(request: Any) -> Any:
+def canonical_period_label(request: Any) -> str:
+    """Return the one period label shared by cards and frozen detail rows."""
     explicit = _request_value(request, "period")
     if explicit is not None:
         return str(explicit)
     year = _request_value(request, "year")
     typ = _request_value(request, "period_type", _request_value(request, "periodType", "all"))
     if year is None or str(typ).lower() == "all":
-        return "全部期间"
+        return "全部历史"
     start = _request_value(request, "start_month", _request_value(request, "startMonth", 1))
     end = _request_value(request, "end_month", _request_value(request, "endMonth", 12))
     start, end = int(start), int(end)
-    return f"{int(year)}年{start}月" if start == end else f"{int(year)}年{start}-{end}月"
+    return f"{int(year)}年{start}–{end}月"
+
+
+def _period_label(request: Any) -> str:
+    # Compatibility wrapper for the shared detail-store implementation.
+    return canonical_period_label(request)
 
 
 def _canonical_rows(frame: pd.DataFrame, request: Any) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
