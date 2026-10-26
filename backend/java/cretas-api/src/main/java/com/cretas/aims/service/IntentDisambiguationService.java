@@ -179,7 +179,7 @@ public class IntentDisambiguationService {
                 return new DisambiguationResult(Choice.FOOD_KNOWLEDGE, "LLM错误: " + response.getErrorMessage(), latency, true);
             }
 
-            String content = response.getContent();
+            String content = redacted.restoreJsonText(response.getContent());
             if (content == null || content.isBlank()) {
                 log.warn("[Disambiguation] LLM返回空内容，默认FOOD_KNOWLEDGE");
                 return new DisambiguationResult(Choice.FOOD_KNOWLEDGE, "LLM返回空", latency, true);

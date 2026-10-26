@@ -131,7 +131,11 @@ class AIEnterpriseServiceStreamEgressTest {
 
         verify(python, after(500).never()).streamGeneralAnalysis(anyString(), any(), any(), any(), any());
         verify(quota, never()).incrementUsedCount(anyString(), any(LocalDate.class), anyInt());
-        assertThat(payloads(emitter)).anySatisfy(p -> assertThat(p.get("type")).isEqualTo("error"));
+        // 明确告诉用户是脱敏这一步拦下的, 不是笼统的「服务不可用」
+        assertThat(payloads(emitter)).anySatisfy(p -> {
+            assertThat(p.get("type")).isEqualTo("error");
+            assertThat(String.valueOf(p.get("message"))).contains("脱敏");
+        });
     }
 
     @SuppressWarnings("unchecked")

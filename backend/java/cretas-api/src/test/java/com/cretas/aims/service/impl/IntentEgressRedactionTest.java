@@ -246,12 +246,25 @@ class IntentEgressRedactionTest {
 
         PythonIntentMatchRequest req = sent.getValue();
         assertNoRealValues(req.getQuery());
-        assertThat(req.getHistory()).hasSize(2);
-        assertThat(req.getHistory().get(0).get("content")).doesNotContain("华东冷链");
-        assertThat(req.getHistory().get(1).get("content")).doesNotContain("赵铁柱", "13912345678");
-        assertThat(req.getHistory().get(1).get("role")).isEqualTo("assistant");
+        // 只带用户自己的话 (脱敏后); 助手的回答是换回真名的查询结果, 一句都不发
+        assertThat(req.getHistory()).hasSize(1);
+        assertThat(req.getHistory().get(0).get("role")).isEqualTo("user");
+        assertThat(req.getHistory().get(0).get("content")).doesNotContain("华东冷链").contains("送的货");
+        assertThat(req.getHistory().toString()).doesNotContain("赵铁柱", "13912345678", "已记录");
         assertThat(result.getUserInput()).isEqualTo(SAID);
         assertThat(result.getClarificationQuestion()).isEqualTo("要通知 13912345678 吗？");
+    }
+
+    @Test
+    void classifierConversationContextCarriesFieldNamesNotValues() {
+        com.cretas.aims.entity.conversation.ConversationTurn turn = new com.cretas.aims.entity.conversation.ConversationTurn(
+                "华东冷链那批货到了吗", "MATERIAL_QUERY", "material_batch_query", null,
+                Map.of("supplierName", "华东冷链商贸有限公司", "contact", "赵铁柱 13912345678"), 1L);
+
+        String prefix = LlmIntentFallbackClientImpl.buildConversationContextPrefix(List.of(turn));
+
+        assertThat(prefix).contains("supplierName").contains("contact")
+                .doesNotContain("华东冷链商贸有限公司", "赵铁柱", "13912345678");
     }
 
     @Test

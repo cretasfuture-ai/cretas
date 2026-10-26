@@ -459,6 +459,28 @@ class ToolDispatchServiceParameterGroundingTest {
     }
 
     @Test
+    @DisplayName("抽参在流式工作线程上 (没有 Servlet 请求): 按控制器绑的可信身份查本厂保密产品名, 不原样外发")
+    void extractionOnTheSseWorkerThreadStillHidesProtectedProductNames() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter secrets =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(secrets.protectedProductNames(FACTORY)).thenReturn(java.util.Set.of("秘制酱牛肉"));
+        ReflectionTestUtils.setField(dispatch, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(mapper, secrets));
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        ChatCompletionResponse resp = mock(ChatCompletionResponse.class);
+        when(llm.chatWithTools(anyString(), user.capture(), anyList())).thenReturn(resp);
+
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 42L, FACTORY, "operator"))) {
+            dispatch.executeToolPreview(completeTool, FACTORY, preview("1827 秘制酱牛肉做完了 100 公斤"),
+                    completeIntent, 42L, "operator");
+        }
+
+        assertThat(user.getValue()).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+    }
+
+    @Test
     @DisplayName("抽参: 脱敏不了就不调模型, 缺的参数照常追问")
     void extractionIsSkippedWhenRedactionFails() throws Exception {
         com.cretas.aims.service.consent.ProcessSecretSampleFilter broken =

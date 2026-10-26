@@ -415,10 +415,18 @@ public class AIIntentServiceImpl implements AIIntentService {
             try {
                 // Python 侧识别可能回落到大模型: 原话与历史 (里面有此前回答换回的真名) 先脱敏;
                 // 脱敏不了抛错, 由下面的 catch 回落到本机管线 —— 不发
+                // 历史只带用户自己说过的话: 助手的回答是换回真名后的查询结果 (表格里的人名、店名没有岗位 / 后缀,
+                // 文本脱敏认不出来), 发出去就是把上一轮藏住的名字再交出去
+                List<Map<String, String>> userTurns = new ArrayList<>();
+                for (Map<String, String> turn : turns) {
+                    if (turn != null && "user".equalsIgnoreCase(turn.get("role"))) {
+                        userTurns.add(turn);
+                    }
+                }
                 List<String> egressTexts = new ArrayList<>();
                 egressTexts.add(userInput);
-                for (Map<String, String> turn : turns) {
-                    egressTexts.add(turn == null ? null : turn.get("content"));
+                for (Map<String, String> turn : userTurns) {
+                    egressTexts.add(turn.get("content"));
                 }
                 com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
                         llmEgressGuard.texts(PYTHON_MATCH_EGRESS_SITE, factoryId, Map.of(), egressTexts);
@@ -426,14 +434,9 @@ public class AIIntentServiceImpl implements AIIntentService {
                     throw new IllegalStateException("intent query could not be redacted, not sending");
                 }
                 List<Map<String, String>> sentTurns = new ArrayList<>();
-                for (int i = 0; i < turns.size(); i++) {
-                    if (turns.get(i) == null) {
-                        continue;
-                    }
-                    Map<String, String> copy = new LinkedHashMap<>(turns.get(i));
-                    if (copy.containsKey("content")) {
-                        copy.put("content", redacted.text(i + 1));
-                    }
+                for (int i = 0; i < userTurns.size(); i++) {
+                    Map<String, String> copy = new LinkedHashMap<>(userTurns.get(i));
+                    copy.put("content", redacted.text(i + 1));
                     sentTurns.add(copy);
                 }
                 PythonIntentMatchRequest req = PythonIntentMatchRequest.builder()

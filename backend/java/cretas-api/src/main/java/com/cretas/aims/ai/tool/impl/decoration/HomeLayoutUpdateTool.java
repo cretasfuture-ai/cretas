@@ -100,7 +100,7 @@ public class HomeLayoutUpdateTool extends AbstractBusinessTool {
         com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
                 llmEgressGuard.texts(getToolName(), factoryId, systemPrompt, userInput);
         if (redacted.refused()) {
-            throw new com.cretas.aims.exception.BusinessException("描述里有无法脱敏的内容, 未发给 AI, 请换个说法");
+            throw new com.cretas.aims.exception.BusinessException("这段描述没能通过发送前的脱敏检查, 未发给 AI。请稍后再试");
         }
         String llmResponse = redacted.restoreJsonText(dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1)));
 

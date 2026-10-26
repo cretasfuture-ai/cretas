@@ -421,7 +421,7 @@ public class ArenaRLTournamentServiceImpl implements ArenaRLTournamentService {
                     pythonLLMClient.chatLowTemp(systemPrompt, redacted.text(0)));
 
             // 等待结果，带超时
-            String responseText = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            String responseText = redacted.restoreJsonText(future.get(timeoutMs, TimeUnit.MILLISECONDS));
 
             // 解析 JSON 响应
             return parseComparisonResponse(matchId, responseText, candidateA, candidateB, matchStart);

@@ -115,16 +115,22 @@ class PromptEgressRedactionTest {
         when(config.isAvailable()).thenReturn(true);
         when(config.getCorrectionModel()).thenReturn("qwen-turbo");
         ArgumentCaptor<ChatCompletionRequest> sent = ArgumentCaptor.forClass(ChatCompletionRequest.class);
-        ChatCompletionResponse response = mock(ChatCompletionResponse.class);
-        when(response.getContent()).thenReturn("{\"choice\":\"B\",\"reason\":\"数据\"}");
-        when(llm.chatCompletion(sent.capture())).thenReturn(response);
+        when(llm.chatCompletion(sent.capture())).thenAnswer(inv -> {
+            String said = String.valueOf(inv.<ChatCompletionRequest>getArgument(0).getMessages().get(1).getContent());
+            String person = said.replaceAll("(?s).*?(\\[人员[A-Z]+]).*", "$1");
+            ChatCompletionResponse response = mock(ChatCompletionResponse.class);
+            when(response.getContent()).thenReturn("{\"choice\":\"B\",\"reason\":\"要通知 " + person + " 复检\"}");
+            return response;
+        });
         IntentDisambiguationService service = new IntentDisambiguationService(llm, config, mapper);
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "llmEgressGuard", guard());
 
-        service.disambiguate(SAID, "QUALITY_CHECK_CREATE");
+        IntentDisambiguationService.DisambiguationResult result = service.disambiguate(SAID, "QUALITY_CHECK_CREATE");
 
         assertNoRealValues(String.valueOf(sent.getValue().getMessages().get(1).getContent()));
+        // 判断理由里的代号换回真名 (日志 / 结果里不出现代号)
+        assertThat(result.getReason()).contains("赵铁柱").doesNotContain("[人员");
 
         DashScopeClient second = mock(DashScopeClient.class);
         IntentDisambiguationService refusing = new IntentDisambiguationService(second, config, mapper);
@@ -150,15 +156,18 @@ class PromptEgressRedactionTest {
     void arenaComparisonSendsRedactedUtterance() {
         PythonLLMClient llm = mock(PythonLLMClient.class);
         ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
-        when(llm.chatLowTemp(anyString(), user.capture()))
-                .thenReturn("{\"winner\":\"A\",\"win_confidence\":0.8,\"reasoning\":\"复检\"}");
+        when(llm.chatLowTemp(anyString(), user.capture())).thenAnswer(inv -> {
+            String person = inv.<String>getArgument(1).replaceAll("(?s).*?(\\[人员[A-Z]+]).*", "$1");
+            return "{\"winner\":\"A\",\"win_confidence\":0.8,\"reasoning\":\"要让 " + person + " 复检\"}";
+        });
         ArenaRLTournamentServiceImpl arena = new ArenaRLTournamentServiceImpl(new ArenaRLConfig(), llm, mapper);
         ReflectionTestUtils.setField(arena, "llmEgressGuard", guard());
 
-        arena.compareTwo(SAID, candidate("QUALITY_CHECK_CREATE"), candidate("NOTIFY_STAFF"),
+        var match = arena.compareTwo(SAID, candidate("QUALITY_CHECK_CREATE"), candidate("NOTIFY_STAFF"),
                 ComparisonRubric.intentDisambiguationRubric());
 
         assertThat(user.getAllValues()).isNotEmpty().allSatisfy(PromptEgressRedactionTest::assertNoRealValues);
+        assertThat(match.getReasoning()).contains("赵铁柱").doesNotContain("[人员");
 
         PythonLLMClient second = mock(PythonLLMClient.class);
         ArenaRLTournamentServiceImpl refusing = new ArenaRLTournamentServiceImpl(new ArenaRLConfig(), second, mapper);

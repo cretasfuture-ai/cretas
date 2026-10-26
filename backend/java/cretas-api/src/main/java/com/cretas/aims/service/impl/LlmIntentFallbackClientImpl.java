@@ -408,9 +408,10 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             }
 
             if (t.response() != null && !t.response().isEmpty()) {
-                String summary = t.response().entrySet().stream()
+                // 只给字段名: 值是上一轮的查询结果 (客户 / 供应商 / 人名), 判断意图用不着, 也不该发给模型
+                String summary = t.response().keySet().stream()
                         .limit(3)  // keep prompt tight
-                        .map(e -> e.getKey() + "=" + e.getValue())
+                        .map(String::valueOf)
                         .collect(java.util.stream.Collectors.joining(", "));
                 sb.append("  返回关键字段: ").append(summary).append("\n");
             }
