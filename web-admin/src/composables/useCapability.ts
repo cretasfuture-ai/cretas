@@ -57,6 +57,19 @@ const _loading = ref(false);
 const _error = ref<Error | null>(null);
 let _inflight: Promise<CapabilityResponse | null> | null = null;
 
+function responseMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  for (const key of ['message', 'detail']) {
+    const value = (body as Record<string, unknown>)[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function isGradualRolloutMessage(message: string | null): boolean {
+  return message !== null && /gradual\s+rollout/i.test(message);
+}
+
 /**
  * Reset state — for tests + manual logout cleanup.
  */
@@ -100,13 +113,23 @@ export function useCapability() {
             headers: { ...await getPythonAuthHeaders() },
           },
         );
-        // 503 = 该工厂尚未开通 capability 层 (gradual rollout), 服务端明说
-        // 「Capability layer not enabled for factory=X」。这是**预期状态不是故障** ——
-        // 记成 console.error 会让每次进驾驶舱都报红, 掩盖真正的错误
-        // (2026-08-02 走查时就是被它误导过一次)。按未启用静默处理, 仍然 fail-open。
         if (res.status === 503) {
-          console.info('[capability] 该工厂尚未开通 capability 层 (灰度中), 按宽松模式处理');
-          return null;
+          let body: unknown = null;
+          try {
+            body = await res.json();
+          } catch {
+            // Keep the status-only error visible when the server sends no JSON.
+          }
+          const message = responseMessage(body);
+          if (isGradualRolloutMessage(message)) {
+            console.info('[capability] 该工厂尚未开通 capability 层 (灰度中), 按宽松模式处理');
+            return null;
+          }
+          throw new Error(
+            message
+              ? `capability fetch failed: 503 ${message}`
+              : 'capability fetch failed: 503',
+          );
         }
         if (!res.ok) throw new Error(`capability fetch failed: ${res.status}`);
         const data = (await res.json()) as CapabilityResponse;
