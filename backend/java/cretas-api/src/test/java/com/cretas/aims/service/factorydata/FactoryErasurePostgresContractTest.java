@@ -374,6 +374,18 @@ class FactoryErasurePostgresContractTest {
             assertThatThrownBy(() -> st.execute("SELECT " + schema + ".factory_erase_llm_egress_audit('" + FA + "')"))
                     .hasMessageContaining("app.factory_erasure");
             c.rollback();
+            // 有删除标记、行级安全变量却是别的工厂 ⇒ 也拒绝 (两个条件各自生效)
+            st.execute("SELECT set_config('app.factory_erasure', '" + FA + "', true), set_config('app.factory_id', '" + FB + "', true)");
+            assertThatThrownBy(() -> st.execute("SELECT " + schema + ".factory_erase_llm_egress_audit('" + FA + "')"))
+                    .hasMessageContaining("app.factory_id");
+            c.rollback();
+            // 阳性对照: 两个都对 ⇒ 删得掉
+            st.execute("SELECT set_config('app.factory_erasure', '" + FA + "', true), set_config('app.factory_id', '" + FA + "', true)");
+            try (ResultSet rs = st.executeQuery("SELECT " + schema + ".factory_erase_llm_egress_audit('" + FA + "')")) {
+                rs.next();
+                assertThat(rs.getLong(1)).isEqualTo(1);
+            }
+            c.rollback();
         }
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_llm_egress_audit WHERE factory_id = '" + FA + "'")).isEqualTo(1);
     }
