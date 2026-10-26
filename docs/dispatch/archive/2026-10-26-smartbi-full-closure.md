@@ -1,5 +1,15 @@
 # SMARTBI-FULL-CLOSURE-20261026
 
+## SMARTBI-FINANCE-TARGET-20261026 scope lock
+
+Base aa14119f40967a61afc56c7568ad085550da6212. Owner Root. Branch codex/smartbi-finance-java-target-20261026, worktree C:/Users/Steve/cretas-smartbi-rule-export-20261025. In-progress subtask of existing SMARTBI-FULL-QA-20261026 ACTIVE row.
+
+Code Owner capture_sources_impl: only backend/python/smartbi/services/factory_charts/finance_auth.py and test_finance_auth.py. Current production has no configured JAVA_API_BASE_URL/BACKEND_BASE_URL; default10010 is inactive and current actual Java10020 serves the correct F006 unscoped finance contract. Preserve explicit operator URL validation and never override explicit configuration. For unconfigured local default only, permit the other fixed loopback blue-green slot only after connection refusal; never fallback following HTTP denial, malformed identity/scope response or semantic rejection. No new remote default, credential logging, role/tenant relaxation, environment/global config mutation, browser, production, dependencies, dispatch or grandchildren. Other workers exist; preserve their edits.
+
+Acceptance: target-resolution/security tests using actual HTTP client transport for unavailable10010/reachable10020, explicit invalid/custom URL,401/403 denial, wrong tenant/row scope/malformed responses and both unavailable. Root full chart test suite plus independent risk review before PR/production. Return structured task/Base/files/commands/results/commit-PR/blocker-next receipt. Root retains integration, release, business browser and final evidence.
+
+Review receipt: worker15 tests passed and released two source files. Independent risk review PASS: only connection refusal on unconfigured loopback default advances to10020; explicit target, HTTP denial, wrong tenant/scope and malformed response remain fail-closed. Root added explicit403, malformed JSON and ReadTimeout one-call negatives, then final full chart suite191 passed,0 skipped,20 warnings with both disposable PostgreSQL contracts enabled (test-output/full-finance-target-final-reviewed.log). Scope remains two product/test files plus this archive; no runtime env or policy change. CI, merge and live deployment pending.
+
 Base: 9f8f04d642523db49befb0bca9d5751319225b77. Owner: Root. Worktree: C:/Users/Steve/cretas-smartbi-rule-export-20261025. Branch: codex/smartbi-full-closure-20261026. Implementation status: review; merge/release/production business acceptance remain independent pending facts.
 
 Steve authorized finishing the remaining factory charts and F006 acceptance, reusing existing implementations, then merging and deploying after validation. Required charts first; optional charts only with qualified facts; restaurant-only charts excluded. F006 QA records must be clearly marked and bounded. Preserve historical batch10943 and linked records. No other-tenant business writes, global permission changes, historical reversal or destructive cleanup.
