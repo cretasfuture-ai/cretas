@@ -116,7 +116,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
             proven.add('sales.channel')
         if source in ('sales-department_id', 'department') and 'finance.business_unit_analysis' in metric:
             proven.add('finance.unit-source')
-        if source == 'oee' and 'production.oee' in metric:
+        if source in ('oee', 'oee-sheet') and 'production.oee' in metric:
             proven.add('production.oee-source')
     extra_gaps = [gap for gap in extra_gaps if gap.get('id') not in proven]
     from common.tenant_identity import caller_user_id

@@ -88,3 +88,32 @@ async def test_route_loads_canonical_sales_sku_and_detail_preserves_line_provena
         row = drilled.json()['data']['rows'][0]
         assert row['订单行ID'] == 'line-851' and row['订单ID'] == 'order-851'
         assert str(row['订单总额']) in {'30', '30.00'}
+
+
+@pytest.mark.asyncio
+async def test_route_loads_sheet_oee_and_details_keep_electronic_row_provenance(monkeypatch):
+    async def empty(*args): return [], [], []
+    async def captured(*args):
+        return [Dataset(pd.DataFrame([{
+            '计划运行分钟': 20, '实际运行分钟': 15, '理想周期秒': 60,
+            '总数': 10, '良品数': 0, '单位': 'kg', '日期': '2026-10-01',
+            '产品': 'QA产品', '报工ID': 'sheet-row:qa-1', '设备ID': 'eq-sheet',
+        }]), 'oee-sheet · 电子工序表提交事实 · eq-sheet|QA产品|kg|60')], [], []
+    async def allowed(*args): return True
+    monkeypatch.setattr(sources, 'load', empty)
+    monkeypatch.setattr(operational_sources, 'load', empty)
+    monkeypatch.setattr(finance_sources, 'load', empty)
+    monkeypatch.setattr(captured_sources, 'load', captured)
+    monkeypatch.setattr('smartbi.services.factory_charts.finance_auth.full_factory_finance_access', allowed)
+    async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as c:
+        response = await c.post('/factory-recommendations', json={'use_ai': False})
+        assert response.status_code == 200
+        card = next(card for card in response.json()['data']['recommendations'] if 'production.oee' in card['id'])
+        assert card['detailContext']['id'] and card['detailContext']['drilldown'] is False
+        drilled = await c.post('/factory-details', json={
+            'context_id': card['detailContext']['id'],
+            'point': {'name': 'QA产品'},
+        })
+        assert drilled.status_code == 200
+        rows = drilled.json()['data']['rows']
+        assert any(row['报工ID'] == 'sheet-row:qa-1' for row in rows)

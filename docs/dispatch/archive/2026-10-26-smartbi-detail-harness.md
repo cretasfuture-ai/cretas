@@ -1,0 +1,9 @@
+# SMARTBI-DETAIL-HARNESS-20261026
+
+Base 891d39c4931276dca02ae7e5945acc48edf2b43e. Status in-progress. Owner Root; executor detail_qa_executor. Worktree C:/Users/Steve/my-prototype-logistics/.claude/worktrees/smartbi-closure-verify-20261025; branch codex/smartbi-detail-harness-20261026. Subtask of SMARTBI-FULL-QA-20261026; phone remains unaccepted by user instruction.
+
+Scope lock: scripts/e2e/production-readonly/scenarios/smartbi-factory-readonly.js, scripts/e2e/production-readonly/tests/unit.test.js, generated scripts/e2e/production-readonly/mcp-entry.js only. Correct virtual-table inner row count, bounded scheduling reserving real point-click time, precise point geometry from actual ECharts options, and shallow sanitized diagnostics. Preserve actual UI drawer/table assertions, all tenant/readonly guards and independent completeness requirement. No product components, credentials, global hooks, dependencies, browser, production writes, dispatch edits or children. Others are working; preserve their changes.
+
+Acceptance: node --test scripts/e2e/production-readonly/tests/unit.test.js; node scripts/e2e/production-readonly/build-mcp-entry.js; tracked drift check; git diff --check. Add meaningful negatives for virtual geometry and point scheduling. Return task/Base/files/commands/results/commit-PR/blocker-next; leave uncommitted. Root owns live MCP execution, fixture verification, commit/CI/merge.
+
+Root review corrected nonzero grid-top/axis-inverse geometry and rejected noninteger/missing virtual row geometry. Final unit54 and bundle/drift5 PASS. Local fixture final proof recorded in test-output/full-detail-harness-fixture-final.log. Initial fixture attempts failed due missing output directory and missing root Playwright CLI; resolved using installed web-admin dependency path, not a product failure. Existing OEE-TEXT PR1194 merged and deployed; stale own ACTIVE row removed.

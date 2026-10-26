@@ -98,6 +98,7 @@ class MonthCloseServiceTest {
     @Mock private IncomeStatementService incomeStatementService;
     @Mock private com.cretas.aims.repository.VoucherEntryRepository voucherEntryRepository;
     @Mock private ClosingReadinessService closingReadinessService;
+    @Mock private com.cretas.aims.service.inventory.InventoryLedgerSnapshotService inventoryLedgerSnapshotService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -113,7 +114,7 @@ class MonthCloseServiceTest {
     void setUp() {
         // @InjectMocks can't inject the real ObjectMapper (not a mock), build manually
         service = new MonthCloseServiceImpl(periodRepo, periodService, arApService,
-                incomeStatementService, objectMapper, voucherEntryRepository);
+                incomeStatementService, objectMapper, inventoryLedgerSnapshotService, voucherEntryRepository);
         org.springframework.test.util.ReflectionTestUtils.setField(service,"closingReadinessService",closingReadinessService);
 
         // 资金段子账↔总账对账 (finance audit Bug 5): 默认零漂移 stub (lenient — 非每个 test 都到 previewClose)。
@@ -287,6 +288,9 @@ class MonthCloseServiceTest {
         assertNotNull(result.getIncomeStatement());
         assertEquals(new BigDecimal("25000.00"), result.getIncomeStatement().getNetProfit());
         verify(periodRepo).save(any(AccountingPeriod.class));
+        var closeOrder = inOrder(periodRepo, inventoryLedgerSnapshotService);
+        closeOrder.verify(periodRepo).save(p);
+        closeOrder.verify(inventoryLedgerSnapshotService).createForPeriod(FACTORY, p.getId());
     }
 
     @Test
@@ -303,6 +307,7 @@ class MonthCloseServiceTest {
         assertEquals("PERIOD_ALREADY_CLOSED", ex.getErrorCode());
         assertNotNull(ex.getActionHint());
         verify(periodRepo, never()).save(any());
+        verifyNoInteractions(inventoryLedgerSnapshotService);
     }
 
     @Test
@@ -320,6 +325,7 @@ class MonthCloseServiceTest {
 
         MonthCloseResultDTO result = service.executeClose(FACTORY, Y, M, 300L);
         assertEquals(AccountingPeriod.Status.CLOSED, result.getPeriod().getStatus());
+        verify(inventoryLedgerSnapshotService).createForPeriod(FACTORY, "p-3");
     }
 
     @Test
@@ -339,6 +345,26 @@ class MonthCloseServiceTest {
         MonthCloseResultDTO result = service.executeClose(FACTORY, Y, M, 300L);
         assertEquals(AccountingPeriod.Status.CLOSED, result.getPeriod().getStatus());
         verify(periodService).openPeriod(FACTORY, Y, M, 300L);
+        verify(inventoryLedgerSnapshotService).createForPeriod(FACTORY, "p-auto");
+    }
+
+    @Test
+    void executeClose_inventorySnapshotFailureDoesNotReturnSuccessfulClose() {
+        AccountingPeriod open = AccountingPeriod.builder()
+                .id("p-snapshot-failure").factoryId(FACTORY).year(Y).month(M)
+                .status(AccountingPeriod.Status.OPEN).build();
+        when(periodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(FACTORY, Y, M))
+                .thenReturn(Optional.of(open));
+        when(periodService.findPeriod(FACTORY, Y, M)).thenReturn(Optional.of(open));
+        stubNoPendingAdjustments();
+        when(incomeStatementService.generate(FACTORY, Y, M, Y, M)).thenReturn(sampleIncomeStatement);
+        when(periodRepo.save(any(AccountingPeriod.class))).thenAnswer(inv -> inv.getArgument(0));
+        IllegalStateException failure = new IllegalStateException("inventory snapshot unavailable");
+        doThrow(failure).when(inventoryLedgerSnapshotService).createForPeriod(FACTORY, open.getId());
+
+        assertSame(failure, assertThrows(IllegalStateException.class,
+                () -> service.executeClose(FACTORY, Y, M, 300L)));
+        verify(inventoryLedgerSnapshotService).createForPeriod(FACTORY, open.getId());
     }
 
     // ==================== input validation ====================
