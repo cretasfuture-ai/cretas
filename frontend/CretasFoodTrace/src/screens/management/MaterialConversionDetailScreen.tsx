@@ -24,6 +24,12 @@ import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
 import { ManagementStackParamList } from '../../types/navigation';
 import { logger } from '../../utils/logger';
+import {
+  PROCESS_SECRET_LABEL,
+  isProcessSecretHidden,
+  isProcessSecretRow,
+  type ProcessSecretFieldMarker,
+} from '../../utils/processSecretField';
 
 // 创建专用logger
 const detailLogger = logger.createContextLogger('MaterialConversionDetail');
@@ -41,9 +47,11 @@ interface ConversionRate {
   id: string;
   materialTypeId: string;
   productTypeId: string;
-  conversionRate: number;
-  wastageRate?: number;
+  /** 工艺保密产品对无授权账号为 null (见 processSecret 标记) */
+  conversionRate: number | null;
+  wastageRate?: number | null;
   notes?: string;
+  processSecret?: ProcessSecretFieldMarker;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -236,7 +244,7 @@ export default function MaterialConversionDetailScreen() {
     });
     setShowProductList(false);
     setFormData({
-      conversionRate: conversion.conversionRate.toString(),
+      conversionRate: conversion.conversionRate?.toString() ?? '',
       wastageRate: conversion.wastageRate?.toString() ?? '',
       notes: conversion.notes ?? '',
     });
@@ -378,6 +386,7 @@ export default function MaterialConversionDetailScreen() {
    * 渲染转换率卡片
    */
   const renderConversionCard = ({ item }: { item: ConversionWithProduct }) => {
+    const secretRow = isProcessSecretRow(item);
     return (
       <Card style={styles.conversionCard} mode="elevated">
         <Card.Content>
@@ -390,26 +399,33 @@ export default function MaterialConversionDetailScreen() {
                 <Text style={styles.productCode}>SKU: {item.productCode}</Text>
               )}
             </View>
-            <View style={styles.cardActions}>
-              <IconButton
-                icon="pencil"
-                size={20}
-                onPress={() => handleEdit(item)}
-              />
-              <IconButton
-                icon="delete"
-                size={20}
-                iconColor="#F44336"
-                onPress={() => handleDelete(item)}
-              />
-            </View>
+            {/* 工艺保密: 转换率已隐藏的行不能在这里改 (会把空值存回去), 需保密负责人授权 */}
+            {secretRow ? (
+              <Text style={styles.rateLabel}>需授权才能修改</Text>
+            ) : (
+              <View style={styles.cardActions}>
+                <IconButton
+                  icon="pencil"
+                  size={20}
+                  onPress={() => handleEdit(item)}
+                />
+                <IconButton
+                  icon="delete"
+                  size={20}
+                  iconColor="#F44336"
+                  onPress={() => handleDelete(item)}
+                />
+              </View>
+            )}
           </View>
 
           <Divider style={styles.cardDivider} />
 
           <View style={styles.rateRow}>
             <View style={styles.rateItem}>
-              <Text style={styles.rateValue}>{item.conversionRate}%</Text>
+              <Text style={styles.rateValue}>
+                {isProcessSecretHidden(item, 'conversionRate') ? PROCESS_SECRET_LABEL : `${item.conversionRate}%`}
+              </Text>
               <Text style={styles.rateLabel}>转换率</Text>
             </View>
             {item.wastageRate != null && (

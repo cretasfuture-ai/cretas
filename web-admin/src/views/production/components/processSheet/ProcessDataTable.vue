@@ -56,6 +56,7 @@ import {
   withProcessSheetUnits,
 } from '@/utils/processSheetUnits';
 import { buildEqualPotWeightsKg } from './potAllocation';
+import { isProcessSecretHidden } from '@/utils/processSecretField';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
 
@@ -329,6 +330,10 @@ function autoFillInputsByShare(row: SheetRow, changed: MaterialInputTotalLine): 
   }
   changed.autoFilled = false;
 }
+/** 工艺保密: 后端隐藏了端口配比 (无授权的本厂账号只看物料和本单总量) */
+const workflowShareHidden = computed(() =>
+  (props.workflowContext?.inputs ?? []).some((p) => isProcessSecretHidden(p, 'inputShareRatio')),
+);
 const workflowRawInputs = computed(() =>
   (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
 );
@@ -3310,6 +3315,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
         </span>
       </template>
     </el-alert>
+    <el-alert
+      v-if="workflowShareHidden"
+      data-testid="workflow-share-secret"
+      class="sp-workflow-banner"
+      type="info"
+      :closable="false"
+      show-icon
+      title="该产品工艺已保密：配比不显示，按配比自动带出已关闭，请逐项填写本单实际投入量"
+    />
     <el-alert
       v-if="outputPorts.some((p) => p.skuResolved === false)"
       class="sp-workflow-banner sp-workflow-banner-warning"

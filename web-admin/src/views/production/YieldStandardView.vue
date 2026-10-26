@@ -27,6 +27,7 @@ import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, EditPen } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { PROCESS_SECRET_LABEL, isProcessSecretRow, processSecretMessage } from '@/utils/processSecretField';
 import {
   bomYieldEstimateApi,
   type RecalculatePreviewRow,
@@ -230,13 +231,17 @@ onMounted(loadData);
         <el-table-column prop="materialName" label="主原料" min-width="150" show-overflow-tooltip />
         <el-table-column label="标准出成率" width="150" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.currentYieldRate == null" type="danger" effect="plain">未填</el-tag>
+            <el-tooltip v-if="isProcessSecretRow(row)" :content="processSecretMessage(row)">
+              <el-tag type="info" effect="plain">{{ PROCESS_SECRET_LABEL }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else-if="row.currentYieldRate == null" type="danger" effect="plain">未填</el-tag>
             <span v-else class="current-value">{{ currentText(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="系统实测 (参考)" width="200" align="center">
           <template #default="{ row }">
-            <span class="suggestion">{{ suggestionText(row) }}</span>
+            <span v-if="isProcessSecretRow(row)" class="suggestion">{{ PROCESS_SECRET_LABEL }}</span>
+            <span v-else class="suggestion">{{ suggestionText(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="140" align="center" fixed="right">
@@ -245,7 +250,8 @@ onMounted(loadData);
               link
               type="primary"
               :icon="EditPen"
-              :disabled="!canEdit"
+              :disabled="!canEdit || isProcessSecretRow(row)"
+              :title="isProcessSecretRow(row) ? '工艺已保密，需保密负责人授权才能修改' : undefined"
               :loading="saving[row.recipeId]"
               @click="handleEdit(row)"
             >
