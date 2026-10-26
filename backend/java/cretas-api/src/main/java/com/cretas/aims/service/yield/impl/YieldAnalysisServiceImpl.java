@@ -1,13 +1,8 @@
 package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
-import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
-import com.cretas.aims.entity.processsecret.ProcessSecretAction;
-import com.cretas.aims.security.AuthenticatedActor;
-import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
-import com.cretas.aims.service.processsecret.ProcessSecretPlanProducts;
+import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -25,11 +20,8 @@ import java.util.Objects;
 public class YieldAnalysisServiceImpl implements YieldAnalysisService {
 
     private static final BigDecimal HUNDRED = new BigDecimal("100");
-    /** 排除列表为空时的哨兵 (NOT IN 不能给空列表)。 */
-    static final String NO_EXCLUSION = "__none__";
     private final ProductionReportRepository reportRepo;
-    private final ProcessSecretAccessService processSecretAccessService;
-    private final ProductionPlanRepository planRepository;
+    private final ProcessSecretAggregateExclusions aggregateExclusions;
 
     @Override
     public List<ProcessYieldAggDTO> aggregateByProcess(String factoryId, LocalDate startDate, LocalDate endDate, String productTypeId) {
@@ -38,9 +30,12 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         LocalDate end = endDate != null ? endDate : LocalDate.of(2999, 12, 31);
         String pt = productTypeId != null ? productTypeId : "";
 
-        List<String> excluded = hiddenProtectedProducts(factoryId);
-        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt,
-                excluded.isEmpty() ? List.of(NO_EXCLUSION) : excluded);
+        // 工艺保密: 厂级按工序汇总里, 调用者无完整查看权的保密产品 (连同多产出计划的原料锚点) 整个不参与 ——
+        // 一道只有保密产品在用的工序, 汇总出来就是它的出成率。点名受保护产品由路由闸拦 (403);
+        // 点名别的产品 (例如锚点) 时同样排除
+        List<String> excluded = aggregateExclusions.forCurrentCaller(factoryId, "yield by-process aggregate")
+                .productTypeIdsOrSentinel();
+        List<Map<String, Object>> rows = reportRepo.aggregateYieldByProcess(factoryId, start, end, pt, excluded);
         List<ProcessYieldAggDTO> result = new ArrayList<>();
         for (Map<String, Object> r : rows) {
             BigDecimal totalInput = toBig(r.get("total_input"));
@@ -73,38 +68,6 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
                     .build());
         }
         return result;
-    }
-
-    /**
-     * 工艺保密 (Steve 第三问 A: 跨批汇总只给负责人和授权人): 厂级按工序汇总里, 调用者无完整查看权的保密产品
-     * 整个不参与 —— 一道只有保密产品在用的工序, 汇总出来就是它的出成率。点名单个保密产品的请求由路由闸拦 (403)。
-     * 每个被排除的产品记一条 DENY 审计。
-     *
-     * <p>多产出计划的工序任务挂在原料锚点上, 锚点 id 就是原料 id (独立审查第三轮 A): 计划牵涉无权的保密产品时
-     * 连锚点一起排除 —— 点名锚点 ({@code ?productTypeId=原料 id}) 也绕不过去, 所以点名时同样排除。
-     * 同一原料锚定的其他计划随之被排除 (宁可少汇总, 不漏)。
-     */
-    List<String> hiddenProtectedProducts(String factoryId) {
-        java.util.Set<String> protectedIds = processSecretAccessService.protectedProductTypeIds(factoryId);
-        if (protectedIds.isEmpty()) return List.of();
-        List<String> all = new ArrayList<>(protectedIds);
-        java.util.Set<String> permitted = new java.util.HashSet<>(processSecretAccessService.filterPermitted(
-                AuthenticatedActor.fromCurrentExecution().orElse(null), factoryId, all,
-                ProcessSecretAction.VIEW_FULL, false, "yield by-process aggregate"));
-        java.util.Set<String> hidden = new java.util.HashSet<>(all);
-        hidden.removeAll(permitted);
-        if (hidden.isEmpty()) return List.of();
-        java.util.TreeSet<String> excluded = new java.util.TreeSet<>(hidden);
-        for (ProductionPlan plan : planRepository.findByFactoryId(factoryId)) {
-            String anchor = plan.getProductTypeId();
-            if (anchor == null || anchor.isBlank() || excluded.contains(anchor)) continue;
-            // 目标成品与按产品钉的配方键已覆盖多产出计划的产出 (钉住的配方不再逐个查库)
-            if (ProcessSecretPlanProducts.of(plan, recipeId -> java.util.Optional.empty()).stream()
-                    .anyMatch(hidden::contains)) {
-                excluded.add(anchor);
-            }
-        }
-        return List.copyOf(excluded);
     }
 
     private static BigDecimal toBig(Object v) {

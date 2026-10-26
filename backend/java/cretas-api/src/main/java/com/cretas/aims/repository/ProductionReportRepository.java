@@ -434,6 +434,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
               AND row_status <> 'DRAFT'
               AND row_payload ->> 'productTypeId' = :semiFinishedSkuId
               AND row_payload ->> 'finished' = 'false'
+              AND plan_id NOT IN (:excludedPlanIds)
         ), valid_rows AS (
             SELECT
                 CASE WHEN input_unit IN ('g', '克') THEN input_quantity / 1000
@@ -454,7 +455,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
         """, nativeQuery = true)
     SemiFinishedYieldAggregate aggregateSettledSemiFinishedYield(
             @Param("factoryId") String factoryId,
-            @Param("semiFinishedSkuId") String semiFinishedSkuId);
+            @Param("semiFinishedSkuId") String semiFinishedSkuId,
+            @Param("excludedPlanIds") java.util.Collection<String> excludedPlanIds);
 
     interface SemiFinishedYieldAggregate {
         BigDecimal getTotalInputKg();

@@ -3,9 +3,9 @@ package com.cretas.aims.service.yield;
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.yield.impl.YieldAnalysisServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -37,8 +37,14 @@ class YieldAnalysisServiceImplTest {
     @Mock
     com.cretas.aims.repository.ProductionPlanRepository planRepository;
 
-    @InjectMocks
     YieldAnalysisServiceImpl service;
+
+    @BeforeEach
+    void setUp() {
+        service = new YieldAnalysisServiceImpl(reportRepo,
+                new com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions(
+                        processSecretAccessService, planRepository));
+    }
 
     /** Build a result row matching the native query projection keys. */
     private static Map<String, Object> row(String processName,

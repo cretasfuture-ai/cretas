@@ -106,7 +106,7 @@ public class ProcessSecretPayloadScrubber {
             "production-analytics", "indicators", "canvas-indicators", "dashboard", "reports", "finance",
             "wastage-reports", "restaurant-dashboard");
     public static final Set<String> AGGREGATE_ANY_SEGMENTS = Set.of(
-            "kpi", "statistics", "analytics", "trend", "daily-trend", "by-process", "by-product", "semi-finished");
+            "kpi", "statistics", "analytics", "trend", "daily-trend", "by-process", "by-product");
 
     /** 分页信息 (无权档也保留, 否则列表翻不了页)。 */
     static final Set<String> PAGING_FIELDS = Set.of(
@@ -216,6 +216,10 @@ public class ProcessSecretPayloadScrubber {
                     || s.endsWith("-stats")) {
                 return true;
             }
+            // 半成品全历史加权出成率; 半成品库存 / 盘点 (/{factoryId}/semi-finished...) 是单据, 不算 (第三轮 F)
+            if ("semi-finished".equals(s) && i > 0 && "yield".equalsIgnoreCase(segments[i - 1])) {
+                return true;
+            }
             if (i > 0 && "{factoryid}".equals(segments[i - 1].toLowerCase(Locale.ROOT))
                     && AGGREGATE_ROUTE_MODULES.contains(s)) {
                 return true;
@@ -291,8 +295,10 @@ public class ProcessSecretPayloadScrubber {
                             .orElse(new Key(read.factoryId(), null)));
                     case WORKFLOW_INSTANCE -> List.of(instanceKey(read.factoryId(), read.id())
                             .orElse(new Key(read.factoryId(), null)));
-                    case PRODUCTION_PLAN -> planKeys(read.factoryId(), read.id());
-                    case PRODUCTION_BATCH -> batchKeys(read.factoryId(), read.id());
+                    case PRODUCTION_PLAN -> withMember(read,
+                            planKeys(read.factoryId(), ProcessSecretReadTracker.baseId(read.id())));
+                    case PRODUCTION_BATCH -> withMember(read,
+                            batchKeys(read.factoryId(), ProcessSecretReadTracker.baseId(read.id())));
                     case MATERIAL_REQUISITION -> requisitionRepository.findById(read.id())
                             .filter(r -> read.factoryId().equals(r.getFactoryId()))
                             .filter(r -> r.getProductionPlanId() != null && !r.getProductionPlanId().isBlank())
@@ -356,6 +362,17 @@ public class ProcessSecretPayloadScrubber {
             } catch (NumberFormatException e) {
                 return Optional.empty();
             }
+        }
+
+        /** 读数带了「这一行自己的产品」(半成品 / 副产 / 锚点) 时, 它也算这张计划的成员 (独立审查第三轮 C)。 */
+        List<Key> withMember(ProcessSecretReadTracker.Read read, List<Key> keys) {
+            String member = ProcessSecretReadTracker.memberOf(read.id());
+            if (member == null) return keys;
+            Key key = new Key(read.factoryId(), member);
+            if (keys.contains(key)) return keys;
+            List<Key> all = new ArrayList<>(keys);
+            all.add(key);
+            return all;
         }
 
         /** 报工行的批次: 批次的产品 + 它所属计划牵涉的全部产品; 批次查不到时不加 (报工行另记了产品)。 */

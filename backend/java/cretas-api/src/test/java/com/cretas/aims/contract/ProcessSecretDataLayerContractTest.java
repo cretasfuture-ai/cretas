@@ -151,8 +151,9 @@ class ProcessSecretDataLayerContractTest {
             Map.entry("entity/ProductionBatch.java", "@SQLDelete 软删除语句"),
             Map.entry("entity/processentry/ProcessSheetRow.java", "@SQLDelete 软删除语句"),
             Map.entry("repository/ProductionReportRepository.java",
-                    "产量 / 良品 / 次品 / 工时汇总 (不是配方); aggregateYieldByProcess 在服务层排除无权的保密产品并有路由闸; "
-                            + "半成品加权出成由路由闸按半成品判; findYieldStandardSamples 只给标准出成自动计算 (内部)"),
+                    "产量 / 良品 / 次品 / 工时汇总 (不是配方); aggregateYieldByProcess 在服务层排除无权的保密产品及其计划锚点并有路由闸; "
+                            + "半成品加权出成由路由闸按半成品判, 并排除牵涉无权保密产品的计划; "
+                            + "findYieldStandardSamples 只给标准出成自动计算 (内部)"),
             Map.entry("repository/ProductionBatchRepository.java", "计数 / 生产周期 / 完工批次总量 (单批总量, 本单档允许)"),
             Map.entry("scheduler/AnomalyDetectionScheduler.java", "厂级跨产品混合均值 (异常检测), 不按产品输出"),
             Map.entry("service/impl/AnomalyDetectionServiceImpl.java", "同上: 厂级跨产品混合均值"),

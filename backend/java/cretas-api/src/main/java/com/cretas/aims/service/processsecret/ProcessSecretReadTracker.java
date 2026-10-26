@@ -120,8 +120,15 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
         // 报工 / 批次: 落库的配比核对快照、批次实测出成都挂在这里 (行上的 productTypeId 是本道产出的半成品,
         // 不能当归属, 所以按计划 / 批次的产品记)
         if (entity instanceof ProcessSheetRow row) {
-            return row.getPlanId() == null || row.getPlanId().isBlank() ? List.of()
-                    : List.of(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), row.getPlanId()));
+            if (row.getPlanId() == null || row.getPlanId().isBlank()) return List.of();
+            List<Read> found = new java.util.ArrayList<>();
+            found.add(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), row.getPlanId()));
+            // 行上的半成品 / 副产 / 次品 SKU 不在计划的产品集合里, 却挂着配比快照: 记成计划的成员,
+            // 计划受限时它们按兄弟产出受限 (独立审查第三轮 C)
+            for (String member : payloadProducts(row.getRowPayload())) {
+                found.add(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), withMember(row.getPlanId(), member)));
+            }
+            return found;
         }
         if (entity instanceof ProductionBatch b) {
             List<Read> found = new java.util.ArrayList<>(product(b.getFactoryId(), b.getProductTypeId()));
@@ -135,7 +142,8 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             // (独立审查第三轮 A): 再按批次记一笔, 出口经批次 → 计划解析计划牵涉的全部产品
             List<Read> found = new java.util.ArrayList<>(product(r.getFactoryId(), r.getProductTypeId()));
             if (r.getBatchId() != null) {
-                found.add(new Read(Kind.PRODUCTION_BATCH, r.getFactoryId(), String.valueOf(r.getBatchId())));
+                found.add(new Read(Kind.PRODUCTION_BATCH, r.getFactoryId(),
+                        withMember(String.valueOf(r.getBatchId()), r.getProductTypeId())));
             }
             return found;
         }
@@ -173,6 +181,42 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
                     .toList();
         }
         return List.of();
+    }
+
+    /** 计划 / 批次读数的 id 可以带「这一行自己的产品」, 出口把它当作该计划的成员 (兄弟产出)。 */
+    static final char MEMBER_SEPARATOR = '';
+
+    static String withMember(String id, String member) {
+        return member == null || member.isBlank() ? id : id + MEMBER_SEPARATOR + member;
+    }
+
+    static String baseId(String id) {
+        int i = id.indexOf(MEMBER_SEPARATOR);
+        return i < 0 ? id : id.substring(0, i);
+    }
+
+    static String memberOf(String id) {
+        int i = id.indexOf(MEMBER_SEPARATOR);
+        return i < 0 ? null : id.substring(i + 1);
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper PAYLOAD_READER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** 报工行 payload 里出现的全部产品 (本行产出、多产出行): 出口按 productTypeId 认归属, 这里同一口径。 */
+    static Set<String> payloadProducts(String payload) {
+        if (payload == null || !payload.contains("productTypeId")) return Set.of();
+        try {
+            Set<String> found = new LinkedHashSet<>();
+            for (com.fasterxml.jackson.databind.JsonNode value : PAYLOAD_READER.readTree(payload)
+                    .findValues("productTypeId")) {
+                if (value.isTextual() && !value.asText().isBlank()) found.add(value.asText());
+            }
+            return found;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // 读不出成员就只记计划: 行的产品归属不可信, 出口按整份受限处理 (见裁剪器 distrustAttribution)
+            return Set.of();
+        }
     }
 
     private static List<Read> product(String factoryId, String productTypeId) {

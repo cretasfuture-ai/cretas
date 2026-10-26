@@ -329,6 +329,42 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void semiFinishedAndByproductRowsOfARestrictedPlanAreSiblingsEvenWhenTheProductIsAttributed() throws Exception {
+        // 独立审查第三轮 C: 输出里同时有受保护产品 (计划头) 时归属可信, 不会整份受限;
+        // 半成品 / 副产行不在计划的产品集合里, 只有把它们记成计划成员才会按兄弟产出受限
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("plan-4");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("plan-4", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.processentry.ProcessSheetRow row = new com.cretas.aims.entity.processentry.ProcessSheetRow();
+        row.setFactoryId(F);
+        row.setPlanId("plan-4");
+        row.setRowPayload("{\"productTypeId\":\"SEMI-2\",\"outputs\":[{\"productTypeId\":\"BY-1\"}]}");
+        Set<ProcessSecretReadTracker.Read> reads = Set.copyOf(ProcessSecretReadTracker.readsOf(row));
+        String body = "{'plan':{'productTypeId':'P17','plannedQuantity':100},'rows':["
+                + "{'productTypeId':'SEMI-2','blendRatio':{'lines':[{'recipeSharePercent':30,'actualSharePercent':25}]}},"
+                + "{'productTypeId':'BY-1','inputShareRatio':0.2}]}";
+
+        ObjectNode operator = tree(body);
+        assertThat(scrubber.scrub(operator, user(5), F, reads, "GET /process-sheet/rows", false)).isTrue();
+        assertThat(operator.at("/rows/0/blendRatio/lines/0/recipeSharePercent").isNull()).isTrue();
+        assertThat(operator.at("/rows/0/blendRatio/lines/0/actualSharePercent").asInt()).isEqualTo(25);
+        assertThat(operator.at("/rows/1/inputShareRatio").isNull()).isTrue();
+        assertThat(operator.at("/plan/plannedQuantity").asInt()).as("本单总量照常").isEqualTo(100);
+
+        ObjectNode owner = tree(body);
+        assertThat(scrubber.scrub(owner, user(OWNER), F, reads, "GET /process-sheet/rows", false)).isFalse();
+        assertThat(owner.at("/rows/0/blendRatio/lines/0/recipeSharePercent").asInt()).isEqualTo(30);
+
+        // 对照 (修复前的读数): 只记计划、不记成员时, 半成品行的配方份额原样放出
+        ObjectNode planOnly = tree(body);
+        scrubber.scrub(planOnly, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-4"),
+                "GET /process-sheet/rows", false);
+        assertThat(planOnly.at("/rows/0/blendRatio/lines/0/recipeSharePercent").asInt()).isEqualTo(30);
+    }
+
+    @Test
     void platformStaffLoseEveryNonIdentifierNumberNotJustTheListedTotals() throws Exception {
         // 审查 #6: 总量词表列不全 (pickedQty / totalInput ...), 无权档改为除标识类以外的数字一律去掉
         ObjectNode t = tree("{'productTypeId':'P17','id':7,'processOrder':2,'pickedQty':12,'totalInput':40,"
@@ -381,6 +417,11 @@ class ProcessSecretPayloadScrubberTest {
         // 第二轮 #6: 单张报工单不是汇总 (模块段是 process-work-reporting, 不因路径里有 reports 就算)
         assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
                 "/api/mobile/{factoryId}/process-work-reporting/reports/{id}")).isFalse();
+        // 第三轮 F: 半成品出成率汇总算, 半成品库存 / 盘点单据不算
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/production/yield/semi-finished/{semiFinishedSkuId}")).isTrue();
+        assertThat(ProcessSecretPayloadScrubber.isAggregateRoute(
+                "/api/mobile/{factoryId}/semi-finished/{id}")).isFalse();
     }
 
     @Test
