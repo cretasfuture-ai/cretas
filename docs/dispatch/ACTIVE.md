@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `SMARTBI-FULL-QA-20261026` — `in-progress` — Root；F006验收见archive/2026-10-26-smartbi-full-closure.md。
+- `SMARTBI-FULL-QA-20261026` — `in-progress` — Root；F006验收及月结快照scope见archive/2026-10-26-smartbi-month-close-snapshot.md。
 - `SMARTBI-OEE-TEXT-20261026` — `review` — Root；PR1194，Base/scope见archive/2026-10-26-smartbi-oee-text.md。
 
 

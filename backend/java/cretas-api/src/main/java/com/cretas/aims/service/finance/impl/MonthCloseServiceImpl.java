@@ -12,6 +12,7 @@ import com.cretas.aims.service.finance.AccountingPeriodService;
 import com.cretas.aims.service.finance.ArApService;
 import com.cretas.aims.service.finance.IncomeStatementService;
 import com.cretas.aims.service.finance.MonthCloseService;
+import com.cretas.aims.service.inventory.InventoryLedgerSnapshotService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,7 @@ public class MonthCloseServiceImpl implements MonthCloseService {
     private final ArApService arApService;
     private final IncomeStatementService incomeStatementService;
     private final ObjectMapper objectMapper;
+    private final InventoryLedgerSnapshotService inventoryLedgerSnapshotService;
     /** 资金段子账↔总账对账 (finance audit Bug 5): 读 1122/2202 凭证净余额。 */
     private final com.cretas.aims.repository.VoucherEntryRepository voucherEntryRepository;
     @org.springframework.beans.factory.annotation.Autowired
@@ -206,6 +208,9 @@ public class MonthCloseServiceImpl implements MonthCloseService {
         period.setIncomeStatementSnapshot(serializeSnapshot(pl));
 
         AccountingPeriod saved = periodRepo.save(period);
+        // Keep the inventory close snapshot in the same transaction. A failed
+        // snapshot must fail this close rather than report an incomplete success.
+        inventoryLedgerSnapshotService.createForPeriod(factoryId, saved.getId());
         log.info("[MonthClose] CLOSED {}-{}-{} by user={} 净利={} 调整窗口截止={} 对账={}",
                 factoryId, year, month, userId, pl.getNetProfit(), adjustDeadline,
                 reconciliation.getReconciliationStatus());
