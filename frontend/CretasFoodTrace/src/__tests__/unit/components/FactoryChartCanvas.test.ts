@@ -3,6 +3,11 @@ import vm from 'vm';
 import { View } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import FactoryChartCanvas, { buildFactoryChartHtml, type FactoryChartCanvasHandle } from '../../../components/smartbi/FactoryChartCanvas';
+import { loadSmartbiChartEngine } from '../../../utils/smartbiChartEngine';
+
+jest.mock('../../../utils/smartbiChartEngine', () => ({
+  loadSmartbiChartEngine: jest.fn(async () => 'window.echarts = window.echarts || {};'),
+}));
 
 const mockPostMessage = jest.fn();
 jest.mock('react-native-webview', () => ({
@@ -14,11 +19,20 @@ jest.mock('react-native-webview', () => ({
 
 describe('FactoryChartCanvas', () => {
   beforeEach(() => mockPostMessage.mockClear());
-  it('escapes JSON and emits point messages from the bounded bridge', () => {
+  it('uses only the bundled engine while blocking external renderer requests', () => {
+    const html = buildFactoryChartHtml({}, 'offline', '/* echarts */ window.engine = "</script><script>bad</script>";');
+    expect(html).toContain('default-src \'none\'');
+    expect(html).toContain('connect-src \'none\'');
+    expect(html).not.toMatch(/<script\s+src=/i);
+    expect(html).toContain('<\\/script>');
+    expect(html.match(/<\/script>/gi)).toHaveLength(2);
+  });
+  it('escapes JSON and emits point messages from the bounded bridge', async () => {
     const html = buildFactoryChartHtml({ title: '</script><script>alert(1)</script>', series: [] });
     expect(html).not.toContain('</script><script>alert(1)');
     const onPoint = jest.fn();
     const screen = render(React.createElement(FactoryChartCanvas, { option: { series: [] }, onPoint }));
+    await act(async () => { await Promise.resolve(); });
     const nonce = String((screen.getByTestId('mock-webview').props.source.html as string).match(/renderNonce="([^"]+)"/)?.[1]);
     act(() => {
       fireEvent(screen.getByTestId('mock-webview'), 'message', { nativeEvent: { data: JSON.stringify({ type: 'ready', nonce }) } });
@@ -32,6 +46,7 @@ describe('FactoryChartCanvas', () => {
   it('resolves only a nonempty PNG capture with matching nonce and request id', async () => {
     const ref = React.createRef<FactoryChartCanvasHandle>();
     const screen = render(React.createElement(FactoryChartCanvas, { ref, option: { series: [] } }));
+    await act(async () => { await Promise.resolve(); });
     const webview = screen.getByTestId('mock-webview');
     const nonce = String((webview.props.source.html as string).match(/renderNonce="([^"]+)"/)?.[1]);
     fireEvent(webview, 'message', { nativeEvent: { data: JSON.stringify({ type: 'ready', nonce }) } });
@@ -46,15 +61,26 @@ describe('FactoryChartCanvas', () => {
 
   it('renders supported formatter markers and rejects unknown markers visibly in the bounded script', () => {
     const html = buildFactoryChartHtml({ yAxis: { axisLabel: { formatter: '__FMT__thousands_sep' } } });
+    expect(html).not.toContain('src="http');
     expect(html).toContain('thousands_sep');
     expect(html).toContain('不支持的图表格式化标记');
+  });
+
+  it('does not mount a WebView or become ready when the local engine fails', async () => {
+    (loadSmartbiChartEngine as jest.Mock).mockRejectedValueOnce(new Error('本地资源失败'));
+    const onReady = jest.fn();
+    const screen = render(React.createElement(FactoryChartCanvas, { option: { series: [] }, onReady }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('mock-webview')).toBeNull();
+    expect(onReady).not.toHaveBeenCalled();
   });
 
   it('executes canonical formatters in the bounded HTML without eval', () => {
     let captured: Record<string, unknown> | undefined;
     const messages: string[] = [];
     const html = buildFactoryChartHtml({ yAxis: { axisLabel: { formatter: '__FMT__thousands_sep' }, }, series: [{ label: { formatter: '__FMT__sankey_financial_tooltip' } }, { tooltip: { formatter: '__FMT__financial_rich_tooltip' } }] }, 'vm-nonce');
-    const script = html.match(/<script>(?!.*src)([\s\S]*?)<\/script>/)?.[1];
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    const script = scripts[scripts.length - 1]?.[1];
     expect(script).toBeTruthy();
     const chart = { setOption: (value: Record<string, unknown>) => { captured = value; }, resize: jest.fn(), on: jest.fn(), getDataURL: () => 'data:image/png;base64,valid' };
     const context = { window: { echarts: { init: () => chart }, ReactNativeWebView: { postMessage: (value: string) => messages.push(value) }, requestAnimationFrame: (fn: () => void) => fn(), addEventListener: jest.fn() }, document: { getElementById: () => ({}), addEventListener: jest.fn() } };
@@ -83,17 +109,18 @@ describe('FactoryChartCanvas', () => {
     expect(comparison).toContain('同比差异');
     expect(comparison).toContain('<svg');
     expect(messages.some(message => message.includes('"type":"ready"'))).toBe(true);
-    const unknownHtml = buildFactoryChartHtml({ series: [{ label: { formatter: '__FMT__not_supported' } }] }, 'bad-marker');
-    const unknownScript = unknownHtml.match(/<script>(?!.*src)([\s\S]*?)<\/script>/)?.[1];
+    const unknownHtml = buildFactoryChartHtml({ formatter: '__FMT__not_supported' }, 'bad-marker');
+    const unknownScript = [...unknownHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)].pop()?.[1];
     const unknownMessages: string[] = [];
     const unknownContext = { window: { echarts: { init: () => chart }, ReactNativeWebView: { postMessage: (value: string) => unknownMessages.push(value) }, requestAnimationFrame: (fn: () => void) => fn(), addEventListener: jest.fn() }, document: { getElementById: () => ({}), addEventListener: jest.fn() } };
     vm.runInNewContext(unknownScript!, unknownContext);
-    expect(unknownMessages.some(message => message.includes('不支持的图表格式化标记'))).toBe(true);
+    expect(unknownMessages.some(message => message.includes('"type":"error"') && message.includes('不支持的图表格式化标记'))).toBe(true);
   });
 
   it('does not fabricate a PNG before the mounted chart is ready', async () => {
     const ref = React.createRef<FactoryChartCanvasHandle>();
-    render(React.createElement(FactoryChartCanvas, { ref, option: { series: [] } }));
-    await expect(ref.current?.capturePng()).rejects.toThrow('尚未就绪');
+    const screen = render(React.createElement(FactoryChartCanvas, { ref, option: { series: [] } }));
+    await act(async () => { await expect(ref.current?.capturePng()).rejects.toThrow('尚未就绪'); });
+    screen.unmount();
   });
 });

@@ -136,6 +136,8 @@ export default function FactoryChartsScreen() {
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<FactoryChartExportFormat | null>(null);
   const [mountedIds, setMountedIds] = useState<string[]>([]);
+  const [showSelection, setShowSelection] = useState(false);
+  const [showUnavailable, setShowUnavailable] = useState(false);
   const [exportPreviewId, setExportPreviewId] = useState<string | null>(null);
   const loadToken = useRef(0);
   const chartRefs = useRef<Record<string, FactoryChartCanvasHandle | null>>({});
@@ -325,12 +327,18 @@ export default function FactoryChartsScreen() {
           </View>
           <View style={styles.switchRow}><Text>包含可选图表</Text><Switch value={includeOptional} onValueChange={setIncludeOptional} /><Text>使用 AI 排序</Text><Switch value={useAi} onValueChange={setUseAi} /></View>
           <Button mode="contained" onPress={() => void load()} loading={loading} disabled={loading} testID="factory-chart-load">刷新推荐</Button>
-          {data && <View style={styles.selectionBox}><Text style={styles.muted}>选择要显示的图表</Text><View style={styles.uploadRow}>{data.recommendations.map(item => <Chip key={item.id} selected={selectedIds === null || selectedIds.includes(item.id)} onPress={() => toggleSelection(item.id)}>{item.title}</Chip>)}</View></View>}
-          {selectedIds !== null && <Button mode="text" onPress={() => void saveSelection()} testID="factory-chart-save-selection">保存当前选择（{selectedIds.length}）</Button>}
+          {data && <View style={styles.selectionBox}><Button onPress={() => setShowSelection(value => !value)} testID="factory-chart-selection-toggle">{showSelection ? '收起图表目录' : `选择图表（已选 ${visibleItems.length} / 可用 ${data.recommendations.length}）`}</Button>{showSelection && <View style={styles.uploadRow}>{data.recommendations.map(item => <Chip key={item.id} selected={selectedIds === null || selectedIds.includes(item.id)} onPress={() => toggleSelection(item.id)}>{item.title}</Chip>)}</View>}</View>}
+          {showSelection && selectedIds !== null && <Button mode="text" onPress={() => void saveSelection()} testID="factory-chart-save-selection">保存当前选择（{selectedIds.length}）</Button>}
           {error && <View style={styles.errorBox}><Text style={styles.errorText}>{error}</Text><Button onPress={() => void load()}>重试</Button></View>}
           {selectionError && <Text style={styles.errorText}>{selectionError}</Text>}
           {exportError && <View style={styles.errorBox}><Text style={styles.errorText}>导出未完成：{exportError}</Text></View>}
-          {data && <><Text style={styles.context}>工厂：{data.factoryId} · 来源：{data.sourceLabel} · 周期：{data.period.label} · 排序：{data.ranking.mode === 'ai' ? 'AI' : '规则'}</Text>{data.unavailable.map(item => <Text key={item.id} style={styles.attention}>未提供：{item.title}（{item.missing.join('、')}）</Text>)}{data.sourceErrors.map(item => <Text key={item.source} style={styles.errorText}>来源错误：{item.source} · {item.message}</Text>)}<View style={styles.exportRow}>{(['excel', 'pdf', 'ppt'] as FactoryChartExportFormat[]).map(format => <Button key={format} mode="outlined" compact onPress={() => void handleExport(format)} loading={exporting === format} disabled={exporting !== null}>{format.toUpperCase()}</Button>)}</View></>}
+          {data && <>
+            <Text style={styles.context}>工厂：{data.factoryId} · 来源：{data.sourceLabel} · 周期：{data.period.label} · 排序：{data.ranking.mode === 'ai' ? 'AI' : '规则'}</Text>
+            {data.unavailable.length > 0 && <Button onPress={() => setShowUnavailable(value => !value)} testID="factory-chart-unavailable-toggle">{showUnavailable ? '收起条件说明' : `查看未满足条件说明（${data.unavailable.length}）`}</Button>}
+            {showUnavailable && data.unavailable.map(item => <Text key={item.id} style={styles.attention}>未提供：{item.title}（{item.missing.join('、')}）</Text>)}
+            {data.sourceErrors.map(item => <Text key={item.source} style={styles.errorText}>来源错误：{item.source} · {item.message}</Text>)}
+            <View style={styles.exportRow}>{(['excel', 'pdf', 'ppt'] as FactoryChartExportFormat[]).map(format => <Button key={format} mode="outlined" compact onPress={() => void handleExport(format)} loading={exporting === format} disabled={exporting !== null}>{format.toUpperCase()}</Button>)}</View>
+          </>}
         </View>}
         ListEmptyComponent={!loading && !error ? <Text style={styles.empty}>当前条件没有可展示的推荐图表。</Text> : null}
       />

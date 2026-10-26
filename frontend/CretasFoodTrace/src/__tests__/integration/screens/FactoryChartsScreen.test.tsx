@@ -56,6 +56,7 @@ describe('FactoryChartsScreen', () => {
     fireEvent.press(screen.getByText('重试'));
     await waitFor(() => expect(screen.getAllByText('销售渠道').length).toBeGreaterThan(0));
     expect(screen.queryByTestId('factory-chart-card-optional')).toBeNull();
+    fireEvent.press(screen.getByTestId('factory-chart-selection-toggle'));
     fireEvent.press(screen.getByText('可选分析'));
     await waitFor(() => expect(screen.getByTestId('factory-chart-card-optional')).toBeTruthy());
     expect(getFactoryRecommendations).toHaveBeenCalledTimes(2);
@@ -142,5 +143,19 @@ describe('FactoryChartsScreen', () => {
       screen.unmount();
       await act(async () => { useAuthStore.setState(original, true); });
     }
+  });
+
+  it('keeps selected charts reachable before hundreds of optional gap explanations without hiding source errors', async () => {
+    const unavailable = Array.from({ length: 200 }, (_, index) => ({ id: `gap-${index}`, title: `未满足条件${index}`, missing: ['真实条件不足'] }));
+    (getFactoryRecommendations as jest.Mock).mockResolvedValue({ success: true, data: { ...successData(), unavailable, sourceErrors: [{ source: 'accounting', message: 'read failed' }] } });
+    const screen = render(<FactoryChartsScreen />);
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-sales')).toBeTruthy());
+    expect(screen.queryByText(/未提供：未满足条件/)).toBeNull();
+    expect(screen.getByText('来源错误：accounting · read failed')).toBeTruthy();
+    expect(screen.getByText('查看未满足条件说明（200）')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('factory-chart-unavailable-toggle'));
+    expect(screen.getByText(/未提供：未满足条件199/)).toBeTruthy();
+    fireEvent.press(screen.getByTestId('factory-chart-unavailable-toggle'));
+    expect(screen.queryByText(/未提供：未满足条件/)).toBeNull();
   });
 });
