@@ -421,10 +421,26 @@ describe('YieldStepReportScreen — 关键控制点 (CCP)', () => {
     // 同一屏还开着时被改派到同工序的第 2 道 (路由参数变 → 重新加载任务; 第 1 道已不在本人可见列表里)
     mockRouteParams = { batchId: 501, batchNumber: 'B-20260817-501', assignedWorkProcessTaskId: 9002 };
     mockedYieldApi.listWorkProcessTasks.mockResolvedValue({ success: true, code: 200, message: 'ok', data: [t2] });
-    mockedYieldApi.getYield.mockResolvedValue({ success: true, code: 200, message: 'ok', data: buildYield(t2, { totalInput: 90, inputUnit: 'kg' }) });
+    const t2Yield = { success: true, code: 200, message: 'ok', data: buildYield(t2, { totalInput: 90, inputUnit: 'kg' }) };
+    mockedYieldApi.getYield.mockResolvedValue(t2Yield);
+    // 第 2 道的出成率数据晚到 (慢网络; 固定制造, 不靠运气): 屏幕的重载是任务 / 批次 / 出成率三路一起等齐了
+    // 才换道 (loadAll 的 Promise.all), 所以换道发生在 getYield 回来之后。测试若只等到「任务列表拉了第 2 次」
+    // 就往下点, 点的是第 1 道的完工出成; 数据一回来阶段切到第 2 道的「过程报工」, 后面的元素就找不到了
+    // —— CI 上偶发红的成因。这里固定让它晚到 50ms, 未等重载完成的写法必红。
+    let t2YieldArrived = false;
+    mockedYieldApi.getYield.mockImplementationOnce(() => new Promise((resolve) => {
+      setTimeout(() => {
+        t2YieldArrived = true;
+        resolve(t2Yield);
+      }, 50);
+    }));
     view.rerender(<YieldStepReportScreen />);
     // 必然发生的读数: 确实换到了第 2 道 (任务列表重新拉过)
     await waitFor(() => expect(mockedYieldApi.listWorkProcessTasks).toHaveBeenCalledTimes(2));
+    // 重载完成的读数: 第 2 道成了当前道之后, 屏幕才按第 2 道的任务 id 去查单位/上限 (只在换道生效后发生)。
+    // 等到它才往下走 —— 此时出成率已到、阶段已按第 2 道定下来, 不会再被迟到的数据切走。
+    await waitFor(() => expect(mockedYieldApi.getYieldLimits).toHaveBeenCalledWith(501, 9002));
+    expect(t2YieldArrived).toBe(true);
 
     // 现行界面换道会把阶段切回「过程报工」(CCP 栏卸载); 不依赖这一点 —— 仍停在完工出成 (CCP 栏没卸载,
     // 正是审查中 9 描述的情形) 就直接往下走。
