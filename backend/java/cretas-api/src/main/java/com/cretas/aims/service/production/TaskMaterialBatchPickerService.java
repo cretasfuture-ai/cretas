@@ -34,7 +34,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class TaskMaterialBatchPickerService {
-    private record InputUnit(String code, java.util.Set<String> frozenDisplays) {
+    /** inputShareRatio: 该原料端口的主料份额(%), 给 App 报工做「配比核对」(缺口 06); null = 不参与。 */
+    private record InputUnit(String code, java.util.Set<String> frozenDisplays, java.math.BigDecimal inputShareRatio) {
         boolean matches(String requested) {
             return requested != null && (frozenDisplays.contains(requested.trim())
                     || Objects.equals(code, UnitContractServiceImpl.crossLanguageCode(requested)));
@@ -181,7 +182,7 @@ public class TaskMaterialBatchPickerService {
                                 throw new BusinessException(409, "原料输入端口缺少有效计量编码，请核对当前工艺")
                                         .withHint("请核对当前任务冻结的计量编码快照；修改活工艺不会修复已开工任务");
                             }
-                            return new InputUnit(code, java.util.Set.of(unit.trim()));
+                            return new InputUnit(code, java.util.Set.of(unit.trim()), port.getInputShareRatio());
                         },
                         (left, right) -> {
                             if (!Objects.equals(left.code(), right.code())) {
@@ -190,7 +191,8 @@ public class TaskMaterialBatchPickerService {
                             }
                             java.util.Set<String> displays = new java.util.HashSet<>(left.frozenDisplays());
                             displays.addAll(right.frozenDisplays());
-                            return new InputUnit(left.code(), java.util.Set.copyOf(displays));
+                            return new InputUnit(left.code(), java.util.Set.copyOf(displays),
+                                    left.inputShareRatio() != null ? left.inputShareRatio() : right.inputShareRatio());
                         }, LinkedHashMap::new));
     }
 
@@ -225,6 +227,7 @@ public class TaskMaterialBatchPickerService {
                 .currentQuantity(available)
                 .quantityUnit(input.code())
                 .warehouseId(batch.getWarehouseId())
+                .inputShareRatio(input.inputShareRatio())
                 .build();
     }
 }

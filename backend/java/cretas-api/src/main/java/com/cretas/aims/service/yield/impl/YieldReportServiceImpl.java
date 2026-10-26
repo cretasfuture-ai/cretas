@@ -151,6 +151,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 缺口 06 汇合配比校验。字段注入 (required=false) 不改构造器, 见 BlendRatioWiringContractTest。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
+
     /**
      * App 报工 {@code material_batch_refs} → RAW_TO_PRODUCTION 边。本类建带领料引用报工的
      * <b>两处</b> (submitReport / recordMaterialInput) 都调这里。
@@ -536,6 +540,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
 
+        // 缺口 06: 多主料按份额汇合时, 偏差 >±2pp 必须带原因; 快照并入 customFields.blendRatio。
+        if (blendRatioCheck != null) {
+            blendRatioCheck.enforceYieldReport(factoryId, t, effMaterialRefs, req.getBlendRatio(), r);
+        }
         ProductionReport saved = reportRepo.save(r);
 
         // 🔴 生产仓占用 (占用点 1/2): 提交即把引用量记进 material_batches.reserved_quantity,
