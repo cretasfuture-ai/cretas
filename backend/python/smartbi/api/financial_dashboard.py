@@ -30,6 +30,8 @@ class FactoryRecommendationRequest(BaseModel):
     end_month: int = Field(12, ge=1, le=12)
     include_optional: bool = True
     use_ai: bool = True
+    guided: bool = False
+    analysis_subject: Optional[str] = Field(None, max_length=80)
 
 
 class FactorySelectionRequest(BaseModel):
@@ -101,7 +103,16 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
             extra_gaps.extend(source_gaps)
         if not datasets and errors:
             return JSONResponse(status_code=503, content={'success': False, 'message': '工厂数据来源读取失败，请重试', 'data': {'sourceErrors': errors}})
-    candidates, gaps = await run_in_threadpool(engine.build, datasets, request, can_price)
+    # The catalogue is deliberately built from the already-authorized datasets;
+    # it never asks a broad source for product names.  Apply a selected subject
+    # before chart generation so a missing subject cannot silently become a
+    # full-factory answer.
+    subjects = engine.analysis_subjects(datasets, can_price)
+    scoped_datasets, subject_gap, scope_label = engine.scope_datasets(
+        datasets, request, subjects, can_price)
+    candidates, gaps = await run_in_threadpool(engine.build, scoped_datasets, request, can_price)
+    if subject_gap:
+        gaps.append(subject_gap)
     errors.extend({'source': gap['title'], 'message': gap['missing'][0]} for gap in gaps if gap.get('error'))
     gaps = [gap for gap in gaps if not gap.get('error')]
     candidates, order = await ranking.rank(candidates, request.use_ai, cache_scope=f'{factory_id}:{role}')
@@ -123,7 +134,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     user_id = caller_user_id(http_request)
     if user_id is not None and user_id > 0:
         try:
-            candidates = await detail_store.register_shared(candidates, datasets, request, (factory_id, user_id, role), can_price)
+            candidates = await detail_store.register_shared(candidates, scoped_datasets, request, (factory_id, user_id, role), can_price)
         except details.DetailError as exc:
             raise HTTPException(exc.status_code, exc.detail) from None
     from smartbi.services.factory_charts.selection_groups import default_selection
@@ -132,7 +143,11 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         'factoryId': factory_id, 'source': request.source,
         'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
         'period': {'label': label}, 'ranking': order,
-        'recommendations': candidates, 'defaultSelection': default_selection(candidates), 'unavailable': gaps + extra_gaps,
+        'recommendations': candidates, 'defaultSelection': default_selection(candidates, guided=request.guided),
+        'subjects': subjects,
+        'analysisSubject': request.analysis_subject,
+        'analysisScopeLabel': scope_label,
+        'unavailable': gaps + extra_gaps,
         'sourceErrors': errors,
     }})
 

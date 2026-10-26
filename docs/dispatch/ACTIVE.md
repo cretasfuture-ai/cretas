@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `SMARTBI-FULL-QA-20261026` — `blocked` — Root；图表Web/App通过，OSS UserDisable待外部恢复；代码scope已释放，见archive/2026-10-26-smartbi-native-factory.md。
+- `SMARTBI-GUIDED-20261026` — `in-progress` — Root；Base 8af2b2576b；scope/Owner/验收见archive/2026-10-26-smartbi-guided.md；原OSS阻塞见native-factory归档。
 
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
