@@ -267,9 +267,20 @@ class QcReleaseSemiDrawContractTest {
         void editDoesNotDoublePending() {
             when(productTypeRepo.findByIdAndFactoryId("PT-SEMI-Q", FACTORY))
                     .thenReturn(Optional.of(product("PT-SEMI-Q", "SEMI-Q", true, ProductCategory.SEMI_FINISHED)));
-            SemiFinishedInventory row = postClerk("PT-SEMI-Q", sfi("CLK-SEMI-1", null));
-            service.reverseClerkOutput(FACTORY, "CLK-SEMI-1", new BigDecimal("20"), null, 1L);
-            service.postClerkOutput(FACTORY, "CLK-SEMI-1", "PT-SEMI-Q", new BigDecimal("20"), "kg", null, null, 2);
+            // 第二轮审查 H3: 撤销只解除「这一笔」的待检 —— 按逐道录入凭据认笔 (分笔账用内存版)
+            com.cretas.aims.service.quality.release.InMemoryHoldLots lots =
+                    new com.cretas.aims.service.quality.release.InMemoryHoldLots();
+            ReflectionTestUtils.setField(service, "semiQcHoldLots", lots.service);
+            SemiFinishedInventory row = sfi("CLK-SEMI-1", null);
+            when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, "CLK-SEMI-1"))
+                    .thenReturn(Optional.of(row));
+            when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            String ref = "PS:PLAN:row-1";
+            service.postClerkOutput(FACTORY, "CLK-SEMI-1", "PT-SEMI-Q", new BigDecimal("20"), "kg", null, null, 2,
+                    false, ref);
+            service.reverseClerkOutput(FACTORY, "CLK-SEMI-1", new BigDecimal("20"), null, 1L, ref);
+            service.postClerkOutput(FACTORY, "CLK-SEMI-1", "PT-SEMI-Q", new BigDecimal("20"), "kg", null, null, 2,
+                    false, ref);
             assertEquals(0, new BigDecimal("20").compareTo(row.getInspectionPendingQuantity()));
             assertEquals(0, new BigDecimal("50").compareTo(row.drawableBalance()));
         }

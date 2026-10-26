@@ -83,6 +83,15 @@ public class QcReleaseService {
         this.productionBatchRepo = repo;
     }
 
+    /** 待检分笔账: 放行 / 判不合格后这一行所有笔清零 (第二轮审查 H3)。 */
+    @Autowired(required = false)
+    private SemiQcHoldLots semiQcHoldLots;
+
+    /** 测试 / 装配用。 */
+    public void setSemiQcHoldLots(SemiQcHoldLots lots) {
+        this.semiQcHoldLots = lots;
+    }
+
     /** 一条待检。 */
     public record PendingItem(
             String targetType,
@@ -184,6 +193,11 @@ public class QcReleaseService {
                 if (release) {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), s, null, null),
                             s.getIntermediateBatchNo());
+                    // 第二轮审查 M2: 与成品同一口径 —— 入过这一行的计划有批次质检 FAILED ⇒ 不能放行
+                    assertPlansQcNotFailed(factoryId, semiPlanIds(factoryId, s),
+                            com.cretas.aims.service.foodsafety.ccp.CcpOpenDeviationLookup
+                                    .planPrefixOfAnchor(s.getIntermediateBatchNo()),
+                            "半成品批次 " + s.getIntermediateBatchNo());
                 } else {
                     // 审查高 2: 判不合格 = 把待检的那部分数量从可用余额里转出 (QC_REJECT 出库流水),
                     // 已放行的存量不动; 这一行回到「无待检」, 之后的新产出照常按需检进待检。
@@ -192,6 +206,9 @@ public class QcReleaseService {
                 s.setInspectionStatus(null);
                 s.setInspectionPendingQuantity(null);
                 semiRepo.save(s);
+                if (semiQcHoldLots != null) {
+                    semiQcHoldLots.closeAll(factoryId, s.getId());   // 待检已处理完, 分笔账清零
+                }
                 record.batchNumber(s.getIntermediateBatchNo()).productTypeId(s.getProductTypeId())
                         .quantity(pending).unit(s.getUnit());
             }
@@ -205,6 +222,9 @@ public class QcReleaseService {
                 if (release) {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), null, w, null),
                             w.getBatchNumber());
+                    // 第二轮审查 M2: 在制批次所在计划有批次质检 FAILED ⇒ 不能放行
+                    assertPlansQcNotFailed(factoryId, wipPlanIds(factoryId, w), null,
+                            "在制半成品批次 " + w.getBatchNumber());
                 }
                 w.setStatus(release ? MaterialBatchStatus.AVAILABLE : MaterialBatchStatus.DEFECTIVE);
                 materialBatchRepo.save(w);
@@ -289,18 +309,81 @@ public class QcReleaseService {
 
     /** 审查中 5: 同计划有生产批次质检判 FAILED ⇒ 成品不能放行 (与质检失败隔离同一口径)。 */
     private void assertPlanQcNotFailed(String factoryId, FinishedGoodsBatch f) {
-        if (productionBatchRepo == null || f.getProductionPlanId() == null || f.getProductionPlanId().isBlank()) {
+        if (f.getProductionPlanId() == null || f.getProductionPlanId().isBlank()) {
             return;
         }
-        boolean failed = productionBatchRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
-                        factoryId, f.getProductionPlanId()).stream()
-                .anyMatch(b -> b.getQualityStatus() == com.cretas.aims.entity.enums.QualityStatus.FAILED);
-        if (failed) {
-            throw new BusinessException(409, "成品批次 " + f.getBatchNumber() + " 所在生产计划有批次质检不合格，不能放行")
+        assertPlansQcNotFailed(factoryId, java.util.Set.of(f.getProductionPlanId()), null,
+                "成品批次 " + f.getBatchNumber());
+    }
+
+    /**
+     * 质检 FAILED 挡放行的<b>唯一判据</b> (成品 / 半成品行 / 在制批次共用, 第二轮审查 M2):
+     * 这些计划 (或计划 id 以锚号里的前缀开头的计划) 里有生产批次质检判 FAILED ⇒ 拒绝放行。
+     * 判不合格 (REJECTED) 不受影响 —— 质检失败的货本来就该判不合格。
+     */
+    private void assertPlansQcNotFailed(String factoryId, java.util.Collection<String> planIds, String planIdPrefix,
+                                        String what) {
+        if (productionBatchRepo == null) {
+            return;
+        }
+        java.util.Set<String> plans = new java.util.LinkedHashSet<>();
+        if (planIds != null) {
+            planIds.stream().filter(p -> p != null && !p.isBlank()).forEach(plans::add);
+        }
+        boolean hasPrefix = planIdPrefix != null && !planIdPrefix.isBlank();
+        if (plans.isEmpty() && !hasPrefix) {
+            return;
+        }
+        long failed = productionBatchRepo.countQcFailedInPlans(factoryId,
+                plans.isEmpty() ? java.util.Set.of("#NO-PLAN#") : plans,
+                hasPrefix ? planIdPrefix + "%" : "#NO-PREFIX#");
+        if (failed > 0) {
+            throw new BusinessException(409, what + " 所在生产计划有批次质检不合格，不能放行")
                     .withCode(CODE_BLOCKED_BY_QC_FAILED)
                     .withHint("请到「质量管理 → 质检记录」复核该计划的不合格批次；确认不合格请选「不合格」")
                     .withSeverity("BLOCKING")
                     .withHintTarget("decision");
+        }
+    }
+
+    /** 半成品行入过账的全部生产批次的计划 (行上 batchId + 入库流水反查, 与 CCP 偏离同一口径)。 */
+    private java.util.Set<String> semiPlanIds(String factoryId, SemiFinishedInventory s) {
+        java.util.Set<String> plans = new java.util.LinkedHashSet<>();
+        if (productionBatchRepo == null) {
+            return plans;
+        }
+        java.util.Set<Long> pbIds = new java.util.LinkedHashSet<>();
+        if (s.getBatchId() != null) {
+            pbIds.add(s.getBatchId());
+        }
+        if (s.getId() != null) {
+            List<Long> posted = semiRepo.findProductionBatchIdsPostedToSemi(factoryId, s.getId());
+            if (posted != null) {
+                pbIds.addAll(posted);
+            }
+        }
+        pbIds.remove(null);
+        for (Long pbId : pbIds) {
+            productionBatchRepo.findByIdAndFactoryId(pbId, factoryId)
+                    .map(com.cretas.aims.entity.ProductionBatch::getProductionPlanId)
+                    .ifPresent(plans::add);
+        }
+        return plans;
+    }
+
+    /** 在制批次 (sourceDocId = 生产批次 id) 所在计划。 */
+    private java.util.Set<String> wipPlanIds(String factoryId, MaterialBatch w) {
+        if (productionBatchRepo == null || w.getSourceDocId() == null) {
+            return java.util.Set.of();
+        }
+        try {
+            Long pbId = Long.valueOf(w.getSourceDocId().trim());
+            return productionBatchRepo.findByIdAndFactoryId(pbId, factoryId)
+                    .map(com.cretas.aims.entity.ProductionBatch::getProductionPlanId)
+                    .map(java.util.Set::of)
+                    .orElse(java.util.Set.of());
+        } catch (NumberFormatException e) {
+            return java.util.Set.of();
         }
     }
 

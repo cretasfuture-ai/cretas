@@ -127,10 +127,14 @@ public class QcInspectionPolicy {
      * 待检数量 += inQty (封顶为当前余额), 状态 PENDING。已放行的存量不动 —— 可领 = 余额 − 待检数量。
      * 旧数据里残留的整行 REJECTED: 回到 PENDING 且<b>整个余额</b>进待检 (旧的不合格量不被新产出洗成可领, 质检员重判)。
      * 不扣 ⇒ 原样 (null 仍是 null = 零回归)。
+     *
+     * @return 这一笔入账自己扣成待检的量 (记进待检分笔账 {@link SemiQcHoldLots}, 撤销这一笔时只解除它);
+     *         不扣 = 0。旧 REJECTED 行被整行拉回待检的那部分不算这一笔的 (撤销这一笔不会把它放出来)。
      */
-    public static void applySemiOutputHold(SemiFinishedInventory sfi, boolean hold, java.math.BigDecimal inQty) {
+    public static java.math.BigDecimal applySemiOutputHold(SemiFinishedInventory sfi, boolean hold,
+                                                           java.math.BigDecimal inQty) {
         if (!hold || sfi == null) {
-            return;
+            return java.math.BigDecimal.ZERO;
         }
         // 入账前已在待检的量 (口径唯一: SemiFinishedInventory#pendingInspectionQuantity; 不在待检 = 0)
         java.math.BigDecimal priorView = sfi.pendingInspectionQuantity();
@@ -147,6 +151,8 @@ public class QcInspectionPolicy {
         }
         sfi.setInspectionStatus(SemiFinishedInventory.InspectionStatus.PENDING);
         sfi.setInspectionPendingQuantity(pending);
+        java.math.BigDecimal own = pending.subtract(prior).max(java.math.BigDecimal.ZERO);
+        return inQty == null ? java.math.BigDecimal.ZERO : own.min(inQty.max(java.math.BigDecimal.ZERO));
     }
 
     /** 新建在制半成品批次的初始状态。 */

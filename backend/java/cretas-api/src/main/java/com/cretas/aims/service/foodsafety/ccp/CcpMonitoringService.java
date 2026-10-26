@@ -215,6 +215,17 @@ public class CcpMonitoringService {
      */
     @Transactional
     public RecordResult record(String factoryId, RecordCommand cmd, Long userId, String userName, String reportRef) {
+        return record(factoryId, cmd, userId, userName, reportRef, false);
+    }
+
+    /**
+     * @param reportRef   报工凭据; 同凭据同控制点已记过 = 重放, 不重记
+     * @param windowDedup 凭据每次提交都不同 (逐工序表: 每次正式提交一个新凭据, 第二轮审查 H1) 时,
+     *                    另按「同批次同控制点同人同值 120 秒内」挡网络重放
+     */
+    @Transactional
+    public RecordResult record(String factoryId, RecordCommand cmd, Long userId, String userName, String reportRef,
+                               boolean windowDedup) {
         if (userId == null) {
             throw invalid("未登录，无法录入 CCP");
         }
@@ -266,8 +277,11 @@ public class CcpMonitoringService {
             // 去重: 带报工凭据的按「同一次报工 + 同一控制点」(报工幂等重放); 不带的沿用双击窗口
             List<HaccpMonitoringRecord> dup = reportRef != null
                     ? recordRepo.findByFactoryIdAndReportRefAndCheckpointId(factoryId, reportRef, c.getId())
-                    : recordRepo.findRecentDuplicates(factoryId, batchNumber, c.getId(),
-                            userId, r.measuredValue(), now.minusSeconds(DUPLICATE_WINDOW_SECONDS));
+                    : List.of();
+            if (dup.isEmpty() && (reportRef == null || windowDedup)) {
+                dup = recordRepo.findRecentDuplicates(factoryId, batchNumber, c.getId(),
+                        userId, r.measuredValue(), now.minusSeconds(DUPLICATE_WINDOW_SECONDS));
+            }
             if (!dup.isEmpty()) {
                 saved.add(dup.get(0));
                 if (dup.get(0).isOpenDeviation()) {
@@ -314,6 +328,36 @@ public class CcpMonitoringService {
         log.info("[CCP] factory={} batch={} wp={} readings={} deviations={} held={}",
                 factoryId, batchNumber, cmd.workProcessId(), saved.size(), deviations, held);
         return new RecordResult(toViews(saved), deviations, held, message);
+    }
+
+    /**
+     * 报工被驳回 / 撤回时, 它随带的 CCP 偏离作废 (第二轮审查 M1): 报工已不存在, 它的读数不再挡放行。
+     * 做法 = 按「已处理」收口并写明原因 (记录保留可查, 不删), 与人工处理偏离同一个判据 ({@code isOpenDeviation})。
+     * 已经扣成待检的产出不自动放回 —— 仍由质检员放行 (此后不再被这条偏离挡)。
+     *
+     * @return 作废了几条
+     */
+    @Transactional
+    public int voidDeviationsOfReport(String factoryId, String reportRef, Long userId, String reason) {
+        if (factoryId == null || reportRef == null || reportRef.isBlank()) {
+            return 0;
+        }
+        int n = 0;
+        for (HaccpMonitoringRecord rec : recordRepo.findByFactoryIdAndReportRef(factoryId, reportRef)) {
+            if (!rec.isOpenDeviation()) {
+                continue;
+            }
+            rec.setDeviationAction("偏离作废: " + reason + " (报工凭据 " + reportRef + "), 读数不再挡放行");
+            rec.setDeviationHandledAt(LocalDateTime.now());
+            rec.setDeviationHandledBy(userId);
+            rec.setDeviationHandledByName("系统 (" + reason + ")");
+            recordRepo.save(rec);
+            n++;
+        }
+        if (n > 0) {
+            log.info("[CCP] factory={} ref={} {} → 作废偏离 {} 条", factoryId, reportRef, reason, n);
+        }
+        return n;
     }
 
     /** 处理偏离: 填纠偏措施 (必填) + 处理人/时间。处理完, 这条不再挡放行和出货。 */

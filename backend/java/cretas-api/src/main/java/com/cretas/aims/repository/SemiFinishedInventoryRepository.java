@@ -191,7 +191,7 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM SemiFinishedInventory w WHERE w.factoryId = :factoryId AND w.id IN :ids " +
-           "AND w.deletedAt IS NULL")
+           "AND w.deletedAt IS NULL ORDER BY w.id")   // 固定加锁顺序, 防两个扣留事务交叉等锁死锁 (审查 L2)
     List<SemiFinishedInventory> lockForDeviationHold(@Param("factoryId") String factoryId,
                                                      @Param("ids") java.util.Collection<Long> ids);
 }

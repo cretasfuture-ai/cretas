@@ -2209,13 +2209,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 BigDecimal originalTotal = item.outcome().originalUnitCost() == null
                         ? null : item.outcome().originalUnitCost().multiply(qty);
                 // 保存阶段已经写入 SFI；同一事务内先精确反冲，再按分摊成本重入，数量净变化为 0。
+                // 质检分笔凭据 (缺口 11): 反冲 + 重入是同一行, 待检解除多少就重新扣多少, 不翻倍也不放出别人的
+                String holdRef = WipInventoryService.clerkHoldRef(planId, item.request().getClientRowId());
                 wipInventoryService.reverseClerkOutput(
-                        factoryId, item.outcome().sfiAnchor(), qty, originalTotal, null);
+                        factoryId, item.outcome().sfiAnchor(), qty, originalTotal, null, holdRef);
                 wipInventoryService.postClerkOutput(
                         factoryId, item.outcome().sfiAnchor(), item.output().getProductTypeId(),
                         qty, item.request().getUnit(), unitPrice(allocated, qty),
                         null, item.request().getProcessOrder(),
-                        Boolean.TRUE.equals(item.request().getRework()));
+                        Boolean.TRUE.equals(item.request().getRework()), holdRef);
             }
 
             // 把后端裁定的比例/金额写回每个合成行 JSON，形成不依赖前端的审计快照。
@@ -4964,7 +4966,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // postClerkOutput: inQty≤0 → no-op (saveRow 上游 gate 已保证 output>0)。
         wipInventoryService.postClerkOutput(factoryId, anchor, req.getProductTypeId(),
                 outQty, req.getUnit() != null ? req.getUnit() : "kg",
-                outUnitCost, null, req.getProcessOrder(), Boolean.TRUE.equals(req.getRework()));
+                outUnitCost, null, req.getProcessOrder(), Boolean.TRUE.equals(req.getRework()),
+                WipInventoryService.clerkHoldRef(planId, req.getClientRowId()));   // 缺口 11 质检分笔凭据
         return anchor;
     }
 
@@ -4984,7 +4987,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         BigDecimal qty = beforeReq.getOutputQuantity();
         BigDecimal oldUnitCost = computeInjectionOutputUnitCost(factoryId, beforeReq, new ArrayList<>());
         BigDecimal totalCost = oldUnitCost == null ? null : oldUnitCost.multiply(qty);
-        wipInventoryService.reverseClerkOutput(factoryId, anchor, qty, totalCost, null);
+        wipInventoryService.reverseClerkOutput(factoryId, anchor, qty, totalCost, null,
+                WipInventoryService.clerkHoldRef(planId, beforeReq.getClientRowId()));   // 缺口 11 质检分笔凭据
     }
 
     /** #1252 调味/熟制道正则 — 与 {@link #buildStepEntry} / InterimSettle isSeasoningRow 同源。 */

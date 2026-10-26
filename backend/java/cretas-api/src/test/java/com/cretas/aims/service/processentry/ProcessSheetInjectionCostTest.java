@@ -148,7 +148,7 @@ class ProcessSheetInjectionCostTest {
         ArgumentCaptor<BigDecimal> cap = ArgumentCaptor.forClass(BigDecimal.class);
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                cap.capture(), any(), eq(2), eq(false));
+                cap.capture(), any(), eq(2), eq(false), any());   // 末参: 质检分笔凭据 (缺口 11)
         return cap.getValue();
     }
 

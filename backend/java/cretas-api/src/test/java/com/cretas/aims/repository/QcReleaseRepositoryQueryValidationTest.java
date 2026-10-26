@@ -54,6 +54,8 @@ class QcReleaseRepositoryQueryValidationTest {
     @Autowired private SemiFinishedInventoryTransactionRepository txnRepo;
     @Autowired private ProductionReportRepository reportRepo;
     @Autowired private EntityManager em;
+    @Autowired private com.cretas.aims.repository.quality.SemiQcHoldLotRepository lotRepo;
+    @Autowired private ProductionBatchRepository productionBatchRepo;
     @Autowired private JdbcTemplate jdbc;
 
     @BeforeEach
@@ -153,6 +155,68 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(back.drawableBalance()).isEqualByComparingTo("7");
         assertThat(semiRepo.lockForDeviationHold(F, List.of(partial.getId(), other.getId())))
                 .extracting(SemiFinishedInventory::getId).containsExactly(partial.getId());
+        // 审查 L2: 加锁读按 id 升序 (固定加锁顺序防死锁)
+        SemiFinishedInventory second = semi(F, "SFI-PART-2", null, 602L);
+        em.clear();
+        assertThat(semiRepo.lockForDeviationHold(F, List.of(second.getId(), partial.getId())))
+                .extracting(SemiFinishedInventory::getId)
+                .containsExactly(Math.min(partial.getId(), second.getId()), Math.max(partial.getId(), second.getId()));
+    }
+
+    @Test
+    @DisplayName("第二轮审查 H2/H3/M1: 待检分笔账三条查询 —— 只取未放行的笔, 按报工 / 凭据认笔, 新的在前; 工厂隔离")
+    void holdLotQueries() {
+        java.util.function.Function<com.cretas.aims.entity.quality.SemiQcHoldLot, com.cretas.aims.entity.quality.SemiQcHoldLot>
+                save = lotRepo::saveAndFlush;
+        var a = save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
+                .holdRef("PS:P:A").quantityHeld(new BigDecimal("100")).quantityOpen(new BigDecimal("100")).build());
+        var b = save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
+                .holdRef("PS:P:A").quantityHeld(new BigDecimal("20")).quantityOpen(new BigDecimal("20")).build());
+        save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
+                .reportId(901L).quantityHeld(new BigDecimal("40")).quantityOpen(new BigDecimal("40")).build());
+        save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
+                .reportId(902L).quantityHeld(new BigDecimal("5")).quantityOpen(BigDecimal.ZERO).build());   // 已放行
+        save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(OTHER).semiFinishedId(77L)
+                .holdRef("PS:P:A").quantityHeld(BigDecimal.ONE).quantityOpen(BigDecimal.ONE).build());
+        em.clear();
+
+        assertThat(lotRepo.findOpenBySemi(F, 77L)).hasSize(3);
+        assertThat(lotRepo.findOpenBySemiAndRef(F, 77L, "PS:P:A"))
+                .extracting(com.cretas.aims.entity.quality.SemiQcHoldLot::getId).containsExactly(b.getId(), a.getId());
+        assertThat(lotRepo.findOpenBySemiAndReport(F, 77L, 901L)).singleElement()
+                .satisfies(l -> assertThat(l.getQuantityOpen()).isEqualByComparingTo("40"));
+        assertThat(lotRepo.findOpenBySemiAndReport(F, 77L, 902L)).isEmpty();
+        assertThat(lotRepo.findOpenBySemiAndRef(OTHER, 77L, "PS:P:A")).hasSize(1);
+        assertThat(lotRepo.findOpenBySemiAndRef(F, 78L, "PS:P:A")).isEmpty();
+    }
+
+    private void productionBatch(String factory, String plan, com.cretas.aims.entity.enums.QualityStatus qs) {
+        com.cretas.aims.entity.ProductionBatch b = new com.cretas.aims.entity.ProductionBatch();
+        b.setFactoryId(factory);
+        b.setBatchNumber("QCF-" + java.util.UUID.randomUUID().toString().substring(0, 8));
+        b.setProductTypeId("PT-QCF");
+        b.setQuantity(new BigDecimal("10"));
+        b.setUnit("kg");
+        b.setStatus(com.cretas.aims.entity.enums.ProductionBatchStatus.IN_PROGRESS);
+        b.setProductionPlanId(plan);
+        b.setQualityStatus(qs);
+        b.setCreatedAt(LocalDateTime.now());
+        b.setUpdatedAt(LocalDateTime.now());
+        productionBatchRepo.saveAndFlush(b);
+    }
+
+    @Test
+    @DisplayName("第二轮审查 M2: 计划质检 FAILED 计数 —— 按计划 id 或计划前缀; PASSED 不算; 工厂隔离; 哨兵不命中")
+    void qcFailedCount() {
+        productionBatch(F, "PLANAAAA-0001", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        productionBatch(F, "PLANBBBB-0002", com.cretas.aims.entity.enums.QualityStatus.PASSED);
+        productionBatch(OTHER, "PLANCCCC-0003", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        em.clear();
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANAAAA-0001"), "#NO-PREFIX#")).isEqualTo(1L);
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANBBBB-0002"), "#NO-PREFIX#")).isZero();
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("#NO-PLAN#"), "PLANAAAA%")).isEqualTo(1L);
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("#NO-PLAN#"), "PLANBBBB%")).isZero();
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANCCCC-0003"), "#NO-PREFIX#")).isZero();
     }
 
     private void material(String id, String sourceDocType, String sourceDocId, MaterialBatchStatus status) {

@@ -179,7 +179,7 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
         return n;
     }
 
-    static String planPrefixOfAnchor(String batchNo) {
+    public static String planPrefixOfAnchor(String batchNo) {
         if (batchNo == null || !batchNo.startsWith(CLERK_SEMI_ANCHOR_PREFIX)) {
             return null;
         }

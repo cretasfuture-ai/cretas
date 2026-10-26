@@ -123,14 +123,75 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Autowired(required = false)
     private QcInspectionPolicy qcInspectionPolicy;
 
-    /** 半成品行入一笔产出后, 按质检策略刷新 {@code inspectionStatus} (不扣 ⇒ 原样)。 */
-    private void applyInspectionHold(SemiFinishedInventory sfi, QcInspectionPolicy.OutputRef ref, BigDecimal inQty) {
+    /**
+     * 待检分笔账 (第二轮审查 H2/H3/M1): 撤销 / 驳回 / 数量改小某一笔时只解除它自己未放行的待检。
+     * {@code required=false}: 不注入时 (既有单测) 撤销一律不解除待检 = 保守。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.quality.release.SemiQcHoldLots semiQcHoldLots;
+
+    /** 驳回 App 报工时作废它带来的 CCP 偏离 (第二轮审查 M1)。{@code @Lazy}: 打断与质检策略的装配环。 */
+    @Autowired(required = false)
+    @Lazy
+    private com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService ccpMonitoringService;
+
+    /**
+     * 半成品行入一笔产出后, 按质检策略刷新 {@code inspectionStatus} (不扣 ⇒ 原样)。
+     *
+     * @return 这一笔扣成待检的量 (调用方记进分笔账); 不扣 = 0
+     */
+    private BigDecimal applyInspectionHold(SemiFinishedInventory sfi, QcInspectionPolicy.OutputRef ref, BigDecimal inQty) {
         if (qcInspectionPolicy == null || sfi == null) {
-            return;
+            return BigDecimal.ZERO;
         }
         boolean hold = qcInspectionPolicy.shouldHoldSemi(sfi.getFactoryId(), ref);
-        QcInspectionPolicy.applySemiOutputHold(sfi, hold, inQty);
+        return QcInspectionPolicy.applySemiOutputHold(sfi, hold, inQty);
     }
+
+    private void recordHoldLot(SemiFinishedInventory sfi, BigDecimal held, Long reportId, String holdRef) {
+        if (semiQcHoldLots != null) {
+            semiQcHoldLots.record(sfi, held, reportId, holdRef);
+        }
+    }
+
+    /**
+     * 第二轮审查 L1: 质检判不合格转出的量记在 consumedQuantity 里 (QC_REJECT 出库流水), 撤销 / 驳回的报错不能把它
+     * 说成「被下一道领用」。返回这一行累计被质检判不合格转出的量。
+     */
+    private BigDecimal qcRejectedQuantity(SemiFinishedInventory sfi) {
+        if (sfi == null || sfi.getId() == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal sum = BigDecimal.ZERO;
+        for (SemiFinishedInventoryTransaction t : txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfi.getId())) {
+            if (SemiFinishedInventoryTransaction.SourceType.QC_REJECT.equals(t.getSourceType())
+                    && t.getQuantity() != null) {
+                sum = sum.add(t.getQuantity().abs());
+            }
+        }
+        return sum;
+    }
+
+    /** L1: 「已被下游消耗 X」改写成「下一道领用 a、质检判不合格转出 b」(b=0 时与旧文案一致)。 */
+    private String consumedCause(SemiFinishedInventory sfi, BigDecimal consumed, String unit) {
+        BigDecimal rejected = qcRejectedQuantity(sfi).min(consumed);
+        BigDecimal drawn = consumed.subtract(rejected);
+        StringBuilder b = new StringBuilder();
+        if (drawn.signum() > 0) {
+            b.append("已被下一道领用 ").append(drawn.stripTrailingZeros().toPlainString()).append(unit);
+        }
+        if (rejected.signum() > 0) {
+            if (b.length() > 0) {
+                b.append("、");
+            }
+            b.append("质检判不合格转出 ").append(rejected.stripTrailingZeros().toPlainString()).append(unit);
+        }
+        return b.toString();
+    }
+
+    private static final String QC_REJECT_REMEDY = "质检判不合格转出的部分已离开库存 (见「质量管理 → 质检放行」的放行记录),"
+            + " 撤销 / 更正都不会把它还回来, 这笔不能再整笔撤销或改数量; 如数量确有错误, 请质检员与主管核对放行记录后"
+            + "用「半成品盘点」把余额校正到实际值";
 
     /** App 报工所在生产批次 → 批次号/计划 (给 CCP 偏离判定用); 拿不到就只按产品判。 */
     private QcInspectionPolicy.OutputRef taskOutputRef(WorkProcessTask task, String productTypeId,
@@ -396,6 +457,15 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal produced = nz(wip.getProducedQuantity()).add(delta);
         wip.setProducedQuantity(produced);
         wip.refreshAvailableQuantity();
+        // 第二轮审查 H2: 数量更正与入账同一口径 —— 改大多出来的量按策略进待检 (并记一笔分笔账);
+        // 改小只解除这次报工自己未放行的待检 (别人的待检、已放行的存量都不动)。
+        BigDecimal correctionHeld = BigDecimal.ZERO;
+        if (delta.signum() > 0) {
+            correctionHeld = applyInspectionHold(wip,
+                    taskOutputRef(task, null, null, wip.getIntermediateBatchNo()), delta);
+        } else if (semiQcHoldLots != null) {
+            semiQcHoldLots.unwindForReport(wip, report.getId(), delta.negate());
+        }
         wip.setStatus(wip.getAvailableQuantity().signum() > 0
                 ? SemiFinishedInventory.Status.AVAILABLE : SemiFinishedInventory.Status.DEPLETED);
         // 更正没有可证明的成本 delta；累计成本保持不变，已知成本按新产出量派生，未知成本继续为 null。
@@ -405,6 +475,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             wip.setUnitCost(null);
         }
         SemiFinishedInventory saved = wipRepo.save(wip);
+        recordHoldLot(saved, correctionHeld, report.getId(), null);
         SemiFinishedInventoryTransaction correction = WipLedgerEntries.correctionRow(
                 saved, delta, null, report, correctionId, operatorId);
         if (correction == null) {
@@ -484,9 +555,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHintTarget("WIP 盘点调整");
         }
         if (nz(wip.getConsumedQuantity()).signum() > 0) {
-            throw new BusinessException(409, "该 WIP 已被下游消费，数量更正会破坏库存账")
+            // L1: 质检判不合格转出也记在 consumed 里 —— 单独列出, 不说成「被下游消费」
+            BigDecimal consumedNow = nz(wip.getConsumedQuantity());
+            boolean qcRejected = qcRejectedQuantity(wip).signum() > 0;
+            throw new BusinessException(409, "该 WIP " + consumedCause(wip, consumedNow, firstNonBlank(wip.getUnit(), ""))
+                    + "，数量更正会破坏库存账")
                     .withCode("WIP_CORRECTION_DOWNSTREAM_CONSUMED")
-                    .withHint("请先处理下游消费或走正式冲销流程");
+                    .withHint(qcRejected ? QC_REJECT_REMEDY : "请先处理下游消费或走正式冲销流程");
         }
         if (wip.getProducedQuantity() == null) {
             throw new BusinessException(409, "WIP 产出数量缺失，已拒绝猜测性更正")
@@ -768,8 +843,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, outputUnit, report.getMaterialBatchRefs());
         // 质检放行: 这一行装的是 semiCode 那个半成品 (行上的 productTypeId 是批次成品, 存量语义, 不能拿来判);
         // 回料行则是回料自己的产品。
-        applyInspectionHold(sfi, taskOutputRef(task, reworkProductTypeId, semiCode, semiCode), inQty);
+        BigDecimal held = applyInspectionHold(sfi, taskOutputRef(task, reworkProductTypeId, semiCode, semiCode), inQty);
         wipRepo.save(sfi);
+        recordHoldLot(sfi, held, report.getId(), null);
 
         // Write immutable ledger entry (R3 — no update ever, only REVERSE rows for cancellation)
         BigDecimal balanceAfter = sfi.getAvailableQuantity();
@@ -961,6 +1037,16 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                                 BigDecimal inQty, String unit, BigDecimal inUnitCost,
                                 List<Map<String, Object>> materialBatchRefs, Integer processOrder,
                                 boolean rework) {
+        postClerkOutput(factoryId, intermediateBatchNo, productTypeId, inQty, unit, inUnitCost,
+                materialBatchRefs, processOrder, rework, null);
+    }
+
+    @Override
+    @Transactional
+    public void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
+                                BigDecimal inQty, String unit, BigDecimal inUnitCost,
+                                List<Map<String, Object>> materialBatchRefs, Integer processOrder,
+                                boolean rework, String qcHoldRef) {
         if (inQty == null || inQty.signum() <= 0) {
             return;
         }
@@ -1010,9 +1096,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         BigDecimal totalCost = inUnitCost == null ? null : inUnitCost.multiply(inQty);
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, unit, materialBatchRefs);
         // 质检放行: 逐道录入的产出产品就是 productTypeId; 锚 = 工序批次号 (CCP 偏离按它和计划判)。
-        applyInspectionHold(sfi, new QcInspectionPolicy.OutputRef(productTypeId, null,
+        BigDecimal held = applyInspectionHold(sfi, new QcInspectionPolicy.OutputRef(productTypeId, null,
                 QcInspectionPolicy.batchNumbers(intermediateBatchNo), null, null), inQty);
         wipRepo.save(sfi);
+        // 分笔账: 有凭据才能在撤销时认出是这一笔; 没有凭据 (小结等旧调用) 撤销时一律不解除 (保守)
+        recordHoldLot(sfi, held, null, qcHoldRef);
 
         // 🔴 2026-08-18: 这条路一直在改余额却【从不记流水】(PR#2870 登记为「未修」)。
         //    ⚠️ 它必须与 consumeClerkSemi / consumeClerkSemiStrict 的 OUT 【成对】补 ——
@@ -1300,6 +1388,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Transactional
     public void reverseClerkOutput(String factoryId, String intermediateBatchNo, BigDecimal qty,
                                    BigDecimal totalCost, Long operatorId) {
+        reverseClerkOutput(factoryId, intermediateBatchNo, qty, totalCost, operatorId, null);
+    }
+
+    @Override
+    @Transactional
+    public void reverseClerkOutput(String factoryId, String intermediateBatchNo, BigDecimal qty,
+                                   BigDecimal totalCost, Long operatorId, String qcHoldRef) {
         if (qty == null || qty.signum() <= 0) {
             return;
         }
@@ -1323,8 +1418,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             // 可撤销上限 = 撤销前当前可用量 = produced − consumed + adj (不能只减 consumed)。
             BigDecimal reversibleNow = sfi.computeBalance().max(BigDecimal.ZERO);
             StringBuilder cause = new StringBuilder();
+            BigDecimal qcRejected = consumed.signum() > 0 ? qcRejectedQuantity(sfi).min(consumed) : BigDecimal.ZERO;
             if (consumed.signum() > 0) {
-                cause.append("已被下游消耗 ").append(consumed.stripTrailingZeros().toPlainString());
+                // L1: 质检判不合格转出的量单独列出, 不说成「被下游消耗」
+                cause.append(consumedCause(sfi, consumed, ""));
             }
             if (adj.signum() < 0) {
                 if (cause.length() > 0) {
@@ -1339,8 +1436,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             }
             String remedyHint = (adj.signum() < 0)
                     ? ("盘亏已过账 (不随撤销自动冲销), 无法通过撤销小结恢复"
-                        + (consumed.signum() > 0 ? "; 下游消耗部分请先撤销下游相关小结" : ""))
-                    : "该批次半成品已被后续工序/计划领用, 请先撤销下游相关小结再重试";
+                        + (consumed.subtract(qcRejected).signum() > 0 ? "; 下游消耗部分请先撤销下游相关小结" : ""))
+                    : consumed.subtract(qcRejected).signum() > 0
+                        ? "该批次半成品已被后续工序/计划领用, 请先撤销下游相关小结再重试"
+                        : "";
+            if (qcRejected.signum() > 0) {
+                remedyHint = remedyHint.isEmpty() ? QC_REJECT_REMEDY : remedyHint + "; " + QC_REJECT_REMEDY;
+            }
             throw new BusinessException(409, "半成品 " + intermediateBatchNo + " " + cause
                     + ", 当前可撤销入库仅 " + reversibleNow.stripTrailingZeros().toPlainString()
                     + " (需撤销 " + qty.stripTrailingZeros().toPlainString() + "), 无法撤销小结; " + remedyHint)
@@ -1350,11 +1452,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withHintTarget(intermediateBatchNo);
         }
         sfi.setProducedQuantity(newProduced);
-        // 缺口 11 (审查高 2): 撤销的是最近一次入账 —— 它若在待检里, 待检数量同步减掉,
-        // 否则「撤销 + 重新入账」(编辑) 会让待检翻倍、把已放行的存量也挡住。
-        if (SemiFinishedInventory.InspectionStatus.PENDING.equals(sfi.getInspectionStatus())
-                && sfi.getInspectionPendingQuantity() != null) {
-            sfi.setInspectionPendingQuantity(sfi.getInspectionPendingQuantity().subtract(qty).max(BigDecimal.ZERO));
+        // 缺口 11 (第二轮审查 H3): 只解除「这一笔」还没放行的待检 (按凭据找分笔账) ——
+        // ⛔ 不按撤销量直接扣行上的待检: 锚点行累加多笔, A 已放行、B 待检时删 A 会把 B 的待检抵消掉。
+        // 没有凭据 = 认不出是哪一笔 ⇒ 一律不解除 (保守; 待检数量封顶为余额)。
+        if (qcHoldRef != null && semiQcHoldLots != null) {
+            semiQcHoldLots.unwindForRef(sfi, qcHoldRef, qty);
         }
         // 成本冲销 (诚实): totalCost null → accumulatedCost 未曾加此段, 不减; 否则减去确切金额。
         BigDecimal acc = sfi.getAccumulatedCost();
@@ -1511,10 +1613,16 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 // ⛔ 下游已经领走了就拒绝 —— 允许冲销会让下游那条报工建立在一批
                 //    已经不存在的料上, 而且不报错。事先拦住优于事后不自洽。
                 if (consumed.signum() > 0) {
-                    throw new BusinessException(409, "这笔产出已被下一道领用 "
-                            + consumed.stripTrailingZeros().toPlainString()
-                            + firstNonBlank(wip.getUnit(), "") + ", 不能直接驳回")
-                            .withHint("请先处理领用它的那道工序的报工, 再回来驳回本条");
+                    // L1: 质检判不合格转出的量也记在 consumed 里 —— 单独列出, 不说成「被下一道领用」
+                    BigDecimal qcRejected = qcRejectedQuantity(wip).min(consumed);
+                    String unitText = firstNonBlank(wip.getUnit(), "");
+                    String hint = consumed.subtract(qcRejected).signum() > 0
+                            ? "请先处理领用它的那道工序的报工, 再回来驳回本条"
+                                + (qcRejected.signum() > 0 ? "; " + QC_REJECT_REMEDY : "")
+                            : QC_REJECT_REMEDY;
+                    throw new BusinessException(409, "这笔产出" + consumedCause(wip, consumed, unitText) + ", 不能直接驳回")
+                            .withCode(qcRejected.signum() > 0 ? "WIP_REVERSE_QC_REJECTED" : null)
+                            .withHint(hint);
                 }
                 BigDecimal produced = nz(wip.getProducedQuantity()).subtract(out).max(BigDecimal.ZERO);
                 // G02: 盘亏 (adjustment<0) 已过账时, 退回全部产出会把余额推成负数 —— 与 reverseClerkOutput
@@ -1534,6 +1642,10 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 }
                 wip.setProducedQuantity(produced);
                 wip.refreshAvailableQuantity();
+                // 第二轮审查 M1: 驳回的这笔若还在待检, 只解除它自己未放行的量 (已放行的存量不再被误挡)
+                if (semiQcHoldLots != null) {
+                    semiQcHoldLots.unwindForReport(wip, report.getId(), out);
+                }
                 if (wip.getAvailableQuantity().signum() <= 0
                         && !SemiFinishedInventory.Status.RETURNED.equals(wip.getStatus())) {
                     wip.setStatus(SemiFinishedInventory.Status.DEPLETED);
@@ -1552,6 +1664,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     txnRepo.save(t);
                 }
             }
+        }
+
+        // 第二轮审查 M1: 被驳回的这次报工随带的 CCP 偏离作废 (报工不存在了, 它的读数不再挡放行)
+        if (ccpMonitoringService != null) {
+            ccpMonitoringService.voidDeviationsOfReport(factoryId,
+                    com.cretas.aims.service.foodsafety.ccp.CcpReportFacade.REF_YIELD_PREFIX + report.getId(),
+                    operatorId, "所属报工已驳回");
         }
 
         // ② 本道领用还回上道
@@ -1679,10 +1798,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // (task.productTypeId), 并不是「成品」本身。按成品的「需检」扣它, 会让需检成品的每一道中间产出
         // 都要放行一次才能被下道领用。⇒ 这里【不按产品开关扣】(成品的待检在成品入库时扣, 见 4 条成品入库路径),
         // 只按 CCP 偏离扣 (productTypeId/code 传 null, 策略只看批次)。
-        if (out.signum() > 0) {
-            applyInspectionHold(wip, taskOutputRef(task, null, null, wipNo), out);
-        }
+        BigDecimal heldOut = out.signum() > 0
+                ? applyInspectionHold(wip, taskOutputRef(task, null, null, wipNo), out)
+                : BigDecimal.ZERO;
         SemiFinishedInventory saved = wipRepo.save(wip);
+        recordHoldLot(saved, heldOut, report.getId(), null);
 
         // 🔴 2026-08-18: 这条路一直在改余额却<b>从不记流水</b>。F006 生产库实测 8 行流水里
         //    IN 是 0 行, 而 4 行库存各挂着 2/240/300/10 的 produced —— 余额凭空出现,

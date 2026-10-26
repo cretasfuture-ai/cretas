@@ -71,3 +71,29 @@ CREATE INDEX IF NOT EXISTS idx_qc_release_factory_time
     ON qc_release_records (factory_id, released_at);
 
 COMMENT ON TABLE qc_release_records IS '质检放行记录 (缺口 11): 每次放行/判不合格一行, 只增不改';
+
+-- 待检分笔账 (第二轮审查 H2/H3/M1): 一行半成品累加多笔入账, 撤销/驳回/更正某一笔时只能解除
+-- 「这一笔还没放行的待检量」, 不能把别人的待检抵消掉。每笔扣成待检的入账记一行:
+--   report_id     App 报工入账 (撤销/驳回/数量更正按它找)
+--   hold_ref      逐道录入入账的凭据 (PS:计划:行; 撤销按它找)
+--                 两者都空 = 认不出是哪一笔, 撤销时一律不解除 (保守: 宁可多挡)
+--   quantity_open 仍未放行的量; 质检放行/判不合格时整行清零
+-- 不改流水表 (semi_finished_inventory_transactions 只增不改)。
+CREATE TABLE IF NOT EXISTS semi_qc_hold_lots (
+    id                 BIGSERIAL PRIMARY KEY,
+    factory_id         VARCHAR(64)   NOT NULL,
+    semi_finished_id   BIGINT        NOT NULL,
+    report_id          BIGINT,
+    hold_ref           VARCHAR(160),
+    quantity_held      DECIMAL(12,2) NOT NULL,
+    quantity_open      DECIMAL(12,2) NOT NULL,
+    created_at         TIMESTAMP     NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMP     NOT NULL DEFAULT NOW(),
+    deleted_at         TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_semi_qc_hold_lots_semi
+    ON semi_qc_hold_lots (factory_id, semi_finished_id);
+
+COMMENT ON TABLE semi_qc_hold_lots IS
+    '半成品待检分笔账 (缺口 11): 每笔扣成待检的入账一行; 撤销某笔只解除它自己未放行的量';

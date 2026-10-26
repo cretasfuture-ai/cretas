@@ -104,8 +104,12 @@ class CcpReportFacadeContractTest {
             saved.add(r);
             return r;
         });
+        // 按凭据查重: 查的是真落过的记录 (内存), 不是恒空的桩 —— 否则「凭据撞了被当重放」测不出来
         when(recordRepo.findByFactoryIdAndReportRefAndCheckpointId(anyString(), anyString(), anyLong()))
-                .thenReturn(List.of());
+                .thenAnswer(inv -> saved.stream()
+                        .filter(r -> inv.getArgument(1).equals(r.getReportRef())
+                                && inv.getArgument(2).equals(r.getCheckpointId()))
+                        .toList());
         ProductionBatch pb = new ProductionBatch();
         pb.setId(BATCH_ID);
         pb.setFactoryId(F);
@@ -279,6 +283,49 @@ class CcpReportFacadeContractTest {
             assertThat(rec.getValue().getReportRef()).isEqualTo("PS:PLAN-1:row-1:idem-1");
             assertThat(rec.getValue().getBatchNumber()).isEqualTo("PB-11");
             assertThat(rec.getValue().getSource()).isEqualTo(CcpMonitoringService.SOURCE_WEB);
+        }
+
+        @Test
+        @DisplayName("第二轮审查 H1: 同一行「提交(限内) → 撤销 → 再提交(超限)」, 第二次照记偏离并扣待检")
+        void resubmitAfterUndoRecordsTheNewReading() {
+            sheetConfig(2, WP_CCP);
+            ProcessSheetRowResult result = new ProcessSheetRowResult();
+            result.setClientRowId("row-1");
+            result.setBatchId(BATCH_ID);
+            result.setBatchNumber("PB-11");
+            when(processSheetService.submitRow(eq(F), eq("PLAN-1"), any(), eq(9L))).thenReturn(result);
+            ProcessSheetRowRequest first = row(List.of(reading("80")));
+            first.setIdempotencyKey(null);                 // web 不发幂等号
+            facade.submitProcessSheetRow(F, "PLAN-1", 9L, "文员", first);
+            // ……撤销小结: 行退回草稿, clientRowId 不变……
+            ProcessSheetRowRequest second = row(List.of(reading("70")));
+            second.setIdempotencyKey(null);
+            facade.submitProcessSheetRow(F, "PLAN-1", 9L, "文员", second);
+            System.out.println("H1 refs=" + saved.stream().map(HaccpMonitoringRecord::getReportRef).toList());
+            assertThat(saved).hasSize(2);
+            assertThat(saved.get(0).getReportRef()).isNotEqualTo(saved.get(1).getReportRef());
+            assertThat(saved.get(1).isDeviation()).isTrue();
+            verify(deviationHold).holdForDeviation(F, "PB-11", BATCH_ID, "PLAN-1");
+        }
+
+        @Test
+        @DisplayName("真正的重放仍然挡住: 已提交的行再提交被 submitRow 409 拒绝, 不落第二条 CCP")
+        void replayIsStillRejected() {
+            sheetConfig(2, WP_CCP);
+            ProcessSheetRowResult result = new ProcessSheetRowResult();
+            result.setBatchId(BATCH_ID);
+            result.setBatchNumber("PB-11");
+            when(processSheetService.submitRow(eq(F), eq("PLAN-1"), any(), eq(9L)))
+                    .thenReturn(result)
+                    .thenThrow(new BusinessException(409, "该报工行已经正式提交")
+                            .withCode("PROCESS_SHEET_ROW_ALREADY_SUBMITTED"));
+            ProcessSheetRowRequest req = row(List.of(reading("70")));
+            req.setIdempotencyKey(null);
+            facade.submitProcessSheetRow(F, "PLAN-1", 9L, "文员", req);
+            assertThatThrownBy(() -> facade.submitProcessSheetRow(F, "PLAN-1", 9L, "文员", req))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getErrorCode()).isEqualTo("PROCESS_SHEET_ROW_ALREADY_SUBMITTED"));
+            assertThat(saved).hasSize(1);
         }
 
         @Test

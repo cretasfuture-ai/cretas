@@ -1066,7 +1066,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     /** CCP 偏离扣留 (审查中 8): 行锁读取这些生产批次物化的在制批次, 锁内再改 (见 SemiFinishedInventoryRepository#lockForDeviationHold)。 */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId AND m.sourceDocType = 'PRODUCTION_BATCH' " +
-           "AND m.sourceDocId IN :productionBatchIds AND m.deletedAt IS NULL")
+           "AND m.sourceDocId IN :productionBatchIds AND m.deletedAt IS NULL ORDER BY m.id")   // 固定加锁顺序 (审查 L2)
     List<MaterialBatch> lockWipBatchesForDeviationHold(@Param("factoryId") String factoryId,
                                                        @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
 }

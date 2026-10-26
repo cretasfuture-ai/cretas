@@ -35,6 +35,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
@@ -155,6 +156,14 @@ class QcFailedPendingQuarantineContractTest {
             when(recordRepo.save(any(QcReleaseRecord.class))).thenAnswer(inv -> inv.getArgument(0));
         }
 
+        /** 计数查询按「这个计划里那个批次的真实质检结论」作答 (查询语义另由 H2 上的仓储测试执行)。 */
+        private void stubFailedCount() {
+            when(productionBatchRepository.countQcFailedInPlans(eq(FACTORY), any(), any())).thenAnswer(inv -> {
+                java.util.Collection<?> plans = inv.getArgument(1);
+                return plans.contains(PLAN_ID) && batch.getQualityStatus() == QualityStatus.FAILED ? 1L : 0L;
+            });
+        }
+
         private void release() {
             releaseService.decide(FACTORY, new QcReleaseService.DecisionCommand(
                     QcReleaseRecord.TargetType.FINISHED_GOODS, "PEND", "RELEASED", "出厂检验合格"), 7L, null);
@@ -164,8 +173,7 @@ class QcFailedPendingQuarantineContractTest {
         @DisplayName("同计划有生产批次质检 FAILED → 放行被拒 (QC_RELEASE_BLOCKED_BY_QC_FAILED), 仍待检")
         void failedPlanBlocksRelease() {
             batch.setQualityStatus(QualityStatus.FAILED);
-            when(productionBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
-                    .thenReturn(List.of(batch));
+            stubFailedCount();
             assertThatThrownBy(this::release)
                     .isInstanceOfSatisfying(BusinessException.class,
                             e -> assertThat(e.getErrorCode()).isEqualTo(QcReleaseService.CODE_BLOCKED_BY_QC_FAILED));
@@ -176,8 +184,7 @@ class QcFailedPendingQuarantineContractTest {
         @DisplayName("阴性对照: 同计划批次质检 PASSED → 放行成功")
         void passedPlanReleases() {
             batch.setQualityStatus(QualityStatus.PASSED);
-            when(productionBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
-                    .thenReturn(List.of(batch));
+            stubFailedCount();
             release();
             assertThat(pending.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         }

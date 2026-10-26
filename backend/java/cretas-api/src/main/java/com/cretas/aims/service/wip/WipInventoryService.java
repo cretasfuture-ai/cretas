@@ -23,6 +23,15 @@ public interface WipInventoryService {
      * 逐道保存 (option F: 纯半成品喂的非成品中间道产出定位) 必须使用<b>同一锚</b>, 故提为
      * 共享静态方法, 防两处派生逻辑漂移。null 段以 {@code 00000000} 占位。
      */
+    /**
+     * 逐道录入入账的质检分笔凭据 (缺口 11 第二轮审查 H3): 同一计划同一行 (clientRowId) 的保存 / 重存 / 删除 /
+     * 成本重分摊用同一个凭据, 撤销时据此只解除这一行自己未放行的待检。
+     */
+    static String clerkHoldRef(String planId, String clientRowId) {
+        String ref = "PS:" + planId + ":" + clientRowId;
+        return ref.length() > 160 ? ref.substring(0, 160) : ref;
+    }
+
     static String clerkSemiAnchor(String planId, String productTypeId) {
         return "CLK-SEMI-" + head8(planId) + "-" + head8(productTypeId);
     }
@@ -209,6 +218,19 @@ public interface WipInventoryService {
                          boolean rework);
 
     /**
+     * 同上, 带质检分笔凭据 {@code qcHoldRef} (缺口 11 第二轮审查 H3): 这一笔若扣成待检, 记进分笔账;
+     * 之后用同一凭据 {@link #reverseClerkOutput(String, String, BigDecimal, BigDecimal, Long, String)}
+     * 撤销时只解除它自己未放行的待检。凭据为 null = 认不出是哪一笔, 撤销时一律不解除 (保守)。
+     */
+    default void postClerkOutput(String factoryId, String intermediateBatchNo, String productTypeId,
+                                 BigDecimal inQty, String unit, BigDecimal inUnitCost,
+                                 List<java.util.Map<String, Object>> materialBatchRefs, Integer processOrder,
+                                 boolean rework, String qcHoldRef) {
+        postClerkOutput(factoryId, intermediateBatchNo, productTypeId, inQty, unit, inUnitCost,
+                materialBatchRefs, processOrder, rework);
+    }
+
+    /**
      * G3 小结半成品出库 (SFI OUT) — task-free，{@link #postClerkOutput} 的逆向。
      *
      * <p>当某次小结的某道消耗了 <b>前序小结已入库的</b>半成品 (跨小结 in/out 闭环) 时调用:
@@ -309,6 +331,12 @@ public interface WipInventoryService {
      */
     void reverseClerkOutput(String factoryId, String intermediateBatchNo, BigDecimal qty,
                             BigDecimal totalCost, Long operatorId);
+
+    /** 同上, 带质检分笔凭据 (见 postClerkOutput 带凭据的重载): 只解除这一笔自己未放行的待检。 */
+    default void reverseClerkOutput(String factoryId, String intermediateBatchNo, BigDecimal qty,
+                                    BigDecimal totalCost, Long operatorId, String qcHoldRef) {
+        reverseClerkOutput(factoryId, intermediateBatchNo, qty, totalCost, operatorId);
+    }
 
     /**
      * 撤销小结 — {@link #consumeClerkSemi} / {@link #consumeClerkSemiStrict} 的逆 (SFI OUT restore, 还回消耗)。

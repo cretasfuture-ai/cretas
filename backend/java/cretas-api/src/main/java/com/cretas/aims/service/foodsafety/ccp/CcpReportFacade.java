@@ -113,7 +113,10 @@ public class CcpReportFacade {
         boolean ccpStep = workProcessId != null
                 && !ccpMonitoringService.validateReadings(factoryId, workProcessId, req.getCcpReadings()).isEmpty();
         ProcessSheetRowResult result = processSheetService.submitRow(factoryId, planId, req, userId);
-        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result) : result;
+        // 正式提交的重放由 submitRow 自己挡 (已提交的行再提交 409, 整个事务连同这里的 CCP 一起回滚),
+        // 所以这里不再按时间窗去重: 撤销后重新提交同一行, 新读数必须照记 (第二轮审查 H1)。
+        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result, false)
+                : result;
     }
 
     /** 旧契约 saveRow (upsert 即入账): 同样兜底, 不让它成为绕过 CCP 的后门。 */
@@ -124,12 +127,14 @@ public class CcpReportFacade {
         boolean ccpStep = workProcessId != null
                 && !ccpMonitoringService.validateReadings(factoryId, workProcessId, req.getCcpReadings()).isEmpty();
         ProcessSheetRowResult result = processSheetService.saveRow(factoryId, planId, req, userId);
-        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result) : result;
+        // 旧契约 saveRow 是幂等 upsert, 重放不会被拒 ⇒ 另按时间窗挡网络重放
+        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result, true)
+                : result;
     }
 
     private ProcessSheetRowResult recordSheetCcp(String factoryId, String planId, Long userId, String userName,
                                                  ProcessSheetRowRequest req, String workProcessId,
-                                                 ProcessSheetRowResult result) {
+                                                 ProcessSheetRowResult result, boolean windowDedup) {
         String batchNumber = result == null ? null : result.getBatchNumber();
         Long pbId = result == null ? null : result.getBatchId();
         if (batchNumber == null && result != null && result.getOutputs() != null) {
@@ -144,16 +149,11 @@ public class CcpReportFacade {
         if (batchNumber == null) {
             batchNumber = req.getBatchNumber();
         }
-        String ref = REF_SHEET_PREFIX + planId + ":" + Objects.toString(req.getClientRowId(), "-")
-                + (req.getIdempotencyKey() == null || req.getIdempotencyKey().isBlank()
-                ? "" : ":" + req.getIdempotencyKey().trim());
-        if (ref.length() > 160) {
-            ref = ref.substring(0, 160);
-        }
+        String ref = sheetSubmissionRef(planId, req);
         CcpMonitoringService.RecordResult ccp = ccpMonitoringService.record(factoryId,
                 new CcpMonitoringService.RecordCommand(batchNumber, pbId, planId, workProcessId,
                         req.getProcessOrder(), CcpMonitoringService.SOURCE_WEB, req.getCcpReadings()),
-                userId, userName, ref);
+                userId, userName, ref, windowDedup);
         if (result == null) {
             return null;
         }
@@ -164,6 +164,20 @@ public class CcpReportFacade {
             result.setWarnings(warnings);
         }
         return result;
+    }
+
+    /**
+     * 逐工序表这一次提交的凭据 (第二轮审查 H1): 计划 + 行 + <b>每次提交一个新值</b>。
+     * 旧版只有「计划 + 行」, 而撤销小结后行退回草稿、clientRowId 不变, 再次正式提交时新的实测值
+     * 会被当成「同一次报工的重放」丢掉 —— 上一轮在限内、这一轮超限, 偏离不记、产出不扣待检。
+     * 前端带了 idempotencyKey (同一次点击的重试共用) 就用它, 否则服务端生成。
+     */
+    static String sheetSubmissionRef(String planId, ProcessSheetRowRequest req) {
+        String submission = req.getIdempotencyKey() == null || req.getIdempotencyKey().isBlank()
+                ? java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12)
+                : req.getIdempotencyKey().trim();
+        String ref = REF_SHEET_PREFIX + planId + ":" + Objects.toString(req.getClientRowId(), "-") + ":" + submission;
+        return ref.length() > 160 ? ref.substring(0, 160) : ref;
     }
 
     /** web 行有没有产出: 单产出量 > 0, 或多产出任一端口 > 0。 */

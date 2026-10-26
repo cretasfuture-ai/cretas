@@ -135,5 +135,9 @@ class CcpMonitoringRepositoryQueryValidationTest {
         assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId(F, "YR:9002", 1L)).isEmpty();
         assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId(F, "YR:9001", 2L)).isEmpty();
         assertThat(recordRepo.findByFactoryIdAndReportRefAndCheckpointId("F-OTHER", "YR:9001", 1L)).isEmpty();
+        // 第二轮审查 M1: 按报工凭据取全部记录 (报工撤回时作废其偏离)
+        assertThat(recordRepo.findByFactoryIdAndReportRef(F, "YR:9001")).hasSize(1);
+        assertThat(recordRepo.findByFactoryIdAndReportRef(F, "YR:9002")).isEmpty();
+        assertThat(recordRepo.findByFactoryIdAndReportRef("F-OTHER", "YR:9001")).isEmpty();
     }
 }

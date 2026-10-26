@@ -539,7 +539,7 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     /** CCP 偏离扣留 (审查中 8): 行锁读取批号命中或同一计划的成品批次, 锁内再改 (不覆盖并发发货/预留)。 */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL " +
-            "AND (b.batchNumber IN :batchNumbers OR b.productionPlanId IN :planIds)")
+            "AND (b.batchNumber IN :batchNumbers OR b.productionPlanId IN :planIds) ORDER BY b.id")   // 固定加锁顺序 (审查 L2)
     List<FinishedGoodsBatch> lockForDeviationHold(@Param("factoryId") String factoryId,
                                                   @Param("batchNumbers") java.util.Collection<String> batchNumbers,
                                                   @Param("planIds") java.util.Collection<String> planIds);

@@ -67,6 +67,9 @@ public interface HaccpMonitoringRecordRepository extends JpaRepository<HaccpMoni
     Optional<HaccpMonitoringRecord> findByIdAndFactoryIdForUpdate(@Param("id") Long id,
                                                                   @Param("factoryId") String factoryId);
 
+    /** 某次报工 (报工凭据) 落下的全部 CCP 记录 (报工驳回 / 撤回时作废其偏离)。 */
+    List<HaccpMonitoringRecord> findByFactoryIdAndReportRef(String factoryId, String reportRef);
+
     /** 同一次报工 (报工凭据) 已为该控制点落过记录 → 报工幂等重放时不重复记。 */
     List<HaccpMonitoringRecord> findByFactoryIdAndReportRefAndCheckpointId(
             String factoryId, String reportRef, Long checkpointId);
