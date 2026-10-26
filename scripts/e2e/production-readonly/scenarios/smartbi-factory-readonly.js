@@ -522,7 +522,7 @@ function detailCellEvidence(expectedData, visibleCellTexts) {
   };
 }
 
-async function inspectDetailsTable(page, expectedRows, expectedData = null, timeoutMs = 5_000) {
+async function inspectDetailsTableOnce(page, expectedRows, expectedData = null) {
   const drawer = page.locator('.el-drawer:visible').first();
   const drawerVisible = await drawer.count() > 0 && await drawer.isVisible().catch(() => false);
   const table = drawer.locator('.el-table-v2').first();
@@ -556,6 +556,35 @@ async function inspectDetailsTable(page, expectedRows, expectedData = null, time
     rowCountMatches,
     ...evidence,
   };
+}
+
+function mountedTableEvidenceComplete(result) {
+  return result?.drawerVisible === true
+    && result?.tableVisible === true
+    && result?.rowCountMatches === true
+    && result?.displayedValues === true
+    && result?.concreteValueVisible === true;
+}
+
+async function retryMountedTableEvidence(sample, { timeoutMs = 5_000, sleep = async () => {} } = {}) {
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  let attempts = 0;
+  let latest = null;
+  while (Date.now() <= deadline) {
+    attempts += 1;
+    latest = await sample();
+    if (mountedTableEvidenceComplete(latest)) return { ...latest, sampleAttempts: attempts };
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+  }
+  return { ...(latest || {}), sampleAttempts: attempts };
+}
+
+async function inspectDetailsTable(page, expectedRows, expectedData = null, timeoutMs = 5_000) {
+  return retryMountedTableEvidence(
+    () => inspectDetailsTableOnce(page, expectedRows, expectedData),
+    { timeoutMs, sleep: (delay) => page.waitForTimeout(delay) },
+  );
 }
 
 async function captureBasicDetails(page, card, candidate, expected, deadline = Date.now() + DETAIL_RESPONSE_TIMEOUT_MS) {
@@ -617,7 +646,7 @@ async function capturePointDetails(page, candidate, expected, deadline = Date.no
     const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: Math.max(1_000, Math.min(3_500, deadline - Date.now())) }).catch(() => null);
     await page.mouse.click(coordinate.x, coordinate.y);
     const response = await responsePromise;
-    if (!response) { attemptEvidence.push({ index, response: false }); continue; }
+    if (!response) { attemptEvidence.push({ index, response: false, result: 'UNVERIFIED', reason: 'no factory-details response within the bounded click wait' }); continue; }
     const body = await response.json().catch(() => null);
     const request = requestJson(response.request());
     const assessment = assessDetailsResponse({ status: response.status(), request, body, expected, point });
@@ -635,7 +664,15 @@ async function capturePointDetails(page, candidate, expected, deadline = Date.no
         ? 'Point-filtered API response passed but mounted drawer, virtual-table row count, or concrete cell evidence was incomplete'
         : 'Point-filtered API response passed after geometry fallback; a mounted ECharts convertToPixel coordinate was unavailable';
     }
-    attemptEvidence.push({ index, response: true, status: response.status(), result: assessment.result, rowCount: assessment.rowCount, total: assessment.total });
+    attemptEvidence.push({
+      index,
+      response: true,
+      status: response.status(),
+      result: assessment.result,
+      rowCount: assessment.rowCount,
+      total: assessment.total,
+      reason: assessment.reason || assessment.ui?.valueEvidenceReason || Object.keys(assessment.checks || {}).filter((key) => assessment.checks[key] === false).join(',') || 'point evidence did not pass',
+    });
     if (assessment.result === 'PASS') {
       await page.locator('.el-drawer:visible').first().waitFor({ timeout: 10_000 }).catch(() => {});
       return { ...assessment, candidateId: candidate.id, interaction: 'mounted-canvas-mouse-click', attempts: attemptEvidence };
@@ -766,6 +803,9 @@ module.exports = {
         detailBasicReason: String(basic.reason || basic.ui?.valueEvidenceReason || 'none'),
         detailPointResult: String(point.result || 'UNVERIFIED'),
         detailPointReason: String(point.reason || point.ui?.valueEvidenceReason || 'none'),
+        detailPointAttempts: Array.isArray(point.attempts)
+          ? point.attempts.map((attempt) => `#${attempt.index}:${attempt.result}:${attempt.reason || 'unknown'}`).join('|')
+          : 'none',
         candidateSummary: candidateChecks.map((item) => `${item.candidateId}:${item.result}:cells=${item.displayedValues ? 'visible' : 'missing'}:concrete=${item.concreteValueVisible ? 'yes' : 'no'}`).join('|') || 'none',
         details: { basic, pagination, point, candidateId: selectedCandidate?.candidate.id || null, candidateChecks },
         screenshots: [await context.screenshot('smartbi-factory-business'), await context.screenshot('smartbi-factory-details')],
@@ -785,6 +825,8 @@ module.exports.selectEChartsAssetUrls = selectEChartsAssetUrls;
 module.exports.mountedEChartsPointCoordinate = mountedEChartsPointCoordinate;
 module.exports.readVirtualTableMetrics = readVirtualTableMetrics;
 module.exports.detailCellEvidence = detailCellEvidence;
+module.exports.mountedTableEvidenceComplete = mountedTableEvidenceComplete;
+module.exports.retryMountedTableEvidence = retryMountedTableEvidence;
 module.exports.selectPointCandidate = selectPointCandidate;
 module.exports.estimateVirtualRowCount = estimateVirtualRowCount;
 module.exports.availablePointAttempts = availablePointAttempts;

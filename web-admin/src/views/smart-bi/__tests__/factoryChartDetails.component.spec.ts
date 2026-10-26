@@ -47,11 +47,12 @@ describe('FactoryChartDetails mounted workflow', () => {
 
   it('renders mounted virtual-table cells from row values including zero, null, and structured Chinese data', async () => {
     const columns = ['批次', '数量', '备注', '空值'];
-    h.get.mockResolvedValueOnce(page(1, [{ 批次: 'B1', 数量: 0, 备注: { 来源: '业务系统' }, 空值: null }], false, columns, 1));
+    h.get.mockResolvedValueOnce(page(1, [{ 批次: 'd273577c-b6f8-4d29-9a99-eff93c012e23', 数量: 0, 备注: { 来源: '业务系统' }, 空值: null }], false, columns, 1));
     const wrapper = mount(FactoryChartDetails, { props: { modelValue: true, candidate }, global: { plugins: [ElementPlus] } });
     await flushPromises();
     const tableText = wrapper.find('.el-table-v2').text();
-    expect(tableText).toContain('B1');
+    expect(tableText).toContain('d273577c-b6f8-4d29-9a99-eff93c012e23');
+    expect(wrapper.findAll('.el-table-v2__cell-text').map((cell) => cell.attributes('title'))).toContain('d273577c-b6f8-4d29-9a99-eff93c012e23');
     expect(tableText).toContain('0');
     expect(tableText).toContain('{"来源":"业务系统"}');
     expect(tableText).toContain('—');

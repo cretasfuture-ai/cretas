@@ -31,6 +31,8 @@ const {
   echartsAssetUrl,
   estimateVirtualRowCount,
   mountedEChartsPointCoordinate,
+  mountedTableEvidenceComplete,
+  retryMountedTableEvidence,
   readVirtualTableMetrics,
   selectEChartsAssetUrls,
   selectPointCandidate,
@@ -160,4 +162,18 @@ test('mounted ECharts lookup filters resources in Node and wires seriesIndex int
   assert.equal(calls.length, 2);
   assert.deepEqual(callbackTarget.resources, ['https://smartbi.example.test/assets/echarts-a.js', 'https://smartbi.example.test/assets/echarts-c.js']);
   assert.equal(callbackTarget.seriesIndex, 1);
+});
+
+test('mounted table evidence retries a delayed virtual DOM before deciding', async () => {
+  let samples = 0;
+  const complete = { drawerVisible: true, tableVisible: true, rowCountMatches: true, displayedValues: true, concreteValueVisible: true };
+  const delayed = await retryMountedTableEvidence(async () => {
+    samples += 1;
+    return samples === 1 ? { drawerVisible: true, tableVisible: true, rowCountMatches: false, displayedValues: false, concreteValueVisible: false } : complete;
+  }, { timeoutMs: 100, sleep: async () => {} });
+  assert.equal(delayed.sampleAttempts, 2);
+  assert.equal(mountedTableEvidenceComplete(delayed), true);
+
+  const neverMounted = await retryMountedTableEvidence(async () => ({ drawerVisible: true, tableVisible: true, rowCountMatches: true, displayedValues: false, concreteValueVisible: false }), { timeoutMs: 1, sleep: async () => {} });
+  assert.equal(mountedTableEvidenceComplete(neverMounted), false);
 });
