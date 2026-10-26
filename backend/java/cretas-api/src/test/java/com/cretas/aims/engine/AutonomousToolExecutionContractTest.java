@@ -65,7 +65,7 @@ class AutonomousToolExecutionContractTest {
 
     @BeforeEach void tools() {
         when(issuer.consumeForScheduledFire(any(), any(), any())).thenAnswer(call ->
-                grants.consume(call.getArgument(0), call.getArgument(1), call.getArgument(2)));
+                grants.consume(call.getArgument(0), call.getArgument(1), call.getArgument(2), grantor -> true));
         when(registry.getExecutor("material_expired_query")).thenReturn(Optional.of(readTool));
         when(registry.getExecutor("dictionary_add")).thenReturn(Optional.of(writeTool));
         when(registry.getExecutor("legacy_tool")).thenReturn(Optional.of(undeclaredTool));
@@ -162,7 +162,7 @@ class AutonomousToolExecutionContractTest {
         assertThat(undeclared.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
         verify(grants).consume(org.mockito.ArgumentMatchers.argThat(binding -> "78".equals(binding.sourceRef())
                 && "dictionary_add".equals(binding.toolName()) && Long.valueOf(42L).equals(binding.runAsUserId())
-                && binding.configRevision() != null), eq(PLANNED), any());
+                && binding.configRevision() != null), eq(PLANNED), any(), any());
         assertThat(foreign.getLastExecutionStatus()).isEqualTo("CONFIG_INVALID");
     }
 
@@ -240,7 +240,7 @@ class AutonomousToolExecutionContractTest {
 
     @Test void grantedWriteReachesTheGatewayWithAPerRunProofAndIdempotencyKey() {
         when(writeTool.getVersion()).thenReturn("1.0.0");
-        when(grants.consume(any(), any(), any())).thenAnswer(call -> Optional.of(new AutonomousGrantService.Consumption(
+        when(grants.consume(any(), any(), any(), any())).thenAnswer(call -> Optional.of(new AutonomousGrantService.Consumption(
                 "g1", "autonomous:g1:" + call.getArgument(1), "1.0.0", false)));
         when(previewTokens.createBoundToken(any())).thenAnswer(call -> com.cretas.aims.entity.intent.IntentPreviewToken
                 .builder().token("tok").commandDigest("digest").build());
@@ -294,7 +294,7 @@ class AutonomousToolExecutionContractTest {
 
     @Test void replayedSlotNeverReachesTheGatewayAndReportsTheRecordedOutcome() {
         when(writeTool.getVersion()).thenReturn("1.0.0");
-        when(grants.consume(any(), any(), any())).thenReturn(Optional.of(
+        when(grants.consume(any(), any(), any(), any())).thenReturn(Optional.of(
                 new AutonomousGrantService.Consumption("g1", "autonomous:g1:slot:1", "1.0.0", true)));
         com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord succeeded =
                 mock(com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.class);
@@ -316,7 +316,7 @@ class AutonomousToolExecutionContractTest {
 
     @Test void aReplayReportsTheOutcomeTheFirstRunRecordedBeforeAskingTheLedger() {
         when(writeTool.getVersion()).thenReturn("1.0.0");
-        when(grants.consume(any(), any(), any())).thenReturn(Optional.of(
+        when(grants.consume(any(), any(), any(), any())).thenReturn(Optional.of(
                 new AutonomousGrantService.Consumption("g1", "autonomous:g1:slot:1", "1.0.0", true)));
         when(issuer.recordedOutcome("g1", "slot:1")).thenReturn(Optional.of("DENIED"));
         var binding = SchedulerGrantBinding.of(schedule(78L, "dictionary_add", Map.of(), 42L), "1.0.0", new ObjectMapper());
@@ -339,7 +339,7 @@ class AutonomousToolExecutionContractTest {
 
     @Test void aReplayedSlotDoesNotOverwriteTheStatusTheExecutingInstanceRecorded() throws Exception {
         when(writeTool.getVersion()).thenReturn("1.0.0");
-        when(grants.consume(any(), any(), any())).thenReturn(Optional.of(
+        when(grants.consume(any(), any(), any(), any())).thenReturn(Optional.of(
                 new AutonomousGrantService.Consumption("g1", "autonomous:g1:slot:1", "1.0.0", true)));
         when(grants.gatewayRecord(any(), any(), any(), any())).thenReturn(Optional.empty());
         FactorySchedulerConfig config = schedule(83L, "dictionary_add", Map.of(), 42L);

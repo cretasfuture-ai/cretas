@@ -31,7 +31,9 @@ import org.springframework.web.bind.annotation.RestController;
  * on every call (active, same factory, factory_super_admin now; the JWT role claim alone is not
  * trusted). A factory super admin holds every permission by the existing semantics, so grants are
  * stopped by revoking them, deactivating the account or changing its role, not by permission
- * overrides. Issuing also requires the grantor to be the config's run-as user, a write tool whose
+ * overrides; the grantor's status and role are re-read from the database at every scheduled
+ * consumption ({@link AutonomousGrantIssuer#consumeForScheduledFire}), so the next fire after such a
+ * change is refused. Issuing also requires the grantor to be the config's run-as user, a write tool whose
  * runtime policy admits SCHEDULER, no other active grant for the same binding, and binds the grant
  * to the stored parameters, config revision and the tool's current descriptor version.
  */

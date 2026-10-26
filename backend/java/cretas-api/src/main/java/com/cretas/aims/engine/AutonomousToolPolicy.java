@@ -33,7 +33,6 @@ public final class AutonomousToolPolicy {
     private AutonomousToolPolicy() {
     }
 
-    /** @return null when allowed; otherwise a reason that names the tool or the offending key. */
     /** Identity keys only: a write tool may be scheduled, each of its runs then needs a delegated grant. */
     public static String identityRejection(Map<String, Object> params) {
         if (params == null) return null;
@@ -41,6 +40,7 @@ public final class AutonomousToolPolicy {
                 .map(key -> IDENTITY_PREFIX + key).orElse(null);
     }
 
+    /** @return null when allowed; otherwise a reason that names the tool or the offending key. */
     public static String rejection(String toolName, ToolExecutor tool, Map<String, Object> params) {
         if (params != null) {
             String key = params.keySet().stream().filter(IDENTITY_KEYS::contains).sorted().findFirst().orElse(null);
@@ -80,16 +80,16 @@ public final class AutonomousToolPolicy {
         static final RuntimeToolDescriptorRegistry REGISTRY = RuntimeToolDescriptorRegistry.loadDefault();
     }
 
-    /**
-     * The factory user saving an enabled schedule/chain becomes its run-as user. A platform
-     * admin or a user of another factory cannot: there is no factory account to run as, and the
-     * gateway only accepts this factory's users.
-     */
     /** The request's actor id when there is one (recorded as who revoked grants on a config edit). */
     public static Long currentActorIdOrNull() {
         return AuthenticatedActor.fromCurrentRequest().map(AuthenticatedActor::id).orElse(null);
     }
 
+    /**
+     * The factory user saving an enabled schedule becomes its run-as user. A platform admin or a
+     * user of another factory cannot: there is no factory account to run as, and the gateway only
+     * accepts this factory's users.
+     */
     public static Long requireRunAsUser(String factoryId) {
         AuthenticatedActor actor = AuthenticatedActor.fromCurrentRequest()
                 .orElseThrow(() -> new BusinessException(401, "无法确认是谁启用了这项自动任务，请重新登录"));

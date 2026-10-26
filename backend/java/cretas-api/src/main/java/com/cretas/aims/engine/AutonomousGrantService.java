@@ -16,6 +16,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Predicate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -72,9 +73,14 @@ public class AutonomousGrantService {
     /**
      * Joins the caller's transaction: a scheduled fire consumes inside the issuer's single transaction
      * together with the config lock and the RUNNING mark, so none of them can commit without the others.
+     *
+     * <p>A new run is only charged to a grant whose grantor still passes {@code grantorEntitled} (the
+     * issuer checks the grantor is still this factory's super admin). A replay is reported regardless:
+     * it never executes again.
      */
     @Transactional(propagation = Propagation.REQUIRED)
-    public Optional<Consumption> consume(Binding binding, String runKey, LocalDateTime now) {
+    public Optional<Consumption> consume(Binding binding, String runKey, LocalDateTime now,
+            Predicate<Long> grantorEntitled) {
         List<AutonomousToolGrant> bound = grants.lockBoundGrants(binding.factoryId(), binding.sourceType(),
                 binding.sourceRef(), binding.toolName(), binding.runAsUserId(), binding.parametersDigest());
         for (AutonomousToolGrant grant : bound) {
@@ -86,7 +92,8 @@ public class AutonomousGrantService {
             }
         }
         for (AutonomousToolGrant grant : bound) {
-            if (grant.usableFor(binding.configRevision(), binding.descriptorVersion(), now)) {
+            if (grant.usableFor(binding.configRevision(), binding.descriptorVersion(), now)
+                    && grantorEntitled.test(grant.getGrantedBy())) {
                 grant.consumeOne();
                 AutonomousToolGrantRun run = runs.save(
                         AutonomousToolGrantRun.record(UUID.randomUUID().toString(), grant.getId(), runKey,

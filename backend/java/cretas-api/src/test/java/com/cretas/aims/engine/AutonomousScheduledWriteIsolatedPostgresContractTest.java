@@ -120,6 +120,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
 
     private DynamicSchedulerService instanceB;
     private Long operator;
+    private Long grantor;
     private Long target;
     private Long bystander;
     private Long configId;
@@ -142,6 +143,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
             factory.setAiWeeklyQuota(20);
             entityManager.persist(factory);
             operator = user("iso-hr", "hr_admin");
+            grantor = user("iso-admin", "factory_super_admin");
             target = user("iso-target", "operator");
             bystander = user("iso-bystander", "operator");
         });
@@ -501,6 +503,31 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(text("SELECT last_execution_error FROM factory_scheduler_configs")).contains("no usable grant");
     }
 
+    @Test void aGrantorNoLongerSuperAdminOrDeactivatedStopsTheGrantAtConsumption() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        String grantId = grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE users SET role_code = 'hr_admin' WHERE id = :id").setParameter("id", grantor).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T04:00:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE users SET role_code = 'factory_super_admin', is_active = false WHERE id = :id")
+                .setParameter("id", grantor).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T04:01:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 0 AND id = '" + grantId + "'")).isEqualTo(1);
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(active(target)).isTrue();
+
+        // Positive control: the same grant spends again once the grantor is restored.
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery(
+                "UPDATE users SET is_active = true WHERE id = :id").setParameter("id", grantor).executeUpdate());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-24T04:02:00Z")).isEqualTo("SUCCESS");
+        assertThat(count("autonomous_tool_grant_runs")).isEqualTo(1);
+        assertThat(active(target)).isFalse();
+    }
+
     @Test void runAsUserWhosePermissionWasRevokedIsDeniedByTheGatewayAndAudited() throws Exception {
         FactorySchedulerConfig config = scheduleSoon();
         grant(config, 3);
@@ -531,7 +558,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         ToolExecutor tool = toolRegistry.getExecutor(TOOL).orElseThrow();
         LocalDateTime now = LocalDateTime.now();
         return grants.issue(SchedulerGrantBinding.of(config, tool.getVersion(), objectMapper), maxRuns,
-                now.plusDays(1), operator, now).getId();
+                now.plusDays(1), grantor, now).getId();
     }
 
     private static void await(BooleanSupplier condition, int seconds) throws InterruptedException {

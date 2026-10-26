@@ -153,7 +153,8 @@ class AutonomousGrantIssuePostgresContractTest {
         assertThat(single("SELECT granted_by FROM autonomous_tool_grants WHERE id = '" + grantId + "'")).isEqualTo(admin);
         entityManager.clear();
         FactorySchedulerConfig fired = schedules.findById(configId).orElseThrow();
-        assertThat(grants.consume(SchedulerGrantBinding.of(fired, "2.0.0", objectMapper), "slot:1", LocalDateTime.now()))
+        assertThat(grants.consume(SchedulerGrantBinding.of(fired, "2.0.0", objectMapper), "slot:1",
+                LocalDateTime.now(), grantor -> true))
                 .hasValueSatisfying(consumption -> assertThat(consumption.grantId()).isEqualTo(grantId));
     }
 
@@ -185,7 +186,7 @@ class AutonomousGrantIssuePostgresContractTest {
         entityManager.clear();
         FactorySchedulerConfig restored = schedules.findById(configId).orElseThrow();
         assertThat(grants.consume(SchedulerGrantBinding.of(restored, "2.0.0", objectMapper), "slot:1",
-                LocalDateTime.now())).isEmpty();
+                LocalDateTime.now(), grantor -> true)).isEmpty();
 
         // Disabling revokes a fresh grant as well.
         actor(admin);

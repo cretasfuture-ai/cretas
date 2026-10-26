@@ -23,7 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Who may manage grants: the request's factory user, re-read from the database and locked for
  * the decision (active, same factory, role factory_super_admin now). A factory super admin holds
  * every permission by the existing permission semantics, so permission overrides cannot take this
- * away; what stops a grantor is revoking the grant, deactivating the account or changing its role.
+ * away; what stops a grantor is revoking the grant, deactivating the account or changing its role
+ * (re-checked at every scheduled consumption, see {@link #consumeForScheduledFire}).
  *
  * <p>Issuing locks the grantor's user row (shared) and the config row (exclusive) before checking,
  * so a concurrent deactivation, role change or config edit commits either before the check (and is
@@ -99,6 +100,12 @@ public class AutonomousGrantIssuer {
      * consumed run beside a config still showing the previous slot. An edit, disable or delete of the
      * config either committed before (and is seen here) or waits for this commit. A replay consumes
      * nothing and leaves the config as the executing instance left it. The tool runs outside.
+     *
+     * <p>A new run is only charged to a grant whose grantor is, now, an active user of this factory
+     * with role factory_super_admin; losing that role or being deactivated stops the grantor's grants
+     * here. The grantor row is read without a lock (issuing locks user then config; taking them in the
+     * other order here could deadlock), so a role change committing during this transaction may miss
+     * this one run, which the gateway still checks against the run-as user's current permissions.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<AutonomousGrantService.Consumption> consumeForScheduledFire(
@@ -120,7 +127,8 @@ public class AutonomousGrantIssuer {
         if (!current.equals(fireBinding)) {
             return Optional.empty();
         }
-        Optional<AutonomousGrantService.Consumption> consumed = grants.consume(current, runKey, now);
+        Optional<AutonomousGrantService.Consumption> consumed = grants.consume(current, runKey, now,
+                grantorId -> stillAdmin(config.getFactoryId(), grantorId));
         if (consumed.isPresent() && !consumed.get().replay()) {
             entityManager.createQuery("update FactorySchedulerConfig c set c.lastExecutionStatus = 'RUNNING',"
                             + " c.lastExecutedAt = :now, c.lastExecutionError = null where c.id = :id")
@@ -178,6 +186,12 @@ public class AutonomousGrantIssuer {
                         + " and g.sourceRef = :sourceRef and g.revokedAt is null")
                 .setParameter("now", now).setParameter("by", by).setParameter("factoryId", factoryId)
                 .setParameter("sourceRef", String.valueOf(configId)).executeUpdate();
+    }
+
+    private boolean stillAdmin(String factoryId, Long grantorId) {
+        User grantor = grantorId == null ? null : entityManager.find(User.class, grantorId);
+        return grantor != null && Boolean.TRUE.equals(grantor.getIsActive()) && factoryId.equals(grantor.getFactoryId())
+                && GRANT_ROLE.equalsIgnoreCase(grantor.getRoleCode());
     }
 
     private static User checkedAdmin(String factoryId, User user) {

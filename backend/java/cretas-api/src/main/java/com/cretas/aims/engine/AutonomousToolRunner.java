@@ -126,8 +126,9 @@ public class AutonomousToolRunner {
             if (consumed.isEmpty()) {
                 return new Outcome(GRANT_DENIED, "no usable grant for " + toolName + " (scheduler config "
                         + grantBinding.sourceRef() + "): missing, revoked, expired, exhausted, or issued for another"
-                        + " config revision, tool version, user or parameters, or the config was disabled or"
-                        + " changed after this fire read it", null);
+                        + " config revision, tool version, user or parameters, its grantor is no longer this"
+                        + " factory's super admin, or the config was disabled or changed after this fire read it",
+                        null);
             }
             if (consumed.get().replay()) {
                 // The same slot again (second instance, duplicate fire): never execute a second time,

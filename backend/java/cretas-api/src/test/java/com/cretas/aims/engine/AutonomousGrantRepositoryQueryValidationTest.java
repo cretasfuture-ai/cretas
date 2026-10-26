@@ -75,8 +75,8 @@ class AutonomousGrantRepositoryQueryValidationTest {
 
     @Test void oneRunKeyConsumesOnceAndThenReplaysTheSameIdempotencyKey() {
         AutonomousToolGrant grant = issue(BOUND, 5);
-        var first = grants.consume(BOUND, "fire:1", now).orElseThrow();
-        var again = grants.consume(BOUND, "fire:1", now).orElseThrow();
+        var first = grants.consume(BOUND, "fire:1", now, grantor -> true).orElseThrow();
+        var again = grants.consume(BOUND, "fire:1", now, grantor -> true).orElseThrow();
 
         assertThat(first.replay()).isFalse();
         assertThat(again.replay()).isTrue();
@@ -87,15 +87,15 @@ class AutonomousGrantRepositoryQueryValidationTest {
 
     @Test void toolUpgradeOrConfigEditStopsNewRunsButAConsumedRunStillReplaysWithItsVersion() {
         issue(BOUND, 5);
-        var first = grants.consume(BOUND, "fire:1", now).orElseThrow();
+        var first = grants.consume(BOUND, "fire:1", now, grantor -> true).orElseThrow();
         Binding upgraded = with(BOUND, null, "3.0.0");
         Binding edited = with(BOUND, "rev-b", null);
 
         // New runs under an upgraded tool or an edited config find no usable grant.
-        assertThat(grants.consume(upgraded, "fire:2", now)).isEmpty();
-        assertThat(grants.consume(edited, "fire:2", now)).isEmpty();
+        assertThat(grants.consume(upgraded, "fire:2", now, grantor -> true)).isEmpty();
+        assertThat(grants.consume(edited, "fire:2", now, grantor -> true)).isEmpty();
         // The run already consumed replays, naming the version the first attempt used.
-        var replay = grants.consume(upgraded, "fire:1", now).orElseThrow();
+        var replay = grants.consume(upgraded, "fire:1", now, grantor -> true).orElseThrow();
         assertThat(first.descriptorVersion()).isEqualTo(V1);
         assertThat(replay.replay()).isTrue();
         assertThat(replay.descriptorVersion()).isEqualTo(V1);
@@ -119,23 +119,36 @@ class AutonomousGrantRepositoryQueryValidationTest {
 
     @Test void distinctRunKeysStopAtTheBudget() {
         AutonomousToolGrant grant = issue(BOUND, 2);
-        assertThat(grants.consume(BOUND, "fire:1", now)).isPresent();
-        assertThat(grants.consume(BOUND, "fire:2", now)).isPresent();
-        assertThat(grants.consume(BOUND, "fire:3", now)).isEmpty();
+        assertThat(grants.consume(BOUND, "fire:1", now, grantor -> true)).isPresent();
+        assertThat(grants.consume(BOUND, "fire:2", now, grantor -> true)).isPresent();
+        assertThat(grants.consume(BOUND, "fire:3", now, grantor -> true)).isEmpty();
         // An already consumed run key still replays after the budget is used up.
-        assertThat(grants.consume(BOUND, "fire:2", now)).hasValueSatisfying(c -> assertThat(c.replay()).isTrue());
+        assertThat(grants.consume(BOUND, "fire:2", now, grantor -> true)).hasValueSatisfying(c -> assertThat(c.replay()).isTrue());
         assertThat(repository.findById(grant.getId()).orElseThrow().getUsedRuns()).isEqualTo(2);
+    }
+
+    @Test void aGrantWhoseGrantorFailsTheCheckChargesNoNewRunButStillReplays() {
+        AutonomousToolGrant grant = issue(BOUND, 5);
+        var first = grants.consume(BOUND, "fire:1", now, grantor -> true).orElseThrow();
+        List<Long> asked = new java.util.ArrayList<>();
+
+        assertThat(grants.consume(BOUND, "fire:2", now, grantor -> asked.add(grantor) && false)).isEmpty();
+        assertThat(asked).containsExactly(7L);
+        // A run already consumed is only reported, never executed again, whatever the grantor's status.
+        assertThat(grants.consume(BOUND, "fire:1", now, grantor -> false))
+                .hasValueSatisfying(c -> assertThat(c.idempotencyKey()).isEqualTo(first.idempotencyKey()));
+        assertThat(repository.findById(grant.getId()).orElseThrow().getUsedRuns()).isEqualTo(1);
     }
 
     @Test void revokedOrExpiredGrantsAreNotConsumed() {
         AutonomousToolGrant revoked = issue(BOUND, 5);
         assertThat(grants.revoke("F1", revoked.getId(), 7L, now)).isPresent();
-        assertThat(grants.consume(BOUND, "fire:1", now)).isEmpty();
+        assertThat(grants.consume(BOUND, "fire:1", now, grantor -> true)).isEmpty();
 
         clean();
         AutonomousToolGrant live = issue(BOUND, 5);
-        assertThat(grants.consume(BOUND, "fire:1", live.getExpiresAt())).isEmpty();
-        assertThat(grants.consume(BOUND, "fire:1", live.getExpiresAt().minusNanos(1000))).isPresent();
+        assertThat(grants.consume(BOUND, "fire:1", live.getExpiresAt(), grantor -> true)).isEmpty();
+        assertThat(grants.consume(BOUND, "fire:1", live.getExpiresAt().minusNanos(1000), grantor -> true)).isPresent();
     }
 
     @Test void grantOnlyAppliesToItsExactFactorySourceToolUserAndParameters() {
@@ -147,9 +160,9 @@ class AutonomousGrantRepositoryQueryValidationTest {
                 new Binding("F1", "SCHEDULER", "78", "product_create", 7L, DIGEST, REV, V1),
                 new Binding("F1", "SCHEDULER", "78", "user_disable", 8L, DIGEST, REV, V1),
                 new Binding("F1", "SCHEDULER", "78", "user_disable", 7L, "digest-b", REV, V1))) {
-            assertThat(grants.consume(other, "fire:1", now)).as(other.toString()).isEmpty();
+            assertThat(grants.consume(other, "fire:1", now, grantor -> true)).as(other.toString()).isEmpty();
         }
-        assertThat(grants.consume(BOUND, "fire:1", now)).isPresent();
+        assertThat(grants.consume(BOUND, "fire:1", now, grantor -> true)).isPresent();
     }
 
     @Test void revokeAndListAreScopedToTheFactory() {
