@@ -34,7 +34,9 @@ public class LlmEgressGuard {
 
     /** 没有 Spring 容器时 (单测直接 new 被测类) 的默认实例: 不查保密产品名, 其余照常脱敏。 */
     public static LlmEgressGuard standalone() {
-        return new LlmEgressGuard(new ObjectMapper(), null);
+        // 与 Spring Boot 注入的 ObjectMapper 一致: 认 java.time, 时间写成 ISO 字符串 (业务记录里常有 LocalDateTime)
+        return new LlmEgressGuard(new ObjectMapper().findAndRegisterModules()
+                .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS), null);
     }
 
     /** 结构化结果 (查询记录 / 工具输出)。 */
