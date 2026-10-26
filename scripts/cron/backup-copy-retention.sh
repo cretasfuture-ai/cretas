@@ -57,8 +57,8 @@ COPY_SCHEMA_RE='^(tenant_purge_[0-9]+|f006_clear_[0-9]+|f006_clean_[0-9]{8}|lega
 COPY_TABLE_RE='^(backup_|repair_backup_|bak_|mock_rest_bak_)[a-z0-9_]*[0-9]{8}[a-z0-9_]*$'
 DAILY_BACKUP_RE='^(cretas_prod_db|smartbi_prod_db|cretas_db_test)_[0-9]{8}_[0-9]{6}\.sql\.gz$'
 WWW_BACKUP_DIR_RE='^(pre-[a-z0-9-]+|prod-clean|[a-z0-9]+-backup)-[0-9]{8}$'
-# backups 顶层的文件只认这些扩展名 (允许名单)
-BACKUP_FILE_RE='\.(dump|sql|sql\.gz|csv|csv\.gz|json|tar|tar\.gz|tgz|zip)$'
+# backups 顶层的文件只认这些扩展名 (允许名单; ⛔ 不收 .json —— 密钥 / 配置常存成 json)
+BACKUP_FILE_RE='\.(dump|sql|sql\.gz|csv|csv\.gz|tar|tar\.gz|tgz|zip)$'
 
 mode="" expect="" auto=0
 while [ $# -gt 0 ]; do

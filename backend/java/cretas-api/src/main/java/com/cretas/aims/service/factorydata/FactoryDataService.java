@@ -582,16 +582,56 @@ public class FactoryDataService {
                 try {
                     return work.get();
                 } finally {
-                    try (PreparedStatement ps = conn.prepareStatement("SELECT pg_advisory_unlock(hashtextextended(?, 0))")) {
-                        ps.setString(1, key);
-                        ps.execute();
-                    }
+                    unlock(conn, key);
                 }
             } finally {
                 conn.setAutoCommit(auto);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("工厂操作锁失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 解锁失败时 ⛔ 不让这条连接带着会话锁回到连接池 (那样该厂之后的操作都会 409): 直接 abort, 连接池会丢弃它。
+     * 也 ⛔ 不让解锁的错误盖掉业务本身的错误: 只记日志。
+     */
+    private static void unlock(Connection conn, String key) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT pg_advisory_unlock(hashtextextended(?, 0))")) {
+            ps.setString(1, key);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && rs.getBoolean(1)) return;
+            }
+            log.error("factory-data lock {} was not held at unlock time", key);
+        } catch (SQLException e) {
+            log.error("factory-data unlock failed for {}, aborting the connection", key, e);
+        }
+        try {
+            conn.abort(Runnable::run);
+        } catch (SQLException e) {
+            log.error("factory-data: abort after failed unlock also failed", e);
+        }
+    }
+
+    /** 删除工厂主记录 (所有库复核通过之后的最后一步)。必须恰好删掉 1 行。 */
+    void deleteFactoryRoot(String factoryId) {
+        try (Connection conn = cretasDataSource.getConnection()) {
+            boolean auto = conn.getAutoCommit();
+            conn.setAutoCommit(false);
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM " + FactoryDataScopeResolver.q(schema)
+                    + ".factories WHERE id = ?")) {
+                ps.setString(1, factoryId);
+                int n = ps.executeUpdate();
+                if (n != 1) throw new IllegalStateException("工厂主记录删除 " + n + " 行 (应为 1)");
+                conn.commit();
+            } catch (SQLException | RuntimeException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(auto);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("工厂主记录删除失败: " + e.getMessage(), e);
         }
     }
 

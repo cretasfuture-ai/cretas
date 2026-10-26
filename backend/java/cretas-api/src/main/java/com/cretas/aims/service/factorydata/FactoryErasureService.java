@@ -60,6 +60,8 @@ public class FactoryErasureService {
     /** SmartBI 的 LLM 外发审计表是只追加的 (smartbi_user 没有 DELETE), 经专用函数删本厂行。 */
     static final String LLM_EGRESS_AUDIT = "smart_bi_llm_egress_audit";
     static final String LLM_EGRESS_ERASE_FUNCTION = "factory_erase_llm_egress_audit";
+    /** SmartBI 定义者函数: 库里出现过的全部工厂编号 (迁移 V20261101_19)。 */
+    static final String TENANT_IDS_FUNCTION = "factory_erasure_tenant_ids";
 
     public record ErasureRequestBody(String confirmFactoryId, Long exportRequestId, String applicant,
                                      String applicationEvidence, String verifiedBy, Boolean drill) {}
@@ -106,7 +108,8 @@ public class FactoryErasureService {
         }
         Row export = body.exportRequestId() == null ? null : ledger.find(body.exportRequestId()).orElse(null);
         if (export == null || export.type() != Type.EXPORT || export.status() != Status.SUCCEEDED
-                || !factoryId.equals(export.factoryId())) {
+                || !factoryId.equals(export.factoryId())
+                || !FactoryDataService.MANUAL_TRIGGER.equals(export.triggerSource())) {
             throw new BusinessException(409, "删除前必须先完成一次该厂的导出并交付工厂 (exportRequestId 无效)");
         }
         if (export.createdAt().isBefore(data.now().minusDays(EXPORT_MAX_AGE_DAYS))) {
@@ -141,8 +144,12 @@ public class FactoryErasureService {
             ledger.finish(id, Status.SUCCEEDED, toJson(summary), null, null, null);
         } catch (RuntimeException e) {
             // 申请没登记成功就不能让工厂停在停用状态 (否则没有有效申请, 也撤销不了)
-            data.setFactoryActive(factoryId, factory.isActive());
-            ledger.finish(id, Status.FAILED, toJson(summary), null, null, e.getMessage());
+            try {
+                data.setFactoryActive(factoryId, factory.isActive());
+                ledger.finish(id, Status.FAILED, toJson(summary), null, null, e.getMessage());
+            } catch (RuntimeException restore) {
+                e.addSuppressed(restore);
+            }
             throw e;
         }
         log.warn("factory-data erasure requested factoryId={} requestId={} notBefore={} drill={}",
@@ -212,6 +219,12 @@ public class FactoryErasureService {
                     if (!unregistered.isEmpty()) {
                         throw new BusinessException(409, db + " 库有不像副本的 schema 也存着该厂的行, 先查清: " + unregistered);
                     }
+                    List<String> stuck = undatedCopiesWithoutPrivilege(conn, data.schema(), factoryId);
+                    if (!stuck.isEmpty()) {
+                        throw new BusinessException(409, db + " 库这些副本里有该厂的行, 账号删不了、名字里又没有日期 (30 天清理认不出): "
+                                + stuck);
+                    }
+                    if (db == Database.SMARTBI) smartbiTenants(conn, data.schema());   // 函数缺失 ⇒ 这里就失败
                     requireDeletePrivileges(conn, data.schema(),
                             scope.nonEmpty().stream().filter(t -> t.category().erased()).toList());
                     return null;
@@ -226,14 +239,23 @@ public class FactoryErasureService {
             // 三步都提交之后, 在新的快照里把两个库再算一遍: 事务内的复核看不见期间别的会话写进来的行
             stage = "VERIFY";
             for (Database db : Database.values()) {
-                List<String> left = data.snapshot(db, conn -> FactoryDataScopeResolver
-                        .resolveVisible(conn, db, data.schema(), factoryId).nonEmpty().stream()
-                        .filter(t -> t.category().erased()).map(t -> t.table() + "(" + t.rows() + ")").toList());
+                List<String> left = data.snapshot(db, conn -> {
+                    List<String> l = new ArrayList<>(FactoryDataScopeResolver
+                            .resolveVisible(conn, db, data.schema(), factoryId).nonEmpty().stream()
+                            .filter(t -> t.category().erased() && t.category() != Category.FACTORY_ROOT)
+                            .map(t -> t.table() + "(" + t.rows() + ")").toList());
+                    FactoryDataService.copiesOutside(conn, data.schema(), factoryId).stream()
+                            .filter(c -> canDelete(conn, c.table())).forEach(c -> l.add(c.table() + "(" + c.rows() + ")"));
+                    return l;
+                });
                 if (!left.isEmpty()) throw new IllegalStateException(db + " 库删除提交后复核仍有本厂行: " + left);
             }
             if (!data.objectStore().list(factoryId + "/").isEmpty()) {
                 throw new IllegalStateException("删除提交后复核: OSS 前缀 " + factoryId + "/ 下又出现了对象");
             }
+            // 复核通过才删工厂主记录 (最后一步)
+            stage = "ROOT";
+            data.deleteFactoryRoot(factoryId);
             LocalDateTime done = data.now();
             Receipt receipt = new Receipt(id, factoryId, factory.name(), smartbi, attachments, cretas, done,
                     done.plusDays(7), done.plusDays(30));
@@ -311,7 +333,10 @@ public class FactoryErasureService {
         // 3) 多轮删除: 撞外键的留到下一轮 (不手写拓扑顺序)
         tenant(conn, db, factoryId);
         List<TableScope> pending = new ArrayList<>();
-        for (TableScope ts : target.nonEmpty()) if (ts.category().erased()) pending.add(ts);
+        // 工厂主记录不在这一步删: 留到所有库复核通过之后 (删了它, 复核失败时就再也预演 / 重试不了)
+        for (TableScope ts : target.nonEmpty()) {
+            if (ts.category().erased() && ts.category() != Category.FACTORY_ROOT) pending.add(ts);
+        }
         requireDeletePrivileges(conn, schema, pending);
         long deleted = 0;
         for (int pass = 1; !pending.isEmpty(); pass++) {
@@ -343,7 +368,8 @@ public class FactoryErasureService {
 
         // 5) 复核: 本厂要删的类别全部为 0; 其他工厂一行不少
         FactoryDataScope after = FactoryDataScopeResolver.resolveVisible(conn, db, schema, factoryId);
-        List<String> left = after.nonEmpty().stream().filter(t -> t.category().erased())
+        List<String> left = after.nonEmpty().stream()
+                .filter(t -> t.category().erased() && t.category() != Category.FACTORY_ROOT)
                 .map(t -> t.table() + "(" + t.rows() + ")").toList();
         if (!left.isEmpty()) throw new IllegalStateException(db + " 库删后仍有本厂行: " + left);
         Map<String, Long> othersAfter = others(FactoryDataScopeResolver.rowsPerFactory(conn, schema, tenants), factoryId);
@@ -358,6 +384,11 @@ public class FactoryErasureService {
 
     private long deleteOwned(Connection conn, String schema, TableScope ts, String factoryId) throws SQLException {
         if (LLM_EGRESS_AUDIT.equals(ts.table())) {
+            // 函数要求本事务的 app.factory_erasure 也等于这个工厂: 只有整厂删除会设它
+            try (PreparedStatement ps = conn.prepareStatement("SELECT set_config('app.factory_erasure', ?, true)")) {
+                ps.setString(1, factoryId);
+                ps.execute();
+            }
             try (PreparedStatement ps = conn.prepareStatement("SELECT " + q(schema) + "." + LLM_EGRESS_ERASE_FUNCTION + "(?)")) {
                 ps.setString(1, factoryId);
                 try (ResultSet rs = ps.executeQuery()) {
@@ -513,9 +544,39 @@ public class FactoryErasureService {
      */
     private Set<String> smartbiTenants(Connection conn, String schema) throws SQLException {
         Set<String> t = new java.util.TreeSet<>(data.knownFactoryIds());
-        FactoryDataScopeResolver.setTenant(conn, "");
-        t.addAll(FactoryDataScopeResolver.tenantValues(conn, schema));
+        // 严格行级安全的表在任何单一身份下都看不全, 工厂编号清单由定义者函数给 (只有编号, 不含行内容)
+        try (PreparedStatement ps = conn.prepareStatement("SELECT DISTINCT x FROM " + q(schema) + "." + TENANT_IDS_FUNCTION + "() x");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) t.add(rs.getString(1));
+        } catch (SQLException e) {
+            throw new BusinessException(503, "SmartBI 库缺少函数 " + TENANT_IDS_FUNCTION
+                    + "() (迁移 V20261101_19), 无法做完整的阴性对照: " + e.getMessage());
+        }
         return t;
+    }
+
+    /** 副本里有该厂的行、账号删不了、schema 名字里又没有 YYYYMMDD (30 天清理认不出日期) ⇒ 永远清不掉。 */
+    private static List<String> undatedCopiesWithoutPrivilege(Connection conn, String schema, String factoryId)
+            throws SQLException {
+        List<String> out = new ArrayList<>();
+        for (FactoryDataService.CopyCount c : FactoryDataService.copiesOutside(conn, schema, factoryId)) {
+            String copySchema = c.table().split("\\.", 2)[0];
+            if (!canDelete(conn, c.table()) && !NAME_DATE.matcher(copySchema).find()) out.add(c.table());
+        }
+        return out;
+    }
+
+    private static boolean canDelete(Connection conn, String schemaDotTable) {
+        String[] st = schemaDotTable.split("\\.", 2);
+        try (PreparedStatement ps = conn.prepareStatement("SELECT has_table_privilege(?, 'DELETE')")) {
+            ps.setString(1, q(st[0]) + "." + q(st[1]));
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getBoolean(1);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查删除权限失败: " + e.getMessage(), e);
+        }
     }
 
     private static Map<String, Long> others(Map<String, Long> perFactory, String factoryId) {

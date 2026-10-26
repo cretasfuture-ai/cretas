@@ -191,7 +191,7 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
 
     private Entry writeEntry(String path, Body body, boolean bom) throws IOException, SQLException {
         MessageDigest sha = sha256();
-        path = safeEntryPath(path);
+        path = uniquePath(safeEntryPath(path));
         zip.putNextEntry(new ZipEntry(path));
         CountingStream counting = new CountingStream(new NonClosing(zip));
         DigestOutputStream out = new DigestOutputStream(counting, sha);
@@ -233,6 +233,17 @@ public final class FactoryDataPackageWriter implements AutoCloseable {
             out.append(seg);
         }
         return out.toString();
+    }
+
+    private final java.util.Set<String> usedPaths = new java.util.HashSet<>();
+
+    /** 两个对象键规范化后可能撞成同一个条目名 (a//b 与 a/b): 后来的加 ~2、~3, ⛔ 不让整个导出因重名失败。 */
+    private String uniquePath(String path) {
+        if (usedPaths.add(path)) return path;
+        for (int i = 2; ; i++) {
+            String p = path + "~" + i;
+            if (usedPaths.add(p)) return p;
+        }
     }
 
     static MessageDigest sha256() {

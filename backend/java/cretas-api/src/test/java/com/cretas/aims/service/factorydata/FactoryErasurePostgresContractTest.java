@@ -83,7 +83,8 @@ class FactoryErasurePostgresContractTest {
         exec(smartbiAdmin, Files.readString(Path.of(
                 "../../python/smartbi/database/migrations/V20261101_19__factory_erasure_grants.sql"))
                 .replace("public.", schema + ".").replace("search_path = public", "search_path = " + schema));
-        exec(smartbiAdmin, "GRANT EXECUTE ON FUNCTION " + schema + ".factory_erase_llm_egress_audit(text) TO " + appRole + ";");
+        exec(smartbiAdmin, "GRANT EXECUTE ON FUNCTION " + schema + ".factory_erase_llm_egress_audit(text) TO " + appRole + ";"
+                + "GRANT EXECUTE ON FUNCTION " + schema + ".factory_erasure_tenant_ids() TO " + appRole + ";");
         smartbiApp = ds(url().replaceAll("/[^/?]+(\\?|$)", "/" + smartbiDb + "$1"), appRole, "x");
         store = new FactoryDataScopePostgresContractTest.FakeStore();
         store.put("cretas-media", FA + "/attachments/a.jpg", "A-PHOTO");
@@ -278,12 +279,15 @@ class FactoryErasurePostgresContractTest {
 
     @Test
     void linkRowThatAlsoReferencesAnotherFactoryBlocksErasure() throws Exception {
-        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30)");
+        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30);"
+                + "INSERT INTO " + schema + ".factory_links (id, from_factory, to_factory) VALUES (1, '" + FA + "', '" + FB + "')");
         FactoryErasureService erasure = erasure();
         long requestId = requestAndWait(erasure, true);
         var preview = data().preview(OPERATOR, FA);
         assertThat(preview.databases().get(0).foreignHits())
-                .anyMatch(h -> h.table().equals("order_links") && h.kind() == FactoryDataScope.ForeignKind.OTHER_TENANT);
+                .anyMatch(h -> h.table().equals("order_links") && h.kind() == FactoryDataScope.ForeignKind.OTHER_TENANT)
+                // 直接挂在 factories 上的关联行: 父行主键就是工厂编号
+                .anyMatch(h -> h.table().equals("factory_links") && h.kind() == FactoryDataScope.ForeignKind.OTHER_TENANT);
         Map<String, String> fbBefore = snapshot(main, FB);
         assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, preview.previewId())))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("跨租户"));
@@ -349,6 +353,11 @@ class FactoryErasurePostgresContractTest {
         assertThatThrownBy(() -> d.startExport(OPERATOR, FA, "backup scheduler")).isInstanceOf(BusinessException.class);
         long scheduled = d.startExport(OPERATOR, FA, "BACKUP_SCHEDULER");
         assertThat(d.ledger().find(scheduled).orElseThrow().triggerSource()).isEqualTo("BACKUP_SCHEDULER");
+        d.writeExport(scheduled, OPERATOR, FA, AttachmentMode.INDEX_ONLY, Set.of(FactoryDataService.Format.CSV),
+                new ByteArrayOutputStream());
+        // 定时备份不等于「已交付给工厂」: 不能拿来申请删除
+        assertThatThrownBy(() -> erasure().request(OPERATOR, FA, body(scheduled, true)))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("exportRequestId"));
         assertThat(d.ledger().find(id).orElseThrow().triggerSource()).isEqualTo("MANUAL");
     }
 
@@ -360,8 +369,39 @@ class FactoryErasurePostgresContractTest {
             assertThatThrownBy(() -> st.execute("SELECT " + schema + ".factory_erase_llm_egress_audit('" + FA + "')"))
                     .hasMessageContaining("app.factory_id");
             c.rollback();
+            // 行级安全变量对了、却没有整厂删除的标记 ⇒ 仍然拒绝 (普通请求代码顺手调用不行)
+            st.execute("SELECT set_config('app.factory_id', '" + FA + "', true)");
+            assertThatThrownBy(() -> st.execute("SELECT " + schema + ".factory_erase_llm_egress_audit('" + FA + "')"))
+                    .hasMessageContaining("app.factory_erasure");
+            c.rollback();
         }
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_llm_egress_audit WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+    }
+
+    @Test
+    void cascadeIntoAnotherTenantsRowOfAStrictRlsTableIsCaughtAndRolledBack() throws Exception {
+        // 严格行级安全的父子表: A 厂的父行被一个只在 SmartBI 出现的租户的子行引用 (级联外键)。
+        // 两次 resolve 都看不见那行子行; 只有逐个租户的阴性对照 (租户清单来自定义者函数) 能发现级联删了它。
+        exec(smartbiAdmin, "SET search_path = " + schema + ";"
+                + "CREATE TABLE sb_parent (id bigint PRIMARY KEY, factory_id varchar(64));"
+                + "CREATE TABLE sb_child (id bigint PRIMARY KEY, factory_id varchar(64),"
+                + "  parent_id bigint REFERENCES sb_parent(id) ON DELETE CASCADE);"
+                + "ALTER TABLE sb_parent ENABLE ROW LEVEL SECURITY; ALTER TABLE sb_parent FORCE ROW LEVEL SECURITY;"
+                + "ALTER TABLE sb_child ENABLE ROW LEVEL SECURITY; ALTER TABLE sb_child FORCE ROW LEVEL SECURITY;"
+                + "CREATE POLICY p ON sb_parent FOR ALL USING (factory_id = current_setting('app.factory_id', true));"
+                + "CREATE POLICY p ON sb_child FOR ALL USING (factory_id = current_setting('app.factory_id', true));"
+                + "GRANT SELECT, INSERT, UPDATE, DELETE ON sb_parent, sb_child TO " + appRole + ";"
+                + "INSERT INTO sb_parent VALUES (1, '" + FA + "');"
+                + "INSERT INTO sb_child VALUES (1, 'SBONLY_TENANT', 1);");
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        long previewId = data().preview(OPERATOR, FA).previewId();
+        assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, previewId)))
+                .hasMessageContaining("阴性对照失败");
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".sb_child")).isEqualTo(1);
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".sb_parent")).isEqualTo(1);
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_uploads WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+        assertThat(store.list(FA + "/")).hasSize(2);
     }
 
     // ---------------------------------------------------------------- fixture
@@ -440,7 +480,10 @@ class FactoryErasurePostgresContractTest {
                 // 不带 factory_id 的关联表: 一行同时挂两个工厂的订单时, 不能算成 A 厂的
                 + "CREATE TABLE " + s + ".order_links (id bigint PRIMARY KEY,"
                 + " order_id bigint REFERENCES " + s + ".sales_orders(id) ON DELETE CASCADE,"
-                + " other_order_id bigint REFERENCES " + s + ".sales_orders(id));";
+                + " other_order_id bigint REFERENCES " + s + ".sales_orders(id));"
+                + "CREATE TABLE " + s + ".factory_links (id bigint PRIMARY KEY,"
+                + " from_factory varchar(64) REFERENCES " + s + ".factories(id) ON DELETE CASCADE,"
+                + " to_factory varchar(64) REFERENCES " + s + ".factories(id));";
     }
 
     static String smartbiExtras(String s) {
@@ -479,6 +522,7 @@ class FactoryErasurePostgresContractTest {
                         + ".sales_orders o ON o.id = i.order_id WHERE o.factory_id = " + f + ")",
                 "notes", "x.author_id IN (SELECT id FROM " + s + ".users WHERE factory_id = " + f + ")",
                 "smart_bi_field_defs", "x.upload_id IN (SELECT id FROM " + s + ".smart_bi_uploads WHERE factory_id = " + f + ")",
+                "factory_links", "x.from_factory = " + f + " OR x.to_factory = " + f,
                 "order_links", "x.order_id IN (SELECT id FROM " + s + ".sales_orders WHERE factory_id = " + f + ")"
                         + " OR x.other_order_id IN (SELECT id FROM " + s + ".sales_orders WHERE factory_id = " + f + ")");
         Map<String, String> out = new TreeMap<>();

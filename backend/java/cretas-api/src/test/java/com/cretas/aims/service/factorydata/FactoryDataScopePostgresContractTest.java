@@ -245,6 +245,12 @@ class FactoryDataScopePostgresContractTest {
         Map<String, byte[]> zip = export(service(Set.of(1L)), FA, AttachmentMode.INCLUDE, Set.of(FactoryDataService.Format.CSV));
         assertThat(zip.keySet()).noneMatch(k -> k.contains("..") || k.startsWith("/"));
         assertThat(zip).containsKey("attachments/cretas-media/" + FA + "/%2E%2E/%2E%2E/etc/evil.txt");
+        // 规范化后撞名的两个对象键都要导出, ⛔ 不能因重名让整个导出失败
+        store.put("cretas-media", FA + "/a//b.txt", "ONE");
+        store.put("cretas-media", FA + "/a/b.txt", "TWO");
+        Map<String, byte[]> zip2 = export(service(Set.of(1L)), FA, AttachmentMode.INCLUDE, Set.of(FactoryDataService.Format.CSV));
+        assertThat(zip2).containsKey("attachments/cretas-media/" + FA + "/a/b.txt")
+                .containsKey("attachments/cretas-media/" + FA + "/a/b.txt~2");
     }
 
     @Test

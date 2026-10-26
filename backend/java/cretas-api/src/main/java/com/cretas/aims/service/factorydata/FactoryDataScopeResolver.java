@@ -155,39 +155,60 @@ public final class FactoryDataScopeResolver {
         }
     }
 
+    /**
+     * 已认领的子行 (不带租户列) 经这条外键指向的父行若不是本厂的 ⇒ 跨租户命中。
+     * <ul>
+     *   <li>父表是 factories: 父行的主键就是工厂编号;</li>
+     *   <li>父表带租户列: 看租户列;</li>
+     *   <li>父行看不见 (SmartBI 严格行级安全下别的工厂的行): LEFT JOIN 取不到 ⇒ 归属不明, 记 UNSCOPED;</li>
+     *   <li>父表不带租户列、也不是 factories (平台共享字典等): 引用它不改变子行归属, 不查。</li>
+     * </ul>
+     * 只查一层: 父行本身也是「不带租户列、经别的工厂外键链挂着」的情形不在内 (手册 §4 写明)。
+     */
     private static void checkOtherParents(Connection conn, String schema, Meta meta, Fk fk, TableScope child,
                                           FactoryDataScope scope) throws SQLException {
-        List<String> parentTenant = FactoryDataCatalog.tenantColumns(fk.parent(),
-                new LinkedHashSet<>(meta.columns().get(fk.parent())));
-        if (parentTenant.isEmpty()) return;     // 父表是平台共享 / 无租户的表: 引用它不改变子行归属
-        TableScope ownParent = scope.table(fk.parent());
         String parentPk = meta.singlePk().get(fk.parent());
+        boolean parentIsFactories = scope.database() == Database.CRETAS
+                && FactoryDataCatalog.FACTORIES_TABLE.equals(fk.parent());
+        List<String> parentTenant = parentIsFactories ? List.of(parentPk)
+                : FactoryDataCatalog.tenantColumns(fk.parent(), new LinkedHashSet<>(meta.columns().get(fk.parent())));
+        if (parentTenant.isEmpty()) return;
+        TableScope ownParent = scope.table(fk.parent());
         StringJoiner select = new StringJoiner(", ");
         select.add("c." + q(child.pkColumn()) + "::text");
+        select.add("p." + q(parentPk) + " IS NULL");
         parentTenant.forEach(col -> select.add("p." + q(col) + "::text"));
         StringJoiner on = new StringJoiner(" AND ");
+        StringJoiner notNull = new StringJoiner(" AND ");
         for (int i = 0; i < fk.childColumns().size(); i++) {
             on.add("c." + q(fk.childColumns().get(i)) + " = p." + q(fk.parentColumns().get(i)));
+            notNull.add("c." + q(fk.childColumns().get(i)) + " IS NOT NULL");
         }
-        String sql = "SELECT " + select + " FROM " + q(schema) + "." + q(fk.child()) + " c JOIN " + q(schema) + "."
-                + q(fk.parent()) + " p ON " + on + " WHERE c." + q(child.pkColumn()) + "::text = ANY(?)"
-                + " AND NOT (p." + q(parentPk) + "::text = ANY(?))";
+        String sql = "SELECT " + select + " FROM " + q(schema) + "." + q(fk.child()) + " c LEFT JOIN " + q(schema) + "."
+                + q(fk.parent()) + " p ON " + on + " WHERE c." + q(child.pkColumn()) + "::text = ANY(?) AND " + notNull
+                + " AND (p." + q(parentPk) + " IS NULL OR NOT (p." + q(parentPk) + "::text = ANY(?)))";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setArray(1, conn.createArrayOf("text", child.keys().toArray(new String[0])));
             ps.setArray(2, conn.createArrayOf("text",
                     ownParent == null ? new String[0] : ownParent.keys().toArray(new String[0])));
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
+                    String key = rs.getString(1);
+                    if (rs.getBoolean(2)) {
+                        scope.addForeign(new ForeignHit(fk.child(), rowKey(key), ForeignKind.UNSCOPED,
+                                "引用的 " + fk.parent() + " 行在当前身份下看不见 (可能是别的工厂的)", fk.parent()));
+                        continue;
+                    }
                     String other = null;
                     boolean own = false;
                     for (int i = 0; i < parentTenant.size(); i++) {
-                        String v = rs.getString(2 + i);
+                        String v = rs.getString(3 + i);
                         if (v == null) continue;
                         if (v.equals(scope.factoryId())) own = true;
                         else if (other == null) other = parentTenant.get(i) + "=" + v;
                     }
                     if (own && other == null) continue;
-                    scope.addForeign(new ForeignHit(fk.child(), rowKey(rs.getString(1)),
+                    scope.addForeign(new ForeignHit(fk.child(), rowKey(key),
                             other != null ? ForeignKind.OTHER_TENANT : ForeignKind.UNSCOPED,
                             "同时引用 " + fk.parent() + " 的行 (" + (other != null ? other : "租户列为空") + ")", fk.parent()));
                 }
