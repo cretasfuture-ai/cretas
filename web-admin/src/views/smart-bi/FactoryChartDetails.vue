@@ -9,7 +9,7 @@ const emit = defineEmits<{ 'update:modelValue': [boolean] }>();
 const loading = ref(false); const error = ref(''); const data = ref<FactoryChartDetailsData | null>(null); const rows = ref<Record<string, unknown>[]>([]); const page = ref(1); const requestVersion = ref(0); const mode = ref<'continuous' | 'paged'>('continuous');
 const columns = computed(() => detailColumns(data.value).map((column) => ({
   ...column,
-  cellRenderer: ({ cellData }: { cellData: unknown }) => h('span', display(cellData)),
+  cellRenderer: ({ cellData }: { cellData: unknown }) => h('span', { class: 'el-table-v2__cell-text', title: display(cellData) }, display(cellData)),
 })));
 const viewport = ref({ width: 1024, height: 720 });
 const width = computed(() => Math.max(280, Math.min(900, Math.floor(viewport.value.width * 0.9 - 24))));

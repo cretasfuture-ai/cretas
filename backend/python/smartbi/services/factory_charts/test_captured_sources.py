@@ -201,6 +201,13 @@ def test_sheet_oee_uses_explicit_good_quantity_and_real_row_provenance():
     assert "process_sheet_rows r" in sources.SHEET_OEE_SQL
     assert "production_batches pb" in sources.SHEET_OEE_SQL
     assert "pb.production_plan_id=r.plan_id" in sources.SHEET_OEE_SQL
+    assert "pb.workflow_selection_mode='WORKFLOW'" in sources.SHEET_OEE_SQL
+    assert "pb.selected_workflow_id=pp.selected_workflow_id" in sources.SHEET_OEE_SQL
+    assert "production_workflow_instances pwi" in sources.SHEET_OEE_SQL
+    assert "wpt.process_order=r.process_order" in sources.SHEET_OEE_SQL
+    assert "product_process_workflow_revisions pwr" in sources.SHEET_OEE_SQL
+    assert "pwr.revision_hash=pp.selected_workflow_revision_hash" in sources.SHEET_OEE_SQL
+    assert "wpt.production_batch_id=pb.id" in sources.SHEET_OEE_SQL
     assert "pp.product_type_id=r.row_payload->>'productTypeId'" in sources.SHEET_OEE_SQL
     assert "r.row_payload->'customFields'->>'smartbi_oee_good_quantity'" in sources.SHEET_OEE_SQL
 
