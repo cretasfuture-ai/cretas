@@ -65,7 +65,8 @@ class ProcessSecretDataLayerContractTest {
 
     /**
      * 实测的量或与出成无关的实测比例: 照常显示 (本单总量那一档)。
-     * 实测出成率 / 损耗率 / 超投率 / 实际配比份额在裁剪器的 ACTUAL_YIELD_FIELDS 里 (Steve 第三问分档前 fail-closed 隐藏)。
+     * 实测出成率 / 损耗率 / 超投率 / 实际配比份额在裁剪器的 SINGLE_RUN_ACTUAL_FIELDS / AGGREGATE_ACTUAL_FIELDS 里
+     * (Steve 第三问 A: 单批可看、汇总不给)。
      */
     static final Set<String> ACTUAL_RESULT_FIELDS = Set.of(
             "batchSharePct", "batchShare", "reworkRate", "wastageQty", "wastageQuantity", "auxiliaryUsage");
@@ -129,7 +130,10 @@ class ProcessSecretDataLayerContractTest {
             ConversionChangeHistory.class, ProductWorkProcess.class, ProductProcessWorkflow.class,
             ProductProcessWorkflowRevision.class, ProductionWorkflowInstance.class, WorkflowTaskPort.class,
             FactoryMaterialRequisition.class, FactoryMaterialRequisitionItem.class, BomRecipeDraft.class,
-            BomRecipeDraftItem.class, BomRecipeDraftSubstitute.class, SalesOrderShortageReport.class);
+            BomRecipeDraftItem.class, BomRecipeDraftSubstitute.class, SalesOrderShortageReport.class,
+            // 报工行 / 报工单 / 批次: 落库的配比核对快照与批次实测出成挂在这里 (独立审查 #2 #5)
+            com.cretas.aims.entity.processentry.ProcessSheetRow.class, com.cretas.aims.entity.ProductionReport.class,
+            com.cretas.aims.entity.ProductionBatch.class);
 
     /** 带配比类字段但不打标的实体, 写明理由。 */
     static final Map<String, String> UNTRACKED_ENTITY_LEDGER = Map.of(
@@ -169,6 +173,63 @@ class ProcessSecretDataLayerContractTest {
                 .isEmpty();
         // 台账不能留已不存在的名字 (否则会悄悄变成摆设)
         assertThat(seen).containsAll(ACTUAL_RESULT_FIELDS).containsAll(NOT_RECIPE_FIELDS);
+    }
+
+    static final Pattern MAP_KEY = Pattern.compile("\\.put\\(\"([a-zA-Z]+)\"");
+
+    /** Map 键按驼峰拆词判 (子串会把 generatedAt / operation 一类全部扫进来)。 */
+    static final Set<String> SUSPICIOUS_WORDS = Set.of("ratio", "rate", "share", "usage", "dosage", "yield",
+            "wastage", "conversion", "pct", "percent", "percentage");
+
+    static boolean hasSuspiciousWord(String name) {
+        for (String word : name.split("(?=[A-Z])")) {
+            if (SUSPICIOUS_WORDS.contains(word.toLowerCase(java.util.Locale.ROOT))) return true;
+        }
+        return false;
+    }
+
+    /** Map 里拼出来的响应字段 (DTO 扫描看不见): 与配方无关的键。 */
+    static final Set<String> NOT_RECIPE_MAP_KEYS = Set.of(
+            // 质量 / 运营 / 系统监控 / 意图识别 / 人事薪资 / 财务指标 / 设备 / 计划进度
+            "availabilityRate", "averagePassRate", "averageUsageHours", "avgMatchRate", "avgStrongSignalRate",
+            "baudRate", "bracketRate", "brandLossRate", "budgetVarianceRate", "completionPct", "complianceRate",
+            "complianceRatePct", "configuredMaxRatio", "constantBitRate", "costChangeRate", "coverageRate",
+            "currentRatio", "debtRatio", "decisionPassRate", "directExecuteRate", "epsilonPct", "equipmentRatio",
+            "equipmentPercentage", "equipmentUsageCount", "equityRatio", "expectedPct", "fillRate",
+            "foodCostChangePct", "foodCostRatio", "grossMarginPercent", "hasUsageRecords", "hitRate", "inFullRate",
+            "inProgressRate", "laborCostChangePct", "laborPercentage", "laborRatio", "marginRateBasis", "matchRate",
+            "maxFrameRate", "memoryUsagePercent", "missingPassRateCount", "momChangePct", "momGrowthRate",
+            "monthlyAvgUsage", "needFullLLMRate", "needRerankingRate", "netMarginPercent", "onlineRate",
+            "otifRate", "outputChangeRate", "overallAchievementRate", "overallProgressPct", "overallProgressPercent",
+            "pct", "pctChangeFromPrevMonth", "progressPct", "quickRatio", "rateUnit", "ratioName", "ratioType",
+            "recoveryRate", "rentRatio", "reportedPassRateCount", "resolutionRate", "revenueChangePct",
+            "showPercentage", "skillSuccessRate", "stockRatio", "teamCompletionRate", "thisMonthWastageCost",
+            "totalPieceRate", "totalPieceRateWage", "totalUsageHours", "usage", "usageAvailable", "usageCount",
+            "usageHistory", "usageId", "usageUnit", "usedPct", "variancePercent", "weeklyUtilizationRate",
+            "yoyGrowthRate",
+            // 成本构成占比 (金额口径, 价格另受价格权限), 不是用量配比
+            "materialRatio", "otherCostRatio", "overheadRatio", "equipmentCostRatio", "rawMaterialPercentage",
+            // 「yield」= 首检良品率 (质量), 不是出成; 其余是单位换算 / 排程 / 意图里的同名词
+            "yield", "conversion", "conversionCandidates", "conversionDate", "conversionEvidence",
+            // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里
+            "blendRatio");
+
+    @Test
+    void everyRatioLikeMapKeyIsClassified() throws IOException {
+        Map<String, String> unclassified = new TreeMap<>();
+        forEachSource(MAIN, (path, text) -> {
+            Matcher m = MAP_KEY.matcher(text);
+            while (m.find()) {
+                String name = m.group(1);
+                if (!hasSuspiciousWord(name)) continue;
+                if (scrubbed(name) || ACTUAL_RESULT_FIELDS.contains(name) || NOT_RECIPE_FIELDS.contains(name)
+                        || NOT_RECIPE_MAP_KEYS.contains(name)) continue;
+                unclassified.putIfAbsent(name, MAIN.relativize(path).toString());
+            }
+        });
+        assertThat(unclassified)
+                .as("Map 拼出来的配比类键加进裁剪器词表; 非配方的登记在 NOT_RECIPE_MAP_KEYS")
+                .isEmpty();
     }
 
     @Test
@@ -227,8 +288,10 @@ class ProcessSecretDataLayerContractTest {
 
     // ------------------------------------------------------------------ helpers
 
+    /** 裁剪器管着的字段: 配比类 / 汇总实测 (总是隐藏)、单批实测 (单据视图保留)、有歧义按上下文判的。 */
     static boolean scrubbed(String name) {
-        return isRatioField(name) || contextual(name);
+        return isRatioField(name) || contextual(name)
+                || ProcessSecretPayloadScrubber.SINGLE_RUN_ACTUAL_FIELDS.contains(name);
     }
 
     @SuppressWarnings("unchecked")
@@ -258,7 +321,8 @@ class ProcessSecretDataLayerContractTest {
         Object entity = ctor.newInstance();
         for (Map.Entry<String, Object> e : Map.<String, Object>of("factoryId", "F", "productTypeId", "P",
                 "recipeId", "r", "bomRecipeId", "r", "workflowInstanceId", 1L, "productionPlanId", "pl",
-                "draftId", "d", "targetProductRefType", "LIVE_PRODUCT", "targetProductRefId", "P").entrySet()) {
+                "draftId", "d", "targetProductRefType", "LIVE_PRODUCT", "targetProductRefId", "P",
+                "planId", "pl").entrySet()) {
             if (hasField(type, e.getKey()) && ReflectionTestUtils.getField(entity, e.getKey()) == null) {
                 ReflectionTestUtils.setField(entity, e.getKey(), e.getValue());
             }

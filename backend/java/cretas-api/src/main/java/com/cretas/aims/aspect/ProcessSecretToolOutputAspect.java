@@ -56,8 +56,9 @@ public class ProcessSecretToolOutputAspect {
         String factoryId = factoryOf(pjp.getArgs());
         String toolName = pjp.getTarget() instanceof ToolExecutor tool ? tool.getToolName() : "unknown";
         AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(null);
+        // AI 的回答按汇总视图处理: 单批实测出成也不给无权的人 (Steve 第三问 A: 汇总不给)
         boolean changed = scrubber.scrub(tree, actor, factoryId, ProcessSecretReadTracker.reads(),
-                "AI tool " + toolName);
+                "AI tool " + toolName, true);
         if (!changed) return raw;
         try {
             return objectMapper.writeValueAsString(tree);

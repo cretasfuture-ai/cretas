@@ -97,11 +97,18 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
     public Object beforeBodyWrite(Object body, MethodParameter returnType, MediaType selectedContentType,
                                   Class<? extends HttpMessageConverter<?>> selectedConverterType,
                                   ServerHttpRequest request, ServerHttpResponse response) {
-        if (body == null || body instanceof String || body instanceof byte[] || body instanceof Resource
-                || body instanceof JsonNode) {
+        if (body == null || body instanceof String || body instanceof byte[] || body instanceof Resource) {
             return body;
         }
-        if (selectedContentType == null || !selectedContentType.isCompatibleWith(MediaType.APPLICATION_JSON)) {
+        // 按「谁来写」判, 不按媒体类型判: Accept: application/vnd.x+json 之类同样由 Jackson 写出完整 JSON,
+        // 只认 application/json 会被一个请求头绕过 (独立审查 #1)
+        boolean jacksonWrites = selectedConverterType != null
+                && org.springframework.http.converter.json.AbstractJackson2HttpMessageConverter.class
+                        .isAssignableFrom(selectedConverterType);
+        boolean jsonMedia = selectedContentType != null
+                && (selectedContentType.isCompatibleWith(MediaType.APPLICATION_JSON)
+                        || selectedContentType.getSubtype().endsWith("+json"));
+        if (!jacksonWrites && !jsonMedia) {
             return body;
         }
         if (!(request instanceof ServletServerHttpRequest servletRequest)) return body;
@@ -112,7 +119,10 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         // (审查 M2: factoryId=PLATFORM 一类跨厂令牌若只看身份会直接跳过裁剪)
         String pathFactory = pathFactoryId(http);
         boolean anyProtected = (pathFactory != null && !accessService.protectedProductTypeIds(pathFactory).isEmpty())
-                || (actor.factoryId() != null && !accessService.protectedProductTypeIds(actor.factoryId()).isEmpty());
+                || (actor.factoryId() != null && !accessService.protectedProductTypeIds(actor.factoryId()).isEmpty())
+                // 本次读过的工艺内容所属工厂也算 (路径上没有 factoryId 的平台接口, 独立审查 #12)
+                || ProcessSecretReadTracker.reads().stream().anyMatch(read -> read.factoryId() != null
+                        && !accessService.protectedProductTypeIds(read.factoryId()).isEmpty());
         if (!anyProtected) {
             return body;
         }
@@ -121,10 +131,12 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
 
         String requestFactory = pathFactory != null ? pathFactory : actor.factoryId();
         Scope scope = new Scope(actor, requestFactory);
-        JsonNode filtered = toTree(payload, scope);
+        // 直接返回 JsonNode 的接口: 复制一份再裁, 不改调用方手里的树
+        JsonNode filtered = payload instanceof JsonNode tree ? tree.deepCopy() : toTree(payload, scope);
         // V2: 派生 DTO / Map 里的配比、单位用量、转换率、标准出成率按字段词表统一裁剪
         boolean scrubbed = payloadScrubber.scrub(filtered, actor, requestFactory,
-                ProcessSecretReadTracker.reads(), http.getMethod() + " " + http.getRequestURI());
+                ProcessSecretReadTracker.reads(), http.getMethod() + " " + http.getRequestURI(),
+                ProcessSecretPayloadScrubber.isAggregateRoute(http.getRequestURI()));
         if (!scope.redacted && !scrubbed) return body;
         if (body instanceof ApiResponse<?> api) {
             ((ApiResponse<Object>) api).setData(filtered);

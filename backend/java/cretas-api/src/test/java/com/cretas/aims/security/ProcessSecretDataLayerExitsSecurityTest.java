@@ -269,6 +269,19 @@ class ProcessSecretDataLayerExitsSecurityTest {
     }
 
     @Test
+    void aVendorJsonAcceptHeaderDoesNotBypassTheScrubber() throws Exception {
+        // 独立审查 #1: application/*+json 同样由 Jackson 写出, 不能因为「不是 application/json」就放过
+        String body = workflowConfig().perform(
+                        get("/api/mobile/F-A/production-plans/plan-1/process-sheet/workflow-config")
+                                .header("Accept", "application/vnd.cretas+json")
+                                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OPERATOR)))
+                .andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(body).doesNotContain("0.65");
+        assertThat(json.readTree(body).at("/data/processes/0/inputs/0/inputShareRatio").isNull()).isTrue();
+    }
+
+    @Test
     void workflowConfigShowsInputSharesToTheOwner() throws Exception {
         JsonNode data = call(workflowConfig(),
                 get("/api/mobile/F-A/production-plans/plan-1/process-sheet/workflow-config"), user(OWNER));
@@ -436,6 +449,19 @@ class ProcessSecretDataLayerExitsSecurityTest {
         mvc.perform(post("/api/mobile/F-A/conversions/calculate/material-requirement")
                         .param("productTypeId", SECRET).param("productQuantity", "1")
                         .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OWNER)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void conversionSuggestionFromHistoryIsACrossBatchAggregateAndNeedsFullView() throws Exception {
+        // 独立审查 #4: 按全部历史批次算的转换率 = 跨批汇总 (Steve 第三问 A)
+        MockMvc mvc = conversions();
+        mvc.perform(get("/api/mobile/F-A/conversions/suggest").param("materialTypeId", "M1")
+                        .param("productTypeId", SECRET).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OPERATOR)))
+                .andExpect(status().isForbidden());
+        verify(dep(ConversionService.class), never()).suggestConversionFromHistory(any(), any(), any());
+        mvc.perform(get("/api/mobile/F-A/conversions/suggest").param("materialTypeId", "M1")
+                        .param("productTypeId", SECRET).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OWNER)))
                 .andExpect(status().isOk());
     }
 

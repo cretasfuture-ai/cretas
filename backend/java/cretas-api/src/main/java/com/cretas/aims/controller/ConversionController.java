@@ -243,6 +243,9 @@ public class ConversionController {
     }
 
     @GetMapping("/suggest")
+    // 工艺保密: 按全部历史批次算出的转换率 / 损耗率就是跨批汇总 (Steve 第三问 A: 汇总只给负责人和授权人)
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PRODUCT_PARAM,
+            name = "productTypeId")
     @Operation(summary = "基于历史数据建议转换率", description = "根据已完成生产批次的历史数据自动计算建议的转换率和损耗率，需要有足够的历史生产数据才能给出准确建议")
     public ApiResponse<ConversionService.SuggestedConversion> suggestConversionFromHistory(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,

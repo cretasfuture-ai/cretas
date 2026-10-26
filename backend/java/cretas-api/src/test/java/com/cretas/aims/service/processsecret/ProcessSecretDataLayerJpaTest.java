@@ -245,6 +245,26 @@ class ProcessSecretDataLayerJpaTest {
         assertThat(workProcesses.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(F, TARGET)).hasSize(1);
     }
 
+    @Test
+    void changingAProtectedStandardYieldNeedsEditButStaffingChangesDoNot() {
+        // 独立审查 #13: 工序链的标准出成率 / 顺序是工艺; 排人不是
+        Long stepId = workProcesses.findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(F, SECRET).get(0).getId();
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor(OPERATOR))) {
+            assertThatThrownBy(() -> workProcessService.update(F, stepId, com.cretas.aims.dto.ProductWorkProcessDTO
+                    .builder().standardYieldRate(new BigDecimal("0.5")).build()))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+            assertThatThrownBy(() -> workProcessService.delete(F, stepId)).isInstanceOf(BusinessException.class);
+            // 只改预计工时 (不碰工艺字段) 照常
+            workProcessService.update(F, stepId, com.cretas.aims.dto.ProductWorkProcessDTO.builder()
+                    .estimatedMinutesOverride(30).build());
+        }
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(workProcesses.findById(stepId).orElseThrow().getStandardYieldRate())
+                .isEqualByComparingTo("0.8100");
+    }
+
     private List<ProcessSecretAccessEvent> denials(String product) {
         return events.findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(F, product, PageRequest.of(0, 20))
                 .stream().filter(e -> "DENY".equals(e.getDecision())).toList();

@@ -6,6 +6,9 @@ import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.bom.BomItemSubstitute;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -114,6 +117,20 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             return p.getWorkflowInstanceId() == null ? List.of()
                     : List.of(new Read(Kind.WORKFLOW_INSTANCE, p.getFactoryId(), String.valueOf(p.getWorkflowInstanceId())));
         }
+        // 报工 / 批次: 落库的配比核对快照、批次实测出成都挂在这里 (行上的 productTypeId 是本道产出的半成品,
+        // 不能当归属, 所以按计划 / 批次的产品记)
+        if (entity instanceof ProcessSheetRow row) {
+            return row.getPlanId() == null || row.getPlanId().isBlank() ? List.of()
+                    : List.of(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), row.getPlanId()));
+        }
+        if (entity instanceof ProductionBatch b) {
+            List<Read> found = new java.util.ArrayList<>(product(b.getFactoryId(), b.getProductTypeId()));
+            if (b.getProductionPlanId() != null && !b.getProductionPlanId().isBlank()) {
+                found.add(new Read(Kind.PRODUCTION_PLAN, b.getFactoryId(), b.getProductionPlanId()));
+            }
+            return found;
+        }
+        if (entity instanceof ProductionReport r) return product(r.getFactoryId(), r.getProductTypeId());
         if (entity instanceof FactoryMaterialRequisition r) {
             // 领料单明细带配比 / 单位需求量, 属于它的生产计划 (多产出计划牵涉多个产品, 由出口解析)
             if (r.getProductionPlanId() == null || r.getProductionPlanId().isBlank()) return List.of();

@@ -42,6 +42,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     @Transactional
     public ProductWorkProcessDTO create(String factoryId, ProductWorkProcessDTO dto) {
         log.info("Creating product-work-process association for factory: {}", factoryId);
+        // 工艺保密: 工序链就是工艺图, 给受保护产品加工序要编辑授权
+        processSecretGuard.requireProduct(factoryId, dto.getProductTypeId(),
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-work-process create");
 
         if (repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
                 factoryId, dto.getProductTypeId(), dto.getWorkProcessId())) {
@@ -164,6 +167,11 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         log.info("Updating product-work-process {} for factory: {}", id, factoryId);
         ProductWorkProcess entity = repository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductWorkProcess", "id", id.toString()));
+        // 工艺保密: 改标准出成率 / 工序顺序是改工艺; 只改人员指派等不算 (班组长照常排人)
+        if (dto.getStandardYieldRate() != null || dto.getProcessOrder() != null) {
+            processSecretGuard.requireProduct(factoryId, entity.getProductTypeId(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-work-process update " + id);
+        }
 
         if (dto.getProcessOrder() != null) entity.setProcessOrder(dto.getProcessOrder());
         if (dto.getUnitOverride() != null) entity.setUnitOverride(dto.getUnitOverride());
@@ -224,6 +232,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         log.info("Deleting product-work-process {} for factory: {}", id, factoryId);
         ProductWorkProcess entity = repository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductWorkProcess", "id", id.toString()));
+        processSecretGuard.requireProduct(factoryId, entity.getProductTypeId(),
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-work-process delete " + id);
         repository.delete(entity);
     }
 

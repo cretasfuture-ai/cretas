@@ -66,19 +66,39 @@ public class ProcessSecretPayloadScrubber {
             "suggestedStandardQuantity", "currentRate", "suggestedRate", "conversionRateChange", "wastageRateChange",
             // 汇合配比校验 (缺口 06) 的落库快照: 配方份额, 以及「实际 − 配方」的偏差
             "recipeSharePercent", "deviationPp", "maxDeviationPp",
+            // 添加剂合规核对里的添加量 (g/kg) 就是配方用量; 超限倍数 = 添加量 ÷ 国标限量 (国标公开) 同样能还原
+            "usageAmount", "exceedRatio",
+            // 工艺图节点的投入 → 产出换算规则 (画布配置工具)
+            "conversionRule",
             // 换料影响: 配方成本差额 ÷ 单价差 = 该料的单位用量
             "oldRecipeMaterialCost", "newRecipeMaterialCost", "costDelta");
 
-    /**
-     * 实测出成 / 损耗 / 超投 / 实际配比份额。跨批汇总会逼近标准出成率和配比, 单批又能由「本单投入 ÷ 产出」算出。
-     * Steve 2026-10-26 第三问要求「分权限显示」, 具体分档待定 ⇒ 先 fail-closed: 与配比类同档隐藏, 只留投入产出总量。
-     * 分档定了以后只改这一组 (以及 ProcessSecretDataLayerContractTest 的归类)。
+    /*
+     * 实测出成 / 损耗 / 超投 / 实际配比份额 (Steve 2026-10-26 第三问 = A「单批可看、汇总不给」):
+     * 单批的数本来就能由「本单投入 ÷ 产出」算出, 所以本厂账号在单据视图 (报工、批次详情、本单成本) 里照常看;
+     * 跨批汇总 (按产品平均 / 趋势、出成率分析页、工厂指标) 会逼近标准出成率和配比, 只给负责人和授权人。
+     * 平台人员两者都看不到。
      */
-    public static final Set<String> ACTUAL_YIELD_FIELDS = Set.of(
+
+    /** 单批 / 单单据的实测值: 单据视图里与「本单总量」同档, 汇总视图 ({@code aggregateView}) 里按配比类隐藏。 */
+    public static final Set<String> SINGLE_RUN_ACTUAL_FIELDS = Set.of(
             "yieldRate", "actualYieldRate", "stepYieldRate", "cumulativeYieldRate", "realYieldRate",
-            "todayYieldRate", "weightedYieldRate", "asOfYieldRate", "netYieldRate", "goodOutputRate",
-            "sourceConsumedRatio", "weightSharePct", "inputRatioPercent", "lossRate", "avgLossRate",
-            "lossPercentage", "scrapRate", "scrapLossRate", "overFeedRate", "actualSharePercent");
+            "asOfYieldRate", "sourceConsumedRatio", "weightSharePct", "inputRatioPercent", "lossRate",
+            "overFeedRate", "actualSharePercent", "batchYield");
+
+    /** 只出现在跨批汇总里的实测值 (日 / 加权 / 平均 / KPI / 按产品指标): 一律按配比类隐藏。 */
+    public static final Set<String> AGGREGATE_ACTUAL_FIELDS = Set.of(
+            "todayYieldRate", "weightedYieldRate", "netYieldRate", "goodOutputRate", "avgLossRate",
+            "lossPercentage", "scrapRate", "scrapLossRate", "avgYieldRate", "averageYieldRate", "monthlyYieldRate",
+            "yieldRateChange");
+
+    /**
+     * 汇总视图的路由段 (出成率分析页、工厂指标、看板、报表): 这些响应里单批实测值也算「跨批」。
+     * AI 工具的回答一律按汇总视图处理。
+     */
+    public static final Set<String> AGGREGATE_ROUTE_SEGMENTS = Set.of(
+            "production-analytics", "indicators", "canvas-indicators", "dashboard", "reports", "report",
+            "kpi", "statistics", "wastage-reports", "analytics", "trend", "daily-trend");
 
     /** 名字含这些片段的字段一并按配比类处理 (统计里的平均转换率、损耗率等)。 */
     static final List<String> RATIO_SUFFIXES = List.of("conversionrate", "conversionratio", "wastagerate");
@@ -88,6 +108,10 @@ public class ProcessSecretPayloadScrubber {
      * {@code rate} / {@code wastage} / {@code avgChange} 在转换率变更趋势里就是转换率和损耗率。
      */
     static final Map<String, Set<String>> CONTEXTUAL_RATIO_FIELDS = Map.of(
+            // BOM 明细里的 yieldRate 是标准出成率; 和 goodOutputRate 同处的是按产品的汇总指标
+            "yieldRate", Set.of("standardQuantity", "dosagePerKgG", "actualQuantity", "goodOutputRate"),
+            // BOM 明细里的 actualQuantity 是出成调整后的单位用量, 不是本单总量 (独立审查 #9)
+            "actualQuantity", Set.of("standardQuantity"),
             "rate", Set.of("changeType"),
             "wastage", Set.of("changeType"),
             "avgChange", Set.of("currentRate"));
@@ -142,12 +166,13 @@ public class ProcessSecretPayloadScrubber {
      *
      * @param requestFactory 本次输出所属的工厂 (路径上的 factoryId, 或工具的工厂上下文)
      * @param reads          本次作用域里读过的工艺内容
+     * @param aggregateView  汇总视图 (分析页 / 指标 / 报表 / AI 回答): 单批实测值也按配比类隐藏
      * @return true 表示有字段被去掉 (调用方要改用裁剪后的树)
      */
     public boolean scrub(JsonNode tree, AuthenticatedActor actor, String requestFactory,
-                         Set<ProcessSecretReadTracker.Read> reads, String resourceRef) {
+                         Set<ProcessSecretReadTracker.Read> reads, String resourceRef, boolean aggregateView) {
         if (tree == null || !(tree.isObject() || tree.isArray())) return false;
-        Run run = new Run(actor, requestFactory, resourceRef);
+        Run run = new Run(actor, requestFactory, resourceRef, aggregateView);
         if (!run.anyProtection(reads)) return false;
         run.resolveReads(reads);
         // 第一遍: 输出里出现了哪些产品归属
@@ -159,6 +184,16 @@ public class ProcessSecretPayloadScrubber {
         return run.changed;
     }
 
+    /** HTTP 路径是否汇总视图 (见 {@link #AGGREGATE_ROUTE_SEGMENTS})。 */
+    public static boolean isAggregateRoute(String requestUri) {
+        if (requestUri == null) return false;
+        for (String segment : requestUri.split("/")) {
+            String s = segment.toLowerCase(Locale.ROOT);
+            if (AGGREGATE_ROUTE_SEGMENTS.contains(s) || s.endsWith("-trend") || s.endsWith("-statistics")) return true;
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------------
 
     private record Key(String factoryId, String productTypeId) { }
@@ -167,6 +202,7 @@ public class ProcessSecretPayloadScrubber {
         final AuthenticatedActor actor;
         final String requestFactory;
         final String resourceRef;
+        final boolean aggregateView;
         final Map<String, Set<String>> protectedByFactory = new HashMap<>();
         final Map<Key, Level> levels = new HashMap<>();
         final Map<String, Optional<Key>> recipeKeys = new HashMap<>();
@@ -181,10 +217,11 @@ public class ProcessSecretPayloadScrubber {
         final Set<Key> allowedWithContent = new LinkedHashSet<>();
         boolean changed;
 
-        Run(AuthenticatedActor actor, String requestFactory, String resourceRef) {
+        Run(AuthenticatedActor actor, String requestFactory, String resourceRef, boolean aggregateView) {
             this.actor = actor;
             this.requestFactory = requestFactory;
             this.resourceRef = resourceRef;
+            this.aggregateView = aggregateView;
         }
 
         Set<String> protectedIn(String factoryId) {
@@ -319,7 +356,8 @@ public class ProcessSecretPayloadScrubber {
 
         void walk(JsonNode node, Key inherited) {
             if (node instanceof ObjectNode object) {
-                if (object.has(MARKER)) return;   // V1 已换成摘要
+                // ⛔ 不因为对象里已有 processSecret 键就跳过: 自定义字段里也能出现同名键 (独立审查 #11);
+                // V1 摘要本身不含配比字段, 走一遍也不会改它
                 Key own = ownKey(object, inherited);
                 Key effective = own != null ? own : inherited;
                 scrubObject(object, effective);
@@ -334,13 +372,20 @@ public class ProcessSecretPayloadScrubber {
         void scrubObject(ObjectNode object, Key key) {
             List<String> ratioFields = new ArrayList<>();
             List<String> quantityFields = new ArrayList<>();
+            // 无权档 (平台 / 他厂) 连总量也不给: 词表列不全 (独立审查 #6), 所以除了标识类数字一律去掉
+            List<String> otherNumbers = new ArrayList<>();
             for (Iterator<String> it = object.fieldNames(); it.hasNext(); ) {
                 String name = it.next();
-                if (object.get(name) == null || object.get(name).isNull()) continue;
+                JsonNode value = object.get(name);
+                if (value == null || value.isNull() || MARKER.equals(name)) continue;
                 if (isRatioField(name) || isContextualRatioField(object, name)) ratioFields.add(name);
-                else if (QUANTITY_FIELDS.contains(name)) quantityFields.add(name);
+                else if (SINGLE_RUN_ACTUAL_FIELDS.contains(name)) {
+                    // 单批实测: 单据视图里与总量同档; 汇总视图里与配比同档
+                    (aggregateView ? ratioFields : quantityFields).add(name);
+                } else if (QUANTITY_FIELDS.contains(name)) quantityFields.add(name);
+                else if (value.isNumber() && !isIdentifierLike(name)) otherNumbers.add(name);
             }
-            if (ratioFields.isEmpty() && quantityFields.isEmpty()) return;
+            if (ratioFields.isEmpty() && quantityFields.isEmpty() && otherNumbers.isEmpty()) return;
 
             Level level;
             Key auditKey;
@@ -369,13 +414,20 @@ public class ProcessSecretPayloadScrubber {
             }
 
             List<String> hidden = new ArrayList<>(ratioFields);
-            if (level == Level.NONE) hidden.addAll(quantityFields);
+            if (level == Level.NONE) {
+                hidden.addAll(quantityFields);
+                hidden.addAll(otherNumbers);
+            }
             if (hidden.isEmpty()) return;
             for (String name : hidden) object.putNull(name);
-            ObjectNode marker = object.putObject(MARKER);
-            marker.put("visibility", level == Level.NONE ? "RESTRICTED" : "TOTALS_ONLY");
-            marker.put("message", level == Level.NONE ? RESTRICTED_MESSAGE : TOTALS_ONLY_MESSAGE);
-            ArrayNode names = marker.putArray("hiddenFields");
+            // 已有标记 (V1 摘要) 时并入, 不覆盖它的 RESTRICTED
+            ObjectNode marker = object.get(MARKER) instanceof ObjectNode existing ? existing : object.putObject(MARKER);
+            if (!"RESTRICTED".equals(marker.path("visibility").asText())) {
+                marker.put("visibility", level == Level.NONE ? "RESTRICTED" : "TOTALS_ONLY");
+                marker.put("message", level == Level.NONE ? RESTRICTED_MESSAGE : TOTALS_ONLY_MESSAGE);
+            }
+            ArrayNode names = marker.get("hiddenFields") instanceof ArrayNode existingNames
+                    ? existingNames : marker.putArray("hiddenFields");
             hidden.forEach(names::add);
             changed = true;
             if (auditKey != null) {
@@ -397,12 +449,19 @@ public class ProcessSecretPayloadScrubber {
     }
 
     static boolean isRatioField(String name) {
-        if (RATIO_FIELDS.contains(name) || ACTUAL_YIELD_FIELDS.contains(name)) return true;
+        if (RATIO_FIELDS.contains(name) || AGGREGATE_ACTUAL_FIELDS.contains(name)) return true;
         String lower = name.toLowerCase(Locale.ROOT);
         for (String suffix : RATIO_SUFFIXES) {
             if (lower.endsWith(suffix)) return true;
         }
         return false;
+    }
+
+    /** 标识 / 排序 / 计数类数字 (无权档也保留, 页面才能定位行)。 */
+    static boolean isIdentifierLike(String name) {
+        return name.equals("id") || name.endsWith("Id") || name.endsWith("Ids") || name.equals("version")
+                || name.endsWith("Version") || name.endsWith("Order") || name.equals("seq") || name.endsWith("Seq")
+                || name.endsWith("Count") || name.endsWith("No") || name.endsWith("Number");
     }
 
     static boolean isContextualRatioField(ObjectNode object, String name) {
