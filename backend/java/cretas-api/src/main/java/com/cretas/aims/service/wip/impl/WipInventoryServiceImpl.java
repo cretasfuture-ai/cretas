@@ -172,13 +172,16 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         return sum;
     }
 
-    /** L1: 「已被下游消耗 X」改写成「下一道领用 a、质检判不合格转出 b」(b=0 时与旧文案一致)。 */
-    private String consumedCause(SemiFinishedInventory sfi, BigDecimal consumed, String unit) {
+    /**
+     * L1: 「已被下游消耗 X」拆成「{downstreamLabel} a、质检判不合格转出 b」; b=0 时与各处旧文案逐字一致
+     * ({@code downstreamLabel} 由调用方给出它原来的说法, 例如「已被下游消耗」/「已被下一道领用」)。
+     */
+    private String consumedCause(SemiFinishedInventory sfi, BigDecimal consumed, String unit, String downstreamLabel) {
         BigDecimal rejected = qcRejectedQuantity(sfi).min(consumed);
         BigDecimal drawn = consumed.subtract(rejected);
         StringBuilder b = new StringBuilder();
         if (drawn.signum() > 0) {
-            b.append("已被下一道领用 ").append(drawn.stripTrailingZeros().toPlainString()).append(unit);
+            b.append(downstreamLabel).append(' ').append(drawn.stripTrailingZeros().toPlainString()).append(unit);
         }
         if (rejected.signum() > 0) {
             if (b.length() > 0) {
@@ -558,7 +561,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             // L1: 质检判不合格转出也记在 consumed 里 —— 单独列出, 不说成「被下游消费」
             BigDecimal consumedNow = nz(wip.getConsumedQuantity());
             boolean qcRejected = qcRejectedQuantity(wip).signum() > 0;
-            throw new BusinessException(409, "该 WIP " + consumedCause(wip, consumedNow, firstNonBlank(wip.getUnit(), ""))
+            throw new BusinessException(409, "该 WIP " + consumedCause(wip, consumedNow, firstNonBlank(wip.getUnit(), ""),
+                    "已被下游消费")
                     + "，数量更正会破坏库存账")
                     .withCode("WIP_CORRECTION_DOWNSTREAM_CONSUMED")
                     .withHint(qcRejected ? QC_REJECT_REMEDY : "请先处理下游消费或走正式冲销流程");
@@ -1421,7 +1425,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             BigDecimal qcRejected = consumed.signum() > 0 ? qcRejectedQuantity(sfi).min(consumed) : BigDecimal.ZERO;
             if (consumed.signum() > 0) {
                 // L1: 质检判不合格转出的量单独列出, 不说成「被下游消耗」
-                cause.append(consumedCause(sfi, consumed, ""));
+                cause.append(consumedCause(sfi, consumed, "", "已被下游消耗"));
             }
             if (adj.signum() < 0) {
                 if (cause.length() > 0) {
@@ -1620,7 +1624,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                             ? "请先处理领用它的那道工序的报工, 再回来驳回本条"
                                 + (qcRejected.signum() > 0 ? "; " + QC_REJECT_REMEDY : "")
                             : QC_REJECT_REMEDY;
-                    throw new BusinessException(409, "这笔产出" + consumedCause(wip, consumed, unitText) + ", 不能直接驳回")
+                    throw new BusinessException(409, "这笔产出" + consumedCause(wip, consumed, unitText, "已被下一道领用")
+                            + ", 不能直接驳回")
                             .withCode(qcRejected.signum() > 0 ? "WIP_REVERSE_QC_REJECTED" : null)
                             .withHint(hint);
                 }
