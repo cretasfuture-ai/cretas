@@ -17,6 +17,8 @@ import com.cretas.aims.repository.TimeClockRecordRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.EmployeeWorkSessionRepository;
 import com.cretas.aims.repository.BatchWorkSessionRepository;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,6 +75,14 @@ public class AIAnalysisService {
     /** 数字出处闸。默认实例保证裸 new 出来的本类 (单测) 也走闸, 而不是因 null 跳过。 */
     @Autowired(required = false)
     private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
+
+    /** 成本 / 员工数据发给模型前脱敏 (供应商、人员、号码、保密产品名); 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String COST_EGRESS_SITE = "cost-analysis";
+    static final String EMPLOYEE_EGRESS_SITE = "employee-analysis";
+    static final String EGRESS_REFUSED_MESSAGE = "数据里有无法脱敏的内容，未发给 AI 分析";
 
     /**
      * 判断是否使用 DashScope 直接调用
@@ -142,12 +152,23 @@ public class AIAnalysisService {
             return errorResult;
         }
 
+        // 两条通道发的是同一份已脱敏正文: 成本数据里的供应商 / 人员名先从结构里认出来, 正文里同名一起换代号
+        LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(COST_EGRESS_SITE, factoryId, costData,
+                Map.of(), List.of(llmInput));
+        if (redacted.refused()) {
+            Map<String, Object> refusedResult = new HashMap<>();
+            refusedResult.put("success", false);
+            refusedResult.put("error", EGRESS_REFUSED_MESSAGE);
+            return refusedResult;
+        }
+        String sentInput = redacted.text(0);
+
         Map<String, Object> result = null;
         // 路由：优先使用 DashScope 直接调用
         if (shouldUseDashScopeDirect()) {
             log.info("[DashScope Direct] 使用 DashScope 直接调用进行成本分析: factoryId={}, batchId={}", factoryId, batchId);
             try {
-                result = analyzeCostDirect(factoryId, batchId, llmInput, enableThinking, thinkingBudget);
+                result = analyzeCostDirect(factoryId, batchId, sentInput, enableThinking, thinkingBudget);
             } catch (Exception e) {
                 log.warn("[DashScope Direct] 直接调用失败，回退到 Python 服务: {}", e.getMessage());
                 // 回退到 Python 服务
@@ -155,9 +176,10 @@ public class AIAnalysisService {
         }
 
         if (result == null) {
-            result = analyzeCostViaPython(factoryId, userId, batchId, llmInput, sessionId,
+            result = analyzeCostViaPython(factoryId, userId, batchId, sentInput, sessionId,
                     enableThinking, thinkingBudget);
         }
+        restoreAnalysisText(result, redacted);
         return gateCostAnalysisNumbers(result, costData, llmInput);
     }
 
@@ -178,6 +200,18 @@ public class AIAnalysisService {
         result.put("aiAnalysis", numberProvenance.enforceText(
                 COST_PROVENANCE_SITE, analysis, costData, llmInput));
         return result;
+    }
+
+    /** 模型回答 (含思考过程) 里的代号换回真名。 */
+    private static void restoreAnalysisText(Map<String, Object> result, LlmEgressRedactor.Result redacted) {
+        if (result == null) {
+            return;
+        }
+        for (String key : List.of("aiAnalysis", "reasoningContent")) {
+            if (result.get(key) instanceof String text) {
+                result.put(key, redacted.restore(text));
+            }
+        }
     }
 
     static final String COST_PROVENANCE_SITE = "cost-analysis";
@@ -970,8 +1004,21 @@ public class AIAnalysisService {
                     ? "【用户补充问题（不改变事实约束）】\n" + question.trim() + "\n\n" + factPrompt
                     : factPrompt;
 
+            // 员工姓名 / 登录名是已知人名; 部门、岗位、考勤数字照发; 脱敏不了就不分析
+            Map<String, LlmEgressRedactor.Party> known = new LinkedHashMap<>();
+            for (String name : Arrays.asList(employee.getFullName(), employee.getUsername())) {
+                if (name != null && !name.isBlank()) {
+                    known.put(name, LlmEgressRedactor.Party.PERSON);
+                }
+            }
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EMPLOYEE_EGRESS_SITE, factoryId,
+                    employeeData, known, List.of(message));
+            if (redacted.refused()) {
+                throw new IllegalStateException(EGRESS_REFUSED_MESSAGE);
+            }
+
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
-                    .message(message)
+                    .message(redacted.text(0))
                     .sessionId(sessionId != null && !sessionId.isBlank() ? sessionId : null)
                     .enableThinking(true)
                     .thinkingBudget(60)
@@ -981,7 +1028,8 @@ public class AIAnalysisService {
                     factoryId,
                     requesterUserId != null ? requesterUserId.toString() : null,
                     request);
-            return buildEmployeeAnalysisResponse(employee, employeeData, response, startTime, endTime, message);
+            return buildEmployeeAnalysisResponse(employee, employeeData, response, startTime, endTime, message,
+                    redacted);
 
         } catch (Exception e) {
             log.error("员工AI分析失败: factoryId={}, employeeId={}, upstream unavailable",
@@ -1172,7 +1220,7 @@ public class AIAnalysisService {
     @SuppressWarnings("unchecked")
     private AIResponseDTO.EmployeeAnalysisResponse buildEmployeeAnalysisResponse(
             User employee, Map<String, Object> data, PythonGeneralAnalysisResponse aiResponse,
-            LocalDateTime startTime, LocalDateTime endTime, String llmInput) {
+            LocalDateTime startTime, LocalDateTime endTime, String llmInput, LlmEgressRedactor.Result redacted) {
 
         Map<String, Object> employeeInfo = (Map<String, Object>) data.get("employee");
         Map<String, Object> attendanceData = (Map<String, Object>) data.get("attendance");
@@ -1299,7 +1347,7 @@ public class AIAnalysisService {
 
         // 数字出处闸: 洞察正文里的数必须出自喂给模型的事实正文 (或其结构化来源)。
         response.setAiInsight(numberProvenance.enforceText(
-                EMPLOYEE_PROVENANCE_SITE, aiResponse.getEffectiveAnalysis(), data, llmInput));
+                EMPLOYEE_PROVENANCE_SITE, redacted.restore(aiResponse.getEffectiveAnalysis()), data, llmInput));
 
         String upstreamSessionId = aiResponse.getSessionId();
         response.setSessionId(upstreamSessionId != null && !upstreamSessionId.isBlank()

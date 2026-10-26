@@ -67,6 +67,23 @@ public class LlmEgressGuard {
         return texts(site, factoryId, Map.of(), Arrays.asList(texts));
     }
 
+    /**
+     * 只发文本、但文本是从一份结构化记录拼出来的 (成本数据 / 表单提交值 / Excel 样本…):
+     * 先从记录里认出人和交易对象名、不发字段 (地址 / 备注 / 电话) 的值, 再按这些名字脱敏文本。
+     * 记录里不认识字段的值也在文本里换掉; 记录展开不了就拒绝 (不退回只按文本猜, 那会漏掉记录里的名字)。
+     */
+    public LlmEgressRedactor.Result textsWithRecord(String site, String factoryId, Object record,
+                                                    Map<String, LlmEgressRedactor.Party> knownParties,
+                                                    List<String> texts) {
+        try {
+            LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper)
+                    .redactTextsWithRecord(record, texts, knownParties, protectedNames(factoryId));
+            return logged(site, r);
+        } catch (RuntimeException e) {
+            return failed(site, e);
+        }
+    }
+
     /** 结构化数据 + 文本共用一套代号 (名单里的人在原话里出现时是同一个代号)。 */
     public LlmEgressRedactor.Result combined(String site, String factoryId, Object data,
                                              Map<String, LlmEgressRedactor.Party> knownParties, List<String> texts) {
@@ -131,9 +148,14 @@ public class LlmEgressGuard {
         return List.of();
     }
 
+    /**
+     * 调用点没带工厂 (Excel 解析 / 纠错 Agent 这类深层方法) 时, 取本次请求登录 token 里的工厂;
+     * 请求线程之外 (定时任务、异步线程) 取不到就当没有工厂上下文。
+     */
     private Collection<String> protectedNames(String factoryId) {
-        return processSecretSampleFilter == null || factoryId == null
-                ? Set.of() : processSecretSampleFilter.protectedProductNames(factoryId);
+        String factory = factoryId != null ? factoryId : com.cretas.aims.utils.SecurityUtils.currentFactoryId();
+        return processSecretSampleFilter == null || factory == null
+                ? Set.of() : processSecretSampleFilter.protectedProductNames(factory);
     }
 
     private static LlmEgressRedactor.Result logged(String site, LlmEgressRedactor.Result r) {

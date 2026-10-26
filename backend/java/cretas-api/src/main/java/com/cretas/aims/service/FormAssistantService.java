@@ -5,6 +5,8 @@ import com.cretas.aims.ai.client.DashScopeVisionClient;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.config.DashScopeConfig;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -43,6 +45,15 @@ public class FormAssistantService {
     private final ObjectMapper objectMapper;
     private final FormPromptRegistry formPromptRegistry;
 
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例 (不查保密产品名)。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String PARSE_EGRESS_SITE = "form-parse";
+    static final String SCHEMA_EGRESS_SITE = "form-schema";
+    static final String VALIDATION_EGRESS_SITE = "form-validation-feedback";
+    static final String EGRESS_REFUSED_MESSAGE = "内容里有无法脱敏的信息，未发给 AI，请手动填写";
+
     // ==================== 表单解析 ====================
 
     /**
@@ -79,20 +90,26 @@ public class FormAssistantService {
 
         try {
             String systemPrompt = buildFormParseSystemPrompt(entityType, formFields);
+            // 用户说的客户名 / 联系人 / 电话换成代号再发, 填回表单时换回真值; 脱敏不了就不发
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARSE_EGRESS_SITE, factoryId, userInput);
+            if (redacted.refused()) {
+                return FormParseResult.error(EGRESS_REFUSED_MESSAGE);
+            }
+            String sentInput = redacted.text(0);
             String response;
 
             if (enableThinking) {
                 log.info("表单解析使用思考模式: thinkingBudget={}", thinkingBudget);
-                var thinkingResponse = dashScopeClient.chatWithThinking(systemPrompt, userInput, thinkingBudget);
+                var thinkingResponse = dashScopeClient.chatWithThinking(systemPrompt, sentInput, thinkingBudget);
                 if (thinkingResponse.hasError()) {
                     return FormParseResult.error("AI思考模式错误: " + thinkingResponse.getErrorMessage());
                 }
                 response = thinkingResponse.getContent();
             } else {
-                response = dashScopeClient.chatLowTemp(systemPrompt, userInput);
+                response = dashScopeClient.chatLowTemp(systemPrompt, sentInput);
             }
 
-            return parseFormParseResponse(response, formFields);
+            return parseFormParseResponse(redacted.restoreJsonText(response), formFields);
         } catch (Exception e) {
             log.error("表单解析失败", e);
             return FormParseResult.error("解析失败: " + e.getMessage());
@@ -387,21 +404,28 @@ public class FormAssistantService {
         }
 
         try {
-            String systemPrompt = buildSchemaGeneratePrompt(entityType, existingFields, userJustification);
+            // 用户解释 (userJustification) 拼在系统提示里, 一起脱敏
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(SCHEMA_EGRESS_SITE, factoryId,
+                    buildSchemaGeneratePrompt(entityType, existingFields, userJustification), userInput);
+            if (redacted.refused()) {
+                return SchemaGenerateResult.error(EGRESS_REFUSED_MESSAGE);
+            }
+            String systemPrompt = redacted.text(0);
+            String sentInput = redacted.text(1);
             String response;
 
             if (enableThinking) {
                 log.info("Schema生成使用思考模式: thinkingBudget={}", thinkingBudget);
-                var thinkingResponse = dashScopeClient.chatWithThinking(systemPrompt, userInput, thinkingBudget);
+                var thinkingResponse = dashScopeClient.chatWithThinking(systemPrompt, sentInput, thinkingBudget);
                 if (thinkingResponse.hasError()) {
                     return SchemaGenerateResult.error("AI思考模式错误: " + thinkingResponse.getErrorMessage());
                 }
                 response = thinkingResponse.getContent();
             } else {
-                response = dashScopeClient.chatLowTemp(systemPrompt, userInput);
+                response = dashScopeClient.chatLowTemp(systemPrompt, sentInput);
             }
 
-            return parseSchemaGenerateResponse(response);
+            return parseSchemaGenerateResponse(redacted.restoreJsonText(response));
         } catch (Exception e) {
             log.error("Schema生成失败", e);
             return SchemaGenerateResult.error("生成失败: " + e.getMessage());
@@ -626,8 +650,15 @@ public class FormAssistantService {
         }
 
         try {
-            String prompt = buildValidationFeedbackPrompt(entityType, formFields,
+            String rawPrompt = buildValidationFeedbackPrompt(entityType, formFields,
                     submittedValues, validationErrors, userInstruction);
+            // 提交值里的客户 / 联系人名先从结构里认出来, 地址 / 备注 / 电话这类不发字段的值在正文里也换掉
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(VALIDATION_EGRESS_SITE, factoryId,
+                    submittedValues, Map.of(), List.of(rawPrompt));
+            if (redacted.refused()) {
+                return ValidationFeedbackResult.error(EGRESS_REFUSED_MESSAGE);
+            }
+            String prompt = redacted.text(0);
             String systemPrompt = "你是一个表单校验助手，帮助用户修正表单填写错误。";
             String response;
 
@@ -642,7 +673,7 @@ public class FormAssistantService {
                 response = dashScopeClient.chatLowTemp(systemPrompt, prompt);
             }
 
-            return parseValidationFeedbackResponse(response);
+            return parseValidationFeedbackResponse(redacted.restoreJsonText(response));
         } catch (Exception e) {
             log.error("校验反馈处理失败", e);
             return ValidationFeedbackResult.error("处理失败: " + e.getMessage());

@@ -193,4 +193,48 @@ class IntentExecutionOrchestratorNumberProvenanceTest {
         assertThat(answer).isEqualTo("冷藏建议控制在 0-4℃。");
         assertThat(gate.total(IntentExecutionOrchestrator.CONVERSATIONAL_PROVENANCE_SITE)).isZero();
     }
+
+    // ------------------------------------------------------------------ 外发脱敏 (官网「数据安全」)
+
+    private void guardWith(java.util.function.Consumer<com.cretas.aims.service.consent.ProcessSecretSampleFilter> stub) {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        stub.accept(filter);
+        ReflectionTestUtils.setField(orchestrator, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(new ObjectMapper(), filter));
+    }
+
+    @Test
+    @DisplayName("带经营报告的咨询回答: 报告和原话里的客户 / 人名 / 电话 / 保密产品名不发给模型, 回答换回真名")
+    void conversationalAnswerOverReportIsRedactedAndRestored() {
+        guardWith(f -> when(f.protectedProductNames(FACTORY)).thenReturn(java.util.Set.of("秘制酱牛肉")));
+        stubDailyReport("今日 张记食品有限公司 回款 12800 元; 秘制酱牛肉 产量 300 kg; 质检员：赵铁柱 13912345678 复检");
+        org.mockito.ArgumentCaptor<String> system = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.ArgumentCaptor<String> user = org.mockito.ArgumentCaptor.forClass(String.class);
+        when(llm.chat(system.capture(), user.capture())).thenAnswer(inv -> {
+            String sys = inv.getArgument(0);
+            String org = sys.replaceAll("(?s).*?(\\[单位[A-Z]+]).*", "$1");
+            return "建议先跟进 " + org + " 的回款 12800 元。";
+        });
+
+        String answer = orchestrator.generateConversationalResponse(
+                FACTORY, "张记食品有限公司 这周还要跟进吗", QuestionType.GENERAL_QUESTION, false, null);
+
+        assertThat(system.getValue() + user.getValue())
+                .doesNotContain("张记食品", "赵铁柱", "13912345678", "秘制酱牛肉").contains("12800", "300");
+        assertThat(answer).isEqualTo("建议先跟进 张记食品有限公司 的回款 12800 元。");
+    }
+
+    @Test
+    @DisplayName("查保密产品名失败: 报告和原话都不发给模型")
+    void conversationalAnswerIsNotSentWhenSecretLookupFails() {
+        guardWith(f -> when(f.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down")));
+        stubDailyReport("今日 张记食品有限公司 回款 12800 元");
+
+        String answer = orchestrator.generateConversationalResponse(
+                FACTORY, "最近经营怎么样", QuestionType.GENERAL_QUESTION, false, null);
+
+        org.mockito.Mockito.verify(llm, org.mockito.Mockito.never()).chat(anyString(), anyString());
+        assertThat(answer).contains("没有发给 AI");
+    }
 }
