@@ -17,6 +17,8 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.utils.TokenUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +27,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -43,6 +46,15 @@ public class CanvasAIController {
     private final DashScopeClient dashScopeClient;
     private final MobileService mobileService;
     private final ToolExecutionGateway toolExecutionGateway;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例 (不查保密产品名)。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String APPROVAL_WORKFLOW_EGRESS_SITE = "canvas-approval-workflow";
+    static final String PRODUCT_PROCESS_WORKFLOW_EGRESS_SITE = "canvas-product-process-workflow";
+    static final String EGRESS_RESULT_SITE = "canvas-plan";
+    static final String EGRESS_REFUSED_REPLY = "内容里有无法脱敏的信息, 未发给 AI, 请手动编辑";
 
     private static final String PRODUCT_WORK_PROCESS_MODULE = "product_work_process_config";
     private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
@@ -304,7 +316,7 @@ public class CanvasAIController {
                         request, authenticatedPrincipal(factoryId, authorization)));
             }
             if (APPROVAL_WORKFLOW_MODULE.equals(request.getModuleCode())) {
-                return ApiResponse.success(handleApprovalWorkflowConfigChat(request));
+                return ApiResponse.success(handleApprovalWorkflowConfigChat(request, factoryId));
             }
 
             Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
@@ -340,18 +352,24 @@ public class CanvasAIController {
         return ApiResponse.success(response);
     }
 
-    private AIResponse handleApprovalWorkflowConfigChat(AIRequest request) throws Exception {
+    private AIResponse handleApprovalWorkflowConfigChat(AIRequest request, String factoryId) throws Exception {
         Map<String, Object> requestParams = request.getParams() != null
                 ? request.getParams()
                 : Map.of();
         Map<String, Object> context = readStringObjectMap(requestParams.get("context"));
-        String prompt = APPROVAL_WORKFLOW_SYSTEM_PROMPT.formatted(
-                objectMapper.writeValueAsString(context));
-        String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
+        // 审批人名单里的姓名 / 登录名换成 [人员A], 管理员原话里提到同一个人时是同一个代号; 用户 id 照发 (草稿要引用)
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(APPROVAL_WORKFLOW_EGRESS_SITE, factoryId,
+                approvalDirectoryNames(context),
+                Arrays.asList(objectMapper.writeValueAsString(context), request.getMessage()));
+        if (redacted.refused()) {
+            return approvalWorkflowFailureResponse(EGRESS_REFUSED_REPLY);
+        }
+        String prompt = APPROVAL_WORKFLOW_SYSTEM_PROMPT.formatted(redacted.text(0));
+        String llmResponse = dashScopeClient.chatLowTemp(prompt, redacted.text(1));
         Map<String, Object> spec;
         try {
-            spec = objectMapper.readValue(
-                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+            spec = castStringObjectMap(redacted.restoreDeep(objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {})));
         } catch (Exception parseError) {
             return approvalWorkflowFailureResponse("AI 未能生成可用的审批草稿，请换一种说法重试");
         }
@@ -374,6 +392,28 @@ public class CanvasAIController {
                 "params", Map.of("spec", spec),
                 "description", APPROVAL_WORKFLOW_REPLY)));
         return response;
+    }
+
+    /** 前端审批目录 {@code users: [{id, username, name}]} 里的姓名与登录名。 */
+    private static Map<String, LlmEgressRedactor.Party> approvalDirectoryNames(Map<String, Object> context) {
+        Map<String, LlmEgressRedactor.Party> names = new LinkedHashMap<>();
+        if (context.get("users") instanceof List<?> users) {
+            for (Object u : users) {
+                if (u instanceof Map<?, ?> user) {
+                    for (String key : List.of("name", "username", "fullName", "realName")) {
+                        if (user.get(key) instanceof String name && !name.isBlank()) {
+                            names.put(name, LlmEgressRedactor.Party.PERSON);
+                        }
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> castStringObjectMap(Object restored) {
+        return (Map<String, Object>) restored;
     }
 
     private AIResponse approvalWorkflowFailureResponse(String message) {
@@ -404,16 +444,26 @@ public class CanvasAIController {
                 ? requestParams.get("selectedNodeId")
                 : nestedContext.get("selectedNodeId");
 
+        // 发给模型前: 工艺保密产品名、号码、公司名 / 人名换代号, 脱敏不了就不发
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PRODUCT_PROCESS_WORKFLOW_EGRESS_SITE,
+                Objects.toString(toolContext.get("factoryId"), null), Map.of(),
+                Arrays.asList(objectMapper.writeValueAsString(definition), request.getMessage(),
+                        Objects.toString(selectedNodeId, "null")));
+        if (redacted.refused()) {
+            AIResponse refused = workflowSpecFailureResponse();
+            refused.setReply(EGRESS_REFUSED_REPLY);
+            return refused;
+        }
         // 弃补丁: 让 LLM 只产出语义规格 (rawMaterials + steps), 前端确定性编译成图。
         String prompt = PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT.formatted(
-                objectMapper.writeValueAsString(definition),
-                Objects.toString(selectedNodeId, "null"));
-        String llmResponse = dashScopeClient.chatLowTemp(prompt, request.getMessage());
+                redacted.text(0),
+                redacted.text(2));
+        String llmResponse = dashScopeClient.chatLowTemp(prompt, redacted.text(1));
         Map<String, Object> spec;
         try {
             // 规格是 JSON 对象 {...} 不是数组, 必须用 extractJsonObject (extractJson 只抓 [...] 数组)。
-            spec = objectMapper.readValue(
-                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+            spec = castStringObjectMap(redacted.restoreDeep(objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {})));
         } catch (Exception parseError) {
             return workflowSpecFailureResponse();
         }
@@ -540,7 +590,7 @@ public class CanvasAIController {
         // server next to the tool it describes.
         if (params.get("action") == null) {
             AIResponse extractionFailure =
-                    fillWorkProcessCatalogParams(request.getMessage(), params);
+                    fillWorkProcessCatalogParams(request.getMessage(), params, principal.tenantId());
             if (extractionFailure != null) {
                 return extractionFailure;
             }
@@ -594,19 +644,23 @@ public class CanvasAIController {
      *         returns a half-filled params map with a success-looking response —
      *         a missing {@code action} is reported, not guessed.
      */
-    private AIResponse fillWorkProcessCatalogParams(String message, Map<String, Object> params) {
+    private AIResponse fillWorkProcessCatalogParams(String message, Map<String, Object> params, String factoryId) {
         String userMessage = Objects.toString(message, "").trim();
         if (userMessage.isEmpty()) {
             return workProcessCatalogFailure(
                     "还没有收到工序描述。请写清楚动作和工序名，例如「新建焯水工序，加工类，标准时薪25」。");
         }
 
+        LlmEgressRedactor.Result masked = llmEgressGuard.texts(EGRESS_RESULT_SITE, factoryId, userMessage);
+        if (masked.refused()) {
+            return workProcessCatalogFailure(EGRESS_REFUSED_REPLY);
+        }
         Map<String, Object> extracted;
         try {
             String llmResponse = dashScopeClient.chatLowTemp(
-                    WORK_PROCESS_CATALOG_SYSTEM_PROMPT, userMessage);
-            extracted = objectMapper.readValue(
-                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {});
+                    WORK_PROCESS_CATALOG_SYSTEM_PROMPT, masked.text(0));
+            extracted = castStringObjectMap(masked.restoreDeep(objectMapper.readValue(
+                    extractJsonObject(llmResponse), new TypeReference<Map<String, Object>>() {})));
         } catch (Exception e) {
             log.warn("工序主数据参数抽取失败: message={}, error={}", userMessage, e.getMessage());
             return workProcessCatalogFailure(
@@ -820,7 +874,13 @@ public class CanvasAIController {
     /**
      * Plan Mode: LLM 生成变更方案 (不执行)，用户逐项审核后批量应用
      */
-    private List<Map<String, Object>> generatePlan(String factoryId, String message) {
+    private List<Map<String, Object>> generatePlan(String factoryId, String rawMessage) {
+        // 用户原话里的手机号 / 证件号 / 卡号换成可还原的代号再发
+        LlmEgressRedactor.Result masked = llmEgressGuard.texts(EGRESS_RESULT_SITE, factoryId, rawMessage);
+        if (masked.refused()) {
+            return List.of(Map.of("type", "INFO", "tool", "", "params", Map.of(), "description", EGRESS_REFUSED_REPLY));
+        }
+        String message = masked.text(0);
         String prompt = CANVAS_SYSTEM_PROMPT + """
 
                 模式: PLAN (生成方案，不执行)
@@ -842,8 +902,12 @@ public class CanvasAIController {
 
         try {
             String json = extractJson(llmResponse);
-            return objectMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {});
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> plan = (List<Map<String, Object>>) masked.restoreDeep(
+                    objectMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {}));
+            return plan;
         } catch (Exception e) {
+            llmResponse = masked.restore(llmResponse);
             log.warn("Plan JSON parse failed: {}", e.getMessage());
             // Return a single item explaining the error
             return List.of(Map.of(
@@ -858,7 +922,12 @@ public class CanvasAIController {
     /**
      * Action Mode: LLM 分析用户操作的关联影响
      */
-    private String analyzeImpact(String factoryId, String message) {
+    private String analyzeImpact(String factoryId, String rawMessage) {
+        LlmEgressRedactor.Result masked = llmEgressGuard.texts(EGRESS_RESULT_SITE, factoryId, rawMessage);
+        if (masked.refused()) {
+            return EGRESS_REFUSED_REPLY;
+        }
+        String message = masked.text(0);
         String prompt = CANVAS_SYSTEM_PROMPT + """
 
                 模式: ACTION (实时提示)
@@ -874,7 +943,7 @@ public class CanvasAIController {
                 用简洁的中文回答，不超过 200 字。
                 """.formatted(factoryId, message);
 
-        return dashScopeClient.chatFast(prompt, message);
+        return masked.restore(dashScopeClient.chatFast(prompt, message));
     }
 
     /**
