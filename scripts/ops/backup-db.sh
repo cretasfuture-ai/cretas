@@ -73,8 +73,11 @@ oss_sync() {
     if [ ! -x "$AGE_BIN" ]; then
         echo "$LOG_PREFIX OSS: SKIPPED (age not found at $AGE_BIN, refusing to upload plaintext)"; return 0
     fi
-    local recipient
-    recipient=$(grep -oE '^age1[0-9a-z]+' "$AGE_RECIPIENT_FILE" 2>/dev/null | head -1 || true)
+    local recipient="" recipient_file=""
+    recipient_file=$(cat "$AGE_RECIPIENT_FILE" 2>/dev/null) || recipient_file=""
+    if [[ "$recipient_file" =~ (^|[[:space:]])(age1[0-9a-z]+) ]]; then
+        recipient="${BASH_REMATCH[2]}"
+    fi
     if [ -z "$recipient" ]; then
         echo "$LOG_PREFIX OSS: SKIPPED (no age public key in $AGE_RECIPIENT_FILE, refusing to upload plaintext)"; return 0
     fi
@@ -94,8 +97,11 @@ oss_sync() {
         fi
         if ossutil64 cp "$enc" "$obj" -f >/dev/null 2>&1; then
             # ⛔ 「命令返回 0」不是判据 —— 去对象存储侧确认它真的在, 且大小对得上
-            local remote_size local_size
-            remote_size=$(ossutil64 stat "$obj" 2>/dev/null | awk -F': *' '/^Content-Length/{print $2}' | tr -d ' \r')
+            local remote_size="" local_size stat_out=""
+            stat_out=$(ossutil64 stat "$obj" 2>/dev/null) || stat_out=""
+            if [[ "$stat_out" =~ Content-Length[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+                remote_size="${BASH_REMATCH[1]}"
+            fi
             local_size=$(stat -c %s "$enc")
             if [ "${remote_size:-0}" = "$local_size" ]; then
                 echo "$LOG_PREFIX OSS upload OK: $(basename "$enc") ($(du -h "$enc" | cut -f1), encrypted, size verified)"
