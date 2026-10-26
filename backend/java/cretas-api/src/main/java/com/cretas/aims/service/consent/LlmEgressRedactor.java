@@ -930,10 +930,7 @@ public final class LlmEgressRedactor {
             if (explicitReals.contains(real)) {
                 return real.length() >= 2 && !real.matches("\\d+");
             }
-            // 记录不发时, 不认识字段里的值 (经销商 / 收款方 / 裸 name …) 也是要在文本里换掉的名字
-            if (kind == Kind.NAME && recordOnly) {
-                return real.length() >= 2 && !real.matches("\\d+") && !isCode(real);
-            }
+            // (名称代号不扩散进结构化结果; 文本里的替换见 textReals)
             // 隐藏内容只在文本模式里替换 (scrubText), 不扩散进结构化结果
             if (kind == null || kind == Kind.NAME || kind == Kind.HIDDEN_FIELD || real.length() < 2
                     || real.matches("\\d+")) {
