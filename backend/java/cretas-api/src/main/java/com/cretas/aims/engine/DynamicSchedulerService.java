@@ -2,7 +2,7 @@ package com.cretas.aims.engine;
 
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
-import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.audit.RequestAuditSupport;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.scheduling.Trigger;
+import org.springframework.scheduling.TriggerContext;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -20,8 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,6 +39,7 @@ public class DynamicSchedulerService {
 
     private final FactorySchedulerConfigRepository schedulerRepo;
     private final ToolRegistry toolRegistry;
+    private final AutonomousToolRunner runner;
 
     // Self-reference for proxy-aware @Transactional dispatch (R7 G2 persistExecutionMetadata
     // needs REQUIRES_NEW, which Spring AOP only honors through the proxy). @Lazy breaks
@@ -114,8 +117,13 @@ public class DynamicSchedulerService {
         if (existing != null) { existing.cancel(false); activeTasks.remove(key); }
 
         try {
+            // The task carries only the config id and the cron it was scheduled with: every fire
+            // re-reads the row, so a change made through another instance takes effect here too.
+            Long configId = config.getId();
+            String scheduledCron = config.getCronExpression();
+            PlannedFireTrigger trigger = new PlannedFireTrigger(new CronTrigger(scheduledCron));
             ScheduledFuture<?> future = getOrCreateScheduler().schedule(
-                    () -> executeTask(config), new CronTrigger(config.getCronExpression()));
+                    () -> fire(configId, scheduledCron, key, trigger.planned()), trigger);
             activeTasks.put(key, future);
             log.info("Scheduled task: {} [{}] cron={}", key, config.getToolOrMethod(), config.getCronExpression());
         } catch (IllegalArgumentException e) {
@@ -166,11 +174,71 @@ public class DynamicSchedulerService {
         if (toolName == null || toolName.isBlank()) return;
         Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
         if (tool.isEmpty()) return;
-        String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), params);
+        String refusal = AutonomousToolPolicy.identityRejection(params);
         if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
+        AutonomousToolPolicy.requireSourceAllowed(toolName, ToolExecutionSource.SCHEDULER);
     }
 
+    /**
+     * A cron trigger that remembers the planned fire time it last handed out. Spring computes the
+     * next planned time before scheduling each run and only after the previous run finished, so the
+     * run that starts reads exactly its own planned time, however late it actually starts.
+     */
+    static final class PlannedFireTrigger implements Trigger {
+        private final Trigger cron;
+        private volatile Instant planned;
+
+        PlannedFireTrigger(Trigger cron) {
+            this.cron = cron;
+        }
+
+        @Override
+        public Instant nextExecution(TriggerContext context) {
+            Instant next = cron.nextExecution(context);
+            planned = next;
+            return next;
+        }
+
+        Instant planned() {
+            return planned;
+        }
+    }
+
+    /**
+     * The immutable identity of one planned fire: the cron is evaluated in this JVM's default zone
+     * (as before), the key is the absolute instant, so it does not depend on when the fire actually
+     * runs. Instances firing for the same planned time share it; adjacent planned times never do.
+     */
+    static String plannedFireKey(Instant plannedFire) {
+        return plannedFire == null ? null : "slot:" + plannedFire;
+    }
+
+    /**
+     * One cron fire: re-read the config, stop if it is gone or disabled, reschedule if its cron
+     * changed elsewhere, otherwise run it under its planned fire's run key.
+     */
+    void fire(Long configId, String scheduledCron, String key, Instant plannedFire) {
+        FactorySchedulerConfig fresh = configId == null ? null : schedulerRepo.findById(configId).orElse(null);
+        if (fresh == null || !Boolean.TRUE.equals(fresh.getEnabled())) {
+            ScheduledFuture<?> future = activeTasks.remove(key);
+            if (future != null) future.cancel(false);
+            log.info("Scheduled config id={} is gone or disabled at fire time; stopped on this instance", configId);
+            return;
+        }
+        if (!Objects.equals(scheduledCron, fresh.getCronExpression())) {
+            log.info("Scheduled config id={} cron changed elsewhere; rescheduling on this instance", configId);
+            scheduleTask(fresh);
+            return;
+        }
+        executeTask(fresh, plannedFireKey(plannedFire));
+    }
+
+    /** A run with no planned fire identity: reads run, delegated writes are refused by the runner. */
     private void executeTask(FactorySchedulerConfig config) {
+        executeTask(config, null);
+    }
+
+    private void executeTask(FactorySchedulerConfig config, String runKey) {
         String validationError = validateConfig(config);
         if (validationError != null) {
             String status = validationStatus(validationError);
@@ -199,13 +267,27 @@ public class DynamicSchedulerService {
             errorHolder[0] = safeError("tool not registered: " + toolOrMethod);
         } else {
             try {
-                String argsJson = objectMapper.writeValueAsString(config.getParams());
-                ToolCall toolCall = ToolCall.of("sched-" + config.getTaskCode(), toolOrMethod, argsJson);
-                Map<String, Object> context = new HashMap<>();
-                context.put("factoryId", config.getFactoryId());
-                String result = executor.get().execute(toolCall, context);
-                String businessError = businessFailure(result);
-                if (businessError != null) {
+                // Never executed directly: the gateway runs it as the run-as user and audits it.
+                AutonomousToolRunner.Outcome outcome = runner.run(config.getFactoryId(), config.getRunAsUserId(),
+                        toolOrMethod, config.getParams(), ToolExecutionSource.SCHEDULER,
+                        "sched-" + config.getId() + "-" + config.getTaskCode(),
+                        SchedulerGrantBinding.of(config, executor.get().getVersion(), objectMapper),
+                        runKey);
+                if (outcome.replay()) {
+                    // Another fire of the same slot (second instance) consumed it: that fire records the
+                    // outcome. Writing ours would overwrite its SUCCESS with this instance's view.
+                    log.info("Scheduled task id={} slot already run elsewhere: {} {}", config.getId(),
+                            outcome.status(), safeError(outcome.error()));
+                    return;
+                }
+                String businessError = outcome.succeeded() && outcome.payload() != null
+                        ? businessFailure(outcome.payload().toString()) : null;
+                if (!outcome.succeeded()) {
+                    statusHolder[0] = outcome.status();
+                    errorHolder[0] = safeError(outcome.error());
+                    log.warn("Scheduled task id={} not completed: status={} error={}",
+                            config.getId(), statusHolder[0], errorHolder[0]);
+                } else if (businessError != null) {
                     statusHolder[0] = "FAILED";
                     errorHolder[0] = safeError(businessError);
                     log.warn("Scheduled task id={} returned business failure: {}",
@@ -289,8 +371,9 @@ public class DynamicSchedulerService {
         if (tool.isEmpty()) {
             return "tool not registered: " + config.getToolOrMethod();
         }
-        // Checked at schedule time and again before every run: there is no user behind a cron run.
-        return AutonomousToolPolicy.rejection(config.getToolOrMethod(), tool.get(), config.getParams());
+        // Identity parameters are refused at schedule time and before every run. A write tool may be
+        // scheduled; each of its runs needs a delegated grant, checked by the runner.
+        return AutonomousToolPolicy.identityRejection(config.getParams());
     }
 
     private void markConfigStatus(FactorySchedulerConfig config, String status, String error) {
