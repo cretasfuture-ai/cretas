@@ -26,12 +26,14 @@ require('./visual-page-census-readonly.test');
 require('./smartbi-factory-details.test');
 
 const {
+  assessDetailsResponse,
   clickAttempts,
   detailCellEvidence,
   echartsAssetUrl,
   estimateVirtualRowCount,
   mountedEChartsPointCoordinate,
   mountedTableEvidenceComplete,
+  inspectDetailsTable,
   retryMountedTableEvidence,
   readVirtualTableMetrics,
   selectEChartsAssetUrls,
@@ -39,6 +41,17 @@ const {
   availablePointAttempts,
   POINT_CLICK_BUDGET_MS,
 } = require('../scenarios/smartbi-factory-readonly');
+
+function pointResponse({ rows, columns, availableFilters = [] }) {
+  return {
+    status: 200,
+    request: { context_id: 'ctx-dept', page: 1, page_size: 50, point: { name: 'QA-SBI-1026-DEPT', seriesName: '收入', dataIndex: 0 } },
+    body: { success: true, data: {
+      factoryId: 'F006', candidateId: 'sales-channel', source: '业务系统', period: '2026年全部期间',
+      page: 1, pageSize: 50, rows, total: rows.length, columns, availableFilters,
+    } },
+  };
+}
 
 test('virtual row geometry uses the inner content height instead of the viewport height', () => {
   assert.notEqual(estimateVirtualRowCount({ contentHeight: 620, rowHeight: 44 }), 51);
@@ -76,6 +89,41 @@ test('bar point coordinates honor the ECharts grid and value axis', () => {
   candidate.chart.echartsOption.yAxis.inverse = true;
   const inverseAttempts = clickAttempts({ x: 10, y: 20, width: 500, height: 400 }, candidate, point);
   assert.ok(Math.abs(inverseAttempts[0].y - 127.5) < 0.001);
+});
+
+test('point filtering accepts a supported department column even when the backend omits single-value filters', () => {
+  const expected = { factoryId: 'F006', candidateId: 'sales-channel', source: '业务系统', period: '2026年全部期间', contextId: 'ctx-dept' };
+  const result = assessDetailsResponse({
+    ...pointResponse({
+      columns: ['日期', '订单ID', '部门', '实际（元）'],
+      rows: [{ 日期: '2026-10-26', 订单ID: 'order-273', 部门: 'QA-SBI-1026-DEPT', '实际（元）': 30 }],
+    }),
+    expected,
+    point: { name: 'QA-SBI-1026-DEPT', seriesName: '收入', dataIndex: 0, dimension: '部门' },
+  });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.checks.pointRows, true);
+  assert.equal(result.pointDimensions.allowedFields.includes('部门'), true);
+});
+
+test('point filtering cannot use remarks or money columns and rejects a mismatched department', () => {
+  const expected = { factoryId: 'F006', candidateId: 'sales-channel', source: '业务系统', period: '2026年全部期间', contextId: 'ctx-dept' };
+  const row = { 备注: 'QA-SBI-1026-DEPT', 金额: 'QA-SBI-1026-DEPT', 部门: 'OTHER' };
+  const columns = ['备注', '金额', '部门'];
+  const remark = assessDetailsResponse({ ...pointResponse({ rows: [row], columns }), expected, point: { name: 'QA-SBI-1026-DEPT', dimension: '备注' } });
+  const money = assessDetailsResponse({ ...pointResponse({ rows: [row], columns }), expected, point: { name: 'QA-SBI-1026-DEPT', dimension: '金额' } });
+  const mismatch = assessDetailsResponse({ ...pointResponse({ rows: [row], columns }), expected, point: { name: 'QA-SBI-1026-DEPT', dimension: '部门' } });
+  assert.notEqual(remark.result, 'PASS');
+  assert.notEqual(money.result, 'PASS');
+  assert.notEqual(mismatch.result, 'PASS');
+  assert.equal(remark.checks.pointDimensionContract, false);
+  assert.equal(money.checks.pointDimensionContract, false);
+  assert.equal(mismatch.checks.pointRowsMatchDimension, false);
+  const measureInput = pointResponse({ rows: [{ 总数: 30 }], columns: ['总数'] });
+  measureInput.request.point = { name: '30' };
+  const measure = assessDetailsResponse({ ...measureInput, expected, point: { name: '30' } });
+  assert.equal(measure.checks.pointRequest, true);
+  assert.equal(measure.checks.pointRows, false);
 });
 
 test('same-origin ECharts asset selection is exact and bounded', () => {
@@ -176,4 +224,38 @@ test('mounted table evidence retries a delayed virtual DOM before deciding', asy
 
   const neverMounted = await retryMountedTableEvidence(async () => ({ drawerVisible: true, tableVisible: true, rowCountMatches: true, displayedValues: false, concreteValueVisible: false }), { timeoutMs: 1, sleep: async () => {} });
   assert.equal(mountedTableEvidenceComplete(neverMounted), false);
+});
+
+test('inspectDetailsTable wiring retries the real drawer/table locator chain with a bounded sample timeout', async () => {
+  let samples = 0;
+  const waitTimeouts = [];
+  const rowLocator = { count: async () => (samples >= 2 ? 1 : 0) };
+  const table = {
+    count: async () => 1,
+    waitFor: async ({ timeout }) => { waitTimeouts.push(timeout); },
+    isVisible: async () => true,
+    locator: () => rowLocator,
+    getAttribute: async () => '1',
+    evaluate: async () => {
+      samples += 1;
+      return samples >= 2
+        ? { contentHeight: 44, viewportHeight: 576, rowHeight: 44, visibleCellTexts: ['B1', '0'] }
+        : { contentHeight: 0, viewportHeight: 576, rowHeight: 0, visibleCellTexts: [] };
+    },
+  };
+  const drawer = {
+    count: async () => 1,
+    isVisible: async () => true,
+    locator: () => ({ first: () => table }),
+  };
+  const page = {
+    locator: selector => selector === '.el-drawer:visible' ? { first: () => drawer } : null,
+    waitForTimeout: async () => {},
+  };
+  const result = await inspectDetailsTable(page, 1, { columns: ['批次', '数量'], rows: [{ 批次: 'B1', 数量: 0 }] }, 100);
+  assert.ok(result.sampleAttempts >= 2);
+  assert.equal(result.rowCountMatches, true);
+  assert.equal(result.displayedValues, true);
+  assert.equal(result.concreteValueVisible, true);
+  assert.ok(waitTimeouts.every(timeout => Number.isFinite(timeout) && timeout <= 1_000));
 });

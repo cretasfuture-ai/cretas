@@ -33,6 +33,18 @@ function expectedDetailIdentity(expected) {
 }
 
 const DATE_DIMENSIONS = new Set(['日期', '月份', '生产日期', '入库日期', '销售日期', '会计期间', '月', '年月', 'date', 'month']);
+// Mirrors the backend details.py _classify semantic allow-list, narrowed to
+// dimensions that can identify a chart point. Free-text remarks and measures
+// are deliberately excluded even when they happen to equal point.name.
+const POINT_DIMENSION_BASES = new Set([
+  ...DATE_DIMENSIONS,
+  '产品', '产品名称', 'SKU', '品类', '工序', '工序名称', '产线', '原料', '原料名称', '物料',
+  '供应商', '供应商名称', '批次', '批次号', '订单号', '单号', '账单号', '仓库', '库位',
+  '部门', '渠道', '车间', '班组', '状态', '规格', '型号', '单位', '数量单位',
+  '订单ID', '订单行ID', '报工ID', '设备ID', '部门ID', '工序序', '原料ID', '流转记录ID',
+  '来源节点', '去向节点',
+  '来源WIP号', '目标WIP号', '产出WIP号', '库存库龄桶', '库存效期桶',
+]);
 
 function dimensionBaseName(field) {
   return String(field || '').replace(/[（(].*?[）)]$/, '').trim();
@@ -54,9 +66,14 @@ function pointValueMatches(value, name, field) {
 }
 
 function pointMatchingDimensions(data, point) {
-  const allowed = Array.isArray(data?.availableFilters)
+  const available = Array.isArray(data?.availableFilters)
     ? data.availableFilters.map((item) => item?.field).filter((field) => typeof field === 'string' && field)
     : [];
+  const semanticColumns = Array.isArray(data?.columns)
+    ? data.columns.filter((field) => typeof field === 'string' && POINT_DIMENSION_BASES.has(dimensionBaseName(field)))
+    : [];
+  const allowed = [...new Set([...available, ...semanticColumns])]
+    .filter((field) => POINT_DIMENSION_BASES.has(dimensionBaseName(field)));
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const matches = rows.map((row) => allowed.filter((field) => pointValueMatches(row?.[field], point.name, field)));
   const expectedDimension = point.dimension;
@@ -461,6 +478,11 @@ function summarizeCandidateCheck(candidateId, result) {
   };
 }
 
+function assessmentFailureReason(assessment) {
+  const failedChecks = Object.keys(assessment?.checks || {}).filter((key) => assessment.checks[key] === false);
+  return failedChecks.join(',') || assessment?.reason || assessment?.ui?.valueEvidenceReason || 'point evidence did not pass';
+}
+
 function unverified(reason, extra = {}) {
   return { result: 'UNVERIFIED', rootCauseClass: 'data', reason, ...extra };
 }
@@ -522,11 +544,11 @@ function detailCellEvidence(expectedData, visibleCellTexts) {
   };
 }
 
-async function inspectDetailsTableOnce(page, expectedRows, expectedData = null) {
+async function inspectDetailsTableOnce(page, expectedRows, expectedData = null, sampleTimeoutMs = 250) {
   const drawer = page.locator('.el-drawer:visible').first();
   const drawerVisible = await drawer.count() > 0 && await drawer.isVisible().catch(() => false);
   const table = drawer.locator('.el-table-v2').first();
-  if (drawerVisible && await table.count()) await table.waitFor({ state: 'visible', timeout: Math.max(1_000, timeoutMs) }).catch(() => {});
+  if (drawerVisible && await table.count()) await table.waitFor({ state: 'visible', timeout: Math.max(1, sampleTimeoutMs) }).catch(() => {});
   const tableVisible = drawerVisible && await table.count() > 0 && await table.isVisible().catch(() => false);
   if (!tableVisible) return {
     drawerVisible, tableVisible: false, renderedRowCount: 0, rowCountMatches: false,
@@ -572,7 +594,7 @@ async function retryMountedTableEvidence(sample, { timeoutMs = 5_000, sleep = as
   let latest = null;
   while (Date.now() <= deadline) {
     attempts += 1;
-    latest = await sample();
+    latest = await sample(Math.max(1, deadline - Date.now()));
     if (mountedTableEvidenceComplete(latest)) return { ...latest, sampleAttempts: attempts };
     if (Date.now() >= deadline) break;
     await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
@@ -582,7 +604,7 @@ async function retryMountedTableEvidence(sample, { timeoutMs = 5_000, sleep = as
 
 async function inspectDetailsTable(page, expectedRows, expectedData = null, timeoutMs = 5_000) {
   return retryMountedTableEvidence(
-    () => inspectDetailsTableOnce(page, expectedRows, expectedData),
+    (remainingMs) => inspectDetailsTableOnce(page, expectedRows, expectedData, Math.min(1_000, remainingMs)),
     { timeoutMs, sleep: (delay) => page.waitForTimeout(delay) },
   );
 }
@@ -671,7 +693,7 @@ async function capturePointDetails(page, candidate, expected, deadline = Date.no
       result: assessment.result,
       rowCount: assessment.rowCount,
       total: assessment.total,
-      reason: assessment.reason || assessment.ui?.valueEvidenceReason || Object.keys(assessment.checks || {}).filter((key) => assessment.checks[key] === false).join(',') || 'point evidence did not pass',
+      reason: assessmentFailureReason(assessment),
     });
     if (assessment.result === 'PASS') {
       await page.locator('.el-drawer:visible').first().waitFor({ timeout: 10_000 }).catch(() => {});
@@ -827,6 +849,7 @@ module.exports.readVirtualTableMetrics = readVirtualTableMetrics;
 module.exports.detailCellEvidence = detailCellEvidence;
 module.exports.mountedTableEvidenceComplete = mountedTableEvidenceComplete;
 module.exports.retryMountedTableEvidence = retryMountedTableEvidence;
+module.exports.inspectDetailsTable = inspectDetailsTable;
 module.exports.selectPointCandidate = selectPointCandidate;
 module.exports.estimateVirtualRowCount = estimateVirtualRowCount;
 module.exports.availablePointAttempts = availablePointAttempts;

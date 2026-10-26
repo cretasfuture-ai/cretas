@@ -5,7 +5,7 @@
 
 ## 在飞任务
 
-- `SMARTBI-FULL-QA-20261026` — `in-progress` — Root；F006验收，OEE/月结/明细scope见archive/2026-10-26-smartbi-full-closure.md。
+- `SMARTBI-FULL-QA-20261026` — `blocked` — Root；OSS403；手机暂缓；scope释放。
 
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
