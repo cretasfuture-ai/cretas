@@ -439,7 +439,9 @@ class LlmEgressRedactorTest {
                         "lw", LlmEgressRedactor.Party.PERSON),
                 Set.of(), true);
 
-        assertThat(r.text(0)).isEqualTo("[客户A]要求少盐");
+        // Map.of 的遍历顺序每个 JVM 都不同, 哪个客户先拿到 A 不固定: 只断言换成了客户代号、且还原回全称
+        assertThat(r.text(0)).matches("\\[客户[A-Z]+]要求少盐");
+        assertThat(r.restore(r.text(0))).isEqualTo("老街坊餐饮有限公司要求少盐");
         assertThat(r.text(1)).doesNotContain("老王");
         assertThat(r.text(2)).doesNotContain("lw");
     }
