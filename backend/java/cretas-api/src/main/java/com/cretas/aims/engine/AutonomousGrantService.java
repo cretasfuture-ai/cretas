@@ -69,7 +69,11 @@ public class AutonomousGrantService {
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /**
+     * Joins the caller's transaction: a scheduled fire consumes inside the issuer's single transaction
+     * together with the config lock and the RUNNING mark, so none of them can commit without the others.
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
     public Optional<Consumption> consume(Binding binding, String runKey, LocalDateTime now) {
         List<AutonomousToolGrant> bound = grants.lockBoundGrants(binding.factoryId(), binding.sourceType(),
                 binding.sourceRef(), binding.toolName(), binding.runAsUserId(), binding.parametersDigest());
