@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -105,6 +106,7 @@ public class FactoryDataService {
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
+    @Autowired   // 另有一个包内构造器给测试用; 不标的话 Spring 找不到该用哪个 (2026-10-26 Fresh DB 启动即失败)
     public FactoryDataService(@Qualifier("primaryDataSource") DataSource cretasDataSource,
                               @Qualifier("smartbiPostgresDataSource") ObjectProvider<DataSource> smartbiDataSource,
                               FactoryObjectStore objectStore,
@@ -309,7 +311,8 @@ public class FactoryDataService {
         FactoryDataRequestLedger.Row started = ledger.find(requestId).orElse(null);
         if (started == null || started.type() != FactoryDataRequestLedger.Type.EXPORT
                 || started.status() != FactoryDataRequestLedger.Status.RUNNING || !factoryId.equals(started.factoryId())) {
-            throw new BusinessException(409, "requestId 不是该厂一次进行中的导出 (先调用 startExport)");
+            throw new BusinessException(409, "requestId 不是该厂一次进行中的导出 (先调用 startExport)")
+                .withHint("先调用 startExport 拿到回执编号, 再用同一个编号写出导出包");
         }
         FactoryRow factory = requireFactory(factoryId);
         Set<Format> fmt = EnumSet.copyOf(formats);
@@ -578,7 +581,8 @@ public class FactoryDataService {
                         locked = rs.getBoolean(1);
                     }
                 }
-                if (!locked) throw new BusinessException(409, "该厂正有另一个删除申请 / 撤销 / 删除在进行, 请稍后再试");
+                if (!locked) throw new BusinessException(409, "该厂正有另一个删除申请 / 撤销 / 删除在进行, 请稍后再试")
+                .withHint("等正在进行的那个操作结束后再试, 进行中的回执可在 GET /requests 查看");
                 try {
                     return work.get();
                 } finally {

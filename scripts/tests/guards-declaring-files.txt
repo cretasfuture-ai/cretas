@@ -29,3 +29,4 @@ test-release-jdk-version-preamble.sh
 test-reap-orphan-testenvs-retired.sh
 test-f006-aurora-runtime.sh
 test-public-repo-hosted-only.sh
+test-backup-copy-retention.sh

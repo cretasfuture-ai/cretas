@@ -2,6 +2,7 @@ package com.cretas.aims.service.factorydata;
 
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -31,6 +32,7 @@ public class FactoryErasureRetentionJob {
     /** 业务表 (platform_data_access_log / factories) 所在 schema; 生产是 public, 测试用独立 schema。 */
     private final String schema;
 
+    @Autowired   // 另有一个包内构造器给测试用; 不标的话 Spring 找不到该用哪个 (2026-10-26 Fresh DB 启动即失败)
     public FactoryErasureRetentionJob(@Qualifier("primaryDataSource") DataSource dataSource) {
         this(dataSource, Clock.systemDefaultZone(), "public");
     }

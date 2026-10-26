@@ -83,7 +83,8 @@ cd / || exit 2
 
 CUTOFF_EPOCH=$((NOW_EPOCH - RETENTION_DAYS * 86400))
 CUTOFF_DAY=$(date -d "@$CUTOFF_EPOCH" +%Y%m%d)
-STAMP=$(date -d "@$NOW_EPOCH" +%Y%m%dT%H%M%S)
+# 文件名带纳秒: 同一秒里先 --plan 再 --apply --expect 时, 后一次的清单 ⛔ 不能覆盖前一次 (否则 --expect 永远对得上)
+STAMP=$(date +%Y%m%dT%H%M%S.%N)
 
 psql_at() {   # $1 db, $2 sql
     $PSQL_CMD -X -q -d "$1" -At -v ON_ERROR_STOP=1 -c "$2"
@@ -206,6 +207,9 @@ verdict() {  # $1 rc, $2 text
 }
 
 plan_file="$OUT_DIR/$STAMP-plan.txt"
+if [ -n "$expect" ] && [ "$(cd "$(dirname "$expect")" && pwd)/$(basename "$expect")" = "$(cd "$OUT_DIR" && pwd)/$STAMP-plan.txt" ]; then
+    echo "--expect 不能是本次运行自己的清单" >&2; exit 2
+fi
 if ! make_plan > "$plan_file"; then
     cron_dead "$ALERTS" "$PREFIX" "plan-failed" "计算清单失败 (库连不上?)"
 fi

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.factorydata;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +41,7 @@ public class FactoryDataRequestLedger {
     private final DataSource dataSource;
     private final Clock clock;
 
+    @Autowired   // 另有一个包内构造器给测试用; 不标的话 Spring 找不到该用哪个 (2026-10-26 Fresh DB 启动即失败)
     public FactoryDataRequestLedger(@Qualifier("primaryDataSource") DataSource dataSource) {
         this(dataSource, Clock.systemDefaultZone());
     }

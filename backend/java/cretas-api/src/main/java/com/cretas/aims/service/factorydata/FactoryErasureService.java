@@ -110,16 +110,20 @@ public class FactoryErasureService {
         if (export == null || export.type() != Type.EXPORT || export.status() != Status.SUCCEEDED
                 || !factoryId.equals(export.factoryId())
                 || !FactoryDataService.MANUAL_TRIGGER.equals(export.triggerSource())) {
-            throw new BusinessException(409, "删除前必须先完成一次该厂的导出并交付工厂 (exportRequestId 无效)");
+            throw new BusinessException(409, "删除前必须先完成一次该厂的导出并交付工厂 (exportRequestId 无效)")
+                .withHint("先导出 (attachments 用 INCLUDE 或 INDEX_ONLY) 并交付工厂, 再带这次导出的回执编号申请");
         }
         if (export.createdAt().isBefore(data.now().minusDays(EXPORT_MAX_AGE_DAYS))) {
-            throw new BusinessException(409, "导出已超过 " + EXPORT_MAX_AGE_DAYS + " 天, 请重新导出交付后再申请");
+            throw new BusinessException(409, "导出已超过 " + EXPORT_MAX_AGE_DAYS + " 天, 请重新导出交付后再申请")
+                .withHint("重新导出并交付工厂后, 用新的回执编号申请");
         }
         if (readString(export.summaryJson(), "/attachments/mode", "").equals(FactoryDataService.AttachmentMode.SKIP.name())) {
-            throw new BusinessException(409, "这次导出跳过了附件 (attachments=SKIP), 不能作为删除前的交付; 请用 INCLUDE 或 INDEX_ONLY 重新导出");
+            throw new BusinessException(409, "这次导出跳过了附件 (attachments=SKIP), 不能作为删除前的交付，请用 INCLUDE 或 INDEX_ONLY 重新导出")
+                .withHint("用 attachments=INCLUDE 或 INDEX_ONLY 重新导出");
         }
         if (ledger.findActiveErasureRequest(factoryId).isPresent()) {
-            throw new BusinessException(409, "该厂已有未完成的删除申请");
+            throw new BusinessException(409, "该厂已有未完成的删除申请")
+                .withHint("在 GET /requests 查看旧申请, 撤销后再申请或直接沿用它");
         }
         // 取整到秒: 库里的 timestamp 按微秒四舍五入, 不取整的话「当场可执行」的演练申请可能被存成比现在晚一点点
         LocalDateTime now = data.now().withNano(0);
@@ -187,16 +191,19 @@ public class FactoryErasureService {
         Row request = activeRequest(factoryId, body.erasureRequestId());
         LocalDateTime now = data.now();
         if (now.isBefore(request.notBefore())) {
-            throw new BusinessException(409, "冷静期未满, 最早 " + request.notBefore() + " 才能执行删除");
+            throw new BusinessException(409, "冷静期未满, 最早 " + request.notBefore() + " 才能执行删除")
+                .withHint("冷静期结束后重新预演, 再执行删除");
         }
         if (!Boolean.FALSE.equals(factory.isActive())) {
-            throw new BusinessException(409, "工厂在冷静期内被重新启用了, 不能删除; 请撤销这次申请, 需要时重新申请");
+            throw new BusinessException(409, "工厂在冷静期内被重新启用了, 不能删除，请撤销这次申请, 需要时重新申请")
+                .withHint("先撤销这次申请, 需要删除时重新申请");
         }
         Row preview = body.previewId() == null ? null : ledger.find(body.previewId()).orElse(null);
         if (preview == null || preview.type() != Type.PREVIEW || preview.status() != Status.SUCCEEDED
                 || !factoryId.equals(preview.factoryId()) || preview.createdAt().isBefore(request.createdAt())
                 || preview.createdAt().isBefore(now.minusHours(PREVIEW_MAX_AGE_HOURS))) {
-            throw new BusinessException(409, "必须带一次本申请之后、" + PREVIEW_MAX_AGE_HOURS + " 小时内的预演编号 (previewId)");
+            throw new BusinessException(409, "必须带一次本申请之后、" + PREVIEW_MAX_AGE_HOURS + " 小时内的预演编号 (previewId)")
+                .withHint("先调用 GET /preview 拿到新的 previewId");
         }
         Map<Database, Map<String, Long>> expected = expectedFromPreview(preview.summaryJson());
 
@@ -211,18 +218,21 @@ public class FactoryErasureService {
                 data.snapshot(db, conn -> {
                     FactoryDataScope scope = FactoryDataScopeResolver.resolveVisible(conn, db, data.schema(), factoryId);
                     if (!scope.foreignHits().isEmpty()) {
-                        throw new BusinessException(409, db + " 库有 " + scope.foreignHits().size() + " 行跨租户命中, 停止删除");
+                        throw new BusinessException(409, db + " 库有 " + scope.foreignHits().size() + " 行跨租户命中, 停止删除")
+                .withHint("按预演里的 foreignHits 把这些行的归属查清, 处理后重新预演");
                     }
                     compareWithPreview(db, scope, exp);
                     List<FactoryDataService.CopyCount> unregistered =
                             FactoryDataService.copiesOutside(conn, data.schema(), factoryId, false);
                     if (!unregistered.isEmpty()) {
-                        throw new BusinessException(409, db + " 库有不像副本的 schema 也存着该厂的行, 先查清: " + unregistered);
+                        throw new BusinessException(409, db + " 库有不像副本的 schema 也存着该厂的行, 先查清: " + unregistered)
+                .withHint("查清这些 schema 的用途: 是副本就按副本命名规则改名, 不是就先迁走该厂的行");
                     }
                     List<String> stuck = undatedCopiesWithoutPrivilege(conn, data.schema(), factoryId);
                     if (!stuck.isEmpty()) {
                         throw new BusinessException(409, db + " 库这些副本里有该厂的行, 账号删不了、名字里又没有日期 (30 天清理认不出): "
-                                + stuck);
+                                + stuck)
+                .withHint("给这些副本 schema 补上 YYYYMMDD 日期或删除权限, 让 30 天清理认得出它们");
                     }
                     if (db == Database.SMARTBI) smartbiTenants(conn, data.schema());   // 函数缺失 ⇒ 这里就失败
                     requireDeletePrivileges(conn, data.schema(),
@@ -296,7 +306,8 @@ public class FactoryErasureService {
         Set<String> tenants = db == Database.SMARTBI ? smartbiTenants(conn, schema) : null;
         FactoryDataScope scope = FactoryDataScopeResolver.resolveVisible(conn, db, schema, factoryId);
         if (!scope.foreignHits().isEmpty()) {
-            throw new BusinessException(409, db + " 库有 " + scope.foreignHits().size() + " 行跨租户命中, 停止删除");
+            throw new BusinessException(409, db + " 库有 " + scope.foreignHits().size() + " 行跨租户命中, 停止删除")
+                .withHint("按预演里的 foreignHits 把这些行的归属查清, 处理后重新预演");
         }
         compareWithPreview(db, scope, expected);
         Map<String, Long> othersBefore = others(FactoryDataScopeResolver.rowsPerFactory(conn, schema, tenants), factoryId);
@@ -408,7 +419,8 @@ public class FactoryErasureService {
     private static void requireDeletePrivileges(Connection conn, String schema, List<TableScope> tables)
             throws SQLException {
         List<String> missing = missingPrivileges(conn, schema, tables);
-        if (!missing.isEmpty()) throw new BusinessException(409, "数据库账号对这些表没有删除权限: " + missing);
+        if (!missing.isEmpty()) throw new BusinessException(409, "数据库账号对这些表没有删除权限: " + missing)
+                .withHint("用迁移给数据库账号补上删除权限后重新预演");
     }
 
     /**
@@ -491,9 +503,11 @@ public class FactoryErasureService {
 
     private Row activeRequest(String factoryId, Long requestId) {
         Row active = ledger.findActiveErasureRequest(factoryId)
-                .orElseThrow(() -> new BusinessException(409, "该厂没有有效的删除申请"));
+                .orElseThrow(() -> new BusinessException(409, "该厂没有有效的删除申请")
+                .withHint("先登记删除申请 (POST /erasure-requests)"));
         if (requestId == null || active.id() != requestId) {
-            throw new BusinessException(409, "删除申请编号不是该厂当前有效的那一个 (当前: " + active.id() + ")");
+            throw new BusinessException(409, "删除申请编号不是该厂当前有效的那一个 (当前: " + active.id() + ")")
+                .withHint("用 GET /requests 里最新的有效申请编号");
         }
         return active;
     }
@@ -514,7 +528,8 @@ public class FactoryErasureService {
         Map<String, Long> now = FactoryDataService.strictCounts(scope);
         if (!now.equals(expected == null ? Map.of() : expected)) {
             throw new BusinessException(409, db + " 库当前范围与预演不一致 (期间有写入?), 请重新预演: 预演 "
-                    + expected + " / 当前 " + now);
+                    + expected + " / 当前 " + now)
+                .withHint("重新调用 GET /preview, 用新的 previewId 执行删除");
         }
     }
 
@@ -530,7 +545,8 @@ public class FactoryErasureService {
         } catch (Exception e) {
             throw new IllegalStateException("预演回执读不出来: " + e.getMessage(), e);
         }
-        if (out.size() != Database.values().length) throw new BusinessException(409, "预演回执缺库, 请重新预演");
+        if (out.size() != Database.values().length) throw new BusinessException(409, "预演回执缺库, 请重新预演")
+                .withHint("重新调用 GET /preview");
         return out;
     }
 
