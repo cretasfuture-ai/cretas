@@ -83,6 +83,12 @@ class QcReleasePlanQcFailedContractTest {
         when(materialBatchRepo.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(productionBatchRepo.findByIdAndFactoryId(101L, F)).thenReturn(Optional.of(pb(101L, "P1")));
         when(productionBatchRepo.findByIdAndFactoryId(202L, F)).thenReturn(Optional.of(pb(202L, "P2")));
+        // 批次 → 计划 (一次 IN 查询): 101→P1 (3 月), 202→P2, 303→P10 (10 月)
+        java.util.Map<Long, String> planOf = java.util.Map.of(101L, "P1", 202L, "P2", 303L, "P10");
+        when(productionBatchRepo.findPlanIdsByIds(eq(F), any())).thenAnswer(inv -> {
+            Collection<?> ids = inv.getArgument(1);
+            return ids.stream().map(planOf::get).filter(java.util.Objects::nonNull).distinct().toList();
+        });
         when(productionBatchRepo.countQcFailedInPlans(eq(F), any(), anyString())).thenAnswer(inv -> {
             Collection<?> plans = inv.getArgument(1);
             String prefixPattern = inv.getArgument(2);
@@ -109,10 +115,10 @@ class QcReleasePlanQcFailedContractTest {
     }
 
     @Test
-    @DisplayName("半成品行: 入过账的批次 202 所在计划 P2 有 FAILED → 放行被拒 (QC_RELEASE_BLOCKED_BY_QC_FAILED)")
+    @DisplayName("旧整行待检 (没有分笔): 退一步看上次决定之后仍有效的入账, 其中批次 202 的计划 P2 FAILED → 放行被拒")
     void semiReleaseBlockedByPostedBatchPlan() {
         SemiFinishedInventory s = semi("SEMI-X", 101L);
-        when(semiRepo.findProductionBatchIdsPostedToSemi(F, 51L)).thenReturn(List.of(101L, 202L));
+        when(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(eq(F), eq(51L), any())).thenReturn(List.of(101L, 202L));
         failedPlans.add("P2");
         assertThatThrownBy(() -> decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "RELEASED"))
                 .isInstanceOfSatisfying(BusinessException.class,
@@ -124,7 +130,7 @@ class QcReleasePlanQcFailedContractTest {
     @DisplayName("阴性对照: 同一行, 计划都没有 FAILED → 放行成功")
     void semiReleasesWhenNoPlanFailed() {
         SemiFinishedInventory s = semi("SEMI-X", 101L);
-        when(semiRepo.findProductionBatchIdsPostedToSemi(F, 51L)).thenReturn(List.of(101L, 202L));
+        when(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(eq(F), eq(51L), any())).thenReturn(List.of(101L, 202L));
         decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "RELEASED");
         assertThat(s.getInspectionStatus()).isNull();
     }
@@ -133,7 +139,7 @@ class QcReleasePlanQcFailedContractTest {
     @DisplayName("逐道录入锚号 CLK-SEMI-<计划前8位>-…: 按计划前缀判, 计划 FAILED → 放行被拒")
     void anchorRowUsesPlanPrefix() {
         semi("CLK-SEMI-PLANABCD-PTSEMI01", null);
-        when(semiRepo.findProductionBatchIdsPostedToSemi(F, 51L)).thenReturn(List.of());
+        when(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(eq(F), eq(51L), any())).thenReturn(List.of());
         failedPlans.add("PLANABCD-1234-5678");
         assertThatThrownBy(() -> decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "RELEASED"))
                 .isInstanceOfSatisfying(BusinessException.class,
@@ -144,10 +150,65 @@ class QcReleasePlanQcFailedContractTest {
     @DisplayName("判不合格不受影响: 计划 FAILED 时半成品照样能判不合格 (转出待检量)")
     void rejectStillAllowed() {
         SemiFinishedInventory s = semi("SEMI-X", 202L);
-        when(semiRepo.findProductionBatchIdsPostedToSemi(F, 51L)).thenReturn(List.of(202L));
+        when(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(eq(F), eq(51L), any())).thenReturn(List.of(202L));
         failedPlans.add("P2");
         decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "REJECTED");
         assertThat(s.getConsumedQuantity()).isEqualByComparingTo("20");
+    }
+
+    // ─────────── 第三轮审查 H-1: App 半成品行跨计划跨月累加 ───────────
+
+    /** 3 月计划 P1 (批次 101) 质检 FAILED, 那批早已判不合格转出; 10 月计划 P10 (批次 303) 新产出 50 进待检。 */
+    private SemiFinishedInventory octoberRow(InMemoryHoldLots lots) {
+        service.setSemiQcHoldLots(lots.service);
+        SemiFinishedInventory s = semi("SEMI-CODE-Q", 101L);       // 行上 batchId 还是 3 月建行的批次
+        s.setInspectionPendingQuantity(new BigDecimal("50"));
+        s.setProducedQuantity(new BigDecimal("50"));
+        s.setAvailableQuantity(new BigDecimal("50"));
+        lots.service.record(s, new BigDecimal("50"), 9010L, null, 303L);
+        // 这一行的全部历史入账 (旧口径会拿它们去判): 3 月的 101 + 10 月的 303
+        when(semiRepo.findProductionBatchIdsPostedToSemi(F, 51L)).thenReturn(List.of(101L, 303L));
+        when(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(eq(F), eq(51L), any())).thenReturn(List.of(101L, 303L));
+        return s;
+    }
+
+    @Test
+    @DisplayName("H-1 沾过 FAILED 的历史计划不连坐: 3 月 P1 FAILED, 10 月未放行的 50 来自 P10 → 放行成功")
+    void historicalFailedPlanDoesNotBlockNewPending() {
+        InMemoryHoldLots lots = new InMemoryHoldLots();
+        SemiFinishedInventory s = octoberRow(lots);
+        failedPlans.add("P1");
+        decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "RELEASED");
+        System.out.println("H1-release inspection=" + s.getInspectionStatus() + " openLots=" + lots.openTotal(51L));
+        assertThat(s.getInspectionStatus()).isNull();
+        assertThat(lots.openTotal(51L)).isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("H-1 阴性对照: 当前未放行分笔所在计划 P10 FAILED → 仍然被拒")
+    void currentLotPlanFailedStillBlocks() {
+        InMemoryHoldLots lots = new InMemoryHoldLots();
+        SemiFinishedInventory s = octoberRow(lots);
+        failedPlans.add("P10");
+        assertThatThrownBy(() -> decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "RELEASED"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(QcReleaseService.CODE_BLOCKED_BY_QC_FAILED));
+        assertThat(s.getInspectionStatus()).isEqualTo(SemiFinishedInventory.InspectionStatus.PENDING);
+    }
+
+    @Test
+    @DisplayName("H-1 退一步只看上一次放行 / 判不合格之后: 查询的起点就是上次决定的时间")
+    void fallbackStartsAfterLastDecision() {
+        semi("SEMI-X", 101L);
+        java.time.LocalDateTime lastDecision = java.time.LocalDateTime.of(2026, 9, 30, 18, 0);
+        QcReleaseRecord last = QcReleaseRecord.builder().factoryId(F).targetType(QcReleaseRecord.TargetType.SEMI_FINISHED)
+                .targetId("51").decision("REJECTED").conclusion("3 月那批不合格").releasedBy(7L)
+                .releasedAt(lastDecision).build();
+        when(recordRepo.findByTarget(F, QcReleaseRecord.TargetType.SEMI_FINISHED, "51")).thenReturn(List.of(last));
+        when(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(F, 51L, lastDecision)).thenReturn(List.of(303L));
+        failedPlans.add("P1");
+        decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51", "RELEASED");   // 只看到 303 (P10), 不被 P1 挡
+        org.mockito.Mockito.verify(semiRepo).findLiveProductionBatchIdsPostedToSemiSince(F, 51L, lastDecision);
     }
 
     private MaterialBatch wip() {

@@ -329,6 +329,64 @@ class QcHoldLotsContractTest {
             assertThat(r.drawableBalance()).isEqualByComparingTo("0");
         }
 
+        /**
+         * 第三轮审查 M-1: SEMI 报工的半成品产出入在 semiCode 行 (按产品码跨批次累加), 不在任务在制行。
+         * 行 61 上: 别的报工 900 的 30 待检 + 这次报工 810 的 50 待检。
+         */
+        private SemiFinishedInventory semiCodeRow() {
+            SemiFinishedInventory r = row(61L, "SEMI-Q", "80");
+            r.setAccumulatedCost(new BigDecimal("160"));
+            r.setUnitCost(new BigDecimal("2"));
+            r.setInspectionStatus(SemiFinishedInventory.InspectionStatus.PENDING);
+            r.setInspectionPendingQuantity(new BigDecimal("80"));
+            lots.service.record(r, new BigDecimal("30"), 900L, null, 9100L);
+            lots.service.record(r, new BigDecimal("50"), 810L, null, 9100L);
+            ledger.add(SemiFinishedInventoryTransaction.builder().id(6100L).factoryId(F).semiFinishedId(61L)
+                    .txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .sourceType(SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT)
+                    .quantity(new BigDecimal("50")).unitCostAtTxn(new BigDecimal("2")).reportId(810L).build());
+            return r;
+        }
+
+        private ProductionReport semiReport() {
+            return ProductionReport.builder().id(810L).factoryId(F).batchId(9100L).workProcessTaskId(8001L)
+                    .outputKind("SEMI").semiCode("SEMI-Q").semiOutputQuantity(new BigDecimal("50"))
+                    .outputQuantity(BigDecimal.ZERO).outputUnit("kg").build();
+        }
+
+        @Test
+        @DisplayName("M-1 驳回 SEMI 报工 → semiCode 行余额减 50、这笔的分笔清掉、待检减 50; 别的报工的 30 不动")
+        void rejectSemiReportReversesSemiCodeRow() {
+            SemiFinishedInventory r = semiCodeRow();
+            service.reverseReportPosting(F, semiReport(), task(), 7L);
+            show("M-1", r);
+            assertThat(r.computeBalance()).isEqualByComparingTo("30");
+            assertThat(r.getInspectionPendingQuantity()).isEqualByComparingTo("30");
+            assertThat(r.getAccumulatedCost()).isEqualByComparingTo("60");
+            assertThat(lots.lots).filteredOn(l -> l.getReportId() == 810L).singleElement()
+                    .satisfies(l -> assertThat(l.getQuantityOpen()).isEqualByComparingTo("0"));
+            assertThat(lots.lots).filteredOn(l -> l.getReportId() == 900L).singleElement()
+                    .satisfies(l -> assertThat(l.getQuantityOpen()).isEqualByComparingTo("30"));
+            assertThat(ledger).filteredOn(t -> SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(t.getTxnType())
+                            && Objects.equals(t.getSemiFinishedId(), 61L))
+                    .singleElement().satisfies(t -> assertThat(t.getQuantity()).isEqualByComparingTo("-50"));
+        }
+
+        @Test
+        @DisplayName("M-1 阴性对照: 这笔的货已被领走 (退完余额会变负) → 拒绝并说明, 行与分笔都不动")
+        void rejectSemiReportRefusedWhenAlreadyDrawn() {
+            SemiFinishedInventory r = semiCodeRow();
+            r.setConsumedQuantity(new BigDecimal("40"));
+            r.refreshAvailableQuantity();   // 余 40, 退 50 会变负
+            assertThatThrownBy(() -> service.reverseReportPosting(F, semiReport(), task(), 7L))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> {
+                        assertThat(e.getErrorCode()).isEqualTo("WIP_REVERSE_SEMI_CONSUMED");
+                        assertThat(e.getMessage()).contains("已被下一道领用 40");
+                    });
+            assertThat(r.getProducedQuantity()).isEqualByComparingTo("80");
+            assertThat(lots.openTotal(61L)).isEqualByComparingTo("80");
+        }
+
         @Test
         @DisplayName("L1 质检判不合格转出的量不说成「被下一道领用」, 并写清怎么处理")
         void qcRejectedConsumptionIsNamedSeparately() {

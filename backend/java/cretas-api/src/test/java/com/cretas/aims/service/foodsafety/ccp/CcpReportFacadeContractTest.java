@@ -328,6 +328,52 @@ class CcpReportFacadeContractTest {
             assertThat(saved).hasSize(1);
         }
 
+        /** 时间窗查重: 查的是真落过的记录 (同批次同控制点同人同值), 不是恒空的桩。 */
+        private void realWindowDedup() {
+            when(recordRepo.findRecentDuplicates(anyString(), anyString(), anyLong(), anyLong(), any(), any()))
+                    .thenAnswer(inv -> saved.stream()
+                            .filter(r -> inv.getArgument(1).equals(r.getBatchNumber())
+                                    && inv.getArgument(2).equals(r.getCheckpointId())
+                                    && ((BigDecimal) inv.getArgument(4)).compareTo(r.getMeasuredValue()) == 0)
+                            .toList());
+        }
+
+        private ProcessSheetRowRequest saveRowReq(String clientRowId) {
+            ProcessSheetRowRequest r = row(List.of(reading("80")));
+            r.setClientRowId(clientRowId);
+            r.setIdempotencyKey(null);
+            return r;
+        }
+
+        @Test
+        @DisplayName("第三轮审查 L-5: 旧 saveRow 同计划两锅 (两行) 读数相同 → 两条都记, 不被时间窗当重放吞掉")
+        void saveRowWindowDedupIsScopedToTheRow() {
+            sheetConfig(2, WP_CCP);
+            realWindowDedup();
+            ProcessSheetRowResult result = new ProcessSheetRowResult();
+            result.setBatchId(BATCH_ID);
+            result.setBatchNumber("PB-11");
+            when(processSheetService.saveRow(eq(F), eq("PLAN-1"), any(), eq(9L))).thenReturn(result);
+            facade.saveProcessSheetRow(F, "PLAN-1", 9L, "文员", saveRowReq("pot-1"));
+            facade.saveProcessSheetRow(F, "PLAN-1", 9L, "文员", saveRowReq("pot-2"));
+            System.out.println("L5 refs=" + saved.stream().map(HaccpMonitoringRecord::getReportRef).toList());
+            assertThat(saved).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("阴性对照: 同一行 saveRow 网络重放 (120 秒内同值) → 仍然只记一条")
+        void saveRowReplaySameRowIsDeduped() {
+            sheetConfig(2, WP_CCP);
+            realWindowDedup();
+            ProcessSheetRowResult result = new ProcessSheetRowResult();
+            result.setBatchId(BATCH_ID);
+            result.setBatchNumber("PB-11");
+            when(processSheetService.saveRow(eq(F), eq("PLAN-1"), any(), eq(9L))).thenReturn(result);
+            facade.saveProcessSheetRow(F, "PLAN-1", 9L, "文员", saveRowReq("pot-1"));
+            facade.saveProcessSheetRow(F, "PLAN-1", 9L, "文员", saveRowReq("pot-1"));
+            assertThat(saved).hasSize(1);
+        }
+
         @Test
         @DisplayName("阴性对照: legacy 计划 (没有 Workflow 录入配置) → 不要求实测值, 原样透传")
         void legacyPlanPassesThrough() {

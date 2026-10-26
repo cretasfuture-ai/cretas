@@ -23,17 +23,18 @@ public interface WipInventoryService {
      * 逐道保存 (option F: 纯半成品喂的非成品中间道产出定位) 必须使用<b>同一锚</b>, 故提为
      * 共享静态方法, 防两处派生逻辑漂移。null 段以 {@code 00000000} 占位。
      */
-    /**
-     * 逐道录入入账的质检分笔凭据 (缺口 11 第二轮审查 H3): 同一计划同一行 (clientRowId) 的保存 / 重存 / 删除 /
-     * 成本重分摊用同一个凭据, 撤销时据此只解除这一行自己未放行的待检。
-     */
-    static String clerkHoldRef(String planId, String clientRowId) {
-        String ref = "PS:" + planId + ":" + clientRowId;
-        return ref.length() > 160 ? ref.substring(0, 160) : ref;
-    }
-
     static String clerkSemiAnchor(String planId, String productTypeId) {
         return "CLK-SEMI-" + head8(planId) + "-" + head8(productTypeId);
+    }
+
+    /**
+     * 逐道录入入账的质检分笔凭据 (缺口 11 第二轮审查 H3; 第三轮 L-2 加工序):
+     * {@code PS:计划:工序:clientRowId}。同一计划同一工序同一行的保存 / 重存 / 删除 / 成本重分摊用同一个凭据,
+     * 撤销时据此只解除这一行自己未放行的待检; 带上工序, 不同工序碰巧同名的 clientRowId 不会串笔。
+     */
+    static String clerkHoldRef(String planId, String processCode, String clientRowId) {
+        String ref = "PS:" + planId + ":" + processCode + ":" + clientRowId;
+        return ref.length() > 160 ? ref.substring(0, 160) : ref;
     }
 
     private static String head8(String s) {

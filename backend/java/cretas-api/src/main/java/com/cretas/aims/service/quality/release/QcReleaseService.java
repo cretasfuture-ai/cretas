@@ -194,7 +194,7 @@ public class QcReleaseService {
                     assertNoOpenDeviation(openDeviations(factoryId, cmd.targetType(), s, null, null),
                             s.getIntermediateBatchNo());
                     // 第二轮审查 M2: 与成品同一口径 —— 入过这一行的计划有批次质检 FAILED ⇒ 不能放行
-                    assertPlansQcNotFailed(factoryId, semiPlanIds(factoryId, s),
+                    assertPlansQcNotFailed(factoryId, semiPlanIds(factoryId, s, pending),
                             com.cretas.aims.service.foodsafety.ccp.CcpOpenDeviationLookup
                                     .planPrefixOfAnchor(s.getIntermediateBatchNo()),
                             "半成品批次 " + s.getIntermediateBatchNo());
@@ -336,7 +336,7 @@ public class QcReleaseService {
         }
         long failed = productionBatchRepo.countQcFailedInPlans(factoryId,
                 plans.isEmpty() ? java.util.Set.of("#NO-PLAN#") : plans,
-                hasPrefix ? planIdPrefix + "%" : "#NO-PREFIX#");
+                hasPrefix ? com.cretas.aims.util.SqlLikeEscaper.escape(planIdPrefix) + "%" : "#NO-PREFIX#");
         if (failed > 0) {
             throw new BusinessException(409, what + " 所在生产计划有批次质检不合格，不能放行")
                     .withCode(CODE_BLOCKED_BY_QC_FAILED)
@@ -346,29 +346,49 @@ public class QcReleaseService {
         }
     }
 
-    /** 半成品行入过账的全部生产批次的计划 (行上 batchId + 入库流水反查, 与 CCP 偏离同一口径)。 */
-    private java.util.Set<String> semiPlanIds(String factoryId, SemiFinishedInventory s) {
-        java.util.Set<String> plans = new java.util.LinkedHashSet<>();
-        if (productionBatchRepo == null) {
-            return plans;
+    /**
+     * 这次要放行的待检来自哪些计划 (第三轮审查 H-1)。
+     *
+     * <p>App 半成品行按产品码跨计划、跨月一直累加: 拿这一行<b>历史上全部</b>入账的计划去判,
+     * 3 月某计划质检 FAILED (那批货早已判不合格转出), 10 月的新待检就永远放不出。所以只看:
+     * <ol>
+     *   <li>当前未放行的分笔记下的生产批次 (分笔账在每次放行 / 判不合格时清零, 剩下的就是这次要放的);</li>
+     *   <li>分笔覆盖不了全部待检时 (旧数据整行待检 / CCP 偏离整行扣留, 认不出是哪一笔), 退一步看
+     *       上一次放行或判不合格<b>之后</b>、仍然有效的入账 (排除已被 REVERSE 冲掉的、已软删的报工)。</li>
+     * </ol>
+     * 计划 id 一次 IN 查询取出 (L-6)。逐道录入锚号行另按锚号里的计划前缀判 (调用方传入)。
+     */
+    private java.util.Set<String> semiPlanIds(String factoryId, SemiFinishedInventory s, BigDecimal pending) {
+        if (productionBatchRepo == null || s.getId() == null) {
+            return java.util.Set.of();
         }
         java.util.Set<Long> pbIds = new java.util.LinkedHashSet<>();
-        if (s.getBatchId() != null) {
-            pbIds.add(s.getBatchId());
+        BigDecimal attributed = BigDecimal.ZERO;
+        if (semiQcHoldLots != null) {
+            for (com.cretas.aims.entity.quality.SemiQcHoldLot lot : semiQcHoldLots.openLots(factoryId, s.getId())) {
+                attributed = attributed.add(lot.getQuantityOpen());
+                if (lot.getProductionBatchId() != null) {
+                    pbIds.add(lot.getProductionBatchId());
+                }
+            }
         }
-        if (s.getId() != null) {
-            List<Long> posted = semiRepo.findProductionBatchIdsPostedToSemi(factoryId, s.getId());
-            if (posted != null) {
-                pbIds.addAll(posted);
+        if (attributed.compareTo(pending == null ? BigDecimal.ZERO : pending) < 0) {
+            java.time.LocalDateTime since = recordRepo.findByTarget(factoryId,
+                            QcReleaseRecord.TargetType.SEMI_FINISHED, String.valueOf(s.getId())).stream()
+                    .map(QcReleaseRecord::getReleasedAt)
+                    .filter(java.util.Objects::nonNull)
+                    .findFirst()
+                    .orElse(java.time.LocalDateTime.of(1970, 1, 1, 0, 0));
+            List<Long> live = semiRepo.findLiveProductionBatchIdsPostedToSemiSince(factoryId, s.getId(), since);
+            if (live != null) {
+                pbIds.addAll(live);
             }
         }
         pbIds.remove(null);
-        for (Long pbId : pbIds) {
-            productionBatchRepo.findByIdAndFactoryId(pbId, factoryId)
-                    .map(com.cretas.aims.entity.ProductionBatch::getProductionPlanId)
-                    .ifPresent(plans::add);
+        if (pbIds.isEmpty()) {
+            return java.util.Set.of();
         }
-        return plans;
+        return new java.util.LinkedHashSet<>(productionBatchRepo.findPlanIdsByIds(factoryId, pbIds));
     }
 
     /** 在制批次 (sourceDocId = 生产批次 id) 所在计划。 */

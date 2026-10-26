@@ -33,6 +33,12 @@ public class SemiQcHoldLots {
 
     /** 一笔入账扣成待检 {@code held} (≤0 不记)。 */
     public void record(SemiFinishedInventory sfi, BigDecimal held, Long reportId, String holdRef) {
+        record(sfi, held, reportId, holdRef, null);
+    }
+
+    /** 同上, 带这一笔的生产批次 (放行时按未放行的笔反查计划)。 */
+    public void record(SemiFinishedInventory sfi, BigDecimal held, Long reportId, String holdRef,
+                       Long productionBatchId) {
         if (sfi == null || sfi.getId() == null || held == null || held.signum() <= 0) {
             return;
         }
@@ -40,6 +46,7 @@ public class SemiQcHoldLots {
                 .factoryId(sfi.getFactoryId())
                 .semiFinishedId(sfi.getId())
                 .reportId(reportId)
+                .productionBatchId(productionBatchId)
                 .holdRef(holdRef)
                 .quantityHeld(held)
                 .quantityOpen(held)
@@ -60,6 +67,11 @@ public class SemiQcHoldLots {
             return BigDecimal.ZERO;
         }
         return unwind(sfi, lotRepo.findOpenBySemiAndRef(sfi.getFactoryId(), sfi.getId(), holdRef), qty);
+    }
+
+    /** 这一行当前所有未放行的笔 (放行前判计划质检 FAILED 用)。 */
+    public List<SemiQcHoldLot> openLots(String factoryId, Long semiId) {
+        return lotRepo.findOpenBySemi(factoryId, semiId);
     }
 
     /** 质检放行 / 判不合格: 这一行所有未放行的笔清零。 */

@@ -75,6 +75,7 @@ COMMENT ON TABLE qc_release_records IS '质检放行记录 (缺口 11): 每次�
 -- 待检分笔账 (第二轮审查 H2/H3/M1): 一行半成品累加多笔入账, 撤销/驳回/更正某一笔时只能解除
 -- 「这一笔还没放行的待检量」, 不能把别人的待检抵消掉。每笔扣成待检的入账记一行:
 --   report_id     App 报工入账 (撤销/驳回/数量更正按它找)
+--   production_batch_id 这一笔入账的生产批次 (放行前查「当前未放行的笔」所在计划有没有质检 FAILED, 第三轮审查 H-1)
 --   hold_ref      逐道录入入账的凭据 (PS:计划:行; 撤销按它找)
 --                 两者都空 = 认不出是哪一笔, 撤销时一律不解除 (保守: 宁可多挡)
 --   quantity_open 仍未放行的量; 质检放行/判不合格时整行清零
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS semi_qc_hold_lots (
     factory_id         VARCHAR(64)   NOT NULL,
     semi_finished_id   BIGINT        NOT NULL,
     report_id          BIGINT,
+    production_batch_id BIGINT,
     hold_ref           VARCHAR(160),
     quantity_held      DECIMAL(12,2) NOT NULL,
     quantity_open      DECIMAL(12,2) NOT NULL,

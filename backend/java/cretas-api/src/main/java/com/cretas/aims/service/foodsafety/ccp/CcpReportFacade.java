@@ -115,7 +115,7 @@ public class CcpReportFacade {
         ProcessSheetRowResult result = processSheetService.submitRow(factoryId, planId, req, userId);
         // 正式提交的重放由 submitRow 自己挡 (已提交的行再提交 409, 整个事务连同这里的 CCP 一起回滚),
         // 所以这里不再按时间窗去重: 撤销后重新提交同一行, 新读数必须照记 (第二轮审查 H1)。
-        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result, false)
+        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result, null)
                 : result;
     }
 
@@ -128,13 +128,14 @@ public class CcpReportFacade {
                 && !ccpMonitoringService.validateReadings(factoryId, workProcessId, req.getCcpReadings()).isEmpty();
         ProcessSheetRowResult result = processSheetService.saveRow(factoryId, planId, req, userId);
         // 旧契约 saveRow 是幂等 upsert, 重放不会被拒 ⇒ 另按时间窗挡网络重放
-        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result, true)
+        return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result,
+                sheetRowScope(planId, req))
                 : result;
     }
 
     private ProcessSheetRowResult recordSheetCcp(String factoryId, String planId, Long userId, String userName,
                                                  ProcessSheetRowRequest req, String workProcessId,
-                                                 ProcessSheetRowResult result, boolean windowDedup) {
+                                                 ProcessSheetRowResult result, String windowDedupScope) {
         String batchNumber = result == null ? null : result.getBatchNumber();
         Long pbId = result == null ? null : result.getBatchId();
         if (batchNumber == null && result != null && result.getOutputs() != null) {
@@ -153,7 +154,7 @@ public class CcpReportFacade {
         CcpMonitoringService.RecordResult ccp = ccpMonitoringService.record(factoryId,
                 new CcpMonitoringService.RecordCommand(batchNumber, pbId, planId, workProcessId,
                         req.getProcessOrder(), CcpMonitoringService.SOURCE_WEB, req.getCcpReadings()),
-                userId, userName, ref, windowDedup);
+                userId, userName, ref, windowDedupScope);
         if (result == null) {
             return null;
         }
@@ -176,8 +177,13 @@ public class CcpReportFacade {
         String submission = req.getIdempotencyKey() == null || req.getIdempotencyKey().isBlank()
                 ? java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12)
                 : req.getIdempotencyKey().trim();
-        String ref = REF_SHEET_PREFIX + planId + ":" + Objects.toString(req.getClientRowId(), "-") + ":" + submission;
+        String ref = sheetRowScope(planId, req) + submission;
         return ref.length() > 160 ? ref.substring(0, 160) : ref;
+    }
+
+    /** 同一计划同一行的凭据前缀 {@code PS:计划:行:} (saveRow 时间窗去重只在这一行内认重放, L-5)。 */
+    static String sheetRowScope(String planId, ProcessSheetRowRequest req) {
+        return REF_SHEET_PREFIX + planId + ":" + Objects.toString(req.getClientRowId(), "-") + ":";
     }
 
     /** web 行有没有产出: 单产出量 > 0, 或多产出任一端口 > 0。 */

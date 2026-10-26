@@ -49,7 +49,7 @@ public interface HaccpMonitoringRecordRepository extends JpaRepository<HaccpMoni
      */
     @Query("SELECT COUNT(r) FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
             "AND r.isDeviation = true AND r.deviationHandledAt IS NULL " +
-            "AND r.productionPlanId LIKE CONCAT(:planIdPrefix, '%')")
+            "AND r.productionPlanId LIKE CONCAT(:planIdPrefix, '%') ESCAPE '\\'")   // 调用方先转义 (第三轮审查 L-1)
     long countOpenDeviationsByPlanIdPrefix(@Param("factoryId") String factoryId,
                                            @Param("planIdPrefix") String planIdPrefix);
 

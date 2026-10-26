@@ -173,7 +173,9 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
         for (String no : nos) {
             String prefix = planPrefixOfAnchor(no);
             if (prefix != null) {
-                n += recordRepo.countOpenDeviationsByPlanIdPrefix(factoryId, prefix);
+                // 第三轮审查 L-1: 前缀里的 % _ 先转义 (查询带 ESCAPE)
+                n += recordRepo.countOpenDeviationsByPlanIdPrefix(factoryId,
+                        com.cretas.aims.util.SqlLikeEscaper.escape(prefix));
             }
         }
         return n;

@@ -52,7 +52,14 @@ public class SemiQcHoldLot extends BaseEntity {
     @Column(name = "report_id")
     private Long reportId;
 
-    /** 逐道录入入账: 凭据 (PS:计划:行)。 */
+    /**
+     * 这一笔入账所属的生产批次 (App 报工的批次; 逐道录入为空, 它的行是单计划锚)。
+     * 放行前按「当前未放行的笔」反查计划判质检 FAILED (第三轮审查 H-1)。
+     */
+    @Column(name = "production_batch_id")
+    private Long productionBatchId;
+
+    /** 逐道录入入账: 凭据 (PS:计划:工序:行)。 */
     @Column(name = "hold_ref", length = 160)
     private String holdRef;
 

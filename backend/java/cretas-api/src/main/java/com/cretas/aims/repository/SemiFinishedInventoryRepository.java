@@ -185,6 +185,22 @@ public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinis
             @Param("semiId") Long semiId);
 
     /**
+     * 质检放行 (第三轮审查 H-1): 这一行在 {@code since} 之后、仍然有效的入账来自哪些生产批次 ——
+     * 只看 IN 流水; 已被 REVERSE (负量) 冲掉的报工、已软删的报工都不算。
+     * 给「没有分笔的旧整行待检」退一步用: since = 上一次放行 / 判不合格的时间 (没有就从头算)。
+     */
+    @Query("SELECT DISTINCT r.batchId FROM SemiFinishedInventoryTransaction t, ProductionReport r " +
+           "WHERE t.factoryId = :factoryId AND t.semiFinishedId = :semiId AND t.txnType = 'IN' " +
+           "AND t.createdAt > :since AND t.reportId = r.id AND r.batchId IS NOT NULL AND r.deletedAt IS NULL " +
+           "AND NOT EXISTS (SELECT x.id FROM SemiFinishedInventoryTransaction x " +
+           "  WHERE x.semiFinishedId = t.semiFinishedId AND x.reportId = t.reportId " +
+           "  AND x.txnType = 'REVERSE' AND x.quantity < 0)")
+    List<Long> findLiveProductionBatchIdsPostedToSemiSince(
+            @Param("factoryId") String factoryId,
+            @Param("semiId") Long semiId,
+            @Param("since") java.time.LocalDateTime since);
+
+    /**
      * CCP 偏离扣留 (审查中 8): 先对这些行加行锁 (SELECT … FOR UPDATE) 再改 —— 锁住之后没有别的事务能在
      * 「读」和「写」之间扣减; 本事务早先读过而已过期的实体在 flush 时撞 @Version 失败回滚, 不会静默覆盖。
      * (不用批量 UPDATE: 它要清空持久化上下文, 同一事务里随后的读取全部重载, 已持有的实体也会脱管。)

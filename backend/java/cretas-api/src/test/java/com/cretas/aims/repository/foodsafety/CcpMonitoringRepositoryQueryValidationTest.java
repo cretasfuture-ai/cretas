@@ -86,6 +86,13 @@ class CcpMonitoringRepositoryQueryValidationTest {
         assertThat(recordRepo.countOpenDeviationsByPlanIds(F, Set.of("plan-aaaa1111-x"))).isEqualTo(1);
         assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F, "plan-bbb")).isEqualTo(1);
         assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F, "zzz")).isZero();
+        // 第三轮审查 L-1: 前缀里的 _ 按字面量匹配 (调用方转义 + ESCAPE); 不转义时 _ 是通配符 (阴性对照)
+        rec(F, "B-3", "plan_x-1", true, false, t);
+        rec(F, "B-4", "planAx-2", true, false, t);
+        em.clear();
+        assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F,
+                com.cretas.aims.util.SqlLikeEscaper.escape("plan_x"))).isEqualTo(1);
+        assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F, "plan_x")).isEqualTo(2);
     }
 
     @Test

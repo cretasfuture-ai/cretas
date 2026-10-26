@@ -215,17 +215,19 @@ public class CcpMonitoringService {
      */
     @Transactional
     public RecordResult record(String factoryId, RecordCommand cmd, Long userId, String userName, String reportRef) {
-        return record(factoryId, cmd, userId, userName, reportRef, false);
+        return record(factoryId, cmd, userId, userName, reportRef, null);
     }
 
     /**
      * @param reportRef   报工凭据; 同凭据同控制点已记过 = 重放, 不重记
-     * @param windowDedup 凭据每次提交都不同 (逐工序表: 每次正式提交一个新凭据, 第二轮审查 H1) 时,
-     *                    另按「同批次同控制点同人同值 120 秒内」挡网络重放
+     * @param windowDedupScope 凭据每次提交都不同 (逐工序表: 每次提交一个新凭据, 第二轮审查 H1) 但重放不会被
+     *                    上游拒绝时 (旧 saveRow), 另按「同批次同控制点同人同值 120 秒内」挡网络重放 ——
+     *                    只认凭据以这个前缀 (同一计划同一行) 开头的记录 (第三轮审查 L-5: 同计划另一锅读数相同的
+     *                    那条不会被当成重放吞掉)。null = 不按时间窗去重
      */
     @Transactional
     public RecordResult record(String factoryId, RecordCommand cmd, Long userId, String userName, String reportRef,
-                               boolean windowDedup) {
+                               String windowDedupScope) {
         if (userId == null) {
             throw invalid("未登录，无法录入 CCP");
         }
@@ -278,9 +280,13 @@ public class CcpMonitoringService {
             List<HaccpMonitoringRecord> dup = reportRef != null
                     ? recordRepo.findByFactoryIdAndReportRefAndCheckpointId(factoryId, reportRef, c.getId())
                     : List.of();
-            if (dup.isEmpty() && (reportRef == null || windowDedup)) {
+            if (dup.isEmpty() && (reportRef == null || windowDedupScope != null)) {
                 dup = recordRepo.findRecentDuplicates(factoryId, batchNumber, c.getId(),
                         userId, r.measuredValue(), now.minusSeconds(DUPLICATE_WINDOW_SECONDS));
+                if (windowDedupScope != null) {
+                    dup = dup.stream().filter(d -> d.getReportRef() != null
+                            && d.getReportRef().startsWith(windowDedupScope)).toList();
+                }
             }
             if (!dup.isEmpty()) {
                 saved.add(dup.get(0));

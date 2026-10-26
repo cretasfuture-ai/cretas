@@ -283,8 +283,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // saveRow 仍允许不完整草稿，仅校验草稿中实际携带端口的归属、SKU、单位和数量合法性。
         validateWorkflowSubmissionSelections(factoryId, planId, req);
 
+        // 缺口 13 第三轮审查 M-2: 加行锁读 —— 并发重放的后到者等前一个提交完再读到 SUBMITTED, 不会双入账
         Optional<ProcessSheetRow> existing = rowRepo
-                .findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                .findForUpdateByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
                         factoryId, planId, req.getProcessCode(), req.getClientRowId());
         if (existing.isPresent()
                 && ProcessSheetRow.SUBMISSION_SUBMITTED.equals(existing.get().getSubmissionStatus())) {
@@ -2210,7 +2211,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         ? null : item.outcome().originalUnitCost().multiply(qty);
                 // 保存阶段已经写入 SFI；同一事务内先精确反冲，再按分摊成本重入，数量净变化为 0。
                 // 质检分笔凭据 (缺口 11): 反冲 + 重入是同一行, 待检解除多少就重新扣多少, 不翻倍也不放出别人的
-                String holdRef = WipInventoryService.clerkHoldRef(planId, item.request().getClientRowId());
+                String holdRef = WipInventoryService.clerkHoldRef(planId, item.request().getProcessCode(),
+                        item.request().getClientRowId());
                 wipInventoryService.reverseClerkOutput(
                         factoryId, item.outcome().sfiAnchor(), qty, originalTotal, null, holdRef);
                 wipInventoryService.postClerkOutput(
@@ -4967,7 +4969,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         wipInventoryService.postClerkOutput(factoryId, anchor, req.getProductTypeId(),
                 outQty, req.getUnit() != null ? req.getUnit() : "kg",
                 outUnitCost, null, req.getProcessOrder(), Boolean.TRUE.equals(req.getRework()),
-                WipInventoryService.clerkHoldRef(planId, req.getClientRowId()));   // 缺口 11 质检分笔凭据
+                WipInventoryService.clerkHoldRef(planId, req.getProcessCode(), req.getClientRowId()));   // 缺口 11 质检分笔凭据
         return anchor;
     }
 
@@ -4988,7 +4990,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         BigDecimal oldUnitCost = computeInjectionOutputUnitCost(factoryId, beforeReq, new ArrayList<>());
         BigDecimal totalCost = oldUnitCost == null ? null : oldUnitCost.multiply(qty);
         wipInventoryService.reverseClerkOutput(factoryId, anchor, qty, totalCost, null,
-                WipInventoryService.clerkHoldRef(planId, beforeReq.getClientRowId()));   // 缺口 11 质检分笔凭据
+                WipInventoryService.clerkHoldRef(planId, beforeReq.getProcessCode(), beforeReq.getClientRowId()));   // 缺口 11 质检分笔凭据
     }
 
     /** #1252 调味/熟制道正则 — 与 {@link #buildStepEntry} / InterimSettle isSeasoningRow 同源。 */

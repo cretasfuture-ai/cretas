@@ -20,6 +20,20 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
     Optional<ProcessSheetRow> findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
             String factoryId, String planId, String processCode, String clientRowId);
 
+    /**
+     * 正式提交前加行锁读取已存在的行 (缺口 13 第三轮审查 M-2): 「已正式提交就 409」是先查再改,
+     * 不加锁时两个并发重放都读到「还没提交」, 双双入账、CCP 也记两条。锁住之后后到的那个等前一个提交完,
+     * 再读到 SUBMITTED 被拒。行不存在时由 uk_sheet_row 唯一约束挡并发插入 (既有「该行已存在 (并发提交)」)。
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM ProcessSheetRow r WHERE r.factoryId = :factoryId AND r.planId = :planId "
+            + "AND r.processCode = :processCode AND r.clientRowId = :clientRowId")
+    Optional<ProcessSheetRow> findForUpdateByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+            @org.springframework.data.repository.query.Param("factoryId") String factoryId,
+            @org.springframework.data.repository.query.Param("planId") String planId,
+            @org.springframework.data.repository.query.Param("processCode") String processCode,
+            @org.springframework.data.repository.query.Param("clientRowId") String clientRowId);
+
     List<ProcessSheetRow> findByFactoryIdAndPlanIdAndProcessCode(
             String factoryId, String planId, String processCode);
 

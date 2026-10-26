@@ -169,7 +169,8 @@ class QcReleaseRepositoryQueryValidationTest {
         java.util.function.Function<com.cretas.aims.entity.quality.SemiQcHoldLot, com.cretas.aims.entity.quality.SemiQcHoldLot>
                 save = lotRepo::saveAndFlush;
         var a = save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
-                .holdRef("PS:P:A").quantityHeld(new BigDecimal("100")).quantityOpen(new BigDecimal("100")).build());
+                .holdRef("PS:P:A").productionBatchId(303L)
+                .quantityHeld(new BigDecimal("100")).quantityOpen(new BigDecimal("100")).build());
         var b = save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
                 .holdRef("PS:P:A").quantityHeld(new BigDecimal("20")).quantityOpen(new BigDecimal("20")).build());
         save.apply(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F).semiFinishedId(77L)
@@ -180,7 +181,8 @@ class QcReleaseRepositoryQueryValidationTest {
                 .holdRef("PS:P:A").quantityHeld(BigDecimal.ONE).quantityOpen(BigDecimal.ONE).build());
         em.clear();
 
-        assertThat(lotRepo.findOpenBySemi(F, 77L)).hasSize(3);
+        assertThat(lotRepo.findOpenBySemi(F, 77L)).hasSize(3)
+                .anySatisfy(l -> assertThat(l.getProductionBatchId()).isEqualTo(303L));   // H-1 新列读写
         assertThat(lotRepo.findOpenBySemiAndRef(F, 77L, "PS:P:A"))
                 .extracting(com.cretas.aims.entity.quality.SemiQcHoldLot::getId).containsExactly(b.getId(), a.getId());
         assertThat(lotRepo.findOpenBySemiAndReport(F, 77L, 901L)).singleElement()
@@ -217,6 +219,68 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("#NO-PLAN#"), "PLANAAAA%")).isEqualTo(1L);
         assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("#NO-PLAN#"), "PLANBBBB%")).isZero();
         assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANCCCC-0003"), "#NO-PREFIX#")).isZero();
+        // 第三轮审查 L-1: 前缀转义后 _ 只配字面量; 不转义时 _ 是通配符, 多配一条 (阴性对照)
+        productionBatch(F, "PLAN_D-1", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        productionBatch(F, "PLANXD-2", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        em.clear();
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("#NO-PLAN#"),
+                com.cretas.aims.util.SqlLikeEscaper.escape("PLAN_D") + "%")).isEqualTo(1L);
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("#NO-PLAN#"), "PLAN_D%")).isEqualTo(2L);
+    }
+
+    @Test
+    @DisplayName("第三轮审查 L-6: 一次 IN 查询取出这些批次的计划 id (去重, 跳过无计划, 工厂隔离)")
+    void planIdsByBatchIds() {
+        productionBatch(F, "PLAN-L6-A", null);
+        productionBatch(F, "PLAN-L6-A", null);
+        productionBatch(F, null, null);
+        productionBatch(OTHER, "PLAN-L6-OTHER", null);
+        em.clear();
+        List<Long> ids = jdbc.queryForList(
+                "SELECT id FROM production_batches WHERE factory_id IN ('" + F + "','" + OTHER + "')", Long.class);
+        assertThat(productionBatchRepo.findPlanIdsByIds(F, ids)).containsExactly("PLAN-L6-A");
+    }
+
+    @Test
+    @DisplayName("第三轮审查 H-1: 上次决定之后仍有效的入账批次 —— 排除决定之前的、被 REVERSE 冲掉的、报工已软删的")
+    void liveBatchesPostedSince() {
+        SemiFinishedInventory row = semi(F, "SEMI-LIVE", null, null);
+        LocalDateTime since = LocalDateTime.now().minusHours(1);
+        java.util.function.BiFunction<Long, Boolean, ProductionReport> report = (batchId, deleted) -> {
+            ProductionReport r = reportRepo.saveAndFlush(ProductionReport.builder().factoryId(F).batchId(batchId)
+                    .workerId(1L).reportType("YIELD").reportDate(LocalDate.now()).build());
+            if (deleted) {
+                r.setDeletedAt(LocalDateTime.now());
+                reportRepo.saveAndFlush(r);
+            }
+            return r;
+        };
+        ProductionReport old = report.apply(1001L, false);       // 上次决定之前入的
+        ProductionReport live = report.apply(1002L, false);      // 有效
+        ProductionReport reversed = report.apply(1003L, false);  // 已被整单撤回冲掉
+        ProductionReport deleted = report.apply(1004L, true);    // 报工已软删
+        java.util.function.BiConsumer<ProductionReport, String> in = (r, type) -> txnRepo.saveAndFlush(
+                SemiFinishedInventoryTransaction.builder().factoryId(F).semiFinishedId(row.getId())
+                        .txnType(type).sourceType("IN".equals(type)
+                                ? SemiFinishedInventoryTransaction.SourceType.PRODUCTION_OUTPUT
+                                : SemiFinishedInventoryTransaction.SourceType.REVERSAL)
+                        .sourceRef("SEMI-LIVE").quantity("IN".equals(type) ? BigDecimal.TEN : BigDecimal.TEN.negate())
+                        .reportId(r.getId()).build());
+        in.accept(old, SemiFinishedInventoryTransaction.TxnType.IN);
+        jdbc.update("UPDATE semi_finished_inventory_transactions SET created_at = ? WHERE report_id = ?",
+                since.minusDays(200), old.getId());
+        in.accept(live, SemiFinishedInventoryTransaction.TxnType.IN);
+        in.accept(reversed, SemiFinishedInventoryTransaction.TxnType.IN);
+        in.accept(reversed, SemiFinishedInventoryTransaction.TxnType.REVERSE);
+        in.accept(deleted, SemiFinishedInventoryTransaction.TxnType.IN);
+        em.clear();
+
+        assertThat(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(F, row.getId(), since)).containsExactly(1002L);
+        // 阴性对照: 起点放到很早 → 决定之前那笔也算进来 (证明起点在起作用)
+        assertThat(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(F, row.getId(), since.minusDays(365)))
+                .containsExactlyInAnyOrder(1001L, 1002L);
+        assertThat(semiRepo.findLiveProductionBatchIdsPostedToSemiSince(OTHER, row.getId(), since.minusDays(365)))
+                .isEmpty();
     }
 
     private void material(String id, String sourceDocType, String sourceDocId, MaterialBatchStatus status) {
