@@ -20,9 +20,26 @@ test('guided assessment reads actual visible cards and product echo', async () =
     initialVisible: baseVisible([{ id: 'inventory-stock', familyId: 'inventory.stock', domain: '库存' }]),
     categoryVisible: baseVisible([{ id: 'inventory-stock', familyId: 'inventory.stock', domain: '库存' }]),
     categoryDomain: '库存', familyRows: 1, beforeGuide: 'a', categoryShot: 'b', productShot: 'c',
+    questionnaireVisible: true, productDomainRetained: true,
+    productVisible: baseVisible([]),
   });
   assert.equal(result.result, 'PASS');
   assert.equal(result.subjectCount, 100);
+});
+
+test('guided assessment rejects a product default from a different question', async () => {
+  const result = await scenario.assess({
+    initial: response(data, { guided: true }),
+    product: response({ ...data, analysisSubject: 'product-0' }, { analysis_subject: 'product-0' }),
+    initialVisible: baseVisible([{ id: 'inventory-stock', familyId: 'inventory.stock', domain: '库存' }]),
+    categoryVisible: baseVisible([{ id: 'inventory-stock', familyId: 'inventory.stock', domain: '库存' }]),
+    productVisible: baseVisible([{ id: 'production-output', familyId: 'production.output', domain: '生产' }]),
+    questionnaireVisible: true, productDomainRetained: false, categoryDomain: '库存',
+    familyRows: 1, beforeGuide: 'a', categoryShot: 'b', productShot: 'c',
+  });
+  assert.equal(result.result, 'CONFIRMED_DEFECT');
+  assert.equal(result.checks.productQuestionRetained, false);
+  assert.equal(result.checks.productCardsMatchQuestion, false);
 });
 
 test('guided assessment fails on duplicate visible families and overbound cards', async () => {

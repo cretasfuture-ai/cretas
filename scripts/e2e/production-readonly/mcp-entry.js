@@ -4193,11 +4193,12 @@ async function readVisibleCards(page, candidateMap) {
   }
   return { count: values.length, values };
 }
-async function assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot }) {
+async function assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot, questionnaireVisible, productVisible, productDomainRetained }) {
   const initialCandidates = candidates(initial?.body?.data);
   const initialFamilies = new Set(initialVisible.values.map(item => item.familyId).filter(Boolean));
   const productId = safeId(product?.request?.analysis_subject);
   const checks = {
+    questionnaireVisible: questionnaireVisible === true,
     initialHttp200: initial?.status === 200, initialSuccess: initial?.body?.success === true,
     factoryF006: initial?.body?.data?.factoryId === 'F006', businessSource: initial?.body?.data?.source === 'business',
     guidedRequest: initial?.request?.guided === true, guidedScope: typeof initial?.body?.data?.analysisScopeLabel === 'string',
@@ -4209,6 +4210,9 @@ async function assess({ initial, product, baseline, initialVisible, categoryVisi
     categoryCardsMatchDomain: categoryVisible.count > 0 && categoryVisible.values.every(item => item.domain === categoryDomain),
     categoryCardsBounded: categoryVisible.count <= MAX_CARDS,
     productConditional: !product || (product.status === 200 && product.body?.success === true && productId !== null && product.body?.data?.analysisSubject === productId),
+    productQuestionRetained: !product || productDomainRetained === true,
+    productCardsMatchQuestion: !product || (productVisible && productVisible.count <= MAX_CARDS && productVisible.values.every(item => item.domain === categoryDomain)),
+    noSourceErrors: [initial, product, baseline].filter(Boolean).every(item => !Object.keys(item.body?.data?.sourceErrors || {}).length),
     baselineReturnedToFactory: !product || (baseline?.status === 200 && baseline.request?.analysis_subject == null && baseline.body?.data?.analysisSubject == null),
     screenshots: Boolean(beforeGuide && categoryShot && (!product || productShot)),
   };
@@ -4223,10 +4227,13 @@ async function assess({ initial, product, baseline, initialVisible, categoryVisi
 
 const scenario = {
   id: 'smartbi-guided-readonly', path: PATH, defaultEnabled: false,
-  landmarks: ['工厂分析', '1. 想了解什么？'], timeoutMs: 60_000,
+  // The questionnaire arrives with the recommendations, after the initial shell.
+  // Its visibility remains a required assessment below, after the real wait.
+  landmarks: ['工厂分析'], timeoutMs: 60_000,
   run: ctx => runReadOnlyPageScenario(ctx, { id: 'smartbi-guided-readonly', path: PATH, landmarks: scenario.landmarks, timeoutMs: scenario.timeoutMs,
     inspect: async (page, body, inspectCtx) => {
       await page.getByTestId('factory-chart-guide').waitFor({ timeout: 60_000 });
+      const questionnaireVisible = await page.getByText('1. 想了解什么？', { exact: true }).isVisible();
       const beforeGuide = await inspectCtx.screenshot('smartbi-guided-before-guide');
       const initialResponse = await responseFor(page, () => page.getByTestId('factory-chart-refresh').click());
       const initial = { status: initialResponse.status(), body: await initialResponse.json().catch(() => ({})), request: requestBody(initialResponse) };
@@ -4250,7 +4257,7 @@ const scenario = {
       if (!await browseRadio.isChecked()) throw new Error('classified browse mode did not become selected');
       const familyRows = await page.getByTestId('factory-chart-family').count();
       const subject = page.getByTestId('factory-chart-guide-subject');
-      let product = null; let baseline = null; let productShot = null;
+      let product = null; let baseline = null; let productShot = null; let productVisible = null; let productDomainRetained = false;
       const firstSubject = initial.body.data?.subjects?.[0];
       if (await subject.count() && firstSubject) {
         await subject.locator('input, button').first().click();
@@ -4259,6 +4266,8 @@ const scenario = {
           const productResponse = await responseFor(page, () => selectedOption.click());
           product = { status: productResponse.status(), body: await productResponse.json().catch(() => ({})), request: requestBody(productResponse) };
           await page.getByText(product.body.data.analysisScopeLabel, { exact: false }).first().waitFor();
+          productDomainRetained = await domainGroup.locator(`input[value="${categoryDomain}"]`).isChecked();
+          productVisible = await readVisibleCards(page, new Map(candidates(product.body.data).map(item => [String(item.id), item])));
           productShot = await inspectCtx.screenshot('smartbi-guided-product');
           await subject.locator('input, button').first().click();
           const clearOption = page.getByRole('option', { name: '全部产品 / 全厂范围', exact: true });
@@ -4268,7 +4277,7 @@ const scenario = {
           }
         }
       }
-      const assessment = await assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot });
+      const assessment = await assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot, questionnaireVisible, productVisible, productDomainRetained });
       return { assessment, ...assessment, screenshots: [beforeGuide, categoryShot, ...(productShot ? [productShot] : [])] };
     },
   }),

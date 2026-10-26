@@ -18,7 +18,7 @@ import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFact
 import FactoryChartCanvas from './FactoryChartCanvas.vue';
 import FactoryChartDetails from './FactoryChartDetails.vue';
 import FactoryChartGuide from './FactoryChartGuide.vue';
-import { chartTypeLabel } from './factoryChartGuide';
+import { chartTypeLabel, recommendedAnalysisIds } from './factoryChartGuide';
 import {
   factoryChartRequestFromSelection,
   loadFactoryChartSelectionIntent,
@@ -65,6 +65,7 @@ const sourceLoadError = ref('');
 const data = ref<FactoryRecommendationsData | null>(null);
 const guideItems = ref<FactoryRecommendation[]>([]);
 const subjectOptions = ref<Array<{ id: string; label: string }>>([]);
+const generatedGuideIntent = ref<{ domain: string; family: string } | null>(null);
 let initialLoadDone = false;
 let requestVersion = 0;
 let selectionReady = false;
@@ -134,6 +135,16 @@ function applySelectionIntent(key: string, eligibleIds: string[]) {
     ? selectionForEligibleIds(eligibleIds, defaults) : visible;
 }
 
+function applyGeneratedGuideIntent(items: readonly FactoryRecommendation[]) {
+  if (!generatedGuideIntent.value) return false;
+  selectedIds.value = recommendedAnalysisIds(items, generatedGuideIntent.value.domain, generatedGuideIntent.value.family);
+  return true;
+}
+
+function applyCurrentSelection(key: string, eligibleIds: string[]) {
+  if (!generatedGuideIntent.value) applySelectionIntent(key, eligibleIds);
+}
+
 function loadSelectionPreference(eligibleIds: string[], _capturedRequestVersion: number) {
   if (!factoryId.value) return;
   const key = `${factoryId.value}:${source.value}:${uploadId.value ?? 'business'}`;
@@ -144,12 +155,12 @@ function loadSelectionPreference(eligibleIds: string[], _capturedRequestVersion:
     const dirtyAtRequest = selectionDirtyVersion;
     const localIntent = selectionIntentByScope.get(key) ?? loadFactoryChartSelectionIntent(factoryId.value, source.value);
     if (localIntent !== null) selectionIntentByScope.set(key, [...localIntent]);
-    applySelectionIntent(key, eligibleIds);
+    applyCurrentSelection(key, eligibleIds);
     void getFactoryChartSelection(factoryId.value, source.value).then(result => {
       if (requestId !== selectionPreferenceRequestVersion || selectionScopeKey !== key || dirtyAtRequest !== selectionDirtyVersion) return;
       if (result.success && result.data.factoryId === factoryId.value && result.data.source === source.value) {
         if (result.data.selectedIds !== null) selectionIntentByScope.set(key, [...result.data.selectedIds]);
-        applySelectionIntent(key, recommendations.value.map(item => item.id));
+        applyCurrentSelection(key, recommendations.value.map(item => item.id));
         selectionSyncState.value = result.data.selectedIds === null ? 'local' : 'synced';
         return;
       }
@@ -161,7 +172,7 @@ function loadSelectionPreference(eligibleIds: string[], _capturedRequestVersion:
     return;
   }
   // Derive the current view from the retained intent; never persist filtering.
-  applySelectionIntent(key, eligibleIds);
+  applyCurrentSelection(key, eligibleIds);
 }
 
 async function loadRecommendations() {
@@ -203,6 +214,7 @@ async function loadRecommendations() {
     data.value = result.data;
     guideItems.value = result.data.recommendations;
     subjectOptions.value = result.data.subjects || [];
+    applyGeneratedGuideIntent(result.data.recommendations);
     if (result.data.recommendations.length === 0) selectionScopeKey = '';
     if (result.data.recommendations.length > 0) {
       loadSelectionPreference(result.data.recommendations.map(item => item.id), capturedRequestVersion);
@@ -225,6 +237,7 @@ function openDetails(item: FactoryRecommendation, point?: { name?: string; serie
 
 function onSourceChange(next: FactoryChartSource) {
   analysisSubject.value = null;
+  generatedGuideIntent.value = null;
   guideContext.value = { mode: 'guide', domain: 'all', family: 'all' };
   guideItems.value = [];
   subjectOptions.value = [];
@@ -244,6 +257,7 @@ function onFactoryChanged() {
   suppressSelectionWatch = true;
   uploadId.value = null;
   analysisSubject.value = null;
+  generatedGuideIntent.value = null;
   guideContext.value = { mode: 'guide', domain: 'all', family: 'all' };
   guideItems.value = [];
   subjectOptions.value = [];
@@ -258,7 +272,7 @@ function onFactoryChanged() {
 }
 
 watch(authEpoch, onFactoryChanged, { flush: 'sync' });
-watch(uploadId, () => { analysisSubject.value = null; guideContext.value = { mode: 'guide', domain: 'all', family: 'all' }; guideItems.value = []; subjectOptions.value = []; }, { flush: 'sync' });
+watch(uploadId, () => { analysisSubject.value = null; generatedGuideIntent.value = null; guideContext.value = { mode: 'guide', domain: 'all', family: 'all' }; guideItems.value = []; subjectOptions.value = []; }, { flush: 'sync' });
 watch([source, uploadId, includeOptional, useAi, analysisSubject], () => {
   if (initialLoadDone && !suppressSelectionWatch) {
     const query = { ...route.query };
@@ -270,11 +284,16 @@ watch([source, uploadId, includeOptional, useAi, analysisSubject], () => {
 }, { deep: true });
 function applyGuidedSelection(ids: string[], save = false) {
   if (!data.value || loading.value) return;
+  if (save) generatedGuideIntent.value = null;
+  else generatedGuideIntent.value = { domain: guideContext.value.domain, family: guideContext.value.family };
   const eligible = new Set(recommendations.value.map(item => item.id));
-  selectedIds.value = [...new Set(ids.filter(id => eligible.has(id)))];
+  const nextIds = [...new Set(ids.filter(id => eligible.has(id)))];
+  selectedIds.value = save ? nextIds : nextIds.slice(0, 4);
   const key = `${factoryId.value}:${source.value}:${uploadId.value ?? 'business'}`;
-  selectionIntentByScope.set(key, [...selectedIds.value]);
   ++selectionDirtyVersion;
+  if (save) {
+    selectionIntentByScope.set(key, [...selectedIds.value]);
+  }
   selectionSyncState.value = 'local';
   if (save) void persistUserSelection();
 }

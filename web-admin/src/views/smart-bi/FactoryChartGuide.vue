@@ -24,6 +24,19 @@ const search = ref('');
 const families = computed(() => analysisFamilies(props.items));
 const domains = computed(() => [...new Set(families.value.map(group => group.domain))]);
 const scopedFamilies = computed(() => families.value.filter(group => domain.value === 'all' || group.domain === domain.value));
+const domainChoices = computed(() => domain.value !== 'all' && !domains.value.includes(domain.value)
+  ? [...domains.value, domain.value] : domains.value);
+const rememberedFamilyLabels = ref(new Map<string, string>());
+watch(families, groups => groups.forEach(group => rememberedFamilyLabels.value.set(group.id, group.label)), { immediate: true });
+const familyChoices = computed(() => {
+  if (family.value === 'all' || scopedFamilies.value.some(group => group.id === family.value)) return scopedFamilies.value;
+  return [...scopedFamilies.value, {
+    id: family.value,
+    label: `${rememberedFamilyLabels.value.get(family.value) || family.value}（当前数据无可用分析）`,
+    domain: domain.value,
+    items: [],
+  }];
+});
 const searchedFamilies = computed(() => scopedFamilies.value.filter(group => !search.value.trim() || group.label.includes(search.value.trim())));
 const recommendationIds = computed(() => recommendedAnalysisIds(props.items, domain.value, family.value));
 const subjectChoices = computed(() => [
@@ -33,8 +46,6 @@ const subjectChoices = computed(() => [
     ? [{ value: props.subject, label: '此前选择的产品（当前来源无数据）' }] : []),
 ]);
 watch(domain, () => { family.value = 'all'; });
-watch(domains, values => { if (domain.value !== 'all' && !values.includes(domain.value)) domain.value = 'all'; });
-watch(scopedFamilies, values => { if (family.value !== 'all' && !values.some(group => group.id === family.value)) family.value = 'all'; });
 watch([mode, domain, family], () => emit('context', { mode: mode.value, domain: domain.value, family: family.value }));
 
 const questions: Record<string, string> = {
@@ -65,7 +76,7 @@ function variant(group: AnalysisFamily, id: string) { emit('selection', replaceF
       <h3>{{ mode === 'guide' ? '1. 想了解什么？' : '业务分类' }}</h3>
       <el-radio-group v-model="domain" aria-label="业务问题" data-testid="factory-chart-guide-domain">
         <el-radio-button value="all">{{ mode === 'guide' ? '先看整体情况' : '全部分类' }}</el-radio-button>
-        <el-radio-button v-for="item in domains" :key="item" :value="item">{{ mode === 'guide' ? questions[item] || `${item}情况怎样？` : item }}</el-radio-button>
+        <el-radio-button v-for="item in domainChoices" :key="item" :value="item">{{ mode === 'guide' ? `${questions[item] || `${item}情况怎样？`}${!domains.includes(item) ? '（当前数据无可用分析）' : ''}` : `${item}${!domains.includes(item) ? '（当前数据无可用分析）' : ''}` }}</el-radio-button>
       </el-radio-group>
     </div>
     <div class="guide-step guide-fields">
@@ -73,7 +84,7 @@ function variant(group: AnalysisFamily, id: string) { emit('selection', replaceF
         <label for="factory-analysis-topic">2. 重点看哪方面？</label>
         <el-select id="factory-analysis-topic" v-model="family" data-testid="factory-chart-guide-topic" aria-label="分析主题">
           <el-option label="推荐组合（最多 4 张）" value="all" />
-          <el-option v-for="item in scopedFamilies" :key="item.id" :label="item.label" :value="item.id" />
+          <el-option v-for="item in familyChoices" :key="item.id" :label="item.label" :value="item.id" />
         </el-select>
       </div>
       <div class="guide-field">

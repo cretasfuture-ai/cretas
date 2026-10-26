@@ -33,6 +33,8 @@ const recommendation = {
   detailContext: { id: 'ctx', expiresAt: '2099-01-01T00:00:00Z' },
 } as const;
 const optionalRecommendation = { ...recommendation, id: 'optional', title: '可选分析', priority: 'optional' as const, chart: { chartType: 'bar_horizontal', echartsOption: { testCandidate: 'optional', series: [] } } };
+const inventoryRecommendation = { ...recommendation, id: 'inventory', title: '库存余额', domain: '库存', analysis: { familyId: 'inventory', familyLabel: '库存余额' }, chart: { chartType: 'bar_horizontal', echartsOption: { testCandidate: 'inventory', series: [] } } };
+const productionRecommendation = { ...recommendation, id: 'production', title: '生产效率', domain: '生产', analysis: { familyId: 'production', familyLabel: '生产效率' }, chart: { chartType: 'bar_horizontal', echartsOption: { testCandidate: 'production', series: [] } } };
 
 function successData() {
   return { factoryId: 'F006', source: 'business', analysisSubject: null, sourceLabel: '业务数据', period: { label: '全部历史' }, defaultSelection: ['sales'], ranking: { mode: 'rule', reason: '' }, recommendations: [recommendation, optionalRecommendation], unavailable: [], sourceErrors: [] };
@@ -102,6 +104,34 @@ describe('FactoryChartsScreen', () => {
     fireEvent.press(screen.getByTestId('factory-chart-load'));
     await waitFor(() => expect(screen.getByTestId('factory-chart-card-cost-5')).toBeTruthy());
     expect(screen.queryByTestId('factory-chart-card-cost-0')).toBeNull();
+  });
+
+  it('does not fall back to unrelated saved production charts after an inventory guide reaches a product with only production data', async () => {
+    const initialData = {
+      ...successData(),
+      subjects: [{ id: 'sku-1', label: '产品一' }],
+      defaultSelection: ['production'],
+      recommendations: [inventoryRecommendation, productionRecommendation],
+    };
+    const productData = {
+      ...initialData,
+      analysisSubject: 'sku-1',
+      defaultSelection: ['production'],
+      recommendations: [productionRecommendation],
+    };
+    (getFactoryRecommendations as jest.Mock).mockImplementation(async request => ({ success: true, data: request.analysis_subject === 'sku-1' ? productData : initialData }));
+    (getFactoryChartSelection as jest.Mock).mockResolvedValue({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['production'], updatedAt: null } });
+    const screen = render(<FactoryChartsScreen />);
+
+    await waitFor(() => expect(screen.getByTestId('factory-chart-card-production')).toBeTruthy());
+    fireEvent.press(screen.getByText('库存'));
+    fireEvent.press(screen.getByText('推荐组合（最多 4 张）'));
+    fireEvent.press(screen.getByTestId('factory-chart-load'));
+    fireEvent.press(screen.getByText('产品一'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ guided: true, analysis_subject: 'sku-1' })));
+    await waitFor(() => expect(screen.queryByTestId('factory-chart-card-production')).toBeNull());
+    expect(screen.getByText(/已选择问题：库存/)).toBeTruthy();
+    expect(screen.getByText(/当前条件暂无与“库存”匹配的分析/)).toBeTruthy();
   });
 
   it('rejects unscoped product results and keeps controls to return to factory data', async () => {
