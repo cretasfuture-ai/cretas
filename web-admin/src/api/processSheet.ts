@@ -189,6 +189,32 @@ export interface ProcessSheetRowRequest {
    * (见 ProcessSheetServiceImpl#validateCustomFields)。
    */
   customFields?: Record<string, unknown>;
+  /**
+   * 缺口 06 汇合配比: 前端只发 reason/note (超差时必填); 其余由后端 BlendRatioCheck 在正式提交时
+   * 计算并覆盖, 随 row_payload 回显。草稿不校验。
+   */
+  blendRatio?: BlendRatioDeviation;
+}
+
+/** mirrors Java dto/workflow/BlendRatioDeviation。 */
+export interface BlendRatioDeviation {
+  reason?: string | null;
+  note?: string | null;
+  /** WITHIN / OVER_WITH_REASON / SKIPPED_UNITS (服务端计算)。 */
+  status?: string | null;
+  tolerancePp?: number | null;
+  basis?: string | null;
+  maxDeviationPp?: number | null;
+  skipReason?: string | null;
+  lines?: Array<{
+    workflowPortId: string;
+    materialName: string;
+    quantity: number;
+    recipeSharePercent: number;
+    actualSharePercent: number;
+    deviationPp: number;
+    overTolerance: boolean;
+  }> | null;
 }
 
 /**

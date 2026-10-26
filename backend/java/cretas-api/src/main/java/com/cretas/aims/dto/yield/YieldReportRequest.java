@@ -154,6 +154,12 @@ public class YieldReportRequest {
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate businessDate;
 
+    /**
+     * 缺口 06 汇合配比: 多主料投料偏离配方份额超 ±2 个百分点时必填的原因 (reason/note);
+     * 服务端算出的快照落在 production_reports.custom_fields.blendRatio。
+     */
+    private com.cretas.aims.dto.workflow.BlendRatioDeviation blendRatio;
+
     /** T161: per-photo annotation attached to each evidence image. */
     @Data
     public static class PhotoAnnotation {
