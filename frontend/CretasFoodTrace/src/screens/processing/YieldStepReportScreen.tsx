@@ -24,6 +24,7 @@ import {
   blendRatioPayload,
   type BlendMaterialOption,
 } from '../../utils/blendRatio';
+import { isProcessSecretHidden } from '../../utils/processSecretField';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import {
   yieldReportApi,
@@ -677,6 +678,7 @@ const YieldStepReportScreen: React.FC = () => {
           materialTypeId: option.materialTypeId,
           materialName: option.materialName,
           inputShareRatio: option.inputShareRatio ?? null,
+          inputShareHidden: isProcessSecretHidden(option, 'inputShareRatio'),
         });
       }
       return next;

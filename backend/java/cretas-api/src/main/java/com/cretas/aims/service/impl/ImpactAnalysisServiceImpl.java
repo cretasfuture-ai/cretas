@@ -59,6 +59,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
     private final ProductTypeRepository productTypeRepository;
     /** 原料核对的唯一真值路径: 当前 ACTIVE BOM 展开 + 批次 receipt−used−reserved (与生产/领料同源)。 */
     private final BomExpansionService bomExpansionService;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
     /** 用于把 BOM 展开放进独立只读子事务 (见 checkMaterialAvailability 注释)。 */
     private final PlatformTransactionManager transactionManager;
 
@@ -399,10 +400,18 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
             }
             List<MaterialShortfall> shortfalls = check.getShortfalls() != null
                     ? check.getShortfalls() : Collections.emptyList();
+            // 工艺保密: 插单数量由调用方随意填, 「需要 X」÷ 数量 = 单位用量; 无完整查看权只说哪些料不足
+            boolean revealQuantities = processSecretGuard == null || processSecretGuard.permitsProduct(factoryId,
+                    productTypeId, com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+                    "urgent-insert material check");
             String detail = shortfalls.stream()
-                    .map(sf -> String.format("%s 需要 %s, 可用 %s",
-                            sf.getMaterialTypeName() != null ? sf.getMaterialTypeName() : sf.getMaterialTypeId(),
-                            plain(sf.getRequiredQuantity()), plain(sf.getAvailableQuantity())))
+                    .map(sf -> {
+                        String name = sf.getMaterialTypeName() != null ? sf.getMaterialTypeName() : sf.getMaterialTypeId();
+                        return revealQuantities
+                                ? String.format("%s 需要 %s, 可用 %s", name,
+                                        plain(sf.getRequiredQuantity()), plain(sf.getAvailableQuantity()))
+                                : name + " 不足";
+                    })
                     .collect(Collectors.joining("; "));
             // 调用方会冠以「原料不足: 」, 这里只放明细
             return ResourceCheckResult.unavailable("MATERIAL",

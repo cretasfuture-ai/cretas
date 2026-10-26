@@ -3,6 +3,7 @@ package com.cretas.aims.service.yield.impl;
 import com.cretas.aims.dto.yield.SemiFinishedYieldStatsDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
 import com.cretas.aims.service.yield.SemiFinishedYieldStatsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ public class SemiFinishedYieldStatsServiceImpl implements SemiFinishedYieldStats
     private static final int RATE_SCALE = 6;
 
     private final ProductionReportRepository productionReportRepository;
+    private final ProcessSecretAggregateExclusions aggregateExclusions;
 
     @Override
     @Transactional(readOnly = true)
@@ -30,9 +32,13 @@ public class SemiFinishedYieldStatsServiceImpl implements SemiFinishedYieldStats
             throw new BusinessException(400, "semiFinishedSkuId 不能为空");
         }
 
+        // 工艺保密 (独立审查第三轮 B): 半成品本身受保护时由路由闸拦; 半成品不受保护但用在保密产品的计划里时,
+        // 那些计划的行不参与 —— 全历史加权出成率是跨批汇总 (Steve 第三问 A)
+        java.util.List<String> excludedPlanIds = aggregateExclusions
+                .forCurrentCaller(factoryId, "semi-finished yield stats " + semiFinishedSkuId).planIdsOrSentinel();
         ProductionReportRepository.SemiFinishedYieldAggregate aggregate =
                 productionReportRepository.aggregateSettledSemiFinishedYield(
-                        factoryId, semiFinishedSkuId);
+                        factoryId, semiFinishedSkuId, excludedPlanIds);
         BigDecimal totalInput = valueOrZero(aggregate == null ? null : aggregate.getTotalInputKg());
         BigDecimal totalOutput = valueOrZero(aggregate == null ? null : aggregate.getTotalOutputKg());
         long batchCount = aggregate == null || aggregate.getBatchCount() == null

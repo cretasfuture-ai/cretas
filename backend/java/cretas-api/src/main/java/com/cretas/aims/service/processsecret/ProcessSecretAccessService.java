@@ -222,10 +222,46 @@ public class ProcessSecretAccessService {
                          ProcessSecretAction action, String decision, String reason, String resourceRef) {
         try {
             auditRecorder.record(factoryId, productTypeId, actor, action, decision, reason, resourceRef);
+            if ("ALLOW".equals(decision) && action == ProcessSecretAction.VIEW_FULL) {
+                rememberAllowedInRequest(factoryId, productTypeId);
+            }
             return true;
         } catch (RuntimeException e) {
             log.error("[process-secret] audit write failed: {}", e.getClass().getSimpleName());
             return false;
         }
+    }
+
+    static final String ALLOWED_IN_REQUEST = ProcessSecretAccessService.class.getName() + ".allowedViewFull";
+
+    /**
+     * 本次 HTTP 请求里是否已经为该产品记过「完整查看放行」。出口裁剪据此不重复记
+     * (同一次打开配方页, 拦截器记一条就够, 访问记录里不出现两条)。
+     */
+    public boolean viewFullAllowedInRequest(String factoryId, String productTypeId) {
+        org.springframework.web.context.request.RequestAttributes attributes =
+                org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (attributes == null) return false;
+        Object seen = attributes.getAttribute(ALLOWED_IN_REQUEST,
+                org.springframework.web.context.request.RequestAttributes.SCOPE_REQUEST);
+        return seen instanceof Set<?> set && set.contains(factoryId + "|" + productTypeId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void rememberAllowedInRequest(String factoryId, String productTypeId) {
+        org.springframework.web.context.request.RequestAttributes attributes =
+                org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        if (attributes == null) return;
+        Object seen = attributes.getAttribute(ALLOWED_IN_REQUEST,
+                org.springframework.web.context.request.RequestAttributes.SCOPE_REQUEST);
+        Set<String> set;
+        if (seen instanceof Set<?> existing) {
+            set = (Set<String>) existing;
+        } else {
+            set = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+            attributes.setAttribute(ALLOWED_IN_REQUEST, set,
+                    org.springframework.web.context.request.RequestAttributes.SCOPE_REQUEST);
+        }
+        set.add(factoryId + "|" + productTypeId);
     }
 }

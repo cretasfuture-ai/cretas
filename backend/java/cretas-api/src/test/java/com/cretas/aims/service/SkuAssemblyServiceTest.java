@@ -40,14 +40,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import(SkuAssemblyService.class)
+// 与 ProcessSecretDataLayerJpaTest 同一组 Import, 共享测试上下文 (组装 SKU 要过工艺保密的复制判定)
+@Import({SkuAssemblyService.class, com.cretas.aims.service.impl.ProductWorkProcessServiceImpl.class,
+        com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard.class,
+        com.cretas.aims.service.processsecret.ProcessSecretAccessService.class,
+        com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder.class,
+        com.cretas.aims.service.processsecret.ProcessSecretReadTrackerConfiguration.class})
 @DisplayName("SkuAssemblyService")
 class SkuAssemblyServiceTest {
 
     private static final String FACTORY_ID = "F-SKU-CLONE";
     private static final String TEMPLATE_ID = "PT-TEMPLATE-CLONE";
     private static final String CUSTOMER_ID = "CUS-SKU-CLONE";
-    private static final Long USER_ID = 1L;
+    // 种子用户的真实 id (共享测试上下文时自增序列不从 1 开始)
+    private Long seededUserId;
     private static final DateTimeFormatter CODE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     @Autowired private SkuAssemblyService skuAssemblyService;
@@ -64,7 +70,7 @@ class SkuAssemblyServiceTest {
         seedTemplateWithProcessChainAndBom();
 
         ProductType sku = skuAssemblyService.assemblesku(
-                FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, USER_ID);
+                FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, seededUserId);
         entityManager.flush();
         entityManager.clear();
 
@@ -120,7 +126,7 @@ class SkuAssemblyServiceTest {
         assertNotEquals(201L, copiedSeasoningItems.get(0).getId());
 
         assertThrows(BusinessException.class, () -> skuAssemblyService.assemblesku(
-                FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, USER_ID));
+                FACTORY_ID, TEMPLATE_ID, CUSTOMER_ID, "v1", null, seededUserId));
         assertEquals(3, productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, sku.getId())
                 .size());
@@ -152,6 +158,7 @@ class SkuAssemblyServiceTest {
         user.setIsActive(true);
         entityManager.persist(user);
         entityManager.flush();
+        seededUserId = user.getId();
 
         Customer customer = new Customer();
         customer.setId(CUSTOMER_ID);

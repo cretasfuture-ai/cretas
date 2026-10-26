@@ -22,6 +22,7 @@ const checked = computed(() => (props.evaluation.status === 'WITHIN' || props.ev
   ? props.evaluation
   : null);
 const isOver = computed(() => props.evaluation.status === 'OVER');
+const isSecret = computed(() => props.evaluation.status === 'SECRET');
 </script>
 
 <template>
@@ -37,6 +38,9 @@ const isOver = computed(() => props.evaluation.status === 'OVER');
       <span v-if="checked" class="blend-sub">按工艺配方份额，允许偏差 ±{{ checked.tolerancePp }} 个百分点</span>
     </div>
     <p v-if="evaluation.status === 'SKIPPED'" class="blend-skip" data-testid="blend-ratio-skipped">{{ evaluation.reason }}</p>
+    <p v-if="isSecret" class="blend-skip" data-testid="blend-ratio-secret">
+      该产品工艺已保密，本页不显示配方份额、不能预先核对；提交时如提示「配比偏差」，请在下面选择原因后再提交。
+    </p>
     <table v-if="checked" class="blend-table">
       <thead>
         <tr><th>主料</th><th>配方</th><th>实际</th><th>偏差</th></tr>
@@ -55,8 +59,9 @@ const isOver = computed(() => props.evaluation.status === 'OVER');
         </tr>
       </tbody>
     </table>
-    <div v-if="isOver" class="blend-reason" data-testid="blend-ratio-reason-area">
-      <span class="blend-reason-label"><i class="sp-required">*</i>配比超出允许范围，请选择原因</span>
+    <div v-if="isOver || isSecret" class="blend-reason" data-testid="blend-ratio-reason-area">
+      <span v-if="isOver" class="blend-reason-label"><i class="sp-required">*</i>配比超出允许范围，请选择原因</span>
+      <span v-else class="blend-sub">配比偏差原因（提交提示超差时必选）</span>
       <el-select
         :model-value="reason"
         placeholder="选择偏差原因"
