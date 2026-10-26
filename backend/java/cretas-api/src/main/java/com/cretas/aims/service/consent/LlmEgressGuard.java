@@ -67,6 +67,26 @@ public class LlmEgressGuard {
         return texts(site, factoryId, Map.of(), Arrays.asList(texts));
     }
 
+    /**
+     * 只发文本、但文本是从一份结构化记录拼出来的 (成本数据 / 表单提交值 / Excel 样本…):
+     * 先从记录里认出人和交易对象名、不发字段 (地址 / 备注 / 电话) 的值, 再按这些名字脱敏文本。
+     * 记录本身不发, 所以记录展开不了 (类型不认识) 时退回只按文本脱敏; 其余拒绝照旧拒绝
+     * (退回会丢掉「不发字段的值」, 不能因为别的原因退)。
+     */
+    public LlmEgressRedactor.Result textsWithRecord(String site, String factoryId, Object record,
+                                                    Map<String, LlmEgressRedactor.Party> knownParties,
+                                                    List<String> texts) {
+        Object tree;
+        try {
+            tree = LlmEgressRedactor.toPlainTree(objectMapper, record);
+        } catch (RuntimeException e) {
+            log.info("LLM egress [{}]: record not expandable ({}), redacting text only", site,
+                    e.getClass().getSimpleName());
+            return texts(site, factoryId, knownParties, texts);
+        }
+        return combined(site, factoryId, tree, knownParties, texts);
+    }
+
     /** 结构化数据 + 文本共用一套代号 (名单里的人在原话里出现时是同一个代号)。 */
     public LlmEgressRedactor.Result combined(String site, String factoryId, Object data,
                                              Map<String, LlmEgressRedactor.Party> knownParties, List<String> texts) {

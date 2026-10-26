@@ -40,6 +40,7 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -172,6 +173,13 @@ public class IntentExecutionOrchestrator {
     // 改成必需注入会让那些测试全部 NPE。为空时只是不挂提示, 主回答不受影响。
     @Autowired(required = false)
     private RestaurantFindingHintAppender restaurantFindingHintAppender;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例 (不查保密产品名)。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply";
 
     // R16 tiered-first 反转开关: 关掉即完全回到 Java-first + gate 摆渡的旧行为。
     @Value("${cretas.restaurant.tiered-first.enabled:true}")
@@ -2581,6 +2589,20 @@ public class IntentExecutionOrchestrator {
             systemPrompt = "你是白垩纪AI Agent的智能助手。友好回应，不超过100字，使用中文。";
         }
 
+        // 经营报告 + 原话发给模型前脱敏 (报告里有客户 / 供应商 / 人名); 报告脱敏不了就不带报告, 原话也脱敏不了就不发
+        LlmEgressRedactor.Result redacted = llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId,
+                systemPrompt, userInput);
+        if (redacted.refused() && factoryAnalysisContext != null) {
+            factoryAnalysisContext = null;
+            redacted = llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId,
+                    "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。", userInput);
+        }
+        if (redacted.refused()) {
+            return "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
+        }
+        String sentSystemPrompt = redacted.text(0);
+        String sentUserInput = redacted.text(1);
+
         try {
             boolean useThinkingMode = Boolean.TRUE.equals(enableThinking)
                     && questionType == QuestionType.GENERAL_QUESTION
@@ -2589,14 +2611,16 @@ public class IntentExecutionOrchestrator {
 
             String response;
             if (useThinkingMode) {
-                ChatCompletionResponse thinkingResponse = dashScopeClient.chatWithThinking(systemPrompt, userInput, budget);
+                ChatCompletionResponse thinkingResponse =
+                        dashScopeClient.chatWithThinking(sentSystemPrompt, sentUserInput, budget);
                 response = thinkingResponse.getContent();
                 if (thinkingResponse.hasError()) {
-                    response = dashScopeClient.chat(systemPrompt, userInput);
+                    response = dashScopeClient.chat(sentSystemPrompt, sentUserInput);
                 }
             } else {
-                response = dashScopeClient.chat(systemPrompt, userInput);
+                response = dashScopeClient.chat(sentSystemPrompt, sentUserInput);
             }
+            response = redacted.restore(response);
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
                 response = numberProvenance.enforceText(
                         CONVERSATIONAL_PROVENANCE_SITE, response, factoryAnalysisContext, userInput);

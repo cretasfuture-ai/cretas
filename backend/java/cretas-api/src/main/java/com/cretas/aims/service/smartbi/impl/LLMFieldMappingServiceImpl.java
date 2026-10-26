@@ -7,6 +7,8 @@ import com.cretas.aims.dto.smartbi.FieldMappingWithChartRole.ChartAxisRole;
 import com.cretas.aims.dto.smartbi.FieldMappingWithChartRole.FieldRole;
 import com.cretas.aims.entity.smartbi.SmartBiDictionary;
 import com.cretas.aims.repository.smartbi.SmartBiDictionaryRepository;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.service.smartbi.LLMFieldMappingService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -52,6 +54,12 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
     private SmartBiDictionaryRepository dictionaryRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** Excel 样本值发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "smartbi-field-mapping";
 
     // ==================== 系统提示词 ====================
 
@@ -521,14 +529,20 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
         }
 
         try {
-            // 构建用户输入
-            String userInput = buildSingleFieldPrompt(columnName, dataType, sampleValues, uniqueValueCount);
+            // 构建用户输入; 样本值按列名判断是不是人名 / 客户名 / 电话, 换代号或不发, 脱敏不了按默认规则
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put(columnName, sampleValues);
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null, record, Map.of(),
+                    List.of(buildSingleFieldPrompt(columnName, dataType, sampleValues, uniqueValueCount)));
+            if (redacted.refused()) {
+                return buildDefaultMapping(columnName, dataType, uniqueValueCount);
+            }
 
             // 调用 LLM（使用低温度确保输出稳定）
-            String response = dashScopeClient.chatLowTemp(SYSTEM_PROMPT, userInput);
+            String response = dashScopeClient.chatLowTemp(SYSTEM_PROMPT, redacted.text(0));
 
             // 解析响应
-            return parseLLMResponse(response, columnName, uniqueValueCount);
+            return parseLLMResponse(redacted.restoreJsonText(response), columnName, uniqueValueCount);
 
         } catch (Exception e) {
             log.error("[LLM Field Mapping] LLM 分析失败: columnName={}, error={}",
@@ -549,14 +563,24 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
         }
 
         try {
-            // 构建用户输入
-            String userInput = buildBatchFieldPrompt(fieldInfoList);
+            // 构建用户输入; 各列样本值按列名脱敏 (人名 / 客户名换代号, 电话 / 地址类不发)
+            Map<String, Object> record = new LinkedHashMap<>();
+            for (FieldInfo info : fieldInfoList) {
+                record.put(info.getColumnName(), info.getSampleValues());
+            }
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null, record, Map.of(),
+                    List.of(buildBatchFieldPrompt(fieldInfoList)));
+            if (redacted.refused()) {
+                return fieldInfoList.stream()
+                        .map(f -> buildDefaultMapping(f.getColumnName(), f.getDataType(), f.getUniqueValueCount()))
+                        .collect(Collectors.toList());
+            }
 
             // 调用 LLM
-            String response = dashScopeClient.chatLowTemp(BATCH_SYSTEM_PROMPT, userInput);
+            String response = dashScopeClient.chatLowTemp(BATCH_SYSTEM_PROMPT, redacted.text(0));
 
             // 解析响应
-            return parseBatchLLMResponse(response, fieldInfoList);
+            return parseBatchLLMResponse(redacted.restoreJsonText(response), fieldInfoList);
 
         } catch (Exception e) {
             log.error("[LLM Field Mapping] LLM 批量分析失败: error={}", e.getMessage(), e);

@@ -26,6 +26,10 @@ public class OperatingReportGenerator {
     private final OperatingReportStore store;
     private final PythonLLMClient model;
     private final AIReportPromptConfigRepository prompts;
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard=com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+    static final String EGRESS_SITE="operating-report";
     public OperatingReportGenerator(FactoryRepository factories,PermissionService permissions,OperatingReportCollector collector,
                                     OperatingReportAssembler assembler,OperatingReportCodec codec,OperatingReportStore store,
                                     PythonLLMClient model,AIReportPromptConfigRepository prompts){
@@ -64,8 +68,11 @@ public class OperatingReportGenerator {
                     .orElseGet(()->prompts.findFirstByFactoryIdIsNullAndReportTypeAndIsActiveTrueOrderByPriorityDesc(type).orElse(null));
             if(config!=null)prompt+="工厂关注方向（不改变上述输出合同）："+config.getPromptTemplate()+"\n";
             prompt+="经营指标快照：\n"+codec.encode(snapshot);
+            // 快照里的指标标签 / 工厂关注方向可能带客户、人名、保密产品名: 换代号再发, 脱敏不了按模型不可用记失败
+            var redacted=llmEgressGuard.texts(EGRESS_SITE,context.factoryId(),system,prompt);
+            if(redacted.refused())throw new IllegalStateException("Operating report prompt could not be redacted");
             // Existing configured application model client; no process, credential or provider override.
-            String output=model.chat(system,prompt);
+            String output=redacted.restoreJsonText(model.chat(redacted.text(0),redacted.text(1)));
             stage=OperatingReportSnapshot.Failure.MODEL_OUTPUT_INVALID;
             snapshot=snapshot.withInsights(codec.parseInsights(output,snapshot)).withAudit(context.audit("SUCCESS"));
             stage=OperatingReportSnapshot.Failure.GENERATION_FAILED;
