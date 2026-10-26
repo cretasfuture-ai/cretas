@@ -66,11 +66,34 @@ CREATE TABLE production_reports (
 );
 CREATE TABLE production_plans (
   id TEXT PRIMARY KEY, factory_id TEXT NOT NULL, product_type_id TEXT,
-  status TEXT, deleted_at TIMESTAMPTZ
+  status TEXT, deleted_at TIMESTAMPTZ,
+  workflow_selection_mode TEXT, selected_workflow_id BIGINT, selected_workflow_version INT,
+  selected_workflow_revision_id BIGINT, selected_workflow_revision_hash TEXT
 );
 CREATE TABLE production_batches (
   id TEXT PRIMARY KEY, factory_id TEXT NOT NULL, production_plan_id TEXT,
-  product_type_id TEXT NOT NULL, status TEXT NOT NULL, deleted_at TIMESTAMPTZ
+  product_type_id TEXT NOT NULL, status TEXT NOT NULL, deleted_at TIMESTAMPTZ,
+  workflow_selection_mode TEXT, selected_workflow_id BIGINT, selected_workflow_version INT,
+  selected_workflow_revision_id BIGINT, selected_workflow_revision_hash TEXT
+);
+CREATE TABLE product_process_workflows (
+  id BIGINT PRIMARY KEY, factory_id TEXT NOT NULL, product_type_id TEXT NOT NULL,
+  definition_version INT NOT NULL, status TEXT NOT NULL, deleted_at TIMESTAMPTZ
+);
+CREATE TABLE production_workflow_instances (
+  id BIGINT PRIMARY KEY, factory_id TEXT NOT NULL, production_batch_id TEXT NOT NULL,
+  product_type_id TEXT NOT NULL, workflow_id BIGINT NOT NULL, definition_version INT NOT NULL,
+  status TEXT NOT NULL, deleted_at TIMESTAMPTZ
+);
+CREATE TABLE work_process_tasks (
+  id BIGINT PRIMARY KEY, factory_id TEXT NOT NULL, production_batch_id TEXT NOT NULL,
+  workflow_instance_id BIGINT NOT NULL, work_process_id TEXT NOT NULL,
+  product_type_id TEXT NOT NULL, process_order INT NOT NULL, deleted_at TIMESTAMPTZ
+);
+CREATE TABLE product_process_workflow_revisions (
+  id BIGINT PRIMARY KEY, factory_id TEXT NOT NULL, product_type_id TEXT NOT NULL,
+  workflow_id BIGINT NOT NULL, definition_version INT NOT NULL, revision_hash TEXT NOT NULL,
+  status TEXT NOT NULL, deleted_at TIMESTAMPTZ
 );
 CREATE TABLE product_types (
   id TEXT PRIMARY KEY, factory_id TEXT NOT NULL, name TEXT NOT NULL,
@@ -136,8 +159,13 @@ async def test_captured_sources_real_pg_migration_load_engine_and_negative_guard
         await conn.execute("INSERT INTO production_reports(factory_id,report_date,report_type,status,product_type_id,product_name,process_order,output_quantity,good_quantity,output_unit,custom_fields) VALUES ('F006','2025-01-01','YIELD','SUBMITTED','p1','产品',2,10,9,'kg',$1::jsonb)", json.dumps({"clerkCustomFields": fields}))
         await conn.execute("INSERT INTO product_types VALUES ('p1','F006','产品',true,NULL)")
         await conn.execute("INSERT INTO product_types VALUES ('p2','F006','错误产品',true,NULL)")
-        await conn.execute("INSERT INTO production_plans VALUES ('plan-sheet','F006','p1','ACTIVE',NULL)")
-        await conn.execute("INSERT INTO production_batches VALUES ('batch-sheet','F006','plan-sheet','p1','ACTIVE',NULL)")
+        revision_hash = "935354b332791ff3bf09f2e6dabd31045944330072d01403a7faddc07c08fc1f"
+        await conn.execute("INSERT INTO product_process_workflow_revisions VALUES (536,'F006','workflow-owner',374,1,$1,'PUBLISHED',NULL)", revision_hash)
+        await conn.execute("INSERT INTO production_plans(id,factory_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ('plan-sheet','F006','p1','ACTIVE',NULL,'WORKFLOW',374,1,536,$1)", revision_hash)
+        await conn.execute("INSERT INTO production_batches(id,factory_id,production_plan_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ('batch-sheet','F006','plan-sheet','p1','ACTIVE',NULL,'WORKFLOW',374,1,536,$1)", revision_hash)
+        await conn.execute("INSERT INTO production_workflow_instances VALUES (734,'F006','batch-sheet','p1',374,1,'ACTIVE',NULL)")
+        await conn.execute("INSERT INTO work_process_tasks VALUES (2052,'F006','batch-sheet',734,'wp1','p1',2,NULL)")
+        await conn.execute("INSERT INTO work_process_tasks VALUES (2053,'F006','wrong-task-batch',734,'wp1','p1',2,NULL)")
         sheet_payload = {
             "processDate": "2026-10-03", "productTypeId": "p1",
             "outputQuantity": 20, "outputUnit": "kg", "customFields": {
@@ -149,17 +177,32 @@ async def test_captured_sources_real_pg_migration_load_engine_and_negative_guard
         await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-sheet','client-sheet',$1::jsonb,'SUBMITTED',NULL)", json.dumps(sheet_payload))
         bad_sheet = dict(sheet_payload, processDate="not-a-date")
         await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-sheet','client-bad',$1::jsonb,'SUBMITTED',NULL)", json.dumps(bad_sheet))
-        await conn.execute("INSERT INTO production_plans VALUES ('plan-other','F006','p1','ACTIVE',NULL)")
-        await conn.execute("INSERT INTO production_batches VALUES ('batch-wrong-plan','F006','plan-other','p1','ACTIVE',NULL)")
+        await conn.execute("INSERT INTO production_plans(id,factory_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ('plan-other','F006','p1','ACTIVE',NULL,'WORKFLOW',374,1,536,$1)", revision_hash)
+        await conn.execute("INSERT INTO production_batches(id,factory_id,production_plan_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ('batch-wrong-plan','F006','plan-other','p1','ACTIVE',NULL,'WORKFLOW',374,1,536,$1)", revision_hash)
         await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-wrong-plan','client-wrong-plan',$1::jsonb,'SUBMITTED',NULL)", json.dumps(sheet_payload))
         for plan_id, batch_id, status, deleted_at, batch_product in [
             ("plan-cancel", "batch-cancel", "CANCELLED", "NULL", "p1"),
             ("plan-deleted", "batch-deleted", "ACTIVE", "now()", "p1"),
             ("plan-mismatch", "batch-mismatch", "ACTIVE", "NULL", "p2"),
         ]:
-            await conn.execute(f"INSERT INTO production_plans VALUES ('{plan_id}','F006','p1','{status}',{deleted_at})")
-            await conn.execute(f"INSERT INTO production_batches VALUES ('{batch_id}','F006','{plan_id}','{batch_product}','ACTIVE',{deleted_at})")
+            await conn.execute(f"INSERT INTO production_plans(id,factory_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ('{plan_id}','F006','p1','{status}',{deleted_at},'WORKFLOW',374,1,536,$1)", revision_hash)
+            await conn.execute(f"INSERT INTO production_batches(id,factory_id,production_plan_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ('{batch_id}','F006','{plan_id}','{batch_product}','ACTIVE',{deleted_at},'WORKFLOW',374,1,536,$1)", revision_hash)
             await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006',$1,2,$2,$3,$4::jsonb,'SUBMITTED',NULL)", plan_id, batch_id, f"negative-{plan_id}", json.dumps(sheet_payload))
+        for revision_id, revision_factory, revision_status, revision_deleted, revision_hash_bad in [
+            (537, 'F006', 'PUBLISHED', 'NULL', 'bad-hash'),
+            (538, 'F006', 'DRAFT', 'NULL', 'draft-hash'),
+            (539, 'F006', 'PUBLISHED', 'now()', 'deleted-hash'),
+            (540, 'F001', 'PUBLISHED', 'NULL', 'foreign-hash'),
+        ]:
+            await conn.execute("INSERT INTO product_process_workflow_revisions VALUES ($1,$2,'workflow-owner',$3,1,$4,$5," + revision_deleted + ")", revision_id, revision_factory, 374, revision_hash_bad, revision_status)
+            plan_id, batch_id = f"plan-revision-{revision_id}", f"batch-revision-{revision_id}"
+            selected_revision_id = 536 if revision_id == 537 else revision_id
+            await conn.execute("INSERT INTO production_plans(id,factory_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ($1,'F006','p1','ACTIVE',NULL,'WORKFLOW',374,1,$2,$3)", plan_id, selected_revision_id, revision_hash_bad)
+            await conn.execute("INSERT INTO production_batches(id,factory_id,production_plan_id,product_type_id,status,deleted_at,workflow_selection_mode,selected_workflow_id,selected_workflow_version,selected_workflow_revision_id,selected_workflow_revision_hash) VALUES ($1,'F006',$2,'p1','ACTIVE',NULL,'WORKFLOW',374,1,$3,$4)", batch_id, plan_id, selected_revision_id, revision_hash_bad)
+            instance_id, task_id = 8000 + revision_id, 9000 + revision_id
+            await conn.execute("INSERT INTO production_workflow_instances VALUES ($1,'F006',$2,'p1',374,1,'ACTIVE',NULL)", instance_id, batch_id)
+            await conn.execute("INSERT INTO work_process_tasks VALUES ($1,'F006',$2,$3,'wp1','p1',2,NULL)", task_id, batch_id, instance_id)
+            await conn.execute("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006',$1,2,$2,$3,$4::jsonb,'SUBMITTED',NULL)", plan_id, batch_id, f"negative-revision-{revision_id}", json.dumps(sheet_payload))
         history_payload = dict(sheet_payload, processDate="2025-01-01")
         await conn.executemany("INSERT INTO process_sheet_rows(factory_id,plan_id,process_order,batch_id,client_row_id,row_payload,submission_status,deleted_at) VALUES ('F006','plan-sheet',2,'batch-sheet',$1,$2::jsonb,'SUBMITTED',NULL)", [(f"history-{i}", json.dumps(history_payload)) for i in range(10001)])
         malformed = [dict(sheet_payload, processDate=value) for value in ("2026-02-31", "2026-13-01", "", "NaT")]
