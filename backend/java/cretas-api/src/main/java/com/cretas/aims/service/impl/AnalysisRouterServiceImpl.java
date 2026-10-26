@@ -31,6 +31,13 @@ public class AnalysisRouterServiceImpl implements AnalysisRouterService {
 
     private final ToolRouterService toolRouterService;
     private final PythonLLMClient pythonLLMClient;
+
+    /** 用户问题发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "analysis-router";
     private final IndustryKnowledgeConfig industryKnowledgeConfig;
     private final IntentKnowledgeBase knowledgeBase;
 
@@ -158,21 +165,28 @@ public class AnalysisRouterServiceImpl implements AnalysisRouterService {
             );
 
             // 5. 调用 LLM 生成分析
+            // 用户问题里的号码 / 人名 / 公司名 / 保密产品名换代号再发, 分析换回后再过数字出处闸
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE,
+                    context.getFactoryId(), buildSystemPrompt(context.getTopic()), analysisPrompt);
+            if (redacted.refused()) {
+                throw new IllegalStateException("analysis prompt could not be redacted, not sending");
+            }
             String analysisText;
             if (Boolean.TRUE.equals(context.getEnableThinking())) {
                 int budget = context.getThinkingBudget() != null ? context.getThinkingBudget() : 30;
                 var response = pythonLLMClient.chatWithThinking(
-                        buildSystemPrompt(context.getTopic()),
-                        analysisPrompt,
+                        redacted.text(0),
+                        redacted.text(1),
                         budget
                 );
                 analysisText = response.getContent();
             } else {
                 analysisText = pythonLLMClient.chat(
-                        buildSystemPrompt(context.getTopic()),
-                        analysisPrompt
+                        redacted.text(0),
+                        redacted.text(1)
                 );
             }
+            analysisText = redacted.restore(analysisText);
 
             log.info("✅ 分析完成: topic={}, responseLength={}",
                     context.getTopic(), analysisText != null ? analysisText.length() : 0);

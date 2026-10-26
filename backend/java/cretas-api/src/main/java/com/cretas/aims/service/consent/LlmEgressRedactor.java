@@ -158,6 +158,12 @@ public final class LlmEgressRedactor {
      */
     private static final Pattern ORG_LEAD_IN = Pattern.compile(
             "^.*(?:一下|我们是|我们|是|给|向|从|找|查|问|跟|让|叫|请|把|往|跟进|联系|通知|客户|供应商)");
+    /** 时间 / 范围 / 动词 + 行业词 (「本周物流」「查看冷链」「所有养殖场」): 说的是业务, 不是某家单位。 */
+    private static final Pattern GENERIC_INDUSTRY_PHRASE = Pattern.compile(
+            "(?:本周|上周|下周|本月|上月|下月|今年|去年|本年|今天|昨天|明天|本季度|上季度|近期|最近|当前|目前|"
+                    + "这批|那批|这些|那些|所有|全部|整体|总体|各个|各|我们的|我们|我方|我司|公司|工厂|本厂|"
+                    + "查看|查询|查一下|看看|看一下|统计|分析|对比|汇总)+"
+                    + "(?:牧业|肉业|肉联厂|合作社|养殖场|养殖基地|农场|冷链|物流|餐饮|贸易|商店|酒楼|批发市场)");
     /** 不剥「找 / 跟 / 叫」: 找钢网、跟谁学这类单位名就以它们开头。 */
     private static final String SINGLE_CHAR_ORG_LEAD_INS = "给让请把往";
     /** 人名正则带着岗位 / 动词前缀 (「质检员：赵铁柱」「通知张三」): 只换名字本身。 */
@@ -893,7 +899,10 @@ public final class LlmEgressRedactor {
             return replaceSpans(text, pattern, kind, java.util.function.UnaryOperator.identity());
         }
 
-        /** @param core 从整段匹配里取出名字本身 (匹配的后缀部分); 前面多出来的字原样保留。 */
+        /**
+         * @param core 从整段匹配里取出名字本身 (匹配的后缀部分); 前面多出来的字原样保留。
+         *             返回 null 表示这段不是名字 (如「本周物流」), 原样保留。
+         */
         String replaceSpans(String text, Pattern pattern, Kind kind, java.util.function.UnaryOperator<String> core) {
             Matcher m = pattern.matcher(text);
             StringBuilder sb = new StringBuilder();
@@ -904,6 +913,9 @@ public final class LlmEgressRedactor {
                 }
                 String span = m.group();
                 String name = core.apply(span);
+                if (name == null) {
+                    continue;
+                }
                 String lead = span.substring(0, span.length() - name.length());
                 m.appendReplacement(sb, Matcher.quoteReplacement(lead + token(kind, name)));
             }
@@ -931,14 +943,16 @@ public final class LlmEgressRedactor {
             Matcher lead = ORG_LEAD_IN.matcher(span);
             // 单字前缀一般不剥 (「向阳食品」「从化…」的首字就是名字), 但这几个动词不会是单位名的首字:
             // 「给华东冷链…下单」不剥的话, 填表字段会还原成「给华东冷链…」
+            String name = span;
             if (lead.find() && (lead.end() >= 2 || SINGLE_CHAR_ORG_LEAD_INS.indexOf(span.charAt(0)) >= 0)
                     && lead.end() < span.length()) {
                 String rest = span.substring(lead.end());
                 if (TrainingSampleRules.ORG_NAME.matcher(rest).matches() || ORG_NAME_EXTRA.matcher(rest).matches()) {
-                    return rest;
+                    name = rest;
                 }
             }
-            return span;
+            // 「本周物流成本」「查看冷链运输记录」: 时间 / 动词 + 行业词是普通说法, 不是单位名 (换掉会丢了意图里的关键词)
+            return GENERIC_INDUSTRY_PHRASE.matcher(name).matches() ? null : name;
         }
 
         /** 「质检员：赵铁柱」「通知张三」→ 只取名字。 */

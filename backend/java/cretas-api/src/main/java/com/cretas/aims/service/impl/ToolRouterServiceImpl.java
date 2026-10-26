@@ -61,6 +61,13 @@ public class ToolRouterServiceImpl implements ToolRouterService {
     @Autowired
     private ObjectMapper objectMapper;
 
+    /** 工具选择发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "tool-router";
+
     // W0 write-guard (intent-w0) — SITE E. executeToolChain → executeParallel/executeSequential →
     // executeSingleTool calls ToolExecutor.execute() DIRECTLY, bypassing ToolDispatchService
     // (Site B). Guard here so a dynamically-selected write tool cannot silently execute without
@@ -208,10 +215,15 @@ public class ToolRouterServiceImpl implements ToolRouterService {
         // 构建 LLM Prompt
         String prompt = buildToolSelectionPrompt(query, intentResult, candidates);
 
-        // 调用 LLM
+        // 调用 LLM (提示词与原话脱敏后再发; 选中的工具名是编码, 回答照常解析)
         String response;
         try {
-            response = dashScopeClient.chat(prompt, query);
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                    llmEgressGuard.texts(EGRESS_SITE, null, prompt, query);
+            if (redacted.refused()) {
+                return fallbackToTopCandidate(candidates);
+            }
+            response = redacted.restoreJsonText(dashScopeClient.chat(redacted.text(0), redacted.text(1)));
         } catch (Exception e) {
             log.error("LLM tool selection failed", e);
             // Fallback: 返回相似度最高的工具

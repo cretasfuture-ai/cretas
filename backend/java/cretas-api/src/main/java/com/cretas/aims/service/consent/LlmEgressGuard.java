@@ -34,7 +34,9 @@ public class LlmEgressGuard {
 
     /** 没有 Spring 容器时 (单测直接 new 被测类) 的默认实例: 不查保密产品名, 其余照常脱敏。 */
     public static LlmEgressGuard standalone() {
-        return new LlmEgressGuard(new ObjectMapper(), null);
+        // 与 Spring Boot 注入的 ObjectMapper 一致: 认 java.time, 时间写成 ISO 字符串 (业务记录里常有 LocalDateTime)
+        return new LlmEgressGuard(new ObjectMapper().findAndRegisterModules()
+                .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS), null);
     }
 
     /** 结构化结果 (查询记录 / 工具输出)。 */
@@ -153,9 +155,22 @@ public class LlmEgressGuard {
      * 请求线程之外 (定时任务、异步线程) 取不到就当没有工厂上下文。
      */
     private Collection<String> protectedNames(String factoryId) {
-        String factory = factoryId != null ? factoryId : com.cretas.aims.utils.SecurityUtils.currentFactoryId();
+        String factory = factoryId != null ? factoryId : currentFactory();
         return processSecretSampleFilter == null || factory == null
                 ? Set.of() : processSecretSampleFilter.protectedProductNames(factory);
+    }
+
+    /**
+     * 请求线程: 登录 token 里的工厂; 流式对话在 SSE 工作线程上跑, 没有 Servlet 请求, 取控制器绑上的可信身份
+     * ({@link com.cretas.aims.security.AuthenticatedActor#trustedAsyncScope})。两者都没有才当没有工厂上下文。
+     */
+    static String currentFactory() {
+        String fromRequest = com.cretas.aims.utils.SecurityUtils.currentFactoryId();
+        if (fromRequest != null) {
+            return fromRequest;
+        }
+        return com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .map(com.cretas.aims.security.AuthenticatedActor::factoryId).orElse(null);
     }
 
     private static LlmEgressRedactor.Result logged(String site, LlmEgressRedactor.Result r) {
