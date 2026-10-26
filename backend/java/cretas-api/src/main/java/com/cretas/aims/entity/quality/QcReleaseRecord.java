@@ -13,7 +13,6 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
-import org.hibernate.annotations.Where;
 
 import java.time.LocalDateTime;
 
@@ -39,8 +38,16 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_qc_release_factory_target", columnList = "factory_id,target_type,target_id"),
                 @Index(name = "idx_qc_release_factory_time", columnList = "factory_id,released_at")
         })
-@Where(clause = "deleted_at IS NULL")
 public class QcReleaseRecord extends BaseEntity {
+
+    /**
+     * 放行记录是留痕, 只增不改不删 (软删注解覆盖率棘轮的 b 方案, 写法同 BatchLineageEdge):
+     * 不挂类级 {@code @Where} —— 本来就不会有被删的行; 意外 {@code repo.delete(entity)} 直接拦下。
+     */
+    @jakarta.persistence.PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException("QcReleaseRecord is an append-only release audit; removal not allowed");
+    }
 
     /** 放行对象的存货形态。 */
     public static final class TargetType {

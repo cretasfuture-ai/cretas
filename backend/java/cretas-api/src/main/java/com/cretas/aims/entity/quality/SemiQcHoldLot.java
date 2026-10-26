@@ -13,7 +13,6 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
-import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
 
@@ -35,8 +34,16 @@ import java.math.BigDecimal;
 @Entity
 @Table(name = "semi_qc_hold_lots",
         indexes = @Index(name = "idx_semi_qc_hold_lots_semi", columnList = "factory_id,semi_finished_id"))
-@Where(clause = "deleted_at IS NULL")
 public class SemiQcHoldLot extends BaseEntity {
+
+    /**
+     * 分笔账不删除: 放行 / 判不合格 / 撤销都是把 {@link #quantityOpen} 改小或清零 ({@code SemiQcHoldLots}),
+     * 记录本身保留 (撤销时据它认笔)。不挂类级 {@code @Where}, 意外删除直接拦下 (写法同 BatchLineageEdge)。
+     */
+    @jakarta.persistence.PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException("SemiQcHoldLot is kept for attribution; removal not allowed");
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

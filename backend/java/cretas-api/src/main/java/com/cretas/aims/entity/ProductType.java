@@ -366,7 +366,9 @@ public class ProductType extends BaseEntity {
      * <p>⚠️ 初始值必须与 DB 默认值同步为 FALSE —— 见上面 {@link #acceptsRework} 那次 prod hotfix:
      * Hibernate 会把 null 显式写进 INSERT, DB 默认值不生效, 直接撞 NOT NULL。
      */
-    @Column(name = "inspection_required", nullable = false)
+    // 数据库层默认值与 V20261103_87 一致 (BOOLEAN NOT NULL DEFAULT FALSE): 由 Entity 生成表结构的测试库、
+    // 以及任何不经过 JPA 的 INSERT (JDBC / SQL 夹具) 不写这一列时落 FALSE, 不撞 NOT NULL。
+    @Column(name = "inspection_required", nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
     private Boolean inspectionRequired = Boolean.FALSE;
 
     @Column(name = "is_active", nullable = false)

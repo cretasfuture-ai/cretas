@@ -371,6 +371,29 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(recordRepo.findTop200ByFactoryIdOrderByReleasedAtDesc(F)).hasSize(3);
     }
 
+    @Test
+    @DisplayName("放行记录 / 分笔账不可删除 (@PreRemove): 意外 delete 被拦下, 行还在 (软删注解棘轮的 b 方案)")
+    void releaseRecordsAndHoldLotsCannotBeDeleted() {
+        QcReleaseRecord rec = recordRepo.saveAndFlush(record("T9", "RELEASED", LocalDateTime.now()));
+        var lot = lotRepo.saveAndFlush(com.cretas.aims.entity.quality.SemiQcHoldLot.builder().factoryId(F)
+                .semiFinishedId(99L).quantityHeld(BigDecimal.ONE).quantityOpen(BigDecimal.ONE).build());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> {
+            recordRepo.delete(rec);
+            recordRepo.flush();
+        }).satisfiesAnyOf(e -> assertThat(e).isInstanceOf(UnsupportedOperationException.class),
+                e -> assertThat(e).hasRootCauseInstanceOf(UnsupportedOperationException.class));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> {
+            lotRepo.delete(lot);
+            lotRepo.flush();
+        }).satisfiesAnyOf(e -> assertThat(e).isInstanceOf(UnsupportedOperationException.class),
+                e -> assertThat(e).hasRootCauseInstanceOf(UnsupportedOperationException.class));
+        // 阴性对照 / 必然读数: 行都还在
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM qc_release_records WHERE id = ?", Long.class, rec.getId()))
+                .isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM semi_qc_hold_lots WHERE id = ?", Long.class, lot.getId()))
+                .isEqualTo(1L);
+    }
+
     private static QcReleaseRecord record(String targetId, String decision, LocalDateTime at) {
         return QcReleaseRecord.builder()
                 .factoryId(F).targetType(QcReleaseRecord.TargetType.SEMI_FINISHED).targetId(targetId)
