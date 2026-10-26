@@ -104,6 +104,19 @@ class ProcessSecretConversionWriteGuardTest {
     }
 
     @Test
+    void anOperatorCannotMoveAProtectedConversionOntoAnUnprotectedProduct() {
+        // 改到不受保护的产品上 = 把保密产品的转换率挪走, 原产品也要能编辑
+        ConversionDTO moveAway = ConversionDTO.builder().materialTypeId("M1").productTypeId("PLAIN")
+                .conversionRate(new BigDecimal("0.9")).build();
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor(OPERATOR))) {
+            assertThatThrownBy(() -> service.updateConversion(F, "c1", moveAway))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+        }
+        verify(conversions, never()).save(any());
+    }
+
+    @Test
     void theOwnerCanStillEditTheConversion() {
         ConversionDTO edit = ConversionDTO.builder().materialTypeId("M1").productTypeId(SECRET)
                 .conversionRate(new BigDecimal("0.85")).build();
