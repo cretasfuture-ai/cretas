@@ -6,8 +6,13 @@ import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.dto.ai.GenericChatRequest;
 import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -15,6 +20,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -44,13 +50,24 @@ class GenericAIChatEgressRedactionTest {
         ReflectionTestUtils.setField(controller, "dashScopeClient", llm);
         ReflectionTestUtils.setField(controller, "dashScopeConfig", config);
         ReflectionTestUtils.setField(controller, "objectMapper", mapper);
-        ReflectionTestUtils.setField(controller, "llmEgressGuard", LlmEgressGuard.standalone());
+        // 接口路径不带工厂: 工厂从登录 token 解析出的 request attribute 取, 用来查保密产品名
+        ProcessSecretSampleFilter processSecret = mock(ProcessSecretSampleFilter.class);
+        when(processSecret.protectedProductNames("F006")).thenReturn(Set.of("秘制酱牛肉"));
+        ReflectionTestUtils.setField(controller, "llmEgressGuard", new LlmEgressGuard(mapper, processSecret));
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        http.setAttribute("factoryId", "F006");
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(http));
+    }
+
+    @AfterEach
+    void tearDown() {
+        RequestContextHolder.resetRequestAttributes();
     }
 
     private static GenericChatRequest request() {
         return GenericChatRequest.builder().messages(List.of(
                 GenericChatRequest.Message.builder().role("system")
-                        .content("当前批次 PB-20261025-0007, 质检员：赵铁柱").build(),
+                        .content("当前批次 PB-20261025-0007 秘制酱牛肉, 质检员：赵铁柱").build(),
                 GenericChatRequest.Message.builder().role("assistant").content("好的, 张记食品有限公司的单子").build(),
                 GenericChatRequest.Message.builder().role("user").content("通知质检员：赵铁柱 13912345678 复检").build()))
                 .build();
@@ -75,8 +92,9 @@ class GenericAIChatEgressRedactionTest {
         String content = controller.chat(request()).getData().getContent();
 
         assertThat(sentText(sent.getValue()))
-                .doesNotContain("赵铁柱", "13912345678", "张记食品有限公司").contains("PB-20261025-0007");
-        assertThat(content).isEqualTo("已通知 质检员：赵铁柱, 电话 13912345678");
+                .doesNotContain("赵铁柱", "13912345678", "张记食品有限公司", "秘制酱牛肉")
+                .contains("PB-20261025-0007", "[保密产品A]");
+        assertThat(content).isEqualTo("已通知 赵铁柱, 电话 13912345678");
     }
 
     @Test
@@ -101,7 +119,7 @@ class GenericAIChatEgressRedactionTest {
             streamed = earlySends(emitter);
         }
 
-        assertThat(sentText(sent.getValue())).doesNotContain("赵铁柱", "13912345678", "张记食品有限公司");
+        assertThat(sentText(sent.getValue())).doesNotContain("赵铁柱", "13912345678", "张记食品有限公司", "秘制酱牛肉");
         assertThat(streamed).contains("event:done").contains("赵铁柱", "13912345678").doesNotContain("[人员A]", "[电话A]");
     }
 

@@ -54,7 +54,7 @@ public class SampleToBomTool extends AbstractBusinessTool {
     private RawMaterialTypeRepository materialTypeRepository;
 
     /** 发给模型前脱敏 (客户名、号码、人名、工艺保密产品名); 单测直接 new 本类时用默认实例。 */
-    @Autowired(required = false)
+    @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
     static final String EGRESS_SITE = "sample-to-bom";

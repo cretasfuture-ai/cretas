@@ -54,7 +54,7 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
     private final SpellCorrectionService spellCorrectionService;
 
     /** 改写前: 槽位名、对话摘要、原话里的客户 / 人名与号码换代号; 单测直接 new 本类时用默认实例。 */
-    @Autowired(required = false)
+    @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
     static final String EGRESS_SITE = "query-rewrite";

@@ -10,6 +10,8 @@ import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.conversation.ConversationMemoryRepository;
 import com.cretas.aims.repository.conversation.ConversationSessionRepository;
 import com.cretas.aims.repository.conversation.FactoryAssemblyConversationSessionRepository;
+import com.cretas.aims.entity.conversation.ConversationSession;
+import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.FactoryAssemblyConversationService;
 import com.cretas.aims.service.QueryPreprocessorService;
 import com.cretas.aims.service.consent.LlmEgressGuard;
@@ -32,6 +34,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -180,6 +183,72 @@ class ConversationHistoryEgressRedactionTest {
 
         assertClean(system.getValue() + user.getValue());
         assertThat(response.getMessage()).isEqualTo("要查 张记食品有限公司 的订单吗?");
+    }
+
+    @Test
+    void secretLookupFailureMeansCoreferenceRewriteAndClarificationAreNotSent() {
+        when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
+        CoreferenceResolutionServiceImpl coref = new CoreferenceResolutionServiceImpl(llm, mapper);
+        ReflectionTestUtils.setField(coref, "llmEnabled", true);
+        ReflectionTestUtils.setField(coref, "llmEgressGuard", guard);
+        QueryPreprocessorServiceImpl rewrite = new QueryPreprocessorServiceImpl(
+                mock(TimeNormalizationRules.class), mock(ColloquialMappings.class), null, llm, mapper, null, null);
+        ReflectionTestUtils.setField(rewrite, "llmEgressGuard", guard);
+        ConversationSessionRepository sessions = mock(ConversationSessionRepository.class);
+        when(sessions.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        AIIntentConfigRepository intents = mock(AIIntentConfigRepository.class);
+        when(intents.findActiveByFactoryIdWithPriority(FACTORY)).thenReturn(List.of());
+        ConversationServiceImpl conversation = new ConversationServiceImpl(sessions, intents, null, llm);
+        ReflectionTestUtils.setField(conversation, "llmEgressGuard", guard);
+
+        ReferenceResult r = coref.resolveWithLLM("那家供应商呢", List.of("那家供应商"), context());
+        QueryPreprocessorService.LlmRewriteResult w = rewrite.rewriteWithLLM("他家呢", context());
+        conversation.startConversation(FACTORY, 7L, "张记食品有限公司 的单子");
+
+        verify(llm, never()).chat(anyString(), anyString());
+        verify(llm, never()).chatLowTemp(anyString(), anyString());
+        verify(llm, never()).chatFast(anyString(), anyString());
+        assertThat(r.getResolvedText()).isEqualTo("那家供应商呢");
+        assertThat(w.getRewrittenQuery()).isEqualTo("他家呢");
+    }
+
+    @Test
+    void parameterExtractionHidesTheReplyAndFillsRealValues() {
+        Map<String, ConversationSession> stored = new LinkedHashMap<>();
+        ConversationSessionRepository sessions = mock(ConversationSessionRepository.class);
+        when(sessions.save(any())).thenAnswer(inv -> {
+            ConversationSession s = inv.getArgument(0);
+            if (s.getSessionId() == null) {
+                s.setSessionId(java.util.UUID.randomUUID().toString()); // JPA 落库时才生成
+            }
+            stored.put(s.getSessionId(), s);
+            return s;
+        });
+        when(sessions.findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(stored.get(inv.getArgument(0, String.class))));
+        ConversationServiceImpl service = new ConversationServiceImpl(
+                sessions, mock(AIIntentConfigRepository.class), null, llm);
+        ReflectionTestUtils.setField(service, "llmEgressGuard", guard);
+        ReflectionTestUtils.setField(service, "maxRounds", 5);
+        ReflectionTestUtils.setField(service, "timeoutMinutes", 10);
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        when(llm.chat(system.capture(), user.capture())).thenAnswer(inv -> {
+            String said = inv.getArgument(1);
+            String org = said.replaceAll("(?s).*?(\\[单位[A-Z]+]).*", "$1");
+            String phone = said.replaceAll("(?s).*?(\\[电话[A-Z]+]).*", "$1");
+            return "{\"extracted\":{\"customerName\":\"" + org + "\",\"contactPhone\":\"" + phone + "\"}}";
+        });
+        var started = service.startParameterCollection(FACTORY, 7L, "CUSTOMER_CREATE", "新建客户", List.of(
+                ConversationService.RequiredParameter.builder().name("customerName").label("客户名称").type("string").build(),
+                ConversationService.RequiredParameter.builder().name("contactPhone").label("联系电话").type("string").build()),
+                List.of());
+
+        service.continueConversation(FACTORY, 7L, started.getSessionId(), "客户是张记食品有限公司, 电话 13812345678");
+
+        assertClean(system.getValue() + user.getValue());
+        assertThat(stored.get(started.getSessionId()).getCollectedParameters())
+                .containsEntry("customerName", "张记食品有限公司").containsEntry("contactPhone", "13812345678");
     }
 
     @Test

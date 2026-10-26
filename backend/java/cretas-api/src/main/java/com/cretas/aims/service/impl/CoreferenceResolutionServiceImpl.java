@@ -42,7 +42,7 @@ public class CoreferenceResolutionServiceImpl implements CoreferenceResolutionSe
     private final ObjectMapper objectMapper;
 
     /** 上下文 (槽位名、最近对话) 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
-    @Autowired(required = false)
+    @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
     static final String EGRESS_SITE = "coreference";

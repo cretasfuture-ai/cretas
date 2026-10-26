@@ -11,6 +11,7 @@ import com.cretas.aims.dto.ai.GenericChatResponse;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
+import com.cretas.aims.utils.SecurityUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.annotation.RateLimit.LimitType;
@@ -66,7 +67,7 @@ public class GenericAIChatController {
     private ObjectMapper objectMapper;
 
     /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
-    @Autowired(required = false)
+    @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
     static final String EGRESS_SITE = "generic-ai-chat";
@@ -94,7 +95,7 @@ public class GenericAIChatController {
 
         try {
             // 脱敏不了就不发
-            LlmEgressRedactor.Result redacted = redactMessages(request.getMessages());
+            LlmEgressRedactor.Result redacted = redactMessages(request.getMessages(), SecurityUtils.currentFactoryId());
             if (redacted.refused()) {
                 throw new BusinessException(400, EGRESS_REFUSED_MESSAGE);
             }
@@ -193,9 +194,10 @@ public class GenericAIChatController {
         emitter.onTimeout(() -> log.warn("Chat stream timeout"));
         emitter.onError(e -> log.error("Chat stream error: {}", ErrorSanitizer.sanitize(e)));
 
+        String factoryId = SecurityUtils.currentFactoryId();
         sseExecutor.execute(() -> {
             try {
-                LlmEgressRedactor.Result redacted = redactMessages(request.getMessages());
+                LlmEgressRedactor.Result redacted = redactMessages(request.getMessages(), factoryId);
                 if (redacted.refused()) {
                     emitter.send(SseEmitter.event().name("error")
                             .data("{\"message\":\"" + EGRESS_REFUSED_MESSAGE + "\"}"));
@@ -328,9 +330,10 @@ public class GenericAIChatController {
 
     /**
      * 客户端发来的整段对话 (多轮历史、语音转写、表单里已录的批次 / 质检数据) 发给模型前脱敏:
-     * 号码、公司名、岗位 + 人名换代号, 回答换回真名。这个接口不带工厂, 不查保密产品名。
+     * 号码、公司名、岗位 + 人名换代号, 回答换回真名。路径里不带工厂: 工厂取登录 token 里的 (查保密产品名),
+     * 流式接口在请求线程里先取好再交给执行线程。
      */
-    private LlmEgressRedactor.Result redactMessages(List<GenericChatRequest.Message> messages) {
+    private LlmEgressRedactor.Result redactMessages(List<GenericChatRequest.Message> messages, String factoryId) {
         if (messages == null || messages.isEmpty()) {
             throw new IllegalArgumentException("消息列表不能为空");
         }
@@ -338,7 +341,7 @@ public class GenericAIChatController {
         for (GenericChatRequest.Message msg : messages) {
             contents.add(msg.getContent());
         }
-        return llmEgressGuard.texts(EGRESS_SITE, null, Map.of(), contents);
+        return llmEgressGuard.texts(EGRESS_SITE, factoryId, Map.of(), contents);
     }
 
     /**

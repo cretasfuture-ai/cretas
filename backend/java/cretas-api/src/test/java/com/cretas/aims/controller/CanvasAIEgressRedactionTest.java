@@ -125,18 +125,50 @@ class CanvasAIEgressRedactionTest {
         assertThat(response.getReply()).contains("未发给 AI");
     }
 
+    private static final String CANVAS_UTTERANCE =
+            "把秘制酱牛肉的卤制交给王建国负责, 客户是张记食品有限公司, 改完通知 13912345678";
+
     @Test
-    void planAndActionModesMaskPhonesInTheUtterance() {
+    void actionModeHidesNamesSecretProductsAndPhones() {
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
         when(llm.chatFast(system.capture(), user.capture())).thenReturn("通知 [电话A] 即可");
         CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
         request.setMode("action");
-        request.setMessage("改完通知 13912345678");
+        request.setMessage(CANVAS_UTTERANCE);
 
         CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
 
-        assertThat(system.getValue() + user.getValue()).doesNotContain("13912345678").contains("[电话A]");
+        assertThat(system.getValue() + user.getValue())
+                .doesNotContain("13912345678", "秘制酱牛肉", "张记食品有限公司").contains("[电话A]", "卤制");
         assertThat(response.getReply()).isEqualTo("通知 13912345678 即可");
+    }
+
+    @Test
+    void planModeHidesNamesSecretProductsAndPhonesAndRestoresThePlan() {
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        when(llm.chatFast(system.capture(), user.capture())).thenReturn(
+                "[{\"type\":\"FIELD_CHANGE\",\"tool\":\"canvas_x\",\"params\":{},\"description\":\"给 [保密产品A] 加卤制\"}]");
+        CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
+        request.setMode("plan");
+        request.setMessage(CANVAS_UTTERANCE);
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertThat(system.getValue() + user.getValue())
+                .doesNotContain("13912345678", "秘制酱牛肉", "张记食品有限公司");
+        assertThat(response.getDiffs().get(0).get("description")).isEqualTo("给 秘制酱牛肉 加卤制");
+    }
+
+    @Test
+    void secretLookupFailureMeansTheApprovalDraftIsNotSent() throws Exception {
+        when(processSecret.protectedProductNames("F006")).thenThrow(new IllegalStateException("db down"));
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, approvalRequest("让赵铁柱审批")).getData();
+
+        verify(llm, never()).chatLowTemp(anyString(), anyString());
+        assertThat(response.getReply()).contains("未发给 AI");
+        assertThat(response.getDiffs()).isEmpty();
     }
 }

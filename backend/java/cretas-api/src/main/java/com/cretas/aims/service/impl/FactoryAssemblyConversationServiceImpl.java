@@ -62,7 +62,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
     private final ObjectMapper objectMapper;
 
     /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
-    @Autowired(required = false)
+    @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
     static final String CONVERSATION_EGRESS_SITE = "factory-assembly-conversation";
@@ -1199,7 +1199,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
         try {
             String prompt = buildParameterExtractionPrompt(candidates, session);
             // 原话里的号码换成可还原的代号 (抽出的参数里换回真值); 脱敏不了按「模型不可用」闭合
-            LlmEgressRedactor.Result masked = llmEgressGuard.utterance(PARAMETER_EGRESS_SITE, userReply);
+            LlmEgressRedactor.Result masked = llmEgressGuard.texts(PARAMETER_EGRESS_SITE, session.getFactoryId(), userReply);
             if (masked.refused()) {
                 throw new IllegalStateException("utterance could not be redacted");
             }
