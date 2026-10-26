@@ -71,8 +71,6 @@ class AutonomousToolConfigContractTest {
         FactorySchedulerConfig disable = new FactorySchedulerConfig();
         disable.setEnabled(false);
         assertThat(rules.setSchedulerConfig("F001", "nightly", disable).getData().getRunAsUserId()).isEqualTo(42L);
-        FactoryTriggerChain chain = chains.setTriggerChain("F001", "C", chain(true, List.of(Map.of("tool", "material_expired_query")))).getData();
-        assertThat(chain.getRunAsUserId()).isEqualTo(43L);
     }
 
     @Test void platformAdminOrAnotherFactorysUserCannotBecomeTheRunAsUser() {
@@ -80,13 +78,12 @@ class AutonomousToolConfigContractTest {
         assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", schedule("material_expired_query", Map.of())))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("本厂账号");
         actor(AuthenticatedActorType.FACTORY_USER, 42L, "F002");
-        assertThatThrownBy(() -> chains.setTriggerChain("F001", "C", chain(true, List.of(Map.of("tool", "material_expired_query")))))
+        assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", schedule("material_expired_query", Map.of())))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("本厂账号");
         RequestContextHolder.resetRequestAttributes();
         assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", schedule("material_expired_query", Map.of())))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("重新登录");
         verify(schedulerRepo, never()).save(any());
-        verify(chainRepo, never()).save(any());
     }
 
     @Test void anEditHandsTheConfigsPriorRevisionAndTheEditorToTheGrantRevocation() {
@@ -153,16 +150,13 @@ class AutonomousToolConfigContractTest {
                 Map.of("tool", "inventory_reserve_stock", "enabled", false)))).getData().getEnabled()).isTrue();
     }
 
-    @Test void toolsWhosePolicyDoesNotAdmitTheSourceAreRefusedAtConfigTime() {
+    @Test void toolsWhosePolicyDoesNotAdmitSchedulerAreRefusedAtConfigTime() {
         ToolExecutor otherRead = mock(ToolExecutor.class);
         when(otherRead.getAccessMode()).thenReturn(AccessMode.READ);
         when(registry.getExecutor("material_stock_summary")).thenReturn(Optional.of(otherRead));
         assertThatThrownBy(() -> rules.setSchedulerConfig("F001", "nightly", schedule("material_stock_summary", Map.of())))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("还没有开放给定时任务");
-        assertThatThrownBy(() -> chains.setTriggerChain("F001", "C", chain(true, List.of(Map.of("tool", "material_stock_summary")))))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("还没有开放给事件链");
         verify(schedulerRepo, never()).save(any());
-        verify(chainRepo, never()).save(any());
     }
 
     @Test void chainValidationFailsClosedWithoutARegistry() throws Exception {
