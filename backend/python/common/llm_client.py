@@ -111,7 +111,7 @@ async def _protected_names_for_egress() -> list:
     if not factory_id:
         return []
     from smartbi.config import get_cretas_pool
-    from smartbi.services.process_secret_names import PROTECTED_NAMES_SQL, usable_names
+    from common.process_secret_sql import PROTECTED_NAMES_SQL, usable_names
     import asyncio
 
     async def _read() -> list:
