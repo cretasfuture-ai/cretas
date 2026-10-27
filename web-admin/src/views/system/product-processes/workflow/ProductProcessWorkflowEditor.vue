@@ -524,7 +524,7 @@
         </div>
 
         <div v-if="productTypeId && flowNodes.length === 0 && !loading" class="empty-canvas-action">
-          <el-empty description="该产品还没有工序图">
+          <el-empty :description="emptyCanvasDescription">
             <el-button v-if="canEdit" type="primary" @click="addStandaloneRaw">添加第一个原料 Cell</el-button>
           </el-empty>
         </div>
@@ -1239,6 +1239,7 @@ import {
 } from '@/api/bom';
 import { bigCategoryOf } from '@/utils/materialCategory';
 import { toDateString } from '@/utils/dateFormat';
+import { PROCESS_SECRET_LABEL, isProcessSecretRow, processSecretMessage } from '@/utils/processSecretField';
 import {
   selectAuxiliaryMaterials,
   selectByproductMaterials,
@@ -2537,6 +2538,10 @@ const previewingVersion = ref<number | null>(null);
 // AI 输入默认可见；用户显式收起后仍保留可键盘访问的展开按钮。
 const aiCollapsed = ref(false);
 const unitReviewPending = ref(false);
+// 工艺保密: 无授权的人拿到的是去掉节点的骨架 (带 processSecret 标记)。⛔ 不能当成「还没有工序图」,
+// 也不能让他在空画布上保存 —— 后端会 403, 但界面会误导人以为可以重画一张 (F006 验收 2026-10-27)。
+const workflowSecretRestricted = ref(false);
+const workflowSecretMessage = ref('');
 const unitIssues = ref<WorkflowUnitIssue[]>([]);
 const publishBindingErrors = ref<WorkflowValidationError[]>([]);
 const publishBindingAttentionNodeIds = ref<Set<string>>(new Set());
@@ -2551,7 +2556,11 @@ const canEdit = computed(() => (
   && loadedCatalogCanWrite.value
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
+  && !workflowSecretRestricted.value
 ));
+const emptyCanvasDescription = computed(() => (workflowSecretRestricted.value
+  ? `${PROCESS_SECRET_LABEL}：${workflowSecretMessage.value || '该产品工艺已设为保密，需要保密负责人授权才能查看和修改'}`
+  : '该产品还没有工序图'));
 const currentDefinitionIsEnabled = computed(() => (
   definition.value?.status === 'PUBLISHED'
   && activation.value?.enabled === true
@@ -2570,6 +2579,7 @@ const publishActionLabel = computed(() => (
   publishActionCompleted.value ? '当前配置已生效' : '更新并应用'
 ));
 const publishDisabledReason = computed(() => {
+  if (workflowSecretRestricted.value) return '该产品工艺已设为保密，需要保密负责人授权才能修改';
   if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
   if (!canEdit.value) return '当前正在加载、预览历史版本或没有编辑权限，暂不能发布';
   // 只在“当前显示的版本”已经发布并启用、且没有新的本地草稿改动时禁用。
@@ -3290,6 +3300,8 @@ async function loadDefinition(): Promise<void> {
       throw new Error('Workflow definition identity does not match the requested product');
     }
     unitReviewPending.value = nextDefinition.unitReviewRequired === true;
+    workflowSecretRestricted.value = isProcessSecretRow(nextDefinition);
+    workflowSecretMessage.value = processSecretMessage(nextDefinition);
     const inputSelectionMigrated = hydrate(nextDefinition);
     loadedDefinitionIdentity.value = identity;
     await ensureBoundSkuDetails();
@@ -3326,6 +3338,8 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   definition.value = null;
   workflowBomSyncPreflight.value = null;
   unitReviewPending.value = false;
+  workflowSecretRestricted.value = false;
+  workflowSecretMessage.value = '';
   unitIssues.value = [];
   flowNodes.value = [];
   flowEdges.value = [];

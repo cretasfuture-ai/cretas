@@ -55,7 +55,8 @@ class ProcessSecretRouteLedgerContractTest {
             "BomBatchOperationController#batchModify",
             "BomBatchOperationController#batchReplace",
             "BomBatchOperationController#batchDelete",
-            "BomBatchOperationController#batchAdd");
+            "BomBatchOperationController#batchAdd",
+            "BomController#recalculateApply");
 
     /** 打印控制器端点很多, 只钉住「payload 里带锁定 BOM / 调味 / 工序」的这几个必须带 Guard。 */
     static final Set<String> PRINT_ENDPOINTS_WITH_BOM = Set.of(
@@ -74,6 +75,8 @@ class ProcessSecretRouteLedgerContractTest {
             Map.entry("BomRecipeController#getRecipe", "响应裁剪: 详情返回摘要 + RESTRICTED (页面可显示抬头而非报错)"),
             Map.entry("BomRecipeController#getCurrentByProduct", "响应裁剪: 同上"),
             Map.entry("BomRecipeController#getVersionsByProduct", "响应裁剪: 版本列表每条换成摘要"),
+            Map.entry("BomRecipeController#getSeasoningProcessFlags",
+                    "只有工序 id 和是否续锅的布尔值, 不含配比; 报工表必需 (F006 验收 2026-10-27)"),
             Map.entry("BomRecipeController#getCopyCandidates",
                     "V2 统一裁剪: 按 sourceProductTypeId / sourceRecipeId 归属, 用量与调味配比去掉 (DataLayerExits 测试)"),
             Map.entry("ProductProcessWorkflowController#getEditorDefinition", "响应裁剪: DTO 换成摘要, 节点不下发"),
@@ -83,7 +86,6 @@ class ProcessSecretRouteLedgerContractTest {
             Map.entry("ProductProcessWorkflowController#findWorkflowsProducing", "V1 未纳管: 产出目录, S1 补"),
             Map.entry("BomController#getProductTypesWithBom", "只有产品 ID 列表"),
             Map.entry("BomController#recalculatePreview", "V2 统一裁剪: currentYieldRate 等标准出成率按产品归属去掉"),
-            Map.entry("BomController#recalculateApply", "V1 未纳管: 出成率批量应用是写入 (需 bom:yield_standard:write), 写入绕过 EDIT 另立一片"),
             Map.entry("BomController#listYieldSuggestions", "V2 统一裁剪: previous/suggestedYieldRate 按产品归属去掉"),
             Map.entry("BomReverseQueryController#findRecipesByMaterial", "响应裁剪: 配方实体换成摘要"),
             Map.entry("BomReverseQueryController#findUsageByMaterial", "响应裁剪: BomItemUsage 换成摘要"),

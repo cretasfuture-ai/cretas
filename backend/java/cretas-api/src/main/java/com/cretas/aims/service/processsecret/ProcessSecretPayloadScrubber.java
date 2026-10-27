@@ -453,11 +453,16 @@ public class ProcessSecretPayloadScrubber {
             List<String> quantityFields = new ArrayList<>();
             // 无权档 (平台 / 他厂) 连总量也不给: 词表列不全 (独立审查 #6), 所以除了标识类数字一律去掉
             List<String> otherNumbers = new ArrayList<>();
+            // 按配比自动带出的行 (调料 / 包材自动分摊, automatic=true): 它的数量 = 配比 × 投入量,
+            // 「本单总量」在这里就等于配比本身 (F006 验收 2026-10-27: 0.1725 kg ÷ 115 kg = 1.5 g/kg)。
+            // 所以这类行上的非标识数字一律按配比处理; 人工录入的实际投料 (automatic=false) 照常给。
+            boolean derivedFromRecipe = object.path("automatic").asBoolean(false);
             for (Iterator<String> it = object.fieldNames(); it.hasNext(); ) {
                 String name = it.next();
                 JsonNode value = object.get(name);
                 if (value == null || value.isNull() || MARKER.equals(name)) continue;
                 if (isRatioField(name) || isContextualRatioField(object, name)) ratioFields.add(name);
+                else if (derivedFromRecipe && value.isNumber() && !isIdentifierLike(name)) ratioFields.add(name);
                 else if (SINGLE_RUN_ACTUAL_FIELDS.contains(name)) {
                     // 单批实测: 单据视图里与总量同档; 汇总视图里与配比同档
                     (aggregateView ? ratioFields : quantityFields).add(name);

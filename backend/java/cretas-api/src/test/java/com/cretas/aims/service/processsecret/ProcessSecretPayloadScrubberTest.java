@@ -246,6 +246,35 @@ class ProcessSecretPayloadScrubberTest {
     // ------------------------------------------------------------------ 独立审查发现的口子
 
     @Test
+    void quantitiesDerivedFromTheRecipeAreHiddenButManualActualsStay() throws Exception {
+        // F006 验收 2026-10-27: 报工行里按配比自动带出的调料用量 0.1725 kg ÷ 投入 115 kg = 1.5 g/kg,
+        // 就是保密配比。automatic=true 的行按配比处理; 人工录入的实际投料 (automatic=false) 是本单总量, 照给
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("plan-5");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("plan-5", F)).thenReturn(Optional.of(plan));
+        String body = "{'rows':[{'productTypeId':'P17','inputQuantity':115,'rawMaterialInputs':["
+                + "{'skuId':'S-CINNAMON','quantity':0.1725,'unit':'kg','automatic':true,'sourceType':'SEASONING'},"
+                + "{'skuId':'M-BEEF','quantity':115,'unit':'kg','automatic':false}]}]}";
+
+        ObjectNode operator = tree(body);
+        assertThat(scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-5"),
+                "GET /process-sheet/rows", false)).isTrue();
+        assertThat(operator.at("/rows/0/rawMaterialInputs/0/quantity").isNull()).isTrue();
+        assertThat(operator.at("/rows/0/rawMaterialInputs/0/skuId").asText()).isEqualTo("S-CINNAMON");
+        assertThat(operator.at("/rows/0/rawMaterialInputs/1/quantity").asInt()).as("人工实际投料照常").isEqualTo(115);
+        assertThat(operator.at("/rows/0/inputQuantity").asInt()).isEqualTo(115);
+        verify(recorder).record(eq(F), eq(SECRET), eq(user(5)), eq(ProcessSecretAction.VIEW_FULL), eq("DENY"),
+                contains("quantity"), eq("GET /process-sheet/rows"));
+
+        ObjectNode owner = tree(body);
+        assertThat(scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-5"),
+                "GET /process-sheet/rows", false)).isFalse();
+        assertThat(owner.at("/rows/0/rawMaterialInputs/0/quantity").decimalValue()).isEqualByComparingTo("0.1725");
+    }
+
+    @Test
     void savedReportRowsUnderTheSemiFinishedProductStillHideRecipeShares() {
         // 审查 #2: 报工行的 productTypeId 是本道产出的半成品 (不受保护), 配比快照挂在它下面;
         // 读的是受保护产品计划的报工行 → 归属不可信, 整份按受限处理
