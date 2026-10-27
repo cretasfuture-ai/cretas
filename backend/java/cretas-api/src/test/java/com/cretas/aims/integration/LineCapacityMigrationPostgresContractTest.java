@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261103_90 on real PostgreSQL: one active capacity row per line + product (generic counts as its
+ * V20261103_91 on real PostgreSQL: one active capacity row per line + product (generic counts as its
  * own key), retiring a row frees the key, and the database refuses an unknown unit, a non-positive
  * rate or an unknown source; one active requirement per product + device.
  */
@@ -36,7 +36,7 @@ class LineCapacityMigrationPostgresContractTest {
             statement.execute("CREATE SCHEMA " + schema);
             statement.execute("SET search_path TO " + schema);
             ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/flyway/V20261103_90__line_capacity_and_equipment_requirements.sql"));
+                    new ClassPathResource("db/flyway/V20261103_91__line_capacity_and_equipment_requirements.sql"));
 
             statement.execute(CAP + "('F1', 'L1', 'PT-1', 100, 'PIECE', 'FACTORY_CONFIG', 7, now(), now(), now())");
             statement.execute(CAP + "('F1', 'L1', NULL, 80, 'KG', 'CONVERSATIONAL_BUILD', 7, now(), now(), now())");

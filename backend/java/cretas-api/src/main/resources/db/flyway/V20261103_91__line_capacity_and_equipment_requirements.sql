@@ -1,4 +1,4 @@
--- V20261103_90__line_capacity_and_equipment_requirements.sql
+-- V20261103_91__line_capacity_and_equipment_requirements.sql
 --
 -- S4 产能与设备口径 (Owner 2026-10-27: 「看具体产线情况, 都需要支持, 按对话建厂或工厂配置时设置」)
 --   1. production_line_capacity_configs  每条产线 (可再细到产品) 每小时能做多少, 单位由配置决定:
