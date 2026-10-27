@@ -453,3 +453,45 @@ def test_video_analyzer_redacts_request_text_in_the_vision_prompt(monkeypatch):
     text = json.dumps(sent, ensure_ascii=False)
     assert sent and "13912345678" not in text and "[电话A]" in text
     assert "华东冷链商贸有限公司" not in text and "赵铁柱" not in text
+
+
+# ---------------------------------------------------------------- ai_proxy (Java LlmIntentFallbackClientImpl 转发)
+
+def _ai_proxy_client(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from smartbi.api import ai_proxy
+
+    monkeypatch.setattr(ai_proxy, "_ai_proxy_cache", type("_NoCache", (), {
+        "get": staticmethod(lambda k: None), "set": staticmethod(lambda k, v: None)})())
+    app = FastAPI()
+    app.include_router(ai_proxy.router, prefix="/api/ai")
+    return TestClient(app)
+
+
+def test_ai_proxy_intent_routes_only_hide_numbers_because_java_already_redacted(upstream, monkeypatch):
+    """Java 兜底意图分类 / 澄清已按同一套规则脱敏才转发: 这里原话模式, 只抹号码、不认名字、不查库。"""
+    async def must_not_run():
+        raise AssertionError("原话模式不该查保密产品名")
+
+    monkeypatch.setattr(lc, "_protected_names_for_egress", must_not_run)
+    upstream.answer = '{"intent": "SUPPLIER_QUERY", "confidence": 0.9}'
+    client = _ai_proxy_client(monkeypatch)
+
+    client.post("/api/ai/intent/classify", json={"text": SECRET, "candidates": ["SUPPLIER_QUERY"]})
+    client.post("/api/ai/intent/clarify", json={"text": SECRET, "ambiguous_intents": ["A", "B"]})
+
+    assert len(upstream.bodies) == 2
+    for body in upstream.bodies:
+        sent = json.dumps(body, ensure_ascii=False)
+        assert "13912345678" not in sent and "[电话A]" in sent
+        assert "华东冷链商贸有限公司" in sent and "赵铁柱" in sent
+
+
+def test_ai_proxy_other_routes_keep_full_redaction(upstream, monkeypatch):
+    """规则解析 / 平台建厂等 Java 侧未逐个脱敏的转发: 仍按完整规则认名字。"""
+    upstream.answer = '{"rule": "x"}'
+    _ai_proxy_client(monkeypatch).post("/api/ai/rule/parse", json={"rule_text": SECRET})
+
+    sent = upstream.sent_text()
+    assert upstream.bodies and "华东冷链商贸有限公司" not in sent and "赵铁柱" not in sent and "[单位A]" in sent

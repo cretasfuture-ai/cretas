@@ -168,7 +168,8 @@ public final class LlmEgressRedactor {
     private static final String SINGLE_CHAR_ORG_LEAD_INS = "给让请把往";
     /** 人名正则带着岗位 / 动词前缀 (「质检员：赵铁柱」「通知张三」): 只换名字本身。 */
     private static final Pattern PERSON_LEAD_IN = Pattern.compile(
-            "^(?:" + TrainingSampleRules.PERSON_ROLE + "|联系|找|通知|叫|告诉)\\s*[:：|]?\\s*");
+            "^(?:" + TrainingSampleRules.PERSON_ROLE + "|联系|找|通知|叫|告诉)" + TrainingSampleRules.GAP + "*[:：|]?"
+                    + TrainingSampleRules.GAP + "*");
     /** 号码的其它写法: 分组银行卡 / 身份证、15 位旧身份证、三段座机 / 400、点分 / 全角手机号。 */
     private static final Pattern CARD_GROUPED = Pattern.compile(
             "(?<![0-9])\\d{4}(?:[ -]\\d{4}){3}(?:[ -]?\\d{1,3})?(?![0-9])");

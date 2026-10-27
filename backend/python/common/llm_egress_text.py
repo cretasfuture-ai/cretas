@@ -28,6 +28,7 @@ from common.sample_text_rules import (  # 训练规则常量: 与 Java TrainingS
     _PERSON_ROLE as PERSON_ROLE,
     _PHONE_RE as PHONE,
     _SURNAMES as SURNAMES,
+    _GAP as GAP,
 )
 
 from common.process_secret_sql import MIN_NAME_LENGTH, java_strip, java_trim  # noqa: E402
@@ -55,7 +56,7 @@ GENERIC_INDUSTRY_PHRASE = re.compile(
     r"这批|那批|这些|那些|所有|全部|整体|总体|各个|各|我们的|我们|我方|我司|公司|工厂|本厂|"
     r"查看|查询|查一下|看看|看一下|统计|分析|对比|汇总)+" + _INDUSTRY)
 SINGLE_CHAR_ORG_LEAD_INS = "给让请把往"
-PERSON_LEAD_IN = re.compile(rf"^(?:{PERSON_ROLE}|联系|找|通知|叫|告诉)\s*[:：|]?\s*", _A)
+PERSON_LEAD_IN = re.compile(rf"^(?:{PERSON_ROLE}|联系|找|通知|叫|告诉){GAP}*[:：|]?{GAP}*", _A)
 CARD_GROUPED = re.compile(r"(?<![0-9])\d{4}(?:[ -]\d{4}){3}(?:[ -]?\d{1,3})?(?![0-9])", _A)
 ID_GROUPED = re.compile(r"(?<![0-9])\d{6}[ -]\d{8}[ -]\d{3}[\dXx](?![0-9A-Za-z])", _A)
 ID_15 = re.compile(r"(?<![0-9A-Za-z])\d{15}(?![0-9A-Za-z])", _A)
