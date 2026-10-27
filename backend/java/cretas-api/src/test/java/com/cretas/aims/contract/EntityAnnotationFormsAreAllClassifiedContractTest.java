@@ -114,7 +114,7 @@ class EntityAnnotationFormsAreAllClassifiedContractTest {
                 "Setter", "Slf4j", "SuperBuilder", "ToString", "ToString.Exclude");
         // JPA / Hibernate —— 映射、生成、生命周期，都不表达唯一性
         java.util.Collections.addAll(EXPLICITLY_IRRELEVANT,
-                "BatchSize", "Convert", "CreationTimestamp", "DynamicInsert", "Entity", "EntityGraph",
+                "BatchSize", "ColumnDefault", "Convert", "CreationTimestamp", "DynamicInsert", "Entity", "EntityGraph",
                 "EntityListeners", "Enumerated", "Formula", "Generated", "GeneratedValue",
                 "GenericGenerator", "JdbcTypeCode", "Lock", "ManyToOne", "MappedSuperclass", "Modifying",
                 "NotFound", "OneToMany", "OrderBy", "Param", "PostLoad", "PrePersist", "PreRemove",
