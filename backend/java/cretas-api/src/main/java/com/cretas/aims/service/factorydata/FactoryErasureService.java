@@ -504,10 +504,13 @@ public class FactoryErasureService {
                 out.add(c.table() + " " + c.rows() + " 行: 删除失败 (" + e.getSQLState() + "), 随副本保留期过期");
             }
         }
-        // 账号读不了的副本: 数不了也删不了, 预检已保证名字里有日期 ⇒ 随 30 天清理过期
+        // 账号读不了的副本: 数不了也删不了, 预检已保证名字里有日期 ⇒ 交给 30 天副本清理。
+        // 回执只说「交给了谁」, 不替它担保: 清理是 postgres 身份的每日 cron, schema 里有视图等依赖时 DROP 会失败 (rc=1)
         for (String t : FactoryDataService.unreadableOutside(conn, schema, true)) {
             Matcher m = NAME_DATE.matcher(t.split("\\.", 2)[0]);
-            out.add(t + ": 账号读不了, 随副本保留期过期" + (m.find() ? " (副本日期 " + m.group(1) + ", 30 天后清理)" : ""));
+            out.add(t + ": 账号读不了, 交给 30 天副本清理 (backup-copy-retention.sh 每日任务"
+                    + (m.find() ? ", 副本日期 " + m.group(1) : ", 副本无日期 (需人工处理)")
+                    + "; 是否已删以该任务日志为准)");
         }
         return out;
     }
