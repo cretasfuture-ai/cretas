@@ -3359,9 +3359,14 @@ const { runReadOnlyPageScenario } = require('./_shared');
 const PATH = '/smart-bi/analysis?tab=query&mode=factory';
 const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
-const EXPORT_PATH = '/smartbi-api/api/smartbi/financial-dashboard/export-excel';
 const QUESTION = '汇总当前库存、生产和销售表现';
 const JOINT_QUESTION = '关联生产、检验和成本做多表分析';
+
+const EXPORT_FORMATS = [
+  { key: 'excel', label: 'Excel', path: '/smartbi-api/api/smartbi/financial-dashboard/export-excel', extension: 'xlsx' },
+  { key: 'pdf', label: 'PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
+  { key: 'ppt', label: 'PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
+];
 
 function endpointPath(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
@@ -3376,9 +3381,13 @@ function isDetailsResponse(response) {
     && endpointPath(response.url()).replace(/\/$/, '') === DETAILS_PATH;
 }
 
-function isExportResponse(response) {
+function isExportResponse(response, format) {
+  const expectedPath = typeof format === 'string'
+    ? EXPORT_FORMATS.find((item) => item.key === format)?.path
+    : format?.path;
   return response.request().method() === 'POST'
-    && endpointPath(response.url()).replace(/\/$/, '') === EXPORT_PATH;
+    && Boolean(expectedPath)
+    && endpointPath(response.url()).replace(/\/$/, '') === expectedPath;
 }
 
 function requestBody(response) {
@@ -3618,6 +3627,70 @@ async function waitForResponse(page, predicate, action, timeout = 120_000) {
   return responsePromise;
 }
 
+function summarizeExportResults(results) {
+  const formats = {};
+  for (const result of results) formats[result.format] = {
+    attempted: result.attempted === true,
+    buttonFound: result.buttonFound === true,
+    downloadStarted: result.downloadStarted === true,
+    httpStatus: Number.isInteger(result.httpStatus) ? result.httpStatus : null,
+    saved: result.saved === true,
+    success: result.success === true,
+    fileName: result.fileName || null,
+  };
+  const complete = EXPORT_FORMATS.every((format) => formats[format.key]);
+  const attempted = complete && EXPORT_FORMATS.every((format) => formats[format.key].attempted);
+  const success = attempted && EXPORT_FORMATS.every((format) => formats[format.key].success);
+  return { attempted, success, formats };
+}
+
+async function downloadExportFormats(page, answer, evidenceDir, prefix, timeout = 30_000) {
+  const results = [];
+  const tools = answer.locator('.answer-tools:visible').first();
+  for (const format of EXPORT_FORMATS) {
+    const fileName = `${prefix}-${format.key}.${format.extension}`;
+    const result = {
+      format: format.key,
+      attempted: true,
+      buttonFound: false,
+      downloadStarted: false,
+      httpStatus: null,
+      saved: false,
+      success: false,
+      fileName,
+    };
+    try {
+      const button = tools.getByRole('button', { name: format.label, exact: true }).first();
+      result.buttonFound = await button.count() > 0;
+      if (!result.buttonFound) {
+        results.push(result);
+        continue;
+      }
+      const downloadPromise = page.waitForEvent('download', { timeout }).catch(() => null);
+      const exportResponsePromise = page.waitForResponse(
+        (response) => isExportResponse(response, format),
+        { timeout },
+      ).catch(() => null);
+      await button.click();
+      const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
+      result.downloadStarted = Boolean(download);
+      result.httpStatus = exportResponse ? exportResponse.status() : null;
+      if (download && exportResponse && exportResponse.status() === 200) {
+        const target = `${String(evidenceDir || '').replace(/[\\/]+$/, '')}/${fileName}`;
+        if (evidenceDir) {
+          await download.saveAs(target);
+          result.saved = true;
+        }
+      }
+      result.success = result.downloadStarted && result.httpStatus === 200 && (Boolean(evidenceDir) ? result.saved : true);
+    } catch {
+      result.success = false;
+    }
+    results.push(result);
+  }
+  return summarizeExportResults(results);
+}
+
 async function run(ctx) {
   return runReadOnlyPageScenario(ctx, {
     id: 'smartbi-factory-analysis-readonly',
@@ -3683,16 +3756,12 @@ async function run(ctx) {
         : null;
       if (details.drawerVisible) await page.keyboard.press('Escape').catch(() => {});
 
-      let exportAttempt = { attempted: false, success: false };
-      const exportButton = page.locator('.answer-tools:visible .el-button').first();
-      if (await exportButton.count()) {
-        exportAttempt.attempted = true;
-        const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
-        const exportResponsePromise = page.waitForResponse(isExportResponse, { timeout: 30_000 }).catch(() => null);
-        await exportButton.click();
-        const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
-        exportAttempt.success = Boolean(download && exportResponse && exportResponse.status() === 200);
-      }
+      const exportAttempt = await downloadExportFormats(
+        page,
+        page.locator('.turn.turn--assistant:visible').last(),
+        inspectCtx.evidenceDir,
+        'smartbi-factory-analysis-overview',
+      );
 
       const followupButtons = page.locator('.followups:visible .el-button');
       const qualityFollowup = followupButtons.filter({ hasText: '质量' }).first();
@@ -3717,7 +3786,7 @@ async function run(ctx) {
       let jointSelected = { attempted: false, summary: {} };
       let jointSelectedBody = {};
       let jointDetails = { attempted: false, success: false };
-      let jointExport = { attempted: false, success: false };
+      let jointExport = { attempted: false, success: false, formats: {} };
       const newAnalysisButton = page.getByRole('button', { name: '新分析', exact: true });
       if (await newAnalysisButton.count()) {
         const jointInitialResponse = await waitForResponse(
@@ -3772,16 +3841,13 @@ async function run(ctx) {
                 if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
               }
             }
-            const jointAnswer = page.locator('.turn--assistant:visible').last();
-            const jointExportButton = jointAnswer.locator('.answer-tools .el-button').first();
-            if (await jointExportButton.count()) {
-              jointExport.attempted = true;
-              const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
-              const exportResponsePromise = page.waitForResponse(isExportResponse, { timeout: 30_000 }).catch(() => null);
-              await jointExportButton.click();
-              const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
-              jointExport.success = Boolean(download && exportResponse && exportResponse.status() === 200);
-            }
+            const jointAnswer = page.locator('.turn.turn--assistant:visible').last();
+            jointExport = await downloadExportFormats(
+              page,
+              jointAnswer,
+              inspectCtx.evidenceDir,
+              'smartbi-factory-analysis-joint',
+            );
           }
         }
       }
@@ -3806,7 +3872,9 @@ async function run(ctx) {
         detailsSucceeded: details.success,
         exportAttempted: exportAttempt.attempted,
         exportSucceeded: exportAttempt.success,
+        exportFormats: exportAttempt.formats,
         joint: assessment.joint,
+        jointExportFormats: jointExport.formats,
         screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : [])],
       };
     },
@@ -3821,6 +3889,9 @@ module.exports = {
   assessJoint,
   summaryFromResponse,
   isAnalysisResponse,
+  isExportResponse,
+  summarizeExportResults,
+  downloadExportFormats,
 };
 
 },
