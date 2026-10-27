@@ -48,7 +48,7 @@
             <el-tooltip v-if="row.health === 'LAST_FAILED'" :content="row.lastRun?.errorMessage || ''" placement="top">
               <el-tag type="danger" disable-transitions>最近失败</el-tag>
             </el-tooltip>
-            <el-tag v-else :type="HEALTH[row.health].type" disable-transitions>{{ HEALTH[row.health].label }}</el-tag>
+            <el-tag v-else :type="HEALTH[row.health as BackupHealth].type" disable-transitions>{{ HEALTH[row.health as BackupHealth].label }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="230" fixed="right">

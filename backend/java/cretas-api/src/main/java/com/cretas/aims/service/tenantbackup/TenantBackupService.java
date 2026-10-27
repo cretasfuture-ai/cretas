@@ -406,8 +406,14 @@ public class TenantBackupService {
     public void runNow(AuthenticatedActor actor, String factoryId) {
         factoryData.requireOperator(actor);
         Plan plan = repo.findPlan(factoryId).orElse(null);
-        if (plan == null || !plan.enabled()) throw new BusinessException(409, "该厂未开通备份套餐, 先开通再执行");
-        if (repo.hasRunning(factoryId)) throw new BusinessException(409, "该厂已有一次备份在进行");
+        if (plan == null || !plan.enabled()) {
+            throw new BusinessException(409, "该厂未开通备份套餐, 先开通再执行")
+                    .withHint("在本页点「开通」, 选好频率与保留期并填写原因后再执行");
+        }
+        if (repo.hasRunning(factoryId)) {
+            throw new BusinessException(409, "该厂已有一次备份在进行")
+                    .withHint("几分钟后点「记录」查看这次的结果, 不需要重复执行");
+        }
         manualRuns.submit(() -> backup(factoryId, actor, MANUAL_TRIGGER));
     }
 
@@ -428,10 +434,12 @@ public class TenantBackupService {
         Run run = repo.findRun(runId).filter(r -> r.factoryId().equals(factoryId))
                 .orElseThrow(() -> new BusinessException(404, "备份记录不存在"));
         if (run.status() != RunStatus.SUCCEEDED || run.objectKey() == null) {
-            throw new BusinessException(409, "这次备份没有成功, 没有可下载的文件");
+            throw new BusinessException(409, "这次备份没有成功, 没有可下载的文件")
+                    .withHint("请选择一条结果为「成功」的备份下载");
         }
         if (!KeyHolder.CUSTOMER.name().equals(run.keyHolder())) {
-            throw new BusinessException(409, "这份备份用平台钥匙加密, 工厂无法自行解开; 需要时请联系平台解密后交付");
+            throw new BusinessException(409, "这份备份用平台钥匙加密, 工厂无法自行解开; 需要时请联系平台解密后交付")
+                    .withHint("联系平台, 说明要取回哪一天的备份");
         }
         boolean present = store.list(run.objectKey()).stream().anyMatch(o -> o.key().equals(run.objectKey()));
         if (!present) throw new BusinessException(410, "这份备份已超过保留期被清理");

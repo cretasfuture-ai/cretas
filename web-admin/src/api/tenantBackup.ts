@@ -7,7 +7,8 @@
 //   @RequireRole factory_super_admin / permission_admin; 只读。
 //   只有「客户自持钥匙」的成功备份能下载 (平台钥匙的件工厂解不开)。
 
-import request, { get, type ApiResponse } from './request';
+import request, { get } from './request';
+import type { ApiResponse } from '@/types/api';
 
 export type BackupFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY';
 export type BackupKeyHolder = 'PLATFORM' | 'CUSTOMER';
