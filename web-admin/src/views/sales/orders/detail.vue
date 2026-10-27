@@ -2925,13 +2925,14 @@ async function handleQuickPayFull() {
         <!-- 2026-08-12: 物料(原料/辅料/包材)不参与成品批次分配 —— 它的货在物料仓,
              确认发货时按 FIFO 自动扣。这里必须说清楚, 否则会落到下面那条
              「全厂无可发货成品库存, 请先完成生产入库」的空态上, 把仓管指向错误的方向。 -->
+        <!-- 旧分配不满足库存所有权 (ineligibleNotice 只在成品行上设置): 说明原因, 下面展示重新推荐的批次 -->
+        <el-alert v-if="item.ineligibleNotice" type="warning" :closable="false" show-icon
+          style="margin-bottom: 8px;" title="原分配批次不能发出" :description="item.ineligibleNotice" />
         <el-alert v-if="item.isMaterial" type="success" :closable="false" show-icon
           title="物料无需分配批次"
           description="原料 / 辅料 / 包材在确认发货时按先进先出自动扣减物料库存，本行可直接提交。"
         />
-        <el-alert v-if="!item.isMaterial && item.ineligibleNotice" type="warning" :closable="false" show-icon
-          style="margin-bottom: 8px;" title="原分配批次不能发出" :description="item.ineligibleNotice" />
-        <el-table v-if="!item.isMaterial && item.allocations.length > 0" :data="item.allocations" border size="small">
+        <el-table v-else-if="item.allocations.length > 0" :data="item.allocations" border size="small">
           <el-table-column prop="batchNumber" label="批次号" width="200" />
           <el-table-column prop="productionDate" label="生产日期" width="120" />
           <el-table-column label="可用数量" width="150" align="right">
@@ -2950,7 +2951,7 @@ async function handleQuickPayFull() {
           </el-table-column>
         </el-table>
         <el-alert
-          v-else-if="!item.isMaterial"
+          v-else
           :type="item.stockWarehouses.length > 0 ? 'error' : 'warning'"
           :closable="false"
           :title="emptyStateTitle(item)"
