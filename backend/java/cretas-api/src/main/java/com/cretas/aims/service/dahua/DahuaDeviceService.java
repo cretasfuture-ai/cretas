@@ -239,6 +239,15 @@ public class DahuaDeviceService {
                 .orElseThrow(() -> new IllegalArgumentException("设备不存在: " + deviceId));
     }
 
+    /**
+     * 获取本厂设备 (别厂的设备与不存在同样报错; AI 工具里设备 id 来自模型抽取的参数, 先过这里)
+     */
+    public DahuaDevice getDevice(String factoryId, String deviceId) {
+        return deviceRepository.findById(deviceId)
+                .filter(d -> factoryId != null && factoryId.equals(d.getFactoryId()))
+                .orElseThrow(() -> new IllegalArgumentException("设备不存在: " + deviceId));
+    }
+
     // ==================== 设备管理 (保留原有方法) ====================
 
     /**

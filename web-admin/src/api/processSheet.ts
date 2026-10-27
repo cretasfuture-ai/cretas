@@ -807,6 +807,8 @@ export interface SemiFinishedInventoryFilter {
   productTypeId?: string;
   /** 阶段: 当前道工序序 → 只列 processOrder 严格小于此值的更早阶段半成品 (防回锅)。 */
   maxProcessOrder?: number;
+  /** 归属 (缺口 16): 领用计划 → 只列与它同一归属的半成品 (代工客户 / 本厂自有不混)。 */
+  planId?: string;
 }
 
 /**
@@ -823,6 +825,7 @@ export function getSemiFinishedInventory(
   const params: Record<string, string | number> = {};
   if (filter?.productTypeId) params.productTypeId = filter.productTypeId;
   if (filter?.maxProcessOrder != null) params.maxProcessOrder = filter.maxProcessOrder;
+  if (filter?.planId) params.planId = filter.planId;
   return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`, { params });
 }
 
@@ -832,12 +835,15 @@ export function getSemiFinishedInventory(
  * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
  *
  * @param productTypeId 可选产品族过滤 (传当前计划产品 → 后端解析成族键仅返回同族成品; 成品是终态无阶段过滤)。
+ * @param planId 归属 (缺口 16): 领用计划 → 只列与它同一归属的成品 (代工客户 / 本厂自有不混)。
  */
 export function getFinishedGoodsInventory(
   factoryId: string,
   productTypeId?: string,
+  planId?: string,
 ): Promise<ApiResponse<FinishedGoodsStockItem[]>> {
   const params: Record<string, string> = {};
   if (productTypeId) params.productTypeId = productTypeId;
+  if (planId) params.planId = planId;
   return get<FinishedGoodsStockItem[]>(`/${factoryId}/finished-goods/inventory`, { params });
 }

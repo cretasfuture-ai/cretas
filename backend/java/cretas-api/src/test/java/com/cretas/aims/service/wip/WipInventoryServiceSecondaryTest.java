@@ -1,5 +1,6 @@
 package com.cretas.aims.service.wip;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
 import com.cretas.aims.exception.BusinessException;
@@ -44,6 +45,8 @@ class WipInventoryServiceSecondaryTest {
     private static final String FACTORY_ID = "F006";
     private static final Long WIP_ID = 55L;
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks
     private WipInventoryServiceImpl service;
 
@@ -88,7 +91,7 @@ class WipInventoryServiceSecondaryTest {
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
             when(wipRepo.save(any())).thenReturn(wip);
 
-            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, 7L);
+            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, 7L, Owner.COMPANY);
 
             // availableQuantity 应为 50
             ArgumentCaptor<SemiFinishedInventory> wipCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
@@ -114,7 +117,7 @@ class WipInventoryServiceSecondaryTest {
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
             when(wipRepo.save(any())).thenReturn(wip);
 
-            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("50"), FACTORY_ID, null);
+            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("50"), FACTORY_ID, null, Owner.COMPANY);
 
             ArgumentCaptor<SemiFinishedInventory> captor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
             verify(wipRepo).save(captor.capture());
@@ -127,7 +130,7 @@ class WipInventoryServiceSecondaryTest {
         void wipNotFound_throws404() {
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null, Owner.COMPANY))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("半成品库存行不存在");
         }
@@ -139,7 +142,7 @@ class WipInventoryServiceSecondaryTest {
             wip.setFactoryId("DIFFERENT_FACTORY");
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
 
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null, Owner.COMPANY))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("工厂 ID 不匹配");
         }
@@ -150,7 +153,7 @@ class WipInventoryServiceSecondaryTest {
             SemiFinishedInventory wip = buildWip(new BigDecimal("20"));
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
 
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, null))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, null, Owner.COMPANY))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("WIP 余量不足");
         }
@@ -158,7 +161,7 @@ class WipInventoryServiceSecondaryTest {
         @Test
         @DisplayName("扣减量为 0 → 400")
         void zeroQty_throws400() {
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, BigDecimal.ZERO, FACTORY_ID, null))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, BigDecimal.ZERO, FACTORY_ID, null, Owner.COMPANY))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("扣减数量必须大于 0");
             verify(wipRepo, never()).findByIdForUpdate(any());
@@ -167,7 +170,7 @@ class WipInventoryServiceSecondaryTest {
         @Test
         @DisplayName("扣减量为 null → 400")
         void nullQty_throws400() {
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, null, FACTORY_ID, null))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, null, FACTORY_ID, null, Owner.COMPANY))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("扣减数量必须大于 0");
         }

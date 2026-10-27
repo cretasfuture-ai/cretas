@@ -52,6 +52,7 @@ class AIEnterpriseServiceStreamEgressTest {
     private PythonSmartBIClient python;
     private AIQuotaUsageRepository quota;
     private MockHttpServletRequest http;
+    private java.util.concurrent.ExecutorService sse;
 
     @BeforeEach
     void setUp() {
@@ -68,6 +69,9 @@ class AIEnterpriseServiceStreamEgressTest {
         ReflectionTestUtils.setField(service, "quotaConfigRepository", quotaConfig);
         ReflectionTestUtils.setField(service, "auditLogRepository", mock(AIAuditLogRepository.class));
         ReflectionTestUtils.setField(service, "llmEgressGuard", new LlmEgressGuard(mapper, processSecret));
+        // 流式分析在 sseExecutor 上跑: 换成本测试自己的线程池, run() 之后等它跑完再断言 (不靠固定等待时长)
+        sse = java.util.concurrent.Executors.newSingleThreadExecutor();
+        ReflectionTestUtils.setField(service, "sseExecutor", sse);
         when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(Map.of(
                         "batchNumber", "B-1",
@@ -87,9 +91,12 @@ class AIEnterpriseServiceStreamEgressTest {
         http.setAttribute("role", "finance_manager");
     }
 
-    private SseEmitter run() {
-        return service.analyzeTimeRangeCostStream(FACTORY, 77L, LocalDateTime.of(2026, 7, 1, 0, 0),
+    private SseEmitter run() throws InterruptedException {
+        SseEmitter emitter = service.analyzeTimeRangeCostStream(FACTORY, 77L, LocalDateTime.of(2026, 7, 1, 0, 0),
                 LocalDateTime.of(2026, 7, 19, 23, 59), "overall", QUESTION, false, 0, http);
+        sse.shutdown();
+        assertThat(sse.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        return emitter;
     }
 
     @Test
@@ -112,9 +119,9 @@ class AIEnterpriseServiceStreamEgressTest {
 
         ArgumentCaptor<PythonSmartBIClient.GeneralAnalysisCall> sent =
                 ArgumentCaptor.forClass(PythonSmartBIClient.GeneralAnalysisCall.class);
-        verify(python, timeout(3_000)).streamGeneralAnalysis(eq(FACTORY), eq("77"), eq("finance_manager"),
+        verify(python).streamGeneralAnalysis(eq(FACTORY), eq("77"), eq("finance_manager"),
                 sent.capture(), any());
-        verify(quota, timeout(3_000)).incrementUsedCount(eq(FACTORY), any(LocalDate.class), eq(1));
+        verify(quota).incrementUsedCount(eq(FACTORY), any(LocalDate.class), eq(1));
         String data = mapper.writeValueAsString(sent.getValue().data());
         assertThat(data).doesNotContain("华东冷链", "赵铁柱").contains("牛腱", "12.5");
         assertThat(sent.getValue().query()).doesNotContain("华东冷链", "13912345678").contains("为什么贵");
@@ -129,7 +136,7 @@ class AIEnterpriseServiceStreamEgressTest {
 
         SseEmitter emitter = run();
 
-        verify(python, after(500).never()).streamGeneralAnalysis(anyString(), any(), any(), any(), any());
+        verify(python, never()).streamGeneralAnalysis(anyString(), any(), any(), any(), any());
         verify(quota, never()).incrementUsedCount(anyString(), any(LocalDate.class), anyInt());
         // 明确告诉用户是脱敏这一步拦下的, 不是笼统的「服务不可用」
         assertThat(payloads(emitter)).anySatisfy(p -> {

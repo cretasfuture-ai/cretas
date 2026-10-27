@@ -10,6 +10,8 @@ it('renders real option contract and disposes on unmount', async () => {
   const wrapper = mount(FactoryChartCanvas, { props: { option } });
   await flushPromises();
   expect(h.setOption).toHaveBeenCalledWith(option, { notMerge: true });
+  expect(h.resize).toHaveBeenCalled();
+  expect(wrapper.emitted('ready')).toHaveLength(1);
   expect(wrapper.find('[role="alert"]').exists()).toBe(false);
   wrapper.unmount();
   expect(h.dispose).toHaveBeenCalled();

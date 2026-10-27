@@ -83,6 +83,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId,
             @RequestBody IsapiDeviceDTO dto) {
+        ownDevice(factoryId, deviceId);
         try {
             IsapiDevice device = deviceService.updateDevice(deviceId, dto);
             return ApiResponse.success("设备更新成功", deviceService.toDTO(device));
@@ -97,6 +98,7 @@ public class IsapiDeviceController {
     public ApiResponse<Void> deleteDevice(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         try {
             // 先取消订阅
             subscriptionService.unsubscribeDevice(deviceId);
@@ -113,7 +115,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
         try {
-            IsapiDevice device = deviceService.getDevice(deviceId);
+            IsapiDevice device = ownDevice(factoryId, deviceId);
             return ApiResponse.success(deviceService.toDTO(device));
         } catch (IllegalArgumentException e) {
             throw new BusinessException(400, ErrorSanitizer.sanitize(e), e);
@@ -149,6 +151,7 @@ public class IsapiDeviceController {
     public ApiResponse<Map<String, Object>> testConnection(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         boolean connected = deviceService.testConnection(deviceId);
         Map<String, Object> result = new HashMap<>();
         result.put("connected", connected);
@@ -168,8 +171,9 @@ public class IsapiDeviceController {
     public ApiResponse<IsapiDeviceDTO> syncDevice(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         deviceService.syncDeviceInfo(deviceId);
-        IsapiDevice device = deviceService.getDevice(deviceId);
+        IsapiDevice device = ownDevice(factoryId, deviceId);
         return ApiResponse.success("同步完成", deviceService.toDTO(device));
     }
 
@@ -180,6 +184,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId,
             @RequestBody HttpHostConfigRequest request) {
+        ownDevice(factoryId, deviceId);
         try {
             log.info("配置 HTTP Host: factoryId={}, deviceId={}, motionDetection={}, lineCrossing={}",
                     factoryId, deviceId, request.getEnableMotionDetection(), request.getEnableLineCrossing());
@@ -210,6 +215,7 @@ public class IsapiDeviceController {
     public ApiResponse<Map<String, String>> getDevicePassword(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         try {
             String password = deviceService.getDecryptedPassword(deviceId);
             Map<String, String> result = new HashMap<>();
@@ -231,6 +237,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId,
             @RequestBody Map<String, String> request) {
+        ownDevice(factoryId, deviceId);
         try {
             String newPassword = request.get("newPassword");
             if (newPassword == null || newPassword.length() < 6) {
@@ -253,6 +260,7 @@ public class IsapiDeviceController {
     public ApiResponse<Void> rebootDevice(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         try {
             deviceService.rebootDevice(deviceId);
             return ApiResponse.successMessage("重启命令已发送，设备将在数秒后重启");
@@ -270,6 +278,7 @@ public class IsapiDeviceController {
     public ApiResponse<Void> factoryResetDevice(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         try {
             deviceService.factoryResetDevice(deviceId);
             return ApiResponse.successMessage("恢复出厂设置命令已发送");
@@ -288,6 +297,7 @@ public class IsapiDeviceController {
     public ApiResponse<List<IsapiStreamDTO>> getStreamUrls(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         List<IsapiStreamDTO> streams = deviceService.getStreamUrls(deviceId);
         return ApiResponse.success(streams);
     }
@@ -299,6 +309,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId,
             @RequestParam(defaultValue = "1") int channelId) {
+        ownDevice(factoryId, deviceId);
         IsapiCaptureDTO capture = deviceService.capturePicture(deviceId, channelId);
         if (capture.getSuccess()) {
             return ApiResponse.success("抓拍成功", capture);
@@ -313,6 +324,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId,
             @RequestParam(defaultValue = "1") int channelId) {
+        ownDevice(factoryId, deviceId);
         IsapiCaptureDTO capture = deviceService.capturePicture(deviceId, channelId);
 
         if (!capture.getSuccess() || capture.getPictureBase64() == null) {
@@ -333,6 +345,7 @@ public class IsapiDeviceController {
     public ApiResponse<Void> subscribeDevice(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         subscriptionService.subscribeDevice(deviceId);
         return ApiResponse.successMessage("订阅成功");
     }
@@ -343,6 +356,7 @@ public class IsapiDeviceController {
     public ApiResponse<Void> unsubscribeDevice(
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
+        ownDevice(factoryId, deviceId);
         subscriptionService.unsubscribeDevice(deviceId);
         return ApiResponse.successMessage("取消订阅成功");
     }
@@ -359,8 +373,10 @@ public class IsapiDeviceController {
     @Operation(summary = "获取订阅状态")
     public ApiResponse<Map<String, Object>> getSubscriptionStatus(@PathVariable String factoryId) {
         Map<String, Object> status = new HashMap<>();
-        status.put("activeCount", subscriptionService.getActiveSubscriptionCount());
-        status.put("activeDevices", subscriptionService.getActiveSubscriptionIds());
+        // 只给本厂的: 订阅表全进程共用
+        List<String> ownSubscribed = subscriptionService.getActiveSubscriptionIds(factoryId);
+        status.put("activeCount", ownSubscribed.size());
+        status.put("activeDevices", ownSubscribed);
         return ApiResponse.success(status);
     }
 
@@ -452,12 +468,34 @@ public class IsapiDeviceController {
             @RequestParam String processedBy,
             @RequestParam(required = false) String result) {
 
-        eventLogRepository.findById(eventId).ifPresent(event -> {
-            event.markProcessed(processedBy, result);
-            eventLogRepository.save(event);
-        });
+        IsapiEventLog event = eventOfFactory(factoryId, eventId);
+        event.markProcessed(processedBy, result);
+        eventLogRepository.save(event);
 
         return ApiResponse.successMessage("处理完成");
+    }
+
+    /**
+     * 取本厂的设备。按设备 id 的接口 (改 / 删 / 读密码 / 重启 / 恢复出厂 / 抓拍…) 以前不看 URL 里的工厂,
+     * 别厂有设备权限的账号知道 id 就能操作; 别厂的设备按「不存在」处理 (不泄露存在与否)。
+     */
+    private IsapiDevice ownDevice(String factoryId, String deviceId) {
+        try {
+            return deviceService.getDevice(factoryId, deviceId);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(404, "设备不存在: " + deviceId)
+                    .withHint("请检查设备 ID 是否正确, 或设备是否属于本厂");
+        }
+    }
+
+    /**
+     * 取本厂的事件。事件表没有租户过滤 (按 id 能取到任何工厂的事件), 别厂的事件按「不存在」处理 (不泄露存在与否)。
+     */
+    private IsapiEventLog eventOfFactory(String factoryId, Long eventId) {
+        return eventLogRepository.findById(eventId)
+                .filter(e -> factoryId != null && factoryId.equals(e.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(404, "事件不存在: " + eventId)
+                        .withHint("请检查 eventId 是否正确"));
     }
 
     // ==================== AI 分析相关 ====================
@@ -516,10 +554,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable Long eventId) {
 
-        return eventLogRepository.findById(eventId)
-                .map(event -> ApiResponse.success(toEventDTO(event)))
-                .orElseThrow(() -> new BusinessException(404, "事件不存在: " + eventId)
-                        .withHint("请检查 eventId 是否正确"));
+        return ApiResponse.success(toEventDTO(eventOfFactory(factoryId, eventId)));
     }
 
     @RequirePermission({"system:read_write", "equipment:read_write"})
@@ -591,7 +626,13 @@ public class IsapiDeviceController {
             @RequestParam String processedBy,
             @RequestParam(required = false) String result) {
 
-        int count = eventLogRepository.markAsProcessed(eventIds, LocalDateTime.now(), processedBy);
+        // 事件表没有租户过滤: 先筛出本厂的事件, 别厂的 id 当作不存在 (计入 requestedCount, 不计入 processedCount)
+        List<Long> ownIds = eventLogRepository.findAllById(eventIds).stream()
+                .filter(e -> factoryId.equals(e.getFactoryId()))
+                .map(IsapiEventLog::getId)
+                .collect(Collectors.toList());
+        int count = ownIds.isEmpty() ? 0
+                : eventLogRepository.markAsProcessed(ownIds, LocalDateTime.now(), processedBy);
 
         Map<String, Object> response = new HashMap<>();
         response.put("processedCount", count);
@@ -611,7 +652,7 @@ public class IsapiDeviceController {
         summary.put("deviceStatus", deviceService.getStatusStatistics(factoryId));
 
         // 订阅状态
-        summary.put("subscriptionCount", subscriptionService.getActiveSubscriptionCount());
+        summary.put("subscriptionCount", subscriptionService.getActiveSubscriptionIds(factoryId).size());
 
         return ApiResponse.success(summary);
     }

@@ -149,7 +149,7 @@ class SemiConsumptionWritesLedgerTest {
                 mock(BatchLineageEdgeRepository.class), taskRepo,
                 mock(WorkProcessRepository.class), mock(ProductTypeRepository.class),
                 mock(ProductionWorkflowInstanceRepository.class), mock(WorkflowTaskPortRepository.class),
-                mock(ProductFamilyResolver.class), mock(ApplicationEventPublisher.class));
+                mock(ProductFamilyResolver.class), mock(ApplicationEventPublisher.class), org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
 
         ProductionReport report = new ProductionReport();
         report.setId(23799L);

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.yield;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.processentry.LaborSegment;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
@@ -163,10 +164,10 @@ class FgCostPropagationTest {
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         // 投料严格扣减默认成功返回请求量 (个别测试无投料则不触发)
-        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
-        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
+        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
         // 盒⇄kg 折算: 本测全部 kg 源 → 原值 (与扣减折算同源; computeOutputUnitCost 用其算投料成本)。
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
@@ -326,7 +327,7 @@ class FgCostPropagationTest {
 
         // SFI 严格出库实际发生 (feed 30) — 成本传导与库存扣减同源
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-STOCK"), eq(new BigDecimal("30")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-STOCK"), eq(new BigDecimal("30")));
         FinishedGoodsBatch fg = captureSavedFg();
         // (pb 200 + feed 30×8=240) / 入库量(outputQuantity) 40 = 440/40 = 11.0000
         assertThat(fg.getUnitCost()).isEqualByComparingTo("11");
@@ -344,7 +345,7 @@ class FgCostPropagationTest {
         service.interimSettle(FACTORY, PLAN_ID, 7L);
 
         verify(finishedGoodsFeedService, times(1))
-                .consumeForFeedStrict(eq(FACTORY), eq("FG-STOCK"), eq(new BigDecimal("20")), eq("kg"));
+                .consumeForFeedStrict(eq(FACTORY), any(), eq("FG-STOCK"), eq(new BigDecimal("20")), eq("kg"));
         FinishedGoodsBatch fg = captureSavedFg();
         // (pb 160 + feed 20×12=240) / 入库量(outputQuantity) 40 = 400/40 = 10.0000
         assertThat(fg.getUnitCost()).isEqualByComparingTo("10");
@@ -526,7 +527,7 @@ class FgCostPropagationTest {
             verify(wipInventoryService, org.mockito.Mockito.never())
                     .postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
             // 但 SFI-X 投料仍严格出库 (库存扣减照常, 只是成本对下游漏计)
-            verify(wipInventoryService).consumeClerkSemiStrict(FACTORY, "SFI-X", new BigDecimal("40"));
+            verify(wipInventoryService).consumeClerkSemiStrict(FACTORY, Owner.COMPANY, "SFI-X", new BigDecimal("40"));
             // 🔴 R3: 漏计不再静默 — WARN 记录 (含 R3 标记 + 中间道 batchNo)
             boolean warned = appender.list.stream()
                     .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)

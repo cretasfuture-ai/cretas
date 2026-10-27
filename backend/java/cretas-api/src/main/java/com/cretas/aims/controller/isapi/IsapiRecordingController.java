@@ -72,7 +72,7 @@ public class IsapiRecordingController {
         log.info("[{}] 搜索录像: deviceId={}, {} ~ {}",
                 factoryId, request.getDeviceId(), request.getStartTime(), request.getEndTime());
 
-        RecordingSearchResponse response = recordingService.searchRecordings(request);
+        RecordingSearchResponse response = recordingService.searchRecordings(factoryId, request);
 
         if (response.isSuccess()) {
             return ApiResponse.success(response);
@@ -113,9 +113,9 @@ public class IsapiRecordingController {
 
             String playbackUrl;
             if (credentialsAllowed) {
-                playbackUrl = recordingService.getPlaybackUrl(deviceId, channelId, startTime, endTime);
+                playbackUrl = recordingService.getPlaybackUrl(factoryId, deviceId, channelId, startTime, endTime);
             } else {
-                playbackUrl = recordingService.getPlaybackUrlWithoutAuth(deviceId, channelId, startTime, endTime);
+                playbackUrl = recordingService.getPlaybackUrlWithoutAuth(factoryId, deviceId, channelId, startTime, endTime);
             }
 
             Map<String, Object> result = new HashMap<>();
@@ -165,7 +165,7 @@ public class IsapiRecordingController {
                 .maxResults(maxResults)
                 .build();
 
-        RecordingSearchResponse response = recordingService.searchRecordings(request);
+        RecordingSearchResponse response = recordingService.searchRecordings(factoryId, request);
 
         if (response.isSuccess()) {
             return ApiResponse.success(response);
@@ -200,7 +200,7 @@ public class IsapiRecordingController {
                 .maxResults(maxResults)
                 .build();
 
-        RecordingSearchResponse response = recordingService.searchRecordings(request);
+        RecordingSearchResponse response = recordingService.searchRecordings(factoryId, request);
 
         if (response.isSuccess()) {
             return ApiResponse.success(response);

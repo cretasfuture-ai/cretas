@@ -68,6 +68,18 @@ public interface IsapiDeviceRepository extends JpaRepository<IsapiDevice, String
      */
     Optional<IsapiDevice> findByIpAddress(String ipAddress);
 
+    /**
+     * 本厂按 MAC 查 (忽略大小写)。私网 IP / MAC 在不同工厂可能重复, 必须带工厂查; 返回列表免得重复时抛异常
+     */
+    @Query("SELECT d FROM IsapiDevice d WHERE d.factoryId = :factoryId AND LOWER(d.macAddress) = LOWER(:macAddress)")
+    List<IsapiDevice> findByFactoryIdAndMacAddressIgnoreCase(@Param("factoryId") String factoryId,
+                                                            @Param("macAddress") String macAddress);
+
+    /**
+     * 本厂按 IP 查
+     */
+    List<IsapiDevice> findByFactoryIdAndIpAddress(String factoryId, String ipAddress);
+
     // ==================== 状态相关 ====================
 
     /**

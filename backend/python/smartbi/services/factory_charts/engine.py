@@ -302,6 +302,7 @@ def _financial_findings(chart, detail, mapping):
     note = chart.get('metadata', {}).get('note')
     if note:
         facts['attention'].append(note)
+        facts['limitations'] = [note]
     return facts
 
 
@@ -394,7 +395,9 @@ def series_candidate(series, kind, optional=False):
         'kpis': [] if total is None else [{'label': '累计口径' if series.aggregate != 'sum' else '合计', 'value': display(total), 'unit': series.unit}],
         'tableData': [{'label': label, 'value': value} for label, value in series.points]}
     if kind in ('line', 'area'):
-        candidate['findings']['attention'].append('仅汇总有记录的日期；缺期不补零，空白不表示停产或没有业务')
+        limitation = '仅汇总有记录的日期；缺期不补零，空白不表示停产或没有业务'
+        candidate['findings']['attention'].append(limitation)
+        candidate['findings'].setdefault('limitations', []).append(limitation)
     return _analysis_metadata(candidate)
 
 
@@ -643,13 +646,15 @@ def build(datasets, request, can_price):
             charts, gaps = [], [{'id': dataset.source, 'title': dataset.source, 'missing': ['所选期间没有来源记录']}]
         elif dataset.source.startswith(('cashflow ·', 'receivables ·')):
             charts, gaps = [], []
+        elif dataset.source.startswith('production-inspection-fused ·'):
+            charts, gaps = [], []
         elif dataset.source.startswith('historical-inventory ·'):
             charts, gaps = historical_inventory(dataset)
         elif dataset.financial:
             charts, gaps = financial_candidates(dataset, request, can_price)
         else:
             charts, gaps = factory_candidates(dataset, request, can_price)
-        business_source = dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory'}
+        business_source = dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused'}
         if not dataset.frame.empty and not business_source:
             from .financial_addons import build as financial_addons
             extra, extra_gaps = financial_addons(dataset, request, can_price)
@@ -698,6 +703,25 @@ def build(datasets, request, can_price):
         candidates.extend(c for c in charts if chart_size(c) <= 100 and len(charts) <= 100
                           and not c['chart']['echartsOption'].get('_factoryUnavailable'))
         unavailable.extend(gaps)
+    # This is the sole fixed multi-source relationship.  It consumes the
+    # already tenant-scoped production/quality frames; it never constructs SQL
+    # or treats separate single-source charts as joined evidence.
+    from .cross_table import build as build_cross_table
+    cross_candidates, cross_gaps = build_cross_table(datasets, request, can_price)
+    for chart in cross_candidates:
+        chart['chart']['echartsOption'].setdefault('tooltip', {})['renderMode'] = 'richText'
+        chart['aiMetric'] = chart['id'].split('@')[0]
+    if len(cross_candidates) > 100:
+        cross_gaps.append({'id': 'production.inspection_fused', 'title': '生产-检验-成本联合分析',
+                           'missing': ['联合候选超过100个安全上限，请缩小产品和单位范围']})
+    else:
+        for chart in cross_candidates:
+            if chart_size(chart) <= 100:
+                candidates.append(chart)
+            else:
+                cross_gaps.append({'id': 'production.inspection_fused', 'title': '生产-检验-成本联合分析',
+                                   'missing': ['联合图表日期点超过100个安全上限，请缩小期间后重试']})
+    unavailable.extend(cross_gaps)
     candidates.sort(key=lambda c: (c['priority'] != 'required', c['domain'], c['id']))
     unique_gaps = {}
     for gap in unavailable:
@@ -722,7 +746,9 @@ def historical_inventory(dataset):
         series = Series('stock.history@'+str(material)+'@'+str(unit), str(material)+'关账库存余额', '库存', str(unit), points, dataset.source, 'nonadditive')
         chart = series_candidate(series, 'line' if len(points) > 1 else 'bar')
         chart['kpis'] = [{'label': '最后关账余额', 'value': display(points[-1][1]), 'unit': str(unit)}]
-        chart['findings']['attention'].append('关账期间余额快照；不同月份余额不累加，不代表当前可用库存')
+        limitation = '关账期间余额快照；不同月份余额不累加，不代表当前可用库存'
+        chart['findings']['attention'].append(limitation)
+        chart['findings'].setdefault('limitations', []).append(limitation)
         charts.append(chart)
     return charts, []
 

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.production;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.dto.production.ProductionSettlementPrefillResponse;
@@ -167,6 +168,7 @@ class ProductionPlanSettlementTest {
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
+        ReflectionTestUtils.setField(service, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "productionSettlementOutputLineRepository",
                 productionSettlementOutputLineRepository);
         ReflectionTestUtils.setField(service, "productionInterimSettlementRepository", productionInterimSettlementRepository);
@@ -399,6 +401,7 @@ class ProductionPlanSettlementTest {
     private void wireR2(ProductionPlan plan, ProcessSheetRow... rows) {
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "finishedGoodsFeedService", finishedGoodsFeedService);
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
@@ -477,16 +480,16 @@ class ProductionPlanSettlementTest {
         wireR2(plan(),
                 feedRow("SFI-STOCK", "30", true, false),
                 feedRow("FG-STOCK", "20", false, true));
-        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), eq("SFI-STOCK"), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
-        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), any(), eq("SFI-STOCK"), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), any(), eq("FG-STOCK"), any(), eq("kg")))
+                .thenAnswer(inv -> inv.getArgument(3));
 
         // 无手工 SFI 领用 → 自动从 process-row 扣
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
 
-        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
-        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-STOCK", new BigDecimal("30"));
+        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, Owner.COMPANY, "FG-STOCK", new BigDecimal("20"), "kg");
     }
 
     @Test
@@ -506,7 +509,7 @@ class ProductionPlanSettlementTest {
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
 
         verify(wipInventoryService, never()).consumeClerkSemiStrict(
-                FACTORY_ID, "SFI-REWORK", new BigDecimal("1"));
+                FACTORY_ID, Owner.COMPANY, "SFI-REWORK", new BigDecimal("1"));
     }
 
     @Test
@@ -515,8 +518,8 @@ class ProductionPlanSettlementTest {
         wireR2(plan(),
                 feedRow("SFI-STOCK", "30", true, false),
                 feedRow("FG-STOCK", "20", false, true));
-        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), any(), eq("FG-STOCK"), any(), eq("kg")))
+                .thenAnswer(inv -> inv.getArgument(3));
         // 手工补录的是 WIP-001，并非 process-row 的 SFI-STOCK；不得把无关自动扣一并跳过。
         SemiFinishedInventory wip = wip();
         when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
@@ -527,8 +530,8 @@ class ProductionPlanSettlementTest {
 
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(manual), 10L);
 
-        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
-        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-STOCK", new BigDecimal("30"));
+        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, Owner.COMPANY, "FG-STOCK", new BigDecimal("20"), "kg");
     }
 
     @Test
@@ -537,8 +540,8 @@ class ProductionPlanSettlementTest {
         wireR2(plan(),
                 feedRow("SFI-STOCK", "30", true, false),
                 feedRow("SFI-OTHER", "10", true, false));
-        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), eq("SFI-OTHER"), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), any(), eq("SFI-OTHER"), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
         SemiFinishedInventory wip = wip();
         wip.setIntermediateBatchNo("SFI-STOCK");
         when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
@@ -550,8 +553,8 @@ class ProductionPlanSettlementTest {
 
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(manual), 10L);
 
-        verify(wipInventoryService, never()).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
-        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-OTHER", new BigDecimal("10"));
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-STOCK", new BigDecimal("30"));
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-OTHER", new BigDecimal("10"));
     }
 
     @Test
@@ -565,8 +568,8 @@ class ProductionPlanSettlementTest {
                 () -> service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L));
 
         assertTrue(ex.getMessage().contains("小结"), "safety-stock settlement must direct users to batch settlement");
-        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
-        verify(finishedGoodsFeedService, never()).consumeForFeedStrict(any(), any(), any(), any());
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any(), any());
+        verify(finishedGoodsFeedService, never()).consumeForFeedStrict(any(), any(), any(), any(), any());
     }
 
     @Test
