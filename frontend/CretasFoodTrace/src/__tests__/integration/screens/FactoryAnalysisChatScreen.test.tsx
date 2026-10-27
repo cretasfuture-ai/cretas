@@ -116,6 +116,26 @@ describe('FactoryAnalysisChatScreen', () => {
     expect(askFactoryAnalysis).toHaveBeenLastCalledWith({ question: '再看质量指标', contextId: 'ctx-latest' });
   });
 
+  it('carries the current route subject into manual first questions after a scope change', async () => {
+    const screen = renderScreen({ source: 'business', analysisSubject: 'sku-a' });
+    fireEvent.changeText(screen.getByTestId('factory-analysis-input'), '看产品产量');
+    fireEvent.press(screen.getByTestId('factory-analysis-send'));
+    await waitFor(() => expect(askFactoryAnalysis).toHaveBeenCalledTimes(1));
+    expect(askFactoryAnalysis).toHaveBeenNthCalledWith(1, {
+      question: '看产品产量', source: 'business', analysisSubject: 'sku-a',
+      year: new Date().getFullYear(), periodType: 'all', startMonth: 1, endMonth: 12,
+    });
+
+    screen.rerender(<FactoryAnalysisChatScreen route={{ key: 'FactoryAnalysisChat', name: 'FactoryAnalysisChat', params: { source: 'business', analysisSubject: 'sku-b' } } as never} navigation={{} as never} />);
+    fireEvent.changeText(screen.getByTestId('factory-analysis-input'), '再看产品成本');
+    fireEvent.press(screen.getByTestId('factory-analysis-send'));
+    await waitFor(() => expect(askFactoryAnalysis).toHaveBeenCalledTimes(2));
+    expect(askFactoryAnalysis).toHaveBeenNthCalledWith(2, {
+      question: '再看产品成本', source: 'business', analysisSubject: 'sku-b',
+      year: new Date().getFullYear(), periodType: 'all', startMonth: 1, endMonth: 12,
+    });
+  });
+
   it('renders every active answer chart and exports real canvas snapshots with answer metadata', async () => {
     (askFactoryAnalysis as jest.Mock).mockResolvedValueOnce(answered({
       selectedIds: [chart.id, chartTwo.id, chartThree.id],

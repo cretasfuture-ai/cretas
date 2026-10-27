@@ -22,6 +22,12 @@ function factoryAnalysisBodyMatches(body) {
   if (keys.length === followupKeys.length && keys.every((key, index) => key === followupKeys[index])) {
     return typeof body.contextId === 'string' && body.contextId.length > 0 && body.contextId.length <= 128;
   }
+  const clarificationKeys = ['analysisSubject', 'contextId', 'question'];
+  if (keys.length === clarificationKeys.length && keys.every((key, index) => key === clarificationKeys[index])) {
+    return typeof body.contextId === 'string' && body.contextId.length > 0 && body.contextId.length <= 128
+      && typeof body.analysisSubject === 'string' && body.analysisSubject.trim().length > 0
+      && body.analysisSubject.length <= 200;
+  }
   const requiredInitial = ['analysisSubject', 'endMonth', 'periodType', 'question', 'source', 'startMonth', 'year'];
   if (!requiredInitial.every((key) => keys.includes(key))) return false;
   const allowedInitial = new Set([...requiredInitial, 'uploadId']);

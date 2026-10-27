@@ -7,6 +7,7 @@ const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
 const EXPORT_PATH = '/smartbi-api/api/smartbi/financial-dashboard/export-excel';
 const QUESTION = '汇总当前库存、生产和销售表现';
+const JOINT_QUESTION = '关联生产、检验和成本做多表分析';
 
 function endpointPath(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
@@ -49,12 +50,23 @@ function familyId(candidate) {
   return candidate?.analysis?.familyId || candidate?.familyId || candidate?.id || null;
 }
 
+function isFusedCandidate(candidate) {
+  return familyId(candidate) === 'production.inspection_fused';
+}
+
+function hasThreeAxis(candidate) {
+  const option = candidate?.chart?.echartsOption;
+  return Array.isArray(option?.yAxis) && option.yAxis.length >= 3
+    && Array.isArray(option?.series) && option.series.length >= 3;
+}
+
 function summaryFromResponse(status, body, request) {
   const data = body?.data || {};
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const facts = Array.isArray(data.facts) ? data.facts : [];
   const catalog = Array.isArray(data.catalog) ? data.catalog : [];
   const families = new Set(recommendations.map(familyId).filter(Boolean).map(String));
+  const fusedRecommendations = recommendations.filter(isFusedCandidate);
   return {
     http200: status === 200,
     envelopeSuccess: body?.success === true,
@@ -70,6 +82,9 @@ function summaryFromResponse(status, body, request) {
     sourceErrorCount: Array.isArray(data.sourceErrors) ? data.sourceErrors.length : 0,
     limitationCount: Array.isArray(data.limitations) ? data.limitations.length : 0,
     familyCount: families.size,
+    fusedCount: fusedRecommendations.length,
+    fusedThreeAxis: fusedRecommendations.some(hasThreeAxis),
+    fusedTableRowCount: fusedRecommendations.reduce((count, item) => count + (Array.isArray(item?.tableData?.rows) ? item.tableData.rows.length : 0), 0),
     catalogCount: catalog.length,
     contextPresent: typeof data.contextId === 'string' && data.contextId.length > 0,
     followUpCount: Array.isArray(data.followUpQuestions) ? data.followUpQuestions.length : 0,
@@ -79,10 +94,51 @@ function summaryFromResponse(status, body, request) {
       ? JSON.stringify({ periodType: request.periodType, year: request.year, startMonth: request.startMonth, endMonth: request.endMonth })
       : null,
     requestContextPresent: typeof request.contextId === 'string' && request.contextId.length > 0,
+    requestSubjectPresent: typeof request.analysisSubject === 'string' && request.analysisSubject.trim().length > 0,
   };
 }
 
-function assess({ initial, followup, ui, details, exportAttempt }) {
+function assessJoint({ initial, selected, ui, details, exportAttempt }) {
+  const initialSummary = initial?.summary || {};
+  const selectedSummary = selected?.summary || {};
+  const hasFused = selectedSummary.fusedCount > 0;
+  const expectedLimitation = !hasFused
+    && selectedSummary.sourceErrorCount === 0
+    && selectedSummary.limitationCount > 0
+    && (selectedSummary.unavailable || selectedSummary.answered || selectedSummary.clarification);
+  const checks = {
+    initialClarification: initialSummary.clarification === true,
+    selectedSubjectRetried: selected?.attempted === true,
+    selectedSubjectProvided: selectedSummary.requestSubjectPresent === true,
+    selectedFactoryF006: selectedSummary.factoryScope === true,
+    selectedSourceBusiness: selectedSummary.source === 'business',
+    selectedAnswered: selectedSummary.answered === true,
+    fusedFamily: hasFused,
+    fusedThreeAxis: selectedSummary.fusedThreeAxis === true,
+    fusedTable: selectedSummary.fusedTableRowCount > 0,
+    fusedFacts: selectedSummary.factCount > 0,
+    detailAttempted: details?.attempted === true,
+    detailSucceeded: details?.success === true,
+    exportAttempted: exportAttempt?.attempted === true,
+    exportSucceeded: exportAttempt?.success === true,
+  };
+  const positivePass = Object.values(checks).every(Boolean);
+  return {
+    result: positivePass ? 'PASS' : expectedLimitation ? 'NEGATIVE_PASS' : 'UNVERIFIED',
+    positiveJoint: positivePass ? 'PASS' : 'UNVERIFIED_DATA_NOT_ELIGIBLE',
+    negativePass: expectedLimitation,
+    expectedLimitation,
+    checks,
+    status: selectedSummary.status || null,
+    note: positivePass
+      ? 'Real production.inspection_fused candidate passed family, three-axis, table, facts, details, and export checks.'
+      : expectedLimitation
+        ? 'Expected limitation recorded: no eligible complete joint dataset; positive joint acceptance remains UNVERIFIED_DATA_NOT_ELIGIBLE.'
+        : 'Joint analysis did not provide either a grounded fused candidate or an evidenced data limitation.',
+  };
+}
+
+function assess({ initial, followup, ui, details, exportAttempt, joint }) {
   const initialSummary = initial?.summary || {};
   const followupSummary = followup?.summary || {};
   const initialAnswered = initialSummary.answered === true;
@@ -103,6 +159,7 @@ function assess({ initial, followup, ui, details, exportAttempt }) {
     groundedFactsVisible: initialSummary.factCount === 0 || ui?.visibleFactCount > 0,
     limitationsVisible: initialSummary.limitationCount === 0 || ui?.visibleLimitationCount > 0,
     sourceErrorsVisible: initialSummary.sourceErrorCount === 0 || ui?.visibleSourceErrorCount > 0,
+    noSourceErrors: initialSummary.sourceErrorCount === 0 && followupSummary.sourceErrorCount === 0,
     followupContract: followupSummary.requestContract?.join(',') === 'contextId,question'
       && followupSummary.requestContextPresent === true,
     followupDifferentDimension: ui?.followupDifferentDimension === true,
@@ -112,11 +169,16 @@ function assess({ initial, followup, ui, details, exportAttempt }) {
     exportSucceeded: exportAttempt?.success === true,
   };
   const validChecks = Object.values(checks).every(Boolean);
-  const result = unavailable ? 'UNVERIFIED' : validChecks ? 'PASS' : 'UNVERIFIED';
+  const jointAssessment = joint || assessJoint({});
+  const acceptedJoint = jointAssessment.positiveJoint === 'PASS' || jointAssessment.negativePass === true;
+  const result = unavailable ? 'UNVERIFIED' : validChecks && acceptedJoint ? 'PASS' : 'UNVERIFIED';
   return {
     result,
     rootCauseClass: result === 'PASS' ? 'none' : 'tool',
     checks,
+    fullPass: result === 'PASS' && validChecks && jointAssessment.positiveJoint === 'PASS',
+    partialReadWarn: !checks.noSourceErrors,
+    joint: jointAssessment,
     status: initialSummary.status,
     followupStatus: followupSummary.status,
     chartCount: ui?.visibleChartCount || 0,
@@ -127,7 +189,11 @@ function assess({ initial, followup, ui, details, exportAttempt }) {
     clarificationIsUnverified: initialSummary.clarification ? result === 'UNVERIFIED' : true,
     note: unavailable || initialSummary.clarification
       ? 'AI returned unavailable/clarification; this run is UNVERIFIED and does not claim AI acceptance.'
-      : validChecks ? 'Grounded chart/fact, follow-up, details, and export checks passed.' : 'One or more grounded UI checks were incomplete.',
+      : validChecks && acceptedJoint
+        ? jointAssessment.negativePass
+          ? 'Overview checks passed; joint analysis recorded an expected data limitation without claiming a positive AI result.'
+          : 'Grounded overview/joint chart-fact, follow-up, details, and export checks passed.'
+        : 'One or more grounded UI checks were incomplete.',
   };
 }
 
@@ -259,12 +325,95 @@ async function run(ctx) {
           summary: summaryFromResponse(followupResponse.status(), followupBody, requestBody(followupResponse)),
         };
       }
+
+      // Start a fresh conversation for the explicit cross-table branch. The
+      // backend must first ask for a real product subject; the selected
+      // subject is taken from that response, never invented by the harness.
+      let jointInitial = { summary: {} };
+      let jointSelected = { attempted: false, summary: {} };
+      let jointSelectedBody = {};
+      let jointDetails = { attempted: false, success: false };
+      let jointExport = { attempted: false, success: false };
+      const newAnalysisButton = page.getByRole('button', { name: '新分析', exact: true });
+      if (await newAnalysisButton.count()) {
+        const jointInitialResponse = await waitForResponse(
+          page,
+          isAnalysisResponse,
+          async () => {
+            await newAnalysisButton.click();
+            await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
+            await page.getByTestId('factory-analysis-submit').click();
+          },
+        );
+        const jointInitialBody = await responseBody(jointInitialResponse);
+        jointInitial = {
+          status: jointInitialResponse.status(),
+          summary: summaryFromResponse(jointInitialResponse.status(), jointInitialBody, requestBody(jointInitialResponse)),
+        };
+
+        const subjects = Array.isArray(jointInitialBody?.data?.subjects) ? jointInitialBody.data.subjects : [];
+        if (jointInitial.summary.clarification && subjects.length > 0) {
+          const subject = subjects[0];
+          if (typeof subject?.label !== 'string' || !subject.label.trim()) throw new Error('Factory AI clarification returned an unusable subject label');
+          const subjectControl = page.getByTestId('factory-analysis-subject');
+          await subjectControl.click();
+          const subjectOption = page.locator('[role="option"], .el-select-dropdown__item')
+            .filter({ hasText: subject.label }).first();
+          await subjectOption.waitFor({ timeout: 15_000 });
+          await subjectOption.click();
+          const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
+          await retryButton.waitFor({ timeout: 15_000 });
+          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          jointSelectedBody = await responseBody(selectedResponse);
+          jointSelected = {
+            attempted: true,
+            status: selectedResponse.status(),
+            summary: summaryFromResponse(selectedResponse.status(), jointSelectedBody, requestBody(selectedResponse)),
+          };
+
+          if (jointSelected.summary.fusedCount > 0) {
+            const fusedId = jointSelectedBody?.data?.recommendations?.find(isFusedCandidate)?.id;
+            const fusedCard = fusedId ? page.getByTestId(`factory-chart-card-${fusedId}`) : null;
+            if (fusedCard) {
+              const detailsButton = fusedCard.getByRole('button', { name: '查看原始明细', exact: true });
+              if (await detailsButton.count()) {
+                jointDetails.attempted = true;
+                const detailsPromise = page.waitForResponse(isDetailsResponse, { timeout: 30_000 }).catch(() => null);
+                await detailsButton.click();
+                const detailsResponse = await detailsPromise;
+                const detailBody = detailsResponse ? await responseBody(detailsResponse) : {};
+                jointDetails.success = Boolean(detailsResponse && detailsResponse.status() === 200
+                  && detailBody.success === true && detailBody.data?.factoryId === 'F006'
+                  && Array.isArray(detailBody.data?.rows));
+                if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
+              }
+            }
+            const jointAnswer = page.locator('.turn--assistant:visible').last();
+            const jointExportButton = jointAnswer.locator('.answer-tools .el-button').first();
+            if (await jointExportButton.count()) {
+              jointExport.attempted = true;
+              const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
+              const exportResponsePromise = page.waitForResponse(isExportResponse, { timeout: 30_000 }).catch(() => null);
+              await jointExportButton.click();
+              const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
+              jointExport.success = Boolean(download && exportResponse && exportResponse.status() === 200);
+            }
+          }
+        }
+      }
       const assessment = assess({
         initial,
         followup,
         ui: { catalogVisibleCount, visibleChartCount, renderedCanvasCount, drawingErrorCount, visibleFactCount, visibleLimitationCount, visibleSourceErrorCount, followupDifferentDimension },
         details,
         exportAttempt,
+        joint: assessJoint({
+          initial: jointInitial,
+          selected: jointSelected,
+          ui: {},
+          details: jointDetails,
+          exportAttempt: jointExport,
+        }),
       });
       return {
         assessment,
@@ -273,6 +422,7 @@ async function run(ctx) {
         detailsSucceeded: details.success,
         exportAttempted: exportAttempt.attempted,
         exportSucceeded: exportAttempt.success,
+        joint: assessment.joint,
         screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : [])],
       };
     },
@@ -284,6 +434,7 @@ module.exports = {
   defaultEnabled: false,
   run,
   assess,
+  assessJoint,
   summaryFromResponse,
   isAnalysisResponse,
 };

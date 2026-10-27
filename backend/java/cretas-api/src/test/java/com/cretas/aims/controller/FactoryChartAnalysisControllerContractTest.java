@@ -8,6 +8,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.smartbi.FactoryChartAnalysisRequest;
+import com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisFailureRelay;
 import com.cretas.aims.exception.BusinessException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -25,6 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
 class FactoryChartAnalysisControllerContractTest {
@@ -32,6 +36,7 @@ class FactoryChartAnalysisControllerContractTest {
     @Mock ToolExecutionGateway gateway;
     @Mock AuthenticatedToolPrincipalFactory principalFactory;
     @Mock HttpServletRequest request;
+    @Mock FactoryChartAnalysisFailureRelay failureRelay;
 
     FactoryChartAnalysisController controller;
     ObjectMapper mapper;
@@ -39,7 +44,7 @@ class FactoryChartAnalysisControllerContractTest {
     @BeforeEach
     void setUp() {
         mapper = new ObjectMapper();
-        controller = new FactoryChartAnalysisController(gateway, principalFactory, mapper);
+        controller = new FactoryChartAnalysisController(gateway, principalFactory, mapper, failureRelay);
         when(request.getAttribute("factoryId")).thenReturn("F006");
         when(request.getAttribute("userId")).thenReturn("42");
         when(request.getAttribute("role")).thenReturn("factory_super_admin");
@@ -88,6 +93,24 @@ class FactoryChartAnalysisControllerContractTest {
         assertThatThrownBy(() -> controller.analyze("F006", body, request))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("invalid response");
+    }
+
+    @Test
+    void mapsOnlyOwnRelayedBusinessFailureAndConsumesExactlyOnce() {
+        ObjectNode failedPayload = mapper.createObjectNode();
+        when(gateway.execute(any())).thenReturn(new ToolExecutionResult(
+                "factory-analysis-test", "smartbi_factory_analysis", "1.0.0", "audit-1", "trace-1",
+                ToolExecutionStatus.FAILED, failedPayload, "tool failed", false));
+        when(failureRelay.consume(any())).thenReturn(java.util.Optional.of(
+                new FactoryChartAnalysisFailureRelay.Failure("request", 410, "固定失效提示")));
+
+        FactoryChartAnalysisRequest body = new FactoryChartAnalysisRequest();
+        body.setQuestion("本厂产量趋势");
+        assertThatThrownBy(() -> controller.analyze("F006", body, request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("固定失效提示");
+        verify(failureRelay, times(1)).consume(any());
+        verify(failureRelay, times(1)).clear(any());
     }
 
     private ToolExecutionResult result(ObjectNode payload) {

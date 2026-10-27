@@ -1,5 +1,8 @@
 """Financial Dashboard API — Chart generation, batch, analysis, PPT/PDF/Excel export."""
 import logging
+import json
+import copy
+from datetime import date
 from typing import Optional, Dict, List, Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -12,6 +15,7 @@ from smartbi.services.financial.base import _sanitize_for_json
 from smartbi.services.financial.export_conclusions import conclusion_rows as _conclusion_rows
 from smartbi.services.factory_charts.export_guard import ExportGuardRoute, validate_export
 from smartbi.services.factory_charts.details import canonical_period_label
+from smartbi.services.factory_charts import conversation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(route_class=ExportGuardRoute)
@@ -44,6 +48,30 @@ class FactorySelectionRequest(BaseModel):
         if any(not item or len(item) > 300 for item in value) or len(value) != len(set(value)):
             raise ValueError('图表标识必须非空、唯一且不超过300字符')
         return value
+
+
+class FactoryAnalysisRequest(BaseModel):
+    """Free-question factory analysis request (public camelCase aliases)."""
+    question: str = Field(..., min_length=1, max_length=1000)
+    source: Optional[Literal['upload', 'business']] = None
+    upload_id: Optional[int] = Field(None, ge=1, alias='uploadId')
+    factory_id: Optional[str] = Field(None, alias='factoryId')
+    year: Optional[int] = Field(None, ge=1900, le=2100)
+    period_type: Optional[Literal['all', 'year', 'month_range']] = Field(None, alias='periodType')
+    start_month: Optional[int] = Field(None, ge=1, le=12, alias='startMonth')
+    end_month: Optional[int] = Field(None, ge=1, le=12, alias='endMonth')
+    analysis_subject: Optional[str] = Field(None, max_length=300, alias='analysisSubject')
+    context_id: Optional[str] = Field(None, max_length=200, alias='contextId')
+
+    class Config:
+        allow_population_by_field_name = True
+        populate_by_name = True
+
+    @validator('question')
+    def question_is_not_blank(cls, value):
+        if not value.strip():
+            raise ValueError('问题不能为空')
+        return value.strip()
 
 
 @router.get('/factory-selection')
@@ -150,6 +178,332 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         'unavailable': gaps + extra_gaps,
         'sourceErrors': errors,
     }})
+
+
+def _recommendation_body(response: Any) -> dict[str, Any]:
+    """Read the existing recommendation route's JSON without changing its contract."""
+    if isinstance(response, JSONResponse):
+        status = int(response.status_code)
+        raw = response.body
+        payload = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
+        if status >= 400:
+            if isinstance(payload.get('data'), dict) and payload['data'].get('sourceErrors'):
+                return payload
+            raise HTTPException(status, payload.get('message', '工厂图表数据暂不可用'))
+        return payload
+    if isinstance(response, dict):
+        return response
+    raise HTTPException(503, '工厂图表数据暂不可用')
+
+
+def _recommendation_request(source: str, upload_id: Optional[int], factory_id: str,
+                            scope: dict[str, Any], *, guided: bool = False,
+                            analysis_subject: Optional[str] = None) -> FactoryRecommendationRequest:
+    return FactoryRecommendationRequest(
+        source=source, upload_id=upload_id, factory_id=factory_id,
+        year=int(scope.get('year', 2026)),
+        period_type=scope.get('period_type', 'all'),
+        start_month=int(scope.get('start_month', 1)),
+        end_month=int(scope.get('end_month', 12)),
+        include_optional=True, use_ai=False, guided=guided,
+        analysis_subject=analysis_subject,
+    )
+
+
+def _analysis_response(data: dict[str, Any], *, factory_id: str, source: str,
+                      question: str, status: str, answer: str, selected_ids: list[str],
+                      recommendations: list[dict[str, Any]], catalog: list[dict[str, Any]],
+                      facts: list[dict[str, Any]], limitations: list[str],
+                      context_id: str, subjects: list[dict[str, Any]],
+                      follow_up_questions: list[str]) -> dict[str, Any]:
+    # Keep the public response stable and camelCase while selected
+    # recommendations remain byte-for-byte the trusted legacy candidates.
+    return _sanitize_for_json({'success': True, 'data': {
+        'factoryId': factory_id,
+        'source': source,
+        'sourceLabel': data.get('sourceLabel'),
+        'period': data.get('period', {}),
+        'analysisSubject': data.get('analysisSubject'),
+        'analysisScopeLabel': data.get('analysisScopeLabel'),
+        'question': question,
+        'status': status,
+        'answer': answer,
+        'selectedIds': selected_ids,
+        'recommendations': recommendations,
+        'catalog': catalog,
+        'facts': facts,
+        'limitations': limitations,
+        'sourceErrors': data.get('sourceErrors') or [],
+        'followUpQuestions': follow_up_questions,
+        'contextId': context_id,
+        'subjects': subjects,
+    }, 'message': answer if status != 'answered' else '工厂分析完成'})
+
+
+@router.post('/factory-analysis')
+async def factory_analysis(request: FactoryAnalysisRequest, http_request: Request):
+    """Grounded free-question chart planning for the authenticated factory."""
+    from common.tenant_identity import require_same_factory
+
+    factory_id = require_same_factory(http_request, request.factory_id)
+    owner = conversation._owner(http_request)
+    context = conversation._context_for(request.context_id, owner) if request.context_id else None
+    if context is not None:
+        # Serialize a turn from context lookup through planner validation.  A
+        # second request cannot mix its source/scope with an in-flight turn.
+        async with context.lock:
+            return await _factory_analysis_turn(request, http_request, factory_id, owner, context)
+
+    source = request.source or 'business'
+    upload_id = request.upload_id
+    current_year = date.today().year
+    scope = {
+        'year': request.year or current_year,
+        'period_type': request.period_type or 'all',
+        'start_month': request.start_month or 1,
+        'end_month': request.end_month or 12,
+        'guided': True,
+        'analysis_subject': None,
+    }
+    explicit_scope, scope_error, explicit_present = conversation.apply_explicit_period(
+        scope, year=request.year, period_type=request.period_type,
+        start_month=request.start_month, end_month=request.end_month)
+    if scope_error:
+        raise HTTPException(422, scope_error)
+    scope = explicit_scope
+    rec_request = _recommendation_request(source, upload_id, factory_id, scope, guided=True)
+    recommendation_data = _recommendation_body(await factory_recommendations(rec_request, http_request))['data']
+    subjects = list(recommendation_data.get('subjects') or [])
+    resolved_subject, subject_error = conversation.resolve_subject(request.question, subjects, request.analysis_subject)
+    # Natural-language scope applies on the first turn as well as follow-ups.
+    # Resolve it against the fresh authorized catalogue before returning or
+    # invoking the planner; otherwise "去年/上个月" silently stayed current/all.
+    period_question = request.question
+    if resolved_subject:
+        for item in subjects:
+            if str(item.get('id')) == resolved_subject:
+                period_question = period_question.replace(str(item.get('label', '')), ' ')
+                break
+    natural_scope, natural_error = conversation.resolve_period(period_question, scope)
+    hard_explicit = (request.period_type in {'year', 'month_range'} or
+                     (request.period_type is None and any(value is not None for value in (request.year, request.start_month, request.end_month))))
+    if not natural_error and hard_explicit and natural_scope != scope:
+        natural_error = '问题中的自然语言期间与显式期间不一致，请只指定一个期间'
+    if natural_error:
+        context = conversation._new_context(owner, source, upload_id, scope, subjects,
+                                            question='', unresolved_product=False)
+        return await _render_factory_analysis_turn(request, http_request, factory_id, context,
+                                                    recommendation_data, subjects, None, period_error=natural_error, scope=scope)
+    if natural_scope != scope:
+        scope = natural_scope
+        rec_request = _recommendation_request(source, upload_id, factory_id, scope, guided=True,
+                                               analysis_subject=resolved_subject)
+        recommendation_data = _recommendation_body(await factory_recommendations(rec_request, http_request))['data']
+        subjects = list(recommendation_data.get('subjects') or subjects)
+    unresolved = bool(subject_error)
+    if resolved_subject:
+        scope['analysis_subject'] = resolved_subject
+        rec_request = _recommendation_request(source, upload_id, factory_id, scope, guided=True,
+                                               analysis_subject=resolved_subject)
+        recommendation_data = _recommendation_body(await factory_recommendations(rec_request, http_request))['data']
+        subjects = list(recommendation_data.get('subjects') or subjects)
+    context = conversation._new_context(owner, source, upload_id, scope, subjects,
+                                        question=request.question, unresolved_product=unresolved)
+    return await _render_factory_analysis_turn(request, http_request, factory_id, context,
+                                                recommendation_data, subjects, subject_error)
+
+
+async def _factory_analysis_turn(request: FactoryAnalysisRequest, http_request: Request,
+                                 factory_id: str, owner: tuple[str, int, str],
+                                 context: conversation.ConversationContext):
+    if request.source is not None and request.source != context.source:
+        raise HTTPException(403, '对话上下文数据源不可切换')
+    if request.upload_id is not None and request.upload_id != context.upload_id:
+        raise HTTPException(403, '对话上下文上传数据源不可切换')
+    # Every turn re-enters the old authorized recommendation route, so current
+    # price permission, source errors, and changed business data are rechecked.
+    base_scope = dict(context.scope)
+    base_scope['guided'] = True
+    base_request = _recommendation_request(context.source, context.upload_id, factory_id, base_scope,
+                                           guided=True, analysis_subject=base_scope.get('analysis_subject'))
+    recommendation_data = _recommendation_body(await factory_recommendations(base_request, http_request))['data']
+    subjects = list(recommendation_data.get('subjects') or [])
+    # Product resolution must use this turn's authorized catalogue; retaining
+    # only subject metadata in the context is not permission to reuse it.
+    current_subject_ids = {str(item.get('id')) for item in subjects if item.get('id')}
+    if context.scope.get('analysis_subject') and context.scope.get('analysis_subject') not in current_subject_ids:
+        context.scope = {**context.scope, 'analysis_subject': None, 'guided': True}
+        context.unresolved_product = True
+    scope, _, period_error = conversation.scope_for_context(
+        context, request.question, request.analysis_subject, subjects,
+        year=request.year, period_type=request.period_type,
+        start_month=request.start_month, end_month=request.end_month)
+    # Resolve against the current authorized product catalogue, never a stale
+    # context copy.  An unresolved turn cannot fall back to factory scope.
+    _, subject_error = conversation.resolve_subject(request.question, subjects, request.analysis_subject)
+    if period_error:
+        conversation.touch_context(context, request.question, [], unresolved_product=False,
+                                    unresolved_period=True, period_error=period_error)
+        return await _render_factory_analysis_turn(request, http_request, factory_id, context,
+                                                    recommendation_data, [], None, period_error=period_error, scope=scope)
+    if subject_error:
+        scope_error = subject_error
+        if conversation.is_cancel(request.question):
+            conversation.touch_context(context, request.question, [], unresolved_product=False)
+            return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                      question=request.question, status='clarification',
+                                      answer='已取消本轮产品限定分析。若要继续，请明确指定产品。', selected_ids=[],
+                                      recommendations=[], catalog=conversation.semantic_catalog(recommendation_data.get('recommendations') or []),
+                                      facts=[], limitations=[scope_error], context_id=context.context_id,
+                                      subjects=subjects, follow_up_questions=['请指定一个明确的产品名称或SKU'])
+        conversation.touch_context(context, request.question, [], unresolved_product=True,
+                                   unresolved_period=False, period_error=None)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='clarification',
+                                  answer=scope_error + '。请明确一个当前工厂产品，或明确取消。', selected_ids=[],
+                                  recommendations=[], catalog=conversation.semantic_catalog(recommendation_data.get('recommendations') or []),
+                                  facts=[], limitations=[scope_error], context_id=context.context_id,
+                                  subjects=subjects, follow_up_questions=['请指定一个明确的产品名称或SKU', '取消本轮分析'])
+    # An unsupported period must be corrected before a bare follow-up can
+    # broaden to the saved baseline.  A valid explicit/NL period clears it.
+    if context.unresolved_period and scope == context.scope:
+        conversation.touch_context(context, request.question, [], unresolved_product=False,
+                                   unresolved_period=True, period_error=context.period_error)
+        return await _render_factory_analysis_turn(request, http_request, factory_id, context,
+                                                    recommendation_data, [], None,
+                                                    period_error=context.period_error, scope=scope)
+    if context.unresolved_product and not scope.get('analysis_subject'):
+        if conversation.is_cancel(request.question):
+            conversation.touch_context(context, request.question, [], unresolved_product=False)
+            return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                      question=request.question, status='clarification',
+                                      answer='已取消本轮产品限定分析。', selected_ids=[], recommendations=[],
+                                      catalog=conversation.semantic_catalog(recommendation_data.get('recommendations') or []),
+                                      facts=[], limitations=['本轮分析已取消'], context_id=context.context_id,
+                                      subjects=subjects, follow_up_questions=['如需继续，请指定一个明确的产品名称或SKU'])
+        conversation.touch_context(context, request.question, [], unresolved_product=True)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='clarification',
+                                  answer='上一轮产品尚未明确，不能继续扩大到全厂。请指定产品或明确取消。', selected_ids=[],
+                                  recommendations=[], catalog=conversation.semantic_catalog(recommendation_data.get('recommendations') or []),
+                                  facts=[], limitations=['产品范围未解析'], context_id=context.context_id,
+                                  subjects=subjects, follow_up_questions=['请指定一个明确的产品名称或SKU', '取消本轮分析'])
+    if scope.get('analysis_subject') and scope.get('analysis_subject') != context.scope.get('analysis_subject'):
+        final_request = _recommendation_request(context.source, context.upload_id, factory_id, scope,
+                                                guided=True, analysis_subject=scope.get('analysis_subject'))
+        recommendation_data = _recommendation_body(await factory_recommendations(final_request, http_request))['data']
+        subjects = list(recommendation_data.get('subjects') or subjects)
+    elif scope != context.scope:
+        final_request = _recommendation_request(context.source, context.upload_id, factory_id, scope, guided=True,
+                                                analysis_subject=scope.get('analysis_subject'))
+        recommendation_data = _recommendation_body(await factory_recommendations(final_request, http_request))['data']
+        subjects = list(recommendation_data.get('subjects') or subjects)
+    return await _render_factory_analysis_turn(request, http_request, factory_id, context,
+                                                recommendation_data, subjects, None,
+                                                period_error=None, scope=scope)
+
+
+async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_request: Request,
+                                        factory_id: str, context: conversation.ConversationContext,
+                                        recommendation_data: dict[str, Any], subjects: list[dict[str, Any]],
+                                        subject_error: Optional[str],
+                                        period_error: Optional[str] = None,
+                                        scope: Optional[dict[str, Any]] = None):
+    catalog = conversation.semantic_catalog(recommendation_data.get('recommendations') or [])
+    effective_scope = scope or context.scope
+    if conversation.is_joint_intent(request.question) and not effective_scope.get('analysis_subject'):
+        conversation.touch_context(context, request.question, [], unresolved_product=True,
+                                    unresolved_period=False, period_error=None, scope=effective_scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='clarification',
+                                  answer='联合/多维度分析需要先明确一个当前工厂产品，不能把独立图表冒充联合结果。',
+                                  selected_ids=[], recommendations=[], catalog=catalog, facts=[],
+                                  limitations=['请先指定产品后再验证生产、质量、良品率与成本的真实联合关系'],
+                                  context_id=context.context_id, subjects=subjects,
+                                  follow_up_questions=['请指定一个明确的产品名称或SKU'])
+    if period_error:
+        conversation.touch_context(context, request.question, [], unresolved_product=False,
+                                    unresolved_period=True, period_error=period_error, scope=scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='clarification',
+                                  answer=period_error + '。请明确年份或月份区间。', selected_ids=[],
+                                  recommendations=[], catalog=catalog, facts=[], limitations=[period_error],
+                                  context_id=context.context_id, subjects=[],
+                                  follow_up_questions=['请明确年份或月份区间', '例如：2025年或2026年8月至10月'])
+    if subject_error:
+        conversation.touch_context(context, request.question, [], unresolved_product=True,
+                                   unresolved_period=False, period_error=None, scope=scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='clarification',
+                                  answer=subject_error + '。请明确一个当前工厂产品，或明确取消。', selected_ids=[],
+                                  recommendations=[], catalog=catalog, facts=[], limitations=[subject_error],
+                                  context_id=context.context_id, subjects=subjects,
+                                  follow_up_questions=['请指定一个明确的产品名称或SKU', '取消本轮分析'])
+    selected_ids, planner_mode = await conversation.plan(
+        request.question, catalog, context.history, factory_id=factory_id,
+        authorized_subjects=subjects,
+        authorized_recommendations=recommendation_data.get('recommendations') or [])
+    if planner_mode.get('mode') != 'ai':
+        conversation.touch_context(context, request.question, [], scope=scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='unavailable',
+                                  answer='AI图表规划暂不可用，未返回未经验证的图表或事实。', selected_ids=[],
+                                  recommendations=[], catalog=catalog, facts=[],
+                                  limitations=[planner_mode.get('reason', 'AI规划不可用')],
+                                  context_id=context.context_id, subjects=subjects,
+                                  follow_up_questions=['请稍后重试，或先从图表目录选择分析主题'])
+    by_id = conversation._catalog_by_id(recommendation_data.get('recommendations') or [])
+    if any(item_id not in by_id for item_id in selected_ids):
+        conversation.touch_context(context, request.question, [], scope=scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='unavailable',
+                                  answer='当前授权数据已变化，AI选择的图表无法重新验证。', selected_ids=[],
+                                  recommendations=[], catalog=catalog, facts=[],
+                                  limitations=['AI选择不在当前授权目录中'], context_id=context.context_id,
+                                  subjects=subjects, follow_up_questions=['请重新提问'])
+    selected = [by_id[item_id] for item_id in selected_ids]
+    if conversation.is_joint_intent(request.question):
+        required_family = conversation.joint_family_requirement(request.question)
+        fused_ids = {str(item.get('id')) for item in catalog
+                     if str(item.get('familyId', '')) == required_family}
+        if not fused_ids:
+            conversation.touch_context(context, request.question, [], unresolved_product=False,
+                                       unresolved_period=False, period_error=None, scope=scope)
+            return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                      question=request.question, status='unavailable',
+                                      answer='当前授权数据没有可验证的生产-质量-成本联合图表，未将独立图表冒充联合分析。',
+                                      selected_ids=[], recommendations=[], catalog=catalog, facts=[],
+                                      limitations=[f'缺少满足同厂、同产品、同单位且真实对齐的 {required_family} 联合关系'],
+                                      context_id=context.context_id, subjects=subjects,
+                                      follow_up_questions=['请稍后重试或改为单一维度分析'])
+        if not any(item_id in fused_ids for item_id in selected_ids):
+            conversation.touch_context(context, request.question, [], unresolved_product=False,
+                                       unresolved_period=False, period_error=None, scope=scope)
+            return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                      question=request.question, status='unavailable',
+                                      answer='当前规划未选择已验证的联合图表，未将独立图表冒充联合分析。',
+                                      selected_ids=[], recommendations=[], catalog=catalog, facts=[],
+                                      limitations=[f'联合分析必须由 {required_family} 真实候选支撑'],
+                                      context_id=context.context_id, subjects=subjects,
+                                      follow_up_questions=['请重新提问联合生产、质量与成本'])
+    facts = conversation.facts_for(selected)
+    limitations = conversation.limitations_for(selected, catalog, request.question)
+    if conversation.is_joint_intent(request.question):
+        required_family = conversation.joint_family_requirement(request.question)
+        for gap in recommendation_data.get('unavailable') or []:
+            if isinstance(gap, dict) and str(gap.get('id')) == required_family:
+                missing = gap.get('missing') if isinstance(gap.get('missing'), list) else []
+                limitations.extend(str(item) for item in missing[:8] if item)
+        limitations = list(dict.fromkeys(limitations))[:16]
+    answer = conversation.render_answer(request.question, selected, facts, limitations)
+    conversation.touch_context(context, request.question, selected_ids, unresolved_product=False,
+                               unresolved_period=False, period_error=None, scope=scope)
+    return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                              question=request.question, status='answered', answer=answer,
+                              selected_ids=selected_ids, recommendations=selected, catalog=catalog,
+                              facts=facts, limitations=limitations, context_id=context.context_id,
+                              subjects=subjects,
+                              follow_up_questions=['再看质量指标', '换一个分析维度', '查看更多图表'])
 
 
 class FinancialDashboardRequest(BaseModel):

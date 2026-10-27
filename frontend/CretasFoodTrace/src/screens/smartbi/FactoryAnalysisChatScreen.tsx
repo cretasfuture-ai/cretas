@@ -250,6 +250,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     const requestScope = scopeKeyRef.current;
     const token = ++requestToken.current;
     const requestContext = options.resetContext ? undefined : contextId || undefined;
+    const requestSubject = options.analysisSubject ?? (!requestContext ? route.params?.analysisSubject : undefined);
     const turnId = `factory-analysis-${token}`;
     setLoading(true);
     setContextExpired(false);
@@ -260,7 +261,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
         ? {
           question,
           contextId: requestContext,
-          ...(options.analysisSubject ? { analysisSubject: options.analysisSubject } : {}),
+          ...(requestSubject ? { analysisSubject: requestSubject } : {}),
         }
         : {
           question,
@@ -270,7 +271,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
           periodType: period.periodType,
           startMonth: period.startMonth,
           endMonth: period.endMonth,
-          ...(options.analysisSubject ? { analysisSubject: options.analysisSubject } : {}),
+          ...(requestSubject ? { analysisSubject: requestSubject } : {}),
         });
       if (token !== requestToken.current || requestAuth !== authEpoch() || requestScope !== scopeKeyRef.current) return;
       setContextId(data.contextId || null);
@@ -295,7 +296,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     setContextId(null);
     setLoading(false);
     setPendingQuestion(null);
-    setSelectedSubject(null);
+    setSelectedSubject(route.params?.analysisSubject ?? null);
     setContextExpired(false);
     setInput('');
     setExportJob(null);

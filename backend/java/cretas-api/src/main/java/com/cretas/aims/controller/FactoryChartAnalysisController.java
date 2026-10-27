@@ -8,6 +8,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisFailureRelay;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.smartbi.FactoryChartAnalysisRequest;
@@ -44,6 +45,7 @@ public class FactoryChartAnalysisController {
     private final ToolExecutionGateway gateway;
     private final AuthenticatedToolPrincipalFactory principalFactory;
     private final ObjectMapper objectMapper;
+    private final FactoryChartAnalysisFailureRelay failureRelay;
 
     @PostMapping("/factory-analysis")
     @RequirePermission({"analytics:read"})
@@ -72,26 +74,36 @@ public class FactoryChartAnalysisController {
         String requestId = "factory-analysis-" + UUID.randomUUID();
         String correlationId = attribute(httpRequest, "X-Correlation-ID");
         if (correlationId == null) correlationId = requestId;
-        ToolExecutionResult result = gateway.execute(new ToolExecutionCommand(
-                requestId, correlationId, requestId + "-trace", TOOL_NAME, DESCRIPTOR_VERSION,
-                objectMapper.valueToTree(request), principal, ToolExecutionSource.HTTP_CONTROLLER,
-                ToolExecutionMode.EXECUTE, java.util.Optional.empty(), java.util.Optional.empty(),
-                java.util.Optional.empty(), Instant.now().plusSeconds(90)));
-        if (result.status() != ToolExecutionStatus.SUCCEEDED || !result.payload().isObject()) {
-            int code = result.status() == ToolExecutionStatus.DENIED ? 403 : 400;
-            throw new BusinessException(code, result.message());
+        try {
+            ToolExecutionResult result = gateway.execute(new ToolExecutionCommand(
+                    requestId, correlationId, requestId + "-trace", TOOL_NAME, DESCRIPTOR_VERSION,
+                    objectMapper.valueToTree(request), principal, ToolExecutionSource.HTTP_CONTROLLER,
+                    ToolExecutionMode.EXECUTE, java.util.Optional.empty(), java.util.Optional.empty(),
+                    java.util.Optional.empty(), Instant.now().plusSeconds(90)));
+            if (result.status() != ToolExecutionStatus.SUCCEEDED || !result.payload().isObject()) {
+                var relayed = failureRelay.consume(requestId);
+                if (relayed.isPresent() && java.util.Set.of(403, 410, 422)
+                        .contains(relayed.get().statusCode())) {
+                    throw new BusinessException(
+                            relayed.get().statusCode(), relayed.get().message());
+                }
+                int code = result.status() == ToolExecutionStatus.DENIED ? 403 : 400;
+                throw new BusinessException(code, result.message());
+            }
+            Map<String, Object> payload = objectMapper.convertValue(
+                    result.payload(), new TypeReference<Map<String, Object>>() {});
+            Object data = payload.get("data");
+            // The tool envelope contains the Python envelope. Expose its data object directly so the
+            // mobile ApiResponse has one {success,data,message} layer, with sourceErrors untouched.
+            if (!(data instanceof Map<?, ?> pythonEnvelope)
+                    || !(pythonEnvelope.get("data") instanceof Map<?, ?>)) {
+                throw new BusinessException(502, "Factory analysis returned an invalid response");
+            }
+            data = ((Map<?, ?>) data).get("data");
+            return ApiResponse.success(data);
+        } finally {
+            failureRelay.clear(requestId);
         }
-        Map<String, Object> payload = objectMapper.convertValue(
-                result.payload(), new TypeReference<Map<String, Object>>() {});
-        Object data = payload.get("data");
-        // The tool envelope contains the Python envelope. Expose its data object directly so the
-        // mobile ApiResponse has one {success,data,message} layer, with sourceErrors untouched.
-        if (!(data instanceof Map<?, ?> pythonEnvelope)
-                || !(pythonEnvelope.get("data") instanceof Map<?, ?>)) {
-            throw new BusinessException(502, "Factory analysis returned an invalid response");
-        }
-        data = ((Map<?, ?>) data).get("data");
-        return ApiResponse.success(data);
     }
 
     private static String attribute(HttpServletRequest request, String name) {

@@ -643,13 +643,15 @@ def build(datasets, request, can_price):
             charts, gaps = [], [{'id': dataset.source, 'title': dataset.source, 'missing': ['所选期间没有来源记录']}]
         elif dataset.source.startswith(('cashflow ·', 'receivables ·')):
             charts, gaps = [], []
+        elif dataset.source.startswith('production-inspection-fused ·'):
+            charts, gaps = [], []
         elif dataset.source.startswith('historical-inventory ·'):
             charts, gaps = historical_inventory(dataset)
         elif dataset.financial:
             charts, gaps = financial_candidates(dataset, request, can_price)
         else:
             charts, gaps = factory_candidates(dataset, request, can_price)
-        business_source = dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory'}
+        business_source = dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused'}
         if not dataset.frame.empty and not business_source:
             from .financial_addons import build as financial_addons
             extra, extra_gaps = financial_addons(dataset, request, can_price)
@@ -698,6 +700,25 @@ def build(datasets, request, can_price):
         candidates.extend(c for c in charts if chart_size(c) <= 100 and len(charts) <= 100
                           and not c['chart']['echartsOption'].get('_factoryUnavailable'))
         unavailable.extend(gaps)
+    # This is the sole fixed multi-source relationship.  It consumes the
+    # already tenant-scoped production/quality frames; it never constructs SQL
+    # or treats separate single-source charts as joined evidence.
+    from .cross_table import build as build_cross_table
+    cross_candidates, cross_gaps = build_cross_table(datasets, request, can_price)
+    for chart in cross_candidates:
+        chart['chart']['echartsOption'].setdefault('tooltip', {})['renderMode'] = 'richText'
+        chart['aiMetric'] = chart['id'].split('@')[0]
+    if len(cross_candidates) > 100:
+        cross_gaps.append({'id': 'production.inspection_fused', 'title': '生产-检验-成本联合分析',
+                           'missing': ['联合候选超过100个安全上限，请缩小产品和单位范围']})
+    else:
+        for chart in cross_candidates:
+            if chart_size(chart) <= 100:
+                candidates.append(chart)
+            else:
+                cross_gaps.append({'id': 'production.inspection_fused', 'title': '生产-检验-成本联合分析',
+                                   'missing': ['联合图表日期点超过100个安全上限，请缩小期间后重试']})
+    unavailable.extend(cross_gaps)
     candidates.sort(key=lambda c: (c['priority'] != 'required', c['domain'], c['id']))
     unique_gaps = {}
     for gap in unavailable:

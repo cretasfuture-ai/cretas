@@ -11,6 +11,12 @@ function response(status, data, request) {
 }
 
 const candidate = (id, familyId) => ({ id, analysis: { familyId } });
+const fusedCandidate = {
+  id: 'production-inspection-fused-P1-kg',
+  analysis: { familyId: 'production.inspection_fused' },
+  chart: { echartsOption: { yAxis: [{}, {}, {}], series: [{}, {}, {}, {}] } },
+  tableData: { rows: [['2026-01-01', 100, 90, 90, 200]] },
+};
 
 function answeredData(overrides = {}) {
   return {
@@ -27,6 +33,14 @@ function answeredData(overrides = {}) {
   };
 }
 
+function jointAnsweredData(overrides = {}) {
+  return answeredData({
+    recommendations: [fusedCandidate],
+    facts: [{ id: 'joint-fact', label: '检验合格率', value: 90, unit: '%', source: '业务系统' }],
+    ...overrides,
+  });
+}
+
 function passAssessment(overrides = {}) {
   return scenario.assess({
     initial: response(200, answeredData(), { question: '敏感问题不应进入证据', source: 'business', periodType: 'all', year: 2026, startMonth: 1, endMonth: 12 }),
@@ -37,6 +51,12 @@ function passAssessment(overrides = {}) {
     },
     details: { attempted: true, success: true },
     exportAttempt: { attempted: true, success: true },
+    joint: scenario.assessJoint({
+      initial: response(200, answeredData({ status: 'clarification', recommendations: [], facts: [], subjects: [{ id: 'P1', label: 'P1' }] }), { question: '跨表问题' }),
+      selected: { attempted: true, ...response(200, jointAnsweredData(), { question: '跨表问题 P1', source: 'business', periodType: 'all', year: 2026, startMonth: 1, endMonth: 12, analysisSubject: 'P1' }) },
+      details: { attempted: true, success: true },
+      exportAttempt: { attempted: true, success: true },
+    }),
     ...overrides,
   });
 }
@@ -46,6 +66,7 @@ test('factory analysis assessment requires grounded chart/fact UI and successful
   assert.equal(result.result, 'PASS');
   assert.equal(result.checks.boundedFamilies, true);
   assert.equal(result.checks.samePeriod, true);
+  assert.equal(result.fullPass, true);
   assert.doesNotMatch(JSON.stringify(result), /敏感问题|敏感追问|12/);
 });
 
@@ -77,4 +98,51 @@ test('assessment rejects family overflow, scope drift, and a non-followup reques
   assert.equal(result.checks.sourceBusiness, false);
   assert.equal(result.checks.samePeriod, false);
   assert.equal(result.checks.followupContract, false);
+});
+
+test('expected joint data limitation is a negative PASS, never a positive joint PASS', () => {
+  const result = passAssessment({
+    joint: scenario.assessJoint({
+      initial: response(200, answeredData({ status: 'clarification', recommendations: [], facts: [], subjects: [{ id: 'P1', label: 'P1' }] }), { question: '跨表问题' }),
+      selected: { attempted: true, ...response(200, answeredData({
+        status: 'unavailable', contextId: null, recommendations: [], facts: [],
+        limitations: ['缺少同厂同产品且完整对齐的生产、真实质检与成本来源'],
+      }), { question: '跨表问题 P1', contextId: 'opaque-context', analysisSubject: 'P1' }) },
+      details: { attempted: false, success: false },
+      exportAttempt: { attempted: false, success: false },
+    }),
+  });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.fullPass, false);
+  assert.equal(result.joint.negativePass, true);
+  assert.equal(result.joint.positiveJoint, 'UNVERIFIED_DATA_NOT_ELIGIBLE');
+});
+
+test('an unavailable response with a fabricated fused candidate cannot pass joint acceptance', () => {
+  const result = passAssessment({
+    joint: scenario.assessJoint({
+      initial: response(200, answeredData({ status: 'clarification', recommendations: [], facts: [], subjects: [{ id: 'P1', label: 'P1' }] }), { question: '跨表问题' }),
+      selected: { attempted: true, ...response(200, jointAnsweredData({ status: 'unavailable', contextId: null }), { question: '跨表问题 P1', contextId: 'opaque-context', analysisSubject: 'P1' }) },
+      details: { attempted: true, success: true },
+      exportAttempt: { attempted: true, success: true },
+    }),
+  });
+  assert.equal(result.result, 'UNVERIFIED');
+  assert.equal(result.fullPass, false);
+  assert.equal(result.joint.positiveJoint, 'UNVERIFIED_DATA_NOT_ELIGIBLE');
+  assert.equal(result.joint.negativePass, false);
+});
+
+test('partial source reads warn and prevent a full PASS even when visible', () => {
+  const result = passAssessment({
+    followup: response(200, answeredData({ sourceErrors: [{ source: 'quality', message: '读取失败' }] }), { question: '再看质量', contextId: 'rotated-context' }),
+    ui: {
+      catalogVisibleCount: 2, visibleChartCount: 2, renderedCanvasCount: 2, drawingErrorCount: 0,
+      visibleFactCount: 1, visibleLimitationCount: 0, visibleSourceErrorCount: 1, followupDifferentDimension: true,
+    },
+  });
+  assert.equal(result.result, 'UNVERIFIED');
+  assert.equal(result.checks.noSourceErrors, false);
+  assert.equal(result.partialReadWarn, true);
+  assert.equal(result.fullPass, false);
 });

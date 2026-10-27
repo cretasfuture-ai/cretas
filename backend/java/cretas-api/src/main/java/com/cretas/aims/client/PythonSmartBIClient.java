@@ -2773,15 +2773,71 @@ public class PythonSmartBIClient {
         if (correlationId != null && !correlationId.isBlank()) {
             builder.header("X-Correlation-ID", correlationId);
         }
-        try {
-            Map<String, Object> response = executeWithRetry(builder.build(), Map.class);
-            if (response == null || !Boolean.TRUE.equals(response.get("success"))
-                    || !(response.get("data") instanceof Map<?, ?>)) {
-                throw new IOException("Factory analysis returned an unsuccessful response");
+        return executeFactoryChartAnalysisOnce(builder.build());
+    }
+
+    private Map<String, Object> executeFactoryChartAnalysisOnce(Request request) throws IOException {
+        if (!circuitBreaker.isCallPermitted()) {
+            throw new PythonServiceUnavailableException(
+                    circuitBreaker.getState().name(), circuitBreaker.getRemainingOpenTimeMs());
+        }
+        try (Response response = httpClient.newCall(request).execute()) {
+            int status = response.code();
+            if (Set.of(403, 410, 422).contains(status)) {
+                inspectErrorBodyBounded(response.body());
+                circuitBreaker.recordSuccess();
+                throw new FactoryAnalysisUpstreamException(status, factoryAnalysisMessage(status));
             }
-            return response;
-        } catch (PythonServiceUnavailableException failure) {
-            throw new IOException("Python SmartBI service is unavailable");
+            if (!response.isSuccessful()) {
+                inspectErrorBodyBounded(response.body());
+                throw sanitizedUpstreamFailure(status);
+            }
+            ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException("Factory analysis returned no response");
+            }
+            requireJsonResponse(body);
+            BoundedInputStream input = boundedStream(body, MAX_JSON_RESPONSE_BYTES);
+            try {
+                Map<String, Object> result = objectMapper.readValue(input, Map.class);
+                input.drainToEnd();
+                if (result == null || !Boolean.TRUE.equals(result.get("success"))
+                        || !(result.get("data") instanceof Map<?, ?>)) {
+                    throw new IOException("Factory analysis returned an invalid response");
+                }
+                circuitBreaker.recordSuccess();
+                return result;
+            } finally {
+                input.closeDelegate();
+            }
+        } catch (FactoryAnalysisUpstreamException businessFailure) {
+            throw businessFailure;
+        } catch (IOException transportFailure) {
+            circuitBreaker.recordFailure();
+            serviceAvailable.set(false);
+            throw transportFailure;
+        }
+    }
+
+    private static String factoryAnalysisMessage(int statusCode) {
+        return switch (statusCode) {
+            case 403 -> "无权访问本厂分析数据，请核对当前工厂和权限";
+            case 410 -> "本厂分析数据已失效，请刷新后重试";
+            case 422 -> "分析问题或范围无效，请调整后重试";
+            default -> "工厂分析请求未完成";
+        };
+    }
+
+    public static final class FactoryAnalysisUpstreamException extends IOException {
+        private final int statusCode;
+
+        public FactoryAnalysisUpstreamException(int statusCode, String message) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        public int statusCode() {
+            return statusCode;
         }
     }
 

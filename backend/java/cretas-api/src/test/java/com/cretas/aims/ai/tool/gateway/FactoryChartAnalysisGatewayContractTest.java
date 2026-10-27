@@ -5,6 +5,7 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal;
 import com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry.ResolvedTool;
 import com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool;
+import com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisFailureRelay;
 import com.cretas.aims.client.PythonSmartBIClient;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.config.FactoryToolConfigRepository;
@@ -34,6 +35,7 @@ class FactoryChartAnalysisGatewayContractTest {
     @Mock FactoryToolConfigRepository factoryToolConfigRepository;
     @Mock ToolExecutionLedgerService ledgerService;
     @Mock PythonSmartBIClient pythonClient;
+    @Mock FactoryChartAnalysisFailureRelay failureRelay;
 
     DefaultToolExecutionGateway gateway;
     FactoryChartAnalysisTool tool;
@@ -41,7 +43,7 @@ class FactoryChartAnalysisGatewayContractTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        tool = new FactoryChartAnalysisTool(pythonClient);
+        tool = new FactoryChartAnalysisTool(pythonClient, failureRelay);
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
         lenient().when(toolRegistry.getExecutor("smartbi_factory_analysis"))
                 .thenReturn(Optional.of(tool));

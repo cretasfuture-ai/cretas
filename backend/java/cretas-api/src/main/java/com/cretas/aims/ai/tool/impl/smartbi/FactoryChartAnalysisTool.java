@@ -24,6 +24,7 @@ public class FactoryChartAnalysisTool extends AbstractBusinessTool implements Eg
             "endMonth", "analysisSubject", "contextId");
 
     private final PythonSmartBIClient pythonClient;
+    private final FactoryChartAnalysisFailureRelay failureRelay;
 
     @Override
     public String getToolName() {
@@ -83,10 +84,15 @@ public class FactoryChartAnalysisTool extends AbstractBusinessTool implements Eg
         permit.requireExact(TOOL_NAME, getVersion(), permit.requestId(),
                 "python-smartbi.factory-chart-analysis.v1");
         String correlationId = MDC.get("correlationId");
-        return pythonClient.callFactoryChartAnalysis(
-                factoryId, userId, role,
-                correlationId == null || correlationId.isBlank() ? permit.requestId() : correlationId,
-                request);
+        try {
+            return pythonClient.callFactoryChartAnalysis(
+                    factoryId, userId, role,
+                    correlationId == null || correlationId.isBlank() ? permit.requestId() : correlationId,
+                    request);
+        } catch (PythonSmartBIClient.FactoryAnalysisUpstreamException businessFailure) {
+            failureRelay.record(permit.requestId(), businessFailure.statusCode(), businessFailure.getMessage());
+            throw businessFailure;
+        }
     }
 
     private static void copy(Map<String, Object> target, Map<String, Object> source,

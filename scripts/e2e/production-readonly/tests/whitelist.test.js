@@ -168,12 +168,18 @@ test('allows only the exact factory analysis contract while generic chat remains
     question: '再看质量', contextId: 'rotated-context',
   }).kind, 'readonly-post');
   assert.equal(classifyMutation('POST', url, undefined, {
+    question: '关联生产、检验和成本做多表分析', contextId: 'clarification-context', analysisSubject: 'P1',
+  }).kind, 'readonly-post');
+  assert.equal(classifyMutation('POST', url, undefined, {
     question: '分析', source: 'upload', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12,
     analysisSubject: null,
   }).kind, 'business-mutation');
   assert.equal(classifyMutation('POST', url, undefined, {
     question: '分析', source: 'business', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12,
     analysisSubject: null, role: 'factory_super_admin',
+  }).kind, 'business-mutation');
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '分析', contextId: 'clarification-context', analysisSubject: 'P1', actorId: 'unknown-actor',
   }).kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/smart-bi/factory-analysis/extra').kind, 'business-mutation');
 });
