@@ -187,6 +187,7 @@ function AnswerCard({
   isChartTurn: boolean;
   onActivateCharts: () => void;
 }) {
+  const [answerExpanded, setAnswerExpanded] = useState(false);
   if (!turn.answer) return null;
   const data = turn.answer;
   const charts = data.status === 'answered' ? answerRecommendations(data.recommendations) : [];
@@ -194,7 +195,21 @@ function AnswerCard({
     <Card.Content>
       <Text variant="titleMedium">{data.status === 'answered' ? '分析回答' : data.status === 'clarification' ? '需要补充范围' : '分析暂不可用'}</Text>
       <Text style={styles.sourceLine} testID={`factory-analysis-answer-metadata-${turn.id}`}>工厂{data.factoryId} · {data.sourceLabel || data.source} · {data.period?.label || '期间未提供'} · {data.analysisScopeLabel || '范围未提供'}</Text>
-      <Text style={styles.answerText}>{data.answer}</Text>
+      <Text
+        style={styles.answerText}
+        numberOfLines={answerExpanded ? undefined : 5}
+        ellipsizeMode="tail"
+        testID={`factory-analysis-answer-prose-${turn.id}`}
+      >{data.answer}</Text>
+      <Button
+        mode="text"
+        onPress={() => setAnswerExpanded(value => !value)}
+        accessibilityRole="button"
+        accessibilityLabel={answerExpanded ? '收起分析说明' : '展开分析说明'}
+        accessibilityState={{ expanded: answerExpanded }}
+        testID={`factory-analysis-answer-toggle-${turn.id}`}
+        style={styles.answerToggle}
+      >{answerExpanded ? '收起分析说明' : '展开分析说明'}</Button>
       {data.sourceErrors.length > 0 && <View style={styles.errorBox} testID="factory-analysis-source-errors"><Text style={styles.errorTitle}>数据来源错误</Text>{data.sourceErrors.map(item => <Text key={`${item.source}-${item.message}`} style={styles.errorText}>{item.source}：{item.message}</Text>)}</View>}
       {data.status === 'clarification' && data.subjects.length > 0 && <>
         <SubjectPicker subjects={data.subjects} selected={selectedSubject} onSelect={onSubjectSelect} />
@@ -503,6 +518,7 @@ const styles = StyleSheet.create({
   userQuestionText: { color: '#12344D' },
   answerCard: { borderRadius: 12, backgroundColor: '#FFFFFF' },
   answerText: { marginTop: 8, color: '#1D2939', lineHeight: 22 },
+  answerToggle: { alignSelf: 'flex-start', minHeight: 44, marginTop: 2 },
   sectionTitle: { marginTop: 14, marginBottom: 6 },
   factList: { gap: 8 },
   factRow: { borderRadius: 8, backgroundColor: '#F8FAFC', padding: 10 },

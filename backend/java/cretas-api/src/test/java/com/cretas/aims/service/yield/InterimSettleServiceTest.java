@@ -150,11 +150,11 @@ class InterimSettleServiceTest {
         when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         // SFI 投料严格扣减: 默认成功返回请求量 (= 实际出库量); 个别测试覆写为抛 (不足/缺失)。
-        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
         // ①c FG 投料严格扣减: 默认成功返回请求量; 个别测试覆写为抛 (不足/缺失)。
-        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
         // 盒⇄kg 成本口径折算: 默认 kg 源原样透传 (feedKg → feedKg); 盒装测试可覆写返回盒数/null。
         when(finishedGoodsFeedService.resolveFeedQtyInSourceUnit(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
@@ -355,9 +355,9 @@ class InterimSettleServiceTest {
 
         Map<String, Object> s = service.interimSettle(FACTORY, PLAN_ID, 7L);
 
-        verify(wipInventoryService, never()).consumeClerkSemiStrict(eq(FACTORY), eq("REWORK-1"), any());
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(eq(FACTORY), any(), eq("REWORK-1"), any());
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-PLAIN"), eq(new BigDecimal("30")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-PLAIN"), eq(new BigDecimal("30")));
         // semiOutQuantity 只数小结真扣的那 30, 不把报工时已扣的 8.5 再算一遍
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("30"));
     }
@@ -377,7 +377,7 @@ class InterimSettleServiceTest {
 
         // SFI OUT: 严格扣减 (consumeClerkSemiStrict), 直接按 SFI 的 intermediateBatchNo (非 semiAnchor)
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-STANDING-1"), eq(new BigDecimal("30")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-STANDING-1"), eq(new BigDecimal("30")));
         // SFI 投料绝不走容忍版 consumeClerkSemi (那条留给 priorStocked anchor 路径)
         verify(wipInventoryService, never()).consumeClerkSemi(any(), any(), any());
         // summary.semiOutQuantity = strict 返回的实际出库量 (= 30, 永不虚高)
@@ -479,7 +479,7 @@ class InterimSettleServiceTest {
 
         // 仅小结1 扣减一次, 小结2 该行已结跳过 (产出侧 interim_settled_at 戳幂等)
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-STANDING-2"), eq(new BigDecimal("25")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-STANDING-2"), eq(new BigDecimal("25")));
     }
 
     @Test
@@ -491,7 +491,7 @@ class InterimSettleServiceTest {
         when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
                 .thenReturn(new ArrayList<>());
         // 库存不足 → strict 抛 (禁止降级)
-        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY), eq("SFI-LOW-1"), eq(new BigDecimal("100"))))
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-LOW-1"), eq(new BigDecimal("100"))))
                 .thenThrow(new BusinessException(409, "半成品库存不足: SFI-LOW-1 余30 需100")
                         .withCode("SFI_INSUFFICIENT"));
 
@@ -519,9 +519,9 @@ class InterimSettleServiceTest {
 
         // FG OUT: 严格扣减 (consumeForFeedStrict), 直接按成品 batchNumber, 投料单位 kg
         verify(finishedGoodsFeedService, times(1))
-                .consumeForFeedStrict(eq(FACTORY), eq("FG-STANDING-1"), eq(new BigDecimal("30")), eq("kg"));
+                .consumeForFeedStrict(eq(FACTORY), any(), eq("FG-STANDING-1"), eq(new BigDecimal("30")), eq("kg"));
         // FG 投料绝不走 SFI 路径
-        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any());
+        verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any(), any());
         verify(wipInventoryService, never()).consumeClerkSemi(any(), any(), any());
         // summary.finishedGoodsOutQuantity = strict 返回的实际扣减量 (= 30)
         assertThat(s.get("finishedGoodsOutQuantity")).isEqualTo(new BigDecimal("30"));
@@ -644,7 +644,7 @@ class InterimSettleServiceTest {
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
         when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
                 .thenReturn(new ArrayList<>());
-        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY), eq("FG-LOW-1"), eq(new BigDecimal("100")), eq("kg")))
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY), any(), eq("FG-LOW-1"), eq(new BigDecimal("100")), eq("kg")))
                 .thenThrow(new BusinessException(409, "成品库存不足: FG-LOW-1 余30 需100")
                         .withCode("FG_INSUFFICIENT"));
 
@@ -670,7 +670,7 @@ class InterimSettleServiceTest {
 
         // 输入 SFI 扣减 (严格版, 禁止降级) —— 仍在小结完成 (延迟扣减不变)
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-IN-A"), eq(new BigDecimal("50")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-IN-A"), eq(new BigDecimal("50")));
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
         // #1252: 产出 SFI IN 已在保存时完成 → 小结不再 postClerkOutput (避免双重入库)
         verify(wipInventoryService, never()).postClerkOutput(
@@ -703,7 +703,7 @@ class InterimSettleServiceTest {
 
         // 输入 SFI 严格扣减 (禁止降级) —— 仍在小结完成
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-IN-GR"), eq(new BigDecimal("50")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-IN-GR"), eq(new BigDecimal("50")));
         assertThat(s.get("semiOutQuantity")).isEqualTo(new BigDecimal("50"));
         // #1252: 产出已在保存时入 SFI → 小结不再重复 postClerkOutput
         verify(wipInventoryService, never()).postClerkOutput(
@@ -735,7 +735,7 @@ class InterimSettleServiceTest {
         // ── 小结1: 道A 产出已在保存时入 anchorY (小结不再 postClerkOutput), 输入 SFI-RAW 严格扣 100 ──
         Map<String, Object> s1 = service.interimSettle(FACTORY, PLAN_ID, 7L);
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq("SFI-RAW"), eq(new BigDecimal("100")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq("SFI-RAW"), eq(new BigDecimal("100")));
         // #1252: 道A 产出已保存时入 SFI → 小结不 postClerkOutput
         verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         assertThat((BigDecimal) s1.get("semiInQuantity")).isEqualByComparingTo(BigDecimal.ZERO);
@@ -746,7 +746,7 @@ class InterimSettleServiceTest {
         assertThat(s2.get("sessionSeq")).isEqualTo(2);
         // anchorY 被严格扣减 60 (保存时入的 60 在此被消耗, 先升后降净平)
         verify(wipInventoryService, times(1))
-                .consumeClerkSemiStrict(eq(FACTORY), eq(anchorY), eq(new BigDecimal("60")));
+                .consumeClerkSemiStrict(eq(FACTORY), any(), eq(anchorY), eq(new BigDecimal("60")));
         // #1252: 全程小结从不 postClerkOutput (道A 保存时入, 道B 成品走 FG)
         verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
         // 道B 成品 → FG 入库

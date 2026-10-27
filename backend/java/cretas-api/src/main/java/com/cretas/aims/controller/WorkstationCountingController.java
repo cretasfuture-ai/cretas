@@ -81,7 +81,7 @@ public class WorkstationCountingController {
             @PathVariable String factoryId,
             @PathVariable @Parameter(description = "工位ID") String workstationId) {
         try {
-            WorkstationStopResult result = countingService.stopWorkstation(workstationId);
+            WorkstationStopResult result = countingService.stopWorkstation(factoryId, workstationId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", result.isSuccess());
@@ -116,7 +116,7 @@ public class WorkstationCountingController {
                 return ResponseEntity.badRequest().body(errorResponse("缺少图像数据"));
             }
 
-            CountingResult result = countingService.processFrame(workstationId, imageBase64);
+            CountingResult result = countingService.processFrame(factoryId, workstationId, imageBase64);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", result.isSuccess());
@@ -153,7 +153,7 @@ public class WorkstationCountingController {
                 }
             }
 
-            CountingResult result = countingService.manualCount(workstationId, manualWeight);
+            CountingResult result = countingService.manualCount(factoryId, workstationId, manualWeight);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", result.isSuccess());
@@ -188,7 +188,7 @@ public class WorkstationCountingController {
                 return ResponseEntity.badRequest().body(errorResponse("缺少标签图像数据"));
             }
 
-            LabelVerifyResult result = countingService.verifyLabel(workstationId, labelImageBase64);
+            LabelVerifyResult result = countingService.verifyLabel(factoryId, workstationId, labelImageBase64);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", result.isSuccess());
@@ -216,7 +216,7 @@ public class WorkstationCountingController {
             @PathVariable String factoryId,
             @PathVariable @Parameter(description = "工位ID") String workstationId) {
         try {
-            WorkstationStatusInfo status = countingService.getWorkstationStatus(workstationId);
+            WorkstationStatusInfo status = countingService.getWorkstationStatus(factoryId, workstationId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);

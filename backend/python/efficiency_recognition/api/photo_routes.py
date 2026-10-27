@@ -12,7 +12,8 @@ import base64
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import Depends, APIRouter, UploadFile, File, Form
+from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
 from ..services.video_analyzer import VideoEfficiencyAnalyzer
@@ -57,7 +58,7 @@ class CountingOnlyRequest(BaseModel):
 
 # ==================== API 端点 ====================
 
-@router.post("/analyze")
+@router.post("/analyze", dependencies=[Depends(require_camera_snapshot_ai)])
 async def analyze_photo(
     file: UploadFile = File(...),
     analysis_type: str = Form("counting"),
@@ -124,7 +125,7 @@ async def analyze_photo(
         }
 
 
-@router.post("/analyze-base64")
+@router.post("/analyze-base64", dependencies=[Depends(require_camera_snapshot_ai)])
 async def analyze_photo_base64(request: PhotoAnalysisRequest):
     """
     分析 Base64 编码的照片
@@ -172,7 +173,7 @@ async def analyze_photo_base64(request: PhotoAnalysisRequest):
         }
 
 
-@router.post("/ocr")
+@router.post("/ocr", dependencies=[Depends(require_camera_snapshot_ai)])
 async def ocr_only(
     file: UploadFile = File(...),
     expected_batch_number: Optional[str] = Form(None)
@@ -217,7 +218,7 @@ async def ocr_only(
         }
 
 
-@router.post("/ocr-base64")
+@router.post("/ocr-base64", dependencies=[Depends(require_camera_snapshot_ai)])
 async def ocr_only_base64(request: OcrOnlyRequest):
     """仅OCR识别（Base64输入）"""
     analyzer = get_analyzer()
@@ -249,7 +250,7 @@ async def ocr_only_base64(request: OcrOnlyRequest):
         }
 
 
-@router.post("/counting")
+@router.post("/counting", dependencies=[Depends(require_camera_snapshot_ai)])
 async def counting_only(
     file: UploadFile = File(...),
     expected_product_type: Optional[str] = Form(None)
@@ -293,7 +294,7 @@ async def counting_only(
         }
 
 
-@router.post("/counting-base64")
+@router.post("/counting-base64", dependencies=[Depends(require_camera_snapshot_ai)])
 async def counting_only_base64(request: CountingOnlyRequest):
     """仅货品计数（Base64输入）"""
     analyzer = get_analyzer()

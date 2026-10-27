@@ -117,6 +117,7 @@ class ProductionPlanCancelConcurrencyTest {
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
         ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "workProcessTaskService", workProcessTaskService);
 
         lenient().when(productionPlanRepository.save(any(ProductionPlan.class)))

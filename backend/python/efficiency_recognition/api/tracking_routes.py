@@ -16,7 +16,8 @@ import base64
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import Depends, APIRouter, UploadFile, File, Form, HTTPException
+from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
 from ..services.tracking_service import get_tracking_service
@@ -52,7 +53,7 @@ class LinkWorkerRequest(BaseModel):
 
 # ==================== API 端点 ====================
 
-@router.post("/identify")
+@router.post("/identify", dependencies=[Depends(require_camera_snapshot_ai)])
 async def identify_workers(request: IdentifyRequest):
     """
     识别画面中的工人并匹配追踪记录
@@ -115,7 +116,7 @@ async def identify_workers(request: IdentifyRequest):
         }
 
 
-@router.post("/identify-upload")
+@router.post("/identify-upload", dependencies=[Depends(require_camera_snapshot_ai)])
 async def identify_workers_upload(
     file: UploadFile = File(...),
     camera_id: str = Form(...)

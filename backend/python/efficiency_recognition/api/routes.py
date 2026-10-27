@@ -21,7 +21,8 @@ import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks
+from fastapi import Depends, APIRouter, UploadFile, File, Form, BackgroundTasks
+from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
 from ..services.video_analyzer import VideoEfficiencyAnalyzer
@@ -165,7 +166,7 @@ class UnifiedAnalysisResponse(BaseModel):
 
 # ==================== API 端点 ====================
 
-@router.post("/analyze-frame", response_model=FrameAnalysisResponse)
+@router.post("/analyze-frame", dependencies=[Depends(require_camera_snapshot_ai)], response_model=FrameAnalysisResponse)
 async def analyze_frame(request: FrameAnalysisRequest):
     """分析单帧图片，可选自动提交到Java后端"""
     analyzer = get_analyzer()
@@ -270,7 +271,7 @@ async def analyze_frame(request: FrameAnalysisRequest):
         )
 
 
-@router.post("/analyze-frame-upload")
+@router.post("/analyze-frame-upload", dependencies=[Depends(require_camera_snapshot_ai)])
 async def analyze_frame_upload(
     file: UploadFile = File(...),
     camera_id: str = Form(None),
@@ -301,7 +302,7 @@ async def analyze_frame_upload(
     return await analyze_frame(request)
 
 
-@router.post("/analyze-video-upload")
+@router.post("/analyze-video-upload", dependencies=[Depends(require_camera_snapshot_ai)])
 async def analyze_video_upload(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -368,7 +369,7 @@ async def get_task_result(task_id: str):
     }
 
 
-@router.post("/batch-analyze")
+@router.post("/batch-analyze", dependencies=[Depends(require_camera_snapshot_ai)])
 async def batch_analyze(request: BatchAnalysisRequest):
     """批量分析多帧图片"""
     analyzer = get_analyzer()
@@ -515,7 +516,7 @@ async def health_check():
 
 # ==================== 统一分析入口 (Phase 4) ====================
 
-@router.post("/analyze", response_model=UnifiedAnalysisResponse)
+@router.post("/analyze", dependencies=[Depends(require_camera_snapshot_ai)], response_model=UnifiedAnalysisResponse)
 async def unified_analyze(request: UnifiedAnalysisRequest):
     """
     统一分析入口，支持多种分析类型
@@ -631,7 +632,7 @@ class EdgeTriggeredAnalysisResponse(BaseModel):
     error: Optional[str] = None
 
 
-@router.post("/edge-triggered", response_model=EdgeTriggeredAnalysisResponse)
+@router.post("/edge-triggered", dependencies=[Depends(require_camera_snapshot_ai)], response_model=EdgeTriggeredAnalysisResponse)
 async def edge_triggered_analyze(request: EdgeTriggeredAnalysisRequest):
     """
     边缘触发分析入口

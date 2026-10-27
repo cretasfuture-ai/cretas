@@ -1,5 +1,6 @@
 package com.cretas.aims.service.wip.impl;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
@@ -73,6 +74,8 @@ class QcReleaseSemiDrawContractTest {
     @Mock private WorkflowTaskPortRepository workflowTaskPortRepo;
     @Mock private ApplicationEventPublisher eventPublisher;
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks
     private WipInventoryServiceImpl service;
 
@@ -113,7 +116,7 @@ class QcReleaseSemiDrawContractTest {
         void pendingIsRejected() {
             stubLockedRow(sfi("WIP-P", SemiFinishedInventory.InspectionStatus.PENDING));
             BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.validateSourceWip(FACTORY, "WIP-P", new BigDecimal("10"), "kg", null));
+                    () -> service.validateSourceWip(FACTORY, Owner.COMPANY, "WIP-P", new BigDecimal("10"), "kg", null));
             assertEquals(QcInspectionGuard.SEMI_PENDING, ex.getErrorCode());
             assertEquals(409, ex.getCode());
         }
@@ -124,9 +127,9 @@ class QcReleaseSemiDrawContractTest {
             SemiFinishedInventory row = sfi("WIP-PART", SemiFinishedInventory.InspectionStatus.PENDING);
             row.setInspectionPendingQuantity(new BigDecimal("20"));
             stubLockedRow(row);
-            assertEquals(row, service.validateSourceWip(FACTORY, "WIP-PART", new BigDecimal("30"), "kg", null));
+            assertEquals(row, service.validateSourceWip(FACTORY, Owner.COMPANY, "WIP-PART", new BigDecimal("30"), "kg", null));
             BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.validateSourceWip(FACTORY, "WIP-PART", new BigDecimal("31"), "kg", null));
+                    () -> service.validateSourceWip(FACTORY, Owner.COMPANY, "WIP-PART", new BigDecimal("31"), "kg", null));
             assertEquals(QcInspectionGuard.SEMI_PENDING, ex.getErrorCode());
         }
 
@@ -135,7 +138,7 @@ class QcReleaseSemiDrawContractTest {
         void rejectedIsRejected() {
             stubLockedRow(sfi("WIP-R", SemiFinishedInventory.InspectionStatus.REJECTED));
             BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.validateSourceWip(FACTORY, "WIP-R", new BigDecimal("10"), "kg", null));
+                    () -> service.validateSourceWip(FACTORY, Owner.COMPANY, "WIP-R", new BigDecimal("10"), "kg", null));
             assertEquals(QcInspectionGuard.SEMI_REJECTED, ex.getErrorCode());
         }
 
@@ -144,7 +147,7 @@ class QcReleaseSemiDrawContractTest {
         void releasedIsAllowed() {
             SemiFinishedInventory row = sfi("WIP-OK", SemiFinishedInventory.InspectionStatus.RELEASED);
             stubLockedRow(row);
-            assertEquals(row, service.validateSourceWip(FACTORY, "WIP-OK", new BigDecimal("10"), "kg", null));
+            assertEquals(row, service.validateSourceWip(FACTORY, Owner.COMPANY, "WIP-OK", new BigDecimal("10"), "kg", null));
         }
 
         @Test
@@ -152,7 +155,7 @@ class QcReleaseSemiDrawContractTest {
         void noSwitchIsUnaffected() {
             SemiFinishedInventory row = sfi("WIP-LEGACY", null);
             stubLockedRow(row);
-            assertEquals(row, service.validateSourceWip(FACTORY, "WIP-LEGACY", new BigDecimal("10"), "kg", null));
+            assertEquals(row, service.validateSourceWip(FACTORY, Owner.COMPANY, "WIP-LEGACY", new BigDecimal("10"), "kg", null));
         }
     }
 
@@ -168,7 +171,7 @@ class QcReleaseSemiDrawContractTest {
             SemiFinishedInventory row = sfi("CLK-SEMI-P", SemiFinishedInventory.InspectionStatus.PENDING);
             stubLockedRow(row);
             BusinessException ex = assertThrows(BusinessException.class,
-                    () -> service.consumeClerkSemiStrict(FACTORY, "CLK-SEMI-P", new BigDecimal("5")));
+                    () -> service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, "CLK-SEMI-P", new BigDecimal("5")));
             assertEquals(QcInspectionGuard.SEMI_PENDING, ex.getErrorCode());
             assertEquals(0, BigDecimal.ZERO.compareTo(row.getConsumedQuantity()));
             verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
@@ -179,7 +182,7 @@ class QcReleaseSemiDrawContractTest {
         void releasedIsDeducted() {
             SemiFinishedInventory row = sfi("CLK-SEMI-OK", SemiFinishedInventory.InspectionStatus.RELEASED);
             stubLockedRow(row);
-            BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, "CLK-SEMI-OK", new BigDecimal("5"));
+            BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, "CLK-SEMI-OK", new BigDecimal("5"));
             assertEquals(0, new BigDecimal("5").compareTo(drawn));
             assertEquals(0, new BigDecimal("45").compareTo(row.getAvailableQuantity()));
         }
@@ -189,7 +192,7 @@ class QcReleaseSemiDrawContractTest {
         void noSwitchIsUnaffected() {
             SemiFinishedInventory row = sfi("CLK-SEMI-LEGACY", null);
             stubLockedRow(row);
-            BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, "CLK-SEMI-LEGACY", new BigDecimal("5"));
+            BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, "CLK-SEMI-LEGACY", new BigDecimal("5"));
             assertEquals(0, new BigDecimal("5").compareTo(drawn));
         }
     }

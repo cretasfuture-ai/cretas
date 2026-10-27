@@ -373,8 +373,10 @@ public class IsapiDeviceController {
     @Operation(summary = "获取订阅状态")
     public ApiResponse<Map<String, Object>> getSubscriptionStatus(@PathVariable String factoryId) {
         Map<String, Object> status = new HashMap<>();
-        status.put("activeCount", subscriptionService.getActiveSubscriptionCount());
-        status.put("activeDevices", subscriptionService.getActiveSubscriptionIds());
+        // 只给本厂的: 订阅表全进程共用
+        List<String> ownSubscribed = subscriptionService.getActiveSubscriptionIds(factoryId);
+        status.put("activeCount", ownSubscribed.size());
+        status.put("activeDevices", ownSubscribed);
         return ApiResponse.success(status);
     }
 
@@ -650,7 +652,7 @@ public class IsapiDeviceController {
         summary.put("deviceStatus", deviceService.getStatusStatistics(factoryId));
 
         // 订阅状态
-        summary.put("subscriptionCount", subscriptionService.getActiveSubscriptionCount());
+        summary.put("subscriptionCount", subscriptionService.getActiveSubscriptionIds(factoryId).size());
 
         return ApiResponse.success(summary);
     }

@@ -247,6 +247,40 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(0);
   });
 
+  it('keeps the pending product question and resolved period through the real picker change', async () => {
+    const originalQuestion = '生产、质检和成本如何关联？';
+    h.post.mockResolvedValueOnce(response({
+      status: 'clarification', answer: '请选择需要分析的产品。', recommendations: [], facts: [],
+      period: { label: '2025年9–10月', year: 2025, periodType: 'month_range', startMonth: 9, endMonth: 10 },
+      contextId: 'ctx-choose-product', subjects: [{ id: 'sku-1', label: '产品甲' }],
+    })).mockResolvedValueOnce(response({ analysisSubject: 'sku-1', answer: '已核对产品甲的生产与质检来源。' }));
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue(originalQuestion);
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+
+    page!.findComponent({ name: 'ElSelectV2' }).vm.$emit('update:modelValue', 'sku-1');
+    await flushPromises();
+    expect(h.post).toHaveBeenCalledTimes(1);
+    expect(page!.text()).toContain('请选择需要分析的产品。');
+    expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(0);
+    const retry = page!.findAll('button').find(button => button.text() === '按当前产品重试');
+    expect(retry?.exists()).toBe(true);
+    await retry!.trigger('click');
+    await flushPromises();
+    expect(h.post.mock.calls[1]).toEqual(['F006', {
+      question: originalQuestion, source: 'business', analysisSubject: 'sku-1',
+      year: 2025, periodType: 'month_range', startMonth: 9, endMonth: 10,
+    }]);
+    expect(page!.text()).toContain('已核对产品甲的生产与质检来源。');
+
+    page!.findComponent({ name: 'ElSelectV2' }).vm.$emit('update:modelValue', 'sku-2');
+    await flushPromises();
+    expect(page!.text()).not.toContain('已核对产品甲的生产与质检来源。');
+    expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(0);
+    expect(page!.findAll('button').some(button => button.text() === '按当前产品重试')).toBe(false);
+  });
+
   it('drops stale upload results after an identity epoch switch and unmounts raw details', async () => {
     let resolveOld!: (value: unknown) => void;
     h.uploads.mockReset()

@@ -57,8 +57,12 @@ class CameraSnapshotCapturePathsSwitchTest {
         ProcessingStageRecordRepository stages = mock(ProcessingStageRecordRepository.class);
         when(stages.findTopByProductionBatchIdAndStageTypeOrderByStartTimeDesc(any(), any()))
                 .thenReturn(Optional.of(ProcessingStageRecord.builder().passCount(0).build()));
+        com.cretas.aims.repository.ProductionBatchRepository batches =
+                mock(com.cretas.aims.repository.ProductionBatchRepository.class);
+        when(batches.findByIdAndFactoryId(9L, FACTORY))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.ProductionBatch()));
         return new WorkstationCountingService(vision, consent, mock(IotDataService.class), stages,
-                mock(BatchWorkSessionRepository.class), mapper);
+                mock(BatchWorkSessionRepository.class), batches, mapper);
     }
 
     private String start(WorkstationCountingService service) {
@@ -71,7 +75,7 @@ class CameraSnapshotCapturePathsSwitchTest {
         WorkstationCountingService service = workstation();
         String ws = start(service);
 
-        WorkstationCountingService.CountingResult r = service.processFrame(ws, "aW1n");
+        WorkstationCountingService.CountingResult r = service.processFrame(FACTORY, ws, "aW1n");
 
         verify(vision, never()).analyzeCompletionGesture(anyString(), any());
         assertThat(r.isCounted()).isFalse();
@@ -83,7 +87,7 @@ class CameraSnapshotCapturePathsSwitchTest {
         when(settings.findAiSettingsByFactoryId(FACTORY)).thenReturn(ON);
         WorkstationCountingService service = workstation();
 
-        service.processFrame(start(service), "aW1n");
+        service.processFrame(FACTORY, start(service), "aW1n");
 
         verify(vision).analyzeCompletionGesture(anyString(), any());
     }
@@ -103,7 +107,7 @@ class CameraSnapshotCapturePathsSwitchTest {
                 .deviceId("cam-1").channelId(1).enabled(true).triggerOnVmd(true).build();
         when(configs.findById(5L)).thenReturn(Optional.of(config));
         when(configs.findEnabledConfigsByDeviceId("cam-1")).thenReturn(List.of(config));
-        when(devices.capturePicture(anyString(), anyInt()))
+        when(devices.capturePicture(anyString(), anyString(), anyInt()))
                 .thenReturn(IsapiCaptureDTO.builder().success(false).error("stub: 已抓帧").build());
         return new AutoLabelRecognitionService(configs, records, devices, vision, consent);
     }
@@ -114,7 +118,7 @@ class CameraSnapshotCapturePathsSwitchTest {
 
         service.onIsapiEvent(FACTORY, "VMD", "cam-1", "evt-1");
 
-        verify(devices, never()).capturePicture(anyString(), anyInt());
+        verify(devices, never()).capturePicture(anyString(), anyString(), anyInt());
         verify(records, never()).save(any());
     }
 
@@ -122,9 +126,9 @@ class CameraSnapshotCapturePathsSwitchTest {
     void manualTriggerLeavesAFailedRecordSayingWhyWithoutCapturing() {
         AutoLabelRecognitionService service = labels();
 
-        LabelRecognitionRecord record = service.manualRecognize(5L);
+        LabelRecognitionRecord record = service.manualRecognize(FACTORY, 5L);
 
-        verify(devices, never()).capturePicture(anyString(), anyInt());
+        verify(devices, never()).capturePicture(anyString(), anyString(), anyInt());
         assertThat(record.getErrorMessage()).isEqualTo(CameraSnapshotAiConsent.DISABLED_MESSAGE);
     }
 
@@ -134,8 +138,8 @@ class CameraSnapshotCapturePathsSwitchTest {
         AutoLabelRecognitionService service = labels();
 
         service.onIsapiEvent(FACTORY, "VMD", "cam-1", "evt-1");
-        service.manualRecognize(5L);
+        service.manualRecognize(FACTORY, 5L);
 
-        verify(devices, org.mockito.Mockito.times(2)).capturePicture(anyString(), anyInt());
+        verify(devices, org.mockito.Mockito.times(2)).capturePicture(anyString(), anyString(), anyInt());
     }
 }

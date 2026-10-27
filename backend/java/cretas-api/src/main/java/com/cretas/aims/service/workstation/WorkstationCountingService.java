@@ -53,6 +53,7 @@ public class WorkstationCountingService {
     private final IotDataService iotDataService;
     private final ProcessingStageRecordRepository stageRecordRepository;
     private final BatchWorkSessionRepository workSessionRepository;
+    private final com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
     private final ObjectMapper objectMapper;
 
     // 工位状态缓存 (workstationId -> WorkstationState)
@@ -78,6 +79,17 @@ public class WorkstationCountingService {
 
         log.info("初始化工位计数: workstationId={}, workstationName={}, factoryId={}, batchId={}",
                 workstationId, config.getWorkstationName(), config.getFactoryId(), config.getProductionBatchId());
+
+        // 工位 id 可由前端传入: 别厂正在用的工位不能被覆盖
+        WorkstationState running = workstationStates.get(workstationId);
+        if (running != null && !java.util.Objects.equals(running.getFactoryId(), config.getFactoryId())) {
+            throw new IllegalArgumentException("工位 ID 已被占用: " + workstationId);
+        }
+        // 计数会写进该批次的加工环节记录: 批次必须是本厂的
+        if (config.getProductionBatchId() != null && productionBatchRepository
+                .findByIdAndFactoryId(config.getProductionBatchId(), config.getFactoryId()).isEmpty()) {
+            throw new IllegalArgumentException("生产批次不存在: " + config.getProductionBatchId());
+        }
 
         // 检查是否有活跃的工作会话
         Optional<BatchWorkSession> activeSession = findActiveWorkSession(
@@ -121,8 +133,11 @@ public class WorkstationCountingService {
      * @return 停止结果（含统计数据）
      */
     @Transactional
-    public WorkstationStopResult stopWorkstation(String workstationId) {
-        WorkstationState state = workstationStates.remove(workstationId);
+    public WorkstationStopResult stopWorkstation(String factoryId, String workstationId) {
+        WorkstationState state = ownState(factoryId, workstationId);
+        if (state != null) {
+            workstationStates.remove(workstationId, state);
+        }
 
         if (state == null) {
             return WorkstationStopResult.builder()
@@ -187,8 +202,8 @@ public class WorkstationCountingService {
      * @return 处理结果
      */
     @Transactional
-    public CountingResult processFrame(String workstationId, String imageBase64) {
-        WorkstationState state = workstationStates.get(workstationId);
+    public CountingResult processFrame(String factoryId, String workstationId, String imageBase64) {
+        WorkstationState state = ownState(factoryId, workstationId);
 
         if (state == null || state.getStatus() != WorkstationStatus.ACTIVE) {
             return CountingResult.builder()
@@ -286,8 +301,8 @@ public class WorkstationCountingService {
      * @return 计数结果
      */
     @Transactional
-    public CountingResult manualCount(String workstationId, BigDecimal manualWeight) {
-        WorkstationState state = workstationStates.get(workstationId);
+    public CountingResult manualCount(String factoryId, String workstationId, BigDecimal manualWeight) {
+        WorkstationState state = ownState(factoryId, workstationId);
 
         if (state == null || state.getStatus() != WorkstationStatus.ACTIVE) {
             return CountingResult.builder()
@@ -333,8 +348,8 @@ public class WorkstationCountingService {
      * @param labelImageBase64 标签图像 (Base64)
      * @return 验证结果
      */
-    public LabelVerifyResult verifyLabel(String workstationId, String labelImageBase64) {
-        WorkstationState state = workstationStates.get(workstationId);
+    public LabelVerifyResult verifyLabel(String factoryId, String workstationId, String labelImageBase64) {
+        WorkstationState state = ownState(factoryId, workstationId);
 
         if (state == null) {
             return LabelVerifyResult.builder()
@@ -403,8 +418,8 @@ public class WorkstationCountingService {
      * @param workstationId 工位ID
      * @return 工位状态
      */
-    public WorkstationStatusInfo getWorkstationStatus(String workstationId) {
-        WorkstationState state = workstationStates.get(workstationId);
+    public WorkstationStatusInfo getWorkstationStatus(String factoryId, String workstationId) {
+        WorkstationState state = ownState(factoryId, workstationId);
 
         if (state == null) {
             return WorkstationStatusInfo.builder()
@@ -441,7 +456,7 @@ public class WorkstationCountingService {
 
         for (WorkstationState state : workstationStates.values()) {
             if (factoryId == null || factoryId.equals(state.getFactoryId())) {
-                result.add(getWorkstationStatus(state.getWorkstationId()));
+                result.add(getWorkstationStatus(state.getFactoryId(), state.getWorkstationId()));
             }
         }
 
@@ -479,6 +494,12 @@ public class WorkstationCountingService {
                 .build();
 
         return stageRecordRepository.save(record);
+    }
+
+    /** 本厂的工位会话: 工位表全进程共用, 别厂的工位与未启动一样 */
+    private WorkstationState ownState(String factoryId, String workstationId) {
+        WorkstationState state = workstationStates.get(workstationId);
+        return state != null && factoryId != null && factoryId.equals(state.getFactoryId()) ? state : null;
     }
 
     private Optional<BatchWorkSession> findActiveWorkSession(Long batchId, Long workerId) {
