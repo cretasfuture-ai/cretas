@@ -48,19 +48,21 @@ public class EdgeGatewayService {
     }
 
     // 边缘网关注册表（内存缓存）
-    private final Map<String, EdgeGatewayInfo> registeredGateways = new HashMap<>();
+    private final Map<String, EdgeGatewayInfo> registeredGateways = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 处理边缘上传数据
      */
     @Transactional
-    public EdgeUploadResponse processUpload(EdgeUploadRequest request) {
+    public EdgeUploadResponse processUpload(String factoryId, EdgeUploadRequest request) {
         log.info("收到边缘上传: gateway={}, device={}, type={}",
                 request.getGatewayId(), request.getDeviceId(), request.getUploadType());
 
-        // 验证设备存在
-        IsapiDevice device = deviceRepository.findById(request.getDeviceId())
-                .orElse(null);
+        // 验证设备存在且属于登录账号的工厂 (否则可以往别厂设备上写心跳、事件和图片)
+        IsapiDevice device = factoryId == null || request.getDeviceId() == null ? null
+                : deviceRepository.findById(request.getDeviceId())
+                        .filter(d -> factoryId.equals(d.getFactoryId()))
+                        .orElse(null);
 
         if (device == null) {
             log.warn("设备不存在: {}", request.getDeviceId());
@@ -197,9 +199,10 @@ public class EdgeGatewayService {
         log.debug("收到心跳: device={}, gateway={}", device.getDeviceName(), request.getGatewayId());
 
         // 更新网关信息
+        // 网关表全进程共用: 按「工厂 + 网关 id」登记, 列表只给本厂的
         EdgeGatewayInfo gatewayInfo = registeredGateways.computeIfAbsent(
-                request.getGatewayId(),
-                k -> new EdgeGatewayInfo(request.getGatewayId())
+                device.getFactoryId() + ":" + request.getGatewayId(),
+                k -> new EdgeGatewayInfo(request.getGatewayId(), device.getFactoryId())
         );
         gatewayInfo.lastHeartbeat = LocalDateTime.now();
         gatewayInfo.deviceCount++;
@@ -258,21 +261,31 @@ public class EdgeGatewayService {
     /**
      * 获取已注册的网关列表
      */
-    public Map<String, EdgeGatewayInfo> getRegisteredGateways() {
-        return new HashMap<>(registeredGateways);
+    public Map<String, EdgeGatewayInfo> getRegisteredGateways(String factoryId) {
+        Map<String, EdgeGatewayInfo> own = new HashMap<>();
+        registeredGateways.values().stream()
+                .filter(g -> factoryId != null && factoryId.equals(g.factoryId))
+                .forEach(g -> own.put(g.gatewayId, g));
+        return own;
     }
 
     /**
      * 根据 MAC 地址或 IP 地址查找设备 ID
      * 用于海康摄像头直接推送事件时匹配设备
      */
-    public String findDeviceIdByMacOrIp(String macAddress, String ipAddress) {
+    public String findDeviceIdByMacOrIp(String factoryId, String macAddress, String ipAddress) {
+        if (factoryId == null) {
+            return null;
+        }
         // 优先通过 MAC 地址查找
         if (macAddress != null && !macAddress.isEmpty()) {
             // 规范化 MAC 地址格式
             String normalizedMac = macAddress.toLowerCase().replace("-", ":").replace(".", ":");
-            IsapiDevice device = deviceRepository.findByMacAddressIgnoreCase(normalizedMac)
-                    .or(() -> deviceRepository.findByMacAddressIgnoreCase(macAddress))
+            // 只在本厂设备里找 (私网 MAC / IP 在不同工厂可能重复)
+            IsapiDevice device = deviceRepository.findByFactoryIdAndMacAddressIgnoreCase(factoryId, normalizedMac)
+                    .stream().findFirst()
+                    .or(() -> deviceRepository.findByFactoryIdAndMacAddressIgnoreCase(factoryId, macAddress)
+                            .stream().findFirst())
                     .orElse(null);
             if (device != null) {
                 log.info("通过 MAC 地址找到设备: mac={}, deviceId={}", macAddress, device.getId());
@@ -282,7 +295,9 @@ public class EdgeGatewayService {
 
         // 通过 IP 地址查找
         if (ipAddress != null && !ipAddress.isEmpty()) {
-            IsapiDevice device = deviceRepository.findByIpAddress(ipAddress).orElse(null);
+            IsapiDevice device = deviceRepository.findByFactoryIdAndIpAddress(factoryId, ipAddress)
+                    .stream().findFirst()
+                    .orElse(null);
             if (device != null) {
                 log.info("通过 IP 地址找到设备: ip={}, deviceId={}", ipAddress, device.getId());
                 return device.getId();
@@ -301,9 +316,12 @@ public class EdgeGatewayService {
         public LocalDateTime firstSeen;
         public LocalDateTime lastHeartbeat;
         public int deviceCount;
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public final String factoryId;
 
-        public EdgeGatewayInfo(String gatewayId) {
+        public EdgeGatewayInfo(String gatewayId, String factoryId) {
             this.gatewayId = gatewayId;
+            this.factoryId = factoryId;
             this.firstSeen = LocalDateTime.now();
             this.lastHeartbeat = LocalDateTime.now();
             this.deviceCount = 0;

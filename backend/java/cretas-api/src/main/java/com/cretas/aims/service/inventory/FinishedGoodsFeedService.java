@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -33,6 +34,12 @@ public interface FinishedGoodsFeedService {
     List<FinishedGoodsStockItem> listAvailableForFeed(String factoryId, String productTypeId);
 
     /**
+     * 投料下拉 (缺口 16): 在同族过滤之外只留与领用计划同一归属的成品 ——
+     * 代工客户的成品只出现在同一客户的计划里。{@code consumer} null = 不按归属过滤 (非领用视图)。
+     */
+    List<FinishedGoodsStockItem> listAvailableForFeed(String factoryId, String productTypeId, Owner consumer);
+
+    /**
      * 小结严格扣减成品批次 (FG 投料, 禁止降级)。镜像 {@code WipInventoryService.consumeClerkSemiStrict}。
      *
      * <p>🔴 <b>扣减口径 = 减 {@code producedQuantity} (对齐成品报损 SCRAP 惯例, 绝不动 shippedQuantity)</b>:
@@ -57,12 +64,15 @@ public interface FinishedGoodsFeedService {
      * 据此返回值精确还回 (口径一致)。悲观行锁串行化并发扣减。必须在调用方 {@code @Transactional} 内执行。
      *
      * @param factoryId   工厂 ID (factory-scoped 🔒)
+     * @param consumer    领用计划的归属 (缺口 16): 与成品批次归属不同 ⇒ 409 跨客户领料, 一点不扣。
+     *                    ⛔ 不提供省略它的重载 —— 每个投料点必须自己说清楚是替谁领。
      * @param batchNumber 成品批次号 (= {@code FinishedGoodsBatch.batchNumber})
      * @param qty         本次投料量 (kg; ≤0 → 返回 0, 不扣)
      * @param feedUnit    投料计量单位 (逐道投料量为 kg → 传 "kg"); 计数单位成品经 gramsPerUnit 折算, 其它单位不一致 loud-fail
      * @return 实际扣减量 (成品原生单位: kg 源=qty, 盒源=折算盒数; 不足/缺失/盒装缺克重/单位不一致即抛)
      */
-    BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty, String feedUnit);
+    BigDecimal consumeForFeedStrict(String factoryId, Owner consumer, String batchNumber, BigDecimal qty,
+                                    String feedUnit);
 
     /**
      * 盒⇄kg 成本口径 — 把 kg 投料量折算为成品来源的<b>原生单位</b>数量 (计数单位 盒/个/件/只 → 盒数; kg 源 → 原值),

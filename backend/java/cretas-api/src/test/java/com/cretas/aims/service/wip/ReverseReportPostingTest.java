@@ -71,7 +71,7 @@ class ReverseReportPostingTest {
     void setUp() {
         svc = new WipInventoryServiceImpl(wipRepo, txnRepo, reportRepo, lineageEdgeRepo,
                 taskRepo, workProcessRepo, productTypeRepo, workflowInstanceRepo, workflowTaskPortRepo,
-                productFamilyResolver, eventPublisher);
+                productFamilyResolver, eventPublisher, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
 
         report = new ProductionReport();
         report.setId(23814L);

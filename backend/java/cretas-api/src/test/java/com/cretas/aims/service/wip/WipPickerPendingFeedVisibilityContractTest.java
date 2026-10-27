@@ -66,6 +66,8 @@ class WipPickerPendingFeedVisibilityContractTest {
 
     private static final String FACTORY_ID = "F006";
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks
     private WipInventoryServiceImpl service;
 

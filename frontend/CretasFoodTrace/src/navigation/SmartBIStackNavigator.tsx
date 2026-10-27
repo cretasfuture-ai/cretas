@@ -39,6 +39,7 @@ import CustomerRFMScreen from '../screens/smartbi/CustomerRFMScreen';
 import CashFlowScreen from '../screens/smartbi/CashFlowScreen';
 import FinancialRatiosScreen from '../screens/smartbi/FinancialRatiosScreen';
 import FactoryChartsScreen from '../screens/smartbi/FactoryChartsScreen';
+import FactoryAnalysisChatScreen from '../screens/smartbi/FactoryAnalysisChatScreen';
 import FactoryChartDetails from '../screens/smartbi/FactoryChartDetails';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
 
@@ -172,6 +173,11 @@ export function SmartBIStackNavigator() {
         name="FactoryCharts"
         component={FactoryChartsScreen}
         options={{ title: '工厂经营分析' }}
+      />
+      <Stack.Screen
+        name="FactoryAnalysisChat"
+        component={FactoryAnalysisChatScreen}
+        options={{ title: '工厂经营分析 AI' }}
       />
       <Stack.Screen
         name="FactoryChartDetails"

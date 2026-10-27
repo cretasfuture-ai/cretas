@@ -182,6 +182,11 @@ def test_sql_contracts_are_parameterized_and_do_not_allocate_costs():
     assert 'i.id AS "订单行ID"' in sources.SALES_SKU_SQL
     assert 'i.id AS "订单行ID"' in sources.SALES_SKU_NO_PRICE_SQL
     assert 'i.id AS "行ID"' not in sources.SALES_SKU_SQL
+    for sql in (sources.SALES_SKU_SQL, sources.SALES_SKU_NO_PRICE_SQL):
+        assert "LEFT JOIN product_types pt" in sql
+        assert "pt.factory_id = so.factory_id" in sql
+        assert "pt.deleted_at IS NULL" in sql
+        assert 'COALESCE(NULLIF(BTRIM(pt.name), \'\'), NULLIF(BTRIM(i.product_name), \'\'))' in sql
 
 
 @pytest.mark.asyncio

@@ -291,7 +291,7 @@ class WipOutputCorrectionPostgresContractTest {
                 ProductFamilyResolver productFamilyResolver) {
             return new WipInventoryServiceImpl(wipRepository, txnRepository, reportRepository, lineageRepository,
                     taskRepository, workProcessRepository, productTypeRepository, workflowInstanceRepository,
-                    workflowTaskPortRepository, productFamilyResolver, event -> { });
+                    workflowTaskPortRepository, productFamilyResolver, event -> { }, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         }
     }
 

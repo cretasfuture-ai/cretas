@@ -28,6 +28,36 @@ def test_sku_total_is_never_allocated_when_order_reconciliation_is_missing():
     assert "订单行小计" in " ".join(gap["missing"])
 
 
+def test_sku_sales_aggregates_by_id_but_displays_names_without_merging_same_names():
+    frame = pd.DataFrame([
+        {"产品ID": "sku-1", "产品": "同名产品", "订单行ID": "L1", "订单ID": "O1",
+         "订单行小计": 12, "订单总额": 12},
+        {"产品ID": "sku-2", "产品": "同名产品", "订单行ID": "L2", "订单ID": "O2",
+         "订单行小计": 8, "订单总额": 8},
+    ])
+    candidates, gaps = build(frame, {"sku": "产品ID", "product": "产品", "order_id": "订单ID",
+                                     "line_id": "订单行ID", "sku_subtotal": "订单行小计",
+                                     "order_total": "订单总额"}, req(), True, "sales")
+    assert not gaps
+    points = next(c for c in candidates if c["id"].startswith("sales.sku"))["tableData"]
+    assert {row["label"] for row in points} == {"同名产品（sku-1）", "同名产品（sku-2）"}
+    assert {row["value"] for row in points} == {8.0, 12.0}
+
+
+def test_sku_sales_explicitly_marks_missing_product_name_fallback():
+    frame = pd.DataFrame([
+        {"产品ID": "sku-1", "产品": None, "订单行ID": "L1", "订单ID": "O1",
+         "订单行小计": 12, "订单总额": 12},
+    ])
+    candidates, gaps = build(frame, {"sku": "产品ID", "product": "产品", "order_id": "订单ID",
+                                     "line_id": "订单行ID", "sku_subtotal": "订单行小计",
+                                     "order_total": "订单总额"}, req(), True, "sales")
+    assert not gaps
+    candidate = next(c for c in candidates if c["id"].startswith("sales.sku"))
+    assert candidate["tableData"] == [{"label": "sku-1", "value": 12.0}]
+    assert any("缺少产品名称" in item for item in candidate["findings"]["attention"])
+
+
 def test_quality_trend_requires_complete_nonnegative_operands():
     frame = pd.DataFrame([{"日期": "2026-01-01", "合格数": 9, "不良数": 1}, {"日期": "2026-01-02", "合格数": None, "不良数": 1}])
     candidates, gaps = build(frame, {"date": "日期", "pass": "合格数", "fail": "不良数"}, req(), False, "quality")

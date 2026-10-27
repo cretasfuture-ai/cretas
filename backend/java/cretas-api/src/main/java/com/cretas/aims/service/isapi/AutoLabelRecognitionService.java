@@ -47,6 +47,7 @@ public class AutoLabelRecognitionService {
     private final LabelRecognitionRecordRepository recordRepository;
     private final IsapiDeviceService isapiDeviceService;
     private final DashScopeVisionClient visionClient;
+    private final CameraSnapshotAiConsent cameraAiConsent;
 
     @Autowired(required = false)
     private SimpMessagingTemplate messagingTemplate;
@@ -68,10 +69,11 @@ public class AutoLabelRecognitionService {
     }
 
     /**
-     * 获取单个配置
+     * 获取单个配置 (只认本厂: 别厂的配置与不存在同样报「配置不存在」)
      */
-    public LabelRecognitionConfig getConfig(Long configId) {
+    public LabelRecognitionConfig getConfig(String factoryId, Long configId) {
         return configRepository.findById(configId)
+                .filter(c -> factoryId != null && factoryId.equals(c.getFactoryId()))
                 .orElseThrow(() -> new IllegalArgumentException("配置不存在: " + configId));
     }
 
@@ -80,6 +82,10 @@ public class AutoLabelRecognitionService {
      */
     @Transactional
     public LabelRecognitionConfig createConfig(String factoryId, LabelRecognitionConfig config) {
+        // 摄像头必须是本厂的: 否则可以把配置挂到别厂摄像头上, 再手动触发去抓别厂画面
+        isapiDeviceService.getDevice(factoryId, config.getDeviceId());
+        // 请求体直接绑实体: 带上别厂配置的 id 就会变成「覆盖那条配置」, 新建一律不认传入的 id
+        config.setId(null);
         // 检查设备是否已有配置
         if (configRepository.existsByFactoryIdAndDeviceId(factoryId, config.getDeviceId())) {
             throw new IllegalArgumentException("该设备已有标签识别配置");
@@ -98,8 +104,8 @@ public class AutoLabelRecognitionService {
      * 更新配置
      */
     @Transactional
-    public LabelRecognitionConfig updateConfig(Long configId, LabelRecognitionConfig updates) {
-        LabelRecognitionConfig config = getConfig(configId);
+    public LabelRecognitionConfig updateConfig(String factoryId, Long configId, LabelRecognitionConfig updates) {
+        LabelRecognitionConfig config = getConfig(factoryId, configId);
 
         if (updates.getConfigName() != null) {
             config.setConfigName(updates.getConfigName());
@@ -130,8 +136,8 @@ public class AutoLabelRecognitionService {
      * 启用/禁用配置
      */
     @Transactional
-    public LabelRecognitionConfig toggleConfig(Long configId, boolean enabled) {
-        LabelRecognitionConfig config = getConfig(configId);
+    public LabelRecognitionConfig toggleConfig(String factoryId, Long configId, boolean enabled) {
+        LabelRecognitionConfig config = getConfig(factoryId, configId);
         config.setEnabled(enabled);
         config = configRepository.save(config);
 
@@ -144,8 +150,8 @@ public class AutoLabelRecognitionService {
      * 删除配置
      */
     @Transactional
-    public void deleteConfig(Long configId) {
-        LabelRecognitionConfig config = getConfig(configId);
+    public void deleteConfig(String factoryId, Long configId) {
+        LabelRecognitionConfig config = getConfig(factoryId, configId);
         config.softDelete();
         configRepository.save(config);
 
@@ -164,9 +170,16 @@ public class AutoLabelRecognitionService {
      */
     public void onIsapiEvent(String factoryId, String eventType, String deviceId, String eventId) {
         log.debug("收到ISAPI事件: factoryId={}, eventType={}, deviceId={}", factoryId, eventType, deviceId);
+        // 抓帧交给 AI 识别默认关闭: 本厂没开就不抓帧、不发、也不留记录
+        if (!cameraAiConsent.enabled(factoryId)) {
+            log.debug("本厂未开启摄像头抓拍 AI 识别, 跳过标签识别: factoryId={}", factoryId);
+            return;
+        }
 
-        // 查询该设备的启用配置
-        List<LabelRecognitionConfig> configs = configRepository.findEnabledConfigsByDeviceId(deviceId);
+        // 查询该设备的启用配置 (只取本厂的: 设备 id 不带工厂, 别厂挂上来的配置不触发)
+        List<LabelRecognitionConfig> configs = configRepository.findEnabledConfigsByDeviceId(deviceId).stream()
+                .filter(c -> factoryId != null && factoryId.equals(c.getFactoryId()))
+                .toList();
 
         for (LabelRecognitionConfig config : configs) {
             // 检查是否应该触发
@@ -219,8 +232,8 @@ public class AutoLabelRecognitionService {
      * @return 识别记录
      */
     @Transactional
-    public LabelRecognitionRecord manualRecognize(Long configId) {
-        LabelRecognitionConfig config = getConfig(configId);
+    public LabelRecognitionRecord manualRecognize(String factoryId, Long configId) {
+        LabelRecognitionConfig config = getConfig(factoryId, configId);
 
         log.info("手动触发标签识别: configId={}", configId);
 
@@ -245,11 +258,17 @@ public class AutoLabelRecognitionService {
         LocalDateTime recognitionTime = LocalDateTime.now();
         byte[] capturedImageData = null;
 
+        if (!cameraAiConsent.enabled(config.getFactoryId())) {
+            return saveFailedRecord(config, triggerType, eventId, recognitionTime,
+                    null, CameraSnapshotAiConsent.DISABLED_MESSAGE, startTime);
+        }
+
         try {
             // 1. 抓帧
             log.debug("开始抓帧: deviceId={}, channelId={}", config.getDeviceId(), config.getChannelId());
+            // 按配置所属工厂抓帧: 摄像头不是该厂的就不抓 (存量配置里可能有挂错厂的)
             IsapiCaptureDTO capture = isapiDeviceService.capturePicture(
-                    config.getDeviceId(), config.getChannelId());
+                    config.getFactoryId(), config.getDeviceId(), config.getChannelId());
 
             if (!capture.isSuccess()) {
                 log.error("抓帧失败: {}", capture.getError());
@@ -432,8 +451,9 @@ public class AutoLabelRecognitionService {
     /**
      * 根据配置ID获取识别历史
      */
-    public Page<LabelRecognitionRecord> getRecordsByConfig(Long configId, Pageable pageable) {
-        return recordRepository.findByConfigIdOrderByRecognitionTimeDesc(configId, pageable);
+    public Page<LabelRecognitionRecord> getRecordsByConfig(String factoryId, Long configId, Pageable pageable) {
+        getConfig(factoryId, configId);
+        return recordRepository.findByFactoryIdAndConfigIdOrderByRecognitionTimeDesc(factoryId, configId, pageable);
     }
 
     /**

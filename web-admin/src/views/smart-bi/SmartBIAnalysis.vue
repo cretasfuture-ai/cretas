@@ -633,6 +633,20 @@ watch(factoryId, (id) => {
 const route = useRoute();
 const topTab = ref(resolveTopTab(route.query));
 watch(() => route.query, () => { topTab.value = resolveTopTab(route.query); });
+// Workspace scheduling follows the requested view. AIQuery owns the tenant-specific child and its access checks.
+const isFactoryQueryMode = computed(() => topTab.value === 'query' && route.query.mode === 'factory');
+let enrichmentEpoch = 0;
+let enrichmentWorkspaceActive = true;
+let historyLoadDeferred = false;
+const invalidateEnrichmentWorkspace = () => { enrichmentEpoch += 1; };
+const enrichActiveSheetAnalysis = async (uploadId: number, forceRefresh = false, onProgress?: (progress: EnrichProgress) => void): Promise<EnrichResult> => {
+  const capturedEpoch = enrichmentEpoch;
+  const mayPublish = () => enrichmentWorkspaceActive && !isFactoryQueryMode.value && capturedEpoch === enrichmentEpoch;
+  const guardedProgress = onProgress ? (progress: EnrichProgress) => { if (mayPublish()) onProgress(progress); } : undefined;
+  const result = await enrichSheetAnalysis(uploadId, forceRefresh, guardedProgress, mayPublish);
+  return mayPublish() ? result : { success: false, error: '分析已取消' };
+};
+watch(() => [factoryId.value, authStore.user?.id, authStore.currentRole], invalidateEnrichmentWorkspace);
 const echartsThemeName = computed(() => appStore.theme === 'dark' ? 'cretas-dark' : 'cretas');
 const permissionStore = usePermissionStore();
 const canUpload = computed(() => permissionStore.canWrite('analytics'));
@@ -2949,10 +2963,12 @@ const isChartDataEmpty = (chartConfig: Record<string, unknown>): boolean => {
 
 // P2.1: 使用 idle callback 预缓存下一个 sheet
 const idleEnrichNext = (currentSheetIndex: number) => {
+  if (isFactoryQueryMode.value) return;
   // Polyfill for requestIdleCallback (not available in all browsers)
   const idleCb = (window as unknown as { requestIdleCallback?: (fn: () => void) => number }).requestIdleCallback || ((fn: Function) => setTimeout(fn, 2000));
 
   idleCb(() => {
+    if (isFactoryQueryMode.value) return;
     // 仅在网络空闲时预加载（没有其他正在进行的 enrichment）
     if (enrichingSheets.value.size > 0) {
       return;
@@ -2970,7 +2986,7 @@ const idleEnrichNext = (currentSheetIndex: number) => {
     if (nextSheet?.uploadId) {
       // 静默预加载（无加载 UI）
       const preCacheUploadId = nextSheet.uploadId;
-      enrichSheetAnalysis(preCacheUploadId).then(result => {
+      enrichActiveSheetAnalysis(preCacheUploadId).then(result => {
         if (result && result.success) {
           // STALENESS GUARD: pre-cache fires async; user may have switched
           // uploads in the meantime. Verify uploadId still matches.
@@ -3019,6 +3035,8 @@ const idleEnrichNext = (currentSheetIndex: number) => {
 
 // 通过前端驱动 Python 服务补充 Sheet 的图表和 AI 分析 (P0: 渐进式渲染)
 const enrichSheet = async (sheet: SheetResult, forceRefresh = false) => {
+  if (isFactoryQueryMode.value) return;
+  const capturedEnrichmentEpoch = enrichmentEpoch;
   const sheetIndex = sheet.sheetIndex;
   const uploadId = sheet.uploadId;
   if (!uploadId || enrichingSheets.value.has(sheetIndex)) return;
@@ -3028,7 +3046,7 @@ const enrichSheet = async (sheet: SheetResult, forceRefresh = false) => {
   enrichPhases.value.set(sheetIndex, { kpi: false, charts: 0, chartsTotal: 0, ai: false });
 
   try {
-    const result: EnrichResult = await enrichSheetAnalysis(uploadId, forceRefresh, (progress: EnrichProgress) => {
+    const result: EnrichResult = await enrichActiveSheetAnalysis(uploadId, forceRefresh, (progress: EnrichProgress) => {
       // STALENESS GUARD: After upload-dropdown switch, the sheet at this
       // sheetIndex may belong to a NEW upload. Verify uploadId still matches
       // before writing — otherwise old upload's data bleeds into new upload's
@@ -3083,6 +3101,7 @@ const enrichSheet = async (sheet: SheetResult, forceRefresh = false) => {
       }
     });
 
+    if (!enrichmentWorkspaceActive || isFactoryQueryMode.value || capturedEnrichmentEpoch !== enrichmentEpoch) return;
     if (result.success) {
       // STALENESS GUARD (final sync): Same risk as the progress callback above —
       // user may have switched uploads while the request was in flight.
@@ -4065,6 +4084,8 @@ const waitForElement = (id: string, timeout = 2000): Promise<HTMLElement | null>
 // ========== Cleanup on unmount (Phase 2.2 — prevent memory leaks) ==========
 // ========== keep-alive lifecycle: pause/resume side effects ==========
 onDeactivated(() => {
+  enrichmentWorkspaceActive = false;
+  invalidateEnrichmentWorkspace();
   // Pause resize listener & auto-refresh when cached (navigated away)
   window.removeEventListener('resize', handleResize);
   resizeObserver?.disconnect(); resizeObserver = null;
@@ -4076,6 +4097,9 @@ onDeactivated(() => {
 });
 
 onActivated(() => {
+  enrichmentWorkspaceActive = true;
+  if (!analysisWorkspaceInitialized) initializeAnalysisWorkspace();
+  else if (!isFactoryQueryMode.value && historyLoadDeferred) void loadHistory();
   // Resume resize listener when re-entering
   window.addEventListener('resize', handleResize);
   // Resume ResizeObserver for sidebar toggle / container resize
@@ -4098,6 +4122,8 @@ onActivated(() => {
 });
 
 onBeforeUnmount(() => {
+  enrichmentWorkspaceActive = false;
+  invalidateEnrichmentWorkspace();
   if (uploadAbortController) { uploadAbortController.abort(); uploadAbortController = null; }
   if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
   if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
@@ -4184,8 +4210,8 @@ const handleRetrySheet = async (sheet: SheetResult) => {
         enrichedSheets.value.delete(sheet.uploadId);
         enrichingSheets.value.delete(sheet.uploadId);
         nextTick(() => {
-          enrichSheetAnalysis(sheet.uploadId!).then(enrichResult => {
-            if (enrichResult) {
+          enrichActiveSheetAnalysis(sheet.uploadId!).then(enrichResult => {
+            if (enrichResult.success) {
               sheet.flowResult = {
                 ...sheet.flowResult,
                 charts: enrichResult.charts,
@@ -4231,6 +4257,7 @@ const makeBatch = (uploads: UploadHistoryItem[]): UploadBatch => {
 // 选择某个批次，填充 uploadedSheets
 // T6 Phase-2: accepts '__FUSED__' sentinel → switches to fused timeseries mode
 const selectBatch = (index: number | '__FUSED__') => {
+  if (isFactoryQueryMode.value) return;
   selectedBatchIndex.value = index;
 
   // Fused mode: clear per-upload sheets, load timeseries resolver data
@@ -4336,12 +4363,15 @@ let _historyLongTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 加载历史上传记录（按文件名 + 时间窗口分组为批次）
 const loadHistory = async () => {
+  if (isFactoryQueryMode.value || !enrichmentWorkspaceActive) { historyLoadDeferred = true; return; }
+  historyLoadDeferred = false;
   historyLoading.value = true;
   historyLoadingLong.value = false;
   if (_historyLongTimer) clearTimeout(_historyLongTimer);
   _historyLongTimer = setTimeout(() => { historyLoadingLong.value = true; }, 5000);
   try {
     const response = await getUploadHistory();
+    if (isFactoryQueryMode.value || !enrichmentWorkspaceActive) { historyLoadDeferred = true; return; }
     if (!response.success || !response.data?.length) return;
 
     // Dedup: keep only the latest upload per fileName+sheetName combo
@@ -4455,7 +4485,10 @@ const { showHelp: showShortcutsHelp, shortcuts: shortcutsList } = useSmartBIShor
   onHelp: () => { showShortcutsHelp.value = !showShortcutsHelp.value; },
 });
 
-onMounted(() => {
+let analysisWorkspaceInitialized = false;
+function initializeAnalysisWorkspace(): void {
+  if (isFactoryQueryMode.value || !enrichmentWorkspaceActive || analysisWorkspaceInitialized) return;
+  analysisWorkspaceInitialized = true;
   // 后台检查 Python 服务健康状态 (with retry)
   checkHealthWithRetry().catch(() => {});
 
@@ -4485,6 +4518,14 @@ onMounted(() => {
   if (rootRef.value && typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(rootRef.value);
+  }
+}
+onMounted(initializeAnalysisWorkspace);
+watch(isFactoryQueryMode, active => {
+  if (active) invalidateEnrichmentWorkspace();
+  else {
+    if (!analysisWorkspaceInitialized) initializeAnalysisWorkspace();
+    else if (historyLoadDeferred) void loadHistory();
   }
 });
 </script>

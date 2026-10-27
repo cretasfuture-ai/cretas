@@ -18,7 +18,7 @@ import { reactive } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 
 // ── mutable route query so we can simulate router.push(同路由 query 变) ──
-const routeQuery = reactive<{ q?: string }>({});
+const routeQuery = reactive<{ q?: string; mode?: string }>({});
 
 // ── executeIntent / intent-chat ──────────────────────────────
 const executeIntentMock = vi.fn();
@@ -72,6 +72,9 @@ vi.mock('@/components/smartbi/SmartBIEmptyState.vue', () => ({
 vi.mock('@/components/smart-bi/MaterializedAnalysisPanel.vue', () => ({
   default: { template: '<div />' },
 }));
+vi.mock('../FactoryAnalysisChat.vue', () => ({
+  default: { template: '<div data-testid="factory-analysis-chat-stub" />' },
+}));
 vi.mock('@/api/smartbi/materialized', () => ({
   listFactoryTemplates: vi.fn(async () => []),
 }));
@@ -119,6 +122,7 @@ describe('AIQuery WS2 #6 — chip 跳转自动读 q 并提交', () => {
     chatAnalysisMock.mockClear();
     // reset mutable route query between tests (delete → undefined, watch ignores)
     delete routeQuery.q;
+    delete routeQuery.mode;
   });
 
   afterEach(() => {
@@ -171,5 +175,14 @@ describe('AIQuery WS2 #6 — chip 跳转自动读 q 并提交', () => {
 
     // exactly one submit even though both onMounted and the watch see the same q
     expect(executeIntentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('factory mode owns startup and ignores legacy q without calling generic AI clients', async () => {
+    routeQuery.mode = 'factory';
+    routeQuery.q = '生产表现怎样？';
+    track(mount(AIQuery, { global: { stubs: globalStubs } }));
+    await flushPromises();
+    expect(executeIntentMock).not.toHaveBeenCalled();
+    expect(chatAnalysisMock).not.toHaveBeenCalled();
   });
 });
