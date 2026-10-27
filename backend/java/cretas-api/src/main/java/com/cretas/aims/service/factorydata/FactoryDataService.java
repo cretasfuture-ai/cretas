@@ -79,7 +79,8 @@ public class FactoryDataService {
                                   List<TableRow> tables, long foreignHitCount, List<ForeignHit> foreignHits,
                                   List<NulledReference> nulledReferences, List<String> suspectTenantColumns,
                                   List<String> missingDeletePrivileges, List<CopyCount> copiesOutsideSchema,
-                                  List<CopyCount> unregisteredSchemas) {}
+                                  List<CopyCount> unregisteredSchemas, List<String> unreadableCopies,
+                                  List<String> unreadableUnregistered) {}
 
     public record CopyCount(String table, long rows) {}
 
@@ -174,7 +175,8 @@ public class FactoryDataService {
                 rows, hits.size(), hits.subList(0, Math.min(hits.size(), MAX_LISTED_FOREIGN_HITS)),
                 scope.nulledReferences(), scope.suspectTenantColumns(),
                 FactoryErasureService.missingPrivileges(conn, schema, toErase), copiesOutside(conn, schema, factoryId),
-                copiesOutside(conn, schema, factoryId, false));
+                copiesOutside(conn, schema, factoryId, false), unreadableOutside(conn, schema, true),
+                unreadableOutside(conn, schema, false));
     }
 
     private long countRetained(Connection conn, TableScope t, String factoryId) throws SQLException {
@@ -204,26 +206,8 @@ public class FactoryDataService {
      */
     static List<CopyCount> copiesOutside(Connection conn, String schema, String factoryId, boolean copiesOnly)
             throws SQLException {
-        List<String[]> tables = new ArrayList<>();
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT n.nspname, c.relname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
-                        + "JOIN pg_namespace n ON n.oid = c.relnamespace "
-                        + "WHERE a.attname = 'factory_id' AND NOT a.attisdropped AND c.relkind IN ('r','p') "
-                        + "AND NOT c.relispartition AND n.nspname <> ? "
-                        + "AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_%' "
-                        + "ORDER BY 1, 2")) {
-            ps.setString(1, schema);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    Category c = FactoryDataCatalog.categorize(rs.getString(2));
-                    if (c == Category.RECEIPT || c == Category.LEDGER) continue;
-                    if (FactoryDataCatalog.isCopySchema(rs.getString(1)) != copiesOnly) continue;
-                    tables.add(new String[]{rs.getString(1), rs.getString(2)});
-                }
-            }
-        }
         List<CopyCount> out = new ArrayList<>();
-        for (String[] t : tables) {
+        for (String[] t : tablesOutside(conn, schema, copiesOnly, true)) {
             String sql = "SELECT count(*) FROM " + FactoryDataScopeResolver.q(t[0]) + "." + FactoryDataScopeResolver.q(t[1])
                     + " WHERE factory_id::text = ?";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -236,6 +220,42 @@ public class FactoryDataService {
             }
         }
         return out;
+    }
+
+    /**
+     * {@code schema} 以外、带 factory_id、应用账号却读不了的表 (prod 上 postgres 建的删前备份 schema 没给 USAGE)。
+     * 数不了该厂有没有行, 只列名字: 名字带日期的副本随 30 天保留期过期; 没日期的 / 不像副本的由删除拒绝。
+     *
+     * <p>2026-10-27: 之前直接去 count, prod 上 F006 预演当场 409「permission denied for schema backup_f006_20261024」。
+     */
+    static List<String> unreadableOutside(Connection conn, String schema, boolean copiesOnly) throws SQLException {
+        return tablesOutside(conn, schema, copiesOnly, false).stream().map(t -> t[0] + "." + t[1]).toList();
+    }
+
+    private static List<String[]> tablesOutside(Connection conn, String schema, boolean copiesOnly, boolean readable)
+            throws SQLException {
+        List<String[]> tables = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT n.nspname, c.relname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+                        + "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        + "WHERE a.attname = 'factory_id' AND NOT a.attisdropped AND c.relkind IN ('r','p') "
+                        + "AND NOT c.relispartition AND n.nspname <> ? "
+                        + "AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_%' "
+                        // 表的 SELECT 权限不看 schema 的 USAGE, 两个都有才读得了
+                        + "AND (has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT')) = ? "
+                        + "ORDER BY 1, 2")) {
+            ps.setString(1, schema);
+            ps.setBoolean(2, readable);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Category c = FactoryDataCatalog.categorize(rs.getString(2));
+                    if (c == Category.RECEIPT || c == Category.LEDGER) continue;
+                    if (FactoryDataCatalog.isCopySchema(rs.getString(1)) != copiesOnly) continue;
+                    tables.add(new String[]{rs.getString(1), rs.getString(2)});
+                }
+            }
+        }
+        return tables;
     }
 
     private Attachments attachmentSummary(String factoryId) {
@@ -263,6 +283,13 @@ public class FactoryDataService {
             }
             if (!db.unregisteredSchemas().isEmpty()) {
                 out.add(db.database() + " 库有不像副本的 schema 也存着该厂的行, 先查清是什么: " + db.unregisteredSchemas());
+            }
+            if (!db.unreadableUnregistered().isEmpty()) {
+                out.add(db.database() + " 库有不像副本的 schema 账号读不了, 查不清有没有该厂的行: " + db.unreadableUnregistered());
+            }
+            List<String> undated = FactoryErasureService.undated(db.unreadableCopies());
+            if (!undated.isEmpty()) {
+                out.add(db.database() + " 库这些副本账号读不了、名字里又没有日期 (30 天清理认不出): " + undated);
             }
         }
         if (!"AVAILABLE".equals(attachments.status())) out.add("附件列举失败: " + attachments.error());
@@ -702,6 +729,7 @@ public class FactoryDataService {
             x.put("rowsInScope", d.rowsInScope());
             x.put("rowsToErase", d.rowsToErase());
             x.put("foreignHitCount", d.foreignHitCount());
+            x.put("unreadableCopies", d.unreadableCopies());
             x.put("strictTables", d.tables().stream().filter(t -> t.category().strict())
                     .collect(Collectors.toMap(TableRow::table, TableRow::rows, (a, b) -> a, LinkedHashMap::new)));
             x.put("tables", d.tables().stream().collect(Collectors.toMap(TableRow::table, TableRow::rows,
