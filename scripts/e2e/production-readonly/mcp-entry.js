@@ -1088,6 +1088,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedFactoryId,
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
+        appMountTimeoutMs: options.appMountTimeoutMs,
       });
 
       const scenarioContext = {
@@ -1398,6 +1399,9 @@ async function performUiLogin(page, options) {
   const expectedRole = options.expectedRole ? String(options.expectedRole).toLowerCase() : null;
   if (!username || !password) throw new Error('E2E_USERNAME and E2E_PASSWORD are required for UI login');
 
+  const loginMount = await waitForAppMount(page, options.appMountTimeoutMs);
+  if (!loginMount.appMounted) throw new Error('Login application did not mount before credential entry');
+
   const usernameInput = page.locator('input[placeholder*="用户名"], input[type="text"]').first();
   const passwordInput = page.locator('input[placeholder*="密码"], input[type="password"]').first();
   await usernameInput.waitFor({ state: 'visible', timeout: 15_000 });
@@ -1477,6 +1481,8 @@ async function performUiLogin(page, options) {
     // ⚠️ 记下来, 否则「落地页没挂载」和「落地页缺东西」在证据里长得一样。
     landingAppMounted: landingMount.appMounted,
     landingAppMountMs: landingMount.appMountMs,
+    loginAppMounted: loginMount.appMounted,
+    loginAppMountMs: loginMount.appMountMs,
   };
 }
 
