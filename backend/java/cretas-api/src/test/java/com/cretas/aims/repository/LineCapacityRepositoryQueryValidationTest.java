@@ -4,6 +4,8 @@ import com.cretas.aims.entity.ProductEquipmentRequirement;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.ProductionLineCapacityConfig.CapacityUnit;
 import com.cretas.aims.entity.ProductionLineCapacityConfig.Source;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -65,7 +67,7 @@ class LineCapacityRepositoryQueryValidationTest {
         c.setCapacityPerHour(new BigDecimal("12.5"));
         c.setCapacityUnit(unit);
         c.setSource(Source.FACTORY_CONFIG);
-        c.setConfiguredBy(7L);
+        c.setActor(new ActorRef(AuthenticatedActorType.FACTORY_USER, 7L));
         c.setEffectiveFrom(effectiveFrom);
         return capacity.saveAndFlush(c);
     }
@@ -98,6 +100,28 @@ class LineCapacityRepositoryQueryValidationTest {
     }
 
     @Test
+    void aPlatformAdminWriteKeepsItsActorAndLeavesConfiguredByEmpty() {
+        ProductionLineCapacityConfig c = new ProductionLineCapacityConfig();
+        c.setFactoryId("F-CAP");
+        c.setProductionLineId("L-PLAT");
+        c.setCapacityPerHour(new BigDecimal("5"));
+        c.setCapacityUnit(CapacityUnit.BATCH);
+        c.setSource(Source.CONVERSATIONAL_BUILD);
+        c.setActor(new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 3L));
+        c.setEffectiveFrom(NOW.minusDays(1));
+        capacity.saveAndFlush(c);
+        entityManager.clear();
+
+        Object[] row = (Object[]) entityManager.getEntityManager().createNativeQuery(
+                "select actor_type, actor_id, configured_by from production_line_capacity_configs"
+                        + " where production_line_id = 'L-PLAT'").getSingleResult();
+        System.out.println("PLATFORM_ACTOR_ROW actor_type=" + row[0] + " actor_id=" + row[1] + " configured_by=" + row[2]);
+        assertThat(row[0]).isEqualTo("PLATFORM_ADMIN");
+        assertThat(((Number) row[1]).longValue()).isEqualTo(3L);
+        assertThat(row[2]).isNull();   // 平台 id 不进 users 命名空间的列
+    }
+
+    @Test
     void equipmentRequirementsAreReadPerFactoryAndProduct() {
         for (Object[] row : new Object[][]{{"F-CAP", "PT-1", 1L}, {"F-CAP", "PT-1", 2L}, {"F-CAP", "PT-2", 3L}, {"F-OTHER", "PT-1", 4L}}) {
             ProductEquipmentRequirement r = new ProductEquipmentRequirement();
@@ -105,7 +129,7 @@ class LineCapacityRepositoryQueryValidationTest {
             r.setProductTypeId((String) row[1]);
             r.setEquipmentId((Long) row[2]);
             r.setSource(Source.CONVERSATIONAL_BUILD);
-            r.setConfiguredBy(7L);
+            r.setActor(new ActorRef(AuthenticatedActorType.FACTORY_USER, 7L));
             requirements.saveAndFlush(r);
         }
         entityManager.clear();
