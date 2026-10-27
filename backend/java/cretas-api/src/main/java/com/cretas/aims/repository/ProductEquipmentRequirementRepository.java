@@ -10,4 +10,6 @@ import java.util.List;
 public interface ProductEquipmentRequirementRepository extends JpaRepository<ProductEquipmentRequirement, Long> {
 
     List<ProductEquipmentRequirement> findByFactoryIdAndProductTypeId(String factoryId, String productTypeId);
+
+    List<ProductEquipmentRequirement> findByFactoryId(String factoryId);
 }
