@@ -10,6 +10,14 @@
 - `web-admin/src/api/smartbi/analysis.ts` 与新 `__tests__/analysis-publication.spec.ts`。
 - 本归档；不修改生产只读白名单、Java/Python、原生代码、Entity/Repository、迁移或权限。
 
+## FADQA27-GATE 补充 scope
+
+CI 实测 6514 项通过、2 项失败：权限分支分析器把混合的动态问答模式和可变生命周期初始值当成静态权限结论。Owner `reachability_gate`；Base 同上。仅允许 `web-admin/src/__tests__/gates/lib/branchReachability.ts` 与 `web-admin/src/__tests__/gates/branchReachability.spec.ts`。修正仪器对可变状态和运行时/权限混合表达式的测量，增加阴阳性对照；不得提高预算、排除产品文件、修改权限矩阵或降低断言。验收：该 gate、gates 类型检查及既有三个本批目标文件。协调者 Root 保留台账、提交和发布责任。
+
+该仪器扩展尝试未通过，完整差异私下保留后精确恢复，未交付。Root 收窄为产品职责修正：外层上传工作区是否初始化只取决于导航模式；租户专属子页面与访问检查仍由原 AIQuery 负责。移除工作区调度对租户权限谓词的不必要依赖，保留普通 query/餐饮入口的原有子页面行为；不改变权限分析器或其预算。
+
+初始化流程明确声明为返回 void 的普通函数，流程内部实际权限判断保持可见。父页测试覆盖 FACTORY/RESTAURANT 的显式问答导航，并隔离与调度无关的延迟展示组件，避免测试环境卸载后继续加载样式。原始失败、资源受限的 worker 启动错误与异步组件卸载错误均保留，不把工具错误算产品通过；最终提交由目标门禁、完整类型检查、必需 CI 和候选构建共同判定。
+
 ## 触发与结果
 
 F006 网页真实验收发现：外层上传分析工作区在工厂问答模式中仍默认加载历史并启动 enrichment，随后尝试保存分析缓存；只读防护在发送前阻止，实际业务写入为 0。另发现产品澄清中选择产品会清空原问题和继续分析按钮。

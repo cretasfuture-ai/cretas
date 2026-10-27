@@ -23,11 +23,16 @@ vi.mock('@/utils/echarts', () => ({
   default: { getInstanceByDom: vi.fn(), connect: vi.fn(), disconnect: vi.fn(), dispose: vi.fn(), init: vi.fn() },
 }));
 vi.mock('../AIQuery.vue', () => ({ default: { name: 'AIQuery', template: '<div />' } }));
+vi.mock('@/components/smartbi/ShortcutsHelpOverlay.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('@/components/smartbi/DemoTour.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('@/components/smartbi/YoYMoMComparisonChart.vue', () => ({ default: { template: '<div />' } }));
 
 import SmartBIAnalysis from '../SmartBIAnalysis.vue';
 
 let page: VueWrapper | undefined;
 beforeEach(() => {
+  h.auth.factoryType = 'FACTORY';
+  h.auth.businessDomain = 'FACTORY';
   h.route = reactive({ query: { tab: 'query', mode: 'factory' } });
   h.history.mockReset().mockResolvedValue({ success: true, data: [] });
   h.enrich.mockReset().mockResolvedValue({ success: true });
@@ -42,7 +47,9 @@ async function mountParent() {
 }
 
 describe('factory question mode in the real SmartBIAnalysis parent', () => {
-  it('does not start hidden upload history, enrichment or cache-producing work', async () => {
+  it.each(['FACTORY', 'RESTAURANT'])('does not start hidden upload workspace for explicit question view in %s', async factoryType => {
+    h.auth.factoryType = factoryType;
+    h.auth.businessDomain = factoryType;
     await mountParent();
     expect(h.history).not.toHaveBeenCalled();
     expect(h.health).not.toHaveBeenCalled();

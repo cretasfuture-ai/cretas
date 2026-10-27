@@ -633,8 +633,8 @@ watch(factoryId, (id) => {
 const route = useRoute();
 const topTab = ref(resolveTopTab(route.query));
 watch(() => route.query, () => { topTab.value = resolveTopTab(route.query); });
-const isFactoryQueryMode = computed(() => topTab.value === 'query'
-  && route.query.mode === 'factory' && !isRestaurantTenant.value);
+// Workspace scheduling follows the requested view. AIQuery owns the tenant-specific child and its access checks.
+const isFactoryQueryMode = computed(() => topTab.value === 'query' && route.query.mode === 'factory');
 let enrichmentEpoch = 0;
 let enrichmentWorkspaceActive = true;
 let historyLoadDeferred = false;
@@ -4486,7 +4486,7 @@ const { showHelp: showShortcutsHelp, shortcuts: shortcutsList } = useSmartBIShor
 });
 
 let analysisWorkspaceInitialized = false;
-const initializeAnalysisWorkspace = () => {
+function initializeAnalysisWorkspace(): void {
   if (isFactoryQueryMode.value || !enrichmentWorkspaceActive || analysisWorkspaceInitialized) return;
   analysisWorkspaceInitialized = true;
   // 后台检查 Python 服务健康状态 (with retry)
@@ -4519,7 +4519,7 @@ const initializeAnalysisWorkspace = () => {
     resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(rootRef.value);
   }
-};
+}
 onMounted(initializeAnalysisWorkspace);
 watch(isFactoryQueryMode, active => {
   if (active) invalidateEnrichmentWorkspace();
