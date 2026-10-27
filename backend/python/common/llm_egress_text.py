@@ -30,7 +30,7 @@ from common.sample_text_rules import (  # 训练规则常量: 与 Java TrainingS
     _SURNAMES as SURNAMES,
 )
 
-MIN_NAME_LENGTH = 2
+from common.process_secret_sql import MIN_NAME_LENGTH, java_strip, java_trim  # noqa: E402
 
 # 种类与代号里的类别名 (顺序与 Java Kind 枚举一致: 正则里的候选顺序也一致)
 CUSTOMER, SUPPLIER, ORG, PERSON_KIND, NAME, PRODUCT, PHONE_KIND, ID_NUMBER, CARD, HIDDEN_FIELD = (
@@ -187,7 +187,7 @@ class _Session:
         self.token_to_real: Dict[str, str] = {}
         self.real_kind: Dict[str, str] = {}
         self.counters: Dict[str, int] = {}
-        names = [n.strip() for n in (protected_names or ()) if n and len(n.strip()) >= MIN_NAME_LENGTH]
+        names = [java_strip(n) for n in (protected_names or ()) if n and len(java_strip(n)) >= MIN_NAME_LENGTH]
         self.protected_names = sorted(names, key=len, reverse=True)
         self.explicit_reals: set = set()
         self.reserved = {canonical_token(m) for m in LOOSE_TOKEN.finditer(reserved)}
@@ -302,7 +302,7 @@ class _Session:
             if _find_number(ID_CARD, s):
                 return "残留证件号"
             if is_code(s):
-                if re.fullmatch(r"\(?0\d{2,3}\)?[- ]?\d{7,8}", s.strip(), _A):
+                if re.fullmatch(r"\(?0\d{2,3}\)?[- ]?\d{7,8}", java_trim(s), _A):
                     return "残留电话号码"
             else:
                 if _find_number(LANDLINE, s) or _find_number(LANDLINE_SEGMENTED, s):
@@ -333,7 +333,7 @@ def redact_texts(texts: Sequence[Optional[str]], known_parties: Optional[Mapping
     corpus = "".join(t + "\n" for t in texts if t is not None)
     s = _Session(protected_names, corpus)
     for real, party in (known_parties or {}).items():
-        real = (real or "").strip()
+        real = java_strip(real or "")
         if len(real) >= 2 and real not in GENERIC:
             s.known(PARTIES[party], real)
     scrubbed = [None if t is None else s.scrub_text(t, detect_names) for t in texts]

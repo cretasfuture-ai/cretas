@@ -538,7 +538,7 @@ def redact_payload_for_egress(payload: Dict[str, Any],
     new_payload = _with_message_texts(new_payload, egress.texts)
     if scope is not None:
         scope.placeholder_map.update(red.placeholder_map)
-        scope.placeholder_map.update(egress.token_to_real)
+        # 本次代号 ([单位A] …) 由出境口在回答 / 流式增量里换回; 不并进 scope: 每次请求都从 A 起, 并进去会互相覆盖
         scope.redacted_count += red.redacted_count + egress.token_count
 
     meta = RedactionMeta(

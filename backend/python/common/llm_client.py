@@ -61,7 +61,7 @@ class _RedactingLLMClient:
         try:
             from common.llm_redactor import redact_payload_for_egress
             from common.llm_metrics import set_egress_redaction_meta
-            redacted, meta = redact_payload_for_egress(json_payload, await _protected_names_for_egress())
+            redacted, meta = redact_payload_for_egress(json_payload, await _names_for_this_request())
             set_egress_redaction_meta(meta)
             _egress_tokens.set(meta.egress_tokens)
             return redacted, meta.egress_tokens
@@ -129,6 +129,36 @@ async def _protected_names_for_egress() -> list:
 _PROTECTED_NAMES_TIMEOUT_S = 5.0
 
 
+async def _names_for_this_request() -> list:
+    """原话模式 (意图识别) 与 Java ``LlmEgressGuard.utterance`` 一样不查库、不认保密产品名 (识别链路不加库查询);
+    其余每次现查; 同一次 call_chain 已预取过就复用 (重试下一家供应商不再查库)。"""
+    from common.llm_redactor import _egress_detect_names
+    if not _egress_detect_names.get():
+        return []
+    prefetched = _prefetched_names.get()
+    if prefetched is not None:
+        return prefetched
+    return await _protected_names_for_egress()
+
+
+_prefetched_names: contextvars.ContextVar = contextvars.ContextVar("llm_egress_prefetched_names", default=None)
+
+
+async def prefetch_names_for_request() -> "contextvars.Token":
+    """call_chain 开头调用: 在供应商重试 / 每次尝试的超时之外先查好保密产品名 (库慢不会被当成供应商超时)。"""
+    try:
+        names = await _names_for_this_request()
+    except Exception as e:
+        logger.critical("[P0-redact] protected-name lookup FAILED, request BLOCKED (nothing sent): %s",
+                        type(e).__name__)
+        raise EgressRedactionError(type(e).__name__) from e
+    return _prefetched_names.set(names)
+
+
+def reset_prefetched_names(token: "contextvars.Token") -> None:
+    _prefetched_names.reset(token)
+
+
 def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response:
     """非流式回答: 把本次发出去的代号换回真名 (去括号 / 全角括号等改写也认)。JSON 先解析再逐个字符串换,
     真名带引号也不会弄坏 JSON; 解析不了按纯文本换。"""
@@ -137,9 +167,15 @@ def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response
     import json as _json
     from common.llm_egress_text import restore
 
+    def _json_text(real: str) -> str:
+        return _json.dumps(real, ensure_ascii=False)[1:-1]
+
     def _deep(node: Any) -> Any:
         if isinstance(node, dict):
-            return {(restore(k, tokens) if isinstance(k, str) else k): _deep(v) for k, v in node.items()}
+            # 工具调用的 arguments 是 JSON 字符串: 换回的真名要按 JSON 转义 (真名带引号也不弄坏它)
+            return {(restore(k, tokens) if isinstance(k, str) else k):
+                    (restore(v, tokens, encode=_json_text) if k == "arguments" and isinstance(v, str) else _deep(v))
+                    for k, v in node.items()}
         if isinstance(node, list):
             return [_deep(x) for x in node]
         return restore(node, tokens) if isinstance(node, str) else node
@@ -149,7 +185,9 @@ def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response
     except ValueError:
         body = (restore(response.text, tokens) or "").encode("utf-8")
     headers = {k: v for k, v in response.headers.items()
-               if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")}
+               if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "content-type")}
+    content_type = response.headers.get("content-type", "application/json").split(";")[0].strip()
+    headers["content-type"] = f"{content_type}; charset=utf-8"  # 重新按 UTF-8 编码了
     return httpx.Response(response.status_code, headers=headers, content=body, request=response.request)
 
 

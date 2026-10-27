@@ -282,13 +282,14 @@ async def test_food_kb_rerank_does_not_send_when_redaction_fails(monkeypatch):
 
 _PY_ROOT = Path(__file__).resolve().parents[1]
 _LLM_HOSTS = re.compile(r"dashscope|aliyuncs\.com|/chat/completions|api\.deepseek|bigmodel|volces|openai\.com")
-_OWN_CLIENT = re.compile(r"httpx\.(?:Async)?Client\(|requests\.(?:post|Session)\(|aiohttp\.ClientSession\(")
+_OWN_CLIENT = re.compile(r"(?<![A-Za-z_])(?:httpx\.)?(?:Async)?Client\(|httpx\.(?:post|stream|request)\(|requests\.(?:post|get|request|Session)\("
+                         r"|aiohttp\.ClientSession\(|(?:Async)?OpenAI\(|urlopen\(")
 # 自己建 HTTP 客户端、又提到外部模型地址的模块: 每个都要有理由
 REGISTERED = {
     "common/llm_client.py": "出境口本身 (内层真实客户端)",
     "food_kb/services/reranker.py": "重排接口不走 /chat/completions: 在发出前按同一套规则脱敏 (本文件有测试)",
     "common/vl_client.py": "视觉模型, 只发图片 + 固定提示词; 全仓没有调用方",
-    "efficiency_recognition/services/video_analyzer.py": "视觉模型, 只发画面 + 固定提示词; 路由按摄像头开关拦截 (#1236)",
+    "efficiency_recognition/services/video_analyzer.py": "视觉模型: 画面按摄像头开关拦截 (#1236); 提示词里来自请求的文字发前按同一套规则脱敏 (本文件有测试)",
 }
 
 
@@ -313,3 +314,142 @@ def test_modules_that_call_external_models_go_through_the_egress_choke_point():
     assert offenders == {}, offenders
     # 登记的例外都还存在 (删了就从名单里删, 名单不能只增不减)
     assert seen_registered == set(REGISTERED), set(REGISTERED) - seen_registered
+
+
+# ---------------------------------------------------------------- 审查跟进
+
+def _llm_api_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from llm.api import endpoints
+
+    app = FastAPI()
+    app.include_router(endpoints.router, prefix="/api/llm")
+    return TestClient(app)
+
+
+def test_java_proxy_only_hides_numbers_and_restores_them(upstream):
+    """/api/llm/*: Java 已按出口定好要不要换名字 (识别类出口故意不换); 这里只再抹号码, 回答里换回。"""
+    upstream.answer = "好的，打 电话A"
+    resp = _llm_api_client().post("/api/llm/chat", json={"messages": [{"role": "user", "content": SECRET}]})
+
+    sent = upstream.sent_text()
+    assert "13912345678" not in sent and "华东冷链商贸有限公司" in sent and "赵铁柱" in sent
+    assert resp.json()["choices"][0]["message"]["content"] == "好的，打 13912345678"
+
+
+def test_java_proxy_intent_classify_answers_503_when_blocked(upstream, monkeypatch):
+    from common import llm_egress_text
+
+    monkeypatch.setattr(llm_egress_text, "redact_texts",
+                        lambda texts, *a, **k: llm_egress_text.Result(texts=list(texts), refusal="残留手机号"))
+    resp = _llm_api_client().post("/api/llm/intent-classify", json={"messages": [{"role": "user", "content": SECRET}]})
+
+    assert resp.status_code == 503
+    assert resp.json()["data"]["reason"] == "EGRESS_REDACTION_FAILED"
+    assert upstream.bodies == []
+
+
+@pytest.mark.asyncio
+async def test_utterance_mode_does_not_query_protected_names(upstream, monkeypatch):
+    """与 Java LlmEgressGuard.utterance 一致: 识别链路不加库查询。"""
+    from ai.matcher.llm import _call_llm
+
+    async def must_not_run():
+        raise AssertionError("原话模式不该查保密产品名")
+
+    monkeypatch.setattr(lc, "_protected_names_for_egress", must_not_run)
+    upstream.answer = '{"intent_code": "X"}'
+    await _call_llm("用户: 秘制酱牛肉怎么样", timeout_s=5)
+    assert upstream.bodies
+
+
+@pytest.mark.asyncio
+async def test_protected_names_are_read_once_per_call_not_per_provider_attempt(upstream, monkeypatch):
+    calls = []
+
+    async def names():
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(lc, "_protected_names_for_egress", names)
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, [("aliyun_a", "qwen-plus"), ("aliyun_b", "qwen-plus")])
+    seen = []
+    orig = upstream.handler
+
+    def first_fails(request):
+        seen.append(1)
+        return httpx.Response(500, json={"error": "boom"}) if len(seen) == 1 else orig(request)
+
+    upstream.handler = first_fails
+    upstream.answer = "ok"
+    wrapper = llm_router.get_llm_http_client()
+    wrapper._inner = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: upstream.handler(r)))
+
+    await llm_router.call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert len(seen) == 2 and calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arguments_stay_valid_json_after_restore(upstream, monkeypatch):
+    async def names():
+        return ['老"王"酱牛肉']
+
+    monkeypatch.setattr(lc, "_protected_names_for_egress", names)
+
+    def handler(request):
+        upstream.bodies.append(json.loads(request.content))
+        args = json.dumps({"product": "[保密产品A]"}, ensure_ascii=False)
+        return httpx.Response(200, json={"choices": [{"message": {"content": None, "tool_calls": [
+            {"type": "function", "function": {"name": "f", "arguments": args}}]}}]})
+
+    llm_router.get_llm_http_client()._inner = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    out = await llm_router.call_chain(SLOT.CHAT, {
+        "messages": [{"role": "user", "content": '老"王"酱牛肉的价格'}],
+        "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]})
+
+    args = out["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(args) == {"product": '老"王"酱牛肉'}
+    assert upstream.bodies[0]["messages"][0]["content"] == "[保密产品A]的价格"
+
+
+@pytest.mark.asyncio
+async def test_stream_that_dies_mid_token_still_delivers_the_restored_tail(upstream, monkeypatch):
+    class _DiesMidAnswer(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            # 结尾的「单」可能是下一个代号的开头, 先攒着; 然后连接断了
+            yield ("data: " + json.dumps({"choices": [{"delta": {"content": "结论：[单位A] 和 单"}}]},
+                                         ensure_ascii=False) + "\n\n").encode("utf-8")
+            raise httpx.ReadError("connection reset")
+
+    def handler(request):
+        upstream.bodies.append(json.loads(request.content))
+        return httpx.Response(200, stream=_DiesMidAnswer(), headers={"content-type": "text/event-stream"})
+
+    llm_router.get_llm_http_client()._inner = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    events = [e async for e in llm_router.call_chain_stream(
+        SLOT.CHAT, {"messages": [{"role": "user", "content": SECRET}]})]
+
+    text = "".join(e.get("text", "") for e in events if e.get("type") == "delta")
+    assert text == "结论：华东冷链商贸有限公司 和 单"  # 断线前攒着的尾巴也发出去 (以前直接丢了)
+
+
+def test_video_analyzer_redacts_request_text_in_the_vision_prompt(monkeypatch):
+    from efficiency_recognition.services.video_analyzer import VideoEfficiencyAnalyzer
+
+    sent = []
+
+    class _Client:
+        def post(self, url, headers=None, json=None, **kw):
+            sent.append(json)
+            return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    analyzer = VideoEfficiencyAnalyzer.__new__(VideoEfficiencyAnalyzer)
+    analyzer.client, analyzer.base_url, analyzer.api_key, analyzer.model = _Client(), "https://llm.test/v1", "k", "m"
+
+    analyzer.analyze_frame("aW1n", 0, {"factory_type": "华东冷链商贸有限公司", "process_hint": "找赵铁柱 13912345678"})
+
+    text = json.dumps(sent, ensure_ascii=False)
+    assert sent and "13912345678" not in text and "[电话A]" in text
+    assert "华东冷链商贸有限公司" not in text and "赵铁柱" not in text
