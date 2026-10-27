@@ -92,7 +92,7 @@ public final class FactoryDataCatalog {
             "metadata ->> 'training_rule' IS NOT NULL AND metadata ->> 'desensitized' = 'true'");
 
     /**
-     * 按工厂备份的套餐 / 改动留痕 / 执行记录 (V20261103_88) 也是回执: 它们证明「这个厂的备份删干净了」,
+     * 按工厂备份的套餐 / 改动留痕 / 执行记录 (V20261103_90) 也是回执: 它们证明「这个厂的备份删干净了」,
      * 且调度每天写执行记录 —— 若按业务表算, 删除前的预演与删除时的逐表计数会对不上。
      */
     private static final Set<String> RECEIPT_TABLES = Set.of(RECEIPT_TABLE, FactoryAuditRetention.TABLE,

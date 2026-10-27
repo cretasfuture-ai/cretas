@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 真实 PostgreSQL: 按工厂备份 = 真实的整厂导出 + 迁移 V20261103_88 建的三张表。
+ * 真实 PostgreSQL: 按工厂备份 = 真实的整厂导出 + 迁移 V20261103_90 建的三张表。
  *
  * <p>加密器与对象存储用测试替身 (真实 age 的加解密见 {@link AgeBackupEncryptorTest});
  * 替身加密器写 age 文件头并把内容逐字节异或, 所以「上传的是明文」会被断言抓到。
@@ -81,7 +81,7 @@ class TenantBackupPostgresContractTest {
         exec(admin, Files.readString(Path.of("src/main/resources/db/flyway/V20261103_87__factory_data_requests.sql")));
         exec(admin, FactoryDataServiceFixture.mainSchema(schema));
         exec(admin, "SET search_path = " + schema + ";"
-                + Files.readString(Path.of("src/main/resources/db/flyway/V20261103_88__tenant_backup_plans.sql"))
+                + Files.readString(Path.of("src/main/resources/db/flyway/V20261103_90__tenant_backup_plans.sql"))
                 + "CREATE TABLE platform_admins (id bigint PRIMARY KEY, platform_role varchar(50), status varchar(20));");
         main = ds(url());
         main.setCurrentSchema(schema + ",public");
