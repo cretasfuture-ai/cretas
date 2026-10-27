@@ -234,6 +234,18 @@ public class FactoryErasureService {
                                 + stuck)
                 .withHint("给这些副本 schema 补上 YYYYMMDD 日期或删除权限, 让 30 天清理认得出它们");
                     }
+                    List<String> unreadableOther = FactoryDataService.unreadableOutside(conn, data.schema(), false);
+                    if (!unreadableOther.isEmpty()) {
+                        throw new BusinessException(409, db + " 库有不像副本的 schema 账号读不了, 查不清有没有该厂的行: "
+                                + unreadableOther)
+                .withHint("查清这些 schema 的用途: 是副本就按副本命名规则 (带 YYYYMMDD) 改名, 不是就给应用账号读权限后重新预演");
+                    }
+                    List<String> unreadableUndated = undated(FactoryDataService.unreadableOutside(conn, data.schema(), true));
+                    if (!unreadableUndated.isEmpty()) {
+                        throw new BusinessException(409, db + " 库这些副本账号读不了、名字里又没有日期 (30 天清理认不出): "
+                                + unreadableUndated)
+                .withHint("给这些副本 schema 补上 YYYYMMDD 日期或给应用账号读和删的权限, 再重新预演");
+                    }
                     if (db == Database.SMARTBI) smartbiTenants(conn, data.schema());   // 函数缺失 ⇒ 这里就失败
                     requireDeletePrivileges(conn, data.schema(),
                             scope.nonEmpty().stream().filter(t -> t.category().erased()).toList());
@@ -460,6 +472,11 @@ public class FactoryErasureService {
 
     private static final Pattern NAME_DATE = Pattern.compile("(\\d{8})");
 
+    /** {@code schema.table} 里 schema 名字没有 YYYYMMDD 的那些 (30 天清理认不出日期, 永远清不掉)。 */
+    static List<String> undated(List<String> schemaDotTables) {
+        return schemaDotTables.stream().filter(t -> !NAME_DATE.matcher(t.split("\\.", 2)[0]).find()).toList();
+    }
+
     /** public 以外 schema 的副本: 有权限的删掉该厂的行; 没权限的记下来, 随 30 天保留期过期 (backup-copy-retention.sh)。 */
     private static List<String> eraseCopies(Connection conn, String schema, String factoryId) throws SQLException {
         List<String> out = new ArrayList<>();
@@ -486,6 +503,11 @@ public class FactoryErasureService {
                 conn.rollback(sp);
                 out.add(c.table() + " " + c.rows() + " 行: 删除失败 (" + e.getSQLState() + "), 随副本保留期过期");
             }
+        }
+        // 账号读不了的副本: 数不了也删不了, 预检已保证名字里有日期 ⇒ 随 30 天清理过期
+        for (String t : FactoryDataService.unreadableOutside(conn, schema, true)) {
+            Matcher m = NAME_DATE.matcher(t.split("\\.", 2)[0]);
+            out.add(t + ": 账号读不了, 随副本保留期过期" + (m.find() ? " (副本日期 " + m.group(1) + ", 30 天后清理)" : ""));
         }
         return out;
     }
