@@ -264,5 +264,9 @@ jobs:
           # The full project requires more than Node's ~2 GiB default heap on
           # GitHub-hosted runners. Keep the complete check; raise only V8's
           # ceiling instead of weakening the TypeScript project or exclusions.
-          NODE_OPTIONS: --max-old-space-size=4096
+          # 2026-10-27 4096 -> 6144: measured with --extendedDiagnostics under an 8 GiB cap,
+          # origin/main 6aeabba934 alone peaks at 4,639,419K ("Memory used") —— already above
+          # 4096 MiB, so passing depended on GC luck; PR #1224 (+0.2% types) OOMed twice.
+          # Hosted runners have 16 GB and vitest has finished by this step.
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npx vue-tsc -b --force
