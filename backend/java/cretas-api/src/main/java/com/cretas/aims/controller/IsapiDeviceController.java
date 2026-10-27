@@ -452,12 +452,21 @@ public class IsapiDeviceController {
             @RequestParam String processedBy,
             @RequestParam(required = false) String result) {
 
-        eventLogRepository.findById(eventId).ifPresent(event -> {
-            event.markProcessed(processedBy, result);
-            eventLogRepository.save(event);
-        });
+        IsapiEventLog event = eventOfFactory(factoryId, eventId);
+        event.markProcessed(processedBy, result);
+        eventLogRepository.save(event);
 
         return ApiResponse.successMessage("处理完成");
+    }
+
+    /**
+     * 取本厂的事件。事件表没有租户过滤 (按 id 能取到任何工厂的事件), 别厂的事件按「不存在」处理 (不泄露存在与否)。
+     */
+    private IsapiEventLog eventOfFactory(String factoryId, Long eventId) {
+        return eventLogRepository.findById(eventId)
+                .filter(e -> factoryId != null && factoryId.equals(e.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(404, "事件不存在: " + eventId)
+                        .withHint("请检查 eventId 是否正确"));
     }
 
     // ==================== AI 分析相关 ====================
@@ -516,10 +525,7 @@ public class IsapiDeviceController {
             @PathVariable String factoryId,
             @PathVariable Long eventId) {
 
-        return eventLogRepository.findById(eventId)
-                .map(event -> ApiResponse.success(toEventDTO(event)))
-                .orElseThrow(() -> new BusinessException(404, "事件不存在: " + eventId)
-                        .withHint("请检查 eventId 是否正确"));
+        return ApiResponse.success(toEventDTO(eventOfFactory(factoryId, eventId)));
     }
 
     @RequirePermission({"system:read_write", "equipment:read_write"})
@@ -591,7 +597,13 @@ public class IsapiDeviceController {
             @RequestParam String processedBy,
             @RequestParam(required = false) String result) {
 
-        int count = eventLogRepository.markAsProcessed(eventIds, LocalDateTime.now(), processedBy);
+        // 事件表没有租户过滤: 先筛出本厂的事件, 别厂的 id 当作不存在 (计入 requestedCount, 不计入 processedCount)
+        List<Long> ownIds = eventLogRepository.findAllById(eventIds).stream()
+                .filter(e -> factoryId.equals(e.getFactoryId()))
+                .map(IsapiEventLog::getId)
+                .collect(Collectors.toList());
+        int count = ownIds.isEmpty() ? 0
+                : eventLogRepository.markAsProcessed(ownIds, LocalDateTime.now(), processedBy);
 
         Map<String, Object> response = new HashMap<>();
         response.put("processedCount", count);
