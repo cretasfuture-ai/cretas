@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { ChatDotRound, Download, Search, Refresh } from '@element-plus/icons-vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { toDateString } from '@/utils/dateFormat';
 import PeriodSelector, { type PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 import { getUploadHistory, type UploadHistoryItem } from '@/api/smartbi/upload';
 import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation } from '@/api/smartbi/factory-charts';
@@ -530,7 +531,7 @@ async function exportAnswer(turn: ChatTurn, format: 'excel' | 'pdf' | 'ppt') {
     });
     const extension = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'pptx';
     if (capturedVersion !== requestVersion.value || capturedIdentity !== identityKey.value || capturedScope !== turnScopeKey.value) return;
-    await downloadFactoryChartExport(format, payload, `工厂AI分析_${new Date().toISOString().slice(0, 10)}.${extension}`);
+    await downloadFactoryChartExport(format, payload, `工厂AI分析_${toDateString(new Date())}.${extension}`);
   } catch (err) {
     ElMessage.error(errorMessage(err, '导出失败，请稍后重试'));
   } finally {
