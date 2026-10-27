@@ -89,6 +89,7 @@ import {
   isOwnerActionFollowupText,
 } from './restaurantOwnerActionRegistry';
 import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
+import FactoryAnalysisChat from './FactoryAnalysisChat.vue';
 
 // Render markdown content safely
 function renderMarkdown(text: string): string {
@@ -745,6 +746,9 @@ function inferDomainFromFilename(name: string): string {
 // grouped catalog (rendered separately in the template). This flat list is used
 // as a fallback for non-restaurant tenants and the autocomplete list.
 const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
+/** Factory-only free-question analysis is an explicit child mode. Generic AI
+ * chat remains untouched for the normal query tab and for restaurant tenants. */
+const isFactoryAnalysisMode = computed(() => route.query.mode === 'factory' && !isRestaurantTenant.value);
 
 function customerSafeAnswer(text: string): string {
   return isRestaurantTenant.value ? sanitizeCustomerAiText(text) : text;
@@ -1098,6 +1102,9 @@ const chartInstances: Map<string, echarts.ECharts> = new Map();
 const pageRef = ref<HTMLElement>();
 
 onMounted(async () => {
+  // Factory free-question mode owns its own scoped client and must not start
+  // the legacy upload/template/chat pipeline behind the child view.
+  if (isFactoryAnalysisMode.value) return;
   // 加载可用数据源列表，去重 + 智能默认选择
   try {
     const res = await getUploadHistory({ status: 'COMPLETED' });
@@ -1151,6 +1158,7 @@ onMounted(async () => {
 // onMounted 与本 watch 都会读初始 q: watch 默认 (immediate:false) 不在挂载时
 // 触发, 所以首次进入只由 onMounted 提交, 不会双发; 之后 q 变化才由 watch 接管.
 function submitRouteQuery(q: string, waitForDataSource = false): void {
+  if (isFactoryAnalysisMode.value) return;
   const text = String(q).trim();
   if (!text) return;
   inputQuery.value = text;
@@ -1168,6 +1176,7 @@ function submitRouteQuery(q: string, waitForDataSource = false): void {
 watch(
   () => route.query.q,
   (q) => {
+    if (isFactoryAnalysisMode.value) return;
     if (typeof q === 'string' && q.trim()) {
       submitRouteQuery(q, /* waitForDataSource */ false);
     }
@@ -2638,7 +2647,8 @@ function handleKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div ref="pageRef" class="ai-query-page">
+  <FactoryAnalysisChat v-if="isFactoryAnalysisMode" />
+  <div v-else ref="pageRef" class="ai-query-page">
     <div class="page-header">
       <div class="header-left">
         <h1>
