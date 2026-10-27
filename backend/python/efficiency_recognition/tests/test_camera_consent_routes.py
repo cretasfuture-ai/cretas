@@ -307,20 +307,23 @@ def test_streams_are_listed_removed_and_stopped_only_for_the_factory_that_added_
 
 @pytest.mark.asyncio
 async def test_a_running_stream_stops_before_sending_once_the_switch_is_off(monkeypatch):
-    from efficiency_recognition.services.multi_stream_sampler import MultiStreamSampler, StreamConfig, StreamTask
+    from efficiency_recognition.services.multi_stream_sampler import (
+        AnalysisResult, MultiStreamSampler, StreamConfig, StreamTask)
 
     _consent(monkeypatch, {"F006": '{"cameraSnapshotAnalysis": false}'})
     s = MultiStreamSampler(max_concurrent=1)
     monkeypatch.setattr(s, "capture_frame", lambda url, timeout=10: "aW1n")
     sent = []
 
-    async def spy(frame, config):
-        sent.append(frame)
-        raise AssertionError("不应送模型")
-
-    monkeypatch.setattr(s, "_analyze_frame", spy)
     task = StreamTask(config=StreamConfig(stream_id="s6", rtsp_url="rtsp://x", interval_seconds=0,
                                           use_local_preprocessing=False, factory_id="F006"))
+
+    async def spy(frame, config):
+        sent.append(frame)  # 不应走到这里; 走到了也收工, 让断言给出红而不是死循环
+        task.is_active = False
+        return AnalysisResult(stream_id="s6", timestamp="t", analysis_type="efficiency", success=False)
+
+    monkeypatch.setattr(s, "_analyze_frame", spy)
 
     await s._run_stream_loop(task)
 
