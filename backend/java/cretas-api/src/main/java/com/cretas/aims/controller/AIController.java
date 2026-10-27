@@ -92,6 +92,10 @@ public class AIController {
     @Autowired
     private ConversionRepository conversionRepository;
 
+    /** 工艺保密 (写入侧): 给已有保密产品新增转换率 = 往它的配方里加配比, 要编辑权。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     // ========== 成本分析接口 ==========
 
     /**
@@ -661,6 +665,17 @@ public class AIController {
             @RequestAttribute("userId") Long userId) {
 
         log.info("开始 AI 业务数据初始化 - 工厂: {}, 用户: {}", factoryId, userId);
+
+        // 工艺保密 (写入侧, 独立审查 V2.1 M1): 在任何写入之前判 —— 本方法没有事务, 判晚了会留下半套数据
+        if (processSecretGuard != null && request.getConversionRates() != null) {
+            for (AIBusinessDataRequest.ConversionRateData crData : request.getConversionRates()) {
+                if (crData == null || crData.getProductTypeCode() == null) continue;
+                productTypeRepository.findByFactoryIdAndCode(factoryId, crData.getProductTypeCode())
+                        .ifPresent(existing -> processSecretGuard.requireProduct(factoryId, existing.getId(),
+                                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                                "ai business-data initialize conversion " + crData.getProductTypeCode()));
+            }
+        }
 
         try {
             int productTypesCreated = 0;

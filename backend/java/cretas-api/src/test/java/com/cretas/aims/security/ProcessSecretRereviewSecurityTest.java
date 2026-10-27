@@ -175,6 +175,61 @@ class ProcessSecretRereviewSecurityTest {
     }
 
     @Test
+    void workflowRoutesOfARawMaterialAnchorAlsoCheckTheWorkflowsTerminalOutputs() {
+        // 独立审查 V2.1 M3: 多产出工艺图挂在原料锚点上 (id 就是原料 id, 不受保护); 编辑 / 发布 / 启停它
+        // 就是在改受保护成品的工艺, 路由闸要把终端产出一起判
+        String[] graph = com.cretas.aims.service.processsecret.ProcessSecretTestHooks
+                .workflowGraphJson(List.of("RAW-BEEF"), List.of("Q-OPEN", SECRET));
+        com.cretas.aims.entity.ProductProcessWorkflow workflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        workflow.setId(5L);
+        workflow.setFactoryId(F);
+        workflow.setProductTypeId("RAW-BEEF");
+        workflow.setNodesJson(graph[0]);
+        workflow.setEdgesJson(graph[1]);
+        ProductProcessWorkflowRepository workflows = mock(ProductProcessWorkflowRepository.class);
+        when(workflows.findById(5L)).thenReturn(Optional.of(workflow));
+        when(workflows.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(F, "RAW-BEEF"))
+                .thenReturn(List.of(workflow));
+        ProcessSecretGuardInterceptor guard = new ProcessSecretGuardInterceptor(access, recipes,
+                mock(BomRecipeItemRepository.class), workflows, mock(BomVersionRepository.class),
+                mock(ProductionBatchRepository.class), plans, mock(FactoryMaterialRequisitionRepository.class));
+        Class<?> controller = com.cretas.aims.controller.ProductProcessWorkflowController.class;
+        Map<String, String> vars = Map.of("factoryId", F, "productTypeId", "RAW-BEEF", "workflowId", "5");
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        http.setParameter("productTypeId", "RAW-BEEF");
+
+        for (String route : List.of("saveDraft", "publish", "publishAndActivate", "getVersion", "activate",
+                "deactivate")) {
+            assertThat(guard.resolveProducts(guardOf(controller, route), F, vars, http)).as(route)
+                    .contains(SECRET);
+        }
+
+        // 对照: 普通单产出产品 (图的终端产出就是它自己) 不多出别的产品
+        String[] plain = com.cretas.aims.service.processsecret.ProcessSecretTestHooks
+                .workflowGraphJson(List.of("RAW-PORK"), List.of("Q-PLAIN"));
+        com.cretas.aims.entity.ProductProcessWorkflow plainWorkflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        plainWorkflow.setFactoryId(F);
+        plainWorkflow.setProductTypeId("Q-PLAIN");
+        plainWorkflow.setNodesJson(plain[0]);
+        plainWorkflow.setEdgesJson(plain[1]);
+        when(workflows.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(F, "Q-PLAIN"))
+                .thenReturn(List.of(plainWorkflow));
+        assertThat(guard.resolveProducts(guardOf(controller, "saveDraft"), F,
+                Map.of("factoryId", F, "productTypeId", "Q-PLAIN"), http)).contains("Q-PLAIN").doesNotContain(SECRET);
+
+        // 图解析不了: 无法确认牵涉哪些产品 —— 按本厂全部保密产品判 (fail-closed, 不退回只看锚点);
+        // ⛔ 不一律 403: 对全部保密产品都有权的人还得能进来修这张图
+        com.cretas.aims.entity.ProductProcessWorkflow broken = new com.cretas.aims.entity.ProductProcessWorkflow();
+        broken.setFactoryId(F);
+        broken.setProductTypeId("RAW-LAMB");
+        broken.setNodesJson("{not json");
+        when(workflows.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(F, "RAW-LAMB"))
+                .thenReturn(List.of(broken));
+        assertThat(guard.resolveProducts(guardOf(controller, "saveDraft"), F,
+                Map.of("factoryId", F, "productTypeId", "RAW-LAMB"), http)).contains("RAW-LAMB", SECRET);
+    }
+
+    @Test
     void planListParameterIsCappedBeforeAnyLookup() {
         ProcessSecretGuardInterceptor guard = interceptor(mock(ProductionBatchRepository.class),
                 mock(FactoryMaterialRequisitionRepository.class));

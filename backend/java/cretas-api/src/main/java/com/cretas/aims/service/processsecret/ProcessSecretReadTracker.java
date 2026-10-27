@@ -50,7 +50,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     static final String REQUEST_ATTRIBUTE = ProcessSecretReadTracker.class.getName() + ".reads";
 
     /** 读到的工艺内容来源。{@code kind} 决定 {@code id} 怎么换成产品。 */
-    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN, PRODUCTION_BATCH, MATERIAL_REQUISITION, BOM_DRAFT }
+    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, WORKFLOW_OUTPUT, PRODUCTION_PLAN, PRODUCTION_BATCH, MATERIAL_REQUISITION, BOM_DRAFT }
 
     /**
      * 一笔读数。{@code member} 只用于计划 / 批次: 这一行自己的产品 (半成品 / 副产 / 锚点), 出口把它当作
@@ -98,10 +98,10 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     /** 包内可见, 供测试和不经过 Hibernate 的读取 (如 JSON 快照) 直接调用。 */
     static void record(Object entity) {
         if (entity == null) return;
-        List<Read> found = readsOf(entity);
-        if (found.isEmpty()) return;
+        // 先看有没有人在记: 没有就不算 (工艺图要解析 JSON, 不能让每次加载都付这个钱; 独立审查 V2.1 复核)
         Set<Read> sink = sink(true);
-        if (sink != null) sink.addAll(found);
+        if (sink == null) return;
+        sink.addAll(readsOf(entity));
     }
 
     /** 哪些实体算「配方内容」。新增敏感实体要加在这里, 并登记进 ProcessSecretDataLayerContractTest。 */
@@ -118,9 +118,15 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
         if (entity instanceof MaterialProductConversion c) return product(c.getFactoryId(), c.getProductTypeId());
         if (entity instanceof ConversionChangeHistory h) return product(h.getFactoryId(), h.getProductTypeId());
         if (entity instanceof ProductWorkProcess p) return product(p.getFactoryId(), p.getProductTypeId());
-        if (entity instanceof ProductProcessWorkflow w) return product(w.getFactoryId(), w.getProductTypeId());
-        if (entity instanceof ProductProcessWorkflowRevision w) return product(w.getFactoryId(), w.getProductTypeId());
-        if (entity instanceof ProductionWorkflowInstance w) return product(w.getFactoryId(), w.getProductTypeId());
+        if (entity instanceof ProductProcessWorkflow w) {
+            return workflow(w.getFactoryId(), w.getProductTypeId(), w.getNodesJson(), w.getEdgesJson());
+        }
+        if (entity instanceof ProductProcessWorkflowRevision w) {
+            return workflow(w.getFactoryId(), w.getProductTypeId(), w.getNodesJson(), w.getEdgesJson());
+        }
+        if (entity instanceof ProductionWorkflowInstance w) {
+            return workflow(w.getFactoryId(), w.getProductTypeId(), w.getNodesJson(), w.getEdgesJson());
+        }
         if (entity instanceof WorkflowTaskPort p) {
             return p.getWorkflowInstanceId() == null ? List.of()
                     : List.of(new Read(Kind.WORKFLOW_INSTANCE, p.getFactoryId(), String.valueOf(p.getWorkflowInstanceId())));
@@ -208,6 +214,42 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             // 读不出成员就只记计划: 行的产品归属不可信, 出口按整份受限处理 (见裁剪器 distrustAttribution)
             return Set.of();
         }
+    }
+
+    /** 成员未知 (图解析不了): 出口当作「无法确认的产品」。 */
+    static final String UNKNOWN_MEMBER = "";
+
+    /**
+     * 本厂有没有保密产品 (由 Spring 启动时接到判定服务的缓存名单上)。没有就不解析工艺图 JSON ——
+     * 请求里总有记录处, 不能让无保密产品的工厂每次加载工艺图都付解析的钱 (独立审查 V2.1 复核)。
+     * 未接上时默认「有」: 宁可多解析, 不漏。
+     */
+    private static volatile java.util.function.Predicate<String> factoryHasProtectedProducts = factoryId -> true;
+
+    public static void useProtectedFactoryProbe(java.util.function.Predicate<String> probe) {
+        factoryHasProtectedProducts = probe == null ? factoryId -> true : probe;
+    }
+
+    /**
+     * 工艺图 (定义 / 版本 / 运行实例): 所属产品 + 图里出现的每个产品记成该图的成员。多产出图挂在原料锚点上,
+     * 锚点不受保护, 受保护的是它产出的成品; 出口把成员当兄弟产出 (独立审查 V2.1 M3)。
+     */
+    private static List<Read> workflow(String factoryId, String ownerProductTypeId, String nodesJson, String edgesJson) {
+        List<Read> found = new java.util.ArrayList<>(product(factoryId, ownerProductTypeId));
+        if (ownerProductTypeId == null || ownerProductTypeId.isBlank()) return found;
+        if (factoryId == null || !factoryHasProtectedProducts.test(factoryId)) return found;
+        java.util.Optional<Set<String>> products = ProcessSecretWorkflowOutputs.productsInGraph(nodesJson);
+        if (products.isEmpty()) {
+            // 图解析不了: 无法确认牵涉哪些产品 —— 记一个「未知成员」, 出口按受保护处理 (fail-closed)
+            found.add(new Read(Kind.WORKFLOW_OUTPUT, factoryId, ownerProductTypeId, UNKNOWN_MEMBER));
+            return found;
+        }
+        for (String output : products.get()) {
+            if (!output.equals(ownerProductTypeId)) {
+                found.add(new Read(Kind.WORKFLOW_OUTPUT, factoryId, ownerProductTypeId, output));
+            }
+        }
+        return found;
     }
 
     private static List<Read> product(String factoryId, String productTypeId) {

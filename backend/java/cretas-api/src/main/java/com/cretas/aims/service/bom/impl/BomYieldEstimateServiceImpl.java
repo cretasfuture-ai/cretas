@@ -55,6 +55,9 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     private final BomChangeLogRepository bomChangeLogRepository;
     private final YieldReportService yieldReportService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Override
     public BomYieldEstimateDTO estimateForProduct(
             String factoryId, String productTypeId, String materialCategory) {
@@ -146,6 +149,16 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
             String factoryId, List<BomYieldApplyRequest> requests) {
         for (BomYieldApplyRequest request : requests) {
             assertYieldRateInRange(request);
+        }
+        // 工艺保密 (写入侧): 点名的配方里任一属于调用者无编辑权的保密产品, 整批 403、一条都不写。
+        // ⛔ 必须在下面的「过期校验」之前: 过期 409 会把库里的标准出成率 (dbCurrent) 原样带回去 (独立审查 V2.1 H1)
+        if (processSecretGuard != null) {
+            List<BomRecipe> targets = new ArrayList<>();
+            for (BomYieldApplyRequest request : requests) {
+                findOwnedActiveRecipe(factoryId, request.getRecipeId()).ifPresent(targets::add);
+            }
+            processSecretGuard.requireRecipes(factoryId, targets,
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "bom yield recalculate-apply");
         }
         List<BomYieldStaleRowDTO> staleRows = new ArrayList<>();
         for (BomYieldApplyRequest request : requests) {

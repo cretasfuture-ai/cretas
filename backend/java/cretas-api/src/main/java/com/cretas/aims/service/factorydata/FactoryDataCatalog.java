@@ -91,7 +91,12 @@ public final class FactoryDataCatalog {
             "smart_bi_distillation_samples",
             "metadata ->> 'training_rule' IS NOT NULL AND metadata ->> 'desensitized' = 'true'");
 
-    private static final Set<String> RECEIPT_TABLES = Set.of(RECEIPT_TABLE, FactoryAuditRetention.TABLE);
+    /**
+     * 按工厂备份的套餐 / 改动留痕 / 执行记录 (V20261103_91) 也是回执: 它们证明「这个厂的备份删干净了」,
+     * 且调度每天写执行记录 —— 若按业务表算, 删除前的预演与删除时的逐表计数会对不上。
+     */
+    private static final Set<String> RECEIPT_TABLES = Set.of(RECEIPT_TABLE, FactoryAuditRetention.TABLE,
+            "tenant_backup_plans", "tenant_backup_plan_changes", "tenant_backup_runs");
 
     private static final Pattern COPY_TABLE = Pattern.compile("^(backup_|repair_backup_|bak_|mock_rest_bak_).*");
     private static final Pattern LEDGER_TABLE = Pattern.compile(

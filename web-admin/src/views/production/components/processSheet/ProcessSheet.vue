@@ -392,16 +392,17 @@ async function resolveProcesses() {
 // 也不是危险方向的错(不会漏掉该录的锅数, 只会多问一次), 但如实记录这个已知差异。
 async function resolveSeasoningProcesses(): Promise<{ configured: Set<string>; potEnabled: Set<string> }> {
   try {
-    const response = await bomSeasoningApi.getByProduct(props.factoryId, props.productTypeId);
-    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.seasoningItems)) {
+    // 只取工序标记 (不含配比): 工艺保密产品对无授权的人也照常返回, 抽屉不会因此整张打不开
+    const response = await bomSeasoningApi.getProcessFlagsByProduct(props.factoryId, props.productTypeId);
+    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.processes)) {
       if (isNotFoundError(response)) return { configured: new Set(), potEnabled: new Set() };
       throw new Error('调料配方响应异常');
     }
     return {
-      configured: new Set((response.data.seasoningItems || []).map((item) => item.workProcessId)),
+      configured: new Set(response.data.processes.map((item) => item.workProcessId)),
       potEnabled: new Set(
-        response.data.seasoningItems
-          .filter((item) => item.subsequentPotRatio != null)
+        response.data.processes
+          .filter((item) => item.potEnabled === true)
           .map((item) => item.workProcessId),
       ),
     };

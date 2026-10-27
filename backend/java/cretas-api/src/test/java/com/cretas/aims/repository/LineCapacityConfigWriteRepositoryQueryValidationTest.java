@@ -93,7 +93,7 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
     void setUp() throws Exception {
         if (onPostgres()) {
             // the migration's partial unique indexes (ddl-auto=create does not know them)
-            String sql = new ClassPathResource("db/flyway/V20261103_91__line_capacity_and_equipment_requirements.sql")
+            String sql = new ClassPathResource("db/flyway/V20261103_92__line_capacity_and_equipment_requirements.sql")
                     .getContentAsString(StandardCharsets.UTF_8);
             // comments first: they contain ';' too
             List<String> uniques = Arrays.stream(sql.replaceAll("(?m)--.*$", "").split(";"))
