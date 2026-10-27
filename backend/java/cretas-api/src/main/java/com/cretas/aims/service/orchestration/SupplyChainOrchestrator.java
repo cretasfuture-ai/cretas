@@ -104,6 +104,10 @@ public class SupplyChainOrchestrator {
     @Autowired(required = false)
     private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
 
+    /** 质检放行 (缺口 11/13): 生产完工自动入成品时叠加「待检」; 未注入 = 旧行为 AVAILABLE。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
+
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for auto-cascade path. */
     @Autowired(required = false)
     private LinkArrayService linkArrayService;
@@ -787,6 +791,12 @@ public class SupplyChainOrchestrator {
         //    归给这批货的生产批次负责人; 没有就如实留空, ⛔ 不再兜底一个假 id。
         fg.setCreatedBy(resolveBatchActor(batch));
         fg.setStatus("AVAILABLE");
+        if (qcInspectionPolicy != null) {
+            // 质检放行 (缺口 11/13): 需检产品 / 有未处理 CCP 偏离 ⇒ 待检。
+            fg.setStatus(qcInspectionPolicy.finishedGoodsStatusForOutput(batch.getFactoryId(),
+                    batch.getProductTypeId(), batch.getProductionPlanId(), fg.getStatus(),
+                    fgBatchNumber, batch.getBatchNumber()));
+        }
         fg.setUnit(fgUnit);
         if (conversionRemark != null) {
             fg.setRemark(conversionRemark);

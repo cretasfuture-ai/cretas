@@ -73,6 +73,10 @@ public class CanvasFoodSafetyController {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.quality.FactoryRecallService factoryRecallService;
 
+    /** 缺口 13: 校验 CCP 挂的工序属于本厂。required=false: 既有直接 new 的单测不注入 = 不校验。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.WorkProcessRepository workProcessRepository;
+
     /** Max length for VARCHAR columns — AUD-5 length pre-check. */
     private static final int SHORT_CODE_MAX = 50;
     private static final int NAME_MAX = 100;
@@ -208,6 +212,7 @@ public class CanvasFoodSafetyController {
                 .correctiveAction(textField(body, "correctiveAction"))
                 .verificationProcedure(textField(body, "verificationProcedure"))
                 .recordKeeping(textField(body, "recordKeeping"))
+                .workProcessId(ownedWorkProcess(factoryId, workProcessField(body)))   // 缺口 13: 挂到工序
                 .active(booleanField(body, "active", true))
                 .build();
         HaccpCheckpoint saved = haccpCheckpointRepo.saveAndFlush(cp);
@@ -294,6 +299,7 @@ public class CanvasFoodSafetyController {
         if (body.containsKey("verificationProcedure")) cp.setVerificationProcedure(textField(body, "verificationProcedure"));
         if (body.containsKey("recordKeeping")) cp.setRecordKeeping(textField(body, "recordKeeping"));
         if (body.containsKey("active")) cp.setActive(booleanField(body, "active", cp.isActive()));
+        if (body.containsKey("workProcessId")) cp.setWorkProcessId(ownedWorkProcess(factoryId, workProcessField(body)));
 
         try {
             HaccpCheckpoint saved = haccpCheckpointRepo.saveAndFlush(cp);
@@ -647,6 +653,7 @@ public class CanvasFoodSafetyController {
         m.put("verificationProcedure", c.getVerificationProcedure());
         m.put("recordKeeping", c.getRecordKeeping());
         m.put("active", c.isActive());
+        m.put("workProcessId", c.getWorkProcessId());   // 缺口 13
         m.put("version", c.getVersion());  // AUD-4 client snapshot
         m.put("createdAt", c.getCreatedAt() != null ? c.getCreatedAt().toString() : null);
         m.put("updatedAt", c.getUpdatedAt() != null ? c.getUpdatedAt().toString() : null);
@@ -663,8 +670,37 @@ public class CanvasFoodSafetyController {
         m.put("measuredValue", r.getMeasuredValue());
         m.put("operatorUserId", r.getOperatorUserId());
         m.put("isDeviation", r.isDeviation());
+        // 缺口 13: 偏离处理状态 + 报工上下文
+        m.put("deviationHandled", r.getDeviationHandledAt() != null);
+        m.put("deviationAction", r.getDeviationAction());
+        m.put("workProcessId", r.getWorkProcessId());
+        m.put("processOrder", r.getProcessOrder());
+        m.put("source", r.getSource());
         m.put("createdAt", r.getCreatedAt() != null ? r.getCreatedAt().toString() : null);
         return m;
+    }
+
+    /** 工序必须属于本厂 (防跨租户挂错); null = 解绑。 */
+    private String ownedWorkProcess(String factoryId, String workProcessId) {
+        if (workProcessId == null || workProcessRepository == null) return workProcessId;
+        if (workProcessRepository.findByFactoryIdAndId(factoryId, workProcessId).isEmpty()) {
+            throw new com.cretas.aims.exception.BusinessException(400, "工序不存在或不属于本工厂: " + workProcessId)
+                    .withHint("请从工序下拉里重新选择");
+        }
+        return workProcessId;
+    }
+
+    /** 工序 id: 空串 = 解绑 (null)。长度与 work_processes.id 一致 (50)。 */
+    private static String workProcessField(Map<String, Object> body) {
+        Object v = body.get("workProcessId");
+        if (v == null) return null;
+        String s = v.toString().trim();
+        if (s.isEmpty()) return null;
+        if (s.length() > 50) {
+            throw new com.cretas.aims.exception.BusinessException(400, "工序 id 过长: " + s)
+                    .withHint("请从工序下拉里选择");
+        }
+        return s;
     }
 
     private Map<String, Object> serializeAdditive(AdditiveLimit a) {

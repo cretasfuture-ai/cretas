@@ -125,6 +125,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                         .withHint("请重新选择仍有库存的成品批次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(batchNumber));
+        // 质检放行 (缺口 11): 待检成品不能作投料来源 (下拉本来就只列 AVAILABLE, 这里兜住直接引用批号的情况)。
+        com.cretas.aims.service.quality.release.QcInspectionGuard.assertFinishedGoodsFeedable(fg, batchNumber);
 
         // 🟠 单位折算 (禁止降级): 气调成品常按 盒/托 计量, 逐道投料量 feedUnit 为 kg。
         //   (a) 计数单位成品 (盒/个/件/只) + kg 投料: 依据 ProductType.gramsPerUnit 把 kg 折算为盒数扣减
@@ -548,9 +550,11 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
         finishedGoodsAdjustmentLogRepository.save(logEntry);
 
         fg.setProducedQuantity(after);
-        // 还量后有可用 → 从 DEPLETED/REVERSED 恢复 AVAILABLE。
-        if (!fg.isDepleted() && !FinishedGoodsBatch.Status.EXPIRED.equals(fg.getStatus())
-                && !FinishedGoodsBatch.Status.FROZEN.equals(fg.getStatus())) {
+        // 还量后有可用 → 只有因量耗尽而变的 DEPLETED/REVERSED 才恢复 AVAILABLE。
+        // ⛔ 白名单而非黑名单: 待检 (PENDING_INSPECTION) / 不良品 (DEFECTIVE) / 冻结 / 过期都是质量或业务判定,
+        //    撤销一笔投料不能把它们洗成可售 (缺口 11 审查: 旧的「除 EXPIRED/FROZEN 外一律改回」会洗白)。
+        if (!fg.isDepleted() && (FinishedGoodsBatch.Status.DEPLETED.equals(fg.getStatus())
+                || FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()))) {
             fg.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         }
         finishedGoodsBatchRepository.save(fg);

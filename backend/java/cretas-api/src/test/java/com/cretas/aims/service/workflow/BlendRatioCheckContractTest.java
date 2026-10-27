@@ -314,6 +314,10 @@ class BlendRatioCheckContractTest {
             rowRepo = mock(ProcessSheetRowRepository.class);
             when(rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(eq(F), eq(PLAN), anyString(), anyString()))
                     .thenThrow(PASSED_SELECTION_GATES);
+            // 缺口 13 第三轮审查 M-2: 正式提交改用加行锁的查询读已有行 —— 哨兵同样挂在它上面
+            when(rowRepo.findForUpdateByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                    eq(F), eq(PLAN), anyString(), anyString()))
+                    .thenThrow(PASSED_SELECTION_GATES);
             WorkflowClerkSheetConfigDTO.PortDescriptor out = new WorkflowClerkSheetConfigDTO.PortDescriptor();
             out.setWorkflowPortId("out-mix");
             out.setSkuId("SEMI-MIX");

@@ -323,6 +323,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         // NOT NULL。请求没传这个字段就维持 DB 语义上的默认值 TRUE, 不要把实体的默认值
         // 覆盖成 null。
         productType.setAcceptsRework(dto.getAcceptsRework() != null ? dto.getAcceptsRework() : Boolean.TRUE);
+        // 质检放行「需检」同一个 NOT NULL 坑: 没传就是 FALSE (不需检), ⛔ 不写 null。
+        productType.setInspectionRequired(Boolean.TRUE.equals(dto.getInspectionRequired()));
         productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         productType.setStandardCost(dto.getStandardCost());
         productType.setTargetGrossMargin(dto.getTargetGrossMargin());
@@ -459,6 +461,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
         if (dto.getReworkPurityLevel() != null) productType.setReworkPurityLevel(dto.getReworkPurityLevel());
         if (dto.getAcceptsRework() != null) productType.setAcceptsRework(dto.getAcceptsRework());
+        if (dto.getInspectionRequired() != null) productType.setInspectionRequired(dto.getInspectionRequired());
         if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
         if (dto.isStandardCostPresent()) productType.setStandardCost(dto.getStandardCost());
         if (dto.isTargetGrossMarginPresent()) productType.setTargetGrossMargin(dto.getTargetGrossMargin());
@@ -1303,6 +1306,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .wipToFgYield(productType.getWipToFgYield())
                 .reworkPurityLevel(productType.getReworkPurityLevel())
                 .acceptsRework(productType.getAcceptsRework())
+                .inspectionRequired(Boolean.TRUE.equals(productType.getInspectionRequired()))
                 .quotedLaborCostPerKg(productType.getQuotedLaborCostPerKg()) // SP9-M1
                 .standardCost(productType.getStandardCost())
                 .targetGrossMargin(productType.getTargetGrossMargin())

@@ -339,6 +339,14 @@ public class SemiFinishedStocktakeServiceImpl implements SemiFinishedStocktakeSe
             //   财务差异凭证是文档化的 FOLLOW-UP (SP7 原料盘点也不过账损益凭证)。
             BigDecimal newAdjustment = newAvail.subtract(produced.subtract(consumed))
                     .setScale(2, RoundingMode.HALF_UP);
+            // 缺口 11 (第二轮审查): 这一行有待检数量时, 盘盈多出来的量来历不明 —— 按保守口径一并进待检,
+            // 不让它绕过质检放行直接可领 (待检数量为空 = 旧数据整行待检, 封顶为余额, 自动覆盖盘盈)。
+            if (realizedDelta.signum() > 0
+                    && SemiFinishedInventory.InspectionStatus.PENDING.equals(sfi.getInspectionStatus())
+                    && sfi.getInspectionPendingQuantity() != null
+                    && sfi.getInspectionPendingQuantity().signum() > 0) {
+                sfi.setInspectionPendingQuantity(sfi.getInspectionPendingQuantity().add(realizedDelta));
+            }
             sfi.setAdjustmentQuantity(newAdjustment);
             sfi.setAvailableQuantity(newAvail);
             // 状态同步 (镜像 WipInventoryServiceImpl; 不覆盖 RETURNED)

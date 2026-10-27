@@ -460,6 +460,24 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanId(
             @Param("factoryId") String factoryId, @Param("productionPlanId") String productionPlanId);
 
+    /**
+     * 质检放行 (缺口 11 第二轮审查 M2): 这些计划 (或计划 id 以 {@code planIdPrefix} 开头的计划, 给逐道录入锚号用)
+     * 里有多少生产批次质检判了 FAILED。>0 ⇒ 这些计划的产出 (半成品行 / 在制批次 / 成品) 都不能放行。
+     * 调用方用哨兵值代替空集合/空前缀 (IN () 与 LIKE '' 都会出错)。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL "
+           + "AND b.qualityStatus = com.cretas.aims.entity.enums.QualityStatus.FAILED "
+           + "AND (b.productionPlanId IN :planIds OR b.productionPlanId LIKE :planIdPrefixPattern ESCAPE '\\')")
+    long countQcFailedInPlans(@Param("factoryId") String factoryId,
+                              @Param("planIds") java.util.Collection<String> planIds,
+                              @Param("planIdPrefixPattern") String planIdPrefixPattern);
+
+    /** 一次取出这些生产批次的计划 id (质检放行反查计划, 第三轮审查 L-6: 不逐个 findById)。 */
+    @Query("SELECT DISTINCT b.productionPlanId FROM ProductionBatch b WHERE b.factoryId = :factoryId "
+           + "AND b.id IN :ids AND b.productionPlanId IS NOT NULL")
+    java.util.List<String> findPlanIdsByIds(@Param("factoryId") String factoryId,
+                                           @Param("ids") java.util.Collection<Long> ids);
+
     /** Cleanup-only lineage lookup: includes CLERK_WIP batches for reversal repair. */
     java.util.List<ProductionBatch> findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
             String factoryId, String productionPlanId);

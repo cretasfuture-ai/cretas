@@ -222,6 +222,36 @@ class FactoryRecallServiceContractTest {
                         && BATCH_ID.equals(action.getTargetEntityId())));
     }
 
+    /** 缺口 11 审查中 5: 召回冻结覆盖待检批次 —— 否则召回中的批次之后被质检放行成可售。 */
+    @Test
+    void createFreezesPendingInspectionSourceToo() {
+        source.setStatus(FinishedGoodsBatch.Status.PENDING_INSPECTION);
+        RecallEvent saved = RecallEvent.builder().id(902L).factoryId(FACTORY)
+                .eventCode("RECALL-20261027-QC000001").status("FROZEN").triggerReason("ccp").build();
+        when(recallEventRepository.findByEventCode(anyString())).thenReturn(Optional.empty());
+        when(recallEventRepository.saveAndFlush(any(RecallEvent.class))).thenReturn(saved);
+        when(recallActionRepository.save(any(RecallAction.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.create(FACTORY, BATCH_ID, "ccp", 7L);
+
+        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, source.getStatus());
+    }
+
+    /** 阴性对照: 已耗尽 (DEPLETED) 的源批次不被冻结改写 —— 冻结只针对还能流出去的可售 / 待检。 */
+    @Test
+    void createLeavesDepletedSourceAlone() {
+        source.setStatus(FinishedGoodsBatch.Status.DEPLETED);
+        RecallEvent saved = RecallEvent.builder().id(903L).factoryId(FACTORY)
+                .eventCode("RECALL-20261027-QC000002").status("FROZEN").triggerReason("ccp").build();
+        when(recallEventRepository.findByEventCode(anyString())).thenReturn(Optional.empty());
+        when(recallEventRepository.saveAndFlush(any(RecallEvent.class))).thenReturn(saved);
+        when(recallActionRepository.save(any(RecallAction.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.create(FACTORY, BATCH_ID, "ccp", 7L);
+
+        assertEquals(FinishedGoodsBatch.Status.DEPLETED, source.getStatus());
+    }
+
     @Test
     void unmanagedLegacyEventDoesNotActivateReleaseGuard() {
         RecallEvent event = RecallEvent.builder().id(902L).factoryId(FACTORY)

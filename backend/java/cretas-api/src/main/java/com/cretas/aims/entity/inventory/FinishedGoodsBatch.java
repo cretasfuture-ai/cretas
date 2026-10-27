@@ -190,11 +190,18 @@ public class FinishedGoodsBatch extends BaseEntity {
          * 质检经理复核后可改回 AVAILABLE。
          */
         public static final String DEFECTIVE  = "DEFECTIVE";
+        /**
+         * 待检 (缺口 11 质检放行, V20261103_88): 「需检」产品的生产产出、或所在批次/计划有未处理的
+         * CCP 偏离时, 成品入库即为此状态。与 DEFECTIVE 同理 —— 现有可售/FEFO/投料/调拨查询全部过滤
+         * status='AVAILABLE', 所以待检批次天然不进任何候选; 手工分配/发货再由
+         * {@code FinishedGoodsBatchSaleabilityGuard} 给出专门的错误码。放行 → AVAILABLE, 判不合格 → DEFECTIVE。
+         */
+        public static final String PENDING_INSPECTION = "PENDING_INSPECTION";
 
         private Status() {}
     }
 
-    /** 状态: AVAILABLE / DEPLETED / EXPIRED / FROZEN / REVERSED(SP2撤回) / DEFECTIVE(不良品/QC隔离) */
+    /** 状态: AVAILABLE / DEPLETED / EXPIRED / FROZEN / REVERSED(SP2撤回) / DEFECTIVE(不良品/QC隔离) / PENDING_INSPECTION(待检) */
     @Column(name = "status", nullable = false, length = 32)
     private String status = "AVAILABLE";
 
