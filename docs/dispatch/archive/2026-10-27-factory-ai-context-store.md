@@ -2,6 +2,8 @@
 
 状态：review；开发 Base SHA：`0c893cc2d790de791da6c7c5c310a2761c024f4e`；协调者 Root；执行 Owner shared_context_store。源码冻结，开发 scope 已释放；后续仅由 Root 合并、官方发布与只读验收。
 
+集成/发布 Base SHA：`d94becee2a792db2b23fe702fc2f220ff9af9fa6`。已 rebase 到当前 main，本 scope 冻结文件内容无变化；统一构建/部署只检测本 Base 之后的 Java 改动，不扩大为重发其他 Owner 的 Web。Python 使用官方独立入口执行 V20 与发布。
+
 授权：用户要求完成 AI 问答、汇总和多表分析全部修复，验证后直接合并部署。沿用本任务此前已发布的短期图表上下文存储与迁移权限；仅新增独立短期会话表，不回填、不修改业务表或其他租户业务数据。
 
 生产已确认双 worker；进程内对话字典使产品澄清在返回后约20秒即410。不得将 worker 减为1或做静默内存降级。复用 detail_store 的 PostgreSQL pool、actor binding、RLS、TTL与双进程验证模式。
