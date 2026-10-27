@@ -20,7 +20,7 @@
 | C3-process-never / C3-desensitized / C3-excluded / C3-no-cross-process | 工艺内容任何情况不进训练；只用汇总指标和脱敏问答；排除清单；不分析比对工厂工艺 | live | 最终口径（Steve 2026-10-24 在「方案审计与执行」确认）。#1128 于 10-24 19:18 上线。线上探针由「方案审计与执行」验证：未授权工厂的普通问答脱敏后存入（工厂名换代号、电话换占位、金额分桶）；已授权的 F006 问配方不存；回答里带工艺细节的不存；factory_config_agent 不再生成全局模板。尚未写入页面的：基于公开标准的流程建议（模板库为空）、工艺保密产品不参与训练（功能未对客户开启）、专属模型 |
 | C4-provider | 阿里云百炼（通义千问）；按量付费 API 的调用数据不用于训练 | live | 阿里云官方页面 https://help.aliyun.com/zh/model-studio/ 的 FAQ「阿里云百炼会用我的数据进行训练吗？」写的是「使用百炼按量付费 API 和 Token Plan 团队版时，不会将您的数据用于模型训练」。Coding Plan 和 Token Plan 个人版不在这个承诺内，Steve 2026-10-22 确认账号都是按量付费。官方没写数据在哪里处理，所以页面上不写「境内处理」 |
 | C4-smartbi-redact | 智能报表分析发给模型前替换客户、门店、产品名称；替换失败就不发送 | live | #1096 上线（方案审计与执行，2026-10-22）。我独立核对：线上 8083 进程 17:37 启动，`common/llm_client.py` 里有 fail-closed（`EgressRedactionError`，失败时不发送）。名称替换只在 SmartBI insights 注册了 `RedactionScope` 的路径上生效，其余 Python 调用只用正则兜底 PII；**数字照常发送**，所以页面上不写「数字也脱敏」 |
-| C4-assistant-redact | 工厂 AI 助手（Java）发给模型前同样替换名称、失败不发 | pending | origin/main 0407cf7c85：`WorkdeskOutputSummarizer` 没有脱敏，Java 侧也没有脱敏类，查询结果原样发给 DashScope。已转告「方案审计与执行」 |
+| C4-assistant-redact | 工厂 AI 助手（Java）发给模型前同样替换名称、失败不发 | live | 2026-10-27 起 live，见文末同日更新 |
 | C5-hosting | 阿里云中国境内服务器，用户到系统全程 HTTPS | live | nginx TLS 1.2/1.3（`ops/nginx-vhosts-139/admin.cretaceousfuture.com.conf`）；服务器 IP 属于阿里云。注意：网关到应用服务器（139 → 47:8083）是明文，所以只写「你和系统之间」 |
 | C5-daily-backup | 每天凌晨自动备份，保留 7 天 | live | 2026-10-22 线上只读核查：crontab 03:00 `backup-db.sh` ＋ `/etc/cron.d/pg_backup`，`/etc/cron.d/cretas-backup-retention` 保留 7 天；当天三个库的备份文件都在 |
 | C5-offsite-encrypted | 备份加密，并在独立存储里另存一份 | pending | 现在和数据在同一台机器上，而且没有加密。2026-10-22 Steve 定了钥匙保管：服务器放一份，Steve 自己离线存一份。实施由「方案审计与执行」负责（第 5 项），要求做一次从异地副本恢复的演练 |
@@ -98,3 +98,11 @@ Steve 决定：完整 11 条现在就对外发布，还没实现的部分由内�
 - C5-offsite-encrypted → live：#1206 上线。异地副本只存加密件，服务器上只有公钥，私钥由 Steve 离线保管；异地每天上传，保留 7 天；从异地副本恢复的演练已通过（「方案审计与执行」回报）。10-24 起的上传失败，根因是阿里云欠费，10-26 充值后已恢复，并补传了三天。
 - C4-image-not-redacted（新增，live）：Steve 拍板，图片和 PDF 交给 AI 识别（单据照片、发票、送货单、SOP 图片）时按原样识别，不做名称脱敏；上传入口会提示「图片会发给 AI 识别」；摄像头抓拍默认关闭，按工厂打开。数据安全页和隐私政策（第一部分、第六部分）都已如实写明。
 - C4-assistant-redact：#1168（WorkdeskOutputSummarizer）、#1208（AI 外发脱敏第一批）已上线；Java 侧其余调用模型的地方还在逐批接入，目前仍是待兑现。
+
+## 2026-10-27 更新
+- C4-assistant-redact → live：#1208 / #1211 / #1222 共接入 51 处 Java 文字出口（「AI 外发脱敏」会话全仓扫描 78 行 / 45 个文件，盘点表 llm-egress-inventory.md）。我独立核对：`LlmEgressGuard.failed` 记录 `redaction failed ..., not sending`，脱敏失败就不发；prod 活跃槽 47:10020（jar 10-27 11:46、进程 11:47 启动）里，#1222 的 `PageGenerateTool`、`PrintTemplateCreateFromAITool` 各含 3 处 `LlmEgressGuard`，阴性对照 `ResultValidatorServiceImpl` 为 0；prod 日志读到 form-parse 替换 3 个名字、intent-python-match 替换 2 个。
+- 未接入的 5 处不属于「工厂 AI 助手」：`batchInitializeFactory`（平台管理员建厂，Steve 选了这次不做）；餐饮语音领料、餐饮老板动作、餐饮经营问答（餐饮线 10-08 已废弃，工厂角色走不到）；`ResultValidatorServiceImpl`（全仓无调用者）。
+- 局限（页面措辞已经避开，不改）：名称识别靠规则，用户原话里的裸人名、公司简称认不出，会原样发出；页面只承诺「查询结果」里的名称换成代号。
+- 已知缺口（官网没承诺，记录在此）：Python 侧看板 AI 洞察自己取数发给模型，没有脱敏；Excel 上传解析在 Python 侧外发字段样本，没有脱敏。C4-smartbi-redact 只覆盖注册了 `RedactionScope` 的 SmartBI insights 路径。
+
+**仍未兑现（对外已写）**：C6-rights（整厂导出、彻底删除，目前人工处理）；第八条「服务商不得用于自身训练」待核实合同。

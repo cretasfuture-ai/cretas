@@ -11,7 +11,7 @@ import urllib.request
 # NEW_FILES do not exist on the server yet: they must be absent (or already
 # identical) before publication, and rollback deletes them.
 NEW_FILES = []
-FILES = ['data-security.html', 'privacy.html']
+FILES = ['data-security.html']
 HOST = 'root@139.196.165.140'
 ROOT = '/www/wwwroot/showcase/cretaceousfuture'
 REPO = Path(__file__).resolve().parents[2]
