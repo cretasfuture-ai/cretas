@@ -107,26 +107,31 @@ async def test_wrapper_fail_closed_on_redactor_error(monkeypatch):
     assert inner.last_json is None
 
 
-def test_wrapper_stream_fail_closed_on_redactor_error(monkeypatch):
+@pytest.mark.asyncio
+async def test_wrapper_stream_fail_closed_on_redactor_error(monkeypatch):
     inner = _FakeInner()
     client = _RedactingLLMClient(inner)
 
-    def _boom(_payload):
+    def _boom(_payload, _names=None):
         raise RuntimeError("redactor exploded")
 
     monkeypatch.setattr("common.llm_redactor.redact_payload_for_egress", _boom)
     payload = {"messages": [{"role": "user", "content": "13812345678"}]}
     with pytest.raises(lc.EgressRedactionError):
-        client.stream("POST", URL, json=payload)
+        # 流式在进入时脱敏 (要先异步查保密产品名)
+        async with client.stream("POST", URL, json=payload):
+            pass
     assert inner.last_json is None
 
 
-def test_wrapper_redacts_successfully_after_previous_failure(monkeypatch):
+@pytest.mark.asyncio
+async def test_wrapper_redacts_successfully_after_previous_failure(monkeypatch):
     """阳性对照: 同一个 client 在脱敏正常时仍然能发出 (证明不是整个入口坏了)。"""
     inner = _FakeInner()
     client = _RedactingLLMClient(inner)
     payload = {"messages": [{"role": "user", "content": "13812345678"}]}
-    client.stream("POST", URL, json=payload)
+    async with client.stream("POST", URL, json=payload):
+        pass
     assert inner.last_json is not None
     assert inner.last_json["messages"][0]["content"] != "13812345678"
 

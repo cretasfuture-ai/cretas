@@ -74,10 +74,10 @@ public class ProcessSecretSampleFilter {
         List<ProductType> products = productTypeRepository.findAllById(protectedIds);
         for (ProductType product : products) {
             String name = product.getName();
-            if (!factoryId.equals(product.getFactoryId()) || name == null || name.trim().length() < MIN_NAME_LENGTH) {
+            if (!factoryId.equals(product.getFactoryId()) || name == null || name.strip().length() < MIN_NAME_LENGTH) {
                 continue;
             }
-            names.add(name.trim());
+            names.add(name.strip()); // 全角空格也去掉 (与 Python process_secret_sql.usable_names 一致)
         }
         return Set.copyOf(names);
     }

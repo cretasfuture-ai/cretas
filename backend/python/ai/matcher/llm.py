@@ -142,7 +142,10 @@ async def _call_llm(prompt: str, *, timeout_s: int, tier=None) -> str:
         "max_tokens": 200,
         "response_format": {"type": "json_object"},
     }
-    with llm_caller_context("ai_matcher"):
+    from common.llm_redactor import utterance_egress  # type: ignore
+
+    # 按原话识别意图: 外发只抹号码, 不认公司名人名 (与 Java LlmEgressGuard.utterance 一致)
+    with llm_caller_context("ai_matcher"), utterance_egress():
         resp = await call_chain(slot, payload, timeout=float(timeout_s))
     try:
         return resp["choices"][0]["message"]["content"] or ""

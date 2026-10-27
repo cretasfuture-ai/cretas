@@ -527,7 +527,7 @@ public final class LlmEgressRedactor {
         s.reserved = corpus.toString();
         if (knownParties != null) {
             for (Map.Entry<String, Party> e : knownParties.entrySet()) {
-                String real = e.getKey() == null ? "" : e.getKey().trim();
+                String real = e.getKey() == null ? "" : e.getKey().strip();
                 if (real.length() >= 2 && !GENERIC.contains(real)) {
                     s.known(e.getValue().kind, real);
                 }
@@ -586,8 +586,9 @@ public final class LlmEgressRedactor {
         Session(Collection<String> names) {
             if (names != null) {
                 for (String n : names) {
-                    if (n != null && n.trim().length() >= ProcessSecretSampleFilter.MIN_NAME_LENGTH) {
-                        protectedNames.add(n.trim());
+                    // strip 而不是 trim: 名字首尾的全角空格也去掉, 否则只认「名字 + 全角空格」, 正文里的名字原样发出
+                    if (n != null && n.strip().length() >= ProcessSecretSampleFilter.MIN_NAME_LENGTH) {
+                        protectedNames.add(n.strip());
                     }
                 }
                 protectedNames.sort(Comparator.comparingInt(String::length).reversed());
