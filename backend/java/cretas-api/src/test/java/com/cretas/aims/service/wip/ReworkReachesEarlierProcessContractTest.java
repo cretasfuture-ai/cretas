@@ -117,7 +117,7 @@ class ReworkReachesEarlierProcessContractTest {
                 workflowInstanceRepo,
                 workflowTaskPortRepo,
                 productFamilyResolver,
-                mock(ApplicationEventPublisher.class));
+                mock(ApplicationEventPublisher.class), org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
     }
 
     // ==================== 半成品行 (下拉数据源) ====================

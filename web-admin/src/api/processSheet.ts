@@ -807,6 +807,8 @@ export interface SemiFinishedInventoryFilter {
   productTypeId?: string;
   /** 阶段: 当前道工序序 → 只列 processOrder 严格小于此值的更早阶段半成品 (防回锅)。 */
   maxProcessOrder?: number;
+  /** 归属 (缺口 16): 领用计划 → 只列与它同一归属的半成品 (代工客户 / 本厂自有不混)。 */
+  planId?: string;
 }
 
 /**
@@ -823,6 +825,7 @@ export function getSemiFinishedInventory(
   const params: Record<string, string | number> = {};
   if (filter?.productTypeId) params.productTypeId = filter.productTypeId;
   if (filter?.maxProcessOrder != null) params.maxProcessOrder = filter.maxProcessOrder;
+  if (filter?.planId) params.planId = filter.planId;
   return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`, { params });
 }
 

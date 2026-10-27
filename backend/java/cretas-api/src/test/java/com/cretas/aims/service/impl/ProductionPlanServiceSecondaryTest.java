@@ -102,6 +102,7 @@ class ProductionPlanServiceSecondaryTest {
         ProductionPlanServiceImpl svc = (ProductionPlanServiceImpl) ctor.newInstance(args);
         if (wipSvc != null) {
             injectField(svc, "wipInventoryService", wipSvc);
+            injectField(svc, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         }
         return svc;
     }

@@ -31,6 +31,7 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
 import com.cretas.aims.service.yield.InterimSettleService;
 import com.cretas.aims.service.reversal.ReversalConsumptionCleanupService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -338,8 +339,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         continue;
                     }
                     if (srcBatchNo != null && feed.signum() > 0) {
+                        // 缺口 16: 只能领本计划同一归属的半成品 (代工客户的料不进别人的计划)
                         BigDecimal drawn = wipInventoryService
-                                .consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
+                                .consumeClerkSemiStrict(factoryId, IntermediateOwnershipGuard.ofPlan(plan),
+                                        srcBatchNo, feed);
                         semiOutQuantity = semiOutQuantity.add(nz(drawn)); // 实际出库量, 非 pre-clamp feed
                         sfiOutStrictDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
                         recordSemiFeedLineage(factoryId, planId, sessionSeq, ur, srcBatchNo, drawn, userId);
