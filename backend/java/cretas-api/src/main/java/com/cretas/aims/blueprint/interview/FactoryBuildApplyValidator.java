@@ -57,6 +57,9 @@ public class FactoryBuildApplyValidator {
     private WorkProcessRepository workProcessRepository;
 
     @Autowired
+    private com.cretas.aims.repository.ProductionLineRepository productionLineRepository;
+
+    @Autowired
     private MaterialCodeSegmentRepository codeSegmentRepository;
 
     /** 见 {@code checkPackaging}: 包装换算两端的单位都要过权威表。 */
@@ -144,6 +147,7 @@ public class FactoryBuildApplyValidator {
                         + "必须先定死是哪一类, 挑错会让整套包材规则(单价/存储方式/包装层级)全用错");
             }
             checkProductProcesses(problems, req.getSuggestedData(), factoryId);
+            checkProductionLines(problems, req.getSuggestedData(), factoryId);
         }
         return problems;
     }
@@ -812,6 +816,74 @@ public class FactoryBuildApplyValidator {
                 if (!inRequestProcesses.contains(pn)
                         && workProcessRepository.findByFactoryIdAndProcessName(factoryId, pn).isEmpty()) {
                     problems.add(tag + " 的工序「" + pn + "」在本次 workProcesses 和库里都找不到");
+                }
+            }
+        }
+    }
+
+    /**
+     * S4 产线与产能。⛔ 写入在 apply 的同一事务里, 那里抛错会把整个事务标成只能回滚 ⇒
+     * 产品 code、单位、数值、同名产线都在这里先判清, 不留到写入时。
+     */
+    void checkProductionLines(List<String> problems,
+                                      ApplyAIInitRequest.SuggestedData sd,
+                                      String factoryId) {
+        if (sd == null || sd.getProductionLines() == null) {
+            return;
+        }
+        Set<String> inRequestProducts = new HashSet<>();
+        if (sd.getProductTypes() != null) {
+            for (ApplyAIInitRequest.TypeItem t : sd.getProductTypes()) {
+                if (t != null && !isBlank(t.getCode())) {
+                    inRequestProducts.add(t.getCode().trim());
+                }
+            }
+        }
+        Set<String> seenLines = new HashSet<>();
+        for (int i = 0; i < sd.getProductionLines().size(); i++) {
+            ApplyAIInitRequest.ProductionLineItem line = sd.getProductionLines().get(i);
+            String tag = "productionLines[" + i + "]";
+            if (line == null || isBlank(line.getName())) {
+                problems.add(tag + ".name 为空(产线名也是幂等键)");
+                continue;
+            }
+            String name = line.getName().trim();
+            if (name.length() > 100) {
+                problems.add(tag + ".name 超过 100 字");
+            }
+            if (!seenLines.add(name)) {
+                problems.add(tag + " 产线「" + name + "」在本次请求里重复");
+            }
+            int existing = productionLineRepository.findByFactoryIdAndNameAndDeletedAtIsNull(factoryId, name).size();
+            if (existing > 1) {
+                problems.add(tag + " 库里已有 " + existing + " 条叫「" + name + "」的产线, 不知道该配哪一条 ——"
+                        + " 先在「产线产能与设备」里把它们改成不同的名字");
+            }
+            if (line.getCapacities() == null || line.getCapacities().isEmpty()) {
+                problems.add(tag + " 产线「" + name + "」没给每小时产能");
+                continue;
+            }
+            Set<String> seenProducts = new HashSet<>();
+            for (int j = 0; j < line.getCapacities().size(); j++) {
+                ApplyAIInitRequest.LineCapacityItem c = line.getCapacities().get(j);
+                String ctag = tag + ".capacities[" + j + "]";
+                if (c == null) {
+                    problems.add(ctag + " 为空");
+                    continue;
+                }
+                if (c.getCapacityPerHour() == null || c.getCapacityPerHour().signum() <= 0) {
+                    problems.add(ctag + ".capacityPerHour 必须大于 0");
+                }
+                if (com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck.parseUnit(c.getCapacityUnit()) == null) {
+                    problems.add(ctag + ".capacityUnit=" + c.getCapacityUnit() + " 只能是 PIECE / KG / BATCH (不换算)");
+                }
+                String code = isBlank(c.getProductCode()) ? "" : c.getProductCode().trim();
+                if (!seenProducts.add(code)) {
+                    problems.add(ctag + " 同一条线同一产品给了两次产能");
+                }
+                if (!code.isEmpty() && !inRequestProducts.contains(code)
+                        && productTypeRepository.findByFactoryIdAndCode(factoryId, code).isEmpty()) {
+                    problems.add(ctag + ".productCode=" + code + " 在本次 productTypes 和库里都找不到");
                 }
             }
         }

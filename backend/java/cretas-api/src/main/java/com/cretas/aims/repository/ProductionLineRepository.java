@@ -22,6 +22,9 @@ public interface ProductionLineRepository extends JpaRepository<ProductionLine, 
 
     Optional<ProductionLine> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
+    /** 对话建厂按名字幂等 (同名多条时由校验器拒绝, 不猜哪一条)。 */
+    List<ProductionLine> findByFactoryIdAndNameAndDeletedAtIsNull(String factoryId, String name);
+
     Optional<ProductionLine> findByFactoryIdAndLineCodeAndDeletedAtIsNull(
         String factoryId, String lineCode);
 
