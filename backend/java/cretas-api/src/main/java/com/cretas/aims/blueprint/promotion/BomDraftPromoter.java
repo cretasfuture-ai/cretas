@@ -60,6 +60,10 @@ class BomDraftPromoter implements DraftPromoter {
     private final BomRecipeDraftCommand draftCommand;
     private final UnitContractService units;
 
+    /** 工艺保密 (写入侧): 转正会给已有产品新建一版正式配方, 绕过了配方路由上的编辑闸, 在这里补判。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -240,6 +244,10 @@ class BomDraftPromoter implements DraftPromoter {
         Source source = (Source) snapshot.source(); BomRecipeDraft draft = source.draft(); CreateBomRecipeRequest request = new CreateBomRecipeRequest(); request.setProductTypeId(draft.getTargetProductRefId());
         request.setItems(source.projection().items().stream().map(item -> { BomRecipeItemDTO dto = new BomRecipeItemDTO(); dto.setMaterialTypeId(item.materialId()); dto.setStandardQuantity(item.quantity()); dto.setUnit(item.unit()); dto.setMaterialCategory(item.category()); dto.setIsOptional(item.optional()); dto.setWorkflowMaterialNodeId(item.nodeId()); dto.setWorkflowInputPortId(item.portId()); dto.setWorkflowEdgeId(item.edgeId()); dto.setSortOrder(item.ordinal()); dto.setRemark(item.reason()); if (item.packagingRole() != null) { dto.setPackagingRole(item.packagingRole()); dto.setNaturalQuantity(item.quantity()); } return dto; }).toList());
         request.setNotes("Blueprint BOM draft " + draft.getId() + "; original batch=" + draft.getOutputQuantity().toPlainString() + " " + draft.getOutputUnit() + "; formal basis=1 SKU unit");
+        if (processSecretGuard != null) {
+            processSecretGuard.requireProduct(factoryId, draft.getTargetProductRefId(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "bom draft promote " + draft.getId());
+        }
         String id = recipeService.createRecipe(factoryId, request).getId(); validateReplayInput(factoryId, id, source.projection().roles()); return id;
     }
 

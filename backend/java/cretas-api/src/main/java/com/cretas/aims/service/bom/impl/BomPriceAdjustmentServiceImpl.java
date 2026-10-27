@@ -45,6 +45,9 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
     private final BomPriceAdjustmentAuditRepository auditRepository;
     private final RawMaterialTypeRepository materialRepository;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Override
     @Transactional
     public List<BomPriceAdjustmentProposal> generateFromReceive(String factoryId, PurchaseReceiveRecord receiveRecord) {
@@ -177,6 +180,12 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
                 .orElseThrow(() -> new ResourceNotFoundException("BOM行不存在: " + proposal.getRecipeItemId()));
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权审批该BOM调价建议");
+        }
+        // 工艺保密 (写入侧): 批准会改写配方行的单价与行成本 (行成本 = 用量 × 单价), 属于改配方, 要编辑权
+        if (processSecretGuard != null) {
+            processSecretGuard.requireRecipe(factoryId, item.getRecipeId(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "bom price-adjustment approve " + proposalId);
         }
 
         BigDecimal beforePrice = scaleMoney(item.getUnitPrice());

@@ -1687,6 +1687,23 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
                     roles: ['factory_super_admin', 'permission_admin'] }
           },
           {
+            // 按工厂备份套餐 (Steve 2026-10-26 口径 Q5): 工厂只读查看本厂备份记录。
+            // 后端 FactoryDataBackupController 只允许 factory_super_admin / permission_admin。
+            path: 'data-backups',
+            name: 'SystemDataBackups',
+            component: () => import('@/views/system/data-backups/index.vue'),
+            meta: { requiresAuth: true, title: '数据备份', module: 'system',
+                    roles: ['factory_super_admin', 'permission_admin'] }
+          },
+          {
+            // 按工厂备份套餐: 平台开通 / 修改 / 查看全部工厂 (口径 Q6: 只有平台能改)。
+            // 后端 PlatformTenantBackupController 只允许平台 super_admin。
+            path: 'tenant-backups',
+            name: 'SystemTenantBackups',
+            component: () => import('@/views/system/tenant-backups/index.vue'),
+            meta: { requiresAuth: true, title: '工厂数据备份', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
             // Sprint 4 Chat K C-EXPORT-CENTER-1 (2026-05-16): 用户可配置的跨模块导出规则.
             // backend: ExportRuleController + ExportExecutor (EntityManager + SpEL + EasyExcel).
             path: 'export-center',

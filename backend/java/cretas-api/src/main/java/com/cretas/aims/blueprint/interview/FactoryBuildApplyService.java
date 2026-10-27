@@ -116,6 +116,9 @@ public class FactoryBuildApplyService {
     @Autowired
     private ProductWorkProcessRepository productWorkProcessRepository;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     /**
      * 后端 API 门禁那一层 —— 与 {@code featureConfigRepository}(前端可见性)是**两层**。
      * 见 {@link InterviewModuleConfigCatalog} 类注释「关掉一个模块其实要关两层」。
@@ -272,6 +275,7 @@ public class FactoryBuildApplyService {
         }
 
         boolean overwrite = Boolean.TRUE.equals(request.getOverwrite());
+        requireProcessSecretEdit(factoryId, request, overwrite);
         ApplyAIInitResult result = new ApplyAIInitResult();
         result.setFactoryId(factoryId);
 
@@ -1123,6 +1127,37 @@ public class FactoryBuildApplyService {
      *    逐条 merge 会把油炸留在链里 —— 而访谈里没有「删除某道工序」这个动作,
      *    客户永远删不掉它。整条替换才是访谈语义(与辅料/包材配方同一口径)。
      */
+    /**
+     * 工艺保密 (写入侧, Steve 2026-10-27): 本次会覆盖<b>已有</b>产品的转换率 (overwrite=true) 或替换已有产品的工序链时,
+     * 调用者必须对该产品有编辑权。任一无权整单 403、什么都不写 —— 与上面「全量校验先于任何写入」同一口径,
+     * 批量写不做「静默跳过一部分」。本次新建的产品还不存在, 没有保密策略, 不判。
+     */
+    void requireProcessSecretEdit(String factoryId, ApplyAIInitRequest request, boolean overwrite) {
+        if (processSecretGuard == null || request.getSuggestedData() == null) return;
+        if (!processSecretGuard.factoryHasProtectedProducts(factoryId)) return;
+        java.util.Map<String, String> touched = new java.util.LinkedHashMap<>();   // productId -> 来源
+        // 不只是覆盖: 给已有保密产品新增一对 (物料, 产品) 转换率, 也是往它的配方里加配比 (独立审查 V2.1 M1)。
+        // 已存在且不覆盖的对会被跳过、不写, 这里一并要求编辑权 (宁可多判一次, 不漏)
+        if (request.getSuggestedData().getConversionRates() != null) {
+            for (ApplyAIInitRequest.ConversionItem c : request.getSuggestedData().getConversionRates()) {
+                if (c == null || c.getToCode() == null) continue;
+                String code = c.getToCode().trim();
+                productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                        .ifPresent(p -> touched.putIfAbsent(p.getId(), "conversion write " + code));
+            }
+        }
+        if (request.getSuggestedData().getProductProcesses() != null) {
+            for (ApplyAIInitRequest.ProductProcessItem pp : request.getSuggestedData().getProductProcesses()) {
+                if (pp == null || pp.getProductCode() == null) continue;
+                String code = pp.getProductCode().trim();
+                productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                        .ifPresent(p -> touched.putIfAbsent(p.getId(), "process chain replace " + code));
+            }
+        }
+        touched.forEach((productId, what) -> processSecretGuard.requireProduct(factoryId, productId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "factory-build apply: " + what));
+    }
+
     private void applyProductProcesses(String factoryId, ApplyAIInitRequest request,
                                        ApplyAIInitResult result) {
         if (request.getSuggestedData() == null

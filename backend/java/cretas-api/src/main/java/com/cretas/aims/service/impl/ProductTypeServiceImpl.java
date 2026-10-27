@@ -130,6 +130,56 @@ public class ProductTypeServiceImpl implements ProductTypeService {
      */
     private final com.cretas.aims.service.product.ProductRetirementGuard productRetirementGuard;
 
+    /** 工艺保密 (写入侧): 改工艺参数 (WIP→成品出率、加工步骤) 要编辑权。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    /**
+     * 两段 JSON 内容是否相同。库里 jsonb 读回来的格式 (空格)、以及 DTO 重新序列化时多写出的 null 字段,
+     * 都不能让「/config 原样回写」被当成改了加工步骤。解析失败按文本比。
+     */
+    private boolean sameJson(String a, String b) {
+        if (Objects.equals(a, b)) return true;
+        if (a == null || b == null) return false;
+        try {
+            return withoutNulls(normalizedSteps(a)).equals(withoutNulls(normalizedSteps(b)));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 先过一遍 {@link ProductTypeDTO.ProcessingStepDTO} 再比: /config 回写走的就是这个 DTO, 库里旧数据多出的、
+     * DTO 不认识的键会在回写时丢掉 —— 不能因此把「只改了工时」当成改了加工步骤 (独立审查 V2.1 L2)。
+     * 解析成步骤列表失败 (不是数组 / 结构不同) 时按原样比。
+     */
+    private com.fasterxml.jackson.databind.JsonNode normalizedSteps(String json)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        try {
+            List<ProductTypeDTO.ProcessingStepDTO> steps = objectMapper.copy()
+                    .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+                    .readValue(json, new com.fasterxml.jackson.core.type.TypeReference<
+                            List<ProductTypeDTO.ProcessingStepDTO>>() { });
+            return objectMapper.valueToTree(steps);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException notSteps) {
+            return objectMapper.readTree(json);
+        }
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode withoutNulls(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+            java.util.List<String> nullFields = new java.util.ArrayList<>();
+            object.fields().forEachRemaining(e -> {
+                if (e.getValue().isNull()) nullFields.add(e.getKey());
+                else withoutNulls(e.getValue());
+            });
+            object.remove(nullFields);
+        } else if (node instanceof com.fasterxml.jackson.databind.node.ArrayNode array) {
+            array.forEach(ProductTypeServiceImpl::withoutNulls);
+        }
+        return node;
+    }
+
     // Manual constructor (Lombok @RequiredArgsConstructor not working)
     @org.springframework.beans.factory.annotation.Autowired
     public ProductTypeServiceImpl(ProductTypeRepository productTypeRepository, ObjectMapper objectMapper,
@@ -410,6 +460,8 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         BigDecimal previousGramsPerUnit = productType.getGramsPerUnit();
         String previousLevel1Unit = productType.getLevel1Unit();
         BigDecimal previousBoxConversionCoefficient = productType.getBoxConversionCoefficient();
+        BigDecimal previousWipToFgYield = productType.getWipToFgYield();
+        String previousProcessingSteps = productType.getProcessingSteps();
 
         if (!productType.getFactoryId().equals(factoryId)) {
             throw new BusinessException(403, "无权限操作此产品类型")
@@ -498,6 +550,18 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                     .unitPrice(dto.getUnitPrice() != null ? dto.getUnitPrice() : productType.getUnitPrice())
                     .build();
             applyTaxConversion(productType, taxDto);
+        }
+
+        // 工艺保密 (写入侧, Steve 2026-10-27): 工艺参数真的变了 (含改成半成品时的隐式清空) 才判编辑权;
+        // 只改名称 / 价格等不受影响。抛出即整个事务回滚, 上面对托管实体的改动不会落库。
+        boolean wipYieldChanged = previousWipToFgYield == null
+                ? productType.getWipToFgYield() != null
+                : productType.getWipToFgYield() == null
+                        || previousWipToFgYield.compareTo(productType.getWipToFgYield()) != 0;
+        if (processSecretGuard != null && (wipYieldChanged
+                || !sameJson(previousProcessingSteps, productType.getProcessingSteps()))) {
+            processSecretGuard.requireProduct(factoryId, id,
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-type update " + id);
         }
 
         productType.setUpdatedAt(LocalDateTime.now());
