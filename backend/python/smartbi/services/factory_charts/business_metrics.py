@@ -106,6 +106,8 @@ def build(frame, cols, request, can_price, source):
                 points, missing_name = _grouped_sales_sku(work, sku, product, subtotal)
                 if points:
                     candidate = emit(Series('sales.sku', 'SKU销售金额（逐单对账）', '销售', '元', points, source), 'bar_horizontal')
+                    if source.startswith('sales-sku · '):
+                        candidate.setdefault('engine', {})['detailUnitPolicy'] = 'currency_rows'
                     if missing_name:
                         limitation = '部分SKU缺少产品名称，已回退产品ID；金额仍按产品ID独立汇总'
                         candidate['findings']['attention'].append(limitation)

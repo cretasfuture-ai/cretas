@@ -223,6 +223,23 @@ def _classify(columns: Sequence[str]) -> tuple[frozenset[str], tuple[str, ...]]:
     return frozenset(prices), tuple(dict.fromkeys(dimensions))
 
 
+def _currency_quantity_independent(candidate: Mapping[str, Any], dataset: Any) -> bool:
+    """Only reconciled CNY SKU revenue keeps rows in their original units.
+
+    This changes row selection, never sums kg/boxes or authorizes money access.
+    Generic money displays, prices and ratios retain the existing unit guard.
+    """
+    source = str(candidate.get('source', ''))
+    dataset_source = str(dataset.get('source', '')) if isinstance(dataset, Mapping) else str(getattr(dataset, 'source', ''))
+    currency = dataset.get('currency') if isinstance(dataset, Mapping) else getattr(dataset, 'currency', None)
+    analysis = candidate.get('analysis') if isinstance(candidate.get('analysis'), Mapping) else {}
+    engine = candidate.get('engine') if isinstance(candidate.get('engine'), Mapping) else {}
+    return (source == dataset_source and source.startswith('sales-sku · ')
+            and currency == 'CNY' and candidate.get('unit') == '元'
+            and analysis.get('familyId') == 'sales-sku.sales.sku'
+            and engine.get('detailUnitPolicy') == 'currency_rows')
+
+
 def _is_financial(source: str, candidate: Mapping[str, Any]) -> bool:
     root = source.split(" · ", 1)[0].lower()
     return root.startswith(_FINANCIAL_SOURCE_PREFIXES)
@@ -357,7 +374,7 @@ def register(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], r
                 candidate_unit = candidate_unit.rsplit("/", 1)[-1]
             candidate_unit = candidate_unit.strip()
             distinct_units = {str(row.get(unit_column, "")).strip() for row in rows} if unit_column else set()
-            if unit_column:
+            if unit_column and not _currency_quantity_independent(item, dataset):
                 quantity_unit = str(item.get("sourceQuantityUnit", item.get("quantityUnit", "")) or "").strip()
                 engine_meta = item.get("engine") if isinstance(item.get("engine"), Mapping) else {}
                 quantity_unit = quantity_unit or str(engine_meta.get("sourceQuantityUnit", "") or "").strip()
