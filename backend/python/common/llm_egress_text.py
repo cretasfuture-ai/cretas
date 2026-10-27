@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
-from smartbi.services.training_consent import (  # 训练规则常量: 与 Java TrainingSampleRules 逐字对齐
+from common.sample_text_rules import (  # 训练规则常量: 与 Java TrainingSampleRules 逐字对齐
     _BANK_CARD_RE as BANK_CARD,
     _HAN as HAN,
     _ID_CARD_RE as ID_CARD,
@@ -358,6 +358,8 @@ class StreamRestorer:
     def push(self, chunk: Optional[str]) -> str:
         if not chunk:
             return ""
+        if not self._map:
+            return chunk  # 本次没发代号: 原样放行, 不攒
         self._pending += chunk
         p = self._pending
         open_ = p.rfind("[")

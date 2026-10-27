@@ -58,7 +58,8 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
-from common.llm_client import EgressRedactionError, get_llm_http_client
+from common.llm_client import EgressRedactionError, current_egress_tokens, get_llm_http_client
+from common.llm_egress_text import StreamRestorer
 # ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
 #    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
 #    llm_budget 不 import llm_router, 无循环依赖。
@@ -2693,6 +2694,9 @@ async def call_chain_stream(
 
                 logger.info(f"[llm_router_stream] slot={slot.value} streaming via {account}/{model}")
 
+                # 发出去的代号 (公司名 / 人名 / 号码 / 保密产品名) 边收边换回真名; 代号可能被拆在两段增量里
+                restorer = StreamRestorer(current_egress_tokens())
+
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line:
@@ -2723,6 +2727,9 @@ async def call_chain_stream(
                                 f"mid-stream error body ({upstream_error}) — "
                                 "preserving partial result"
                             )
+                            rest = restorer.flush()
+                            if rest:
+                                yield {"type": "delta", "text": rest}
                             return
                         break
 
@@ -2732,7 +2739,9 @@ async def call_chain_stream(
                         content = delta.get("content")
                         if content:
                             first_delta_yielded = True
-                            yield {"type": "delta", "text": content}
+                            ready = restorer.push(content)
+                            if ready:
+                                yield {"type": "delta", "text": ready}
 
                     usage = obj.get("usage")
                     if usage:
@@ -2768,6 +2777,9 @@ async def call_chain_stream(
                             logger.debug(f"[llm_router_stream] usage record skipped: {_e}")
                         if total:
                             yield {"type": "usage", "tokens": total}
+                rest = restorer.flush()
+                if rest:
+                    yield {"type": "delta", "text": rest}
                 if not first_delta_yielded:
                     _cb_record_failure(cb_key)
                     if stream_error_text and _is_quota_exhausted(200, stream_error_text):
