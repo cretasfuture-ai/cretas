@@ -222,7 +222,7 @@ public class DahuaDeviceController {
             @PathVariable String deviceId,
             @RequestBody DahuaDeviceDTO dto) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -277,7 +277,7 @@ public class DahuaDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -303,7 +303,7 @@ public class DahuaDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -422,7 +422,7 @@ public class DahuaDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -459,7 +459,7 @@ public class DahuaDeviceController {
             @PathVariable String factoryId,
             @PathVariable String deviceId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -510,7 +510,7 @@ public class DahuaDeviceController {
             @PathVariable String deviceId,
             @RequestParam(defaultValue = "1") int channelId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -551,7 +551,7 @@ public class DahuaDeviceController {
             @PathVariable String deviceId,
             @RequestParam(defaultValue = "1") int channelId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 throw new BusinessException(404, "设备不存在: " + deviceId).withHint("请检查 deviceId 是否正确");
             }
@@ -581,7 +581,7 @@ public class DahuaDeviceController {
             @PathVariable String deviceId,
             @RequestParam(defaultValue = "1") int channelId) {
         try {
-            Optional<DahuaDevice> optDevice = deviceRepository.findById(deviceId);
+            Optional<DahuaDevice> optDevice = ownDevice(factoryId, deviceId);
             if (optDevice.isEmpty()) {
                 return ResponseEntity.notFound().build();
             }
@@ -749,5 +749,11 @@ public class DahuaDeviceController {
         // 拒绝非 IP 格式（防止 DNS rebinding）
         if (!trimmed.matches("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$")) return false;
         return true;
+    }
+
+    /** 本厂设备: 别厂的设备与不存在同样处理 (按 id 的接口都先走这里) */
+    private Optional<DahuaDevice> ownDevice(String factoryId, String deviceId) {
+        return deviceRepository.findById(deviceId)
+                .filter(d -> factoryId != null && factoryId.equals(d.getFactoryId()));
     }
 }

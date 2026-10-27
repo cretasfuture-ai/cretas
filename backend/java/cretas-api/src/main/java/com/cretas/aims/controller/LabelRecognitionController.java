@@ -86,7 +86,7 @@ public class LabelRecognitionController {
             @PathVariable String factoryId,
             @PathVariable @Parameter(description = "配置ID") Long configId) {
         try {
-            LabelRecognitionConfig config = labelRecognitionService.getConfig(configId);
+            LabelRecognitionConfig config = labelRecognitionService.getConfig(factoryId, configId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -139,7 +139,7 @@ public class LabelRecognitionController {
             @PathVariable @Parameter(description = "配置ID") Long configId,
             @Valid @RequestBody LabelRecognitionConfig updates) {
         try {
-            LabelRecognitionConfig updated = labelRecognitionService.updateConfig(configId, updates);
+            LabelRecognitionConfig updated = labelRecognitionService.updateConfig(factoryId, configId, updates);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -165,7 +165,7 @@ public class LabelRecognitionController {
             @PathVariable String factoryId,
             @PathVariable @Parameter(description = "配置ID") Long configId) {
         try {
-            labelRecognitionService.deleteConfig(configId);
+            labelRecognitionService.deleteConfig(factoryId, configId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -196,7 +196,7 @@ public class LabelRecognitionController {
                 return ResponseEntity.badRequest().body(errorResponse("缺少 enabled 参数"));
             }
 
-            LabelRecognitionConfig config = labelRecognitionService.toggleConfig(configId, enabled);
+            LabelRecognitionConfig config = labelRecognitionService.toggleConfig(factoryId, configId, enabled);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -224,7 +224,7 @@ public class LabelRecognitionController {
             @PathVariable String factoryId,
             @PathVariable @Parameter(description = "配置ID") Long configId) {
         try {
-            LabelRecognitionRecord record = labelRecognitionService.manualRecognize(configId);
+            LabelRecognitionRecord record = labelRecognitionService.manualRecognize(factoryId, configId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("success", true);
@@ -257,7 +257,7 @@ public class LabelRecognitionController {
             Page<LabelRecognitionRecord> records;
 
             if (configId != null) {
-                records = labelRecognitionService.getRecordsByConfig(configId, pageable);
+                records = labelRecognitionService.getRecordsByConfig(factoryId, configId, pageable);
             } else {
                 records = labelRecognitionService.getRecords(factoryId, pageable);
             }
@@ -279,6 +279,8 @@ public class LabelRecognitionController {
             response.put("message", "获取成功");
 
             return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(errorResponse(ErrorSanitizer.sanitize(e)));
         } catch (Exception e) {
             log.error("获取识别历史失败: {}", e.getMessage(), e);
             return ResponseEntity.internalServerError().body(errorResponse("获取识别历史失败: " + ErrorSanitizer.sanitize(e)));

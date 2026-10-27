@@ -439,4 +439,18 @@ public class IsapiEventSubscriptionService {
     public List<String> getActiveSubscriptionIds() {
         return List.copyOf(activeSubscriptions.keySet());
     }
+
+    /**
+     * 本厂设备中正在订阅的 id (订阅表是全进程共用的, 不能把别厂的设备 id 返回给前端)
+     */
+    public List<String> getActiveSubscriptionIds(String factoryId) {
+        if (factoryId == null) {
+            return List.of();
+        }
+        return activeSubscriptions.keySet().stream()
+                .filter(id -> deviceRepository.findById(id)
+                        .map(d -> factoryId.equals(d.getFactoryId())).orElse(false))
+                .sorted()
+                .toList();
+    }
 }
