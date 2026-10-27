@@ -285,6 +285,52 @@ class ProcessSecretWriteSliceGuardTest {
     }
 
     @Nested
+    @DisplayName("AI 业务数据初始化 (/ai/{factoryId}/business-data/initialize)")
+    class AiBusinessDataInitialize {
+        ProductTypeRepository products;
+        com.cretas.aims.controller.AIController controller;
+
+        @BeforeEach
+        void setUp() {
+            products = mock(ProductTypeRepository.class);
+            ProductType secret = new ProductType();
+            secret.setId(SECRET);
+            secret.setFactoryId(F);
+            when(products.findByFactoryIdAndCode(F, "P17-CODE")).thenReturn(Optional.of(secret));
+            controller = new com.cretas.aims.controller.AIController();
+            ReflectionTestUtils.setField(controller, "productTypeRepository", products);
+            ReflectionTestUtils.setField(controller, "conversionRepository",
+                    mock(com.cretas.aims.repository.ConversionRepository.class));
+            ReflectionTestUtils.setField(controller, "rawMaterialTypeRepository", mock(RawMaterialTypeRepository.class));
+            ReflectionTestUtils.setField(controller, "processSecretGuard", guard);
+        }
+
+        com.cretas.aims.dto.ai.AIBusinessDataRequest request() {
+            return com.cretas.aims.dto.ai.AIBusinessDataRequest.builder()
+                    .productTypes(List.of(com.cretas.aims.dto.ai.AIBusinessDataRequest.ProductTypeData.builder()
+                            .code("NEW-CODE").name("新品").build()))
+                    .conversionRates(List.of(com.cretas.aims.dto.ai.AIBusinessDataRequest.ConversionRateData.builder()
+                            .materialTypeCode("RM-1").productTypeCode("P17-CODE").rate(0.5).build()))
+                    .build();
+        }
+
+        @Test
+        void operatorCannotAddAConversionToAProtectedProductAndNothingIsCreatedFirst() {
+            // 独立审查 V2.1 M1: 本接口没有事务, 判定必须在建任何档之前
+            assertDeniedByThisGate(() -> controller.initializeBusinessData(F, request(), OPERATOR),
+                    "ai business-data initialize conversion P17-CODE");
+            verify(products, never()).save(any());
+        }
+
+        @Test
+        void ownerGetsPastTheGateAndTheInitializerRuns() {
+            as(OWNER, () -> controller.initializeBusinessData(F, request(), OWNER));
+            verify(products).save(any());   // 「一定会发生」: 建了新品, 说明走过了这道闸
+            verify(recorder, never()).record(any(), any(), any(), any(), eq("DENY"), any(), any());
+        }
+    }
+
+    @Nested
     @DisplayName("对话建厂落库 (覆盖转换率 / 替换工序链)")
     class FactoryBuildApply {
         FactoryBuildApplyService service;

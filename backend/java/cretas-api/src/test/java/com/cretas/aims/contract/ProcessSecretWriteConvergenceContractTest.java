@@ -37,6 +37,15 @@ class ProcessSecretWriteConvergenceContractTest {
             "ProductProcessWorkflowRepository", "ProductProcessWorkflowRevisionRepository",
             "WorkflowTaskPortRepository");
 
+    /**
+     * 故意不判 (Steve 2026-10-27 裁定): 工序定义上的标准出成范围 (work_processes.standard_yield_min/max) 与
+     * 工序级辅料 / 包材配方 (process_material_recipes) 是全厂共用的定义, 不挂产品, 不算保密工艺,
+     * 按普通的工序编辑权限管。所以这两个仓库不进 {@link #PROTECTED_REPOSITORIES}。
+     */
+    static final Map<String, String> INTENTIONALLY_NOT_GUARDED = Map.of(
+            "WorkProcessRepository", "全厂共用的工序定义 (含标准出成范围), 不挂产品; Steve 2026-10-27: 不算保密工艺",
+            "ProcessMaterialRecipeRepository", "工序级辅料 / 包材配方, 挂在工序上不挂产品; Steve 2026-10-27: 不算保密工艺");
+
     static final Pattern WRITE = Pattern.compile(
             "\\.(save|saveAll|saveAndFlush|saveAllAndFlush|delete|deleteAll|deleteById|deleteAllById|deleteInBatch"
                     + "|deleteAllInBatch)\\b|::(save|saveAll|delete|deleteAll)\\b");
@@ -104,6 +113,27 @@ class ProcessSecretWriteConvergenceContractTest {
                 "service/bom/impl/BomRecipeServiceImpl.java");
         assertThat(writers.get("service/impl/ConversionServiceImpl.java")).isTrue();
         assertThat(writers).hasSizeGreaterThanOrEqualTo(15);
+    }
+
+    @Test
+    void sharedWorkProcessDefinitionsAreDeliberatelyOutsideTheGate() throws IOException {
+        // 故意不判要写在明处: 不能既不在受保护列表、也没有登记理由 (Steve 2026-10-27 裁定)
+        assertThat(PROTECTED_REPOSITORIES).doesNotContainAnyElementsOf(INTENTIONALLY_NOT_GUARDED.keySet());
+        INTENTIONALLY_NOT_GUARDED.values().forEach(reason -> assertThat(reason).contains("Steve 2026-10-27"));
+        // 阳性对照: 这两个仓库确实存在、确实有写入方 (不是登记了一个不存在的东西)
+        for (String repository : INTENTIONALLY_NOT_GUARDED.keySet()) {
+            try (Stream<Path> files = Files.walk(MAIN)) {
+                boolean written = files.filter(p -> p.toString().endsWith(".java")).anyMatch(p -> {
+                    try {
+                        String source = Files.readString(p, StandardCharsets.UTF_8);
+                        return source.contains(repository + " ") && WRITE.matcher(source).find();
+                    } catch (IOException e) {
+                        throw new IllegalStateException(e);
+                    }
+                });
+                assertThat(written).as(repository + " 应当有写入方").isTrue();
+            }
+        }
     }
 
     @Test
