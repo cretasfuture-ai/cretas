@@ -112,12 +112,21 @@ async def _protected_names_for_egress() -> list:
         return []
     from smartbi.config import get_cretas_pool
     from smartbi.services.process_secret_names import PROTECTED_NAMES_SQL, usable_names
-    pool = await get_cretas_pool()
-    if pool is None:
-        raise RuntimeError("cretas database pool unavailable")
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(PROTECTED_NAMES_SQL, factory_id)
-    return sorted(usable_names(r["name"] for r in rows))
+    import asyncio
+
+    async def _read() -> list:
+        pool = await get_cretas_pool()
+        if pool is None:
+            raise RuntimeError("cretas database pool unavailable")
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(PROTECTED_NAMES_SQL, factory_id)
+        return sorted(usable_names(r["name"] for r in rows))
+
+    # 库卡住时不让外发请求一起卡住: 5 秒没查到按查不了处理 (不发)
+    return await asyncio.wait_for(_read(), timeout=_PROTECTED_NAMES_TIMEOUT_S)
+
+
+_PROTECTED_NAMES_TIMEOUT_S = 5.0
 
 
 def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response:

@@ -164,6 +164,18 @@ async def test_when_protected_names_cannot_be_read_nothing_is_sent(upstream, mon
 
 
 @pytest.mark.asyncio
+async def test_a_refused_redaction_sends_nothing(upstream, monkeypatch):
+    """脱敏后仍有残留 (规则层判定) → 出境口拒绝, 一个字节都不发。"""
+    from common import llm_egress_text
+
+    monkeypatch.setattr(llm_egress_text, "redact_texts",
+                        lambda *a, **k: llm_egress_text.Result(refusal="残留手机号"))
+    with pytest.raises(lc.EgressRedactionError):
+        await llm_router.call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": SECRET}]})
+    assert upstream.bodies == []
+
+
+@pytest.mark.asyncio
 async def test_protected_names_are_read_fresh_for_every_request(monkeypatch):
     """不走 60 秒缓存: 刚设为保密的产品名下一次请求就不能再发出去。"""
     from common.llm_metrics import _llm_factory
