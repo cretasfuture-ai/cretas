@@ -1009,7 +1009,10 @@ export interface LineCapacityConfig {
   capacityPerHour: number;
   capacityUnit: CapacityUnit;
   source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
-  configuredBy: number;
+  /** 谁配的: 工厂用户或平台管理员 (对话建厂) */
+  actorType: 'FACTORY_USER' | 'PLATFORM_ADMIN';
+  /** 只在工厂用户配置时有值 */
+  configuredBy: number | null;
   effectiveFrom: string;
 }
 
@@ -1018,7 +1021,8 @@ export interface ProductEquipmentRequirement {
   productTypeId: string;
   equipmentId: number;
   source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
-  configuredBy: number;
+  /** 只在工厂用户配置时有值 */
+  configuredBy: number | null;
 }
 
 export function getLineCapacityConfigs(factoryId: string) {

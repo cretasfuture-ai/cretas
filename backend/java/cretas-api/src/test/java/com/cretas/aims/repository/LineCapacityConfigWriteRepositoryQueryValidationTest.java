@@ -8,6 +8,8 @@ import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.ProductionLineCapacityConfig.CapacityUnit;
 import com.cretas.aims.entity.ProductionLineCapacityConfig.Source;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.scheduling.LineCapacityConfigService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,6 +76,10 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
     }
 
     private static final String F = "F-S4W";
+    private static final ActorRef USER7 = new ActorRef(AuthenticatedActorType.FACTORY_USER, 7L);
+    private static final ActorRef USER8 = new ActorRef(AuthenticatedActorType.FACTORY_USER, 8L);
+    /** 平台管理员走对话建厂: 同样的数字 id, 另一个命名空间 —— 不得进 configured_by。 */
+    private static final ActorRef PLATFORM7 = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 7L);
 
     @Autowired TestEntityManager entityManager;
     @Autowired LineCapacityConfigService service;
@@ -135,10 +141,10 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
     @Test
     void replacingACapacityRetiresTheOldRowAndKeepsItForAudit() {
         ProductionLineCapacityConfig first = service.setCapacity(F, "L1", "PT-1", new BigDecimal("100"), "kg",
-                Source.FACTORY_CONFIG, 7L);
+                Source.FACTORY_CONFIG, USER7);
         ProductionLineCapacityConfig second = service.setCapacity(F, "L1", "PT-1", new BigDecimal("80"), "PIECE",
-                Source.FACTORY_CONFIG, 8L);
-        service.setCapacity(F, "L1", null, new BigDecimal("500"), "KG", Source.CONVERSATIONAL_BUILD, 7L);
+                Source.FACTORY_CONFIG, USER8);
+        service.setCapacity(F, "L1", null, new BigDecimal("500"), "KG", Source.CONVERSATIONAL_BUILD, PLATFORM7);
         entityManager.clear();
 
         System.out.println("CAPACITY_WRITE active=" + activeRows() + " all=" + allRows() + " pg=" + onPostgres());
@@ -149,14 +155,19 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
         assertThat(current.getId()).isEqualTo(second.getId()).isNotEqualTo(first.getId());
         assertThat(current.getCapacityUnit()).isEqualTo(CapacityUnit.PIECE);
         assertThat(current.getConfiguredBy()).isEqualTo(8L);
-        assertThat(capacity.findByFactoryIdAndProductionLineIdAndProductTypeId(F, "L1", null).orElseThrow()
-                .getSource()).isEqualTo(Source.CONVERSATIONAL_BUILD);
+        ProductionLineCapacityConfig generic = capacity.findByFactoryIdAndProductionLineIdAndProductTypeId(F, "L1", null)
+                .orElseThrow();
+        assertThat(generic.getSource()).isEqualTo(Source.CONVERSATIONAL_BUILD);
+        assertThat(generic.getActorType()).isEqualTo(AuthenticatedActorType.PLATFORM_ADMIN);
+        assertThat(generic.getActorId()).isEqualTo(7L);
+        assertThat(generic.getConfiguredBy()).isNull();
+        assertThat(current.getActorType()).isEqualTo(AuthenticatedActorType.FACTORY_USER);
     }
 
     @Test
     void theActiveIndexIsRealOnPostgres() {
         org.junit.jupiter.api.Assumptions.assumeTrue(onPostgres(), "partial unique index exists only on PostgreSQL");
-        service.setCapacity(F, "L1", "PT-1", new BigDecimal("100"), "KG", Source.FACTORY_CONFIG, 7L);
+        service.setCapacity(F, "L1", "PT-1", new BigDecimal("100"), "KG", Source.FACTORY_CONFIG, USER7);
         ProductionLineCapacityConfig dup = new ProductionLineCapacityConfig();
         dup.setFactoryId(F);
         dup.setProductionLineId("L1");
@@ -164,24 +175,24 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
         dup.setCapacityPerHour(BigDecimal.ONE);
         dup.setCapacityUnit(CapacityUnit.KG);
         dup.setSource(Source.FACTORY_CONFIG);
-        dup.setConfiguredBy(7L);
+        dup.setActor(USER7);
         dup.setEffectiveFrom(java.time.LocalDateTime.now());
         assertThatThrownBy(() -> capacity.saveAndFlush(dup)).isInstanceOf(Exception.class);
     }
 
     @Test
     void foreignOrBadInputWritesNothing() {
-        assertThatThrownBy(() -> service.setCapacity(F, "L-OTHER", null, BigDecimal.TEN, "KG", Source.FACTORY_CONFIG, 7L))
+        assertThatThrownBy(() -> service.setCapacity(F, "L-OTHER", null, BigDecimal.TEN, "KG", Source.FACTORY_CONFIG, USER7))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("产线不存在");
-        assertThatThrownBy(() -> service.setCapacity(F, "L1", "PT-OTHER", BigDecimal.TEN, "KG", Source.FACTORY_CONFIG, 7L))
+        assertThatThrownBy(() -> service.setCapacity(F, "L1", "PT-OTHER", BigDecimal.TEN, "KG", Source.FACTORY_CONFIG, USER7))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("产品不存在");
-        assertThatThrownBy(() -> service.setCapacity(F, "L1", null, BigDecimal.TEN, "TON", Source.FACTORY_CONFIG, 7L))
+        assertThatThrownBy(() -> service.setCapacity(F, "L1", null, BigDecimal.TEN, "TON", Source.FACTORY_CONFIG, USER7))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("产能单位");
-        assertThatThrownBy(() -> service.setCapacity(F, "L1", null, BigDecimal.ZERO, "KG", Source.FACTORY_CONFIG, 7L))
+        assertThatThrownBy(() -> service.setCapacity(F, "L1", null, BigDecimal.ZERO, "KG", Source.FACTORY_CONFIG, USER7))
                 .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> service.setCapacity(F, "L1", null, BigDecimal.TEN, "KG", Source.FACTORY_CONFIG, null))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("操作人");
-        assertThatThrownBy(() -> service.replaceEquipment(F, "PT-1", List.of(1L, 500L), Source.FACTORY_CONFIG, 7L))
+        assertThatThrownBy(() -> service.replaceEquipment(F, "PT-1", List.of(1L, 500L), Source.FACTORY_CONFIG, USER7))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("500");
         assertThatThrownBy(() -> service.retireCapacity("F-OTHER", 1L)).isInstanceOf(BusinessException.class);
         entityManager.clear();
@@ -191,9 +202,9 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
 
     @Test
     void equipmentReplaceKeepsUnchangedRowsAndRetiresRemovedOnes() {
-        List<ProductEquipmentRequirement> first = service.replaceEquipment(F, "PT-1", List.of(1L, 2L), Source.FACTORY_CONFIG, 7L);
+        List<ProductEquipmentRequirement> first = service.replaceEquipment(F, "PT-1", List.of(1L, 2L), Source.FACTORY_CONFIG, USER7);
         Long keptId = first.stream().filter(r -> r.getEquipmentId() == 1L).findFirst().orElseThrow().getId();
-        service.replaceEquipment(F, "PT-1", List.of(1L, 3L), Source.FACTORY_CONFIG, 7L);
+        service.replaceEquipment(F, "PT-1", List.of(1L, 3L), Source.FACTORY_CONFIG, USER7);
         entityManager.clear();
 
         assertThat(requirements.findByFactoryIdAndProductTypeId(F, "PT-1"))
@@ -205,7 +216,7 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
                 "select count(*) from product_equipment_requirements where equipment_id = 2 and deleted_at is not null")
                 .getSingleResult()).longValue()).isEqualTo(1);
 
-        service.replaceEquipment(F, "PT-1", List.of(), Source.FACTORY_CONFIG, 7L);
+        service.replaceEquipment(F, "PT-1", List.of(), Source.FACTORY_CONFIG, USER7);
         entityManager.clear();
         assertThat(requirements.findByFactoryIdAndProductTypeId(F, "PT-1")).isEmpty();
     }

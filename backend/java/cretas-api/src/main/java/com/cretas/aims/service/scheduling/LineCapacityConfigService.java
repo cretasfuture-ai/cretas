@@ -12,6 +12,7 @@ import com.cretas.aims.repository.ProductEquipmentRequirementRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
+import com.cretas.aims.security.ActorRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,8 +58,8 @@ public class LineCapacityConfigService {
     @Transactional
     public ProductionLineCapacityConfig setCapacity(String factoryId, String productionLineId, String productTypeId,
                                                     BigDecimal capacityPerHour, String unit, Source source,
-                                                    Long configuredBy) {
-        if (configuredBy == null) {
+                                                    ActorRef actor) {
+        if (actor == null) {
             throw new BusinessException(401, "无法识别当前操作人, 未保存");
         }
         if (capacityPerHour == null || capacityPerHour.signum() <= 0) {
@@ -90,7 +91,7 @@ public class LineCapacityConfigService {
         row.setCapacityPerHour(capacityPerHour);
         row.setCapacityUnit(capacityUnit);
         row.setSource(source);
-        row.setConfiguredBy(configuredBy);
+        row.setActor(actor);
         row.setEffectiveFrom(now);
         return capacityConfigs.saveAndFlush(row);
     }
@@ -116,8 +117,8 @@ public class LineCapacityConfigService {
     @Transactional
     public List<ProductEquipmentRequirement> replaceEquipment(String factoryId, String productTypeId,
                                                               Collection<Long> equipmentIds, Source source,
-                                                              Long configuredBy) {
-        if (configuredBy == null) {
+                                                              ActorRef actor) {
+        if (actor == null) {
             throw new BusinessException(401, "无法识别当前操作人, 未保存");
         }
         if (productTypeId == null || productTypes.findByIdAndFactoryId(productTypeId, factoryId).isEmpty()) {
@@ -151,7 +152,7 @@ public class LineCapacityConfigService {
             r.setProductTypeId(productTypeId);
             r.setEquipmentId(id);
             r.setSource(source);
-            r.setConfiguredBy(configuredBy);
+            r.setActor(actor);
             kept.add(equipmentRequirements.saveAndFlush(r));
         }
         return kept;

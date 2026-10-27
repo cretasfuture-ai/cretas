@@ -6,6 +6,8 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.ProductEquipmentRequirement;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.ProductionLineCapacityConfig.Source;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.scheduling.LineCapacityConfigService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -53,10 +55,12 @@ public class LineCapacityConfigController {
     }
 
     public record CapacityView(Long id, String productionLineId, String productTypeId, BigDecimal capacityPerHour,
-                               String capacityUnit, String source, Long configuredBy, LocalDateTime effectiveFrom) {
+                               String capacityUnit, String source, String actorType, Long configuredBy,
+                               LocalDateTime effectiveFrom) {
         static CapacityView of(ProductionLineCapacityConfig c) {
             return new CapacityView(c.getId(), c.getProductionLineId(), c.getProductTypeId(), c.getCapacityPerHour(),
-                    c.getCapacityUnit().name(), c.getSource().name(), c.getConfiguredBy(), c.getEffectiveFrom());
+                    c.getCapacityUnit().name(), c.getSource().name(), c.getActorType().name(), c.getConfiguredBy(),
+                    c.getEffectiveFrom());
         }
     }
 
@@ -83,7 +87,7 @@ public class LineCapacityConfigController {
                                                  HttpServletRequest http) {
         ProductionLineCapacityConfig saved = service.setCapacity(factoryId, request.getProductionLineId(),
                 request.getProductTypeId(), request.getCapacityPerHour(), request.getCapacityUnit(),
-                Source.FACTORY_CONFIG, userId(http));
+                Source.FACTORY_CONFIG, factoryUser(http));
         return ApiResponse.success("保存成功", CapacityView.of(saved));
     }
 
@@ -113,8 +117,14 @@ public class LineCapacityConfigController {
                                                              @Valid @RequestBody EquipmentRequest request,
                                                              HttpServletRequest http) {
         List<ProductEquipmentRequirement> saved = service.replaceEquipment(factoryId, productTypeId,
-                request.getEquipmentIds(), Source.FACTORY_CONFIG, userId(http));
+                request.getEquipmentIds(), Source.FACTORY_CONFIG, factoryUser(http));
         return ApiResponse.success("保存成功", saved.stream().map(EquipmentView::of).toList());
+    }
+
+    /** 工厂配置页的写入人是工厂用户; 拿不到 id 时返回 null, 服务层 401 且不写。 */
+    private static ActorRef factoryUser(HttpServletRequest request) {
+        Long id = userId(request);
+        return id == null || id <= 0 ? null : new ActorRef(AuthenticatedActorType.FACTORY_USER, id);
     }
 
     private static Long userId(HttpServletRequest request) {
