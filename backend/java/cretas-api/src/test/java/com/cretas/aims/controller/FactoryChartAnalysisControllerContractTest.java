@@ -113,6 +113,29 @@ class FactoryChartAnalysisControllerContractTest {
         verify(failureRelay, times(1)).clear(any());
     }
 
+    @Test
+    void mapsRelayedContextConflictToRetryableBusinessFailure() {
+        ObjectNode failedPayload = mapper.createObjectNode();
+        when(gateway.execute(any())).thenReturn(new ToolExecutionResult(
+                "factory-analysis-test", "smartbi_factory_analysis", "1.0.0", "audit-1", "trace-1",
+                ToolExecutionStatus.FAILED, failedPayload, "tool failed", false));
+        when(failureRelay.consume(any())).thenReturn(java.util.Optional.of(
+                new FactoryChartAnalysisFailureRelay.Failure(
+                        "request", 409, "对话上下文正在更新，请稍后重试")));
+
+        FactoryChartAnalysisRequest body = new FactoryChartAnalysisRequest();
+        body.setQuestion("本厂产量趋势");
+        assertThatThrownBy(() -> controller.analyze("F006", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(409);
+                    assertThat(business.getMessage()).isEqualTo("对话上下文正在更新，请稍后重试");
+                });
+        verify(failureRelay, times(1)).consume(any());
+        verify(failureRelay, times(1)).clear(any());
+    }
+
     private ToolExecutionResult result(ObjectNode payload) {
         return new ToolExecutionResult("factory-analysis-test", "smartbi_factory_analysis", "1.0.0",
                 "audit-1", "trace-1", ToolExecutionStatus.SUCCEEDED, payload,

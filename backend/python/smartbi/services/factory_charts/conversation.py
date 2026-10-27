@@ -48,6 +48,8 @@ class ConversationContext:
     expires_at: float = 0.0
     version: int = 0
     lock: Any = field(default_factory=asyncio.Lock, repr=False)
+    lease_token: str = ""
+    persisted_version: int = 0
 
 
 _CONTEXTS: dict[str, ConversationContext] = {}
@@ -563,9 +565,34 @@ def touch_context(context: ConversationContext, question: str, selected_ids: Seq
     context.expires_at = time.monotonic() + CONTEXT_TTL_SECONDS
 
 
+async def create_shared_context(owner, source, upload_id, scope, *, question="", unresolved_product=False):
+    """Create production state in PostgreSQL; no in-process fallback."""
+    from .conversation_store import get_store
+    context = await get_store().create(owner, source, upload_id, scope, ConversationContext)
+    # The accepted turn is recorded by touch_context after rendering; do not
+    # pre-seed the same question here (which would duplicate history).
+    return context
+
+
+async def claim_shared_context(context_id, owner):
+    from .conversation_store import get_store
+    return await get_store().claim(context_id, owner, ConversationContext)
+
+
+async def save_shared_context(context):
+    from .conversation_store import get_store
+    return await get_store().save(context)
+
+
+async def release_shared_context(context):
+    from .conversation_store import get_store
+    return await get_store().release(context)
+
+
 __all__ = [
     "ConversationContext", "CONTEXT_TTL_SECONDS", "MAX_CONTEXTS", "clear_contexts",
     "_new_context", "_context_for", "semantic_catalog", "plan", "facts_for",
     "limitations_for", "render_answer", "resolve_subject", "resolve_period",
     "scope_for_context", "apply_explicit_period", "public_catalog", "is_cancel", "touch_context", "is_joint_intent", "joint_family_requirement",
+    "create_shared_context", "claim_shared_context", "save_shared_context", "release_shared_context",
 ]

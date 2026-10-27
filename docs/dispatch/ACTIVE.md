@@ -1,4 +1,5 @@
 # Dispatch 台账 — ACTIVE
+
 旧页眉见 archive/2026-10-25-smartbi-catalog-closure.md。
 
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
