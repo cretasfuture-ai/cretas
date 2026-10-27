@@ -325,9 +325,25 @@ function periodChanged(value: PeriodSelection) {
 }
 
 function onSubjectChange(value: string | null | undefined) {
+  const latestTurn = turns.value.at(-1);
+  const clarification = !pending.value && latestTurn?.role === 'assistant'
+    && latestTurn.clarification && latestTurn.clarificationHasSubjects ? latestTurn : null;
+  const clarificationQuestion = clarification?.question || lastQuestion.value;
   analysisSubject.value = value || null;
   detailsVisible.value = false;
-  resetConversation('产品范围已切换，请重新提问。');
+  resetConversation(clarification ? '产品已选定，请继续分析。' : '产品范围已切换，请重新提问。', {
+    preserveAcceptedScope: Boolean(clarification),
+  });
+  if (clarification) {
+    // Keep only the unanswered question. Prior facts, charts, context tokens
+    // and details must still be discarded when the product scope changes.
+    lastQuestion.value = clarificationQuestion;
+    turns.value = [{
+      id: id(), role: 'assistant', text: clarification.text,
+      question: clarificationQuestion, status: 'clarification',
+      clarification: true, clarificationHasSubjects: true,
+    }];
+  }
 }
 
 function subjectLabel(subjectId: string | null | undefined): string {
@@ -480,7 +496,7 @@ function sendClarification(text: string) {
   // A product clarification starts a fresh trusted read. Follow-ups remain
   // the fixed {question, contextId} contract.
   contextId.value = null;
-  void sendQuestion(text, analysisSubject.value, true);
+  void sendQuestion(text, analysisSubject.value, true, lastAcceptedScope.value || undefined);
 }
 
 function retryExpired() {
