@@ -45,6 +45,12 @@ public interface LabelRecognitionRecordRepository extends JpaRepository<LabelRec
     Page<LabelRecognitionRecord> findByConfigIdOrderByRecognitionTimeDesc(Long configId, Pageable pageable);
 
     /**
+     * 本厂某配置的识别记录 (分页)
+     */
+    Page<LabelRecognitionRecord> findByFactoryIdAndConfigIdOrderByRecognitionTimeDesc(String factoryId, Long configId,
+                                                                                     Pageable pageable);
+
+    /**
      * 根据设备ID查询
      */
     List<LabelRecognitionRecord> findByDeviceIdOrderByRecognitionTimeDesc(String deviceId);

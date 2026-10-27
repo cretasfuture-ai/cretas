@@ -75,7 +75,8 @@ public class CameraCaptureTool extends AbstractBusinessTool {
         String deviceId = getString(params, "deviceId");
         Integer channelId = getInteger(params, "channelId", 1);
 
-        IsapiCaptureDTO capture = deviceService.capturePicture(deviceId, channelId);
+        // 设备 id 来自模型抽取的参数: 只抓本厂摄像头
+        IsapiCaptureDTO capture = deviceService.capturePicture(factoryId, deviceId, channelId);
 
         if (!capture.getSuccess()) {
             throw new IllegalArgumentException("抓拍失败: " + capture.getError());

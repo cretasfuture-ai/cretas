@@ -17,9 +17,8 @@ import java.util.*;
  *
  * Intent Code: CAMERA_SUBSCRIBE
  *
- * factoryId 隔离豁免说明: subscribeDevice/getDevice 已迁移到 factoryId-aware
- * overload (P0-1 fix commit 79b76adff). 剩余 getActiveSubscriptionCount() 和
- * getActiveSubscriptionIds() 是进程级 in-memory state, 不跨工厂.
+ * factoryId 隔离: subscribeDevice/getDevice 走 factoryId-aware overload (P0-1 fix commit 79b76adff);
+ * 订阅表是全进程共用的, 订阅数和设备 id 只取本厂的 (getActiveSubscriptionIds(factoryId)).
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -91,11 +90,12 @@ public class CameraSubscribeTool extends AbstractBusinessTool {
         } else {
             // 订阅所有设备
             subscriptionService.subscribeAllDevices(factoryId);
-            int count = subscriptionService.getActiveSubscriptionCount();
+            java.util.List<String> ownSubscribed = subscriptionService.getActiveSubscriptionIds(factoryId);
+            int count = ownSubscribed.size();
 
             result.put("message", "已订阅所有在线摄像头告警，共 " + count + " 台");
             result.put("subscribedCount", count);
-            result.put("subscribedDeviceIds", subscriptionService.getActiveSubscriptionIds());
+            result.put("subscribedDeviceIds", ownSubscribed);
 
             log.info("全部设备告警订阅完成 - 订阅数: {}", count);
         }

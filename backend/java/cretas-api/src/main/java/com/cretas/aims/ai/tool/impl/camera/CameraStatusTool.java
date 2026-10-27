@@ -19,9 +19,8 @@ import java.util.stream.Collectors;
  *
  * Intent Code: CAMERA_STATUS
  *
- * factoryId 隔离豁免说明: subscriptionService.getActiveSubscriptionCount() 是
- * 进程级 in-memory counter (ConcurrentMap), 返回当前 JVM 活跃订阅总数,
- * 不涉及跨工厂数据读取. 设备查询使用 deviceRepository.findByFactoryId 已带 factoryId 过滤.
+ * factoryId 隔离: 订阅表是全进程共用的, 订阅数只数本厂设备 (getActiveSubscriptionIds(factoryId));
+ * 设备查询使用 deviceRepository.findByFactoryId 已带 factoryId 过滤.
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -97,7 +96,7 @@ public class CameraStatusTool extends AbstractBusinessTool {
         result.put("offline", offline);
         result.put("error", error);
         result.put("offlineDevices", offlineList);
-        result.put("activeSubscriptions", subscriptionService.getActiveSubscriptionCount());
+        result.put("activeSubscriptions", subscriptionService.getActiveSubscriptionIds(factoryId).size());
         result.put("message", String.format("摄像头状态: 在线 %d / 总计 %d", online, total));
 
         log.info("摄像头状态查询完成 - 在线: {}, 总计: {}", online, total);

@@ -2,6 +2,7 @@ package com.cretas.aims.entity.dahua;
 
 import com.cretas.aims.entity.BaseEntity;
 import com.cretas.aims.entity.common.UnifiedDeviceType;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -119,6 +120,8 @@ public class DahuaDevice extends BaseEntity {
     @Column(name = "username", nullable = false, length = 50)
     private String username;
 
+    // 接口直接返回实体: 加密后的设备密码也不出现在返回里
+    @JsonIgnore
     @Column(name = "password_encrypted", nullable = false, length = 255)
     private String passwordEncrypted;
 
