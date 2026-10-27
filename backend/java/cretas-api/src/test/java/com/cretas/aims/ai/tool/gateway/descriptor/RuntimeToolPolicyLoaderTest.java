@@ -25,7 +25,7 @@ class RuntimeToolPolicyLoaderTest {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(9);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(10);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
@@ -37,7 +37,8 @@ class RuntimeToolPolicyLoaderTest {
                         "product_create",
                         "material_stock_summary",
                         "material_batch_query",
-                        "material_expired_query");
+                        "material_expired_query",
+                        "smartbi_factory_analysis");
         assertThat(manifest.policies()).allSatisfy(policy -> {
             assertThat(policy.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
             assertThat(policy.requiredPermissions().isEmpty() && policy.allowedRoles().isEmpty())
@@ -119,8 +120,26 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.egressPolicy().allowedDestinations())
                     .containsExactly("python-smartbi.owner-action-chat.v1");
         });
+        assertThat(manifest.policies().get(9)).satisfies(policy -> {
+            assertThat(policy.toolName()).isEqualTo("smartbi_factory_analysis");
+            assertThat(policy.implementationClass()).isEqualTo(
+                    "com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool");
+            assertThat(policy.actionType())
+                    .isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.ActionType.ANALYZE);
+            assertThat(policy.riskLevel())
+                    .isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW);
+            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.requiredPermissions()).containsExactly("analytics:read");
+            assertThat(policy.allowedBusinessTypes()).containsExactly(FactoryType.FACTORY);
+            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+            assertThat(policy.dataClassification()).isEqualTo(DataClassification.CONFIDENTIAL);
+            assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.ALLOWLIST_ONLY);
+            assertThat(policy.egressPolicy().allowedDestinations())
+                    .containsExactly("python-smartbi.factory-chart-analysis.v1");
+        });
         assertThat(manifest.policies())
-                .filteredOn(policy -> !policy.toolName().equals("restaurant_owner_action_advisor"))
+                .filteredOn(policy -> !policy.toolName().equals("restaurant_owner_action_advisor")
+                        && !policy.toolName().equals("smartbi_factory_analysis"))
                 .allSatisfy(policy -> {
                     assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
                     assertThat(policy.egressPolicy().allowedDestinations()).isEmpty();

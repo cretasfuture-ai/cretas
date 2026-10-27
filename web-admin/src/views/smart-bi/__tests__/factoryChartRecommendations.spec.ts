@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn(), getFactoryChartSelection: vi.fn(), saveFactoryChartSelection: vi.fn() },
   route: { query: {} as Record<string, unknown> },
   replace: vi.fn(),
+  push: vi.fn(),
 }));
 
 vi.mock('@/store/modules/auth', async () => {
@@ -15,7 +16,7 @@ vi.mock('@/store/modules/auth', async () => {
   h.authStore = makeReactive({ factoryId: 'F006' });
   return { useAuthStore: () => h.authStore };
 });
-vi.mock('vue-router', () => ({ useRoute: () => h.route, useRouter: () => ({ replace: h.replace }) }));
+vi.mock('vue-router', () => ({ useRoute: () => h.route, useRouter: () => ({ replace: h.replace, push: h.push }) }));
 vi.mock('@/api/smartbi/factory-charts', async () => {
   const actual = await vi.importActual<typeof import('@/api/smartbi/factory-charts')>('@/api/smartbi/factory-charts');
   return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations, getFactoryChartSelection: h.api.getFactoryChartSelection, saveFactoryChartSelection: h.api.saveFactoryChartSelection };
@@ -81,6 +82,7 @@ beforeEach(() => {
   h.authStore!.user = { id: 1309 };
   h.route.query = {};
   h.replace.mockReset();
+  h.push.mockReset();
   h.api.getUploadHistory.mockReset().mockResolvedValue({ success: true, data: [
     { id: 42, fileName: '生产报表.xlsx', sheetName: '产量', rowCount: 8, columnCount: 4, status: 'COMPLETED', createdAt: '2026-10-01' },
   ] });
@@ -91,6 +93,27 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = null; document.body.innerHTML = ''; });
 
 describe('FactoryChartRecommendations mounted workflow', () => {
+  it('AI entry serializes the current scope and drops legacy q', async () => {
+    const page = await mountPage();
+    const vm = page!.vm as unknown as {
+      source: 'business' | 'upload'; uploadId: number | null; analysisSubject: string | null;
+      periodSelection: { type: string; year: number; value: [string, string]; compareEnabled: boolean; allHistory?: boolean };
+    };
+    vm.source = 'upload';
+    vm.uploadId = 42;
+    vm.analysisSubject = 'sku-butter';
+    vm.periodSelection = { type: 'month_range', year: 2026, value: ['2026-03', '2026-05'], compareEnabled: false, allHistory: false };
+    h.route.query = { q: 'legacy question' };
+    await page!.get('[data-testid="factory-chart-ai-entry"]').trigger('click');
+    expect(h.push).toHaveBeenCalledWith({
+      path: '/smart-bi/analysis',
+      query: {
+        tab: 'query', mode: 'factory', source: 'upload', upload_id: '42', year: '2026',
+        period_type: 'month_range', start_month: '3', end_month: '5', analysis_subject: 'sku-butter',
+      },
+    });
+  });
+
   it('uses distinct server defaults without claiming an unset preference was saved', async () => {
     h.api.getFactoryChartRecommendations.mockResolvedValue(response({ defaultSelection: ['margin'] }));
     const page = await mountPage();

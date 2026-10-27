@@ -2739,6 +2739,52 @@ public class PythonSmartBIClient {
 
     // ==================== 财务看板 ====================
 
+    /** Fixed read-only factory analysis route; caller cannot select an endpoint or SQL source. */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> callFactoryChartAnalysis(
+            String factoryId,
+            String userId,
+            String userRole,
+            String correlationId,
+            Map<String, Object> request) throws IOException {
+        if (!config.isEnabled()) {
+            throw new IOException("Python SmartBI service is disabled");
+        }
+        String trustedFactory = requireFactoryId(factoryId);
+        String trustedUser = optionalIdentity(userId);
+        String trustedRole = optionalIdentity(userRole);
+        if (request == null || request.isEmpty() || !request.containsKey("question")) {
+            throw new IOException("Factory analysis question is required");
+        }
+        Set<String> allowed = Set.of("question", "source", "upload_id", "year", "period_type",
+                "start_month", "end_month", "analysis_subject", "context_id");
+        if (!allowed.containsAll(request.keySet())) {
+            throw new IOException("Unsupported factory analysis parameter");
+        }
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi/financial-dashboard/factory-analysis")
+                .build();
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .header("X-Factory-Id", trustedFactory)
+                .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)));
+        if (trustedUser != null) builder.header("X-User-Id", trustedUser);
+        if (trustedRole != null) builder.header("X-User-Role", trustedRole);
+        if (correlationId != null && !correlationId.isBlank()) {
+            builder.header("X-Correlation-ID", correlationId);
+        }
+        try {
+            Map<String, Object> response = executeWithRetry(builder.build(), Map.class);
+            if (response == null || !Boolean.TRUE.equals(response.get("success"))
+                    || !(response.get("data") instanceof Map<?, ?>)) {
+                throw new IOException("Factory analysis returned an unsuccessful response");
+            }
+            return response;
+        } catch (PythonServiceUnavailableException failure) {
+            throw new IOException("Python SmartBI service is unavailable");
+        }
+    }
+
     /**
      * 调用财务看板 Python 服务
      *

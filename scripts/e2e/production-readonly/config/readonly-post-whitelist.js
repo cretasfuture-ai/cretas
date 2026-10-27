@@ -10,10 +10,45 @@ const AUTH_REQUESTS = [
   },
 ];
 
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function factoryAnalysisBodyMatches(body) {
+  if (!body || typeof body !== 'object' || typeof body.question !== 'string'
+    || !body.question.trim() || body.question.length > 1000) return false;
+  const keys = Object.keys(body).sort();
+  const followupKeys = ['contextId', 'question'];
+  if (keys.length === followupKeys.length && keys.every((key, index) => key === followupKeys[index])) {
+    return typeof body.contextId === 'string' && body.contextId.length > 0 && body.contextId.length <= 128;
+  }
+  const requiredInitial = ['analysisSubject', 'endMonth', 'periodType', 'question', 'source', 'startMonth', 'year'];
+  if (!requiredInitial.every((key) => keys.includes(key))) return false;
+  const allowedInitial = new Set([...requiredInitial, 'uploadId']);
+  if (keys.some((key) => !allowedInitial.has(key))) return false;
+  if (body.source !== 'business' && body.source !== 'upload') return false;
+  if (!Number.isSafeInteger(body.year) || body.year < 2000 || body.year > 2100) return false;
+  if (!['all', 'year', 'month_range'].includes(body.periodType)) return false;
+  if (!Number.isInteger(body.startMonth) || body.startMonth < 1 || body.startMonth > 12
+    || !Number.isInteger(body.endMonth) || body.endMonth < body.startMonth || body.endMonth > 12) return false;
+  if (body.analysisSubject !== null && (typeof body.analysisSubject !== 'string' || body.analysisSubject.length > 200)) return false;
+  if (body.source === 'upload') {
+    return keys.includes('uploadId') && isPositiveInteger(body.uploadId);
+  }
+  return !keys.includes('uploadId');
+}
+
 // Every entry must point to a server contract that is query-only. Do not add
 // generic prefixes. AI chat is deliberately absent because some modes may
 // execute tools with side effects behind a single HTTP request.
 const READONLY_POST_WHITELIST = [
+  {
+    id: 'smartbi-factory-analysis',
+    method: 'POST',
+    path: /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/,
+    bodyMatches: factoryAnalysisBodyMatches,
+    rationale: 'Root-approved Java factory analysis contract; authenticated planner reads existing tenant-qualified chart facts and returns no business mutation.',
+  },
   {
     id: 'smartbi-factory-details',
     method: 'POST',
