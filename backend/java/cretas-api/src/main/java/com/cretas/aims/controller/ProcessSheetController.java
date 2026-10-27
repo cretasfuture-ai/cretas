@@ -51,6 +51,9 @@ public class ProcessSheetController {
     private BusinessRowScope businessRowScope;
     @Autowired(required = false)
     private ProductionPlanRepository productionPlanRepository;
+    /** 缺口 13 (审查中 7): 正式报工与 CCP 实测值同一事务 (挂 CCP 的工序缺值整笔拒绝)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.ccp.CcpReportFacade ccpReportFacade;
 
     private void requirePlanScope(String factoryId, String planId) {
         if (productionPlanRepository == null) return;
@@ -65,8 +68,13 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId,
             @RequestAttribute("userId") Long userId,
+            @RequestAttribute(value = "username", required = false) String username,
             @Valid @RequestBody ProcessSheetRowRequest req) {
         requirePlanScope(factoryId, planId);
+        if (ccpReportFacade != null) {
+            return ApiResponse.success("保存成功",
+                    ccpReportFacade.saveProcessSheetRow(factoryId, planId, userId, username, req));
+        }
         return ApiResponse.success("保存成功", service.saveRow(factoryId, planId, req, userId));
     }
 
@@ -89,11 +97,14 @@ public class ProcessSheetController {
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId,
             @RequestAttribute("userId") Long userId,
+            @RequestAttribute(value = "username", required = false) String username,
             @Valid @RequestBody ProcessSheetRowRequest req) {
         requirePlanScope(factoryId, planId);
         try {
             return ResponseEntity.ok(ApiResponse.success(
-                    "正式提交成功", service.submitRow(factoryId, planId, req, userId)));
+                    "正式提交成功", ccpReportFacade != null
+                            ? ccpReportFacade.submitProcessSheetRow(factoryId, planId, userId, username, req)
+                            : service.submitRow(factoryId, planId, req, userId)));
         } catch (ProductionStockShortageException error) {
             ApiResponse<ProductionStockShortageDTO> response = ApiResponse.of(
                     409, error.getMessage(), error.getShortage());

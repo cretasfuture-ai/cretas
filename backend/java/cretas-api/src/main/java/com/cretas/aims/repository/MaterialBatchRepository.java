@@ -1042,4 +1042,31 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     BigDecimal calculateConsumedValue(@Param("factoryId") String factoryId,
                                        @Param("startDateTime") LocalDateTime startDateTime,
                                        @Param("endDateTime") LocalDateTime endDateTime);
+
+    // ==================== 质检放行 (缺口 11/13) ====================
+
+    /**
+     * 质检放行待办: 逐道录入的在制半成品批次 (sourceDocType=PRODUCTION_BATCH) 中处于某状态
+     * (INSPECTING = 待检) 的批次。⛔ 只看在制批次 —— 原料的「质检中」有自己的放行流程, 不进这张待办。
+     */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.sourceDocType = 'PRODUCTION_BATCH' AND m.status = :status " +
+           "ORDER BY m.updatedAt DESC")
+    List<MaterialBatch> findWipBatchesByFactoryIdAndStatus(
+            @Param("factoryId") String factoryId,
+            @Param("status") com.cretas.aims.entity.enums.MaterialBatchStatus status);
+
+    /** CCP 偏离扣留: 这些生产批次物化出来的在制半成品批次。 */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.sourceDocType = 'PRODUCTION_BATCH' AND m.sourceDocId IN :productionBatchIds")
+    List<MaterialBatch> findWipBatchesByFactoryIdAndSourceDocIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
+
+    /** CCP 偏离扣留 (审查中 8): 行锁读取这些生产批次物化的在制批次, 锁内再改 (见 SemiFinishedInventoryRepository#lockForDeviationHold)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId AND m.sourceDocType = 'PRODUCTION_BATCH' " +
+           "AND m.sourceDocId IN :productionBatchIds AND m.deletedAt IS NULL ORDER BY m.id")   // 固定加锁顺序 (审查 L2)
+    List<MaterialBatch> lockWipBatchesForDeviationHold(@Param("factoryId") String factoryId,
+                                                       @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
 }

@@ -127,6 +127,27 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /**
+     * 质检放行 (缺口 11/13): 在制半成品批次产出时判「要不要扣成待检」。同上字段注入 required=false ——
+     * 未注入 (既有按位置 new 的单测) ⇒ 从不扣 = 旧行为。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
+
+    /** 在制批次 (逐道录入 CLK-W) 这次产出要不要扣成待检。 */
+    private boolean holdWipOutput(String factoryId, ProductionBatch batch, String outputProductId) {
+        if (qcInspectionPolicy == null) {
+            return false;
+        }
+        return qcInspectionPolicy.shouldHoldSemi(factoryId,
+                new com.cretas.aims.service.quality.release.QcInspectionPolicy.OutputRef(
+                        outputProductId, null,
+                        com.cretas.aims.service.quality.release.QcInspectionPolicy.batchNumbers(
+                                batch == null ? null : batch.getBatchNumber()),
+                        batch == null ? null : batch.getProductionPlanId(),
+                        batch == null ? null : batch.getId()));
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Public API
     // ─────────────────────────────────────────────────────────────
@@ -522,6 +543,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO);
             wip.setUnitPrice(wipUnitPrice);
+            // 质检放行: 重存改了产出量 = 一笔新的产出, 已放行的在制批次重新待检 (只动 AVAILABLE)。
+            if (qcInspectionPolicy != null && holdWipOutput(ctx.getFactoryId(),
+                    batchRepo.findByIdAndFactoryId(existingBatchId, ctx.getFactoryId()).orElse(null),
+                    wip.getProductTypeId())) {
+                wip.setStatus(com.cretas.aims.service.quality.release.QcInspectionPolicy
+                        .wipBatchStatusAfterOutput(wip.getStatus(), true));
+            }
             // 立即 flush，确保身份/FK 错误在写审计日志前暴露，避免污染 Hibernate Session。
             materialBatchRepo.saveAndFlush(wip);
             // 重物化保 id: 边的幂等键只看库存批 id, 已有边 ⇒ ALREADY_EXISTS (不重复写);
@@ -807,7 +835,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setUsedQuantity(BigDecimal.ZERO);
         mb.setReservedQuantity(BigDecimal.ZERO);
         mb.setUnitPrice(unitPrice);
-        mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        // 质检放行: 需检半成品 (或批次/计划有未处理 CCP 偏离) 产出即「质检中」, 下道投料被
+        // QcInspectionGuard.assertWipBatchDrawable 拦住; 其余与以前一样 AVAILABLE。
+        mb.setStatus(com.cretas.aims.service.quality.release.QcInspectionPolicy.wipBatchInitialStatus(
+                holdWipOutput(factoryId, batch, mb.getProductTypeId())));
         mb.setSourceDocType("PRODUCTION_BATCH");
         mb.setSourceDocId(String.valueOf(batch.getId()));
         mb.setCreatedBy(operatorId);

@@ -63,6 +63,8 @@ export interface HaccpCheckpoint {
   correctiveAction?: string
   verificationProcedure?: string
   recordKeeping?: string
+  /** 缺口 13: 挂在哪个工序 (work_processes.id); null = 未挂工序 */
+  workProcessId?: string | null
   active: boolean
   version?: number
   createdAt?: string

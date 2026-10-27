@@ -20,4 +20,8 @@ public interface HaccpCheckpointRepository extends JpaRepository<HaccpCheckpoint
 
     /** 按编码查找 (factory 内唯一). */
     Optional<HaccpCheckpoint> findByFactoryIdAndCheckpointCode(String factoryId, String checkpointCode);
+
+    /** 缺口 13: 挂在某工序上的启用 CCP (报工时必须录的那几项), 按编码排序。 */
+    List<HaccpCheckpoint> findByFactoryIdAndWorkProcessIdAndActiveTrueOrderByCheckpointCodeAsc(
+            String factoryId, String workProcessId);
 }

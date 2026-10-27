@@ -522,6 +522,28 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      */
     List<FinishedGoodsBatch> findByFactoryIdAndWarehouseId(String factoryId, String warehouseId);
 
+    /** 质检放行待办 (缺口 11): 本厂处于某状态 (PENDING_INSPECTION) 的成品批次, 新的在前。 */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.status = :status ORDER BY b.createdAt DESC")
+    List<FinishedGoodsBatch> findByFactoryIdAndStatusForRelease(
+            @Param("factoryId") String factoryId,
+            @Param("status") String status);
+
+    /** CCP 偏离扣留 (缺口 13): 按批次号找成品 (逐道录入/结单入库的成品批号 = 报工生产批号)。 */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.batchNumber IN :batchNumbers")
+    List<FinishedGoodsBatch> findByFactoryIdAndBatchNumberInForHold(
+            @Param("factoryId") String factoryId,
+            @Param("batchNumbers") java.util.Collection<String> batchNumbers);
+
+    /** CCP 偏离扣留 (审查中 8): 行锁读取批号命中或同一计划的成品批次, 锁内再改 (不覆盖并发发货/预留)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL " +
+            "AND (b.batchNumber IN :batchNumbers OR b.productionPlanId IN :planIds) ORDER BY b.id")   // 固定加锁顺序 (审查 L2)
+    List<FinishedGoodsBatch> lockForDeviationHold(@Param("factoryId") String factoryId,
+                                                  @Param("batchNumbers") java.util.Collection<String> batchNumbers,
+                                                  @Param("planIds") java.util.Collection<String> planIds);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.id = :id AND b.factoryId = :factoryId")
     Optional<FinishedGoodsBatch> findStocktakeBatchForUpdate(

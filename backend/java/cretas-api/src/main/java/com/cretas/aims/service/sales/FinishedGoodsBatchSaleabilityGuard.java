@@ -31,6 +31,12 @@ public final class FinishedGoodsBatchSaleabilityGuard {
 
     public static void assertSaleable(FinishedGoodsBatch batch, String hintTarget, LocalDate today) {
         String status = batch.getStatus();
+        // 质检放行 (缺口 11): 待检单独给错误码和出路 —— 「请先完成质检放行」在通用分支里只是一句泛话,
+        // 待检批次的出路是明确的 (质检员放行), 不能和冻结/不良品混成同一个 FINISHED_GOODS_BATCH_NOT_SALEABLE。
+        if (FinishedGoodsBatch.Status.PENDING_INSPECTION.equals(status)) {
+            throw com.cretas.aims.service.quality.release.QcInspectionGuard
+                    .pendingFinishedGoods(batch, hintTarget, "分配或发货");
+        }
         if (!FinishedGoodsBatch.Status.AVAILABLE.equals(status)) {
             String displayStatus = status == null || status.isBlank() ? "未知" : status;
             throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()

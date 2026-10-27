@@ -108,6 +108,12 @@ public class YieldReportRequest {
      */
     private List<SemiOutput> semiOutputs;
 
+    /**
+     * 缺口 13 (审查中 7): 本道挂了关键控制点时, 完工出成要把 CCP 实测值<b>随报工一起</b>提交 ——
+     * 服务端在同一事务里先校验 (少录一项整笔拒绝) 再落库, 不再是报工成功后另发一次。
+     */
+    private List<com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService.Reading> ccpReadings;
+
     // ==================== 传统报工适配 (适配单元1 地基; 算法在后续任务) ====================
 
     /** 图片证据 URL 列表 (前端先传 OSS 拿 URL, 存入 ProductionReport.photos) */

@@ -87,7 +87,28 @@ public class QualityDispositionInventoryService {
         /** 源状态已是目标状态 (幂等跳过)。 */
         ALREADY_IN_TARGET,
         /** 源状态为终态, 不可翻转。 */
-        INVALID_TERMINAL
+        INVALID_TERMINAL,
+        /**
+         * 缺口 11 (审查低 10): 逐道录入的在制批次 (sourceDocType=PRODUCTION_BATCH) 处于待检 ——
+         * 只能走「质检放行」({@code QcReleaseService}: 查 CCP 偏离、留放行记录), 不许在这里直接放成可用。
+         */
+        QC_RELEASE_REQUIRED
+    }
+
+    public static final String QC_RELEASE_REQUIRED_MESSAGE =
+            "这是生产过程中的在制批次，正在待检：请到「质量管理 → 质检放行」处理（会先核对关键控制点偏离并留下放行记录）";
+
+    /**
+     * 带批次身份的守卫: 在制批次的待检只能经质检放行解除; 其余同 {@link #evaluateMaterialFlip(MaterialBatchStatus, MaterialBatchStatus)}。
+     */
+    public static FlipDecision evaluateMaterialFlip(MaterialBatch batch, MaterialBatchStatus target) {
+        MaterialBatchStatus current = batch == null ? null : batch.getStatus();
+        if (batch != null && current == MaterialBatchStatus.INSPECTING && target == MaterialBatchStatus.AVAILABLE
+                && com.cretas.aims.service.quality.release.QcInspectionGuard.WIP_SOURCE_DOC_TYPE
+                .equals(batch.getSourceDocType())) {
+            return FlipDecision.QC_RELEASE_REQUIRED;
+        }
+        return evaluateMaterialFlip(current, target);
     }
 
     @Autowired
@@ -241,7 +262,10 @@ public class QualityDispositionInventoryService {
                     materialBatchId, inspection.getFactoryId());
             return null;
         }
-        FlipDecision decision = evaluateMaterialFlip(mb.getStatus(), target);
+        FlipDecision decision = evaluateMaterialFlip(mb, target);
+        if (decision == FlipDecision.QC_RELEASE_REQUIRED) {
+            log.warn("质检处置库存桥接 — 在制批次 {} 待检, 不在处置桥接里放行 (须走质检放行)", mb.getBatchNumber());
+        }
         if (decision == FlipDecision.FLIP) {
             mb.setStatus(target);
             materialBatchRepository.save(mb);

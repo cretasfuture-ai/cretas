@@ -203,6 +203,16 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             return result;
         }
 
+        // 缺口 11 (审查低 10): 在制批次的待检只能走质检放行
+        if (QualityDispositionInventoryService.evaluateMaterialFlip(batch, newStatus)
+                == FlipDecision.QC_RELEASE_REQUIRED) {
+            result.put("canDo", false);
+            result.put("status", "QC_RELEASE_REQUIRED");
+            result.put("message", "⛔ 批次 " + batchNumber + "："
+                    + QualityDispositionInventoryService.QC_RELEASE_REQUIRED_MESSAGE);
+            return result;
+        }
+
         // 状态合法性: 是否可改
         if (currentStatus != null && !RELEASABLE_FROM.contains(currentStatus)
                 && currentStatus != MaterialBatchStatus.AVAILABLE
@@ -260,7 +270,11 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
                 : MaterialBatchStatus.DEFECTIVE;
 
         // R4 幂等 + 终态校验 — 复用与质检处置桥接共享的纯函数守卫 (single source of truth, 防漂移)
-        FlipDecision flip = QualityDispositionInventoryService.evaluateMaterialFlip(prevStatus, newStatus);
+        FlipDecision flip = QualityDispositionInventoryService.evaluateMaterialFlip(batch, newStatus);
+        if (flip == FlipDecision.QC_RELEASE_REQUIRED) {
+            throw new IllegalStateException("批次 " + batchNumber + "："
+                    + QualityDispositionInventoryService.QC_RELEASE_REQUIRED_MESSAGE);
+        }
         if (flip == FlipDecision.ALREADY_IN_TARGET) {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("status", "RELEASED".equals(decision) ? "ALREADY_RELEASED" : "ALREADY_REJECTED");

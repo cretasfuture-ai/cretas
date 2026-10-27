@@ -186,6 +186,10 @@ export interface SemiFinishedInventoryItem {
   availableQuantity: number;
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=有待检数量 / RELEASED / REJECTED(旧数据, 不可领) */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
+  /** 这一行里待检的数量 (PENDING 时才有); 可领 = availableQuantity − inspectionPendingQuantity。 */
+  inspectionPendingQuantity?: number | null;
 }
 
 // ============ WipRowDTO (mirror backend dto/yield/WipRowDTO.java) ============
@@ -201,6 +205,10 @@ export interface WipRowDTO {
   availableQuantity: number | null;        // 余额 = produced − consumed (下道 :max)
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=有待检数量 / RELEASED / REJECTED(旧数据, 不可领) */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
+  /** 这一行里待检的数量 (PENDING 时才有); 可领 = availableQuantity − inspectionPendingQuantity。 */
+  inspectionPendingQuantity?: number | null;
 }
 
 // ============ 请求 DTO ============
@@ -250,6 +258,11 @@ export interface YieldReportRequest {
    * 其余快照由后端计算, 落在报工单 custom_fields.blendRatio。
    */
   blendRatio?: { reason: string; note?: string };
+  /**
+   * 缺口 13 (审查中 7): 本道挂了关键控制点时, 完工出成随请求带上 CCP 实测值 ——
+   * 后端与产出同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。
+   */
+  ccpReadings?: Array<{ checkpointId: number; measuredValue: number; notes?: string | null }>;
   /**
    * G7 Wave 4 部分领用: 本道领用哪个上道 WIP (semi_finished_inventory.intermediate_batch_no)。
    * 非空 → 后端扣减该 WIP available_quantity (防呆 inputQuantity ≤ available);
@@ -363,6 +376,8 @@ export interface YieldReportResult {
    * 三阶段 INPUT/SEGMENT/OUTPUT 各只带单边量, 此字段不会出现 (由后端注释明确)。
    */
   balanceWarning?: string;
+  /** 缺口 13: 本次报工随带的 CCP 实测值落库结果 (仅本道挂了 CCP 时出现); 有偏离时产出已转待检。 */
+  ccp?: { deviationCount: number; heldOutputs: number; recordCount: number; message: string };
 }
 
 // recordMaterialInput: 只 put reportId — :160-162

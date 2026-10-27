@@ -194,7 +194,9 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
                 .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(batch.getFactoryId(), planId);
         int quarantined = 0;
         for (var fg : fgBatches) {
-            if ("AVAILABLE".equals(fg.getStatus())) {
+            // 缺口 11: 待检 (PENDING_INSPECTION) 的同样隔离 —— 否则质检员之后一放行, 失败计划的成品就成了可售。
+            if ("AVAILABLE".equals(fg.getStatus())
+                    || com.cretas.aims.entity.inventory.FinishedGoodsBatch.Status.PENDING_INSPECTION.equals(fg.getStatus())) {
                 fg.setStatus("DEFECTIVE");
                 finishedGoodsBatchRepository.save(fg);
                 quarantined++;

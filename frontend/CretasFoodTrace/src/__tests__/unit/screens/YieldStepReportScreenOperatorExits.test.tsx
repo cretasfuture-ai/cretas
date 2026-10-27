@@ -182,6 +182,14 @@ jest.mock('react-native-paper', () => {
   return { TouchableRipple: ({ children, onPress, ...props }: any) => <TouchableOpacity onPress={onPress} {...props}>{children}</TouchableOpacity> };
 });
 
+// 缺口 13: 完工出成要先加载本道关键控制点 (加载中/失败都挡提交); 本文件的工序都没挂 CCP
+jest.mock('../../../services/api/ccpApi', () => ({
+  ccpApi: {
+    listStepCheckpoints: () => Promise.resolve({ success: true, data: [] }),
+    record: () => Promise.resolve({ success: true, data: { deviationCount: 0, heldOutputs: 0, message: '' } }),
+  },
+}));
+
 jest.mock('../../../services/api/yieldReportApi', () => {
   const actual = jest.requireActual('../../../services/api/yieldReportApi');
   return {
