@@ -168,6 +168,19 @@ public class ProcessSecretAccessService {
     }
 
     /**
+     * 不含配比、只给本厂账号的工艺元信息 (例如报工表「哪些工序配了调料」): 本厂工厂用户直接放行
+     * (与响应裁剪的「物料 + 本单总量」档同一判据); 平台 / 他厂 / 识别不出的身份对受保护产品按完整查看判,
+     * 无权 403 + 审计 (独立审查 V2.1 L3)。
+     */
+    public void requireFactoryUserOrFull(AuthenticatedActor actor, String factoryId, String productTypeId,
+                                         String resourceRef) {
+        if (ProcessSecretPayloadScrubber.degradedLevel(actor, factoryId) == ProcessSecretPayloadScrubber.Level.TOTALS_ONLY) {
+            return;
+        }
+        require(actor, factoryId, productTypeId, ProcessSecretAction.VIEW_FULL, resourceRef);
+    }
+
+    /**
      * 多产品接口 (批量成本、导出) 的过滤。{@code explicit} = 调用方点名要的: 任一无权直接 403;
      * 否则 (例如「全厂导出」) 静默排除无权的受保护产品, 并逐个记 DENY 审计。
      */

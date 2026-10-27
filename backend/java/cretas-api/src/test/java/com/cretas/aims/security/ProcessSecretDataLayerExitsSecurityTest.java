@@ -534,6 +534,44 @@ class ProcessSecretDataLayerExitsSecurityTest {
     }
 
     @Test
+    void platformStaffDoNotLearnWhichStepsOfAProtectedProductCarrySeasoning() throws Exception {
+        MockMvc mvc = seasoningFlags();
+        String body = mvc.perform(get("/api/mobile/F-A/bom/recipes/by-product/P17/seasoning/process-flags")
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, platform()))
+                .andExpect(status().isForbidden())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(body).doesNotContain("WP-STEW").doesNotContain("WP-MIX");
+        verify(recorder).record(eq(F), eq(SECRET), eq(platform()), eq(ProcessSecretAction.VIEW_FULL),
+                eq("DENY"), anyString(), contains("/seasoning/process-flags"));
+    }
+
+    @Test
+    void anotherFactorysAccountDoesNotGetTheSeasoningStepFlags() throws Exception {
+        AuthenticatedActor stranger = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 77L, "F-B", "operator");
+        seasoningFlags().perform(get("/api/mobile/F-A/bom/recipes/by-product/P17/seasoning/process-flags")
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, stranger))
+                .andExpect(status().isForbidden());
+        verify(recorder).record(eq(F), eq(SECRET), eq(stranger), eq(ProcessSecretAction.VIEW_FULL),
+                eq("DENY"), anyString(), contains("/seasoning/process-flags"));
+    }
+
+    @Test
+    void platformStaffStillGetSeasoningStepFlagsOfAnUnprotectedProduct() throws Exception {
+        com.cretas.aims.entity.bom.BomSeasoningItem item = new com.cretas.aims.entity.bom.BomSeasoningItem();
+        item.setFactoryId(F);
+        item.setWorkProcessId("WP-PLAIN");
+        com.cretas.aims.dto.bom.BomSeasoningResponse response = new com.cretas.aims.dto.bom.BomSeasoningResponse();
+        response.setProductTypeId(PLAIN);
+        response.setSeasoningItems(List.of(item));
+        when(dep(com.cretas.aims.service.bom.BomRecipeService.class).getSeasoningByProduct(F, PLAIN))
+                .thenReturn(Optional.of(response));
+        JsonNode data = call(mvc(controller(BomRecipeController.class)),
+                get("/api/mobile/F-A/bom/recipes/by-product/PLAIN/seasoning/process-flags"), platform());
+        assertThat(data.at("/processes/0/workProcessId").asText()).isEqualTo("WP-PLAIN");
+        verify(recorder, org.mockito.Mockito.never()).record(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void theFullSeasoningRecipeStaysBehindTheFullViewGuard() throws Exception {
         MockMvc mvc = seasoningFlags();
         mvc.perform(get("/api/mobile/F-A/bom/recipes/by-product/P17/seasoning")
