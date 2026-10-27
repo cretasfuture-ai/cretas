@@ -123,6 +123,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedFactoryId,
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
+        appMountTimeoutMs: options.appMountTimeoutMs,
       });
 
       const scenarioContext = {
