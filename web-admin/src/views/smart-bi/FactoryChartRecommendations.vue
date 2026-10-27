@@ -229,6 +229,30 @@ async function loadRecommendations() {
 
 function refresh() { void loadRecommendations(); }
 
+function openFactoryAiAnalysis() {
+  const scope = factoryChartRequestFromSelection({
+    factoryId: factoryId.value,
+    source: source.value,
+    uploadId: uploadId.value,
+    period: periodSelection.value,
+    includeOptional: includeOptional.value,
+    useAi: useAi.value,
+  });
+  const query: Record<string, string> = { tab: 'query', mode: 'factory', source: source.value };
+  if (!('error' in scope)) {
+    query.year = String(scope.year);
+    query.period_type = scope.period_type;
+    query.start_month = String(scope.start_month);
+    query.end_month = String(scope.end_month);
+    if (scope.source === 'upload' && scope.upload_id) query.upload_id = String(scope.upload_id);
+  }
+  if (analysisSubject.value) query.analysis_subject = analysisSubject.value;
+  void router.push({
+    path: '/smart-bi/analysis',
+    query,
+  });
+}
+
 function openDetails(item: FactoryRecommendation, point?: { name?: string; seriesName?: string; dataIndex?: number }) {
   detailsCandidate.value = item;
   detailsPoint.value = point?.name ? { name: point.name, seriesName: point.seriesName, dataIndex: point.dataIndex } : undefined;
@@ -391,7 +415,10 @@ function findingsFor(item: FactoryRecommendation) {
         <h2>工厂分析</h2>
         <p class="page-subtitle">先选业务问题，再按数据查看图表与结论</p>
       </div>
-      <el-button type="primary" :icon="Refresh" :loading="loading" :disabled="!factoryId" data-testid="factory-chart-refresh" @click="refresh">刷新</el-button>
+      <div class="page-actions">
+        <el-button type="primary" plain data-testid="factory-chart-ai-entry" @click="openFactoryAiAnalysis">分析当前范围</el-button>
+        <el-button type="primary" :icon="Refresh" :loading="loading" :disabled="!factoryId" data-testid="factory-chart-refresh" @click="refresh">刷新</el-button>
+      </div>
     </div>
 
     <el-card shadow="never" class="filter-card">
@@ -493,6 +520,7 @@ function findingsFor(item: FactoryRecommendation) {
 <style scoped lang="scss">
 .factory-chart-recommendations { padding: 8px 0 24px; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.page-actions { display: flex; align-items: center; gap: 8px; }
 h2 { margin: 0; color: var(--el-text-color-primary, #1a2332); font-size: 20px; }
 .page-subtitle { margin: 6px 0 0; color: var(--el-text-color-secondary, #7a8599); font-size: 13px; }
 .filter-card, .recommendation-card, .unavailable-card { border-radius: 10px; }

@@ -12,7 +12,7 @@ import smartbi.config as config
 from .engine import Dataset
 
 PRODUCTION_SQL = """
-SELECT stat_date AS "日期", batch_number AS "批次", product_type_id AS "产品ID",
+SELECT stat_date AS "日期", source_pk AS "来源主键", batch_number AS "批次", product_type_id AS "产品ID",
        COALESCE(product_name, product_type_id, '未关联产品') AS "产品",
        unit AS "单位", planned_qty AS "计划产量", actual_qty AS "产量", good_qty AS "良品数",
        defect_qty AS "不良数", material_cost AS "材料成本", labor_cost AS "人工成本",
@@ -54,7 +54,7 @@ WHERE mb.factory_id=$1 AND mb.deleted_at IS NULL AND mb.status='AVAILABLE'
 ORDER BY mb.id LIMIT 10001
 """
 QUALITY_SQL = """
-SELECT qi.inspection_date AS "日期", pb.product_type_id AS "产品ID",
+SELECT qi.inspection_date AS "日期", qi.production_batch_id AS "生产批次ID", pb.product_type_id AS "产品ID",
        COALESCE(pt.name, '未关联产品') AS "产品", '样本' AS "单位",
        qi.sample_size AS "检验数", qi.pass_count AS "合格数", qi.fail_count AS "不良数"
 FROM quality_inspections qi
@@ -62,6 +62,15 @@ LEFT JOIN production_batches pb ON pb.id=qi.production_batch_id AND pb.factory_i
 LEFT JOIN product_types pt ON pt.id=pb.product_type_id AND pt.factory_id=pb.factory_id AND pt.deleted_at IS NULL
 WHERE qi.factory_id=$1 AND qi.deleted_at IS NULL
  AND ($2::date IS NULL OR qi.inspection_date >= $2) AND ($3::date IS NULL OR qi.inspection_date <= $3)
+ORDER BY qi.inspection_date, qi.id LIMIT 10001
+"""
+QUALITY_JOIN_SQL = """
+SELECT qi.inspection_date AS "日期", qi.production_batch_id AS "生产批次ID", pb.product_type_id AS "产品ID",
+       qi.sample_size AS "检验数", qi.pass_count AS "合格数", qi.fail_count AS "不良数"
+FROM quality_inspections qi
+JOIN production_batches pb ON pb.id=qi.production_batch_id AND pb.factory_id=qi.factory_id AND pb.deleted_at IS NULL
+WHERE qi.factory_id=$1 AND qi.deleted_at IS NULL
+ AND qi.production_batch_id::text = ANY($2::text[])
 ORDER BY qi.inspection_date, qi.id LIMIT 10001
 """
 PROCESS_SQL = """
@@ -96,12 +105,12 @@ async def load(factory_id, request, can_price):
     else:
         gaps.append({'id': 'stock.snapshot', 'title': '历史库存', 'missing': ['所选期间库存余额快照；当前余额不能倒推历史库存']})
 
-    async def read(name, title, get_pool, sql):
+    async def read(name, title, get_pool, sql, override_params=None):
         try:
             pool = await get_pool()
             if pool is None:
                 raise RuntimeError('pool unavailable')
-            params = [factory_id] if name == 'inventory' else [factory_id, start, end]
+            params = override_params if override_params is not None else ([factory_id] if name == 'inventory' else [factory_id, start, end])
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
@@ -121,5 +130,35 @@ async def load(factory_id, request, can_price):
             # Do not expose connection details/SQL/schema; do not pretend failures are empty data.
             return None, {'source': name, 'message': '来源读取失败，请重试或联系管理员核对数据服务'}
 
-    results = await asyncio.gather(*(read(*source) for source in sources))
-    return [dataset for dataset, _ in results if dataset is not None], [error for _, error in results if error], gaps
+    # Read production first so the fixed cross-table query can be bounded by
+    # already-authorized, tenant-scoped stable batch keys.
+    production_result = await read(*sources[0])
+    remaining = await asyncio.gather(*(read(*source) for source in sources[1:]))
+    results = [production_result, *remaining]
+    datasets = [dataset for dataset, _ in results if dataset is not None]
+    errors = [error for _, error in results if error]
+    production = production_result[0]
+    # A product scope is required before reading this optional relationship.
+    # Do not create a chart or perform an extra join query per SKU on startup.
+    if (can_price and getattr(request, 'guided', False) and getattr(request, 'analysis_subject', None)
+            and production is not None and '来源主键' in production.frame and not production.frame.empty):
+        from .engine import analysis_subjects, scope_datasets
+        selected, _, _ = scope_datasets([production], request, analysis_subjects([production], can_price), can_price)
+        production = selected[0] if selected else None
+        keys = (list(dict.fromkeys(str(v).strip() for v in production.frame['来源主键'].dropna() if str(v).strip()))
+                if production is not None else [])
+        if keys:
+            joined_result = await read('quality-join', '生产批次关联质检 · 按生产日期范围取批次，保留检验日期',
+                                       config.get_cretas_pool, QUALITY_JOIN_SQL, [factory_id, keys])
+            joined, joined_error = joined_result
+            if joined is not None:
+                from .cross_table import prepare_joined
+                merged, merge_gaps = prepare_joined(production, joined)
+                gaps.extend(merge_gaps)
+                if merged is not None:
+                    from .cross_table import SOURCE_LABEL
+                    provenance = production.source.split(' · ', 1)[-1]
+                    datasets.append(Dataset(merged, SOURCE_LABEL + ' · ' + provenance, currency='CNY'))
+            elif joined_error:
+                errors.append(joined_error)
+    return datasets, errors, gaps

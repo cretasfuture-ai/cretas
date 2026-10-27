@@ -1,6 +1,6 @@
 # Runtime authorization truth. D1 tool-descriptors.yaml remains a separate source audit inventory.
 schemaVersion: 1
-expectedPolicyCount: 9
+expectedPolicyCount: 10
 policies:
   - implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
     toolName: "user_disable"
@@ -175,3 +175,29 @@ policies:
       mode: DENY_ALL
       allowedDestinations: []
     provenance: EXPLICIT
+  - toolName: smartbi_factory_analysis
+    implementationClass: com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool
+    actionType: ANALYZE
+    riskLevel: LOW
+    supportsPreview: false
+    requiredPermissions:
+    - analytics:read
+    allowedRoles: []
+    version: 1.0.0
+    domainTags:
+    - factory
+    - smartbi
+    - analytics
+    provenance: EXPLICIT
+    allowedBusinessTypes:
+    - FACTORY
+    allowedSources:
+    - HTTP_CONTROLLER
+    confirmationPolicy: NOT_REQUIRED
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: NOT_REQUIRED
+    dataClassification: CONFIDENTIAL
+    egressPolicy:
+      mode: ALLOWLIST_ONLY
+      allowedDestinations:
+      - python-smartbi.factory-chart-analysis.v1

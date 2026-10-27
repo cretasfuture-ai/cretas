@@ -53,9 +53,10 @@ class ToolDescriptorInventoryDriftTest {
 
         // 2026-09-15 FEAT-AI-LINEAGE-INDIVIDUAL-TOOLS: +1 SourceIndividualQueryTool (EXPLICIT, READ/LOW) → 585
         // 2026-10-22: +1 explicit purchase_grant_execute, WRITE/HIGH/current procurement permission.
+        // 2026-10-27: +1 smartbi_factory_analysis, ANALYZE/LOW/factory SmartBI read path.
         // Legacy membership and all exact per-field comparisons remain unchanged.
-        assertThat(sourceTools).hasSize(586);
-        assertThat(inventory.expectedToolCount()).isEqualTo(586);
+        assertThat(sourceTools).hasSize(587);
+        assertThat(inventory.expectedToolCount()).isEqualTo(587);
         assertThat(inventoryByClass.keySet()).isEqualTo(sourceTools.keySet());
         assertThat(sourceTools.values())
                 .extracting(SourceTool::toolName)
@@ -165,10 +166,16 @@ class ToolDescriptorInventoryDriftTest {
                 .toList();
 
         assertThat(tools.stream().filter(SourceTool::literalToolName)).hasSize(585);
-        assertThat(constantNames).singleElement().satisfies(tool -> {
+        assertThat(constantNames).hasSize(2);
+        assertThat(constantNames).anySatisfy(tool -> {
             assertThat(tool.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.workprocess.ProductProcessWorkflowConfigTool");
             assertThat(tool.toolName()).isEqualTo("canvas_product_process_workflow_config");
+        });
+        assertThat(constantNames).anySatisfy(tool -> {
+            assertThat(tool.implementationClass()).isEqualTo(
+                    "com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool");
+            assertThat(tool.toolName()).isEqualTo("smartbi_factory_analysis");
         });
         // ⚠️ 把当前实测值打进日志 —— 下面这一串是**冻结的基线**, 改动它们时
         //    需要知道「现在到底是多少」。原来只能靠一次次重跑, 每次让一条断言
@@ -188,32 +195,32 @@ class ToolDescriptorInventoryDriftTest {
         // 2026-10-05: 61 → 63 (+2): work_process_task_start / work_process_task_complete 显式声明
         // getActionType()=UPDATE (原先按工具名后缀推断成 READ, 确认卡影响说明措辞不对); 下面 actions 桶
         // READ 445 → 443 / UPDATE 26 → 28 是同一处改动。
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(64);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(45);
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(65);
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(46);
         // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
         // 2026-10-06: 44 → 52 (+8): 一线默认开放的 8 个日常写工具补只读预览 (clock_in / clock_out / material_batch_create /
         // material_batch_use / reusable_container_ship_out / reusable_container_return_in / quality_check_create /
         // quality_defect_record)。此前它们 supportsPreview=false, 一线点了只会看到「预览模式暂不支持此意图类型」。
         // 2026-10-20: canonical purchase_order_create adds preview/permission/version (+1 each).
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(53);
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(54);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
         // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(56);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(38);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(16);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(11);
-        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(23);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(57);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(39);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(17);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(12);
+        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(24);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolExecutor.ActionType.READ, 443L,
                 ToolExecutor.ActionType.WRITE, 62L,
                 ToolExecutor.ActionType.UPDATE, 28L,
                 ToolExecutor.ActionType.DELETE, 11L,
-                ToolExecutor.ActionType.ANALYZE, 19L,
+                ToolExecutor.ActionType.ANALYZE, 20L,
                 ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 510L,
+                ToolExecutor.RiskLevel.LOW, 511L,
                 ToolExecutor.RiskLevel.MEDIUM, 67L,
                 ToolExecutor.RiskLevel.HIGH, 9L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
