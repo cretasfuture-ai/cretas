@@ -324,8 +324,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 if (ref.isFinishedGoods()) {
                     if (srcBatchNo != null && feed.signum() > 0) {
                         // 投料量 feedQuantityKg 语义为 kg → 传 "kg"; 与 FG 批次 unit(盒/托) 不一致则 loud-fail。
+                        // 缺口 16: 只能投本计划同一归属的成品
                         BigDecimal drawn = finishedGoodsFeedService
-                                .consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
+                                .consumeForFeedStrict(factoryId, IntermediateOwnershipGuard.ofPlan(plan),
+                                        srcBatchNo, feed, "kg");
                         finishedGoodsOutQuantity = finishedGoodsOutQuantity.add(nz(drawn));
                         fgFeedDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
                     }

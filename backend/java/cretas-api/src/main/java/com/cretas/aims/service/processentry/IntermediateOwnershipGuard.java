@@ -78,6 +78,17 @@ public class IntermediateOwnershipGuard {
         return new Owner(InventoryOwnership.CUSTOMER_OWNED, sfi.getOwnerCustomerId());
     }
 
+    /**
+     * 成品批次归谁 (成品作投料来源时用): 批次上的归属本来就从产出计划抄来, 直接读;
+     * 旧行 null 按公司自有读 (与 {@code ProductionPlanServiceImpl} 成品归属校验同口径)。
+     */
+    public static Owner ofFinishedGoods(com.cretas.aims.entity.inventory.FinishedGoodsBatch fg) {
+        if (fg == null || fg.getOwnership() != InventoryOwnership.CUSTOMER_OWNED) {
+            return Owner.COMPANY;
+        }
+        return new Owner(InventoryOwnership.CUSTOMER_OWNED, fg.getOwnerCustomerId());
+    }
+
     public static boolean sameOwner(Owner a, Owner b) {
         return a != null && b != null && a.ownership() == b.ownership()
                 && Objects.equals(a.customerId(), b.customerId());
@@ -200,6 +211,20 @@ public class IntermediateOwnershipGuard {
 
     public boolean drawable(Owner consumer, SemiFinishedInventory sfi) {
         return sameOwner(consumer, ofSemi(sfi));
+    }
+
+    /** 成品作投料来源: 只能投进与成品同一归属的计划 (代工客户的成品不进别人的计划)。 */
+    public void assertFinishedGoodsDrawable(String factoryId, Owner consumer,
+                                            com.cretas.aims.entity.inventory.FinishedGoodsBatch fg,
+                                            String hintTarget) {
+        if (fg == null) {
+            return;
+        }
+        requireConsumer(consumer, hintTarget);
+        Owner material = ofFinishedGoods(fg);
+        if (!sameOwner(consumer, material)) {
+            throw crossOwner(factoryId, "成品批次 " + fg.getBatchNumber(), material, consumer, hintTarget);
+        }
     }
 
     private static void requireConsumer(Owner consumer, String hintTarget) {

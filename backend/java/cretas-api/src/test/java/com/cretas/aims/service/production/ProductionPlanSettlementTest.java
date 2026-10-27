@@ -482,14 +482,14 @@ class ProductionPlanSettlementTest {
                 feedRow("FG-STOCK", "20", false, true));
         when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), any(), eq("SFI-STOCK"), any()))
                 .thenAnswer(inv -> inv.getArgument(3));
-        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), any(), eq("FG-STOCK"), any(), eq("kg")))
+                .thenAnswer(inv -> inv.getArgument(3));
 
         // 无手工 SFI 领用 → 自动从 process-row 扣
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(new java.util.ArrayList<>()), 10L);
 
         verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-STOCK", new BigDecimal("30"));
-        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, Owner.COMPANY, "FG-STOCK", new BigDecimal("20"), "kg");
     }
 
     @Test
@@ -518,8 +518,8 @@ class ProductionPlanSettlementTest {
         wireR2(plan(),
                 feedRow("SFI-STOCK", "30", true, false),
                 feedRow("FG-STOCK", "20", false, true));
-        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), eq("FG-STOCK"), any(), eq("kg")))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY_ID), any(), eq("FG-STOCK"), any(), eq("kg")))
+                .thenAnswer(inv -> inv.getArgument(3));
         // 手工补录的是 WIP-001，并非 process-row 的 SFI-STOCK；不得把无关自动扣一并跳过。
         SemiFinishedInventory wip = wip();
         when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
@@ -531,7 +531,7 @@ class ProductionPlanSettlementTest {
         service.settleProduction(FACTORY_ID, PLAN_ID, r2Request(manual), 10L);
 
         verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-STOCK", new BigDecimal("30"));
-        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, "FG-STOCK", new BigDecimal("20"), "kg");
+        verify(finishedGoodsFeedService).consumeForFeedStrict(FACTORY_ID, Owner.COMPANY, "FG-STOCK", new BigDecimal("20"), "kg");
     }
 
     @Test
@@ -569,7 +569,7 @@ class ProductionPlanSettlementTest {
 
         assertTrue(ex.getMessage().contains("小结"), "safety-stock settlement must direct users to batch settlement");
         verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any(), any());
-        verify(finishedGoodsFeedService, never()).consumeForFeedStrict(any(), any(), any(), any());
+        verify(finishedGoodsFeedService, never()).consumeForFeedStrict(any(), any(), any(), any(), any());
     }
 
     @Test

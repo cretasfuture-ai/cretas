@@ -2889,7 +2889,8 @@ async function loadFgOptions() {
   fgLoading.value = true;
   try {
     // 防呆过滤 (07-01): 传当前计划 productTypeId → 后端解析成产品族仅返回同族成品 (猪蹄计划不显牛肉)。
-    const resp = await getFinishedGoodsInventory(props.factoryId, props.productTypeId);
+    // 归属 (缺口 16): 传本计划 → 只列与本计划同一归属的成品 (代工客户的成品只出现在同客户的计划里)。
+    const resp = await getFinishedGoodsInventory(props.factoryId, props.productTypeId, props.planId);
     if (seq !== fgLoadSeq) return;
     const all = Array.isArray(resp.data) ? resp.data : [];
     fgOptions.value = all.filter((f) => fgAvailable(f) > 0);
