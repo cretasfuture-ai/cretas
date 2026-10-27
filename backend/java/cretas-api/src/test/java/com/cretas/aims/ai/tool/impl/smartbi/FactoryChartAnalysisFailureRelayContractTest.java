@@ -44,7 +44,7 @@ class FactoryChartAnalysisFailureRelayContractTest {
 
     @Test
     void businessStatusesAreTypedFixedMessageAndDoNotPolluteBreaker() throws Exception {
-        for (int status : new int[] {403, 410, 422}) {
+        for (int status : new int[] {403, 409, 410, 422}) {
             server.enqueue(new MockResponse().setResponseCode(status).setBody("{" +
                     "\"secret\":\"must-not-be-parsed\"}"));
 
@@ -54,10 +54,13 @@ class FactoryChartAnalysisFailureRelayContractTest {
                         var typed = (PythonSmartBIClient.FactoryAnalysisUpstreamException) error;
                         assertThat(typed.statusCode()).isEqualTo(status);
                         assertThat(typed.getMessage()).doesNotContain("secret");
+                        if (status == 409) {
+                            assertThat(typed.getMessage()).isEqualTo("对话上下文正在更新，请稍后重试");
+                        }
                     });
             assertThat(breaker.getMetrics().get("totalFailures")).isEqualTo(0L);
         }
-        assertThat(server.getRequestCount()).isEqualTo(3);
+        assertThat(server.getRequestCount()).isEqualTo(4);
     }
 
     @Test

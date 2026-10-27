@@ -248,12 +248,28 @@ async def factory_analysis(request: FactoryAnalysisRequest, http_request: Reques
 
     factory_id = require_same_factory(http_request, request.factory_id)
     owner = conversation._owner(http_request)
-    context = conversation._context_for(request.context_id, owner) if request.context_id else None
+    try:
+        context = await conversation.claim_shared_context(request.context_id, owner) if request.context_id else None
+    except Exception as exc:
+        if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+            raise HTTPException(exc.status_code, exc.detail) from None
+        raise
     if context is not None:
         # Serialize a turn from context lookup through planner validation.  A
         # second request cannot mix its source/scope with an in-flight turn.
-        async with context.lock:
-            return await _factory_analysis_turn(request, http_request, factory_id, owner, context)
+        try:
+            async with context.lock:
+                response = await _factory_analysis_turn(request, http_request, factory_id, owner, context)
+            try:
+                await conversation.save_shared_context(context)
+            except Exception as exc:
+                if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+                    raise HTTPException(exc.status_code, exc.detail) from None
+                raise
+            return response
+        except Exception:
+            await conversation.release_shared_context(context)
+            raise
 
     source = request.source or 'business'
     upload_id = request.upload_id
@@ -291,10 +307,25 @@ async def factory_analysis(request: FactoryAnalysisRequest, http_request: Reques
     if not natural_error and hard_explicit and natural_scope != scope:
         natural_error = '问题中的自然语言期间与显式期间不一致，请只指定一个期间'
     if natural_error:
-        context = conversation._new_context(owner, source, upload_id, scope, subjects,
-                                            question='', unresolved_product=False)
-        return await _render_factory_analysis_turn(request, http_request, factory_id, context,
-                                                    recommendation_data, subjects, None, period_error=natural_error, scope=scope)
+        try:
+            context = await conversation.create_shared_context(owner, source, upload_id, scope)
+        except Exception as exc:
+            if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+                raise HTTPException(exc.status_code, exc.detail) from None
+            raise
+        try:
+            response = await _render_factory_analysis_turn(request, http_request, factory_id, context,
+                recommendation_data, subjects, None, period_error=natural_error, scope=scope)
+            try:
+                await conversation.save_shared_context(context)
+            except Exception as exc:
+                if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+                    raise HTTPException(exc.status_code, exc.detail) from None
+                raise
+            return response
+        except Exception:
+            await conversation.release_shared_context(context)
+            raise
     if natural_scope != scope:
         scope = natural_scope
         rec_request = _recommendation_request(source, upload_id, factory_id, scope, guided=True,
@@ -308,10 +339,26 @@ async def factory_analysis(request: FactoryAnalysisRequest, http_request: Reques
                                                analysis_subject=resolved_subject)
         recommendation_data = _recommendation_body(await factory_recommendations(rec_request, http_request))['data']
         subjects = list(recommendation_data.get('subjects') or subjects)
-    context = conversation._new_context(owner, source, upload_id, scope, subjects,
-                                        question=request.question, unresolved_product=unresolved)
-    return await _render_factory_analysis_turn(request, http_request, factory_id, context,
-                                                recommendation_data, subjects, subject_error)
+    try:
+        context = await conversation.create_shared_context(owner, source, upload_id, scope,
+                                                           question=request.question, unresolved_product=unresolved)
+    except Exception as exc:
+        if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+            raise HTTPException(exc.status_code, exc.detail) from None
+        raise
+    try:
+        response = await _render_factory_analysis_turn(request, http_request, factory_id, context,
+            recommendation_data, subjects, subject_error)
+        try:
+            await conversation.save_shared_context(context)
+        except Exception as exc:
+            if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+                raise HTTPException(exc.status_code, exc.detail) from None
+            raise
+        return response
+    except Exception:
+        await conversation.release_shared_context(context)
+        raise
 
 
 async def _factory_analysis_turn(request: FactoryAnalysisRequest, http_request: Request,
