@@ -147,6 +147,23 @@ SmartBI 有行级安全（2026-10-26 prod：95 张表是严格策略，只认 `f
 
 只在专门新建的一次性测试工厂上做：编号以 `ERASETEST_` 开头、3 天内新建的工厂，申请时可带 `"drill": true` 免冷静期（其余工厂一律 7 天）。先造数据，导出，申请，预演计数，删除，再计数确认为 0，同时确认其他工厂行数不变。⛔ 绝不对 F006、LIUSHANMEN 或任何真实工厂演练。
 
+#### 演练记录
+
+**2026-10-27 · ERASETEST_20261027A · prod · 平台管理员 platform_admin（userId 1）· 结果：通过**
+
+| 步骤 | 编号 | 读数 |
+|---|---|---|
+| 导出 | request 5 | CSV+JSON，附件 INCLUDE，17,204 B，sha256 `90486e2d…` 与台账一致 |
+| 申请 | request 6 | `drill=true`，工厂当场停用 |
+| 预演 | preview 7 | `erasable=true`、`blockers=[]`；CRETAS 9 行、SMARTBI 3 行（训练样本 2 条里留 1 条）、附件 1 个 27 B。计数发 Steve，回复「可以删」 |
+| 删除 | erasure 9 | 22:17:03 SUCCEEDED；CRETAS 删 9 行（users 1 / suppliers 2 / customers 1 / ai_analysis_results 1 / operation_logs 1 / platform_data_access_log 3），SMARTBI 删 3 行，附件 1 个；工厂主记录在复核后最后删 |
+
+- **本厂复数**：上面各表和 `factories` 全部 0，OSS 前缀 `ERASETEST_20261027A/` 0 个对象。
+- **阴性对照**（库外独立快照，以 postgres 身份、绕过 RLS，删前删后各拍一次）：其他工厂 users 90 / suppliers 21 / customers 39 / operation_logs 5,854 / ai_analysis_results 302 / agg_supplier_price 841 前后相同，按工厂分组的行数哈希 `64cff7bd40acd768f8aa7f0f1295f67a` 不变。接口自身报告检查了 CRETAS 11 个、SMARTBI 15 个其他工厂。
+- **保留物**：留存区 operation_logs 1 条 + platform_data_access_log 3 条，`retain_until` 2027-04-27；保留样本的 `factory_id` 已为 NULL，原始样本已删。台账 5 / 6 / 7 / 9 四条回执都在。
+- **和预演的差别**：访问记录 3 条（预演时 2 条），多出的是预演请求自己写的那条，同一张表，一并进了留存区。
+- **删完后在线表里还剩 1 行**：删除接口自己的访问记录（`platform_data_access_log` id 787，比删除完成晚 16 ms）。按 §7「删除操作本身产生的平台访问记录」保留，2026-10-27 暂按不改处理。
+
 ---
 
 ## §7 保留什么、留多久
