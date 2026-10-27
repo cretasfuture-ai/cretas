@@ -352,7 +352,7 @@ const batchAllocLoading = ref(false);
 type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number; unit: string; batchNativeUnit: string };
 // 🔴 G1: sourceWarehouseCode (发货行声明的来源仓, 空=未声明) + stockWarehouses (该产品实际有货的仓库 code,
 // 仅在无推荐批次时查, 用于诚实空态提示「成品在 X 仓」而非误导的「请先生产」)。
-type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; unit: string; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[]; isMaterial: boolean };
+type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; unit: string; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[]; isMaterial: boolean; ineligibleNotice: string };
 const batchAllocForm = ref<{ deliveryId: string; deliveryNumber: string; items: AllocItem[] }>({
   deliveryId: '', deliveryNumber: '', items: [],
 });
@@ -1355,14 +1355,24 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
 
       let allocations: AllocRow[] = [];
       let stockWarehouses: string[] = [];
+      let ineligibleNotice = '';
       // 物料行不查成品批次 —— 查了必然是空, 然后显示一句误导仓管的空态。
       const isMaterial = materialIdSet.value.has(String(productTypeId));
       if (!isMaterial && productTypeId && deliveredQuantity > 0) {
         const existingRes = await get<Array<TableRow>>(
           `/${factoryId.value}/sales-deliveries/items/${deliveryItemId}/batch-allocations`
         );
-        if (existingRes.success && Array.isArray(existingRes.data) && existingRes.data.length > 0) {
-          allocations = existingRes.data.map(r => ({
+        // ERP-S3-TOLL-DELIVERY-PREFILL-COMPANY-FG-001: 已有分配可能是按旧规则写的
+        // (代加工订单被预填了公司库存)。后端逐条用仓库确认同一道所有权闸判 eligible;
+        // 有任何一条不能发, 就不再展示这组旧分配, 改走下面的推荐 (只会给本订单能发的批次),
+        // 并说清楚原来那几个批次为什么不能发 —— 否则用户只能看着一个注定被拒的批次。
+        const existingRows = existingRes.success && Array.isArray(existingRes.data) ? existingRes.data : [];
+        const ineligibleRows = existingRows.filter(r => r.eligible === false);
+        if (ineligibleRows.length > 0) {
+          ineligibleNotice = `原分配的批次 ${ineligibleRows.map(r => String(r.batchNumber || '')).join('、')} 不能用于本订单：`
+            + `${String(ineligibleRows[0].ineligibleReason || '库存所有权不符')}。已按本订单可发的批次重新推荐，确认分配后替换原分配。`;
+        } else if (existingRows.length > 0) {
+          allocations = existingRows.map(r => ({
             finishedGoodsBatchId: String(r.finishedGoodsBatchId || ''),
             batchNumber: String(r.batchNumber || ''),
             productionDate: String(r.productionDate || ''),
@@ -1402,7 +1412,7 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
           } catch { /* 非关键: 查不到就退回通用提示 */ }
         }
       }
-      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, unit, sourceWarehouseCode, allocations, stockWarehouses, isMaterial });
+      items.push({ deliveryItemId, productName, productTypeId, deliveredQuantity, unit, sourceWarehouseCode, allocations, stockWarehouses, isMaterial, ineligibleNotice });
     }
     batchAllocForm.value = { deliveryId, deliveryNumber, items };
     batchAllocDialogVisible.value = true;
@@ -2919,7 +2929,9 @@ async function handleQuickPayFull() {
           title="物料无需分配批次"
           description="原料 / 辅料 / 包材在确认发货时按先进先出自动扣减物料库存，本行可直接提交。"
         />
-        <el-table v-else-if="item.allocations.length > 0" :data="item.allocations" border size="small">
+        <el-alert v-if="!item.isMaterial && item.ineligibleNotice" type="warning" :closable="false" show-icon
+          style="margin-bottom: 8px;" title="原分配批次不能发出" :description="item.ineligibleNotice" />
+        <el-table v-if="!item.isMaterial && item.allocations.length > 0" :data="item.allocations" border size="small">
           <el-table-column prop="batchNumber" label="批次号" width="200" />
           <el-table-column prop="productionDate" label="生产日期" width="120" />
           <el-table-column label="可用数量" width="150" align="right">
@@ -2938,7 +2950,7 @@ async function handleQuickPayFull() {
           </el-table-column>
         </el-table>
         <el-alert
-          v-else
+          v-else-if="!item.isMaterial"
           :type="item.stockWarehouses.length > 0 ? 'error' : 'warning'"
           :closable="false"
           :title="emptyStateTitle(item)"
