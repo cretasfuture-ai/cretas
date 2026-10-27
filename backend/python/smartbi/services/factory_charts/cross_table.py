@@ -94,6 +94,9 @@ def _candidate(frame, product, unit, source, coverage):
              float(r['良品数'] / r['产量'] * 100), float(r['总成本'])] for day, r in sums.iterrows()]
     label = next((str(v) for v in frame.get('产品', []) if _key(v)), product)
     total, covered = coverage.get('totalBatches', len(frame)), len(frame)
+    limitations = [f'当前产品/单位覆盖{covered}/{total}个生产批次；未关联或不完整批次不进入汇总',
+        '检验合格率=质检合格数÷检验样本数；生产良品率=生产良品数÷生产产量，分母不同',
+        '多次检验汇总的是检验样本观测次数，不等于唯一生产实物数量；未推断因果']
     return {
         'id': f'{FAMILY}@{product}@{unit}', 'analysis': {'familyId': FAMILY, 'familyLabel': '生产-检验-成本联合'},
         'title': f'{label}生产-检验-成本联合分析', 'metric': '生产-检验-成本联合分析',
@@ -120,9 +123,7 @@ def _candidate(frame, product, unit, source, coverage):
         'sourceMetadata': {'sourceKey': SOURCE, 'sources': ['production', 'quality'],
                            'joinKey': 'factory_id + source_pk/production_batch_id + product_type_id', 'costAuthorized': True,
                            'coverage': {'totalBatches': total, 'coveredBatches': covered}},
-        'findings': {'good': [], 'attention': [f'当前产品/单位覆盖{covered}/{total}个生产批次；未关联或不完整批次不进入汇总',
-            '检验合格率=质检合格数÷检验样本数；生产良品率=生产良品数÷生产产量，分母不同',
-            '多次检验汇总的是检验样本观测次数，不等于唯一生产实物数量；未推断因果'],
+        'findings': {'good': [], 'attention': list(limitations), 'limitations': limitations,
             'suggestions': ['按稳定批次键回查联合原始明细，核对缺失质检及成本归集']}}
 
 

@@ -29,12 +29,16 @@ _SALES_LINE_ID = "订单行ID"
 # for the untaxed SKU amount (Java uses it only in getLineAmountWithTax()).
 SALES_SKU_SQL = """
 SELECT i.id AS "订单行ID", so.id AS "订单ID", so.order_date AS "日期",
-       i.product_type_id AS "产品ID", i.product_name AS "产品", i.unit AS "单位",
+       i.product_type_id AS "产品ID",
+       COALESCE(NULLIF(BTRIM(pt.name), ''), NULLIF(BTRIM(i.product_name), '')) AS "产品",
+       i.unit AS "单位",
        i.quantity AS "数量", i.unit_price AS "单价",
        COALESCE(i.discount_rate, 0) AS "折扣率",
        i.quoted_gross_unit_price AS "报价含税单价", so.total_amount AS "订单总额"
 FROM sales_order_items i
 JOIN sales_orders so ON so.id = i.sales_order_id AND so.factory_id = $1
+LEFT JOIN product_types pt
+  ON pt.id = i.product_type_id AND pt.factory_id = so.factory_id AND pt.deleted_at IS NULL
 WHERE so.factory_id = $1 AND so.deleted_at IS NULL AND i.deleted_at IS NULL
   AND so.status NOT IN ('CANCELLED', 'DRAFT', 'FINANCE_REJECTED')
   AND ($2::date IS NULL OR so.order_date >= $2::date)
@@ -47,10 +51,14 @@ LIMIT 10001
 # not receive any price/discount/order-total column from this adapter.
 SALES_SKU_NO_PRICE_SQL = """
 SELECT i.id AS "订单行ID", so.id AS "订单ID", so.order_date AS "日期",
-       i.product_type_id AS "产品ID", i.product_name AS "产品", i.unit AS "单位",
+       i.product_type_id AS "产品ID",
+       COALESCE(NULLIF(BTRIM(pt.name), ''), NULLIF(BTRIM(i.product_name), '')) AS "产品",
+       i.unit AS "单位",
        i.quantity AS "数量"
 FROM sales_order_items i
 JOIN sales_orders so ON so.id = i.sales_order_id AND so.factory_id = $1
+LEFT JOIN product_types pt
+  ON pt.id = i.product_type_id AND pt.factory_id = so.factory_id AND pt.deleted_at IS NULL
 WHERE so.factory_id = $1 AND so.deleted_at IS NULL AND i.deleted_at IS NULL
   AND so.status NOT IN ('CANCELLED', 'DRAFT', 'FINANCE_REJECTED')
   AND ($2::date IS NULL OR so.order_date >= $2::date)
