@@ -290,6 +290,7 @@ public class ProductionBatch extends BaseEntity {
      * 由物化 / 多产出分摊写入 (V20261103_89_1)。</p>
      */
     @Builder.Default
+    @org.hibernate.annotations.ColumnDefault("false")
     @Column(name = "cost_incomplete", nullable = false)
     private Boolean costIncomplete = false;
      /**
