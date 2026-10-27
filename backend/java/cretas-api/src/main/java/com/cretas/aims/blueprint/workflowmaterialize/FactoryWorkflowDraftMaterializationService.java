@@ -72,6 +72,10 @@ public class FactoryWorkflowDraftMaterializationService {
     private final ObjectMapper canonicalMapper;
     private final FactoryWorkflowDraftPreviewCompiler compiler;
 
+    /** 工艺保密 (写入侧): 实体化会改写已有产品的工艺图草稿并把它的配方改钉到新版本, 要编辑权。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Autowired
     public FactoryWorkflowDraftMaterializationService(
             ProductProcessWorkflowRepository workflowRepository,
@@ -148,6 +152,16 @@ public class FactoryWorkflowDraftMaterializationService {
             throw invalid(409, "确认后的草稿操作目标或冲突策略已变化",
                     "WORKFLOW_DRAFT_OPERATION_DIGEST_CONFLICT",
                     "重新查看 Workflow/BOM DRAFT 操作预览", "operationDigest");
+        }
+        // 工艺保密 (写入侧, Steve 2026-10-27): 在写回执与任何草稿之前判; 无权整单 403
+        if (processSecretGuard != null) {
+            processSecretGuard.requireProduct(factoryId, operation.targetProductTypeId(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "workflow draft materialize " + operation.targetProductTypeId());
+            processSecretGuard.requireRecipes(factoryId,
+                    prepared.lockedBoms().stream().map(LockedBom::recipe).toList(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "workflow draft materialize re-pin");
         }
 
         String receiptId = UUID.randomUUID().toString();

@@ -55,6 +55,9 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     private final BomChangeLogRepository bomChangeLogRepository;
     private final YieldReportService yieldReportService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Override
     public BomYieldEstimateDTO estimateForProduct(
             String factoryId, String productTypeId, String materialCategory) {
@@ -169,6 +172,16 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
         if (!staleRows.isEmpty()) {
             throw new BomYieldStaleException(staleRows,
                     "部分配方的出成率已发生变化，请重新预览后再应用。共 " + staleRows.size() + " 条数据过期。");
+        }
+
+        // 工艺保密 (写入侧): 点名的配方里任一属于调用者无编辑权的保密产品, 整批 403、一条都不写
+        if (processSecretGuard != null) {
+            List<BomRecipe> targets = new ArrayList<>();
+            for (BomYieldApplyRequest request : requests) {
+                findOwnedActiveRecipe(factoryId, request.getRecipeId()).ifPresent(targets::add);
+            }
+            processSecretGuard.requireRecipes(factoryId, targets,
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "bom yield recalculate-apply");
         }
 
         Long actingUserId = readActingUserId();

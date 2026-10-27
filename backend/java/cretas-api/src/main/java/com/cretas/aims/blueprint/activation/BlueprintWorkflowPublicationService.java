@@ -63,6 +63,10 @@ public class BlueprintWorkflowPublicationService {
     private final CriticalControlDraftCommand criticalCommand;
     private final BomRecipeDraftPromotionAuthority promotionAuthority;
 
+    /** 工艺保密 (写入侧): 发布会激活已有产品的配方并发布它的工艺图, 要编辑权。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     public BlueprintWorkflowPublicationService(
             AssemblyActivationActorResolver actors,
             CanonicalFactoryBlueprintService blueprints,
@@ -136,9 +140,20 @@ public class BlueprintWorkflowPublicationService {
         if (!confirmedDigest.equals(second.digest())) {
             throw conflict("PUBLICATION_SNAPSHOT_CHANGED", "两次确认之间 Workflow 或其依赖已变化");
         }
+        String owner = workflowOwner(factoryId, second.workflowDraftId());
+        if (processSecretGuard != null) {
+            // 工艺保密 (写入侧, Steve 2026-10-27): 这条路绕过了配方 / 工艺图路由上的编辑闸, 在这里补判;
+            // 工艺图挂在原料锚点上时 (多产出), 配方所属产品就是被保护的那一个
+            processSecretGuard.requireRecipe(factoryId, second.formalRecipeId(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "blueprint workflow publish recipe " + second.formalRecipeId());
+            processSecretGuard.requireProduct(factoryId, owner,
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "blueprint workflow publish " + second.workflowDraftId());
+        }
         BomRecipe activated = recipes.activateRecipeAsActor(factoryId, second.formalRecipeId(), actor);
         var result = workflowService.publishAndActivateAsActor(
-                factoryId, workflowOwner(factoryId, second.workflowDraftId()),
+                factoryId, owner,
                 second.workflowLockVersion(), "blueprint-workflow:" + confirmedDigest,
                 second.workflowRevisionId(), second.workflowRevisionHash(),
                 second.workflowDefinitionVersion(), actor);
