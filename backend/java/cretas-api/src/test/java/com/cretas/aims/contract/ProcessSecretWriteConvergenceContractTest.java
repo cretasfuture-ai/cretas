@@ -45,8 +45,6 @@ class ProcessSecretWriteConvergenceContractTest {
 
     /** 没有自带判定的写入类 → 谁替它把关 (逐条核实过, 见 PR 描述)。 */
     static final Map<String, String> LEDGER = Map.ofEntries(
-            Map.entry("controller/AIController.java",
-                    "business-data/initialize 只新增不存在的 (物料, 产品) 对, 已有的跳过, 不覆盖已有产品的转换率"),
             Map.entry("service/bom/BomWorkflowRevisionService.java",
                     "配方钉工艺图版本: 路由 BomWorkflowRevisionController 有 EDIT 注解; 建厂实体化调用前已判"),
             Map.entry("service/bom/impl/BomCopyServiceImpl.java",
@@ -141,6 +139,12 @@ class ProcessSecretWriteConvergenceContractTest {
                 "processSecretGuard.requireProduct(", "recipeService.createRecipe(");
         assertBefore("service/bom/impl/BomYieldEstimateServiceImpl.java",
                 "processSecretGuard.requireRecipes(", "bomRecipeRepository.save(recipe)");
+        // 过期 409 会带回库里的标准出成率: 判定也必须在它之前 (独立审查 V2.1 H1)
+        assertBefore("service/bom/impl/BomYieldEstimateServiceImpl.java",
+                "processSecretGuard.requireRecipes(", "throw new BomYieldStaleException(");
+        // 没有事务: 判定必须在建任何档之前 (独立审查 V2.1 M1)
+        assertBefore("controller/AIController.java", "public ResponseEntity<AIBusinessDataResponse> initializeBusinessData(",
+                "processSecretGuard.requireProduct(", "productTypeRepository.save(");
         assertBefore("service/bom/impl/BomPriceAdjustmentServiceImpl.java",
                 "processSecretGuard.requireRecipe(", "itemRepository.save(item)");
         assertBefore("service/impl/ProductTypeServiceImpl.java", "public ProductTypeDTO updateProductType(",

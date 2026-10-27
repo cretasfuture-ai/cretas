@@ -50,7 +50,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     static final String REQUEST_ATTRIBUTE = ProcessSecretReadTracker.class.getName() + ".reads";
 
     /** 读到的工艺内容来源。{@code kind} 决定 {@code id} 怎么换成产品。 */
-    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, PRODUCTION_PLAN, PRODUCTION_BATCH, MATERIAL_REQUISITION, BOM_DRAFT }
+    public enum Kind { PRODUCT, RECIPE, WORKFLOW_INSTANCE, WORKFLOW_OUTPUT, PRODUCTION_PLAN, PRODUCTION_BATCH, MATERIAL_REQUISITION, BOM_DRAFT }
 
     /**
      * 一笔读数。{@code member} 只用于计划 / 批次: 这一行自己的产品 (半成品 / 副产 / 锚点), 出口把它当作
@@ -118,9 +118,15 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
         if (entity instanceof MaterialProductConversion c) return product(c.getFactoryId(), c.getProductTypeId());
         if (entity instanceof ConversionChangeHistory h) return product(h.getFactoryId(), h.getProductTypeId());
         if (entity instanceof ProductWorkProcess p) return product(p.getFactoryId(), p.getProductTypeId());
-        if (entity instanceof ProductProcessWorkflow w) return product(w.getFactoryId(), w.getProductTypeId());
-        if (entity instanceof ProductProcessWorkflowRevision w) return product(w.getFactoryId(), w.getProductTypeId());
-        if (entity instanceof ProductionWorkflowInstance w) return product(w.getFactoryId(), w.getProductTypeId());
+        if (entity instanceof ProductProcessWorkflow w) {
+            return workflow(w.getFactoryId(), w.getProductTypeId(), w.getNodesJson(), w.getEdgesJson());
+        }
+        if (entity instanceof ProductProcessWorkflowRevision w) {
+            return workflow(w.getFactoryId(), w.getProductTypeId(), w.getNodesJson(), w.getEdgesJson());
+        }
+        if (entity instanceof ProductionWorkflowInstance w) {
+            return workflow(w.getFactoryId(), w.getProductTypeId(), w.getNodesJson(), w.getEdgesJson());
+        }
         if (entity instanceof WorkflowTaskPort p) {
             return p.getWorkflowInstanceId() == null ? List.of()
                     : List.of(new Read(Kind.WORKFLOW_INSTANCE, p.getFactoryId(), String.valueOf(p.getWorkflowInstanceId())));
@@ -208,6 +214,21 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             // 读不出成员就只记计划: 行的产品归属不可信, 出口按整份受限处理 (见裁剪器 distrustAttribution)
             return Set.of();
         }
+    }
+
+    /**
+     * 工艺图 (定义 / 版本 / 运行实例): 所属产品 + 每个终端产出记成该图的成员。多产出图挂在原料锚点上,
+     * 锚点不受保护, 受保护的是它产出的成品; 出口把成员当兄弟产出 (独立审查 V2.1 M3)。
+     */
+    private static List<Read> workflow(String factoryId, String ownerProductTypeId, String nodesJson, String edgesJson) {
+        List<Read> found = new java.util.ArrayList<>(product(factoryId, ownerProductTypeId));
+        if (ownerProductTypeId == null || ownerProductTypeId.isBlank()) return found;
+        for (String output : ProcessSecretWorkflowOutputs.terminalOutputs(nodesJson, edgesJson)) {
+            if (!output.equals(ownerProductTypeId)) {
+                found.add(new Read(Kind.WORKFLOW_OUTPUT, factoryId, ownerProductTypeId, output));
+            }
+        }
+        return found;
     }
 
     private static List<Read> product(String factoryId, String productTypeId) {

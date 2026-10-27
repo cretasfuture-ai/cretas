@@ -148,6 +148,17 @@ class ProcessSecretWriteSliceGuardTest {
         }
 
         @Test
+        void aStaleRequestFromAnOperatorGets403NotThe409ThatCarriesTheStoredYield() {
+            // 独立审查 V2.1 H1: 过期 409 会把库里的标准出成率 (dbCurrent) 原样带回去, 判定必须在过期校验之前
+            BomYieldApplyRequest stale = request().get(0);
+            stale.setExpectedCurrentYieldRate(new BigDecimal("70.00"));
+            assertDeniedByThisGate(() -> service.recalculateApply(F, List.of(stale)), "bom yield recalculate-apply");
+            // 对照: 负责人照常拿到过期 409 (说明这道过期校验确实会触发)
+            assertThatThrownBy(() -> as(OWNER, () -> service.recalculateApply(F, List.of(stale))))
+                    .isInstanceOf(com.cretas.aims.exception.BomYieldStaleException.class);
+        }
+
+        @Test
         void ownerAppliesAsBefore() {
             assertThat(as(OWNER, () -> service.recalculateApply(F, request())).getApplied()).isEqualTo(1);
             verify(serviceRecipes).save(any());
@@ -323,7 +334,7 @@ class ProcessSecretWriteSliceGuardTest {
             assertDeniedByThisGate(() -> {
                 ReflectionTestUtils.invokeMethod(service, "requireProcessSecretEdit", F, request("P17-CODE", null), true);
                 return null;
-            }, "conversion overwrite P17-CODE");
+            }, "conversion write P17-CODE");
         }
 
         @Test
@@ -335,8 +346,16 @@ class ProcessSecretWriteSliceGuardTest {
         }
 
         @Test
-        void skippedExistingPairsNewProductsAndTheOwnerAreNotStopped() {
-            check(OPERATOR, request("P17-CODE", null), false);   // 不覆盖: 已有的对会跳过, 不写
+        void addingAConversionPairToAProtectedProductNeedsEditPermissionEvenWithoutOverwrite() {
+            // 独立审查 V2.1 M1: 不覆盖时, 不存在的 (物料, 产品) 对照样会新增 —— 往保密产品的配方里加配比
+            assertDeniedByThisGate(() -> {
+                ReflectionTestUtils.invokeMethod(service, "requireProcessSecretEdit", F, request("P17-CODE", null), false);
+                return null;
+            }, "conversion write P17-CODE");
+        }
+
+        @Test
+        void newProductsAndTheOwnerAreNotStopped() {
             check(OPERATOR, request("NEW-CODE", "NEW-CODE"), true);   // 本次新建的产品, 还没有保密策略
             check(OWNER, request("P17-CODE", "P17-CODE"), true);
             verify(recorder, never()).record(any(), any(), any(), any(), eq("DENY"), any(), any());

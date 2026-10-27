@@ -1136,12 +1136,14 @@ public class FactoryBuildApplyService {
         if (processSecretGuard == null || request.getSuggestedData() == null) return;
         if (!processSecretGuard.factoryHasProtectedProducts(factoryId)) return;
         java.util.Map<String, String> touched = new java.util.LinkedHashMap<>();   // productId -> 来源
-        if (overwrite && request.getSuggestedData().getConversionRates() != null) {
+        // 不只是覆盖: 给已有保密产品新增一对 (物料, 产品) 转换率, 也是往它的配方里加配比 (独立审查 V2.1 M1)。
+        // 已存在且不覆盖的对会被跳过、不写, 这里一并要求编辑权 (宁可多判一次, 不漏)
+        if (request.getSuggestedData().getConversionRates() != null) {
             for (ApplyAIInitRequest.ConversionItem c : request.getSuggestedData().getConversionRates()) {
                 if (c == null || c.getToCode() == null) continue;
                 String code = c.getToCode().trim();
                 productTypeRepository.findByFactoryIdAndCode(factoryId, code)
-                        .ifPresent(p -> touched.putIfAbsent(p.getId(), "conversion overwrite " + code));
+                        .ifPresent(p -> touched.putIfAbsent(p.getId(), "conversion write " + code));
             }
         }
         if (request.getSuggestedData().getProductProcesses() != null) {

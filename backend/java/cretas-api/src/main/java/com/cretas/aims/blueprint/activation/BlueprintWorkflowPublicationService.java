@@ -150,6 +150,12 @@ public class BlueprintWorkflowPublicationService {
             processSecretGuard.requireProduct(factoryId, owner,
                     com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
                     "blueprint workflow publish " + second.workflowDraftId());
+            workflows.findByIdAndFactoryId(second.workflowDraftId(), factoryId).ifPresent(draft ->
+                    com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs
+                            .terminalOutputs(draft.getNodesJson(), draft.getEdgesJson())
+                            .forEach(output -> processSecretGuard.requireProduct(factoryId, output,
+                                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                                    "blueprint workflow publish output " + output)));
         }
         BomRecipe activated = recipes.activateRecipeAsActor(factoryId, second.formalRecipeId(), actor);
         var result = workflowService.publishAndActivateAsActor(

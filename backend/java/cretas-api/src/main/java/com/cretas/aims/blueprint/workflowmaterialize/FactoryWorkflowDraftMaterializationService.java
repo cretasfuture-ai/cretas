@@ -158,6 +158,17 @@ public class FactoryWorkflowDraftMaterializationService {
             processSecretGuard.requireProduct(factoryId, operation.targetProductTypeId(),
                     com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
                     "workflow draft materialize " + operation.targetProductTypeId());
+            // 多产出图挂在原料锚点上: 受保护的是它的终端产出 (改前与改后的图都算)
+            java.util.Set<String> outputs = new java.util.LinkedHashSet<>(
+                    com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.terminalOutputs(
+                            prepared.preview().desiredDefinition()));
+            outputs.addAll(com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.terminalOutputs(
+                    prepared.currentDefinition()));
+            for (String output : outputs) {
+                processSecretGuard.requireProduct(factoryId, output,
+                        com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                        "workflow draft materialize output " + output);
+            }
             processSecretGuard.requireRecipes(factoryId,
                     prepared.lockedBoms().stream().map(LockedBom::recipe).toList(),
                     com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,

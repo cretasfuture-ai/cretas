@@ -142,9 +142,27 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         if (Objects.equals(a, b)) return true;
         if (a == null || b == null) return false;
         try {
-            return withoutNulls(objectMapper.readTree(a)).equals(withoutNulls(objectMapper.readTree(b)));
+            return withoutNulls(normalizedSteps(a)).equals(withoutNulls(normalizedSteps(b)));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             return false;
+        }
+    }
+
+    /**
+     * 先过一遍 {@link ProductTypeDTO.ProcessingStepDTO} 再比: /config 回写走的就是这个 DTO, 库里旧数据多出的、
+     * DTO 不认识的键会在回写时丢掉 —— 不能因此把「只改了工时」当成改了加工步骤 (独立审查 V2.1 L2)。
+     * 解析成步骤列表失败 (不是数组 / 结构不同) 时按原样比。
+     */
+    private com.fasterxml.jackson.databind.JsonNode normalizedSteps(String json)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        try {
+            List<ProductTypeDTO.ProcessingStepDTO> steps = objectMapper.copy()
+                    .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+                    .readValue(json, new com.fasterxml.jackson.core.type.TypeReference<
+                            List<ProductTypeDTO.ProcessingStepDTO>>() { });
+            return objectMapper.valueToTree(steps);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException notSteps) {
+            return objectMapper.readTree(json);
         }
     }
 

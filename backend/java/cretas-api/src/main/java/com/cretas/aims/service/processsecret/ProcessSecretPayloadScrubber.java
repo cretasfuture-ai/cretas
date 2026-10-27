@@ -295,6 +295,7 @@ public class ProcessSecretPayloadScrubber {
                             .orElse(new Key(read.factoryId(), null)));
                     case WORKFLOW_INSTANCE -> List.of(instanceKey(read.factoryId(), read.id())
                             .orElse(new Key(read.factoryId(), null)));
+                    case WORKFLOW_OUTPUT -> withMember(read, List.of(new Key(read.factoryId(), read.id())));
                     case PRODUCTION_PLAN -> withMember(read, planKeys(read.factoryId(), read.id()));
                     case PRODUCTION_BATCH -> withMember(read, batchKeys(read.factoryId(), read.id()));
                     case MATERIAL_REQUISITION -> requisitionRepository.findById(read.id())
@@ -434,35 +435,59 @@ public class ProcessSecretPayloadScrubber {
         }
 
         void walk(JsonNode node, Key inherited) {
+            walk(node, inherited, false);
+        }
+
+        /** {@code derived}: 上层是按配比自动算出的对象, 下层的数量 (例如分到哪些批次) 加起来就是它。 */
+        void walk(JsonNode node, Key inherited, boolean derived) {
             if (node instanceof ObjectNode object) {
                 // ⛔ 不因为对象里已有 processSecret 键就跳过: 自定义字段里也能出现同名键 (独立审查 #11);
                 // V1 摘要本身不含配比字段, 走一遍也不会改它
                 Key own = ownKey(object, inherited);
                 Key effective = own != null ? own : inherited;
-                scrubObject(object, effective);
+                scrubObject(object, effective, derived);
+                boolean childrenDerived = derived || isRecipeDerived(object) || isReworkDeduction(object);
                 List<JsonNode> children = new ArrayList<>();
                 object.elements().forEachRemaining(children::add);
-                for (JsonNode child : children) walk(child, effective);
+                for (JsonNode child : children) walk(child, effective, childrenDerived);
             } else if (node instanceof ArrayNode array) {
-                array.forEach(child -> walk(child, inherited));
+                array.forEach(child -> walk(child, inherited, derived));
             }
         }
 
-        void scrubObject(ObjectNode object, Key key) {
+        /**
+         * 按配比自动带出的行 (调料 / 包材自动分摊, automatic=true): 它的数量 = 配比 × 投入量,
+         * 「本单总量」在这里就等于配比本身 (F006 验收 2026-10-27: 0.1725 kg ÷ 115 kg = 1.5 g/kg)。
+         */
+        boolean isRecipeDerived(ObjectNode object) {
+            return object.path("automatic").asBoolean(false);
+        }
+
+        /**
+         * 回料自动扣减: 目标量 = 回料配比 × 主料投入, 且 手工 + 自动 + 仍缺 = 目标 ——
+         * 配比字段藏了, 这几个量一除照样得出配比 (独立审查 V2.1 H2)。主料投入与手工投入是实际值, 照给。
+         */
+        boolean isReworkDeduction(ObjectNode object) {
+            return object.has("inputRatioPercent") && object.has("targetKg");
+        }
+
+        static final Set<String> REWORK_DERIVED_FIELDS = Set.of("targetKg", "drawnKg", "shortfallKg");
+
+        void scrubObject(ObjectNode object, Key key, boolean derived) {
             List<String> ratioFields = new ArrayList<>();
             List<String> quantityFields = new ArrayList<>();
             // 无权档 (平台 / 他厂) 连总量也不给: 词表列不全 (独立审查 #6), 所以除了标识类数字一律去掉
             List<String> otherNumbers = new ArrayList<>();
-            // 按配比自动带出的行 (调料 / 包材自动分摊, automatic=true): 它的数量 = 配比 × 投入量,
-            // 「本单总量」在这里就等于配比本身 (F006 验收 2026-10-27: 0.1725 kg ÷ 115 kg = 1.5 g/kg)。
-            // 所以这类行上的非标识数字一律按配比处理; 人工录入的实际投料 (automatic=false) 照常给。
-            boolean derivedFromRecipe = object.path("automatic").asBoolean(false);
+            // 按配比算出来的对象 (及其下层): 非标识数字一律按配比处理; 人工录入的实际投料 (automatic=false) 照常给
+            boolean derivedFromRecipe = derived || isRecipeDerived(object);
+            boolean reworkDeduction = isReworkDeduction(object);
             for (Iterator<String> it = object.fieldNames(); it.hasNext(); ) {
                 String name = it.next();
                 JsonNode value = object.get(name);
                 if (value == null || value.isNull() || MARKER.equals(name)) continue;
                 if (isRatioField(name) || isContextualRatioField(object, name)) ratioFields.add(name);
                 else if (derivedFromRecipe && value.isNumber() && !isIdentifierLike(name)) ratioFields.add(name);
+                else if (reworkDeduction && REWORK_DERIVED_FIELDS.contains(name)) ratioFields.add(name);
                 else if (SINGLE_RUN_ACTUAL_FIELDS.contains(name)) {
                     // 单批实测: 单据视图里与总量同档; 汇总视图里与配比同档
                     (aggregateView ? ratioFields : quantityFields).add(name);
