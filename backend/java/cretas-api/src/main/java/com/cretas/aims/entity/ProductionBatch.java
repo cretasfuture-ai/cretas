@@ -282,6 +282,17 @@ public class ProductionBatch extends BaseEntity {
     @PriceSensitive
     @Column(name = "unit_cost", precision = 12, scale = 4)
     private BigDecimal unitCost;
+    /**
+     * 成本不完整: 有投入成本未知 (例如原料批次没有单价)。
+     *
+     * <p>为 true 时 totalCost / unitCost 是「不知道」, {@link #calculateMetrics()} 不得再用已知分项
+     * (原料按 0 + 人工) 求和把它改回「已知」。分项仍按已知部分记录, 只是汇总诚实留空。
+     * 由物化 / 多产出分摊写入 (V20261103_90_1)。</p>
+     */
+    @Builder.Default
+    @org.hibernate.annotations.ColumnDefault("false")
+    @Column(name = "cost_incomplete", nullable = false)
+    private Boolean costIncomplete = false;
      /**
       * 良品率
       */
@@ -422,8 +433,12 @@ public class ProductionBatch extends BaseEntity {
         // 同单位 (plannedUnit 为 null 或与 unit 相同) 行为零变化。
         boolean crossUnit = plannedUnit != null && unit != null && !plannedUnit.equals(unit);
 
-        // 计算总成本
-        if (materialCost != null || laborCost != null || equipmentCost != null || otherCost != null) {
+        // 成本不完整: 汇总是「不知道」, 不用已知分项求和伪造 (S3-13: 原料无单价被当 0 汇总成 114.80)
+        if (Boolean.TRUE.equals(costIncomplete)) {
+            totalCost = null;
+            unitCost = null;
+        } else if (materialCost != null || laborCost != null || equipmentCost != null || otherCost != null) {
+            // 计算总成本
             totalCost = BigDecimal.ZERO;
             if (materialCost != null) totalCost = totalCost.add(materialCost);
             if (laborCost != null) totalCost = totalCost.add(laborCost);

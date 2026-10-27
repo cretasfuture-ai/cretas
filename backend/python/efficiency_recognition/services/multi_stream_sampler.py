@@ -68,6 +68,7 @@ class StreamConfig:
     # Phase 8 优化选项
     use_local_preprocessing: bool = True  # 启用本地预处理
     skip_unchanged_frames: bool = True    # 跳过无变化帧
+    factory_id: str = ""                  # 添加这路流的登录工厂 (状态 / 移除只给本厂; 送模型前按本厂开关复查)
 
 
 @dataclass
@@ -262,7 +263,8 @@ class MultiStreamSampler:
         analysis_type: str = "efficiency",
         interval_seconds: int = 60,
         use_local_preprocessing: bool = True,
-        skip_unchanged_frames: bool = True
+        skip_unchanged_frames: bool = True,
+        factory_id: str = "",
     ) -> Dict[str, Any]:
         """
         添加一个摄像头流到并行处理池
@@ -301,7 +303,8 @@ class MultiStreamSampler:
                 analysis_type=analysis_type,
                 interval_seconds=interval_seconds,
                 use_local_preprocessing=use_local_preprocessing,
-                skip_unchanged_frames=skip_unchanged_frames
+                skip_unchanged_frames=skip_unchanged_frames,
+                factory_id=factory_id,
             )
 
             task = StreamTask(config=config)
@@ -321,7 +324,8 @@ class MultiStreamSampler:
         self,
         streams: List[Dict[str, Any]],
         default_interval: int = 60,
-        default_preprocessing: bool = True
+        default_preprocessing: bool = True,
+        factory_id: str = "",
     ) -> Dict[str, Any]:
         """
         批量添加多个摄像头流
@@ -344,7 +348,8 @@ class MultiStreamSampler:
                 analysis_type=stream.get("analysis_type", "efficiency"),
                 interval_seconds=stream.get("interval_seconds", default_interval),
                 use_local_preprocessing=stream.get("use_local_preprocessing", default_preprocessing),
-                skip_unchanged_frames=stream.get("skip_unchanged_frames", default_preprocessing)
+                skip_unchanged_frames=stream.get("skip_unchanged_frames", default_preprocessing),
+                factory_id=factory_id,
             )
             results.append({
                 "stream_id": stream.get("stream_id"),
@@ -361,7 +366,12 @@ class MultiStreamSampler:
             "results": results
         }
 
-    async def remove_stream(self, stream_id: str) -> Dict[str, Any]:
+    def _owned(self, stream_id: str, factory_id: Optional[str]) -> bool:
+        """factory_id 为 None 时不按工厂过滤 (进程内部调用); 否则只认该厂添加的流。"""
+        task = self.active_streams.get(stream_id)
+        return task is not None and (factory_id is None or task.config.factory_id == factory_id)
+
+    async def remove_stream(self, stream_id: str, factory_id: Optional[str] = None) -> Dict[str, Any]:
         """
         移除一个流
 
@@ -372,7 +382,7 @@ class MultiStreamSampler:
             操作结果
         """
         with self._lock:
-            if stream_id not in self.active_streams:
+            if not self._owned(stream_id, factory_id):
                 return {
                     "success": False,
                     "message": f"Stream {stream_id} not found"
@@ -391,21 +401,23 @@ class MultiStreamSampler:
                 "message": f"Stream {stream_id} removed"
             }
 
-    async def stop_all(self) -> Dict[str, Any]:
-        """停止所有流"""
-        stream_ids = list(self.active_streams.keys())
+    async def stop_all(self, factory_id: Optional[str] = None) -> Dict[str, Any]:
+        """停止所有流 (给了 factory_id 就只停该厂的)"""
+        stream_ids = [s for s in list(self.active_streams.keys()) if self._owned(s, factory_id)]
         for stream_id in stream_ids:
-            await self.remove_stream(stream_id)
+            await self.remove_stream(stream_id, factory_id)
 
         return {
             "success": True,
             "message": f"Stopped {len(stream_ids)} streams"
         }
 
-    def get_status(self) -> Dict[str, Any]:
-        """获取所有流的状态（包含 Phase 8 优化统计）"""
+    def get_status(self, factory_id: Optional[str] = None) -> Dict[str, Any]:
+        """获取所有流的状态（包含 Phase 8 优化统计; 给了 factory_id 就只含该厂的流）"""
         streams = {}
-        for stream_id, task in self.active_streams.items():
+        for stream_id, task in list(self.active_streams.items()):
+            if not self._owned(stream_id, factory_id):
+                continue
             # 计算跳帧率
             skip_ratio = (
                 task.skipped_count / task.frame_count
@@ -437,7 +449,7 @@ class MultiStreamSampler:
         )
 
         return {
-            "active_streams": len(self.active_streams),
+            "active_streams": len(streams),
             "max_concurrent": self.max_concurrent,
             "local_preprocessing_available": LOCAL_PREPROCESSING_AVAILABLE,
             "global_stats": {
@@ -450,9 +462,9 @@ class MultiStreamSampler:
             "streams": streams
         }
 
-    def get_stream_status(self, stream_id: str) -> Optional[Dict[str, Any]]:
+    def get_stream_status(self, stream_id: str, factory_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """获取单个流的状态（包含 Phase 8 优化统计）"""
-        if stream_id not in self.active_streams:
+        if not self._owned(stream_id, factory_id):
             return None
 
         task = self.active_streams[stream_id]
@@ -575,6 +587,14 @@ class MultiStreamSampler:
                         )
                         await asyncio.sleep(task.config.interval_seconds)
                         continue
+
+                # 送模型前按添加这路流的工厂复查开关: 中途关掉就停流, 不再发
+                from efficiency_recognition.api.camera_consent import DISABLED_MESSAGE, camera_snapshot_ai_enabled
+                if not task.config.factory_id or not await camera_snapshot_ai_enabled(task.config.factory_id):
+                    task.is_active = False
+                    task.last_error = DISABLED_MESSAGE
+                    logger.info(f"Stream {task.config.stream_id} stopped: camera AI switch is off")
+                    break
 
                 # 执行 VL 分析
                 task.analyzed_count += 1

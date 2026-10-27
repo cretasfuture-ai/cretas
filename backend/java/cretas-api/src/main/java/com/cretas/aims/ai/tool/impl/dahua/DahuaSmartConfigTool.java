@@ -107,6 +107,11 @@ public class DahuaSmartConfigTool extends AbstractBusinessTool {
         log.info("执行大华智能分析配置 - 工厂ID: {}, 设备ID: {}, 通道: {}, 操作: {}, 功能: {}",
                 factoryId, deviceId, channelId, action, feature);
 
+        // 设备 id 来自模型抽取的参数: 只认本厂设备
+        if (deviceId != null) {
+            dahuaDeviceService.getDevice(factoryId, deviceId);
+        }
+
         Map<String, Object> result = new HashMap<>();
 
         switch (feature.toLowerCase()) {

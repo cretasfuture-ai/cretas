@@ -131,6 +131,12 @@ public class DahuaDeviceManageTool extends AbstractBusinessTool {
 
         log.info("执行大华设备管理 - 工厂ID: {}, 操作: {}", factoryId, action);
 
+        // 设备 id 来自模型抽取的参数: 按 id 的操作只认本厂设备
+        String deviceId = getString(params, "deviceId", null);
+        if (deviceId != null) {
+            dahuaDeviceService.getDevice(factoryId, deviceId);
+        }
+
         switch (action.toLowerCase()) {
             case "list":
                 return handleList(factoryId);

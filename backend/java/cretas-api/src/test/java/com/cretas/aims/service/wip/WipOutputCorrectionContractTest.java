@@ -62,7 +62,7 @@ class WipOutputCorrectionContractTest {
     void setUp() {
         service = new WipInventoryServiceImpl(wipRepo, txnRepo, reportRepo, lineageEdgeRepo, taskRepo,
                 workProcessRepo, productTypeRepo, workflowInstanceRepo, workflowTaskPortRepo,
-                productFamilyResolver, eventPublisher);
+                productFamilyResolver, eventPublisher, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         report = ProductionReport.builder().id(23989L).factoryId("F006").outputQuantity(new BigDecimal("0.81"))
                 .outputUnit("kg").reportKind("OUTPUT").outputKind(null).semiOutputs(null).build();
         task = new WorkProcessTask();

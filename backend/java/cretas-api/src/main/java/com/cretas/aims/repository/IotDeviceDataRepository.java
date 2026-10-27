@@ -27,9 +27,9 @@ public interface IotDeviceDataRepository extends JpaRepository<IotDeviceData, Lo
     List<IotDeviceData> findTop10ByDeviceCodeOrderByReceivedAtDesc(String deviceCode);
 
     /**
-     * 根据设备ID查询最近的数据（分页）
+     * 本厂某设备最近的数据（分页; 设备 id 不带工厂, 必须同时按工厂过滤）
      */
-    List<IotDeviceData> findByDeviceIdOrderByReceivedAtDesc(String deviceId, Pageable pageable);
+    List<IotDeviceData> findByFactoryIdAndDeviceIdOrderByReceivedAtDesc(String factoryId, String deviceId, Pageable pageable);
 
     /**
      * 根据设备编码查询最近的数据（分页）

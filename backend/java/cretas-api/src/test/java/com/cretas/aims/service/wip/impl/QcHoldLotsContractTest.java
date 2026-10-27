@@ -86,6 +86,8 @@ class QcHoldLotsContractTest {
     @Mock private CcpOpenDeviationLookup deviationLookup;
     @Mock private CcpMonitoringService ccpMonitoringService;
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks
     private WipInventoryServiceImpl service;
 

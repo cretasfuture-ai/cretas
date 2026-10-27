@@ -78,7 +78,7 @@ class WipConsumeEdgeSourceResolutionTest {
     void setUp() {
         service = new WipInventoryServiceImpl(wipRepo, txnRepo, reportRepo, lineageEdgeRepo, taskRepo,
                 workProcessRepo, productTypeRepo, workflowInstanceRepo, workflowTaskPortRepo,
-                productFamilyResolver, eventPublisher);
+                productFamilyResolver, eventPublisher, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         SemiSourceBatchResolver resolver = new SemiSourceBatchResolver(wipRepo, productionBatchRepo, taskRepo);
         meters = new SimpleMeterRegistry();
         ReflectionTestUtils.setField(resolver, "meterRegistry", meters);

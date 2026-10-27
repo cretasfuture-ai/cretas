@@ -1,5 +1,6 @@
 package com.cretas.aims.service.yield;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef;
 import com.cretas.aims.entity.MaterialConsumption;
@@ -128,7 +129,7 @@ class InterimSettleLineageWiringTest {
             if (fg.getId() == null) fg.setId("fg-" + fgIds.getAndIncrement());
             return fg;
         });
-        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any())).thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any(), any())).thenAnswer(inv -> inv.getArgument(3));
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
     }
@@ -141,7 +142,7 @@ class InterimSettleLineageWiringTest {
 
         service.interimSettle(FACTORY, PLAN_ID, 7L);
 
-        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY, "SFI-STANDING-1", new BigDecimal("30"));
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY, Owner.COMPANY, "SFI-STANDING-1", new BigDecimal("30"));
         verify(semiFeedLineageRecorder).recordSemiFeed(eq(FACTORY), eq("SFI-STANDING-1"), eq(20L),
                 argThat(q -> q != null && q.compareTo(new BigDecimal("30")) == 0), eq(null), eq(7L),
                 argThat(k -> k.startsWith("interimSfiFeed:" + PLAN_ID + ":s1:row20:")),

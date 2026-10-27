@@ -97,6 +97,8 @@ class QcSettlementGuardsContractTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "intermediateOwnershipGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "semiFinishedInventoryRepository", semiRepo);
         ReflectionTestUtils.setField(service, "semiFinishedInventoryTransactionRepository", semiTxnRepo);
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", lowStockPublisher);
@@ -202,6 +204,10 @@ class QcSettlementGuardsContractTest {
             b.setSourceDocType(sourceDocType);
             b.setSourceDocId("901");
             when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-W", FACTORY_ID)).thenReturn(Optional.of(b));
+            // 缺口 16: 结单领在制批次时按来源生产批次判归属, 来源必须查得到
+            com.cretas.aims.entity.ProductionBatch source = new com.cretas.aims.entity.ProductionBatch();
+            source.setId(901L);
+            when(productionBatchRepository.findByIdAndFactoryId(901L, FACTORY_ID)).thenReturn(Optional.of(source));
             return b;
         }
 

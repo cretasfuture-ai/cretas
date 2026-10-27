@@ -125,6 +125,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     private SemiFinishedInventoryTransactionRepository wipTransactionRepository;
 
     /** C-074/C-075/X-10: 补录时效锁 (optional, fail-open 向后兼容). */
+    /** 缺口 16 跨客户领料: 字段注入只为既有单测装配; 领用时没有它 ⇒ 500, 不放行。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard intermediateOwnershipGuard;
+
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
 
@@ -376,8 +380,13 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 三阶段 (单元1): 领料发生在 INPUT 阶段 (或 legacy); SEGMENT/OUTPUT 阶段不消耗源 WIP (input 已被隔离为 null)。
         SemiFinishedInventory sourceWip = null;
         if ((isInput || isLegacy) && hasSourceWip) {
+            // 缺口 16: 领用方 = 本批次的计划; 代工客户的半成品只能领进同一客户的计划
+            if (intermediateOwnershipGuard == null) {
+                throw new BusinessException(500, "半成品归属校验服务未就绪, 不能领用半成品");
+            }
             sourceWip = wipInventoryService.validateSourceWip(
-                    factoryId, req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
+                    factoryId, intermediateOwnershipGuard.ofProductionBatch(factoryId, batchId),
+                    req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
         }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数

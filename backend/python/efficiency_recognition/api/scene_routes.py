@@ -16,7 +16,8 @@ API 端点:
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
+from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
 from ..services.scene_understanding_service import get_scene_service
@@ -41,7 +42,7 @@ class ChangeDetectionRequest(BaseModel):
 
 # ==================== API 端点 ====================
 
-@router.post("/understand")
+@router.post("/understand", dependencies=[Depends(require_camera_snapshot_ai)])
 async def understand_scene(request: SceneUnderstandRequest):
     """
     LLM 理解当前场景
@@ -103,7 +104,7 @@ async def understand_scene(request: SceneUnderstandRequest):
     }
 
 
-@router.post("/detect-changes")
+@router.post("/detect-changes", dependencies=[Depends(require_camera_snapshot_ai)])
 async def detect_scene_changes(request: ChangeDetectionRequest):
     """
     LLM 检测场景变化
@@ -301,7 +302,7 @@ async def clear_camera_scene(camera_id: str):
     }
 
 
-@router.post("/compare")
+@router.post("/compare", dependencies=[Depends(require_camera_snapshot_ai)])
 async def compare_two_scenes(
     camera_id: str,
     image_a_base64: str,

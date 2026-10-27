@@ -156,6 +156,7 @@ public class LlmEgressGuard {
      */
     private Collection<String> protectedNames(String factoryId) {
         String factory = factoryId != null ? factoryId : currentFactory();
+        // 缓存在 ProcessSecretSampleFilter 里 (按「工厂 + 当前保密产品集合」作键, 改保密设置立即生效)
         return processSecretSampleFilter == null || factory == null
                 ? Set.of() : processSecretSampleFilter.protectedProductNames(factory);
     }

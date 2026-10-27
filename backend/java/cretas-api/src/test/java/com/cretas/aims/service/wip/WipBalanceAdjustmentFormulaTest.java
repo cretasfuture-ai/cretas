@@ -1,5 +1,6 @@
 package com.cretas.aims.service.wip;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
@@ -74,7 +75,7 @@ class WipBalanceAdjustmentFormulaTest {
     void setUp() {
         svc = new WipInventoryServiceImpl(wipRepo, txnRepo, reportRepo, lineageEdgeRepo,
                 taskRepo, workProcessRepo, productTypeRepo, workflowInstanceRepo, workflowTaskPortRepo,
-                productFamilyResolver, eventPublisher);
+                productFamilyResolver, eventPublisher, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(i -> i.getArgument(0));
         when(txnRepo.save(any(SemiFinishedInventoryTransaction.class))).thenAnswer(i -> i.getArgument(0));
         when(txnRepo.findByFactoryIdAndReportId(anyString(), any())).thenReturn(List.of());
@@ -119,7 +120,7 @@ class WipBalanceAdjustmentFormulaTest {
         SemiFinishedInventory r = row("kg", "100", "20", "-30");
         locked(r);
 
-        assertThatThrownBy(() -> svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("60")))
+        assertThatThrownBy(() -> svc.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("60")))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("半成品库存不足")
                 .hasMessageContaining("余50");
@@ -136,7 +137,7 @@ class WipBalanceAdjustmentFormulaTest {
         SemiFinishedInventory r = row("kg", "100", "20", "-30");
         locked(r);
 
-        BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("50"));
+        BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("50"));
 
         assertThat(deducted).isEqualByComparingTo("50");
         assertThat(r.getAvailableQuantity()).isEqualByComparingTo("0");
@@ -152,7 +153,7 @@ class WipBalanceAdjustmentFormulaTest {
         SemiFinishedInventory r = row("kg", "100", "20", "30");
         locked(r);
 
-        BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("100"));
+        BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("100"));
 
         assertThat(deducted).isEqualByComparingTo("100");
         assertThat(r.getConsumedQuantity()).isEqualByComparingTo("120");
@@ -205,13 +206,13 @@ class WipBalanceAdjustmentFormulaTest {
         SemiFinishedInventory r = row("盒", "100", "20", "-30");
         locked(r);
 
-        assertThatThrownBy(() -> svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("30")))
+        assertThatThrownBy(() -> svc.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("30")))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("余50盒")
                 .hasMessageContaining("需60盒");
         verify(txnRepo, never()).save(any());
 
-        BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("20"));
+        BigDecimal deducted = svc.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("20"));
         assertThat(deducted).as("扣减按来源原生单位 (盒)").isEqualByComparingTo("40");
         assertThat(r.getConsumedQuantity()).isEqualByComparingTo("60");
         assertThat(r.getAvailableQuantity()).isEqualByComparingTo("10");
@@ -257,7 +258,7 @@ class WipBalanceAdjustmentFormulaTest {
         r.setAvailableQuantity(new BigDecimal("80"));   // 旧漂移: 存量列没纳入盘亏
         locked(r);
 
-        assertThatThrownBy(() -> svc.deductForSecondaryPlan(77L, new BigDecimal("60"), FACTORY, 1L))
+        assertThatThrownBy(() -> svc.deductForSecondaryPlan(77L, new BigDecimal("60"), FACTORY, 1L, Owner.COMPANY))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("WIP 余量不足");
         verify(txnRepo, never()).save(any());
@@ -271,10 +272,10 @@ class WipBalanceAdjustmentFormulaTest {
         locked(r);
         when(reportRepo.sumPendingInputBySourceWipNo(FACTORY, ANCHOR, null)).thenReturn(BigDecimal.ZERO);
 
-        assertThatThrownBy(() -> svc.validateSourceWip(FACTORY, ANCHOR, new BigDecimal("60"), "kg", null))
+        assertThatThrownBy(() -> svc.validateSourceWip(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("60"), "kg", null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("领用量超过半成品余额");
-        assertThat(svc.validateSourceWip(FACTORY, ANCHOR, new BigDecimal("50"), "kg", null)).isSameAs(r);
+        assertThat(svc.validateSourceWip(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("50"), "kg", null)).isSameAs(r);
     }
 
     @Test

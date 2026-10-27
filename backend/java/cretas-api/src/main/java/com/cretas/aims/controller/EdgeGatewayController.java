@@ -1,5 +1,6 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.edge.EdgeUploadRequest;
@@ -52,7 +53,7 @@ public class EdgeGatewayController {
     @Operation(summary = "边缘数据上传", description = "接收边缘网关上传的摄像头数据")
     public ApiResponse<EdgeUploadResponse> upload(@RequestBody EdgeUploadRequest request) {
         try {
-            EdgeUploadResponse response = edgeGatewayService.processUpload(request);
+            EdgeUploadResponse response = edgeGatewayService.processUpload(SecurityUtils.currentFactoryId(), request);
             if (response.isSuccess()) {
                 return ApiResponse.success(response.getMessage(), response);
             } else {
@@ -89,7 +90,7 @@ public class EdgeGatewayController {
             request.setPictureBase64(Base64.getEncoder().encodeToString(image.getBytes()));
             request.setPictureFormat(getImageFormat(image.getOriginalFilename()));
 
-            EdgeUploadResponse response = edgeGatewayService.processUpload(request);
+            EdgeUploadResponse response = edgeGatewayService.processUpload(SecurityUtils.currentFactoryId(), request);
             if (response.isSuccess()) {
                 return ApiResponse.success(response.getMessage(), response);
             } else {
@@ -119,17 +120,18 @@ public class EdgeGatewayController {
         request.setDeviceId(deviceId);
         request.setUploadType(EdgeUploadRequest.UploadType.HEARTBEAT);
 
-        EdgeUploadResponse response = edgeGatewayService.processUpload(request);
+        EdgeUploadResponse response = edgeGatewayService.processUpload(SecurityUtils.currentFactoryId(), request);
         return ApiResponse.success("心跳确认", response);
     }
 
     /**
      * 获取已注册的边缘网关列表
      */
+    @RequirePermission({"equipment:read_write"})
     @GetMapping("/gateways")
     @Operation(summary = "获取边缘网关列表", description = "查看已注册的边缘网关")
     public ApiResponse<Map<String, EdgeGatewayService.EdgeGatewayInfo>> getGateways() {
-        return ApiResponse.success(edgeGatewayService.getRegisteredGateways());
+        return ApiResponse.success(edgeGatewayService.getRegisteredGateways(SecurityUtils.currentFactoryId()));
     }
 
     /**
@@ -200,7 +202,7 @@ public class EdgeGatewayController {
             String deviceId = findDeviceByMacOrIp(eventInfo.macAddress, eventInfo.ipAddress);
             if (deviceId != null) {
                 request.setDeviceId(deviceId);
-                edgeGatewayService.processUpload(request);
+                edgeGatewayService.processUpload(SecurityUtils.currentFactoryId(), request);
             } else {
                 log.warn("未找到匹配的设备: mac={}, ip={}", eventInfo.macAddress, eventInfo.ipAddress);
                 // 即使没找到设备也记录日志
@@ -295,7 +297,7 @@ public class EdgeGatewayController {
     private String findDeviceByMacOrIp(String macAddress, String ipAddress) {
         // 这里需要实现根据 MAC 或 IP 查找设备的逻辑
         // 暂时返回 null，后续通过 service 实现
-        return edgeGatewayService.findDeviceIdByMacOrIp(macAddress, ipAddress);
+        return edgeGatewayService.findDeviceIdByMacOrIp(SecurityUtils.currentFactoryId(), macAddress, ipAddress);
     }
 
     /**

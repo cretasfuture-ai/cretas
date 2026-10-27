@@ -1437,14 +1437,19 @@ const inFlightEnrichments = new Map<number, Promise<EnrichResult>>();
 export async function enrichSheetAnalysis(
   uploadId: number,
   forceRefresh = false,
-  onProgress?: (progress: EnrichProgress) => void
+  onProgress?: (progress: EnrichProgress) => void,
+  mayPublish?: () => boolean,
 ): Promise<EnrichResult> {
+  if (mayPublish && !mayPublish()) return { success: false, error: '分析已取消' };
   // Deduplication: if already in-flight for this uploadId, share the promise
   if (!forceRefresh && inFlightEnrichments.has(uploadId)) {
     return inFlightEnrichments.get(uploadId)!;
   }
 
-  const promise = _doEnrichSheetAnalysis(uploadId, forceRefresh, onProgress);
+  const guardedProgress = mayPublish && onProgress
+    ? (progress: EnrichProgress) => { if (mayPublish()) onProgress(progress); }
+    : onProgress;
+  const promise = _doEnrichSheetAnalysis(uploadId, forceRefresh, guardedProgress, mayPublish);
   if (!forceRefresh) {
     inFlightEnrichments.set(uploadId, promise);
     promise.finally(() => inFlightEnrichments.delete(uploadId));
@@ -1455,7 +1460,8 @@ export async function enrichSheetAnalysis(
 async function _doEnrichSheetAnalysis(
   uploadId: number,
   forceRefresh: boolean,
-  onProgress?: (progress: EnrichProgress) => void
+  onProgress?: (progress: EnrichProgress) => void,
+  mayPublish?: () => boolean,
 ): Promise<EnrichResult> {
   // Cache-first
   // Apr 25 2026 (Task C / PROD-1 fix): cache may be PARTIAL — when populated
@@ -1468,6 +1474,7 @@ async function _doEnrichSheetAnalysis(
   if (!forceRefresh) {
     try {
       const cached = await getCachedAnalysis(uploadId);
+      if (mayPublish && !mayPublish()) return { success: false, error: '分析已取消' };
       if (cached && cached.success) {
         if (cached._partial) {
           // Render KPIs early so the user sees something in <1s, then fall
@@ -1878,6 +1885,7 @@ async function _doEnrichSheetAnalysis(
     // Notify complete
     onProgress?.({ phase: 'complete', partial: enrichResult });
 
+    if (mayPublish && !mayPublish()) return { success: false, error: '分析已取消' };
     if (hasContent) {
       saveAnalysisToCache(uploadId, getFactoryId(), enrichResult).catch(() => {});
     }

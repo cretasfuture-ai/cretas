@@ -184,6 +184,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /**
+     * 缺口 16 跨客户领料: 半成品 / 在制批次的归属闸。字段注入只为既有单测装配;
+     * 走到领用点却没有它 ⇒ {@link #ownershipGuard()} 500, ⛔ 不当作「不查」放行。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard intermediateOwnershipGuard;
+
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard() {
+        if (intermediateOwnershipGuard == null) {
+            throw new BusinessException(500, "半成品归属校验服务未就绪, 不能领用半成品");
+        }
+        return intermediateOwnershipGuard;
+    }
+
     /** 缺口 06 汇合配比校验 (正式提交才校验, 草稿不拦)。字段注入, 见 BlendRatioWiringContractTest。 */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
@@ -382,7 +396,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
         // 只接受服务端标记为回料的来源；普通半成品仍保留原有的报工→小结延迟扣减语义。
         List<ProcessSheetRowResult.InputAllocation> reworkAllocations =
-                consumeReworkInputs(factoryId, req, allocations.size());
+                consumeReworkInputs(factoryId, planId, req, allocations.size());
 
         ProcessSheetRowResult result = saveRow(factoryId, planId, req, userId);
         List<ProcessSheetRow> submittedRows = resolveSubmittedRows(factoryId, planId, req, result);
@@ -464,7 +478,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * 调用失败会让整个正式报工事务回滚。</p>
      */
     private List<ProcessSheetRowResult.InputAllocation> consumeReworkInputs(
-            String factoryId, ProcessSheetRowRequest req, int allocationOrderOffset) {
+            String factoryId, String planId, ProcessSheetRowRequest req, int allocationOrderOffset) {
         if (wipInventoryService == null || req.getUpstreamSources() == null
                 || req.getUpstreamSources().isEmpty()) {
             return List.of();
@@ -506,7 +520,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal requestedKg = entry.getValue();
             SemiFinishedInventory source = sourceByBatch.get(batchNo);
             BigDecimal actualSourceQuantity = wipInventoryService.consumeClerkSemiStrict(
-                    factoryId, batchNo, requestedKg);
+                    factoryId, ownershipGuard().ofPlanId(factoryId, planId), batchNo, requestedKg);
             req.getUpstreamSources().stream()
                     .filter(Objects::nonNull)
                     .filter(ref -> ref.isSemiFinished()
@@ -2166,6 +2180,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<BigDecimal> allocatedLabor = allocateMoney(costKnown ? laborPool : null, plan.ratios());
         List<BigDecimal> allocatedEquipment = allocateMoney(costKnown ? equipmentPool : null, plan.ratios());
         List<BigDecimal> allocatedOther = allocateMoney(costKnown ? otherPool : null, plan.ratios());
+        if (!costKnown) {
+            warnings.add("本次投入有成本未知的物料（批次没有单价），各产出的成本都记为未知；补录单价后可重算成本");
+        }
 
         for (int i = 0; i < materializations.size(); i++) {
             MultiOutputMaterialization item = materializations.get(i);
@@ -2205,6 +2222,36 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                             wip.setUnitPrice(unitPrice(allocated, item.output().getQuantity()));
                             materialBatchRepo.save(wip);
                         });
+            } else if (!costKnown && item.outcome().batchId() != null) {
+                // 共同投入有未知成本 ⇒ 每个产出的成本都未知。不能让无投入的产出只带自己的人工、
+                // 承载投入的产出带着「原料按 0」的分项各自汇总 (S3-13: 114.80 + 26.00 ≠ 联产真实成本)。
+                ProductionBatch batch = productionBatchRepo
+                        .findByIdAndFactoryId(item.outcome().batchId(), factoryId)
+                        .orElseThrow(() -> new BusinessException(404, "多产出批次不存在或无权访问")
+                                .withCode("PROCESS_SHEET_MULTI_OUTPUT_BATCH_NOT_FOUND"));
+                batch.setCostIncomplete(true);
+                batch.setTotalCost(null);
+                batch.setUnitCost(null);
+                productionBatchRepo.save(batch);
+                materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                                factoryId, "PRODUCTION_BATCH", item.outcome().batchId().toString())
+                        .ifPresent(wip -> {
+                            wip.setUnitPrice(null);
+                            materialBatchRepo.save(wip);
+                        });
+            } else if (!costKnown && item.outcome().sfiAnchor() != null
+                    && item.outcome().originalUnitCost() != null) {
+                // 同理: 半成品产出保存时按自身口径入账了已知单价, 改为未知 (反冲后以 null 单价重入, 数量净变化 0)。
+                BigDecimal qty = item.output().getQuantity();
+                String holdRef = WipInventoryService.clerkHoldRef(planId, item.request().getProcessCode(),
+                        item.request().getClientRowId());
+                wipInventoryService.reverseClerkOutput(factoryId, item.outcome().sfiAnchor(), qty,
+                        item.outcome().originalUnitCost().multiply(qty), null, holdRef);
+                wipInventoryService.postClerkOutput(
+                        factoryId, item.outcome().sfiAnchor(), item.output().getProductTypeId(),
+                        qty, item.request().getUnit(), null,
+                        null, item.request().getProcessOrder(),
+                        Boolean.TRUE.equals(item.request().getRework()), holdRef);
             } else if (costKnown && item.outcome().sfiAnchor() != null) {
                 BigDecimal qty = item.output().getQuantity();
                 BigDecimal originalTotal = item.outcome().originalUnitCost() == null
@@ -3976,6 +4023,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
                     assertWorkflowSourceSku(ur.getSourceBatchNumber(), ur.getSkuId(), source.getProductTypeId());
+                    // 跨客户领料 (缺口 16): 代工客户的成品只能投进同一客户的计划; 保存即拦, 不留到小结 / 结单
+                    ownershipGuard().assertFinishedGoodsDrawable(factoryId,
+                            ownershipGuard().ofPlanId(factoryId, planId), source, req.getProcessCode());
                     continue;
                 }
                 // 半成品库存(SFI)投料 (半成品直接产成品): 不解析为 in-plan WIP MaterialBatch,
@@ -3995,6 +4045,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
                     assertLiveSemiSourceStatus(source, ur.getSourceBatchNumber(), req.getProcessCode());
+                    // 跨客户领料 (缺口 16): 保存即拦, 不留到小结 / 结单才发现
+                    ownershipGuard().assertSemiDrawable(factoryId, ownershipGuard().ofPlanId(factoryId, planId),
+                            source, req.getProcessCode());
                     com.cretas.aims.service.quality.release.QcInspectionGuard
                             .assertSemiDrawable(source, req.getProcessCode());   // 质检放行: 待检不可领
                     assertWorkflowSourceSku(ur.getSourceBatchNumber(), ur.getSkuId(), source.getProductTypeId());
@@ -4024,6 +4077,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
+                // 跨客户领料 (缺口 16): 上游批次可以是别的计划的在制品 (按批次号工厂内查) —— 归属看它的计划
+                ownershipGuard().assertWipBatchDrawable(factoryId, ownershipGuard().ofPlanId(factoryId, planId),
+                        pb, ur.getSourceBatchNumber(), req.getProcessCode());
                 com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
                         srcMb, ur.getSourceBatchNumber(), req.getProcessCode());   // 质检放行: 待检不可投
 

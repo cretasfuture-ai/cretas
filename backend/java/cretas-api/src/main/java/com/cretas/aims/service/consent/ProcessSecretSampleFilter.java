@@ -3,7 +3,11 @@ package com.cretas.aims.service.consent;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.stereotype.Component;
+
+import java.time.Duration;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -49,6 +53,23 @@ public class ProcessSecretSampleFilter {
         if (protectedIds.isEmpty()) {
             return Set.of();
         }
+        // 一条消息要过好几处外发出口, 每处都要这份名单: 按「工厂 + 当前保密产品集合」缓存 10 秒。
+        // 保密产品集合来自 accessService (改保密设置时立即失效), 集合一变键就变 —— 新设保密立即生效;
+        // 只有「已保密产品改名」最多 10 秒后才认新名字。查库失败不缓存, 照样抛给调用方 (外发据此拒绝)。
+        return nameCache.get(new NameKey(factoryId, Set.copyOf(protectedIds)), key -> loadNames(factoryId, protectedIds));
+    }
+
+    static final Duration NAME_CACHE_TTL = Duration.ofSeconds(10);
+
+    private record NameKey(String factoryId, Set<String> protectedIds) {
+    }
+
+    private final Cache<NameKey, Set<String>> nameCache = Caffeine.newBuilder()
+            .expireAfterWrite(NAME_CACHE_TTL)
+            .maximumSize(1_000)
+            .build();
+
+    private Set<String> loadNames(String factoryId, Set<String> protectedIds) {
         Set<String> names = new LinkedHashSet<>();
         List<ProductType> products = productTypeRepository.findAllById(protectedIds);
         for (ProductType product : products) {
@@ -58,6 +79,6 @@ public class ProcessSecretSampleFilter {
             }
             names.add(name.trim());
         }
-        return names;
+        return Set.copyOf(names);
     }
 }

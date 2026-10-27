@@ -112,7 +112,7 @@ class SingleReportSingleCostContractTest {
                 mock(ProductionWorkflowInstanceRepository.class),
                 mock(WorkflowTaskPortRepository.class),
                 mock(ProductFamilyResolver.class),
-                eventPublisher);
+                eventPublisher, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
 
         // ensure-row-then-lock: 第一次 findForUpdate 空 → saveAndFlush 建占位行 → 再 findForUpdate 命中。
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(eq(FACTORY), any()))

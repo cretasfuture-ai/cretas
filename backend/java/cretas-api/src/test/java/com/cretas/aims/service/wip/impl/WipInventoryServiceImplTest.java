@@ -1,5 +1,6 @@
 package com.cretas.aims.service.wip.impl;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.yield.OutputOptionsResponse;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionReport;
@@ -91,6 +92,8 @@ class WipInventoryServiceImplTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks
     private WipInventoryServiceImpl service;
 
@@ -142,7 +145,7 @@ class WipInventoryServiceImplTest {
                 .thenReturn(Optional.of(source));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.validateSourceWip("WIP-S1", new BigDecimal("21"), "kg"));
+                () -> service.validateSourceWip(null, Owner.COMPANY, "WIP-S1", new BigDecimal("21"), "kg", null));
 
         assertEquals(409, ex.getCode());
         assertEquals("WIP_INSUFFICIENT", ex.getErrorCode());
@@ -162,7 +165,7 @@ class WipInventoryServiceImplTest {
                 .thenReturn(Optional.of(source));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.validateSourceWip("WIP-S1", null, "kg"));
+                () -> service.validateSourceWip(null, Owner.COMPANY, "WIP-S1", null, "kg", null));
 
         assertEquals(409, ex.getCode());
         assertEquals("WIP_INPUT_REQUIRED", ex.getErrorCode());
@@ -184,7 +187,7 @@ class WipInventoryServiceImplTest {
                 .thenReturn(new BigDecimal("70"));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.validateSourceWip(FACTORY_ID, "WIP-S1", new BigDecimal("40"), "kg", null));
+                () -> service.validateSourceWip(FACTORY_ID, Owner.COMPANY, "WIP-S1", new BigDecimal("40"), "kg", null));
 
         assertEquals(409, ex.getCode());
         assertEquals("WIP_RESERVED_INSUFFICIENT", ex.getErrorCode());
@@ -198,7 +201,7 @@ class WipInventoryServiceImplTest {
                 .thenReturn(Optional.empty());
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.validateSourceWip(FACTORY_ID, "WIP-SAME", new BigDecimal("10"), "kg", null));
+                () -> service.validateSourceWip(FACTORY_ID, Owner.COMPANY, "WIP-SAME", new BigDecimal("10"), "kg", null));
 
         assertEquals(404, ex.getCode());
         verify(wipRepo, never()).findForUpdateByIntermediateBatchNoAndDeletedAtIsNull(anyString());
