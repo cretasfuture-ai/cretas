@@ -840,6 +840,38 @@ class OrderCostBreakdownServiceTest {
     }
 
     @Test
+    @DisplayName("工艺保密: BOM 自动扣料 / 报工自动带出的包材行标 automatic, 人工投料不标 (独立审查 V2.1 M4)")
+    void recipeDerivedConsumptionLinesAreMarkedAutomatic() {
+        MaterialConsumption autoBom = cons("MB-AUTO", "3", "2.00", "6.00");
+        autoBom.setSourceType("AUTO_BOM");
+        MaterialConsumption manual = cons("MB-MANUAL", "5", "2.00", "10.00");
+        manual.setSourceType("RAW_MATERIAL");
+        MaterialConsumption box = cons("MB-BOX", "5", "0.50", "2.50");
+        box.setSourceType("PACKAGING");
+        stubAuditEligiblePlan("PLAN-AUTO", 9106L, "9.8", List.of(autoBom, manual, box));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-AUTO", F)).thenReturn(Optional.of(
+                materialBatch("MB-AUTO", "AUTO-1", InventoryOwnership.COMPANY_OWNED, "2.00")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-MANUAL", F)).thenReturn(Optional.of(
+                materialBatch("MB-MANUAL", "MANUAL-1", InventoryOwnership.COMPANY_OWNED, "2.00")));
+        when(materialBatchRepository.findByIdAndFactoryId("MB-BOX", F)).thenReturn(Optional.of(
+                materialBatch("MB-BOX", "BOX-1", InventoryOwnership.COMPANY_OWNED, "0.50")));
+
+        OrderCostBreakdownDTO dto = service.compute(F, ORDER, false);
+
+        assertThat(dto.getRawMaterialDetails())
+                .extracting(d -> d.getBatchNumber() + "=" + d.isAutomatic())
+                .containsExactlyInAnyOrder("AUTO-1=true", "MANUAL-1=false");
+        assertThat(dto.getSources())
+                .extracting(s -> s.getBatchName() + "=" + s.isAutomatic())
+                .containsExactlyInAnyOrder("AUTO-1=true", "MANUAL-1=false");
+        assertThat(dto.getPackagingDetails()).extracting(OrderCostBreakdownDTO.PackagingDetail::isAutomatic)
+                .containsExactly(true);
+        // 包材成本项是包材明细金额换了个名字 (独立审查 V2.1 复核 H1)
+        assertThat(dto.getPackagingDetail()).extracting(OrderCostBreakdownDTO.PackagingItem::isAutomatic)
+                .containsExactly(true);
+    }
+
+    @Test
     @DisplayName("空订单: 无生产计划 → hasData=false, 诚实空")
     void emptyOrderHonestEmpty() {
         when(planRepository.findByFactoryIdAndSourceOrderId(F, ORDER)).thenReturn(List.of());

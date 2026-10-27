@@ -101,6 +101,26 @@ class BatchConsumptionSummaryNoFakeRateTest {
     }
 
     @Test
+    @DisplayName("工艺保密: 含 BOM 自动扣料 / 报工自动带出的物料行标 automatic, 人工投料不标")
+    @SuppressWarnings("unchecked")
+    void marksMaterialsWhoseActualQuantityWasDerivedFromTheRecipe() {
+        MaterialConsumption seasoning = consumption(null, new BigDecimal("0.1725"), new BigDecimal("1"));
+        seasoning.setSourceType("SEASONING");
+        MaterialConsumption beef = consumption(null, new BigDecimal("115"), new BigDecimal("100"));
+        beef.setMaterialTypeId("RMT-beef");
+        beef.setSourceType("RAW_MATERIAL");
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(BATCH_ID, FACTORY))
+                .thenReturn(List.of(seasoning, beef));
+
+        List<Map<String, Object>> items =
+                (List<Map<String, Object>>) service.getConsumptionSummary(FACTORY, BATCH_ID).get("items");
+
+        Map<String, Boolean> automaticByType = new java.util.HashMap<>();
+        items.forEach(item -> automaticByType.put((String) item.get("materialTypeId"), (Boolean) item.get("automatic")));
+        assertEquals(Map.of(TYPE_ID, true, "RMT-beef", false), automaticByType);
+    }
+
+    @Test
     @DisplayName("阳性对照: 有计划成本时算得出来 —— 否则下面那条「为 null」的断言是恒真式")
     void computesRateWhenPlanExists() {
         when(consumptionRepository.findByProductionBatchIdAndFactoryId(BATCH_ID, FACTORY))

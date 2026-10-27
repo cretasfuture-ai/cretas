@@ -385,6 +385,8 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("materialTypeId", typeId);
             item.put("materialTypeName", typeNameMap.getOrDefault(typeId, typeId));
+            // 含 BOM 自动扣料 / 报工自动带出行: 实际量就是配比算出的量 (独立审查 V2.1 M4)
+            item.put("automatic", typeConsumptions.stream().anyMatch(c -> com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType())));
             item.put("plannedQty", plannedQty);
             item.put("actualQty", actualQty);
             item.put("variancePercent", variancePercent);
