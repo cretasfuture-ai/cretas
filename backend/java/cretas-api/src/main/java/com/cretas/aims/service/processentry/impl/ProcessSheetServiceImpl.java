@@ -2166,6 +2166,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<BigDecimal> allocatedLabor = allocateMoney(costKnown ? laborPool : null, plan.ratios());
         List<BigDecimal> allocatedEquipment = allocateMoney(costKnown ? equipmentPool : null, plan.ratios());
         List<BigDecimal> allocatedOther = allocateMoney(costKnown ? otherPool : null, plan.ratios());
+        if (!costKnown) {
+            warnings.add("本次投入有成本未知的物料（批次没有单价），各产出的成本都记为未知；补录单价后可重算成本");
+        }
 
         for (int i = 0; i < materializations.size(); i++) {
             MultiOutputMaterialization item = materializations.get(i);
@@ -2205,6 +2208,36 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                             wip.setUnitPrice(unitPrice(allocated, item.output().getQuantity()));
                             materialBatchRepo.save(wip);
                         });
+            } else if (!costKnown && item.outcome().batchId() != null) {
+                // 共同投入有未知成本 ⇒ 每个产出的成本都未知。不能让无投入的产出只带自己的人工、
+                // 承载投入的产出带着「原料按 0」的分项各自汇总 (S3-13: 114.80 + 26.00 ≠ 联产真实成本)。
+                ProductionBatch batch = productionBatchRepo
+                        .findByIdAndFactoryId(item.outcome().batchId(), factoryId)
+                        .orElseThrow(() -> new BusinessException(404, "多产出批次不存在或无权访问")
+                                .withCode("PROCESS_SHEET_MULTI_OUTPUT_BATCH_NOT_FOUND"));
+                batch.setCostIncomplete(true);
+                batch.setTotalCost(null);
+                batch.setUnitCost(null);
+                productionBatchRepo.save(batch);
+                materialBatchRepo.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                                factoryId, "PRODUCTION_BATCH", item.outcome().batchId().toString())
+                        .ifPresent(wip -> {
+                            wip.setUnitPrice(null);
+                            materialBatchRepo.save(wip);
+                        });
+            } else if (!costKnown && item.outcome().sfiAnchor() != null
+                    && item.outcome().originalUnitCost() != null) {
+                // 同理: 半成品产出保存时按自身口径入账了已知单价, 改为未知 (反冲后以 null 单价重入, 数量净变化 0)。
+                BigDecimal qty = item.output().getQuantity();
+                String holdRef = WipInventoryService.clerkHoldRef(planId, item.request().getProcessCode(),
+                        item.request().getClientRowId());
+                wipInventoryService.reverseClerkOutput(factoryId, item.outcome().sfiAnchor(), qty,
+                        item.outcome().originalUnitCost().multiply(qty), null, holdRef);
+                wipInventoryService.postClerkOutput(
+                        factoryId, item.outcome().sfiAnchor(), item.output().getProductTypeId(),
+                        qty, item.request().getUnit(), null,
+                        null, item.request().getProcessOrder(),
+                        Boolean.TRUE.equals(item.request().getRework()), holdRef);
             } else if (costKnown && item.outcome().sfiAnchor() != null) {
                 BigDecimal qty = item.output().getQuantity();
                 BigDecimal originalTotal = item.outcome().originalUnitCost() == null

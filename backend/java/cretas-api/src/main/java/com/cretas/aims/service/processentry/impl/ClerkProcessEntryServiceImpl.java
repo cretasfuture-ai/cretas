@@ -781,6 +781,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 🔒 honest-null: 任一消耗源未计价 (unitPrice==null, 成本未知而非 0) → 批次总成本/单价不可知,
         // 写 null 而非 nz-求和后的低估值 (与纯 SFI 投料路径 ProcessSheetServiceImpl:151 「成本诚实 null」一致)。
         // materialCost/laborCost 仍写已知分量, 仅 ROLL-UP totalCost/unitCost 诚实置 null。
+        // costIncomplete 必须持久化: 实体 @PreUpdate (calculateMetrics) 会用分项重新求和, 只置 null 会在
+        // save 时被改回「原料按 0 计的已知数」(S3-13 实测批次 10998: total_cost 114.80 / unit_cost 空)。
+        batch.setCostIncomplete(anyUncosted);
         if (anyUncosted) {
             batch.setTotalCost(null);
             batch.setUnitCost(null);
@@ -1583,9 +1586,17 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     }
 
     private static BigDecimal edgeUnitPrice(ResolvedEdge edge) {
-        return edge.getResolvedUnitPrice() != null
-                ? edge.getResolvedUnitPrice()
-                : edge.getSourceBatch().getUnitPrice();
+        if (edge.getResolvedUnitPrice() != null) {
+            return edge.getResolvedUnitPrice();
+        }
+        MaterialBatch source = edge.getSourceBatch();
+        if (source.getUnitPrice() == null
+                && source.getOwnership() == com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED) {
+            // 客户自带料对本厂是「已知 0」(加工口径, 见结单 describeCustomerSuppliedNote), 不是「未知」;
+            // 只有本厂自有料缺单价才让批次成本不完整。
+            return BigDecimal.ZERO;
+        }
+        return source.getUnitPrice();
     }
 
     private static BigDecimal nz(BigDecimal v) {
