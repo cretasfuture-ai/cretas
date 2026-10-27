@@ -328,6 +328,24 @@ def test_answer_contains_trusted_findings_and_stock_question_has_no_joint_warnin
     assert not any('生产-质量-成本' in item for item in conversation.limitations_for(selected, catalog, '看库存'))
 
 
+def test_limitations_use_only_explicit_constraints_not_normal_attention():
+    selected = [_candidate('production.output:line', 'production.output')]
+    selected[0]['findings'] = {
+        'attention': ['合计 1,342kg', '最高为 800kg；最低为 542kg'],
+        'limitations': ['部分SKU缺少产品名称，已回退产品ID'],
+    }
+    assert conversation.limitations_for(selected, [], '看产量') == ['部分SKU缺少产品名称，已回退产品ID']
+
+
+def test_real_trend_keeps_missing_period_constraint_without_relabeling_totals():
+    from .engine import series_candidate
+    from .metrics import Series
+    candidate = series_candidate(Series('production.output', '产量趋势', '生产', 'kg', [('2026-01-01', 10), ('2026-01-03', 20)], 'production'), 'line')
+    limitations = conversation.limitations_for([candidate], [], '看产量')
+    assert limitations == ['仅汇总有记录的日期；缺期不补零，空白不表示停产或没有业务']
+    assert any('合计' in item for item in candidate['findings']['attention'])
+
+
 def test_joint_intent_and_findings_use_chinese_labels():
     assert conversation.is_joint_intent('把生产、质量和成本放一起看')
     assert conversation.is_joint_intent('多维度分析产量和良品率')

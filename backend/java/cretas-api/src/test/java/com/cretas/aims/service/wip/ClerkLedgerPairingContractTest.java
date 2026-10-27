@@ -1,5 +1,6 @@
 package com.cretas.aims.service.wip;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
@@ -98,7 +99,7 @@ class ClerkLedgerPairingContractTest {
                     mock(ProductionWorkflowInstanceRepository.class),
                     mock(WorkflowTaskPortRepository.class),
                     mock(ProductFamilyResolver.class),
-                    mock(ApplicationEventPublisher.class));
+                    mock(ApplicationEventPublisher.class), org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
 
             lenient().when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(
                     anyString(), anyString())).thenAnswer(i -> Optional.ofNullable(row));
@@ -206,7 +207,7 @@ class ClerkLedgerPairingContractTest {
         rig.svc.postClerkOutput(FACTORY, ANCHOR, "RMT_2ac4",
                 new BigDecimal("10"), "盒", new BigDecimal("3.00"), null, 2);
         // 投 2 kg，每盒 500g ⇒ 折算 4 盒
-        BigDecimal deducted = rig.svc.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2"));
+        BigDecimal deducted = rig.svc.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("2"));
 
         assertThat(deducted).as("返回的是来源原生单位的实际扣减量 (盒)")
                 .isEqualByComparingTo(new BigDecimal("4"));

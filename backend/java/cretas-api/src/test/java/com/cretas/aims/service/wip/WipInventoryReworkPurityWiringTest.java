@@ -57,6 +57,8 @@ class WipInventoryReworkPurityWiringTest {
     private static final String PATTY = "pt-patty";    // 汉堡排       不收回料
     private static final String UNSET = "pt-unset";    // 未配纯度等级
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks private WipInventoryServiceImpl service;
 
     @Mock private SemiFinishedInventoryRepository wipRepo;

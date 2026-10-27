@@ -16,7 +16,8 @@ from typing import Optional, Dict, List
 from datetime import datetime
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import Depends, APIRouter, HTTPException, BackgroundTasks
+from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["NVR 录像分析"])
@@ -99,7 +100,7 @@ _analysis_tasks: Dict[str, RecordingAnalysisTask] = {}
 
 # ==================== API 端点 ====================
 
-@router.post("/analyze")
+@router.post("/analyze", dependencies=[Depends(require_camera_snapshot_ai)])
 async def analyze_recording(
     request: RecordingAnalysisRequest,
     background_tasks: BackgroundTasks

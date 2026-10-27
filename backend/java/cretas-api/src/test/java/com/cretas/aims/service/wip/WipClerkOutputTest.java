@@ -1,5 +1,6 @@
 package com.cretas.aims.service.wip;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.exception.BusinessException;
@@ -43,6 +44,8 @@ class WipClerkOutputTest {
     @Mock private SemiFinishedInventoryRepository wipRepo;
     @Mock private SemiFinishedInventoryTransactionRepository txnRepo;
     @Mock private ProductTypeRepository productTypeRepo;
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks private WipInventoryServiceImpl service;
 
     private SemiFinishedInventory freshRow() {
@@ -222,7 +225,7 @@ class WipClerkOutputTest {
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
                 .thenReturn(Optional.of(row));
 
-        BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("40"));
+        BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("40"));
         assertThat(drawn).isEqualByComparingTo("40");
         assertThat(row.getConsumedQuantity()).isEqualByComparingTo("40");
         assertThat(row.getAvailableQuantity()).isEqualByComparingTo("20");
@@ -233,7 +236,7 @@ class WipClerkOutputTest {
     void consumeClerkSemiStrictMissingThrows() {
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
                 .thenReturn(Optional.empty());
-        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("50")))
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("50")))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
@@ -253,7 +256,7 @@ class WipClerkOutputTest {
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, ANCHOR))
                 .thenReturn(Optional.of(row));
 
-        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("30")))
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("30")))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
@@ -275,7 +278,7 @@ class WipClerkOutputTest {
                 .thenReturn(Optional.of(row));
         stubGrams("200");
 
-        BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2"));   // 2kg → 10盒
+        BigDecimal drawn = service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("2"));   // 2kg → 10盒
 
         assertThat(drawn).isEqualByComparingTo("10");             // 返回扣减盒数 (供撤销精确还回)
         assertThat(row.getConsumedQuantity()).isEqualByComparingTo("10");
@@ -290,7 +293,7 @@ class WipClerkOutputTest {
                 .thenReturn(Optional.of(row));
         when(productTypeRepo.findById("PT1")).thenReturn(Optional.empty());   // 未配每盒克重
 
-        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2")))
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("2")))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_NO_GRAMS_PER_UNIT"));
         assertThat(row.getConsumedQuantity()).isEqualByComparingTo("0");   // 未扣
@@ -305,7 +308,7 @@ class WipClerkOutputTest {
                 .thenReturn(Optional.of(row));
         stubGrams("200");
 
-        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, ANCHOR, new BigDecimal("2.2")))   // 11盒
+        assertThatThrownBy(() -> service.consumeClerkSemiStrict(FACTORY, Owner.COMPANY, ANCHOR, new BigDecimal("2.2")))   // 11盒
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("SFI_INSUFFICIENT"));
         assertThat(row.getConsumedQuantity()).isEqualByComparingTo("0");   // 未扣

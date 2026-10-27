@@ -1,5 +1,6 @@
 package com.cretas.aims.service.production;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.production.ProductionSettlementRequest;
 import com.cretas.aims.entity.ProductType;
@@ -131,6 +132,7 @@ class SettlementLineageWiringTest {
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "finishedGoodsFeedService", finishedGoodsFeedService);
         ReflectionTestUtils.setField(service, "workshopReservationService", workshopReservationService);
         ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard",
@@ -166,8 +168,8 @@ class SettlementLineageWiringTest {
         when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, PLAN_ID)).thenReturn(List.of(row));
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(new ArrayList<>());
-        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), eq("SFI-STOCK"), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(wipInventoryService.consumeClerkSemiStrict(eq(FACTORY_ID), any(), eq("SFI-STOCK"), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
 
         service.settleProduction(FACTORY_ID, PLAN_ID, ProductionSettlementRequest.builder()
                 .idempotencyKey("idem-l")
@@ -180,7 +182,7 @@ class SettlementLineageWiringTest {
                 .laborSegments(new ArrayList<>())
                 .build(), 10L);
 
-        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, "SFI-STOCK", new BigDecimal("30"));
+        verify(wipInventoryService).consumeClerkSemiStrict(FACTORY_ID, Owner.COMPANY, "SFI-STOCK", new BigDecimal("30"));
         verify(semiFeedLineageRecorder).recordSemiFeed(eq(FACTORY_ID), eq("SFI-STOCK"), eq(555L),
                 argThat(q -> q != null && q.compareTo(new BigDecimal("30")) == 0), eq(null), any(),
                 argThat(k -> k.startsWith("settleSfiFeed:" + PLAN_ID + ":row")), eq("SETTLEMENT_SFI_FEED"));

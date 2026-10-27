@@ -302,6 +302,7 @@ def _financial_findings(chart, detail, mapping):
     note = chart.get('metadata', {}).get('note')
     if note:
         facts['attention'].append(note)
+        facts['limitations'] = [note]
     return facts
 
 
@@ -394,7 +395,9 @@ def series_candidate(series, kind, optional=False):
         'kpis': [] if total is None else [{'label': '累计口径' if series.aggregate != 'sum' else '合计', 'value': display(total), 'unit': series.unit}],
         'tableData': [{'label': label, 'value': value} for label, value in series.points]}
     if kind in ('line', 'area'):
-        candidate['findings']['attention'].append('仅汇总有记录的日期；缺期不补零，空白不表示停产或没有业务')
+        limitation = '仅汇总有记录的日期；缺期不补零，空白不表示停产或没有业务'
+        candidate['findings']['attention'].append(limitation)
+        candidate['findings'].setdefault('limitations', []).append(limitation)
     return _analysis_metadata(candidate)
 
 
@@ -743,7 +746,9 @@ def historical_inventory(dataset):
         series = Series('stock.history@'+str(material)+'@'+str(unit), str(material)+'关账库存余额', '库存', str(unit), points, dataset.source, 'nonadditive')
         chart = series_candidate(series, 'line' if len(points) > 1 else 'bar')
         chart['kpis'] = [{'label': '最后关账余额', 'value': display(points[-1][1]), 'unit': str(unit)}]
-        chart['findings']['attention'].append('关账期间余额快照；不同月份余额不累加，不代表当前可用库存')
+        limitation = '关账期间余额快照；不同月份余额不累加，不代表当前可用库存'
+        chart['findings']['attention'].append(limitation)
+        chart['findings'].setdefault('limitations', []).append(limitation)
         charts.append(chart)
     return charts, []
 

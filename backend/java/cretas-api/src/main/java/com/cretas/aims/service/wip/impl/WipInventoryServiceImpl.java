@@ -58,6 +58,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -82,6 +84,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     private final ProductFamilyResolver productFamilyResolver;
     /** SP3: 成本更新事件发布 — 异步回填+预警. */
     private final ApplicationEventPublisher eventPublisher;
+    /** 缺口 16: 半成品归属 —— 入账时盖产出计划的归属, 领用时比领用计划的归属。 */
+    private final IntermediateOwnershipGuard ownershipGuard;
 
     /**
      * W8 BUG-SP1-NEW-ROW 修复: 自引用代理, 用于在 {@code REQUIRES_NEW} 子事务中创建新行,
@@ -207,7 +211,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
     @Override
     public SemiFinishedInventory validateSourceWip(
-            String factoryId, String sourceWipNo, BigDecimal inputQuantity, String inputUnit, Long excludeReportId) {
+            String factoryId, Owner consumer, String sourceWipNo, BigDecimal inputQuantity, String inputUnit,
+            Long excludeReportId) {
         if (sourceWipNo == null || sourceWipNo.isBlank()) {
             return null;
         }
@@ -215,6 +220,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .orElseThrow(() -> new BusinessException(404, "源半成品库存不存在: " + sourceWipNo)
                         .withHint("请重新选择要领用的上道半成品批次")
                         .withHintTarget("sourceWipNo"));
+        // 跨客户领料 (缺口 16): 代工客户的半成品只能领进同一客户的计划。
+        ownershipGuard.assertSemiDrawable(factoryId, consumer, sourceWip, "sourceWipNo");
         // 质检放行 (缺口 11): 待检 / 不合格的半成品不能被下道领用 (App 报工领用路径)。
         QcInspectionGuard.assertSemiDrawable(sourceWip, inputQuantity, "sourceWipNo");
         if (inputQuantity == null) {
@@ -250,7 +257,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 && report.getInputQuantity() != null) {
             BigDecimal sourceWipQuantity = sourceWipQuantity(report);
             SemiFinishedInventory sourceWip = validateSourceWip(
-                    factoryId, report.getSourceWipNo(), sourceWipQuantity, report.getInputUnit(), report.getId());
+                    factoryId, ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId()),
+                    report.getSourceWipNo(), sourceWipQuantity, report.getInputUnit(), report.getId());
             consumeSourceWip(sourceWip, sourceWipQuantity, report, task, operatorId);
         }
         String outputKind = report.getOutputKind();
@@ -823,8 +831,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         // 为何 0 量占位安全 (而非全量行): 若调用方 approval 事务事后回滚, 残留的是 0 量空行 (无量无成本),
         //   且 IN ledger txn 也随之回滚 → 下次重试 idempotency guard 放行 → findForUpdate 命中 0 量行 →
         //   累加 0+inQty=inQty → **不双计**。全量行残留则会被重试再次累加 = 双计 bug; 0 量占位天然幂等自愈。
+        // 缺口 16: semiCode 行按产品码跨批次共用 —— 代工客户的产出落到它自己的那一行
+        //   (<产品码>@<客户前 8 位>), 不与本厂自有 / 别的客户的料混在一行。流水 sourceRef 仍记 semiCode
+        //   (上面的幂等判重按它比), 冲销按流水上的 semiFinishedId 找行, 不按行号。
+        Owner producer = ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId());
+        String rowKey = IntermediateOwnershipGuard.pooledRowKey(semiCode, producer);
         SemiFinishedInventory sfi = wipRepo
-                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, rowKey)
                 .orElse(null);
         if (sfi == null) {
             // 回料行的 productTypeId 记【回料自己】的产品, 不是批次的成品 (Critical-B):
@@ -832,14 +845,15 @@ public class WipInventoryServiceImpl implements WipInventoryService {
             //   就永远筛不中 —— 阶段过滤放行了也照样到不了操作员眼前; 显示名/每盒克重也会印成成品的。
             // ⛔ 只对回料这么记: 普通半成品行「productTypeId = 批次成品」是存量语义, 备货看板
             //   (RestockBoardService.sumAvailableByProduct) 按成品汇总在制半成品量依赖它, 本次不动。
-            ensureRowExists(factoryId, semiCode, task, outputUnit,
+            ensureRowExists(factoryId, rowKey, task, outputUnit,
                     reworkProductTypeId != null ? reworkProductTypeId : task.getProductTypeId(),
                     reworkProductTypeId != null);
             sfi = wipRepo
-                    .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, semiCode)
+                    .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, rowKey)
                     .orElseThrow(() -> new IllegalStateException(
-                            "[SP1-semi] row missing after ensureRowExists, semiCode=" + semiCode));
+                            "[SP1-semi] row missing after ensureRowExists, semiCode=" + rowKey));
         }
+        IntermediateOwnershipGuard.assertRowCreditable(sfi, producer);
         // 既有行 (跨批次复用同一个回料产品的那一行) 也要补标 —— 一旦为 true 不再翻回 false。
         if (reworkProductTypeId != null && !Boolean.TRUE.equals(sfi.getIsRework())) {
             sfi.setIsRework(Boolean.TRUE);
@@ -1086,6 +1100,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         SemiFinishedInventory sfi = wipRepo
                 .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
                 .orElseThrow(() -> new IllegalStateException("SFI row missing after create: " + intermediateBatchNo));
+        // 缺口 16: 逐道录入的锚一计划一行, 归属 = 锚里那个计划
+        IntermediateOwnershipGuard.assertRowCreditable(sfi, ownershipGuard.ofClerkAnchor(factoryId, intermediateBatchNo));
         // 回料角色 sticky true：同一锚后续普通入账不能把已确认回料翻回普通半成品。
         if (rework && !Boolean.TRUE.equals(sfi.getIsRework())) {
             sfi.setIsRework(Boolean.TRUE);
@@ -1190,7 +1206,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      */
     @Override
     @Transactional
-    public BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty) {
+    public BigDecimal consumeClerkSemiStrict(String factoryId, Owner consumer, String intermediateBatchNo,
+                                             BigDecimal qty) {
         if (qty == null || qty.signum() <= 0) {
             return BigDecimal.ZERO;
         }
@@ -1217,6 +1234,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
+        // 跨客户领料 (缺口 16)
+        ownershipGuard.assertSemiDrawable(factoryId, consumer, sfi, intermediateBatchNo);
         // 质检放行 (缺口 11): 逐道录入 SFI 投料在小结时真正扣减 —— 只能领已放行的部分 (按折算后的原生数量判)。
         QcInspectionGuard.assertSemiDrawable(sfi, deductQty, intermediateBatchNo);
         // G02: 校验与写回用同一个余额 (含盘点修正 adjustment)。旧版这里是 produced − consumed,
@@ -1805,6 +1824,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .orElseThrow(() -> new IllegalStateException(
                             "[wip] row missing after ensureRowExists, wipNo=" + wipNo));
         }
+        // 缺口 16: 任务在制行按批次一行, 归属 = 这个批次的计划
+        IntermediateOwnershipGuard.assertRowCreditable(wip,
+                ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId()));
 
         // 修2: 累加前快照历史产出量 + 单价 (用于诚实 null 毒化判定, 必须在 setProducedQuantity 前取)。
         BigDecimal wipPriorProduced = wip.getProducedQuantity();
@@ -2234,7 +2256,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * 调用方必须持有 @Transactional。
      */
     @Override
-    public void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId) {
+    public void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId,
+                                       Owner consumer) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "扣减数量必须大于 0");
         }
@@ -2244,6 +2267,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
+        // 跨客户领料 (缺口 16)
+        ownershipGuard.assertSemiDrawable(factoryId, consumer, wip, "wipId");
         // 质检放行 (缺口 11): 二次加工开工领用半成品 —— 待检 / 不合格不能领。
         QcInspectionGuard.assertSemiDrawable(wip, qty, "wipId");
         // G02: 校验与写回同一个余额公式 (现算 produced − consumed + adjustment)。
@@ -2459,7 +2484,17 @@ public class WipInventoryServiceImpl implements WipInventoryService {
 
     @Override
     public List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder) {
+        return listWipByFactory(factoryId, productTypeId, maxProcessOrder, null);
+    }
+
+    @Override
+    public List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder,
+                                            Owner consumer) {
         List<SemiFinishedInventory> rows = wipRepo.findByFactoryIdForWeightView(factoryId);
+        // 缺口 16: 投料下拉只给领用计划自己归属的半成品 (consumer null = 非领用视图, 不过滤)
+        if (consumer != null) {
+            rows = rows.stream().filter(w -> ownershipGuard.drawable(consumer, w)).collect(Collectors.toList());
+        }
         if (rows.isEmpty()) {
             return List.of();
         }

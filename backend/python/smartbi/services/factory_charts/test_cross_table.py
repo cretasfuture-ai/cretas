@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import pandas as pd
 import pytest
-from . import cross_table as joined, engine, detail_store, sources
+from . import cross_table as joined, engine, detail_store, sources, conversation
 from .engine import Dataset
 from .test_sources import fake_loader
 
@@ -102,6 +102,10 @@ def test_missing_relationship_is_excluded_and_coverage_denominator_remains_visib
     candidates, _ = joined.build(scoped(dataset, request()), request(), True)
     assert candidates[0]['sourceMetadata']['coverage'] == {'totalBatches': 2, 'coveredBatches': 1}
     assert '1/2' in candidates[0]['findings']['attention'][0]
+    limitations = conversation.limitations_for(candidates, [], '跨表关联生产质量成本')
+    assert any('1/2' in item for item in limitations)
+    assert any('分母不同' in item for item in limitations)
+    assert any('观测次数' in item for item in limitations)
 
 
 def test_mixed_units_stay_separate_and_unscoped_or_price_denied_cannot_construct_join():

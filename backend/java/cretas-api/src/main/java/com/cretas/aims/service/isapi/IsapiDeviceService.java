@@ -339,10 +339,21 @@ public class IsapiDeviceService {
     }
 
     /**
-     * 抓拍图片
+     * 抓拍图片 (只抓本厂摄像头: 别厂的设备与不存在同样报错)
+     */
+    public IsapiCaptureDTO capturePicture(String factoryId, String deviceId, int channelId) {
+        return capture(getDevice(factoryId, deviceId), channelId);
+    }
+
+    /**
+     * 抓拍图片 (调用方已校验设备归属)
      */
     public IsapiCaptureDTO capturePicture(String deviceId, int channelId) {
-        IsapiDevice device = getDevice(deviceId);
+        return capture(getDevice(deviceId), channelId);
+    }
+
+    private IsapiCaptureDTO capture(IsapiDevice device, int channelId) {
+        String deviceId = device.getId();
 
         try {
             byte[] pictureData = isapiClient.capturePicture(device, channelId);

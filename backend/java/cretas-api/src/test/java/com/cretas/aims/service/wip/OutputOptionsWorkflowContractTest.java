@@ -85,7 +85,7 @@ class OutputOptionsWorkflowContractTest {
                 workflowInstanceRepo,
                 workflowTaskPortRepo,
                 mock(ProductFamilyResolver.class),
-                mock(ApplicationEventPublisher.class));
+                mock(ApplicationEventPublisher.class), org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
     }
 
     private WorkflowTaskPort port(Long taskId, WorkflowTaskPort.Direction direction,

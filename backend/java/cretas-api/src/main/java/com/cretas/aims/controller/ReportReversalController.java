@@ -148,7 +148,12 @@ public class ReportReversalController {
     @Operation(summary = "可用 WIP 半成品列表", description = "查询可用于二次加工的半成品库存 (SP2)")
     public ApiResponse<List<SemiFinishedInventory>> listAvailableWip(
             @PathVariable @Parameter(description = "工厂ID") String factoryId) {
-        List<SemiFinishedInventory> result = wipInventoryService.listAvailableWip(factoryId);
+        // 缺口 16: 二次加工计划不带客户合同 (产出公司自有) ⇒ 选料只列本厂自有的半成品
+        List<SemiFinishedInventory> result = wipInventoryService.listAvailableWip(factoryId).stream()
+                .filter(w -> com.cretas.aims.service.processentry.IntermediateOwnershipGuard.sameOwner(
+                        com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner.COMPANY,
+                        com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofSemi(w)))
+                .toList();
         return ApiResponse.success(result);
     }
 
