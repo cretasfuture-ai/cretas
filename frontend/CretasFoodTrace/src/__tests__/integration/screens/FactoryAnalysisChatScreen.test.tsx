@@ -80,6 +80,30 @@ describe('FactoryAnalysisChatScreen', () => {
     expect(screen.getByText(/指标9/)).toBeTruthy();
   });
 
+  it('folds long answer prose by default and exposes accessible expand/collapse control', async () => {
+    const longAnswer = Array.from({ length: 12 }, (_, index) => `分析说明第${index + 1}段：本段保留完整的经营分析结论。`).join('\n');
+    (askFactoryAnalysis as jest.Mock).mockResolvedValueOnce(answered({ answer: longAnswer }));
+    const screen = renderScreen({ initialQuestion: '看完整分析' });
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-answer-prose-factory-analysis-1')).toBeTruthy());
+
+    const prose = screen.getByTestId('factory-analysis-answer-prose-factory-analysis-1');
+    const toggle = screen.getByTestId('factory-analysis-answer-toggle-factory-analysis-1');
+    expect(prose.props.children).toBe(longAnswer);
+    expect(prose.props.numberOfLines).toBe(5);
+    expect(toggle).toHaveTextContent('展开分析说明');
+    expect(toggle.props.accessibilityState).toEqual({ expanded: false });
+
+    fireEvent.press(toggle);
+    expect(prose.props.numberOfLines).toBeUndefined();
+    expect(toggle).toHaveTextContent('收起分析说明');
+    expect(toggle.props.accessibilityLabel).toBe('收起分析说明');
+    expect(toggle.props.accessibilityState).toEqual({ expanded: true });
+
+    fireEvent.press(toggle);
+    expect(prose.props.numberOfLines).toBe(5);
+    expect(toggle.props.accessibilityState).toEqual({ expanded: false });
+  });
+
   it('keeps a clarification pending and limits searchable product matches to eight', async () => {
     (askFactoryAnalysis as jest.Mock).mockResolvedValueOnce(answered({
       status: 'clarification', answer: '请指定产品', recommendations: [], facts: [], limitations: ['产品不明确'],

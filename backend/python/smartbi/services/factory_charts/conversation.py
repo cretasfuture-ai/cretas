@@ -340,8 +340,8 @@ def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Map
     limitations: list[str] = []
     for candidate in selected:
         findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
-        attention = findings.get("attention") if isinstance(findings.get("attention"), list) else []
-        limitations.extend(str(item) for item in attention[:2] if item)
+        explicit = findings.get("limitations") if isinstance(findings.get("limitations"), list) else []
+        limitations.extend(str(item) for item in explicit if item)
     families = {_canonical_family(item) for item in selected}
     available = {str(item.get("familyId")) for item in catalog}
     # Only disclose a missing relationship when the question asks for a
