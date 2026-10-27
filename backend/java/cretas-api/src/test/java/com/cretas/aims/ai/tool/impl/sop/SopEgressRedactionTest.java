@@ -100,6 +100,8 @@ class SopEgressRedactionTest {
         assertThat(sent.getValue()).doesNotContain("秘制酱牛肉", "赵铁柱", "13912345678", "华东冷链");
 
         when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
+        // 守卫把查到的保密名缓存 10 秒: 换一个新守卫, 才是「这次查库失败」
+        ReflectionTestUtils.setField(tool, "llmEgressGuard", new LlmEgressGuard(mapper, processSecret));
         llm = mock(DashScopeClient.class);
         ReflectionTestUtils.setField(tool, "dashScopeClient", llm);
         String out = tool.execute(call(tool.getToolName(), Map.of("sopContent", SOP)),

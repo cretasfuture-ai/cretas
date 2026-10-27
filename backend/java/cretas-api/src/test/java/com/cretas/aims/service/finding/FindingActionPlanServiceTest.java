@@ -86,6 +86,9 @@ class FindingActionPlanServiceTest {
         assertEquals("· 秘制酱牛肉 尽快补 38kg", r.get("plan"));
 
         when(filter.protectedProductNames(FACTORY_ID)).thenThrow(new IllegalStateException("db down"));
+        // 守卫把查到的保密名缓存 10 秒: 换一个新守卫, 才是「这次查库失败」
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(new com.fasterxml.jackson.databind.ObjectMapper(), filter));
         assertThrows(IllegalStateException.class, () -> svc.generate(FACTORY_ID, "inventory"));
         verify(dashScopeClient, times(1)).chatLowTemp(anyString(), anyString());
     }

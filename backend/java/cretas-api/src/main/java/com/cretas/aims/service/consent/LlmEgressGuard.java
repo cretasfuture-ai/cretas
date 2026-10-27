@@ -156,9 +156,21 @@ public class LlmEgressGuard {
      */
     private Collection<String> protectedNames(String factoryId) {
         String factory = factoryId != null ? factoryId : currentFactory();
-        return processSecretSampleFilter == null || factory == null
-                ? Set.of() : processSecretSampleFilter.protectedProductNames(factory);
+        if (processSecretSampleFilter == null || factory == null) {
+            return Set.of();
+        }
+        // 一条消息要过好几处出口 (识别 / 消歧 / 抽参 / 回复), 每处都查两次库; 同一工厂 10 秒内复用。
+        // 只缓存查到的结果: 查库失败照样抛出 (由调用方按「脱敏不了」拒绝), 不缓存。新设的保密名最多 10 秒后生效。
+        return protectedNameCache.get(factory, processSecretSampleFilter::protectedProductNames);
     }
+
+    static final java.time.Duration PROTECTED_NAME_TTL = java.time.Duration.ofSeconds(10);
+
+    private final com.github.benmanes.caffeine.cache.Cache<String, Set<String>> protectedNameCache =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                    .expireAfterWrite(PROTECTED_NAME_TTL)
+                    .maximumSize(1_000)
+                    .build();
 
     /**
      * 请求线程: 登录 token 里的工厂; 流式对话在 SSE 工作线程上跑, 没有 Servlet 请求, 取控制器绑上的可信身份
