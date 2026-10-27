@@ -168,8 +168,9 @@ async def test_a_refused_redaction_sends_nothing(upstream, monkeypatch):
     """脱敏后仍有残留 (规则层判定) → 出境口拒绝, 一个字节都不发。"""
     from common import llm_egress_text
 
+    # 结果里带着文本: 只有「拒绝就不发」那一步能拦住它 (不是靠缺文本崩掉)
     monkeypatch.setattr(llm_egress_text, "redact_texts",
-                        lambda *a, **k: llm_egress_text.Result(refusal="残留手机号"))
+                        lambda texts, *a, **k: llm_egress_text.Result(texts=list(texts), refusal="残留手机号"))
     with pytest.raises(lc.EgressRedactionError):
         await llm_router.call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": SECRET}]})
     assert upstream.bodies == []
@@ -210,6 +211,24 @@ async def test_protected_names_are_read_fresh_for_every_request(monkeypatch):
         _llm_factory.reset(token)
     assert (first, second) == ([], ["秘制酱牛肉"])
     assert queries == ["F006", "F006"]
+
+
+@pytest.mark.asyncio
+async def test_protected_names_lookup_errors_propagate(monkeypatch):
+    """库连不上 / 查询出错: 向上抛 (出境口据此不发), 不能当成「没有保密产品」。"""
+    from common.llm_metrics import _llm_factory
+    import smartbi.config as cfg
+
+    async def broken_pool():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(cfg, "get_cretas_pool", broken_pool)
+    token = _llm_factory.set("F006")
+    try:
+        with pytest.raises(RuntimeError):
+            await lc._protected_names_for_egress()
+    finally:
+        _llm_factory.reset(token)
 
 
 @pytest.mark.asyncio

@@ -191,6 +191,17 @@
         "客户A类和人员A班照常，联系人：[人员A]"
       ],
       "refusal": null
+    },
+    {
+      "name": "单字动词「查」前缀也剥掉",
+      "texts": [
+        "我们去查永辉超市的库存"
+      ],
+      "detect_names": true,
+      "expected": [
+        "我们去查[单位A]的库存"
+      ],
+      "refusal": null
     }
   ]
 }
