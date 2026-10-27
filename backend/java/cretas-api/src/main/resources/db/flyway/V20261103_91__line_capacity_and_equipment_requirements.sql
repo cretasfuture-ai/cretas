@@ -9,6 +9,8 @@
 -- 不换算单位、不套 500 kg 默认值。旧的 production_lines.hourly_capacity / equipment_ids 与
 -- factory_capacity_configs.hourly_capacity 保留但不再当作已配置读数。
 -- 存量为空 = 所有工厂的产能与设备都是 MISSING, 与改动前 (插单恒为未验证) 一致, 不放松。
+-- 谁配的: actor_type + actor_id (平台管理员走对话建厂也能落库; 平台 id 不进 users 外键语义的列),
+--   configured_by 只在工厂用户配置时填 (与 product_types.actor_type / actor_id / created_by 同一口径)。
 
 CREATE TABLE production_line_capacity_configs (
     id                  BIGSERIAL     PRIMARY KEY,
@@ -18,7 +20,9 @@ CREATE TABLE production_line_capacity_configs (
     capacity_per_hour   NUMERIC(14,3) NOT NULL CHECK (capacity_per_hour > 0),
     capacity_unit       VARCHAR(16)   NOT NULL CHECK (capacity_unit IN ('PIECE', 'KG', 'BATCH')),
     source              VARCHAR(32)   NOT NULL CHECK (source IN ('CONVERSATIONAL_BUILD', 'FACTORY_CONFIG')),
-    configured_by       BIGINT        NOT NULL,
+    actor_type          VARCHAR(32)   NOT NULL CHECK (actor_type IN ('FACTORY_USER', 'PLATFORM_ADMIN')),
+    actor_id            BIGINT        NOT NULL,
+    configured_by       BIGINT,
     effective_from      TIMESTAMP     NOT NULL,
     created_at          TIMESTAMP     NOT NULL,
     updated_at          TIMESTAMP     NOT NULL,
@@ -43,7 +47,9 @@ CREATE TABLE product_equipment_requirements (
     product_type_id  VARCHAR(100) NOT NULL,
     equipment_id     BIGINT       NOT NULL,
     source           VARCHAR(32)  NOT NULL CHECK (source IN ('CONVERSATIONAL_BUILD', 'FACTORY_CONFIG')),
-    configured_by    BIGINT       NOT NULL,
+    actor_type       VARCHAR(32)  NOT NULL CHECK (actor_type IN ('FACTORY_USER', 'PLATFORM_ADMIN')),
+    actor_id         BIGINT       NOT NULL,
+    configured_by    BIGINT,
     created_at       TIMESTAMP    NOT NULL,
     updated_at       TIMESTAMP    NOT NULL,
     deleted_at       TIMESTAMP

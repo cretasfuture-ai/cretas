@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
@@ -37,6 +39,22 @@ public class ProductEquipmentRequirement extends BaseEntity {
     @Column(name = "source", length = 32, nullable = false)
     private ProductionLineCapacityConfig.Source source;
 
-    @Column(name = "configured_by", nullable = false)
+    /** 谁配的 (工厂用户 / 平台管理员); 数字 id 只在各自命名空间内唯一。 */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "actor_type", length = 32, nullable = false)
+    private AuthenticatedActorType actorType;
+
+    @Column(name = "actor_id", nullable = false)
+    private Long actorId;
+
+    /** 只在工厂用户配置时有值 (平台 id 不进这一列)。 */
+    @Column(name = "configured_by")
     private Long configuredBy;
+
+    public void setActor(ActorRef actor) {
+        java.util.Objects.requireNonNull(actor, "Actor identity is required");
+        this.actorType = actor.type();
+        this.actorId = actor.id();
+        this.configuredBy = actor.factoryUserId();
+    }
 }
