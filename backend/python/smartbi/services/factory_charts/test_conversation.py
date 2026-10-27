@@ -8,8 +8,16 @@ from httpx import ASGITransport, AsyncClient
 
 from smartbi.api import financial_dashboard as api
 from smartbi.services.factory_charts import conversation
+from smartbi.services.factory_charts import conversation_store
 from smartbi.services.factory_charts.business_metrics import build as build_business_metrics
 from smartbi.services.factory_charts import cross_table as joined, engine
+
+
+@pytest.fixture(autouse=True)
+def isolated_conversation_store():
+    old = conversation_store.set_store_for_tests(conversation_store.MemoryConversationStore())
+    yield
+    conversation_store.set_store_for_tests(old)
 
 
 def _candidate(cid, family, chart_type='line', value='10'):
@@ -593,6 +601,14 @@ async def test_factory_analysis_reuses_trusted_candidates_and_context(monkeypatc
 
     monkeypatch.setattr(api, 'factory_recommendations', recommendations)
     monkeypatch.setattr(conversation, 'plan', planner)
+    releases = []
+    original_release = conversation.release_shared_context
+
+    async def tracked_release(context):
+        releases.append(context.context_id)
+        return await original_release(context)
+
+    monkeypatch.setattr(conversation, 'release_shared_context', tracked_release)
     app = FastAPI()
 
     @app.middleware('http')
@@ -620,6 +636,9 @@ async def test_factory_analysis_reuses_trusted_candidates_and_context(monkeypatc
             'question': '再看质量', 'contextId': context_id, 'source': 'upload', 'uploadId': 99,
         })
         assert switched.status_code == 403
+        assert releases == [context_id]
+        reclaimed = await conversation.claim_shared_context(context_id, ('F006', 1309, 'factory_super_admin'))
+        await conversation.release_shared_context(reclaimed)
 
 
 @pytest.mark.asyncio

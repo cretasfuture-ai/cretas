@@ -322,6 +322,52 @@ class FactoryErasurePostgresContractTest {
         assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isEqualTo(1);
     }
 
+    /**
+     * prod 2026-10-27: postgres 建的删前备份 schema (backup_f006_20261024) 没给应用账号 USAGE, 预演去数它, 当场
+     * 409「permission denied for schema」, 任何工厂都预演不了。SmartBI 这边测试用的就是非超级用户的应用账号。
+     */
+    @Test
+    void datedCopyTheAppAccountCannotReadIsListedAndExpiresWithRetention() throws Exception {
+        String unreadable = "backup_" + schema + "_20261024";
+        exec(smartbiAdmin, "CREATE SCHEMA " + unreadable + "; CREATE TABLE " + unreadable
+                + ".agg_copy (id int, factory_id varchar(64)); INSERT INTO " + unreadable + ".agg_copy VALUES (1, '" + FA + "')");
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        var preview = data().preview(OPERATOR, FA);
+        assertThat(preview.databases().get(1).unreadableCopies()).containsExactly(unreadable + ".agg_copy");
+        assertThat(preview.blockers()).isEmpty();
+        FactoryErasureService.Receipt receipt = erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, preview.previewId()));
+        assertThat(receipt.smartbi().copies()).anyMatch(c -> c.startsWith(unreadable + ".agg_copy") && c.contains("账号读不了")
+                && c.contains("20261024"));
+        // 账号碰不到这份副本: 行还在, 由 30 天清理 (backup-copy-retention.sh, postgres 身份) 带走
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + unreadable + ".agg_copy")).isEqualTo(1);
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".factories WHERE id = '" + FA + "'")).isZero();
+    }
+
+    @Test
+    void undatedCopyOrOtherSchemaTheAppAccountCannotReadBlocksErasure() throws Exception {
+        FactoryErasureService erasure = erasure();
+        long requestId = requestAndWait(erasure, true);
+        String[][] cases = {
+                {"backup_" + schema, "名字里又没有日期"},          // 像副本、没日期: 30 天清理认不出
+                {"oth_" + schema, "查不清有没有该厂的行"},          // 不像副本: 读不了就不知道里面是什么
+        };
+        for (String[] c : cases) {
+            exec(smartbiAdmin, "CREATE SCHEMA " + c[0] + "; CREATE TABLE " + c[0] + ".t (id int, factory_id varchar(64))");
+            var preview = data().preview(OPERATOR, FA);
+            assertThat(preview.blockers()).as(c[0]).anyMatch(b -> b.contains(c[1]) && b.contains(c[0] + ".t"));
+            assertThatThrownBy(() -> erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, preview.previewId())))
+                    .as(c[0])
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains(c[1]));
+            assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isEqualTo(1);
+            exec(smartbiAdmin, "DROP SCHEMA " + c[0] + " CASCADE");
+        }
+        // 归因对照: 两个 schema 都移走后, 同一个申请就能删
+        long previewId = data().preview(OPERATOR, FA).previewId();
+        erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, previewId));
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".users WHERE factory_id = '" + FA + "'")).isZero();
+    }
+
     @Test
     void concurrentOperationOnTheSameFactoryIsRefused() throws Exception {
         FactoryErasureService erasure = erasure();

@@ -1514,4 +1514,74 @@ class ClerkProcessEntryServiceImplTest {
         assertThat(anyWipUnitPriceNull)
                 .as("未计价 WIP 产出批 unitPrice 诚实 null (honest-null 复用链)").isTrue();
     }
+
+    /**
+     * T18 — T17 的 honest-null 必须扛过实体的 {@code @PreUpdate}。
+     *
+     * <p>T17 在 Mockito 里断言 totalCost==null 是绿的, 但真实保存时 {@link ProductionBatch#calculateMetrics()}
+     * 会用 material/labor 分项重新求和, 把「未知」改回「原料按 0 计的已知数」(S3-13 生产实测: 本厂猪大骨
+     * 无单价, 批次 10998 total_cost=114.80 而 unit_cost 为空)。这里直接调用钩子, 与每次 save 时一致。
+     */
+    @Test
+    @DisplayName("T18: 未计价源批次在 @PreUpdate (calculateMetrics) 之后仍是成本未知")
+    void t18_uncostedBatchStaysUnknownAfterEntityUpdateHook() {
+        stubNoIdempotency("T18-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch rawUncosted = rawMb("RAW-T18-U", FACTORY, null);
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T18-U", FACTORY)).thenReturn(Optional.of(rawUncosted));
+        BatchEntry finished = finishedBatch("FIN-T18", "PT-PRODUCT", List.of(
+                rawStep(1, "12", "10", List.of(rawInput("RAW-T18-U", "12")))));
+
+        service.recordChain(FACTORY, PLAN_ID, req("T18-KEY", List.of(finished)), OPERATOR_ID);
+
+        ArgumentCaptor<ProductionBatch> cap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(batchRepo, atLeastOnce()).save(cap.capture());
+        ProductionBatch fin = cap.getAllValues().get(cap.getAllValues().size() - 1);
+        assertThat(fin.getTotalCost()).as("物化时已诚实置 null (T17 口径)").isNull();
+        assertThat(fin.getMaterialCost()).as("已知分项照常记录 (原料按 0 计入分项)").isNotNull();
+
+        fin.calculateMetrics();   // = 每次 save 的 @PreUpdate
+
+        assertThat(fin.getTotalCost()).as("原料无单价 → 批次总成本仍未知, 不能被分项求和改回已知").isNull();
+        assertThat(fin.getUnitCost()).as("原料无单价 → 单位成本仍未知").isNull();
+    }
+
+    /**
+     * T19 — 对照: 客户自带料 (CUSTOMER_OWNED) 没有单价, 对本厂是「已知 0」(加工口径), 不是未知。
+     * S3-14 客供卤牛肉 PB-…-88763: 客户猪大骨无单价, 成品成本 = 人工 + 包材, 不能因此变成未知。
+     */
+    @Test
+    @DisplayName("T19: 客户自带料无单价 → 按已知 0 计, 批次成本仍完整")
+    void t19_customerOwnedUnpricedMaterialIsKnownZero() {
+        stubNoIdempotency("T19-KEY");
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+
+        MaterialBatch customerRaw = rawMb("RAW-T19-C", FACTORY, null);
+        customerRaw.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED);
+        when(materialBatchRepo.findByIdAndFactoryId("RAW-T19-C", FACTORY)).thenReturn(Optional.of(customerRaw));
+        BatchEntry finished = finishedBatch("FIN-T19", "PT-PRODUCT", List.of(
+                rawStep(1, "3.2", "16", List.of(rawInput("RAW-T19-C", "3.2")))));
+
+        service.recordChain(FACTORY, PLAN_ID, req("T19-KEY", List.of(finished)), OPERATOR_ID);
+
+        ArgumentCaptor<ProductionBatch> cap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(batchRepo, atLeastOnce()).save(cap.capture());
+        ProductionBatch fin = cap.getAllValues().get(cap.getAllValues().size() - 1);
+        fin.calculateMetrics();
+        assertThat(fin.getCostIncomplete()).as("客户料按已知 0, 不标不完整").isFalse();
+        assertThat(fin.getTotalCost()).as("成本已知 (客户料 0 + 其余分项)").isNotNull();
+    }
 }

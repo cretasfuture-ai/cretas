@@ -82,7 +82,7 @@ public class FactoryChartAnalysisController {
                     java.util.Optional.empty(), Instant.now().plusSeconds(90)));
             if (result.status() != ToolExecutionStatus.SUCCEEDED || !result.payload().isObject()) {
                 var relayed = failureRelay.consume(requestId);
-                if (relayed.isPresent() && java.util.Set.of(403, 410, 422)
+                if (relayed.isPresent() && java.util.Set.of(403, 409, 410, 422)
                         .contains(relayed.get().statusCode())) {
                     throw new BusinessException(
                             relayed.get().statusCode(), relayed.get().message());

@@ -38,8 +38,10 @@ export function buildFactoryChartHtml(option: Record<string, unknown>, nonce = '
   const serialized = escapeJsonForScript(option);
   const safeEngine = engineScript.replace(/<\/script/gi, '<\\/script');
   return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'"/><meta name="viewport" content="width=device-width,initial-scale=1"/><style>html,body,#chart{margin:0;width:100%;height:100%;background:#fff;overflow:hidden}</style></head><body><div id="chart"></div><script>${safeEngine}</script><script>(function(){
-  var option=${serialized}, renderNonce=${JSON.stringify(nonce)};
+  var option=normalizeValueAxes(${serialized}), renderNonce=${JSON.stringify(nonce)};
   var chart;
+  function normalizeValueAxis(axis){if(!axis||typeof axis!=='object'||axis.type!=='value')return axis;var axisLabel=axis.axisLabel&&typeof axis.axisLabel==='object'?axis.axisLabel:{};return Object.assign({},axis,{axisLabel:Object.assign({},axisLabel,{hideOverlap:true})});}
+  function normalizeValueAxes(value){var out=Object.assign({},value);['xAxis','yAxis'].forEach(function(key){var axis=out[key];if(Array.isArray(axis))out[key]=axis.map(normalizeValueAxis);else if(axis&&typeof axis==='object')out[key]=normalizeValueAxis(axis);});return out;}
   function post(message){if(window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify(message));}}
   ${FACTORY_CHART_RUNTIME}
   function resolve(value,depth){if(depth>20)return value;if(typeof value==='string'){if(value.indexOf('__FMT__')===0){var f=FMT[value.slice(7)];if(!f)throw new Error('不支持的图表格式化标记：'+value);return f;}if(value.indexOf('__ANIM__')===0){var a=ANIM[value.slice(8)];if(!a)throw new Error('不支持的图表动画标记：'+value);return a;}return value;}if(Array.isArray(value))return value.map(function(v){return resolve(v,depth+1);});if(value&&typeof value==='object'){var out={};Object.keys(value).forEach(function(k){out[k]=resolve(value[k],depth+1);});return out;}return value;}
