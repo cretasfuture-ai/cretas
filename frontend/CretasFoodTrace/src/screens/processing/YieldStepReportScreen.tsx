@@ -15,7 +15,9 @@ import MaterialBatchPicker, {
   MaterialBatchPickerValidation,
   MaterialBatchRef,
 } from '../../components/processing/MaterialBatchPicker';
-import WipBatchPicker, { WipSelection } from '../../components/processing/WipBatchPicker';
+import WipBatchPicker, {
+  WipSelection, wipFreeQuantity, wipPendingQuantity, wipQcBlockReason,
+} from '../../components/processing/WipBatchPicker';
 import BlendRatioCard from '../../components/processing/BlendRatioCard';
 import {
   evaluateBlend,
@@ -24,13 +26,18 @@ import {
   blendRatioPayload,
   type BlendMaterialOption,
 } from '../../utils/blendRatio';
+import { isProcessSecretHidden } from '../../utils/processSecretField';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
+import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
+import { buildCcpReadings, ccpSubmitBlockReason, CcpLoadStatus } from '../../components/processing/ccpReadings';
+import type { CcpStepCheckpoint } from '../../services/api/ccpApi';
 import {
   yieldReportApi,
   WorkProcessTask,
   BatchYieldDTO,
   StepYieldDTO,
   YieldReportRequest,
+  YieldReportResult,
   YieldLimitsDTO,
   OutputOptionItem,
   SemiFinishedInventoryItem,
@@ -677,6 +684,7 @@ const YieldStepReportScreen: React.FC = () => {
           materialTypeId: option.materialTypeId,
           materialName: option.materialName,
           inputShareRatio: option.inputShareRatio ?? null,
+          inputShareHidden: isProcessSecretHidden(option, 'inputShareRatio'),
         });
       }
       return next;
@@ -732,7 +740,7 @@ const YieldStepReportScreen: React.FC = () => {
   // 是否超出可领量 (防呆: 红框 + 禁提交)
   const wipPickOverLimit = selectedWipItem != null
     && wipPickQty !== ''
-    && parseFloat(wipPickQty) > (selectedWipItem.availableQuantity ?? 0);
+    && parseFloat(wipPickQty) > wipFreeQuantity(selectedWipItem);   // 待检的那部分不能领 (缺口 11)
 
   const currentTask = tasks[currentStepIndex] ?? null;
   const totalSteps = tasks.length;
@@ -757,6 +765,41 @@ const YieldStepReportScreen: React.FC = () => {
   const isSentinelMaterial = currentTask?.workProcessId === SENTINEL_MATERIAL_INPUT;
   const isSentinelOutput = currentTask?.workProcessId === SENTINEL_FINAL_OUTPUT;
   const isSentinelBatch = isSentinelMaterial || isSentinelOutput;
+
+  // ── 缺口 13 CCP: 本道挂了关键控制点 → 完工出成前必须录实测值, 随报工请求一起提交 (同一事务) ──
+  // 加载中 / 失败都挡提交 (fail-closed): 不知道要不要录, 就不能当成不用录。
+  const [ccpStatus, setCcpStatus] = useState<CcpLoadStatus>('loading');
+  const [ccpCheckpoints, setCcpCheckpoints] = useState<CcpStepCheckpoint[]>([]);
+  const [ccpValues, setCcpValues] = useState<Record<number, string>>({});
+  const handleCcpLoaded = useCallback((status: CcpLoadStatus, cps: CcpStepCheckpoint[]) => {
+    setCcpStatus(status);
+    setCcpCheckpoints(cps);
+  }, []);
+  const handleCcpChange = useCallback((checkpointId: number, text: string) => {
+    setCcpValues((prev) => ({ ...prev, [checkpointId]: text }));
+  }, []);
+  useEffect(() => {
+    // 换道: 上一道填的 CCP 值不能带到下一道
+    setCcpValues({});
+    setCcpStatus('loading');
+    setCcpCheckpoints([]);
+  }, [currentTask?.id]);
+  const ccpBlockReason = ccpSubmitBlockReason(ccpStatus, ccpCheckpoints, ccpValues);
+
+  /** 完工出成请求里的 CCP 实测值 (本道没挂 CCP → undefined, 请求体不带这个字段)。 */
+  const ccpReadingsForRequest = useCallback((): YieldReportRequest['ccpReadings'] => (
+    currentTask?.workProcessId && ccpCheckpoints.length > 0
+      ? buildCcpReadings(ccpCheckpoints, ccpValues)
+      : undefined
+  ), [currentTask, ccpCheckpoints, ccpValues]);
+  /** 报工成功之后: 清掉本道填的 CCP 值; 后端回报有偏离 → 告诉操作员这批已转待检。 */
+  const afterCcpReport = useCallback((ccp: YieldReportResult['ccp']) => {
+    if (!ccp) return;
+    setCcpValues({});
+    if (ccp.deviationCount > 0) {
+      appAlert('关键控制点超出范围', ccp.message);
+    }
+  }, []);
 
   // 当前道的 yield step (从 getYield 取; 无报工时不存在 → undefined → AWAITING_INPUT)
   const currentStepYield = useMemo<StepYieldDTO | undefined>(() => {
@@ -1369,7 +1412,7 @@ const YieldStepReportScreen: React.FC = () => {
         return;
       }
       if (wipPickOverLimit) {
-        appAlert('领用数量超限', `最多可领 ${selectedWipItem.availableQuantity} ${selectedWipItem.unit ?? 'kg'}, 请调整数量`);
+        appAlert('领用数量超限', `最多可领 ${wipFreeQuantity(selectedWipItem)} ${selectedWipItem.unit ?? 'kg'}, 请调整数量`);
         return;
       }
       if (materialBatchValidation.hasOverLimit) {
@@ -1662,6 +1705,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
+      afterCcpReport(res.data.ccp);
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
@@ -1679,7 +1723,7 @@ const YieldStepReportScreen: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [batchId, refetchYield, outUnit]);
+  }, [batchId, refetchYield, outUnit, afterCcpReport]);
 
   // 同单未完结续报: markComplete 控制本次 OUTPUT 是否完工 (true=标记完工锁出成率; false=保存留单继续产出)。
   const doSubmitOutput = useCallback(async (markComplete: boolean) => {
@@ -1689,6 +1733,7 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
+    // CCP: 按钮已置灰 + 界面已写明缺什么 + 后端错误码兜底 (CCP_READING_MISSING)
     const output = parseFloat(outputQty);
     if (Number.isNaN(output) || output <= 0) {
       appAlert('请填写本道产出量', '产出量必须大于 0');
@@ -1728,6 +1773,8 @@ const YieldStepReportScreen: React.FC = () => {
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
       // T161: per-photo annotation (仅含已标注的照片)
       ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
+      // 缺口 13: CCP 实测值随产出一起提交 (后端同一事务落库; 缺值整笔拒绝, 产出不入账)
+      ...(ccpReadingsForRequest() ? { ccpReadings: ccpReadingsForRequest() } : {}),
     };
     setSubmitting(true);
     try {
@@ -1738,6 +1785,7 @@ const YieldStepReportScreen: React.FC = () => {
       }
       setLastAlert(res.data.alert ?? null);
       await refetchYield();
+      afterCcpReport(res.data.ccp);
       setEvidencePhotos([]);
       maybeShowBalanceWarning(res.data.balanceWarning);
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
@@ -1804,7 +1852,7 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
-      taskOptions, semiQtyByCode, buildPhotoAnnotations]);
+      taskOptions, semiQtyByCode, buildPhotoAnnotations, ccpReadingsForRequest, afterCcpReport]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {
@@ -2789,10 +2837,15 @@ const YieldStepReportScreen: React.FC = () => {
                   ) : (
                     availableWipList.map((item) => {
                       const isSelected = selectedWipItem?.id === item.id;
+                      // 质检放行 (缺口 11): 按数量 —— 只算放行了的部分; 整行待检 / 不合格的灰显并写原因
+                      const qcBlock = wipQcBlockReason(item);
+                      const pendingQty = wipPendingQuantity(item);
                       return (
                         <TouchableRipple
                           key={item.id}
                           style={[styles.sp3Item, isSelected && styles.sp3ItemSelected]}
+                          disabled={qcBlock != null}
+                          testID={`sp3-wip-item-${item.intermediateBatchNo}`}
                           onPress={() => {
                             setSelectedWipItem(isSelected ? null : item);
                             setWipPickQty('');
@@ -2803,8 +2856,13 @@ const YieldStepReportScreen: React.FC = () => {
                               {item.productTypeName ?? '—'} · {item.intermediateBatchNo}
                             </Text>
                             <Text style={styles.sp3ItemAvail}>
-                              可用 {item.availableQuantity} {item.unit ?? 'kg'}
+                              可用 {wipFreeQuantity(item)} {item.unit ?? 'kg'}
                             </Text>
+                            {qcBlock != null ? (
+                              <Text style={styles.sp3ItemAvail}>{qcBlock}</Text>
+                            ) : pendingQty > 0 ? (
+                              <Text style={styles.sp3ItemAvail}>另有 {pendingQty} {item.unit ?? 'kg'} 待检，质检员放行后才能领</Text>
+                            ) : null}
                           </>
                         </TouchableRipple>
                       );
@@ -2815,15 +2873,15 @@ const YieldStepReportScreen: React.FC = () => {
                     <View style={styles.sp3PickWrap}>
                       <Text style={styles.sp3PickHint}>
                         已选: {selectedWipItem.productTypeName} · {selectedWipItem.intermediateBatchNo}
-                        {'\n'}可领余额 {selectedWipItem.availableQuantity} {selectedWipItem.unit ?? 'kg'}
+                        {'\n'}可领余额 {wipFreeQuantity(selectedWipItem)} {selectedWipItem.unit ?? 'kg'}
                       </Text>
                       <YieldQuantityInput
                         label="领用数量"
                         value={wipPickQty}
                         onChangeText={setWipPickQty}
                         unit={selectedWipItem.unit ?? 'kg'}
-                        max={selectedWipItem.availableQuantity}
-                        maxHint={`最多可领 ${selectedWipItem.availableQuantity} ${selectedWipItem.unit ?? 'kg'}`}
+                        max={wipFreeQuantity(selectedWipItem)}
+                        maxHint={`最多可领 ${wipFreeQuantity(selectedWipItem)} ${selectedWipItem.unit ?? 'kg'}`}
                         disabled={submitting}
                         calculatorMode
                         defaultTrayWeighing={false}
@@ -2832,7 +2890,7 @@ const YieldStepReportScreen: React.FC = () => {
                       />
                       {wipPickOverLimit ? (
                         <Text style={styles.sp3OverLimit}>
-                          超出可领余额 {selectedWipItem.availableQuantity} {selectedWipItem.unit ?? 'kg'}, 请调整数量
+                          超出可领余额 {wipFreeQuantity(selectedWipItem)} {selectedWipItem.unit ?? 'kg'}, 请调整数量
                         </Text>
                       ) : null}
                     </View>
@@ -3331,12 +3389,27 @@ const YieldStepReportScreen: React.FC = () => {
                 </View>
               ) : null}
 
+              {/* 缺口 13: 本道挂了关键控制点才出现; 未填完 / 未加载出来时下面两个按钮不可点 */}
+              {/* key: 换一道 (哪怕同一工序) 就重新挂载重新加载 —— 父组件换道时把 CCP 状态重置成「加载中」,
+                  同工序时 workProcessId 不变, 不重挂就不会再回报「加载完」, 按钮会一直卡在加载中 (审查中 9) */}
+              <CcpReadingsSection
+                key={currentTask?.id ?? 'no-task'}
+                workProcessId={currentTask?.workProcessId}
+                values={ccpValues}
+                onChangeValue={handleCcpChange}
+                onLoaded={handleCcpLoaded}
+                disabled={submitting}
+              />
+              {ccpBlockReason && ccpCheckpoints.length > 0 ? (
+                <Text style={styles.ccpBlockText} testID="ccp-block-reason">{ccpBlockReason}</Text>
+              ) : null}
+
               {/* 同单未完结续报: 留单继续 (保存本次产出, 不锁出成率) — 灰底次按钮 */}
               <NeoButton
                 variant="outline"
                 size="large"
                 onPress={handleSavePartialOutput}
-            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading || !!ccpBlockReason}
                 loading={submitting}
                 style={styles.blockBtn}
                 testID="yield-save-partial-output-btn"
@@ -3348,7 +3421,7 @@ const YieldStepReportScreen: React.FC = () => {
                 variant="primary"
                 size="large"
                 onPress={handleSubmitOutput}
-            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading}
+            disabled={submitting || !taskUnitsReady || outputOverHardCap || evidenceUploading || !!ccpBlockReason}
                 loading={submitting}
                 style={styles.blockBtn}
                 testID="yield-submit-output-btn"
@@ -3597,6 +3670,7 @@ const styles = StyleSheet.create({
   summaryLine: { fontSize: 16, color: '#303133', fontWeight: '600' },
   // 告警 / 提示条
   alertBanner: { backgroundColor: '#FDF6EC', borderRadius: 8, padding: 12, marginTop: 4 },
+  ccpBlockText: { fontSize: 14, color: '#F56C6C', fontWeight: '600', marginBottom: 8, textAlign: 'center' },
   alertText: { fontSize: 14, color: '#E6A23C', fontWeight: '500' },
   materialAdvisoryCard: {
     backgroundColor: '#FFF7ED',

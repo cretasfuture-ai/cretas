@@ -7,6 +7,12 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Search, Refresh, Edit, Delete } from '@element-plus/icons-vue';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
+import {
+  PROCESS_SECRET_LABEL,
+  isProcessSecretHidden,
+  isProcessSecretRow,
+  processSecretMessage,
+} from '@/utils/processSecretField';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -234,24 +240,36 @@ async function handleDelete(row: TableRow) {
         </el-table-column>
         <el-table-column prop="conversionRate" label="转换率" width="120" align="center">
           <template #default="{ row }">
-            {{ (row.conversionRate * 100).toFixed(1) }}%
+            <el-tooltip v-if="isProcessSecretHidden(row, 'conversionRate')" :content="processSecretMessage(row)">
+              <el-tag type="info" effect="plain">{{ PROCESS_SECRET_LABEL }}</el-tag>
+            </el-tooltip>
+            <template v-else>{{ (row.conversionRate * 100).toFixed(1) }}%</template>
           </template>
         </el-table-column>
         <el-table-column prop="wastageRate" label="损耗率" width="120" align="center">
           <template #default="{ row }">
-            {{ ((row.wastageRate || 0) * 100).toFixed(1) }}%
+            <el-tooltip v-if="isProcessSecretHidden(row, 'wastageRate')" :content="processSecretMessage(row)">
+              <el-tag type="info" effect="plain">{{ PROCESS_SECRET_LABEL }}</el-tag>
+            </el-tooltip>
+            <template v-else>{{ ((row.wastageRate || 0) * 100).toFixed(1) }}%</template>
           </template>
         </el-table-column>
         <el-table-column prop="notes" label="备注" min-width="200" show-overflow-tooltip />
         <el-table-column prop="updatedAt" label="更新时间" width="180" />
         <el-table-column label="操作" width="150" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button v-if="canWrite" type="primary" link size="small" :icon="Edit" @click="handleEdit(row)">
-              编辑
-            </el-button>
-            <el-button v-if="canWrite" type="danger" link size="small" :icon="Delete" @click="handleDelete(row)">
-              删除
-            </el-button>
+            <!-- 工艺保密: 转换率已隐藏的行不能在这里改 (否则会把空值 / 0 存回去), 需保密负责人授权 -->
+            <el-tooltip v-if="canWrite && isProcessSecretRow(row)" :content="processSecretMessage(row)">
+              <el-tag type="info" effect="plain" size="small">需授权才能修改</el-tag>
+            </el-tooltip>
+            <template v-else>
+              <el-button v-if="canWrite" type="primary" link size="small" :icon="Edit" @click="handleEdit(row)">
+                编辑
+              </el-button>
+              <el-button v-if="canWrite" type="danger" link size="small" :icon="Delete" @click="handleDelete(row)">
+                删除
+              </el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>

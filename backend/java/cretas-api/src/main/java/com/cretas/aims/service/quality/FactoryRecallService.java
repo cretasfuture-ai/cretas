@@ -164,7 +164,9 @@ public class FactoryRecallService {
         }
 
         FinishedGoodsBatch finishedGoodsBatch = lockSourceFinishedGoods(factoryId, batch);
-        if (FinishedGoodsBatch.Status.AVAILABLE.equals(finishedGoodsBatch.getStatus())
+        // 缺口 11: 待检批次同样冻结 —— 召回中的批次不能事后被放行成可售。
+        if ((FinishedGoodsBatch.Status.AVAILABLE.equals(finishedGoodsBatch.getStatus())
+                || FinishedGoodsBatch.Status.PENDING_INSPECTION.equals(finishedGoodsBatch.getStatus()))
                 && physicalQuantity(finishedGoodsBatch).signum() > 0) {
             finishedGoodsBatch.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
             finishedGoodsBatchRepository.save(finishedGoodsBatch);

@@ -333,7 +333,7 @@ describe('枚举中文覆盖 (对着 Java 源文件断言)', () => {
     for (const code of ['PENDING_POSTING', 'PENDING_CLEARING', 'PENDING_WAREHOUSE_RECEIPT', 'POSTED', 'POSTED_WITH_TOLERANCE']) {
       expect(PRODUCTION_SETTLEMENT_POSTING_STATUS_LABELS[code], `postingStatus 缺 ${code}`).toBeTruthy();
     }
-    for (const code of ['AVAILABLE', 'DEFECTIVE', 'DEPLETED']) {
+    for (const code of ['AVAILABLE', 'DEFECTIVE', 'DEPLETED', 'PENDING_INSPECTION']) {
       expect(FINISHED_GOODS_BATCH_STATUS_LABELS[code], `成品批次状态缺 ${code}`).toBeTruthy();
     }
     // transfer_diff_records.status —— 实体默认值 "PENDING" + TransferDiffServiceImpl 的两个 setStatus

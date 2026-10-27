@@ -356,6 +356,21 @@ public class ProductType extends BaseEntity {
 
     // ==================== End 回料纯度 ====================
 
+    /**
+     * 质检放行 (缺口 11, owner 2026-10-25): 本产品/半成品的产出是否「需检」。
+     *
+     * <p>{@code true} ⇒ 生产产出默认<b>待检</b>: 半成品待检时下道不能领用, 成品待检时不能分配/发货,
+     * 放行时记录结论、放行人、放行时间 (见 {@code QcReleaseService})。
+     * DB 侧 {@code NOT NULL DEFAULT FALSE} (V20261103_88) = 存量全部不受影响。
+     *
+     * <p>⚠️ 初始值必须与 DB 默认值同步为 FALSE —— 见上面 {@link #acceptsRework} 那次 prod hotfix:
+     * Hibernate 会把 null 显式写进 INSERT, DB 默认值不生效, 直接撞 NOT NULL。
+     */
+    // 数据库层默认值与 V20261103_88 一致 (BOOLEAN NOT NULL DEFAULT FALSE): 由 Entity 生成表结构的测试库、
+    // 以及任何不经过 JPA 的 INSERT (JDBC / SQL 夹具) 不写这一列时落 FALSE, 不撞 NOT NULL。
+    @Column(name = "inspection_required", nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private Boolean inspectionRequired = Boolean.FALSE;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = true;
     @Column(name = "notes", columnDefinition = "TEXT")

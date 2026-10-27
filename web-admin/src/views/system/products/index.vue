@@ -154,6 +154,8 @@ interface ProductType {
   taxIncludedUnitPrice?: number;
   /** SP4-A8: 税率 TAX_9 / TAX_13 / null=未配置 */
   taxRate?: 'TAX_9' | 'TAX_13' | null;
+  /** 缺口 11 质检放行: 需检 —— 产出默认待检, 放行后才能被下道领用 / 分配发货 */
+  inspectionRequired?: boolean;
   [key: string]: unknown;
 }
 
@@ -495,6 +497,10 @@ function handleCategoryChange() {
 }
 
 const isSemiFinishedSku = computed(() => formData.productCategory === 'SEMI_FINISHED');
+// 质检放行开关的说明随大类变 (防呆 Rule 1: 开之前就告诉他开了会怎样)
+const inspectionRequiredTip = computed(() => (isSemiFinishedSku.value
+  ? '开启后：这个半成品每次产出先进入「待检」，质检员在「质量管理 → 质检放行」放行后，下道工序才能领用'
+  : '开启后：这个产品每次生产入库先进入「待检」，质检员在「质量管理 → 质检放行」放行后，才能分配批次和发货'));
 
 function applyCategoryUnitContract(): void {
   if (isSemiFinishedSku.value) {
@@ -929,6 +935,7 @@ function resetForm() {
   formData.standardCost = null;
   formData.targetGrossMargin = null;
   formData.targetGrossMarginPercent = null;
+  formData.inspectionRequired = false;
   netContentAmount.value = null;
   netContentUnit.value = 'g';
   previousNetContentUnit = 'g';
@@ -973,6 +980,7 @@ async function handleEdit(row: ProductType) {
       product.netContentUnit,
     );
     formData.standardCost = product.standardCost ?? null;
+    formData.inspectionRequired = product.inspectionRequired === true;
     formData.targetGrossMargin = product.targetGrossMargin ?? null;
     formData.targetGrossMarginPercent = product.targetGrossMargin != null
       ? Number((Number(product.targetGrossMargin) * 100).toFixed(2))
@@ -1107,6 +1115,8 @@ async function handleSubmit() {
       level1Unit: formData.level1Unit ?? null,
       boxConversionCoefficient: formData.boxConversionCoefficient ?? null,
       packagingSpecs: submittedPackagingSpecs,
+      // 质检放行: 显式发 true/false (后端 null = 不改, 编辑时关掉开关必须真的关掉)
+      inspectionRequired: formData.inspectionRequired === true,
       ...(!isSemiFinishedSku.value ? {
         netContentQuantity: Number(netContentAmount.value),
         netContentUnit: netContentUnit.value,
@@ -2006,6 +2016,12 @@ watch(aiProductDialogVisible, (visible) => {
 
         <el-form-item label="备注" prop="notes">
           <el-input v-model="formData.notes" type="textarea" :rows="3" placeholder="请输入备注信息" />
+        </el-form-item>
+
+        <el-form-item label="质检放行">
+          <el-switch v-model="formData.inspectionRequired" active-text="需检" inactive-text="不需检"
+            data-testid="product-inspection-required" />
+          <div class="form-tip">{{ inspectionRequiredTip }}</div>
         </el-form-item>
 
         <!-- ========== 高级设置 (T157): 非必要项收起, 内分 关联客户/温区/图片 + 成本 + 产能 + 库存 ========== -->

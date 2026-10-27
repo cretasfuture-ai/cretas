@@ -103,6 +103,16 @@ public class HaccpCheckpoint extends BaseEntity {
     @Column(name = "record_keeping", columnDefinition = "TEXT")
     private String recordKeeping;
 
+    /**
+     * 挂在哪个工序上 (缺口 13, V20261103_89): {@code work_processes.id}。
+     *
+     * <p>Workflow 画布的工序节点引用的就是 {@code data.workProcessId} —— 挂在工序上 = 画布里所有用到
+     * 这个工序的节点报工时都要录这个 CCP (App 报工按 {@code WorkProcessTask.workProcessId},
+     * web 逐道录入按 Workflow 运行时快照的 {@code workProcessId})。{@code null} = 未挂工序, 只做台账。
+     */
+    @Column(name = "work_process_id", length = 50)
+    private String workProcessId;
+
     /** 是否启用 — false 时不可用于新监控记录, 但保留历史引用. */
     @Column(name = "active", nullable = false)
     @Builder.Default

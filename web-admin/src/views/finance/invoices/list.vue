@@ -17,6 +17,7 @@ import type { TableRow } from '@/types/api';
 //   ⇒ 抽屉**不注册任何路由** —— 物理上进不了侧边栏, URL 也始终停在 /finance/*。
 import OrderPeekDrawer from '../components/OrderPeekDrawer.vue';
 import InvoicePdfDownload from '@/components/finance/InvoicePdfDownload.vue';
+import AiUploadHint from '@/components/common/AiUploadHint.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -449,6 +450,7 @@ function peekOrder(id: string) {
           >
             <el-button type="primary">选择 PDF 文件</el-button>
             <template #tip>
+              <AiUploadHint kind="pdf" />
               <div style="color:#999;font-size:12px">仅 PDF, 上传后销售可从 SO 详情下载. 系统将自动 OCR 识别金额, 与申请金额对比.</div>
             </template>
           </el-upload>

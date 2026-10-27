@@ -29,6 +29,7 @@ import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEdito
 import { usePinyinFilter } from './workflow/pinyinInitials';
 import { isRawMaterialOption } from './workflow/rawMaterialCatalog';
 import { canWriteProductProcess } from '../products/productWriteGates';
+import { PROCESS_SECRET_LABEL, isProcessSecretHidden } from '@/utils/processSecretField';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -1063,6 +1064,8 @@ const costDialogVisible = ref(false);
 const costSaving = ref(false);
 const costEditId = ref<number | null>(null);
 const costEditName = ref('');
+/** 工艺保密: 该产品的标准出成率对当前账号隐藏 */
+const costYieldHidden = ref(false);
 // 后端 update() @Valid 要求 productTypeId + workProcessId 非空 (即便 partial update), 否则 400。
 const costEditProductTypeId = ref('');
 const costEditWorkProcessId = ref('');
@@ -1082,6 +1085,7 @@ function openCostConfig(item: any) {
   costEditName.value = item.processName || item.workProcessId;
   costEditProductTypeId.value = item.productTypeId || selectedProductId.value || '';
   costEditWorkProcessId.value = item.workProcessId || '';
+  costYieldHidden.value = isProcessSecretHidden(item, 'standardYieldRate');
   costForm.value = {
     defaultCostCategory: item.defaultCostCategory || '',
     auxAllocMethod: item.auxAllocMethod || '',
@@ -1619,7 +1623,9 @@ async function saveCustomFieldConfig() {
         </el-form-item>
         <el-divider content-position="left" style="margin: 4px 0 12px">辅料标准单价对账 (抓多投/误差)</el-divider>
         <el-form-item label="标准出成率">
-          <el-input-number v-model="costForm.standardYieldPct" :min="0" :max="300" :precision="2"
+          <!-- 工艺保密: 无授权时后端不下发标准出成率; 不给输入框, 免得把空当成「没填」再去填 -->
+          <el-tag v-if="costYieldHidden" type="info" effect="plain">{{ PROCESS_SECRET_LABEL }}（需保密负责人授权）</el-tag>
+          <el-input-number v-else v-model="costForm.standardYieldPct" :min="0" :max="300" :precision="2"
             controls-position="right" placeholder="如 85 = 85%" style="width: 200px" />
           <span style="margin-left: 8px; color: #909399; font-size: 12px">% (配方率, 投料对账基准; 保水工序可 &gt;100)</span>
         </el-form-item>

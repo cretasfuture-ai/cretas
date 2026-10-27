@@ -31,6 +31,9 @@ public class BomExpansionTool extends AbstractBusinessTool {
     @Autowired
     private BomExpansionService bomExpansionService;
 
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Override
     public String getToolName() {
         return "bom_expansion_calculate";
@@ -89,6 +92,13 @@ public class BomExpansionTool extends AbstractBusinessTool {
 
         if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("请提供有效的生产数量");
+        }
+
+        // 工艺保密: 数量由调用方随意填 (填 1 就是单位用量), 不是「本单总量」, 无完整查看权一律不算
+        if (!processSecretGuard.permitsProduct(factoryId, productTypeId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL, "AI tool bom_expansion_calculate")) {
+            return buildSimpleResult(com.cretas.aims.security.ProcessSecretResponseAdvice.RESTRICTED_MESSAGE,
+                    Map.of("productTypeId", productTypeId, "processSecret", Map.of("visibility", "RESTRICTED")));
         }
 
         // Step 1: BOM展开

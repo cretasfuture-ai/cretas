@@ -3561,7 +3561,8 @@ public class SalesServiceImpl implements SalesService {
                 if (records.isEmpty()) {
                     unmonitored.add(batchNumber);
                 } else if (records.stream().anyMatch(
-                        com.cretas.aims.entity.foodsafety.HaccpMonitoringRecord::isDeviation)) {
+                        // 缺口 13: 已填纠偏措施并标记处理的偏离不再挡; 未处理的照旧硬拦 (存量偏离均未处理 = 不放松)
+                        com.cretas.aims.service.foodsafety.ccp.CcpOpenDeviationLookup::isOpenDeviation)) {
                     deviating.add(batchNumber);
                 }
             }
@@ -3575,7 +3576,7 @@ public class SalesServiceImpl implements SalesService {
             throw new BusinessException(409,
                     "以下批次的 HACCP 关键控制点存在偏离，不可发货：" + String.join("、", deviating))
                     .withCode("HACCP_DEVIATION_BLOCKS_RELEASE")
-                    .withHint("请先在「质量管理 → HACCP 监控」中处理这些批次的偏离记录，"
+                    .withHint("请先在「质量管理 → CCP 监控记录」中填写纠偏措施、处理这些批次的偏离，"
                             + "或改分配其他批次后重新确认发货");
         }
     }

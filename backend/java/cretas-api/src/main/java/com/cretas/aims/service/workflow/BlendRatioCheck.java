@@ -80,6 +80,65 @@ public class BlendRatioCheck {
     @Autowired(required = false)
     private MaterialBatchRepository materialBatchRepository;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionPlanRepository planRepository;
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository batchRepository;
+
+    /**
+     * 工艺保密: 超差提示里的「配方 30%」就是配比。只有能看完整工艺的人 (或产品不受保护) 才在提示里给配方份额,
+     * 其余人只看到料名、实际份额和偏高 / 偏低 —— 后端照常按真实份额裁决。只在真超差时才判 (免得每次报工都记审计)。
+     *
+     * <p>多产出计划的 productTypeId 是原料锚点, 它的 id 就是原料 id (名字前缀 {@code __RAW_WORKFLOW_OWNER__}
+     * 不在 id 上, 独立审查第三轮 A): 只看它会把受保护成品当成不受保护。所以按计划牵涉的全部产品判,
+     * 任一受保护且无权即不给; 有计划却查不到 (已删 / 他厂) 时, 本厂有保密产品就不给。
+     */
+    boolean revealRecipeShares(String factoryId, String planId, String productTypeId,
+                               BlendRatioDeviation evaluation) {
+        if (evaluation == null || !STATUS_OVER_PENDING.equals(evaluation.getStatus())) return true;
+        if (processSecretGuard == null) return true;
+        if (UNRESOLVED_PLAN.equals(planId)) return !processSecretGuard.factoryHasProtectedProducts(factoryId);
+        Set<String> products = new LinkedHashSet<>();
+        if (productTypeId != null && !productTypeId.isBlank()) products.add(productTypeId);
+        if (planId != null && !planId.isBlank()) {
+            java.util.Optional<com.cretas.aims.entity.ProductionPlan> plan = planRepository == null
+                    ? java.util.Optional.empty() : planRepository.findByIdAndFactoryId(planId, factoryId);
+            if (plan.isEmpty()) return !processSecretGuard.factoryHasProtectedProducts(factoryId);
+            products.addAll(com.cretas.aims.service.processsecret.ProcessSecretPlanProducts.of(plan.get(),
+                    recipeId -> processSecretGuard.productOf(factoryId, recipeId)));
+        }
+        if (products.isEmpty()) return !processSecretGuard.factoryHasProtectedProducts(factoryId);
+        for (String product : products) {
+            if (!processSecretGuard.permitsProduct(factoryId, product,
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+                    "blend-ratio deviation message")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 任务的批次查不到 (已删 / 他厂 / 未装配仓库) 时的计划: 与「计划查不到」同样按不能看处理。 */
+    static final String UNRESOLVED_PLAN = "\u0000unresolved-plan";
+
+    /**
+     * App 报工的任务属于哪张计划 (任务 → 批次 → 计划); 任务没挂批次、或批次没挂计划时为 null (只按任务产品判);
+     * 批次查不到时为 {@link #UNRESOLVED_PLAN} —— 锚点任务不能因此退回只看锚点 (独立审查第四轮 L1)。
+     */
+    String planIdOf(String factoryId, WorkProcessTask task) {
+        if (task == null || task.getProductionBatchId() == null) return null;
+        if (batchRepository == null) return UNRESOLVED_PLAN;
+        java.util.Optional<com.cretas.aims.entity.ProductionBatch> batch =
+                batchRepository.findByIdAndFactoryId(task.getProductionBatchId(), factoryId);
+        if (batch.isEmpty()) return UNRESOLVED_PLAN;
+        String planId = batch.get().getProductionPlanId();
+        return planId == null || planId.isBlank() ? null : planId;
+    }
+
     /** 带份额的投入端口 (纯数据, 便于两个写入口共用)。 */
     public record SharePort(String portId, String materialName, BigDecimal share, String unit,
                             BigDecimal gramsPerUnit) {
@@ -104,7 +163,7 @@ public class BlendRatioCheck {
      * 端口已由 applyWorkflowInputPorts 归位 (workflowPortId / unit 都是端口的) 之后调用。
      * 结果写回 {@code req.blendRatio} (随 row_payload 落库); 不适用时清成 null, 客户端伪造的快照不作数。
      */
-    public void enforceProcessSheet(String factoryId, String productTypeId,
+    public void enforceProcessSheet(String factoryId, String planId, String productTypeId,
                                     WorkflowClerkSheetConfigDTO.ProcessDescriptor descriptor,
                                     ProcessSheetRowRequest req) {
         if (descriptor == null || req == null || descriptor.getInputs() == null) {
@@ -145,7 +204,8 @@ public class BlendRatioCheck {
             log.warn("[blend-ratio] 跳过配比校验 factory={} processOrder={} clientRowId={}: {}",
                     factoryId, req.getProcessOrder(), req.getClientRowId(), evaluation.getSkipReason());
         }
-        req.setBlendRatio(enforce(evaluation, req.getBlendRatio()));
+        req.setBlendRatio(enforce(evaluation, req.getBlendRatio(),
+                revealRecipeShares(factoryId, planId, productTypeId, evaluation)));
     }
 
     // ------------------------------------------------------------------
@@ -199,7 +259,8 @@ public class BlendRatioCheck {
             log.warn("[blend-ratio] 跳过配比校验 factory={} task={}: {}",
                     factoryId, task.getId(), evaluation.getSkipReason());
         }
-        BlendRatioDeviation snapshot = enforce(evaluation, submitted);
+        BlendRatioDeviation snapshot = enforce(evaluation, submitted,
+                revealRecipeShares(factoryId, planIdOf(factoryId, task), task.getProductTypeId(), evaluation));
         if (snapshot == null) {
             return;
         }
@@ -307,6 +368,15 @@ public class BlendRatioCheck {
      * 不适用 ⇒ null; 跳过 / 容差内 ⇒ 原样返回快照 (容差内不留原因, 免得审计里出现没必要的原因)。
      */
     public static BlendRatioDeviation enforce(BlendRatioDeviation evaluation, BlendRatioDeviation submitted) {
+        return enforce(evaluation, submitted, true);
+    }
+
+    /**
+     * @param revealRecipeShares false = 工艺保密且调用者无完整查看权: 提示里不给配方份额和偏差百分点,
+     *                           只给料名、实际份额和偏高 / 偏低 (裁决本身不变)
+     */
+    public static BlendRatioDeviation enforce(BlendRatioDeviation evaluation, BlendRatioDeviation submitted,
+                                              boolean revealRecipeShares) {
         if (evaluation == null) {
             return null;
         }
@@ -320,9 +390,12 @@ public class BlendRatioCheck {
         String tol = plain(evaluation.getTolerancePp());
         String overText = evaluation.getLines().stream()
                 .filter(BlendRatioDeviation.Line::isOverTolerance)
-                .map(l -> "「" + l.getMaterialName() + "」配方 " + pct(l.getRecipeSharePercent())
-                        + " / 实际 " + pct(l.getActualSharePercent())
-                        + "（" + signed(l.getDeviationPp()) + " 个百分点）")
+                .map(l -> revealRecipeShares
+                        ? "「" + l.getMaterialName() + "」配方 " + pct(l.getRecipeSharePercent())
+                                + " / 实际 " + pct(l.getActualSharePercent())
+                                + "（" + signed(l.getDeviationPp()) + " 个百分点）"
+                        : "「" + l.getMaterialName() + "」实际 " + pct(l.getActualSharePercent())
+                                + (l.getDeviationPp() != null && l.getDeviationPp().signum() > 0 ? "，偏高" : "，偏低"))
                 .collect(Collectors.joining("；"));
         if (reason.isEmpty()) {
             throw new BusinessException(409, "主料配比偏差超过 ±" + tol + " 个百分点：" + overText + "，必须填写偏差原因")

@@ -66,6 +66,51 @@ export default function BlendRatioCard({ evaluation, reason, note, onReasonChang
       </View>
     );
   }
+  const reasonArea = (hint: string) => (
+    <View testID="blend-ratio-reason-area">
+      <Text style={styles.overHint}>{hint}</Text>
+      <View style={styles.reasons}>
+        {BLEND_REASONS.map((r) => {
+          const selected = reason === r;
+          return (
+            <TouchableRipple
+              key={r}
+              testID={`blend-ratio-reason-${r}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected, disabled: !!disabled }}
+              disabled={disabled}
+              onPress={() => onReasonChange(r)}
+              borderless={false}
+              style={[styles.reasonBtn, selected && styles.reasonBtnSelected]}
+            >
+              <Text style={[styles.reasonText, selected && styles.reasonTextSelected]}>{r}</Text>
+            </TouchableRipple>
+          );
+        })}
+      </View>
+      {reason === BLEND_REASON_OTHER ? (
+        <TextInput
+          testID="blend-ratio-note"
+          value={note}
+          onChangeText={onNoteChange}
+          editable={!disabled}
+          placeholder="请写一句具体原因"
+          maxLength={200}
+          style={styles.note}
+        />
+      ) : null}
+    </View>
+  );
+  if (evaluation.status === 'SECRET') {
+    // 工艺保密: 不显示配方份额; 后端照常按真实份额校验, 超差会要求原因 —— 原因要一直能选, 否则卡死
+    return (
+      <View style={styles.card} testID="blend-ratio-card">
+        <Text style={styles.title}>配比核对</Text>
+        <Text style={styles.muted} testID="blend-ratio-secret">该产品工艺已保密，本页不显示配方份额、不能预先核对。</Text>
+        {reasonArea('提交时如提示「配比偏差」，请选一个原因：')}
+      </View>
+    );
+  }
   const over = evaluation.status === 'OVER';
   return (
     <View style={[styles.card, over && styles.cardOver]} testID="blend-ratio-card">
@@ -82,41 +127,7 @@ export default function BlendRatioCard({ evaluation, reason, note, onReasonChang
           </Text>
         </View>
       ))}
-      {over ? (
-        <View testID="blend-ratio-reason-area">
-          <Text style={styles.overHint}>配比超出允许范围。先核对用量；确实这样投料，请选一个原因：</Text>
-          <View style={styles.reasons}>
-            {BLEND_REASONS.map((r) => {
-              const selected = reason === r;
-              return (
-                <TouchableRipple
-                  key={r}
-                  testID={`blend-ratio-reason-${r}`}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected, disabled: !!disabled }}
-                  disabled={disabled}
-                  onPress={() => onReasonChange(r)}
-                  borderless={false}
-                  style={[styles.reasonBtn, selected && styles.reasonBtnSelected]}
-                >
-                  <Text style={[styles.reasonText, selected && styles.reasonTextSelected]}>{r}</Text>
-                </TouchableRipple>
-              );
-            })}
-          </View>
-          {reason === BLEND_REASON_OTHER ? (
-            <TextInput
-              testID="blend-ratio-note"
-              value={note}
-              onChangeText={onNoteChange}
-              editable={!disabled}
-              placeholder="请写一句具体原因"
-              maxLength={200}
-              style={styles.note}
-            />
-          ) : null}
-        </View>
-      ) : null}
+      {over ? reasonArea('配比超出允许范围。先核对用量；确实这样投料，请选一个原因：') : null}
     </View>
   );
 }

@@ -54,6 +54,8 @@ public class SemiFinishedInventoryTransaction {
         public static final String TRANSFER_OUT        = "TRANSFER_OUT";
         public static final String REVERSAL            = "REVERSAL";
         public static final String STOCKTAKE           = "STOCKTAKE";
+        /** 质检判不合格: 把待检数量从可用余额里转出 (缺口 11, 不合格量不洗白)。 */
+        public static final String QC_REJECT           = "QC_REJECT";
     }
 
     @Id

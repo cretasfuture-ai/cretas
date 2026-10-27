@@ -43,6 +43,12 @@
           {{ row.criticalLimitMin }} ~ {{ row.criticalLimitMax }} {{ row.unit }}
         </template>
       </el-table-column>
+      <el-table-column label="所属工序" min-width="140">
+        <template #default="{ row }">
+          <span v-if="row.workProcessId">{{ workProcessName(row.workProcessId) }}</span>
+          <span v-else class="muted">未挂工序（报工时不录）</span>
+        </template>
+      </el-table-column>
       <el-table-column label="启用" width="80">
         <template #default="{ row }">
           <el-tag v-if="row.active" type="success" size="small">启用</el-tag>
@@ -107,6 +113,21 @@
         <el-form-item label="单位" prop="unit">
           <el-input v-model="form.unit" placeholder="e.g. ℃ / min / mg/kg" />
         </el-form-item>
+        <el-form-item label="所属工序">
+          <el-select
+            v-model="form.workProcessId"
+            clearable
+            filterable
+            placeholder="选择工序（该工序报工时必须录入本 CCP）"
+            style="width: 100%"
+            data-testid="ccp-work-process"
+          >
+            <el-option v-for="wp in workProcesses" :key="wp.id" :label="wp.processName" :value="wp.id" />
+          </el-select>
+          <div class="form-tip">
+            挂上后：Workflow 里用到这个工序的每一道，报工时都要先录实测值；超出临界限值会自动记偏离，该批次转为待检。
+          </div>
+        </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
         </el-form-item>
@@ -152,6 +173,7 @@ import {
   type HazardType,
   HazardTypeLabels,
 } from '@/api/foodSafetyHub'
+import { getActiveWorkProcesses, type WorkProcessItem } from '@/api/processProduction'
 
 interface Props {
   factoryId: string
@@ -160,6 +182,20 @@ const props = defineProps<Props>()
 
 const loading = ref(false)
 const saving = ref(false)
+// 缺口 13: CCP 挂工序的下拉
+const workProcesses = ref<WorkProcessItem[]>([])
+async function loadWorkProcesses() {
+  if (!props.factoryId) return
+  try {
+    const res = await getActiveWorkProcesses(props.factoryId)
+    workProcesses.value = res.success && Array.isArray(res.data) ? res.data : []
+  } catch {
+    workProcesses.value = []
+  }
+}
+function workProcessName(id: string) {
+  return workProcesses.value.find((w) => w.id === id)?.processName ?? id
+}
 const rows = ref<HaccpCheckpoint[]>([])
 const search = ref('')
 const activeOnly = ref(false)
@@ -187,6 +223,7 @@ const blankForm = (): HaccpCheckpoint => ({
   correctiveAction: '',
   verificationProcedure: '',
   recordKeeping: '',
+  workProcessId: null,
   active: true,
 })
 const form = ref<HaccpCheckpoint>(blankForm())
@@ -292,6 +329,7 @@ async function confirmDelete(row: HaccpCheckpoint) {
 
 onMounted(() => {
   void reload()
+  void loadWorkProcesses()
 })
 </script>
 
@@ -306,5 +344,14 @@ onMounted(() => {
 }
 .table {
   margin-top: 8px;
+}
+.muted {
+  color: #909399;
+  font-size: 12px;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
 }
 </style>

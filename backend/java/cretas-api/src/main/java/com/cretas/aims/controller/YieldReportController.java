@@ -32,6 +32,13 @@ public class YieldReportController {
 
     private final YieldReportService yieldReportService;
 
+    /**
+     * 缺口 13 (审查中 7): 报工与 CCP 实测值同一事务 (挂 CCP 的工序缺值整笔拒绝)。
+     * required=false 只为不构建 Spring 的老控制器单测; 应用上下文里它一定存在。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.ccp.CcpReportFacade ccpReportFacade;
+
     @RequirePermission({"production:read_write"})
     @PostMapping("/reports")
     @Operation(summary = "逐道报工 (投入+产出双量)")
@@ -39,7 +46,11 @@ public class YieldReportController {
             @PathVariable String factoryId,
             @PathVariable Long batchId,
             @RequestBody YieldReportRequest req,
-            @RequestAttribute("userId") Long workerId) {
+            @RequestAttribute("userId") Long workerId,
+            @RequestAttribute(value = "username", required = false) String username) {
+        if (ccpReportFacade != null) {
+            return ApiResponse.success(ccpReportFacade.submitYieldReport(factoryId, batchId, workerId, username, req));
+        }
         return ApiResponse.success(yieldReportService.submitReport(factoryId, batchId, workerId, req));
     }
 

@@ -434,6 +434,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
               AND row_status <> 'DRAFT'
               AND row_payload ->> 'productTypeId' = :semiFinishedSkuId
               AND row_payload ->> 'finished' = 'false'
+              AND plan_id NOT IN (:excludedPlanIds)
         ), valid_rows AS (
             SELECT
                 CASE WHEN input_unit IN ('g', '克') THEN input_quantity / 1000
@@ -454,7 +455,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
         """, nativeQuery = true)
     SemiFinishedYieldAggregate aggregateSettledSemiFinishedYield(
             @Param("factoryId") String factoryId,
-            @Param("semiFinishedSkuId") String semiFinishedSkuId);
+            @Param("semiFinishedSkuId") String semiFinishedSkuId,
+            @Param("excludedPlanIds") java.util.Collection<String> excludedPlanIds);
 
     interface SemiFinishedYieldAggregate {
         BigDecimal getTotalInputKg();
@@ -486,6 +488,10 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
           AND pr.deleted_at IS NULL
           AND pr.report_date BETWEEN :startDate AND :endDate
           AND (:productTypeId = '' OR wpt.product_type_id = :productTypeId)
+          AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
+          AND NOT EXISTS (SELECT 1 FROM production_batches pb
+                          WHERE pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
+                            AND pb.production_plan_id IN (:excludedPlanIds))
         GROUP BY wp.id, wp.process_name, wp.unit, wp.output_unit
         ORDER BY MIN(wpt.process_order)
         """, nativeQuery = true)
@@ -493,7 +499,11 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             @Param("factoryId") String factoryId,
             @Param("startDate") java.time.LocalDate startDate,
             @Param("endDate") java.time.LocalDate endDate,
-            @Param("productTypeId") String productTypeId);
+            @Param("productTypeId") String productTypeId,
+            // 工艺保密: 调用者无完整查看权的保密产品不进厂级汇总; 永不传空列表 (调用方用哨兵)
+            @Param("excludedProductTypeIds") java.util.Collection<String> excludedProductTypeIds,
+            // 牵涉无权保密产品的计划整张不进 (兄弟产出也是这张计划的工艺; 独立审查第四轮 M1)
+            @Param("excludedPlanIds") java.util.Collection<String> excludedPlanIds);
 
     /**
      * D4: 每个工序按批次聚合的自动标准计算样本.

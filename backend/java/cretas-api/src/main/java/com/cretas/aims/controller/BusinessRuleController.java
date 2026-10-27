@@ -2,6 +2,8 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.engine.AutonomousGrantIssuer;
+import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.engine.DynamicSchedulerService;
 import com.cretas.aims.entity.config.*;
 import com.cretas.aims.repository.config.*;
@@ -56,6 +58,7 @@ public class BusinessRuleController {
     private final FactorySchedulerConfigRepository schedulerRepo;
     private final DynamicSchedulerService dynamicSchedulerService;
     private final SandboxedSpelEvaluator spelEvaluator;
+    private final AutonomousGrantIssuer grantIssuer;
 
     @GetMapping("/validation-rules")
     @Operation(summary = "获取工厂校验规则列表")
@@ -178,6 +181,8 @@ public class BusinessRuleController {
         if (body.getCronExpression() != null) validateCronFrequency(body.getCronExpression());
         FactorySchedulerConfig config = schedulerRepo.findByFactoryIdAndTaskCode(factoryId, taskCode)
                 .orElseGet(() -> { FactorySchedulerConfig c = new FactorySchedulerConfig(); c.setFactoryId(factoryId); c.setTaskCode(taskCode); c.setCronExpression("0 0 2 * * ?"); return c; });
+        // What this config runs before the request: an edit or a disable revokes its delegated grants.
+        String revisionBefore = config.getId() == null ? null : grantIssuer.revisionOf(config);
         if (body.getCronExpression() != null) config.setCronExpression(body.getCronExpression());
         if (body.getEnabled() != null) config.setEnabled(body.getEnabled());
         if (body.getToolOrMethod() != null) config.setToolOrMethod(body.getToolOrMethod());
@@ -185,8 +190,10 @@ public class BusinessRuleController {
         // Only an enabled config runs; disabling an existing write-tool schedule must stay possible.
         if (Boolean.TRUE.equals(config.getEnabled())) {
             dynamicSchedulerService.requireSchedulable(config.getToolOrMethod(), config.getParams());
+            config.setRunAsUserId(AutonomousToolPolicy.requireRunAsUser(factoryId));
         }
-        FactorySchedulerConfig saved = schedulerRepo.save(config);
+        FactorySchedulerConfig saved = grantIssuer.saveConfig(config, revisionBefore,
+                AutonomousToolPolicy.currentActorIdOrNull(), java.time.LocalDateTime.now());
         dynamicSchedulerService.reloadSchedule(factoryId, taskCode);
         return ApiResponse.success(saved);
     }

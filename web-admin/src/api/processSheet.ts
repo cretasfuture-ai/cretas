@@ -194,6 +194,11 @@ export interface ProcessSheetRowRequest {
    * 计算并覆盖, 随 row_payload 回显。草稿不校验。
    */
   blendRatio?: BlendRatioDeviation;
+  /**
+   * 缺口 13 (审查中 7): 本道挂了关键控制点时, 正式报工随请求带上 CCP 实测值 ——
+   * 后端与报工同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。超限偏离写进返回的 warnings。
+   */
+  ccpReadings?: Array<{ checkpointId: number; measuredValue: number; notes?: string | null }>;
 }
 
 /** mirrors Java dto/workflow/BlendRatioDeviation。 */
@@ -638,6 +643,8 @@ export interface WorkflowPortDescriptor {
 export interface WorkflowProcessDescriptor {
   workflowNodeId: string;
   workProcessId: string;
+  /** 缺口 13: 本工序挂的关键控制点; 非空 ⇒ 正式报工前必须录实测值 (CcpEntryDialog)。 */
+  ccpCheckpoints?: import('./ccp').CcpStepCheckpoint[] | null;
   processName: string | null;
   /** 工序类别 (WorkProcess.processCategory, 熟制/注射/…) — Slice C: workflow 计划报工据此驱动锅数录入。 */
   processCategory: string | null;
@@ -761,6 +768,10 @@ export interface SemiFinishedStockItem {
   isRework?: boolean | null;
   /** picker 上下文中的纯度闸判定状态，例如 ENFORCED。 */
   reworkPurityStatus?: string | null;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=有待检数量 / RELEASED / REJECTED (旧数据, 不可选)。 */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
+  /** 这一行里待检的数量 (PENDING 时才有); 可投 = availableQuantity − inspectionPendingQuantity。 */
+  inspectionPendingQuantity?: number | null;
 }
 
 /**

@@ -169,7 +169,8 @@ policies:
     approvalPolicy: NOT_REQUIRED
     idempotencyPolicy: NOT_REQUIRED
     dataClassification: CONFIDENTIAL
-    allowedSources: [SKILL_WORKFLOW]
+    # S6 pilot: the first tool a cron schedule may run, as its run-as user. Event chains and SOP stay out.
+    allowedSources: [SKILL_WORKFLOW, SCHEDULER]
     egressPolicy:
       mode: DENY_ALL
       allowedDestinations: []

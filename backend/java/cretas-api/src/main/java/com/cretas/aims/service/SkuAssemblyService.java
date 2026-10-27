@@ -55,6 +55,7 @@ public class SkuAssemblyService {
     private final BomRecipeItemRepository bomRecipeItemRepository;
     private final BomSeasoningItemRepository bomSeasoningItemRepository;
     private final BomProcessInjectionConfigRepository processInjectionConfigRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
     /**
      * 拼积木创建 SKU
@@ -74,7 +75,10 @@ public class SkuAssemblyService {
 
         // 1. 加载并验证模板
         ProductType template = productTypeRepository.findById(templateId)
+                .filter(t -> t.getFactoryId() == null || t.getFactoryId().equals(factoryId))
                 .orElseThrow(() -> new ResourceNotFoundException("产品模板不存在: " + templateId));
+        // 工艺保密: SKU 会复制模板的转换率、工序链和整套 BOM, 而新 SKU 没有保密策略 —— 与复制配方同一口径
+        processSecretGuard.requireCopySource(factoryId, templateId, "assemble-sku template " + templateId);
 
         if (template.getTemplateId() != null) {
             throw new BusinessException(400, "不能从 SKU 创建 SKU，请选择产品模板")
