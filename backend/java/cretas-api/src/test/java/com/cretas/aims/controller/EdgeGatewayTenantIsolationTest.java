@@ -16,6 +16,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -52,8 +53,8 @@ class EdgeGatewayTenantIsolationTest {
         cam.setFactoryId("F006");
         cam.setDeviceName("仓库门口");
         when(devices.findById("cam-1")).thenReturn(Optional.of(cam));
-        when(devices.findByMacAddressIgnoreCase("aa:bb:cc:dd:ee:ff")).thenReturn(Optional.of(cam));
-        when(devices.findByIpAddress("10.0.0.5")).thenReturn(Optional.of(cam));
+        when(devices.findByFactoryIdAndMacAddressIgnoreCase("F006", "aa:bb:cc:dd:ee:ff")).thenReturn(List.of(cam));
+        when(devices.findByFactoryIdAndIpAddress("F006", "10.0.0.5")).thenReturn(List.of(cam));
         service = new EdgeGatewayService(devices, events, analysis, null);
         controller = new EdgeGatewayController(service);
     }
@@ -99,6 +100,18 @@ class EdgeGatewayTenantIsolationTest {
         assertThat(service.findDeviceIdByMacOrIp("F007", "aa:bb:cc:dd:ee:ff", "10.0.0.5")).isNull();
         assertThat(service.findDeviceIdByMacOrIp(null, "aa:bb:cc:dd:ee:ff", "10.0.0.5")).isNull();
         assertThat(service.findDeviceIdByMacOrIp("F006", "AA-BB-CC-DD-EE-FF", null)).isEqualTo("cam-1");
+        assertThat(service.findDeviceIdByMacOrIp("F006", null, "10.0.0.5")).isEqualTo("cam-1");
+    }
+
+    @Test
+    void theSamePrivateIpInTwoFactoriesResolvesToEachFactorysOwnCamera() {
+        // 海康默认 192.168.1.64 在不同工厂常见: 以前全局单条查询, 两厂各有一台时直接抛异常、事件丢掉
+        IsapiDevice other = new IsapiDevice();
+        other.setId("cam-7");
+        other.setFactoryId("F007");
+        when(devices.findByFactoryIdAndIpAddress("F007", "10.0.0.5")).thenReturn(List.of(other));
+
+        assertThat(service.findDeviceIdByMacOrIp("F007", null, "10.0.0.5")).isEqualTo("cam-7");
         assertThat(service.findDeviceIdByMacOrIp("F006", null, "10.0.0.5")).isEqualTo("cam-1");
     }
 

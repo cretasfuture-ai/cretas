@@ -419,25 +419,12 @@ public class IsapiEventSubscriptionService {
 
     // ==================== 查询方法 ====================
 
-    /**
-     * 获取活动订阅数量
-     */
-    public int getActiveSubscriptionCount() {
-        return activeSubscriptions.size();
-    }
 
     /**
      * 检查设备是否已订阅
      */
     public boolean isSubscribed(String deviceId) {
         return activeSubscriptions.containsKey(deviceId);
-    }
-
-    /**
-     * 获取所有活动订阅的设备ID
-     */
-    public List<String> getActiveSubscriptionIds() {
-        return List.copyOf(activeSubscriptions.keySet());
     }
 
     /**

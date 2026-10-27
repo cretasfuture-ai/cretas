@@ -15,7 +15,8 @@ API 端点:
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import Depends, APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException, Request
+from common.tenant_identity import caller_factory
 from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
@@ -67,7 +68,7 @@ class RemoveStreamRequest(BaseModel):
 # ==================== API 端点 ====================
 
 @router.post("/add", dependencies=[Depends(require_camera_snapshot_ai)])
-async def add_stream(request: AddStreamRequest):
+async def add_stream(request: AddStreamRequest, http: Request):
     """
     添加单个摄像头流到并行处理池
 
@@ -91,14 +92,15 @@ async def add_stream(request: AddStreamRequest):
         analysis_type=request.analysis_type,
         interval_seconds=request.interval_seconds,
         use_local_preprocessing=request.use_local_preprocessing,
-        skip_unchanged_frames=request.skip_unchanged_frames
+        skip_unchanged_frames=request.skip_unchanged_frames,
+        factory_id=caller_factory(http),
     )
 
     return result
 
 
 @router.post("/batch-add", dependencies=[Depends(require_camera_snapshot_ai)])
-async def batch_add_streams(request: BatchAddStreamsRequest):
+async def batch_add_streams(request: BatchAddStreamsRequest, http: Request):
     """
     批量添加多个摄像头流
 
@@ -127,25 +129,26 @@ async def batch_add_streams(request: BatchAddStreamsRequest):
     result = await sampler.batch_add_streams(
         streams=streams_data,
         default_interval=request.default_interval_seconds,
-        default_preprocessing=request.default_preprocessing
+        default_preprocessing=request.default_preprocessing,
+        factory_id=caller_factory(http),
     )
 
     return result
 
 
 @router.post("/remove")
-async def remove_stream(request: RemoveStreamRequest):
-    """移除一个摄像头流"""
+async def remove_stream(request: RemoveStreamRequest, http: Request):
+    """移除一个摄像头流 (只能移除本厂添加的)"""
     sampler = get_sampler()
-    result = await sampler.remove_stream(request.stream_id)
+    result = await sampler.remove_stream(request.stream_id, caller_factory(http))
     return result
 
 
 @router.get("/status")
-async def get_all_streams_status():
-    """获取所有流的状态"""
+async def get_all_streams_status(http: Request):
+    """获取本厂所有流的状态 (流地址可能带摄像头账号密码, 不给别厂)"""
     sampler = get_sampler()
-    status = sampler.get_status()
+    status = sampler.get_status(caller_factory(http))
 
     return {
         "success": True,
@@ -155,10 +158,10 @@ async def get_all_streams_status():
 
 
 @router.get("/{stream_id}/status")
-async def get_stream_status(stream_id: str):
-    """获取单个流的状态"""
+async def get_stream_status(stream_id: str, http: Request):
+    """获取单个流的状态 (别厂的流与不存在一样)"""
     sampler = get_sampler()
-    status = sampler.get_stream_status(stream_id)
+    status = sampler.get_stream_status(stream_id, caller_factory(http))
 
     if status is None:
         raise HTTPException(status_code=404, detail=f"Stream {stream_id} not found")
@@ -171,10 +174,10 @@ async def get_stream_status(stream_id: str):
 
 
 @router.post("/stop-all")
-async def stop_all_streams():
-    """停止所有流"""
+async def stop_all_streams(http: Request):
+    """停止本厂所有流"""
     sampler = get_sampler()
-    result = await sampler.stop_all()
+    result = await sampler.stop_all(caller_factory(http))
 
     return {
         "success": True,

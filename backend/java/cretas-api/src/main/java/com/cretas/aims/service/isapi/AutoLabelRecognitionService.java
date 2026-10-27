@@ -84,6 +84,8 @@ public class AutoLabelRecognitionService {
     public LabelRecognitionConfig createConfig(String factoryId, LabelRecognitionConfig config) {
         // 摄像头必须是本厂的: 否则可以把配置挂到别厂摄像头上, 再手动触发去抓别厂画面
         isapiDeviceService.getDevice(factoryId, config.getDeviceId());
+        // 请求体直接绑实体: 带上别厂配置的 id 就会变成「覆盖那条配置」, 新建一律不认传入的 id
+        config.setId(null);
         // 检查设备是否已有配置
         if (configRepository.existsByFactoryIdAndDeviceId(factoryId, config.getDeviceId())) {
             throw new IllegalArgumentException("该设备已有标签识别配置");
@@ -451,7 +453,7 @@ public class AutoLabelRecognitionService {
      */
     public Page<LabelRecognitionRecord> getRecordsByConfig(String factoryId, Long configId, Pageable pageable) {
         getConfig(factoryId, configId);
-        return recordRepository.findByConfigIdOrderByRecognitionTimeDesc(configId, pageable);
+        return recordRepository.findByFactoryIdAndConfigIdOrderByRecognitionTimeDesc(factoryId, configId, pageable);
     }
 
     /**

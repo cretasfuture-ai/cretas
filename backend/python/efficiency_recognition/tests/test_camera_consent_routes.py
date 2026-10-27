@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.testclient import TestClient
 
 from efficiency_recognition.api import camera_consent
@@ -59,16 +59,44 @@ GATED = [
     "/api/efficiency/tracking/identify-upload",
 ]
 
-# 不读图、不调视觉模型的 POST (只改内存配置 / 停任务 / 转换已有结果)
+# 不读图、不调视觉模型的接口 (只读状态 / 改内存配置 / 停任务 / 转换已有结果); 新增接口不登记就红
 NO_IMAGE = {
-    "/api/efficiency/build-efficiency-record",
-    "/api/efficiency/workstation-mapping",
-    "/api/efficiency/recording/cancel/{task_id}",
-    "/api/efficiency/scene/auto-adapt/{change_id}",
-    "/api/efficiency/streams/remove",
-    "/api/efficiency/streams/stop-all",
-    "/api/efficiency/tracking/topology",
-    "/api/efficiency/tracking/link",
+    "POST /api/efficiency/build-efficiency-record",
+    "POST /api/efficiency/workstation-mapping",
+    "GET /api/efficiency/workstation-mapping",
+    "GET /api/efficiency/task/{task_id}",
+    "GET /api/efficiency/health",
+    "GET /api/efficiency/config",
+    "GET /api/efficiency/recording/task/{task_id}",
+    "POST /api/efficiency/recording/cancel/{task_id}",
+    "GET /api/efficiency/recording/tasks",
+    "DELETE /api/efficiency/recording/tasks/cleanup",
+    "GET /api/efficiency/scene/current/{camera_id}",
+    "GET /api/efficiency/scene/history",
+    "POST /api/efficiency/scene/auto-adapt/{change_id}",
+    "GET /api/efficiency/scene/all",
+    "GET /api/efficiency/scene/stats",
+    "DELETE /api/efficiency/scene/camera/{camera_id}",
+    "POST /api/efficiency/streams/remove",
+    "GET /api/efficiency/streams/status",
+    "GET /api/efficiency/streams/{stream_id}/status",
+    "POST /api/efficiency/streams/stop-all",
+    "GET /api/efficiency/streams/analysis-types",
+    "GET /api/efficiency/streams/preprocessing-stats",
+    "GET /api/efficiency/tracking/trajectory/{tracking_id}",
+    "GET /api/efficiency/tracking/record/{tracking_id}",
+    "POST /api/efficiency/tracking/topology",
+    "GET /api/efficiency/tracking/topology",
+    "POST /api/efficiency/tracking/link",
+    "GET /api/efficiency/tracking/all",
+    "GET /api/efficiency/tracking/features/{tracking_id}",
+    "GET /api/efficiency/tracking/stats",
+    "DELETE /api/efficiency/tracking/cleanup",
+    "GET /api/efficiency/tracking/by-camera/{camera_id}",
+    "GET /api/efficiency/tracking/search/badge",
+    "GET /api/efficiency/tracking/search/clothing",
+    "GET /api/efficiency/tracking/movement/{tracking_id}",
+    "DELETE /api/efficiency/tracking/topology/{camera_a_id}/{camera_b_id}",
 }
 
 ON = '{"cameraSnapshotAnalysis": true}'
@@ -152,16 +180,19 @@ def test_photo_is_not_sent_to_the_model_when_off_and_is_sent_once_turned_on(app,
     assert app.state.spy.calls == 1
 
 
-def test_every_post_route_is_either_gated_or_registered_as_not_sending_images():
+def test_every_route_is_either_gated_or_registered_as_not_sending_images():
     gated, ungated = set(), set()
     for r, prefix in PREFIXES:
         for route in r.routes:
-            if not isinstance(route, APIRoute) or "POST" not in route.methods:
+            if isinstance(route, APIWebSocketRoute):
+                ungated.add("WS " + prefix + route.path)
                 continue
-            full = prefix + route.path
+            assert isinstance(route, APIRoute), route
             deps = [d.dependency for d in route.dependencies]
-            (gated if camera_consent.require_camera_snapshot_ai in deps else ungated).add(full)
-    assert gated == set(GATED)
+            for method in sorted(route.methods):
+                key = f"{method} {prefix}{route.path}"
+                (gated if camera_consent.require_camera_snapshot_ai in deps else ungated).add(key)
+    assert gated == {"POST " + p for p in GATED}
     assert ungated == NO_IMAGE
 
 
@@ -235,3 +266,89 @@ def test_main_mounts_these_routers_with_these_prefixes():
         ("efficiency_scene_router", "/api/efficiency/scene"),
     ]:
         assert f'app.include_router({name}, prefix="{prefix}"' in main
+
+
+# ---------------------------------------------------------------- 取流: 只看 / 停本厂的流, 中途关开关就停
+
+@pytest.fixture()
+def sampler(monkeypatch):
+    from efficiency_recognition.api import stream_routes
+    from efficiency_recognition.services.multi_stream_sampler import MultiStreamSampler
+
+    async def no_loop(self, task):  # 不真的去拉流
+        return None
+
+    monkeypatch.setattr(MultiStreamSampler, "_run_stream_loop", no_loop)
+    s = MultiStreamSampler(max_concurrent=4)
+    monkeypatch.setattr(stream_routes, "get_sampler", lambda: s)
+    return s
+
+
+def test_streams_are_listed_removed_and_stopped_only_for_the_factory_that_added_them(app, monkeypatch, sampler):
+    _consent(monkeypatch, {"F006": ON, "F007": ON})
+    client = TestClient(app)
+    f6, f7 = {"x-test-factory": "F006"}, {"x-test-factory": "F007"}
+    assert client.post("/api/efficiency/streams/add", json={"stream_id": "s6", "rtsp_url": "rtsp://u:pw@10.0.0.6/1"},
+                       headers=f6).json()["success"] is True
+    assert client.post("/api/efficiency/streams/add", json={"stream_id": "s7", "rtsp_url": "rtsp://u:pw@10.0.0.7/1"},
+                       headers=f7).json()["success"] is True
+
+    status7 = client.get("/api/efficiency/streams/status", headers=f7).json()
+    assert set(status7["streams"]) == {"s7"} and status7["active_streams"] == 1
+    assert client.get("/api/efficiency/streams/s6/status", headers=f7).status_code == 404
+    assert client.post("/api/efficiency/streams/remove", json={"stream_id": "s6"}, headers=f7).json()["success"] is False
+    client.post("/api/efficiency/streams/stop-all", headers=f7)
+
+    assert set(sampler.active_streams) == {"s6"}
+    assert sampler.active_streams["s6"].config.factory_id == "F006"
+    assert client.get("/api/efficiency/streams/s6/status", headers=f6).status_code == 200
+    assert client.get("/api/efficiency/streams/status").status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_running_stream_stops_before_sending_once_the_switch_is_off(monkeypatch):
+    from efficiency_recognition.services.multi_stream_sampler import MultiStreamSampler, StreamConfig, StreamTask
+
+    _consent(monkeypatch, {"F006": '{"cameraSnapshotAnalysis": false}'})
+    s = MultiStreamSampler(max_concurrent=1)
+    monkeypatch.setattr(s, "capture_frame", lambda url, timeout=10: "aW1n")
+    sent = []
+
+    async def spy(frame, config):
+        sent.append(frame)
+        raise AssertionError("不应送模型")
+
+    monkeypatch.setattr(s, "_analyze_frame", spy)
+    task = StreamTask(config=StreamConfig(stream_id="s6", rtsp_url="rtsp://x", interval_seconds=0,
+                                          use_local_preprocessing=False, factory_id="F006"))
+
+    await s._run_stream_loop(task)
+
+    assert sent == []
+    assert task.is_active is False
+    assert task.last_error == camera_consent.DISABLED_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_a_running_stream_sends_frames_while_the_switch_is_on(monkeypatch):
+    from efficiency_recognition.services.multi_stream_sampler import (
+        AnalysisResult, MultiStreamSampler, StreamConfig, StreamTask)
+
+    _consent(monkeypatch, {"F006": ON})
+    s = MultiStreamSampler(max_concurrent=1)
+    monkeypatch.setattr(s, "capture_frame", lambda url, timeout=10: "aW1n")
+    task = StreamTask(config=StreamConfig(stream_id="s6", rtsp_url="rtsp://x", interval_seconds=0,
+                                          use_local_preprocessing=False, factory_id="F006"))
+    sent = []
+
+    async def spy(frame, config):
+        sent.append(frame)
+        task.is_active = False  # 发了一帧就收工
+        return AnalysisResult(stream_id="s6", timestamp="t", analysis_type="efficiency",
+                              success=False, error="stub")
+
+    monkeypatch.setattr(s, "_analyze_frame", spy)
+
+    await s._run_stream_loop(task)
+
+    assert sent == ["aW1n"]

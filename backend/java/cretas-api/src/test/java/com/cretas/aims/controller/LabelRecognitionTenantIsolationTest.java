@@ -65,7 +65,7 @@ class LabelRecognitionTenantIsolationTest {
         when(configs.findById(5L)).thenReturn(Optional.of(config));
         when(configs.save(any(LabelRecognitionConfig.class))).thenAnswer(inv -> inv.getArgument(0));
         when(records.save(any(LabelRecognitionRecord.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(records.findByConfigIdOrderByRecognitionTimeDesc(eq(5L), any()))
+        when(records.findByFactoryIdAndConfigIdOrderByRecognitionTimeDesc(eq("F006"), eq(5L), any()))
                 .thenReturn(new PageImpl<>(List.of()));
         IsapiDevice cam = new IsapiDevice();
         cam.setId(CAM);
@@ -108,7 +108,7 @@ class LabelRecognitionTenantIsolationTest {
         assertThat(resp.getBody()).isEqualTo(missing.getBody());
         verify(configs, never()).save(any());
         verify(records, never()).save(any());
-        verify(records, never()).findByConfigIdOrderByRecognitionTimeDesc(any(), any());
+        verify(records, never()).findByFactoryIdAndConfigIdOrderByRecognitionTimeDesc(any(), any(), any());
         verify(devices, never()).capturePicture(anyString(), anyString(), anyInt());
         assertThat(config.getChannelId()).isEqualTo(1);
         assertThat(config.getEnabled()).isTrue();
@@ -138,6 +138,31 @@ class LabelRecognitionTenantIsolationTest {
 
         assertThat(resp.getStatusCode().value()).isEqualTo(400);
         verify(configs, never()).save(any());
+    }
+
+    @Test
+    void anIdInTheCreateBodyCannotOverwriteAnotherFactorysConfig() {
+        IsapiDevice ownCam = new IsapiDevice();
+        ownCam.setId("cam-7");
+        ownCam.setFactoryId("F007");
+        when(devices.getDevice("F007", "cam-7")).thenReturn(ownCam);
+        org.mockito.ArgumentCaptor<LabelRecognitionConfig> saved = org.mockito.ArgumentCaptor.forClass(LabelRecognitionConfig.class);
+
+        ResponseEntity<?> resp = controller.createConfig("F007",
+                LabelRecognitionConfig.builder().id(5L).deviceId("cam-7").channelId(1).build());
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        verify(configs).save(saved.capture());
+        assertThat(saved.getValue().getId()).isNull();
+        assertThat(saved.getValue().getFactoryId()).isEqualTo("F007");
+        assertThat(config.getFactoryId()).isEqualTo("F006");
+    }
+
+    @Test
+    void recordsAreQueriedForTheCallersFactory() {
+        controller.getRecords("F006", 0, 20, 5L);
+
+        verify(records).findByFactoryIdAndConfigIdOrderByRecognitionTimeDesc(eq("F006"), eq(5L), any());
     }
 
     @Test

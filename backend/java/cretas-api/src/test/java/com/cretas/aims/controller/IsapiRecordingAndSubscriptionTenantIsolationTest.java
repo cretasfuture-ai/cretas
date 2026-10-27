@@ -113,6 +113,6 @@ class IsapiRecordingAndSubscriptionTenantIsolationTest {
         assertThat(own).containsEntry("activeDevices", List.of("cam-1")).containsEntry("activeCount", 1);
         assertThat(summary).containsEntry("subscriptionCount", 1);
         assertThat(none).containsEntry("activeDevices", List.of()).containsEntry("activeCount", 0);
-        assertThat(subscriptions.getActiveSubscriptionCount()).isEqualTo(2);
+        assertThat(active).hasSize(2);
     }
 }

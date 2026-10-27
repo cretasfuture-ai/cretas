@@ -281,9 +281,11 @@ public class EdgeGatewayService {
         if (macAddress != null && !macAddress.isEmpty()) {
             // 规范化 MAC 地址格式
             String normalizedMac = macAddress.toLowerCase().replace("-", ":").replace(".", ":");
-            IsapiDevice device = deviceRepository.findByMacAddressIgnoreCase(normalizedMac)
-                    .or(() -> deviceRepository.findByMacAddressIgnoreCase(macAddress))
-                    .filter(d -> factoryId.equals(d.getFactoryId()))
+            // 只在本厂设备里找 (私网 MAC / IP 在不同工厂可能重复)
+            IsapiDevice device = deviceRepository.findByFactoryIdAndMacAddressIgnoreCase(factoryId, normalizedMac)
+                    .stream().findFirst()
+                    .or(() -> deviceRepository.findByFactoryIdAndMacAddressIgnoreCase(factoryId, macAddress)
+                            .stream().findFirst())
                     .orElse(null);
             if (device != null) {
                 log.info("通过 MAC 地址找到设备: mac={}, deviceId={}", macAddress, device.getId());
@@ -293,8 +295,8 @@ public class EdgeGatewayService {
 
         // 通过 IP 地址查找
         if (ipAddress != null && !ipAddress.isEmpty()) {
-            IsapiDevice device = deviceRepository.findByIpAddress(ipAddress)
-                    .filter(d -> factoryId.equals(d.getFactoryId()))
+            IsapiDevice device = deviceRepository.findByFactoryIdAndIpAddress(factoryId, ipAddress)
+                    .stream().findFirst()
                     .orElse(null);
             if (device != null) {
                 log.info("通过 IP 地址找到设备: ip={}, deviceId={}", ipAddress, device.getId());
