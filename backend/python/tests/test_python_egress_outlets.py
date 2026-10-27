@@ -453,3 +453,42 @@ def test_video_analyzer_redacts_request_text_in_the_vision_prompt(monkeypatch):
     text = json.dumps(sent, ensure_ascii=False)
     assert sent and "13912345678" not in text and "[电话A]" in text
     assert "华东冷链商贸有限公司" not in text and "赵铁柱" not in text
+
+
+# ---------------------------------------------------------------- ai_proxy (Java LlmIntentFallbackClientImpl 转发)
+
+def _ai_proxy_client(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from smartbi.api import ai_proxy
+
+    monkeypatch.setattr(ai_proxy, "_ai_proxy_cache", type("_NoCache", (), {
+        "get": staticmethod(lambda k: None), "set": staticmethod(lambda k, v: None)})())
+    app = FastAPI()
+    app.include_router(ai_proxy.router, prefix="/api/ai")
+    return TestClient(app)
+
+
+def test_ai_proxy_intent_classify_redacts_the_intent_list_java_forwards_unredacted(upstream, monkeypatch):
+    """Java 兜底意图分类 (LlmIntentFallbackClientImpl) 用完整规则脱敏了原话, 但意图列表 (名称 / 描述 / 关键词) 原样转发;
+    这里保持完整规则, 列表里的名字也换掉。字段名用 Java 实际发的 user_input / available_intents。"""
+    upstream.answer = '{"intent": "SUPPLIER_QUERY", "confidence": 0.9}'
+    _ai_proxy_client(monkeypatch).post("/api/ai/intent/classify", json={
+        "user_input": "[单位A]的单子查一下, 电话 13912345678",
+        "available_intents": [{"intent_code": "SUPPLIER_QUERY", "intent_name": "查供应商",
+                               "description": "例: 查华东冷链商贸有限公司的供货", "keywords": ["联系人：赵铁柱"]}],
+    })
+
+    sent = upstream.sent_text()
+    assert upstream.bodies
+    assert "13912345678" not in sent and "华东冷链商贸有限公司" not in sent and "赵铁柱" not in sent
+    assert "[单位A]的单子" in sent  # Java 发来的代号原样保留 (不重复分配)
+
+
+def test_ai_proxy_other_routes_keep_full_redaction(upstream, monkeypatch):
+    """规则解析 / 平台建厂等 Java 侧未逐个脱敏的转发: 仍按完整规则认名字。"""
+    upstream.answer = '{"rule": "x"}'
+    _ai_proxy_client(monkeypatch).post("/api/ai/rule/parse", json={"rule_text": SECRET})
+
+    sent = upstream.sent_text()
+    assert upstream.bodies and "华东冷链商贸有限公司" not in sent and "赵铁柱" not in sent and "[单位A]" in sent

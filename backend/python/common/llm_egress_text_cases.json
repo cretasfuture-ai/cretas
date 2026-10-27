@@ -204,13 +204,13 @@
       "refusal": null
     },
     {
-      "name": "全角空格与全角数字不当人名边界 (与 Java \\s / \\d 只认 ASCII 一致)",
+      "name": "全角空格算空白 (联系人　王五 认得出); 全角数字不算 (与 Java \\d 一致)",
       "texts": [
         "联系人　王五，联系张三１２点到"
       ],
       "detect_names": true,
       "expected": [
-        "联系人　王五，联系张三１２点到"
+        "联系人　[人员A]，联系张三１２点到"
       ],
       "refusal": null
     },
@@ -253,6 +253,17 @@
       "detect_names": true,
       "expected": [
         "[保密产品A]　的配方和[保密产品A]的成本"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "「联系 + 人名」后面跟全角空格也认",
+      "texts": [
+        "联系张三　明天到，负责人　　李四"
+      ],
+      "detect_names": true,
+      "expected": [
+        "联系[人员A]　明天到，负责人　　[人员B]"
       ],
       "refusal": null
     }
