@@ -62,6 +62,8 @@ public class ReworkPolicyAutoDeduction {
     private final ProductionWorkflowInstanceRepository workflowInstanceRepository;
     private final SemiFinishedInventoryRepository sfiRepository;
     private final WipInventoryService wipInventoryService;
+    /** 缺口 16: 自动追加只挑本计划同一归属的回料 (代工客户的回料不进别人的计划)。 */
+    private final com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
 
     /** 本次自动追加的结果：明细给响应，warnings 给行级提示。 */
     public record Outcome(List<ProcessSheetRowResult.ReworkAutoDeduction> lines, List<String> warnings) {
@@ -187,7 +189,8 @@ public class ReworkPolicyAutoDeduction {
             }
             if (authorizedRework == null) {
                 authorizedRework = wipInventoryService
-                        .listWipByFactory(factoryId, req.getProductTypeId(), req.getProcessOrder());
+                        .listWipByFactory(factoryId, req.getProductTypeId(), req.getProcessOrder(),
+                                ownershipGuard.ofPlanId(factoryId, planId));
             }
             List<WipRowDTO> candidates = authorizedRework.stream()
                     .filter(w -> Boolean.TRUE.equals(w.getIsRework()))

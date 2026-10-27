@@ -2914,7 +2914,8 @@ async function loadSfiOptions() {
     //         故猪蹄计划能看到所有猪蹄族半成品, 但不显牛肉。
     //   阶段: 仅当本道 processOrder 为正整数时传 → 后端仅返回更早阶段 (processOrder < 本道)。
     //         processOrder 缺失/为0 (链起步/未配) → 省略, 只按同族过滤 (务实: 不因缺阶段信息而清空可选项)。
-    const filter: SemiFinishedInventoryFilter = { productTypeId: props.productTypeId };
+    //   归属 (缺口 16): 传本计划 → 后端只列与本计划同一归属的半成品 (代工客户的料只出现在同客户的计划里)。
+    const filter: SemiFinishedInventoryFilter = { productTypeId: props.productTypeId, planId: props.planId };
     if (typeof props.processOrder === 'number' && props.processOrder > 0) {
       filter.maxProcessOrder = props.processOrder;
     }

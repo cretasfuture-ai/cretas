@@ -1,5 +1,6 @@
 package com.cretas.aims.service.production;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
@@ -206,7 +207,7 @@ class ProductionPlanStartValidationTest {
         service.startProduction(FACTORY_ID, PLAN_ID, 77L);
 
         verify(wipInventoryService).deductForSecondaryPlan(
-                347L, new BigDecimal("0.04"), FACTORY_ID, 77L);
+                347L, new BigDecimal("0.04"), FACTORY_ID, 77L, Owner.COMPANY);
     }
 
     @Test

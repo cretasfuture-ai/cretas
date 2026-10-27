@@ -5,6 +5,7 @@ import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -44,12 +45,13 @@ public interface WipInventoryService {
         return s.length() <= 8 ? s : s.substring(0, 8);
     }
 
-    default SemiFinishedInventory validateSourceWip(String sourceWipNo, BigDecimal inputQuantity, String inputUnit) {
-        return validateSourceWip(null, sourceWipNo, inputQuantity, inputUnit, null);
-    }
-
+    /**
+     * @param consumer 领用计划的归属 (缺口 16): 与源半成品行的归属不同 ⇒ 409 跨客户领料。
+     *        ⛔ 不提供省略它的重载 —— 每个领用点必须自己说清楚是替谁领。
+     */
     SemiFinishedInventory validateSourceWip(
-            String factoryId, String sourceWipNo, BigDecimal inputQuantity, String inputUnit, Long excludeReportId);
+            String factoryId, Owner consumer, String sourceWipNo, BigDecimal inputQuantity, String inputUnit,
+            Long excludeReportId);
 
     void postApprovedOutput(String factoryId, ProductionReport report, WorkProcessTask task, Long operatorId);
 
@@ -115,7 +117,7 @@ public interface WipInventoryService {
      * @param operatorId 操作人 ID (可为 null)
      * @throws org.springframework.web.server.ResponseStatusException 409 如余量不足
      */
-    void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId);
+    void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId, Owner consumer);
 
     /**
      * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆操作。
@@ -181,6 +183,13 @@ public interface WipInventoryService {
      * @return 过滤后的 WIP 重量视图 DTO 列表
      */
     List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder);
+
+    /**
+     * 投料下拉 (缺口 16): 在上面的同族 / 阶段过滤之外, 只留与领用计划同一归属的行 ——
+     * 代工客户的半成品只出现在同一客户的计划里, 本厂自有的只出现在本厂自有计划里。
+     * {@code consumer} null = 不按归属过滤 (只用于库存总览 / 销售等非领用视图)。
+     */
+    List<WipRowDTO> listWipByFactory(String factoryId, String productTypeId, Integer maxProcessOrder, Owner consumer);
 
     // ==================== G3 小结 (interim-settle) — task-free SFI in/out ====================
 
@@ -274,7 +283,7 @@ public interface WipInventoryService {
      * @param qty                 本次投料量 (kg; ≤0 → 返回 0, 不扣)
      * @return 实际扣减量 (来源原生单位: kg 源=qty, 盒源=折算盒数; 不足/缺失/盒装缺克重即抛, 故永不少于请求量)
      */
-    BigDecimal consumeClerkSemiStrict(String factoryId, String intermediateBatchNo, BigDecimal qty);
+    BigDecimal consumeClerkSemiStrict(String factoryId, Owner consumer, String intermediateBatchNo, BigDecimal qty);
 
     /**
      * {@link #consumeClerkSemiStrict} 的<b>成对</b>逆操作 (整单撤回还回正式报工时扣掉的回料)。

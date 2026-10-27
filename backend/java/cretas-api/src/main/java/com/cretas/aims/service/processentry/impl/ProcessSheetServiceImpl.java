@@ -184,6 +184,20 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /**
+     * 缺口 16 跨客户领料: 半成品 / 在制批次的归属闸。字段注入只为既有单测装配;
+     * 走到领用点却没有它 ⇒ {@link #ownershipGuard()} 500, ⛔ 不当作「不查」放行。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard intermediateOwnershipGuard;
+
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard() {
+        if (intermediateOwnershipGuard == null) {
+            throw new BusinessException(500, "半成品归属校验服务未就绪, 不能领用半成品");
+        }
+        return intermediateOwnershipGuard;
+    }
+
     /** 缺口 06 汇合配比校验 (正式提交才校验, 草稿不拦)。字段注入, 见 BlendRatioWiringContractTest。 */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
@@ -382,7 +396,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
         // 只接受服务端标记为回料的来源；普通半成品仍保留原有的报工→小结延迟扣减语义。
         List<ProcessSheetRowResult.InputAllocation> reworkAllocations =
-                consumeReworkInputs(factoryId, req, allocations.size());
+                consumeReworkInputs(factoryId, planId, req, allocations.size());
 
         ProcessSheetRowResult result = saveRow(factoryId, planId, req, userId);
         List<ProcessSheetRow> submittedRows = resolveSubmittedRows(factoryId, planId, req, result);
@@ -464,7 +478,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * 调用失败会让整个正式报工事务回滚。</p>
      */
     private List<ProcessSheetRowResult.InputAllocation> consumeReworkInputs(
-            String factoryId, ProcessSheetRowRequest req, int allocationOrderOffset) {
+            String factoryId, String planId, ProcessSheetRowRequest req, int allocationOrderOffset) {
         if (wipInventoryService == null || req.getUpstreamSources() == null
                 || req.getUpstreamSources().isEmpty()) {
             return List.of();
@@ -506,7 +520,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             BigDecimal requestedKg = entry.getValue();
             SemiFinishedInventory source = sourceByBatch.get(batchNo);
             BigDecimal actualSourceQuantity = wipInventoryService.consumeClerkSemiStrict(
-                    factoryId, batchNo, requestedKg);
+                    factoryId, ownershipGuard().ofPlanId(factoryId, planId), batchNo, requestedKg);
             req.getUpstreamSources().stream()
                     .filter(Objects::nonNull)
                     .filter(ref -> ref.isSemiFinished()
@@ -3995,6 +4009,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
                     assertLiveSemiSourceStatus(source, ur.getSourceBatchNumber(), req.getProcessCode());
+                    // 跨客户领料 (缺口 16): 保存即拦, 不留到小结 / 结单才发现
+                    ownershipGuard().assertSemiDrawable(factoryId, ownershipGuard().ofPlanId(factoryId, planId),
+                            source, req.getProcessCode());
                     com.cretas.aims.service.quality.release.QcInspectionGuard
                             .assertSemiDrawable(source, req.getProcessCode());   // 质检放行: 待检不可领
                     assertWorkflowSourceSku(ur.getSourceBatchNumber(), ur.getSkuId(), source.getProductTypeId());
@@ -4024,6 +4041,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 if (!factoryId.equals(srcMb.getFactoryId())) {
                     throw new BusinessException(403, "无权访问上游批次 " + ur.getSourceBatchNumber());
                 }
+                // 跨客户领料 (缺口 16): 上游批次可以是别的计划的在制品 (按批次号工厂内查) —— 归属看它的计划
+                ownershipGuard().assertWipBatchDrawable(factoryId, ownershipGuard().ofPlanId(factoryId, planId),
+                        pb, ur.getSourceBatchNumber(), req.getProcessCode());
                 com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
                         srcMb, ur.getSourceBatchNumber(), req.getProcessCode());   // 质检放行: 待检不可投
 

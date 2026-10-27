@@ -205,7 +205,7 @@ class ReversalPhantomWipContractTest {
                 mock(ProductionWorkflowInstanceRepository.class),
                 mock(WorkflowTaskPortRepository.class),
                 mock(ProductFamilyResolver.class),
-                mock(ApplicationEventPublisher.class));
+                mock(ApplicationEventPublisher.class), org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
 
         ProductionReport report = ProductionReport.builder()
                 .id(23837L).factoryId(FACTORY).batchId(10761L)
