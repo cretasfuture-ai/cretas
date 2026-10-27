@@ -469,23 +469,20 @@ def _ai_proxy_client(monkeypatch):
     return TestClient(app)
 
 
-def test_ai_proxy_intent_routes_only_hide_numbers_because_java_already_redacted(upstream, monkeypatch):
-    """Java 兜底意图分类 / 澄清已按同一套规则脱敏才转发: 这里原话模式, 只抹号码、不认名字、不查库。"""
-    async def must_not_run():
-        raise AssertionError("原话模式不该查保密产品名")
-
-    monkeypatch.setattr(lc, "_protected_names_for_egress", must_not_run)
+def test_ai_proxy_intent_classify_redacts_the_intent_list_java_forwards_unredacted(upstream, monkeypatch):
+    """Java 兜底意图分类 (LlmIntentFallbackClientImpl) 用完整规则脱敏了原话, 但意图列表 (名称 / 描述 / 关键词) 原样转发;
+    这里保持完整规则, 列表里的名字也换掉。字段名用 Java 实际发的 user_input / available_intents。"""
     upstream.answer = '{"intent": "SUPPLIER_QUERY", "confidence": 0.9}'
-    client = _ai_proxy_client(monkeypatch)
+    _ai_proxy_client(monkeypatch).post("/api/ai/intent/classify", json={
+        "user_input": "[单位A]的单子查一下, 电话 13912345678",
+        "available_intents": [{"intent_code": "SUPPLIER_QUERY", "intent_name": "查供应商",
+                               "description": "例: 查华东冷链商贸有限公司的供货", "keywords": ["联系人：赵铁柱"]}],
+    })
 
-    client.post("/api/ai/intent/classify", json={"text": SECRET, "candidates": ["SUPPLIER_QUERY"]})
-    client.post("/api/ai/intent/clarify", json={"text": SECRET, "ambiguous_intents": ["A", "B"]})
-
-    assert len(upstream.bodies) == 2
-    for body in upstream.bodies:
-        sent = json.dumps(body, ensure_ascii=False)
-        assert "13912345678" not in sent and "[电话A]" in sent
-        assert "华东冷链商贸有限公司" in sent and "赵铁柱" in sent
+    sent = upstream.sent_text()
+    assert upstream.bodies
+    assert "13912345678" not in sent and "华东冷链商贸有限公司" not in sent and "赵铁柱" not in sent
+    assert "[单位A]的单子" in sent  # Java 发来的代号原样保留 (不重复分配)
 
 
 def test_ai_proxy_other_routes_keep_full_redaction(upstream, monkeypatch):

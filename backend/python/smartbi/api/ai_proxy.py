@@ -167,7 +167,6 @@ async def _call_llm(
     max_tokens: int = 2000,
     cache_key: Optional[str] = None,
     model: Optional[str] = None,
-    java_redacted_utterance: bool = False,
 ) -> str:
     """Call DashScope LLM API with optional application-level result cache.
 
@@ -209,15 +208,8 @@ async def _call_llm(
         "enable_thinking": False
     }
 
-    if java_redacted_utterance:
-        # Java (LlmIntentFallbackClientImpl) 已按同一套规则脱敏后才转发: 这里只再抹一遍号码 (原话模式, 不查库),
-        # 不再认名字 —— 与 /api/llm/* 代理一样, 名字要不要换由 Java 按出口决定
-        from common.llm_redactor import utterance_egress
-        with llm_caller_context("ai_proxy"), utterance_egress():
-            data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
-    else:
-        with llm_caller_context("ai_proxy"):
-            data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
+    with llm_caller_context("ai_proxy"):
+        data = await call_chain(SLOT.CHAT, payload, timeout=30.0)
 
     # Log context cache stats
     usage = data.get("usage", {})
@@ -321,7 +313,6 @@ async def classify_intent(raw_request: Request):
             user_prompt=f"用户输入：{text}\n\n候选意图：\n{candidates_str}",
             cache_key=ck,
             model=settings.llm_fast_model,
-            java_redacted_utterance=True,
         )
         return {
             "success": True,
@@ -346,7 +337,6 @@ async def clarify_intent(request: IntentClarifyRequest):
             user_prompt=f"用户输入：{request.text}\n\n当前识别意图：{request.current_intent or '未识别'}\n模糊意图列表：{request.ambiguous_intents or []}",  # noqa: E501
             cache_key=ck,
             model=settings.llm_fast_model,
-            java_redacted_utterance=True,
         )
         return {
             "success": True,
