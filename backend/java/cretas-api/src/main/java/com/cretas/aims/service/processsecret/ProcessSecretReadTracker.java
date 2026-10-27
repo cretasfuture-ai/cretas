@@ -2,6 +2,7 @@ package com.cretas.aims.service.processsecret;
 
 import com.cretas.aims.dto.orchestration.LineItemMatch;
 import com.cretas.aims.entity.ConversionChangeHistory;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.MaterialProductConversion;
 import com.cretas.aims.entity.ProductProcessWorkflow;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
@@ -9,6 +10,7 @@ import com.cretas.aims.entity.ProductWorkProcess;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog;
 import com.cretas.aims.entity.bom.BomItemSubstitute;
 import com.cretas.aims.entity.bom.BomProcessInjectionConfig;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -150,6 +152,20 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
                 found.add(new Read(Kind.PRODUCTION_PLAN, b.getFactoryId(), b.getProductionPlanId()));
             }
             return found;
+        }
+        if (entity instanceof MaterialConsumption c) {
+            // 消耗记录里有报工自动带出的调料 / 包材和 BOM 自动扣料 (数量 = 配比 × 投入; 独立审查 V2.1 M4),
+            // 也有本单实际总量 (平台 / 他厂不给): 按它的计划记, 没有计划时按生产批次记
+            if (c.getProductionPlanId() != null && !c.getProductionPlanId().isBlank()) {
+                return List.of(new Read(Kind.PRODUCTION_PLAN, c.getFactoryId(), c.getProductionPlanId()));
+            }
+            return c.getProductionBatchId() == null ? List.of()
+                    : List.of(new Read(Kind.PRODUCTION_BATCH, c.getFactoryId(), String.valueOf(c.getProductionBatchId())));
+        }
+        if (entity instanceof ProcessSheetRowChangeLog log) {
+            // 报工行操作记录的前后快照就是 row_payload (含自动带出行和回料自动扣减)
+            if (log.getPlanId() == null || log.getPlanId().isBlank()) return List.of();
+            return List.of(new Read(Kind.PRODUCTION_PLAN, log.getFactoryId(), log.getPlanId()));
         }
         if (entity instanceof ProductionReport r) {
             // 多产出计划的报工行 productTypeId 是原料锚点 (id 就是原料 id), 只按它记会把受保护成品漏掉

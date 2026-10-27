@@ -208,6 +208,8 @@ class EstimatedAuxByBomRatioContractTest {
         assertThat(line.getRawInputKg()).isEqualByComparingTo(RAW_KG);
         // 10 g/kg × 80kg = 800 g = 0.8 kg
         assertThat(line.getQuantity()).isEqualByComparingTo("0.8");
+        // 工艺保密: 用量 = 配方 g/kg × 主料投入, 两个数同在一行, 一除就是配比 (独立审查 V2.1 M4)
+        assertThat(line.isAutomatic()).isTrue();
         assertThat(line.getUnit()).isEqualTo("kg");
         assertThat(line.getUnitPrice()).isEqualByComparingTo("2.00");
         assertThat(line.getAmount()).isEqualByComparingTo("1.6000");

@@ -1800,6 +1800,8 @@ public class SalesServiceImpl implements SalesService {
         java.util.Map<String, BigDecimal> amtByType = new java.util.LinkedHashMap<>();
         // 兜底单价 (用量为 0 时用首个 unitPrice)
         java.util.Map<String, BigDecimal> fallbackUnitPrice = new java.util.HashMap<>();
+        // 含报工自动带出 / BOM 自动扣料的物料: 用量 = 配比 × 投入 (独立审查 V2.1 M4)
+        java.util.Set<String> automaticTypes = new java.util.HashSet<>();
 
         for (Long pkId : batchPkIds) {
             java.util.List<com.cretas.aims.entity.MaterialConsumption> cons;
@@ -1818,6 +1820,9 @@ public class SalesServiceImpl implements SalesService {
                 BigDecimal q = c.getQuantity() != null ? c.getQuantity() : BigDecimal.ZERO;
                 BigDecimal amt = c.getTotalCost() != null ? c.getTotalCost() : BigDecimal.ZERO;
                 qtyByType.merge(typeId, q, BigDecimal::add);
+                if (com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType())) {
+                    automaticTypes.add(typeId);
+                }
                 amtByType.merge(typeId, amt, BigDecimal::add);
                 if (c.getUnitPrice() != null) {
                     fallbackUnitPrice.putIfAbsent(typeId, c.getUnitPrice());
@@ -1865,6 +1870,7 @@ public class SalesServiceImpl implements SalesService {
                     .materialName(name)
                     .category(category)
                     .actualQuantity(qty)
+                    .automatic(automaticTypes.contains(typeId))
                     .unit(unit)
                     .unitPrice(unitPrice)
                     .amount(amt)

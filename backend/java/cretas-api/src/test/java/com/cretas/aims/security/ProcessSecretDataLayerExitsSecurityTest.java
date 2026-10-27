@@ -113,6 +113,8 @@ class ProcessSecretDataLayerExitsSecurityTest {
     ProcessSecretAccessService access;
     BomRecipeRepository recipes;
     final Map<Class<?>, Object> deps = new HashMap<>();
+    /** 裁剪器解析计划 → 产品用 (落库的消耗记录按计划打标)。 */
+    final ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
 
     @BeforeEach
     void setUp() {
@@ -154,7 +156,7 @@ class ProcessSecretDataLayerExitsSecurityTest {
 
     MockMvc mvc(Object controller) {
         ProcessSecretPayloadScrubber scrubber = com.cretas.aims.service.processsecret.ProcessSecretTestHooks.scrubber(access, recipes,
-                mock(ProductionWorkflowInstanceRepository.class), mock(ProductionPlanRepository.class));
+                mock(ProductionWorkflowInstanceRepository.class), plans);
         return MockMvcBuilders.standaloneSetup(controller)
                 .addMappedInterceptors(new String[]{"/api/mobile/**"}, new ProcessSecretGuardInterceptor(access,
                         recipes, mock(BomRecipeItemRepository.class), mock(ProductProcessWorkflowRepository.class),
@@ -228,6 +230,8 @@ class ProcessSecretDataLayerExitsSecurityTest {
                 user(OPERATOR)).at("/estimatedAuxItems/0");
         assertThat(item.get("dosagePerKgG").isNull()).isTrue();
         assertThat(item.get("rawInputKg").asInt()).isEqualTo(40);
+        // 用量 0.5 kg ÷ 主料 40 kg = 12.5 g/kg: 估算用量和主料投入同在一行, 用量按配比藏 (独立审查 V2.1 M4)
+        assertThat(item.get("quantity").isNull()).isTrue();
         assertThat(item.get("materialName").asText()).isEqualTo("秘方香料");
         assertThat(item.get("processSecret").get("visibility").asText()).isEqualTo("TOTALS_ONLY");
         verifyDenied(user(OPERATOR), "dosagePerKgG");
@@ -569,6 +573,93 @@ class ProcessSecretDataLayerExitsSecurityTest {
                 get("/api/mobile/F-A/bom/recipes/by-product/PLAIN/seasoning/process-flags"), platform());
         assertThat(data.at("/processes/0/workProcessId").asText()).isEqualTo("WP-PLAIN");
         verify(recorder, org.mockito.Mockito.never()).record(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ------------------------------------------------------------------ 落库的消耗记录 (独立审查 V2.1 M4)
+
+    static com.cretas.aims.entity.MaterialConsumption consumption(int id, String sourceType, String quantity) {
+        com.cretas.aims.entity.MaterialConsumption c = new com.cretas.aims.entity.MaterialConsumption();
+        c.setId(id);
+        c.setFactoryId(F);
+        c.setProductionPlanId("plan-7");
+        c.setProductionBatchId(70L);
+        c.setBatchId("MB-" + id);
+        c.setMaterialTypeId("MAT-" + id);
+        c.setSourceType(sourceType);
+        c.setQuantity(new BigDecimal(quantity));
+        c.setTotalCost(new BigDecimal("1"));
+        return c;
+    }
+
+    /** 0.1725 kg 桂皮是报工按配比自动带出的 (1.5 g/kg × 115 kg 牛肉); 115 kg 牛肉是人工投料。 */
+    MockMvc storedConsumptions() throws Exception {
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("plan-7");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("plan-7", F)).thenReturn(Optional.of(plan));
+        List<com.cretas.aims.entity.MaterialConsumption> rows = List.of(
+                consumption(1, "SEASONING", "0.1725"), consumption(2, "RAW_MATERIAL", "115"));
+        when(dep(com.cretas.aims.repository.MaterialConsumptionRepository.class).findByProductionBatchId(70L))
+                .thenAnswer(invocation -> {
+                    // 真实仓库读库时由 Hibernate PostLoad 打标; 这里走同一个入口
+                    rows.forEach(com.cretas.aims.service.processsecret.ProcessSecretTestHooks::record);
+                    return rows;
+                });
+        return mvc(controller(com.cretas.aims.controller.MaterialConsumptionController.class));
+    }
+
+    @Test
+    void storedAutomaticSeasoningConsumptionIsHiddenWhileTheManualActualStays() throws Exception {
+        JsonNode rows = call(storedConsumptions(),
+                get("/api/mobile/F-A/processing/material-consumptions/batch/70"), user(OPERATOR));
+        assertThat(rows.at("/0/automatic").asBoolean()).isTrue();
+        assertThat(rows.at("/0/quantity").isNull()).as("自动带出的调料量 = 配比 × 投入").isTrue();
+        assertThat(rows.at("/0/materialTypeId").asText()).isEqualTo("MAT-1");
+        assertThat(rows.at("/1/quantity").decimalValue()).as("人工实际投料照常").isEqualByComparingTo("115");
+        verifyDenied(user(OPERATOR), "quantity");
+    }
+
+    @Test
+    void theOwnerSeesStoredAutomaticConsumption() throws Exception {
+        JsonNode rows = call(storedConsumptions(),
+                get("/api/mobile/F-A/processing/material-consumptions/batch/70"), user(OWNER));
+        assertThat(rows.at("/0/quantity").decimalValue()).isEqualByComparingTo("0.1725");
+        verifyNothingDenied();
+    }
+
+    @Test
+    void platformStaffGetNoStoredConsumptionQuantitiesOfAProtectedProduct() throws Exception {
+        JsonNode rows = call(storedConsumptions(),
+                get("/api/mobile/F-A/processing/material-consumptions/batch/70"), platform());
+        assertThat(rows.at("/0/quantity").isNull()).isTrue();
+        assertThat(rows.at("/1/quantity").isNull()).as("平台连本单总量也不给").isTrue();
+    }
+
+    @Test
+    void batchConsumptionTotalsThatIncludeAutomaticLinesAreHidden() throws Exception {
+        // 合计 115.1725 − 可见的人工 115 = 0.1725, 一减就是配比算出的量
+        JsonNode total = call(storedConsumptions(),
+                get("/api/mobile/F-A/processing/material-consumptions/batch/70/cost"), user(OPERATOR));
+        assertThat(total.get("totalQuantity").isNull()).isTrue();
+        JsonNode ownerTotal = call(storedConsumptions(),
+                get("/api/mobile/F-A/processing/material-consumptions/batch/70/cost"), user(OWNER));
+        assertThat(ownerTotal.get("totalQuantity").decimalValue()).isEqualByComparingTo("115.1725");
+    }
+
+    @Test
+    void batchConsumptionTotalsWithoutAutomaticLinesStayForTheFactory() throws Exception {
+        storedConsumptions();
+        com.cretas.aims.entity.MaterialConsumption manual = consumption(3, "RAW_MATERIAL", "40");
+        manual.setProductionBatchId(71L);
+        when(dep(com.cretas.aims.repository.MaterialConsumptionRepository.class).findByProductionBatchId(71L))
+                .thenAnswer(invocation -> {
+                    com.cretas.aims.service.processsecret.ProcessSecretTestHooks.record(manual);
+                    return List.of(manual);
+                });
+        JsonNode total = call(mvc(controller(com.cretas.aims.controller.MaterialConsumptionController.class)),
+                get("/api/mobile/F-A/processing/material-consumptions/batch/71/cost"), user(OPERATOR));
+        assertThat(total.get("totalQuantity").decimalValue()).isEqualByComparingTo("40");
     }
 
     @Test

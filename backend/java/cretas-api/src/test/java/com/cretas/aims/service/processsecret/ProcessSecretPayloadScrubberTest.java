@@ -348,6 +348,91 @@ class ProcessSecretPayloadScrubberTest {
         assertThat(owner.at("/reworkAutoDeductions/0/batches/0/quantityKg").asInt()).isEqualTo(15);
     }
 
+    ProductionPlan securedPlan(String id) {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(id);
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId(id, F)).thenReturn(Optional.of(plan));
+        return plan;
+    }
+
+    @Test
+    void storedReworkAutoDeductionFeedIsHiddenButAManualReworkFeedStays() throws Exception {
+        // 独立审查 V2.1 M4: 落库的 row_payload 里回料自动扣减只剩 automaticRework 标志, 投料量 = 回料配比 × 主料投入
+        securedPlan("plan-8");
+        String body = "{'rows':[{'productTypeId':'P17','upstreamSources':["
+                + "{'sourceBatchNumber':'RW-1','feedQuantityKg':23,'automaticRework':true},"
+                + "{'sourceBatchNumber':'RW-2','feedQuantityKg':5,'automaticRework':false}]}]}";
+
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-8"),
+                "GET /process-sheet/rows", false);
+        assertThat(operator.at("/rows/0/upstreamSources/0/feedQuantityKg").isNull()).isTrue();
+        assertThat(operator.at("/rows/0/upstreamSources/0/sourceBatchNumber").asText()).isEqualTo("RW-1");
+        assertThat(operator.at("/rows/0/upstreamSources/1/feedQuantityKg").asInt()).as("手工回料照常").isEqualTo(5);
+
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-8"),
+                "GET /process-sheet/rows", false);
+        assertThat(owner.at("/rows/0/upstreamSources/0/feedQuantityKg").asInt()).isEqualTo(23);
+    }
+
+    @Test
+    void rowHistorySummariesThatSpellOutAutomaticLinesAreHidden() throws Exception {
+        // 操作记录的「字段: 旧→新」是快照转成的文字, 自动带出行的数量也在里面
+        securedPlan("plan-9");
+        String body = "[{'id':1,'operation':'UPDATE','diffSummary':'rawMaterialInputs: [{skuId=S-CINNAMON, "
+                + "quantity=0.1725, automatic=true}]→[{skuId=S-CINNAMON, quantity=0.18, automatic=true}]'},"
+                + "{'id':2,'operation':'UPDATE','diffSummary':'remark: 空→二号锅'},"
+                + "{'id':3,'operation':'CREATE','diffSummary':'新建行'}]";
+
+        JsonNode operator = json.readTree(body.replace('\'', '"'));
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-9"),
+                "GET /process-sheet/row/history", false);
+        assertThat(operator.at("/0/diffSummary").isNull()).isTrue();
+        assertThat(operator.at("/1/diffSummary").asText()).isEqualTo("remark: 空→二号锅");
+        assertThat(operator.at("/2/diffSummary").asText()).isEqualTo("新建行");
+
+        JsonNode owner = json.readTree(body.replace('\'', '"'));
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-9"),
+                "GET /process-sheet/row/history", false);
+        assertThat(owner.at("/0/diffSummary").asText()).contains("0.1725");
+    }
+
+    @Test
+    void storedConsumptionAndRowHistoryAreTrackedByTheirPlan() {
+        com.cretas.aims.entity.MaterialConsumption planned = new com.cretas.aims.entity.MaterialConsumption();
+        planned.setFactoryId(F);
+        planned.setProductionPlanId("plan-7");
+        planned.setProductionBatchId(70L);
+        assertThat(ProcessSecretReadTracker.readsOf(planned)).containsExactly(
+                new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, F, "plan-7"));
+
+        // 批次完工 BOM 自动扣料的旧记录可能没有计划: 按生产批次记 (出口经批次 → 计划解析)
+        com.cretas.aims.entity.MaterialConsumption batchOnly = new com.cretas.aims.entity.MaterialConsumption();
+        batchOnly.setFactoryId(F);
+        batchOnly.setProductionBatchId(70L);
+        assertThat(ProcessSecretReadTracker.readsOf(batchOnly)).containsExactly(
+                new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCTION_BATCH, F, "70"));
+
+        com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog history =
+                com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog.builder().factoryId(F).planId("plan-9").build();
+        assertThat(ProcessSecretReadTracker.readsOf(history)).containsExactly(
+                new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, F, "plan-9"));
+    }
+
+    @Test
+    void consumptionSourceTypesWrittenByTheRecipeAreRecognised() {
+        assertThat(ProcessSecretRecipeDerived.isAutomaticConsumption("SEASONING")).isTrue();
+        assertThat(ProcessSecretRecipeDerived.isAutomaticConsumption(" packaging ")).isTrue();
+        assertThat(ProcessSecretRecipeDerived.isAutomaticConsumption("AUTO_BOM")).isTrue();
+        // 人工 / 显式投料与差异调整是实际值
+        assertThat(ProcessSecretRecipeDerived.isAutomaticConsumption("RAW_MATERIAL")).isFalse();
+        assertThat(ProcessSecretRecipeDerived.isAutomaticConsumption("ADJUSTMENT")).isFalse();
+        assertThat(ProcessSecretRecipeDerived.isAutomaticConsumption(null)).isFalse();
+    }
+
     @Test
     void quantitiesDerivedFromTheRecipeAreHiddenButManualActualsStay() throws Exception {
         // F006 验收 2026-10-27: 报工行里按配比自动带出的调料用量 0.1725 kg ÷ 投入 115 kg = 1.5 g/kg,
