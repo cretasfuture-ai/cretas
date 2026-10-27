@@ -1,0 +1,196 @@
+{
+  "_doc": "外发文本脱敏共用用例 (Steve 2026-10-27: Python 与 Java 同一套规则)。每条在 Java (LlmEgressRedactor.redactTexts) 和 Python (common.llm_egress_text.redact_texts) 各跑一遍, 输出必须与 expected 一字不差; answers 用本条的代号表还原模型回答。",
+  "cases": [
+    {
+      "name": "手机号各种写法",
+      "texts": [
+        "联系电话 139-1234-5678，备用 +86 13912345670，点分 139.1234.5671，全角 １３９１２３４５６７２"
+      ],
+      "detect_names": true,
+      "expected": [
+        "联系电话 [电话C]，备用 [电话D]，点分 [电话B]，全角 [电话A]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "座机与 400",
+      "texts": [
+        "座机 021-5888 1234 或 (021)58881235，客服 400-820-8820，办公 0571 8888 1236"
+      ],
+      "detect_names": true,
+      "expected": [
+        "座机 [电话A] 或 [电话D]，客服 [电话B]，办公 [电话C]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "证件号与银行卡",
+      "texts": [
+        "身份证 110101199003077777，旧证 110101900307777，分组 110101 19900307 7778，卡号 6222 0212 3456 7890 123，整卡 6222021234567890"
+      ],
+      "detect_names": true,
+      "expected": [
+        "身份证 [证件号B]，旧证 [证件号C]，分组 [证件号A]，卡号 [卡号A]，整卡 [卡号B]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "小数部分不是号码",
+      "texts": [
+        "占比 0.13912345678，误差 0.30000000000000004"
+      ],
+      "detect_names": true,
+      "expected": [
+        "占比 0.13912345678，误差 0.30000000000000004"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "公司名去掉前面的动词",
+      "texts": [
+        "查一下永辉超市的单子，然后给华东冷链商贸有限公司下单，供应商是牛大哥牧业"
+      ],
+      "detect_names": true,
+      "expected": [
+        "查一下[单位A]的单子，然后给[单位B]下单，供应商是[单位C]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "时间动词加行业词不是单位",
+      "texts": [
+        "本周物流成本偏高，查看冷链运输记录，所有养殖场都要统计"
+      ],
+      "detect_names": true,
+      "expected": [
+        "本周物流成本偏高，查看冷链运输记录，所有养殖场都要统计"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "岗位人名与称谓",
+      "texts": [
+        "质检员：赵铁柱说李经理明天到，通知张三，找牛经理确认"
+      ],
+      "detect_names": true,
+      "expected": [
+        "质检员：[人员A]说[人员C]明天到，通知[人员B]，找[人员D]确认"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "已知交易对象与简称",
+      "texts": [
+        "老街坊上周退货两次，老街坊餐饮有限公司要求赵铁柱跟进"
+      ],
+      "known_parties": {
+        "老街坊餐饮有限公司": "CUSTOMER",
+        "赵铁柱": "PERSON"
+      },
+      "detect_names": true,
+      "answers": [
+        {
+          "answer": "[客户A] 的退货由 人员A 跟进",
+          "expected": "老街坊餐饮有限公司 的退货由 赵铁柱 跟进"
+        }
+      ],
+      "expected": [
+        "[客户A]上周退货两次，[客户A]要求[人员A]跟进"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "保密产品名",
+      "texts": [
+        "秘制酱牛肉的出成率比五香牛肉低"
+      ],
+      "protected_names": [
+        "秘制酱牛肉",
+        "肉",
+        "  "
+      ],
+      "detect_names": true,
+      "expected": [
+        "[保密产品A]的出成率比五香牛肉低"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "入参里已有的代号字样不再分配",
+      "texts": [
+        "表里写着[客户A]和单位A栋，新客户是老街坊餐饮有限公司，单位是华东冷链商贸有限公司"
+      ],
+      "known_parties": {
+        "老街坊餐饮有限公司": "CUSTOMER"
+      },
+      "detect_names": true,
+      "answers": [
+        {
+          "answer": "【客户 B】和单位A，原来的[客户A]与单位A栋不动",
+          "expected": "老街坊餐饮有限公司和华东冷链商贸有限公司，原来的[客户A]与单位A栋不动"
+        }
+      ],
+      "expected": [
+        "表里写着[客户A]和单位A栋，新客户是[客户B]，单位是[单位A]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "原话模式只抹号码",
+      "texts": [
+        "给华东冷链商贸有限公司的李经理打电话13912345678"
+      ],
+      "detect_names": false,
+      "expected": [
+        "给华东冷链商贸有限公司的李经理打电话[电话A]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "拼音名按整词",
+      "texts": [
+        "wangjg 提交了，wangjgx 还没有"
+      ],
+      "known_parties": {
+        "wangjg": "PERSON"
+      },
+      "detect_names": true,
+      "expected": [
+        "[人员A] 提交了，wangjgx 还没有"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "后面认出的人名在前一段也换",
+      "texts": [
+        "赵铁柱今天请假",
+        null,
+        "质检员：赵铁柱"
+      ],
+      "detect_names": true,
+      "expected": [
+        "[人员A]今天请假",
+        null,
+        "质检员：[人员A]"
+      ],
+      "refusal": null
+    },
+    {
+      "name": "去括号代号后面跟量词是普通说法",
+      "texts": [
+        "客户A类和人员A班照常，联系人：王五"
+      ],
+      "detect_names": true,
+      "answers": [
+        {
+          "answer": "人员A 负责，人员A班不变，[人员 A] 已通知",
+          "expected": "王五 负责，人员A班不变，王五 已通知"
+        }
+      ],
+      "expected": [
+        "客户A类和人员A班照常，联系人：[人员A]"
+      ],
+      "refusal": null
+    }
+  ]
+}
