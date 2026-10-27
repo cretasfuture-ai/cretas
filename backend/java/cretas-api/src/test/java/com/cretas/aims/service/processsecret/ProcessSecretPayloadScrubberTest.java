@@ -401,6 +401,75 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void sharesOfManualRowsNextToAnAutomaticRowAreHidden() throws Exception {
+        // 独立审查 V2.1 复核 H3: 人工 115 kg 占 99.85% → 自动行 = 115 × 0.15 ÷ 99.85, 不需要价格权限
+        securedPlan("plan-10");
+        String body = "{'sources':[{'batchName':'BEEF-1','quantity':115,'weightSharePct':99.85,'automatic':false},"
+                + "{'batchName':'AUTO-1','quantity':0.1725,'weightSharePct':0.15,'automatic':true,"
+                + "'initialQuantity':20,'remainingQuantity':19.8275}],"
+                + "'byproducts':[{'name':'牛油','quantity':3,'weightSharePct':60},{'name':'牛筋','quantity':2,'weightSharePct':40}]}";
+
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-10"),
+                "GET /production/orders/o1/cost-breakdown", false);
+        assertThat(operator.at("/sources/0/quantity").asInt()).as("人工实际投料照常").isEqualTo(115);
+        assertThat(operator.at("/sources/0/weightSharePct").isNull()).isTrue();
+        assertThat(operator.at("/sources/1/quantity").isNull()).isTrue();
+        assertThat(operator.at("/sources/1/weightSharePct").isNull()).isTrue();
+        // 自动行上的原料批次库存是库存事实, 不是配比 (复核 L2)
+        assertThat(operator.at("/sources/1/initialQuantity").asInt()).isEqualTo(20);
+        // 阴性对照: 没有自动行的列表, 占比照常
+        assertThat(operator.at("/byproducts/0/weightSharePct").asInt()).isEqualTo(60);
+
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-10"),
+                "GET /production/orders/o1/cost-breakdown", false);
+        assertThat(owner.at("/sources/0/weightSharePct").decimalValue()).isEqualByComparingTo("99.85");
+    }
+
+    @Test
+    void rowHistorySummariesWithBlendSnapshotsAreHiddenAndPlatformStaffGetNoSummaryText() throws Exception {
+        // 复核 M3: 配比核对快照 (recipeSharePercent) 也写进了摘要文字; 平台从摘要里能读到本单总量
+        securedPlan("plan-11");
+        String body = "[{'id':1,'diffSummary':'blendRatio: {recipeSharePercent=60.0, actualSharePercent=58.2}→空'},"
+                + "{'id':2,'diffSummary':'inputQuantity: 100→120'}]";
+
+        JsonNode operator = json.readTree(body.replace('\'', '"'));
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-11"),
+                "GET /process-sheet/row/history", false);
+        assertThat(operator.at("/0/diffSummary").isNull()).isTrue();
+        assertThat(operator.at("/1/diffSummary").asText()).as("本厂账号看本单总量").isEqualTo("inputQuantity: 100→120");
+
+        JsonNode platform = json.readTree(body.replace('\'', '"'));
+        scrubber.scrub(platform, platform(), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-11"),
+                "GET /process-sheet/row/history", false);
+        assertThat(platform.at("/1/diffSummary").isNull()).isTrue();
+    }
+
+    @Test
+    void consumptionOfABatchThatCanNoLongerBeFoundIsTreatedAsProtected() throws Exception {
+        // 复核 M4: 只有生产批次的 BOM 自动扣料记录, 批次已软删时原来没有任何受限读数 → 原样输出
+        when(batches.findByIdAndFactoryId(99L, F)).thenReturn(Optional.empty());
+        String body = "{'content':[{'materialTypeId':'S-CINNAMON','quantity':0.1725,'automatic':true}]}";
+
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_BATCH, "99"),
+                "GET /processing/material-consumptions", false);
+        assertThat(operator.at("/content/0/quantity").isNull()).isTrue();
+    }
+
+    @Test
+    void rowHistoryRecordsTheSnapshotsOwnProductsAsPlanMembers() {
+        // 复核 L1: 多产出行快照里的半成品 SKU 不在计划产品集合里, 要像报工行一样记成成员
+        com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog history =
+                com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog.builder().factoryId(F).planId("plan-9")
+                        .afterValue(java.util.Map.of("productTypeId", "SEMI-X", "rawMaterialInputs", List.of())).build();
+        assertThat(ProcessSecretReadTracker.readsOf(history)).containsExactly(
+                new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, F, "plan-9"),
+                new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, F, "plan-9", "SEMI-X"));
+    }
+
+    @Test
     void storedConsumptionAndRowHistoryAreTrackedByTheirPlan() {
         com.cretas.aims.entity.MaterialConsumption planned = new com.cretas.aims.entity.MaterialConsumption();
         planned.setFactoryId(F);

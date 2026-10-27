@@ -165,7 +165,23 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
         if (entity instanceof ProcessSheetRowChangeLog log) {
             // 报工行操作记录的前后快照就是 row_payload (含自动带出行和回料自动扣减)
             if (log.getPlanId() == null || log.getPlanId().isBlank()) return List.of();
-            return List.of(new Read(Kind.PRODUCTION_PLAN, log.getFactoryId(), log.getPlanId()));
+            List<Read> found = new java.util.ArrayList<>();
+            found.add(new Read(Kind.PRODUCTION_PLAN, log.getFactoryId(), log.getPlanId()));
+            // 快照里的半成品 / 副产 SKU 同报工行一样记成计划的成员 (独立审查 V2.1 复核 L1)
+            Set<String> members = new LinkedHashSet<>();
+            for (java.util.Map<String, Object> snapshot : java.util.Arrays.asList(log.getBeforeValue(), log.getAfterValue())) {
+                if (snapshot == null) continue;
+                try {
+                    members.addAll(payloadProducts(PAYLOAD_READER.writeValueAsString(snapshot)));
+                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                    // 读不出成员: 快照里的产品归属不可信, 记一个未知成员, 出口按受保护处理
+                    members.add(UNKNOWN_MEMBER);
+                }
+            }
+            for (String member : members) {
+                found.add(new Read(Kind.PRODUCTION_PLAN, log.getFactoryId(), log.getPlanId(), member));
+            }
+            return found;
         }
         if (entity instanceof ProductionReport r) {
             // 多产出计划的报工行 productTypeId 是原料锚点 (id 就是原料 id), 只按它记会把受保护成品漏掉

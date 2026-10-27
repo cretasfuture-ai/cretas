@@ -246,6 +246,8 @@ public class OrderCostBreakdownDTO {
     @AllArgsConstructor
     public static class PackagingItem {
         private String name;
+        /** 来自报工自动带出 / BOM 自动扣料的包材 (金额 = 配比 × 投入 × 单价): 工艺保密时按配比类裁剪。 */
+        private boolean automatic;
         /** 该包材项成本 (元); masked 时 null。 */
         private BigDecimal cost;
     }

@@ -866,6 +866,9 @@ class OrderCostBreakdownServiceTest {
                 .containsExactlyInAnyOrder("AUTO-1=true", "MANUAL-1=false");
         assertThat(dto.getPackagingDetails()).extracting(OrderCostBreakdownDTO.PackagingDetail::isAutomatic)
                 .containsExactly(true);
+        // 包材成本项是包材明细金额换了个名字 (独立审查 V2.1 复核 H1)
+        assertThat(dto.getPackagingDetail()).extracting(OrderCostBreakdownDTO.PackagingItem::isAutomatic)
+                .containsExactly(true);
     }
 
     @Test

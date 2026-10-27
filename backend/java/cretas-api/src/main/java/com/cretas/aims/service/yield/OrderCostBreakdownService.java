@@ -645,6 +645,7 @@ public class OrderCostBreakdownService {
                     .map(item -> PackagingItem.builder()
                             .name(item.getMaterialName())
                             .cost(item.getAmount())
+                            .automatic(item.isAutomatic())
                             .build())
                     .collect(Collectors.toList());
         } else {
