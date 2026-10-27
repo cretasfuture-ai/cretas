@@ -35,11 +35,20 @@ export interface FactoryAnalysisFact {
   source: string;
 }
 
+/** Structured period returned with every answer; labels are display-only. */
+export interface FactoryAnalysisPeriodSnapshot {
+  label: string;
+  year: number;
+  periodType: FactoryChartPeriodType;
+  startMonth: number;
+  endMonth: number;
+}
+
 export interface FactoryAnalysisData {
   factoryId: string;
   source: FactoryChartSource;
   sourceLabel?: string;
-  period?: { label?: string; [key: string]: unknown };
+  period: FactoryAnalysisPeriodSnapshot;
   analysisSubject?: string | null;
   analysisScopeLabel?: string;
   question: string;

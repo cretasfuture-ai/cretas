@@ -1,6 +1,6 @@
 # FAD27 工厂 AI 对话分析
 
-状态 review；源码 Owner 已冻结，文件 scope 锁释放，Root 保留最终集成/PR/发布/验收；Base SHA `5338bd8a4f4c206f8be67bbc6f3330a438e8dd51`；worktree `C:/Users/Steve/cretas-factory-ai-dialogue-20261027`；branch `codex/factory-ai-dialogue-20261027`。
+状态 review（最终候选冻结归档）；所有代码 Owner 已冻结并释放文件 scope，后续合入/发布事实以 Git 和发布回执为准；Root 负责 PR/发布/验收；Base SHA `5338bd8a4f4c206f8be67bbc6f3330a438e8dd51`；worktree `C:/Users/Steve/cretas-factory-ai-dialogue-20261027`；branch `codex/factory-ai-dialogue-20261027`。
 
 用户目标：底层保留丰富图表与可分析数据，由自由问题驱动 AI 选图、分析、汇总、追问和多表多维度分析。每次最多四类相关图，不等于缩减图表库。产品是筛选对象；餐饮专属路径排除。
 
@@ -70,3 +70,9 @@ FAD27-JOIN 初版3项 direct-builder 测试已通过，但新 prepare/loader/明
 - 只读 harness：overview、followup、真实canvas/facts/目录、原始明细、Excel以及多表clarification分支；精确白名单+场景12项、bundle/skill drift5项通过。通用chat仍拒绝。所有代码未部署的状态与已通过本地目标分开。
 - 生产数据就绪：F006唯一完整质检关联批次10995，状态IN_PROGRESS、实际/良品数量NULL，Silver已完成事实无该批次。线上联合正向数据未满足；仅可验收明确缺数据分支，不能填假值、创建质检或改变生产状态来制造PASS。证据在主工作区 `.playwright-mcp/smartbi-guided-20261026/cross-table-data-readiness.json`。
 - 当前尚需：合最新main、必要集成验证和候选制品、PR/必需CI、合并部署及F006 Web/原生App验收。此前header OTA已发布并真机验证；不能据此称FAD27已上线。
+
+最后接线发现并保留的两项 FAIL：真实二维表/表头的客户或事业部名称出境注册不完整；自然语言改变期间后前端详情/导出仍引用初始筛选期间。修复同一批完成：受控授权表字符串脱敏、结构化 answer.period 与每轮独立的详情/导出快照。已合最新 main，merge HEAD `7e67afdf5da7960f0169267b0187aa6ad1b14f05`，没有冲突；该集成引入主线已批准的安全/质检代码，必须跑适用集成门禁。
+
+Web 末项导出接线：追加允许 `FactoryChartCanvas.vue` 与其 `__tests__/factoryChartCanvas.spec.ts`，唯一 Owner 仍 Web。只新增 setOption/resize 完成后的 ready 事件；Chat 切回旧轮后必须等待该轮真实 Canvas 全部 ready，再抓图，等待有超时且持续校验身份/范围/请求代次。不用固定 nextTick 猜测，不改共享导出计算或其他页面行为。验收旧新轮同 candidate ID/不同option 的延迟 ready 图片回归与原Canvas目标测试。
+
+最终冻结：Python111项、Java24项和可信JAR构建（backend tree `508dafae44b9e640a7db6f7523540580a7b1f6f8`，SHA256 `c2ffeb9759021d7beff44be3cf8f29e77fb9626f9958600cef666a80927bd6c3`）通过；Web Chat/Canvas15项及 vue-tsc build-mode通过；RN screen/API18项及类型检查通过；harness18项通过。隐私、跨表、Java与最后UI已知风险独立复核均PASS，无剩余代码BLOCK。原始FAIL均已记录，不计作生产验收；PR/CI/发布/F006 Web及原生验收仍待实际执行。

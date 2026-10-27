@@ -60,13 +60,36 @@ function hasThreeAxis(candidate) {
     && Array.isArray(option?.series) && option.series.length >= 3;
 }
 
+function normalizedDomain(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function domainGroup(value) {
+  const text = normalizedDomain(value);
+  if (/(inventory|stock|库存)/u.test(text)) return 'inventory';
+  if (/(production|manufactur|生产)/u.test(text)) return 'production';
+  if (/(sales|order|shipment|销售)/u.test(text)) return 'sales';
+  return null;
+}
+
+function qualitySemantic(value) {
+  return /(quality|inspection|defect|良品|质量|检验|不良|production\.fused)/iu.test(String(value || ''));
+}
+
 function summaryFromResponse(status, body, request) {
   const data = body?.data || {};
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const facts = Array.isArray(data.facts) ? data.facts : [];
+  const limitations = Array.isArray(data.limitations) ? data.limitations : [];
   const catalog = Array.isArray(data.catalog) ? data.catalog : [];
   const families = new Set(recommendations.map(familyId).filter(Boolean).map(String));
   const fusedRecommendations = recommendations.filter(isFusedCandidate);
+  const recommendationDomains = [...new Set(recommendations.flatMap((item) => [item?.domain, familyId(item)]).filter(Boolean).map(String))];
+  const catalogDomains = [...new Set(catalog.flatMap((item) => [item?.domain, item?.familyId]).filter(Boolean).map(String))];
+  const availableOverviewGroups = new Set(catalogDomains.map(domainGroup).filter(Boolean));
+  const selectedOverviewGroups = new Set(recommendationDomains.map(domainGroup).filter(Boolean));
+  const missingOverviewGroups = ['inventory', 'production', 'sales']
+    .filter((group) => availableOverviewGroups.has(group) && !selectedOverviewGroups.has(group));
   return {
     http200: status === 200,
     envelopeSuccess: body?.success === true,
@@ -80,8 +103,13 @@ function summaryFromResponse(status, body, request) {
     recommendationCount: recommendations.length,
     factCount: facts.length,
     sourceErrorCount: Array.isArray(data.sourceErrors) ? data.sourceErrors.length : 0,
-    limitationCount: Array.isArray(data.limitations) ? data.limitations.length : 0,
+    limitationCount: limitations.length,
     familyCount: families.size,
+    familyIds: [...families],
+    domains: recommendationDomains,
+    catalogDomains,
+    qualityGrounded: recommendationDomains.some(qualitySemantic),
+    overviewScopeCoverage: missingOverviewGroups.length === 0 || limitations.length > 0,
     fusedCount: fusedRecommendations.length,
     fusedThreeAxis: fusedRecommendations.some(hasThreeAxis),
     fusedTableRowCount: fusedRecommendations.reduce((count, item) => count + (Array.isArray(item?.tableData?.rows) ? item.tableData.rows.length : 0), 0),
@@ -160,9 +188,11 @@ function assess({ initial, followup, ui, details, exportAttempt, joint }) {
     limitationsVisible: initialSummary.limitationCount === 0 || ui?.visibleLimitationCount > 0,
     sourceErrorsVisible: initialSummary.sourceErrorCount === 0 || ui?.visibleSourceErrorCount > 0,
     noSourceErrors: initialSummary.sourceErrorCount === 0 && followupSummary.sourceErrorCount === 0,
+    overviewScopeCoverage: initialSummary.overviewScopeCoverage === true,
     followupContract: followupSummary.requestContract?.join(',') === 'contextId,question'
       && followupSummary.requestContextPresent === true,
     followupDifferentDimension: ui?.followupDifferentDimension === true,
+    followupQualityGrounded: followupSummary.qualityGrounded === true,
     detailsAttempted: details?.attempted === true,
     detailsSucceeded: details?.success === true,
     exportAttempted: exportAttempt?.attempted === true,

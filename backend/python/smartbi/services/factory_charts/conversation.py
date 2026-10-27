@@ -228,16 +228,38 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
             values: dict[str, list[str]] = {"product": [], "customer": [], "phone": [], "sensitive": []}
             for item in authorized_subjects:
                 value = item.get("label") if isinstance(item, Mapping) else None
-                if isinstance(value, str): values["product"].append(value)
+                if isinstance(value, str):
+                    values["product"].append(value)
+                    values["product"].append(value.split(" · ", 1)[0])
             for candidate in authorized_recommendations:
+                for field in ("title", "label"):
+                    value = candidate.get(field) if isinstance(candidate, Mapping) else None
+                    if isinstance(value, str) and value.strip():
+                        values["sensitive"].append(value)
                 table = candidate.get("tableData") if isinstance(candidate, Mapping) else None
                 rows = table.get("rows", []) if isinstance(table, Mapping) else []
+                headers = table.get("headers", []) if isinstance(table, Mapping) else []
+                for header in headers if isinstance(headers, list) else []:
+                    if isinstance(header, str) and header.strip():
+                        values["sensitive"].append(header)
                 for row in rows if isinstance(rows, list) else []:
-                    if not isinstance(row, Mapping): continue
-                    for key, value in row.items():
+                    cells = list(zip(headers, row)) if isinstance(row, list) else list(row.items()) if isinstance(row, Mapping) else []
+                    for key, value in cells:
                         if isinstance(value, str) and value.strip():
-                            bucket = "phone" if re.search(r"电话|手机|phone", str(key), re.I) else ("customer" if re.search(r"客户|姓名|联系人|customer|name", str(key), re.I) else "sensitive")
+                            bucket = ("phone" if re.search(r"电话|手机|phone", str(key), re.I)
+                                      else "customer" if re.search(r"客户|姓名|联系人|customer|name", str(key), re.I)
+                                      else "product" if re.search(r"产品|sku|product", str(key), re.I)
+                                      else "sensitive")
                             values[bucket].append(value)
+                chart = candidate.get("chart") if isinstance(candidate, Mapping) else None
+                def collect_chart_strings(value: Any) -> None:
+                    if isinstance(value, str) and value.strip():
+                        values["sensitive"].append(value)
+                    elif isinstance(value, Mapping):
+                        for child in value.values(): collect_chart_strings(child)
+                    elif isinstance(value, list):
+                        for child in value: collect_chart_strings(child)
+                collect_chart_strings(chart)
             return {key: list(dict.fromkeys(items)) for key, items in values.items() if items}
         from common.llm_router import call_chain, SLOT
         provider_lookup = {alias: item for item, alias in ((item, aliases[str(item["id"])]) for item in semantic)}

@@ -1,8 +1,8 @@
 import React from 'react';
 import { Text, View } from 'react-native';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import FactoryAnalysisChatScreen from '../../../screens/smartbi/FactoryAnalysisChatScreen';
-import { askFactoryAnalysis } from '../../../services/api/smartbiFactoryAnalysis';
+import { askFactoryAnalysis, FactoryAnalysisApiError } from '../../../services/api/smartbiFactoryAnalysis';
 import { exportFactoryCharts, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
 
 const navigate = jest.fn();
@@ -40,10 +40,11 @@ const chart = {
 };
 const chartTwo = { ...chart, id: 'quality.pass', title: '质量合格率', metric: '合格率', domain: '质量', analysis: { familyId: 'quality.pass' } };
 const chartThree = { ...chart, id: 'cost.unit', title: '单位成本', metric: '单位成本', domain: '成本', analysis: { familyId: 'cost.unit' } };
+const chartVariant = { ...chart, id: 'production.oee.variant', title: '生产效率变体', analysis: { familyId: 'production.oee' } };
 
 function answered(overrides: Record<string, unknown> = {}) {
   return {
-    factoryId: 'F006', source: 'business', sourceLabel: '本厂业务系统', period: { label: '全部历史' }, question: '看产量',
+    factoryId: 'F006', source: 'business', sourceLabel: '本厂业务系统', period: { label: '2025 全年', year: 2025, periodType: 'all', startMonth: 1, endMonth: 12 }, analysisScopeLabel: '当前工厂授权范围', question: '看产量',
     status: 'answered', answer: '可信事实：OEE=83%', selectedIds: [chart.id], recommendations: [chart],
     catalog: Array.from({ length: 10 }, (_, index) => ({ id: `candidate-${index}`, familyId: `family-${index}`, chartType: 'bar', domain: '生产', metric: `指标${index}`, unit: '%', priority: 'optional', sourceKey: 'business' })),
     facts: [{ id: 'fact-1', candidateId: chart.id, label: 'OEE', value: 83, unit: '%', source: '业务系统' }], limitations: ['未覆盖联合分析'], sourceErrors: [{ source: '质量', message: '来源超时' }],
@@ -67,6 +68,7 @@ describe('FactoryAnalysisChatScreen', () => {
   it('renders trusted facts, source errors, limitations and an expandable full catalogue', async () => {
     const screen = renderScreen({ initialQuestion: '看产量' });
     await waitFor(() => expect(screen.getByTestId('factory-analysis-facts')).toBeTruthy());
+    expect(screen.getByTestId('factory-analysis-answer-metadata-factory-analysis-1')).toHaveTextContent('工厂F006 · 本厂业务系统 · 2025 全年 · 当前工厂授权范围');
     expect(askFactoryAnalysis).toHaveBeenNthCalledWith(1, {
       question: '看产量', source: 'business', year: new Date().getFullYear(), periodType: 'all', startMonth: 1, endMonth: 12,
     });
@@ -141,14 +143,18 @@ describe('FactoryAnalysisChatScreen', () => {
       selectedIds: [chart.id, chartTwo.id, chartThree.id],
       recommendations: [chart, chartTwo, chartThree],
     }));
-    const screen = renderScreen({ initialQuestion: '看生产质量成本' });
+    const screen = renderScreen({ initialQuestion: '看生产质量成本', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 });
     await waitFor(() => expect(screen.getByTestId('factory-analysis-canvas-cost.unit')).toBeTruthy());
     expect(screen.getByTestId('factory-analysis-canvas-production.oee')).toBeTruthy();
     expect(screen.getByTestId('factory-analysis-canvas-quality.pass')).toBeTruthy();
     fireEvent.press(screen.getByText('PDF'));
     await waitFor(() => expect(exportFactoryCharts).toHaveBeenCalledWith('pdf', expect.objectContaining({
       factory_id: 'F006',
-      period_label: '全部历史',
+      period_label: '2025 全年',
+      year: 2025,
+      period_type: 'all',
+      start_month: 1,
+      end_month: 12,
       chart_images: expect.objectContaining({
         'production.oee': expect.stringMatching(/^data:image\/png;base64,/),
         'quality.pass': expect.stringMatching(/^data:image\/png;base64,/),
@@ -156,6 +162,77 @@ describe('FactoryAnalysisChatScreen', () => {
       }),
     })));
     expect(shareFactoryChartFile).toHaveBeenCalledTimes(1);
+    fireEvent.press(screen.getAllByText('查看原始明细')[0]);
+    expect(navigate).toHaveBeenCalledWith('FactoryChartDetails', expect.objectContaining({
+      period: { year: 2025, periodType: 'all', startMonth: 1, endMonth: 12, label: '2025 全年' },
+      periodLabel: '2025 全年',
+    }));
+  });
+
+  it('rejects detail and export when an answer has no legal structured period', async () => {
+    (askFactoryAnalysis as jest.Mock).mockResolvedValueOnce(answered({ period: undefined }));
+    const screen = renderScreen({ initialQuestion: '看产量' });
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-facts')).toBeTruthy());
+    fireEvent.press(screen.getByText('EXCEL'));
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-export-error')).toBeTruthy());
+    expect(screen.getByText(/缺少合法的结构化期间/)).toBeTruthy();
+    expect(exportFactoryCharts).not.toHaveBeenCalled();
+    fireEvent.press(screen.getByText('查看原始明细'));
+    expect(screen.getByTestId('factory-analysis-detail-error')).toBeTruthy();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('shows unavailable answer limitations instead of hiding the missing-relation reason', async () => {
+    (askFactoryAnalysis as jest.Mock).mockResolvedValueOnce(answered({
+      status: 'unavailable', answer: '暂时无法完成联合分析', recommendations: [], facts: [],
+      limitations: ['缺少产量与质量的可关联批次关系'], followUpQuestions: [],
+    }));
+    const screen = renderScreen({ initialQuestion: '联合看产量和质量' });
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-limitations')).toBeTruthy());
+    expect(screen.getByText(/缺少产量与质量的可关联批次关系/)).toBeTruthy();
+    expect(screen.queryByTestId('factory-analysis-chart-list')).toBeNull();
+  });
+
+  it('retries an expired context with the latest unavailable answer period and subject', async () => {
+    const expired = new FactoryAnalysisApiError('上下文已过期');
+    Object.defineProperty(expired, 'status', { value: 410 });
+    (askFactoryAnalysis as jest.Mock)
+      .mockResolvedValueOnce(answered({ status: 'unavailable', analysisSubject: 'sku-a', period: { label: '2025 全年', year: 2025, periodType: 'all', startMonth: 1, endMonth: 12 } }))
+      .mockRejectedValueOnce(expired)
+      .mockResolvedValueOnce(answered({ analysisSubject: 'sku-a', period: { label: '2025 全年', year: 2025, periodType: 'all', startMonth: 1, endMonth: 12 } }));
+    const screen = renderScreen({ initialQuestion: '去年产量', source: 'business', analysisSubject: 'sku-a', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 });
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-followups')).toBeTruthy());
+    fireEvent.press(screen.getByText('再看质量指标'));
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-clear-context-retry')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-analysis-clear-context-retry'));
+    await waitFor(() => expect(askFactoryAnalysis).toHaveBeenCalledTimes(3));
+    expect(askFactoryAnalysis).toHaveBeenNthCalledWith(3, {
+      question: '再看质量指标', source: 'business', analysisSubject: 'sku-a',
+      year: 2025, periodType: 'all', startMonth: 1, endMonth: 12,
+    });
+  });
+
+  it('keeps each older turn detail and export on its answer period snapshot', async () => {
+    (askFactoryAnalysis as jest.Mock)
+      .mockResolvedValueOnce(answered({ answer: '首轮事实', period: { label: '2025 全年', year: 2025, periodType: 'all', startMonth: 1, endMonth: 12 }, recommendations: [chart, chartTwo, chartThree] }))
+      .mockResolvedValueOnce(answered({ answer: '次轮事实', period: { label: '2024 全年', year: 2024, periodType: 'all', startMonth: 1, endMonth: 12 }, question: '再看成本', recommendations: [chartVariant, chartTwo, chartThree] }));
+    const screen = renderScreen({ initialQuestion: '去年产量', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 });
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-followups')).toBeTruthy());
+    fireEvent.press(screen.getByText('再看质量指标'));
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-answer-factory-analysis-2')).toBeTruthy());
+    expect(screen.getAllByTestId(/factory-analysis-canvas-/)).toHaveLength(3);
+    expect(screen.getByTestId('factory-analysis-canvas-production.oee.variant')).toBeTruthy();
+    expect(screen.queryByTestId('factory-analysis-canvas-production.oee')).toBeNull();
+    expect(screen.getByText('首轮事实')).toBeTruthy();
+    const oldAnswer = screen.getByTestId('factory-analysis-answer-factory-analysis-1');
+    fireEvent.press(within(oldAnswer).getByTestId('factory-analysis-show-charts-factory-analysis-1'));
+    expect(screen.getAllByTestId(/factory-analysis-canvas-/)).toHaveLength(3);
+    expect(screen.getByTestId('factory-analysis-canvas-production.oee')).toBeTruthy();
+    expect(screen.queryByTestId('factory-analysis-canvas-production.oee.variant')).toBeNull();
+    fireEvent.press(within(oldAnswer).getAllByText('查看原始明细')[0]);
+    expect(navigate).toHaveBeenCalledWith('FactoryChartDetails', expect.objectContaining({ periodLabel: '2025 全年', period: { year: 2025, periodType: 'all', startMonth: 1, endMonth: 12, label: '2025 全年' } }));
+    fireEvent.press(within(screen.getByTestId('factory-analysis-export-factory-analysis-1')).getByText('PDF'));
+    await waitFor(() => expect(exportFactoryCharts).toHaveBeenCalledWith('pdf', expect.objectContaining({ year: 2025, period_label: '2025 全年' })));
   });
 
   it('shows export failure and never shares when the binary export fails', async () => {

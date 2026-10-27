@@ -170,7 +170,8 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     return _sanitize_for_json({'success': True, 'data': {
         'factoryId': factory_id, 'source': request.source,
         'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
-        'period': {'label': label}, 'ranking': order,
+        'period': {'label': label, 'year': request.year, 'periodType': request.period_type,
+                   'startMonth': request.start_month, 'endMonth': request.end_month}, 'ranking': order,
         'recommendations': candidates, 'defaultSelection': default_selection(candidates, guided=request.guided),
         'subjects': subjects,
         'analysisSubject': request.analysis_subject,

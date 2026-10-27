@@ -1,4 +1,5 @@
 import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation } from './factoryCharts';
+import type { FactoryChartPeriodSelection } from '../utils/smartbiFactoryChartModel';
 
 export interface FactoryAnalysisRequest {
   question: string;
@@ -40,11 +41,15 @@ export interface FactoryAnalysisSourceError {
   message: string;
 }
 
+export interface FactoryAnalysisPeriod extends FactoryChartPeriodSelection {
+  label: string;
+}
+
 export interface FactoryAnalysisData {
   factoryId: string;
   source: FactoryChartSource;
   sourceLabel?: string;
-  period?: { label?: string };
+  period?: FactoryAnalysisPeriod;
   analysisSubject?: string | null;
   analysisScopeLabel?: string;
   question: string;

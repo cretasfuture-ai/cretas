@@ -170,9 +170,15 @@ async def test_planner_registers_current_subjects_and_sensitive_table_values(mon
 
     async def call(_slot, _payload, **kwargs):
         from common.llm_redactor import current_redaction_scope
+        from common.llm_redactor import redact_payload_for_egress
         seen.update(current_redaction_scope().known_values)
         import json as _json
-        alias = _json.loads(_payload['messages'][1]['content'])['catalog'][0]['id']
+        egress, _ = redact_payload_for_egress(_payload)
+        provider_content = egress['messages'][1]['content']
+        assert '秘密产品凤凰2025' not in provider_content
+        assert '客户张三' not in provider_content
+        assert '13800138000' not in provider_content
+        alias = _json.loads(provider_content)['catalog'][0]['id']
         return {'choices': [{'message': {'content': '{"selected_ids":["' + alias + '"]}'}}]}
 
     monkeypatch.setattr('common.llm_router.call_chain', call)
@@ -180,10 +186,22 @@ async def test_planner_registers_current_subjects_and_sensitive_table_values(mon
         '看秘密产品凤凰2025和客户张三',
         [{'id': 'one', 'familyId': 'production.output', 'chartType': 'line'}],
         authorized_subjects=[{'id': 'p', 'label': '秘密产品凤凰2025'}],
-        authorized_recommendations=[{'tableData': {'rows': [{'客户': '客户张三', '联系电话': '13800138000'}]}}],
+        authorized_recommendations=[{'id': 'production.output@秘密产品凤凰2025@kg',
+                                     'tableData': {'headers': ['客户', '联系电话'],
+                                                   'rows': [['客户张三', '13800138000']]}}],
     )
     assert selected == ['one'] and mode['mode'] == 'ai'
     assert {'秘密产品凤凰2025', '客户张三', '13800138000'} <= set(seen)
+
+
+def test_analysis_response_preserves_structured_period_for_export_and_detail():
+    body = api._analysis_response(
+        {'sourceLabel': '本厂业务系统',
+         'period': {'label': '2025年', 'year': 2025, 'periodType': 'year', 'startMonth': 1, 'endMonth': 12}},
+        factory_id='F006', source='business', question='看去年', status='answered', answer='ok',
+        selected_ids=[], recommendations=[], catalog=[], facts=[], limitations=[], context_id='ctx',
+        subjects=[], follow_up_questions=[])
+    assert body['data']['period'] == {'label': '2025年', 'year': 2025, 'periodType': 'year', 'startMonth': 1, 'endMonth': 12}
 
 
 @pytest.mark.asyncio

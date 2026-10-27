@@ -10,7 +10,7 @@ function response(status, data, request) {
   };
 }
 
-const candidate = (id, familyId) => ({ id, analysis: { familyId } });
+const candidate = (id, familyId, domain) => ({ id, domain: domain || familyId, analysis: { familyId } });
 const fusedCandidate = {
   id: 'production-inspection-fused-P1-kg',
   analysis: { familyId: 'production.inspection_fused' },
@@ -25,9 +25,19 @@ function answeredData(overrides = {}) {
     period: { periodType: 'all', year: 2026, startMonth: 1, endMonth: 12, label: '全部历史' },
     status: 'answered',
     contextId: 'opaque-context',
-    recommendations: [candidate('production-output', 'production.output'), candidate('quality-yield', 'quality.yield')],
+    recommendations: [
+      candidate('production-output', 'production.output', '生产'),
+      candidate('quality-yield', 'quality.yield', '质量'),
+      candidate('inventory-stock', 'inventory.stock', '库存'),
+      candidate('sales-order', 'sales.order', '销售'),
+    ],
     facts: [{ id: 'fact-redacted', label: '产量', value: 12, unit: 'kg', source: '业务系统' }],
-    catalog: [{ id: 'production-output', familyId: 'production.output' }, { id: 'quality-yield', familyId: 'quality.yield' }],
+    catalog: [
+      { id: 'production-output', familyId: 'production.output', domain: '生产' },
+      { id: 'quality-yield', familyId: 'quality.yield', domain: '质量' },
+      { id: 'inventory-stock', familyId: 'inventory.stock', domain: '库存' },
+      { id: 'sales-order', familyId: 'sales.order', domain: '销售' },
+    ],
     followUpQuestions: ['再看质量'],
     ...overrides,
   };
@@ -145,4 +155,20 @@ test('partial source reads warn and prevent a full PASS even when visible', () =
   assert.equal(result.checks.noSourceErrors, false);
   assert.equal(result.partialReadWarn, true);
   assert.equal(result.fullPass, false);
+});
+
+test('semantic follow-up coverage cannot pass from a quality button label alone', () => {
+  const result = passAssessment({
+    followup: response(200, answeredData({
+      recommendations: [candidate('production-output', 'production.output', '生产')],
+      catalog: [{ id: 'production-output', familyId: 'production.output', domain: '生产' }],
+    }), { question: '再看质量', contextId: 'rotated-context' }),
+    ui: {
+      catalogVisibleCount: 2, visibleChartCount: 2, renderedCanvasCount: 2, drawingErrorCount: 0,
+      visibleFactCount: 1, visibleLimitationCount: 0, visibleSourceErrorCount: 0, followupDifferentDimension: true,
+    },
+  });
+  assert.equal(result.result, 'UNVERIFIED');
+  assert.equal(result.checks.followupDifferentDimension, true);
+  assert.equal(result.checks.followupQualityGrounded, false);
 });

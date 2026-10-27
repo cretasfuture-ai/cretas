@@ -12,6 +12,7 @@ import {
   type FactoryAnalysisCatalogItem,
   type FactoryAnalysisData,
   type FactoryAnalysisFact,
+  type FactoryAnalysisPeriodSnapshot,
   type FactoryAnalysisRequest,
 } from '@/api/smartbi/factory-analysis';
 import { periodSelectionToRequest } from './financialDashboardState';
@@ -38,6 +39,7 @@ interface ChatTurn {
     source: FactoryChartSource;
     sourceLabel: string;
     periodLabel: string;
+    period: FactoryAnalysisPeriodSnapshot;
     scopeLabel?: string;
     selectedIds: string[];
   };
@@ -47,6 +49,13 @@ interface FactoryRouteScope {
   source: FactoryChartSource;
   uploadId: number | null;
   period: PeriodSelection;
+  analysisSubject: string | null;
+}
+
+interface AcceptedAnswerScope {
+  source: FactoryChartSource;
+  uploadId: number | null;
+  period: FactoryAnalysisPeriodSnapshot;
   analysisSubject: string | null;
 }
 
@@ -129,6 +138,9 @@ const detailsPoint = ref<{ name: string; seriesName?: string; dataIndex?: number
 const detailsTurnKey = ref('');
 const activeTurnId = ref<string | null>(null);
 const exportLoading = ref<'' | 'excel' | 'pdf' | 'ppt'>('');
+const lastAcceptedScope = ref<AcceptedAnswerScope | null>(null);
+const chartReadyKeys = ref(new Set<string>());
+const chartReadyWaiters = new Map<string, Set<() => void>>();
 let identityLoadScheduled = false;
 
 const filteredCatalog = computed(() => {
@@ -186,8 +198,66 @@ function errorMessage(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function resetConversation(message = '') {
+function validPeriodSnapshot(value: unknown): value is FactoryAnalysisPeriodSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const period = value as Partial<FactoryAnalysisPeriodSnapshot>;
+  return typeof period.label === 'string' && period.label.trim().length > 0
+    && Number.isSafeInteger(period.year) && period.year >= 2000 && period.year <= 2100
+    && (period.periodType === 'all' || period.periodType === 'year' || period.periodType === 'month_range')
+    && Number.isInteger(period.startMonth) && period.startMonth >= 1 && period.startMonth <= 12
+    && Number.isInteger(period.endMonth) && period.endMonth >= period.startMonth && period.endMonth <= 12;
+}
+
+function chartReadyKey(turn: ChatTurn, item: FactoryRecommendation): string {
+  return `${turn.id}:${item.id}`;
+}
+
+function clearChartReadiness() {
+  chartReadyKeys.value = new Set();
+  const callbacks = [...chartReadyWaiters.values()].flatMap(waiters => [...waiters]);
+  chartReadyWaiters.clear();
+  callbacks.forEach(callback => callback());
+}
+
+function markChartReady(turn: ChatTurn, item: FactoryRecommendation) {
+  // The active turn identity is the component-generation guard. Export still
+  // validates the captured scope/identity/request epoch before consuming it.
+  if (turn.id !== activeTurnId.value) return;
+  const key = chartReadyKey(turn, item);
+  chartReadyKeys.value = new Set(chartReadyKeys.value).add(key);
+  chartReadyWaiters.get(key)?.forEach(callback => callback());
+}
+
+function waitForChartsReady(turn: ChatTurn, items: readonly FactoryRecommendation[], valid: () => boolean): Promise<boolean> {
+  const missing = items.map(item => chartReadyKey(turn, item)).filter(key => !chartReadyKeys.value.has(key));
+  if (!missing.length) return Promise.resolve(valid());
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      missing.forEach(key => chartReadyWaiters.get(key)?.delete(check));
+      resolve(value);
+    };
+    const check = () => {
+      if (!valid()) finish(false);
+      else if (missing.every(key => chartReadyKeys.value.has(key))) finish(true);
+    };
+    const timeout = globalThis.setTimeout(() => finish(false), 15_000);
+    missing.forEach(key => {
+      const waiters = chartReadyWaiters.get(key) || new Set<() => void>();
+      waiters.add(check);
+      chartReadyWaiters.set(key, waiters);
+    });
+    check();
+  });
+}
+
+function resetConversation(message = '', options: { preserveAcceptedScope?: boolean } = {}) {
   requestVersion.value += 1;
+  clearChartReadiness();
+  if (!options.preserveAcceptedScope) lastAcceptedScope.value = null;
   contextId.value = null;
   catalog.value = [];
   catalogOpen.value = false;
@@ -264,6 +334,10 @@ function subjectLabel(subjectId: string | null | undefined): string {
 }
 
 function openDetails(item: FactoryRecommendation, point?: { name?: string; seriesName?: string; dataIndex?: number }, turn?: ChatTurn) {
+  if (!turn?.metadata || !validPeriodSnapshot(turn.metadata.period)) {
+    error.value = '当前回答缺少有效期间，无法读取原始明细。';
+    return;
+  }
   detailsCandidate.value = item;
   detailsPoint.value = point?.name ? { name: point.name, seriesName: point.seriesName, dataIndex: point.dataIndex } : undefined;
   detailsTurnKey.value = turn?.scopeKey || turn?.id || '';
@@ -278,23 +352,38 @@ function sourceErrorText(item: FactoryAnalysisData['sourceErrors'][number]): str
   return `${item.source || '数据源'}：${detail}`;
 }
 
-async function sendQuestion(rawQuestion = question.value, explicitSubject = analysisSubject.value, forceNew = false) {
+async function sendQuestion(
+  rawQuestion = question.value,
+  explicitSubject = analysisSubject.value,
+  forceNew = false,
+  scopeOverride?: AcceptedAnswerScope,
+) {
   const text = rawQuestion.trim();
   if (!text || pending.value) return;
   if (!factoryId.value) {
     error.value = '当前账号没有所属工厂，无法进行工厂分析';
     return;
   }
-  if (source.value === 'upload' && !uploadId.value) {
+  const requestSource = scopeOverride?.source || source.value;
+  const requestUploadId = scopeOverride?.uploadId ?? uploadId.value;
+  if (requestSource === 'upload' && !requestUploadId) {
     error.value = '请选择一份已上传的报表';
     return;
   }
-  const periodRequest = periodPayload();
+  const periodRequest = scopeOverride
+    ? {
+      year: scopeOverride.period.year,
+      periodType: scopeOverride.period.periodType,
+      startMonth: scopeOverride.period.startMonth,
+      endMonth: scopeOverride.period.endMonth,
+    }
+    : periodPayload();
   if (!periodRequest) return;
   const capturedIdentity = identityKey.value;
   const capturedScope = activeScopeKey.value;
   const version = ++requestVersion.value;
   activeTurnId.value = null;
+  clearChartReadiness();
   detailsVisible.value = false;
   detailsCandidate.value = null;
   detailsPoint.value = undefined;
@@ -313,8 +402,8 @@ async function sendQuestion(rawQuestion = question.value, explicitSubject = anal
     ? { question: text, contextId: contextId.value || undefined }
     : {
       question: text,
-      source: source.value,
-      ...(source.value === 'upload' && uploadId.value ? { uploadId: uploadId.value } : {}),
+      source: requestSource,
+      ...(requestSource === 'upload' && requestUploadId ? { uploadId: requestUploadId } : {}),
       ...periodRequest,
       analysisSubject: explicitSubject,
     };
@@ -323,6 +412,18 @@ async function sendQuestion(rawQuestion = question.value, explicitSubject = anal
     if (version !== requestVersion.value || capturedIdentity !== identityKey.value || capturedScope !== activeScopeKey.value) return;
     if (!result.success || !result.data) throw new Error(result.message || '工厂分析未返回有效结果');
     const data = result.data;
+    if (!validPeriodSnapshot(data.period)) {
+      throw new Error('工厂分析响应缺少有效期间，已拒绝该结果，请重新提问。');
+    }
+    const acceptedSubject = data.analysisSubject || (isFollowup
+      ? lastAcceptedScope.value?.analysisSubject || null
+      : explicitSubject || null);
+    lastAcceptedScope.value = {
+      source: data.source,
+      uploadId: data.source === 'upload' ? requestUploadId : null,
+      period: data.period,
+      analysisSubject: acceptedSubject,
+    };
     // The server may rotate the opaque token on every response; always retain
     // the latest one and never construct one in the browser.
     contextId.value = data.contextId || null;
@@ -343,7 +444,8 @@ async function sendQuestion(rawQuestion = question.value, explicitSubject = anal
     assistantTurn.metadata = {
       source: data.source,
       sourceLabel: data.sourceLabel || sourceLabel.value,
-      periodLabel: data.period?.label || '当前期间',
+      periodLabel: data.period.label,
+      period: data.period,
       scopeLabel: data.analysisScopeLabel,
       selectedIds: [...(data.selectedIds || [])],
     };
@@ -383,8 +485,9 @@ function sendClarification(text: string) {
 function retryExpired() {
   const text = retryQuestion.value;
   if (!text) return;
-  resetConversation('正在重新读取当前授权数据…');
-  void sendQuestion(text, analysisSubject.value);
+  const acceptedScope = lastAcceptedScope.value;
+  resetConversation('正在重新读取当前授权数据…', { preserveAcceptedScope: true });
+  void sendQuestion(text, acceptedScope?.analysisSubject ?? analysisSubject.value, true, acceptedScope || undefined);
 }
 
 async function exportAnswer(turn: ChatTurn, format: 'excel' | 'pdf' | 'ppt') {
@@ -397,18 +500,32 @@ async function exportAnswer(turn: ChatTurn, format: 'excel' | 'pdf' | 'ppt') {
   activeTurnId.value = turn.id;
   await nextTick();
   if (capturedVersion !== requestVersion.value || capturedIdentity !== identityKey.value || capturedScope !== turnScopeKey.value) return;
+  const exportScopeValid = () => capturedVersion === requestVersion.value
+    && capturedIdentity === identityKey.value
+    && capturedScope === turnScopeKey.value;
+  if (!await waitForChartsReady(turn, items, exportScopeValid) || !exportScopeValid()) {
+    if (exportScopeValid()) error.value = '图表仍在绘制，暂时无法导出，请稍后重试。';
+    return;
+  }
   exportLoading.value = format;
   try {
     const images = await captureFactoryChartImages(items);
     if (capturedVersion !== requestVersion.value || capturedIdentity !== identityKey.value || capturedScope !== turnScopeKey.value) return;
     const metadata = turn.metadata;
-    if (!metadata) return;
+    if (!metadata || !validPeriodSnapshot(metadata.period)) {
+      error.value = '当前回答缺少有效期间，无法导出。';
+      return;
+    }
     const payload = buildFactoryChartExportPayload(items, images, {
       factoryId: factoryId.value,
       source: metadata.source,
       sourceLabel: metadata.sourceLabel,
       scopeLabel: metadata.scopeLabel,
       periodLabel: metadata.periodLabel,
+      year: metadata.period.year,
+      periodType: metadata.period.periodType,
+      startMonth: metadata.period.startMonth,
+      endMonth: metadata.period.endMonth,
       selectedIds: metadata.selectedIds.length ? metadata.selectedIds : items.map(item => item.id),
     });
     const extension = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'pptx';
@@ -436,7 +553,7 @@ watch([source, uploadId], () => {
   resetConversation('数据源已变化，请重新提问。');
 }, { flush: 'sync' });
 loadUploads();
-onBeforeUnmount(() => { requestVersion.value += 1; });
+onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
 </script>
 
 <template>
@@ -479,6 +596,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; });
     <div class="turns" data-testid="factory-analysis-turns">
       <article v-for="turn in turns" :key="turn.id" class="turn" :class="`turn--${turn.role}`">
         <div class="turn__label">{{ turn.role === 'user' ? '我' : 'AI 工厂分析' }}</div>
+        <div v-if="turn.metadata" class="turn__scope" data-testid="factory-analysis-turn-scope">工厂{{ factoryId }} · {{ turn.metadata.sourceLabel }} · {{ turn.metadata.periodLabel }} · {{ turn.metadata.scopeLabel || '全厂范围' }}</div>
         <div class="turn__text" :data-testid="turn.role === 'assistant' ? 'factory-analysis-answer' : 'factory-analysis-question'">{{ turn.text }}</div>
         <el-skeleton v-if="turn.loading" :rows="2" animated />
         <template v-if="turn.role === 'assistant' && !turn.loading">
@@ -494,7 +612,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; });
           <div v-if="turn.id === activeTurnId && turn.recommendations?.length" class="answer-charts">
             <div v-for="item in turn.recommendations" :key="item.id" class="answer-chart" :data-testid="`factory-chart-card-${item.id}`">
               <div class="answer-chart__heading"><strong>{{ item.title }}</strong><span>{{ item.metric }} · {{ item.unit }} · {{ item.chart.chartType }}</span></div>
-              <FactoryChartCanvas :option="item.chart.echartsOption" @click="openDetails(item, $event, turn)" />
+              <FactoryChartCanvas :option="item.chart.echartsOption" @ready="markChartReady(turn, item)" @click="openDetails(item, $event, turn)" />
               <el-button v-if="item.detailContext" link type="primary" @click="openDetails(item, undefined, turn)">查看原始明细</el-button>
             </div>
           </div>

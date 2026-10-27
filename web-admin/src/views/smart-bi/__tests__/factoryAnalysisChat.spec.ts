@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   capture: vi.fn(),
   build: vi.fn(),
   download: vi.fn(),
+  readyEmitters: [] as Array<() => void>,
+  canvasReady: true,
 }));
 
 vi.mock('@/store/modules/auth', async () => {
@@ -32,7 +34,9 @@ vi.mock('../factoryChartExport', () => ({
 vi.mock('../FactoryChartCanvas.vue', () => ({
   default: defineComponent({
     name: 'FactoryChartCanvasStub',
+    emits: ['ready', 'click'],
     props: { option: { type: Object, required: true } },
+    mounted() { const emitReady = () => this.$emit('ready'); h.readyEmitters.push(emitReady); if (h.canvasReady) queueMicrotask(emitReady); },
     template: '<div class="factory-chart-canvas" data-testid="rendered-factory-chart">{{ option.title?.text }}</div>',
   }),
 }));
@@ -45,11 +49,15 @@ vi.mock('@/components/smartbi/PeriodSelector.vue', () => ({
 
 import FactoryAnalysisChat from '../FactoryAnalysisChat.vue';
 
-const response = (overrides: Record<string, unknown> = {}) => ({
-  success: true,
-  message: '工厂分析完成',
-  data: {
-    factoryId: 'F006', source: 'business', sourceLabel: '业务系统', period: { label: '全部历史' },
+const response = (overrides: Record<string, unknown> = {}) => {
+  const period = overrides.period === null
+    ? null
+    : { label: '全部历史', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12, ...(overrides.period as Record<string, unknown> | undefined) };
+  return {
+    success: true,
+    message: '工厂分析完成',
+    data: {
+    factoryId: 'F006', source: 'business', sourceLabel: '业务系统',
     analysisSubject: null, analysisScopeLabel: '全厂范围', question: '生产表现怎样？', status: 'answered',
     answer: '已根据授权数据完成分析。', selectedIds: ['yield'],
     recommendations: [{
@@ -61,9 +69,17 @@ const response = (overrides: Record<string, unknown> = {}) => ({
     catalog: [{ id: 'yield', familyId: 'production.yield', chartType: 'line', domain: '生产', metric: '产量', unit: 'kg' }],
     facts: [{ id: 'fact-1', candidateId: 'yield', label: '总产量', value: 12, unit: 'kg', source: '业务系统' }],
     limitations: ['仅基于当前期间'], sourceErrors: [], followUpQuestions: ['再看质量指标'], contextId: 'ctx-1', subjects: [],
-    ...overrides,
-  },
-});
+      ...overrides,
+      period,
+    },
+  };
+};
+
+function responseWithChartTitle(title: string, overrides: Record<string, unknown> = {}) {
+  const result = response(overrides) as { data: { recommendations: Array<{ chart: { echartsOption: Record<string, unknown> } }> } };
+  result.data.recommendations[0].chart.echartsOption = { title: { text: title }, series: [] };
+  return result;
+}
 
 let wrapper: VueWrapper | null = null;
 beforeEach(() => {
@@ -74,6 +90,8 @@ beforeEach(() => {
   h.capture.mockReset().mockResolvedValue({ yield: 'data:image/png;base64,chart' });
   h.build.mockReset().mockImplementation((_items: unknown, _images: unknown, context: unknown) => ({ context }));
   h.download.mockReset().mockResolvedValue(undefined);
+  h.readyEmitters = [];
+  h.canvasReady = true;
 });
 afterEach(() => { wrapper?.unmount(); wrapper = null; });
 
@@ -91,6 +109,7 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     await flushPromises();
     expect(h.post).toHaveBeenCalledWith('F006', expect.objectContaining({ question: '生产表现怎样？', source: 'business', periodType: 'all' }));
     expect(page!.find('[data-testid="factory-analysis-answer"]').text()).toContain('已根据授权数据完成分析');
+    expect(page!.find('[data-testid="factory-analysis-turn-scope"]').text()).toContain('工厂F006 · 业务系统 · 全部历史 · 全厂范围');
     expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(1);
     expect(page!.find('[data-testid="factory-analysis-facts"]').text()).toContain('12 kg');
   });
@@ -121,6 +140,35 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     await flushPromises();
     expect(h.post.mock.calls[1][1]).toEqual({ question: '再看质量指标', contextId: 'ctx-1' });
     expect(page!.text()).toContain('追问完成');
+  });
+
+  it('retries an expired context with the last accepted answer period and subject', async () => {
+    h.route.query = { analysis_subject: 'sku-a' };
+    h.post.mockResolvedValueOnce(response({
+      period: { label: '2025年', year: 2025, periodType: 'year', startMonth: 1, endMonth: 12 },
+      analysisSubject: 'sku-a', contextId: 'ctx-2025',
+    }));
+    h.post.mockRejectedValueOnce({ status: 410 });
+    h.post.mockResolvedValueOnce(response({
+      period: { label: '2025年', year: 2025, periodType: 'year', startMonth: 1, endMonth: 12 },
+      analysisSubject: 'sku-a', contextId: 'ctx-2025-retry', answer: '已按原期间重新读取。',
+    }));
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('去年产量');
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    await page!.get('.followups .el-button').trigger('click');
+    await flushPromises();
+    const retry = page!.findAll('.turn--assistant').at(-1)!.findAll('.el-button')
+      .find(button => button.text().includes('重新发送'));
+    expect(retry).toBeTruthy();
+    await retry!.trigger('click');
+    await flushPromises();
+    expect(h.post.mock.calls[2][1]).toEqual({
+      question: '再看质量指标', source: 'business', year: 2025,
+      periodType: 'year', startMonth: 1, endMonth: 12, analysisSubject: 'sku-a',
+    });
+    expect(page!.text()).toContain('已按原期间重新读取');
   });
 
   it('does not paint a delayed response after an auth identity change', async () => {
@@ -230,22 +278,33 @@ describe('FactoryAnalysisChat mounted workflow', () => {
 
   it('exports each turn from its own snapshot and cancels download after scope changes', async () => {
     const page = await mountChat();
-    h.post.mockResolvedValueOnce(response({ period: { label: '2026年3月' }, contextId: 'ctx-1' }));
+    h.post.mockResolvedValueOnce(response({ period: { label: '2025年', year: 2025, periodType: 'year', startMonth: 1, endMonth: 12 }, contextId: 'ctx-1' }));
     await page!.get('[data-testid="factory-analysis-input"]').setValue('三月产量');
     await page!.get('form.composer').trigger('submit');
     await flushPromises();
     await page!.findAll('.turn--assistant').at(-1)!.find('.answer-tools .el-button').trigger('click');
     await flushPromises();
     expect(h.download).toHaveBeenCalledTimes(1);
-    expect((h.build.mock.calls[0][2] as { periodLabel: string }).periodLabel).toBe('2026年3月');
+    expect(h.build.mock.calls[0][2]).toEqual(expect.objectContaining({
+      periodLabel: '2025年', year: 2025, periodType: 'year', startMonth: 1, endMonth: 12,
+    }));
 
-    h.post.mockResolvedValueOnce(response({ period: { label: '2026年4月' }, contextId: 'ctx-2', answer: '四月完成。' }));
+    h.post.mockResolvedValueOnce(response({ period: { label: '2024年', year: 2024, periodType: 'year', startMonth: 1, endMonth: 12 }, contextId: 'ctx-2', answer: '四月完成。' }));
     await page!.get('.followups .el-button').trigger('click');
     await flushPromises();
     expect(page!.findAll('[data-testid^="factory-chart-card-"]')).toHaveLength(1);
+    // The earlier answer remains exportable after a later response rotates
+    // the server period; it must retain its own 2025 snapshot.
+    await page!.findAll('.turn--assistant').at(0)!.find('.answer-tools .el-button').trigger('click');
+    await flushPromises();
+    expect(h.build.mock.calls[1][2]).toEqual(expect.objectContaining({
+      periodLabel: '2025年', year: 2025, periodType: 'year', startMonth: 1, endMonth: 12,
+    }));
     await page!.findAll('.turn--assistant').at(-1)!.find('.answer-tools .el-button').trigger('click');
     await flushPromises();
-    expect((h.build.mock.calls[1][2] as { periodLabel: string }).periodLabel).toBe('2026年4月');
+    expect(h.build.mock.calls[2][2]).toEqual(expect.objectContaining({
+      periodLabel: '2024年', year: 2024, periodType: 'year', startMonth: 1, endMonth: 12,
+    }));
 
     let resolveCapture!: (value: unknown) => void;
     h.capture.mockImplementationOnce(() => new Promise(resolve => { resolveCapture = resolve; }));
@@ -254,6 +313,58 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     (page!.vm as unknown as { onSourceChange: (value: 'upload' | 'business') => void }).onSourceChange('upload');
     resolveCapture({ yield: 'data:image/png;base64,late' });
     await flushPromises();
-    expect(h.download).toHaveBeenCalledTimes(2);
+    expect(h.download).toHaveBeenCalledTimes(3);
+  });
+
+  it('waits for the active turn chart ready event and ignores a stale same-id chart event', async () => {
+    h.canvasReady = false;
+    h.post.mockResolvedValueOnce(responseWithChartTitle('旧图', { contextId: 'ctx-old' }));
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('旧问题');
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    const oldReady = h.readyEmitters[h.readyEmitters.length - 1];
+    await page!.findAll('.turn--assistant').at(-1)!.find('.answer-tools .el-button').trigger('click');
+    await flushPromises();
+    expect(h.capture).not.toHaveBeenCalled();
+    oldReady();
+    await flushPromises();
+    expect(h.capture).toHaveBeenCalledTimes(1);
+    expect((h.capture.mock.calls[0][0] as Array<{ chart: { echartsOption: { title: { text: string } } } }>)[0].chart.echartsOption.title.text).toBe('旧图');
+
+    h.post.mockResolvedValueOnce(responseWithChartTitle('新图', { contextId: 'ctx-new', answer: '新图回答' }));
+    await page!.get('.followups .el-button').trigger('click');
+    await flushPromises();
+    const newReady = h.readyEmitters[h.readyEmitters.length - 1];
+    await page!.findAll('.turn--assistant').at(-1)!.find('.answer-tools .el-button').trigger('click');
+    await flushPromises();
+    expect(h.capture).toHaveBeenCalledTimes(1);
+    oldReady();
+    await flushPromises();
+    expect(h.capture).toHaveBeenCalledTimes(1);
+    newReady();
+    await flushPromises();
+    expect(h.capture).toHaveBeenCalledTimes(2);
+    expect((h.capture.mock.calls[1][0] as Array<{ chart: { echartsOption: { title: { text: string } } } }>)[0].chart.echartsOption.title.text).toBe('新图');
+  });
+
+  it('rejects missing or invalid answer periods instead of exporting or opening details', async () => {
+    h.post.mockResolvedValueOnce(response({ period: null }));
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('缺少期间');
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    expect(page!.text()).toContain('工厂分析响应缺少有效期间');
+    expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(0);
+    expect(h.capture).not.toHaveBeenCalled();
+    expect(h.build).not.toHaveBeenCalled();
+    expect(h.download).not.toHaveBeenCalled();
+
+    h.post.mockResolvedValueOnce(response({ period: { label: '2025年', year: 2025, periodType: 'year', startMonth: 0, endMonth: 12 } }));
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('非法期间');
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    expect(page!.text()).toContain('工厂分析响应缺少有效期间');
+    expect(h.download).not.toHaveBeenCalled();
   });
 });

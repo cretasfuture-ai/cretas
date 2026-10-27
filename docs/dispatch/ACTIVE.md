@@ -160,3 +160,4 @@
 - 仅在飞状态；merged 当次归档释放 scope。每条≤300字、全文≤30000 bytes，不开三级增量段；详细证据进 archive/。PR/push/fastlane 保留 `python scripts/ci/check_dispatch_active.py` 门禁。
 - 原维护规则全文保留在 archive/2026-10-22-s6-b3b-review.md。
 
+
