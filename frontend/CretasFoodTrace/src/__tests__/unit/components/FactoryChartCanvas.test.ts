@@ -123,4 +123,29 @@ describe('FactoryChartCanvas', () => {
     await act(async () => { await expect(ref.current?.capturePng()).rejects.toThrow('尚未就绪'); });
     screen.unmount();
   });
+
+  it('enables value-axis label overlap handling without changing category axes or formatters', () => {
+    let captured: Record<string, unknown> | undefined;
+    const html = buildFactoryChartHtml({
+      xAxis: { type: 'value', axisLabel: { formatter: '__FMT__thousands_sep' } },
+      yAxis: [
+        { type: 'category', data: ['产品A', '产品B'], axisLabel: { interval: 0 } },
+        { type: 'value', axisLabel: { rotate: 0 } },
+      ],
+      series: [],
+    }, 'axis-overlap-nonce');
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    const script = scripts[scripts.length - 1]?.[1];
+    const chart = { setOption: (value: Record<string, unknown>) => { captured = value; }, resize: jest.fn(), on: jest.fn(), getDataURL: () => 'data:image/png;base64,valid' };
+    const context = { window: { echarts: { init: () => chart }, ReactNativeWebView: { postMessage: jest.fn() }, requestAnimationFrame: (fn: () => void) => fn(), addEventListener: jest.fn() }, document: { getElementById: () => ({}), addEventListener: jest.fn() } };
+    vm.runInNewContext(script!, context);
+
+    const xLabel = ((captured!.xAxis as Record<string, unknown>).axisLabel as Record<string, unknown>);
+    expect(xLabel.hideOverlap).toBe(true);
+    expect(typeof xLabel.formatter).toBe('function');
+    const yAxes = captured!.yAxis as Array<Record<string, unknown>>;
+    expect((yAxes[0]!.axisLabel as Record<string, unknown>).hideOverlap).toBeUndefined();
+    expect((yAxes[0]!.axisLabel as Record<string, unknown>).interval).toBe(0);
+    expect((yAxes[1]!.axisLabel as Record<string, unknown>).hideOverlap).toBe(true);
+  });
 });

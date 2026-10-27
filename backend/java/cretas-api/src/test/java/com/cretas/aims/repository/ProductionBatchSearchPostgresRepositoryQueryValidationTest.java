@@ -92,6 +92,7 @@ class ProductionBatchSearchPostgresRepositoryQueryValidationTest {
                   supervisor_name VARCHAR(50), worker_count INTEGER, work_duration_minutes INTEGER,
                   material_cost NUMERIC(12,2), labor_cost NUMERIC(12,2), equipment_cost NUMERIC(12,2),
                   other_cost NUMERIC(12,2), total_cost NUMERIC(12,2), unit_cost NUMERIC(12,4),
+                  cost_incomplete BOOLEAN NOT NULL DEFAULT FALSE,
                   yield_rate NUMERIC(12,2), efficiency NUMERIC(5,2), notes TEXT, created_by BIGINT,
                   photo_required BOOLEAN DEFAULT FALSE, sop_config_id VARCHAR(50), photo_completed_stages TEXT,
                   custom_fields JSONB DEFAULT '{}'::jsonb, planned_unit VARCHAR(20), batch_type VARCHAR(20) NOT NULL DEFAULT 'REGULAR',

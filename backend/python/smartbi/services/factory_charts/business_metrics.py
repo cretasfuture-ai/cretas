@@ -6,6 +6,38 @@ from .metrics import Series, number, display, grouped
 from smartbi.services.financial import metrics as M
 
 
+def _grouped_sales_sku(frame, identity, name, value):
+    """Aggregate by product identity while keeping chart labels human-readable.
+
+    Product names are labels only: IDs remain the aggregation key so two
+    tenant-owned SKUs with the same name cannot be merged.
+    """
+    if identity is None or value is None or identity not in frame or value not in frame:
+        return None, False
+    work = frame[[identity, name, value]].copy() if name and identity != name and name in frame else frame[[identity, value]].copy()
+    if work[identity].isna().any():
+        return None, False
+    work[value] = work[value].map(number)
+    if work[value].isna().any():
+        return None, False
+    grouped_rows = []
+    missing_name = False
+    for product_id, rows in work.groupby(identity, sort=True, dropna=False):
+        names = rows[name].map(lambda item: str(item).strip() if pd.notna(item) else '') if name in rows else pd.Series('', index=rows.index)
+        usable = names[names.ne('')]
+        product_name = usable.iloc[0] if not usable.empty else str(product_id)
+        missing_name = missing_name or usable.empty
+        grouped_rows.append((str(product_id), product_name, float(rows[value].sum())))
+    name_counts = {}
+    for _, product_name, _ in grouped_rows:
+        name_counts[product_name] = name_counts.get(product_name, 0) + 1
+    points = []
+    for product_id, product_name, total in grouped_rows:
+        label = product_name if name_counts[product_name] == 1 else f'{product_name}（{product_id}）'
+        points.append((label, total))
+    return points, missing_name
+
+
 def build(frame, cols, request, can_price, source):
     from .engine import series_candidate
     candidates, gaps = [], []
@@ -29,6 +61,10 @@ def build(frame, cols, request, can_price, source):
         c = series_candidate(series, kind, optional)
         candidates.append(c)
         return c
+
+    def limit(candidate, text):
+        candidate['findings']['attention'].append(text)
+        candidate['findings'].setdefault('limitations', []).append(text)
 
     date = col('date', '日期', '月份', '检验日期', '销售日期')
     product = col('product', '产品', 'SKU', '产品名称')
@@ -67,7 +103,15 @@ def build(frame, cols, request, can_price, source):
                 valid = all(g[total].nunique() == 1 and abs(g[subtotal].sum()-g[total].iloc[0]) <= .01
                             for _, g in work.groupby(order, dropna=False))
             if valid:
-                emit(Series('sales.sku', 'SKU销售金额（逐单对账）', '销售', '元', grouped(work, sku, subtotal), source), 'bar_horizontal')
+                points, missing_name = _grouped_sales_sku(work, sku, product, subtotal)
+                if points:
+                    candidate = emit(Series('sales.sku', 'SKU销售金额（逐单对账）', '销售', '元', points, source), 'bar_horizontal')
+                    if missing_name:
+                        limitation = '部分SKU缺少产品名称，已回退产品ID；金额仍按产品ID独立汇总'
+                        candidate['findings']['attention'].append(limitation)
+                        candidate['findings'].setdefault('limitations', []).append(limitation)
+                else:
+                    valid = False
         if not valid:
             gap('sales.sku', 'SKU销售金额', '真实SKU、唯一订单行ID、订单行小计（折后）与订单保存总额逐单对账；不能任意分摊折扣')
 
@@ -90,7 +134,7 @@ def build(frame, cols, request, can_price, source):
                 ag = group.groupby(material)[['_amount', received]].sum()
                 points = [(str(k), M.ratio(r['_amount'], r[received], 1).value) for k, r in ag.iterrows()]
                 c = emit(Series('purchase.price@'+str(u), '原料采购加权单价', '采购', '元/'+str(u), points, source, 'nonadditive'), 'bar_horizontal')
-                c['findings']['attention'].append('各原料分别按实收数量加权：金额合计÷数量合计；不同原料均价不相加，不代表扣退货后的净采购价')
+                limit(c, '各原料分别按实收数量加权：金额合计÷数量合计；不同原料均价不相加，不代表扣退货后的净采购价')
 
     components = [col(k, *names) for k, names in [
         ('material_cost', ('材料成本', '原料成本')), ('labor_cost', ('人工成本',)),
@@ -102,7 +146,7 @@ def build(frame, cols, request, can_price, source):
         if valid:
             work = frame.copy(); work[components+[cost]] = values
             c = emit(Series('process.full-cost', '工序完整成本', '成本', '元', grouped(work, process, cost), source), 'bar_horizontal')
-            c['findings']['attention'].append('逐行材料+人工+设备+其他=总成本；仅覆盖来源已完成归集的工序')
+            limit(c, '逐行材料+人工+设备+其他=总成本；仅覆盖来源已完成归集的工序')
         else: gap('process.full-cost', '工序完整成本', '完整材料/人工/设备/其他/总成本及逐行对账，不能把两项成本称为完整成本')
 
     for key, title, num, den in [
@@ -160,7 +204,7 @@ def build(frame, cols, request, can_price, source):
                                   'rows': [[d, q, r, v] for (d, q), r, v in zip(points, rates, costs)]}
                 c['kpis'] += [{'label': '累计良品率', 'value': display(M.ratio(M.total(group[good]), M.total(group[output])).value), 'unit': '%'},
                               {'label': '总成本', 'value': display(M.total(group[cost])), 'unit': '元'}]
-                c['findings']['attention'].append('同批次对齐的数量、质量及已归集总成本；未推断因果或在制品流向')
+                limit(c, '同批次对齐的数量、质量及已归集总成本；未推断因果或在制品流向')
         else: gap('production.fused', '生产/质量/成本联合趋势', '唯一批次、同产品同单位、真实日期与完整产量/良品/总成本')
 
     input_qty = col('input', '投入量', '投入数量')
@@ -195,7 +239,7 @@ def build(frame, cols, request, can_price, source):
                 q = M.total(vals[good])/M.total(vals[count])
                 c = emit(Series('production.oee', '设备OEE', '生产', '%', [('同节拍观察期', round(100*a*p*q, 6))], source, 'nonadditive'), 'gauge', True)
                 c['kpis'] = [{'label': label, 'value': display(v*100), 'unit': '%'} for label, v in [('OEE', a*p*q), ('时间开动率', a), ('性能开动率', p), ('良品率', q)]]
-                c['findings']['attention'].append(f'OEE {display(100*a*p*q)}%=时间开动率{display(a*100)}%×性能开动率{display(p*100)}%×良品率{display(q*100)}%；秒/分钟已换算')
+                limit(c, f'OEE {display(100*a*p*q)}%=时间开动率{display(a*100)}%×性能开动率{display(p*100)}%×良品率{display(q*100)}%；秒/分钟已换算')
             else: gap('production.oee', '设备OEE', '同一理想节拍的计划/实际运行分钟、理想周期秒、总数与良品数；逐行0≤A/P/Q≤100%')
 
         avg = col('average_inventory', '平均库存金额')
@@ -211,7 +255,7 @@ def build(frame, cols, request, can_price, source):
             if valid:
                 points = [(str(k), M.ratio(g[period_cost].iloc[0], g[avg].iloc[0], 1).value) for k, g in work.groupby(period)]
                 c = emit(Series('stock.turnover', '库存金额周转次数', '库存', '次', points, source, 'nonadditive'), 'bar', True)
-                c['findings']['attention'].append('每会计期间使用一次同期销货/领料成本÷该期间提供的平均库存金额；重复快照不累加成本')
+                limit(c, '每会计期间使用一次同期销货/领料成本÷该期间提供的平均库存金额；重复快照不累加成本')
             else: gap('stock.turnover', '库存周转', '会计期间、同币种平均库存金额、唯一同期销货/领料成本事实及金额权限；采购金额不能代替消耗成本')
 
         if (not getattr(request, 'guided', False) or getattr(request, 'analysis_subject', None)) and all([batch, date, product, unit, output]):
@@ -227,5 +271,5 @@ def build(frame, cols, request, can_price, source):
                     outliers = [k for k, v in points if abs(v-mean) > 2*deviation]
                     if outliers:
                         c = emit(Series('production.anomaly@'+str(sku_name)+'@'+str(u), '同SKU批次产量偏离观察', '生产', str(u), points, source, 'nonadditive'), 'bar', True)
-                        c['findings']['attention'].append(f'{len(group)}个同SKU/单位批次，{len(outliers)}个值偏离均值超过2个总体标准差；仅统计观察，不代表原因')
+                        limit(c, f'{len(group)}个同SKU/单位批次，{len(outliers)}个值偏离均值超过2个总体标准差；仅统计观察，不代表原因')
     return candidates, gaps

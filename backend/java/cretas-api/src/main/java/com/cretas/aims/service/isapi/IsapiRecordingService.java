@@ -52,13 +52,13 @@ public class IsapiRecordingService {
      * @param request 搜索请求
      * @return 录像列表
      */
-    public RecordingSearchResponse searchRecordings(RecordingSearchRequest request) {
+    public RecordingSearchResponse searchRecordings(String factoryId, RecordingSearchRequest request) {
         log.info("开始搜索录像: deviceId={}, startTime={}, endTime={}",
                 request.getDeviceId(), request.getStartTime(), request.getEndTime());
 
         try {
             // 获取设备
-            Optional<IsapiDevice> deviceOpt = deviceRepository.findById(request.getDeviceId());
+            Optional<IsapiDevice> deviceOpt = ownDevice(factoryId, request.getDeviceId());
             if (deviceOpt.isEmpty()) {
                 return RecordingSearchResponse.builder()
                         .success(false)
@@ -105,10 +105,10 @@ public class IsapiRecordingService {
      * @param endTime   结束时间
      * @return RTSP URL
      */
-    public String getPlaybackUrl(String deviceId, int channelId,
+    public String getPlaybackUrl(String factoryId, String deviceId, int channelId,
                                   LocalDateTime startTime, LocalDateTime endTime) {
         try {
-            Optional<IsapiDevice> deviceOpt = deviceRepository.findById(deviceId);
+            Optional<IsapiDevice> deviceOpt = ownDevice(factoryId, deviceId);
             if (deviceOpt.isEmpty()) {
                 throw new IllegalArgumentException("设备不存在: " + deviceId);
             }
@@ -140,10 +140,10 @@ public class IsapiRecordingService {
     /**
      * 获取录像回放 RTSP URL（不带认证信息，用于前端显示）
      */
-    public String getPlaybackUrlWithoutAuth(String deviceId, int channelId,
+    public String getPlaybackUrlWithoutAuth(String factoryId, String deviceId, int channelId,
                                              LocalDateTime startTime, LocalDateTime endTime) {
         try {
-            Optional<IsapiDevice> deviceOpt = deviceRepository.findById(deviceId);
+            Optional<IsapiDevice> deviceOpt = ownDevice(factoryId, deviceId);
             if (deviceOpt.isEmpty()) {
                 throw new IllegalArgumentException("设备不存在: " + deviceId);
             }
@@ -165,6 +165,12 @@ public class IsapiRecordingService {
             log.error("获取回放 URL 失败: {}", e.getMessage(), e);
             throw new RuntimeException("获取回放 URL 失败: " + e.getMessage(), e);
         }
+    }
+
+    /** 本厂设备: 别厂的设备与不存在一样 (录像检索 / 回放地址带设备密码, 不能跨厂取) */
+    private Optional<IsapiDevice> ownDevice(String factoryId, String deviceId) {
+        return deviceRepository.findById(deviceId)
+                .filter(d -> factoryId != null && factoryId.equals(d.getFactoryId()));
     }
 
     /**
@@ -338,7 +344,7 @@ public class IsapiRecordingService {
             // 如果没有 playbackUrl，自动生成
             if (item.getPlaybackUrl() == null && item.getStartTime() != null && item.getEndTime() != null) {
                 item.setPlaybackUrl(getPlaybackUrlWithoutAuth(
-                        device.getId(),
+                        device.getFactoryId(), device.getId(),
                         item.getChannelId(),
                         item.getStartTime(),
                         item.getEndTime()

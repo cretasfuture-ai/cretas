@@ -26,6 +26,7 @@ import java.util.List;
 public class FinishedGoodsInventoryController {
 
     private final FinishedGoodsFeedService finishedGoodsFeedService;
+    private final com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
 
     /**
      * 工厂级可投料成品库存 (AVAILABLE 且可用量 &gt; 0), 供逐道 FG 投料下拉。
@@ -38,8 +39,11 @@ public class FinishedGoodsInventoryController {
     @Operation(summary = "工厂级可投料成品库存 (含品名/生产日期/成本; 可选产品族过滤)")
     public ApiResponse<List<FinishedGoodsStockItem>> listInventory(
             @PathVariable String factoryId,
-            @RequestParam(required = false) String productTypeId) {
-        List<FinishedGoodsStockItem> rows = finishedGoodsFeedService.listAvailableForFeed(factoryId, productTypeId);
+            @RequestParam(required = false) String productTypeId,
+            @RequestParam(required = false) String planId) {
+        // 缺口 16: 带 planId = 投料下拉, 只列与该计划同一归属的成品; 不带 = 全列
+        List<FinishedGoodsStockItem> rows = finishedGoodsFeedService.listAvailableForFeed(factoryId, productTypeId,
+                planId == null || planId.isBlank() ? null : ownershipGuard.ofPlanId(factoryId, planId));
         log.debug("[FG-feed] listInventory factoryId={} productTypeId={} → {} rows",
                 factoryId, productTypeId, rows.size());
         return ApiResponse.success(rows);

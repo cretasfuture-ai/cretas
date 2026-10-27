@@ -12,6 +12,7 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/smartbi-factory-analysis-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,

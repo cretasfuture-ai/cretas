@@ -263,6 +263,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /**
+     * 缺口 16 跨客户领料: 半成品 / 在制批次的归属闸。required=false 只为既有单测装配;
+     * 走到领用点却没有它 ⇒ {@link #ownershipGuard()} 直接 500, ⛔ 不当作「不查」放行。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard intermediateOwnershipGuard;
+
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard() {
+        if (intermediateOwnershipGuard == null) {
+            throw new BusinessException(500, "半成品归属校验服务未就绪, 不能领用半成品");
+        }
+        return intermediateOwnershipGuard;
+    }
+
     /** 结单族 SFI 投料 (deductProcessSheetStockFeeds) 的 WIP_CONSUME 写点; required=false 同上。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
@@ -3297,7 +3311,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     plan.getSecondarySourceWipId(),
                     plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO,
                     factoryId,
-                    operatorId);
+                    operatorId,
+                    com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan));
             log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
         }
 
@@ -7098,7 +7113,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .collect(java.util.stream.Collectors.toSet()));
         for (ProductionSettlementConsumption line : lines) {
             if ("SEMI_FINISHED".equals(line.getSourceType())) {
-                postSemiFinishedConsumption(factoryId, line, operatorId);
+                postSemiFinishedConsumption(factoryId, plan, line, operatorId);
             } else {
                 postMaterialBatchConsumption(factoryId, plan, line, materialMainCategoryByType);
             }
@@ -7120,6 +7135,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 大类同上: 从批次的 materialTypeId 查预取好的 map, 不用行自带的字面值。
         assertMaterialBatchOwnershipMatchesPlan(
                 plan, batch, materialMainCategoryByType.get(batch.getMaterialTypeId()), "实际领用");
+        // 跨客户领料 (缺口 16): 在制半成品批次的归属看产出它的生产批次的计划 (原料归属闸看不出来:
+        //   在制批次的 ownership 列恒为公司自有, 见 IntermediateOwnershipGuard 类注释)。
+        if (com.cretas.aims.service.quality.release.QcInspectionGuard.WIP_SOURCE_DOC_TYPE.equals(batch.getSourceDocType())) {
+            ownershipGuard().assertWipBatchDrawable(factoryId,
+                    com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan),
+                    sourceProductionBatch(factoryId, batch), batch.getBatchNumber(), "实际领用");
+        }
         // 质检放行 (缺口 11): 结单领用在制半成品批次 —— 待检 / 不合格不能领 (只作用于 PRODUCTION_BATCH 来源)。
         com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
                 batch, batch.getBatchNumber(), "实际领用");
@@ -7136,8 +7158,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");
     }
 
-    private void postSemiFinishedConsumption(String factoryId, ProductionSettlementConsumption line,
-                                              Long operatorId) {
+    /** 在制批次 (sourceDocType=PRODUCTION_BATCH) 的来源生产批次; 找不到 ⇒ 409, 不当成公司自有。 */
+    private com.cretas.aims.entity.ProductionBatch sourceProductionBatch(String factoryId, MaterialBatch wipBatch) {
+        Long batchId = null;
+        try {
+            batchId = wipBatch.getSourceDocId() == null ? null : Long.valueOf(wipBatch.getSourceDocId());
+        } catch (NumberFormatException ignored) {
+            // 落到下面的 409
+        }
+        java.util.Optional<com.cretas.aims.entity.ProductionBatch> source = batchId == null
+                ? java.util.Optional.empty()
+                : productionBatchRepository.findByIdAndFactoryId(batchId, factoryId);
+        return source.orElseThrow(() -> new BusinessException(409, "在制批次 " + wipBatch.getBatchNumber()
+                        + " 找不到来源生产批次, 不能判断归属")
+                        .withCode(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.CODE_CONTEXT_REQUIRED)
+                        .withHint("请改选仍存在的在制批次, 或联系管理员核对该批次来源")
+                        .withHintTarget("实际领用"));
+    }
+
+    private void postSemiFinishedConsumption(String factoryId, ProductionPlan plan,
+                                              ProductionSettlementConsumption line, Long operatorId) {
         if (semiFinishedInventoryTransactionRepository == null
                 || line.getId() == null || line.getSettlementId() == null) {
             throw new BusinessException(409, "半成品结单消耗缺少可追溯 OUT 流水凭据")
@@ -7151,6 +7191,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(403, "无权领用其他工厂的半成品库存")
                     .withHintTarget("半成品领用");
         }
+        // 跨客户领料 (缺口 16): 只能领本计划同一归属的半成品。
+        ownershipGuard().assertSemiDrawable(factoryId,
+                com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan), inventory, "半成品领用");
         // 质检放行 (缺口 11): 结单领用常驻半成品 —— 待检 / 不合格不能领。
         com.cretas.aims.service.quality.release.QcInspectionGuard.assertSemiDrawable(
                 inventory, zeroIfNull(line.getQuantity()), "半成品领用");
@@ -7230,7 +7273,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         throw new BusinessException(500, "成品投料扣减服务未就绪, 无法完成结单 (投料来源: "
                                 + srcBatchNo + ")").withHintTarget("核对结单");
                     }
-                    BigDecimal drawn = finishedGoodsFeedService.consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
+                    BigDecimal drawn = finishedGoodsFeedService.consumeForFeedStrict(factoryId,
+                            com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan),
+                            srcBatchNo, feed, "kg");
                     fgOut = fgOut.add(zeroIfNull(drawn));
                     fgCount++;
                 } else if (ref.isSemiFinished()) {
@@ -7244,7 +7289,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         throw new BusinessException(500, "半成品投料扣减服务未就绪, 无法完成结单 (投料来源: "
                                 + srcBatchNo + ")").withHintTarget("核对结单");
                     }
-                    BigDecimal drawn = wipInventoryService.consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
+                    BigDecimal drawn = wipInventoryService.consumeClerkSemiStrict(factoryId,
+                            com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan), srcBatchNo, feed);
                     sfiOut = sfiOut.add(zeroIfNull(drawn));
                     sfiCount++;
                     // 血缘: 产出它的生产批次 → 本行生产批次 (结单只扣一次, 见上方幂等说明)。
@@ -9788,6 +9834,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .filter(w -> w.getId().equals(wipId))
                 .findFirst()
                 .orElseThrow(() -> new ResourceNotFoundException("半成品库存", "id", wipId));
+        // 缺口 16: 二次加工计划不带客户合同 (产出公司自有) ⇒ 只能用本厂自有的半成品
+        ownershipGuard().assertSemiDrawable(factoryId,
+                com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner.COMPANY, wip, "wipId");
 
         if (quantity == null || quantity.compareTo(java.math.BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "计划加工数量必须大于 0");

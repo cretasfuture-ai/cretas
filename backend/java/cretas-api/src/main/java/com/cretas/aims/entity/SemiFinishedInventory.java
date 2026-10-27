@@ -234,6 +234,19 @@ public class SemiFinishedInventory {
     @Column(name = "material_batch_refs", columnDefinition = "jsonb")
     private List<Map<String, Object>> materialBatchRefs;
 
+    /**
+     * 这一行半成品归谁 (缺口 16 跨客户领料): 与原料批次同口径 —— 公司自有, 或某个客户所有
+     * (代工 / 来料加工计划的产出)。入账时从产出它的计划的 {@code outputOwnership} 继承,
+     * 由 {@code IntermediateOwnershipGuard} 统一写入和比对。null 只出现在迁移前的旧行, 按公司自有读。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ownership", length = 32)
+    private com.cretas.aims.entity.enums.InventoryOwnership ownership;
+
+    /** 客户所有时的客户 id ({@link #ownership} = CUSTOMER_OWNED 时必有)。 */
+    @Column(name = "owner_customer_id", length = 191)
+    private String ownerCustomerId;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

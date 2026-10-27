@@ -29,6 +29,7 @@ import java.util.List;
 public class SemiFinishedInventoryController {
 
     private final WipInventoryService wipInventoryService;
+    private final com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
 
     /**
      * 工厂级半成品重量库存快照。
@@ -67,8 +68,11 @@ public class SemiFinishedInventoryController {
     public ApiResponse<List<WipRowDTO>> listInventory(
             @PathVariable String factoryId,
             @RequestParam(required = false) String productTypeId,
-            @RequestParam(required = false) Integer maxProcessOrder) {
-        List<WipRowDTO> rows = wipInventoryService.listWipByFactory(factoryId, productTypeId, maxProcessOrder);
+            @RequestParam(required = false) Integer maxProcessOrder,
+            @RequestParam(required = false) String planId) {
+        // 缺口 16: 带 planId = 投料下拉, 只列与该计划同一归属的半成品; 不带 = 库存总览, 全列
+        List<WipRowDTO> rows = wipInventoryService.listWipByFactory(factoryId, productTypeId, maxProcessOrder,
+                planId == null || planId.isBlank() ? null : ownershipGuard.ofPlanId(factoryId, planId));
         log.debug("[C3] listInventory factoryId={} productTypeId={} maxProcessOrder={} → {} rows",
                 factoryId, productTypeId, maxProcessOrder, rows.size());
         return ApiResponse.success(rows);

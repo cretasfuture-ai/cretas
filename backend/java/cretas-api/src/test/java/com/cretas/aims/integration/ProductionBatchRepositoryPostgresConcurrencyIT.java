@@ -111,6 +111,7 @@ class ProductionBatchRepositoryPostgresConcurrencyIT {
                     equipment_cost NUMERIC(12,2),
                     other_cost NUMERIC(12,2),
                     total_cost NUMERIC(12,2),
+                    cost_incomplete BOOLEAN NOT NULL DEFAULT FALSE,
                     unit_cost NUMERIC(12,4),
                     yield_rate NUMERIC(12,2),
                     efficiency NUMERIC(5,2),

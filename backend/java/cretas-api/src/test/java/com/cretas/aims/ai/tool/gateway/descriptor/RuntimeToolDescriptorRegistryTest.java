@@ -38,7 +38,8 @@ class RuntimeToolDescriptorRegistryTest {
                         // 下面三条只读物料工具不受影响, 必须保留。
                         "material_stock_summary",
                         "material_batch_query",
-                        "material_expired_query");
+                        "material_expired_query",
+                        "smartbi_factory_analysis");
         for (String toolName : registry.approvedToolNames()) {
             ToolDescriptor descriptor = registry.findApproved(toolName).orElseThrow();
             assertThat(descriptor.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
@@ -60,6 +61,23 @@ class RuntimeToolDescriptorRegistryTest {
                             .isEqualTo(EgressMode.ALLOWLIST_ONLY);
                     assertThat(descriptor.egressPolicy().allowedDestinations())
                             .containsExactly("python-smartbi.owner-action-chat.v1");
+                });
+        assertThat(registry.findApproved("smartbi_factory_analysis").orElseThrow())
+                .satisfies(descriptor -> {
+                    assertThat(descriptor.version()).isEqualTo("1.0.0");
+                    assertThat(descriptor.actionType())
+                            .isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.ActionType.ANALYZE);
+                    assertThat(descriptor.riskLevel())
+                            .isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW);
+                    assertThat(descriptor.allowedBusinessTypes())
+                            .containsExactly(FactoryType.FACTORY);
+                    assertThat(descriptor.requiredPermissions()).containsExactly("analytics:read");
+                    assertThat(descriptor.allowedSources())
+                            .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+                    assertThat(descriptor.egressPolicy().mode())
+                            .isEqualTo(EgressMode.ALLOWLIST_ONLY);
+                    assertThat(descriptor.egressPolicy().allowedDestinations())
+                            .containsExactly("python-smartbi.factory-chart-analysis.v1");
                 });
         assertThat(registry.findApproved("canvas_product_work_process_config").orElseThrow())
                 .satisfies(descriptor -> {
@@ -95,7 +113,7 @@ class RuntimeToolDescriptorRegistryTest {
                 "com.example.UnapprovedTool", "unapproved_tool", first.version());
         List<RuntimeToolPolicyEntry> extraPolicies = new ArrayList<>(manifest.policies());
         extraPolicies.add(extraEntry);
-        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 10, extraPolicies);
+        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 11, extraPolicies);
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, extra))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unapproved=[unapproved_tool]");
@@ -103,7 +121,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry driftedEntry = copy(
                 first, first.implementationClass(), first.toolName(), "2.0.1");
         RuntimeToolPolicyManifest drifted = new RuntimeToolPolicyManifest(
-                1, 9, manifest.policies().stream()
+                1, 10, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? driftedEntry : policy)
                         .toList());
@@ -114,7 +132,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry sourceDrift = copy(
                 first, "com.example.UserDisableTool", first.toolName(), first.version());
         RuntimeToolPolicyManifest sourceDriftManifest = new RuntimeToolPolicyManifest(
-                1, 9, manifest.policies().stream()
+                1, 10, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? sourceDrift : policy)
                         .toList());
@@ -126,7 +144,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry permissionDrift = copyWithPermissions(
                 first, Set.of("hr:read"));
         RuntimeToolPolicyManifest permissionDriftManifest = new RuntimeToolPolicyManifest(
-                1, 9, manifest.policies().stream()
+                1, 10, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? permissionDrift : policy)
                         .toList());

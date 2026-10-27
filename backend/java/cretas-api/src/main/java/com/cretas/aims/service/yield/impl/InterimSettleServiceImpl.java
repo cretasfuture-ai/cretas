@@ -31,6 +31,7 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.processentry.ClerkProcessEntryService;
 import com.cretas.aims.service.wip.WipInventoryService;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
 import com.cretas.aims.service.yield.InterimSettleService;
 import com.cretas.aims.service.reversal.ReversalConsumptionCleanupService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -323,8 +324,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                 if (ref.isFinishedGoods()) {
                     if (srcBatchNo != null && feed.signum() > 0) {
                         // 投料量 feedQuantityKg 语义为 kg → 传 "kg"; 与 FG 批次 unit(盒/托) 不一致则 loud-fail。
+                        // 缺口 16: 只能投本计划同一归属的成品
                         BigDecimal drawn = finishedGoodsFeedService
-                                .consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
+                                .consumeForFeedStrict(factoryId, IntermediateOwnershipGuard.ofPlan(plan),
+                                        srcBatchNo, feed, "kg");
                         finishedGoodsOutQuantity = finishedGoodsOutQuantity.add(nz(drawn));
                         fgFeedDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
                     }
@@ -338,8 +341,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         continue;
                     }
                     if (srcBatchNo != null && feed.signum() > 0) {
+                        // 缺口 16: 只能领本计划同一归属的半成品 (代工客户的料不进别人的计划)
                         BigDecimal drawn = wipInventoryService
-                                .consumeClerkSemiStrict(factoryId, srcBatchNo, feed);
+                                .consumeClerkSemiStrict(factoryId, IntermediateOwnershipGuard.ofPlan(plan),
+                                        srcBatchNo, feed);
                         semiOutQuantity = semiOutQuantity.add(nz(drawn)); // 实际出库量, 非 pre-clamp feed
                         sfiOutStrictDetail.add(qtyDetail("batchNo", srcBatchNo, nz(drawn)));
                         recordSemiFeedLineage(factoryId, planId, sessionSeq, ur, srcBatchNo, drawn, userId);
