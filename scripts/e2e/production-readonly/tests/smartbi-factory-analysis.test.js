@@ -172,3 +172,35 @@ test('semantic follow-up coverage cannot pass from a quality button label alone'
   assert.equal(result.checks.followupDifferentDimension, true);
   assert.equal(result.checks.followupQualityGrounded, false);
 });
+
+test('factory analysis export helper requires successful Excel, PDF, and PPT downloads', () => {
+  const results = ['excel', 'pdf', 'ppt'].map((format) => ({
+    format,
+    attempted: true,
+    buttonFound: true,
+    downloadStarted: true,
+    httpStatus: 200,
+    saved: true,
+    success: true,
+    fileName: `factory-analysis-${format}`,
+  }));
+  const summary = scenario.summarizeExportResults(results);
+  assert.equal(summary.attempted, true);
+  assert.equal(summary.success, true);
+  assert.equal(summary.formats.excel.httpStatus, 200);
+  assert.equal(summary.formats.pdf.saved, true);
+  assert.equal(summary.formats.ppt.downloadStarted, true);
+});
+
+test('factory analysis export helper rejects one missing or failed format', () => {
+  const results = [
+    { format: 'excel', attempted: true, buttonFound: true, downloadStarted: true, httpStatus: 200, saved: true, success: true },
+    { format: 'pdf', attempted: true, buttonFound: false, downloadStarted: false, httpStatus: null, saved: false, success: false },
+    { format: 'ppt', attempted: true, buttonFound: true, downloadStarted: true, httpStatus: 500, saved: false, success: false },
+  ];
+  const summary = scenario.summarizeExportResults(results);
+  assert.equal(summary.attempted, true);
+  assert.equal(summary.success, false);
+  assert.equal(summary.formats.pdf.buttonFound, false);
+  assert.equal(summary.formats.ppt.httpStatus, 500);
+});
