@@ -15,7 +15,8 @@ API 端点:
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
+from efficiency_recognition.api.camera_consent import require_camera_snapshot_ai
 from pydantic import BaseModel, Field
 
 from ..services.multi_stream_sampler import get_sampler
@@ -65,7 +66,7 @@ class RemoveStreamRequest(BaseModel):
 
 # ==================== API 端点 ====================
 
-@router.post("/add")
+@router.post("/add", dependencies=[Depends(require_camera_snapshot_ai)])
 async def add_stream(request: AddStreamRequest):
     """
     添加单个摄像头流到并行处理池
@@ -96,7 +97,7 @@ async def add_stream(request: AddStreamRequest):
     return result
 
 
-@router.post("/batch-add")
+@router.post("/batch-add", dependencies=[Depends(require_camera_snapshot_ai)])
 async def batch_add_streams(request: BatchAddStreamsRequest):
     """
     批量添加多个摄像头流
