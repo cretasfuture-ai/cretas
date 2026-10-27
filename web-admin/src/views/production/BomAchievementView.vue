@@ -5,6 +5,7 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { summarizeBatch, toMaterialDetail, type MaterialDetail } from './bomAchievementSummary';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -32,16 +33,10 @@ interface BatchRow {
   createdAt: string;
   // computed from consumption summary
   plannedTotal?: number;
-  actualTotal?: number;
+  /** null: 含工艺保密隐藏的物料, 合计不给 */
+  actualTotal?: number | null;
   achievementRate?: number;
-}
-
-interface MaterialDetail {
-  materialName: string;
-  planned: number;
-  actual: number;
-  variance: number;
-  unit?: string;
+  secretHidden?: boolean;
 }
 
 interface ConsumptionSummary {
@@ -139,8 +134,6 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
     if (res.success && res.data) {
       // 后端返回 { items: [...], overallAchievementRate, totalPlannedCost, totalActualCost }
       const items = (res.data.items as Record<string, unknown>[] | undefined) || (Array.isArray(res.data) ? res.data as Record<string, unknown>[] : []);
-      const planned = items.reduce((s: number, r) => s + (Number(r.plannedQty ?? r.plannedQuantity ?? 0)), 0);
-      const actual = items.reduce((s: number, r) => s + (Number(r.actualQty ?? r.actualQuantity ?? 0)), 0);
       if (items.length > 0) {
         // 🔴 2026-08-28: 上面这句「Never fall back to 100 — null means no data」原本就写在
         //   把 100 放进去的那两行**正上方**:
@@ -159,13 +152,8 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
         //
         // ⇒ 后端已改为在没有计划成本时下发 null; 这里只留**一个口径**(数量比),
         //   算不出来就是 undefined → 表格与 KPI 都渲染「—」。
-        const computedRate = planned > 0 ? Math.round((actual / planned) * 1000) / 10 : null;
-        return {
-          ...batch,
-          plannedTotal: Math.round(planned * 100) / 100,
-          actualTotal: Math.round(actual * 100) / 100,
-          achievementRate: computedRate ?? undefined,
-        };
+        //   计算在 bomAchievementSummary: 工艺保密隐藏的实际量不按 0 计 (独立审查 V2.1 M4)。
+        return { ...batch, ...summarizeBatch(items) };
       }
     }
   } catch {
@@ -210,13 +198,7 @@ async function handleExpandChange(row: BatchRow, expandedRows: BatchRow[]) {
     if (res.success && res.data) {
       // 后端返回 { items: [...] } 或直接数组
       const items = (res.data.items as Record<string, unknown>[] | undefined) || (Array.isArray(res.data) ? res.data as Record<string, unknown>[] : []);
-      expandedDetails.value[row.id] = items.map((item) => ({
-        materialName: (item.materialName as string) || (item.materialTypeName as string) || '-',
-        planned: Number(item.plannedQty ?? item.plannedQuantity ?? 0),
-        actual: Number(item.actualQty ?? item.actualQuantity ?? 0),
-        variance: Math.round((Number(item.actualQty ?? item.actualQuantity ?? 0) - Number(item.plannedQty ?? item.plannedQuantity ?? 0)) * 100) / 100,
-        unit: item.unit as string,
-      }));
+      expandedDetails.value[row.id] = items.map(toMaterialDetail);
     } else {
       expandedDetails.value[row.id] = [];
     }
@@ -262,7 +244,8 @@ function getStatusText(status: string): string {
   return map[status?.toUpperCase()] || status;
 }
 
-function getVarianceClass(variance: number): string {
+function getVarianceClass(variance: number | null): string {
+  if (variance == null) return '';
   if (variance > 0) return 'variance-over';
   if (variance < 0) return 'variance-under';
   return '';
@@ -380,12 +363,14 @@ function handleSizeChange(size: number) {
                 </el-table-column>
                 <el-table-column prop="actual" label="实际用量" width="120" align="right">
                   <template #default="{ row: r }">
-                    {{ r.actual }} {{ r.unit || '' }}
+                    <span v-if="r.actual === null" class="secret-hidden" title="该产品工艺已设为保密，按配比自动带出的用量已隐藏">已保密</span>
+                    <template v-else>{{ r.actual }} {{ r.unit || '' }}</template>
                   </template>
                 </el-table-column>
                 <el-table-column label="偏差" width="120" align="right">
                   <template #default="{ row: r }">
-                    <span :class="getVarianceClass(r.variance)">
+                    <span v-if="r.variance === null" class="secret-hidden">—</span>
+                    <span v-else :class="getVarianceClass(r.variance)">
                       {{ r.variance > 0 ? '+' : '' }}{{ r.variance }} {{ r.unit || '' }}
                     </span>
                   </template>
@@ -409,7 +394,8 @@ function handleSizeChange(size: number) {
         </el-table-column>
         <el-table-column prop="actualTotal" label="实际总量" width="110" align="right">
           <template #default="{ row }">
-            {{ row.actualTotal != null ? row.actualTotal : '-' }}
+            <span v-if="row.secretHidden" class="secret-hidden" title="该产品工艺已设为保密，按配比自动带出的用量已隐藏">已保密</span>
+            <template v-else>{{ row.actualTotal != null ? row.actualTotal : '-' }}</template>
           </template>
         </el-table-column>
         <el-table-column label="达成率" width="120" align="center">
@@ -551,6 +537,10 @@ function handleSizeChange(size: number) {
 
 .expand-content {
   min-height: 40px;
+}
+
+.secret-hidden {
+  color: var(--el-text-color-secondary);
 }
 
 .variance-over {
