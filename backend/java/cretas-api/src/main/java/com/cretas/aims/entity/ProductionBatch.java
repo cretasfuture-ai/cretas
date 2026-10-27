@@ -287,7 +287,7 @@ public class ProductionBatch extends BaseEntity {
      *
      * <p>为 true 时 totalCost / unitCost 是「不知道」, {@link #calculateMetrics()} 不得再用已知分项
      * (原料按 0 + 人工) 求和把它改回「已知」。分项仍按已知部分记录, 只是汇总诚实留空。
-     * 由物化 / 多产出分摊写入 (V20261103_89_1)。</p>
+     * 由物化 / 多产出分摊写入 (V20261103_90_1)。</p>
      */
     @Builder.Default
     @org.hibernate.annotations.ColumnDefault("false")

@@ -17,14 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * V20261103_89_1 on real PostgreSQL: existing batches read cost_incomplete=false (behaviour unchanged),
+ * V20261103_90_1 on real PostgreSQL: existing batches read cost_incomplete=false (behaviour unchanged),
  * new rows default to false, the column refuses NULL, and re-running the script is harmless.
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class ProductionBatchCostIncompleteMigrationPostgresContractTest {
 
     private static final String MIGRATION =
-            "db/flyway/V20261103_89_1__production_batch_cost_incomplete.sql";
+            "db/flyway/V20261103_90_1__production_batch_cost_incomplete.sql";
 
     @Test
     void existingAndNewBatchesAreCompleteByDefaultAndNullIsRefused() throws Exception {
