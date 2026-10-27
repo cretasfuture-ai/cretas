@@ -503,6 +503,46 @@ class ProcessSecretDataLayerExitsSecurityTest {
         return mvc(controller(BomRecipeController.class));
     }
 
+    // ------------------------------------------------------------------ 报工表调料工序标记 (F006 验收缺陷 2)
+
+    MockMvc seasoningFlags() throws Exception {
+        com.cretas.aims.entity.bom.BomSeasoningItem pot = new com.cretas.aims.entity.bom.BomSeasoningItem();
+        pot.setFactoryId(F);
+        pot.setWorkProcessId("WP-STEW");
+        pot.setDosagePerKgG(new BigDecimal("1.5"));
+        pot.setSubsequentPotRatio(new BigDecimal("0.6"));
+        com.cretas.aims.entity.bom.BomSeasoningItem plain = new com.cretas.aims.entity.bom.BomSeasoningItem();
+        plain.setFactoryId(F);
+        plain.setWorkProcessId("WP-MIX");
+        plain.setDosagePerKgG(new BigDecimal("2.5"));
+        com.cretas.aims.dto.bom.BomSeasoningResponse response = new com.cretas.aims.dto.bom.BomSeasoningResponse();
+        response.setProductTypeId(SECRET);
+        response.setSeasoningItems(List.of(pot, plain));
+        when(dep(com.cretas.aims.service.bom.BomRecipeService.class).getSeasoningByProduct(F, SECRET))
+                .thenAnswer(afterReadingSecretRecipe(() -> Optional.of(response)));
+        return mvc(controller(BomRecipeController.class));
+    }
+
+    @Test
+    void processSheetSeasoningFlagsStayAvailableWithoutRatiosSoTheSheetStillOpens() throws Exception {
+        JsonNode data = call(seasoningFlags(),
+                get("/api/mobile/F-A/bom/recipes/by-product/P17/seasoning/process-flags"), user(OPERATOR));
+        assertThat(data.at("/processes/0/workProcessId").asText()).isEqualTo("WP-STEW");
+        assertThat(data.at("/processes/0/potEnabled").asBoolean()).isTrue();
+        assertThat(data.at("/processes/1/potEnabled").asBoolean()).isFalse();
+        assertThat(data.toString()).doesNotContain("1.5").doesNotContain("0.6").doesNotContain("2.5");
+    }
+
+    @Test
+    void theFullSeasoningRecipeStaysBehindTheFullViewGuard() throws Exception {
+        MockMvc mvc = seasoningFlags();
+        mvc.perform(get("/api/mobile/F-A/bom/recipes/by-product/P17/seasoning")
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, user(OPERATOR)))
+                .andExpect(status().isForbidden());
+        verify(recorder).record(eq(F), eq(SECRET), eq(user(OPERATOR)), eq(ProcessSecretAction.VIEW_FULL),
+                eq("DENY"), anyString(), contains("/seasoning"));
+    }
+
     @Test
     void copyCandidatesHideAnotherProductsQuantities() throws Exception {
         JsonNode item = call(copyCandidates(), get("/api/mobile/F-A/bom/recipes/copy-candidates")

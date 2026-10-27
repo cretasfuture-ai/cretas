@@ -601,7 +601,23 @@ export interface BomSeasoningSaveRequest {
 
 const seasoningBase = (factoryId: string) => `/${factoryId}/bom/recipes`;
 
+/** 报工表用的调料工序标记: 只有工序 id 和「要不要录续锅锅数」, 不含配比。 */
+export interface SeasoningProcessFlagsResponse {
+  processes: Array<{ workProcessId: string; potEnabled: boolean }>;
+}
+
 export const bomSeasoningApi = {
+  /**
+   * 报工表要知道哪些工序配了调料、哪些要录续锅锅数。这个接口只回工序 id 和布尔值, 不含配比 ——
+   * 工艺保密产品对无授权的人也照常返回, 逐道录入不会因为看不到配方而整张打不开 (F006 验收 2026-10-27)。
+   * 产品未建 BOM 时返回 404, 与 getByProduct 同口径。
+   */
+  getProcessFlagsByProduct: (factoryId: string, productTypeId: string) =>
+    get<SeasoningProcessFlagsResponse>(
+      `${seasoningBase(factoryId)}/by-product/${productTypeId}/seasoning/process-flags`,
+      { _silent: true },
+    ),
+
   /**
    * 按产品类型加载当前 BOM 的调料配方。
    * 若该产品尚未建 BOM，后端返回 404 { success:false, message:"产品未建 BOM 配方: ..." }。

@@ -52,6 +52,9 @@ class ProcessSecretPayloadScrubberTest {
 
     @BeforeEach
     void setUp() {
+        // 打标的「本厂有无保密产品」探针是静态的; 同一 JVM 里先跑的 Spring 测试上下文会装上它自己的 (缓存的
+        // 上下文不销毁), 这里恢复默认「有」, 让工艺图照常解析
+        ProcessSecretReadTracker.useProtectedFactoryProbe(null);
         ProcessSecretPolicyRepository policies = mock(ProcessSecretPolicyRepository.class);
         ProcessSecretGrantRepository grants = mock(ProcessSecretGrantRepository.class);
         recorder = mock(ProcessSecretAuditRecorder.class);
@@ -244,6 +247,135 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     // ------------------------------------------------------------------ 独立审查发现的口子
+
+    @Test
+    void aWorkflowOwnedByARawMaterialAnchorIsRestrictedThroughItsTerminalOutputs() throws Exception {
+        // 独立审查 V2.1 M3: 多产出工艺图挂在原料锚点上 (锚点 id 就是原料 id, 不受保护), 受保护的是它产出的成品
+        String[] graph = ProcessSecretTestHooks.workflowGraphJson(List.of("RAW-BEEF"), List.of("Q-OPEN", SECRET));
+        com.cretas.aims.entity.ProductProcessWorkflow workflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        workflow.setFactoryId(F);
+        workflow.setProductTypeId("RAW-BEEF");
+        workflow.setNodesJson(graph[0]);
+        workflow.setEdgesJson(graph[1]);
+        Set<ProcessSecretReadTracker.Read> reads = Set.copyOf(ProcessSecretReadTracker.readsOf(workflow));
+        String body = "{'productTypeId':'RAW-BEEF','nodes':[{'id':'process','data':{'ports':["
+                + "{'id':'in-1','inputShareRatio':0.6,'materialName':'牛肉'}]}}]}";
+
+        ObjectNode operator = tree(body);
+        assertThat(scrubber.scrub(operator, user(5), F, reads, "GET /product-process-workflows/RAW-BEEF", false))
+                .isTrue();
+        assertThat(operator.at("/nodes/0/data/ports/0/inputShareRatio").isNull()).isTrue();
+        assertThat(operator.at("/nodes/0/data/ports/0/materialName").asText()).isEqualTo("牛肉");
+
+        ObjectNode owner = tree(body);
+        assertThat(scrubber.scrub(owner, user(OWNER), F, reads, "GET /product-process-workflows/RAW-BEEF", false))
+                .isFalse();
+        assertThat(owner.at("/nodes/0/data/ports/0/inputShareRatio").asDouble()).isEqualTo(0.6);
+
+        // 对照 (修复前): 只按锚点记读数时原样放出
+        ObjectNode anchorOnly = tree(body);
+        scrubber.scrub(anchorOnly, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, "RAW-BEEF"),
+                "GET /product-process-workflows/RAW-BEEF", false);
+        assertThat(anchorOnly.at("/nodes/0/data/ports/0/inputShareRatio").asDouble()).isEqualTo(0.6);
+    }
+
+    @Test
+    void workflowGraphsAreOnlyParsedForFactoriesThatHaveProtectedProducts() {
+        // 独立审查 V2.1 复核: 请求里总有记录处; 无保密产品的工厂不该每次加载工艺图都解析 JSON
+        String[] graph = ProcessSecretTestHooks.workflowGraphJson(List.of("RAW-BEEF"), List.of("Q-OPEN", SECRET));
+        com.cretas.aims.entity.ProductProcessWorkflow workflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        workflow.setFactoryId("F-NONE");
+        workflow.setProductTypeId("RAW-BEEF");
+        workflow.setNodesJson(graph[0]);
+        workflow.setEdgesJson(graph[1]);
+        try {
+            ProcessSecretReadTracker.useProtectedFactoryProbe("F-A"::equals);
+            assertThat(ProcessSecretReadTracker.readsOf(workflow))
+                    .extracting(ProcessSecretReadTracker.Read::kind)
+                    .containsOnly(ProcessSecretReadTracker.Kind.PRODUCT);
+            // 对照: 有保密产品的工厂照常解析出成员
+            workflow.setFactoryId("F-A");
+            assertThat(ProcessSecretReadTracker.readsOf(workflow))
+                    .extracting(ProcessSecretReadTracker.Read::member).contains(SECRET);
+        } finally {
+            ProcessSecretReadTracker.useProtectedFactoryProbe(null);
+        }
+    }
+
+    @Test
+    void aWorkflowWhoseGraphCannotBeReadFailsClosedInsteadOfFallingBackToTheAnchor() throws Exception {
+        // 独立审查 V2.1 复核: 图解析不了就无法确认牵涉哪些产品, 不能退回只看 (不受保护的) 锚点
+        com.cretas.aims.entity.ProductProcessWorkflow workflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        workflow.setFactoryId(F);
+        workflow.setProductTypeId("RAW-BEEF");
+        workflow.setNodesJson("{not json");
+        Set<ProcessSecretReadTracker.Read> reads = Set.copyOf(ProcessSecretReadTracker.readsOf(workflow));
+        ObjectNode operator = tree("{'productTypeId':'RAW-BEEF','nodes':[{'data':{'inputShareRatio':0.6}}]}");
+        assertThat(scrubber.scrub(operator, user(5), F, reads, "GET /product-process-workflows/RAW-BEEF", false))
+                .isTrue();
+        assertThat(operator.at("/nodes/0/data/inputShareRatio").isNull()).isTrue();
+    }
+
+    @Test
+    void reworkAutoDeductionQuantitiesThatAddUpToTheRatioAreHidden() throws Exception {
+        // 独立审查 V2.1 H2: 目标 = 回料配比 × 主料投入, 手工 + 自动 + 仍缺 = 目标, 批次明细加起来 = 自动
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("plan-6");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("plan-6", F)).thenReturn(Optional.of(plan));
+        String body = "{'productTypeId':'P17','reworkAutoDeductions':[{'reworkSkuId':'SEMI-R','inputRatioPercent':20,"
+                + "'mainInputKg':100,'targetKg':20,'manualKg':5,'drawnKg':15,'shortfallKg':0,"
+                + "'batches':[{'batchNumber':'RW-1','quantityKg':15}]}]}";
+
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-6"),
+                "GET /process-sheet/rows", false);
+        JsonNode deduction = operator.at("/reworkAutoDeductions/0");
+        assertThat(deduction.get("inputRatioPercent").isNull()).isTrue();
+        assertThat(deduction.get("targetKg").isNull()).isTrue();
+        assertThat(deduction.get("drawnKg").isNull()).isTrue();
+        assertThat(deduction.get("shortfallKg").isNull()).isTrue();
+        assertThat(deduction.at("/batches/0/quantityKg").isNull()).isTrue();
+        assertThat(deduction.at("/batches/0/batchNumber").asText()).isEqualTo("RW-1");
+        assertThat(deduction.get("mainInputKg").asInt()).as("主料实际投入照常").isEqualTo(100);
+        assertThat(deduction.get("manualKg").asInt()).as("手工实际投入照常").isEqualTo(5);
+
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-6"),
+                "GET /process-sheet/rows", false);
+        assertThat(owner.at("/reworkAutoDeductions/0/targetKg").asInt()).isEqualTo(20);
+        assertThat(owner.at("/reworkAutoDeductions/0/batches/0/quantityKg").asInt()).isEqualTo(15);
+    }
+
+    @Test
+    void quantitiesDerivedFromTheRecipeAreHiddenButManualActualsStay() throws Exception {
+        // F006 验收 2026-10-27: 报工行里按配比自动带出的调料用量 0.1725 kg ÷ 投入 115 kg = 1.5 g/kg,
+        // 就是保密配比。automatic=true 的行按配比处理; 人工录入的实际投料 (automatic=false) 是本单总量, 照给
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("plan-5");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("plan-5", F)).thenReturn(Optional.of(plan));
+        String body = "{'rows':[{'productTypeId':'P17','inputQuantity':115,'rawMaterialInputs':["
+                + "{'skuId':'S-CINNAMON','quantity':0.1725,'unit':'kg','automatic':true,'sourceType':'SEASONING'},"
+                + "{'skuId':'M-BEEF','quantity':115,'unit':'kg','automatic':false}]}]}";
+
+        ObjectNode operator = tree(body);
+        assertThat(scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-5"),
+                "GET /process-sheet/rows", false)).isTrue();
+        assertThat(operator.at("/rows/0/rawMaterialInputs/0/quantity").isNull()).isTrue();
+        assertThat(operator.at("/rows/0/rawMaterialInputs/0/skuId").asText()).isEqualTo("S-CINNAMON");
+        assertThat(operator.at("/rows/0/rawMaterialInputs/1/quantity").asInt()).as("人工实际投料照常").isEqualTo(115);
+        assertThat(operator.at("/rows/0/inputQuantity").asInt()).isEqualTo(115);
+        verify(recorder).record(eq(F), eq(SECRET), eq(user(5)), eq(ProcessSecretAction.VIEW_FULL), eq("DENY"),
+                contains("quantity"), eq("GET /process-sheet/rows"));
+
+        ObjectNode owner = tree(body);
+        assertThat(scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-5"),
+                "GET /process-sheet/rows", false)).isFalse();
+        assertThat(owner.at("/rows/0/rawMaterialInputs/0/quantity").decimalValue()).isEqualByComparingTo("0.1725");
+    }
 
     @Test
     void savedReportRowsUnderTheSemiFinishedProductStillHideRecipeShares() {

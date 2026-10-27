@@ -354,6 +354,33 @@ public class BomRecipeController {
                 .orElseGet(() -> ApiResponse.error(404, "产品未建 BOM 配方: " + productTypeId));
     }
 
+    /**
+     * 报工表 (逐道录入) 只需要知道哪些工序配了调料、哪些要录续锅锅数。只回工序 id 和布尔值, 不含配比,
+     * 所以不挂完整查看闸 —— 挂了的话, 保密产品的无授权账号整张报工表打不开 (F006 验收 2026-10-27)。
+     */
+    @GetMapping("/by-product/{productTypeId}/seasoning/process-flags")
+    @Operation(summary = "报工表用: 当前 BOM 哪些工序配了调料 / 要录续锅锅数 (不含配比)")
+    public ApiResponse<com.cretas.aims.dto.bom.SeasoningProcessFlagsDTO> getSeasoningProcessFlags(
+            @PathVariable String factoryId,
+            @PathVariable String productTypeId) {
+        return recipeService.getSeasoningByProduct(factoryId, productTypeId)
+                .map(response -> {
+                    java.util.Map<String, Boolean> potByProcess = new java.util.LinkedHashMap<>();
+                    if (response.getSeasoningItems() != null) {
+                        response.getSeasoningItems().stream()
+                                .filter(item -> item.getWorkProcessId() != null)
+                                .forEach(item -> potByProcess.merge(item.getWorkProcessId(),
+                                        item.getSubsequentPotRatio() != null, Boolean::logicalOr));
+                    }
+                    return new com.cretas.aims.dto.bom.SeasoningProcessFlagsDTO(potByProcess.entrySet().stream()
+                            .map(e -> new com.cretas.aims.dto.bom.SeasoningProcessFlagsDTO.ProcessFlag(
+                                    e.getKey(), e.getValue()))
+                            .toList());
+                })
+                .map(ApiResponse::success)
+                .orElseGet(() -> ApiResponse.error(404, "产品未建 BOM 配方: " + productTypeId));
+    }
+
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.RECIPE_PATH, name = "recipeId")
     @RequirePermission({"production:read_write", "rd:read_write", "finance:read_write"})
     @PutMapping("/{recipeId}/seasoning")

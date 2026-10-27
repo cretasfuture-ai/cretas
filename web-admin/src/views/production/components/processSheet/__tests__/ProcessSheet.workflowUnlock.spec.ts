@@ -25,7 +25,7 @@ vi.mock('@/api/processProduction', () => ({
 const getSeasoningByProduct = vi.fn();
 vi.mock('@/api/bom', () => ({
   bomSeasoningApi: {
-    getByProduct: (...args: unknown[]) => getSeasoningByProduct(...args),
+    getProcessFlagsByProduct: (...args: unknown[]) => getSeasoningByProduct(...args),
   },
 }));
 
@@ -119,7 +119,7 @@ describe('ProcessSheet.vue 按工艺图解锁 (缺口 04)', () => {
     getInventory.mockResolvedValue({ success: true, data: [] });
     // 没有任何一道正式报过 —— 旧规则下第 2、3 道都会被拦
     getRows.mockResolvedValue({ success: true, data: [] });
-    getSeasoningByProduct.mockResolvedValue({ success: true, data: { injectionConfigs: [], seasoningItems: [] } });
+    getSeasoningByProduct.mockResolvedValue({ success: true, data: { processes: [] } });
   });
 
   it('parallel branch is open although the previous tab has no submitted row; the starved step is blocked with the backend reason', async () => {

@@ -15,7 +15,7 @@ vi.mock('@/api/processProduction', () => ({
 }));
 vi.mock('@/api/bom', () => ({
   bomSeasoningApi: {
-    getByProduct: vi.fn().mockResolvedValue({ success: true, data: { injectionConfigs: [], seasoningItems: [] } }),
+    getProcessFlagsByProduct: vi.fn().mockResolvedValue({ success: true, data: { processes: [] } }),
   },
 }));
 
