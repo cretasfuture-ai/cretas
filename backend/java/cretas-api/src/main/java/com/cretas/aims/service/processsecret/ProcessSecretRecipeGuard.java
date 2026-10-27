@@ -141,6 +141,11 @@ public class ProcessSecretRecipeGuard {
         }
     }
 
+    /** 无法确认牵涉哪些产品时 (例如工艺图解析不了): 按本厂全部保密产品判, 任一无权即 403 + 审计。 */
+    public void requireAllProtected(String factoryId, ProcessSecretAction action, String resourceRef) {
+        requireProtectedAmong(factoryId, accessService.protectedProductTypeIds(factoryId), action, resourceRef);
+    }
+
     /** 本厂是否有任何保密产品 (缓存名单, 不写审计)。 */
     public boolean factoryHasProtectedProducts(String factoryId) {
         return !accessService.protectedProductTypeIds(factoryId).isEmpty();

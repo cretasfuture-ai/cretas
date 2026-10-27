@@ -150,13 +150,19 @@ public class BlueprintWorkflowPublicationService {
             processSecretGuard.requireProduct(factoryId, owner,
                     com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
                     "blueprint workflow publish " + second.workflowDraftId());
-            workflows.findByIdAndFactoryId(second.workflowDraftId(), factoryId).ifPresent(draft ->
-                    processSecretGuard.requireProtectedAmong(factoryId,
-                            com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs
-                                    .productsInGraph(draft.getNodesJson())
-                                    .orElseThrow(() -> new BusinessException(403, "无法确认该工艺图牵涉的产品，已按工艺保密拦截")),
-                            com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
-                            "blueprint workflow publish outputs " + second.workflowDraftId()));
+            workflows.findByIdAndFactoryId(second.workflowDraftId(), factoryId).ifPresent(draft -> {
+                String ref = "blueprint workflow publish outputs " + second.workflowDraftId();
+                java.util.Optional<java.util.Set<String>> products =
+                        com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.productsInGraph(draft.getNodesJson());
+                if (products.isPresent()) {
+                    processSecretGuard.requireProtectedAmong(factoryId, products.get(),
+                            com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, ref);
+                } else {
+                    // 图解析不了: 无法确认牵涉谁, 按本厂全部保密产品判 (fail-closed)
+                    processSecretGuard.requireAllProtected(factoryId,
+                            com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, ref);
+                }
+            });
         }
         BomRecipe activated = recipes.activateRecipeAsActor(factoryId, second.formalRecipeId(), actor);
         var result = workflowService.publishAndActivateAsActor(

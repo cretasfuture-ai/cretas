@@ -52,6 +52,9 @@ class ProcessSecretPayloadScrubberTest {
 
     @BeforeEach
     void setUp() {
+        // 打标的「本厂有无保密产品」探针是静态的; 同一 JVM 里先跑的 Spring 测试上下文会装上它自己的 (缓存的
+        // 上下文不销毁), 这里恢复默认「有」, 让工艺图照常解析
+        ProcessSecretReadTracker.useProtectedFactoryProbe(null);
         ProcessSecretPolicyRepository policies = mock(ProcessSecretPolicyRepository.class);
         ProcessSecretGrantRepository grants = mock(ProcessSecretGrantRepository.class);
         recorder = mock(ProcessSecretAuditRecorder.class);
@@ -274,6 +277,29 @@ class ProcessSecretPayloadScrubberTest {
         scrubber.scrub(anchorOnly, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, "RAW-BEEF"),
                 "GET /product-process-workflows/RAW-BEEF", false);
         assertThat(anchorOnly.at("/nodes/0/data/ports/0/inputShareRatio").asDouble()).isEqualTo(0.6);
+    }
+
+    @Test
+    void workflowGraphsAreOnlyParsedForFactoriesThatHaveProtectedProducts() {
+        // 独立审查 V2.1 复核: 请求里总有记录处; 无保密产品的工厂不该每次加载工艺图都解析 JSON
+        String[] graph = ProcessSecretTestHooks.workflowGraphJson(List.of("RAW-BEEF"), List.of("Q-OPEN", SECRET));
+        com.cretas.aims.entity.ProductProcessWorkflow workflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        workflow.setFactoryId("F-NONE");
+        workflow.setProductTypeId("RAW-BEEF");
+        workflow.setNodesJson(graph[0]);
+        workflow.setEdgesJson(graph[1]);
+        try {
+            ProcessSecretReadTracker.useProtectedFactoryProbe("F-A"::equals);
+            assertThat(ProcessSecretReadTracker.readsOf(workflow))
+                    .extracting(ProcessSecretReadTracker.Read::kind)
+                    .containsOnly(ProcessSecretReadTracker.Kind.PRODUCT);
+            // 对照: 有保密产品的工厂照常解析出成员
+            workflow.setFactoryId("F-A");
+            assertThat(ProcessSecretReadTracker.readsOf(workflow))
+                    .extracting(ProcessSecretReadTracker.Read::member).contains(SECRET);
+        } finally {
+            ProcessSecretReadTracker.useProtectedFactoryProbe(null);
+        }
     }
 
     @Test

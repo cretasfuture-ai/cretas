@@ -217,15 +217,16 @@ class ProcessSecretRereviewSecurityTest {
         assertThat(guard.resolveProducts(guardOf(controller, "saveDraft"), F,
                 Map.of("factoryId", F, "productTypeId", "Q-PLAIN"), http)).contains("Q-PLAIN").doesNotContain(SECRET);
 
-        // 图解析不了: 无法确认牵涉哪些产品 —— 拦 (fail-closed), 不退回只看锚点
+        // 图解析不了: 无法确认牵涉哪些产品 —— 按本厂全部保密产品判 (fail-closed, 不退回只看锚点);
+        // ⛔ 不一律 403: 对全部保密产品都有权的人还得能进来修这张图
         com.cretas.aims.entity.ProductProcessWorkflow broken = new com.cretas.aims.entity.ProductProcessWorkflow();
         broken.setFactoryId(F);
         broken.setProductTypeId("RAW-LAMB");
         broken.setNodesJson("{not json");
         when(workflows.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(F, "RAW-LAMB"))
                 .thenReturn(List.of(broken));
-        assertCode(403, () -> guard.resolveProducts(guardOf(controller, "saveDraft"), F,
-                Map.of("factoryId", F, "productTypeId", "RAW-LAMB"), http));
+        assertThat(guard.resolveProducts(guardOf(controller, "saveDraft"), F,
+                Map.of("factoryId", F, "productTypeId", "RAW-LAMB"), http)).contains("RAW-LAMB", SECRET);
     }
 
     @Test

@@ -216,16 +216,28 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
         }
     }
 
-    /**
-     * 工艺图 (定义 / 版本 / 运行实例): 所属产品 + 每个终端产出记成该图的成员。多产出图挂在原料锚点上,
-     * 锚点不受保护, 受保护的是它产出的成品; 出口把成员当兄弟产出 (独立审查 V2.1 M3)。
-     */
     /** 成员未知 (图解析不了): 出口当作「无法确认的产品」。 */
     static final String UNKNOWN_MEMBER = "";
 
+    /**
+     * 本厂有没有保密产品 (由 Spring 启动时接到判定服务的缓存名单上)。没有就不解析工艺图 JSON ——
+     * 请求里总有记录处, 不能让无保密产品的工厂每次加载工艺图都付解析的钱 (独立审查 V2.1 复核)。
+     * 未接上时默认「有」: 宁可多解析, 不漏。
+     */
+    private static volatile java.util.function.Predicate<String> factoryHasProtectedProducts = factoryId -> true;
+
+    public static void useProtectedFactoryProbe(java.util.function.Predicate<String> probe) {
+        factoryHasProtectedProducts = probe == null ? factoryId -> true : probe;
+    }
+
+    /**
+     * 工艺图 (定义 / 版本 / 运行实例): 所属产品 + 图里出现的每个产品记成该图的成员。多产出图挂在原料锚点上,
+     * 锚点不受保护, 受保护的是它产出的成品; 出口把成员当兄弟产出 (独立审查 V2.1 M3)。
+     */
     private static List<Read> workflow(String factoryId, String ownerProductTypeId, String nodesJson, String edgesJson) {
         List<Read> found = new java.util.ArrayList<>(product(factoryId, ownerProductTypeId));
         if (ownerProductTypeId == null || ownerProductTypeId.isBlank()) return found;
+        if (factoryId == null || !factoryHasProtectedProducts.test(factoryId)) return found;
         java.util.Optional<Set<String>> products = ProcessSecretWorkflowOutputs.productsInGraph(nodesJson);
         if (products.isEmpty()) {
             // 图解析不了: 无法确认牵涉哪些产品 —— 记一个「未知成员」, 出口按受保护处理 (fail-closed)
