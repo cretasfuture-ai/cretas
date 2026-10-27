@@ -277,6 +277,20 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void aWorkflowWhoseGraphCannotBeReadFailsClosedInsteadOfFallingBackToTheAnchor() throws Exception {
+        // 独立审查 V2.1 复核: 图解析不了就无法确认牵涉哪些产品, 不能退回只看 (不受保护的) 锚点
+        com.cretas.aims.entity.ProductProcessWorkflow workflow = new com.cretas.aims.entity.ProductProcessWorkflow();
+        workflow.setFactoryId(F);
+        workflow.setProductTypeId("RAW-BEEF");
+        workflow.setNodesJson("{not json");
+        Set<ProcessSecretReadTracker.Read> reads = Set.copyOf(ProcessSecretReadTracker.readsOf(workflow));
+        ObjectNode operator = tree("{'productTypeId':'RAW-BEEF','nodes':[{'data':{'inputShareRatio':0.6}}]}");
+        assertThat(scrubber.scrub(operator, user(5), F, reads, "GET /product-process-workflows/RAW-BEEF", false))
+                .isTrue();
+        assertThat(operator.at("/nodes/0/data/inputShareRatio").isNull()).isTrue();
+    }
+
+    @Test
     void reworkAutoDeductionQuantitiesThatAddUpToTheRatioAreHidden() throws Exception {
         // 独立审查 V2.1 H2: 目标 = 回料配比 × 主料投入, 手工 + 自动 + 仍缺 = 目标, 批次明细加起来 = 自动
         ProductionPlan plan = new ProductionPlan();

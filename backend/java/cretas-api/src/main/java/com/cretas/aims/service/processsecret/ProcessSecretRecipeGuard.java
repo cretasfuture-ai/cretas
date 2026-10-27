@@ -124,6 +124,23 @@ public class ProcessSecretRecipeGuard {
         return decision.permitted() && recorded;
     }
 
+    /**
+     * 一组产品里只对受保护的那些判 (名单走缓存, 不为每个原料 / 普通产品查一次库), 任一无权即 403 + 审计。
+     * 用于工艺图: 图里出现的每个 SKU 都可能是被保护的产出 (独立审查 V2.1 M3)。
+     */
+    public void requireProtectedAmong(String factoryId, java.util.Collection<String> productTypeIds,
+                                      ProcessSecretAction action, String resourceRef) {
+        if (productTypeIds == null || productTypeIds.isEmpty()) return;
+        java.util.Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
+        if (protectedIds.isEmpty()) return;
+        AuthenticatedActor actor = currentActor();
+        for (String productTypeId : new java.util.LinkedHashSet<>(productTypeIds)) {
+            if (productTypeId != null && protectedIds.contains(productTypeId)) {
+                accessService.require(actor, factoryId, productTypeId, action, resourceRef);
+            }
+        }
+    }
+
     /** 本厂是否有任何保密产品 (缓存名单, 不写审计)。 */
     public boolean factoryHasProtectedProducts(String factoryId) {
         return !accessService.protectedProductTypeIds(factoryId).isEmpty();

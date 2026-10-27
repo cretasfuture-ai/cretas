@@ -129,6 +129,13 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
         return new ArrayList<>(products);
     }
 
+    /** 图里出现的产品; 图解析不了时无法确认, 本厂又有保密策略 → 拦 (fail-closed, 不退回只看锚点)。 */
+    private static Set<String> productsInGraph(com.cretas.aims.entity.ProductProcessWorkflow workflow) {
+        return com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.productsInGraph(workflow.getNodesJson())
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(403,
+                        "无法确认该工艺图牵涉的产品，已按工艺保密拦截"));
+    }
+
     /** 每个所属产品最多看几版工艺图 (当前草稿 + 最近发布, 再多是历史)。 */
     static final int WORKFLOW_VERSIONS_CHECKED = 3;
 
@@ -146,15 +153,13 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
                     .flatMap(workflowRepository::findById)
                     .filter(w -> factoryId.equals(w.getFactoryId()))
                     .filter(w -> !protectedIds.contains(w.getProductTypeId()))
-                    .ifPresent(w -> outputs.addAll(com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs
-                            .terminalOutputs(w.getNodesJson(), w.getEdgesJson())));
+                    .ifPresent(w -> outputs.addAll(productsInGraph(w)));
             case PRODUCT_PATH, PRODUCT_PARAM -> {
                 for (String owner : products) {
                     if (protectedIds.contains(owner)) continue;
                     workflowRepository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, owner)
                             .stream().limit(WORKFLOW_VERSIONS_CHECKED)
-                            .forEach(w -> outputs.addAll(com.cretas.aims.service.processsecret
-                                    .ProcessSecretWorkflowOutputs.terminalOutputs(w.getNodesJson(), w.getEdgesJson())));
+                            .forEach(w -> outputs.addAll(productsInGraph(w)));
                 }
             }
             default -> { }

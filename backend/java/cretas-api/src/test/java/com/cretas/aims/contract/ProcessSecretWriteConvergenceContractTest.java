@@ -64,8 +64,6 @@ class ProcessSecretWriteConvergenceContractTest {
                     "配方增删改 / 激活 / 归档: BomRecipeController 每个写路由都有 EDIT 注解; 建厂转正调用前已判"),
             Map.entry("service/bom/impl/BomSeasoningWorkspaceServiceImpl.java",
                     "调料绑定增删改: BomRecipeController 的 seasoning 写路由都有 EDIT 注解"),
-            Map.entry("service/impl/ProductProcessWorkflowServiceImpl.java",
-                    "工艺图草稿 / 发布 / 激活: ProductProcessWorkflowController 写路由有 EDIT 注解; 建厂发布与实体化调用前已判"),
             Map.entry("service/impl/ProductionPlanServiceImpl.java",
                     "改钉计划时重建运行端口: 运行时实例数据, 由已发布的工艺图生成, 不改工艺本身"),
             Map.entry("service/workflow/WorkflowRevisionSnapshotService.java",

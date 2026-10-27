@@ -367,7 +367,8 @@ public class ProcessSecretPayloadScrubber {
         List<Key> withMember(ProcessSecretReadTracker.Read read, List<Key> keys) {
             String member = read.member();
             if (member == null) return keys;
-            Key key = new Key(read.factoryId(), member);
+            // 空成员 = 无法确认 (例如工艺图解析不了): 当作未知产品, 按受保护处理
+            Key key = new Key(read.factoryId(), member.isBlank() ? null : member);
             if (keys.contains(key)) return keys;
             List<Key> all = new ArrayList<>(keys);
             all.add(key);

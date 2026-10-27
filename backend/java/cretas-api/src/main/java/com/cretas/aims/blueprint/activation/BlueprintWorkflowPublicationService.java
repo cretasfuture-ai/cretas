@@ -151,11 +151,12 @@ public class BlueprintWorkflowPublicationService {
                     com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
                     "blueprint workflow publish " + second.workflowDraftId());
             workflows.findByIdAndFactoryId(second.workflowDraftId(), factoryId).ifPresent(draft ->
-                    com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs
-                            .terminalOutputs(draft.getNodesJson(), draft.getEdgesJson())
-                            .forEach(output -> processSecretGuard.requireProduct(factoryId, output,
-                                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
-                                    "blueprint workflow publish output " + output)));
+                    processSecretGuard.requireProtectedAmong(factoryId,
+                            com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs
+                                    .productsInGraph(draft.getNodesJson())
+                                    .orElseThrow(() -> new BusinessException(403, "无法确认该工艺图牵涉的产品，已按工艺保密拦截")),
+                            com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                            "blueprint workflow publish outputs " + second.workflowDraftId()));
         }
         BomRecipe activated = recipes.activateRecipeAsActor(factoryId, second.formalRecipeId(), actor);
         var result = workflowService.publishAndActivateAsActor(
