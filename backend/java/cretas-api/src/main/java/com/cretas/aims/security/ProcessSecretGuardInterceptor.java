@@ -125,7 +125,50 @@ public class ProcessSecretGuardInterceptor implements HandlerInterceptor {
                     });
             default -> resolveProduct(guard, factoryId, vars, request).ifPresent(products::add);
         }
+        addWorkflowOutputs(guard, factoryId, vars, products);
         return new ArrayList<>(products);
+    }
+
+    /**
+     * 图里出现的产品。图解析不了时无法确认牵涉谁: 按「本厂全部保密产品」判 (fail-closed, 不退回只看锚点);
+     * 对全部保密产品都有权的人照样能进来修这张图, ⛔ 不一律 403 —— 那会让这个产品的所有路由谁都打不开、也修不了
+     * (独立审查 V2.1 复核)。
+     */
+    private static Set<String> productsInGraph(com.cretas.aims.entity.ProductProcessWorkflow workflow,
+                                               Set<String> protectedIds) {
+        return com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.productsInGraph(workflow.getNodesJson())
+                .orElse(protectedIds);
+    }
+
+    /** 每个所属产品最多看几版工艺图 (当前草稿 + 最近发布, 再多是历史)。 */
+    static final int WORKFLOW_VERSIONS_CHECKED = 3;
+
+    /**
+     * 多产出工艺图挂在原料锚点上 (锚点 id 就是原料 id, 不受保护), 受保护的是它产出的成品 ——
+     * 只判锚点会把受保护成品的工艺图放给无权的人 (独立审查 V2.1 M3)。所以按工艺图 / 产品路由时,
+     * 所属产品本身不受保护的, 再把它工艺图的终端产出一起判。
+     */
+    private void addWorkflowOutputs(ProcessSecretGuard guard, String factoryId, Map<String, String> vars,
+                                    Set<String> products) {
+        Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
+        Set<String> outputs = new LinkedHashSet<>();
+        switch (guard.from()) {
+            case WORKFLOW_PATH -> parseLong(vars.get(guard.name()))
+                    .flatMap(workflowRepository::findById)
+                    .filter(w -> factoryId.equals(w.getFactoryId()))
+                    .filter(w -> !protectedIds.contains(w.getProductTypeId()))
+                    .ifPresent(w -> outputs.addAll(productsInGraph(w, protectedIds)));
+            case PRODUCT_PATH, PRODUCT_PARAM -> {
+                for (String owner : products) {
+                    if (protectedIds.contains(owner)) continue;
+                    workflowRepository.findByFactoryIdAndProductTypeIdOrderByDefinitionVersionDesc(factoryId, owner)
+                            .stream().limit(WORKFLOW_VERSIONS_CHECKED)
+                            .forEach(w -> outputs.addAll(productsInGraph(w, protectedIds)));
+                }
+            }
+            default -> { }
+        }
+        products.addAll(outputs);
     }
 
     static final int MAX_PLANS_PER_REQUEST = 20;

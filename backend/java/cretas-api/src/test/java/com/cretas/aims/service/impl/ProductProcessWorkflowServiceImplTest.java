@@ -688,6 +688,72 @@ class ProductProcessWorkflowServiceImplTest {
         verify(repository, never()).saveAndFlush(any());
     }
 
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard guardProtecting(String productTypeId) {
+        com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository policies =
+                mock(com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository.class);
+        com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository grants =
+                mock(com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository.class);
+        lenient().when(grants.findActive(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
+        com.cretas.aims.entity.processsecret.ProcessSecretPolicy policy =
+                com.cretas.aims.entity.processsecret.ProcessSecretPolicy.builder().id(1L).factoryId(FACTORY_ID)
+                        .productTypeId(productTypeId)
+                        .storageMode(com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CLOUD_RESTRICTED)
+                        .ownerUserId(10L).createdBy(10L).build();
+        lenient().when(policies.findByFactoryIdAndProductTypeId(FACTORY_ID, productTypeId)).thenReturn(Optional.of(policy));
+        lenient().when(policies.findByFactoryIdOrderByProductTypeIdAsc(FACTORY_ID)).thenReturn(List.of(policy));
+        return new com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard(
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class),
+                new com.cretas.aims.service.processsecret.ProcessSecretAccessService(policies, grants,
+                        mock(com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder.class)));
+    }
+
+    private static <T> T as(long userId, java.util.function.Supplier<T> call) {
+        com.cretas.aims.security.AuthenticatedActor actor = new com.cretas.aims.security.AuthenticatedActor(
+                com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, FACTORY_ID, "operator");
+        try (com.cretas.aims.security.AuthenticatedActor.ActorScope ignored =
+                     com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(actor)) {
+            return call.get();
+        }
+    }
+
+    @Test
+    @DisplayName("工艺保密: 草稿图里出现受保护产品 (例如多产出锚点画进了保密成品), 无编辑权整单 403、不落库")
+    void saveDraftNeedsEditPermissionOnEveryProtectedProductTheGraphReferences() {
+        // 路由闸只看所属产品和已存的图; 新草稿第一次把保密成品画进来时, 只能按请求里的图判 (独立审查 V2.1 复核)
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "processSecretGuard",
+                guardProtecting("FG-BRAISED-400"));
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(null);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> as(5L, () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, request)));
+
+        assertEquals(403, error.getCode());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("工艺保密: 保密负责人照常保存画了自己产品的草稿")
+    void saveDraftByTheSecretOwnerIsUnaffected() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "processSecretGuard",
+                guardProtecting("FG-BRAISED-400"));
+        ProductProcessWorkflowDTO request = validDefinition();
+        request.setLockVersion(null);
+        when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
+                FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
+                .thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any(ProductProcessWorkflow.class))).thenAnswer(invocation -> {
+            ProductProcessWorkflow saved = invocation.getArgument(0);
+            saved.setId(91L);
+            saved.setLockVersion(0L);
+            return saved;
+        });
+
+        as(10L, () -> service.saveDraft(FACTORY_ID, PRODUCT_ID, request));
+
+        verify(repository, times(2)).saveAndFlush(any(ProductProcessWorkflow.class));
+    }
+
     @Test
     @DisplayName("保存缺失或跨工厂 owner product 时稳定拒绝且不落库")
     void saveDraftRejectsInvalidOwningProductBeforePersistence() {

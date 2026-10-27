@@ -32,7 +32,7 @@ vi.mock('@/api/processProduction', () => ({
 const getSeasoningByProduct = vi.fn();
 vi.mock('@/api/bom', () => ({
   bomSeasoningApi: {
-    getByProduct: (...args: unknown[]) => getSeasoningByProduct(...args),
+    getProcessFlagsByProduct: (...args: unknown[]) => getSeasoningByProduct(...args),
   },
 }));
 
@@ -86,7 +86,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     getRows.mockResolvedValue({ success: true, data: [] });
     getSeasoningByProduct.mockResolvedValue({
       success: true,
-      data: { injectionConfigs: [], seasoningItems: [] },
+      data: { processes: [] },
     });
   });
 
@@ -114,8 +114,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
     getSeasoningByProduct.mockResolvedValue({
       success: true,
       data: {
-        seasoningItems: [{ workProcessId: 'WP-CONFIGURED', subsequentPotRatio: 0.5 }],
-        injectionConfigs: [],
+        processes: [{ workProcessId: 'WP-CONFIGURED', potEnabled: true }],
       },
     });
 
@@ -164,7 +163,7 @@ describe('ProcessSheet.vue workflow-awareness (2B Task F1/F2)', () => {
 
     getSeasoningByProduct.mockResolvedValueOnce({
       success: true,
-      data: { injectionConfigs: [], seasoningItems: [] },
+      data: { processes: [] },
     });
     const retry = wrapper.findAll('button').find((button) => button.text().includes('重试'));
     if (!retry) throw new Error('找不到重试按钮');

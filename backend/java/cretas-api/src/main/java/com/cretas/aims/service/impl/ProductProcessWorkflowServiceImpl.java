@@ -66,6 +66,13 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final ProductTypeRepository productTypeRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
 
+    /**
+     * 工艺保密 (写入侧): 路由闸只看所属产品和已存的图; 一张新草稿把受保护产品画进来 (多产出锚点的图),
+     * 要在这里按请求里的图判 (独立审查 V2.1 复核)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Override
     @Transactional(readOnly = true)
     public Optional<ProductProcessWorkflowDTO> getEditorDefinition(
@@ -85,6 +92,12 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             String productTypeId,
             ProductProcessWorkflowDTO definition) {
         requireWorkflowOwner(factoryId, productTypeId);
+        if (processSecretGuard != null) {
+            processSecretGuard.requireProtectedAmong(factoryId,
+                    com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs.productsInGraph(definition),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                    "workflow draft save " + productTypeId);
+        }
         lockWorkflowOwner(factoryId, productTypeId);
         WorkflowActualIoSemantics.normalizeDraft(definition);
         validator.validateForDraft(definition);
