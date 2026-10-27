@@ -1,5 +1,9 @@
 # FADCOSTREC27 — 补齐投入成本后恢复联产成本
 
+2026-10-27 收尾登记：PR1243 已以 2536e9d454b49751657b535db798e89851851082 合并；八类 27 项测试全部通过，适用 CI 全部通过。开发 Base e20c391 保留为历史；最终集成/生产发布 Base SHA 为 9178dc7769b5211735e958d50443277cc5d0da5c，仅部署其后的成本恢复 Java 差异，不扩大为发布其他 Owner 的 Web。当前最终后端树 3afe5abe1b168a017a447b22cd2d9ba52814467b，因父提交加入租户备份功能，须为此集成树构建一次可信制品，不能复用旧 b06 树制品。
+
+Java 问答 409 依赖已由完整成功回执 cretas-1793108236-61056.json 证明在线：source9178dc、backend tree db6686f2e7e69ccdaf65652899615982c78f618d、exit0、no-op、active blue10010、backend_health=pass。705d5fd 的问答接口与 Python 文件相对9178均无差异；此证明只用于允许 Python 共享上下文发布，不宣称2536成本修复已部署。最终 Java 与 Python 发布及业务验收仍以后续完整回执记录。
+
 状态 review；Base SHA e20c39173039dcd53409e8a56b296f4a58fb941d；协调者/执行 Owner Root DIRECT。源码/测试冻结，独立风险复核通过；后续仅Root进行制品/CI/合并发布，合并后释放scope。未完成的测试/发布不记通过。
 
 用户授权完成 AI 汇总/多表分析依赖问题、验证后合并部署，仅F006只读验收。本任务修复实际发现的前置成本恢复缺陷：PR1237已Merged，旧cost worktree clean，目标源码与Main相同，当前ACTIVE没有同文件在飞锁。不能以保留的Squash分支/历史分叉推断旧写Owner仍占用；不修改旧cost worktree。
