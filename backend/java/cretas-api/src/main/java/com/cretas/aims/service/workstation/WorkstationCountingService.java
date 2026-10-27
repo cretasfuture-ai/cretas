@@ -49,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class WorkstationCountingService {
 
     private final DashScopeVisionClient visionClient;
+    private final com.cretas.aims.service.isapi.CameraSnapshotAiConsent cameraAiConsent;
     private final IotDataService iotDataService;
     private final ProcessingStageRecordRepository stageRecordRepository;
     private final BatchWorkSessionRepository workSessionRepository;
@@ -208,6 +209,15 @@ public class WorkstationCountingService {
                         .message("防抖中，跳过")
                         .build();
             }
+        }
+
+        // 摄像头画面交给 AI 识别默认关闭: 本厂没开就不发 (计数可以走手动计数)
+        if (!cameraAiConsent.enabled(state.getFactoryId())) {
+            return CountingResult.builder()
+                    .success(false)
+                    .counted(false)
+                    .message(com.cretas.aims.service.isapi.CameraSnapshotAiConsent.DISABLED_MESSAGE)
+                    .build();
         }
 
         // 1. AI 分析完成手势

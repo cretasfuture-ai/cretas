@@ -47,6 +47,7 @@ public class AutoLabelRecognitionService {
     private final LabelRecognitionRecordRepository recordRepository;
     private final IsapiDeviceService isapiDeviceService;
     private final DashScopeVisionClient visionClient;
+    private final CameraSnapshotAiConsent cameraAiConsent;
 
     @Autowired(required = false)
     private SimpMessagingTemplate messagingTemplate;
@@ -164,6 +165,11 @@ public class AutoLabelRecognitionService {
      */
     public void onIsapiEvent(String factoryId, String eventType, String deviceId, String eventId) {
         log.debug("收到ISAPI事件: factoryId={}, eventType={}, deviceId={}", factoryId, eventType, deviceId);
+        // 抓帧交给 AI 识别默认关闭: 本厂没开就不抓帧、不发、也不留记录
+        if (!cameraAiConsent.enabled(factoryId)) {
+            log.debug("本厂未开启摄像头抓拍 AI 识别, 跳过标签识别: factoryId={}", factoryId);
+            return;
+        }
 
         // 查询该设备的启用配置
         List<LabelRecognitionConfig> configs = configRepository.findEnabledConfigsByDeviceId(deviceId);
@@ -244,6 +250,11 @@ public class AutoLabelRecognitionService {
         long startTime = System.currentTimeMillis();
         LocalDateTime recognitionTime = LocalDateTime.now();
         byte[] capturedImageData = null;
+
+        if (!cameraAiConsent.enabled(config.getFactoryId())) {
+            return saveFailedRecord(config, triggerType, eventId, recognitionTime,
+                    null, CameraSnapshotAiConsent.DISABLED_MESSAGE, startTime);
+        }
 
         try {
             // 1. 抓帧

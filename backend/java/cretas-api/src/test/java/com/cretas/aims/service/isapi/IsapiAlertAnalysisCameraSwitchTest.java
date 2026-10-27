@@ -48,7 +48,7 @@ class IsapiAlertAnalysisCameraSwitchTest {
                 .thenReturn(CameraAlertAnalysisResult.error("stub: 模型已调用"));
         settings = mock(FactorySettingsRepository.class);
         events = mock(IsapiEventLogRepository.class);
-        service = new IsapiAlertAnalysisService(vision, events, settings, mapper);
+        service = new IsapiAlertAnalysisService(vision, events, new CameraSnapshotAiConsent(settings, mapper));
     }
 
     private static IsapiDevice device(String factoryId) {

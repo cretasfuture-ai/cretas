@@ -2,14 +2,19 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = withDefaults(defineProps<{ option: Record<string, unknown>; height?: number }>(), { height: 320 });
-const emit = defineEmits<{ click: [params: { name?: string; seriesName?: string; dataIndex?: number }] }>();
+const emit = defineEmits<{
+  click: [params: { name?: string; seriesName?: string; dataIndex?: number }];
+  ready: [];
+}>();
 const chartEl = ref<HTMLElement | null>(null);
 const chartError = ref('');
 type ChartInstance = { setOption: (option: Record<string, unknown>, opts?: Record<string, unknown>) => void; resize: () => void; dispose: () => void; on?: (event: string, handler: (params: { name?: string; seriesName?: string; dataIndex?: number }) => void) => void; off?: (event: string) => void };
 let instance: ChartInstance | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let renderVersion = 0;
 
 async function render() {
+  const version = ++renderVersion;
   chartError.value = '';
   try {
   if (!chartEl.value || !props.option || Object.keys(props.option).length === 0) return;
@@ -21,11 +26,14 @@ async function render() {
     echarts.use([ParallelChart]);
   }
   if (!chartEl.value) return;
+  if (version !== renderVersion) return;
   if (!instance) instance = echarts.init(chartEl.value, 'cretas') as unknown as ChartInstance;
   instance.setOption(processEChartsOptions(props.option), { notMerge: true });
   instance.off?.('click'); instance.on?.('click', (params) => emit('click', params));
   instance.resize();
+  if (version === renderVersion) emit('ready');
   } catch {
+    if (version !== renderVersion) return;
     instance?.dispose();
     instance = null;
     chartError.value = '图表绘制失败，请刷新重试；下方规则结论仍可核对';
@@ -38,7 +46,7 @@ onMounted(async () => {
   }
 });
 watch(() => props.option, () => { void render(); }, { deep: true });
-onBeforeUnmount(() => { resizeObserver?.disconnect(); resizeObserver = null; instance?.dispose(); instance = null; });
+onBeforeUnmount(() => { renderVersion += 1; resizeObserver?.disconnect(); resizeObserver = null; instance?.dispose(); instance = null; });
 </script>
 <template><div><p v-if="chartError" role="alert">{{ chartError }}</p><div v-show="!chartError" ref="chartEl" class="factory-chart-canvas" :style="{ height: `${height}px` }" role="img" aria-label="工厂推荐图表" /></div></template>
 <style scoped>.factory-chart-canvas { width: 100%; min-height: 220px; }</style>
