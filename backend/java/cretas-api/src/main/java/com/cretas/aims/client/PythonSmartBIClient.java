@@ -2783,7 +2783,7 @@ public class PythonSmartBIClient {
         }
         try (Response response = httpClient.newCall(request).execute()) {
             int status = response.code();
-            if (Set.of(403, 410, 422).contains(status)) {
+            if (Set.of(403, 409, 410, 422).contains(status)) {
                 inspectErrorBodyBounded(response.body());
                 circuitBreaker.recordSuccess();
                 throw new FactoryAnalysisUpstreamException(status, factoryAnalysisMessage(status));
@@ -2822,6 +2822,7 @@ public class PythonSmartBIClient {
     private static String factoryAnalysisMessage(int statusCode) {
         return switch (statusCode) {
             case 403 -> "无权访问本厂分析数据，请核对当前工厂和权限";
+            case 409 -> "对话上下文正在更新，请稍后重试";
             case 410 -> "本厂分析数据已失效，请刷新后重试";
             case 422 -> "分析问题或范围无效，请调整后重试";
             default -> "工厂分析请求未完成";
