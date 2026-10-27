@@ -153,8 +153,8 @@ class InterimSettleServiceTest {
         when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(3));
         // ①c FG 投料严格扣减: 默认成功返回请求量; 个别测试覆写为抛 (不足/缺失)。
-        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
         // 盒⇄kg 成本口径折算: 默认 kg 源原样透传 (feedKg → feedKg); 盒装测试可覆写返回盒数/null。
         when(finishedGoodsFeedService.resolveFeedQtyInSourceUnit(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
@@ -519,7 +519,7 @@ class InterimSettleServiceTest {
 
         // FG OUT: 严格扣减 (consumeForFeedStrict), 直接按成品 batchNumber, 投料单位 kg
         verify(finishedGoodsFeedService, times(1))
-                .consumeForFeedStrict(eq(FACTORY), eq("FG-STANDING-1"), eq(new BigDecimal("30")), eq("kg"));
+                .consumeForFeedStrict(eq(FACTORY), any(), eq("FG-STANDING-1"), eq(new BigDecimal("30")), eq("kg"));
         // FG 投料绝不走 SFI 路径
         verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any(), any());
         verify(wipInventoryService, never()).consumeClerkSemi(any(), any(), any());
@@ -644,7 +644,7 @@ class InterimSettleServiceTest {
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
         when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
                 .thenReturn(new ArrayList<>());
-        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY), eq("FG-LOW-1"), eq(new BigDecimal("100")), eq("kg")))
+        when(finishedGoodsFeedService.consumeForFeedStrict(eq(FACTORY), any(), eq("FG-LOW-1"), eq(new BigDecimal("100")), eq("kg")))
                 .thenThrow(new BusinessException(409, "成品库存不足: FG-LOW-1 余30 需100")
                         .withCode("FG_INSUFFICIENT"));
 

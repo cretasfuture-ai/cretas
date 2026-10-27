@@ -166,8 +166,8 @@ class FgCostPropagationTest {
         // 投料严格扣减默认成功返回请求量 (个别测试无投料则不触发)
         when(wipInventoryService.consumeClerkSemiStrict(any(), any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(3));
-        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(2));
+        when(finishedGoodsFeedService.consumeForFeedStrict(any(), any(), any(), any(), any()))
+                .thenAnswer(inv -> inv.getArgument(3));
         // 盒⇄kg 折算: 本测全部 kg 源 → 原值 (与扣减折算同源; computeOutputUnitCost 用其算投料成本)。
         when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(2));
@@ -345,7 +345,7 @@ class FgCostPropagationTest {
         service.interimSettle(FACTORY, PLAN_ID, 7L);
 
         verify(finishedGoodsFeedService, times(1))
-                .consumeForFeedStrict(eq(FACTORY), eq("FG-STOCK"), eq(new BigDecimal("20")), eq("kg"));
+                .consumeForFeedStrict(eq(FACTORY), any(), eq("FG-STOCK"), eq(new BigDecimal("20")), eq("kg"));
         FinishedGoodsBatch fg = captureSavedFg();
         // (pb 160 + feed 20×12=240) / 入库量(outputQuantity) 40 = 400/40 = 10.0000
         assertThat(fg.getUnitCost()).isEqualByComparingTo("10");

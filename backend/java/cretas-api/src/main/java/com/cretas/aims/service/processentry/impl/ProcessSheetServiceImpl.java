@@ -3990,6 +3990,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
                     assertWorkflowSourceSku(ur.getSourceBatchNumber(), ur.getSkuId(), source.getProductTypeId());
+                    // 跨客户领料 (缺口 16): 代工客户的成品只能投进同一客户的计划; 保存即拦, 不留到小结 / 结单
+                    ownershipGuard().assertFinishedGoodsDrawable(factoryId,
+                            ownershipGuard().ofPlanId(factoryId, planId), source, req.getProcessCode());
                     continue;
                 }
                 // 半成品库存(SFI)投料 (半成品直接产成品): 不解析为 in-plan WIP MaterialBatch,

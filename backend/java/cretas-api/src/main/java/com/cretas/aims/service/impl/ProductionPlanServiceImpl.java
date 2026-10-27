@@ -7273,7 +7273,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         throw new BusinessException(500, "成品投料扣减服务未就绪, 无法完成结单 (投料来源: "
                                 + srcBatchNo + ")").withHintTarget("核对结单");
                     }
-                    BigDecimal drawn = finishedGoodsFeedService.consumeForFeedStrict(factoryId, srcBatchNo, feed, "kg");
+                    BigDecimal drawn = finishedGoodsFeedService.consumeForFeedStrict(factoryId,
+                            com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan),
+                            srcBatchNo, feed, "kg");
                     fgOut = fgOut.add(zeroIfNull(drawn));
                     fgCount++;
                 } else if (ref.isSemiFinished()) {
