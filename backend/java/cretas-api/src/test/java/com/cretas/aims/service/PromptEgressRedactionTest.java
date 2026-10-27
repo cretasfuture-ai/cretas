@@ -102,8 +102,6 @@ class PromptEgressRedactionTest {
         DashScopeClient second = mock(DashScopeClient.class);
         ReflectionTestUtils.setField(executor, "dashScopeClient", second);
         when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
-        // 守卫把查到的保密名缓存 10 秒: 换一个新守卫, 才是「这次查库失败」
-        ReflectionTestUtils.setField(executor, "llmEgressGuard", guard());
         executor.execute(skill, SkillContext.builder().factoryId(FACTORY).userId("1").userQuery(SAID).build(), 5_000L);
         verify(second, never()).chat(anyString(), anyString());
     }
@@ -195,8 +193,6 @@ class PromptEgressRedactionTest {
         assertNoRealValues(user.getValue());
 
         when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
-        // 守卫把查到的保密名缓存 10 秒: 换一个新守卫, 才是「这次查库失败」
-        ReflectionTestUtils.setField(decoration, "llmEgressGuard", guard());
         PythonLLMClient second = mock(PythonLLMClient.class);
         ReflectionTestUtils.setField(decoration, "pythonLLMClient", second);
         assertThat(decoration.generateLayoutWithAI(FACTORY, AILayoutRequest.builder().prompt(SAID).build()))

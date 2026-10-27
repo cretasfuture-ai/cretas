@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
  * 按设备 id 的 15 个摄像头接口: 只认 URL 里本厂的设备。以前它们不看工厂, 别厂有设备权限的账号
  * 知道设备 id 就能读明文密码、重启、恢复出厂、删除、抓拍。别厂的设备一律 404, 且除了「查归属」什么都不做。
  */
-class IsapiDeviceTenantIsolationTest {
+class IsapiDeviceTenantIsolationContractTest {
 
     private static final String DEVICE = "cam-1";
     private static final Path CONTROLLER = Path.of(

@@ -116,8 +116,6 @@ class UtteranceEgressRedactionTest {
         assertThat(result.getFormattedAnalysis()).contains("赵铁柱").doesNotContain("[人员");
 
         when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
-        // 守卫把查到的保密名缓存 10 秒: 换一个新守卫, 才是「这次查库失败」
-        ReflectionTestUtils.setField(router, "llmEgressGuard", guard());
         PythonLLMClient second = mock(PythonLLMClient.class);
         ReflectionTestUtils.setField(router, "pythonLLMClient", second);
         assertThat(router.executeAnalysis(context()).isSuccess()).isFalse();
@@ -143,8 +141,6 @@ class UtteranceEgressRedactionTest {
         assertThat(result.getFormattedAnalysis()).contains("赵铁柱").doesNotContain("[人员");
 
         when(processSecret.protectedProductNames(FACTORY)).thenThrow(new IllegalStateException("db down"));
-        // 守卫把查到的保密名缓存 10 秒: 换一个新守卫, 才是「这次查库失败」
-        ReflectionTestUtils.setField(agents, "llmEgressGuard", guard());
         DashScopeClient second = mock(DashScopeClient.class);
         ReflectionTestUtils.setField(agents, "dashScopeClient", second);
         agents.executeCollaborativeAnalysis(context());
