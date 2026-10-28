@@ -234,6 +234,15 @@ describe('scheduling detail real wire mount', () => {
       expect(rows[2]).toContain('2026-10-20');
       expect(rows[2]).toContain('180 kg');
       expect(wrapper.find('[data-testid="task-timeline"]').exists()).toBe(false); // v2 没有工序时间线
+      // 2026-10-28 线上验收: 排程列表「时间」原来只显示 00:00 - 23:59, 跨天看不出是哪几天
+      const text = wrapper.text().replace(/\s+/g, ' ');
+      expect(text).toContain('10-19（1 天）');
+      expect(text).toContain('10-19 至 10-20（2 天）');
+      expect(text).not.toContain('00:00 - 23:59');
+      // 计划级排程没有批次: 不挂按批次算的输入检查 (原来误报「产线或批次不属于当前工厂」), 风险不是「极高风险」
+      expect(wrapper.findAllComponents({ name: 'SchedulingDiagnosticsPanel' })).toHaveLength(0);
+      expect(text).toContain('未计算');
+      expect(text).not.toContain('极高风险');
     } finally {
       wrapper.unmount();
     }

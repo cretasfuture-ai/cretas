@@ -59,6 +59,9 @@ const warningsMentionProcessSetup = computed(() => apsWarnings.value.some(w => w
 const timelineSchedules = computed(() => (plan.value?.lineSchedules || [])
   .filter(s => Array.isArray(s.taskTimeline) && s.taskTimeline.length > 0));
 
+/** 挂着批次的排程 (输入检查/完成概率按批次算, 只对它们有意义)。 */
+const batchSchedules = computed(() => (plan.value?.lineSchedules || []).filter(s => s.batchId != null));
+
 /** APS v2: 有按天分配的排程。 */
 const dailySchedules = computed(() => (plan.value?.lineSchedules || [])
   .filter(s => s.dailyAllocations && Array.isArray(s.dailyAllocations.days) && s.dailyAllocations.days.length > 0));
@@ -96,6 +99,21 @@ function scheduleLabel(s: LineSchedule) {
   if (s.batchNumber) return s.batchNumber;
   if (s.planNumber) return `计划 ${s.planNumber}`;
   return '未标明';
+}
+
+/**
+ * 排程列表「时间」列。按天排的排程 (APS v2) 显示日期范围 ——
+ * 原来一律只显示时刻, 跨 3 天的排程看着是「00:00 - 23:59」, 看不出是哪几天。
+ */
+function scheduleTimeText(s: LineSchedule) {
+  const days = s.dailyAllocations?.days;
+  if (Array.isArray(days) && days.length > 0) {
+    const first = days[0].date;
+    const last = days[days.length - 1].date;
+    return first === last ? `${first.slice(5)}（1 天）` : `${first.slice(5)} 至 ${last.slice(5)}（${days.length} 天）`;
+  }
+  const clock = (iso: string) => new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  return `${clock(s.plannedStartTime)} - ${clock(s.plannedEndTime)}`;
 }
 
 /** 时间线时刻: 与计划日期同一天只显示 HH:mm, 跨天带上月-日。 */
@@ -427,14 +445,17 @@ function formatProbability(prob: number) {
   return (prob * 100).toFixed(0) + '%';
 }
 
-function getProbabilityColor(prob: number) {
+function getProbabilityColor(prob: number | null | undefined) {
+  if (prob === null || prob === undefined) return '#909399';
   if (prob >= 0.9) return '#67C23A';
   if (prob >= 0.7) return '#E6A23C';
   if (prob >= 0.5) return '#F56C6C';
   return '#909399';
 }
 
-function getRiskLevel(prob: number) {
+function getRiskLevel(prob: number | null | undefined) {
+  // 没算过概率 (如按日产能排程) ≠ 极高风险; 原来 null >= 0.9 都为 false, 落到「极高风险」
+  if (prob === null || prob === undefined) return '未计算';
   if (prob >= 0.9) return '低风险';
   if (prob >= 0.7) return '中风险';
   if (prob >= 0.5) return '高风险';
@@ -633,11 +654,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
           <template #default="{ row }">{{ scheduleLabel(row) }}</template>
         </el-table-column>
         <el-table-column label="时间" width="200">
-          <template #default="{ row }">
-            {{ new Date(row.plannedStartTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}
-            -
-            {{ new Date(row.plannedEndTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}
-          </template>
+          <template #default="{ row }">{{ scheduleTimeText(row) }}</template>
         </el-table-column>
         <el-table-column label="进度" width="180">
           <template #default="{ row }">
@@ -760,8 +777,9 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
     </el-card>
 
     <template v-if="factoryId && plan">
+      <!-- 输入检查/概率是按批次算的; 按天排的计划级排程没有批次, 不显示 (原来误报「产线或批次不属于当前工厂」) -->
       <SchedulingDiagnosticsPanel
-        v-for="schedule in plan.lineSchedules"
+        v-for="schedule in batchSchedules"
         :key="schedule.id"
         :factory-id="factoryId"
         :schedule-id="schedule.id"
