@@ -228,7 +228,7 @@ async function captureExport(page, format, inspectCtx, deadline, batchNumber) {
   try {
     const responsePromise = waitResponse(page, (response) => isExportResponse(response, format), deadline).catch(() => null);
     const downloadPromise = page.waitForEvent('download', { timeout: remainingTimeout(deadline) }).catch(() => null);
-    await button.click();
+    await button.click({ timeout: remainingTimeout(deadline) });
     const [response, download] = await Promise.all([responsePromise, downloadPromise]);
     result.httpStatus = response ? response.status() : null;
     result.candidateIds = summarizeExportIds(response ? requestBody(response) : {});
@@ -252,7 +252,7 @@ async function chooseBrowseMode(page, deadline) {
   if (!await mode.count()) return false;
   const browse = mode.locator('button, label').filter({ hasText: '按分类浏览' }).first();
   if (!await browse.count()) return false;
-  await browse.click();
+  await browse.click({ timeout: remainingTimeout(deadline) });
   await testId(page, 'factory-chart-selection').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
   return true;
 }
@@ -301,7 +301,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
   let recommendationResponse = null;
   if (await refresh.count()) {
     const pending = waitResponse(page, isRecommendationsResponse, deadline).catch(() => null);
-    await refresh.click().catch(() => {});
+    await refresh.click({ timeout: remainingTimeout(deadline) }).catch(() => {});
     recommendationResponse = await pending;
   }
   if (!recommendationResponse) ui.httpFailure = true;
@@ -380,7 +380,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
       summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
-        await testId(page, 'factory-chart-guide-generate').click().catch(() => {});
+        await testId(page, 'factory-chart-guide-generate').click({ timeout: remainingTimeout(deadline) }).catch(() => {});
         summary.checks.cardRendered = await card.isVisible().catch(() => false);
       }
       if (summary.checks.cardRendered) {
@@ -399,7 +399,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
             ? Promise.resolve(null)
             : waitResponse(page, isRecommendationsResponse, deadline).catch(() => null);
           const detailsResponsePromise = waitResponse(page, isDetailsResponse, deadline).catch(() => null);
-          await detailsButton.click().catch(() => {});
+          await detailsButton.click({ timeout: remainingTimeout(deadline) }).catch(() => {});
           const refreshed = await recommendationRefresh;
           const detailsResponse = await detailsResponsePromise;
           const detailBody = await responseBody(detailsResponse);
@@ -453,6 +453,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
     assessment,
     ...assessment,
     families,
+    flatFamilyResults: families.map((item) => `${item.familyId}|${item.candidateId}|${item.status}|${(item.checkFailures || []).join(',')}`),
     selectionErrors: families.filter(item => item.selectionError).map(item => `${item.familyId}: ${item.selectionError}`),
     screenshots,
     exports,

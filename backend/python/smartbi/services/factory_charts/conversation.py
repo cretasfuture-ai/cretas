@@ -446,7 +446,7 @@ def render_answer(question: str, selected: Sequence[Mapping[str, Any]], facts: S
 
 def _joint_axes(question: str) -> set[str]:
     patterns = {"production": r"生产|产量|\b(?:production|outputs?)\b",
-                "quality": r"质量|质检|检验|良品|\b(?:quality|good|yields?|inspections?)\b",
+                "quality": r"质量|质检|检验|良品|\b(?:quality|qc|good|yields?|inspections?)\b",
                 "cost": r"成本|\bcosts?\b", "sales": r"销售|发货|\b(?:sales|shipments?)\b",
                 "inventory": r"库存|\b(?:stocks?|inventory)\b", "customer": r"客户|\bcustomers?\b",
                 "channel": r"渠道|\bchannels?\b"}
@@ -473,7 +473,7 @@ def joint_family_requirements(question: str) -> set[str]:
         families.add("commerce-joint.sales.stock")
         covered.update({"sales", "inventory"})
     if len(axes & {"production", "quality", "cost"}) >= 2:
-        if re.search(r"多表|跨表|跨数据|检验|inspection|cross[- ]?table|multiple tables|across tables|across sources", question, re.I):
+        if re.search(r"多表|跨表|跨数据|质检|检验|\bqc\b|inspection|cross[- ]?table|multiple tables|across tables|across sources", question, re.I):
             families.add("production.inspection_fused")
         else:
             families.add("production.fused")

@@ -7,7 +7,8 @@
 
 ## 在飞任务
 
-- `SC29-COMMERCE-RELEASE-WINDOW` — `claimed` — Root；Base `9159711e4540f33a1f9f2992222359c56b8b5826`；PR1292及commerce联合修复已冻结/终审，拟Web+Python构建合入发布；暂缓无关主线合并/同组件切流，已有构建继续；服务回执和F006关键复验后归档释放，不等待手机登录。
+
+
 
 
 - `SMARTBI-F006-QA-20261028` — `in-progress` — Root；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；PR1267已部署；34场景与QA修复见archive/2026-10-28-smartbi-acceptance-fixes.md；F006 only。

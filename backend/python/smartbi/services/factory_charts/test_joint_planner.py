@@ -7,6 +7,8 @@ from . import conversation
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('question', 'family'), [
     ('关联生产、检验和成本做多表分析', 'production.inspection_fused'),
+    ('关联生产、质检和成本一起看', 'production.inspection_fused'),
+    ('Compare production QC and cost together', 'production.inspection_fused'),
     ('Compare production quality and cost across tables', 'production.inspection_fused'),
     ('把生产、良品率与成本放一起看', 'production.fused'),
     ('关联销售发货与当前库存做多表分析', 'commerce-joint.sales.stock'),
