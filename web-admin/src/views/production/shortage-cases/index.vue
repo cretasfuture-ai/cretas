@@ -4,20 +4,29 @@
  * 下了采购单和到货待检都不算解决, 只有放行入库才减少缺口。「缺口已解决」和「订单交付」分两列。
  */
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import {
   listShortageCases,
   getShortageCase,
   refreshShortageCase,
+  getProcurementProposals,
+  createProcurementDraft,
+  decideShortageCase,
+  type ProcurementProposal,
   type ShortageCase,
+  type ShortageCaseDecision,
   type ShortageCaseDetail,
   type ShortageCaseStage,
 } from '@/api/shortageCases';
 
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId || '');
+const canPurchase = computed(() => permissionStore.canWrite('procurement'));
+const canDecide = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production'));
 
 const STAGE_LABEL: Record<ShortageCaseStage, string> = {
   DETECTED: '待处理',
@@ -52,6 +61,10 @@ const REASON_LABEL: Record<string, string> = {
   MATERIAL_RECEIVED: '物料入库',
   MATERIAL_BATCH_RELEASED: '质检放行',
   MANUAL_REFRESH: '手动核对',
+  PURCHASE_DRAFT_CREATED: '生成采购草稿',
+  DECISION_CANCEL: '取消',
+  DECISION_MANUAL: '转人工',
+  DECISION_CLOSE: '关闭',
 };
 
 const openOnly = ref(true);
@@ -63,6 +76,15 @@ const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detail = ref<ShortageCaseDetail | null>(null);
 const refreshing = ref(false);
+const proposals = ref<Record<string, ProcurementProposal>>({});
+const drafting = ref<string | null>(null);
+const deciding = ref(false);
+
+const TERMINAL: ShortageCaseStage[] = ['CANCELLED', 'MANUAL', 'CLOSED'];
+const isOpen = computed(() => !!detail.value && !TERMINAL.includes(detail.value.case.stage));
+// 转人工只停自动处理, 实例还没关 (closedAt 为空): 仍要能取消 / 关闭
+const canStillDecide = computed(() => !!detail.value && detail.value.case.closedAt == null);
+const isManual = computed(() => detail.value?.case.stage === 'MANUAL');
 
 function qty(v: number | null | undefined, unit: string | null) {
   if (v === null || v === undefined) return '—';
@@ -98,8 +120,12 @@ async function openDetail(row: ShortageCase) {
   detail.value = null;
   try {
     const res = await getShortageCase(factoryId.value, row.id);
-    if (res.success) detail.value = res.data;
-    else ElMessage.error(res.message || '详情加载失败');
+    if (res.success) {
+      detail.value = res.data;
+      await loadProposals(row.id);
+    } else {
+      ElMessage.error(res.message || '详情加载失败');
+    }
   } catch {
     ElMessage.error('详情加载失败');
   } finally {
@@ -123,6 +149,74 @@ async function refreshCase() {
     ElMessage.error((e as { message?: string })?.message || '核对失败');
   } finally {
     refreshing.value = false;
+  }
+}
+
+async function loadProposals(caseId: string) {
+  proposals.value = {};
+  if (!canPurchase.value) return;
+  try {
+    const res = await getProcurementProposals(factoryId.value, caseId);
+    if (res.success) {
+      for (const p of res.data ?? []) proposals.value[p.materialTypeId] = p;
+    }
+  } catch {
+    // 建议拿不到只是不显示按钮, 缺口本身照常展示
+  }
+}
+
+async function draft(materialTypeId: string) {
+  if (!detail.value) return;
+  drafting.value = materialTypeId;
+  try {
+    const res = await createProcurementDraft(factoryId.value, detail.value.case.id, materialTypeId);
+    const unitLabel = detail.value.lines.find((l) => l.materialTypeId === materialTypeId)?.unitLabel ?? '';
+    if (res.success && res.data) {
+      ElMessage.success(
+        res.data.reused
+          ? `已有在走的采购单 ${res.data.purchaseOrderNumber}，没有重复生成`
+          : `已生成采购草稿 ${res.data.purchaseOrderNumber}（${res.data.quantity} ${unitLabel}），请到采购单里核对后提交`,
+      );
+      await openDetail(detail.value.case);
+    } else {
+      ElMessage.error(res.message || '生成采购草稿失败');
+    }
+  } catch (e: unknown) {
+    ElMessage.error((e as { message?: string })?.message || '生成采购草稿失败');
+  } finally {
+    drafting.value = null;
+  }
+}
+
+const DECISION_LABEL: Record<ShortageCaseDecision, string> = { CANCEL: '取消', MANUAL: '转人工', CLOSE: '关闭' };
+
+async function decide(decision: ShortageCaseDecision) {
+  if (!detail.value) return;
+  let reason: string;
+  try {
+    const r = await ElMessageBox.prompt(`请写明${DECISION_LABEL[decision]}的原因（必填）`, DECISION_LABEL[decision], {
+      inputValidator: (v: string) => (v && v.trim().length > 0) || '原因不能为空',
+      confirmButtonText: '确定',
+      cancelButtonText: '先不',
+    });
+    reason = (r as { value: string }).value.trim();
+  } catch {
+    return; // 用户取消
+  }
+  deciding.value = true;
+  try {
+    const res = await decideShortageCase(factoryId.value, detail.value.case.id, { decision, reason });
+    if (res.success) {
+      ElMessage.success(`已${DECISION_LABEL[decision]}`);
+      await openDetail(detail.value.case);
+      await load();
+    } else {
+      ElMessage.error(res.message || '处理失败');
+    }
+  } catch (e: unknown) {
+    ElMessage.error((e as { message?: string })?.message || '处理失败');
+  } finally {
+    deciding.value = false;
   }
 }
 
@@ -210,7 +304,36 @@ onMounted(load);
                 <span :class="{ gap: row.gapQty > 0 }">{{ qty(row.gapQty, row.unitLabel) }}</span>
               </template>
             </el-table-column>
+            <el-table-column v-if="canPurchase && isOpen" label="采购" min-width="190">
+              <template #default="{ row }">
+                <template v-if="proposals[row.materialTypeId]">
+                  <el-button
+                    v-if="proposals[row.materialTypeId].canDraft"
+                    size="small"
+                    type="primary"
+                    :loading="drafting === row.materialTypeId"
+                    @click="draft(row.materialTypeId)"
+                  >
+                    生成采购草稿 {{ proposals[row.materialTypeId].suggestedQty }} {{ row.unitLabel ?? '' }}
+                  </el-button>
+                  <div v-for="(n, i) in proposals[row.materialTypeId].notes" :key="i" class="hint">{{ n }}</div>
+                </template>
+              </template>
+            </el-table-column>
           </el-table>
+
+          <div v-if="canDecide && canStillDecide" class="decision-bar">
+            <el-button v-if="!isManual" :loading="deciding" @click="decide('MANUAL')">转人工</el-button>
+            <el-button :loading="deciding" type="danger" plain @click="decide('CANCEL')">取消</el-button>
+            <el-button
+              :loading="deciding"
+              type="success"
+              :disabled="detail.case.stage !== 'GAP_RESOLVED' && !isManual"
+              @click="decide('CLOSE')"
+            >
+              {{ isManual ? '关闭（人工处理完毕）' : '关闭（缺口已解决）' }}
+            </el-button>
+          </div>
 
           <h4>处理记录</h4>
           <el-timeline>
@@ -235,4 +358,5 @@ onMounted(load);
 .section-head h4, h4 { margin: 16px 0 8px; }
 .hint { color: var(--el-text-color-secondary); font-size: 12px; }
 .gap { color: var(--el-color-danger); font-weight: 600; }
+.decision-bar { display: flex; gap: 8px; margin: 12px 0; }
 </style>

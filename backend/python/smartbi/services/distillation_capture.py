@@ -62,7 +62,12 @@ import os
 from typing import Any, Dict, List, Optional
 
 from smartbi.services.corpus_anonymize import desensitize_for_training
-from smartbi.services.process_secret_names import mentions_any, protected_product_names
+from smartbi.services.process_secret_names import (
+    all_protected_product_names,
+    any_factory_names,
+    mentions_any,
+    protected_product_names,
+)
 from smartbi.services.training_consent import (
     DESENSITIZED_KEY,
     RULE_KEY,
@@ -95,6 +100,32 @@ def _log_skip_once(reason: str, factory_id: Optional[str], detail: str = "") -> 
         "factory/reason are not logged", reason, factory_id,
         f" {detail}" if detail else "",
     )
+
+
+# Caller metadata keys holding a raw copy of the question (synthesis_engine
+# stores metadata.query = the user's question). Desensitized like input_text.
+_RAW_QUESTION_METADATA_KEYS = ("query",)
+
+
+def _desensitize_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Metadata of a desensitized sample must not keep raw text: the question
+    copies are desensitized, and the grounding check's violation list (raw
+    answer clauses / claimed figures) is reduced to its count."""
+    if not metadata:
+        return metadata
+    out = dict(metadata)
+    for key in _RAW_QUESTION_METADATA_KEYS:
+        value = out.get(key)
+        if isinstance(value, str) and value:
+            out[key] = desensitize_for_training(value, "")[0]
+    grounding = out.get("grounding")
+    if isinstance(grounding, dict) and "violations" in grounding:
+        grounding = dict(grounding)
+        violations = grounding.pop("violations")
+        grounding["violation_count"] = (
+            len(violations) if isinstance(violations, (list, tuple)) else int(bool(violations)))
+        out["grounding"] = grounding
+    return out
 
 
 def _request_factory_id() -> Optional[str]:
@@ -208,6 +239,23 @@ async def persist_distillation_sample(
         _log_skip_once("process / personnel content is never used for training",
                        factory_id, f"source={source}")
         return
+    if not synthetic:
+        # privacy clause 6: a sample naming one of the factory's process-secret
+        # products is not used for training. With no factory we cannot tell
+        # whose product it names, so the process-secret products of ANY factory
+        # count. Looked up (Cretas main DB) before taking a capture connection.
+        try:
+            if factory_id:
+                names = await protected_product_names(factory_id)
+            else:
+                names = any_factory_names(await all_protected_product_names())
+        except Exception as e:
+            _log_skip_once("process-secret product lookup failed, sample not stored",
+                           factory_id, f"({type(e).__name__}: {e})")
+            return
+        if mentions_any(names, input_text, teacher_output):
+            _log_skip_once("sample names a process-secret product", factory_id)
+            return
     try:
         async with pool.acquire() as conn:
             scope = "none"
@@ -222,23 +270,12 @@ async def persist_distillation_sample(
             if is_withdrawn(scope):
                 _log_skip_once("factory withdrew from training", factory_id)
                 return
-            if factory_id and not synthetic:
-                # privacy clause 6: a sample naming one of the factory's
-                # process-secret products is not used for training
-                try:
-                    names = await protected_product_names(factory_id)
-                except Exception as e:
-                    _log_skip_once("process-secret product lookup failed, sample not stored",
-                                   factory_id, f"({type(e).__name__}: {e})")
-                    return
-                if mentions_any(names, input_text, teacher_output):
-                    _log_skip_once("sample names a process-secret product", factory_id)
-                    return
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
                 if not keeps_raw(scope):
                     input_text, teacher_output = desensitize_for_training(
                         input_text, teacher_output)
+                    metadata = _desensitize_metadata(metadata)
                     tags[DESENSITIZED_KEY] = True
                 metadata = {**(metadata or {}), **tags}
             input_hash = compute_input_hash(input_text)

@@ -365,20 +365,25 @@ class TestBucketStats:
         qa_key = ("chat_qa", "unknown", "qa")
         assert buckets[qa_key].quality_null == 1
 
-    def test_is_synthetic_seeded_flag(self):
+    # 2026-10-29: synthetic ONLY by sentinel factory id, same as export and capture
+    # (is_synthetic_factory). metadata seeded / source_kind is caller-supplied.
+    def test_is_synthetic_ignores_metadata_flags(self):
         from scripts.corpus_census import _is_synthetic
-        assert _is_synthetic({"seeded": True}) is True
-        assert _is_synthetic({"seeded": False}) is False
-        assert _is_synthetic({"source_kind": "synthetic"}) is True
-        assert _is_synthetic({"source_kind": "organic"}) is False
+        for meta in ({"seeded": True}, {"source_kind": "synthetic"},
+                     {"source_kind": "synthetic_seed"}, {"source_kind": "SYNTHETIC_SEED"},
+                     '{"seeded": true}'):
+            assert _is_synthetic(meta) is False
+            assert _is_synthetic(meta, factory_id="F001") is False
         assert _is_synthetic(None) is False
+        # control: the sentinel is synthetic whatever the metadata says
+        assert _is_synthetic({"seeded": True}, factory_id="SEED_F") is True
+        assert _is_synthetic({"source_kind": "organic"}, factory_id="SEED_R") is True
 
-    # Fix 3 (S3iii): corpus_census._is_synthetic must recognise synthetic_seed + SEED sentinels
-    def test_is_synthetic_recognizes_synthetic_seed(self):
-        """source_kind='synthetic_seed' (used by seeder) must be synthetic."""
+    def test_census_agrees_with_capture_and_export(self):
         from scripts.corpus_census import _is_synthetic
-        assert _is_synthetic({"source_kind": "synthetic_seed"}) is True
-        assert _is_synthetic({"source_kind": "SYNTHETIC_SEED"}) is True  # case-insensitive
+        from smartbi.services.training_consent import is_synthetic_factory
+        for fid in ("SEED_R", "SEED_F", "F001", "", None):
+            assert _is_synthetic({"seeded": True}, factory_id=fid) is is_synthetic_factory(fid)
 
     def test_is_synthetic_recognizes_seed_r_factory(self):
         """factory_id=SEED_R is a synthetic-seeder sentinel → synthetic."""

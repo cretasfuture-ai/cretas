@@ -88,6 +88,13 @@ logger = logging.getLogger("corpus_judge")
 # Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
+# Privacy clause 6: rows naming a process-secret product (own factory's, or ANY
+# factory's for rows with no factory) are never sent to the judge LLM. A failed
+# name lookup propagates and aborts the run.
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    drop_rows_naming_protected_products,
+)
 
 _USABLE_ROWS = usable_rows_sql()
 
@@ -383,11 +390,12 @@ def resolve_judge_chain(
 # ---------------------------------------------------------------------------
 
 _FETCH_SQL = """
-    SELECT id, input_text, teacher_output, metadata, source
+    SELECT id, factory_id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 3
       AND """ + _USABLE_ROWS + """
       AND (metadata IS NULL OR NOT (metadata ? 'judge'))
+      AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded'))
     {source_clause}
     ORDER BY id
     LIMIT $1
@@ -403,15 +411,43 @@ _UPDATE_SQL = """
 # Cross-family: fetch quality=4 rows that are NOT from claims-pinned sources
 # and do NOT yet have a 'judge_crossfamily' key in their metadata.
 _CROSSFAMILY_FETCH_SQL = """
-    SELECT id, input_text, teacher_output, metadata, source
+    SELECT id, factory_id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 4
       AND """ + _USABLE_ROWS + """
       AND source NOT IN ({sources_placeholder})
       AND (metadata IS NULL OR NOT (metadata ? 'judge_crossfamily'))
+      AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded'))
     ORDER BY id
     LIMIT $1
 """
+
+# Rows naming a process-secret product are flagged once so later runs do not
+# refetch them forever (the batch would silently shrink to "judged 0").
+PROCESS_SECRET_FLAG = "process_secret_excluded"
+_MARK_PROCESS_SECRET_SQL = """
+    UPDATE smart_bi_distillation_samples
+    SET metadata = COALESCE(metadata, '{}'::jsonb) || '{"process_secret_excluded": true}'::jsonb
+    WHERE id = ANY($1::bigint[])
+"""
+
+
+async def _drop_process_secret_rows(pool, rows, label: str) -> List[Any]:
+    """Drop rows naming a process-secret product (privacy clause 6), flag them
+    with metadata.process_secret_excluded=true and log how many. A failed name
+    lookup raises: the run aborts, never "nothing protected"."""
+    kept = drop_rows_naming_protected_products(rows, await all_protected_product_names())
+    kept_ids = {r["id"] for r in kept}
+    excluded = [r["id"] for r in rows if r["id"] not in kept_ids]
+    if excluded:
+        async with pool.acquire() as conn:
+            await conn.execute(_MARK_PROCESS_SECRET_SQL, excluded)
+        logger.warning(
+            "%s: excluded %d row(s) naming a process-secret product (not sent to the "
+            "judge; flagged %s=true so later runs skip them): ids=%s",
+            label, len(excluded), PROCESS_SECRET_FLAG, excluded[:50],
+        )
+    return kept
 
 
 async def _make_pool(dsn: Optional[str]):
@@ -457,6 +493,7 @@ async def fetch_unjudged_rows(
             rows = await conn.fetch(sql, limit, source)
         else:
             rows = await conn.fetch(sql, limit)
+    rows = await _drop_process_secret_rows(pool, rows, "judge")
 
     result = []
     for row in rows:
@@ -515,6 +552,7 @@ async def fetch_crossfamily_rows(
         if source:
             params.append(source)
         rows = await conn.fetch(sql, *params)
+    rows = await _drop_process_secret_rows(pool, rows, "cross-family judge")
 
     return [
         {
