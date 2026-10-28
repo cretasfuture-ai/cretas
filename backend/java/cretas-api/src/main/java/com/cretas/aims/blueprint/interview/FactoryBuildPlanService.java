@@ -55,6 +55,12 @@ public class FactoryBuildPlanService {
     private ProductTypeRepository productTypeRepository;
 
     @Autowired
+    private com.cretas.aims.repository.ProductionLineRepository productionLineRepository;
+
+    @Autowired
+    private com.cretas.aims.repository.ProductionLineCapacityConfigRepository lineCapacityConfigRepository;
+
+    @Autowired
     private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     @Autowired
@@ -262,6 +268,34 @@ public class FactoryBuildPlanService {
                 //    (WAREHOUSE_TYPE_LABELS), 后端再写一份就是同一个东西两份, 必漂。
                 PlannedChange c = change("存放区", code, w.getName(), exists, false);
                 out.add(c);
+            }
+        }
+        if (sd.getProductionLines() != null) {
+            // S4: 产线按名字幂等 (同名复用 ⇒ 跳过); 产能按线+产品替换 (在用的有 ⇒ 覆盖), 与落库同一口径。
+            // 分组名带「设备」二字: 冻结的 v2 能力目录里产线落在「设备、维护与校准」能力下, 不另起目录版本。
+            for (ApplyAIInitRequest.ProductionLineItem line : sd.getProductionLines()) {
+                String name = line.getName() == null ? "" : line.getName().trim();
+                java.util.Optional<com.cretas.aims.entity.ProductionLine> existing = productionLineRepository
+                        .findByFactoryIdAndNameAndDeletedAtIsNull(factoryId, name).stream().findFirst();
+                out.add(change("产线与设备产能", FactoryBuildProductionLines.lineKey(name), "产线",
+                        existing.isPresent(), false));
+                if (line.getCapacities() == null) {
+                    continue;
+                }
+                for (ApplyAIInitRequest.LineCapacityItem c : line.getCapacities()) {
+                    String code = c.getProductCode() == null || c.getProductCode().isBlank()
+                            ? null : c.getProductCode().trim();
+                    // 产品还没落库 (本次新建) ⇒ 它不可能已有在用产能, 是新建
+                    java.util.Optional<String> productId = code == null ? java.util.Optional.empty()
+                            : productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                                    .map(com.cretas.aims.entity.ProductType::getId);
+                    boolean active = existing.isPresent() && (code == null || productId.isPresent())
+                            && lineCapacityConfigRepository.findByFactoryIdAndProductionLineIdAndProductTypeId(
+                                    factoryId, existing.get().getId(), productId.orElse(null)).isPresent();
+                    out.add(change("产线与设备产能", FactoryBuildProductionLines.capacityKey(name, code),
+                            FactoryBuildProductionLines.capacityDetail(c,
+                                    code == null ? null : nameOfCode(sd.getProductTypes(), code)), active, true));
+                }
             }
         }
         if (sd.getProductProcesses() != null) {

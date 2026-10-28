@@ -31,6 +31,8 @@ final class FactoryDecisionGuidanceCatalog {
                     List.of("成品 SKU", "产品工序链", "共享前处理"), List.of("2 个成品", "6 个成品")),
             entry("warehouseSetup", "存放区决定原料、半成品和成品在各阶段能否正确入库、移库和追溯。",
                     List.of("仓储区域", "库存阶段", "批次追溯"), List.of("原料冷库（原料）", "车间暂存（暂存）")),
+            entry("lineCapacity", "插单时系统按产线每小时产能判断够不够；单位必须和订单一致，系统不会自己换算。",
+                    List.of("产线", "每小时产能", "插单可行性"), List.of("卤制线 每小时 200 kg", "包装线 每小时 1500 件")),
             entry("materialCoding", "这里只确定物料的大类边界，具体物料编码仍由后续物料主数据确认。",
                     List.of("物料分类", "编码前缀"), List.of("原料/辅料/包材", "原料和包材")),
             entry("metricWatches", "只有明确指标和阈值，系统才能知道什么时候提醒管理人员。",

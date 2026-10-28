@@ -482,6 +482,11 @@ public class PlatformAssemblyInterviewController {
             /** 存放区(仓库/库位) —— 没有它就无法入库出库 */
             private List<WarehouseItem> warehouses;
             /**
+             * S4 产线与每小时产能 (访谈「产线产能」)。单位由客户说出, 只认 PIECE / KG / BATCH;
+             * 插单可行性只读这些配置, 不换算、不套默认。按产线名字幂等: 同名产线复用, 产能按线+产品替换。
+             */
+            private List<ProductionLineItem> productionLines;
+            /**
              * 产品×工序绑定。
              *
              * <p>⚠️ 这是 2026-08-10 对抗性审计抓出来的缺口: 访谈问了一条工序链,
@@ -607,6 +612,22 @@ public class PlatformAssemblyInterviewController {
             private String code;
             /** 段名, 如 原料 / 包材 / 辅料 */
             private String label;
+        }
+
+        @Data
+        public static class ProductionLineItem {
+            /** 产线名, 也是幂等键 (本厂同名产线复用, 不重复建) */
+            private String name;
+            private List<LineCapacityItem> capacities;
+        }
+
+        @Data
+        public static class LineCapacityItem {
+            /** 产品 code (本次 productTypes 或库里); 为空 = 该线所有产品通用 */
+            private String productCode;
+            private java.math.BigDecimal capacityPerHour;
+            /** PIECE / KG / BATCH */
+            private String capacityUnit;
         }
 
         @Data
@@ -830,6 +851,10 @@ public class PlatformAssemblyInterviewController {
         private List<String> writtenThresholds = new ArrayList<>();
         private List<String> writtenWarehouses = new ArrayList<>();
         private List<String> skippedWarehouses = new ArrayList<>();
+        /** S4: 新建的产线与写下的产能 (键与预览「产线与设备产能」分组同形) */
+        private List<String> writtenProductionLines = new ArrayList<>();
+        /** S4: 同名已存在而复用的产线 */
+        private List<String> skippedProductionLines = new ArrayList<>();
         private List<String> writtenProductProcesses = new ArrayList<>();
         /** 新建的登录账号用户名。⛔ 初始密码不在这里, 也不在任何响应里 —— 走重置流程。 */
         private List<String> writtenUsers = new ArrayList<>();
