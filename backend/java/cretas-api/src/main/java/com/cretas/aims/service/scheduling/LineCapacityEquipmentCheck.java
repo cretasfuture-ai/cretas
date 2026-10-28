@@ -204,7 +204,7 @@ public class LineCapacityEquipmentCheck {
         }
     }
 
-    static String unitLabel(CapacityUnit u) {
+    public static String unitLabel(CapacityUnit u) {
         return switch (u) {
             case PIECE -> "件";
             case KG -> "kg";

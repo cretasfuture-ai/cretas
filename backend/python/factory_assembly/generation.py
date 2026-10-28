@@ -272,6 +272,86 @@ def _default_warehouses(description: str):
         logger.warning('存放区: 建了 %d 个, 没认出 %s —— 已并进 aiSummary', len(out), unrecognized)
     return out
 
+_LINE_CAPACITY_ANSWER = re.compile('产线产能[：:][ \t]*([^\n]*)')
+
+# S4: 只认这三类单位。「斤」「吨」「箱」要换算或依赖包装规格, 换算就是替客户做主 ⇒ 认不出, 进「没建」。
+_CAPACITY_UNITS = {'件': 'PIECE', '个': 'PIECE', 'kg': 'KG', 'KG': 'KG', 'Kg': 'KG', '公斤': 'KG', '千克': 'KG', '批': 'BATCH'}
+
+_LINE_CAPACITY_SEGMENT = re.compile(
+    '^(?P<line>[^\\s，,、;；做]+?)\\s*(?:做\\s*(?P<product>[^\\s每]+?)\\s*)?每(?:个)?小时\\s*(?:能做|可做|做|产)?\\s*'
+    '(?P<num>\\d+(?:\\.\\d+)?)\\s*(?P<unit>[^\\s\\d、，,;；。]+)\\s*$')
+
+
+def _production_lines(description: str, suggested: dict):
+    """从访谈「产线产能」那一答确定性地给出产线及每小时产能 —— 认不出的不猜。
+
+    S4 (owner 2026-10-27): 单位「看具体产线情况」, 由客户说出来。插单可行性只认与订单
+    同单位的配置、不换算 ⇒ 这里也不换算: 只认 件 / kg(公斤、千克) / 批。
+
+    ⛔ 不交给模型: 单位和数字编一个, 插单就会拿一个客户没说过的产能去判「能做」。这里是查表。
+    ⛔ 「做某产品」必须对上本次 productTypes 里的成品 (按名字, 同 _product_processes 的口径),
+       对不上整段跳过 —— 校验器要求 productCode 在本次载荷或库里, 对不上就整次 400。
+
+    :return: (lines, skipped) —— lines 形如
+             [{'name', 'capacities': [{'productCode'|None, 'capacityPerHour', 'capacityUnit'}]}]
+             skipped 是「原文片段(原因)」, 给 notBuilt / aiSummary 用。
+    """
+    m = _LINE_CAPACITY_ANSWER.search(description or '')
+    if not m:
+        return ([], [])
+    answer = m.group(1).strip()
+    if not answer or '先不配' in answer or answer in ('我来说',):
+        return ([], [])
+    codes_by_name = {}
+    for t in (suggested or {}).get('productTypes') or []:
+        if isinstance(t, dict) and t.get('code') and t.get('name'):
+            for key in _product_identity_keys(t['name']):
+                codes_by_name.setdefault(key, set()).add(str(t['code']).strip())
+    by_line, order, skipped = ({}, [], [])
+    for seg in re.split('[、,，;；。]+', answer):
+        seg = seg.strip()
+        if not seg:
+            continue
+        sm = _LINE_CAPACITY_SEGMENT.match(seg)
+        if not sm:
+            skipped.append('%s(没认出「哪条线 每小时 多少 什么单位」)' % seg)
+            continue
+        unit = _CAPACITY_UNITS.get(sm.group('unit'))
+        if not unit:
+            skipped.append('%s(单位「%s」不认识，只认 件 / kg / 批，不换算)' % (seg, sm.group('unit')))
+            continue
+        rate = float(sm.group('num'))
+        if rate <= 0:
+            skipped.append('%s(每小时产能要大于 0)' % seg)
+            continue
+        product_code = None
+        if sm.group('product'):
+            codes = set()
+            for key in _product_identity_keys(sm.group('product')):
+                codes |= codes_by_name.get(key, set())
+            if len(codes) != 1:
+                why = '没对上成品清单里的产品' if not codes else '对上了不止一个成品'
+                skipped.append('%s(「%s」%s)' % (seg, sm.group('product'), why))
+                continue
+            product_code = next(iter(codes))
+        name = sm.group('line').strip()
+        if name not in by_line:
+            by_line[name] = {}
+            order.append(name)
+        key = product_code or ''
+        if key in by_line[name]:
+            skipped.append('%s(同一条线同一产品说了两次，以第一次为准)' % seg)
+            continue
+        by_line[name][key] = {'productCode': product_code,
+                              'capacityPerHour': int(rate) if rate.is_integer() else rate,
+                              'capacityUnit': unit}
+    lines = []
+    for name in order:
+        lines.append({'name': name, 'capacities': list(by_line[name].values())})
+    if skipped:
+        logger.warning('产线产能: 建了 %d 条线, 没认出 %s', len(lines), skipped)
+    return (lines, skipped)
+
 _PRODUCT_HEAD = re.compile('^\\s*第\\s*\\d+\\s*个\\s+(\\S.*?)\\s*$')
 
 _PRODUCT_STEPS = re.compile('^\\s*经过哪几道[：:]\\s*(\\S.*?)\\s*$')
@@ -468,7 +548,7 @@ def _normalize_conversions(suggested: dict):
             skipped.append('%s(%s)' % (label, why))
     return (kept, skipped)
 
-_FIELD_NAME_PLAIN = {'suggestedData': '这次配出来的东西', 'productTypes': '成品清单', 'materialTypes': '原料清单', 'conversionRates': '出成换算', 'workProcesses': '工序清单', 'productProcesses': '产品工序链', 'haccpCheckpoints': '关键控制点', 'codeSegments': '编码大类', 'metricWatches': '要盯的指标', 'moduleConfigs': '功能开关', 'indicatorOptOut': '不看的指标', 'warehouses': '存放区', 'alerts': '提醒', 'fromCode': '原料', 'toCode': '成品', 'boxConversionCoefficient': '一箱装多少', 'level1Unit': '包装单位', 'industryCode': '行业', 'aiSummary': '说明'}
+_FIELD_NAME_PLAIN = {'suggestedData': '这次配出来的东西', 'productTypes': '成品清单', 'materialTypes': '原料清单', 'conversionRates': '出成换算', 'workProcesses': '工序清单', 'productProcesses': '产品工序链', 'haccpCheckpoints': '关键控制点', 'codeSegments': '编码大类', 'metricWatches': '要盯的指标', 'moduleConfigs': '功能开关', 'indicatorOptOut': '不看的指标', 'warehouses': '存放区', 'productionLines': '产线与设备产能', 'alerts': '提醒', 'fromCode': '原料', 'toCode': '成品', 'boxConversionCoefficient': '一箱装多少', 'level1Unit': '包装单位', 'industryCode': '行业', 'aiSummary': '说明'}
 
 def _plainify(text, suggested):
     """把**已经漏进客户可见文字**里的机器码和字段名换成客户说过的名字。
@@ -1090,6 +1170,10 @@ async def generate_configuration(request: FactoryInitRequest):
         parsed['suggestedData']['warehouses'] = warehouses
         logger.info('Factory init: warehouses=%d 个 %s', len(warehouses), [w['code'] for w in warehouses])
         parsed['aiSummary'] = (parsed.get('aiSummary') or '') + _warehouse_note(_UNRECOGNIZED_WAREHOUSES)
+        lines, line_skipped = _production_lines(request.factory_description, parsed['suggestedData'])
+        parsed['suggestedData']['productionLines'] = lines
+        logger.info('Factory init: productionLines=%d 条; 没认出 %d 段 %s', len(lines), len(line_skipped), line_skipped)
+        parsed['aiSummary'] = (parsed.get('aiSummary') or '') + _skip_note('产线产能里这几段我没认出来，没有给你建', line_skipped, '可以建完厂在「智能调度 › 产线产能与设备」里补，或者按「卤制线 每小时 200 kg」这样再说一遍')
         pps, pp_skipped = _product_processes(request.factory_description, parsed['suggestedData'])
         parsed['suggestedData']['productProcesses'] = pps
         logger.info('Factory init: productProcesses=%d 条; 跳过 %d 条 %s', len(pps), len(pp_skipped), pp_skipped)
@@ -1119,7 +1203,7 @@ async def generate_configuration(request: FactoryInitRequest):
         if extra_products:
             logger.info('Factory init: 客户没报过名字而配出来的成品 %s', extra_products)
         parsed['aiSummary'] = (parsed.get('aiSummary') or '') + _extra_product_note(extra_products)
-        parsed['notBuilt'] = _not_built('存放区', _UNRECOGNIZED_WAREHOUSES, '这个名字没认出来是哪一类仓', '在名字后面用括号带一句它属于哪类（原料/半成品/成品/线边/暂存/质检/退货/废料）再说一遍；也可以建完厂在「仓库管理」里手动加') + _not_built('产品工序链', pp_skipped, '这个成品的工序链没对上', '在「产品-工序配置」里手动补；或者把它走的工序按名字（或「第几道」）再说一遍') + _not_built('转换率', conv_skipped, '这条出成换算对不上原料→成品的方向', '在「转换率配置」里手动补；或者按「1 公斤某原料能出多少某成品」再说一遍') + _not_built('盯指标', mw_skipped, '没给出这条指标的线（要一个数字）', '带上数字再说一遍，像「良品率低于95%」；也可以建完厂在「指标设置」里补') + _not_built('产品类型', missing_packaging, '这条包装换算你说过，但没落到成品上', '在「产品类型管理」里给对应成品补上「一箱几袋」；或者把它按「卤鸭脖一箱装20袋」这样再说一遍') + _not_built('产品类型', missing_products, '这个成品你报过名字，但没被配出来', '把它的名字和规格再说一遍（像「卤牛腱 250g/袋」）；也可以到手机 App 的「产品类型管理」里手动加') + _not_built('产品类型', extra_products, '这个成品你没有专门报过名字，是我按你说的情况补的', '在「产品类型管理」里删掉；下次在成品清单里把有哪几个说清就不会多配', kind='extra')
+        parsed['notBuilt'] = _not_built('产线与设备产能', line_skipped, '这段产线产能没认出来', '在「智能调度 › 产线产能与设备」里补；或者按「卤制线 每小时 200 kg」这样再说一遍（单位只认 件 / kg / 批）') + _not_built('存放区', _UNRECOGNIZED_WAREHOUSES, '这个名字没认出来是哪一类仓', '在名字后面用括号带一句它属于哪类（原料/半成品/成品/线边/暂存/质检/退货/废料）再说一遍；也可以建完厂在「仓库管理」里手动加') + _not_built('产品工序链', pp_skipped, '这个成品的工序链没对上', '在「产品-工序配置」里手动补；或者把它走的工序按名字（或「第几道」）再说一遍') + _not_built('转换率', conv_skipped, '这条出成换算对不上原料→成品的方向', '在「转换率配置」里手动补；或者按「1 公斤某原料能出多少某成品」再说一遍') + _not_built('盯指标', mw_skipped, '没给出这条指标的线（要一个数字）', '带上数字再说一遍，像「良品率低于95%」；也可以建完厂在「指标设置」里补') + _not_built('产品类型', missing_packaging, '这条包装换算你说过，但没落到成品上', '在「产品类型管理」里给对应成品补上「一箱几袋」；或者把它按「卤鸭脖一箱装20袋」这样再说一遍') + _not_built('产品类型', missing_products, '这个成品你报过名字，但没被配出来', '把它的名字和规格再说一遍（像「卤牛腱 250g/袋」）；也可以到手机 App 的「产品类型管理」里手动加') + _not_built('产品类型', extra_products, '这个成品你没有专门报过名字，是我按你说的情况补的', '在「产品类型管理」里删掉；下次在成品清单里把有哪几个说清就不会多配', kind='extra')
         logger.info('Factory init: 说了没配上的 %d 条 %s', len(parsed['notBuilt']), [x['item'] for x in parsed['notBuilt']])
         module_configs = _module_configs(request.factory_description)
         parsed['suggestedData']['moduleConfigs'] = module_configs
