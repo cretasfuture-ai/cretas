@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `SC29-SMARTBI-RELEASE-WINDOW` — `claimed` — Root；Base `0ae7cb91d8f602bd49b5cbee7eeaa46afb5f1782`；待当前候选构建退出后发布Java/Web/Python并做F006关键复验；短窗口暂缓其他Java/Web主线合并/切流，已有构建继续；服务回执及关键Web复验完成即归档释放，不等待手机登录。
+
 - `SMARTBI-F006-QA-20261028` — `in-progress` — Root；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；PR1267已部署；34场景与QA修复见archive/2026-10-28-smartbi-acceptance-fixes.md；F006 only。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
