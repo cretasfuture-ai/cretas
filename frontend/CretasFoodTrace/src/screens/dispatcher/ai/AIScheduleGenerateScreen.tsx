@@ -34,6 +34,8 @@ import { DISPATCHER_THEME, ProductionPlan, LineSchedule } from '../../../types/d
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { formatDate } from '../../../utils/formatters';
+import { appAlert } from '../../../components/ui/AppDialog';
+import { getErrorMsg } from '../../../utils/errorHandler';
 
 // 班次类型
 type ShiftType = 'day' | 'night' | 'full_day';
@@ -46,6 +48,8 @@ const SHIFT_OPTIONS = [
 
 // 生成的排程接口
 interface GeneratedSchedule {
+  /** 排程 (LineSchedule) id, 列表 key 用; 同一次生成的排程共享 planId */
+  scheduleId: string;
   planId: string;
   planNumber: string;
   productName: string;
@@ -54,8 +58,9 @@ interface GeneratedSchedule {
   workerCount: number;
   startTime: string;
   endTime: string;
-  estimatedEfficiency: number;
-  completionProbability: number;
+  /** 后端没有给出就是 null (按工艺图排程不估效率/概率), ⛔ 不拿默认值冒充 */
+  estimatedEfficiency: number | null;
+  completionProbability: number | null;
 }
 
 export default function AIScheduleGenerateScreen() {
@@ -84,8 +89,8 @@ export default function AIScheduleGenerateScreen() {
 
   // 统计数据
   const [totalWorkers, setTotalWorkers] = useState(0);
-  const [avgEfficiency, setAvgEfficiency] = useState(0);
-  const [avgProbability, setAvgProbability] = useState(0);
+  const [avgEfficiency, setAvgEfficiency] = useState<number | null>(null);
+  const [avgProbability, setAvgProbability] = useState<number | null>(null);
 
   const loadPlans = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -170,7 +175,10 @@ export default function AIScheduleGenerateScreen() {
         // 后端返回 SchedulingPlanDTO，直接作为 plan 使用
         // 注意：后端返回的是 SchedulingPlanDTO，包含 id, planDate, lineSchedules 等
         interface LineScheduleDTO {
+          id?: string;
           batchNumber?: string;
+          planNumber?: string;
+          productionLineName?: string;
           productTypeName?: string;
           lineName?: string;
           productionLineId?: string;
@@ -185,35 +193,38 @@ export default function AIScheduleGenerateScreen() {
           planName?: string;
           totalWorkers?: number;
           lineSchedules?: LineScheduleDTO[];
+          warnings?: string[];
         }
         const plan = response.data as SchedulingPlanDTO;
         const lineSchedules = plan.lineSchedules || [];
 
         // 从 lineSchedules 构建每条产线的排程详情
         const schedules: GeneratedSchedule[] = lineSchedules.length > 0
-          ? lineSchedules.map((schedule: LineScheduleDTO) => ({
+          ? lineSchedules.map((schedule: LineScheduleDTO, index: number) => ({
+              scheduleId: schedule.id ?? `${plan.id}-${index}`,
               planId: plan.id, // 这是 SchedulingPlan 的 ID，用于确认
-              planNumber: schedule.batchNumber ?? plan.planName ?? '-',
+              planNumber: schedule.planNumber ?? schedule.batchNumber ?? plan.planName ?? '-',
               productName: schedule.productTypeName ?? '-',
-              lineName: schedule.lineName ?? '默认产线',
+              lineName: schedule.productionLineName ?? schedule.lineName ?? '产线未标明',
               lineId: schedule.productionLineId ?? '',
               workerCount: schedule.assignedWorkers ?? 0,
               startTime: schedule.plannedStartTime ? new Date(schedule.plannedStartTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '-',
               endTime: schedule.plannedEndTime ? new Date(schedule.plannedEndTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '-',
-              estimatedEfficiency: schedule.predictedEfficiency ? Math.round(Number(schedule.predictedEfficiency)) : 85,
-              completionProbability: schedule.completionProbability ? Math.round(Number(schedule.completionProbability)) : 80,
+              estimatedEfficiency: schedule.predictedEfficiency != null ? Math.round(Number(schedule.predictedEfficiency)) : null,
+              completionProbability: schedule.completionProbability != null ? Math.round(Number(schedule.completionProbability)) : null,
             }))
           : [{
+              scheduleId: plan.id,
               planId: plan.id,
               planNumber: plan.planName ?? '-',
               productName: '-',
-              lineName: '默认产线',
+              lineName: '产线未标明',
               lineId: '',
               workerCount: plan.totalWorkers ?? 0,
               startTime: '-',
               endTime: '-',
-              estimatedEfficiency: 85,
-              completionProbability: 80,
+              estimatedEfficiency: null,
+              completionProbability: null,
             }];
 
         setGeneratedSchedules(schedules);
@@ -221,21 +232,29 @@ export default function AIScheduleGenerateScreen() {
         // 计算统计
         if (schedules.length > 0) {
           const workers = schedules.reduce((sum, s) => sum + s.workerCount, 0);
-          const efficiency = schedules.reduce((sum, s) => sum + s.estimatedEfficiency, 0) / schedules.length;
-          const probability = schedules.reduce((sum, s) => sum + s.completionProbability, 0) / schedules.length;
+          const average = (values: Array<number | null>) => {
+            const known = values.filter((v): v is number => v != null);
+            return known.length ? Math.round(known.reduce((a, b) => a + b, 0) / known.length) : null;
+          };
 
           setTotalWorkers(workers);
-          setAvgEfficiency(Math.round(efficiency));
-          setAvgProbability(Math.round(probability));
+          setAvgEfficiency(average(schedules.map(s => s.estimatedEfficiency)));
+          setAvgProbability(average(schedules.map(s => s.completionProbability)));
         }
 
         setShowResult(true);
+        // 按工艺图排程的提示: 缺工时没排的计划 / 没有工艺图 / 默认 08:00 开工
+        const warnings = (plan.warnings ?? []).filter(w => typeof w === 'string' && w.trim().length > 0);
+        if (warnings.length > 0) {
+          appAlert('排程提示', warnings.join('\n'));
+        }
       } else {
-        Alert.alert('错误', response.message ?? '排程生成失败');
+        appAlert('排程没有生成', response.message ?? '排程生成失败');
       }
     } catch (err) {
       console.error('Generate schedule failed:', err);
-      Alert.alert('错误', '排程生成失败，请稍后重试');
+      // 后端会说清楚为什么没排 (例如哪道工序缺预计工时、要选哪条产线), 原样给用户看
+      appAlert('排程没有生成', getErrorMsg(err) || '排程生成失败，请稍后重试');
     } finally {
       setShowGenerating(false);
     }
@@ -514,11 +533,11 @@ export default function AIScheduleGenerateScreen() {
                 <Text style={styles.statLabel}>所需工人</Text>
               </View>
               <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: '#52c41a' }]}>{avgEfficiency}%</Text>
+                <Text style={[styles.statValue, { color: '#52c41a' }]}>{avgEfficiency != null ? `${avgEfficiency}%` : '—'}</Text>
                 <Text style={styles.statLabel}>预计效率</Text>
               </View>
               <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: DISPATCHER_THEME.primary }]}>{avgProbability}%</Text>
+                <Text style={[styles.statValue, { color: DISPATCHER_THEME.primary }]}>{avgProbability != null ? `${avgProbability}%` : '—'}</Text>
                 <Text style={styles.statLabel}>完成概率</Text>
               </View>
             </View>
@@ -528,7 +547,7 @@ export default function AIScheduleGenerateScreen() {
               <Text style={styles.cardTitle}>排程预览</Text>
 
               {generatedSchedules.map((schedule, index) => (
-                <View key={schedule.planId} style={styles.scheduleItem}>
+                <View key={schedule.scheduleId} style={styles.scheduleItem}>
                   <View style={styles.scheduleHeader}>
                     <Text style={styles.scheduleNumber}>{schedule.planNumber}</Text>
                     <View style={styles.scheduleTime}>
@@ -553,7 +572,7 @@ export default function AIScheduleGenerateScreen() {
                     <View style={styles.scheduleDetail}>
                       <MaterialCommunityIcons name="speedometer" size={14} color="#52c41a" />
                       <Text style={[styles.scheduleDetailText, { color: '#52c41a' }]}>
-                        {schedule.estimatedEfficiency}%
+                        {schedule.estimatedEfficiency != null ? `${schedule.estimatedEfficiency}%` : '—'}
                       </Text>
                     </View>
                   </View>
@@ -562,12 +581,12 @@ export default function AIScheduleGenerateScreen() {
                     <View
                       style={[
                         styles.probabilityFill,
-                        { width: `${schedule.completionProbability}%` },
+                        { width: `${schedule.completionProbability ?? 0}%` },
                       ]}
                     />
                   </View>
                   <Text style={styles.probabilityText}>
-                    完成概率: {schedule.completionProbability}%
+                    完成概率: {schedule.completionProbability != null ? `${schedule.completionProbability}%` : '未估算'}
                   </Text>
                 </View>
               ))}
