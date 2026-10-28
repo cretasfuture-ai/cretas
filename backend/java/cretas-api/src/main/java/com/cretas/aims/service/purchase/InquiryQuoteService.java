@@ -60,4 +60,16 @@ public interface InquiryQuoteService {
      */
     PurchaseOrder selectAndConvertToPurchaseOrder(
             String factoryId, String inquiryId, SelectAndConvertRequest request, Long userId);
+
+    /**
+     * 比价 (L3, S5-01 / S5-02): 逐条报价判定可比 / 可选定, 只对可比且在有效期内的报价排序。
+     * 币种 / 单位 / 规格 / 税率任一未知或不同 → 不可比并给出原因。
+     */
+    com.cretas.aims.dto.purchase.InquiryQuoteComparisonDTO compare(String factoryId, String inquiryId);
+
+    /**
+     * 报价价格对 BOM 的影响估算 (L3, S5-04)。只读, 不回写 BOM 与历史成本; 报价必须有价格生效日。
+     */
+    com.cretas.aims.dto.purchase.InquiryQuotePriceImpactDTO priceImpact(
+            String factoryId, String inquiryId, String priceId);
 }
