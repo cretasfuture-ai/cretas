@@ -395,6 +395,7 @@ _FETCH_SQL = """
     WHERE quality = 3
       AND """ + _USABLE_ROWS + """
       AND (metadata IS NULL OR NOT (metadata ? 'judge'))
+      AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded'))
     {source_clause}
     ORDER BY id
     LIMIT $1
@@ -416,9 +417,37 @@ _CROSSFAMILY_FETCH_SQL = """
       AND """ + _USABLE_ROWS + """
       AND source NOT IN ({sources_placeholder})
       AND (metadata IS NULL OR NOT (metadata ? 'judge_crossfamily'))
+      AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded'))
     ORDER BY id
     LIMIT $1
 """
+
+# Rows naming a process-secret product are flagged once so later runs do not
+# refetch them forever (the batch would silently shrink to "judged 0").
+PROCESS_SECRET_FLAG = "process_secret_excluded"
+_MARK_PROCESS_SECRET_SQL = """
+    UPDATE smart_bi_distillation_samples
+    SET metadata = COALESCE(metadata, '{}'::jsonb) || '{"process_secret_excluded": true}'::jsonb
+    WHERE id = ANY($1::bigint[])
+"""
+
+
+async def _drop_process_secret_rows(pool, rows, label: str) -> List[Any]:
+    """Drop rows naming a process-secret product (privacy clause 6), flag them
+    with metadata.process_secret_excluded=true and log how many. A failed name
+    lookup raises: the run aborts, never "nothing protected"."""
+    kept = drop_rows_naming_protected_products(rows, await all_protected_product_names())
+    kept_ids = {r["id"] for r in kept}
+    excluded = [r["id"] for r in rows if r["id"] not in kept_ids]
+    if excluded:
+        async with pool.acquire() as conn:
+            await conn.execute(_MARK_PROCESS_SECRET_SQL, excluded)
+        logger.warning(
+            "%s: excluded %d row(s) naming a process-secret product (not sent to the "
+            "judge; flagged %s=true so later runs skip them): ids=%s",
+            label, len(excluded), PROCESS_SECRET_FLAG, excluded[:50],
+        )
+    return kept
 
 
 async def _make_pool(dsn: Optional[str]):
@@ -464,8 +493,7 @@ async def fetch_unjudged_rows(
             rows = await conn.fetch(sql, limit, source)
         else:
             rows = await conn.fetch(sql, limit)
-    # lookup failure raises -> the run aborts (never "nothing protected")
-    rows = drop_rows_naming_protected_products(rows, await all_protected_product_names())
+    rows = await _drop_process_secret_rows(pool, rows, "judge")
 
     result = []
     for row in rows:
@@ -524,8 +552,7 @@ async def fetch_crossfamily_rows(
         if source:
             params.append(source)
         rows = await conn.fetch(sql, *params)
-    # lookup failure raises -> the run aborts (never "nothing protected")
-    rows = drop_rows_naming_protected_products(rows, await all_protected_product_names())
+    rows = await _drop_process_secret_rows(pool, rows, "cross-family judge")
 
     return [
         {

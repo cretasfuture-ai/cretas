@@ -438,6 +438,43 @@ async def test_process_secret_lookup_runs_before_a_capture_connection_is_taken(m
     assert len(sink) == 1
 
 
+def _synthesis_metadata():
+    # shape written by synthesis_engine: metadata.query = the raw question
+    return {"query": "华东工厂本月营收 2500000 为什么下降", "question_family": "attribution",
+            "plan": {"finance": True},
+            "grounding": {"clean": False, "reconciled": True, "confidence_adj": -0.1,
+                          "violations": ["华东工厂毛利率 23.5% 未在数据中"]}}
+
+
+async def test_desensitized_sample_does_not_keep_the_raw_question_in_metadata():
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    await _capture(pool, factory_id="F006", input_text="华东工厂本月营收 2500000 为什么下降",
+                   metadata=_synthesis_metadata())
+    await _capture(pool, factory_id="F_PRIV", input_text="华北工厂本月营收为什么下降",
+                   metadata=_synthesis_metadata())                       # control: authorized
+    desensitized, raw = _meta(sink[0][1]), _meta(sink[1][1])
+    assert desensitized["desensitized"] is True
+    stored = _json.dumps(desensitized, ensure_ascii=False)
+    assert "华东" not in stored and "2500000" not in stored and "23.5" not in stored
+    assert desensitized["query"] == "工厂A本月营收 <数值> 为什么下降"
+    assert desensitized["grounding"] == {"clean": False, "reconciled": True,
+                                         "confidence_adj": -0.1, "violation_count": 1}
+    assert desensitized["question_family"] == "attribution" and desensitized["plan"] == {"finance": True}
+    # authorized factory: kept as is (no desensitization anywhere)
+    assert raw["query"] == "华东工厂本月营收 2500000 为什么下降"
+    assert raw["grounding"]["violations"] == ["华东工厂毛利率 23.5% 未在数据中"]
+    assert "desensitized" not in raw
+
+
+async def test_no_factory_sample_metadata_query_is_desensitized():
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), input_text="华东工厂本月营收 2500000",
+                   metadata={"query": "华东工厂本月营收 2500000"})
+    meta = _meta(sink[0][1])
+    assert meta["desensitized"] is True and "华东" not in meta["query"] and "2500000" not in meta["query"]
+
+
 async def test_factory_sample_does_not_use_the_all_factories_names(monkeypatch):
     # a factory's sample answers to its own factory's names only (unchanged)
     from smartbi.services import distillation_capture as dc

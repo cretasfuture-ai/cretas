@@ -102,6 +102,32 @@ def _log_skip_once(reason: str, factory_id: Optional[str], detail: str = "") -> 
     )
 
 
+# Caller metadata keys holding a raw copy of the question (synthesis_engine
+# stores metadata.query = the user's question). Desensitized like input_text.
+_RAW_QUESTION_METADATA_KEYS = ("query",)
+
+
+def _desensitize_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Metadata of a desensitized sample must not keep raw text: the question
+    copies are desensitized, and the grounding check's violation list (raw
+    answer clauses / claimed figures) is reduced to its count."""
+    if not metadata:
+        return metadata
+    out = dict(metadata)
+    for key in _RAW_QUESTION_METADATA_KEYS:
+        value = out.get(key)
+        if isinstance(value, str) and value:
+            out[key] = desensitize_for_training(value, "")[0]
+    grounding = out.get("grounding")
+    if isinstance(grounding, dict) and "violations" in grounding:
+        grounding = dict(grounding)
+        violations = grounding.pop("violations")
+        grounding["violation_count"] = (
+            len(violations) if isinstance(violations, (list, tuple)) else int(bool(violations)))
+        out["grounding"] = grounding
+    return out
+
+
 def _request_factory_id() -> Optional[str]:
     """Authenticated tenant of the current request, or None outside a request."""
     try:
@@ -249,6 +275,7 @@ async def persist_distillation_sample(
                 if not keeps_raw(scope):
                     input_text, teacher_output = desensitize_for_training(
                         input_text, teacher_output)
+                    metadata = _desensitize_metadata(metadata)
                     tags[DESENSITIZED_KEY] = True
                 metadata = {**(metadata or {}), **tags}
             input_hash = compute_input_hash(input_text)

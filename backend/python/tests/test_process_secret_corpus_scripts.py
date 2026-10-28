@@ -98,6 +98,35 @@ async def test_judge_fetch_drops_rows_naming_a_process_secret_product(monkeypatc
     assert [r["id"] for r in await judge.fetch_crossfamily_rows(pool, 50)] == _KEPT
 
 
+async def test_judge_flags_and_reports_excluded_rows_so_they_are_not_refetched(monkeypatch, caplog):
+    judge = importlib.import_module("scripts.corpus_judge")
+    monkeypatch.setattr(judge, "all_protected_product_names", _names)
+    # the fetch SQL skips rows flagged by an earlier run
+    assert "process_secret_excluded" in judge._FETCH_SQL
+    assert "process_secret_excluded" in judge._CROSSFAMILY_FETCH_SQL
+    for fetch in (judge.fetch_unjudged_rows, judge.fetch_crossfamily_rows):
+        pool = _Pool({"smart_bi_distillation_samples": _db_rows()})
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="corpus_judge"):
+            await fetch(pool, 50)
+        marks = [(sql, args) for sql, args in pool.executed if "process_secret_excluded" in sql]
+        assert len(marks) == 1 and sorted(marks[0][1][0]) == [1, 2]
+        assert any("excluded 2 row(s)" in r.getMessage() for r in caplog.records)
+
+    # control: nothing protected -> no flag written, nothing reported
+    monkeypatch.setattr(judge, "all_protected_product_names", lambda *a, **k: _empty())
+    pool = _Pool({"smart_bi_distillation_samples": _db_rows()})
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="corpus_judge"):
+        assert len(await judge.fetch_unjudged_rows(pool, 50)) == len(_ROWS)
+    assert pool.executed == []
+    assert not any("excluded" in r.getMessage() for r in caplog.records)
+
+
+async def _empty():
+    return {}
+
+
 async def test_judge_fetch_aborts_when_the_name_lookup_fails(monkeypatch):
     judge = importlib.import_module("scripts.corpus_judge")
     monkeypatch.setattr(judge, "all_protected_product_names", _boom)

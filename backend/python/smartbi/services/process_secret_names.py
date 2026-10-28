@@ -95,23 +95,29 @@ def names_for_row(factory_id: Optional[str],
     return any_factory_names(by_factory)
 
 
+SAMPLE_TEXT_FIELDS: Tuple[str, ...] = ("input_text", "teacher_output")
+
+
 def row_names_protected_product(row: Mapping[str, Any],
-                                by_factory: Optional[Mapping[str, Iterable[str]]]) -> bool:
-    """True when a ``smart_bi_distillation_samples`` row (``factory_id`` /
-    ``input_text`` / ``teacher_output``) names a process-secret product."""
+                                by_factory: Optional[Mapping[str, Iterable[str]]],
+                                fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
+    """True when a ``smart_bi_distillation_samples`` row (``factory_id`` plus
+    the text ``fields``) names a process-secret product."""
     return mentions_any(names_for_row(row.get("factory_id"), by_factory),
-                        row.get("input_text"), row.get("teacher_output"))
+                        *(row.get(f) for f in fields))
 
 
 def drop_rows_naming_protected_products(
         rows: Iterable[Any],
-        by_factory: Optional[Mapping[str, Iterable[str]]]) -> List[Any]:
+        by_factory: Optional[Mapping[str, Iterable[str]]],
+        fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> List[Any]:
     """Rows that name no process-secret product (corpus scripts: LLM judge,
-    human review sampling, eval freeze). Rows must carry ``factory_id`` /
-    ``input_text`` / ``teacher_output``. ``by_factory`` comes from
+    human review sampling, eval freeze, synthesis report). Rows must carry
+    ``factory_id`` and the text ``fields``. ``by_factory`` comes from
     ``all_protected_product_names``: a failed lookup must abort the caller,
     never be read as "nothing protected"."""
-    return [r for r in rows if not row_names_protected_product(r, by_factory)]
+    fields = tuple(fields)
+    return [r for r in rows if not row_names_protected_product(r, by_factory, fields)]
 
 
 def clear_cache() -> None:

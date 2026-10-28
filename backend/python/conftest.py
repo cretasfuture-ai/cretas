@@ -47,7 +47,8 @@ def _no_process_secret_products_by_default():
     # them: importing corpus_judge here would bypass its test's import stubs.
     loaded_only = (("scripts.corpus_judge", "all_protected_product_names", _none_map),
                    ("scripts.corpus_g3_sample", "all_protected_product_names", _none_map),
-                   ("scripts.corpus_eval_freeze", "all_protected_product_names", _none_map))
+                   ("scripts.corpus_eval_freeze", "all_protected_product_names", _none_map),
+                   ("scripts.synthesis_family_report", "all_protected_product_names", _none_map))
     for module_name, attr, stub in targets:
         try:
             module = __import__(module_name, fromlist=[attr])
