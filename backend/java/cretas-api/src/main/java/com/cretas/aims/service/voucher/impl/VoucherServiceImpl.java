@@ -1088,7 +1088,8 @@ public class VoucherServiceImpl implements VoucherService {
      * <p>查 (factoryId, voucherDate.year, voucherDate.month) period.status:
      * <ul>
      *   <li>CLOSED → 抛 {@link com.cretas.aims.exception.PeriodClosedException}</li>
-     *   <li>OPEN / PENDING_CLOSE / 无 row → silently pass</li>
+     *   <li>OPEN / PENDING_CLOSE → pass</li>
+     *   <li>无 row: 其后已有 CLOSED 期间 → 拒绝 (S5-11, 不许倒签进已关的账); 否则视为 OPEN</li>
      * </ul>
      *
      * <p>{@code accountingPeriodService} null (测试 / 模块未启用) 或 voucherDate null
