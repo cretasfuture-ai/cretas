@@ -815,8 +815,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 movements.stream().flatMap(m -> m.productTypeIds().stream()).filter(Objects::nonNull)
                         .distinct().toList(),
                 "EXPORT /finance/quantity-amount-ledger"));
-        // 认不出来源的半成品批次: 当作受保护且无权
-        if (costMask != null) secretProducts.add(ProcessSecretCostMask.UNKNOWN_PRODUCT);
+        // 认不出来源的流水 (计划 / 批次查不到、来源编号认不出): 本厂有调用者看不到的保密产品时当作受保护且无权;
+        // 没有时不遮 (终审 L1)
+        if (costMask != null && movements.stream().anyMatch(m -> m.productTypeIds()
+                .contains(ProcessSecretCostMask.UNKNOWN_PRODUCT))
+                && costMask.anyHidden(factoryId, "EXPORT /finance/quantity-amount-ledger")) {
+            secretProducts.add(ProcessSecretCostMask.UNKNOWN_PRODUCT);
+        }
         // 平台 / 他厂 / 识别不出的调用者: 受保护产品的数量也不给
         boolean quantitiesHidden = !secretProducts.isEmpty() && costMask.quantitiesHidden(factoryId);
         // 同一品项一旦有一行被遮, 之后的结存也遮: 前后两次结存一减就是被遮的那一行

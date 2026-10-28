@@ -176,7 +176,9 @@ public class ExportExecutor {
     }
 
     /** 单价 / 单位成本类字段: 半成品、成品、跨计划领用的单价就是滚进配方金额的单位成本。 */
-    static final Set<String> UNIT_COST_FIELDS = Set.of("unitPrice", "unitCost");
+    static final Set<String> UNIT_COST_FIELDS = Set.of("unitPrice", "unitCost",
+            // 物料批次的 totalPrice / totalValue = 单价 × 入库量: 半成品批次的单价是滚进配方金额的单位成本 (终审 H1)
+            "totalPrice", "totalValue");
 
     /**
      * 这一行的成本要不要遮:
@@ -195,8 +197,13 @@ public class ExportExecutor {
         String productTypeId = row.path("productTypeId").asText(null);
         if (productTypeId != null && !productTypeId.isBlank()) linked.add(productTypeId);
         String planId = row.path("productionPlanId").asText(null);
-        Long productionBatchId = row.path("productionBatchId").canConvertToLong()
-                ? row.path("productionBatchId").asLong() : null;
+        Long productionBatchId = null;
+        if (row.path("productionBatchId").canConvertToLong()) {
+            productionBatchId = row.path("productionBatchId").asLong();
+        } else if (row.path("batchId").isIntegralNumber()) {
+            // 半成品库存 / 报工等实体的 batchId 是数字的生产批次 id (终审 M2); 文本的才是物料批次
+            productionBatchId = row.path("batchId").asLong();
+        }
         boolean hasLink = !linked.isEmpty() || (planId != null && !planId.isBlank()) || productionBatchId != null;
         if ((planId != null && !planId.isBlank()) || productionBatchId != null) {
             linked.addAll(processSecretCostMask.productsOf(factoryId, planId, productionBatchId, productCache));

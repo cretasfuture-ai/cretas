@@ -169,8 +169,20 @@ class ProcessSecretCostMaskTest {
 
     @Test
     void anUnidentifiableSourceCountsAsHidden() {
+        // 本厂有调用者看不到的保密产品时, 认不出归属按看不到处理
         assertThat(ProcessSecretCostMask.isHiddenAmong(java.util.Set.of(ProcessSecretCostMask.UNKNOWN_PRODUCT),
-                java.util.Set.of())).isTrue();
+                java.util.Set.of(SECRET))).isTrue();
+        // 阴性对照: 没有看不到的保密产品 (无保密产品的工厂 / 全有权的负责人), 认不出来源不遮 (终审 L1)
+        assertThat(ProcessSecretCostMask.isHiddenAmong(java.util.Set.of(ProcessSecretCostMask.UNKNOWN_PRODUCT),
+                java.util.Set.of())).isFalse();
         assertThat(ProcessSecretCostMask.isHiddenAmong(java.util.Set.of("PLAIN"), java.util.Set.of())).isFalse();
+    }
+
+    @Test
+    void aPlanOrBatchThatCannotBeFoundCountsAsUnknown() {
+        // 终审 M1: 软删 / 查不到的计划和生产批次不能当作「与保密无关」
+        java.util.Map<String, java.util.Set<String>> cache = new java.util.HashMap<>();
+        assertThat(mask.productsOf(F, "PLAN-GONE", null, cache)).containsExactly(ProcessSecretCostMask.UNKNOWN_PRODUCT);
+        assertThat(mask.productsOf(F, null, 404L, cache)).containsExactly(ProcessSecretCostMask.UNKNOWN_PRODUCT);
     }
 }

@@ -159,10 +159,14 @@ public class ProcessSecretCostMask {
      */
     public static final String UNKNOWN_PRODUCT = "__unknown_product__";
 
-    /** 这组产品里有没有调用者看不到的 (含认不出归属的占位)。 */
+    /**
+     * 这组产品里有没有调用者看不到的。认不出归属的占位只在「本厂有调用者看不到的保密产品」时才算看不到
+     * —— 没有保密产品的工厂、或对全部保密产品有权的人, 不因为认不出来源就被遮 (独立审查终审 L1)。
+     */
     public static boolean isHiddenAmong(Set<String> products, Set<String> hidden) {
         for (String product : products) {
-            if (UNKNOWN_PRODUCT.equals(product) || hidden.contains(product)) return true;
+            if (hidden.contains(product)) return true;
+            if (UNKNOWN_PRODUCT.equals(product) && !hidden.isEmpty()) return true;
         }
         return false;
     }
@@ -174,12 +178,12 @@ public class ProcessSecretCostMask {
         Set<String> cached = cache.get(key);
         if (cached != null) return cached;
         Set<String> found = new LinkedHashSet<>();
-        batchRepository.findByIdAndFactoryId(productionBatchId, factoryId).ifPresent(batch -> {
+        batchRepository.findByIdAndFactoryId(productionBatchId, factoryId).ifPresentOrElse(batch -> {
             if (batch.getProductTypeId() != null) found.add(batch.getProductTypeId());
             if (batch.getProductionPlanId() != null && !batch.getProductionPlanId().isBlank()) {
                 found.addAll(planProducts(factoryId, batch.getProductionPlanId(), cache));
             }
-        });
+        }, () -> found.add(UNKNOWN_PRODUCT));   // 查不到 (已软删 / 他厂): 认不出归属, 与 JSON 裁剪器同口径
         cache.put(key, found);
         return found;
     }
@@ -192,7 +196,7 @@ public class ProcessSecretCostMask {
                 .map(plan -> ProcessSecretPlanProducts.of(plan, recipeId -> recipeRepository.findById(recipeId)
                         .filter(r -> factoryId.equals(r.getFactoryId()))
                         .map(BomRecipe::getProductTypeId)))
-                .orElse(Set.of());
+                .orElse(Set.of(UNKNOWN_PRODUCT));   // 计划查不到 (已软删): 认不出归属
         cache.put(key, products);
         return products;
     }

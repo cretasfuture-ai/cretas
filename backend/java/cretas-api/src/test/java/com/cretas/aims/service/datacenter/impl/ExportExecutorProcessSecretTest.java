@@ -193,6 +193,11 @@ class ExportExecutorProcessSecretTest {
         plan.setFactoryId(F);
         plan.setProductTypeId(SECRET);
         when(plans.findByIdAndFactoryId("PLAN-9", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.ProductionPlan plainPlan = new com.cretas.aims.entity.ProductionPlan();
+        plainPlan.setId("PLAN-0");
+        plainPlan.setFactoryId(F);
+        plainPlan.setProductTypeId("PLAIN");
+        when(plans.findByIdAndFactoryId("PLAN-0", F)).thenReturn(Optional.of(plainPlan));
         List<Map<String, Object>> input = List.of(
                 row("productTypeId", "PLAIN", "productionPlanId", "PLAN-9", "unitCost", 12, "quantity", 3),
                 row("productTypeId", "PLAIN", "productionPlanId", "PLAN-0", "unitCost", 8, "quantity", 4));
@@ -231,5 +236,45 @@ class ExportExecutorProcessSecretTest {
             rows = executor.maskProcessSecret(rule, input);
         }
         assertThat(rows.get(0)).containsEntry("unitPrice", "已保密");
+    }
+
+    @Test
+    void materialBatchTotalsOfAProtectedPlansWipBatchAreMaskedButAPurchasesAreNot() {
+        // 终审 H1: totalPrice / totalValue = 单价 × 入库量
+        com.cretas.aims.entity.ProductionBatch source = new com.cretas.aims.entity.ProductionBatch();
+        source.setProductTypeId(SECRET);
+        when(batches.findByIdAndFactoryId(77L, F)).thenReturn(Optional.of(source));
+        List<Map<String, Object>> input = List.of(
+                row("batchNumber", "MB-W", "sourceDocType", "PRODUCTION_BATCH", "sourceDocId", "77",
+                        "unitPrice", 16.2, "totalPrice", 810, "totalValue", 810, "receiptQuantity", 50),
+                row("batchNumber", "MB-P", "sourceDocType", "PURCHASE_ORDER", "sourceDocId", "PO-1",
+                        "unitPrice", 7, "totalPrice", 700, "totalValue", 700, "receiptQuantity", 100));
+        List<Map<String, Object>> rows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            rows = executor.maskProcessSecret(rule, input);
+        }
+        assertThat(rows.get(0)).containsEntry("totalPrice", "已保密").containsEntry("totalValue", "已保密")
+                .containsEntry("receiptQuantity", 50);
+        assertThat(rows.get(1)).containsEntry("totalPrice", 700).containsEntry("totalValue", 700);
+    }
+
+    @Test
+    void aNumericBatchIdIsTheProductionBatchAndAConsumptionOfADeletedPlanIsMasked() {
+        // 终审 M2: 半成品库存的 batchId 是数字的生产批次 id; M1: 计划查不到 (已软删) 按认不出归属处理
+        com.cretas.aims.entity.ProductionBatch source = new com.cretas.aims.entity.ProductionBatch();
+        source.setProductTypeId(SECRET);
+        when(batches.findByIdAndFactoryId(77L, F)).thenReturn(Optional.of(source));
+        List<Map<String, Object>> input = List.of(
+                row("productTypeId", "WIP-SKU", "batchId", 77, "unitCost", 16.2),
+                row("productionPlanId", "PLAN-GONE", "unitPrice", 7, "totalCost", 70),
+                row("productTypeId", "PLAIN", "batchId", 88, "unitCost", 8));
+        when(batches.findByIdAndFactoryId(88L, F)).thenReturn(Optional.of(new com.cretas.aims.entity.ProductionBatch()));
+        List<Map<String, Object>> rows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            rows = executor.maskProcessSecret(rule, input);
+        }
+        assertThat(rows.get(0)).containsEntry("unitCost", "已保密");
+        assertThat(rows.get(1)).containsEntry("unitPrice", "已保密").containsEntry("totalCost", "已保密");
+        assertThat(rows.get(2)).as("普通批次照常").containsEntry("unitCost", 8);
     }
 }
