@@ -590,6 +590,7 @@ async def _visible_consumption_total(
     if scope.is_unavailable:
         return None, process_secret.rollup_annotation(scope, 0)
     total = Decimal("0")
+    contributed = False
     unresolved = 0
     for c in consumptions:
         if not scope.is_full:
@@ -602,6 +603,7 @@ async def _visible_consumption_total(
         tc = c.get("total_cost")
         if tc is not None:
             total += _to_decimal(tc)
+            contributed = True
     excluded = scope.excluded_product_ids(c.get("cost_product_type_id") for c in consumptions)
     annotation = process_secret.rollup_annotation(scope, len(excluded))
     if unresolved:
@@ -610,6 +612,11 @@ async def _visible_consumption_total(
                                     "note": process_secret.excluded_note(0)}
         annotation["unresolvedProductRowCount"] = unresolved
         annotation["note"] += f"；{unresolved} 条消耗无法确认所属产品，未计入"
+    if annotation is not None and not contributed:
+        # Everything costed was left out (protected / unresolved): the visible
+        # total is unknown, not 0 — a 0 would read as "no consumption" and
+        # drive turnover to 0 / days to 999 / a RED alert.
+        return None, annotation
     return total, annotation
 
 
@@ -620,7 +627,10 @@ def _consumption_hidden_metrics(current_inventory_value: Decimal, cost_scope: Op
     so publishing them would let the hidden consumption be backed out.
     Same 11-key MetricResult shape; ``alertLevel`` is null (nothing measured).
     """
-    reason = (cost_scope or {}).get("reason") or process_secret.REASON_FAILED
+    # Authorization failure carries a reason; a scoped caller whose costed
+    # consumption is entirely protected carries the 「不含 N 个保密产品」 note.
+    reason = ((cost_scope or {}).get("reason") or (cost_scope or {}).get("note")
+              or process_secret.REASON_FAILED)
     metrics = []
     for code, name, unit in (("TURNOVER_RATE", "库存周转率", "次/年"),
                              ("INVENTORY_DAYS", "库存天数", "天"),
@@ -1827,13 +1837,17 @@ def _generate_ai_insights(
         (m for m in kpi_cards if m.get("metricCode") == "TURNOVER_RATE"),
         None,
     )
+    # 工艺保密: the turnover metric's description carries 「不含 N 个保密产品」
+    # (or the authorization-failure reason); FULL callers have None → unchanged.
+    scope_note = turnover.get("description") if turnover is not None else None
+    note_suffix = f"（{scope_note}）" if scope_note else ""
     if turnover is not None and turnover.get("value") is not None:
         rate = _to_decimal(turnover["value"])
         if rate < _TURNOVER_RED:
             insights.append({
                 "level":            "RED",
                 "category":         "周转效率",
-                "message":          f"库存周转率仅 {_format_decimal_half_up(rate, 1)} 次/年，库存积压严重",
+                "message":          f"库存周转率仅 {_format_decimal_half_up(rate, 1)} 次/年，库存积压严重{note_suffix}",
                 "relatedEntity":    None,
                 "actionSuggestion": "建议减少采购量，加快库存消化，优化安全库存设置",
             })
@@ -1841,10 +1855,19 @@ def _generate_ai_insights(
             insights.append({
                 "level":            "YELLOW",
                 "category":         "周转效率",
-                "message":          f"库存周转率 {_format_decimal_half_up(rate, 1)} 次/年，有优化空间",
+                "message":          f"库存周转率 {_format_decimal_half_up(rate, 1)} 次/年，有优化空间{note_suffix}",
                 "relatedEntity":    None,
                 "actionSuggestion": "建议优化采购批次和频率，提高周转效率",
             })
+    elif turnover is not None and scope_note:
+        # Consumption hidden by 工艺保密 → turnover not computed; say so, no alert.
+        insights.append({
+            "level":            "INFO",
+            "category":         "周转效率",
+            "message":          f"库存周转率未计算：{scope_note}",
+            "relatedEntity":    None,
+            "actionSuggestion": None,
+        })
 
     # Insight 3: Health score (only emits when score >= 80, NOT for low scores)
     health_score = next(

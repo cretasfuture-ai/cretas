@@ -706,3 +706,119 @@ def test_unified_dashboard_route_passes_a_resolver_to_inventory_health(java, mon
     assert r.status_code == 200, r.text
     assert fake.calls and fake.calls[0]["bearer"] == f"Bearer {token}"
     assert seen["scope"].allows(PUBLIC) and not seen["scope"].allows(SECRET)
+
+
+# ─── Review follow-ups: raw ids (M1), empty sums (L1), quality summary (L3) ──
+
+
+async def test_protected_id_with_whitespace_is_never_trimmed(java, gold):
+    """A protected id stored as "P1 " must not be asked/matched as "P1".
+
+    The Java fake protects the raw "P1 " only, so a trimmed "P1" would be
+    judged unprotected and allowed — the raw row must still stay hidden.
+    """
+    from smartbi.api import factory_production_gold as g
+    fake = java(protected=frozenset({"P1 "}))
+    resolver = cost_scope.CostScopeResolver(_req(), FACTORY)
+    scope = await resolver.scope_for(["P1 ", PUBLIC])
+    assert not scope.allows("P1 ") and scope.allows(PUBLIC)
+    assert all("P1" not in call["ids"] for call in fake.calls)  # never sent trimmed
+    assert scope.excluded_product_ids(["P1 ", PUBLIC]) == ["P1 "]
+
+    rows = [dict(r, product_type_id="P1 ") if r["product_type_id"] == SECRET else r
+            for r in PRODUCT_ROWS]
+    gold(product_rows=rows)
+    products = (await g.product_cost_compare(_req(), None, None))["data"]["products"]
+    padded = next(p for p in products if p["productTypeId"] == "P1 ")
+    assert padded["totalCost"] is None and padded["costPerUnit"] is None
+    assert padded["totalActualQty"] == pytest.approx(35.0)
+    assert padded["processSecret"]["visibility"] == "TOTALS_ONLY"
+
+
+def _install_consumptions(monkeypatch, rows):
+    from smartbi_compat.api import analysis_inventory as mod
+
+    async def inv_total(factory_id):
+        return Decimal("10000")
+
+    async def consumptions(factory_id, start_date, end_date):
+        return rows
+
+    async def batches(factory_id, status="AVAILABLE"):
+        return []
+
+    monkeypatch.setattr(mod, "_query_inventory_value_total", inv_total)
+    monkeypatch.setattr(mod, "_query_material_consumptions_in_range", consumptions)
+    monkeypatch.setattr(mod, "_query_material_batches_by_status", batches)
+    return mod
+
+
+async def test_inventory_entirely_protected_consumption_is_null_not_zero(java, monkeypatch):
+    mod = _install_consumptions(monkeypatch, [_cons(SECRET, "5000")])
+    java()
+    resolver = cost_scope.CostScopeResolver(_req(), FACTORY)
+    result = await mod._get_turnover_mode(FACTORY, date(2026, 5, 1), date(2026, 5, 31),
+                                          cost_resolver=resolver)
+    by = {m["metricCode"]: m for m in result["metrics"]}
+    for code in ("CONSUMPTION_AMOUNT", "TURNOVER_RATE", "INVENTORY_DAYS"):
+        assert by[code]["value"] is None, code          # not 0 / 999
+        assert by[code]["alertLevel"] is None, code     # no RED from an unknown
+        assert by[code]["description"] == "不含 1 个保密产品"
+    assert result["trendChart"]["data"][0]["consumption"] is None
+    assert result["costScope"]["excludedProtectedProductCount"] == 1
+
+    insights = mod._generate_ai_insights([], result["metrics"], FACTORY)
+    turnover = [i for i in insights if i["category"] == "周转效率"]
+    assert [i["level"] for i in turnover] == ["INFO"]
+    assert "不含 1 个保密产品" in turnover[0]["message"]
+    assert all("库存积压严重" not in i["message"] for i in insights)
+
+
+async def test_inventory_scoped_red_insight_carries_the_note_full_does_not(java, monkeypatch):
+    mod = _install_consumptions(monkeypatch, [_cons(PUBLIC, "100"), _cons(SECRET, "5000")])
+    java()
+    scoped = await mod._get_turnover_analysis(FACTORY, date(2026, 5, 1), date(2026, 5, 31),
+                                              cost_resolver=cost_scope.CostScopeResolver(_req(), FACTORY))
+    red = [i for i in mod._generate_ai_insights([], scoped, FACTORY) if i["level"] == "RED"]
+    assert red and "库存积压严重" in red[0]["message"] and "不含 1 个保密产品" in red[0]["message"]
+    java(granted={SECRET})
+    full = await mod._get_turnover_analysis(FACTORY, date(2026, 5, 1), date(2026, 5, 31),
+                                            cost_resolver=cost_scope.CostScopeResolver(_req(), FACTORY))
+    assert all("保密" not in i["message"] for i in mod._generate_ai_insights([], full, FACTORY))
+
+
+async def test_inventory_scoped_caller_with_no_consumption_keeps_zero(java, monkeypatch):
+    """Control: nothing excluded and nothing consumed is a real 0 (unchanged)."""
+    mod = _install_consumptions(monkeypatch, [])
+    java()
+    metrics = await mod._get_turnover_analysis(FACTORY, date(2026, 5, 1), date(2026, 5, 31),
+                                               cost_resolver=cost_scope.CostScopeResolver(_req(), FACTORY))
+    by = {m["metricCode"]: m for m in metrics}
+    assert by["CONSUMPTION_AMOUNT"]["value"] == 0 and by["INVENTORY_DAYS"]["value"] == 999
+
+
+async def test_quality_cost_null_when_no_allowed_row_has_cost(java, gold):
+    from smartbi_compat.api.analysis_quality import _factory_quality_dispatch
+    java()
+    gold(product_rows=[_gold(D1, PUBLIC, "10", None, None, None, None),
+                       _gold(D1, SECRET, "20", 600, 200, 50, 50)])
+    resolver = cost_scope.CostScopeResolver(_req(), FACTORY)
+    result = await _factory_quality_dispatch(FACTORY, D1, D2, "rework", cost_resolver=resolver)
+    metric, chart = _quality_cost(result)
+    assert metric["value"] is None and chart["cost"] is None  # not Decimal 0
+    assert result["costScope"]["excludedProtectedProductCount"] == 1
+
+
+async def test_quality_summary_total_cost_is_overwritten_with_scoped_value():
+    from smartbi_compat.api import analysis_quality as q
+    scoped = cost_scope.CostScope(cost_scope.SCOPED, frozenset({PUBLIC, PUBLIC2}))
+    summary = q._calculate_factory_quality_summary(PRODUCT_ROWS)
+    assert summary["totalCost"] == Decimal("1870")  # the spread full total, before scoping
+    q._scope_quality_cost(summary, PRODUCT_ROWS, scoped)
+    expected = sum(r["total_cost"] for r in PRODUCT_ROWS
+                   if r["product_type_id"] in {PUBLIC, PUBLIC2} and r["total_cost"] is not None)
+    assert summary["qualityCost"] == expected == Decimal("270")
+    assert summary["totalCost"] == expected
+    failed = q._calculate_factory_quality_summary(PRODUCT_ROWS)
+    q._scope_quality_cost(failed, PRODUCT_ROWS, cost_scope.unavailable())
+    assert failed["totalCost"] is None and failed["qualityCost"] is None

@@ -46,11 +46,22 @@ REASON_NOT_RUN = "成本授权未执行，成本金额已隐藏"
 REASON_FAILED = "成本授权失败，成本金额已隐藏"
 
 
-def _norm(product_id: Any) -> Optional[str]:
+def _raw(product_id: Any) -> Optional[str]:
+    """The product id exactly as stored; ``None`` = row tied to no product.
+
+    ⛔ Never trimmed: a protected id stored as ``"P1 "`` must not be asked
+    about (and matched) as ``"P1"`` — Java could judge the trimmed id
+    unprotected and the raw row would leak.
+    """
     if product_id is None:
         return None
-    text = str(product_id).strip()
-    return text or None
+    return product_id if isinstance(product_id, str) else str(product_id)
+
+
+def _canonical(product_id: str) -> bool:
+    """Ids with surrounding whitespace (or empty) are never sent to Java and
+    never allowed for a scoped caller (fail closed)."""
+    return bool(product_id) and product_id == product_id.strip()
 
 
 @dataclass(frozen=True)
@@ -71,14 +82,14 @@ class CostScope:
         """May this caller see the cost amount of a row of ``product_id``?"""
         if self.status == UNAVAILABLE:
             return False
-        pid = _norm(product_id)
+        pid = _raw(product_id)
         if pid is None or self.status == FULL:
             return True
-        return pid in self.allowed_product_ids
+        return _canonical(pid) and pid in self.allowed_product_ids
 
     def excluded_product_ids(self, product_ids: Iterable[Any]) -> list[str]:
         """Distinct product ids whose costs this caller may not see."""
-        ids = {p for p in (_norm(v) for v in product_ids) if p is not None}
+        ids = {p for p in (_raw(v) for v in product_ids) if p is not None}
         if self.status == FULL:
             return []
         return sorted(p for p in ids if not self.allows(p))
@@ -107,10 +118,11 @@ class CostScopeResolver:
     async def scope_for(self, product_ids: Iterable[Any]) -> CostScope:
         if self._failure:
             return unavailable(self._failure)
-        ids = {p for p in (_norm(v) for v in product_ids) if p is not None}
+        ids = {p for p in (_raw(v) for v in product_ids) if p is not None}
         if self._full:
             return CostScope(FULL, frozenset(ids))
-        pending = sorted(ids - self._decided.keys())
+        # Raw ids only; non-canonical ids are denied without asking Java.
+        pending = sorted(p for p in ids - self._decided.keys() if _canonical(p))
         if pending or self._full is None:
             try:
                 authority = await cost_authorization.authorize_batches(

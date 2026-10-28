@@ -224,16 +224,23 @@ def _scope_quality_cost(summary: dict, rows: list, scope) -> Optional[dict]:
         return None
     if scope.is_unavailable:
         summary["qualityCost"] = None
+        # The spread production summary also carries the full factory total.
+        summary["totalCost"] = None
         return process_secret.rollup_annotation(scope, 0)
     excluded = scope.excluded_product_ids(r["product_type_id"] for r in rows)
     if not excluded:
         return None
-    allowed_rows = [r for r in rows if scope.allows(r["product_type_id"])]
-    # No visible product at all: there is no visible total (None, not 0).
+    # Only allowed rows that actually carry a cost: when none does there is no
+    # visible total (None, not the Decimal 0 _to_decimal_or_zero would give).
+    costed_rows = [r for r in rows
+                   if scope.allows(r["product_type_id"]) and r["total_cost"] is not None]
     summary["qualityCost"] = (
-        factory_gold._calculate_factory_production_rates(allowed_rows)["totalCost"]
-        if allowed_rows else None
+        factory_gold._calculate_factory_production_rates(costed_rows)["totalCost"]
+        if costed_rows else None
     )
+    # ⛔ summary["totalCost"] came from **production_summary (all products);
+    # overwrite it so no consumer can read the full total off the summary.
+    summary["totalCost"] = summary["qualityCost"]
     return process_secret.rollup_annotation(scope, len(excluded))
 
 
