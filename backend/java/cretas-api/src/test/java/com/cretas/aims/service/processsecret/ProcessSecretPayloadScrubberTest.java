@@ -428,6 +428,77 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void costTotalsThatIncludeAutomaticLinesAreHiddenFromUnauthorizedAccounts() throws Exception {
+        // Steve 2026-10-28 选 A: 调料小计 − 0 = 自动行金额, ÷ 单价 ÷ 投入 = 配比; 总成本 − 可见各项同理
+        securedPlan("plan-12");
+        String body = "{'orderId':'o1','seasoningCost':12.5,'rawMaterialCost':800,'laborCost':60,'totalCost':872.5,"
+                + "'perBoxCost':8.725,'grossProfit':128,'grossMargin':12.8,'totalAmount':1000,'boxCount':100,"
+                + "'missingCostItemCount':0,"
+                + "'rawMaterialDetails':[{'materialName':'牛肉','quantity':115,'unitPrice':7,'amount':805,'automatic':false},"
+                + "{'materialName':'盐','quantity':0.1725,'unitPrice':2,'amount':0.345,'automatic':true}],"
+                + "'laborDetails':[{'processName':'卤制','amount':60,'laborCost':60}],"
+                + "'packagingCost':{'total':3}}";
+
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-12"),
+                "GET /production/orders/o1/cost-breakdown", false);
+        for (String field : List.of("seasoningCost", "rawMaterialCost", "laborCost", "totalCost", "perBoxCost",
+                "grossProfit", "grossMargin")) {
+            assertThat(operator.path(field).isNull()).as(field).isTrue();
+        }
+        assertThat(operator.path("totalAmount").asInt()).as("销售额与配比无关").isEqualTo(1000);
+        assertThat(operator.path("boxCount").asInt()).isEqualTo(100);
+        assertThat(operator.path("missingCostItemCount").asInt()).as("计数不是金额").isZero();
+        assertThat(operator.at("/rawMaterialDetails/0/amount").asInt()).as("人工行金额是实际值").isEqualTo(805);
+        assertThat(operator.at("/rawMaterialDetails/1/amount").isNull()).isTrue();
+        // 阴性对照: 不含自动行的下层对象, 金额照给
+        assertThat(operator.at("/laborDetails/0/laborCost").asInt()).isEqualTo(60);
+        assertThat(operator.path("processSecret").path("hiddenFields").toString()).contains("totalCost");
+
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-12"),
+                "GET /production/orders/o1/cost-breakdown", false);
+        assertThat(owner.path("totalCost").decimalValue()).isEqualByComparingTo("872.5");
+        assertThat(owner.path("seasoningCost").decimalValue()).isEqualByComparingTo("12.5");
+
+        // 阴性对照: 全是人工投料的单子, 合计照给
+        ObjectNode manualOnly = tree("{'totalCost':805,'rawMaterialDetails':[{'amount':805,'automatic':false}]}");
+        scrubber.scrub(manualOnly, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-12"),
+                "GET /production/orders/o2/cost-breakdown", false);
+        assertThat(manualOnly.path("totalCost").asInt()).isEqualTo(805);
+    }
+
+    @Test
+    void anExitCanDeclareThatATotalWithoutLinesIncludesAutomaticCost() throws Exception {
+        securedPlan("plan-13");
+        String body = "[{'batchNumber':'B1','materialCost':812,'automaticCostIncluded':true},"
+                + "{'batchNumber':'B2','materialCost':805,'automaticCostIncluded':false}]";
+        JsonNode operator = json.readTree(body.replace('\'', '"'));
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-13"),
+                "GET /processing/batches", false);
+        assertThat(operator.at("/0/materialCost").isNull()).isTrue();
+        assertThat(operator.at("/1/materialCost").asInt()).isEqualTo(805);
+    }
+
+    @Test
+    void bomAchievementTotalsAndOverallRateAreHiddenWhenAnItemIsAutomatic() throws Exception {
+        // 计划量 × 单价可见, 总达成率 = 实际总成本 ÷ 计划总成本 → 一乘就是含自动行的实际总成本
+        securedPlan("plan-14");
+        String body = "{'items':[{'materialTypeName':'牛肉','plannedQty':115,'actualQty':115,'unitPrice':7,'cost':805,"
+                + "'automatic':false},{'materialTypeName':'盐','plannedQty':0.17,'actualQty':0.1725,'unitPrice':2,"
+                + "'cost':0.345,'variancePercent':1.5,'automatic':true}],"
+                + "'totalPlannedCost':805.34,'totalActualCost':805.345,'overallAchievementRate':100.0}";
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-14"),
+                "GET /material-consumptions/batch/1/summary", false);
+        assertThat(operator.path("totalPlannedCost").isNull()).isTrue();
+        assertThat(operator.path("totalActualCost").isNull()).isTrue();
+        assertThat(operator.path("overallAchievementRate").isNull()).isTrue();
+        assertThat(operator.at("/items/0/cost").asInt()).as("人工行").isEqualTo(805);
+        assertThat(operator.at("/items/0/plannedQty").asInt()).as("本单总量档").isEqualTo(115);
+    }
+
+    @Test
     void rowHistorySummariesWithBlendSnapshotsAreHiddenAndPlatformStaffGetNoSummaryText() throws Exception {
         // 复核 M3: 配比核对快照 (recipeSharePercent) 也写进了摘要文字; 平台从摘要里能读到本单总量
         securedPlan("plan-11");

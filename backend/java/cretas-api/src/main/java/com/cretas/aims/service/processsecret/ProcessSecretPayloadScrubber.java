@@ -50,6 +50,9 @@ public class ProcessSecretPayloadScrubber {
 
     public enum Level { FULL, TOTALS_ONLY, NONE }
 
+    /** 出口显式声明「这个对象的成本合计含按配比算出的金额」(下层不带明细行时用)。 */
+    public static final String AUTOMATIC_COST_FLAG = "automaticCostIncluded";
+
     /**
      * 配比 / 单位用量 / 转换率 / 标准出成率: 受限 (含「本单总量」档) 一律去掉。
      * 新增此类字段要加在这里, ProcessSecretDataLayerContractTest 会扫描 DTO 字段名逼着归类。
@@ -414,16 +417,33 @@ public class ProcessSecretPayloadScrubber {
             return null;
         }
 
-        void collectAttributions(JsonNode node, Key inherited) {
+        /** @return 这一层 (含下层) 是否有按配比算出的行 */
+        boolean collectAttributions(JsonNode node, Key inherited) {
             if (node instanceof ObjectNode object) {
                 Key own = ownKey(object, inherited);
                 Key effective = own != null ? own : inherited;
                 if (own != null) attributed.add(own);
-                object.fields().forEachRemaining(e -> collectAttributions(e.getValue(), effective));
+                boolean below = false;
+                List<JsonNode> children = new ArrayList<>();
+                object.elements().forEachRemaining(children::add);
+                for (JsonNode child : children) below |= collectAttributions(child, effective);
+                if (below || object.path(AUTOMATIC_COST_FLAG).asBoolean(false)) costIncludesAutomatic.add(object);
+                return below || isRecipeDerived(object) || isReworkDeduction(object);
             } else if (node instanceof ArrayNode array) {
-                array.forEach(child -> collectAttributions(child, inherited));
+                boolean below = false;
+                for (JsonNode child : array) below |= collectAttributions(child, inherited);
+                return below;
             }
+            return false;
         }
+
+        /**
+         * 下层含按配比算出的行 (或出口显式标了 {@value #AUTOMATIC_COST_FLAG}) 的对象: 它的成本合计
+         * (调料 / 包材 / 原料小计、总成本、单位成本) 和由它算出的利润 / 毛利, 减去可见的人工行就是
+         * 自动行的金额, 再 ÷ 单价 ÷ 投入就是配比 (Steve 2026-10-28 选 A: 无授权账号一律「已保密」)。
+         */
+        final Set<ObjectNode> costIncludesAutomatic =
+                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
         void decideFallback() {
             if (restrictedReads.isEmpty()) return;
@@ -536,6 +556,9 @@ public class ProcessSecretPayloadScrubber {
                         && !DERIVED_LINE_ACTUAL_FIELDS.contains(name)) ratioFields.add(name);
                 else if (reworkDeduction && REWORK_DERIVED_FIELDS.contains(name)) ratioFields.add(name);
                 else if (SHARE_FIELDS.contains(name) && sharesWithAutomaticSiblings.contains(object)) ratioFields.add(name);
+                else if (value.isNumber() && isCostTotalField(name) && costIncludesAutomatic.contains(object)) {
+                    ratioFields.add(name);
+                }
                 // 操作记录摘要是文字: 本单总量也写在里面, 无权档整段不给
                 else if ("diffSummary".equals(name) && value.isTextual()) quantityFields.add(name);
                 else if (SINGLE_RUN_ACTUAL_FIELDS.contains(name)) {
@@ -627,6 +650,19 @@ public class ProcessSecretPayloadScrubber {
                 || name.equals("id") || name.endsWith("Id") || name.endsWith("Ids") || name.equals("version")
                 || name.endsWith("Version") || name.endsWith("Order") || name.equals("seq") || name.endsWith("Seq")
                 || name.endsWith("Count") || name.endsWith("No") || name.endsWith("Number");
+    }
+
+    /**
+     * 成本合计类字段: 名字含 cost / profit / margin / achievement / variance (总成本、单位成本、毛利、毛利率,
+     * 以及「实际成本 ÷ 计划成本」的达成率和差异 —— 计划侧可见时它们一样能反推自动行金额)。
+     * 销售额、单价不算 (与配比无关); 计数 / 标识类数字不算。
+     */
+    static final List<String> COST_TOTAL_PARTS = List.of("cost", "profit", "margin", "achievement", "variance");
+
+    static boolean isCostTotalField(String name) {
+        if (isIdentifierLike(name)) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return COST_TOTAL_PARTS.stream().anyMatch(lower::contains);
     }
 
     static boolean isContextualRatioField(ObjectNode object, String name) {
