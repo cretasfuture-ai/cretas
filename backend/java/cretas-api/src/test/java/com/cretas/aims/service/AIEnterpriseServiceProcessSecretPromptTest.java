@@ -379,4 +379,108 @@ class AIEnterpriseServiceProcessSecretPromptTest {
         verify(results, never()).findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(anyString(), any());
         sentToModel(1);
     }
+
+    // ---------------- 报告列表 / 详情 (共享的 AI 分析条目) ----------------
+
+    /** 报告读取走真实的经营报告投影 / 编解码 (非快照条目原来会把原文整段给出去)。 */
+    private AIEnterpriseService readableService(ProcessSecretLlmCostScope scope) throws Exception {
+        AIEnterpriseService service = service(scope);
+        com.cretas.aims.service.reports.OperatingReportCodec codec =
+                new com.cretas.aims.service.reports.OperatingReportCodec(mapper);
+        OperatingReportGenerator operating = (OperatingReportGenerator) ReflectionTestUtils.getField(service, "operatingReports");
+        when(operating.usesLegacyReportContract(anyString())).thenReturn(false);
+        com.cretas.aims.service.reports.OperatingReportProjection projection =
+                new com.cretas.aims.service.reports.OperatingReportProjection(codec);
+        ReflectionTestUtils.setField(projection, "secretScope", scope);
+        ReflectionTestUtils.setField(service, "operatingProjection", projection);
+        ReflectionTestUtils.setField(service, "operatingCodec", codec);
+        when(results.findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(eq(FACTORY), any()))
+                .thenAnswer(inv -> new ArrayList<>(stored.values()));
+        when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(), any())).thenReturn(enhancedRows());
+        return service;
+    }
+
+    private MobileDTO.AICostAnalysisResponse detailAs(AIEnterpriseService service, long id,
+                                                      com.cretas.aims.security.AuthenticatedActor actor) {
+        try (var ignored = as(actor)) {
+            return service.getReportDetail(FACTORY, id, true);
+        }
+    }
+
+    private MobileDTO.AIReportSummary summaryAs(AIEnterpriseService service, long id,
+                                               com.cretas.aims.security.AuthenticatedActor actor) {
+        try (var ignored = as(actor)) {
+            return service.getReportList(FACTORY, new MobileDTO.AIReportListRequest(), true).getReports().stream()
+                    .filter(r -> r.getId() == id).findFirst().orElseThrow();
+        }
+    }
+
+    @Test
+    void theOwnersAnalysisIsWithheldFromAnUnauthorizedColleagueInDetailAndList() throws Exception {
+        AIEnterpriseService service = readableService(protectedScope());
+        timeRangeAs(service, FACTORY, owner());   // 负责人的分析: 含保密产品成本
+        long id = stored.keySet().iterator().next();
+
+        MobileDTO.AICostAnalysisResponse colleague = detailAs(service, id, sameFactoryUser());
+        assertThat(colleague.getAnalysis()).isEqualTo(ProcessSecretLlmCostScope.READ_WITHHELD);
+        assertThat(colleague.getReportAnalysis()).isNull();
+        MobileDTO.AIReportSummary colleagueRow = summaryAs(service, id, sameFactoryUser());
+        assertThat(colleagueRow.getSummaryText()).isEqualTo(ProcessSecretLlmCostScope.READ_WITHHELD);
+        assertThat(colleagueRow.getFinancialSummaryText()).isNull();
+        assertThat(detailAs(service, id, platform()).getAnalysis()).isEqualTo(ProcessSecretLlmCostScope.READ_WITHHELD);
+
+        // 阳性对照: 负责人 / 被授权人照常看到原文
+        assertThat(detailAs(service, id, owner()).getReportAnalysis()).isEqualTo("新分析");
+        assertThat(detailAs(service, id, grantee()).getReportAnalysis()).isEqualTo("新分析");
+        assertThat(summaryAs(service, id, grantee()).getFinancialSummaryText()).isEqualTo("新分析");
+    }
+
+    @Test
+    void anAnalysisMadeForAnUnauthorizedCallerIsReadableByEveryone() throws Exception {
+        AIEnterpriseService service = readableService(protectedScope());
+        timeRangeAs(service, FACTORY, sameFactoryUser());   // 无权视角生成: 不含保密产品成本
+        long id = stored.keySet().iterator().next();
+
+        assertThat(detailAs(service, id, sameFactoryUser()).getReportAnalysis()).isEqualTo("新分析");
+        assertThat(detailAs(service, id, owner()).getReportAnalysis()).isEqualTo("新分析");
+    }
+
+    @Test
+    void oldRowsWithoutAStampAreOnlyForFullyAuthorizedReaders() throws Exception {
+        AIEnterpriseService service = readableService(protectedScope());
+        AIAnalysisResult old = AIAnalysisResult.builder().id(900L).factoryId(FACTORY).reportType("time_range")
+                .analysisText("旧分析: " + SECRET_NAME + " 成本 " + SECRET_COST).periodStart(START).periodEnd(END)
+                .expiresAt(LocalDateTime.now().plusDays(3)).build();
+        stored.put(900L, old);
+
+        assertThat(detailAs(service, 900L, sameFactoryUser()).getAnalysis()).isEqualTo(ProcessSecretLlmCostScope.READ_WITHHELD);
+        assertThat(summaryAs(service, 900L, sameFactoryUser()).toString()).doesNotContain(SECRET_COST.toPlainString());
+        assertThat(detailAs(service, 900L, owner()).getReportAnalysis()).contains(SECRET_COST.toPlainString());
+        // 旧条目不删不改
+        assertThat(stored.get(900L).getAnalysisText()).contains(SECRET_COST.toPlainString());
+    }
+
+    @Test
+    void anotherFactoryStillCannotOpenTheReport() throws Exception {
+        AIEnterpriseService service = readableService(protectedScope());
+        timeRangeAs(service, FACTORY, owner());
+        long id = stored.keySet().iterator().next();
+
+        try (var ignored = as(otherFactoryUser())) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.getReportDetail(OTHER_FACTORY, id, true))
+                    .hasMessageContaining("无权访问此报告");
+        }
+    }
+
+    @Test
+    void theCallersSecrecyViewIsDecidedOnceAroundTheModelCall() throws Exception {
+        ProcessSecretLlmCostScope spied = org.mockito.Mockito.spy(protectedScope());
+        AIEnterpriseService service = service(spied);
+        when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(), any())).thenReturn(enhancedRows());
+
+        timeRangeAs(service, FACTORY, owner());
+
+        verify(spied, times(1)).readerView(FACTORY);   // 读缓存 / 写缓存 / 打戳共用这一次判定
+        sentToModel(1);
+    }
 }

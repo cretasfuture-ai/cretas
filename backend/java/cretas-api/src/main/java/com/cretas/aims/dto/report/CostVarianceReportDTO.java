@@ -50,6 +50,12 @@ public class CostVarianceReportDTO {
     private String comparabilityReason;
 
     /**
+     * 工艺保密: 当前调用者无权查看部分保密产品时, 实际成本合计只算他能看的批次, 这里是「不含 N 个保密产品」的说明;
+     * 能看全时为 null。
+     */
+    private String processSecretNote;
+
+    /**
      * 工厂ID
      */
     private String factoryId;

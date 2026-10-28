@@ -138,4 +138,44 @@ class OperatingReportSecretMaskTest {
                     .doesNotContain(OperatingReportCodec.PROCESS_SECRET_MASK);
         }
     }
+
+    private OperatingReportSnapshot maskedFor(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope scope,
+                                              AuthenticatedActor actor) {
+        OperatingReportProjection projection = new OperatingReportProjection(codec);
+        ReflectionTestUtils.setField(projection, "secretScope", scope);
+        try (var ignored = as(actor)) {
+            return projection.maskForCaller(codec.decode(storedReport().getAnalysisText()).orElseThrow(), FACTORY);
+        }
+    }
+
+    @Test
+    void maskedRowsMoveToTheEndOfEveryRankingSoTheirPositionDoesNotLeakTheMargin() {
+        OperatingReportSnapshot masked = maskedFor(protectedScope(), sameFactoryUser());
+
+        for (OperatingReportSnapshot.Section section : masked.sections()) {
+            if (!OperatingReportProjection.PRODUCT_RANK_SECTIONS.contains(section.id())) continue;
+            List<OperatingReportSnapshot.Metric> metrics = section.metrics();
+            // 保密产品原本在高毛利率榜第 2 位 (22.22% 介于 58.85% 与 13.58% 之间), 遮挡后必须排在最后两项
+            assertThat(metrics.subList(metrics.size() - 2, metrics.size()))
+                    .as("section %s", section.id())
+                    .allSatisfy(m -> assertThat(m.id()).contains("." + SECRET + "."))
+                    .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.PROCESS_SECRET_MASK));
+            assertThat(metrics.subList(0, metrics.size() - 2)).noneSatisfy(m -> assertThat(m.id()).contains("." + SECRET + "."));
+        }
+    }
+
+    @Test
+    void theMaskUsesThePlanAwareScopeLikeThePromptDoes() {
+        // 多产出计划锚在原料 RAW-ANCHOR 上、目标成品是保密产品: 锚点那一行 (与提示词同口径) 也遮
+        com.cretas.aims.entity.ProductionPlan anchorPlan = plan("PL-MULTI", NORMAL2, null);
+        anchorPlan.setTargetFinishedGoodIds(List.of(SECRET));
+        OperatingReportSnapshot masked = maskedFor(scope(java.util.Set.of(SECRET), List.of(anchorPlan)), sameFactoryUser());
+
+        List<OperatingReportSnapshot.Metric> high = masked.sections().stream()
+                .filter(s -> s.id().equals("marginHigh")).findFirst().orElseThrow().metrics();
+        assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL2 + "."))
+                .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.PROCESS_SECRET_MASK));
+        assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL + "."))
+                .allSatisfy(m -> assertThat(m.value()).isNotNull());
+    }
 }

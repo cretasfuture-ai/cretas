@@ -38,6 +38,40 @@ public class ProcessSecretLlmCostScope {
 
     public static final String WITHHELD_REASON = "该产品工艺已设为保密，当前账号无权查看其成本，未提供给 AI 分析";
 
+    /** 共享的 AI 分析 / 报告条目对当前读者不可见时的占位 (与其他页面「已保密」一致)。 */
+    public static final String READ_WITHHELD = "已保密（该分析含工艺保密产品的数据，当前账号无权查看）";
+
+    /**
+     * 当前读者 / 调用者在本厂的保密视角 (一次判定, 多处复用)。
+     * {@code tier}: 共享缓存档位; {@code stamp}: 给新生成的分析条目打的戳 (生成时的保密产品集合 + 生成者可完整查看的集合)。
+     */
+    public record ReaderView(boolean factoryHasProtected, String protectedHash, Set<String> fullView, boolean fullForAll) {
+        public static final ReaderView NO_PROTECTED = new ReaderView(false, "", Set.of(), true);
+
+        /** 没有保密产品 = 空串 (沿用原缓存); 否则 = 本厂保密产品集合 + 可完整查看集合 的稳定哈希。 */
+        public String tier() {
+            return factoryHasProtected ? "ps-" + sha256(protectedHash + "|" + String.join(",", fullView)).substring(0, 16) : "";
+        }
+
+        /** 新生成条目的戳; 没有保密产品时为 null (不需要)。 */
+        public String stamp() {
+            return factoryHasProtected ? protectedHash + ";" + String.join(",", fullView) : null;
+        }
+
+        /**
+         * 这个读者能不能看一条按 {@link #stamp()} 生成的共享条目: 没有保密产品 / 读者能看全 → 能 (含没有戳的旧条目);
+         * 否则只有戳在、保密产品集合没变、且生成者能看的保密产品读者都能看, 才能。
+         */
+        public boolean mayRead(String rowStamp) {
+            if (!factoryHasProtected || fullForAll) return true;
+            if (rowStamp == null || rowStamp.indexOf(';') < 0) return false;
+            String hash = rowStamp.substring(0, rowStamp.indexOf(';'));
+            String ids = rowStamp.substring(rowStamp.indexOf(';') + 1);
+            if (!hash.equals(protectedHash)) return false;
+            return ids.isEmpty() || fullView.containsAll(List.of(ids.split(",")));
+        }
+    }
+
     /**
      * 有保密产品的工厂, 所有带业务数据的 AI 对话 / 分析的系统约束 (唯一一份, 各提示词构造处引用它)。
      */
@@ -178,14 +212,21 @@ public class ProcessSecretLlmCostScope {
         return !protectedIds(factoryId).isEmpty();
     }
 
+    /** 当前读者 / 调用者的保密视角 (一次判定)。 */
+    public ReaderView readerView(String factoryId) {
+        Set<String> protectedIds = protectedIds(factoryId);
+        if (protectedIds.isEmpty()) return ReaderView.NO_PROTECTED;
+        Set<String> full = fullView(factoryId, protectedIds);
+        String protectedHash = sha256(String.join(",", new TreeSet<>(protectedIds))).substring(0, 16);
+        return new ReaderView(true, protectedHash, full, full.containsAll(protectedIds));
+    }
+
     /**
-     * 共享 AI 分析缓存的保密档位: 本厂没有保密产品 = 空串 (沿用原缓存); 有保密产品 = 当前调用者可完整查看的
-     * 保密产品集合的稳定哈希 (无授权 = 空集合的哈希)。同档复用, 跨档不复用; 缓存行本身按工厂存, 跨厂不复用。
+     * 共享 AI 分析缓存的保密档位: 本厂没有保密产品 = 空串 (沿用原缓存); 有保密产品 = 本厂保密产品集合与当前调用者
+     * 可完整查看集合的稳定哈希 —— 同档复用, 跨档不复用; 新设一个保密产品后旧档位一律失效; 缓存行按工厂存, 跨厂不复用。
      */
     public String accessTier(String factoryId) {
-        Set<String> protectedIds = protectedIds(factoryId);
-        if (protectedIds.isEmpty()) return "";
-        return "ps-" + sha256(String.join(",", fullView(factoryId, protectedIds))).substring(0, 16);
+        return readerView(factoryId).tier();
     }
 
     /** 有保密产品的工厂: 带业务数据的提示词要带的系统约束; 判定失败时也带 (宁多勿少)。 */
@@ -236,7 +277,8 @@ public class ProcessSecretLlmCostScope {
     }
 
     private static boolean scan(Excluded excluded, Object node, int depth) {
-        if (node == null || depth > 12) return false;
+        if (node == null) return false;
+        if (depth > 12) return true;   // 太深看不完: 有隐藏范围时按「含保密」处理 (fail-closed)
         if (node instanceof Map<?, ?> map) {
             if (excluded.coversProduct(text(map.get("productTypeId")))
                     || excluded.coversPlan(text(map.get("productionPlanId")))) {

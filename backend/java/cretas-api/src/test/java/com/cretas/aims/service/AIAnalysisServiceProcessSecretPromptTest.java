@@ -130,6 +130,28 @@ class AIAnalysisServiceProcessSecretPromptTest {
     }
 
     @Test
+    void onTheDirectChannelTheHarnessGoesIntoTheSystemPromptNotTheUserTurn() throws Exception {
+        AIAnalysisService service = service(protectedScope());
+        DashScopeConfig direct = mock(DashScopeConfig.class, RETURNS_DEEP_STUBS);
+        when(direct.isAvailable()).thenReturn(true);
+        when(direct.getMigration().isCostAnalysis()).thenReturn(true);
+        ReflectionTestUtils.setField(service, "dashScopeConfig", direct);
+        com.cretas.aims.ai.client.PythonLLMClient llm = mock(com.cretas.aims.ai.client.PythonLLMClient.class);
+        when(llm.chat(anyString(), anyString())).thenReturn("好的");
+        ReflectionTestUtils.setField(service, "pythonLLMClient", llm);
+
+        Map<String, Object> result = service.analyzeCost(FACTORY, 1L, "batch-x", new HashMap<>(), null, "分析", false, 50);
+
+        assertThat(result.get("success")).isEqualTo(true);
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        verify(llm).chat(system.capture(), user.capture());
+        assertThat(system.getValue()).contains(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
+        assertThat(user.getValue()).doesNotContain("工艺保密约束");
+        verify(python, never()).analyzeGeneral(anyString(), any(), any());
+    }
+
+    @Test
     void aProductWhoseBatchesCameFromAPlanOfTheProtectedProductIsWithheldForUnauthorizedCallers() {
         AIContextServiceImpl contexts = contextService(protectedScope());
         CostAIContext sibling = costContext(NORMAL, "普通2", "12.3456");

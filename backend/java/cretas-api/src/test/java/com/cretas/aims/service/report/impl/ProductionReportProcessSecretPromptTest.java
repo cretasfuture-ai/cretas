@@ -19,6 +19,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static com.cretas.aims.service.processsecret.ProcessSecretLlmFixture.*;
@@ -34,6 +35,8 @@ class ProductionReportProcessSecretPromptTest {
 
     private final ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
     private final PythonSmartBIClient python = mock(PythonSmartBIClient.class);
+    private final ProductionBatchRepository batchRepository = mock(ProductionBatchRepository.class);
+    private final ShipmentRecordRepository shipments = mock(ShipmentRecordRepository.class);
     private final LocalDateTime yesterday = LocalDate.now().minusDays(1).atTime(10, 0);
     /** 含保密产品的全厂总成本 (原查询的结果) —— 不许出现在提示词里。 */
     private final BigDecimal factoryWideTotal = SECRET_COST.add(NORMAL_COST).add(NORMAL2_COST);
@@ -62,11 +65,14 @@ class ProductionReportProcessSecretPromptTest {
         when(plans.findByFactoryId(FACTORY)).thenReturn(planRows);
         when(plans.calculateTotalCostBetweenDates(eq(FACTORY), any(), any())).thenReturn(factoryWideTotal);
         when(plans.calculateOutputBetweenDates(eq(FACTORY), any(), any())).thenReturn(new BigDecimal("400"));
+        // 原查询的分项 (全厂, 含保密产品): 四项里只有材料有值
+        when(plans.calculateMaterialCostBetweenDates(eq(FACTORY), any(), any())).thenReturn(factoryWideTotal);
+        when(shipments.calculateTotalRevenue(eq(FACTORY), any(), any())).thenReturn(new BigDecimal("20000.00"));
 
         ProductionReportServiceImpl service = new ProductionReportServiceImpl(plans, mock(MaterialBatchRepository.class),
                 mock(UserRepository.class), mock(EquipmentRepository.class), mock(SupplierRepository.class),
-                mock(CustomerRepository.class), ai, mock(ProcessingService.class), mock(ProductionBatchRepository.class),
-                mock(QualityInspectionRepository.class), mock(ShipmentRecordRepository.class),
+                mock(CustomerRepository.class), ai, mock(ProcessingService.class), batchRepository,
+                mock(QualityInspectionRepository.class), shipments,
                 mock(TimeClockRecordRepository.class), mock(ReworkRecordRepository.class), mock(SalesOrderRepository.class),
                 mock(ProductionLineRepository.class), mock(FactorySettingsRepository.class));
         ProcessSecretLlmCostScope scope = scope(protectedIds, planRows);
@@ -151,5 +157,117 @@ class ProductionReportProcessSecretPromptTest {
 
         BigDecimal thirtyDays = factoryWideTotal.multiply(BigDecimal.valueOf(30));
         assertThat(sentToModel()).contains("历史数据总计：" + thirtyDays.toPlainString()).doesNotContain("保密产品");
+    }
+
+    // ---------------- 报表数据本身 (页面与 AI 工具拿到的) ----------------
+
+    private <T> T callAs(com.cretas.aims.security.AuthenticatedActor actor, java.util.function.Supplier<T> call) {
+        try (var ignored = com.cretas.aims.service.processsecret.ProcessSecretLlmFixture.as(actor)) {
+            return call.get();
+        }
+    }
+
+    @Test
+    void productionReportTotalCostIsTheVisibleSumForAnUnauthorizedCallerAndTheFullTotalForTheOwner() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        LocalDate from = LocalDate.now().minusDays(7);
+
+        Map<String, Object> colleague = callAs(sameFactoryUser(), () -> service.getProductionReport(FACTORY, from, LocalDate.now()));
+        Map<String, Object> owner = callAs(owner(), () -> service.getProductionReport(FACTORY, from, LocalDate.now()));
+
+        assertThat((BigDecimal) colleague.get("totalCost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat((String) colleague.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat((BigDecimal) owner.get("totalCost")).isEqualByComparingTo(factoryWideTotal);
+        assertThat(owner).doesNotContainKey("processSecretNote");
+    }
+
+    @Test
+    void financeReportCostsAreVisibleRowsOnlyAndProfitIsNotDerivedFromAPartialCost() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        LocalDate from = LocalDate.now().minusDays(7);
+
+        Map<String, Object> colleague = callAs(sameFactoryUser(), () -> service.getFinanceReport(FACTORY, from, LocalDate.now()));
+        Map<String, Object> owner = callAs(owner(), () -> service.getFinanceReport(FACTORY, from, LocalDate.now()));
+
+        assertThat((BigDecimal) colleague.get("materialCost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat((BigDecimal) colleague.get("totalCost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat(colleague.get("totalProfit")).isNull();
+        assertThat(colleague.get("profitMargin")).isNull();
+        assertThat((String) colleague.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat((BigDecimal) owner.get("materialCost")).isEqualByComparingTo(factoryWideTotal);
+        assertThat((BigDecimal) owner.get("totalProfit")).isEqualByComparingTo(new BigDecimal("20000.00").subtract(factoryWideTotal));
+    }
+
+    @Test
+    void costAnalysisComparativeAndPeriodComparisonUseVisibleRowsForUnauthorizedCallers() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        LocalDate from = LocalDate.now().minusDays(7);
+        LocalDate to = LocalDate.now();
+
+        Map<String, Object> analysis = callAs(platform(), () -> service.getCostAnalysisReport(FACTORY, from, to));
+        Map<String, Object> comparative = callAs(sameFactoryUser(), () -> service.getComparativeAnalysis(FACTORY, from, to, from, to));
+        Map<String, Object> period = callAs(otherFactoryUser(), () -> service.getPeriodComparisonReport(FACTORY, from, to, from, to));
+
+        assertThat((BigDecimal) analysis.get("totalCost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat((BigDecimal) ((Map<?, ?>) comparative.get("period1")).get("cost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat((BigDecimal) ((Map<?, ?>) period.get("period2")).get("cost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat(comparative.toString()).doesNotContain(factoryWideTotal.toPlainString());
+        Map<String, Object> ownerAnalysis = callAs(owner(), () -> service.getCostAnalysisReport(FACTORY, from, to));
+        assertThat((BigDecimal) ownerAnalysis.get("totalCost")).isEqualByComparingTo(factoryWideTotal);
+    }
+
+    @Test
+    void trendAndForecastDataReturnedToTheToolOnlyCarryVisibleCosts() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+
+        Map<String, Object> trend = callAs(sameFactoryUser(), () -> service.getTrendAnalysisReport(FACTORY, "cost", 7));
+        Map<String, Object> forecast = callAs(sameFactoryUser(), () -> service.getForecastReport(FACTORY, "cost", 7));
+        Map<String, Object> summaryForecast = callAs(sameFactoryUser(), () -> service.getForecastReport(FACTORY, 7));
+
+        BigDecimal trendTotal = ((List<?>) trend.get("trendData")).stream()
+                .map(p -> (BigDecimal) ((Map<?, ?>) p).get("value")).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(trendTotal).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat((String) trend.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat((BigDecimal) ((Map<?, ?>) forecast.get("historicalSummary")).get("total")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat(summaryForecast.get("expectedProfit")).isNull();
+        BigDecimal ownerTrend = ((List<?>) callAs(owner(), () -> service.getTrendAnalysisReport(FACTORY, "cost", 7)).get("trendData"))
+                .stream().map(p -> (BigDecimal) ((Map<?, ?>) p).get("value")).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(ownerTrend).isEqualByComparingTo(factoryWideTotal.multiply(BigDecimal.valueOf(7)));   // 原按天查询
+    }
+
+    @Test
+    void anomalyDataContextCarriesTheVisibleTotalForTheTool() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        Map<String, Object> report = callAs(sameFactoryUser(),
+                () -> service.getAnomalyReport(FACTORY, LocalDate.now().minusDays(7), LocalDate.now()));
+
+        Map<?, ?> dataContext = (Map<?, ?>) report.get("dataContext");
+        assertThat((BigDecimal) dataContext.get("totalCost")).isEqualByComparingTo(nonProtectedPlanTotal());
+        assertThat((String) dataContext.get("processSecretNote")).contains("不含 1 个保密产品");
+    }
+
+    @Test
+    void costVarianceTotalsAreVisibleBatchesOnlyAndTheProtectedUnitCostIsWithheld() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        when(batchRepository.findByFactoryIdAndCreatedAtBetween(eq(FACTORY), any(), any())).thenReturn(List.of(
+                batch(1L, SECRET, SECRET_PLAN, SECRET_COST, new BigDecimal("100")),
+                batch(2L, NORMAL, NORMAL_PLAN, NORMAL_COST, new BigDecimal("100")),
+                batch(3L, NORMAL2, null, NORMAL2_COST, new BigDecimal("200"))));
+        LocalDate from = LocalDate.now().minusDays(7);
+
+        com.cretas.aims.dto.report.CostVarianceReportDTO colleague =
+                callAs(sameFactoryUser(), () -> service.getCostVarianceReport(FACTORY, from, LocalDate.now()));
+        com.cretas.aims.dto.report.CostVarianceReportDTO owner =
+                callAs(owner(), () -> service.getCostVarianceReport(FACTORY, from, LocalDate.now()));
+
+        assertThat(colleague.getTotalActualCost()).isEqualByComparingTo(NORMAL_COST.add(NORMAL2_COST));
+        assertThat(colleague.getProcessSecretNote()).contains("不含 1 个保密产品");
+        assertThat(colleague.getProductVariances()).filteredOn(v -> SECRET.equals(v.getProductTypeId()))
+                .singleElement().satisfies(v -> {
+                    assertThat(v.getActualUnitCost()).isNull();
+                    assertThat(v.getQuantity()).isEqualByComparingTo("100");   // 数量照常
+                });
+        assertThat(owner.getTotalActualCost()).isEqualByComparingTo(factoryWideTotal);
+        assertThat(owner.getProcessSecretNote()).isNull();
     }
 }

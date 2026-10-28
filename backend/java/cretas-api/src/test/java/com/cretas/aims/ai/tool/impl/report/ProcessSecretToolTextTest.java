@@ -211,6 +211,71 @@ class ProcessSecretToolTextTest {
         }
     }
 
+    @Test
+    void costVarianceMessageCarriesTheVisibleTotalWithTheNoteWhenTheServiceTrimmedIt() throws Exception {
+        ReportService reports = mock(ReportService.class);
+        when(reports.getCostVarianceReport(eq(FACTORY), any(), any())).thenReturn(CostVarianceReportDTO.builder()
+                .comparable(false).totalActualCost(new BigDecimal("5555.56")).batchCount(3)
+                .processSecretNote(ProcessSecretLlmCostScope.note(1)).build());
+        ReportCostVarianceTool tool = new ReportCostVarianceTool();
+        ReflectionTestUtils.setField(tool, "reportService", reports);
+        ReflectionTestUtils.setField(tool, "llmCostScope", protectedScope());
+
+        String message = (String) tool.doExecute(FACTORY, new HashMap<>(), Map.of()).get("message");
+
+        assertThat(message).contains("实际总成本 ¥5555.56", "不含 1 个保密产品");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> skuOrder(ProcessSecretLlmCostScope scope) throws Exception {
+        // 保密产品毛利率 90% (按毛利排本该第一), 普通产品 58.85%
+        List<Map<String, Object>> rows = List.of(skuRow(SECRET, SECRET_NAME, "9999.99", new BigDecimal("999.99")),
+                skuRow(NORMAL, "普通甲", "3000.00", NORMAL_COST));
+        OperatingReportGrossMarginQuery query = mock(OperatingReportGrossMarginQuery.class);
+        when(query.fetch(eq(FACTORY), any(), any())).thenReturn(OperatingReportGrossMarginQuery.payload(rows, false));
+        ProductTypeRepository types = mock(ProductTypeRepository.class);
+        when(types.findByFactoryIdAndIsActiveTrue(FACTORY)).thenReturn(List.of());
+        SkuGrossMarginTool tool = new SkuGrossMarginTool();
+        ReflectionTestUtils.setField(tool, "realizedQuery", query);
+        ReflectionTestUtils.setField(tool, "productTypeRepository", types);
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        Map<String, Object> data = (Map<String, Object>) tool.doExecute(FACTORY, new HashMap<>(), Map.of()).get("data");
+        return ((List<Map<String, Object>>) data.get("items")).stream().map(i -> (String) i.get("productTypeId")).toList();
+    }
+
+    @Test
+    void skuMarginPutsTheMaskedProductLastForUnauthorizedCallersSoTheRankDoesNotLeak() throws Exception {
+        assertThat(skuOrder(protectedScope())).containsExactly(NORMAL, SECRET);
+        try (var ignored = as(owner())) {
+            assertThat(skuOrder(protectedScope())).containsExactly(SECRET, NORMAL);   // 有权: 照毛利率排
+        }
+    }
+
+    @Test
+    void processTaskSummaryCarriesTheBatchsProductAndPlanForAttribution() throws Exception {
+        com.cretas.aims.service.workprocess.WorkProcessTaskService tasks =
+                mock(com.cretas.aims.service.workprocess.WorkProcessTaskService.class);
+        com.cretas.aims.service.ProcessWorkReportingService reporting =
+                mock(com.cretas.aims.service.ProcessWorkReportingService.class);
+        ProductionBatchRepository batchRepository = mock(ProductionBatchRepository.class);
+        when(tasks.getById(FACTORY, 7L)).thenReturn(com.cretas.aims.dto.WorkProcessTaskDTO.builder()
+                .id(7L).productionBatchId(1L).processName("卤制").build());
+        when(reporting.getWorkerSummaryByTask(FACTORY, "7")).thenReturn(List.of());
+        when(reporting.getReportsByTask(FACTORY, "7")).thenReturn(List.of());
+        when(batchRepository.findByIdAndFactoryId(1L, FACTORY))
+                .thenReturn(java.util.Optional.of(batch(1L, SECRET, SECRET_PLAN, SECRET_COST, BigDecimal.TEN)));
+        com.cretas.aims.ai.tool.impl.processing.ProcessTaskSummaryTool tool =
+                new com.cretas.aims.ai.tool.impl.processing.ProcessTaskSummaryTool(tasks, reporting, batchRepository);
+
+        java.lang.reflect.Method doExecute = tool.getClass().getDeclaredMethod("doExecute", String.class, Map.class, Map.class);
+        doExecute.setAccessible(true);
+        Map<?, ?> data = (Map<?, ?>) ((Map<?, ?>) doExecute.invoke(tool, FACTORY,
+                new HashMap<>(Map.of("taskId", "7")), Map.of())).get("data");
+
+        assertThat(data.get("productTypeId")).isEqualTo(SECRET);
+        assertThat(data.get("productionPlanId")).isEqualTo(SECRET_PLAN);
+    }
+
     private static ProductionByProductDTO stat(String productTypeId, String name, String quantity) {
         return ProductionByProductDTO.builder().productTypeId(productTypeId).productName(name)
                 .totalQuantity(new BigDecimal(quantity)).unit("kg").build();

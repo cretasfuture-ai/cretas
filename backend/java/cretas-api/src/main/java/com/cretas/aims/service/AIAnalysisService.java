@@ -234,6 +234,11 @@ public class AIAnalysisService {
     }
 
     static final String COST_PROVENANCE_SITE = "cost-analysis";
+
+    private String withHarness(String factoryId, String message) {
+        String harness = llmCostScope.harnessFor(factoryId);
+        return harness.isEmpty() ? message : harness + "\n\n" + message;
+    }
     static final String EMPLOYEE_PROVENANCE_SITE = "employee-analysis";
 
     /**
@@ -273,9 +278,7 @@ public class AIAnalysisService {
             userMessage = preComputedContext + "\n\n" + userMessage;
             log.info("已注入预计算上下文: factoryId={}", factoryId);
         }
-        // 工艺保密系统约束 (有保密产品的工厂; 两条通道发的都是这一份正文)
-        String harness = llmCostScope.harnessFor(factoryId);
-        return harness.isEmpty() ? userMessage : harness + "\n\n" + userMessage;
+        return userMessage;
     }
 
     /**
@@ -286,7 +289,8 @@ public class AIAnalysisService {
                                                    Boolean enableThinking,
                                                    Integer thinkingBudget) {
         // 2. 构建系统提示词
-        String systemPrompt = buildCostAnalysisSystemPrompt();
+        // 工艺保密系统约束放进 system (有保密产品的工厂)
+        String systemPrompt = buildCostAnalysisSystemPrompt() + llmCostScope.harnessFor(factoryId);
 
         // 3. 调用 DashScope
         boolean useThinking = enableThinking != null ? enableThinking : true;
@@ -588,7 +592,9 @@ public class AIAnalysisService {
                                                       Integer thinkingBudget) {
         try {
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
-                    .message(message)
+                    // 工艺保密系统约束: Java → Python 通用分析的合同没有 system 字段 (Python 自己拼 system),
+                    // 只能放在正文最前面; 有保密产品的工厂才带
+                    .message(withHarness(factoryId, message))
                     .sessionId(sessionId != null && !sessionId.isBlank() ? sessionId : null)
                     .enableThinking(enableThinking != null ? enableThinking : true)
                     .thinkingBudget(thinkingBudget != null ? thinkingBudget : 50)

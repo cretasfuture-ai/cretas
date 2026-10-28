@@ -164,9 +164,9 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             StringBuilder msg = new StringBuilder(
                     "成本差异无法比较：缺少独立标准成本，本期不给出差异金额与差异率。");
             if (costVarianceData.getTotalActualCost() != null) {
-                // 工艺保密: 全厂实际总成本含保密产品, 而这里拿不到逐产品的总成本来只加非保密行 ——
-                // 当前账号对本厂某个保密产品无权时文案里不写这个总数 (文案直接进模型上下文; 负责人 / 有效授权照常写, Steve 10-29)
-                if (!llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
+                // 工艺保密: 报表服务已按调用者只算他能看的批次并给出说明 (processSecretNote) —— 照写合计并带上说明;
+                // 调用者对本厂某个保密产品无权、而数据没带说明 (未按调用者裁剪过, 例如旧缓存) 时不写这个总数 (fail-closed)
+                if (!llmCostScope.forCurrentCaller(factoryId).isEmpty() && costVarianceData.getProcessSecretNote() == null) {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 批次数 ").append(costVarianceData.getBatchCount())
                             .append("；实际总成本含工艺保密产品，不提供给 AI。");
@@ -174,6 +174,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
                             .append("，批次数 ").append(costVarianceData.getBatchCount()).append("。");
+                    if (costVarianceData.getProcessSecretNote() != null) msg.append(costVarianceData.getProcessSecretNote());
                 }
             }
             result.put("message", msg.toString());

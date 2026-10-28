@@ -112,6 +112,48 @@ class ProcessSecretLlmCostScopeTest {
     }
 
     @Test
+    void protectingAnotherProductChangesEveryTierSoOldCachedResultsStopMatching() {
+        String before = scope(Set.of(SECRET)).accessTier(FACTORY);          // 无权调用者: 可完整查看的集合都是空
+        String after = scope(Set.of(SECRET, "P-NEW")).accessTier(FACTORY);
+
+        assertThat(before).isNotEqualTo(after);
+    }
+
+    @Test
+    void readerViewDecidesWhoMayReadASharedAnalysisRow() {
+        ProcessSecretLlmCostScope scope = protectedScope();
+        String ownerStamp;
+        String colleagueStamp;
+        ProcessSecretLlmCostScope.ReaderView owner;
+        ProcessSecretLlmCostScope.ReaderView grantee;
+        ProcessSecretLlmCostScope.ReaderView colleague;
+        try (var ignored = as(owner())) { owner = scope.readerView(FACTORY); ownerStamp = owner.stamp(); }
+        try (var ignored = as(grantee())) { grantee = scope.readerView(FACTORY); }
+        try (var ignored = as(sameFactoryUser())) { colleague = scope.readerView(FACTORY); colleagueStamp = colleague.stamp(); }
+
+        assertThat(colleague.mayRead(ownerStamp)).isFalse();      // 负责人生成的 (含保密成本) 无权同事看不了
+        assertThat(grantee.mayRead(ownerStamp)).isTrue();
+        assertThat(owner.mayRead(colleagueStamp)).isTrue();       // 无权视角生成的 (不含保密成本) 谁都能看
+        assertThat(colleague.mayRead(colleagueStamp)).isTrue();
+        assertThat(colleague.mayRead(null)).isFalse();            // 没有戳的旧条目: 只给能看全的读者
+        assertThat(owner.mayRead(null)).isTrue();
+        // 之后又新设了一个保密产品: 旧戳对无权读者一律失效
+        ProcessSecretLlmCostScope.ReaderView colleagueLater;
+        try (var ignored = as(sameFactoryUser())) { colleagueLater = scope(Set.of(SECRET, "P-NEW")).readerView(FACTORY); }
+        assertThat(colleagueLater.mayRead(colleagueStamp)).isFalse();
+        assertThat(unprotectedScope().readerView(FACTORY).mayRead(null)).isTrue();
+    }
+
+    @Test
+    void dataNestedTooDeepToInspectCountsAsContainingProtectedRows() {
+        Object deep = Map.of("productTypeId", NORMAL);
+        for (int i = 0; i < 20; i++) deep = Map.of("level" + i, deep);
+
+        assertThat(protectedScope().containsProtected(FACTORY, deep)).isTrue();
+        assertThat(unprotectedScope().containsProtected(FACTORY, deep)).isFalse();
+    }
+
+    @Test
     void harnessInstructionOnlyInFactoriesWithProtectedProducts() {
         assertThat(protectedScope().harnessFor(FACTORY)).isEqualTo(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
         assertThat(unprotectedScope().harnessFor(FACTORY)).isEmpty();

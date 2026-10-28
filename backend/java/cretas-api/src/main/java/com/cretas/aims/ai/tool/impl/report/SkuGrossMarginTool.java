@@ -153,10 +153,23 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
                 .comparing((Map<String, Object> i) -> rateOf(i, "realized"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
                 .thenComparing(i -> rateOf(i, "catalog"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
                 .thenComparing(i -> String.valueOf(i.get("productName"))));
+        // 工艺保密: 当前调用者无权看的产品不按毛利排 (排名本身泄露毛利高低) —— 挪到最后, 按名称排
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret = llmCostScope.forCurrentCaller(factoryId);
+        if (!secret.isEmpty()) {
+            List<Map<String, Object>> visible = new ArrayList<>();
+            List<Map<String, Object>> masked = new ArrayList<>();
+            for (Map<String, Object> item : items) {
+                Object id = item.get("productTypeId");
+                (id == null || secret.coversProduct(id.toString()) ? masked : visible).add(item);
+            }
+            masked.sort(Comparator.comparing(i -> String.valueOf(i.get("productName"))));
+            items = new ArrayList<>(visible);
+            items.addAll(masked);
+        }
         int total = items.size();
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
-        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, llmCostScope.forCurrentCaller(factoryId)),
+        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret),
                 resultData(shown, total, start, end, defaultPeriod));
     }
 

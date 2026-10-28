@@ -21,6 +21,8 @@ public class ProcessTaskSummaryTool extends AbstractBusinessTool {
 
     private final WorkProcessTaskService workProcessTaskService;
     private final ProcessWorkReportingService reportingService;
+    /** 工艺保密: 输出带批次的产品 / 计划, 裁剪按这两个字段认, 不依赖读库时的打标。 */
+    private final com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
 
     @Override
     public String getToolName() {
@@ -64,6 +66,10 @@ public class ProcessTaskSummaryTool extends AbstractBusinessTool {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("taskId", task.getId());
         data.put("productionBatchId", task.getProductionBatchId());
+        com.cretas.aims.entity.ProductionBatch batch = task.getProductionBatchId() == null ? null
+                : productionBatchRepository.findByIdAndFactoryId(task.getProductionBatchId(), factoryId).orElse(null);
+        data.put("productTypeId", batch != null && batch.getProductTypeId() != null ? batch.getProductTypeId() : task.getProductTypeId());
+        data.put("productionPlanId", batch != null ? batch.getProductionPlanId() : null);
         data.put("processName", task.getProcessName());
         data.put("productName", task.getProductTypeName());
         data.put("status", task.getStatus());

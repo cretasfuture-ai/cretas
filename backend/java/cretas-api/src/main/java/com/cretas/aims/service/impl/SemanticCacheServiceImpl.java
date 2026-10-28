@@ -47,6 +47,28 @@ public class SemanticCacheServiceImpl implements SemanticCacheService {
     private final RequestScopedEmbeddingCache requestScopedCache;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 工艺保密: 语义缓存按工厂共享、不看调用者 —— 有保密产品的工厂不存、不回放完整执行结果 (只留意图),
+     * 每个人重新执行、按自己的权限裁剪。单测直接构造时用「没有保密产品」的默认实例。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope secretScope =
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
+    /** 有保密产品 (或判定失败) 的工厂: 命中只给意图, 不给执行结果。 */
+    private SemanticCacheHit withoutAnswerIfSecret(String factoryId, SemanticCacheHit hit) {
+        if (hit != null && hit.hasExecutionResult() && !answersShareable(factoryId)) hit.setExecutionResultJson(null);
+        return hit;
+    }
+
+    private boolean answersShareable(String factoryId) {
+        try {
+            return !secretScope.factoryHasProtected(factoryId);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     // 统计计数器
     private final AtomicLong totalHits = new AtomicLong(0);
     private final AtomicLong exactHits = new AtomicLong(0);
@@ -86,13 +108,13 @@ public class SemanticCacheServiceImpl implements SemanticCacheService {
                 log.debug("Exact cache hit for factory={}, hash={}, latency={}ms",
                     factoryId, inputHash, latency);
 
-                return SemanticCacheHit.exactHit(
+                return withoutAnswerIfSecret(factoryId, SemanticCacheHit.exactHit(
                     cache.getId(),
                     cache.getIntentCode(),
                     cache.getIntentResult(),
                     cache.getExecutionResult(),
                     latency
-                );
+                ));
             }
 
             // 4. 语义匹配 (向量相似度)
@@ -100,7 +122,7 @@ public class SemanticCacheServiceImpl implements SemanticCacheService {
                 SemanticCacheHit semanticHit = findSemanticMatch(
                     factoryId, normalizedInput, config, startTime);
                 if (semanticHit.isHit()) {
-                    return semanticHit;
+                    return withoutAnswerIfSecret(factoryId, semanticHit);
                 }
             }
 
@@ -122,6 +144,10 @@ public class SemanticCacheServiceImpl implements SemanticCacheService {
     @Transactional
     public void cacheResult(String factoryId, String userInput,
                             IntentMatchResult matchResult, IntentExecuteResponse executeResponse) {
+        if (!answersShareable(factoryId)) {
+            cacheIntentResult(factoryId, userInput, matchResult);
+            return;
+        }
         try {
             SemanticCacheConfig config = getEffectiveConfig(factoryId);
             if (!config.isEnabled()) {

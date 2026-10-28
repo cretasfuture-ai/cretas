@@ -56,7 +56,7 @@ public class WorkdeskOutputSummarizer {
      * (而不是因为字段为 null 静默跳过); Spring 下由容器注入同一个带计数器的 bean。
      */
     /** 工艺保密系统约束; 单测直接 new 本类时用「没有保密产品」的默认实例。 */
-    @Autowired(required = false)
+    @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
             com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
