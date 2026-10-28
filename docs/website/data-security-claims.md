@@ -125,7 +125,13 @@ Steve 决定：完整 11 条现在就对外发布，还没实现的部分由内�
   6. 不出公网的模型：自建 bge 重排（经 FRP 到开发机）、本机 Ollama，不算外部大模型。
 - ai_proxy 意图分类：Java 用完整规则脱敏用户原话，意图列表原样转发（「AI 外发脱敏」会话回报，我没另核列表内容）。
 - 仍有的局限（页面措辞不涉及，不改）：Excel 表头里「物流公司」这类词会被换成代号；16–19 位编号会被当作卡号；邮箱只有 Python 有规则。
-- 与出口无关的原有缺陷：Java 调 `/api/ai/intent/clarify` 一直 422（字段名对不上），Java 吞错后走本地兜底。修它等于新开一条外发，需要单独决定，未做。
+- 意图澄清出口（Java `LlmIntentFallbackClient.generateClarificationQuestion` → Python `POST /api/ai/intent/clarify`）→ 已删除：见下方 2026-10-28 更新（三）。（原记录「一直 422、Java 吞错走本地兜底」已过时。）
 - 页面不改：现有措辞都已兑现，未接入的部分都不在承诺范围内。
 
 **仍未兑现（对外已写）**：C6-rights（整厂导出、彻底删除，目前人工处理）；第八条「服务商不得用于自身训练」待核实合同。
+
+## 2026-10-28 更新（三）：意图澄清出口已删除
+- #1255（合并 ad73dcc869）删除了 Java `LlmIntentFallbackClient.generateClarificationQuestion`（调 Python `/api/ai/intent/clarify` 的那一路）和 Python `POST /api/ai/intent/clarify`。原因：这一路在 prod 走不到（语义优先架构默认开启，在调用点之前就返回），prod 8 天日志里调用 0 次，从没发出过请求（「AI 外发脱敏」会话回报）。
+- 我独立核对：47:10010 进程（13:10:58 启动）实际加载的 jar（进程持有的已被替换的旧文件句柄）sha256 前 8 位 fd1739f2，与回报一致；其中 `LlmIntentFallbackClientImpl` 含 `intent/clarify` 0 处，阳性对照 `intent/classify` 1 处。Python 8083（14:40:48 启动）对 `POST /api/ai/intent/clarify` 返回 404，同一进程 `/api/ai/intent/match` 返回 422（空请求体被校验拒绝 = 路由在）。
+- 不受影响：按钮澄清（`/api/ai/intent/match`）照常；缺参追问 `generateClarificationQuestionsForMissingParams` 是另一条，仍在用，没动。
+- 页面不改。
