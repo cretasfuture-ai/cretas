@@ -333,6 +333,8 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                         "selected_ids每项familyId必须互异，最多4项；仍只返回原JSON格式。"
                     ),
                 })
+                if len(json.dumps(retry_payload, ensure_ascii=False).encode("utf-8")) > 50000:
+                    return [], {"mode": "unavailable", "reason": "图表规划纠正请求超过安全上限"}
                 response = await _call(retry_payload)
         choices = response.get("choices") if isinstance(response, Mapping) else None
         content = choices[0].get("message", {}).get("content") if choices else None

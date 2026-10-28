@@ -211,6 +211,31 @@ async def test_duplicate_family_does_not_replan_after_shared_deadline(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(monkeypatch):
+    calls = []
+    oversized_metric = 'x' * 49200
+
+    async def call(_slot, payload, **_kwargs):
+        calls.append(payload)
+        if len(calls) > 1:
+            raise AssertionError('retry payload must be rejected before provider call')
+        payload_size = len(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+        assert 49000 <= payload_size < 50000
+        raise LLMChainExhausted(
+            'chart', ['provider/model: invalid_planner selected duplicate chart family'])
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产', [{
+        'id': 'large', 'familyId': 'production.output', 'chartType': 'line',
+        'domain': '生产', 'metric': oversized_metric, 'unit': 'kg',
+    }])
+
+    assert selected == [] and mode['mode'] == 'unavailable'
+    assert '超过安全上限' in mode['reason']
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_planner_receives_sanitized_history_without_old_numeric_answers(monkeypatch):
     seen = {}
 
