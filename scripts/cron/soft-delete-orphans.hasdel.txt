@@ -1,6 +1,6 @@
 -- 这是生成物。由 scripts/check-soft-delete-orphans.sh --write 从 prod 抓取。
 -- ⛔ 不要手工编辑: 它是一份**读数**(prod 上哪些表有 deleted_at), 不是配置。
--- captured-at 2026-10-26 22:44:08Z
+-- captured-at 2026-10-28 14:34:20Z
 -- capture-sql SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'deleted_at'
 abaca_quantity_log
 accounting_periods
@@ -38,11 +38,6 @@ ar_ap_transactions
 attachments
 attendance_exceptions
 attendance_shifts
-backup_e2e_w2_cleanup_20260815
-backup_e2e_w2_ventries_20260815
-backup_e2e_w2_vouchers_20260815
-backup_f006_layout_20260828
-bak_bom_recipes_20260731
 batch_equipment_usage
 batch_evidence_photos
 batch_lineage_closure
@@ -265,6 +260,7 @@ process_material_recipes
 process_sheet_rows
 processing_stage_records
 product_cost_variance_configs
+product_equipment_requirements
 product_mid_quotes
 product_packaging_specs
 product_process_workflow_activations
@@ -280,6 +276,7 @@ production_alerts
 production_batches
 production_input_allocations
 production_interim_settlement
+production_line_capacity_configs
 production_lines
 production_material_returns
 production_plan_batch_usages
@@ -302,6 +299,7 @@ purchase_orders
 purchase_receive_items
 purchase_receive_records
 purchase_requisitions
+qc_release_records
 quality_check_item_bindings
 quality_check_items
 quality_defects
@@ -319,8 +317,6 @@ recipe_versions
 recipes
 release_notes
 reminders
-repair_backup_liushanmen_labor_batches_20260627_1027
-repair_backup_liushanmen_labor_reports_20260627_1027
 report_reversal_logs
 restaurant_commissions
 restaurant_guests
@@ -369,6 +365,7 @@ semantic_cache
 semi_finished_inventory
 semi_finished_stocktake_items
 semi_finished_stocktakes
+semi_qc_hold_lots
 sessions
 shipment_records
 sku_complexity
