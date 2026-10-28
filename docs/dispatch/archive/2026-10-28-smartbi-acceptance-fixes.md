@@ -35,3 +35,12 @@
 - Independent final Legacy AI code risk review passed frozen product commit 91097e1f4f. Subsequent ledger test change only aligns fixture binding and avoids redundant metadata scanning; no production changes after that review.
 - Completed child implementation scopes SC28-UNIT-FIX, SC28-LEGACY-AI, SC28-SCOPED-QUERY, SC28-LEDGER-DRAFT, SC28-LIFECYCLE-QA and SC28-CATALOG-MATRIX are archived here and released when this commit merges. Parent retains release and actual F006 acceptance only; no blanket business PASS.
 - Local private logs: `sc28-final-java-unit-v4.log`, `sc28-final-java-realpg-v1.log` (repository PASS, original ledger fixture FAIL retained), `sc28-final-ledger-realpg-v2.log` (ledger PASS), `sc28-harness-final-matrix-upload-export.log`.
+
+## SC29-GATE-CLOSURE
+
+- Owner Root; incremental Base 458cf2047e3d2619e9d69ee6b0e48f04092a29ef; PR1285. Scope: LegacyAiAnalysisGuard/ContractTest and two dynamic-quality form/page specs. No query, Entity, permission or revision-protocol changes.
+- Original PR Web gate: two assertions still expected the previous revision-bearing title. Fixed to the business label; refresh test additionally preserves the entered answer and resubmits the actual rev-8 payload. Target Vitest: seven passed. No assertion was removed to hide a product failure.
+- Original Guard rejected proven unit box; standalone execution reproduced it. Added singular box recognition while retaining exact source-unit comparison and alphabetic boundaries. Seven original-unit positives plus seventeen existing negative/positive probe assertions passed; added the ninth JUnit case, which must execute in the final candidate build.
+- Original candidate at 458cf built successfully using the unified entry and staged an immutable artifact without deployment. This delta requires a new candidate; do not deploy the earlier build as if it contained the box fix.
+- Independent incremental code risk review passed. Query-startup CI run40726690781 failed with Java heap exhaustion; raw failure retained privately. It is not a successful gate. Changed repository declarations/tests are unmodified; final-commit local real-JPA evidence and applicable PR checks are required under the documented infrastructure-failure rule.
+- Implementation scope released on merge; parent retains release and F006 actual acceptance. Current Android auth events supplied no logout-cause evidence; no credentials entered and no approval configuration changed.

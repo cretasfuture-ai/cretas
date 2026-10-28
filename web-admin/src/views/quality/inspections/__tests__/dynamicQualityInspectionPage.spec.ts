@@ -46,7 +46,8 @@ describe('质检列表动态标准入口', () => {
     await create!.trigger('click');
     await flushPromises();
     expect(state.get).toHaveBeenCalledWith('/F006/processing/batches/11003/quality-form');
-    expect(wrapper.text()).toContain('动态质检标准 · rev-7');
+    expect(wrapper.text()).toContain('当前产品质检标准');
+    expect(wrapper.text()).not.toContain('rev-7');
     expect(wrapper.text()).toContain('温度');
   });
 
@@ -78,6 +79,6 @@ describe('质检列表动态标准入口', () => {
     await create!.trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('抽样数量');
-    expect(wrapper.text()).not.toContain('动态质检标准 · rev-7');
+    expect(wrapper.text()).not.toContain('当前产品质检标准');
   });
 });

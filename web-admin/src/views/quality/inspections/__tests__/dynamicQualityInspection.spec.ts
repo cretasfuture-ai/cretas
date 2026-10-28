@@ -92,6 +92,17 @@ describe('动态质检表单', () => {
     await refresh!.trigger('click');
     await flushPromises();
     expect(state.get).toHaveBeenCalledWith('/F006/processing/batches/11003/quality-form');
-    expect(wrapper.text()).toContain('动态质检标准 · rev-8');
+    expect(wrapper.text()).toContain('当前产品质检标准');
+    expect(wrapper.text()).not.toContain('rev-8');
+    expect(wrapper.find('input').element.value).toBe('2');
+    state.post.mockResolvedValue(ok({ inspection: { id: 'qc-11003', result: 'PASS' }, standardRevision: 'rev-8' }));
+    await clickSubmit(wrapper);
+    expect(state.post).toHaveBeenLastCalledWith(
+      '/F006/processing/batches/11003/quality-inspections',
+      expect.objectContaining({
+        standardRevision: 'rev-8',
+        answers: [{ bindingId: 'binding-temp', itemId: 'item-temp', itemVersion: 3, value: '2' }],
+      }),
+    );
   });
 });

@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  */
 public final class LegacyAiAnalysisGuard {
     private static final String NUMBER = "[+-]?\\d[\\d,]*(?:\\.\\d+)?";
-    private static final String UNITS = "(?:件|盒|箱|袋|个|份|样本|批|次|公斤|千克|吨|斤|pcs?|pieces?|units?|items?|boxes|bags?|cases?|kg|ml|g|t|L)";
+    private static final String UNITS = "(?:件|盒|箱|袋|个|份|样本|批|次|公斤|千克|吨|斤|pcs?|pieces?|units?|items?|box(?:es)?|bags?|cases?|kg|ml|g|t|L)";
     private static final String QUANTITY_LABEL = "(?:总产出|总产量|产出|产量|总数量|不良数量|良品数量|不良品|良品|不良数|不良|合格数|检验数|total[ \\t]+output|output|quantity)(?!率)";
     private static final Pattern QUANTITY_WITH_UNIT = Pattern.compile(
             "(?i)" + NUMBER + "[ \\t]*(" + UNITS + ")(?![A-Za-z])");

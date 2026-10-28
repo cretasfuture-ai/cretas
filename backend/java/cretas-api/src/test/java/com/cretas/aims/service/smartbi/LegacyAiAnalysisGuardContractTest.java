@@ -119,6 +119,18 @@ class LegacyAiAnalysisGuardContractTest {
     }
 
     @Test
+    void acceptsOriginalLegacyUnitsWithoutGuessingConversions() {
+        for (String unit : List.of("g", "box", "case", "kg", "盒", "袋", "箱")) {
+            assertThat(LegacyAiAnalysisGuard.validate(
+                    data("unitValues", List.of(unit), "unitComplete", true),
+                    "产出10" + unit + "。").usable()).as(unit).isTrue();
+        }
+        assertThat(LegacyAiAnalysisGuard.validate(
+                data("unitValues", List.of("g"), "unitComplete", true),
+                "产出1kg。").usable()).isFalse();
+    }
+
+    @Test
     void keepsGroundedResponseWhenNoForbiddenClaimIsPresent() {
         var result = LegacyAiAnalysisGuard.validate(
                 data("unitValues", List.of("kg"), "unitComplete", true,
