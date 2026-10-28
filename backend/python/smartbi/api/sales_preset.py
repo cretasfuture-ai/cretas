@@ -561,29 +561,60 @@ def _gross_margin_row(r) -> dict:
     }
 
 
-def _gross_margin_payload(rows: list, order: str, limit: int) -> dict:
+# 工艺保密: 受保护产品对无授权账号隐藏的毛利字段 (收入 / 数量照常可见)。
+_GROSS_MARGIN_HIDDEN_FIELDS = (
+    "costedRevenue", "cost", "grossProfit", "marginRate", "costCoverage",
+    "costedLineCount", "zeroCostLineCount",
+)
+
+
+def _gross_margin_payload(rows: list, order: str, limit: int, scope=None) -> dict:
     """毛利只在「已回填成本」的明细上算: 收入与成本同口径 (都是未税、折后)。
 
     没回填成本的明细不计入毛利, 用 costCoverage 告诉用户这个毛利率覆盖了多少收入。
+
+    ``scope`` (工艺保密成本授权, cost_scope.CostScope) 由路由向 Java 取得;
+    ``None`` = 没有授权结论, 按失败关闭处理 (所有成本/毛利隐藏)。
+    无权产品: 行内成本/毛利字段置 None, 排在所有可见产品之后 (按 productTypeId, 与成本无关);
+    汇总的成本/毛利/毛利率/覆盖率只累加**有权产品**的行 (⛔ 不用「总数 − 保密」)。
     """
+    from smartbi.services.factory_charts import cost_scope as process_secret
+    if scope is None:
+        scope = process_secret.unavailable(process_secret.REASON_NOT_RUN)
+
     products = [_gross_margin_row(r) for r in rows]
-    with_margin = [p for p in products if p["marginRate"] is not None]
-    without_margin = [p for p in products if p["marginRate"] is None]
+    visible = [p for p in products if scope.allows(p["productTypeId"])]
+    hidden = [p for p in products if not scope.allows(p["productTypeId"])]
+    for p in hidden:
+        for name in _GROSS_MARGIN_HIDDEN_FIELDS:
+            p[name] = None
+        p[process_secret.MARKER] = process_secret.hidden_marker(_GROSS_MARGIN_HIDDEN_FIELDS, scope)
+
+    with_margin = [p for p in visible if p["marginRate"] is not None]
+    without_margin = [p for p in visible if p["marginRate"] is None]
     with_margin.sort(key=lambda p: p["marginRate"], reverse=(order == "desc"))
     without_margin.sort(key=lambda p: p["revenue"], reverse=True)
-    ranked = (with_margin + without_margin)[:limit]
+    hidden.sort(key=lambda p: str(p["productTypeId"]))
+    ranked = (with_margin + without_margin + hidden)[:limit]
 
     revenue = sum(p["revenue"] for p in products)
-    costed_revenue = sum(p["costedRevenue"] for p in products)
-    costs = [p["cost"] for p in products if p["cost"] is not None]
-    cost = sum(costs) if costs else None
-    gross_profit = costed_revenue - cost if cost is not None else None
-    return {
-        "rank": [{"rank": i + 1, **p} for i, p in enumerate(ranked)],
-        "summary": {
-            "productCount": len(products),
-            "costedProductCount": len(with_margin),
-            "revenue": revenue,
+    summary = {
+        "productCount": len(products),
+        "costedProductCount": len(with_margin),
+        "revenue": revenue,
+    }
+    if scope.is_unavailable:
+        summary.update({"costedRevenue": None, "cost": None, "grossProfit": None,
+                        "marginRate": None, "costCoverage": None,
+                        "costScope": process_secret.rollup_annotation(scope, 0)})
+    else:
+        # 只累加有权产品的行; 覆盖率的分母也是有权产品的收入, 口径一致。
+        visible_revenue = sum(p["revenue"] for p in visible)
+        costed_revenue = sum(p["costedRevenue"] for p in visible)
+        costs = [p["cost"] for p in visible if p["cost"] is not None]
+        cost = sum(costs) if costs else None
+        gross_profit = costed_revenue - cost if cost is not None else None
+        summary.update({
             "costedRevenue": costed_revenue,
             "cost": cost,
             "grossProfit": gross_profit,
@@ -591,8 +622,15 @@ def _gross_margin_payload(rows: list, order: str, limit: int) -> dict:
                 gross_profit / costed_revenue
                 if gross_profit is not None and costed_revenue > 0 else None
             ),
-            "costCoverage": costed_revenue / revenue if revenue > 0 else None,
-        },
+            "costCoverage": costed_revenue / visible_revenue if visible_revenue > 0 else None,
+        })
+        annotation = process_secret.rollup_annotation(
+            scope, len(scope.excluded_product_ids(p["productTypeId"] for p in products)))
+        if annotation is not None:
+            summary["costScope"] = annotation
+    return {
+        "rank": [{"rank": i + 1, **p} for i, p in enumerate(ranked)],
+        "summary": summary,
     }
 
 
@@ -656,13 +694,16 @@ async def gross_margin(
             """,
             caller, start, end,
         )
+    from smartbi.services.factory_charts import cost_scope as process_secret
+    scope = await process_secret.resolve_cost_scope(
+        request, caller, [r["product_type_id"] for r in rows])
     return {
         "success": True,
         "data": {
             "startDate": start.isoformat(),
             "endDate": end.isoformat(),
             "order": order,
-            **_gross_margin_payload(list(rows), order, limit),
+            **_gross_margin_payload(list(rows), order, limit, scope),
         },
         "message": "ok",
     }

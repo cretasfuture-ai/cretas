@@ -244,7 +244,7 @@ async def test_fetch_inventory_safe_signature_matches_primitive(monkeypatch):
     """Inventory primitive uses (factory_id, start_date, end_date) not DateRange."""
     received_args: dict[str, Any] = {}
 
-    async def fake_inv(factory_id, start_date, end_date):
+    async def fake_inv(factory_id, start_date, end_date, **_kw):
         received_args["factory_id"] = factory_id
         received_args["start_date"] = start_date
         received_args["end_date"] = end_date
@@ -344,7 +344,7 @@ async def test_build_executive_preserves_existing_metadata(monkeypatch):
 async def test_build_unified_envelope_shape(monkeypatch):
     """All 18 fields of UnifiedDashboardResponse must be present."""
 
-    async def fake_primitive(factory_id, range_or_start, end_date=None):
+    async def fake_primitive(factory_id, range_or_start, end_date=None, **_kw):
         return {"kpiCards": [], "period": "month"}
 
     monkeypatch.setattr(dc, "_get_sales_overview", fake_primitive)
@@ -378,7 +378,7 @@ async def test_build_unified_envelope_shape(monkeypatch):
 @pytest.mark.asyncio
 async def test_build_unified_production_quality_are_placeholders(monkeypatch):
     """Production + Quality should always be placeholders per pilot scope."""
-    async def fake_primitive(factory_id, *args):
+    async def fake_primitive(factory_id, *args, **_kw):
         return {"kpiCards": [{"key": "REAL"}]}
 
     monkeypatch.setattr(dc, "_get_sales_overview", fake_primitive)
@@ -398,7 +398,7 @@ async def test_build_unified_production_quality_are_placeholders(monkeypatch):
 @pytest.mark.asyncio
 async def test_build_unified_rankings_alerts_empty(monkeypatch):
     """Pilot HOLD — rankings + alerts + recommendations all empty list."""
-    async def fake_primitive(factory_id, *args):
+    async def fake_primitive(factory_id, *args, **_kw):
         return {"kpiCards": []}
     for name in ("_get_sales_overview", "_get_finance_overview",
                  "_get_inventory_health", "_get_procurement_overview"):
@@ -423,7 +423,7 @@ async def test_build_unified_partial_failure_graceful(monkeypatch):
     async def fake_finance_broken(factory_id, range_):
         raise RuntimeError("finance pool down")
 
-    async def fake_inv(factory_id, start, end):
+    async def fake_inv(factory_id, start, end, **_kw):
         return {"kpiCards": [{"key": "INV_REAL"}]}
 
     async def fake_proc(factory_id, start, end):
@@ -444,7 +444,7 @@ async def test_build_unified_partial_failure_graceful(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_unified_emits_metadata_dates(monkeypatch):
-    async def fake_primitive(factory_id, *args):
+    async def fake_primitive(factory_id, *args, **_kw):
         return {"kpiCards": []}
     for name in ("_get_sales_overview", "_get_finance_overview",
                  "_get_inventory_health", "_get_procurement_overview"):
@@ -552,7 +552,7 @@ async def test_build_unified_includes_three_derived_getter_keys(monkeypatch):
     fields — Java golden truth has 21 keys. This regression test ensures
     those 3 keys never disappear from Python output."""
 
-    async def fake_primitive(factory_id, *args):
+    async def fake_primitive(factory_id, *args, **_kw):
         return {"kpiCards": []}
 
     for name in ("_get_sales_overview", "_get_finance_overview",
@@ -751,7 +751,7 @@ def endpoint_client(monkeypatch):
     async def fake_finance(factory_id, range_):
         return {"period": "month", "kpiCards": []}
 
-    async def fake_inventory(factory_id, start_date, end_date):
+    async def fake_inventory(factory_id, start_date, end_date, **_kw):
         return {"period": "month", "kpiCards": []}
 
     async def fake_procurement(factory_id, start_date, end_date):
