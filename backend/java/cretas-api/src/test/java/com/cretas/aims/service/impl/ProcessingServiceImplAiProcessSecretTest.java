@@ -149,6 +149,71 @@ class ProcessingServiceImplAiProcessSecretTest {
                 .thenReturn(aiOk());
     }
 
+    // ---------------- 生产统计 / 生产看板的成本合计 ----------------
+
+    /** 本月批次: 保密产品 7777.77 / 100kg, 普通 1234.56 / 100kg 与 4321.00 / 200kg; 原查询返回含保密的全厂数。 */
+    private void stubMonthBatches() {
+        java.time.LocalDateTime today = java.time.LocalDate.now().atTime(0, 0, 1);
+        java.util.List<com.cretas.aims.entity.ProductionBatch> batches = java.util.List.of(
+                completed(batch(1L, SECRET, SECRET_PLAN, SECRET_COST, new BigDecimal("100")), today),
+                completed(batch(2L, NORMAL, NORMAL_PLAN, NORMAL_COST, new BigDecimal("100")), today),
+                completed(batch(3L, NORMAL2, null, NORMAL2_COST, new BigDecimal("200")), today));
+        lenient().when(productionBatchRepository.findByFactoryIdAndCreatedAtAfter(eq(FACTORY), any())).thenReturn(batches);
+        lenient().when(productionBatchRepository.calculateTotalCostAfter(eq(FACTORY), any()))
+                .thenReturn(SECRET_COST.add(NORMAL_COST).add(NORMAL2_COST));
+        lenient().when(productionBatchRepository.calculateTotalOutputAfter(eq(FACTORY), any())).thenReturn(new BigDecimal("400"));
+        lenient().when(productTypeRepository.findByIdIn(any())).thenReturn(java.util.List.of());
+    }
+
+    private static com.cretas.aims.entity.ProductionBatch completed(com.cretas.aims.entity.ProductionBatch batch,
+                                                                    java.time.LocalDateTime createdAt) {
+        batch.setStatus(com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED);
+        batch.setCreatedAt(createdAt);
+        return batch;
+    }
+
+    private Map<String, Object> statisticsAs(com.cretas.aims.security.AuthenticatedActor actor) {
+        try (var ignored = as(actor)) {
+            return service.getProductionStatistics(FACTORY, "month");
+        }
+    }
+
+    @Test
+    void productionStatisticsTotalCostIsTheVisibleSumForAnUnauthorizedCaller() {
+        ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
+        stubMonthBatches();
+
+        Map<String, Object> colleague = statisticsAs(sameFactoryUser());
+        Map<String, Object> owner = statisticsAs(owner());
+
+        assertThat((BigDecimal) colleague.get("totalCost")).isEqualByComparingTo(NORMAL_COST.add(NORMAL2_COST));
+        assertThat((String) colleague.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat((BigDecimal) owner.get("totalCost")).isEqualByComparingTo(SECRET_COST.add(NORMAL_COST).add(NORMAL2_COST));
+        assertThat(owner).doesNotContainKey("processSecretNote");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void dashboardUnitCostIsVisibleCostOverVisibleOutputForAnUnauthorizedCaller() {
+        ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
+        stubMonthBatches();
+
+        Map<String, Object> colleagueKpi;
+        Map<String, Object> ownerKpi;
+        try (var ignored = as(sameFactoryUser())) {
+            colleagueKpi = (Map<String, Object>) service.getDashboardOverview(FACTORY).get("kpi");
+        }
+        try (var ignored = as(owner())) {
+            ownerKpi = (Map<String, Object>) service.getDashboardOverview(FACTORY).get("kpi");
+        }
+
+        // 无权: (1234.56 + 4321.00) / (100 + 200) = 18.52; 有权: 13333.33 / 400 = 33.33 (原查询)
+        BigDecimal visible = NORMAL_COST.add(NORMAL2_COST).divide(new BigDecimal("300"), 2, java.math.RoundingMode.HALF_UP);
+        assertThat((BigDecimal) colleagueKpi.get("unitCost")).isEqualByComparingTo(visible);
+        assertThat((String) colleagueKpi.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat((BigDecimal) ownerKpi.get("unitCost")).isEqualByComparingTo("33.33");
+    }
+
     private static Map<String, Object> aiOk() {
         Map<String, Object> ai = new HashMap<>();
         ai.put("success", true);

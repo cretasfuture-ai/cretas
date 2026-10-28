@@ -84,8 +84,18 @@ public class ProcessSecretLlmCostScope {
      * {@code protectedProductTypeIds} 只是被隐藏的、真正受保护的产品, {@code protectedProductsByPlan} 是每个被排除计划背后的这些产品。
      */
     public record Excluded(Set<String> productTypeIds, Set<String> planIds, Set<String> protectedProductTypeIds,
-                           Map<String, Set<String>> protectedProductsByPlan) {
-        public static final Excluded NONE = new Excluded(Set.of(), Set.of(), Set.of(), Map.of());
+                           Map<String, Set<String>> protectedProductsByPlan, Set<String> planProductTypeIds) {
+        public static final Excluded NONE = new Excluded(Set.of(), Set.of(), Set.of(), Map.of(), Set.of());
+
+        /**
+         * 按产品出数的地方 (经营报告毛利榜等) 要遮的产品: 隐藏的保密产品、计划锚点, 以及与它们同计划联产的普通产品
+         * (联产品的成本与保密产品分摊, 单独给会泄露)。
+         */
+        public Set<String> withheldProducts() {
+            Set<String> all = new java.util.TreeSet<>(productTypeIds);
+            all.addAll(planProductTypeIds);
+            return all;
+        }
 
         public boolean isEmpty() {
             return productTypeIds.isEmpty() && planIds.isEmpty();
@@ -204,7 +214,7 @@ public class ProcessSecretLlmCostScope {
         if (hidden.isEmpty()) return Excluded.NONE;
         ProcessSecretAggregateExclusions.ProtectedScope scope = exclusions.forHidden(factoryId, hidden);
         return new Excluded(Set.copyOf(scope.scope().productTypeIds()), Set.copyOf(scope.scope().planIds()),
-                scope.protectedProductTypeIds(), scope.protectedProductsByPlan());
+                scope.protectedProductTypeIds(), scope.protectedProductsByPlan(), scope.planProductTypeIds());
     }
 
     /** 本厂有没有任何保密产品 (与调用者无关)。 */

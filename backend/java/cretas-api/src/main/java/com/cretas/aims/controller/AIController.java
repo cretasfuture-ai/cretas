@@ -600,7 +600,8 @@ public class AIController {
             startDate = endDate.minusDays(6);
         }
 
-        ProductionAIContext context = aiContextService.buildProductionContext(
+        // 工艺保密: 按调用者裁剪的版本 (无权的保密产品成本为空, 合计只算能看的产品并带说明; 有权调用者与原来相同)
+        ProductionAIContext context = aiContextService.buildProductionContextForAi(
                 factoryId, startDate, endDate);
 
         return ApiResponse.success(context);
@@ -628,7 +629,8 @@ public class AIController {
         log.info("获取产品成本AI上下文: factoryId={}, productTypeId={}, recentBatchCount={}",
                 factoryId, productTypeId, recentBatchCount);
 
-        CostAIContext context = aiContextService.buildCostContext(
+        // 工艺保密: 无权调用者只拿到产品与数量, 成本为空并带说明
+        CostAIContext context = aiContextService.buildCostContextForCaller(
                 factoryId, productTypeId.trim(), recentBatchCount);
 
         return ApiResponse.success(context);

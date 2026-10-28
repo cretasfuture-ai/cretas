@@ -165,6 +165,22 @@ class OperatingReportSecretMaskTest {
     }
 
     @Test
+    void aNonProtectedCoProductOfTheProtectedProductsPlanIsMaskedToo() {
+        // 联产: 同一计划锚在原料上, 目标成品是保密产品和普通产品乙 —— 乙的毛利与保密产品分摊成本, 单独给会泄露
+        com.cretas.aims.entity.ProductionPlan coPlan = plan("PL-CO", "RAW-ANCHOR", null);
+        coPlan.setTargetFinishedGoodIds(List.of(SECRET, NORMAL2));
+        OperatingReportSnapshot masked = maskedFor(scope(java.util.Set.of(SECRET), List.of(coPlan)), sameFactoryUser());
+
+        List<OperatingReportSnapshot.Metric> high = masked.sections().stream()
+                .filter(s -> s.id().equals("marginHigh")).findFirst().orElseThrow().metrics();
+        assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL2 + "."))
+                .isNotEmpty()
+                .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.PROCESS_SECRET_MASK));
+        assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL + "."))
+                .allSatisfy(m -> assertThat(m.value()).isNotNull());
+    }
+
+    @Test
     void theMaskUsesThePlanAwareScopeLikeThePromptDoes() {
         // 多产出计划锚在原料 RAW-ANCHOR 上、目标成品是保密产品: 锚点那一行 (与提示词同口径) 也遮
         com.cretas.aims.entity.ProductionPlan anchorPlan = plan("PL-MULTI", NORMAL2, null);

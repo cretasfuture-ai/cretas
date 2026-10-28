@@ -270,4 +270,49 @@ class ProductionReportProcessSecretPromptTest {
         assertThat(owner.getTotalActualCost()).isEqualByComparingTo(factoryWideTotal);
         assertThat(owner.getProcessSecretNote()).isNull();
     }
+
+    private void stubBatches() {
+        when(batchRepository.findByFactoryIdAndCreatedAtBetween(eq(FACTORY), any(), any())).thenReturn(List.of(
+                batch(1L, SECRET, SECRET_PLAN, SECRET_COST, new BigDecimal("100")),
+                batch(2L, NORMAL, NORMAL_PLAN, NORMAL_COST, new BigDecimal("100")),
+                batch(3L, NORMAL2, null, NORMAL2_COST, new BigDecimal("200"))));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void kpiUnitCostIsNotAPartialCostOverTheFullOutput() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        stubBatches();
+
+        Map<String, Object> colleague = callAs(sameFactoryUser(), () -> service.getKPIMetrics(FACTORY, LocalDate.now()));
+        Map<String, Object> owner = callAs(owner(), () -> service.getKPIMetrics(FACTORY, LocalDate.now()));
+        com.cretas.aims.dto.report.KpiMetricsDTO colleagueDto =
+                callAs(sameFactoryUser(), () -> service.getKpiMetricsDTO(FACTORY, LocalDate.now()));
+        com.cretas.aims.dto.report.KpiMetricsDTO ownerDto =
+                callAs(owner(), () -> service.getKpiMetricsDTO(FACTORY, LocalDate.now()));
+
+        // 无权: 成本只算了能看的批次而产出是全厂的, 相除不是单位成本 —— 不给; 有权: 全厂成本 / 全厂产出
+        assertThat(((Map<String, Object>) colleague.get("cost")).get("unitCost")).isNull();
+        assertThat((BigDecimal) ((Map<String, Object>) owner.get("cost")).get("unitCost"))
+                .isEqualByComparingTo(factoryWideTotal.divide(new BigDecimal("400"), 2, java.math.RoundingMode.HALF_UP));
+        assertThat(colleagueDto.getUnitCost()).isNull();
+        assertThat(ownerDto.getUnitCost()).isNotNull().isPositive();
+    }
+
+    @Test
+    void comparativeAnalysisSurvivesASecondPeriodThatOnlyHasHiddenPlans() throws Exception {
+        LocalDateTime tenDaysAgo = LocalDate.now().minusDays(10).atTime(10, 0);
+        List<ProductionPlan> rows = List.of(
+                costed(plan(SECRET_PLAN, SECRET, tenDaysAgo), SECRET_COST),       // 第二期只有保密计划
+                costed(plan(NORMAL_PLAN, NORMAL, yesterday), NORMAL_COST));
+        ProductionReportServiceImpl service = service(Set.of(SECRET), rows);
+        LocalDate today = LocalDate.now();
+
+        Map<String, Object> analysis = callAs(sameFactoryUser(), () -> service.getComparativeAnalysis(FACTORY,
+                today.minusDays(3), today, today.minusDays(12), today.minusDays(8)));
+
+        assertThat((BigDecimal) ((Map<?, ?>) analysis.get("period1")).get("cost")).isEqualByComparingTo(NORMAL_COST);
+        assertThat((BigDecimal) ((Map<?, ?>) analysis.get("period2")).get("cost")).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(((Map<?, ?>) analysis.get("changeRate")).containsKey("costChange")).isFalse();   // 第二期没有可见成本, 不算环比
+    }
 }

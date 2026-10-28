@@ -155,6 +155,9 @@ public class CostAIContext {
     @com.fasterxml.jackson.annotation.JsonIgnore
     private List<String> costSourcePlanIds;
 
+    /** 工艺保密: 成本对当前调用者不提供时的说明; 其余为 null。 */
+    private String processSecretNote;
+
     /**
      * 成本差异明细
      */

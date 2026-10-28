@@ -483,14 +483,31 @@ public class AIContextServiceImpl implements AIContextService {
 
     @Override
     @Transactional(readOnly = true)
+    public CostAIContext buildCostContextForCaller(String factoryId, String productTypeId, Integer recentBatchCount) {
+        CostAIContext full = buildCostContext(factoryId, productTypeId, recentBatchCount);
+        if (!llmCostScope.forCurrentCaller(factoryId).coversProductOrAnyPlan(productTypeId, full.getCostSourcePlanIds())) {
+            return full;
+        }
+        return CostAIContext.builder().factoryId(factoryId).productTypeId(productTypeId)
+                .productName(full.getProductName()).productCategory(full.getProductCategory())
+                .batchCount(full.getBatchCount()).totalQuantity(full.getTotalQuantity())
+                .processSecretNote("该产品工艺已设为保密，当前账号无权查看其成本")
+                .calculatedAt(full.getCalculatedAt()).build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<CostAIContext.CostVarianceDetail> getCostVarianceSummary(String factoryId) {
         // 获取所有有 BOM 的产品
         List<String> productTypeIds = bomService.getProductTypesWithBom(factoryId);
         List<CostAIContext.CostVarianceDetail> results = new ArrayList<>();
+        // 工艺保密: 调用者无权看的产品 (或成本来自牵涉保密产品的计划) 不出差异明细
+        ProcessSecretLlmCostScope.Excluded hidden = llmCostScope.forCurrentCaller(factoryId);
 
         for (String productTypeId : productTypeIds) {
             try {
                 CostAIContext context = buildCostContext(factoryId, productTypeId, 10);
+                if (hidden.coversProductOrAnyPlan(productTypeId, context.getCostSourcePlanIds())) continue;
                 if (context.getVarianceDetails() != null && !context.getVarianceDetails().isEmpty()) {
                     // 添加产品标识
                     for (CostAIContext.CostVarianceDetail detail : context.getVarianceDetails()) {

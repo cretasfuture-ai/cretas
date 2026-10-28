@@ -154,6 +154,42 @@ class ProcessSecretLlmCostScopeTest {
     }
 
     @Test
+    void withheldProductsIncludeTheNonProtectedCoProductsOfAHiddenPlan() {
+        ProductionPlan multi = plan("PL-MULTI", "RAW-ANCHOR", null);
+        multi.setTargetFinishedGoodIds(List.of(SECRET, "P-SIBLING"));
+        ProcessSecretLlmCostScope.Excluded excluded = scope(Set.of(SECRET), List.of(multi)).forCurrentCaller(FACTORY);
+
+        assertThat(excluded.withheldProducts()).contains(SECRET, "RAW-ANCHOR", "P-SIBLING").doesNotContain(NORMAL);
+        assertThat(excluded.protectedProductTypeIds()).containsExactly(SECRET);   // N 仍只数保密产品
+    }
+
+    @Test
+    void aLoadedPlanIsRecordedButReadsInsideAnUntrackedSectionAreNot() {
+        ProductionPlan secretPlan = plan(SECRET_PLAN, SECRET, null);
+        try (var ignored = ProcessSecretReadTracker.open()) {
+            ProcessSecretReadTracker.untracked(() -> {
+                ProcessSecretReadTracker.record(secretPlan);
+                return null;
+            });
+            assertThat(ProcessSecretReadTracker.reads()).isEmpty();
+
+            ProcessSecretReadTracker.record(secretPlan);
+            assertThat(ProcessSecretReadTracker.reads()).containsExactly(new ProcessSecretReadTracker.Read(
+                    ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, FACTORY, SECRET_PLAN));
+        }
+    }
+
+    @Test
+    void computingTheScopeDoesNotMarkEveryPlanAsRead() {
+        try (var ignored = ProcessSecretReadTracker.open()) {
+            // 判定范围要读全厂计划 (夹具的计划仓库对每个返回的计划走一遍打标入口, 等同 PostLoad)
+            ProcessSecretLlmCostScope scope = protectedScope();
+            assertThat(scope.forCurrentCaller(FACTORY).isEmpty()).isFalse();   // 一定发生: 确实算了范围、读了计划
+            assertThat(ProcessSecretReadTracker.reads()).isEmpty();
+        }
+    }
+
+    @Test
     void harnessInstructionOnlyInFactoriesWithProtectedProducts() {
         assertThat(protectedScope().harnessFor(FACTORY)).isEqualTo(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
         assertThat(unprotectedScope().harnessFor(FACTORY)).isEmpty();

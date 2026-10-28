@@ -71,33 +71,38 @@ public class ProcessSecretAggregateExclusions {
      * 判定由调用方做 (ProcessSecretLlmCostScope), 这里不判权限、不记审计。
      */
     public record ProtectedScope(Scope scope, Set<String> protectedProductTypeIds,
-                                 Map<String, Set<String>> protectedProductsByPlan) {
+                                 Map<String, Set<String>> protectedProductsByPlan, Set<String> planProductTypeIds) {
     }
 
     public ProtectedScope forHidden(String factoryId, Set<String> hidden) {
         Map<String, Set<String>> byPlan = new HashMap<>();
-        Scope scope = expand(factoryId, new HashSet<>(hidden), byPlan);
-        return new ProtectedScope(scope, Set.copyOf(hidden), Map.copyOf(byPlan));
+        Set<String> planProducts = new TreeSet<>();
+        Scope scope = expand(factoryId, new HashSet<>(hidden), byPlan, planProducts);
+        return new ProtectedScope(scope, Set.copyOf(hidden), Map.copyOf(byPlan), Set.copyOf(planProducts));
     }
 
     private Scope expand(String factoryId, Set<String> hidden) {
-        return expand(factoryId, hidden, null);
+        return expand(factoryId, hidden, null, null);
     }
 
-    private Scope expand(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan) {
+    /** {@code planProducts}: 牵涉隐藏产品的计划上的全部产品 (锚点、目标成品、联产的普通产品)。 */
+    private Scope expand(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan,
+                         Set<String> planProducts) {
         TreeSet<String> products = new TreeSet<>(hidden);
         TreeSet<String> plans = new TreeSet<>();
-        List<ProductionPlan> factoryPlans = planRepository.findByFactoryId(factoryId);
+        // 判定范围要读全厂计划: 不打标, 否则出口会以为这次输出牵涉了所有计划
+        List<ProductionPlan> factoryPlans = ProcessSecretReadTracker.untracked(() -> planRepository.findByFactoryId(factoryId));
         Map<String, String> productOfRecipe = productsOfPinnedRecipes(factoryId, factoryPlans);
         for (ProductionPlan plan : factoryPlans) {
             // 与裁剪器、配比提示同一口径: 锚点、目标成品、按产品钉的配方键, 以及钉住的配方所属产品
             // (只钉了单个配方的多产出计划, 产品只能从配方查到; 独立审查第四轮 M2)
-            Set<String> involved = new TreeSet<>(
-                    ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId))));
+            Set<String> allOfPlan = ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId)));
+            Set<String> involved = new TreeSet<>(allOfPlan);
             involved.retainAll(hidden);
             if (involved.isEmpty()) {
                 continue;
             }
+            if (planProducts != null) planProducts.addAll(allOfPlan);
             if (plan.getId() != null && !plan.getId().isBlank()) {
                 plans.add(plan.getId());
                 if (hiddenByPlan != null) hiddenByPlan.put(plan.getId(), Set.copyOf(involved));

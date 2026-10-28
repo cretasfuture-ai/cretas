@@ -69,8 +69,9 @@ public class OperatingReportGenerator {
             // 工艺保密: 给模型的是另一份快照 —— 产品毛利榜去掉保密产品, 毛利汇总只在剩下的产品上重算;
             // 保存/展示的快照不变。取不到保密范围就按取数失败记 (不发)。
             var secret=llmCostScope.forCurrentCaller(context.factoryId());
-            Map<String,Object> promptHigh=OperatingReportGrossMarginQuery.withoutProducts(input.marginHigh(),secret.productTypeIds(),secret.protectedProductTypeIds(),false);
-            Map<String,Object> promptLow=OperatingReportGrossMarginQuery.withoutProducts(input.marginLow(),secret.productTypeIds(),secret.protectedProductTypeIds(),true);
+            // 与页面读取遮挡同一个集合: 保密产品、计划锚点、同计划联产的普通产品
+            Map<String,Object> promptHigh=OperatingReportGrossMarginQuery.withoutProducts(input.marginHigh(),secret.withheldProducts(),secret.protectedProductTypeIds(),false);
+            Map<String,Object> promptLow=OperatingReportGrossMarginQuery.withoutProducts(input.marginLow(),secret.withheldProducts(),secret.protectedProductTypeIds(),true);
             int excludedRows=((Number)promptHigh.get("excludedRowCount")).intValue();
             int excludedProducts=((Number)promptHigh.get("excludedProtectedProductCount")).intValue();
             OperatingReportSnapshot promptSnapshot=assembler.assemble(new OperatingReportAssembler.Input(input.type(),input.start(),input.end(),

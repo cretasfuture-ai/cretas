@@ -120,6 +120,11 @@ public class ProcessingServiceImpl implements ProcessingService {
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
             com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
+    /** 生产由 Spring 注入 (必需); 部分模拟 (CALLS_REAL_METHODS) 的单测里字段初始化不执行, 退回同一个默认实例。 */
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope secretScope() {
+        return llmCostScope != null ? llmCostScope : com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+    }
+
     /**
      * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* with per-factory config.
      * Optional injection so Mockito @InjectMocks tests without resolver still construct.
@@ -2449,6 +2454,12 @@ public class ProcessingServiceImpl implements ProcessingService {
                 && monthlyTotalCost != null) {
             unitCost = monthlyTotalCost.divide(monthlyTotalOutput, 2, RoundingMode.HALF_UP);
         }
+        // 工艺保密: 调用者对本厂某个保密产品无权时, 单位成本 = 他能看的批次的成本 / 同一批批次的产量 (带说明)
+        com.cretas.aims.service.processsecret.ProcessSecretBatchCosts visibleMonth = visibleBatchCosts(factoryId, monthStart);
+        if (visibleMonth != null) {
+            unitCost = visibleMonth.unitCost();
+            if (visibleMonth.partial()) kpi.put("processSecretNote", visibleMonth.note());
+        }
         kpi.put("unitCost", unitCost);
 
         // 查询19: 平均生产周期
@@ -2554,8 +2565,13 @@ public class ProcessingServiceImpl implements ProcessingService {
         // 产量统计
         BigDecimal totalOutput = productionBatchRepository.calculateTotalOutputAfter(factoryId, startDate);
         statistics.put("totalOutput", totalOutput != null ? totalOutput : BigDecimal.ZERO);
-        // 成本统计
+        // 成本统计 (工艺保密: 调用者对本厂某个保密产品无权时只算他能看的批次, 带说明)
         BigDecimal totalCost = productionBatchRepository.calculateTotalCostAfter(factoryId, startDate);
+        com.cretas.aims.service.processsecret.ProcessSecretBatchCosts visibleStats = visibleBatchCosts(factoryId, startDate);
+        if (visibleStats != null) {
+            totalCost = visibleStats.totalCost();
+            if (visibleStats.partial()) statistics.put("processSecretNote", visibleStats.note());
+        }
         statistics.put("totalCost", totalCost != null ? totalCost : BigDecimal.ZERO);
         // 效率统计
         BigDecimal avgEfficiency = productionBatchRepository.calculateAverageEfficiency(factoryId, startDate);
@@ -3025,6 +3041,18 @@ public class ProcessingServiceImpl implements ProcessingService {
         return savings;
     }
 
+    /**
+     * 工艺保密: 调用者对本厂保密产品都能完整查看 (或本厂没有保密产品) 时返回 null, 调用方沿用原查询;
+     * 否则只在他能看的批次上累加成本与产量。读全厂批次本身不打标 (结果已经按调用者裁剪)。
+     */
+    private com.cretas.aims.service.processsecret.ProcessSecretBatchCosts visibleBatchCosts(String factoryId, java.time.LocalDateTime from) {
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = secretScope().forCurrentCaller(factoryId);
+        if (hidden.isEmpty()) return null;
+        List<ProductionBatch> batches = com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(
+                () -> productionBatchRepository.findByFactoryIdAndCreatedAtAfter(factoryId, from.minusSeconds(1)));
+        return com.cretas.aims.service.processsecret.ProcessSecretBatchCosts.of(hidden, batches, from);
+    }
+
     // ========== AI智能成本分析（新版本） ==========
 
     /**
@@ -3039,7 +3067,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         // 0. 工艺保密: 当前账号无权查看的保密产品批次, 成本不发给 AI, 也不回放以前缓存的分析 (判定在读缓存之前;
         //    负责人 / 有效授权照常分析)
         ProductionBatch secretCheck = getBatchById(factoryId, batchId);
-        if (llmCostScope.isProtectedBatch(factoryId, secretCheck.getProductTypeId(), secretCheck.getProductionPlanId())) {
+        if (secretScope().isProtectedBatch(factoryId, secretCheck.getProductTypeId(), secretCheck.getProductionPlanId())) {
             Map<String, Object> withheld = new HashMap<>();
             withheld.put("batchId", batchId);
             withheld.put("batchNumber", secretCheck.getBatchNumber());
@@ -3050,7 +3078,7 @@ public class ProcessingServiceImpl implements ProcessingService {
             return withheld;
         }
         // 共享的分析缓存按调用者保密档位分开: 有保密产品的工厂键里带档位 (同档复用, 跨档不复用, 不带档位的旧键不再命中)
-        String secrecyTier = llmCostScope.accessTier(factoryId);
+        String secrecyTier = secretScope().accessTier(factoryId);
         String cacheKey = secrecyTier.isEmpty() ? batchId : batchId + "|" + secrecyTier;
 
         // 1. 检查缓存（仅对初次分析且无自定义消息的情况使用缓存）

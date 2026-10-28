@@ -32,6 +32,12 @@ public record ProcessSecretPlanCosts(BigDecimal material, BigDecimal labor, BigD
         return partial() ? ProcessSecretLlmCostScope.note(excludedProducts) : null;
     }
 
+    /** 已经按调用方口径筛好的计划行 (不再按结束时间筛窗口)。 */
+    public static ProcessSecretPlanCosts ofRows(ProcessSecretLlmCostScope.Excluded excluded, List<ProductionPlan> plans) {
+        return of(excluded, plans, null, null, false);
+    }
+
+    /** {@code from} / {@code to} 为 null = 不筛窗口。 */
     public static ProcessSecretPlanCosts of(ProcessSecretLlmCostScope.Excluded excluded, List<ProductionPlan> plans,
                                             LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
         Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
@@ -40,7 +46,7 @@ public record ProcessSecretPlanCosts(BigDecimal material, BigDecimal labor, BigD
         int excludedPlans = 0;
         for (ProductionPlan plan : plans) {
             LocalDateTime end = plan.getEndTime();
-            if (end == null || end.isBefore(from) || end.isAfter(to)) continue;
+            if (from != null && (end == null || end.isBefore(from) || end.isAfter(to))) continue;
             if (perDayBounds && end.isAfter(end.toLocalDate().atTime(23, 59, 59))) continue;
             if (excluded.coversPlan(plan.getId()) || excluded.coversProduct(plan.getProductTypeId())) {
                 excludedPlans++;
@@ -56,7 +62,7 @@ public record ProcessSecretPlanCosts(BigDecimal material, BigDecimal labor, BigD
             BigDecimal cost = nz(plan.getActualMaterialCost()).add(nz(plan.getActualLaborCost()))
                     .add(nz(plan.getActualEquipmentCost())).add(nz(plan.getActualOtherCost()));
             total = total == null ? cost : total.add(cost);
-            byDay.merge(end.toLocalDate(), cost, BigDecimal::add);
+            if (end != null) byDay.merge(end.toLocalDate(), cost, BigDecimal::add);
         }
         return new ProcessSecretPlanCosts(material, labor, equipment, other, total, byDay, excludedPlans,
                 excludedProducts.size());

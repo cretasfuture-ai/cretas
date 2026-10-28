@@ -125,7 +125,11 @@ public final class ProcessSecretLlmFixture {
 
     private static ProcessSecretAggregateExclusions exclusions(ProcessSecretAccessService access, List<ProductionPlan> plans) {
         ProductionPlanRepository planRepository = lenientMock(ProductionPlanRepository.class);
-        when(planRepository.findByFactoryId(anyString())).thenReturn(plans);
+        // 模拟 Hibernate PostLoad: 仓库返回的每个计划都经过数据层打标入口 (作用域外不记)
+        when(planRepository.findByFactoryId(anyString())).thenAnswer(inv -> {
+            plans.forEach(ProcessSecretReadTracker::record);
+            return plans;
+        });
         BomRecipeRepository recipes = lenientMock(BomRecipeRepository.class);
         when(recipes.findAllById(any())).thenReturn(List.of());
         return new ProcessSecretAggregateExclusions(access, planRepository, recipes);

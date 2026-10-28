@@ -46,7 +46,7 @@ public class OperatingReportProjection {
     OperatingReportSnapshot maskForCaller(OperatingReportSnapshot snapshot,String factoryId){
         if(snapshot.sections()==null||snapshot.sections().isEmpty())return snapshot;
         java.util.Set<String> hidden;
-        try{hidden=secretScope.forCurrentCaller(factoryId).productTypeIds();}
+        try{hidden=secretScope.forCurrentCaller(factoryId).withheldProducts();}
         catch(RuntimeException unknown){hidden=null;}
         if(hidden!=null&&hidden.isEmpty())return snapshot;
         java.util.List<OperatingReportSnapshot.Section> sections=new java.util.ArrayList<>();

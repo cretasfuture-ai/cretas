@@ -82,7 +82,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visiblePlanCosts(String factoryId, LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forCurrentCaller(factoryId);
         if (excluded.isEmpty()) return null;
-        return com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(excluded, productionPlanRepository.findByFactoryId(factoryId), from, to, perDayBounds);
+        // 读全厂计划不打标: 结果已按调用者只算他能看的计划
+        return com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(excluded, com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> productionPlanRepository.findByFactoryId(factoryId)),
+                from, to, perDayBounds);
     }
 
     /** 区间总成本: 能看全 → 原查询; 否则可见计划逐行累加, 并在返回给调用方 (页面 / AI 工具) 的数据上注明。 */
@@ -681,6 +683,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         try {
             CostVarianceReportDTO costReport = getCostVarianceReport(factoryId, startDate, endDate);
             BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
+            // 工艺保密: 成本只算了调用者能看的批次而产出是全厂的 —— 两者相除不是单位成本, 不给 (说明见成本差异报表)
+            if (costReport != null && costReport.getProcessSecretNote() != null) totalActualCost = null;
             if (totalActualCost != null && output.compareTo(BigDecimal.ZERO) > 0) {
                 unitCost = totalActualCost.divide(output, 2, RoundingMode.HALF_UP);
             }
@@ -758,12 +762,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         period2.put("cost", cost2 != null ? cost2 : BigDecimal.ZERO);
         analysis.put("period2", period2);
         Map<String, Double> changeRate = new HashMap<>();
-        if (output1 != null && output1.compareTo(BigDecimal.ZERO) > 0) {
+        if (output1 != null && output1.compareTo(BigDecimal.ZERO) > 0 && output2 != null) {
             changeRate.put("outputChange",
                     output2.subtract(output1).divide(output1, 4, RoundingMode.HALF_UP)
                             .multiply(BigDecimal.valueOf(100)).doubleValue());
         }
-        if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0) {
+        if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0 && cost2 != null) {
             changeRate.put("costChange",
                     cost2.subtract(cost1).divide(cost1, 4, RoundingMode.HALF_UP)
                             .multiply(BigDecimal.valueOf(100)).doubleValue());
@@ -1558,6 +1562,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
         BigDecimal unitCost = (totalActualCost != null && safeOutput.compareTo(BigDecimal.ZERO) > 0) ?
                 totalActualCost.divide(safeOutput, 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+        // 工艺保密: 成本只算了调用者能看的批次而产出是全厂的, 相除不是单位成本 —— 不给
+        if (costReport != null && costReport.getProcessSecretNote() != null) unitCost = null;
 
         BigDecimal equipmentAvailability = equipments.size() > 0 ?
                 new BigDecimal(runningEquipment).divide(new BigDecimal(equipments.size()), 4, RoundingMode.HALF_UP)

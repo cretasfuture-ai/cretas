@@ -47,6 +47,12 @@ public interface AIContextService {
     CostAIContext buildCostContext(String factoryId, String productTypeId, Integer recentBatchCount);
 
     /**
+     * 对外输出版: 当前调用者无权完整查看该产品 (或它的成本来自牵涉保密产品的计划) 时, 只给产品与数量, 成本全空并带说明;
+     * 有权调用者与 {@link #buildCostContext} 相同。
+     */
+    CostAIContext buildCostContextForCaller(String factoryId, String productTypeId, Integer recentBatchCount);
+
+    /**
      * 获取成本差异汇总
      *
      * @param factoryId 工厂ID

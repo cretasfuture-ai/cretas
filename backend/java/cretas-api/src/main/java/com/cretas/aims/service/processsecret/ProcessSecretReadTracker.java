@@ -65,6 +65,22 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     }
 
     private static final ThreadLocal<Set<Read>> EXPLICIT = new ThreadLocal<>();
+    private static final ThreadLocal<int[]> UNTRACKED = ThreadLocal.withInitial(() -> new int[1]);
+
+    /**
+     * 不打标地执行一段读取: 只给「自己已经按调用者裁剪了结果」的代码用 —— 判定保密范围要读全厂计划,
+     * 只算调用者能看的计划成本也要先读全厂计划; 这些读数若记进作用域, 出口会以为这次输出牵涉了保密计划,
+     * 连已经裁剪过的合计一起藏掉。其他读取照常打标。
+     */
+    public static <T> T untracked(java.util.function.Supplier<T> read) {
+        int[] depth = UNTRACKED.get();
+        depth[0]++;
+        try {
+            return read.get();
+        } finally {
+            depth[0]--;
+        }
+    }
 
     /** 打开一个显式作用域 (AI 工具执行)。嵌套时沿用外层, 关闭内层不清外层。 */
     public static Scope open() {
@@ -100,6 +116,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     /** 包内可见, 供测试和不经过 Hibernate 的读取 (如 JSON 快照) 直接调用。 */
     static void record(Object entity) {
         if (entity == null) return;
+        if (UNTRACKED.get()[0] > 0) return;
         // 先看有没有人在记: 没有就不算 (工艺图要解析 JSON, 不能让每次加载都付这个钱; 独立审查 V2.1 复核)
         Set<Read> sink = sink(true);
         if (sink == null) return;
@@ -145,6 +162,12 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
                 found.add(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), row.getPlanId(), member));
             }
             return found;
+        }
+        if (entity instanceof com.cretas.aims.entity.ProductionPlan plan) {
+            // 计划上挂着实际成本 (材料 / 人工 / 设备 / 其他): 按计划记, 出口经计划解析它牵涉的全部产品
+            // (纵深防御: 统计接口已按调用者只算能看的计划)
+            if (plan.getId() == null || plan.getId().isBlank()) return List.of();
+            return List.of(new Read(Kind.PRODUCTION_PLAN, plan.getFactoryId(), plan.getId()));
         }
         if (entity instanceof ProductionBatch b) {
             List<Read> found = new java.util.ArrayList<>(product(b.getFactoryId(), b.getProductTypeId()));

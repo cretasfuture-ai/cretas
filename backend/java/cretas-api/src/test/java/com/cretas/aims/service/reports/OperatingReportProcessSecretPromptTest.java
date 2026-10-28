@@ -124,6 +124,17 @@ class OperatingReportProcessSecretPromptTest {
     }
 
     @Test
+    void theCoProductOfTheProtectedProductsPlanIsLeftOutOfThePromptButNotCountedAsProtected() throws Exception {
+        com.cretas.aims.entity.ProductionPlan coPlan = plan("PL-CO", "RAW-ANCHOR", null);
+        coPlan.setTargetFinishedGoodIds(List.of(SECRET, NORMAL2));
+
+        String prompt = prompt(scope(java.util.Set.of(SECRET), List.of(coPlan)));
+
+        assertThat(prompt).doesNotContain(SECRET + ".", NORMAL2 + ".").contains(NORMAL + ".")
+                .contains("不含 1 个保密产品");   // 联产品被一并去掉, 但 N 只数保密产品
+    }
+
+    @Test
     void negativeControlTheSameInstrumentSeesTheSecretMarginWhenNothingIsProtected() throws Exception {
         String prompt = prompt(unprotectedScope());
 
