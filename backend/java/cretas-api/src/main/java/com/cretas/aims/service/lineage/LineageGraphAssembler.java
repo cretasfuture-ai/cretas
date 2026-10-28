@@ -74,6 +74,10 @@ public class LineageGraphAssembler {
      * depth 不在索引里、只是取回后的过滤条件 —— 上限只影响返回行数，不改变访问路径。
      */
     public static final int MAX_DEPTH_CAP = 50;
+
+    /** S3-16 按锅收窄 (可选注入: Mockito @InjectMocks 构造的单测里为 null, 召回结果不变)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.pot.PotTraceService potTraceService;
     /**
      * 缺省跳数 = 上限。召回「漏一个成品」是食品安全事故，溯源「看不到首道原料」等于没溯源，
      * 所以没有「先给个浅的」这一档；调用方真想看浅的就显式传。
@@ -316,7 +320,17 @@ public class LineageGraphAssembler {
         List<TraceabilityDTO.LineageNode> finished = byType(all, LineageEdgeRecorder.NODE_FINISHED_BATCH);
         List<TraceabilityDTO.LineageNode> shipments = byType(all, LineageEdgeRecorder.NODE_SHIPMENT_RECORD);
 
+        // S3-16: 影响面里有锅次的批次再按锅收窄 (额外一层, 不改上面的批次级结果)
+        List<com.cretas.aims.service.pot.PotTraceService.BatchPotScope> potScopes = null;
+        if (potTraceService != null) {
+            java.util.Set<String> impacted = new java.util.LinkedHashSet<>();
+            impacted.add(rootType + "#" + rootId);
+            all.forEach(n -> impacted.add(n.getNodeType() + "#" + n.getNodeId()));
+            potScopes = potTraceService.scopesFor(factoryId, impacted, null);
+        }
+
         return TraceabilityDTO.ImpactResponse.builder()
+                .potScopes(potScopes)
                 .rootType(rootType)
                 .rootId(rootId)
                 .productionBatches(production)
