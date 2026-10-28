@@ -138,6 +138,72 @@ describe('scheduling detail real wire mount', () => {
     wrapper.unmount();
   });
 
+  it('shows the auto-schedule task timeline per schedule and the generation warnings carried in history state', async () => {
+    const baseGet = get.getMockImplementation()!;
+    get.mockImplementation(async (url: string) => {
+      const result = await baseGet(url);
+      if (!url.endsWith('/PLAN-1')) return result;
+      return { ...result, data: { ...result.data, lineSchedules: [{
+        id: 'S-APS', planId: 'PLAN-1', productionLineId: 'LINE-1', productionLineName: '一号线', batchId: null,
+        batchNumber: null, productionPlanId: 'PP-A', planNumber: 'PLAN-A', sequenceOrder: 0,
+        plannedStartTime: '2026-10-19T08:00:00', plannedEndTime: '2026-10-19T09:25:00', plannedQuantity: 12,
+        assignedWorkers: 0, completedQuantity: 0, status: 'pending', workerAssignments: [],
+        taskTimeline: [
+          { taskName: '分切', processOrder: 1, workProcessId: 'WP-CUT', start: '2026-10-19T08:00', end: '2026-10-19T08:30', status: 'SCHEDULED' },
+          { taskName: '包装', processOrder: 4, workProcessId: 'WP-PACK', start: '2026-10-19T09:15', end: '2026-10-20T09:25', status: 'SCHEDULED' },
+          { taskName: '解冻', processOrder: 0, workProcessId: 'WP-THAW', start: null, end: null, status: 'DONE' },
+        ],
+      }] } };
+    });
+    window.history.replaceState({ apsWarnings: [
+      '计划「PLAN-B」有工序缺预计工时：「蒸煮」，这个计划没有排，也不占工位。请到「工序管理」给这些工序填预计分钟后再排',
+    ] }, '');
+    const box = { template: '<div><slot name="header"/><slot/></div>' };
+    const wrapper = mount(Detail, { global: {
+      directives: { loading: () => undefined },
+      stubs: { ElCard: box, ElTable, ElTableColumn, ElProgress: box, ElTag: box, ElButton: box,
+        ElDialog: box, ElForm: box, ElFormItem: box, ElInputNumber: box, ElEmpty: box, ElIcon: box,
+        ElAlert: { props: ['title'], template: '<div class="alert">{{ title }}</div>' },
+        SchedulingDiagnosticsPanel: true },
+    } });
+    try {
+      await flushPromises();
+      const warnings = wrapper.get('[data-testid="aps-warnings"]');
+      expect(warnings.text()).toContain('蒸煮');
+      expect(warnings.text()).toContain('去工序管理填预计工时');
+      const timeline = wrapper.get('[data-testid="task-timeline"]');
+      expect(timeline.text()).toContain('计划 PLAN-A');
+      expect(timeline.text()).toContain('1. 分切');
+      expect(timeline.text()).toContain('08:00');
+      expect(timeline.text()).toContain('08:30');
+      expect(timeline.text()).toContain('10-20 09:25'); // 跨天带日期
+      expect(timeline.text()).toContain('已完成（不占时间）');
+      expect(wrapper.find('.el-table').text()).toContain('计划 PLAN-A'); // 没有批次时排程列表显示计划号
+    } finally {
+      wrapper.unmount();
+      window.history.replaceState(null, '');
+    }
+  });
+
+  it('shows no warning block when the page is opened directly (warnings are not persisted)', async () => {
+    window.history.replaceState(null, '');
+    const box = { template: '<div><slot name="header"/><slot/></div>' };
+    const wrapper = mount(Detail, { global: {
+      directives: { loading: () => undefined },
+      stubs: { ElCard: box, ElTable, ElTableColumn, ElProgress: box, ElTag: box, ElButton: box,
+        ElDialog: box, ElForm: box, ElFormItem: box, ElInputNumber: box, ElEmpty: box, ElIcon: box,
+        ElAlert: { props: ['title'], template: '<div class="alert">{{ title }}</div>' },
+        SchedulingDiagnosticsPanel: true },
+    } });
+    try {
+      await flushPromises();
+      expect(wrapper.find('[data-testid="aps-warnings"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="task-timeline"]').exists()).toBe(false); // 手工排程没有时间线
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('passes an existing line schedule context through the real diagnostics Panel and API', async () => {
     const box = { template: '<div><slot name="header"/><slot/></div>' };
     const wrapper = mount(Detail, { global: {

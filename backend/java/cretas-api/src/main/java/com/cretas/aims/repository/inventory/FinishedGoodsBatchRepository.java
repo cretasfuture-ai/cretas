@@ -28,10 +28,16 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             String factoryId, java.util.Collection<Long> owners,
             java.time.LocalDate startDate, java.time.LocalDate endDate, Pageable pageable);
 
-    /** Disposal may consume only stock still physically present and not reserved for an order. */
+    /**
+     * Disposal may consume only stock still physically present and not reserved for an order.
+     * Customer-owned stock is eligible only once it is no longer sellable (returned/defective/expired/frozen):
+     * sellable toll output must leave through the toll delivery so the processing fee is billed.
+     */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.status IN :statuses " +
-            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED " +
+            "     OR (b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+            "         AND b.status <> 'AVAILABLE')) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.createdAt DESC, b.id DESC")
     List<FinishedGoodsBatch> findDisposalEligibleByFactoryId(@Param("factoryId") String factoryId,

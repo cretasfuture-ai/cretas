@@ -15,15 +15,9 @@ from __future__ import annotations
 import time
 from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
-MIN_NAME_LENGTH = 2
-_CACHE_SECONDS = 60.0
+from common.process_secret_sql import MIN_NAME_LENGTH, PROTECTED_NAMES_SQL, usable_names  # noqa: F401
 
-PROTECTED_NAMES_SQL = """
-    SELECT DISTINCT pt.name
-    FROM process_secret_policies p
-    JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
-    WHERE p.factory_id = $1 AND pt.name IS NOT NULL
-"""
+_CACHE_SECONDS = 60.0
 
 ALL_PROTECTED_NAMES_SQL = """
     SELECT DISTINCT p.factory_id, pt.name
@@ -33,10 +27,6 @@ ALL_PROTECTED_NAMES_SQL = """
 """
 
 _cache: Dict[str, Tuple[float, FrozenSet[str]]] = {}
-
-
-def usable_names(names: Iterable[Optional[str]]) -> FrozenSet[str]:
-    return frozenset(n.strip() for n in names if n and len(n.strip()) >= MIN_NAME_LENGTH)
 
 
 def mentions_any(names: Iterable[str], *texts: Optional[str]) -> bool:

@@ -6,8 +6,9 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.ProductEquipmentRequirement;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.ProductionLineCapacityConfig.Source;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.ActorRef;
-import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.scheduling.LineCapacityConfigService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -64,10 +65,11 @@ public class LineCapacityConfigController {
         }
     }
 
-    public record EquipmentView(Long id, String productTypeId, Long equipmentId, String source, Long configuredBy) {
+    public record EquipmentView(Long id, String productTypeId, Long equipmentId, String source, String actorType,
+                                Long configuredBy) {
         static EquipmentView of(ProductEquipmentRequirement r) {
             return new EquipmentView(r.getId(), r.getProductTypeId(), r.getEquipmentId(), r.getSource().name(),
-                    r.getConfiguredBy());
+                    r.getActorType().name(), r.getConfiguredBy());
         }
     }
 
@@ -87,7 +89,7 @@ public class LineCapacityConfigController {
                                                  HttpServletRequest http) {
         ProductionLineCapacityConfig saved = service.setCapacity(factoryId, request.getProductionLineId(),
                 request.getProductTypeId(), request.getCapacityPerHour(), request.getCapacityUnit(),
-                Source.FACTORY_CONFIG, factoryUser(http));
+                Source.FACTORY_CONFIG, writer(http, factoryId));
         return ApiResponse.success("保存成功", CapacityView.of(saved));
     }
 
@@ -117,28 +119,27 @@ public class LineCapacityConfigController {
                                                              @Valid @RequestBody EquipmentRequest request,
                                                              HttpServletRequest http) {
         List<ProductEquipmentRequirement> saved = service.replaceEquipment(factoryId, productTypeId,
-                request.getEquipmentIds(), Source.FACTORY_CONFIG, factoryUser(http));
+                request.getEquipmentIds(), Source.FACTORY_CONFIG, writer(http, factoryId));
         return ApiResponse.success("保存成功", saved.stream().map(EquipmentView::of).toList());
     }
 
-    /** 工厂配置页的写入人是工厂用户; 拿不到 id 时返回 null, 服务层 401 且不写。 */
-    private static ActorRef factoryUser(HttpServletRequest request) {
-        Long id = userId(request);
-        return id == null || id <= 0 ? null : new ActorRef(AuthenticatedActorType.FACTORY_USER, id);
-    }
-
-    private static Long userId(HttpServletRequest request) {
-        Object v = request.getAttribute("userId");
-        if (v instanceof Number n) {
-            return n.longValue();
-        }
-        if (v instanceof String s) {
-            try {
-                return Long.parseLong(s);
-            } catch (NumberFormatException e) {
-                return null;
+    /**
+     * 写入人取 JWT 拦截器验过的身份, 按它真实的类型记账。
+     *
+     * <p>⛔ 不读裸 {@code userId} 属性再一律记成 FACTORY_USER: 平台管理员和工厂用户的 id 是两个序列,
+     * 会撞号, 那样审计行会指向另一个人。平台侧只放行能跨厂的角色 (与拦截器同一张名单), 记成 PLATFORM_ADMIN;
+     * 工厂用户的 token 必须属于路径上的这家厂。
+     */
+    static ActorRef writer(HttpServletRequest request, String factoryId) {
+        AuthenticatedActor actor = AuthenticatedActor.current(request)
+                .orElseThrow(() -> new BusinessException(401, "无法识别当前操作人, 未保存"));
+        if (actor.isPlatformAdmin()) {
+            if (!actor.hasFactoryBypass()) {
+                throw new BusinessException(403, "当前平台角色不能修改工厂的产线产能配置");
             }
+        } else if (actor.factoryId() == null || !actor.factoryId().equals(factoryId)) {
+            throw new BusinessException(403, "登录账号不属于该工厂, 未保存");
         }
-        return null;
+        return new ActorRef(actor.type(), actor.id());
     }
 }

@@ -108,9 +108,18 @@ class ProcessSheetMultiOutputUnknownCostTest {
     }
 
     @Test
-    void knownJointCostIsStillSplitAndConserved() throws Throwable {
-        carrier.setCostIncomplete(false);
-        carrier.setTotalCost(new BigDecimal("114.80"));
+    void previouslyUnknownJointCostRecoversAndRemainsConserved() throws Throwable {
+        List<Object> unknown = List.of(
+                materialization("grp#0", "PT-SOUP", "8", outcome(10998L, null)),
+                materialization("grp#1", "PT-MARROW", "2", outcome(10999L, new BigDecimal("26.00"))));
+        allocate(unknown, new ArrayList<>());
+        for (ProductionBatch batch : List.of(carrier, sibling)) {
+            batch.calculateMetrics();
+            assertThat(batch.getCostIncomplete()).isTrue();
+            assertThat(batch.getTotalCost()).isNull();
+            assertThat(batch.getUnitCost()).isNull();
+        }
+
         List<Object> materializations = List.of(
                 materialization("grp#0", "PT-SOUP", "8", outcome(10998L, new BigDecimal("114.80"))),
                 materialization("grp#1", "PT-MARROW", "2", outcome(10999L, new BigDecimal("26.00"))));
@@ -119,6 +128,11 @@ class ProcessSheetMultiOutputUnknownCostTest {
 
         carrier.calculateMetrics();
         sibling.calculateMetrics();
+        for (ProductionBatch batch : List.of(carrier, sibling)) {
+            assertThat(batch.getCostIncomplete()).isFalse();
+            assertThat(batch.getTotalCost()).isNotNull();
+            assertThat(batch.getUnitCost()).isNotNull();
+        }
         assertThat(carrier.getTotalCost().add(sibling.getTotalCost()))
                 .as("成本已知时按质量分摊, 合计守恒").isEqualByComparingTo("140.80");
         assertThat(carrier.getTotalCost()).isEqualByComparingTo("112.64");   // 80%

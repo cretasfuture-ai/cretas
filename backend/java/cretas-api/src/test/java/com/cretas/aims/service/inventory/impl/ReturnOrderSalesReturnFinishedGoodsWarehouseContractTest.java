@@ -981,4 +981,80 @@ class ReturnOrderSalesReturnFinishedGoodsWarehouseContractTest {
         assertThat(order.getStatus()).isEqualTo(ReturnOrderStatus.REJECTED);
         verify(returnOrderRepository).save(order);
     }
+
+    // ==================== S3-10 (2026-10-28): 代加工退货归属 + 含税应收冲减 ====================
+
+    @Test
+    @DisplayName("代加工客户自有成品退回: 回库批次保持 CUSTOMER_OWNED 与原客户, 不变成公司库存")
+    void customerOwnedReturnKeepsOwner() {
+        ReturnOrder order = salesReturn(List.of(productLine("PT-TOLL", new BigDecimal("16"))));
+        FinishedGoodsBatch tollSource = sourceBatch("SRC-PT-TOLL", "PT-TOLL", "kg");
+        tollSource.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED);
+        tollSource.setOwnerCustomerId("CUST-001");
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "SRC-PT-TOLL"))
+                .thenReturn(Optional.of(tollSource));
+
+        service.completeReturnOrder(FACTORY, order.getId());
+
+        ArgumentCaptor<FinishedGoodsBatch> captor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(captor.capture());
+        assertThat(captor.getValue().getOwnership())
+                .isEqualTo(com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED);
+        assertThat(captor.getValue().getOwnerCustomerId()).isEqualTo("CUST-001");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 公司自有成品退回仍是公司自有, 无客户归属")
+    void companyOwnedReturnStaysCompanyOwned() {
+        ReturnOrder order = salesReturn(List.of(productLine("PT-001", new BigDecimal("5"))));
+
+        service.completeReturnOrder(FACTORY, order.getId());
+
+        ArgumentCaptor<FinishedGoodsBatch> captor = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository).save(captor.capture());
+        assertThat(captor.getValue().getOwnership())
+                .isEqualTo(com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED);
+        assertThat(captor.getValue().getOwnerCustomerId()).isNull();
+    }
+
+    @Test
+    @DisplayName("应收冲减按含税额 (未税 + 销项税), 与发货挂账同一口径; 提示金额同口径")
+    void completionCreditsTaxInclusiveReceivable() {
+        ReturnOrder order = salesReturn(List.of(productLine("PT-001", new BigDecimal("16"))));
+        order.setTotalAmount(new BigDecimal("70.80"));
+        order.setTaxAmount(new BigDecimal("9.20"));
+
+        ReturnOrder done = service.completeReturnOrder(FACTORY, order.getId());
+
+        verify(arApService).recordAdjustment(any(), any(), any(),
+                argThat(amount -> amount != null && amount.compareTo(new BigDecimal("-80.00")) == 0),
+                any(), any(), any(), any());
+        assertThat(done.getCompletionHint()).contains("80");
+    }
+
+    @Test
+    @DisplayName("建销售退货时按源销售单行税率算销项税: 16 × 4.4248 = 70.80, 13% ⇒ 9.20 (F006 RT-SAL-20261027-0001 实测口径)")
+    void createSalesReturnComputesOutputTaxFromSourceOrderLine() {
+        stubUniqueShippedAllocation("PT-001", "kg", "FG-001", "SRC-001", "kg", new BigDecimal("16"));
+        com.cretas.aims.entity.inventory.SalesOrderItem line = new com.cretas.aims.entity.inventory.SalesOrderItem();
+        line.setId(11L);
+        line.setProductTypeId("PT-001");
+        line.setUnitPrice(new BigDecimal("4.4248"));
+        line.setTaxRate(new BigDecimal("13.00"));
+        com.cretas.aims.entity.inventory.SalesOrder so = new com.cretas.aims.entity.inventory.SalesOrder();
+        so.setId("SO-001");
+        so.setItems(List.of(line));
+        com.cretas.aims.repository.inventory.SalesOrderRepository salesOrderRepository =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class);
+        when(salesOrderRepository.findById("SO-001")).thenReturn(Optional.of(so));
+        ReflectionTestUtils.setField(service, "salesOrderRepository", salesOrderRepository);
+        CreateReturnOrderRequest request = createSalesReturnRequest("PT-001", new BigDecimal("16"), null);
+        request.getItems().get(0).setUnitPrice(new BigDecimal("4.4248"));
+
+        ReturnOrder created = service.createReturnOrder(FACTORY, request, APPROVER);
+
+        assertThat(created.getTotalAmount()).isEqualByComparingTo("70.80");
+        assertThat(created.getTaxAmount()).isEqualByComparingTo("9.20");
+        assertThat(created.getReceivableAmount()).isEqualByComparingTo("80.00");
+    }
 }

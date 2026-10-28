@@ -133,7 +133,10 @@ class ProcessSecretDataLayerContractTest {
             BomRecipeDraftItem.class, BomRecipeDraftSubstitute.class, SalesOrderShortageReport.class,
             // 报工行 / 报工单 / 批次: 落库的配比核对快照与批次实测出成挂在这里 (独立审查 #2 #5)
             com.cretas.aims.entity.processentry.ProcessSheetRow.class, com.cretas.aims.entity.ProductionReport.class,
-            com.cretas.aims.entity.ProductionBatch.class);
+            com.cretas.aims.entity.ProductionBatch.class,
+            // 落库的消耗记录 / 报工行操作记录: 自动带出行的数量 = 配比 × 投入 (独立审查 V2.1 M4)
+            com.cretas.aims.entity.MaterialConsumption.class,
+            com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog.class);
 
     /** 带配比类字段但不打标的实体, 写明理由。 */
     static final Map<String, String> UNTRACKED_ENTITY_LEDGER = Map.of(

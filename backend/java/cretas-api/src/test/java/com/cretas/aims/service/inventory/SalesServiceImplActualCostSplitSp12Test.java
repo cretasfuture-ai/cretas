@@ -170,6 +170,30 @@ class SalesServiceImplActualCostSplitSp12Test {
     }
 
     @Test
+    @DisplayName("工艺保密: 含报工自动带出 / BOM 自动扣料的物料行标 automatic, 人工投料不标")
+    void marksMaterialLinesThatIncludeRecipeDerivedConsumption() {
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(makeOrder()));
+        when(productionPlanRepository.findByFactoryIdAndSourceOrderId(FACTORY_ID, ORDER_ID))
+                .thenReturn(List.of(makePlan()));
+        when(productionBatchRepository.findByFactoryIdAndProductionPlanIdIn(eq(FACTORY_ID), any(Collection.class)))
+                .thenReturn(List.of(makeBatch(new BigDecimal("300.00"), new BigDecimal("50.00"), new BigDecimal("20.00"))));
+        MaterialConsumption pig = makeConsumption("MT-PIG", "50", "10.00", "500.00");
+        pig.setSourceType("RAW_MATERIAL");
+        MaterialConsumption salt = makeConsumption("MT-SALT", "0.5", "4.00", "2.00");
+        salt.setSourceType("SEASONING");
+        when(materialConsumptionRepository.findByProductionBatchIdAndFactoryId(BATCH_PK, FACTORY_ID))
+                .thenReturn(List.of(pig, salt));
+        when(rawMaterialTypeRepository.findById(org.mockito.ArgumentMatchers.anyString())).thenReturn(Optional.empty());
+
+        FinanceCostBreakdown.ActualCostSplit split =
+                salesService.getOrderCostBreakdown(FACTORY_ID, ORDER_ID).getActualCostSplit();
+
+        org.assertj.core.api.Assertions.assertThat(split.getMaterials())
+                .extracting(m -> m.getMaterialTypeId() + "=" + m.isAutomatic())
+                .containsExactlyInAnyOrder("MT-PIG=false", "MT-SALT=true");
+    }
+
+    @Test
     @DisplayName("订单未投产: split 非 null, 组分全 null, hint 说明未投产")
     void noPlan() {
         when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(makeOrder()));

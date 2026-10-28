@@ -554,6 +554,34 @@ class FactoryRecallServiceContractTest {
     }
 
     @Test
+    void closeAcceptsReturnedCustomerGoodsHandedBackToCustomer() {
+        // Steve 2026-10-28: 客户自有退回货「退还客户」与报废同样算处置完成; 但扣减类型必须与单据一致
+        FinishedGoodsBatch returned = stubDisposedClose(915L, "returned-customer-goods");
+        FinishedGoodsAdjustmentLog handBack = scrapLog(1501L, FACTORY, returned.getId(),
+                "RETURN_TO_CUSTOMER", new BigDecimal("10"), BigDecimal.ZERO);
+        handBack.setOperatorId(7L);
+        when(finishedGoodsAdjustmentLogRepository.findByBatchIdOrderByCreatedAtDesc(returned.getId()))
+                .thenReturn(List.of(handBack));
+        DisposalRecord scrapRecord = DisposalRecord.builder()
+                .id(7501L).factoryId(FACTORY).finishedGoodsBatchId(returned.getId())
+                .disposalType("SCRAP").disposalQuantity(new BigDecimal("10")).build();
+        scrapRecord.approve(7, "财务");
+        when(disposalRecordRepository.findById(7501L)).thenReturn(Optional.of(scrapRecord));
+
+        BusinessException mismatch = assertThrows(BusinessException.class,
+                () -> service.close(FACTORY, 915L, "done", 7L));
+        assertEquals("RECALL_CLOSE_BLOCKED", mismatch.getErrorCode());
+
+        scrapRecord.setDisposalType("RETURN_TO_CUSTOMER");
+        RecallEvent event = recallEventRepository.findById(915L).orElseThrow();
+        when(recallEventRepository.saveAndFlush(event)).thenReturn(event);
+
+        FactoryRecallDTO.RecallView view = service.close(FACTORY, 915L, "handed back", 7L);
+
+        assertEquals("COMPLETED", view.getStatus());
+    }
+
+    @Test
     void createReturnRejectsQuantityAboveShipmentWithoutCreatingSalesReturn() {
         RecallEvent event = RecallEvent.builder().id(901L).factoryId(FACTORY)
                 .eventCode("RECALL-20261016-ABC12345").status("FROZEN").build();

@@ -61,6 +61,9 @@ export interface ReturnOrder {
   sourceOrderId?: string | null;
   returnDate: string;
   totalAmount?: number | null;
+  /** 销项税额 (销售退货); 应收冲减 = totalAmount + taxAmount */
+  taxAmount?: number | null;
+  receivableAmount?: number | null;
   reason?: string | null;
   withGoods: boolean;
   createdBy: number;

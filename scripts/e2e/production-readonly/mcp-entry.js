@@ -1088,6 +1088,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedFactoryId,
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
+        appMountTimeoutMs: options.appMountTimeoutMs,
       });
 
       const scenarioContext = {
@@ -1097,6 +1098,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedUsername,
         expectedFactoryId,
         loginEvidence,
+        factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         scenarioRef,
         mutationGuard,
         network,
@@ -1398,6 +1400,9 @@ async function performUiLogin(page, options) {
   const expectedRole = options.expectedRole ? String(options.expectedRole).toLowerCase() : null;
   if (!username || !password) throw new Error('E2E_USERNAME and E2E_PASSWORD are required for UI login');
 
+  const loginMount = await waitForAppMount(page, options.appMountTimeoutMs);
+  if (!loginMount.appMounted) throw new Error('Login application did not mount before credential entry');
+
   const usernameInput = page.locator('input[placeholder*="用户名"], input[type="text"]').first();
   const passwordInput = page.locator('input[placeholder*="密码"], input[type="password"]').first();
   await usernameInput.waitFor({ state: 'visible', timeout: 15_000 });
@@ -1477,6 +1482,8 @@ async function performUiLogin(page, options) {
     // ⚠️ 记下来, 否则「落地页没挂载」和「落地页缺东西」在证据里长得一样。
     landingAppMounted: landingMount.appMounted,
     landingAppMountMs: landingMount.appMountMs,
+    loginAppMounted: loginMount.appMounted,
+    loginAppMountMs: loginMount.appMountMs,
   };
 }
 
@@ -3353,9 +3360,14 @@ const { runReadOnlyPageScenario } = require('./_shared');
 const PATH = '/smart-bi/analysis?tab=query&mode=factory';
 const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
-const EXPORT_PATH = '/smartbi-api/api/smartbi/financial-dashboard/export-excel';
 const QUESTION = '汇总当前库存、生产和销售表现';
 const JOINT_QUESTION = '关联生产、检验和成本做多表分析';
+
+const EXPORT_FORMATS = [
+  { key: 'excel', label: 'Excel', path: '/smartbi-api/api/smartbi/financial-dashboard/export-excel', extension: 'xlsx' },
+  { key: 'pdf', label: 'PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
+  { key: 'ppt', label: 'PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
+];
 
 function endpointPath(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
@@ -3370,9 +3382,13 @@ function isDetailsResponse(response) {
     && endpointPath(response.url()).replace(/\/$/, '') === DETAILS_PATH;
 }
 
-function isExportResponse(response) {
+function isExportResponse(response, format) {
+  const expectedPath = typeof format === 'string'
+    ? EXPORT_FORMATS.find((item) => item.key === format)?.path
+    : format?.path;
   return response.request().method() === 'POST'
-    && endpointPath(response.url()).replace(/\/$/, '') === EXPORT_PATH;
+    && Boolean(expectedPath)
+    && endpointPath(response.url()).replace(/\/$/, '') === expectedPath;
 }
 
 function requestBody(response) {
@@ -3400,6 +3416,13 @@ function familyId(candidate) {
 
 function isFusedCandidate(candidate) {
   return familyId(candidate) === 'production.inspection_fused';
+}
+
+function selectAuthorizedSubject(subjects, requestedId) {
+  if (!requestedId) return subjects[0];
+  const subject = subjects.find((item) => String(item?.id) === String(requestedId));
+  if (!subject) throw new Error('Requested joint-analysis subject is absent from the authorized response');
+  return subject;
 }
 
 function hasThreeAxis(candidate) {
@@ -3612,12 +3635,77 @@ async function waitForResponse(page, predicate, action, timeout = 120_000) {
   return responsePromise;
 }
 
+function summarizeExportResults(results) {
+  const formats = {};
+  for (const result of results) formats[result.format] = {
+    attempted: result.attempted === true,
+    buttonFound: result.buttonFound === true,
+    downloadStarted: result.downloadStarted === true,
+    httpStatus: Number.isInteger(result.httpStatus) ? result.httpStatus : null,
+    saved: result.saved === true,
+    success: result.success === true,
+    fileName: result.fileName || null,
+  };
+  const complete = EXPORT_FORMATS.every((format) => formats[format.key]);
+  const attempted = complete && EXPORT_FORMATS.every((format) => formats[format.key].attempted);
+  const success = attempted && EXPORT_FORMATS.every((format) => formats[format.key].success);
+  return { attempted, success, formats };
+}
+
+async function downloadExportFormats(page, answer, evidenceDir, prefix, timeout = 30_000) {
+  const results = [];
+  const tools = answer.locator('.answer-tools:visible').first();
+  for (const format of EXPORT_FORMATS) {
+    const fileName = `${prefix}-${format.key}.${format.extension}`;
+    const result = {
+      format: format.key,
+      attempted: true,
+      buttonFound: false,
+      downloadStarted: false,
+      httpStatus: null,
+      saved: false,
+      success: false,
+      fileName,
+    };
+    try {
+      const button = tools.getByRole('button', { name: format.label, exact: true }).first();
+      result.buttonFound = await button.count() > 0;
+      if (!result.buttonFound) {
+        results.push(result);
+        continue;
+      }
+      const downloadPromise = page.waitForEvent('download', { timeout }).catch(() => null);
+      const exportResponsePromise = page.waitForResponse(
+        (response) => isExportResponse(response, format),
+        { timeout },
+      ).catch(() => null);
+      await button.click();
+      const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
+      result.downloadStarted = Boolean(download);
+      result.httpStatus = exportResponse ? exportResponse.status() : null;
+      if (download && exportResponse && exportResponse.status() === 200) {
+        const target = `${String(evidenceDir || '').replace(/[\\/]+$/, '')}/${fileName}`;
+        if (evidenceDir) {
+          await download.saveAs(target);
+          result.saved = true;
+        }
+      }
+      result.success = result.downloadStarted && result.httpStatus === 200 && (Boolean(evidenceDir) ? result.saved : true);
+    } catch {
+      result.success = false;
+    }
+    results.push(result);
+  }
+  return summarizeExportResults(results);
+}
+
 async function run(ctx) {
   return runReadOnlyPageScenario(ctx, {
     id: 'smartbi-factory-analysis-readonly',
     path: PATH,
     landmarks: ['工厂 AI 问答分析', '当前授权图表目录'],
     timeoutMs: 60_000,
+    appMountTimeoutMs: 90_000,
     inspect: async (page, _body, inspectCtx) => {
       if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory AI acceptance is limited to F006');
       await page.getByTestId('factory-analysis-chat').waitFor({ timeout: 60_000 });
@@ -3677,16 +3765,12 @@ async function run(ctx) {
         : null;
       if (details.drawerVisible) await page.keyboard.press('Escape').catch(() => {});
 
-      let exportAttempt = { attempted: false, success: false };
-      const exportButton = page.locator('.answer-tools:visible .el-button').first();
-      if (await exportButton.count()) {
-        exportAttempt.attempted = true;
-        const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
-        const exportResponsePromise = page.waitForResponse(isExportResponse, { timeout: 30_000 }).catch(() => null);
-        await exportButton.click();
-        const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
-        exportAttempt.success = Boolean(download && exportResponse && exportResponse.status() === 200);
-      }
+      const exportAttempt = await downloadExportFormats(
+        page,
+        page.locator('.turn.turn--assistant:visible').last(),
+        inspectCtx.evidenceDir,
+        'smartbi-factory-analysis-overview',
+      );
 
       const followupButtons = page.locator('.followups:visible .el-button');
       const qualityFollowup = followupButtons.filter({ hasText: '质量' }).first();
@@ -3711,7 +3795,9 @@ async function run(ctx) {
       let jointSelected = { attempted: false, summary: {} };
       let jointSelectedBody = {};
       let jointDetails = { attempted: false, success: false };
-      let jointExport = { attempted: false, success: false };
+      let jointExport = { attempted: false, success: false, formats: {} };
+      let jointScreenshot = null;
+      let jointSubjectId = null;
       const newAnalysisButton = page.getByRole('button', { name: '新分析', exact: true });
       if (await newAnalysisButton.count()) {
         const jointInitialResponse = await waitForResponse(
@@ -3731,7 +3817,8 @@ async function run(ctx) {
 
         const subjects = Array.isArray(jointInitialBody?.data?.subjects) ? jointInitialBody.data.subjects : [];
         if (jointInitial.summary.clarification && subjects.length > 0) {
-          const subject = subjects[0];
+          const subject = selectAuthorizedSubject(subjects, inspectCtx.factoryAnalysisSubjectId);
+          jointSubjectId = subject.id;
           if (typeof subject?.label !== 'string' || !subject.label.trim()) throw new Error('Factory AI clarification returned an unusable subject label');
           const subjectControl = page.getByTestId('factory-analysis-subject');
           await subjectControl.click();
@@ -3753,6 +3840,8 @@ async function run(ctx) {
             const fusedId = jointSelectedBody?.data?.recommendations?.find(isFusedCandidate)?.id;
             const fusedCard = fusedId ? page.getByTestId(`factory-chart-card-${fusedId}`) : null;
             if (fusedCard) {
+              await fusedCard.waitFor({ state: 'visible', timeout: 30_000 });
+              jointScreenshot = await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-joint');
               const detailsButton = fusedCard.getByRole('button', { name: '查看原始明细', exact: true });
               if (await detailsButton.count()) {
                 jointDetails.attempted = true;
@@ -3766,16 +3855,13 @@ async function run(ctx) {
                 if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
               }
             }
-            const jointAnswer = page.locator('.turn--assistant:visible').last();
-            const jointExportButton = jointAnswer.locator('.answer-tools .el-button').first();
-            if (await jointExportButton.count()) {
-              jointExport.attempted = true;
-              const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
-              const exportResponsePromise = page.waitForResponse(isExportResponse, { timeout: 30_000 }).catch(() => null);
-              await jointExportButton.click();
-              const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
-              jointExport.success = Boolean(download && exportResponse && exportResponse.status() === 200);
-            }
+            const jointAnswer = page.locator('.turn.turn--assistant:visible').last();
+            jointExport = await downloadExportFormats(
+              page,
+              jointAnswer,
+              inspectCtx.evidenceDir,
+              'smartbi-factory-analysis-joint',
+            );
           }
         }
       }
@@ -3800,14 +3886,20 @@ async function run(ctx) {
         detailsSucceeded: details.success,
         exportAttempted: exportAttempt.attempted,
         exportSucceeded: exportAttempt.success,
+        exportFormats: exportAttempt.formats,
         joint: assessment.joint,
-        screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : [])],
+        jointSubjectId,
+        jointTables: (jointSelectedBody?.data?.recommendations || []).filter(isFusedCandidate)
+          .map((item) => ({ unit: item.unit, headers: item.tableData?.headers, rows: item.tableData?.rows })),
+        jointExportFormats: jointExport.formats,
+        screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : []), ...(jointScreenshot ? [jointScreenshot] : [])],
       };
     },
   });
 }
 
 module.exports = {
+  selectAuthorizedSubject,
   id: 'smartbi-factory-analysis-readonly',
   defaultEnabled: false,
   run,
@@ -3815,6 +3907,9 @@ module.exports = {
   assessJoint,
   summaryFromResponse,
   isAnalysisResponse,
+  isExportResponse,
+  summarizeExportResults,
+  downloadExportFormats,
 };
 
 },

@@ -1761,6 +1761,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             materialDetail.put("materialName", materialName);
 
             materialDetail.put("quantity", quantity);
+            // 报工自动带出 / BOM 自动扣料: 数量 = 配比 × 投入 (独立审查 V2.1 M4)
+            materialDetail.put("automatic", com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(consumption.getSourceType()));
             materialDetail.put("unit", materialBatch != null ? materialBatch.getQuantityUnit() : null);
             materialDetail.put("unitPrice", unitPrice);
 

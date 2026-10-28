@@ -201,6 +201,9 @@ public class OrderCostBreakdownDTO {
     @AllArgsConstructor
     public static class SourceCost {
         private String batchId;
+
+        /** 报工自动带出 / BOM 自动扣料 (数量 = 配比 × 投入): 工艺保密时按配比类裁剪 (独立审查 V2.1 M4)。 */
+        private boolean automatic;
         private String batchName;
         private BigDecimal quantity;
         private String unit;
@@ -243,6 +246,8 @@ public class OrderCostBreakdownDTO {
     @AllArgsConstructor
     public static class PackagingItem {
         private String name;
+        /** 来自报工自动带出 / BOM 自动扣料的包材 (金额 = 配比 × 投入 × 单价): 工艺保密时按配比类裁剪。 */
+        private boolean automatic;
         /** 该包材项成本 (元); masked 时 null。 */
         private BigDecimal cost;
     }
@@ -253,6 +258,9 @@ public class OrderCostBreakdownDTO {
     @AllArgsConstructor
     public static class RawMaterialDetail {
         private String batchNumber;
+
+        /** 报工自动带出 / BOM 自动扣料 (数量 = 配比 × 投入): 工艺保密时按配比类裁剪 (独立审查 V2.1 M4)。 */
+        private boolean automatic;
         private String materialCode;
         private String materialName;
         private BigDecimal quantity;
@@ -275,6 +283,9 @@ public class OrderCostBreakdownDTO {
     @AllArgsConstructor
     public static class PackagingDetail {
         private String materialCode;
+
+        /** 报工自动带出 / BOM 自动扣料 (数量 = 配比 × 投入): 工艺保密时按配比类裁剪 (独立审查 V2.1 M4)。 */
+        private boolean automatic;
         private String materialName;
         private BigDecimal quantity;
         private String unit;
@@ -318,6 +329,9 @@ public class OrderCostBreakdownDTO {
     public static class EstimatedAuxItem {
         /** {@code bom_seasoning_items.material_type_id}。 */
         private String materialCode;
+        /** 恒为 true: 用量 = 配方 g/kg × 主料投入, 工艺保密时按配比类裁剪 (独立审查 V2.1 M4)。 */
+        @Builder.Default
+        private boolean automatic = true;
         private String materialName;
         /** 这条估算所依据的 BOM 配方 (批次绑定优先, 见 {@code BatchBomBinding})。 */
         private String bomRecipeId;

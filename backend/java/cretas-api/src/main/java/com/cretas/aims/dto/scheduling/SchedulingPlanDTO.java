@@ -32,6 +32,9 @@ public class SchedulingPlanDTO {
     // 关联数据
     private List<LineScheduleDTO> lineSchedules;
 
+    /** 自动排程的提示: 缺工时 / 没有工艺图 / 开工时刻用了默认值等。只在生成那次返回, 不落库。 */
+    private List<String> warnings;
+
     // 统计数据
     private Integer completedSchedules;
     private Integer inProgressSchedules;

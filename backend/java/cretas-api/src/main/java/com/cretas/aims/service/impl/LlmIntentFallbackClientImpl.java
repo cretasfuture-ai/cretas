@@ -1777,31 +1777,6 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         }
     }
 
-    @Override
-    public String generateClarificationQuestion(String userInput,
-                                                  List<CandidateIntent> candidateIntents,
-                                                  String factoryId) {
-        log.info("Generating clarification question: factoryId={}, candidates={}",
-                 factoryId, candidateIntents.size());
-
-        try {
-            // 构建请求体 (原话脱敏后再发; 澄清问题里的代号换回)
-            LlmEgressRedactor.Result redacted = redactedOrThrow(factoryId, userInput);
-            Map<String, Object> requestBody = buildClarifyRequest(redacted.text(0), candidateIntents, factoryId);
-
-            // 调用 Python 端点
-            String responseJson = redacted.restoreJsonText(callPythonEndpoint("/api/ai/intent/clarify", requestBody));
-
-            // 解析响应
-            return parseClarifyResponse(responseJson);
-
-        } catch (Exception e) {
-            log.error("Clarification question generation failed: {}", e.getMessage(), e);
-            // 返回默认问题
-            return generateDefaultClarificationQuestion(candidateIntents);
-        }
-    }
-
     /**
      * 为缺失参数生成澄清问题
      *
@@ -2142,29 +2117,6 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         return simplified;
     }
 
-    private Map<String, Object> buildClarifyRequest(String userInput,
-                                                      List<CandidateIntent> candidateIntents,
-                                                      String factoryId) {
-        Map<String, Object> request = new HashMap<>();
-        request.put("user_input", userInput);
-        request.put("factory_id", factoryId);
-
-        // 候选意图信息
-        List<Map<String, Object>> candidates = candidateIntents.stream()
-                .map(c -> {
-                    Map<String, Object> candidate = new HashMap<>();
-                    candidate.put("intent_code", c.getIntentCode());
-                    candidate.put("intent_name", c.getIntentName());
-                    candidate.put("description", c.getDescription());
-                    candidate.put("confidence", c.getConfidence());
-                    return candidate;
-                })
-                .collect(Collectors.toList());
-        request.put("candidate_intents", candidates);
-
-        return request;
-    }
-
     // ==================== HTTP 调用 (OkHttp) ====================
 
     private String callPythonEndpoint(String endpoint, Map<String, Object> requestBody) throws IOException {
@@ -2426,39 +2378,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 .build();
     }
 
-    @SuppressWarnings("unchecked")
-    private String parseClarifyResponse(String responseJson) throws IOException {
-        Map<String, Object> response = objectMapper.readValue(responseJson,
-                new TypeReference<Map<String, Object>>() {});
-
-        Boolean success = (Boolean) response.get("success");
-        if (success == null || !success) {
-            return null;
-        }
-
-        Map<String, Object> data = (Map<String, Object>) response.get("data");
-        if (data == null) {
-            return null;
-        }
-
-        return (String) data.get("clarification_question");
-    }
-
     // ==================== 工具方法 ====================
-
-    private String generateDefaultClarificationQuestion(List<CandidateIntent> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
-            return "请问您具体想要执行什么操作？";
-        }
-
-        StringBuilder sb = new StringBuilder("请问您想要：\n");
-        for (int i = 0; i < Math.min(candidates.size(), 3); i++) {
-            CandidateIntent candidate = candidates.get(i);
-            sb.append(String.format("%d. %s (%s)\n", i + 1, candidate.getIntentName(), candidate.getDescription()));
-        }
-        sb.append("\n请选择或描述您的需求。");
-        return sb.toString();
-    }
 
     private String truncate(String str, int maxLength) {
         if (str == null) return "null";

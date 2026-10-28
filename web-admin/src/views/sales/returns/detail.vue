@@ -987,7 +987,9 @@ function goBack() {
           <el-descriptions-item label="客户/对方">{{ order.counterpartyName || order.counterpartyId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="源订单号">{{ order.sourceOrderNumber || order.sourceOrderId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="退货日期">{{ order.returnDate || '-' }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="退货金额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="退货金额(未税)">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice && Number(order.taxAmount) > 0" label="销项税额">{{ formatAmount(order.taxAmount) }}</el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice && Number(order.taxAmount) > 0" label="应收冲减(含税)">{{ formatAmount(order.receivableAmount) }}</el-descriptions-item>
           <el-descriptions-item label="审批人">{{ order.approvedByName || (order.approvedBy != null ? `编号 #${order.approvedBy}` : '-') }}</el-descriptions-item>
           <el-descriptions-item label="原因" :span="3">{{ order.reason || '-' }}</el-descriptions-item>
           <el-descriptions-item label="备注" :span="3">{{ remarkDisplay }}</el-descriptions-item>

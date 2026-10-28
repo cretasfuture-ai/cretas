@@ -375,7 +375,7 @@ public class ProcessSecretPayloadScrubber {
             return all;
         }
 
-        /** 报工行的批次: 批次的产品 + 它所属计划牵涉的全部产品; 批次查不到时不加 (报工行另记了产品)。 */
+        /** 报工行 / 消耗记录的批次: 批次的产品 + 它所属计划牵涉的全部产品; 批次查不到时当作未知产品。 */
         List<Key> batchKeys(String factoryId, String batchId) {
             final Long id;
             try {
@@ -392,7 +392,9 @@ public class ProcessSecretPayloadScrubber {
                     keys.addAll(planKeys(factoryId, batch.getProductionPlanId()));
                 }
                 return List.copyOf(keys);
-            }).orElse(List.of());
+                // 查不到 (已软删 / 他厂) 的批次: 当作「无法确认所属产品」按受保护处理, 与计划查不到同一口径
+                // (独立审查 V2.1 复核 M4: 只有批次的 BOM 自动扣料记录原来会静默放行)
+            }).orElse(List.of(new Key(factoryId, null)));
         }
 
         /** 对象自身的归属 (没有则 null, 由上层继承)。 */
@@ -452,16 +454,51 @@ public class ProcessSecretPayloadScrubber {
                 object.elements().forEachRemaining(children::add);
                 for (JsonNode child : children) walk(child, effective, childrenDerived);
             } else if (node instanceof ArrayNode array) {
-                array.forEach(child -> walk(child, inherited, derived));
+                boolean automaticSibling = false;
+                for (JsonNode child : array) {
+                    if (child instanceof ObjectNode o && (isRecipeDerived(o) || isReworkDeduction(o))) {
+                        automaticSibling = true;
+                        break;
+                    }
+                }
+                for (JsonNode child : array) {
+                    if (automaticSibling && child instanceof ObjectNode o) sharesWithAutomaticSiblings.add(o);
+                    walk(child, inherited, derived);
+                }
             }
         }
+
+        /**
+         * 同一列表里有按配比算出的行时, 其余行的占比 (人工行 q 与占比 s 可见 → 自动行 = q × (100 − s) ÷ s)
+         * 同样是配比算出来的 (独立审查 V2.1 复核 H3)。按对象身份记, 不改 JSON。
+         */
+        final Set<ObjectNode> sharesWithAutomaticSiblings =
+                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+        static final Set<String> SHARE_FIELDS = Set.of("weightSharePct", "costSharePct", "weightShare", "costShare");
 
         /**
          * 按配比自动带出的行 (调料 / 包材自动分摊, automatic=true): 它的数量 = 配比 × 投入量,
          * 「本单总量」在这里就等于配比本身 (F006 验收 2026-10-27: 0.1725 kg ÷ 115 kg = 1.5 g/kg)。
          */
         boolean isRecipeDerived(ObjectNode object) {
-            return object.path("automatic").asBoolean(false);
+            // 回料自动扣减 (automaticRework): 投料量 = 回料配比 × 主料投入, 落库的 row_payload 里只剩这个标志
+            // (独立审查 V2.1 M4)。落库的消耗记录由出口按 source_type 标 automatic (ProcessSecretRecipeDerived)。
+            return object.path("automatic").asBoolean(false) || object.path("automaticRework").asBoolean(false);
+        }
+
+        /**
+         * 报工行操作记录的「字段: 旧→新」摘要是把快照直接转成文字, 自动带出行的数量也在里面
+         * (形如 {@code quantity=0.1725, ..., automatic=true})。文字裁不掉单个数, 整段按配比类处理。
+         */
+        boolean isDerivedText(ObjectNode object, String name) {
+            if (!"diffSummary".equals(name) || !object.path(name).isTextual()) return false;
+            String text = object.path(name).asText();
+            if (text.contains("automatic=true") || text.contains("automaticRework=true")) return true;
+            for (String field : RATIO_FIELDS) {
+                if (text.contains(field + "=") || text.contains(field + ":")) return true;
+            }
+            return false;
         }
 
         /**
@@ -473,6 +510,12 @@ public class ProcessSecretPayloadScrubber {
         }
 
         static final Set<String> REWORK_DERIVED_FIELDS = Set.of("targetKg", "drawnKg", "shortfallKg");
+
+        /**
+         * 按配比算出的行上同时带着的实际值 (估算辅料行的主料投入 kg、原料批次的初始 / 剩余库存): 照「本单总量」档给;
+         * 配比藏了以后, 用量也藏了, 只剩它推不出配比。
+         */
+        static final Set<String> DERIVED_LINE_ACTUAL_FIELDS = Set.of("rawInputKg", "initialQuantity", "remainingQuantity");
 
         void scrubObject(ObjectNode object, Key key, boolean derived) {
             List<String> ratioFields = new ArrayList<>();
@@ -486,9 +529,15 @@ public class ProcessSecretPayloadScrubber {
                 String name = it.next();
                 JsonNode value = object.get(name);
                 if (value == null || value.isNull() || MARKER.equals(name)) continue;
-                if (isRatioField(name) || isContextualRatioField(object, name)) ratioFields.add(name);
-                else if (derivedFromRecipe && value.isNumber() && !isIdentifierLike(name)) ratioFields.add(name);
+                if (isRatioField(name) || isContextualRatioField(object, name) || isDerivedText(object, name)) {
+                    ratioFields.add(name);
+                }
+                else if (derivedFromRecipe && value.isNumber() && !isIdentifierLike(name)
+                        && !DERIVED_LINE_ACTUAL_FIELDS.contains(name)) ratioFields.add(name);
                 else if (reworkDeduction && REWORK_DERIVED_FIELDS.contains(name)) ratioFields.add(name);
+                else if (SHARE_FIELDS.contains(name) && sharesWithAutomaticSiblings.contains(object)) ratioFields.add(name);
+                // 操作记录摘要是文字: 本单总量也写在里面, 无权档整段不给
+                else if ("diffSummary".equals(name) && value.isTextual()) quantityFields.add(name);
                 else if (SINGLE_RUN_ACTUAL_FIELDS.contains(name)) {
                     // 单批实测: 单据视图里与总量同档; 汇总视图里与配比同档
                     (aggregateView ? ratioFields : quantityFields).add(name);

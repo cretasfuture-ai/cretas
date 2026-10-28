@@ -106,3 +106,32 @@ Steve 决定：完整 11 条现在就对外发布，还没实现的部分由内�
 - 已知缺口（官网没承诺，记录在此）：Python 侧看板 AI 洞察自己取数发给模型，没有脱敏；Excel 上传解析在 Python 侧外发字段样本，没有脱敏。C4-smartbi-redact 只覆盖注册了 `RedactionScope` 的 SmartBI insights 路径。
 
 **仍未兑现（对外已写）**：C6-rights（整厂导出、彻底删除，目前人工处理）；第八条「服务商不得用于自身训练」待核实合同。
+
+## 2026-10-28 更新
+- Python 侧已知缺口（10-27 记的看板 AI 洞察、Excel 上传解析）→ 已补：#1247（合并 8f795c7e2a）第四批外发脱敏上线。经 Python 出境口发往外部模型的 47 个模块（非餐饮 38 个：SmartBI 洞察 / 通用分析含流式、Excel 结构 / 表头 / 语义识别、SQL 生成、财务看板、图表洞察、食品知识库问答等）按与 Java 相同的规则和代号脱敏（手机 / 座机 / 身份证 / 银行卡、公司名、「岗位 + 人名」、本厂工艺保密产品名），回答在出境口换回真名，有残留就不发；保密产品名每次现查，查不了就不发。意图识别的原话模式（Python 3 处 + Java 转发的 /api/llm）只抹号码，与 Java 一致。两边一致性：19 条共用用例，Java、Python 输出必须逐字相同（「AI 外发脱敏」会话回报）。
+- 我独立核对：47 上 8083 进程 2026-10-28 00:24:04 启动，晚于 `common/llm_egress_text.py` 等文件的 23:18；`llm_egress_text.py`、`llm_redactor.py` 的 sha256 与 origin/main 一致。没有向真实模型发探针。
+- 仍未做（页面措辞不涉及，不改）：「联系人 + 全角空格 + 人名」认不出；Excel 表头里「物流公司」这类词会被换成代号；16–19 位编号会被当作卡号替换。
+- 页面不改：C4-smartbi-redact 与 C4-assistant-redact 的现有措辞都已兑现，不借这次扩大对外承诺。
+
+## 2026-10-28 更新（二）：外发脱敏收尾清单
+- 「联系人 + 全角空格 + 人名」→ 已修：#1250（合并 dbed007352），Java、Python 同改，加了共用用例。「AI 外发脱敏」会话用已部署代码核对：「联系人　王五，联系张三　明天到」→「联系人　[人员A]，联系[人员B]　明天到」。
+- 我独立核对：网关活跃槽 47:10020，进程 01:46:43 启动，晚于 jar（01:46:01，sha256 前 8 位 fdf83f5a，与回报一致）；8083 进程 02:01:31 启动，`llm_egress_text.py`、`sample_text_rules.py` 的 sha256 与 dbed007352 一致。没有向真实模型发探针。
+- 仍未接入的文字出口及理由（「AI 外发脱敏」会话逐条核对：Java 全仓 67 处、Python 经出境口 47 个模块，其余全部接入）：
+  1. 餐饮三处（语音领料、GoldFinanceClient、RestaurantOwnerActionClient）：餐饮 10-08 已废弃，不做。
+  2. `ResultValidatorServiceImpl:160`：注入了但从不调用，死代码。
+  3. `AIEnterpriseService.batchInitializeFactory`（平台管理员建厂）：Java 侧不脱敏（Steve 定的不做），但它经 Python `/api/ai/factory/batch-initialize` 外发，自 #1247 起在 Python 出境口按完整规则处理。
+  4. 图片和文件（单据 OCR、SOP、仓库平面图、核验照片、发票 PDF、送货单、摄像头抓拍、视觉模型画面）：按 C4-image-not-redacted 处理（上传入口提示 #1221，摄像头默认关、按厂开 #1220 / #1225 / #1236），页面和隐私政策已如实写明。
+  5. Python `scripts/` 下的线下工具（generate_synonyms、corpus_judge 等）：员工手动运行，不在生产请求链路上。
+  6. 不出公网的模型：自建 bge 重排（经 FRP 到开发机）、本机 Ollama，不算外部大模型。
+- ai_proxy 意图分类：Java 用完整规则脱敏用户原话，意图列表原样转发（「AI 外发脱敏」会话回报，我没另核列表内容）。
+- 仍有的局限（页面措辞不涉及，不改）：Excel 表头里「物流公司」这类词会被换成代号；16–19 位编号会被当作卡号；邮箱只有 Python 有规则。
+- 意图澄清出口（Java `LlmIntentFallbackClient.generateClarificationQuestion` → Python `POST /api/ai/intent/clarify`）→ 已删除：见下方 2026-10-28 更新（三）。（原记录「一直 422、Java 吞错走本地兜底」已过时。）
+- 页面不改：现有措辞都已兑现，未接入的部分都不在承诺范围内。
+
+**仍未兑现（对外已写）**：C6-rights（整厂导出、彻底删除，目前人工处理）；第八条「服务商不得用于自身训练」待核实合同。
+
+## 2026-10-28 更新（三）：意图澄清出口已删除
+- #1255（合并 ad73dcc869）删除了 Java `LlmIntentFallbackClient.generateClarificationQuestion`（调 Python `/api/ai/intent/clarify` 的那一路）和 Python `POST /api/ai/intent/clarify`。原因：这一路在 prod 走不到（语义优先架构默认开启，在调用点之前就返回），prod 8 天日志里调用 0 次，从没发出过请求（「AI 外发脱敏」会话回报）。
+- 我独立核对：47:10010 进程（13:10:58 启动）实际加载的 jar（进程持有的已被替换的旧文件句柄）sha256 前 8 位 fd1739f2，与回报一致；其中 `LlmIntentFallbackClientImpl` 含 `intent/clarify` 0 处，阳性对照 `intent/classify` 1 处。Python 8083（14:40:48 启动）对 `POST /api/ai/intent/clarify` 返回 404，同一进程 `/api/ai/intent/match` 返回 422（空请求体被校验拒绝 = 路由在）。
+- 不受影响：按钮澄清（`/api/ai/intent/match`）照常；缺参追问 `generateClarificationQuestionsForMissingParams` 是另一条，仍在用，没动。
+- 页面不改。

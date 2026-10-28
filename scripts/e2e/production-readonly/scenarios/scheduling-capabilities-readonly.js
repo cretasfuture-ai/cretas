@@ -2,19 +2,25 @@
 
 const { runReadOnlyPageScenario } = require('./_shared');
 
-function assessCapability(kind, payload, ui) {
+// expected: { status, mode } the server must report. UNAVAILABLE ⇒ the automation button must be
+// disabled; AVAILABLE (APS v1, aiGeneration = DAG_DURATION since 2026-10-28) ⇒ it must be enabled.
+const UNAVAILABLE = { status: 'UNAVAILABLE', mode: 'UNAVAILABLE' };
+
+function assessCapability(kind, payload, ui, expected = UNAVAILABLE) {
   if (payload === null) return { result: 'UNVERIFIED', rootCauseClass: 'tool' };
   const data = payload?.success === true ? payload.data : null;
   const capability = data?.[kind];
   const contractMatches = data?.contractVersion === 'scheduling-capabilities/v1'
-    && capability?.status === 'UNAVAILABLE' && capability?.mode === 'UNAVAILABLE'
+    && capability?.status === expected.status && capability?.mode === expected.mode
     && typeof capability.reason === 'string' && capability.reason.trim().length > 0;
-  const consistent = contractMatches && ui.automationDisabled === true
+  const buttonMatches = expected.status === 'AVAILABLE'
+    ? ui.automationDisabled === false : ui.automationDisabled === true;
+  const consistent = contractMatches && buttonMatches
     && ui.reasonVisible === true && ui.manualExplanationVisible === true;
   return { result: consistent ? 'PASS' : 'PARTIAL_DEFECT', rootCauseClass: consistent ? 'none' : contractMatches ? 'frontend' : 'backend' };
 }
 
-function scenario(kind, id, route, landmark, buttonName, explanation) {
+function scenario(kind, id, route, landmark, buttonName, explanation, expected = UNAVAILABLE) {
   return {
     id,
     defaultEnabled: false,
@@ -41,7 +47,7 @@ function scenario(kind, id, route, landmark, buttonName, explanation) {
               manualExplanationVisible: await page.getByText(explanation, { exact: true }).first().isVisible().catch(() => false),
             };
             return { capabilityResponseObserved: payload !== null, contractVersion: payload?.data?.contractVersion,
-              capability, ui, assessment: assessCapability(kind, payload, ui) };
+              capability, ui, assessment: assessCapability(kind, payload, ui, expected) };
           },
         });
       } finally {
@@ -53,7 +59,8 @@ function scenario(kind, id, route, landmark, buttonName, explanation) {
 
 module.exports = {
   create: scenario('aiGeneration', 'scheduling-create-capabilities-readonly', '/scheduling/plans/create',
-    '人工确认的排程草稿', 'AI 智能生成（暂不可用）', '请逐项填写产线、基本单位整数数量和起止时间；系统不会自动分配工人，也不会替你确认工艺、物料或换产可行性。'),
+    '人工确认的排程草稿', '按工艺图自动排程', '请逐项填写产线、基本单位整数数量和起止时间；系统不会自动分配工人，也不会替你确认工艺、物料或换产可行性。',
+    { status: 'AVAILABLE', mode: 'DAG_DURATION' }),
   workers: scenario('workerOptimization', 'scheduling-worker-capabilities-readonly', '/scheduling/workers',
     '人员分配', 'AI 优化分配（暂不可用）', '请使用每个排程卡片上的“添加工人”进行人工指派。'),
   assessCapability,
