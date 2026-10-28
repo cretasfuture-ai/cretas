@@ -649,7 +649,8 @@ class ProcessSecretPayloadScrubberTest {
             assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isTrue();
         }
         for (String name : List.of("unitPrice", "totalAmount", "salePrice", "missingCostItemCount", "costVersion",
-                "quantity")) {
+                "quantity", "costDenominatorQuantity", "varianceQuantity", "warehouseVarianceQuantity",
+                "stocktakeProfitQty", "switchCostMinutes")) {
             assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isFalse();
         }
     }

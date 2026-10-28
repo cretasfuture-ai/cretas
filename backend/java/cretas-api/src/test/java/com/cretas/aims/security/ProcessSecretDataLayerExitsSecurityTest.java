@@ -249,6 +249,7 @@ class ProcessSecretDataLayerExitsSecurityTest {
         when(dep(OrderCostBreakdownService.class).compute(eq(F), eq("o2"), anyBoolean()))
                 .thenAnswer(afterReadingSecretRecipe(() -> OrderCostBreakdownDTO.builder()
                         .orderId("o2").outputQuantity(new BigDecimal("100"))
+                        .costDenominatorQuantity(new BigDecimal("310")).costDenominatorUnit("袋")
                         .rawMaterialCost(new BigDecimal("805")).seasoningCost(new BigDecimal("12.5"))
                         .packagingCost(new BigDecimal("31")).laborCost(new BigDecimal("60"))
                         .totalCost(new BigDecimal("908.5")).perBoxCost(new BigDecimal("9.085"))
@@ -264,7 +265,10 @@ class ProcessSecretDataLayerExitsSecurityTest {
             assertThat(body.get(field).isNull()).as(field).isTrue();
         }
         assertThat(body.get("outputQuantity").asInt()).isEqualTo(100);
-        assertThat(body.get("processSecret").get("hiddenFields").toString()).contains("seasoningCost");
+        // 成本分母产量是产量, 不是金额 (Steve: 产量不算保密); 金额仍然隐藏
+        assertThat(body.get("costDenominatorQuantity").asInt()).isEqualTo(310);
+        assertThat(body.get("processSecret").get("hiddenFields").toString())
+                .contains("seasoningCost").doesNotContain("costDenominatorQuantity");
         verifyDenied(user(OPERATOR), "seasoningCost");
     }
 

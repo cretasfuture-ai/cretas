@@ -743,10 +743,17 @@ public class ProcessSecretPayloadScrubber {
     /** 名字不带上面片段的金额: 共锅调料成本分到本批的那一份 (元; 独立审查 PR3 复核 M-b)。 */
     static final Set<String> EXACT_COST_FIELDS = Set.of("batchShare");
 
+    /**
+     * 名字带 cost / variance 等片段、实际是数量或时长的字段: 成本分母产量、入库差异量、盘盈数量、换线分钟数。
+     * 产量不算保密 (Steve 2026-10-28), 按「本单总量」档处理; 元/kg、元/件这类单位金额不在此列。
+     */
+    static final List<String> NON_MONEY_SUFFIXES = List.of("quantity", "qty", "minutes");
+
     static boolean isCostTotalField(String name) {
         if (EXACT_COST_FIELDS.contains(name)) return true;
         if (isIdentifierLike(name)) return false;
         String lower = name.toLowerCase(Locale.ROOT);
+        if (NON_MONEY_SUFFIXES.stream().anyMatch(lower::endsWith)) return false;
         return COST_TOTAL_PARTS.stream().anyMatch(lower::contains);
     }
 
