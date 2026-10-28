@@ -679,7 +679,7 @@ class ReportReversalServiceTest {
         }
 
         @Test
-        @DisplayName("executeReversal → 同批逐道录入行软删，计划取消门禁不再误判")
+        @DisplayName("executeReversal → 本批逐道录入行软删, 同计划别的工序行不动 (Steve 2026-10-28「只撤这一道」)")
         void executeReversal_softDeletesProcessSheetRows() {
             ReportReversalLog pending = ReportReversalLog.builder()
                     .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
@@ -705,8 +705,10 @@ class ReportReversalServiceTest {
             service.executeReversal(LOG_ID, FACTORY_ID);
 
             assertThat(row.getDeletedAt()).isNotNull();
-            assertThat(upstreamRow.getDeletedAt()).isNotNull();
-            verify(processSheetRowRepository).saveAll(List.of(upstreamRow, row));
+            // 🔴 原来上一道 (别的批次) 的行也一起删, 而它的报工和在制品还在 —— F006 撤回 #22 实测把
+            //    第 1 道「修油」删成待报工。阴性对照: 别的批次的行一行不动。
+            assertThat(upstreamRow.getDeletedAt()).as("上一道的行不属于被撤的批次").isNull();
+            verify(processSheetRowRepository).saveAll(List.of(row));
             assertThat(pending.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
         }
 
