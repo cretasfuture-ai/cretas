@@ -51,6 +51,10 @@ public class DynamicSchedulerService {
     private final Map<String, ScheduledFuture<?>> activeTasks = new ConcurrentHashMap<>();
     private volatile TaskScheduler taskScheduler;
 
+    /** Result callback: every finished fire is published here (S6-03); absent in bare unit tests. */
+    @Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher events;
+
     private TaskScheduler getOrCreateScheduler() {
         if (taskScheduler == null) {
             synchronized (this) {
@@ -239,6 +243,34 @@ public class DynamicSchedulerService {
     }
 
     private void executeTask(FactorySchedulerConfig config, String runKey) {
+        try (com.cretas.aims.ai.usage.LlmUsageScope usage = com.cretas.aims.ai.usage.LlmUsageScope.open()) {
+            runTask(config, runKey, usage);
+        }
+    }
+
+    /** Tells the run recorder how this fire ended; never lets recording affect the fire. */
+    private void publishFinished(FactorySchedulerConfig config, String runKey, LocalDateTime startedAt,
+            String status, String error, com.fasterxml.jackson.databind.JsonNode payload,
+            com.cretas.aims.ai.usage.LlmUsageScope usage) {
+        if (events == null || config == null || config.getId() == null || config.getFactoryId() == null
+                || config.getTaskCode() == null) return;
+        try {
+            java.util.Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
+            snapshot.put("cronExpression", config.getCronExpression());
+            snapshot.put("params", config.getParams());
+            snapshot.put("runAsUserId", config.getRunAsUserId());
+            snapshot.put("enabled", config.getEnabled());
+            events.publishEvent(new SchedulerRunFinishedEvent(config.getId(), config.getFactoryId(),
+                    config.getTaskCode(), config.getToolOrMethod(), snapshot, runKey, startedAt,
+                    LocalDateTime.now(), status, error, payload, usage.usage()));
+        } catch (Exception e) {
+            log.warn("Could not publish scheduled run result for config id={} type={}",
+                    config.getId(), e.getClass().getSimpleName());
+        }
+    }
+
+    private void runTask(FactorySchedulerConfig config, String runKey,
+            com.cretas.aims.ai.usage.LlmUsageScope usage) {
         String validationError = validateConfig(config);
         if (validationError != null) {
             String status = validationStatus(validationError);
@@ -247,6 +279,7 @@ public class DynamicSchedulerService {
                     config == null ? null : config.getId(), scopeDescription(config), status, safeError(validationError));
             persistExecutionMetadataThroughProxy(config == null ? null : config.getId(),
                     startedAt, status, safeError(validationError));
+            publishFinished(config, runKey, startedAt, status, safeError(validationError), null, usage);
             return;
         }
 
@@ -257,6 +290,7 @@ public class DynamicSchedulerService {
         // so the write commits even if the tool throws.
         final String[] statusHolder = { "SUCCESS" };
         final String[] errorHolder = { null };
+        final com.fasterxml.jackson.databind.JsonNode[] payloadHolder = { null };
         final java.time.LocalDateTime startedAt = java.time.LocalDateTime.now();
 
         Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolOrMethod);
@@ -287,7 +321,9 @@ public class DynamicSchedulerService {
                     errorHolder[0] = safeError(outcome.error());
                     log.warn("Scheduled task id={} not completed: status={} error={}",
                             config.getId(), statusHolder[0], errorHolder[0]);
-                } else if (businessError != null) {
+                } else if (businessError == null) {
+                    payloadHolder[0] = outcome.payload();
+                } else {
                     statusHolder[0] = "FAILED";
                     errorHolder[0] = safeError(businessError);
                     log.warn("Scheduled task id={} returned business failure: {}",
@@ -304,6 +340,7 @@ public class DynamicSchedulerService {
 
         // Persist through self proxy so @Transactional(REQUIRES_NEW) takes effect.
         persistExecutionMetadataThroughProxy(config.getId(), startedAt, statusHolder[0], errorHolder[0]);
+        publishFinished(config, runKey, startedAt, statusHolder[0], errorHolder[0], payloadHolder[0], usage);
     }
 
     /**

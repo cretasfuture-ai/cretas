@@ -145,6 +145,7 @@ public class PythonLLMClient {
             // Stream usage captured from Python {"type":"usage","tokens":N} SSE event.
             // Python call_chain_stream emits this when upstream reports usage on final [DONE].
             int streamTotalTokens = 0;
+            boolean streamUsageSeen = false;
             String streamModel = "unknown";
 
             try (BufferedReader reader = new BufferedReader(
@@ -176,7 +177,11 @@ public class PythonLLMClient {
                             }
                         } else if ("usage".equals(type)) {
                             // Python call_chain_stream yields {"type":"usage","tokens":N}
-                            streamTotalTokens = node.path("tokens").asInt(0);
+                            // Only a numeric count is usage; a malformed event stays "unknown", not a known 0.
+                            if (node.path("tokens").isNumber()) {
+                                streamTotalTokens = node.path("tokens").asInt();
+                                streamUsageSeen = true;
+                            }
                         } else if ("done".equals(type) || "finish".equals(type)) {
                             finishReason = node.path("finish_reason").asText("stop");
                         } else if ("error".equals(type)) {
@@ -189,6 +194,8 @@ public class PythonLLMClient {
                     }
                 }
             }
+            // No usage event from the provider = unknown cost, reported as such (never as 0 tokens).
+            com.cretas.aims.ai.usage.LlmUsageScope.report(null, null, streamUsageSeen ? streamTotalTokens : null);
             // Log stream usage (total_tokens only; prompt/completion breakdown not available in stream path)
             log.info("[LLM_USAGE] slot=chat path=/api/llm/chat-stream model={} prompt_tokens=0 completion_tokens=0 total_tokens={}",
                     streamModel, streamTotalTokens);
@@ -699,6 +706,11 @@ public class PythonLLMClient {
         }
         String model = resp.getModel() != null ? resp.getModel() : "unknown";
         ChatCompletionResponse.Usage usage = resp.getUsage();
+        // Per-run / per-task token cost: report what the provider actually said (null = no usage).
+        com.cretas.aims.ai.usage.LlmUsageScope.report(
+                usage != null ? usage.getPromptTokens() : null,
+                usage != null ? usage.getCompletionTokens() : null,
+                usage != null ? usage.getTotalTokens() : null);
         int promptTokens      = usage != null && usage.getPromptTokens()     != null ? usage.getPromptTokens()     : 0;
         int completionTokens  = usage != null && usage.getCompletionTokens() != null ? usage.getCompletionTokens() : 0;
         int totalTokens       = usage != null && usage.getTotalTokens()      != null ? usage.getTotalTokens()
