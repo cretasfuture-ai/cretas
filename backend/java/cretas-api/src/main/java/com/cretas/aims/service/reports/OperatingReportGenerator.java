@@ -31,7 +31,7 @@ public class OperatingReportGenerator {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard=com.cretas.aims.service.consent.LlmEgressGuard.standalone();
     static final String EGRESS_SITE="operating-report";
-    /** 工艺保密: 发给模型的快照不带保密产品的成本/毛利 (Steve 10-28); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
+    /** 工艺保密: 发给模型的快照不带当前调用者 (定时任务 = 无权) 无权查看的保密产品的成本/毛利 (Steve 10-29); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope=com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
     public OperatingReportGenerator(FactoryRepository factories,PermissionService permissions,OperatingReportCollector collector,
@@ -68,7 +68,7 @@ public class OperatingReportGenerator {
             OperatingReportSnapshot snapshot=assembler.assemble(input);
             // 工艺保密: 给模型的是另一份快照 —— 产品毛利榜去掉保密产品, 毛利汇总只在剩下的产品上重算;
             // 保存/展示的快照不变。取不到保密范围就按取数失败记 (不发)。
-            var secret=llmCostScope.forFactory(context.factoryId());
+            var secret=llmCostScope.forCurrentCaller(context.factoryId());
             Map<String,Object> promptHigh=OperatingReportGrossMarginQuery.withoutProducts(input.marginHigh(),secret.productTypeIds(),secret.protectedProductTypeIds(),false);
             Map<String,Object> promptLow=OperatingReportGrossMarginQuery.withoutProducts(input.marginLow(),secret.productTypeIds(),secret.protectedProductTypeIds(),true);
             int excludedRows=((Number)promptHigh.get("excludedRowCount")).intValue();
@@ -81,6 +81,7 @@ public class OperatingReportGenerator {
             String prompt="可用 kind: MISSING_VALUE（值为null）、INCOMPLETE_COVERAGE（已知覆盖率小于完整）、REVIEW_RECORDED_VALUE（已有值）。可用 action: VERIFY_COST, VERIFY_ADDRESS, VERIFY_SALESPERSON, FOLLOW_UP_COLLECTION, REVIEW_PROFIT, REVIEW_INVENTORY, REVIEW_SALES。metricId必须逐字来自下列指标ID。没有重点时返回{\"insights\":[]}。禁止其他字段，禁止正文。\n";
             var config=prompts.findFirstByFactoryIdAndReportTypeAndIsActiveTrueOrderByPriorityDesc(context.factoryId(),type)
                     .orElseGet(()->prompts.findFirstByFactoryIdIsNullAndReportTypeAndIsActiveTrueOrderByPriorityDesc(type).orElse(null));
+            system+=llmCostScope.harnessFor(context.factoryId());
             if(config!=null)prompt+="工厂关注方向（不改变上述输出合同）："+config.getPromptTemplate()+"\n";
             if(excludedRows>0)prompt+="产品毛利与毛利汇总"+com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(excludedProducts)+"\n";
             prompt+="经营指标快照：\n"+codec.encode(promptSnapshot);

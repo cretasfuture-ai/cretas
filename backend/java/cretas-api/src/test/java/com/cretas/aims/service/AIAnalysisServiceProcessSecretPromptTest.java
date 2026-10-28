@@ -98,10 +98,55 @@ class AIAnalysisServiceProcessSecretPromptTest {
     }
 
     @Test
+    void theOwnerGetsTheFullContextIncludingTheProtectedProductCost() throws Exception {
+        try (var ignored = as(owner())) {
+            service(protectedScope()).analyzeCost(FACTORY, OWNER, "batch-x", new HashMap<>(), null, "分析本月成本", true, 50);
+        }
+
+        assertThat(sentToModel()).contains("¥77.7777", "¥13333.33", ProcessSecretLlmCostScope.HARNESS_INSTRUCTION)
+                .doesNotContain("不含 1 个保密产品");
+    }
+
+    @Test
+    void platformAndOtherFactoryCallersAreTrimmedLikeAnUnauthorizedColleague() throws Exception {
+        for (var actor : List.of(platform(), otherFactoryUser(), sameFactoryUser())) {
+            org.mockito.Mockito.clearInvocations(python);
+            try (var ignored = as(actor)) {
+                service(protectedScope()).analyzeCost(FACTORY, 1L, "batch-x", new HashMap<>(), null, "分析", true, 50);
+            }
+            assertThat(sentToModel()).as("caller %s", actor).contains("不含 1 个保密产品")
+                    .doesNotContain("77.7777", SECRET_COST.toPlainString(), "13333.33");
+        }
+    }
+
+    @Test
+    void theHarnessInstructionIsInEveryCostPromptOfAProtectedFactoryOnly() throws Exception {
+        service(protectedScope()).analyzeCost(FACTORY, 1L, "batch-x", new HashMap<>(), null, "分析", true, 50);
+        assertThat(sentToModel()).startsWith(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
+
+        org.mockito.Mockito.clearInvocations(python);
+        service(unprotectedScope()).analyzeCost(FACTORY, 1L, "batch-x", new HashMap<>(), null, "分析", true, 50);
+        assertThat(sentToModel()).doesNotContain("工艺保密约束");
+    }
+
+    @Test
+    void aProductWhoseBatchesCameFromAPlanOfTheProtectedProductIsWithheldForUnauthorizedCallers() {
+        AIContextServiceImpl contexts = contextService(protectedScope());
+        CostAIContext sibling = costContext(NORMAL, "普通2", "12.3456");
+        sibling.setCostSourcePlanIds(List.of(SECRET_PLAN));
+
+        assertThat(contexts.formatCostContextForPrompt(sibling)).contains(ProcessSecretLlmCostScope.WITHHELD_REASON)
+                .doesNotContain("12.3456");
+        try (var ignored = as(owner())) {
+            assertThat(contexts.formatCostContextForPrompt(sibling)).contains("¥12.3456");
+        }
+    }
+
+    @Test
     void negativeControlWithoutProtectionTheSameInstrumentSeesTheSecretProductCost() throws Exception {
         service(unprotectedScope()).analyzeCost(FACTORY, 42L, "batch-x", new HashMap<>(), null, "分析本月成本", true, 50);
 
-        assertThat(sentToModel()).contains("¥77.7777", "¥13333.33").doesNotContain("保密产品");
+        assertThat(sentToModel()).contains("¥77.7777", "¥13333.33").doesNotContain("保密产品", "工艺保密约束");
     }
 
     @Test
@@ -132,6 +177,12 @@ class AIAnalysisServiceProcessSecretPromptTest {
         // 阴性对照: 普通产品的单批照常发
         Map<String, Object> normal = service.analyzeCost(FACTORY, 42L, "2", new HashMap<>(), null, "为什么贵", true, 50);
         assertThat(normal.get("success")).isEqualTo(true);
+
+        // 保密负责人直接分析保密批次: 照常发
+        try (var ignored = as(owner())) {
+            Map<String, Object> ownerResult = service.analyzeCost(FACTORY, OWNER, "1", new HashMap<>(), null, "为什么贵", true, 50);
+            assertThat(ownerResult.get("success")).isEqualTo(true);
+        }
     }
 
     @Test
@@ -140,7 +191,7 @@ class AIAnalysisServiceProcessSecretPromptTest {
         when(access.protectedProductTypeIds(anyString())).thenThrow(new IllegalStateException("db down"));
         ProcessSecretLlmCostScope broken = new ProcessSecretLlmCostScope(new ProcessSecretAggregateExclusions(access,
                 mock(com.cretas.aims.repository.ProductionPlanRepository.class),
-                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class)));
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class)), access);
 
         Map<String, Object> result = service(broken).analyzeCost(FACTORY, 42L, null, new HashMap<>(), null, "x", true, 50);
 
@@ -179,6 +230,6 @@ class AIAnalysisServiceProcessSecretPromptTest {
                 .bomTotalCost(new BigDecimal("3.21")).bomMaterialCostRatio(BigDecimal.ONE)
                 .batchCount(2).avgActualUnitCost(new BigDecimal(unitCost))
                 .actualMaterialCostRatio(BigDecimal.TEN).actualLaborCostRatio(BigDecimal.ONE)
-                .isCostIncreasing(false).build();
+                .isCostIncreasing(false).costSourcePlanIds(List.of()).build();
     }
 }

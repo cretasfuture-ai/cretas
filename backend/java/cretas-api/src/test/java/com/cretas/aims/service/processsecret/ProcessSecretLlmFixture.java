@@ -2,8 +2,17 @@ package com.cretas.aims.service.processsecret;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.processsecret.ProcessSecretGrant;
+import com.cretas.aims.entity.processsecret.ProcessSecretGranteeType;
+import com.cretas.aims.entity.processsecret.ProcessSecretPolicy;
+import com.cretas.aims.entity.processsecret.ProcessSecretStorageMode;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository;
+import com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -11,31 +20,40 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 
 /**
- * 「发给大模型的成本数据不带保密产品」各出口测试共用的数据: 一个保密产品 + 两个普通产品,
+ * 「发给大模型的成本数据按调用者裁剪」各出口测试共用的数据: 一个保密产品 + 两个普通产品,
  * 成本数字各不相同且一眼可辨 (保密 7777.77, 普通 1234.56 / 4321.00), 断言直接在发给模型的字符串上找。
  *
- * <p>保密范围走真实的 {@link ProcessSecretLlmCostScope} → {@link ProcessSecretAggregateExclusions#allProtected},
- * 只桩掉「本厂有哪些保密产品」和「本厂有哪些计划」两张表。</p>
+ * <p>判定走真实的 {@link ProcessSecretAccessService#decide} → {@link ProcessSecretLlmCostScope}
+ * → {@link ProcessSecretAggregateExclusions#forHidden}, 只桩掉策略 / 授权 / 计划 / 配方几张表。
+ * 保密负责人是 {@link #OWNER}, {@link #GRANTEE} 持有效的完整查看授权; 调用者用 {@link #as} 放进受信异步作用域,
+ * 不放 = 认不出身份 (与没有用户的定时任务一样, 按无权处理)。</p>
  */
 public final class ProcessSecretLlmFixture {
 
     public static final String FACTORY = "F-PS";
+    public static final String OTHER_FACTORY = "F-OTHER";
     public static final String SECRET = "P-SECRET";
     public static final String NORMAL = "P-NORMAL";
     public static final String NORMAL2 = "P-NORMAL2";
     public static final String SECRET_PLAN = "PL-SECRET";
     public static final String NORMAL_PLAN = "PL-NORMAL";
     public static final String SECRET_NAME = "保密卤味";
+    public static final long OWNER = 501L;
+    public static final long OTHER_USER = 502L;
+    public static final long GRANTEE = 503L;
 
-    /** 保密产品的成本: 任何发给模型的字符串里都不许出现。 */
+    /** 保密产品的成本: 无权调用者的提示词里不许出现, 有权调用者的提示词里必须出现。 */
     public static final BigDecimal SECRET_COST = new BigDecimal("7777.77");
     public static final BigDecimal NORMAL_COST = new BigDecimal("1234.56");
     public static final BigDecimal NORMAL2_COST = new BigDecimal("4321.00");
@@ -43,20 +61,77 @@ public final class ProcessSecretLlmFixture {
     private ProcessSecretLlmFixture() {
     }
 
-    /** 真实的保密范围; {@code protectedIds} 为空 = 本厂没有保密产品 (阴性对照)。 */
+    private static <T> T lenientMock(Class<T> type) {
+        return mock(type, withSettings().strictness(Strictness.LENIENT));
+    }
+
+    // ---------------- 调用者 ----------------
+
+    public static AuthenticatedActor owner() {
+        return new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, OWNER, FACTORY, "factory_super_admin");
+    }
+
+    public static AuthenticatedActor grantee() {
+        return new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, GRANTEE, FACTORY, "finance_manager");
+    }
+
+    /** 同厂、无授权 (头衔再高也不因头衔放行)。 */
+    public static AuthenticatedActor sameFactoryUser() {
+        return new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, OTHER_USER, FACTORY, "factory_super_admin");
+    }
+
+    public static AuthenticatedActor platform() {
+        return new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 900L, null, "platform_admin");
+    }
+
+    public static AuthenticatedActor otherFactoryUser() {
+        return new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 777L, OTHER_FACTORY, "factory_super_admin");
+    }
+
+    /** 把调用者放进受信异步作用域 (try-with-resources)。 */
+    public static AuthenticatedActor.ActorScope as(AuthenticatedActor actor) {
+        return AuthenticatedActor.trustedAsyncScope(actor);
+    }
+
+    // ---------------- 保密范围 ----------------
+
+    /** 真实的判定链; {@code protectedIds} 为空 = 本厂没有保密产品 (阴性对照)。 */
     public static ProcessSecretLlmCostScope scope(Set<String> protectedIds) {
         return scope(protectedIds, plans());
     }
 
     public static ProcessSecretLlmCostScope scope(Set<String> protectedIds, List<ProductionPlan> plans) {
-        // lenient: 在 MockitoExtension 的严格模式里用时, 没用到的桩不算错 (阴性对照不会查计划)
-        ProcessSecretAccessService access = mock(ProcessSecretAccessService.class, org.mockito.Mockito.withSettings().strictness(org.mockito.quality.Strictness.LENIENT));
-        when(access.protectedProductTypeIds(anyString())).thenReturn(protectedIds);
-        ProductionPlanRepository planRepository = mock(ProductionPlanRepository.class, org.mockito.Mockito.withSettings().strictness(org.mockito.quality.Strictness.LENIENT));
+        ProcessSecretAccessService access = access(protectedIds);
+        return new ProcessSecretLlmCostScope(exclusions(access, plans), access);
+    }
+
+    public static ProcessSecretAccessService access(Set<String> protectedIds) {
+        ProcessSecretPolicyRepository policies = lenientMock(ProcessSecretPolicyRepository.class);
+        List<ProcessSecretPolicy> list = protectedIds.stream().sorted().map(ProcessSecretLlmFixture::policy).toList();
+        when(policies.findByFactoryIdOrderByProductTypeIdAsc(eq(FACTORY))).thenReturn(list);
+        when(policies.findByFactoryIdAndProductTypeId(eq(FACTORY), anyString())).thenAnswer(inv ->
+                protectedIds.contains(inv.<String>getArgument(1))
+                        ? Optional.of(policy(inv.getArgument(1))) : Optional.empty());
+        ProcessSecretGrantRepository grants = lenientMock(ProcessSecretGrantRepository.class);
+        when(grants.findActive(eq(FACTORY), anyString(), eq(ProcessSecretGranteeType.FACTORY_USER), eq(GRANTEE), any()))
+                .thenAnswer(inv -> List.of(ProcessSecretGrant.builder().factoryId(FACTORY)
+                        .productTypeId(inv.getArgument(1)).granteeType(ProcessSecretGranteeType.FACTORY_USER)
+                        .granteeId(GRANTEE).canViewFull(true).canExport(false).canEdit(false).purpose("test")
+                        .expiresAt(LocalDateTime.now().plusDays(1)).grantedBy(OWNER).build()));
+        return new ProcessSecretAccessService(policies, grants, lenientMock(ProcessSecretAuditRecorder.class));
+    }
+
+    private static ProcessSecretAggregateExclusions exclusions(ProcessSecretAccessService access, List<ProductionPlan> plans) {
+        ProductionPlanRepository planRepository = lenientMock(ProductionPlanRepository.class);
         when(planRepository.findByFactoryId(anyString())).thenReturn(plans);
-        BomRecipeRepository recipes = mock(BomRecipeRepository.class, org.mockito.Mockito.withSettings().strictness(org.mockito.quality.Strictness.LENIENT));
+        BomRecipeRepository recipes = lenientMock(BomRecipeRepository.class);
         when(recipes.findAllById(any())).thenReturn(List.of());
-        return new ProcessSecretLlmCostScope(new ProcessSecretAggregateExclusions(access, planRepository, recipes));
+        return new ProcessSecretAggregateExclusions(access, planRepository, recipes);
+    }
+
+    private static ProcessSecretPolicy policy(String productTypeId) {
+        return ProcessSecretPolicy.builder().id(1L).factoryId(FACTORY).productTypeId(productTypeId)
+                .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
     }
 
     public static ProcessSecretLlmCostScope protectedScope() {
@@ -66,6 +141,8 @@ public final class ProcessSecretLlmFixture {
     public static ProcessSecretLlmCostScope unprotectedScope() {
         return scope(Set.of());
     }
+
+    // ---------------- 数据 ----------------
 
     public static List<ProductionPlan> plans() {
         return List.of(plan(SECRET_PLAN, SECRET, null), plan(NORMAL_PLAN, NORMAL, null));
@@ -126,7 +203,7 @@ public final class ProcessSecretLlmFixture {
         return rows;
     }
 
-    /** 测试里逐行算出的「非保密行合计」: 不是「总数 − 保密」。 */
+    /** 测试里逐行算出的「无权调用者能看的行合计」: 不是「总数 − 保密」。 */
     @SuppressWarnings("unchecked")
     public static BigDecimal sumOfNonProtectedRows(List<Map<String, Object>> rows) {
         BigDecimal sum = BigDecimal.ZERO;

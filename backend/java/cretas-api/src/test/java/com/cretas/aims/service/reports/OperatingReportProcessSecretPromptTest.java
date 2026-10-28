@@ -109,6 +109,21 @@ class OperatingReportProcessSecretPromptTest {
     }
 
     @Test
+    void anAuthorizedCallerGetsTheProtectedMarginAndTheSystemPromptCarriesTheHarness() throws Exception {
+        OperatingReportGenerator g = generator(protectedScope());
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        when(model.chat(system.capture(), prompt.capture())).thenReturn("{\"insights\":[]}");
+
+        try (var ignored = as(owner())) {
+            g.scheduled(FACTORY, "daily", day, day);
+        }
+
+        assertThat(prompt.getValue()).contains("2222.22", "13333.33").doesNotContain("不含 1 个保密产品");
+        assertThat(system.getValue()).contains(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
+    }
+
+    @Test
     void negativeControlTheSameInstrumentSeesTheSecretMarginWhenNothingIsProtected() throws Exception {
         String prompt = prompt(unprotectedScope());
 

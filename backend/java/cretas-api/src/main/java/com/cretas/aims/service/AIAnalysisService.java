@@ -80,7 +80,7 @@ public class AIAnalysisService {
     @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
-    /** 工艺保密: 发给模型的成本数据不带保密产品 (Steve 10-28); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
+    /** 工艺保密: 发给模型的成本数据不带当前账号无权查看的保密产品 (Steve 10-29); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
             com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
@@ -148,8 +148,8 @@ public class AIAnalysisService {
                                            String customMessage,
                                            Boolean enableThinking,
                                            Integer thinkingBudget) {
-        // 工艺保密 (中央兜底, 全部成本分析调用点都汇合在这里): 单批是保密产品, 或数据里还夹着保密产品的行
-        // (调用方该过滤没过滤) —— 整次不发给模型。判定本身出错也不发 (fail-closed)。
+        // 工艺保密 (中央兜底, 全部成本分析调用点都汇合在这里): 单批是当前账号无权查看的保密产品, 或数据里还夹着
+        // 这类产品的行 (调用方该过滤没过滤) —— 整次不发给模型。负责人 / 有效授权照常发。判定本身出错也不发 (fail-closed)。
         if (involvesProcessSecret(factoryId, batchId, costData)) {
             Map<String, Object> withheld = new HashMap<>();
             withheld.put("success", false);
@@ -242,7 +242,7 @@ public class AIAnalysisService {
      */
     private boolean involvesProcessSecret(String factoryId, String batchId, Map<String, Object> costData) {
         try {
-            var excluded = llmCostScope.forFactory(factoryId);
+            var excluded = llmCostScope.forCurrentCaller(factoryId);
             if (excluded.isEmpty()) return false;
             if (llmCostScope.containsProtected(factoryId, costData)) return true;
             if (batchId != null && productionBatchRepository != null && batchId.chars().allMatch(Character::isDigit)
@@ -273,7 +273,9 @@ public class AIAnalysisService {
             userMessage = preComputedContext + "\n\n" + userMessage;
             log.info("已注入预计算上下文: factoryId={}", factoryId);
         }
-        return userMessage;
+        // 工艺保密系统约束 (有保密产品的工厂; 两条通道发的都是这一份正文)
+        String harness = llmCostScope.harnessFor(factoryId);
+        return harness.isEmpty() ? userMessage : harness + "\n\n" + userMessage;
     }
 
     /**

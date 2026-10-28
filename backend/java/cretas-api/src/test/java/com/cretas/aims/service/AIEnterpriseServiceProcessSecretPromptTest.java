@@ -13,6 +13,7 @@ import com.cretas.aims.repository.AIAuditLogRepository;
 import com.cretas.aims.repository.AIQuotaUsageRepository;
 import com.cretas.aims.repository.config.AIQuotaConfigRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
+import com.cretas.aims.service.CacheService;
 import com.cretas.aims.service.reports.OperatingReportGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -56,6 +57,8 @@ class AIEnterpriseServiceProcessSecretPromptTest {
     private final AIQuotaUsageRepository quota = mock(AIQuotaUsageRepository.class);
     private final MockHttpServletRequest http = new MockHttpServletRequest();
     private ExecutorService sse;
+    private final Map<Long, AIAnalysisResult> stored = new HashMap<>();
+    private long nextId = 100L;
 
     private AIEnterpriseService service(ProcessSecretLlmCostScope scope) throws Exception {
         AIAnalysisService basic = new AIAnalysisService();
@@ -84,11 +87,19 @@ class AIEnterpriseServiceProcessSecretPromptTest {
         sse = Executors.newSingleThreadExecutor();
         ReflectionTestUtils.setField(service, "sseExecutor", sse);
 
-        when(quota.findByFactoryIdAndWeekStart(eq(FACTORY), any(LocalDate.class)))
+        when(quota.findByFactoryIdAndWeekStart(anyString(), any(LocalDate.class)))
                 .thenReturn(Optional.of(AIQuotaUsage.builder().factoryId(FACTORY).usedCount(0).quotaLimit(100).build()));
         when(quotaConfig.findByFactoryIdAndQuestionType(anyString(), anyString()))
                 .thenReturn(List.of(AIQuotaConfig.builder().factoryId(FACTORY).questionType("x").quotaCost(1).build()));
-        when(results.save(any(AIAnalysisResult.class))).thenAnswer(inv -> inv.getArgument(0));
+        // 保存即分配 id, findById 读回同一行 (分档缓存索引只记 id)
+        when(results.save(any(AIAnalysisResult.class))).thenAnswer(inv -> {
+            AIAnalysisResult saved = inv.getArgument(0);
+            if (saved.getId() == null) saved.setId(nextId++);
+            stored.put(saved.getId(), saved);
+            return saved;
+        });
+        when(results.findById(anyLong())).thenAnswer(inv -> Optional.ofNullable(stored.get(inv.<Long>getArgument(0))));
+        ReflectionTestUtils.setField(service, "cacheService", new CacheService());   // 无 Redis: 内存缓存
         return service;
     }
 
@@ -198,6 +209,65 @@ class AIEnterpriseServiceProcessSecretPromptTest {
         assertThat(data).contains(NORMAL_COST.toPlainString()).doesNotContain(SECRET_COST.toPlainString(), SECRET);
     }
 
+    @Test
+    void streamedTimeRangeForTheOwnerCarriesTheProtectedCostAndTheHarness() throws Exception {
+        AIEnterpriseService service = service(protectedScope());
+        when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(), any())).thenReturn(enhancedRows());
+        http.setAttribute("role", "factory_super_admin");
+
+        try (var ignored = as(owner())) {   // 请求线程上的调用者, 由服务带进流式工作线程
+            service.analyzeTimeRangeCostStream(FACTORY, OWNER, START, END, "overall", null, false, 0, http);
+        }
+        sse.shutdown();
+        assertThat(sse.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+
+        ArgumentCaptor<PythonSmartBIClient.GeneralAnalysisCall> call =
+                ArgumentCaptor.forClass(PythonSmartBIClient.GeneralAnalysisCall.class);
+        verify(python).streamGeneralAnalysis(eq(FACTORY), anyString(), anyString(), call.capture(), any());
+        assertThat(call.getValue().query()).contains("批次:3", ProcessSecretLlmCostScope.HARNESS_INSTRUCTION)
+                .doesNotContain("不含 1 个保密产品");
+        assertThat(mapper.writeValueAsString(call.getValue().data())).contains(SECRET_COST.toPlainString());
+    }
+
+    @Test
+    void streamBackstopRefusesWhenFilteringWasBypassed() throws Exception {
+        // 过滤被绕过 (行原样返回) 时, 发送前的中央兜底仍拦下, 不发也不扣配额
+        ProcessSecretLlmCostScope real = protectedScope();
+        ProcessSecretLlmCostScope bypassed = org.mockito.Mockito.spy(real);
+        org.mockito.Mockito.doAnswer(inv -> new ProcessSecretLlmCostScope.Rows(inv.getArgument(1), 0, 0))
+                .when(bypassed).withoutProtectedBatches(anyString(), any());
+        AIEnterpriseService service = service(bypassed);
+        when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(), any())).thenReturn(enhancedRows());
+
+        service.analyzeTimeRangeCostStream(FACTORY, 7L, START, END, "overall", null, false, 0, http);
+        sse.shutdown();
+        assertThat(sse.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
+
+        verify(bypassed).withoutProtectedBatches(eq(FACTORY), any());   // 一定会发生: 确实走到了过滤这一步
+        verify(python, never()).streamGeneralAnalysis(anyString(), any(), any(), any(), any());
+        verify(quota, never()).incrementUsedCount(anyString(), any(LocalDate.class), anyInt());
+    }
+
+    @Test
+    void theOwnerMayAnalyseTheProtectedBatchDirectly() throws Exception {
+        AIEnterpriseService service = service(protectedScope());
+        when(processing.getBatchById(FACTORY, "1")).thenReturn(batch(1L, SECRET, SECRET_PLAN, SECRET_COST, BigDecimal.TEN));
+        Map<String, Object> costData = new HashMap<>();
+        costData.put("totalCost", SECRET_COST);
+        when(processing.getBatchCostAnalysis(FACTORY, "1")).thenReturn(costData);
+        MobileDTO.AICostAnalysisRequest request = new MobileDTO.AICostAnalysisRequest();
+        request.setBatchId("1");
+        request.setReportType("default");
+
+        MobileDTO.AICostAnalysisResponse response;
+        try (var ignored = as(owner())) {
+            response = service.analyzeCost(FACTORY, OWNER, request, http);
+        }
+
+        assertThat(response.getSuccess()).isTrue();
+        assertThat(sentToModel(1).get(0)).contains(SECRET_COST.toPlainString());
+    }
+
     // ---------------- 对比 ----------------
 
     @Test
@@ -226,22 +296,60 @@ class AIEnterpriseServiceProcessSecretPromptTest {
         return cached;
     }
 
+    private MobileDTO.AICostAnalysisResponse timeRangeAs(AIEnterpriseService service, String factory,
+                                                         com.cretas.aims.security.AuthenticatedActor actor) {
+        try (var ignored = as(actor)) {
+            return service.analyzeTimeRangeCost(factory, 1L, START, END, "overall", null, http);
+        }
+    }
+
     @Test
-    void twoCallersInAFactoryWithProtectedProductsNeverGetTheSharedCachedAnalysis() throws Exception {
+    void oldCachedRowsWithoutATierAreServedToNobodyInAProtectedFactory() throws Exception {
         AIEnterpriseService service = service(protectedScope());
         when(results.findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(eq(FACTORY), any()))
                 .thenReturn(List.of(cachedTimeRange()));
         when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(), any())).thenReturn(enhancedRows());
 
-        // 保密负责人 (userId 1) 先分析, 无授权的同厂账号 (userId 2) 再问同一时间段
-        MobileDTO.AICostAnalysisResponse owner = service.analyzeTimeRangeCost(FACTORY, 1L, START, END, "overall", null, http);
-        MobileDTO.AICostAnalysisResponse other = service.analyzeTimeRangeCost(FACTORY, 2L, START, END, "overall", null, http);
+        MobileDTO.AICostAnalysisResponse owner = timeRangeAs(service, FACTORY, owner());
+        MobileDTO.AICostAnalysisResponse other = timeRangeAs(service, FACTORY, sameFactoryUser());
 
         assertThat(owner.getAnalysis()).isEqualTo("新分析");
         assertThat(other.getAnalysis()).isEqualTo("新分析");
-        assertThat(other.getCacheHit()).isFalse();
         sentToModel(2);   // 两次都现算 —— 一定会发生的读数
         verify(results, never()).findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(anyString(), any());
+    }
+
+    @Test
+    void sameTierReusesTheCachedAnalysisDifferentTierDoesNot() throws Exception {
+        AIEnterpriseService service = service(protectedScope());
+        when(processing.getTimeRangeBatchesCostAnalysis(eq(FACTORY), any(), any())).thenReturn(enhancedRows());
+
+        MobileDTO.AICostAnalysisResponse first = timeRangeAs(service, FACTORY, owner());
+        MobileDTO.AICostAnalysisResponse ownerAgain = timeRangeAs(service, FACTORY, owner());
+        MobileDTO.AICostAnalysisResponse grantee = timeRangeAs(service, FACTORY, grantee());      // 同样完整查看 = 同档
+        MobileDTO.AICostAnalysisResponse colleague = timeRangeAs(service, FACTORY, sameFactoryUser());
+        MobileDTO.AICostAnalysisResponse platform = timeRangeAs(service, FACTORY, platform());     // 与同厂无权同档
+
+        assertThat(first.getCacheHit()).isFalse();
+        assertThat(ownerAgain.getCacheHit()).isTrue();
+        assertThat(grantee.getCacheHit()).isTrue();
+        assertThat(colleague.getCacheHit()).isFalse();
+        assertThat(platform.getCacheHit()).isTrue();
+        List<String> sent = sentToModel(2);   // 负责人档一次 + 无权档一次
+        assertThat(sent.get(0)).contains(SECRET_COST.toPlainString());
+        assertThat(sent.get(1)).doesNotContain(SECRET_COST.toPlainString()).contains("不含 1 个保密产品");
+    }
+
+    @Test
+    void anotherFactoryNeverGetsThisFactorysCachedAnalysis() throws Exception {
+        AIEnterpriseService service = service(protectedScope());
+        when(processing.getTimeRangeBatchesCostAnalysis(anyString(), any(), any())).thenReturn(enhancedRows());
+
+        timeRangeAs(service, FACTORY, owner());
+        MobileDTO.AICostAnalysisResponse elsewhere = timeRangeAs(service, OTHER_FACTORY, otherFactoryUser());
+
+        assertThat(elsewhere.getCacheHit()).isFalse();
+        verify(python).analyzeGeneral(eq(OTHER_FACTORY), nullable(String.class), any());
     }
 
     @Test

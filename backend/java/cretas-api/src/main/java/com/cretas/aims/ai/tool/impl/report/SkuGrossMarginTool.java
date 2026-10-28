@@ -49,8 +49,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     @Autowired
     private ProductTypeRepository productTypeRepository;
     /**
-     * 工艺保密: 文案 (message) 直接进模型上下文, 保密产品的成本 / 毛利 / 毛利率不写进文案, 不论调用者是否有权
-     * (Steve 10-28: 对 AI 一律不带)。结构化字段仍由 ProcessSecretToolOutputAspect 按调用者裁剪。
+     * 工艺保密: 文案 (message) 直接进模型上下文, 当前账号无权查看的保密产品的成本 / 毛利 / 毛利率不写进文案,
+     * 负责人 / 有效授权照常写 (Steve 10-29)。结构化字段仍由 ProcessSecretToolOutputAspect 按调用者裁剪。
      */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
@@ -156,7 +156,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         int total = items.size();
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
-        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, llmCostScope.forFactory(factoryId)),
+        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, llmCostScope.forCurrentCaller(factoryId)),
                 resultData(shown, total, start, end, defaultPeriod));
     }
 

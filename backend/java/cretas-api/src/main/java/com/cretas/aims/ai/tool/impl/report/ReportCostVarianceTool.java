@@ -165,8 +165,8 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                     "成本差异无法比较：缺少独立标准成本，本期不给出差异金额与差异率。");
             if (costVarianceData.getTotalActualCost() != null) {
                 // 工艺保密: 全厂实际总成本含保密产品, 而这里拿不到逐产品的总成本来只加非保密行 ——
-                // 本厂有保密产品时文案里不写这个总数 (文案直接进模型上下文, Steve 10-28: 对 AI 一律不带)
-                if (llmCostScope.factoryHasProtected(factoryId)) {
+                // 当前账号对本厂某个保密产品无权时文案里不写这个总数 (文案直接进模型上下文; 负责人 / 有效授权照常写, Steve 10-29)
+                if (!llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 批次数 ").append(costVarianceData.getBatchCount())
                             .append("；实际总成本含工艺保密产品，不提供给 AI。");

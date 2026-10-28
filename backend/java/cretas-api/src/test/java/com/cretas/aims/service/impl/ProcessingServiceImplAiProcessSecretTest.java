@@ -16,6 +16,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -73,15 +74,42 @@ class ProcessingServiceImplAiProcessSecretTest {
     }
 
     @Test
-    void sharedCacheIsNotReadInAFactoryWithProtectedProducts() {
+    void theOwnerMayAnalyseTheProtectedBatch() {
+        ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
+        when(productionBatchRepository.findByIdAndFactoryId(1L, FACTORY))
+                .thenReturn(Optional.of(batch(1L, SECRET, SECRET_PLAN, SECRET_COST, BigDecimal.TEN)));
+        stubAnalysisPath(1L);
+
+        Map<String, Object> result;
+        try (var ignored = as(owner())) {
+            result = service.analyzeWithAI(FACTORY, "1", null, null);
+        }
+
+        assertThat(result.get("success")).isEqualTo(true);
+        verify(aiAnalysisService).analyzeCost(eq(FACTORY), eq("1"), anyMap(), isNull(), isNull());
+    }
+
+    @Test
+    void theSharedCacheKeyCarriesTheCallersSecrecyTier() {
         ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
         stubNormalBatch();
+        org.mockito.ArgumentCaptor<String> keys = org.mockito.ArgumentCaptor.forClass(String.class);
 
-        service.analyzeWithAI(FACTORY, "2", null, null);
+        try (var ignored = as(owner())) {
+            service.analyzeWithAI(FACTORY, "2", null, null);
+        }
+        try (var ignored = as(grantee())) {
+            service.analyzeWithAI(FACTORY, "2", null, null);
+        }
+        try (var ignored = as(sameFactoryUser())) {
+            service.analyzeWithAI(FACTORY, "2", null, null);
+        }
 
-        verify(cacheService, never()).getAIAnalysisCache(anyString(), anyString());
-        verify(cacheService, never()).setAIAnalysisCache(anyString(), anyString(), any());
-        verify(aiAnalysisService).analyzeCost(eq(FACTORY), eq("2"), anyMap(), isNull(), isNull());
+        verify(cacheService, times(3)).getAIAnalysisCache(eq(FACTORY), keys.capture());
+        List<String> read = keys.getAllValues();
+        assertThat(read).allSatisfy(k -> assertThat(k).startsWith("2|ps-"));   // 旧的无档位键 "2" 不再读
+        assertThat(read.get(0)).isEqualTo(read.get(1));                           // 负责人与被授权人同档
+        assertThat(read.get(2)).isNotEqualTo(read.get(0));                        // 无权同事另一档
     }
 
     @Test
@@ -108,6 +136,8 @@ class ProcessingServiceImplAiProcessSecretTest {
 
     /** getEnhancedBatchCostAnalysis 一路要读的仓库 (lenient: 判定拦下时它们不会被用到)。 */
     private void stubAnalysisPath(long batchId) {
+        // 未打桩的 Map 返回值是空 Map 而不是 null, 会被当成缓存命中: 明确「缓存里没有」
+        lenient().when(cacheService.getAIAnalysisCache(anyString(), anyString())).thenReturn(null);
         lenient().when(equipmentRepository.findByIdIn(any())).thenReturn(java.util.List.of());
         lenient().when(batchWorkSessionRepository.findByBatchId(batchId)).thenReturn(java.util.List.of());
         lenient().when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(batchId), any()))

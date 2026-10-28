@@ -48,6 +48,10 @@ class ProductionReportProcessSecretPromptTest {
     }
 
     private ProductionReportServiceImpl service(Set<String> protectedIds) throws Exception {
+        return service(protectedIds, planRows);
+    }
+
+    private ProductionReportServiceImpl service(Set<String> protectedIds, List<ProductionPlan> planRows) throws Exception {
         AIAnalysisService ai = new AIAnalysisService();
         DashScopeConfig dashScope = mock(DashScopeConfig.class);
         when(dashScope.isAvailable()).thenReturn(false);
@@ -95,6 +99,30 @@ class ProductionReportProcessSecretPromptTest {
                 .contains("- 总成本：" + nonProtectedPlanTotal().toPlainString() + "\n")
                 .contains("不含 1 个保密产品")
                 .doesNotContain(factoryWideTotal.toPlainString(), SECRET_COST.toPlainString());
+    }
+
+    @Test
+    void anomalyForTheOwnerUsesTheFactoryWideTotal() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+        try (var ignored = as(owner())) {
+            service.getAnomalyReport(FACTORY, LocalDate.now().minusDays(7), LocalDate.now());
+        }
+
+        assertThat(sentToModel()).contains("- 总成本：" + factoryWideTotal.toPlainString()).doesNotContain("不含");
+    }
+
+    @Test
+    void anomalyNoteCountsTheProtectedProductOnceEvenWithAnAnchorPlan() throws Exception {
+        // 多产出计划锚在原料上、目标成品是保密产品: 两个计划都排除, 但保密产品只有 1 个
+        ProductionPlan anchor = costed(plan("PL-ANCHOR", "RAW-ANCHOR", yesterday), new BigDecimal("100.00"));
+        anchor.setTargetFinishedGoodIds(List.of(SECRET));
+        List<ProductionPlan> withAnchor = new java.util.ArrayList<>(planRows);
+        withAnchor.add(anchor);
+
+        service(Set.of(SECRET), withAnchor).getAnomalyReport(FACTORY, LocalDate.now().minusDays(7), LocalDate.now());
+
+        assertThat(sentToModel()).contains("- 总成本：" + nonProtectedPlanTotal().toPlainString() + "\n")
+                .contains("不含 1 个保密产品").doesNotContain("不含 2 个保密产品");
     }
 
     @Test

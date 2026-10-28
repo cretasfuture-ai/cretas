@@ -66,29 +66,18 @@ public class ProcessSecretAggregateExclusions {
     }
 
     /**
-     * 与调用者无关的全部受保护范围: 本厂所有受保护产品, 以及牵涉它们的计划和计划锚点。
-     * 给「发给大模型的数据」用 (Steve 10-28: 对 AI 一律不带, 负责人发起的 AI 分析也不带),
-     * 所以不判权限、不记审计。
-     */
-    public Scope allProtected(String factoryId) {
-        return allProtectedDetailed(factoryId).scope();
-    }
-
-    /**
-     * {@link #allProtected} 加两样给「不含 N 个保密产品」计数用的东西: 真正受保护的产品 id
-     * (不含计划锚点 / 同计划的普通产品), 以及每个被排除的计划背后是哪几个受保护产品。
+     * 给「发给大模型的数据」用: 已经判定好的隐藏产品 (对当前调用者无完整查看权的保密产品), 连同牵涉它们的计划和锚点,
+     * 以及每个被排除计划背后是哪几个隐藏产品 (给「不含 N 个保密产品」计数, 锚点 / 同计划普通产品不算)。
+     * 判定由调用方做 (ProcessSecretLlmCostScope), 这里不判权限、不记审计。
      */
     public record ProtectedScope(Scope scope, Set<String> protectedProductTypeIds,
                                  Map<String, Set<String>> protectedProductsByPlan) {
-        public static final ProtectedScope EMPTY = new ProtectedScope(Scope.EMPTY, Set.of(), Map.of());
     }
 
-    public ProtectedScope allProtectedDetailed(String factoryId) {
-        Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
-        if (protectedIds.isEmpty()) return ProtectedScope.EMPTY;
+    public ProtectedScope forHidden(String factoryId, Set<String> hidden) {
         Map<String, Set<String>> byPlan = new HashMap<>();
-        Scope scope = expand(factoryId, new HashSet<>(protectedIds), byPlan);
-        return new ProtectedScope(scope, Set.copyOf(protectedIds), Map.copyOf(byPlan));
+        Scope scope = expand(factoryId, new HashSet<>(hidden), byPlan);
+        return new ProtectedScope(scope, Set.copyOf(hidden), Map.copyOf(byPlan));
     }
 
     private Scope expand(String factoryId, Set<String> hidden) {

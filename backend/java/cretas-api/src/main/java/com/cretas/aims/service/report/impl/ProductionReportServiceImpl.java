@@ -69,7 +69,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final ProductionLineRepository productionLineRepository;
     private final FactorySettingsRepository factorySettingsRepository;
 
-    /** 工艺保密: 发给 AI 的成本合计不含保密产品 (Steve 10-28); 字段注入, 单测按构造器装配时用「没有保密产品」的默认实例。 */
+    /** 工艺保密: 发给 AI 的成本合计不含当前账号无权查看的保密产品 (Steve 10-29); 字段注入, 单测按构造器装配时用「没有保密产品」的默认实例。 */
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
@@ -82,7 +82,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
      * {@code perDayBounds}: 与按天查询的口径一致, 每天只算到当天 23:59:59。
      */
     AiPlanCosts planCostsForAi(String factoryId, LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
-        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forFactory(factoryId);
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forCurrentCaller(factoryId);
         Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
         BigDecimal total = BigDecimal.ZERO;
         Set<String> excludedProducts = new LinkedHashSet<>();
@@ -886,7 +886,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             // 工艺保密: 发给 AI 的总成本只在非保密计划上累加 (取不到保密范围时抛出 → 走规则检测, 不发)
             BigDecimal aiTotalCost = (BigDecimal) dataContext.get("totalCost");
             String secretNote = "";
-            if (llmCostScope.factoryHasProtected(factoryId)) {
+            if (!llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
                 AiPlanCosts aiCosts = planCostsForAi(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
                 aiTotalCost = aiCosts.total();
                 if (aiCosts.excludedPlans() > 0) {
@@ -1097,7 +1097,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             BigDecimal aiTotal = totalHistorical;
             BigDecimal aiAverage = dailyAverage;
             String secretNote = "";
-            if ("cost".equals(type) && llmCostScope.factoryHasProtected(factoryId)) {
+            if ("cost".equals(type) && !llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
                 LocalDate firstDay = today.minusDays(historicalDays - 1);
                 AiPlanCosts aiCosts = planCostsForAi(factoryId, firstDay.atStartOfDay(), today.atTime(23, 59, 59), true);
                 aiHistorical = new ArrayList<>();

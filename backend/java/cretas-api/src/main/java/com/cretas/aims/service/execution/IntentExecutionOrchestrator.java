@@ -182,8 +182,9 @@ public class IntentExecutionOrchestrator {
     static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply";
 
     /**
-     * 工艺保密: 存档的日 / 周 / 月报 (经营报告快照含保密产品的毛利 / 成本; 修复前的旧文本也留 90 天)
-     * 在有保密产品的工厂不拼进咨询提示词 (Steve 10-28: 对 AI 一律不带)。单测直接 new 本类时用「没有保密产品」的默认实例。
+     * 工艺保密: 存档的日 / 周 / 月报是全厂共享的产物 (经营报告快照含保密产品的毛利 / 成本; 旧文本也留 90 天),
+     * 当前账号对本厂某个保密产品无完整查看权时不拼进咨询提示词; 负责人 / 有效授权照常带 (Steve 10-29)。
+     * 单测直接 new 本类时用「没有保密产品」的默认实例。
      */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
@@ -2588,7 +2589,7 @@ public class IntentExecutionOrchestrator {
                     %s
                     ---
                     请基于数据提供针对性建议，不超过500字，使用中文。
-                    """.formatted(factoryAnalysisContext);
+                    """.formatted(factoryAnalysisContext) + llmCostScope.harnessFor(factoryId);
             } else {
                 systemPrompt = "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。";
             }
@@ -4804,8 +4805,8 @@ public class IntentExecutionOrchestrator {
     private String getPrecomputedAnalysisContext(String factoryId) {
         if (factoryId == null || factoryId.isEmpty()) return null;
         try {
-            if (llmCostScope.factoryHasProtected(factoryId)) {
-                log.info("[process-secret] 本厂有工艺保密产品, 存档报告不拼进咨询提示词: factoryId={}", factoryId);
+            if (!llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
+                log.info("[process-secret] 当前账号无权查看本厂部分保密产品, 存档报告不拼进咨询提示词: factoryId={}", factoryId);
                 return null;
             }
         } catch (RuntimeException e) {

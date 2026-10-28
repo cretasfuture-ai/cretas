@@ -117,19 +117,43 @@ public class AIEnterpriseService {
     static final String STREAM_EGRESS_SITE = "cost-analysis-stream";
 
     /**
-     * 工艺保密 (Steve 10-28: 对 AI 一律不带): 发给模型的批次成本先去掉保密产品; 单测直接 new 本类时
-     * 用「没有保密产品」的默认实例。共享的分析缓存不分调用者, 本厂有保密产品时不读 (见 {@link #cacheReadable})。
+     * 工艺保密 (Steve 10-29): 发给模型的批次成本按当前调用者裁剪 —— 负责人 / 有效授权照常带保密产品,
+     * 其他人 (含没有用户的定时任务) 去掉保密产品; 单测直接 new 本类时用「没有保密产品」的默认实例。
+     * 共享的分析缓存按调用者保密档位分开 (见 {@link #cachedForCaller})。
      */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
+    /** 分档缓存索引 (Redis / 内存); 单测没装时有保密产品的工厂一律不命中。 */
+    @Autowired(required = false)
+    private CacheService cacheService;
+
     /**
-     * 共享分析缓存 (按工厂存、不看调用者) 只在本厂没有任何保密产品时才读:
-     * 新生成的分析已不含保密产品成本, 但缓存行可能早于本次修复或早于该产品设为保密,
-     * 表里也没有记录生成时保密状态的列 —— 宁可多调一次模型, 不回放可能带保密成本的旧分析。
+     * 共享分析缓存按 (工厂, 缓存键, 调用者保密档位) 命中。本厂没有保密产品: 档位为空, 沿用原查询;
+     * 有保密产品: 只认本档位记过的结果 id —— 跨档 / 跨厂不命中, 同档复用; 没记档位的旧行一律不命中 (不删)。
      */
-    private boolean cacheReadable(String factoryId) {
-        return !llmCostScope.factoryHasProtected(factoryId);
+    private Optional<AIAnalysisResult> cachedForCaller(String factoryId, String cacheKey,
+                                                       java.util.function.Predicate<AIAnalysisResult> matches,
+                                                       java.util.function.Supplier<Optional<AIAnalysisResult>> legacy) {
+        String tier = llmCostScope.accessTier(factoryId);
+        if (tier.isEmpty()) return legacy.get();
+        if (cacheService == null) return Optional.empty();
+        Long reportId = cacheService.getSecrecyTierIndex(factoryId, cacheKey, tier);
+        if (reportId == null) return Optional.empty();
+        return analysisResultRepository.findById(reportId)
+                .filter(r -> factoryId.equals(r.getFactoryId()))
+                .filter(r -> r.getExpiresAt() != null && r.getExpiresAt().isAfter(LocalDateTime.now()))
+                .filter(matches);
+    }
+
+    /** 有保密产品的工厂: 把这次结果登记到当前调用者的档位下 (有效期跟结果一样长)。 */
+    private void rememberForCaller(String factoryId, String cacheKey, AIAnalysisResult saved) {
+        if (saved == null || saved.getId() == null || cacheService == null) return;
+        String tier = llmCostScope.accessTier(factoryId);
+        if (tier.isEmpty()) return;
+        java.time.Duration ttl = saved.getExpiresAt() == null ? null
+                : java.time.Duration.between(LocalDateTime.now(), saved.getExpiresAt());
+        cacheService.putSecrecyTierIndex(factoryId, cacheKey, tier, saved.getId(), ttl);
     }
 
     /** 去掉了保密行时在提示词最前面注明「不含 N 个保密产品」。 */
@@ -168,9 +192,10 @@ public class AIEnterpriseService {
         AIAnalysisResult cachedResult = null;
 
         try {
-            // 0. 工艺保密: 保密产品的批次成本不发给 AI (追问同样), 也不回放缓存; 判定在读缓存之前
-            boolean cacheReadable = cacheReadable(factoryId);
-            if (!cacheReadable && !"historical".equals(questionType) && request.getBatchId() != null) {
+            // 0. 工艺保密: 当前账号无权查看的保密产品批次, 成本不发给 AI (追问同样), 也不回放缓存; 判定在读缓存之前
+            //    (负责人 / 有效授权照常分析)
+            if (!"historical".equals(questionType) && request.getBatchId() != null
+                    && !llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
                 com.cretas.aims.entity.ProductionBatch batch = processingService.getBatchById(factoryId, request.getBatchId());
                 if (llmCostScope.isProtectedBatch(factoryId, batch.getProductTypeId(), batch.getProductionPlanId())) {
                     return MobileDTO.AICostAnalysisResponse.builder()
@@ -181,8 +206,14 @@ public class AIEnterpriseService {
             }
 
             // 1. 检查缓存（default和followup类型）
-            if (cacheReadable && ("default".equals(questionType) || "followup".equals(questionType))) {
-                cachedResult = checkCache(factoryId, request.getBatchId(), questionType, request.getQuestion());
+            if ("default".equals(questionType) || "followup".equals(questionType)) {
+                String batchKey = request.getBatchId();
+                cachedResult = "default".equals(questionType)
+                        ? cachedForCaller(factoryId, "batch:" + batchKey,
+                                r -> "batch".equals(r.getReportType()) && batchKey != null && batchKey.equals(r.getBatchId()),
+                                () -> Optional.ofNullable(checkCache(factoryId, batchKey, questionType, request.getQuestion())))
+                            .orElse(null)
+                        : checkCache(factoryId, batchKey, questionType, request.getQuestion());
                 if (cachedResult != null) {
                     cacheHit = true;
                     success = true;
@@ -242,6 +273,9 @@ public class AIEnterpriseService {
             // 5. 保存结果到缓存
             AIAnalysisResult savedResult = saveAnalysisResult(
                     factoryId, request.getBatchId(), questionType, aiAnalysis, sessionId, request);
+            if ("default".equals(questionType)) {
+                rememberForCaller(factoryId, "batch:" + request.getBatchId(), savedResult);
+            }
 
             // 6. 记录审计日志
             int quotaCost = ("followup".equals(questionType) || "historical".equals(questionType))
@@ -735,15 +769,16 @@ public class AIEnterpriseService {
 
             // 1. 检查缓存（基于时间范围和维度，仅在无question时）
             String actualDimension = dimension != null ? dimension : "overall";
-            if ((question == null || question.trim().isEmpty()) && cacheReadable(factoryId)) {
-                Optional<AIAnalysisResult> cachedResult = analysisResultRepository
-                        .findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(factoryId, LocalDateTime.now())
-                        .stream()
-                        .filter(r -> "time_range".equals(r.getReportType()))
-                        .filter(r -> r.getPeriodStart() != null && r.getPeriodEnd() != null)
-                        .filter(r -> r.getPeriodStart().equals(startDate) && r.getPeriodEnd().equals(endDate))
-                        .filter(r -> actualDimension.equals(r.getDimension() != null ? r.getDimension() : "overall"))
-                        .findFirst();
+            String timeRangeKey = "time_range:" + startDate + ":" + endDate + ":" + actualDimension;
+            java.util.function.Predicate<AIAnalysisResult> sameRange = r -> "time_range".equals(r.getReportType())
+                    && r.getPeriodStart() != null && r.getPeriodEnd() != null
+                    && r.getPeriodStart().equals(startDate) && r.getPeriodEnd().equals(endDate)
+                    && actualDimension.equals(r.getDimension() != null ? r.getDimension() : "overall");
+            if (question == null || question.trim().isEmpty()) {
+                Optional<AIAnalysisResult> cachedResult = cachedForCaller(factoryId, timeRangeKey, sameRange,
+                        () -> analysisResultRepository
+                                .findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(factoryId, LocalDateTime.now())
+                                .stream().filter(sameRange).findFirst());
 
                 if (cachedResult.isPresent()) {
                     log.info("时间范围分析缓存命中: factoryId={}, startDate={}, endDate={}, dimension={}",
@@ -836,7 +871,8 @@ public class AIEnterpriseService {
                     .expiresAt(LocalDateTime.now().plusDays(7))
                     .isAutoGenerated(false)
                     .build();
-            analysisResultRepository.save(result);
+            AIAnalysisResult savedTimeRange = analysisResultRepository.save(result);
+            rememberForCaller(factoryId, timeRangeKey, savedTimeRange);
 
             // 8. 记录审计日志
             logAuditRecord(factoryId, userId, null, "time_range", true, quotaCost,
@@ -899,7 +935,12 @@ public class AIEnterpriseService {
                 factoryId, userId, startDate.toLocalDate(), endDate.toLocalDate(), dimension);
 
         // 异步处理，避免阻塞主线程
+        // 工艺保密按调用者裁剪: 把请求线程上的调用者带进流式工作线程 (取不到 = 按无权处理)
+        com.cretas.aims.security.AuthenticatedActor streamCaller =
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null);
         sseExecutor.execute(() -> {
+          try (com.cretas.aims.security.AuthenticatedActor.ActorScope callerScope =
+                       com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(streamCaller)) {
             try {
                 // 1. 发送开始事件
                 emitter.send(SseEmitter.event()
@@ -973,7 +1014,7 @@ public class AIEnterpriseService {
                         .data("{\"type\":\"progress\",\"message\":\"获取到 " + batchesData.size() + " 个批次数据\"}"));
 
                 // 4. 格式化 Prompt (使用精简版以减少Token，加速AI响应)
-                String promptMessage = withSecretNote(secretRows,
+                String promptMessage = llmCostScope.harnessFor(factoryId) + withSecretNote(secretRows,
                         formatCompactTimeRangePrompt(batchesData, startDate, endDate, dimension, question));
 
                 emitter.send(SseEmitter.event()
@@ -1037,6 +1078,7 @@ public class AIEnterpriseService {
                     emitter.completeWithError(ex);
                 }
             }
+          }
         });
 
         // 设置超时和完成回调
@@ -1514,14 +1556,14 @@ public class AIEnterpriseService {
             }
 
             // 2. 检查缓存（仅在无question时）
-            if ((question == null || question.trim().isEmpty()) && cacheReadable(factoryId)) {
+            if (question == null || question.trim().isEmpty()) {
                 String cacheKey = String.join(",", batchIds);
-                Optional<AIAnalysisResult> cachedResult = analysisResultRepository
-                        .findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(factoryId, LocalDateTime.now())
-                        .stream()
-                        .filter(r -> "comparison".equals(r.getReportType()))
-                        .filter(r -> cacheKey.equals(r.getBatchId()))
-                        .findFirst();
+                java.util.function.Predicate<AIAnalysisResult> sameBatches =
+                        r -> "comparison".equals(r.getReportType()) && cacheKey.equals(r.getBatchId());
+                Optional<AIAnalysisResult> cachedResult = cachedForCaller(factoryId, "comparison:" + cacheKey, sameBatches,
+                        () -> analysisResultRepository
+                                .findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(factoryId, LocalDateTime.now())
+                                .stream().filter(sameBatches).findFirst());
 
                 if (cachedResult.isPresent()) {
                     log.info("命中缓存: 批次对比分析");
@@ -1578,7 +1620,8 @@ public class AIEnterpriseService {
                     .sessionId(sessionId)
                     .expiresAt(LocalDateTime.now().plusDays(7))
                     .build();
-            analysisResultRepository.save(result);
+            AIAnalysisResult savedComparison = analysisResultRepository.save(result);
+            rememberForCaller(factoryId, "comparison:" + cacheKey, savedComparison);
 
             // 10. 记录审计日志
             MobileDTO.AICostAnalysisRequest dummyRequest = new MobileDTO.AICostAnalysisRequest();

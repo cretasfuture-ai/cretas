@@ -40,6 +40,10 @@ class ProcessSecretToolTextTest {
     // ---------------- ReportBomCostTool ----------------
 
     private ReportBomCostTool bomTool(ProcessSecretLlmCostScope scope) {
+        return bomTool(scope, batches);
+    }
+
+    private ReportBomCostTool bomTool(ProcessSecretLlmCostScope scope, List<ProductionBatch> batches) {
         ReportService reports = mock(ReportService.class);
         when(reports.getProductionByProduct(eq(FACTORY), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of(
                 stat(SECRET, SECRET_NAME, "100"), stat(NORMAL, "普通2", "100"), stat(NORMAL2, "普通3", "200")));
@@ -103,6 +107,37 @@ class ProcessSecretToolTextTest {
         assertThat((String) normal.get("preformattedPrompt")).contains("¥12.3456");
     }
 
+    @Test
+    void bomCostForTheOwnerCarriesTheProtectedProductCost() throws Exception {
+        ReportBomCostTool tool = bomTool(protectedScope());
+        Map<String, Object> factory;
+        Map<String, Object> single;
+        try (var ignored = as(owner())) {
+            factory = tool.doExecute(FACTORY, new HashMap<>(Map.of("analysisType", "detail", "includeZeroCost", true)), Map.of());
+            single = tool.doExecute(FACTORY, new HashMap<>(Map.of("productTypeId", SECRET)), Map.of());
+        }
+
+        assertThat((String) factory.get("preformattedPrompt")).contains("¥77.7777", "¥13333.33").doesNotContain("不含");
+        assertThat((String) single.get("preformattedPrompt")).contains("¥77.7777");
+    }
+
+    @Test
+    void bomCostOfAProductMadeOnTheProtectedProductsPlanIsWithheldForUnauthorizedCallers() throws Exception {
+        // 普通产品, 但它的批次属于牵涉保密产品的计划 (联产): 与生产统计上下文同口径, 无权调用者整份不给
+        List<ProductionBatch> coProduced = List.of(batch(5L, NORMAL, SECRET_PLAN, NORMAL_COST, new BigDecimal("100")));
+        ReportBomCostTool tool = bomTool(protectedScope(), coProduced);
+
+        Map<String, Object> unauthorized = tool.doExecute(FACTORY, new HashMap<>(Map.of("productTypeId", NORMAL)), Map.of());
+        Map<String, Object> owner;
+        try (var ignored = as(owner())) {
+            owner = tool.doExecute(FACTORY, new HashMap<>(Map.of("productTypeId", NORMAL)), Map.of());
+        }
+
+        assertThat(unauthorized.get("costWithheld")).isEqualTo(true);
+        assertThat(unauthorized.toString()).doesNotContain("12.3456");
+        assertThat((String) owner.get("preformattedPrompt")).contains("¥12.3456");
+    }
+
     // ---------------- SkuGrossMarginTool ----------------
 
     private Map<String, Object> skuRow(String id, String name, String revenue, BigDecimal cost) {
@@ -144,6 +179,13 @@ class ProcessSecretToolTextTest {
     }
 
     @Test
+    void skuMarginMessageForTheOwnerStatesTheProtectedMargin() throws Exception {
+        try (var ignored = as(owner())) {
+            assertThat(skuMessage(protectedScope())).contains("成本 ¥" + SECRET_COST.toPlainString(), "22.22%");
+        }
+    }
+
+    @Test
     void skuMarginNegativeControlStatesItWhenNothingIsProtected() throws Exception {
         assertThat(skuMessage(unprotectedScope())).contains("成本 ¥" + SECRET_COST.toPlainString(), "22.22%");
     }
@@ -164,6 +206,9 @@ class ProcessSecretToolTextTest {
     void costVarianceMessageLeavesOutTheFactoryTotalThatIncludesProtectedProducts() throws Exception {
         assertThat(varianceMessage(protectedScope())).doesNotContain("13333.33").contains("批次数 3", "工艺保密");
         assertThat(varianceMessage(unprotectedScope())).contains("实际总成本 ¥13333.33");
+        try (var ignored = as(owner())) {
+            assertThat(varianceMessage(protectedScope())).contains("实际总成本 ¥13333.33");
+        }
     }
 
     private static ProductionByProductDTO stat(String productTypeId, String name, String quantity) {

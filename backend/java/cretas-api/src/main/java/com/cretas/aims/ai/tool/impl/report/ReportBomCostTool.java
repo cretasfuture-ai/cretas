@@ -40,7 +40,7 @@ public class ReportBomCostTool extends AbstractBusinessTool {
     @Autowired
     private AIContextService aiContextService;
 
-    /** 工艺保密: 本工具的结果整体给模型看, 保密产品的成本一律不带 (Steve 10-28: 对 AI 一律不带)。 */
+    /** 工艺保密: 本工具的结果整体给模型看; 当前账号无权查看的保密产品成本不带, 负责人 / 有效授权照常带 (Steve 10-29)。 */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
@@ -141,7 +141,7 @@ public class ReportBomCostTool extends AbstractBusinessTool {
         CostAIContext costContext = aiContextService.buildCostContext(factoryId, productTypeId, 10);
 
         // 工艺保密产品, 或累加的批次属于牵涉保密产品的计划: 不给任何成本数 (结构化字段和预格式化文本都不带)
-        if (llmCostScope.forFactory(factoryId)
+        if (llmCostScope.forCurrentCaller(factoryId)
                 .coversProductOrAnyPlan(productTypeId, costContext.getCostSourcePlanIds())) {
             result.put("analysisType", "product_detail");
             result.put("productTypeId", productTypeId);

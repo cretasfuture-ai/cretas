@@ -64,14 +64,14 @@ public class AIContextServiceImpl implements AIContextService {
     }
 
     /**
-     * 给大模型的版本: 工艺保密产品 (含牵涉它们的计划所产批次) 的成本去掉、数量保留;
-     * 成本合计 / 单位成本 / 成本结构 / 成本排名只在非保密产品上逐行累加 (Steve 10-28)。
+     * 给大模型的版本 (按当前调用者): 他无权完整查看的保密产品 (含牵涉它们的计划所产批次) 成本去掉、数量保留;
+     * 成本合计 / 单位成本 / 成本结构 / 成本排名只在他能看的产品上逐行累加。负责人 / 有效授权 = 不过滤 (Steve 10-29)。
      * 取不到保密范围时抛出, 调用方不发 (fail-closed)。
      */
     @Override
     @Transactional(readOnly = true)
     public ProductionAIContext buildProductionContextForAi(String factoryId, LocalDate startDate, LocalDate endDate) {
-        return buildProductionContext(factoryId, startDate, endDate, llmCostScope.forFactory(factoryId));
+        return buildProductionContext(factoryId, startDate, endDate, llmCostScope.forCurrentCaller(factoryId));
     }
 
     private ProductionAIContext buildProductionContext(String factoryId, LocalDate startDate, LocalDate endDate,
@@ -567,7 +567,7 @@ public class AIContextServiceImpl implements AIContextService {
         sb.append("## 产品成本分析: ").append(context.getProductName()).append("\n\n");
         // 工艺保密产品, 或累加的批次属于牵涉保密产品的计划: 成本一个数都不进提示词
         // (与生产统计上下文同口径; 取不到保密范围时抛出, 调用方不发)
-        if (llmCostScope.forFactory(context.getFactoryId())
+        if (llmCostScope.forCurrentCaller(context.getFactoryId())
                 .coversProductOrAnyPlan(context.getProductTypeId(), context.getCostSourcePlanIds())) {
             sb.append(ProcessSecretLlmCostScope.WITHHELD_REASON).append("。\n");
             return sb.toString();

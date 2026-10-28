@@ -1,36 +1,53 @@
 package com.cretas.aims.service.processsecret;
 
+import com.cretas.aims.entity.processsecret.ProcessSecretAction;
+import com.cretas.aims.security.AuthenticatedActor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
- * 发给大模型的成本数据里不带工艺保密产品 (Steve 10-28: 「对无授权账号和 AI 一律不带」)。
+ * 发给大模型的成本数据按<b>当前调用者</b>裁剪 (Steve 10-29 修订: AI 对话可以带保密产品, 只要不泄露到别的工厂、
+ * 不被 AI 学走再对外复述; 用提示词 / 系统约束限制, 不能一刀切)。
  *
- * <p>与调用者无关: 保密负责人 / 被授权人发起的 AI 分析同样不带, 只有授权人在非 AI 页面能看。
- * 数量可以留, 成本金额 (原料/辅料/包材小计、总成本、单位成本、毛利、毛利率) 不进提示词。
- * 全厂合计只在<b>非保密行</b>上逐行累加 (不做「总数 − 保密」), 并注明「不含 N 个保密产品」。</p>
+ * <ul>
+ *   <li>保密负责人 / 持有效授权的人 (对该产品「完整查看」放行): 提示词、上下文、工具结果照常带该产品的成本。</li>
+ *   <li>其他人 (同厂无授权、平台、他厂、认不出身份 —— 含没有用户的定时任务): 该产品的成本金额不进提示词;
+ *       合计只在他能看的行上逐行累加 (不做「总数 − 保密」), 并注明「不含 N 个保密产品」。</li>
+ * </ul>
  *
- * <p>范围 = 本厂全部受保护产品 + 牵涉它们的生产计划 ({@link ProcessSecretAggregateExclusions#allProtected}):
- * 多产出计划的锚点是原料 id, 只按产品排除会漏。取不到范围时直接抛出, 调用方据此不发 (fail-closed)。</p>
+ * <p>判定走 {@link ProcessSecretAccessService#decide} (与 HTTP 出口同一个判定点); 被隐藏范围连同牵涉这些产品的
+ * 生产计划一起给出 ({@link ProcessSecretAggregateExclusions#forHidden}: 多产出计划的锚点是原料 id, 只按产品排除会漏)。
+ * 取不到范围时直接抛出, 调用方据此不发 (fail-closed)。</p>
  *
- * <p>「不含 N 个保密产品」的 N 只数真正受保护的产品 ({@link Excluded#protectedProductTypeIds()}),
- * 计划锚点 (原料 id) 和同计划的普通产品虽然被一并排除, 但不算进 N。</p>
+ * <p>「不含 N 个保密产品」的 N 只数对该调用者隐藏的、真正受保护的产品; 计划锚点和同计划的普通产品不算。</p>
  */
 @Component
 public class ProcessSecretLlmCostScope {
 
-    public static final String WITHHELD_REASON = "该产品工艺已设为保密，成本数据不提供给 AI 分析";
+    public static final String WITHHELD_REASON = "该产品工艺已设为保密，当前账号无权查看其成本，未提供给 AI 分析";
 
     /**
-     * 本厂对 AI 一律排除的范围。{@code productTypeIds} / {@code planIds} 是排除范围 (含计划锚点),
-     * {@code protectedProductTypeIds} 只是真正受保护的产品, {@code protectedProductsByPlan} 是每个被排除计划背后的保密产品。
+     * 有保密产品的工厂, 所有带业务数据的 AI 对话 / 分析的系统约束 (唯一一份, 各提示词构造处引用它)。
+     */
+    public static final String HARNESS_INSTRUCTION =
+            "【工艺保密约束】本工厂有工艺保密产品。对话里出现的保密产品配方、工艺与成本，只用于回答当前这位用户在本次对话中的问题；"
+            + "不得写入任何可共享或可复用的内容（共享报告、模板、知识库、记忆、示例），不得建议把它们发给他人或其他工厂。";
+
+    /**
+     * 对当前调用者隐藏的范围。{@code productTypeIds} / {@code planIds} 是排除范围 (含计划锚点),
+     * {@code protectedProductTypeIds} 只是被隐藏的、真正受保护的产品, {@code protectedProductsByPlan} 是每个被排除计划背后的这些产品。
      */
     public record Excluded(Set<String> productTypeIds, Set<String> planIds, Set<String> protectedProductTypeIds,
                            Map<String, Set<String>> protectedProductsByPlan) {
@@ -48,7 +65,7 @@ public class ProcessSecretLlmCostScope {
             return planId != null && planIds.contains(planId);
         }
 
-        /** 批次: 产品或所属计划牵涉受保护产品即排除; 本厂有保密产品而这一行认不出产品时同样排除 (fail-closed)。 */
+        /** 批次: 产品或所属计划牵涉被隐藏的保密产品即排除; 有隐藏范围而这一行认不出产品时同样排除 (fail-closed)。 */
         public boolean coversBatch(String productTypeId, String planId) {
             if (isEmpty()) return false;
             if (productTypeId == null || productTypeId.isBlank()) return true;
@@ -56,8 +73,8 @@ public class ProcessSecretLlmCostScope {
         }
 
         /**
-         * 产品级成本 (由多个批次累加): 产品本身在范围内, 或任一来源批次的计划牵涉保密产品, 就整份不给。
-         * 来源计划未知 ({@code null}) 而本厂有保密产品时同样不给 (fail-closed)。
+         * 产品级成本 (由多个批次累加): 产品本身在范围内, 或任一来源批次的计划牵涉被隐藏的保密产品, 就整份不给。
+         * 来源计划未知 ({@code null}) 而有隐藏范围时同样不给 (fail-closed)。
          */
         public boolean coversProductOrAnyPlan(String productTypeId, Collection<String> sourcePlanIds) {
             if (isEmpty()) return false;
@@ -65,7 +82,7 @@ public class ProcessSecretLlmCostScope {
             return sourcePlanIds.stream().anyMatch(this::coversPlan);
         }
 
-        /** 一行被排除时, 它背后是哪几个真正受保护的产品 (计数用; 锚点 / 普通产品不算)。 */
+        /** 一行被排除时, 它背后是哪几个被隐藏的保密产品 (计数用; 锚点 / 普通产品不算)。 */
         public Set<String> protectedBehind(String productTypeId, Collection<String> planIds) {
             Set<String> behind = new LinkedHashSet<>();
             if (productTypeId != null && protectedProductTypeIds.contains(productTypeId)) behind.add(productTypeId);
@@ -78,7 +95,7 @@ public class ProcessSecretLlmCostScope {
         }
     }
 
-    /** 去掉保密行之后剩下的行, 以及去掉了几行、涉及几个真正受保护的产品 (给「不含 N 个保密产品」用)。 */
+    /** 去掉隐藏行之后剩下的行, 以及去掉了几行、涉及几个被隐藏的保密产品 (给「不含 N 个保密产品」用)。 */
     public record Rows(List<Map<String, Object>> allowed, int excludedRows, int excludedProducts) {
         public boolean anyExcluded() {
             return excludedRows > 0;
@@ -90,59 +107,107 @@ public class ProcessSecretLlmCostScope {
         }
     }
 
-    /** N = 真正受保护的产品个数; 认不出是哪个保密产品 (N=0 但确有行被排除) 时不报数字。 */
+    /** N = 被隐藏的真正受保护的产品个数; 认不出是哪个保密产品 (N=0 但确有行被排除) 时不报数字。 */
     public static String note(int excludedProducts) {
         if (excludedProducts <= 0) {
-            return "说明：以上成本与合计不含工艺保密产品相关的数据（工艺保密产品的成本不提供给 AI）。";
+            return "说明：以上成本与合计不含工艺保密产品相关的数据（当前账号无权查看其成本）。";
         }
-        return "说明：以上成本与合计不含 " + excludedProducts + " 个保密产品（工艺保密产品的成本不提供给 AI）。";
+        return "说明：以上成本与合计不含 " + excludedProducts + " 个保密产品（当前账号无权查看其成本）。";
     }
 
     private final ProcessSecretAggregateExclusions exclusions;
-    private final Excluded fixed;
+    private final ProcessSecretAccessService accessService;
+    private final boolean standalone;
 
     @Autowired
-    public ProcessSecretLlmCostScope(ProcessSecretAggregateExclusions exclusions) {
+    public ProcessSecretLlmCostScope(ProcessSecretAggregateExclusions exclusions, ProcessSecretAccessService accessService) {
         this.exclusions = exclusions;
-        this.fixed = null;
+        this.accessService = accessService;
+        this.standalone = false;
     }
 
-    private ProcessSecretLlmCostScope(Excluded fixed) {
+    private ProcessSecretLlmCostScope() {
         this.exclusions = null;
-        this.fixed = fixed;
+        this.accessService = null;
+        this.standalone = true;
     }
 
     /** 单测里裸 new 出来的服务用的默认实例 (与 LlmEgressGuard.standalone() 同款): 没有保密产品。生产一律由 Spring 注入。 */
     public static ProcessSecretLlmCostScope standalone() {
-        return new ProcessSecretLlmCostScope(Excluded.NONE);
+        return new ProcessSecretLlmCostScope();
     }
 
-    public Excluded forFactory(String factoryId) {
-        if (fixed != null) return fixed;
+    private static AuthenticatedActor caller() {
+        return AuthenticatedActor.fromCurrentExecution().orElse(null);
+    }
+
+    private Set<String> protectedIds(String factoryId) {
+        if (standalone) return Set.of();
         if (factoryId == null || factoryId.isBlank()) {
             throw new IllegalStateException("工厂未识别，无法判定工艺保密范围，成本数据不发给 AI");
         }
-        ProcessSecretAggregateExclusions.ProtectedScope detailed = exclusions.allProtectedDetailed(factoryId);
-        return new Excluded(Set.copyOf(detailed.scope().productTypeIds()), Set.copyOf(detailed.scope().planIds()),
-                detailed.protectedProductTypeIds(), detailed.protectedProductsByPlan());
+        return accessService.protectedProductTypeIds(factoryId);
     }
 
-    /** 本厂有没有任何保密产品 (共享的 AI 分析缓存、存档报告只在没有时才读进提示词)。 */
+    /** 当前调用者对哪些保密产品有「完整查看」(负责人 / 有效授权); 认不出身份 = 一个都没有。 */
+    private Set<String> fullView(String factoryId, Set<String> protectedIds) {
+        AuthenticatedActor actor = caller();
+        Set<String> full = new TreeSet<>();
+        for (String productTypeId : protectedIds) {
+            if (accessService.decide(actor, factoryId, productTypeId, ProcessSecretAction.VIEW_FULL).permitted()) {
+                full.add(productTypeId);
+            }
+        }
+        return full;
+    }
+
+    /** 对当前调用者隐藏的范围 (完整授权的调用者 = 空)。 */
+    public Excluded forCurrentCaller(String factoryId) {
+        Set<String> protectedIds = protectedIds(factoryId);
+        if (protectedIds.isEmpty()) return Excluded.NONE;
+        Set<String> hidden = new TreeSet<>(protectedIds);
+        hidden.removeAll(fullView(factoryId, protectedIds));
+        if (hidden.isEmpty()) return Excluded.NONE;
+        ProcessSecretAggregateExclusions.ProtectedScope scope = exclusions.forHidden(factoryId, hidden);
+        return new Excluded(Set.copyOf(scope.scope().productTypeIds()), Set.copyOf(scope.scope().planIds()),
+                scope.protectedProductTypeIds(), scope.protectedProductsByPlan());
+    }
+
+    /** 本厂有没有任何保密产品 (与调用者无关)。 */
     public boolean factoryHasProtected(String factoryId) {
-        return !forFactory(factoryId).isEmpty();
-    }
-
-    public boolean isProtectedBatch(String factoryId, String productTypeId, String planId) {
-        return forFactory(factoryId).coversBatch(productTypeId, planId);
+        return !protectedIds(factoryId).isEmpty();
     }
 
     /**
-     * 批次行 (每行带 {@code productTypeId} / {@code productionPlanId}) 去掉保密的整行。
+     * 共享 AI 分析缓存的保密档位: 本厂没有保密产品 = 空串 (沿用原缓存); 有保密产品 = 当前调用者可完整查看的
+     * 保密产品集合的稳定哈希 (无授权 = 空集合的哈希)。同档复用, 跨档不复用; 缓存行本身按工厂存, 跨厂不复用。
+     */
+    public String accessTier(String factoryId) {
+        Set<String> protectedIds = protectedIds(factoryId);
+        if (protectedIds.isEmpty()) return "";
+        return "ps-" + sha256(String.join(",", fullView(factoryId, protectedIds))).substring(0, 16);
+    }
+
+    /** 有保密产品的工厂: 带业务数据的提示词要带的系统约束; 判定失败时也带 (宁多勿少)。 */
+    public String harnessFor(String factoryId) {
+        try {
+            return factoryHasProtected(factoryId) ? HARNESS_INSTRUCTION : "";
+        } catch (RuntimeException e) {
+            return HARNESS_INSTRUCTION;
+        }
+    }
+
+    public boolean isProtectedBatch(String factoryId, String productTypeId, String planId) {
+        return forCurrentCaller(factoryId).coversBatch(productTypeId, planId);
+    }
+
+    /**
+     * 批次行 (每行带 {@code productTypeId} / {@code productionPlanId}) 去掉对当前调用者隐藏的整行。
      * 合计由调用方在 {@link Rows#allowed()} 上逐行累加。
      */
     public Rows withoutProtectedBatches(String factoryId, List<Map<String, Object>> rows) {
         if (rows == null || rows.isEmpty()) return new Rows(List.of(), 0, 0);
-        Excluded excluded = forFactory(factoryId);
+        Excluded excluded = forCurrentCaller(factoryId);
         if (excluded.isEmpty()) return new Rows(new ArrayList<>(rows), 0, 0);
         List<Map<String, Object>> allowed = new ArrayList<>(rows.size());
         Set<String> products = new LinkedHashSet<>();
@@ -161,11 +226,11 @@ public class ProcessSecretLlmCostScope {
     }
 
     /**
-     * 中央兜底: 发给模型的结构化数据里, 任何一层出现属于保密范围的 {@code productTypeId} /
+     * 中央兜底: 发给模型的结构化数据里, 任何一层出现对当前调用者隐藏的 {@code productTypeId} /
      * {@code productionPlanId} 就返回 true —— 说明调用方漏了过滤, 整次不发。
      */
     public boolean containsProtected(String factoryId, Object data) {
-        Excluded excluded = forFactory(factoryId);
+        Excluded excluded = forCurrentCaller(factoryId);
         if (excluded.isEmpty()) return false;
         return scan(excluded, data, 0);
     }
@@ -194,5 +259,14 @@ public class ProcessSecretLlmCostScope {
         if (value == null) return null;
         String s = value.toString();
         return s.isBlank() ? null : s;
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }
