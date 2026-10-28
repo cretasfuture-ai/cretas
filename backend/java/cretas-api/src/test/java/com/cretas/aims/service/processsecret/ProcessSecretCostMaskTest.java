@@ -33,6 +33,8 @@ class ProcessSecretCostMaskTest {
     ProcessSecretCostMask mask;
     com.cretas.aims.repository.ProductionPlanRepository plans;
     com.cretas.aims.repository.ProductionBatchRepository batches;
+    com.cretas.aims.repository.MaterialBatchRepository materials;
+    com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository finished;
 
     @BeforeEach
     void setUp() {
@@ -46,8 +48,10 @@ class ProcessSecretCostMaskTest {
         when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
         plans = mock(com.cretas.aims.repository.ProductionPlanRepository.class);
         batches = mock(com.cretas.aims.repository.ProductionBatchRepository.class);
+        materials = mock(com.cretas.aims.repository.MaterialBatchRepository.class);
+        finished = mock(com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository.class);
         mask = new ProcessSecretCostMask(new ProcessSecretAccessService(policies, grants, recorder), plans, batches,
-                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class));
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class), materials, finished);
     }
 
     static AuthenticatedActor user(long id) {
@@ -114,5 +118,52 @@ class ProcessSecretCostMaskTest {
             assertThat(mask.quantitiesHidden(F)).isTrue();
         }
         assertThat(mask.quantitiesHidden(F)).as("识别不出调用者").isTrue();
+    }
+    @Test
+    void aBatchLookedUpFirstOnAnEmptyCacheDoesNotCrash() {
+        // 独立审查 N-H1: 批次查计划时计划产品也写同一张缓存, 不能在 computeIfAbsent 里改 map
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("PLAN-2");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("PLAN-2", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+        batch.setProductTypeId("WIP-SKU");
+        batch.setProductionPlanId("PLAN-2");
+        when(batches.findByIdAndFactoryId(9L, F)).thenReturn(Optional.of(batch));
+        assertThat(mask.productsOf(F, null, 9L, new java.util.HashMap<>())).containsExactlyInAnyOrder("WIP-SKU", SECRET);
+    }
+
+    @Test
+    void aWipMaterialBatchCarriesTheProductsOfItsSourceProductionBatchButAPurchaseDoesNot() {
+        com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+        batch.setProductTypeId(SECRET);
+        when(batches.findByIdAndFactoryId(77L, F)).thenReturn(Optional.of(batch));
+        java.util.Map<String, java.util.Set<String>> cache = new java.util.HashMap<>();
+        assertThat(mask.materialBatchProducts(F, "WIP-SKU", "PRODUCTION_BATCH", "77", cache))
+                .containsExactlyInAnyOrder("WIP-SKU", SECRET);
+        assertThat(mask.materialBatchProducts(F, null, "PURCHASE_ORDER", "PO-1", cache)).isEmpty();
+        assertThat(mask.materialBatchProducts(F, null, "PRODUCTION_BATCH", "not-a-number", cache))
+                .containsExactly(ProcessSecretCostMask.UNKNOWN_PRODUCT);
+        com.cretas.aims.entity.MaterialBatch wip = new com.cretas.aims.entity.MaterialBatch();
+        wip.setSourceDocType("PRODUCTION_BATCH");
+        wip.setSourceDocId("77");
+        when(materials.findByIdAndFactoryId("MB-W", F)).thenReturn(Optional.of(wip));
+        assertThat(mask.materialBatchProducts(F, "MB-W", cache)).containsExactly(SECRET);
+    }
+
+    @Test
+    void finishedGoodsCarryTheProductsOfTheirPlan() {
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("PLAN-3");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("PLAN-3", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.inventory.FinishedGoodsBatch fg = new com.cretas.aims.entity.inventory.FinishedGoodsBatch();
+        fg.setProductTypeId("BYPRODUCT");
+        fg.setProductionPlanId("PLAN-3");
+        when(finished.findByFactoryIdAndBatchNumber(F, "FG-1")).thenReturn(Optional.of(fg));
+        assertThat(mask.finishedGoodsProducts(F, "FG-1", new java.util.HashMap<>()))
+                .containsExactlyInAnyOrder("BYPRODUCT", SECRET);
     }
 }

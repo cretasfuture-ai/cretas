@@ -30,6 +30,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.Map;
 
 /**
@@ -129,31 +131,92 @@ public class ExportExecutor {
         // 整表导出就是跨批汇总 (Steve 2026-10-26 第三问: 单批可看、汇总不给)
         boolean changed = processSecretScrubber.scrub(tree, actor, rule.getFactoryId(),
                 ProcessSecretReadTracker.reads(), resourceRef, true);
-        // 没有产品归属的行 (半成品流水、返工记录、工序配方等): 本厂有调用者看不到的保密产品时,
-        // 成本合计一律不给 —— 规则可以导出任意实体, 这里认不出它属于哪个产品, 宁可多遮
-        boolean anyHidden = processSecretCostMask.anyHidden(rule.getFactoryId(), resourceRef);
-        if (!changed && !anyHidden) return rows;
-        List<Map<String, Object>> masked = new ArrayList<>(rows.size());
+        // 调用者看不到的保密产品 (只在有行需要时才查, 免得给与产品无关的导出写审计; 独立审查 L-a)
+        String factoryId = rule.getFactoryId();
+        Set<String>[] hiddenProtected = new Set[1];
+        java.util.function.Supplier<Set<String>> hidden = () -> {
+            if (hiddenProtected[0] == null) {
+                hiddenProtected[0] = processSecretCostMask.hiddenProtected(factoryId, resourceRef);
+            }
+            return hiddenProtected[0];
+        };
+        Map<String, Set<String>> productCache = new HashMap<>();
+        boolean anyMasked = changed;
+        List<ObjectNode> out = new ArrayList<>(rows.size());
         for (JsonNode node : tree) {
             ObjectNode row = (ObjectNode) node;
             JsonNode marker = row.remove(ProcessSecretPayloadScrubber.MARKER);
             if (marker != null) {
-                for (JsonNode hidden : marker.path("hiddenFields")) {
-                    row.put(hidden.asText(), ProcessSecretCostMask.LABEL);
+                for (JsonNode hiddenField : marker.path("hiddenFields")) {
+                    row.put(hiddenField.asText(), ProcessSecretCostMask.LABEL);
                 }
             }
-            if (anyHidden && !row.hasNonNull("productTypeId")) {
-                List<String> costFields = new ArrayList<>();
-                row.fields().forEachRemaining(e -> {
-                    if (e.getValue().isNumber() && ProcessSecretPayloadScrubber.isCostTotalField(e.getKey())) {
-                        costFields.add(e.getKey());
-                    }
-                });
-                costFields.forEach(name -> row.put(name, ProcessSecretCostMask.LABEL));
+            List<String> costFields = new ArrayList<>();
+            List<String> unitCostFields = new ArrayList<>();
+            row.fields().forEachRemaining(e -> {
+                if (!e.getValue().isNumber()) return;
+                if (ProcessSecretPayloadScrubber.isCostTotalField(e.getKey())) costFields.add(e.getKey());
+                else if (UNIT_COST_FIELDS.contains(e.getKey())) unitCostFields.add(e.getKey());
+            });
+            if (!costFields.isEmpty() || !unitCostFields.isEmpty()) {
+                RowCost decision = rowCostHidden(row, factoryId, hidden, productCache);
+                List<String> toMask = new ArrayList<>();
+                if (decision != RowCost.VISIBLE) toMask.addAll(costFields);
+                // 单价只在认定属于看不到的保密产品时才遮; 认不出归属的行不遮单价 (采购价不是秘密)
+                if (decision == RowCost.LINKED_HIDDEN) toMask.addAll(unitCostFields);
+                toMask.forEach(name -> row.put(name, ProcessSecretCostMask.LABEL));
+                anyMasked |= !toMask.isEmpty();
             }
-            masked.add(objectMapper.convertValue(row, Map.class));
+            out.add(row);
         }
+        if (!anyMasked) return rows;
+        List<Map<String, Object>> masked = new ArrayList<>(out.size());
+        for (ObjectNode row : out) masked.add(objectMapper.convertValue(row, Map.class));
         return masked;
+    }
+
+    /** 单价 / 单位成本类字段: 半成品、成品、跨计划领用的单价就是滚进配方金额的单位成本。 */
+    static final Set<String> UNIT_COST_FIELDS = Set.of("unitPrice", "unitCost");
+
+    /**
+     * 这一行的成本要不要遮:
+     * <ul>
+     *   <li>行上的产品, 或它的计划 / 生产批次 / 物料批次牵涉的产品里, 有调用者看不到的保密产品
+     *       (受限计划的副产、中间品, 跨计划领用的半成品; 独立审查 N-M1 / N-M2);</li>
+     *   <li>行上什么归属都没有 (半成品流水、返工记录、工序配方), 而本厂有调用者看不到的保密产品:
+     *       认不出它属于谁, 宁可多遮 (M3)。</li>
+     * </ul>
+     */
+    enum RowCost { VISIBLE, LINKED_HIDDEN, UNATTRIBUTED_HIDDEN }
+
+    RowCost rowCostHidden(ObjectNode row, String factoryId, java.util.function.Supplier<Set<String>> hidden,
+                          Map<String, Set<String>> productCache) {
+        Set<String> linked = new LinkedHashSet<>();
+        String productTypeId = row.path("productTypeId").asText(null);
+        if (productTypeId != null && !productTypeId.isBlank()) linked.add(productTypeId);
+        String planId = row.path("productionPlanId").asText(null);
+        Long productionBatchId = row.path("productionBatchId").canConvertToLong()
+                ? row.path("productionBatchId").asLong() : null;
+        boolean hasLink = !linked.isEmpty() || (planId != null && !planId.isBlank()) || productionBatchId != null;
+        if ((planId != null && !planId.isBlank()) || productionBatchId != null) {
+            linked.addAll(processSecretCostMask.productsOf(factoryId, planId, productionBatchId, productCache));
+        }
+        if (row.has("sourceDocType")) {
+            // 物料批次本身: 生产批次产出的半成品批次按来源计划认, 采购批次与产品无关 (采购价照给)
+            hasLink = true;
+            linked.addAll(processSecretCostMask.materialBatchProducts(factoryId, productTypeId,
+                    row.path("sourceDocType").asText(null), row.path("sourceDocId").asText(null), productCache));
+        }
+        String materialBatchId = row.path("batchId").isTextual() ? row.path("batchId").asText() : null;
+        if (materialBatchId != null) {
+            hasLink = true;
+            linked.addAll(processSecretCostMask.materialBatchProducts(factoryId, materialBatchId, productCache));
+        }
+        if (!linked.isEmpty()) {
+            return ProcessSecretCostMask.isHiddenAmong(linked, hidden.get()) ? RowCost.LINKED_HIDDEN : RowCost.VISIBLE;
+        }
+        if (hasLink) return RowCost.VISIBLE;
+        return hidden.get().isEmpty() ? RowCost.VISIBLE : RowCost.UNATTRIBUTED_HIDDEN;
     }
 
     /** 仅做 entity query + SpEL filter, 返 Map list. 单独抽出便于 unit test. */

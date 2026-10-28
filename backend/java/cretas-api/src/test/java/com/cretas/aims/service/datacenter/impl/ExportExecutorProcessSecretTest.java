@@ -43,6 +43,9 @@ class ExportExecutorProcessSecretTest {
     static final long OWNER = 10L;
 
     ExportExecutor executor;
+    ProductionPlanRepository plans;
+    ProductionBatchRepository batches;
+    com.cretas.aims.repository.MaterialBatchRepository materials;
     ExportRule rule;
 
     @BeforeEach
@@ -54,13 +57,16 @@ class ExportExecutorProcessSecretTest {
                 .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
         when(policies.findByFactoryIdAndProductTypeId(F, SECRET)).thenReturn(Optional.of(policy));
         when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
+        plans = mock(ProductionPlanRepository.class);
+        batches = mock(ProductionBatchRepository.class);
+        materials = mock(com.cretas.aims.repository.MaterialBatchRepository.class);
         ProcessSecretAccessService access = new ProcessSecretAccessService(policies, grants,
                 mock(ProcessSecretAuditRecorder.class));
         executor = new ExportExecutor(new ObjectMapper(),
                 ProcessSecretTestHooks.scrubber(access, mock(BomRecipeRepository.class),
                         mock(ProductionWorkflowInstanceRepository.class), mock(ProductionPlanRepository.class)),
-                new ProcessSecretCostMask(access, mock(ProductionPlanRepository.class),
-                        mock(ProductionBatchRepository.class), mock(BomRecipeRepository.class)));
+                new ProcessSecretCostMask(access, plans,
+                        batches, mock(BomRecipeRepository.class), materials, mock(com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository.class)));
         rule = new ExportRule();
         rule.setId(7L);
         rule.setFactoryId(F);
@@ -178,5 +184,40 @@ class ExportExecutorProcessSecretTest {
         }
         assertThat(rows.get(0)).containsEntry("automatic", true);
         assertThat(rows.get(1)).doesNotContainKey("automatic");
+    }
+    @Test
+    void rowsLinkedToAProtectedPlanAreMaskedEvenWhenTheirOwnProductIsPlain() {
+        // 独立审查 N-M1 / N-M2: 受限计划的副产、跨计划领用的半成品, 单价就是滚进配方金额的单位成本
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("PLAN-9");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        when(plans.findByIdAndFactoryId("PLAN-9", F)).thenReturn(Optional.of(plan));
+        List<Map<String, Object>> input = List.of(
+                row("productTypeId", "PLAIN", "productionPlanId", "PLAN-9", "unitCost", 12, "quantity", 3),
+                row("productTypeId", "PLAIN", "productionPlanId", "PLAN-0", "unitCost", 8, "quantity", 4));
+        List<Map<String, Object>> rows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            rows = executor.maskProcessSecret(rule, input);
+        }
+        assertThat(rows.get(0)).containsEntry("unitCost", "已保密").containsEntry("quantity", 3);
+        // 阴性对照: 普通计划的普通产品照常
+        assertThat(rows.get(1)).containsEntry("unitCost", 8);
+    }
+
+    @Test
+    void aPurchaseMaterialBatchKeepsItsPriceButAWipBatchOfAProtectedPlanDoesNot() {
+        com.cretas.aims.entity.ProductionBatch source = new com.cretas.aims.entity.ProductionBatch();
+        source.setProductTypeId(SECRET);
+        when(batches.findByIdAndFactoryId(77L, F)).thenReturn(Optional.of(source));
+        List<Map<String, Object>> input = List.of(
+                row("batchNumber", "MB-P", "sourceDocType", "PURCHASE_ORDER", "sourceDocId", "PO-1", "unitPrice", 7),
+                row("batchNumber", "MB-W", "sourceDocType", "PRODUCTION_BATCH", "sourceDocId", "77", "unitPrice", 16.2));
+        List<Map<String, Object>> rows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            rows = executor.maskProcessSecret(rule, input);
+        }
+        assertThat(rows.get(0)).as("采购价不是秘密").containsEntry("unitPrice", 7);
+        assertThat(rows.get(1)).containsEntry("unitPrice", "已保密");
     }
 }

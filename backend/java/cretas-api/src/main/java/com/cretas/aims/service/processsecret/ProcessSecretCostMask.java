@@ -1,5 +1,7 @@
 package com.cretas.aims.service.processsecret;
 
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.processsecret.ProcessSecretAction;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -33,13 +35,19 @@ public class ProcessSecretCostMask {
     private final ProductionPlanRepository planRepository;
     private final ProductionBatchRepository batchRepository;
     private final BomRecipeRepository recipeRepository;
+    private final MaterialBatchRepository materialBatchRepository;
+    private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
     public ProcessSecretCostMask(ProcessSecretAccessService accessService, ProductionPlanRepository planRepository,
-                                 ProductionBatchRepository batchRepository, BomRecipeRepository recipeRepository) {
+                                 ProductionBatchRepository batchRepository, BomRecipeRepository recipeRepository,
+                                 MaterialBatchRepository materialBatchRepository,
+                                 FinishedGoodsBatchRepository finishedGoodsBatchRepository) {
         this.accessService = accessService;
         this.planRepository = planRepository;
         this.batchRepository = batchRepository;
         this.recipeRepository = recipeRepository;
+        this.materialBatchRepository = materialBatchRepository;
+        this.finishedGoodsBatchRepository = finishedGoodsBatchRepository;
     }
 
     /** 当前调用者看不到成本的产品; 没有受保护产品时为空集合 (不写审计)。 */
@@ -68,8 +76,13 @@ public class ProcessSecretCostMask {
 
     /** 本厂是否有当前调用者看不到成本的保密产品 (没有归属的成本行据此决定遮不遮)。 */
     public boolean anyHidden(String factoryId, String resourceRef) {
-        if (factoryId == null) return false;
-        return !hiddenFor(factoryId, accessService.protectedProductTypeIds(factoryId), resourceRef).isEmpty();
+        return !hiddenProtected(factoryId, resourceRef).isEmpty();
+    }
+
+    /** 本厂全部保密产品里当前调用者看不到成本的那些。 */
+    public Set<String> hiddenProtected(String factoryId, String resourceRef) {
+        if (factoryId == null) return Set.of();
+        return hiddenFor(factoryId, accessService.protectedProductTypeIds(factoryId), resourceRef);
     }
 
     /**
@@ -89,19 +102,86 @@ public class ProcessSecretCostMask {
                                   Map<String, Set<String>> cache) {
         Set<String> products = new LinkedHashSet<>();
         if (planId != null && !planId.isBlank()) products.addAll(planProducts(factoryId, planId, cache));
-        if (productionBatchId != null) {
-            products.addAll(cache.computeIfAbsent("batch|" + productionBatchId, k -> {
-                Set<String> found = new LinkedHashSet<>();
-                batchRepository.findByIdAndFactoryId(productionBatchId, factoryId).ifPresent(batch -> {
-                    if (batch.getProductTypeId() != null) found.add(batch.getProductTypeId());
-                    if (batch.getProductionPlanId() != null && !batch.getProductionPlanId().isBlank()) {
-                        found.addAll(planProducts(factoryId, batch.getProductionPlanId(), cache));
-                    }
-                });
-                return found;
-            }));
-        }
+        if (productionBatchId != null) products.addAll(batchProducts(factoryId, productionBatchId, cache));
         return products;
+    }
+
+    /**
+     * 物料批次牵涉的产品: 自己的产品; 来自生产批次的半成品批次 (sourceDocType = PRODUCTION_BATCH) 再加上
+     * 那个生产批次及其计划的产品 —— 它的单价是按配方把调料、包材金额滚进去的单位成本 (独立审查 N-H2 / N-M1)。
+     */
+    public Set<String> materialBatchProducts(String factoryId, String materialBatchId, Map<String, Set<String>> cache) {
+        if (factoryId == null || materialBatchId == null || materialBatchId.isBlank()) return Set.of();
+        String key = "material|" + materialBatchId;
+        Set<String> cached = cache.get(key);
+        if (cached != null) return cached;
+        Set<String> found = new LinkedHashSet<>();
+        materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId)
+                .ifPresent(batch -> found.addAll(materialBatchProducts(factoryId, batch.getProductTypeId(),
+                        batch.getSourceDocType(), batch.getSourceDocId(), cache)));
+        cache.put(key, found);
+        return found;
+    }
+
+    /** 已经拿到物料批次实体时用 (导出里的原料入库行)。 */
+    public Set<String> materialBatchProducts(String factoryId, String productTypeId, String sourceDocType,
+                                             String sourceDocId, Map<String, Set<String>> cache) {
+        Set<String> found = new LinkedHashSet<>();
+        if (productTypeId != null && !productTypeId.isBlank()) found.add(productTypeId);
+        if ("PRODUCTION_BATCH".equals(sourceDocType) && sourceDocId != null) {
+            try {
+                found.addAll(batchProducts(factoryId, Long.valueOf(sourceDocId.trim()), cache));
+            } catch (NumberFormatException e) {
+                // 认不出来源生产批次: 当作未知产品, 调用方按受保护处理
+                found.add(UNKNOWN_PRODUCT);
+            }
+        }
+        return found;
+    }
+
+    /** 成品批次牵涉的产品: 自己的产品 + 它所属计划的全部产品 (受限计划的副产 / 联产品同样受限; N-M2)。 */
+    public Set<String> finishedGoodsProducts(String factoryId, String batchNumber, Map<String, Set<String>> cache) {
+        if (factoryId == null || batchNumber == null || batchNumber.isBlank()) return Set.of();
+        String key = "fg|" + batchNumber;
+        Set<String> cached = cache.get(key);
+        if (cached != null) return cached;
+        Set<String> found = new LinkedHashSet<>();
+        finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber).ifPresent(batch -> {
+            if (batch.getProductTypeId() != null) found.add(batch.getProductTypeId());
+            found.addAll(productsOf(factoryId, batch.getProductionPlanId(), null, cache));
+        });
+        cache.put(key, found);
+        return found;
+    }
+
+    /**
+     * 认不出归属的占位产品: 调用方把它当作受保护且无权 (见 {@link #hiddenFor} 之外的 {@link #isHiddenAmong})。
+     */
+    public static final String UNKNOWN_PRODUCT = "__unknown_product__";
+
+    /** 这组产品里有没有调用者看不到的 (含认不出归属的占位)。 */
+    public static boolean isHiddenAmong(Set<String> products, Set<String> hidden) {
+        for (String product : products) {
+            if (UNKNOWN_PRODUCT.equals(product) || hidden.contains(product)) return true;
+        }
+        return false;
+    }
+
+    private Set<String> batchProducts(String factoryId, Long productionBatchId, Map<String, Set<String>> cache) {
+        // ⛔ 不在 computeIfAbsent 里改同一张 map (计划产品也写这张缓存, Java 9+ 会抛
+        // ConcurrentModificationException; 独立审查 N-H1): 先查、再算、再放
+        String key = "batch|" + productionBatchId;
+        Set<String> cached = cache.get(key);
+        if (cached != null) return cached;
+        Set<String> found = new LinkedHashSet<>();
+        batchRepository.findByIdAndFactoryId(productionBatchId, factoryId).ifPresent(batch -> {
+            if (batch.getProductTypeId() != null) found.add(batch.getProductTypeId());
+            if (batch.getProductionPlanId() != null && !batch.getProductionPlanId().isBlank()) {
+                found.addAll(planProducts(factoryId, batch.getProductionPlanId(), cache));
+            }
+        });
+        cache.put(key, found);
+        return found;
     }
 
     private Set<String> planProducts(String factoryId, String planId, Map<String, Set<String>> cache) {

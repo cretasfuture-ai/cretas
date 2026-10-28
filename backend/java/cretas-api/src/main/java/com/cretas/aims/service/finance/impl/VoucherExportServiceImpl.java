@@ -811,10 +811,12 @@ public class VoucherExportServiceImpl implements VoucherExportService {
 
         // 工艺保密: 半成品 / 成品的单位成本是按配方把调料、包材金额滚进去的; 无完整查看权的保密产品
         // 单价、金额、结存金额一律「已保密」, 数量照给 (Steve 2026-10-28 选 A)
-        Set<String> secretProducts = costMask == null ? Set.of() : costMask.hiddenFor(factoryId,
+        Set<String> secretProducts = new HashSet<>(costMask == null ? Set.of() : costMask.hiddenFor(factoryId,
                 movements.stream().flatMap(m -> m.productTypeIds().stream()).filter(Objects::nonNull)
                         .distinct().toList(),
-                "EXPORT /finance/quantity-amount-ledger");
+                "EXPORT /finance/quantity-amount-ledger"));
+        // 认不出来源的半成品批次: 当作受保护且无权
+        if (costMask != null) secretProducts.add(ProcessSecretCostMask.UNKNOWN_PRODUCT);
         // 平台 / 他厂 / 识别不出的调用者: 受保护产品的数量也不给
         boolean quantitiesHidden = !secretProducts.isEmpty() && costMask.quantitiesHidden(factoryId);
         // 同一品项一旦有一行被遮, 之后的结存也遮: 前后两次结存一减就是被遮的那一行
@@ -935,6 +937,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     }
 
     private List<InventoryMovement> buildInventoryMovements(String factoryId, VoucherExportRequestDTO req) {
+        // 工艺保密: 每条流水牵涉的产品, 一次导出里复用计划 / 批次的查询
+        Map<String, Set<String>> productCache = new HashMap<>();
         List<InventoryMovement> movements = new ArrayList<>();
         List<Long> owners = VoucherRowScopeContext.currentCreators();
         if (owners != null && owners.isEmpty()) {
@@ -963,7 +967,10 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     "RAW:" + nvlStr(batch.getMaterialTypeId()),
                     quantity,
                     unitPrice,
-                    quantity.multiply(unitPrice)
+                    quantity.multiply(unitPrice),
+                    // 生产批次产出的半成品物料批次: 单价 = 滚进配方金额的单位成本, 按来源计划遮 (N-H2)
+                    costMask == null ? Set.of() : costMask.materialBatchProducts(factoryId, batch.getProductTypeId(),
+                            batch.getSourceDocType(), batch.getSourceDocId(), productCache)
             ));
         }
 
@@ -974,8 +981,6 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         //
         // ⚠️ 判据只有一份: VoucherConsumptionSourcePolicy。⛔ 不要在这里写 if 列举来源。
         // ⚠️ 未知来源**不静默**: 既不计入(会凭空造成本), 也不假装没发生 —— 计数并打日志。
-        // 工艺保密: 每条流水牵涉的产品, 一次导出里复用计划 / 批次的查询
-        Map<String, Set<String>> productCache = new HashMap<>();
         int excludedKnown = 0;
         java.util.Map<String, Integer> excludedUnknown = new java.util.TreeMap<>();
         List<MaterialConsumption> consumptions = restricted
@@ -1004,8 +1009,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     quantity,
                     unitPrice,
                     amount,
-                    productsOf(factoryId, consumption.getProductionPlanId(), consumption.getProductionBatchId(),
-                            productCache),
+                    consumptionProducts(factoryId, consumption, productCache),
                     ProcessSecretRecipeDerived.isAutomaticConsumption(sourceType)
             ));
         }
@@ -1077,7 +1081,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 BigDecimal amount = unitCost == null ? null : produced.multiply(unitCost);
                 movements.add(InventoryMovement.inbound(date, batch.getBatchNumber(),
                         "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()) + "（单位：" + batch.getUnit() + "）",
-                        itemKey, produced, unitCost, amount, ownProduct(batch.getProductTypeId())));
+                        itemKey, produced, unitCost, amount, finishedGoodsProducts(factoryId, batch, productCache)));
             }
         }
 
@@ -1107,7 +1111,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             movements.add(InventoryMovement.outbound(shipDate,
                     firstNonBlank(deliveryNumber, batchNumber),
                     "成品发出 " + firstNonBlank(productName, productTypeId) + "（单位：" + nativeUnit + "）",
-                    itemKey, shippedQty, unitCost, amount, ownProduct(productTypeId), false));
+                    itemKey, shippedQty, unitCost, amount, shipmentProducts(factoryId, productTypeId, batchNumber,
+                            productCache), false));
         }
         return movements;
     }
@@ -1120,6 +1125,32 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                                    Map<String, Set<String>> cache) {
         if (costMask == null) return Set.of();
         return costMask.productsOf(factoryId, planId, productionBatchId, cache);
+    }
+
+    /** 生产领用: 所属计划 / 生产批次的产品, 加上被领用的物料批次背后的产品 (跨计划领半成品; N-M1)。 */
+    private Set<String> consumptionProducts(String factoryId, MaterialConsumption consumption,
+                                            Map<String, Set<String>> cache) {
+        if (costMask == null) return Set.of();
+        Set<String> products = new HashSet<>(costMask.productsOf(factoryId, consumption.getProductionPlanId(),
+                consumption.getProductionBatchId(), cache));
+        products.addAll(costMask.materialBatchProducts(factoryId, consumption.getBatchId(), cache));
+        return products;
+    }
+
+    /** 成品入库: 自己的产品 + 所属计划的全部产品 (受限计划的副产 / 联产品; N-M2)。 */
+    private Set<String> finishedGoodsProducts(String factoryId, FinishedGoodsBatch batch,
+                                              Map<String, Set<String>> cache) {
+        Set<String> products = new HashSet<>(ownProduct(batch.getProductTypeId()));
+        products.addAll(productsOf(factoryId, batch.getProductionPlanId(), null, cache));
+        return products;
+    }
+
+    /** 成品发出: 发出批次所属计划的产品 (单位成本就是那个批次的)。 */
+    private Set<String> shipmentProducts(String factoryId, String productTypeId, String batchNumber,
+                                         Map<String, Set<String>> cache) {
+        Set<String> products = new HashSet<>(ownProduct(productTypeId));
+        if (costMask != null) products.addAll(costMask.finishedGoodsProducts(factoryId, batchNumber, cache));
+        return products;
     }
 
     /** 半成品自身的产品 + 它所属生产批次的产品与计划 (受限计划的中间品同样受限)。 */
