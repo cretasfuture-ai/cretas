@@ -84,6 +84,12 @@ public class SkillResult {
     private String errorStrategy;
 
     /**
+     * 本次运行的回执 id（skill_run_records）；没有执行任何工具、或没有登录执行人时为空。
+     * 成功运行可以据此保存为可复用 Skill。
+     */
+    private String runId;
+
+    /**
      * 创建成功结果
      *
      * @param skillName     Skill名称
