@@ -25,13 +25,28 @@ import {
   Alert,
   Modal,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { DISPATCHER_THEME, ProductionPlan, LineSchedule } from '../../../types/dispatcher';
-import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
+import {
+  schedulingApiClient,
+  type DailyAllocations,
+  type DailyCapacityOverride,
+  type DailyCapacityRequired,
+} from '../../../services/api/schedulingApiClient';
+import {
+  buildCapacityOverrides,
+  capacityBlockReason,
+  capacityKey,
+  describeCapacity,
+  describeDateRange,
+  describeDays,
+  type CapacityInputs,
+} from './dailyCapacityPrompt';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { formatDate } from '../../../utils/formatters';
 import { appAlert } from '../../../components/ui/AppDialog';
@@ -58,7 +73,11 @@ interface GeneratedSchedule {
   workerCount: number;
   startTime: string;
   endTime: string;
-  /** 后端没有给出就是 null (按工艺图排程不估效率/概率), ⛔ 不拿默认值冒充 */
+  /** APS v2 按天排: 「10-29 ~ 10-31」/「10-29 300袋 · …」/「日产能 300袋/天（人工填写）」; 旧排程为 null */
+  dateRange: string | null;
+  daysText: string | null;
+  capacityText: string | null;
+  /** 后端没有给出就是 null (按日产能排程不估效率/概率), ⛔ 不拿默认值冒充 */
   estimatedEfficiency: number | null;
   completionProbability: number | null;
 }
@@ -91,6 +110,12 @@ export default function AIScheduleGenerateScreen() {
   const [totalWorkers, setTotalWorkers] = useState(0);
   const [avgEfficiency, setAvgEfficiency] = useState<number | null>(null);
   const [avgProbability, setAvgProbability] = useState<number | null>(null);
+
+  // APS v2: 两样都没有日产能时当场补填
+  const [capacityRequired, setCapacityRequired] = useState<DailyCapacityRequired[]>([]);
+  const [capacityInputs, setCapacityInputs] = useState<CapacityInputs>({});
+  const [showCapacityModal, setShowCapacityModal] = useState(false);
+  const capacityBlock = capacityBlockReason(capacityRequired, capacityInputs);
 
   const loadPlans = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -153,7 +178,7 @@ export default function AIScheduleGenerateScreen() {
     }
   };
 
-  const generateSchedule = async () => {
+  const generateSchedule = async (overrides: DailyCapacityOverride[] = []) => {
     if (selectedPlanIds.size === 0) {
       Alert.alert('提示', '请至少选择一个生产计划');
       return;
@@ -169,9 +194,28 @@ export default function AIScheduleGenerateScreen() {
         planIds: Array.from(selectedPlanIds),
         autoAssignWorkers,
         enableLinUCB: optimizeByLinUCB,
+        ...(overrides.length > 0 ? { dailyCapacityOverrides: overrides } : {}),
       });
 
+      if (response.success && response.data && response.data.outcome === 'CAPACITY_REQUIRED') {
+        // 两样都没有日产能: 后端什么都没保存, 当场问每个产品一天能做多少
+        const required = response.data.capacityRequired ?? [];
+        if (required.length === 0) {
+          appAlert('排程没有生成', '有产品缺日产能，但没有拿到清单；请刷新后重试');
+          return;
+        }
+        setCapacityRequired(required);
+        setCapacityInputs(prev => {
+          const next: CapacityInputs = {};
+          for (const item of required) next[capacityKey(item)] = prev[capacityKey(item)];
+          return next;
+        });
+        setShowCapacityModal(true);
+        return;
+      }
+
       if (response.success && response.data) {
+        setShowCapacityModal(false);
         // 后端返回 SchedulingPlanDTO，直接作为 plan 使用
         // 注意：后端返回的是 SchedulingPlanDTO，包含 id, planDate, lineSchedules 等
         interface LineScheduleDTO {
@@ -185,6 +229,7 @@ export default function AIScheduleGenerateScreen() {
           assignedWorkers?: number;
           plannedStartTime?: string;
           plannedEndTime?: string;
+          dailyAllocations?: DailyAllocations | null;
           predictedEfficiency?: number;
           completionProbability?: number;
         }
@@ -210,6 +255,9 @@ export default function AIScheduleGenerateScreen() {
               workerCount: schedule.assignedWorkers ?? 0,
               startTime: schedule.plannedStartTime ? new Date(schedule.plannedStartTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '-',
               endTime: schedule.plannedEndTime ? new Date(schedule.plannedEndTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '-',
+              dateRange: describeDateRange(schedule.dailyAllocations),
+              daysText: describeDays(schedule.dailyAllocations),
+              capacityText: describeCapacity(schedule.dailyAllocations),
               estimatedEfficiency: schedule.predictedEfficiency != null ? Math.round(Number(schedule.predictedEfficiency)) : null,
               completionProbability: schedule.completionProbability != null ? Math.round(Number(schedule.completionProbability)) : null,
             }))
@@ -223,6 +271,9 @@ export default function AIScheduleGenerateScreen() {
               workerCount: plan.totalWorkers ?? 0,
               startTime: '-',
               endTime: '-',
+              dateRange: null,
+              daysText: null,
+              capacityText: null,
               estimatedEfficiency: null,
               completionProbability: null,
             }];
@@ -243,7 +294,7 @@ export default function AIScheduleGenerateScreen() {
         }
 
         setShowResult(true);
-        // 按工艺图排程的提示: 缺工时没排的计划 / 没有工艺图 / 默认 08:00 开工
+        // 按日产能排程的提示: 按历史估算 / 人工与历史相差大 / 已完成不排
         const warnings = (plan.warnings ?? []).filter(w => typeof w === 'string' && w.trim().length > 0);
         if (warnings.length > 0) {
           appAlert('排程提示', warnings.join('\n'));
@@ -253,7 +304,7 @@ export default function AIScheduleGenerateScreen() {
       }
     } catch (err) {
       console.error('Generate schedule failed:', err);
-      // 后端会说清楚为什么没排 (例如哪道工序缺预计工时、要选哪条产线), 原样给用户看
+      // 后端会说清楚为什么没排 (例如要选哪条产线、日产能单位不对), 原样给用户看
       appAlert('排程没有生成', getErrorMsg(err) || '排程生成失败，请稍后重试');
     } finally {
       setShowGenerating(false);
@@ -506,7 +557,7 @@ export default function AIScheduleGenerateScreen() {
             </View>
 
             {/* 生成按钮 */}
-            <TouchableOpacity onPress={generateSchedule}>
+            <TouchableOpacity onPress={() => generateSchedule()}>
               <LinearGradient
                 colors={[DISPATCHER_THEME.primary, DISPATCHER_THEME.secondary]}
                 start={{ x: 0, y: 0 }}
@@ -553,12 +604,22 @@ export default function AIScheduleGenerateScreen() {
                     <View style={styles.scheduleTime}>
                       <MaterialCommunityIcons name="clock-outline" size={14} color="#666" />
                       <Text style={styles.scheduleTimeText}>
-                        {schedule.startTime} - {schedule.endTime}
+                        {schedule.dateRange ?? `${schedule.startTime} - ${schedule.endTime}`}
                       </Text>
                     </View>
                   </View>
 
                   <Text style={styles.scheduleProduct}>{schedule.productName}</Text>
+                  {schedule.capacityText ? (
+                    <Text style={styles.scheduleDailyText} testID={`daily-capacity-${schedule.scheduleId}`}>
+                      {schedule.capacityText}
+                    </Text>
+                  ) : null}
+                  {schedule.daysText ? (
+                    <Text style={styles.scheduleDailyText} testID={`daily-days-${schedule.scheduleId}`}>
+                      {schedule.daysText}
+                    </Text>
+                  ) : null}
 
                   <View style={styles.scheduleDetails}>
                     <View style={styles.scheduleDetail}>
@@ -624,6 +685,59 @@ export default function AIScheduleGenerateScreen() {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* 两样都没有日产能: 当场补填, 保存到产品后重新排 */}
+      <Modal visible={showCapacityModal} transparent animationType="fade" onRequestClose={() => setShowCapacityModal(false)}>
+        <View style={styles.loadingOverlay}>
+          <View style={styles.capacityContent} testID="capacity-required-modal">
+            <Text style={styles.capacityTitle}>这些产品还不知道一天能做多少</Text>
+            <Text style={styles.capacityHint}>填一下就能排，会记在产品上，下次不用再填</Text>
+            <ScrollView style={styles.capacityList}>
+              {capacityRequired.map(item => (
+                <View key={capacityKey(item)} style={styles.capacityRow} testID={`capacity-row-${item.productTypeId}`}>
+                  <Text style={styles.capacityQuestion}>{item.question}</Text>
+                  <Text style={styles.capacityMeta}>
+                    计划：{item.planNumbers.join('、')}
+                    {item.reason === 'UNIT_MISMATCH'
+                      ? `；产品上填的是 ${item.currentQuantityPerDay ?? '-'} ${item.currentUnit ?? ''}/天，和计划单位 ${item.unit} 对不上`
+                      : ''}
+                  </Text>
+                  <View style={styles.capacityInputRow}>
+                    <TextInput
+                      style={styles.capacityInput}
+                      keyboardType="decimal-pad"
+                      placeholder="一天能做多少"
+                      value={capacityInputs[capacityKey(item)] ?? ''}
+                      onChangeText={text => setCapacityInputs(prev => ({ ...prev, [capacityKey(item)]: text }))}
+                      testID={`capacity-input-${item.productTypeId}`}
+                      accessibilityLabel={item.question}
+                    />
+                    <Text style={styles.capacityUnit}>{item.unit}/天</Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            {capacityBlock ? <Text style={styles.capacityBlock} testID="capacity-block-reason">{capacityBlock}</Text> : null}
+            <View style={styles.capacityActions}>
+              <TouchableOpacity style={styles.outlineButton} onPress={() => setShowCapacityModal(false)}>
+                <Text style={styles.outlineButtonText}>先不排</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.capacitySubmit, capacityBlock ? styles.capacitySubmitDisabled : null]}
+                disabled={!!capacityBlock}
+                testID="capacity-submit"
+                onPress={() => {
+                  if (capacityBlock) return;
+                  setShowCapacityModal(false);
+                  generateSchedule(buildCapacityOverrides(capacityRequired, capacityInputs));
+                }}
+              >
+                <Text style={styles.solidButtonText}>保存并排程</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* 生成中弹窗 */}
       <Modal visible={showGenerating} transparent animationType="fade">
@@ -1102,5 +1216,83 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 12,
     color: '#bbb',
+  },
+  scheduleDailyText: {
+    fontSize: 12,
+    color: '#595959',
+    marginBottom: 6,
+  },
+  capacityContent: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  capacityTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#262626',
+  },
+  capacityHint: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#8c8c8c',
+  },
+  capacityList: {
+    marginTop: 12,
+  },
+  capacityRow: {
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f0f0f0',
+  },
+  capacityQuestion: {
+    fontSize: 14,
+    color: '#262626',
+  },
+  capacityMeta: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#8c8c8c',
+  },
+  capacityInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  capacityInput: {
+    flex: 1,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#d9d9d9',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 16,
+  },
+  capacityUnit: {
+    fontSize: 14,
+    color: '#595959',
+  },
+  capacityBlock: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#d48806',
+  },
+  capacityActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  capacitySubmit: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: DISPATCHER_THEME.primary,
+  },
+  capacitySubmitDisabled: {
+    opacity: 0.4,
   },
 });

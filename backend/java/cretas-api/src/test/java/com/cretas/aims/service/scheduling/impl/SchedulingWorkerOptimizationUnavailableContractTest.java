@@ -111,11 +111,11 @@ class SchedulingWorkerOptimizationUnavailableContractTest {
     }
 
     @Test
-    void generationDelegatesToDagEngineAndNeverDispatchesWorkers() {
-        // APS v1 (2026-10-28): 自动排程 = 按工艺图 + 预计工时排时间; 人员优化仍不可用, 生成路径不得派工。
-        com.cretas.aims.service.scheduling.dag.DagScheduleGenerator generator =
-                mock(com.cretas.aims.service.scheduling.dag.DagScheduleGenerator.class);
-        ReflectionTestUtils.setField(optimizer, "dagScheduleGenerator", generator);
+    void generationDelegatesToDailyCapacityGeneratorAndNeverDispatchesWorkers() {
+        // APS v2 (2026-10-28): 自动排程 = 按产品日产能按天排; 人员优化仍不可用, 生成路径不得派工。
+        com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator generator =
+                mock(com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator.class);
+        ReflectionTestUtils.setField(optimizer, "dailyCapacityScheduleGenerator", generator);
         GenerateScheduleRequest request = new GenerateScheduleRequest();
         request.setPlanDate(java.time.LocalDate.of(2026, 10, 19));
         com.cretas.aims.dto.scheduling.SchedulingPlanDTO produced = new com.cretas.aims.dto.scheduling.SchedulingPlanDTO();

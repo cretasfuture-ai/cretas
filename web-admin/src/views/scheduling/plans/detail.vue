@@ -55,8 +55,42 @@ function readApsWarnings(): string[] {
 }
 const apsWarnings = ref<string[]>(readApsWarnings());
 const warningsMentionProcessSetup = computed(() => apsWarnings.value.some(w => w.includes('工序管理')));
+// v1 (按工艺图) 的旧排程仍按工序时间线展示; v2 (按日产能) 的排程看下面的按天表。
 const timelineSchedules = computed(() => (plan.value?.lineSchedules || [])
   .filter(s => Array.isArray(s.taskTimeline) && s.taskTimeline.length > 0));
+
+/** APS v2: 有按天分配的排程。 */
+const dailySchedules = computed(() => (plan.value?.lineSchedules || [])
+  .filter(s => s.dailyAllocations && Array.isArray(s.dailyAllocations.days) && s.dailyAllocations.days.length > 0));
+
+/** 哪天做哪个计划、做多少: 所有排程的按天分配摊平, 按日期 → 排程顺序。 */
+const dailyRows = computed(() => {
+  const rows: Array<{ key: string; date: string; label: string; quantity: number; unit: string; share: number; order: number }> = [];
+  for (const s of dailySchedules.value) {
+    const alloc = s.dailyAllocations!;
+    for (const day of alloc.days) {
+      rows.push({
+        key: `${s.id}-${day.date}`,
+        date: day.date,
+        label: scheduleLabel(s),
+        quantity: Number(day.quantity),
+        unit: alloc.unit,
+        share: Number(day.shareOfDay),
+        order: s.sequenceOrder ?? 0,
+      });
+    }
+  }
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order);
+});
+
+function formatQty(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+  return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+function formatShare(share: number) {
+  return Number.isFinite(share) ? `${Math.round(share * 100)}%` : '—';
+}
 
 function scheduleLabel(s: LineSchedule) {
   if (s.batchNumber) return s.batchNumber;
@@ -668,7 +702,38 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
       </el-table>
     </el-card>
 
-    <!-- 自动排程: 每条排程的工序时间线 -->
+    <!-- 自动排程 (按日产能): 哪天做哪个计划、做多少 -->
+    <el-card v-if="dailySchedules.length" class="timeline-card" data-testid="daily-allocations">
+      <template #header>
+        <span>按天排程 — 哪天做哪个计划、做多少</span>
+      </template>
+      <ul class="daily-capacity-summary">
+        <li v-for="schedule in dailySchedules" :key="`cap-${schedule.id}`" :data-testid="`daily-capacity-${schedule.id}`">
+          <strong>{{ scheduleLabel(schedule) }}</strong>：
+          日产能 {{ formatQty(schedule.dailyAllocations!.capacityPerDay) }} {{ schedule.dailyAllocations!.unit }}/天
+          （{{ schedule.dailyAllocations!.capacitySourceLabel }}）；
+          计划量 {{ formatQty(schedule.dailyAllocations!.plannedQuantity) }}，
+          已入库 {{ formatQty(schedule.dailyAllocations!.reportedQuantity) }}，
+          本次排 {{ formatQty(schedule.dailyAllocations!.remainingQuantity) }} {{ schedule.dailyAllocations!.unit }}
+        </li>
+      </ul>
+      <el-table :data="dailyRows" size="small" border row-key="key">
+        <el-table-column label="日期" width="120">
+          <template #default="{ row }">{{ row.date }}</template>
+        </el-table-column>
+        <el-table-column label="计划" min-width="160">
+          <template #default="{ row }">{{ row.label }}</template>
+        </el-table-column>
+        <el-table-column label="做多少" width="160">
+          <template #default="{ row }">{{ formatQty(row.quantity) }} {{ row.unit }}</template>
+        </el-table-column>
+        <el-table-column label="占当天产能" width="120">
+          <template #default="{ row }">{{ formatShare(row.share) }}</template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- 旧的自动排程 (v1 按工艺图): 每条排程的工序时间线 -->
     <el-card
       v-for="schedule in timelineSchedules"
       :key="`timeline-${schedule.id}`"
@@ -867,5 +932,13 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
 
 .timeline-card {
   margin-top: 20px;
+}
+
+.daily-capacity-summary {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.8;
 }
 </style>

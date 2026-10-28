@@ -32,8 +32,18 @@ public class SchedulingPlanDTO {
     // 关联数据
     private List<LineScheduleDTO> lineSchedules;
 
-    /** 自动排程的提示: 缺工时 / 没有工艺图 / 开工时刻用了默认值等。只在生成那次返回, 不落库。 */
+    /** 自动排程的提示: 按历史估算 / 人工与历史相差大 / 计划已完成不排等。只在生成那次返回, 不落库。 */
     private List<String> warnings;
+
+    /** 自动排程结果: SCHEDULED = 已排出并落库; CAPACITY_REQUIRED = 有产品要先补日产能, 什么都没落库。 */
+    public static final String OUTCOME_SCHEDULED = "SCHEDULED";
+    public static final String OUTCOME_CAPACITY_REQUIRED = "CAPACITY_REQUIRED";
+
+    /** 只在自动排程那次返回。 */
+    private String outcome;
+
+    /** outcome = CAPACITY_REQUIRED 时: 需要当场补日产能的产品 (id 为空, 没有落库)。 */
+    private List<DailyCapacityRequiredDTO> capacityRequired;
 
     // 统计数据
     private Integer completedSchedules;

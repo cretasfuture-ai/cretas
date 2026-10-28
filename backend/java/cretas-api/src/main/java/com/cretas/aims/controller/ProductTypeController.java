@@ -62,6 +62,7 @@ public class ProductTypeController {
     private final ProductWorkProcessRecommendTool productWorkProcessRecommendTool;
     private final ProductPackagingSpecService productPackagingSpecService;
     private final SkuImportService skuImportService;
+    private final com.cretas.aims.service.scheduling.daily.ProductDailyCapacityService productDailyCapacityService;
 
     @RequirePermission({"production:read_write", "rd:read_write"})
     @GetMapping("/import/template")
@@ -175,6 +176,33 @@ public class ProductTypeController {
         log.info("更新产品类型: factoryId={}, id={}", factoryId, id);
         ProductTypeDTO result = productTypeService.updateProductType(factoryId, id, dto);
         return ApiResponse.success(result);
+    }
+
+    /**
+     * APS v2 产品人工日产能 (Steve 2026-10-28): 一天能做多少 + 单位 (与该产品计划的计划单位一致)。
+     * quantityPerDay 为 null = 清掉 (排程改用经验值或当场问)。只写这三列, 不经过通用更新。
+     */
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
+    @PutMapping("/{id}/daily-capacity")
+    @Operation(summary = "设置产品日产能", description = "一天能做多少 (数值 + 单位), 自动排程按它按天排; quantityPerDay 为空则清掉")
+    public ApiResponse<ProductTypeDTO> updateDailyCapacity(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "产品类型ID") String id,
+            @RequestBody DailyCapacityUpdateRequest body,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+        if (body == null || body.quantityPerDay() == null) {
+            productDailyCapacityService.clear(factoryId, id, userId);
+        } else {
+            productDailyCapacityService.save(factoryId, id, body.quantityPerDay(), body.unit(), userId);
+        }
+        log.info("设置产品日产能: factoryId={}, id={}, quantityPerDay={}, unit={}", factoryId, id,
+                body == null ? null : body.quantityPerDay(), body == null ? null : body.unit());
+        return ApiResponse.success(productTypeService.getProductTypeById(factoryId, id));
+    }
+
+    /** 日产能请求体: quantityPerDay 为 null 表示清掉。 */
+    public record DailyCapacityUpdateRequest(java.math.BigDecimal quantityPerDay, String unit) {
     }
 
     /**
