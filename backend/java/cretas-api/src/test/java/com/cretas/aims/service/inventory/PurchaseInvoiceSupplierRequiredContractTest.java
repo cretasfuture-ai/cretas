@@ -27,7 +27,9 @@ class PurchaseInvoiceSupplierRequiredContractTest {
     final PurchaseInvoiceRepository invoices = mock(PurchaseInvoiceRepository.class);
     final PurchaseOrderRepository orders = mock(PurchaseOrderRepository.class);
     final PurchaseInvoiceChaseLogRepository chases = mock(PurchaseInvoiceChaseLogRepository.class);
-    final PurchaseInvoiceServiceImpl service = new PurchaseInvoiceServiceImpl(invoices, orders, chases);
+    final PurchaseInvoiceServiceImpl service = new PurchaseInvoiceServiceImpl(invoices, orders, chases,
+            mock(com.cretas.aims.repository.inventory.PurchaseInvoiceLineRepository.class),
+            mock(com.cretas.aims.service.inventory.impl.PurchaseInvoiceThreeWayMatcher.class));
 
     void order() {
         var order = new PurchaseOrder();
