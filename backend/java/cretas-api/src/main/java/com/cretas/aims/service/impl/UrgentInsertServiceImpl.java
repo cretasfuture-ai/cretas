@@ -19,6 +19,7 @@ import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.ImpactAnalysisService;
+import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.ImpactAnalysisService.*;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.PushNotificationService;
@@ -57,6 +58,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final ObjectMapper objectMapper;
     private final DecisionAuditService decisionAuditService;
     private final ImpactAnalysisService impactAnalysisService;
+    private final LineCapacityEquipmentCheck lineChecks;
     private final ApprovalChainService approvalChainService;
     private final PushNotificationService pushNotificationService;
 
@@ -86,14 +88,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             slots = insertSlotRepository.findByFactoryIdAndStatus(factoryId, "available");
         }
 
-        // 根据产能需求过滤 (仅当指定了产能需求时)
-        BigDecimal requiredCapacity = request.getRequiredQuantity();
-        if (requiredCapacity != null && requiredCapacity.compareTo(BigDecimal.ZERO) > 0) {
-            slots = slots.stream()
-                    .filter(s -> s.getAvailableCapacity() == null ||
-                            s.getAvailableCapacity().compareTo(requiredCapacity) >= 0)
-                    .collect(Collectors.toList());
-        }
+        // S4: 时段上的 availableCapacity 是按工厂默认时产能 (kg) 估的, 不是配置读数, 不再拿它筛掉时段;
+        // 产能够不够在影响分析里按产线配置、同单位核对。
 
         // 如果指定了产线，优先返回该产线的时段
         if (request.getPreferredProductionLineId() != null) {
@@ -143,8 +139,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 资源检查
         ResourceCheckResult materialCheck = impactAnalysisService.checkMaterialAvailability(
                 factoryId, request.getProductTypeId(), request.getRequiredQuantity());
-        ResourceCheckResult equipmentCheck = impactAnalysisService.checkEquipmentAvailability(
-                factoryId, slot.getStartTime(), slot.getEndTime(), null);
+        // S4: 产能与设备只读对话建厂 / 工厂配置写下的配置 (同单位、显式设备), 缺配置 = 未验证
+        ResourceCheckResult equipmentCheck = lineChecks.checkEquipment(factoryId, request.getProductTypeId());
+        ResourceCheckResult capacityCheck = lineChecks.checkCapacity(factoryId, request.getProductTypeId(),
+                request.getRequiredQuantity(), request.getQuantityUnit(), request.getPreferredProductionLineId(),
+                slot.getStartTime(), slot.getEndTime());
 
         Map<String, Object> result = new HashMap<>();
 
@@ -197,6 +196,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         resourceStatus.put("equipmentAvailable", equipmentCheck.isAvailable());
         resourceStatus.put("equipmentVerified", equipmentCheck.isVerified());
         resourceStatus.put("equipmentMessage", equipmentCheck.getMessage());
+        resourceStatus.put("equipmentStatus", LineCapacityEquipmentCheck.status(equipmentCheck));
+        resourceStatus.put("capacityAvailable", capacityCheck.isAvailable());
+        resourceStatus.put("capacityVerified", capacityCheck.isVerified());
+        resourceStatus.put("capacityMessage", capacityCheck.getMessage());
+        resourceStatus.put("capacityStatus", LineCapacityEquipmentCheck.status(capacityCheck));
+        resourceStatus.put("capacityUnit", request.getQuantityUnit());
         resourceStatus.put("hasEnoughWorkers", slot.hasEnoughWorkers());
         // 时段上的人数是生成时段时按产能配置估算的, 不是考勤/排班读数 ⇒ 恒为未验证
         resourceStatus.put("workerVerified", false);
@@ -206,7 +211,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         result.put("resourceStatus", resourceStatus);
 
         // 风险评估
-        String riskLevel = determineRiskLevel(chainImpact, materialCheck, equipmentCheck, slot);
+        String riskLevel = determineRiskLevel(chainImpact, materialCheck, equipmentCheck, capacityCheck, slot);
         result.put("riskLevel", riskLevel);
         result.put("riskWarnings", chainImpact.getRiskWarnings());
 
@@ -224,25 +229,22 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             unverifiedReasons.add(equipmentCheck.getMessage());
         }
         unverifiedReasons.add(WORKER_UNVERIFIED_REASON);
-        Boolean capacityOk = null;
-        if (slot.getAvailableCapacity() != null && request.getRequiredQuantity() != null) {
-            capacityOk = slot.getAvailableCapacity().compareTo(request.getRequiredQuantity()) >= 0;
-        } else {
-            unverifiedReasons.add("产能未验证: 缺少时段可用产能或插单数量");
+        if (!capacityCheck.isVerified()) {
+            unverifiedReasons.add(capacityCheck.getMessage());
         }
         boolean resourcesVerified = unverifiedReasons.isEmpty();
         boolean definitelyShort = (materialCheck.isVerified() && !materialCheck.isAvailable())
                 || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
-                || Boolean.FALSE.equals(capacityOk);
+                || (capacityCheck.isVerified() && !capacityCheck.isAvailable());
         boolean isFeasible = resourcesVerified && !definitelyShort
                 && materialCheck.isAvailable() && equipmentCheck.isAvailable()
-                && slot.hasEnoughWorkers() && Boolean.TRUE.equals(capacityOk);
+                && slot.hasEnoughWorkers() && capacityCheck.isAvailable();
         result.put("isFeasible", isFeasible);
         result.put("resourcesVerified", resourcesVerified);
         result.put("unverifiedReasons", unverifiedReasons);
         result.put("feasibilityStatus", isFeasible ? "FEASIBLE" : (definitelyShort ? "INFEASIBLE" : "UNVERIFIED"));
         if (!isFeasible) {
-            result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, slot, request));
+            result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, capacityCheck, slot));
         }
 
         return result;
@@ -288,10 +290,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private String determineRiskLevel(ChainImpactResult chainImpact,
                                       ResourceCheckResult materialCheck,
                                       ResourceCheckResult equipmentCheck,
+                                      ResourceCheckResult capacityCheck,
                                       InsertSlot slot) {
         // 核对过且确定不够 = 高风险 (未验证不等于不够, 它体现在 feasibilityStatus=UNVERIFIED)
         if ((materialCheck.isVerified() && !materialCheck.isAvailable())
                 || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
+                || (capacityCheck.isVerified() && !capacityCheck.isAvailable())
                 || !slot.hasEnoughWorkers()) {
             return "critical";
         }
@@ -308,8 +312,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
      */
     private String buildInfeasibleReason(ResourceCheckResult materialCheck,
                                          ResourceCheckResult equipmentCheck,
-                                         InsertSlot slot,
-                                         GetInsertSlotsRequest request) {
+                                         ResourceCheckResult capacityCheck,
+                                         InsertSlot slot) {
         StringBuilder reasons = new StringBuilder();
         if (!materialCheck.isAvailable()) {
             // 未验证的 message 自带「原料未验证: …」, 不冠「原料不足」
@@ -325,10 +329,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             reasons.append("人员不足: 需要").append(slot.getRequiredWorkers())
                     .append("人，可用").append(slot.getAvailableWorkers()).append("人; ");
         }
-        if (slot.getAvailableCapacity() != null && request.getRequiredQuantity() != null
-                && slot.getAvailableCapacity().compareTo(request.getRequiredQuantity()) < 0) {
-            reasons.append("产能不足: 需要").append(request.getRequiredQuantity())
-                    .append("kg，可用").append(slot.getAvailableCapacity()).append("kg; ");
+        if (!capacityCheck.isAvailable()) {
+            // message 自带「产能不足: …」或「产能未验证: …」, 单位取自配置
+            reasons.append(capacityCheck.getMessage()).append("; ");
         }
         return reasons.toString();
     }

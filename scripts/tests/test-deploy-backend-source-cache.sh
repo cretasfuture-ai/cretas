@@ -120,14 +120,18 @@ MOCK_UPSTREAM_PORT=10020
 MOCK_SERVICE_STATE=active
 MOCK_HTTP_STATUS=200
 MOCK_MAIN_PID=4242
+# 进程启动时间 / JAR mtime (epoch)。默认「进程比 JAR 新」= 正常已部署态。
+MOCK_PROC_STARTED=2000
+MOCK_JAR_MTIME=1000
 # 运行进程打开的运行 jar 句柄: 「<md5> live|deleted」每行一个。默认 = 正常已部署态。
 OLD_MD5=fedcba9876543210fedcba9876543210
 MOCK_OPEN_JARS="$LOCAL_MD5 live"
 MOCK_REMOTE_FD_DIR=
 MOCK_TRUNCATED=
+MOCK_DISK_MD5=
 ssh() {
     case "$*" in
-        # ⚠️ 句柄这条也跑 md5sum, 必须排在 *md5sum* 之前, 否则被那条吃掉。
+        # ⚠️ 句柄这条也跑 md5sum、也含 /proc/, 必须排在 *md5sum* 和 *"/proc/"* 之前。
         *"/proc/$MOCK_MAIN_PID/fd/"*)
             [[ "$*" == *"$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME (deleted)"* ]] \
                 || fail "open-JAR check does not recognise deleted runtime JAR handles"
@@ -149,6 +153,9 @@ ssh() {
         # ⚠️ MainPID 这条必须排在通用 *systemctl* 之前 —— 否则会被那条吃掉,
         #    返回 "active\n200" 当成 pid, 测试会以错误的理由通过/失败。
         *"MainPID"*) printf '%s\n' "$MOCK_MAIN_PID" ;;
+        *"etimes= -p '$MOCK_MAIN_PID'"*) printf '%s\n' "$MOCK_PROC_STARTED" ;;
+        *"/proc/"*) fail "process start time read from /proc mtime (that is first-access time, not start time)" ;;
+        *"stat -c %Y '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME'"*) printf '%s\n' "$MOCK_JAR_MTIME" ;;
         *systemctl*) printf '%s\n%s' "$MOCK_SERVICE_STATE" "$MOCK_HTTP_STATUS" ;;
         *) return 1 ;;
     esac
@@ -161,11 +168,8 @@ if FORCE_REDEPLOY=1 prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "FORCE_REDEPLOY=1 did not bypass no-op"
 fi
 
-# 🔴 2026-08-20 事故用例: jar MD5 一致 + upstream 对 + systemd active + health 200
-# 四条全绿, 而 JVM 仍跑着旧字节码 (上次部署装了 jar 但切流失败没重启)。
-# 🔴 2026-10-28 同形复发: 当时靠「/proc/<pid> mtime >= jar mtime」拦, 但那个 mtime 是条目首次
-# 被读的时间 —— 盘上 jar 14:40 是新的, 13:10 的进程握着已删除的旧 jar, 仍判成 no-op。
-# 现在逐个读进程打开的 jar 句柄。实测当时的句柄形状: 两个已删除的旧 jar + 一个新 jar。
+# 🔴 2026-10-28: 进程启动时刻正常 (比盘上 jar 新), 但进程**手里**还握着已删除的旧 jar。
+# 实测句柄形状: 两个已删除的旧 jar + 一个后来打开的新 jar。启动时刻那条闸放行, 必须由句柄这条拦下。
 MOCK_OPEN_JARS=$(printf '%s deleted\n%s deleted\n%s live' "$OLD_MD5" "$OLD_MD5" "$LOCAL_MD5")
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "process still holding the deleted old JAR (new JAR on disk) was accepted as an already-deployed no-op"
@@ -183,7 +187,6 @@ MOCK_OPEN_JARS="$OLD_MD5 live"
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "process holding different JAR bytes was accepted as an already-deployed no-op"
 fi
-
 # 读不到句柄要走正常部署, ⛔ 不能默认放行(「读不到」不等于「确认一致」)。
 MOCK_OPEN_JARS=
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
@@ -197,7 +200,6 @@ if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "truncated handle list (no END line) was treated as an already-deployed no-op"
 fi
 MOCK_TRUNCATED=
-MOCK_OPEN_JARS="$LOCAL_MD5 live"
 
 # 句柄判定在远端执行, 上面的 mock 直接给成品行, 测不到「(deleted) 认成 deleted」和「按句柄读字节」。
 # 这里把远端命令原样跑在假的 fd 目录上 (符号链接, 与 /proc/<pid>/fd 同形)。
@@ -214,7 +216,7 @@ ln -s "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME" "$FAKE_ROOT/fd/25"
 SAVED_REMOTE_JAR_DIR=$REMOTE_JAR_DIR
 REMOTE_JAR_DIR="$FAKE_ROOT/jar"
 MOCK_REMOTE_FD_DIR="$FAKE_ROOT/fd"
-NEW_MD5=$(printf 'new-jar-bytes' | md5sum | awk '{print $1}')
+NEW_MD5=d04534a1213443acf14fe4bd31dce99c  # md5 of the 13 bytes 'new-jar-bytes'
 MOCK_DISK_MD5=$NEW_MD5
 if prod_already_runs_local_artifact "$NEW_MD5"; then
     fail "real handle scan: a deleted runtime JAR handle next to the new one was accepted as an already-deployed no-op"
@@ -229,16 +231,34 @@ fi
 REMOTE_JAR_DIR=$SAVED_REMOTE_JAR_DIR
 MOCK_REMOTE_FD_DIR=
 MOCK_DISK_MD5=
+MOCK_OPEN_JARS="$LOCAL_MD5 live"
 rm -rf "$FAKE_ROOT"
 
+# 🔴 2026-08-20 事故用例: jar MD5 一致 + upstream 对 + systemd active + health 200
+# **四条全绿, 而运行中的进程比 JAR 旧** —— 上次部署装了 jar 但切流失败没重启。
+# 旧实现在这里会报 no-op / DEPLOY_EXIT=0, 实测 jar 15:34:58 vs 进程 15:05:39 差 29 分钟。
+MOCK_PROC_STARTED=1000
+MOCK_JAR_MTIME=2000
+if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+    fail "running process older than the JAR was accepted as an already-deployed no-op"
+fi
+
+# 取不到时间要走正常部署, ⛔ 不能默认放行(「读不到」不等于「确认一致」)。
+MOCK_PROC_STARTED=
+MOCK_JAR_MTIME=2000
+if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+    fail "unreadable process start time was treated as an already-deployed no-op"
+fi
 MOCK_MAIN_PID=0
+MOCK_PROC_STARTED=3000
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "MainPID=0 (service not running) was treated as an already-deployed no-op"
 fi
 
 # 复位, 并确认阳性对照仍然成立 —— ⛔ 否则上面几条「不通过」可能只是因为我把 mock 弄坏了。
 MOCK_MAIN_PID=4242
-MOCK_OPEN_JARS="$LOCAL_MD5 live"
+MOCK_PROC_STARTED=2000
+MOCK_JAR_MTIME=1000
 prod_already_runs_local_artifact "$LOCAL_MD5" \
     || fail "positive control broken: healthy identical artifact should still be a no-op"
 MOCK_UPSTREAM_PORT=10030
@@ -254,6 +274,29 @@ MOCK_SERVICE_STATE=active
 MOCK_HTTP_STATUS=503
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "unhealthy active slot was accepted"
+fi
+
+# 🔴 2026-10-28: 上面的桩只证明「拿到数字后怎么比」, 证明不了远端命令拿到的是**启动时刻**
+# (旧实现读 /proc/<pid> 目录 mtime = 第一次被读的时刻, 桩一样给数字, 测试全绿而线上 no-op 了旧字节码)。
+# 这里在 Linux 上真跑那条远端命令: 起一个进程, 等 3 秒再第一次读它 —— 启动时刻必须是 3 秒前,
+# 而 /proc mtime 会是「现在」。ps 不支持 etimes 的平台 (Git Bash) 明确报跳过, 不算通过。
+if ps -o etimes= -p $$ >/dev/null 2>&1; then
+    sleep 30 &
+    probe_pid=$!
+    sleep 3
+    started=$(bash -c "$(proc_start_epoch_cmd "$probe_pid")")
+    now=$(date +%s)
+    kill "$probe_pid" 2>/dev/null || true
+    case "$started" in ''|*[!0-9]*) fail "proc_start_epoch_cmd printed a non-number: '$started'" ;; esac
+    age=$((now - started))
+    [ "$age" -ge 2 ] && [ "$age" -le 6 ] \
+        || fail "proc_start_epoch_cmd is not the start time: process age read as ${age}s, expected ~3s"
+    if bash -c "$(proc_start_epoch_cmd 999999999)" >/dev/null 2>&1; then
+        fail "proc_start_epoch_cmd succeeded for a missing pid"
+    fi
+    echo "  proc start time measured on this host: age=${age}s (expected ~3s)"
+else
+    echo "  SKIP (not a pass): ps -o etimes unsupported here; start-time command not exercised"
 fi
 
 grep -Fq 'if reuse_local_source_artifact_cache "$JAR_TARGET"; then' "$DEPLOY_SCRIPT" \

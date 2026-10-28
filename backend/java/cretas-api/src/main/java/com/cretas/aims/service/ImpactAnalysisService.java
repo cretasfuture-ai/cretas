@@ -304,6 +304,13 @@ public interface ImpactAnalysisService {
             return result;
         }
 
+        /** 核对过且够用, 并说明是按什么核对的。 */
+        public static ResourceCheckResult available(String resourceType, BigDecimal available, BigDecimal required, String message) {
+            ResourceCheckResult result = available(resourceType, available, required);
+            result.message = message;
+            return result;
+        }
+
         public static ResourceCheckResult unavailable(String resourceType, String message, BigDecimal available, BigDecimal required) {
             ResourceCheckResult result = new ResourceCheckResult();
             result.available = false;
