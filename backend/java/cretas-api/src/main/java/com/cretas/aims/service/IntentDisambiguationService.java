@@ -126,6 +126,14 @@ public class IntentDisambiguationService {
      * @return 消歧结果
      */
     public DisambiguationResult disambiguate(String originalInput, String matchedIntent) {
+        return disambiguate(originalInput, matchedIntent, null);
+    }
+
+    /**
+     * @param factoryId 本次识别的工厂 (服务端认定): 按这家的工艺保密产品名脱敏原话; null 时按
+     *                  {@code LlmEgressGuard} 的绑定 / 登录身份, 都没有则不发 (Steve 2026-10-29)
+     */
+    public DisambiguationResult disambiguate(String originalInput, String matchedIntent, String factoryId) {
         long startTime = System.currentTimeMillis();
 
         // 功能未启用时，默认返回食品知识（保持原行为）
@@ -155,7 +163,7 @@ public class IntentDisambiguationService {
         try {
             // 原话里的号码 / 人名 / 公司名换代号再发 (只要模型判断类别, 不需要还原); 脱敏不了按原有默认处理
             com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
-                    llmEgressGuard.texts(EGRESS_SITE, null, originalInput);
+                    llmEgressGuard.texts(EGRESS_SITE, factoryId, originalInput);
             if (redacted.refused()) {
                 return new DisambiguationResult(Choice.FOOD_KNOWLEDGE, "原话无法脱敏, 未发给模型", 0, true);
             }

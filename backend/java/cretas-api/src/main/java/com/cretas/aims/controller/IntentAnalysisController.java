@@ -60,6 +60,7 @@ public class IntentAnalysisController {
     private final IntentOptimizationSuggestionRepository suggestionRepository;
     private final AIIntentConfigRepository intentConfigRepository;
     private final SemanticRouterService semanticRouterService;
+    private final com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
 
     // ==================== 统计数据 ====================
 
@@ -922,6 +923,10 @@ public class IntentAnalysisController {
 
                 AIIntentConfig intent = intentOpt.get();
 
+                // 工艺保密 (Steve 2026-10-29): 平台级意图对所有工厂可见。关键词 / 示例 / 描述里提到任何一家工厂的
+                // 保密产品名 (或判断不了) 就不晋升 —— 否则一家工厂的保密产品名经由平台意图出现在别家。
+                rejectPromotionNamingProtectedProducts(intent);
+
                 // 备份原工厂ID，然后设为平台级
                 String originalFactoryId = intent.getFactoryId();
                 intent.setFactoryId(null); // null 表示平台级
@@ -958,6 +963,25 @@ public class IntentAnalysisController {
         } catch (Exception e) {
             log.error("审批晋升请求失败: suggestionId={}", suggestionId, e);
             throw new BusinessException(500, "审批失败: " + ErrorSanitizer.sanitize(e), e);
+        }
+    }
+
+    /** 晋升为平台级前: 意图的文字字段提到任何一家工厂的保密产品名 → 409; 查不了 → 503 (都不晋升)。 */
+    void rejectPromotionNamingProtectedProducts(AIIntentConfig intent) {
+        String[] texts = {intent.getIntentName(), intent.getKeywords(), intent.getNegativeKeywords(),
+                intent.getRegexPattern(), intent.getDescription(), intent.getExampleQueries(),
+                intent.getNegativeExamples(), intent.getResponseTemplate(), intent.getPatterns(),
+                intent.getExamples(), intent.getFollowUpQuestions()};
+        boolean mentions;
+        try {
+            mentions = processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(texts);
+        } catch (RuntimeException e) {
+            log.warn("晋升前的保密产品检查失败, 不晋升: intent={}", intent.getIntentCode());
+            throw new BusinessException(503, "暂时无法核对工艺保密产品, 未晋升, 请稍后重试");
+        }
+        if (mentions) {
+            log.warn("意图 [{}] 的文字提到工艺保密产品, 不晋升为平台级", intent.getIntentCode());
+            throw new BusinessException(409, "该意图的关键词或示例提到工艺保密产品, 不能晋升为平台级");
         }
     }
 

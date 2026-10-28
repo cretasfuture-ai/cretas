@@ -222,7 +222,11 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
     public FieldMappingWithChartRole analyzeAndSave(String columnName, String dataType,
                                                      List<Object> sampleValues, int uniqueValueCount,
                                                      String factoryId) {
-        FieldMappingWithChartRole result = analyzeField(columnName, dataType, sampleValues, uniqueValueCount);
+        FieldMappingWithChartRole result;
+        // 列名 / 样本值外发时按上传所属工厂脱敏 (平台账号替某厂分析时也按那家, Steve 2026-10-29)
+        try (var egressFactory = LlmEgressGuard.analysing(factoryId)) {
+            result = analyzeField(columnName, dataType, sampleValues, uniqueValueCount);
+        }
 
         // 高置信度时自动保存
         if (result.getConfidence() != null && result.getConfidence() >= CONFIDENCE_THRESHOLD_SAVE) {
@@ -234,7 +238,11 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
 
     @Override
     public List<FieldMappingWithChartRole> analyzeAndSaveAll(List<FieldInfo> fieldInfoList, String factoryId) {
-        List<FieldMappingWithChartRole> results = analyzeFields(fieldInfoList);
+        List<FieldMappingWithChartRole> results;
+        // 列名 / 样本值外发时按上传所属工厂脱敏 (平台账号替某厂分析时也按那家, Steve 2026-10-29)
+        try (var egressFactory = LlmEgressGuard.analysing(factoryId)) {
+            results = analyzeFields(fieldInfoList);
+        }
 
         // 批量保存高置信度结果
         for (FieldMappingWithChartRole result : results) {

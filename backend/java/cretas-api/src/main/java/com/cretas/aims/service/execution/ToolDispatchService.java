@@ -142,6 +142,18 @@ public class ToolDispatchService {
                                                   AIIntentConfig intent,
                                                   Long userId, String userRole,
                                                   IntentMatchResult matchResult) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+        }
+    }
+
+    private IntentExecuteResponse executeWithToolInScope(ToolExecutor tool, String factoryId,
+                                                  IntentExecuteRequest request,
+                                                  AIIntentConfig intent,
+                                                  Long userId, String userRole,
+                                                  IntentMatchResult matchResult) {
         try {
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
@@ -848,6 +860,17 @@ public class ToolDispatchService {
      * Tool 预览执行
      */
     public IntentExecuteResponse executeToolPreview(ToolExecutor tool, String factoryId,
+                                                     IntentExecuteRequest request,
+                                                     AIIntentConfig intent,
+                                                     Long userId, String userRole) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return executeToolPreviewInScope(tool, factoryId, request, intent, userId, userRole);
+        }
+    }
+
+    private IntentExecuteResponse executeToolPreviewInScope(ToolExecutor tool, String factoryId,
                                                      IntentExecuteRequest request,
                                                      AIIntentConfig intent,
                                                      Long userId, String userRole) {

@@ -111,6 +111,11 @@ class NoCrossFactoryLearningContractTest {
             com.cretas.aims.service.consent.ProcessSecretSampleFilter filter) {
         ActiveLearningServiceImpl service = Mockito.mock(ActiveLearningServiceImpl.class, Mockito.CALLS_REAL_METHODS);
         ReflectionTestUtils.setField(service, "processSecretSampleFilter", filter);
+        com.cretas.aims.service.consent.TrainingConsentService consent =
+                mock(com.cretas.aims.service.consent.TrainingConsentService.class);
+        when(consent.status(anyString())).thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.AUTHORIZED);
+        when(consent.status("F_GONE")).thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.WITHDRAWN);
+        ReflectionTestUtils.setField(service, "trainingConsentService", consent);
         return service;
     }
 
@@ -174,9 +179,44 @@ class NoCrossFactoryLearningContractTest {
         verify(phrases).addPhraseMapping("今天做了多少", "PRODUCTION_QUERY");
     }
 
+    /**
+     * 复审 M3 (2026-10-29): 先过完整的本厂学习规则再动共用短语表 —— 撤回训练的工厂、没有工厂的建议、
+     * 带客户名 / 配方参数的建议都不应用 (以前先 addPhraseMapping, 再无视 learnExpression 的结果)。
+     */
+    @Test
+    void suggestionsFailingTheFactoryLearningRulesNeverReachThePhraseTable() {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        ActiveLearningServiceImpl service = activeLearning(filter);
+        com.cretas.aims.repository.learning.LearningSuggestionRepository suggestions =
+                mock(com.cretas.aims.repository.learning.LearningSuggestionRepository.class);
+        com.cretas.aims.config.IntentKnowledgeBase phrases = mock(com.cretas.aims.config.IntentKnowledgeBase.class);
+        com.cretas.aims.service.ExpressionLearningService expressions =
+                mock(com.cretas.aims.service.ExpressionLearningService.class);
+        ReflectionTestUtils.setField(service, "suggestionRepository", suggestions);
+        ReflectionTestUtils.setField(service, "adoptionRepository", mock(CrossFactoryKnowledgeAdoptionRepository.class));
+        ReflectionTestUtils.setField(service, "intentKnowledgeBase", phrases);
+        ReflectionTestUtils.setField(service, "expressionLearningService", expressions);
+        when(suggestions.findById(1L)).thenReturn(java.util.Optional.of(suggestion("F_GONE", "今天做了多少")));
+        when(suggestions.findById(2L)).thenReturn(java.util.Optional.of(suggestion(null, "今天做了多少")));
+        when(suggestions.findById(3L)).thenReturn(java.util.Optional.of(suggestion("F006", "这个产品配方里盐放多少")));
+
+        service.applySuggestion(1L, "reviewer");
+        service.applySuggestion(2L, "reviewer");
+        service.applySuggestion(3L, "reviewer");
+
+        verify(phrases, never()).addPhraseMapping(anyString(), anyString());
+        verifyNoInteractions(expressions);
+        verify(suggestions, never()).applySuggestion(any(), any(), any(), any());
+    }
+
     private static com.cretas.aims.entity.learning.LearningSuggestion suggestion(String content) {
+        return suggestion("F006", content);
+    }
+
+    private static com.cretas.aims.entity.learning.LearningSuggestion suggestion(String factoryId, String content) {
         return com.cretas.aims.entity.learning.LearningSuggestion.builder()
-                .factoryId("F006")
+                .factoryId(factoryId)
                 .intentCode("PRODUCTION_QUERY")
                 .suggestionType(com.cretas.aims.entity.learning.LearningSuggestion.SuggestionType.NEW_EXPRESSION)
                 .content(content)

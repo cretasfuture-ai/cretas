@@ -183,10 +183,17 @@ public class LlmEgressGuard {
         return processSecretSampleFilter.protectedProductNames(factory);
     }
 
-    /** 显式工厂优先; 没有时平台账号返回 null (不按 token 猜), 其余取本次执行的登录身份工厂。 */
+    /**
+     * 显式工厂优先; 其次是服务端入口绑定的「本次分析的工厂」({@link #analysing}); 都没有时平台账号返回 null
+     * (不按 token 猜), 其余取本次执行的登录身份工厂。
+     */
     static String egressFactory(String explicitFactoryId) {
         if (explicitFactoryId != null && !explicitFactoryId.isBlank()) {
             return explicitFactoryId;
+        }
+        String analysed = ANALYSED_FACTORY.get();
+        if (analysed != null) {
+            return analysed;
         }
         boolean platformActor = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
                 .map(com.cretas.aims.security.AuthenticatedActor::isPlatformAdmin).orElse(false);
@@ -195,6 +202,41 @@ public class LlmEgressGuard {
         }
         String fromExecution = currentFactory();
         return fromExecution == null || fromExecution.isBlank() ? null : fromExecution;
+    }
+
+    private static final ThreadLocal<String> ANALYSED_FACTORY = new ThreadLocal<>();
+
+    /**
+     * 服务端入口 (意图识别管线 / 执行编排 / 流式执行 / 工具执行) 把<b>路径上认定的工厂</b>绑到当前线程:
+     * 深层出口 (抽参、消歧、长文本、选工具、纠错、比较赛) 不带工厂参数时按它脱敏 —— 平台账号替某厂操作时
+     * 就按那家工厂的保密产品名换代号, 不再因 token 里没有工厂而被拒或原文发出。
+     * ⛔ 只能传服务端认定的工厂 (路径 / 可信执行上下文), 不能传请求体里客户端给的值。
+     * 空值不改变当前绑定。用 try-with-resources, 结束时还原外层绑定 (线程池复用线程)。
+     */
+    public static AnalysedFactoryScope analysing(String factoryId) {
+        String previous = ANALYSED_FACTORY.get();
+        if (factoryId != null && !factoryId.isBlank()) {
+            ANALYSED_FACTORY.set(factoryId);
+        }
+        return new AnalysedFactoryScope(previous);
+    }
+
+    /** {@link #analysing} 的作用域; close 时还原外层绑定。 */
+    public static final class AnalysedFactoryScope implements AutoCloseable {
+        private final String previous;
+
+        private AnalysedFactoryScope(String previous) {
+            this.previous = previous;
+        }
+
+        @Override
+        public void close() {
+            if (previous == null) {
+                ANALYSED_FACTORY.remove();
+            } else {
+                ANALYSED_FACTORY.set(previous);
+            }
+        }
     }
 
     /** 不知道按哪家工厂脱敏: 拒绝外发 (原因只写类别)。 */

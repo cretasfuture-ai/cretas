@@ -459,8 +459,8 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
      * 不进全局池 —— 否则它会被合并到每一家工厂的识别里 (Steve 2026-10-22: 工厂之间不共享学到的说法)。
      */
     static boolean learnedGlobalExpression(LearnedExpression expression) {
-        boolean global = expression.getFactoryId() == null || "*".equals(expression.getFactoryId());
-        return global && expression.getSourceType() != LearnedExpression.SourceType.MANUAL;
+        // 空白工厂字段同样算全局 (2026-10-29 复审 L1); 判据统一在 LearningContentRules
+        return com.cretas.aims.service.consent.LearningContentRules.systemLearnedGlobal(expression);
     }
 
     private void cacheExpressionInternal(LearnedExpression expression) {
@@ -468,8 +468,8 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             return;
         }
         String factoryId = expression.getFactoryId();
-        if (factoryId == null) {
-            factoryId = "*"; // 全局表达
+        if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(factoryId)) {
+            factoryId = "*"; // 全局表达 (人工预置; 空 / 空白 / "*" 统一归到 "*")
         }
 
         float[] embedding = expression.getEmbeddingAsFloatArray();

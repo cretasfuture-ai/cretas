@@ -449,6 +449,15 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     @Override
     public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
                                                             Long userId, String userRole, String sessionId) {
+        // 识别链路上的深层外发 (长文本摘要、消歧、比较赛、选工具) 不带工厂参数: 按本次识别的工厂脱敏
+        // (平台账号替某厂识别时也按那家的保密产品名换代号), Steve 2026-10-29
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return recognizeIntentWithConfidenceInScope(userInput, factoryId, topN, userId, userRole, sessionId);
+        }
+    }
+
+    private IntentMatchResult recognizeIntentWithConfidenceInScope(String userInput, String factoryId, int topN,
+                                                                   Long userId, String userRole, String sessionId) {
         // This method body is identical to the original AIIntentServiceImpl.recognizeIntentWithConfidence.
         // For brevity of this refactoring commit, we delegate to the full pipeline logic.
         // The complete ~800-line method and all ~80 private helpers have been preserved in this class.
@@ -613,7 +622,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // Long text handling
         if (longTextEnabled && longTextHandler != null && longTextHandler.needsProcessing(processedInput)) {
             try {
-                processedInput = longTextHandler.processForIntent(processedInput);
+                processedInput = longTextHandler.processForIntent(processedInput, factoryId);
             } catch (Exception e) {
                 log.warn("Long text processing failed: {}", e.getMessage());
             }
@@ -2228,7 +2237,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 // v19: 使用LLM消歧判断是食品知识还是工厂数据查询
                 if (disambiguationService != null && disambiguationService.isAvailable()) {
                     IntentDisambiguationService.DisambiguationResult disambResult =
-                            disambiguationService.disambiguate(originalInput, "FOOD_ENTITY_FALLBACK");
+                            disambiguationService.disambiguate(originalInput, "FOOD_ENTITY_FALLBACK", factoryId);
                     // v30: LLM失败时若含数据指标，视为工厂数据
                     boolean treatAsFactoryData = disambResult.getChoice() == IntentDisambiguationService.Choice.FACTORY_DATA
                             || (disambResult.isDefault() && knowledgeBase.containsDataQueryIndicator(originalInput));
@@ -2391,7 +2400,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                     boolean shouldRouteToFood = true;
                     if (disambiguationService != null && disambiguationService.isAvailable()) {
                         IntentDisambiguationService.DisambiguationResult disambResult =
-                                disambiguationService.disambiguate(userInput, "FINAL_FOOD_FALLBACK");
+                                disambiguationService.disambiguate(userInput, "FINAL_FOOD_FALLBACK", factoryId);
                         // v30: LLM失败时若含数据指标，视为工厂数据
                         boolean isFactoryData = disambResult.getChoice() == IntentDisambiguationService.Choice.FACTORY_DATA
                                 || (disambResult.isDefault() && knowledgeBase.containsDataQueryIndicator(userInput));
@@ -5183,7 +5192,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         // 如果消歧服务可用，调用 LLM 判断
         if (disambiguationService != null && disambiguationService.isAvailable()) {
             IntentDisambiguationService.DisambiguationResult disambResult =
-                    disambiguationService.disambiguate(originalInput, matchedIntent);
+                    disambiguationService.disambiguate(originalInput, matchedIntent, factoryId);
 
             log.info("v17.0 LLM消歧: input='{}', matchedIntent='{}', choice={}, reason='{}', latency={}ms, isDefault={}",
                     originalInput, matchedIntent, disambResult.getChoice(), disambResult.getReason(),

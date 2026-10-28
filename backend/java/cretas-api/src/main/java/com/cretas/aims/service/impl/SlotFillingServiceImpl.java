@@ -102,6 +102,18 @@ public class SlotFillingServiceImpl implements SlotFillingService {
             AIIntentConfig intent,
             IntentExecuteRequest request,
             IntentMatchResult matchResult) {
+        // 兜底抽参的外发按本次执行的工厂脱敏 (平台账号替某厂执行时也按那家, Steve 2026-10-29)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return checkAndStartSlotFillingInScope(factoryId, userId, intent, request, matchResult);
+        }
+    }
+
+    private IntentExecuteResponse checkAndStartSlotFillingInScope(
+            String factoryId,
+            Long userId,
+            AIIntentConfig intent,
+            IntentExecuteRequest request,
+            IntentMatchResult matchResult) {
 
         try {
             // 1. 获取意图的必需槽位定义

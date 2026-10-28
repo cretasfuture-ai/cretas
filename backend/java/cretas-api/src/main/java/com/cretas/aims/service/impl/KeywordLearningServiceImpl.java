@@ -6,6 +6,9 @@ import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.service.FactoryConfigService;
 import com.cretas.aims.service.KeywordEffectivenessService;
 import com.cretas.aims.service.KeywordLearningService;
+import com.cretas.aims.service.consent.LearningContentRules;
+import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
+import com.cretas.aims.service.consent.TrainingConsentService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +42,39 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
     private final KeywordEffectivenessService keywordEffectivenessService;
     private final FactoryConfigService factoryConfigService;
     private final ObjectMapper objectMapper;
+    private final TrainingConsentService trainingConsentService;
+    private final ProcessSecretSampleFilter processSecretSampleFilter;
+
+    /**
+     * 学到的关键词只写进<b>调用方本厂</b>的意图行 (Steve 2026-10-29): 平台级 (factory_id 为空) 行和别厂的行
+     * 对其他工厂可见, 写进去就是把一家工厂的原话 (可能含工艺保密产品名) 带给别家。本厂没有这个意图的行就不写。
+     */
+    Optional<AIIntentConfig> ownFactoryIntent(String factoryId, String intentCode) {
+        if (LearningContentRules.isGlobalFactory(factoryId) || intentCode == null) {
+            return Optional.empty();
+        }
+        return intentRepository.findByFactoryIdAndIntentCode(factoryId, intentCode)
+                .filter(c -> factoryId.equals(c.getFactoryId()))
+                .filter(c -> !Boolean.FALSE.equals(c.getIsActive()));
+    }
+
+    /** 人工添加的关键词: 不按训练授权拦, 但仍不许是本厂工艺保密产品名; 判断不了就不加。 */
+    private boolean manualKeywordAllowed(String factoryId, String keyword) {
+        if (processSecretSampleFilter == null) {
+            return false;
+        }
+        try {
+            return !processSecretSampleFilter.mentionsProtectedProduct(factoryId, keyword);
+        } catch (RuntimeException e) {
+            log.warn("关键词保密产品检查失败, 不加: factory={}", factoryId);
+            return false;
+        }
+    }
+
+    /** 这段原话 / 关键词能不能学进本厂 (训练授权、本厂保密产品名、配方参数 / 客户 / 人名规则)。 */
+    private boolean learnable(String factoryId, String text) {
+        return LearningContentRules.factoryLearnable(trainingConsentService, processSecretSampleFilter, factoryId, text);
+    }
 
     /**
      * 停用词列表（用于过滤无意义的词）
@@ -72,11 +108,15 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
             return 0;
         }
 
-        // 获取意图配置
-        Optional<AIIntentConfig> intentOpt = intentRepository
-                .findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(intentCode);
+        // 工艺保密 / 训练授权 (Steve 2026-10-29): 原话本身不能学就一个词都不学
+        if (!learnable(factoryId, userInput)) {
+            return 0;
+        }
+
+        // 获取本厂的意图配置 (不写平台级 / 别厂的行)
+        Optional<AIIntentConfig> intentOpt = ownFactoryIntent(factoryId, intentCode);
         if (intentOpt.isEmpty()) {
-            log.debug("意图配置不存在: {}", intentCode);
+            log.debug("本厂没有意图配置行, 不学关键词: factory={}, intent={}", factoryId, intentCode);
             return 0;
         }
 
@@ -141,10 +181,19 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
             return 0;
         }
 
-        Optional<AIIntentConfig> intentOpt = intentRepository
-                .findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(intentCode);
+        // 只写本厂的意图行; 平台级 / 别厂的行对其他工厂可见, 不写 (Steve 2026-10-29)
+        Optional<AIIntentConfig> intentOpt = ownFactoryIntent(factoryId, intentCode);
         if (intentOpt.isEmpty()) {
-            log.warn("意图配置不存在: {}", intentCode);
+            log.info("本厂没有意图配置行, 不写关键词: factory={}, intent={}", factoryId, intentCode);
+            return 0;
+        }
+        // 每个词都过学习规则: 人工添加只查本厂保密产品名, 其余来源走完整的训练授权 / 内容规则
+        keywords = keywords.stream()
+                .filter(k -> k != null && !k.isBlank())
+                .filter(k -> source == LearnSource.MANUAL_ADD
+                        ? manualKeywordAllowed(factoryId, k) : learnable(factoryId, k))
+                .collect(Collectors.toList());
+        if (keywords.isEmpty()) {
             return 0;
         }
 
@@ -242,9 +291,20 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
             return 0;
         }
 
+        // 工艺保密 / 训练授权 (Steve 2026-10-29): 原话不能学就不拆词
+        if (!learnable(factoryId, userInput)) {
+            return 0;
+        }
+        // 匹配到的可能是平台级意图行: 新词去重和写入都按本厂的那一行
+        Optional<AIIntentConfig> own = ownFactoryIntent(factoryId, matchedIntent.getIntentCode());
+        if (own.isEmpty()) {
+            log.debug("本厂没有意图配置行, 不学关键词: factory={}, intent={}", factoryId, matchedIntent.getIntentCode());
+            return 0;
+        }
+
         try {
             // 提取新关键词
-            List<String> newKeywords = extractNewKeywords(userInput, matchedIntent);
+            List<String> newKeywords = extractNewKeywords(userInput, own.get());
 
             if (newKeywords.isEmpty()) {
                 log.debug("未从输入中提取到新关键词: {}", userInput);

@@ -152,6 +152,7 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
 
     @Override
     public ChartSufficiencyResult evaluate(
+            String factoryId,
             List<Map<String, Object>> data,
             DataFeatures features,
             String currentChartType) {
@@ -170,7 +171,7 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
             }
 
             // 列名可能就是人名 / 客户名 (透视表): 换代号再发, 脱敏不了按规则评估
-            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, null, prompt);
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, factoryId, prompt);
             if (redacted.refused()) {
                 return ruleBasedEvaluation(features, currentChartType);
             }
@@ -194,6 +195,7 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
 
     @Override
     public ChartSufficiencyResult evaluateInitial(
+            String factoryId,
             List<Map<String, Object>> data,
             DataFeatures features) {
 
@@ -208,7 +210,7 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
                 return ruleBasedInitialRecommendation(features);
             }
 
-            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, null, prompt);
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, factoryId, prompt);
             if (redacted.refused()) {
                 return ruleBasedInitialRecommendation(features);
             }

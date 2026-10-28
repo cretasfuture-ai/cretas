@@ -350,6 +350,15 @@ public class IntentExecutionOrchestrator {
      */
     public IntentExecuteResponse execute(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return executeInScope(factoryId, request, userId, userRole);
+        }
+    }
+
+    private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
+                                          Long userId, String userRole) {
 
         log.info("执行意图: factoryId={}, userInput={}, intentCode={}, userId={}, role={}",
                 factoryId,
@@ -1046,6 +1055,15 @@ public class IntentExecutionOrchestrator {
      */
     public IntentExecuteResponse executeWithExplicitIntent(String factoryId, IntentExecuteRequest request,
                                                              Long userId, String userRole) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return executeWithExplicitIntentInScope(factoryId, request, userId, userRole);
+        }
+    }
+
+    private IntentExecuteResponse executeWithExplicitIntentInScope(String factoryId, IntentExecuteRequest request,
+                                                             Long userId, String userRole) {
         if (hasNamedSession(request) && !hasTrustedConversationIdentity(
                 factoryId, userId, request.getSessionId())) {
             return sessionAdmissionDeniedResponse();
@@ -1214,6 +1232,15 @@ public class IntentExecutionOrchestrator {
      * 确认执行预览的操作
      */
     public IntentExecuteResponse confirm(String factoryId, ConfirmationProof confirmationProof,
+                                          Long userId, String userRole) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return confirmInScope(factoryId, confirmationProof, userId, userRole);
+        }
+    }
+
+    private IntentExecuteResponse confirmInScope(String factoryId, ConfirmationProof confirmationProof,
                                           Long userId, String userRole) {
         if (previewTokenService == null) {
             return IntentExecuteResponse.builder()

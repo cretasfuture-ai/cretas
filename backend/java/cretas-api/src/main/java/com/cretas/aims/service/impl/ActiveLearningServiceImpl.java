@@ -516,6 +516,21 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         return knowledge != null && !namesAnyProtectedProduct(knowledge.getContent());
     }
 
+    /** 学习建议 (新关键词 / 新说法) 不能应用的原因 (只有类别, 不含原文); 能应用返回 null。 */
+    String suggestionNotApplicable(String factoryId, String content) {
+        if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(factoryId)) {
+            return "suggestion has no factory (would become a global MANUAL expression)";
+        }
+        if (!com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(
+                trainingConsentService, processSecretSampleFilter, factoryId, content)) {
+            return "factory learning rules (consent / process-secret / blocked content)";
+        }
+        if (namesAnyProtectedProduct(content)) {
+            return "content names a process-secret product (shared phrase table)";
+        }
+        return null;
+    }
+
     /** 文本提到任何一家工厂的保密产品名, 或无法判断 → true (调用方据此不写全局)。 */
     boolean namesAnyProtectedProduct(String text) {
         if (text == null || text.isBlank()) {
@@ -599,14 +614,18 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
 
         boolean applied = false;
 
-        // 新关键词 / 新说法会进 intentKnowledgeBase 的短语表 —— 那张表不分工厂, 所有工厂共用。
-        // 提到任何一家工厂的工艺保密产品名 (或判断不了) 就不应用 (Steve 2026-10-29)。
-        if ((type == LearningSuggestion.SuggestionType.NEW_KEYWORD
-                || type == LearningSuggestion.SuggestionType.NEW_EXPRESSION)
-                && namesAnyProtectedProduct(content)) {
-            log.warn("Suggestion {} not applied: content names a process-secret product (shared phrase table)",
-                    suggestionId);
-            return;
+        // 新关键词 / 新说法会进 intentKnowledgeBase 的短语表 —— 那张表不分工厂, 所有工厂共用 —— 再按
+        // 建议所属工厂存成 MANUAL 说法。先判断再动短语表 (Steve 2026-10-29):
+        //   没有工厂的建议不应用 (不许以 MANUAL 身份写成全局, 也查不了授权);
+        //   本厂规则 (训练授权、本厂保密产品名、配方参数 / 客户 / 人名) 不过不应用;
+        //   提到任何一家工厂的保密产品名 (或判断不了) 不应用。
+        if (type == LearningSuggestion.SuggestionType.NEW_KEYWORD
+                || type == LearningSuggestion.SuggestionType.NEW_EXPRESSION) {
+            String reason = suggestionNotApplicable(suggestion.getFactoryId(), content);
+            if (reason != null) {
+                log.warn("Suggestion {} not applied: {}", suggestionId, reason);
+                return;
+            }
         }
 
         switch (type) {

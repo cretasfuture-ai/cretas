@@ -227,8 +227,10 @@ public class SseStreamingService {
         // userId 来自控制器已认证的请求, 在工作线程上绑成「可信用户」作用域, 结束时还原 (线程池复用线程)。
         var actor = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest().orElse(null);
         sseExecutor.execute(() -> {
+            // 工作线程上的深层外发按路径上的工厂脱敏 (平台账号替某厂对话时同样按那家, Steve 2026-10-29)
             try (var actorScope = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(actor);
-                 SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId)) {
+                 SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId);
+                 var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
                 executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
             }
         });
