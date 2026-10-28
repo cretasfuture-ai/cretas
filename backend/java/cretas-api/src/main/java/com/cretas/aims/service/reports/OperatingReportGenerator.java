@@ -13,6 +13,7 @@ import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.Map;
 import java.util.Set;
 
 @Slf4j
@@ -30,6 +31,9 @@ public class OperatingReportGenerator {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard=com.cretas.aims.service.consent.LlmEgressGuard.standalone();
     static final String EGRESS_SITE="operating-report";
+    /** 工艺保密: 发给模型的快照不带保密产品的成本/毛利 (Steve 10-28); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope=com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
     public OperatingReportGenerator(FactoryRepository factories,PermissionService permissions,OperatingReportCollector collector,
                                     OperatingReportAssembler assembler,OperatingReportCodec codec,OperatingReportStore store,
                                     PythonLLMClient model,AIReportPromptConfigRepository prompts){
@@ -60,16 +64,27 @@ public class OperatingReportGenerator {
     private AIAnalysisResult generate(OperatingReportContext context,String type,LocalDate start,LocalDate end,boolean automatic){
         OperatingReportSnapshot.Failure stage=OperatingReportSnapshot.Failure.SOURCE_UNAVAILABLE;
         try {
-            OperatingReportSnapshot snapshot=assembler.assemble(collector.collect(context,type,start,end));
+            OperatingReportAssembler.Input input=collector.collect(context,type,start,end);
+            OperatingReportSnapshot snapshot=assembler.assemble(input);
+            // 工艺保密: 给模型的是另一份快照 —— 产品毛利榜去掉保密产品, 毛利汇总只在剩下的产品上重算;
+            // 保存/展示的快照不变。取不到保密范围就按取数失败记 (不发)。
+            Set<String> excluded=llmCostScope.forFactory(context.factoryId()).productTypeIds();
+            Map<String,Object> promptHigh=OperatingReportGrossMarginQuery.withoutProducts(input.marginHigh(),excluded,false);
+            Map<String,Object> promptLow=OperatingReportGrossMarginQuery.withoutProducts(input.marginLow(),excluded,true);
+            int excludedProducts=((Number)promptHigh.get("excludedProtectedProductCount")).intValue();
+            OperatingReportSnapshot promptSnapshot=assembler.assemble(new OperatingReportAssembler.Input(input.type(),input.start(),input.end(),
+                    input.fetchedAt(),input.receipts(),input.sales(),input.previous(),input.lastYear(),input.region(),promptHigh,promptLow,
+                    input.aging(),input.income(),input.inventory(),input.inventoryCostCoverage()));
             stage=OperatingReportSnapshot.Failure.MODEL_UNAVAILABLE;
             String system="你是食品工厂经营分析助手。只从已查询指标选择重点事项和建议，禁止编写数字或自由文字。只返回 JSON 对象 insights 数组，每项严格含 kind、metricId、action 三个字符串。";
             String prompt="可用 kind: MISSING_VALUE（值为null）、INCOMPLETE_COVERAGE（已知覆盖率小于完整）、REVIEW_RECORDED_VALUE（已有值）。可用 action: VERIFY_COST, VERIFY_ADDRESS, VERIFY_SALESPERSON, FOLLOW_UP_COLLECTION, REVIEW_PROFIT, REVIEW_INVENTORY, REVIEW_SALES。metricId必须逐字来自下列指标ID。没有重点时返回{\"insights\":[]}。禁止其他字段，禁止正文。\n";
             var config=prompts.findFirstByFactoryIdAndReportTypeAndIsActiveTrueOrderByPriorityDesc(context.factoryId(),type)
                     .orElseGet(()->prompts.findFirstByFactoryIdIsNullAndReportTypeAndIsActiveTrueOrderByPriorityDesc(type).orElse(null));
             if(config!=null)prompt+="工厂关注方向（不改变上述输出合同）："+config.getPromptTemplate()+"\n";
-            prompt+="经营指标快照：\n"+codec.encode(snapshot);
+            if(excludedProducts>0)prompt+="产品毛利与毛利汇总"+com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(excludedProducts)+"\n";
+            prompt+="经营指标快照：\n"+codec.encode(promptSnapshot);
             // 快照里的指标标签 / 工厂关注方向可能带客户、人名、保密产品名: 换代号再发, 脱敏不了按模型不可用记失败
-            var redacted=llmEgressGuard.textsWithRecord(EGRESS_SITE,context.factoryId(),snapshot,java.util.Map.of(),java.util.List.of(system,prompt));
+            var redacted=llmEgressGuard.textsWithRecord(EGRESS_SITE,context.factoryId(),promptSnapshot,java.util.Map.of(),java.util.List.of(system,prompt));
             if(redacted.refused())throw new IllegalStateException("Operating report prompt could not be redacted");
             // Existing configured application model client; no process, credential or provider override.
             String output=redacted.restoreJsonText(model.chat(redacted.text(0),redacted.text(1)));

@@ -69,6 +69,43 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final ProductionLineRepository productionLineRepository;
     private final FactorySettingsRepository factorySettingsRepository;
 
+    /** 工艺保密: 发给 AI 的成本合计不含保密产品 (Steve 10-28); 字段注入, 单测按构造器装配时用「没有保密产品」的默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
+    /** 发给 AI 的计划成本: 只在非保密计划上逐行累加 (按结束日期分天), 以及去掉了几个保密产品。 */
+    record AiPlanCosts(Map<LocalDate, BigDecimal> byDay, BigDecimal total, int excludedProducts) { }
+
+    /**
+     * 与 {@code calculateTotalCostBetweenDates} 同口径 (结束时间在区间内, 四项实际成本缺失按 0),
+     * 但跳过牵涉保密产品的计划 —— 合计是剩下的行逐行加出来的, 不是「总数 − 保密」。
+     * {@code perDayBounds}: 与按天查询的口径一致, 每天只算到当天 23:59:59。
+     */
+    AiPlanCosts planCostsForAi(String factoryId, LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forFactory(factoryId);
+        Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
+        BigDecimal total = BigDecimal.ZERO;
+        Set<String> excludedProducts = new LinkedHashSet<>();
+        for (com.cretas.aims.entity.ProductionPlan plan : productionPlanRepository.findByFactoryId(factoryId)) {
+            LocalDateTime end = plan.getEndTime();
+            if (end == null || end.isBefore(from) || end.isAfter(to)) continue;
+            if (perDayBounds && end.isAfter(end.toLocalDate().atTime(23, 59, 59))) continue;
+            if (excluded.coversPlan(plan.getId()) || excluded.coversProduct(plan.getProductTypeId())) {
+                excludedProducts.add(String.valueOf(plan.getProductTypeId()));
+                continue;
+            }
+            BigDecimal cost = nz(plan.getActualMaterialCost()).add(nz(plan.getActualLaborCost()))
+                    .add(nz(plan.getActualEquipmentCost())).add(nz(plan.getActualOtherCost()));
+            total = total.add(cost);
+            byDay.merge(end.toLocalDate(), cost, BigDecimal::add);
+        }
+        return new AiPlanCosts(byDay, total, excludedProducts.size());
+    }
+
+    private static BigDecimal nz(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
     // ==================== 基础报表 ====================
 
     @Override
@@ -842,11 +879,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
 
         try {
+            // 工艺保密: 发给 AI 的总成本只在非保密计划上累加 (取不到保密范围时抛出 → 走规则检测, 不发)
+            BigDecimal aiTotalCost = (BigDecimal) dataContext.get("totalCost");
+            String secretNote = "";
+            if (llmCostScope.factoryHasProtected(factoryId)) {
+                AiPlanCosts aiCosts = planCostsForAi(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
+                aiTotalCost = aiCosts.total();
+                if (aiCosts.excludedProducts() > 0) {
+                    secretNote = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(aiCosts.excludedProducts()) + "\n";
+                }
+            }
+            Map<String, Object> aiData = new HashMap<>(dataContext);
+            aiData.put("totalCost", aiTotalCost);
             String aiMessage = String.format(
                 "分析以下工厂数据，识别潜在的异常和风险：\n" +
                 "- 期间：%s 至 %s\n" +
                 "- 总产量：%.2f\n" +
-                "- 总成本：%.2f\n" +
+                "- 总成本：%.2f\n%s" +
                 "- 即将过期批次：%d个\n" +
                 "- 已过期批次：%d个\n" +
                 "- 低库存项目：%d个\n" +
@@ -854,14 +903,15 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 "请识别异常模式，分析潜在风险，并提供预警建议。",
                 startDate, endDate,
                 dataContext.get("totalOutput"),
-                dataContext.get("totalCost"),
+                aiTotalCost,
+                secretNote,
                 expiringBatches.size(),
                 expiredBatches.size(),
                 lowStockItems.size(),
                 needsMaintenance.size()
             );
             Map<String, Object> aiResult = aiAnalysisService.analyzeCost(
-                factoryId, "anomaly_detection", dataContext, null, aiMessage
+                factoryId, "anomaly_detection", aiData, null, aiMessage
             );
             if (Boolean.TRUE.equals(aiResult.get("success"))) {
                 report.put("aiAnalysis", aiResult.get("aiAnalysis"));
@@ -1038,21 +1088,43 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal dailyAverage = totalHistorical.divide(BigDecimal.valueOf(historicalDays), 2, RoundingMode.HALF_UP);
 
         try {
+            // 工艺保密: 成本预测发给 AI 的历史值只在非保密计划上逐天累加 (取不到保密范围时抛出 → 走基础预测, 不发)
+            List<Map<String, Object>> aiHistorical = historicalData;
+            BigDecimal aiTotal = totalHistorical;
+            BigDecimal aiAverage = dailyAverage;
+            String secretNote = "";
+            if ("cost".equals(type) && llmCostScope.factoryHasProtected(factoryId)) {
+                LocalDate firstDay = today.minusDays(historicalDays - 1);
+                AiPlanCosts aiCosts = planCostsForAi(factoryId, firstDay.atStartOfDay(), today.atTime(23, 59, 59), true);
+                aiHistorical = new ArrayList<>();
+                for (int i = 0; i < historicalDays; i++) {
+                    LocalDate date = firstDay.plusDays(i);
+                    Map<String, Object> point = new HashMap<>();
+                    point.put("date", date.toString());
+                    point.put("value", aiCosts.byDay().getOrDefault(date, BigDecimal.ZERO));
+                    aiHistorical.add(point);
+                }
+                aiTotal = aiCosts.total();
+                aiAverage = aiTotal.divide(BigDecimal.valueOf(historicalDays), 2, RoundingMode.HALF_UP);
+                if (aiCosts.excludedProducts() > 0) {
+                    secretNote = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(aiCosts.excludedProducts()) + "\n";
+                }
+            }
             Map<String, Object> aiContext = new HashMap<>();
             aiContext.put("factoryId", factoryId);
             aiContext.put("forecastType", type);
             aiContext.put("forecastDays", days);
-            aiContext.put("historicalData", historicalData);
-            aiContext.put("dailyAverage", dailyAverage);
-            aiContext.put("totalHistorical", totalHistorical);
+            aiContext.put("historicalData", aiHistorical);
+            aiContext.put("dailyAverage", aiAverage);
+            aiContext.put("totalHistorical", aiTotal);
 
             String aiMessage = String.format(
                 "基于以下%d天的历史数据进行%s预测分析，预测未来%d天的趋势：\n" +
                 "- 历史数据总计：%.2f\n" +
-                "- 日均值：%.2f\n" +
+                "- 日均值：%.2f\n%s" +
                 "请分析数据趋势，识别周期性规律，并给出预测建议。",
                 historicalDays, "production".equals(type) ? "产量" : "成本", days,
-                totalHistorical.doubleValue(), dailyAverage.doubleValue()
+                aiTotal.doubleValue(), aiAverage.doubleValue(), secretNote
             );
             Map<String, Object> aiResult = aiAnalysisService.analyzeCost(
                 factoryId, "forecast_" + type, aiContext, null, aiMessage

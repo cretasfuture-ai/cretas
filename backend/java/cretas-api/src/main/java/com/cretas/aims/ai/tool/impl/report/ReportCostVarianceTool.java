@@ -28,6 +28,11 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
     @Autowired
     private ReportService reportService;
 
+    /** 工艺保密: 文案直接进模型上下文, 含保密产品的全厂总成本不写进文案 (Steve 10-28)。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
     @Override
     public String getToolName() {
         return "report_cost_variance";
@@ -159,9 +164,17 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             StringBuilder msg = new StringBuilder(
                     "成本差异无法比较：缺少独立标准成本，本期不给出差异金额与差异率。");
             if (costVarianceData.getTotalActualCost() != null) {
-                msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
-                        .append(" 实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
-                        .append("，批次数 ").append(costVarianceData.getBatchCount()).append("。");
+                // 工艺保密: 全厂实际总成本含保密产品, 而这里拿不到逐产品的总成本来只加非保密行 ——
+                // 本厂有保密产品时文案里不写这个总数 (文案直接进模型上下文, Steve 10-28: 对 AI 一律不带)
+                if (llmCostScope.factoryHasProtected(factoryId)) {
+                    msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
+                            .append(" 批次数 ").append(costVarianceData.getBatchCount())
+                            .append("；实际总成本含工艺保密产品，不提供给 AI。");
+                } else {
+                    msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
+                            .append(" 实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
+                            .append("，批次数 ").append(costVarianceData.getBatchCount()).append("。");
+                }
             }
             result.put("message", msg.toString());
         }

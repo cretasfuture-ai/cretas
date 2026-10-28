@@ -31,6 +31,12 @@ public interface AIContextService {
     ProductionAIContext buildProductionContext(String factoryId, LocalDate startDate, LocalDate endDate);
 
     /**
+     * 给大模型的生产统计上下文: 工艺保密产品的成本去掉 (数量保留), 成本合计只在非保密产品上累加。
+     * {@link #formatProductionContextForPrompt} 只接受这个版本。
+     */
+    ProductionAIContext buildProductionContextForAi(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
      * 构建产品成本 AI 上下文
      *
      * @param factoryId 工厂ID

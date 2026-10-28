@@ -114,6 +114,9 @@ public class ProcessingServiceImpl implements ProcessingService {
     // optional/fail-open: 未配置 bean 时不阻塞 (与 YieldReportServiceImpl 同款)。
     @Autowired(required = false)
     private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
+    // 工艺保密: 发给大模型的成本数据不带保密产品 (Steve 10-28)。字段注入, 不打断按构造器装配的既有测试。
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope;
 
     /**
      * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* with per-factory config.
@@ -3031,8 +3034,23 @@ public class ProcessingServiceImpl implements ProcessingService {
         log.info("AI成本分析(增强版): factoryId={}, batchId={}, sessionId={}, customMessage={}",
                  factoryId, batchId, sessionId, customMessage != null ? "有追问" : "初次分析");
 
+        // 0. 工艺保密: 保密产品的批次成本不发给 AI, 也不回放以前缓存的分析 (判定在读缓存之前)
+        ProductionBatch secretCheck = getBatchById(factoryId, batchId);
+        if (llmCostScope.isProtectedBatch(factoryId, secretCheck.getProductTypeId(), secretCheck.getProductionPlanId())) {
+            Map<String, Object> withheld = new HashMap<>();
+            withheld.put("batchId", batchId);
+            withheld.put("batchNumber", secretCheck.getBatchNumber());
+            withheld.put("success", false);
+            withheld.put("processSecret", true);
+            withheld.put("error", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON);
+            withheld.put("fromCache", false);
+            return withheld;
+        }
+        // 共享的分析缓存不分调用者: 本厂有保密产品时不读不写 (旧缓存可能早于保密设置, 含保密产品成本)
+        boolean cacheable = !llmCostScope.factoryHasProtected(factoryId);
+
         // 1. 检查缓存（仅对初次分析且无自定义消息的情况使用缓存）
-        if (sessionId == null && customMessage == null) {
+        if (cacheable && sessionId == null && customMessage == null) {
             Map<String, Object> cachedResult = cacheService.getAIAnalysisCache(factoryId, batchId);
             if (cachedResult != null) {
                 log.info("返回缓存的AI分析结果: factoryId={}, batchId={}", factoryId, batchId);
@@ -3070,7 +3088,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
 
         // 5. 保存到缓存（仅对成功的初次分析）
-        if (sessionId == null && customMessage == null && Boolean.TRUE.equals(aiResult.get("success"))) {
+        if (cacheable && sessionId == null && customMessage == null && Boolean.TRUE.equals(aiResult.get("success"))) {
             cacheService.setAIAnalysisCache(factoryId, batchId, result);
         }
 
@@ -3117,6 +3135,9 @@ public class ProcessingServiceImpl implements ProcessingService {
                         // 添加批次基本信息
                         costData.put("batchNumber", batch.getBatchNumber());
                         costData.put("productName", batch.getProductName());
+                        // 工艺保密: 给 AI 前按产品 / 计划去掉保密批次 (ProcessSecretLlmCostScope)
+                        costData.put("productTypeId", batch.getProductTypeId());
+                        costData.put("productionPlanId", batch.getProductionPlanId());
                         costData.put("status", batch.getStatus());
                         costData.put("createdAt", batch.getCreatedAt());
                         return costData;
@@ -3168,6 +3189,8 @@ public class ProcessingServiceImpl implements ProcessingService {
                         costData.put("batchId", batch.getId());
                         costData.put("batchNumber", batch.getBatchNumber());
                         costData.put("productName", batch.getProductName());
+                        costData.put("productTypeId", batch.getProductTypeId());
+                        costData.put("productionPlanId", batch.getProductionPlanId());
                         costData.put("status", batch.getStatus());
                         costData.put("createdAt", batch.getCreatedAt());
 
@@ -3220,6 +3243,8 @@ public class ProcessingServiceImpl implements ProcessingService {
                     batchCostSummary.put("batchId", batch.getId());
                     batchCostSummary.put("batchNumber", batch.getBatchNumber());
                     batchCostSummary.put("productName", batch.getProductName());
+                    batchCostSummary.put("productTypeId", batch.getProductTypeId());
+                    batchCostSummary.put("productionPlanId", batch.getProductionPlanId());
                     batchCostSummary.put("status", batch.getStatus());
                     batchCostSummary.put("createdAt", batch.getCreatedAt());
 

@@ -62,6 +62,21 @@ public class ProcessSecretAggregateExclusions {
         hidden.removeAll(accessService.filterPermitted(AuthenticatedActor.fromCurrentExecution().orElse(null),
                 factoryId, all, ProcessSecretAction.VIEW_FULL, false, resourceRef));
         if (hidden.isEmpty()) return Scope.EMPTY;
+        return expand(factoryId, hidden);
+    }
+
+    /**
+     * 与调用者无关的全部受保护范围: 本厂所有受保护产品, 以及牵涉它们的计划和计划锚点。
+     * 给「发给大模型的数据」用 (Steve 10-28: 对 AI 一律不带, 负责人发起的 AI 分析也不带),
+     * 所以不判权限、不记审计。
+     */
+    public Scope allProtected(String factoryId) {
+        Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
+        if (protectedIds.isEmpty()) return Scope.EMPTY;
+        return expand(factoryId, new HashSet<>(protectedIds));
+    }
+
+    private Scope expand(String factoryId, Set<String> hidden) {
         TreeSet<String> products = new TreeSet<>(hidden);
         TreeSet<String> plans = new TreeSet<>();
         List<ProductionPlan> factoryPlans = planRepository.findByFactoryId(factoryId);

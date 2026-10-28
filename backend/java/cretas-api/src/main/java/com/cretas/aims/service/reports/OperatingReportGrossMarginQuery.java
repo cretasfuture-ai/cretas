@@ -50,8 +50,6 @@ public class OperatingReportGrossMarginQuery {
     }
     public static Map<String,Object> payload(List<Map<String,Object>> rows,boolean ascending){
         List<Map<String,Object>> products=new ArrayList<>();
-        BigDecimal revenue=BigDecimal.ZERO,costedRevenue=BigDecimal.ZERO,cost=BigDecimal.ZERO;
-        int costedProducts=0,costsPresent=0;
         for(Map<String,Object> row:rows){
             Map<String,Object> product=new LinkedHashMap<>();
             BigDecimal rowRevenue=zero(number(row.get("revenue")));
@@ -67,8 +65,21 @@ public class OperatingReportGrossMarginQuery {
             product.put("costedLineCount",costedLines);product.put("zeroCostLineCount",number(row.get("zero_cost_line_count")));product.put("missingPriceLineCount",number(row.get("missing_price_line_count")));product.put("revenue",rowRevenue);product.put("costedRevenue",rowCostedRevenue);
             product.put("cost",rowCost);product.put("grossProfit",profit);product.put("marginRate",margin);
             product.put("costCoverage",ratio(rowCostedRevenue,rowRevenue)); products.add(product);
-            revenue=revenue.add(rowRevenue);costedRevenue=costedRevenue.add(rowCostedRevenue);
-            if(rowCost!=null){cost=cost.add(rowCost);costsPresent++;} if(margin!=null)costedProducts++;
+        }
+        return summarize(products,ascending);
+    }
+    /**
+     * 产品行 → 排序 + 汇总。汇总只在给定的行上逐行累加 —— 工艺保密的 AI 版本先去掉保密行再调这里,
+     * 不做「总数 − 保密」(Steve 10-28)。
+     */
+    public static Map<String,Object> summarize(List<Map<String,Object>> rows,boolean ascending){
+        List<Map<String,Object>> products=new ArrayList<>(rows);
+        BigDecimal revenue=BigDecimal.ZERO,costedRevenue=BigDecimal.ZERO,cost=BigDecimal.ZERO;
+        int costedProducts=0,costsPresent=0;
+        for(Map<String,Object> product:products){
+            BigDecimal rowCost=number(product.get("cost"));
+            revenue=revenue.add(zero(number(product.get("revenue"))));costedRevenue=costedRevenue.add(zero(number(product.get("costedRevenue"))));
+            if(rowCost!=null){cost=cost.add(rowCost);costsPresent++;} if(number(product.get("marginRate"))!=null)costedProducts++;
         }
         products.sort(Comparator.comparing((Map<String,Object> p)->number(p.get("marginRate")),Comparator.nullsLast(ascending?Comparator.<BigDecimal>naturalOrder():Comparator.<BigDecimal>reverseOrder())));
         Map<String,Object> summary=new LinkedHashMap<>();
@@ -77,6 +88,24 @@ public class OperatingReportGrossMarginQuery {
         summary.put("costedRevenue",costedRevenue);summary.put("cost",totalCost);summary.put("grossProfit",profit);
         summary.put("marginRate",ratio(profit,costedRevenue));summary.put("costCoverage",ratio(costedRevenue,revenue));
         return Map.of("rank",products,"summary",summary);
+    }
+    /**
+     * 给大模型的版本: 去掉保密产品的行 (本厂有保密产品而行认不出产品时同样去掉), 汇总在剩下的行上重算。
+     * {@code excludedProtectedProductCount} = 去掉了几个产品。
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String,Object> withoutProducts(Map<String,Object> payload,Set<String> excluded,boolean ascending){
+        List<Map<String,Object>> rank=payload.get("rank") instanceof List<?> list?(List<Map<String,Object>>)list:List.of();
+        List<Map<String,Object>> kept=new ArrayList<>();
+        Set<String> dropped=new LinkedHashSet<>();
+        for(Map<String,Object> row:rank){
+            Object id=row.get("productTypeId");
+            if(!excluded.isEmpty()&&(id==null||excluded.contains(id.toString()))){dropped.add(String.valueOf(id));continue;}
+            kept.add(row);
+        }
+        Map<String,Object> result=new LinkedHashMap<>(summarize(kept,ascending));
+        result.put("excludedProtectedProductCount",dropped.size());
+        return result;
     }
     private static BigDecimal zero(BigDecimal value){return value==null?BigDecimal.ZERO:value;}
 }

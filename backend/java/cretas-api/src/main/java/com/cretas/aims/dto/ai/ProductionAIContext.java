@@ -119,6 +119,14 @@ public class ProductionAIContext {
      */
     private List<String> topProductsByCostVariance;
 
+    // ========== 工艺保密 (只在给 AI 的版本里有值) ==========
+
+    /**
+     * 给 AI 的版本里去掉成本的保密产品个数; null = 这份上下文没按工艺保密过滤过, 不能直接拼进提示词。
+     * 成本合计、单位成本、成本结构与成本排名只在非保密产品上累加。
+     */
+    private Integer excludedProtectedProductCount;
+
     // ========== 计算时间 ==========
 
     /**
@@ -188,5 +196,10 @@ public class ProductionAIContext {
          * 批次数
          */
         private Integer batchCount;
+
+        /**
+         * 工艺保密: 给 AI 的版本里该产品的成本已去掉 (数量保留)
+         */
+        private Boolean costWithheld;
     }
 }

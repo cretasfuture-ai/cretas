@@ -11,6 +11,7 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.AIContextService;
 import com.cretas.aims.service.BomService;
 import com.cretas.aims.service.ReportService;
+import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
@@ -42,13 +43,16 @@ public class AIContextServiceImpl implements AIContextService {
     private final ReportService reportService;
     private final ProductionBatchRepository productionBatchRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final ProcessSecretLlmCostScope llmCostScope;
 
     public AIContextServiceImpl(BomService bomService,
                                 @Lazy ReportService reportService,
                                 ProductionBatchRepository productionBatchRepository,
-                                ProductTypeRepository productTypeRepository) {
+                                ProductTypeRepository productTypeRepository,
+                                ProcessSecretLlmCostScope llmCostScope) {
         this.bomService = bomService;
         this.reportService = reportService;
+        this.llmCostScope = llmCostScope;
         this.productionBatchRepository = productionBatchRepository;
         this.productTypeRepository = productTypeRepository;
     }
@@ -56,6 +60,22 @@ public class AIContextServiceImpl implements AIContextService {
     @Override
     @Transactional(readOnly = true)
     public ProductionAIContext buildProductionContext(String factoryId, LocalDate startDate, LocalDate endDate) {
+        return buildProductionContext(factoryId, startDate, endDate, null);
+    }
+
+    /**
+     * 给大模型的版本: 工艺保密产品 (含牵涉它们的计划所产批次) 的成本去掉、数量保留;
+     * 成本合计 / 单位成本 / 成本结构 / 成本排名只在非保密产品上逐行累加 (Steve 10-28)。
+     * 取不到保密范围时抛出, 调用方不发 (fail-closed)。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ProductionAIContext buildProductionContextForAi(String factoryId, LocalDate startDate, LocalDate endDate) {
+        return buildProductionContext(factoryId, startDate, endDate, llmCostScope.forFactory(factoryId));
+    }
+
+    private ProductionAIContext buildProductionContext(String factoryId, LocalDate startDate, LocalDate endDate,
+                                                       ProcessSecretLlmCostScope.Excluded excluded) {
         log.info("构建生产AI上下文: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
 
         LocalDateTime startDateTime = startDate.atStartOfDay();
@@ -89,10 +109,33 @@ public class AIContextServiceImpl implements AIContextService {
         BigDecimal totalLaborCost = BigDecimal.ZERO;
         BigDecimal totalEquipmentCost = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
+        // 给 AI 的版本: 单位成本的分母只算有成本的 (非保密) 产品的产量
+        BigDecimal costedOutput = BigDecimal.ZERO;
+        int withheldCount = 0;
 
         for (ProductionByProductDTO stat : productionStats) {
             String productTypeId = stat.getProductTypeId();
             ProductType productType = productTypeMap.get(productTypeId);
+            List<ProductionBatch> productBatches = batchesByProduct.getOrDefault(productTypeId, Collections.emptyList());
+
+            // 工艺保密: 产品受保护, 或它的批次属于牵涉受保护产品的计划; 认不出产品时同样不给成本
+            boolean withheld = excluded != null && !excluded.isEmpty()
+                    && (productTypeId == null || excluded.coversProduct(productTypeId)
+                        || productBatches.stream().anyMatch(b -> excluded.coversPlan(b.getProductionPlanId())));
+            if (withheld) {
+                withheldCount++;
+                productionWithCost.add(ProductionAIContext.ProductionWithCostDTO.builder()
+                        .productTypeId(productTypeId)
+                        .productName(stat.getProductName())
+                        .productCategory(productType != null ? productType.getProductCategory() : null)
+                        .totalQuantity(stat.getTotalQuantity())
+                        .unit(stat.getUnit())
+                        .batchCount(productBatches.size())
+                        .costWithheld(true)
+                        .build());
+                totalOutput = totalOutput.add(stat.getTotalQuantity() != null ? stat.getTotalQuantity() : BigDecimal.ZERO);
+                continue;
+            }
 
             // BOM 成本
             BigDecimal bomUnitCost = BigDecimal.ZERO;
@@ -110,7 +153,6 @@ public class AIContextServiceImpl implements AIContextService {
             }
 
             // 实际成本统计
-            List<ProductionBatch> productBatches = batchesByProduct.getOrDefault(productTypeId, Collections.emptyList());
             BigDecimal avgActualUnitCost = BigDecimal.ZERO;
             BigDecimal productTotalCost = BigDecimal.ZERO;
             BigDecimal productMaterialCost = BigDecimal.ZERO;
@@ -168,6 +210,7 @@ public class AIContextServiceImpl implements AIContextService {
 
             // 累计总数
             totalOutput = totalOutput.add(stat.getTotalQuantity() != null ? stat.getTotalQuantity() : BigDecimal.ZERO);
+            costedOutput = costedOutput.add(stat.getTotalQuantity() != null ? stat.getTotalQuantity() : BigDecimal.ZERO);
             totalMaterialCost = totalMaterialCost.add(productMaterialCost);
             totalLaborCost = totalLaborCost.add(productLaborCost);
             totalEquipmentCost = totalEquipmentCost.add(productEquipmentCost);
@@ -199,6 +242,7 @@ public class AIContextServiceImpl implements AIContextService {
                 .collect(Collectors.toList());
 
         List<String> topByCost = productionWithCost.stream()
+                .filter(p -> !Boolean.TRUE.equals(p.getCostWithheld()))
                 .sorted(Comparator.comparing(ProductionAIContext.ProductionWithCostDTO::getTotalCost,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .limit(5)
@@ -218,8 +262,10 @@ public class AIContextServiceImpl implements AIContextService {
         // 8. 计算日均产量
         long periodDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
         BigDecimal avgDailyOutput = totalOutput.divide(new BigDecimal(periodDays), 2, RoundingMode.HALF_UP);
-        BigDecimal avgUnitCost = totalOutput.compareTo(BigDecimal.ZERO) > 0
-                ? totalCost.divide(totalOutput, 4, RoundingMode.HALF_UP)
+        // 未过滤版本沿用原口径 (总成本 / 总产量); 给 AI 的版本分子分母都只算非保密产品
+        BigDecimal costDenominator = excluded != null ? costedOutput : totalOutput;
+        BigDecimal avgUnitCost = costDenominator.compareTo(BigDecimal.ZERO) > 0
+                ? totalCost.divide(costDenominator, 4, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
         return ProductionAIContext.builder()
@@ -240,6 +286,7 @@ public class AIContextServiceImpl implements AIContextService {
                 .topProductsByOutput(topByOutput)
                 .topProductsByCost(topByCost)
                 .topProductsByCostVariance(topByVariance)
+                .excludedProtectedProductCount(excluded != null ? withheldCount : null)
                 .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
                 .build();
     }
@@ -458,6 +505,10 @@ public class AIContextServiceImpl implements AIContextService {
 
     @Override
     public String formatProductionContextForPrompt(ProductionAIContext context) {
+        // 只接受按工艺保密过滤过的版本 (buildProductionContextForAi); 未过滤的含保密产品成本, 一律不拼进提示词
+        if (context.getExcludedProtectedProductCount() == null) {
+            throw new IllegalStateException("生产上下文未按工艺保密过滤，不能拼进 AI 提示词");
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("## 预计算生产数据（").append(context.getStartDate())
           .append(" 至 ").append(context.getEndDate()).append("）\n\n");
@@ -467,7 +518,11 @@ public class AIContextServiceImpl implements AIContextService {
         sb.append("- 产品种类: ").append(context.getProductCount()).append("\n");
         sb.append("- 日均产量: ").append(context.getAvgDailyOutput()).append("\n");
         sb.append("- 总成本: ¥").append(context.getTotalCost()).append("\n");
-        sb.append("- 平均单位成本: ¥").append(context.getAvgUnitCost()).append("\n\n");
+        sb.append("- 平均单位成本: ¥").append(context.getAvgUnitCost()).append("\n");
+        if (context.getExcludedProtectedProductCount() > 0) {
+            sb.append("- ").append(ProcessSecretLlmCostScope.note(context.getExcludedProtectedProductCount())).append("\n");
+        }
+        sb.append("\n");
 
         if (context.getCostBreakdown() != null && !context.getCostBreakdown().isEmpty()) {
             sb.append("### 成本结构\n");
@@ -483,6 +538,12 @@ public class AIContextServiceImpl implements AIContextService {
         sb.append("|------|------|------------------|----------|\n");
         if (context.getProductionByProduct() != null) {
             for (ProductionAIContext.ProductionWithCostDTO p : context.getProductionByProduct()) {
+                if (Boolean.TRUE.equals(p.getCostWithheld())) {
+                    sb.append("| ").append(p.getProductName())
+                      .append(" | ").append(p.getTotalQuantity()).append(" ").append(p.getUnit())
+                      .append(" | 保密 | 保密 |\n");
+                    continue;
+                }
                 sb.append("| ").append(p.getProductName())
                   .append(" | ").append(p.getTotalQuantity()).append(" ").append(p.getUnit())
                   .append(" | ¥").append(p.getBomUnitCost())
@@ -498,6 +559,11 @@ public class AIContextServiceImpl implements AIContextService {
     public String formatCostContextForPrompt(CostAIContext context) {
         StringBuilder sb = new StringBuilder();
         sb.append("## 产品成本分析: ").append(context.getProductName()).append("\n\n");
+        // 工艺保密产品: 成本一个数都不进提示词 (取不到保密范围时抛出, 调用方不发)
+        if (llmCostScope.forFactory(context.getFactoryId()).coversProduct(context.getProductTypeId())) {
+            sb.append(ProcessSecretLlmCostScope.WITHHELD_REASON).append("。\n");
+            return sb.toString();
+        }
 
         sb.append("### BOM 理论成本\n");
         sb.append("- 总成本: ¥").append(context.getBomTotalCost()).append("/单位\n");

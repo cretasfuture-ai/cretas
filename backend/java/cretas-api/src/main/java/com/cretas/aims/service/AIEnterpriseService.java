@@ -116,6 +116,27 @@ public class AIEnterpriseService {
 
     static final String STREAM_EGRESS_SITE = "cost-analysis-stream";
 
+    /**
+     * 工艺保密 (Steve 10-28: 对 AI 一律不带): 发给模型的批次成本先去掉保密产品; 单测直接 new 本类时
+     * 用「没有保密产品」的默认实例。共享的分析缓存不分调用者, 本厂有保密产品时不读 (见 {@link #cacheReadable})。
+     */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
+    /**
+     * 共享分析缓存 (按工厂存、不看调用者) 只在本厂没有任何保密产品时才读:
+     * 新生成的分析已不含保密产品成本, 但缓存行可能早于本次修复或早于该产品设为保密,
+     * 表里也没有记录生成时保密状态的列 —— 宁可多调一次模型, 不回放可能带保密成本的旧分析。
+     */
+    private boolean cacheReadable(String factoryId) {
+        return !llmCostScope.factoryHasProtected(factoryId);
+    }
+
+    /** 去掉了保密行时在提示词最前面注明「不含 N 个保密产品」。 */
+    private static String withSecretNote(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows rows, String prompt) {
+        return rows.anyExcluded() ? rows.note() + "\n\n" + prompt : prompt;
+    }
+
     @Autowired
     private com.cretas.aims.utils.JwtUtil jwtUtil;
 
@@ -147,8 +168,20 @@ public class AIEnterpriseService {
         AIAnalysisResult cachedResult = null;
 
         try {
+            // 0. 工艺保密: 保密产品的批次成本不发给 AI (追问同样), 也不回放缓存; 判定在读缓存之前
+            boolean cacheReadable = cacheReadable(factoryId);
+            if (!cacheReadable && !"historical".equals(questionType) && request.getBatchId() != null) {
+                com.cretas.aims.entity.ProductionBatch batch = processingService.getBatchById(factoryId, request.getBatchId());
+                if (llmCostScope.isProtectedBatch(factoryId, batch.getProductTypeId(), batch.getProductionPlanId())) {
+                    return MobileDTO.AICostAnalysisResponse.builder()
+                            .success(false)
+                            .errorMessage(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON)
+                            .build();
+                }
+            }
+
             // 1. 检查缓存（default和followup类型）
-            if ("default".equals(questionType) || "followup".equals(questionType)) {
+            if (cacheReadable && ("default".equals(questionType) || "followup".equals(questionType))) {
                 cachedResult = checkCache(factoryId, request.getBatchId(), questionType, request.getQuestion());
                 if (cachedResult != null) {
                     cacheHit = true;
@@ -423,8 +456,12 @@ public class AIEnterpriseService {
     private String callAIForDailyReport(String factoryId, List<Map<String, Object>> batches,
                                         LocalDate reportDate, String promptTemplate) {
         try {
+            // 0. 工艺保密: 保密产品的批次整行不发, 合计只在剩下的批次上累加
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, batches);
+            batches = secretRows.allowed();
+
             // 1. 格式化日数据为AI Prompt
-            String promptMessage = formatDailyReportPrompt(batches, reportDate, promptTemplate);
+            String promptMessage = withSecretNote(secretRows, formatDailyReportPrompt(batches, reportDate, promptTemplate));
 
             // 2. 构建虚拟costData
             Map<String, Object> dailyData = new HashMap<>();
@@ -698,7 +735,7 @@ public class AIEnterpriseService {
 
             // 1. 检查缓存（基于时间范围和维度，仅在无question时）
             String actualDimension = dimension != null ? dimension : "overall";
-            if (question == null || question.trim().isEmpty()) {
+            if ((question == null || question.trim().isEmpty()) && cacheReadable(factoryId)) {
                 Optional<AIAnalysisResult> cachedResult = analysisResultRepository
                         .findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(factoryId, LocalDateTime.now())
                         .stream()
@@ -752,8 +789,19 @@ public class AIEnterpriseService {
                     .build();
             }
 
+            // 3.5 工艺保密: 保密产品的批次整行不发, 合计只在剩下的批次上累加
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, batchesData);
+            batchesData = secretRows.allowed();
+            if (batchesData.isEmpty()) {
+                return MobileDTO.AICostAnalysisResponse.builder()
+                        .success(false)
+                        .errorMessage("该时间段内的批次都是工艺保密产品，成本数据不提供给 AI 分析")
+                        .build();
+            }
+
             // 4. 格式化为AI Prompt
-            String promptMessage = formatTimeRangePrompt(batchesData, startDate, endDate, dimension, question);
+            String promptMessage = withSecretNote(secretRows,
+                    formatTimeRangePrompt(batchesData, startDate, endDate, dimension, question));
 
             // 5. 调用AI分析
             Map<String, Object> costData = new java.util.HashMap<>();
@@ -874,10 +922,10 @@ public class AIEnterpriseService {
                         .name("progress")
                         .data("{\"type\":\"progress\",\"message\":\"正在获取生产数据...\"}"));
 
-                List<Map<String, Object>> batchesData = processingService
+                List<Map<String, Object>> fetchedBatches = processingService
                         .getTimeRangeBatchesCostAnalysis(factoryId, startDate, endDate);
 
-                if (batchesData.isEmpty()) {
+                if (fetchedBatches.isEmpty()) {
                     // 无数据时返回友好提示，而不是错误
                     String noDataMessage = String.format(
                         "在 %s 至 %s 期间，系统未检索到任何生产批次记录。\n\n" +
@@ -902,12 +950,23 @@ public class AIEnterpriseService {
                     return;
                 }
 
+                // 工艺保密: 保密产品的批次整行不发 (提示词和随附的结构化数据都不带), 合计只在剩下的批次上累加
+                com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, fetchedBatches);
+                List<Map<String, Object>> batchesData = secretRows.allowed();
+                if (batchesData.isEmpty()) {
+                    emitter.send(SseEmitter.event().name("error").data(Map.of(
+                            "type", "error", "message", "该时间段内的批次都是工艺保密产品，成本数据不提供给 AI 分析")));
+                    emitter.complete();
+                    return;
+                }
+
                 emitter.send(SseEmitter.event()
                         .name("progress")
                         .data("{\"type\":\"progress\",\"message\":\"获取到 " + batchesData.size() + " 个批次数据\"}"));
 
                 // 4. 格式化 Prompt (使用精简版以减少Token，加速AI响应)
-                String promptMessage = formatCompactTimeRangePrompt(batchesData, startDate, endDate, dimension, question);
+                String promptMessage = withSecretNote(secretRows,
+                        formatCompactTimeRangePrompt(batchesData, startDate, endDate, dimension, question));
 
                 emitter.send(SseEmitter.event()
                         .name("progress")
@@ -1447,7 +1506,7 @@ public class AIEnterpriseService {
             }
 
             // 2. 检查缓存（仅在无question时）
-            if (question == null || question.trim().isEmpty()) {
+            if ((question == null || question.trim().isEmpty()) && cacheReadable(factoryId)) {
                 String cacheKey = String.join(",", batchIds);
                 Optional<AIAnalysisResult> cachedResult = analysisResultRepository
                         .findByFactoryIdAndExpiresAtAfterOrderByCreatedAtDesc(factoryId, LocalDateTime.now())
@@ -1466,11 +1525,21 @@ public class AIEnterpriseService {
             checkQuotaOrThrow(factoryId, "comparison");
 
             // 4. 获取批次对比数据
-            List<Map<String, Object>> batchesData = processingService
+            List<Map<String, Object>> fetchedBatches = processingService
                     .getComparativeBatchesCostAnalysis(factoryId, batchIds);
 
+            // 4.5 工艺保密: 保密产品的批次不参与对比 (成本不发给 AI); 剩下不足 2 个就不对比
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, fetchedBatches);
+            List<Map<String, Object>> batchesData = secretRows.allowed();
+            if (batchesData.size() < 2) {
+                return MobileDTO.AICostAnalysisResponse.builder()
+                        .success(false)
+                        .errorMessage("所选批次里有工艺保密产品，成本数据不提供给 AI；剩下的批次不足 2 个，无法对比")
+                        .build();
+            }
+
             // 5. 格式化为AI Prompt（表格格式）
-            String promptMessage = formatComparisonPrompt(batchesData, question);
+            String promptMessage = withSecretNote(secretRows, formatComparisonPrompt(batchesData, question));
 
             // 6. 构造虚拟costData用于调用AI (使用第一个批次ID作为主体)
             Map<String, Object> virtualCostData = new java.util.HashMap<>();
@@ -1478,8 +1547,9 @@ public class AIEnterpriseService {
             virtualCostData.put("type", "comparison");
 
             // 7. 调用AI分析
+            Object firstBatchId = batchesData.get(0).get("batchId");
             Map<String, Object> aiResult = basicAIService.analyzeCost(
-                    factoryId, userId, batchIds.get(0), virtualCostData,
+                    factoryId, userId, firstBatchId != null ? firstBatchId.toString() : batchIds.get(0), virtualCostData,
                     null, promptMessage, true, 50);
 
             String aiAnalysis = (String) aiResult.get("aiAnalysis");
@@ -1781,8 +1851,13 @@ public class AIEnterpriseService {
                 return "该时间段内暂无生产数据";
             }
 
+            // 工艺保密: 保密产品的批次整行不发, 合计只在剩下的批次上累加
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, historicalBatches);
+            historicalBatches = secretRows.allowed();
+
             // 2. 格式化为AI Prompt
-            String promptMessage = formatHistoricalReportPrompt(historicalBatches, startDate, endDate);
+            String promptMessage = withSecretNote(secretRows,
+                    formatHistoricalReportPrompt(historicalBatches, startDate, endDate));
 
             // 3. 构建数据
             Map<String, Object> historicalData = new HashMap<>();
@@ -1816,8 +1891,12 @@ public class AIEnterpriseService {
     private String callAIForWeeklyReport(String factoryId, List<Map<String, Object>> batches,
                                         LocalDate weekStart, LocalDate weekEnd) {
         try {
+            // 0. 工艺保密: 保密产品的批次整行不发, 合计只在剩下的批次上累加
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, batches);
+            batches = secretRows.allowed();
+
             // 1. 格式化周数据为AI Prompt
-            String promptMessage = formatWeeklyReportPrompt(batches, weekStart, weekEnd);
+            String promptMessage = withSecretNote(secretRows, formatWeeklyReportPrompt(batches, weekStart, weekEnd));
 
             // 2. 构建虚拟costData
             Map<String, Object> weeklyData = new HashMap<>();
@@ -1855,8 +1934,12 @@ public class AIEnterpriseService {
     private String callAIForMonthlyReport(String factoryId, List<Map<String, Object>> batches,
                                          LocalDate monthStart, LocalDate monthEnd) {
         try {
+            // 0. 工艺保密: 保密产品的批次整行不发, 合计只在剩下的批次上累加
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, batches);
+            batches = secretRows.allowed();
+
             // 1. 格式化月数据为AI Prompt
-            String promptMessage = formatMonthlyReportPrompt(batches, monthStart, monthEnd);
+            String promptMessage = withSecretNote(secretRows, formatMonthlyReportPrompt(batches, monthStart, monthEnd));
 
             // 2. 构建虚拟costData
             Map<String, Object> monthlyData = new HashMap<>();
