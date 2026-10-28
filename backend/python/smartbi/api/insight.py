@@ -110,7 +110,8 @@ async def generate_insights(request: InsightRequest):
             insights=insights,
             totalGenerated=result.get("totalGenerated"),
             method=result.get("method"),
-            message=result.get("message"),
+            # 失败时 message 也带上说明 (复审 Low 3: 前端有的只读 message)
+            message=result.get("message") or result.get("error"),
             error=result.get("error")
         )
 
@@ -189,11 +190,14 @@ async def analyze_metrics(metrics: List[dict]):
             max_insights=5
         )
 
+        # 外发被拦等失败的说明原样带出 (复审 Low 3, 2026-10-29): 以前丢掉 error, 前端只看到空结果
         return InsightResponse(
             success=result.get("success", False),
             insights=[Insight(**i) for i in result.get("insights", [])],
             totalGenerated=result.get("totalGenerated"),
-            method=result.get("method")
+            method=result.get("method"),
+            message=result.get("message") or result.get("error"),
+            error=result.get("error"),
         )
 
     except (HTTPException, ApiException):

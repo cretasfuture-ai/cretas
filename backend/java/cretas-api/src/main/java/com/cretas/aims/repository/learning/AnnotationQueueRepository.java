@@ -109,9 +109,11 @@ public interface AnnotationQueueRepository extends JpaRepository<AnnotationQueue
     // ==================== Updates ====================
 
     /**
-     * Assign to annotator
+     * Assign to annotator.
+     * 只领还是 PENDING 的; 执行前把待写的改动刷库、执行后清空持久化上下文 —— 调用方手里的旧实体不会在提交时
+     * 把别人刚领走的行写回去 (复审 M2, 2026-10-29)。
      */
-    @Modifying
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE AnnotationQueue a " +
            "SET a.assignedTo = :annotator, " +
            "    a.assignedAt = :assignedAt, " +
@@ -125,6 +127,10 @@ public interface AnnotationQueueRepository extends JpaRepository<AnnotationQueue
             @Param("assignedAt") LocalDateTime assignedAt,
             @Param("dueAt") LocalDateTime dueAt);
 
+    /** 这一次真正领到的行: 本厂、这批 ID、领给这个人、这个领取时间 (复审 M2)。 */
+    List<AnnotationQueue> findByIdInAndFactoryIdAndAssignedToAndAssignedAt(
+            List<Long> ids, String factoryId, String assignedTo, LocalDateTime assignedAt);
+
     /**
      * Complete annotation
      */
@@ -135,9 +141,10 @@ public interface AnnotationQueueRepository extends JpaRepository<AnnotationQueue
            "    a.annotatedAt = :annotatedAt, " +
            "    a.annotationNotes = :notes, " +
            "    a.annotationStatus = 'COMPLETED' " +
-           "WHERE a.id = :id")
+           "WHERE a.id = :id AND a.factoryId = :factoryId")
     int completeAnnotation(
             @Param("id") Long id,
+            @Param("factoryId") String factoryId,
             @Param("intentCode") String intentCode,
             @Param("annotator") String annotator,
             @Param("annotatedAt") LocalDateTime annotatedAt,

@@ -222,7 +222,11 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
     public FieldMappingWithChartRole analyzeAndSave(String columnName, String dataType,
                                                      List<Object> sampleValues, int uniqueValueCount,
                                                      String factoryId) {
-        FieldMappingWithChartRole result = analyzeField(columnName, dataType, sampleValues, uniqueValueCount);
+        FieldMappingWithChartRole result;
+        // 列名 / 样本值外发时按上传所属工厂脱敏 (平台账号替某厂分析时也按那家, Steve 2026-10-29)
+        try (var egressFactory = LlmEgressGuard.analysing(factoryId)) {
+            result = analyzeField(columnName, dataType, sampleValues, uniqueValueCount);
+        }
 
         // 高置信度时自动保存
         if (result.getConfidence() != null && result.getConfidence() >= CONFIDENCE_THRESHOLD_SAVE) {
@@ -234,7 +238,11 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
 
     @Override
     public List<FieldMappingWithChartRole> analyzeAndSaveAll(List<FieldInfo> fieldInfoList, String factoryId) {
-        List<FieldMappingWithChartRole> results = analyzeFields(fieldInfoList);
+        List<FieldMappingWithChartRole> results;
+        // 列名 / 样本值外发时按上传所属工厂脱敏 (平台账号替某厂分析时也按那家, Steve 2026-10-29)
+        try (var egressFactory = LlmEgressGuard.analysing(factoryId)) {
+            results = analyzeFields(fieldInfoList);
+        }
 
         // 批量保存高置信度结果
         for (FieldMappingWithChartRole result : results) {
@@ -908,6 +916,13 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
      * 保存映射结果到数据库
      */
     private void saveToDatabase(FieldMappingWithChartRole mapping, String factoryId) {
+        // 没有工厂的「自动学到」的映射会写成全局字典行 (所有工厂的列名识别都用): 列名可能就是某家的保密产品名,
+        // 不写 (复审 L1, Steve 2026-10-29)。全局字典只由人工维护。
+        if (factoryId == null || factoryId.isBlank()) {
+            log.warn("[LLM Field Mapping] 没有工厂, 不把自动分析的映射写进全局字典: field={}",
+                    mapping.getStandardField());
+            return;
+        }
         if (dictionaryRepository == null) {
             log.debug("[LLM Field Mapping] 数据库不可用，跳过保存");
             return;

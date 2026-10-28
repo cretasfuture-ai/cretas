@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 # 2026-07-23 审计: intent_match_records.query_embedding_vec 全库 0 行非空 —
 # Java 侧从未写入该列 (persistence 一直是 "future"), 那一臂 UNION 每次白扫
 # 全表。删除该臂; 若未来 Java 补了写入端, 再恢复 UNION 并注明写入方。
+# 2026-10-29 (Steve, 工艺保密): 全局 (NULL 工厂) 行只取人工预置的 MANUAL —— 系统从某家工厂学来的
+# 无工厂行 (历史上 ExpressionLearner 写过 SEMANTIC_HIGH) 不进别家的检索 (与 Java LearningContentRules.servable 同一判据)。
 RAG_SQL = """
 SELECT
     expression AS query, intent_code, confidence::real AS confidence, factory_id,
@@ -40,7 +42,7 @@ SELECT
 FROM ai_learned_expressions
 WHERE embedding_vec IS NOT NULL
   AND is_active = true
-  AND (factory_id = $2 OR factory_id IS NULL)
+  AND (factory_id = $2 OR (factory_id IS NULL AND source_type = 'MANUAL'))
 ORDER BY similarity DESC
 LIMIT $3
 """

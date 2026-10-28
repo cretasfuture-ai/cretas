@@ -49,9 +49,11 @@ public interface IntentConfigManagementService {
 
     AIIntentConfig updateIntent(AIIntentConfig intentConfig);
 
-    void deleteIntent(String intentCode);
+    /** 只删 factoryId 这一家的行 (null = 平台级行); 不按代码跨厂取 (复审 H1)。 */
+    void deleteIntent(String factoryId, String intentCode);
 
-    void setIntentActive(String intentCode, boolean active);
+    /** 只改 factoryId 这一家的行 (null = 平台级行); 不按代码跨厂取 (复审 H1)。 */
+    void setIntentActive(String factoryId, String intentCode, boolean active);
 
     // ==================== Permission & Quota ====================
 

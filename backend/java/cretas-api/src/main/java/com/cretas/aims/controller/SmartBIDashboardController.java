@@ -102,7 +102,7 @@ public class SmartBIDashboardController {
         }
 
         try {
-            AdaptiveChartResponse response = adaptiveChartGenerator.generateAdaptive(request.getUploadId(), request);
+            AdaptiveChartResponse response = adaptiveChartGenerator.generateAdaptive(factoryId, request.getUploadId(), request);
             String message = response.getCharts() != null && !response.getCharts().isEmpty()
                     ? String.format("Generated %d charts", response.getCharts().size())
                     : "Chart generation complete";
@@ -137,7 +137,7 @@ public class SmartBIDashboardController {
                     .preferredChartType(chartType)
                     .build();
 
-            AdaptiveChartResponse response = adaptiveChartGenerator.generateAdaptive(uploadId, request);
+            AdaptiveChartResponse response = adaptiveChartGenerator.generateAdaptive(factoryId, uploadId, request);
 
             if (response.getCharts() != null && !response.getCharts().isEmpty()) {
                 return ResponseEntity.ok(ApiResponse.success("Chart generated", response.getCharts().get(0)));

@@ -151,9 +151,9 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
 
     @Override
     @Transactional
-    public void deleteIntent(String intentCode) {
-        log.debug("deleteIntent(intentCode={})", intentCode);
-        intentRepository.findByIntentCodeAndDeletedAtIsNull(intentCode).ifPresent(config -> {
+    public void deleteIntent(String factoryId, String intentCode) {
+        log.debug("deleteIntent(factoryId={}, intentCode={})", factoryId, intentCode);
+        ownRow(factoryId, intentCode).ifPresent(config -> {
             config.setDeletedAt(LocalDateTime.now());
             intentRepository.save(config);
         });
@@ -163,12 +163,18 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Transactional
     @CacheEvict(value = {"allIntents", "intentsByCategory", "intentCategories", "intentsBySensitivity",
             "allIntents_legacy", "intentsByCategory_legacy", "intentCategories_legacy"}, allEntries = true)
-    public void setIntentActive(String intentCode, boolean active) {
-        AIIntentConfig existing = intentRepository
-                .findByIntentCodeAndDeletedAtIsNull(intentCode)
-                .orElseThrow(() -> new IllegalArgumentException("意图配置不存在: " + intentCode));
+    public void setIntentActive(String factoryId, String intentCode, boolean active) {
+        AIIntentConfig existing = ownRow(factoryId, intentCode)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404,
+                        com.cretas.aims.service.intent.IntentConfigWriteGuard.NOT_OWNED_MESSAGE));
         existing.setIsActive(active);
         intentRepository.save(existing);
+    }
+
+    /** factoryId 这一家自己的行 (null = 平台级行); 不退回平台级 / 别厂的同代码行 (复审 H1)。 */
+    private Optional<AIIntentConfig> ownRow(String factoryId, String intentCode) {
+        return intentRepository.findByFactoryIdAndIntentCode(factoryId, intentCode)
+                .filter(c -> factoryId == null ? c.getFactoryId() == null : factoryId.equals(c.getFactoryId()));
     }
 
     // ==================== Permission & Quota ====================

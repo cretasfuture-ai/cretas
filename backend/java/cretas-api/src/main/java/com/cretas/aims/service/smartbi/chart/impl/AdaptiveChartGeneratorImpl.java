@@ -69,12 +69,18 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
     private static final int DEFAULT_MAX_CHARTS = 3;
 
     @Override
-    public AdaptiveChartResponse generateAdaptive(Long uploadId, AdaptiveChartRequest request) {
-        log.info("Starting adaptive chart generation for uploadId: {}", uploadId);
+    public AdaptiveChartResponse generateAdaptive(String factoryId, Long uploadId, AdaptiveChartRequest request) {
+        log.info("Starting adaptive chart generation for factory {}, uploadId: {}", factoryId, uploadId);
 
-        // 1. Load upload data
-        SmartBiExcelUpload upload = uploadRepository.findById(uploadId)
-                .orElseThrow(() -> new RuntimeException("Upload not found: " + uploadId));
+        // 1. Load upload data —— 只认路径上这家工厂的上传 (Steve 2026-10-29: 以前按 id 取, 别厂的上传也能拿来出图,
+        //    并且样本行按调用者自己的工厂脱敏, 那家的保密产品名原样发给模型)。别厂 / 不存在一律按不存在处理。
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new com.cretas.aims.exception.BusinessException(400, "缺少工厂");
+        }
+        SmartBiExcelUpload upload = uploadRepository.findByIdAndFactoryId(uploadId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "上传记录不存在"));
+        // 外发脱敏按上传所属工厂 (就是路径上的工厂)
+        String dataFactoryId = upload.getFactoryId() != null ? upload.getFactoryId() : factoryId;
 
         List<Map<String, Object>> data = parseUploadData(upload);
         List<String> headers = parseHeaders(upload);
@@ -97,7 +103,7 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
         // 3. Evaluate sufficiency (if requested)
         ChartSufficiencyResult evaluation = null;
         if (request.isEvaluateFirst()) {
-            evaluation = sufficiencyEvaluator.evaluateInitial(data, features);
+            evaluation = sufficiencyEvaluator.evaluateInitial(dataFactoryId, data, features);
             log.debug("Sufficiency evaluation: sufficient={}, score={}",
                     evaluation.isSufficient(), evaluation.getSufficiencyScore());
         }
@@ -105,7 +111,7 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
         // 4. Generate optimal charts
         int maxCharts = request.getMaxCharts() != null ? request.getMaxCharts() : DEFAULT_MAX_CHARTS;
         List<AdaptiveChartResponse.GeneratedChart> charts =
-                generateOptimalCharts(data, features, evaluation, maxCharts);
+                generateOptimalCharts(dataFactoryId, data, features, evaluation, maxCharts);
 
         // 5. Optional: Fuse charts
         if (request.isFusionEnabled() && charts.size() > 1) {
@@ -133,6 +139,7 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
 
     @Override
     public List<AdaptiveChartResponse.GeneratedChart> generateOptimalCharts(
+            String factoryId,
             List<Map<String, Object>> data,
             DataFeatures features,
             ChartSufficiencyResult evaluation,
@@ -156,7 +163,7 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
 
             try {
                 AdaptiveChartResponse.GeneratedChart chart =
-                        generateChart(data, features, suggestion.getType(), suggestion.getPurpose());
+                        generateChart(factoryId, data, features, suggestion.getType(), suggestion.getPurpose());
 
                 if (chart != null) {
                     charts.add(chart);
@@ -173,6 +180,7 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
 
     @Override
     public AdaptiveChartResponse.GeneratedChart generateChart(
+            String factoryId,
             List<Map<String, Object>> data,
             DataFeatures features,
             String chartType,
@@ -183,7 +191,7 @@ public class AdaptiveChartGeneratorImpl implements AdaptiveChartGenerator {
             String rawPrompt = buildChartGenerationPrompt(data, features, chartType, purpose);
             // 样本行里的客户 / 人名 / 电话: 按列名从行里认出来换代号或不发; 图表配置解析后再换回真名
             // 只有前 MAX_SAMPLE_ROWS 行进了提示词, 就只拿这几行认名字 (整份上传可能上万行)
-            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, null,
+            LlmEgressRedactor.Result redacted = llmEgressGuard.textsWithRecord(EGRESS_SITE, factoryId,
                     data.subList(0, Math.min(MAX_SAMPLE_ROWS, data.size())), Map.of(), List.of(rawPrompt));
             if (redacted.refused()) {
                 return null;

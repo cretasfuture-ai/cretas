@@ -61,6 +61,17 @@ from smartbi.services.llm_guard import (
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
 
+
+def _stream_failure_message(err: BaseException) -> str:
+    """流式对话失败时给用户的话: 外发被拦 (没有工厂 / 平台账号 / 脱敏失败) 讲清楚没发出, 其余照旧
+    (复审 Low 3, Steve 2026-10-29)。"""
+    from common.llm_client import EgressRedactionError, egress_refusal_message
+    if isinstance(err, EgressRedactionError):
+        return egress_refusal_message(err)
+    return "AI对话处理失败，请稍后重试"
+
+
+
 _CHAT_PENDING_BG_TASKS: set[asyncio.Task] = set()
 
 
@@ -1792,6 +1803,13 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         )
                     return response
                 except Exception as e:
+                    from common.llm_client import EgressRedactionError, egress_refusal_message
+                    if isinstance(e, EgressRedactionError):
+                        # 外发被拦 (没有工厂 / 脱敏失败): 明说没发出, 不落到「暂无可分析的数据」(复审 H3)
+                        msg = egress_refusal_message(e)
+                        return GeneralAnalysisResponse(
+                            success=False, error=msg, answer=msg, insights=[], charts=[],
+                            processing_time_ms=int((time.time() - start_time) * 1000))
                     logger.warning(f"Direct LLM analysis failed: {e}")
                     # Fall through to no-data response
 
@@ -3464,6 +3482,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             )
                         return
                     except Exception as e:
+                        from common.llm_client import EgressRedactionError, egress_refusal_message
+                        if isinstance(e, EgressRedactionError):
+                            # 外发被拦: 明说没发出 (复审 H3)
+                            msg = egress_refusal_message(e)
+                            yield _sse_event("done", {"success": False, "error": msg, "answer": msg,
+                                                       "charts": []})
+                            return
                         logger.warning(f"[stream] Direct LLM failed: {e}")
 
                 yield _sse_event("done", {
@@ -4223,7 +4248,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
         except Exception as e:
             logger.error(f"[stream] General analysis stream failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4417,7 +4442,7 @@ async def drill_down_stream(request: DrillDownRequest, http_request: Request):
 
         except Exception as e:
             logger.error(f"[drill-down-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4548,7 +4573,7 @@ KPI统计: {stats_text}
 
         except Exception as e:
             logger.error(f"[root-cause-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4650,7 +4675,7 @@ async def benchmark_stream(request: BenchmarkRequest, http_request: Request):
 
         except Exception as e:
             logger.error(f"[benchmark-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4760,7 +4785,7 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
 
         except Exception as e:
             logger.error(f"[multi-dimension-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),

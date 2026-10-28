@@ -252,6 +252,16 @@ public interface ActiveLearningService {
     void applySuggestion(Long suggestionId, String applier);
 
     /**
+     * 按 (建议 ID, 路径工厂) 审批 / 驳回 / 应用: 建议不属于这家工厂按不存在处理 (404)。
+     * HTTP 入口只能调这三个; 不带工厂的版本只给服务端内部 (定时任务) 用 (复审 M-B, 2026-10-29)。
+     */
+    void approveSuggestion(String factoryId, Long suggestionId, String reviewer, String notes);
+
+    void rejectSuggestion(String factoryId, Long suggestionId, String reviewer, String notes);
+
+    void applySuggestion(String factoryId, Long suggestionId, String applier);
+
+    /**
      * Get all APPROVED suggestions for a factory, ready to be applied
      *
      * @param factoryId Factory ID
@@ -319,7 +329,7 @@ public interface ActiveLearningService {
      * @param annotator Annotator username
      * @param notes Notes
      */
-    void completeAnnotation(Long annotationId, String intentCode, String annotator, String notes);
+    void completeAnnotation(String factoryId, Long annotationId, String intentCode, String annotator, String notes);
 
     // ==================== Cleanup Tasks ====================
 

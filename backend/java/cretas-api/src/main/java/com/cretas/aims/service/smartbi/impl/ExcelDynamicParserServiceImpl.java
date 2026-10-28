@@ -305,6 +305,9 @@ public class ExcelDynamicParserServiceImpl implements ExcelDynamicParserService 
             }
 
             // 4. 映射字段
+            // ⚠️ request.getFactoryId() 决定字段映射写进哪家的字典、外发按哪家脱敏: 调用方必须填服务端认定的工厂
+            // (路径 / 登录身份), 不能透传客户端请求体 (复审 L1, 2026-10-29; 当前 src/main 里没有调用方)。
+            // 为空时映射不落库 (LLMFieldMappingServiceImpl.saveToDatabase 拒绝写全局行)。
             List<FieldMappingResult> fieldMappings = mapFields(headers, dataFeatures, request.getFactoryId());
 
             // 5. 检查字段（推荐字段，非强制）

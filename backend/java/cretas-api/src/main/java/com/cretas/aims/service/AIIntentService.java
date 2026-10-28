@@ -402,17 +402,21 @@ public interface AIIntentService {
     /**
      * 删除意图配置 (软删除)
      *
+     * @param factoryId 要操作的行的工厂 (服务端认定; null = 平台级行, 调用方须先确认是平台账号)。
+     *                  只改这一家自己的行, 不按意图代码跨厂取 (复审 H1, 2026-10-29)
      * @param intentCode 意图代码
      */
-    void deleteIntent(String intentCode);
+    void deleteIntent(String factoryId, String intentCode);
 
     /**
      * 启用/禁用意图
      *
      * @param intentCode 意图代码
      * @param active 是否启用
+     * @param factoryId 要操作的行的工厂 (服务端认定; null = 平台级行, 调用方须先确认是平台账号)。
+     *                  只改这一家自己的行, 不按意图代码跨厂取 (复审 H1, 2026-10-29)
      */
-    void setIntentActive(String intentCode, boolean active);
+    void setIntentActive(String factoryId, String intentCode, boolean active);
 
     // ==================== 缓存管理 ====================
 

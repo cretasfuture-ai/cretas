@@ -30,6 +30,16 @@ public interface LongTextHandler {
     String processForIntent(String input);
 
     /**
+     * 同 {@link #processForIntent(String)}, 摘要外发时按 {@code factoryId} (服务端认定的本次识别工厂) 的
+     * 工艺保密产品名脱敏 —— 平台账号替某厂识别时也按那家 (Steve 2026-10-29)。
+     */
+    default String processForIntent(String input, String factoryId) {
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return processForIntent(input);
+        }
+    }
+
+    /**
      * 针对意图分类场景的摘要方法
      *
      * 使用 qwen-turbo（correctionModel）快速摘要：

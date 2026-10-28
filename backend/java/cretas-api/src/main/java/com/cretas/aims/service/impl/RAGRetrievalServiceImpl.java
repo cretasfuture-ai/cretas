@@ -73,6 +73,22 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
         this.requestScopedCache = requestScopedCache;
     }
 
+    /**
+     * 读已学说法只走这两处: 系统学来的全局行 (空 / "*" 且不是人工预置) 来自某一家工厂,
+     * 不给任何工厂当检索结果 (Steve 2026-10-29, {@link com.cretas.aims.service.consent.LearningContentRules#servable})。
+     */
+    private List<LearnedExpression> servableActiveByFactory(String factoryId) {
+        return expressionRepository.findActiveByFactory(factoryId).stream()
+                .filter(com.cretas.aims.service.consent.LearningContentRules::servable)
+                .collect(Collectors.toList());
+    }
+
+    private List<LearnedExpression> servableByHash(String inputHash, String factoryId) {
+        return expressionRepository.findByExpressionHash(inputHash, factoryId).stream()
+                .filter(com.cretas.aims.service.consent.LearningContentRules::servable)
+                .collect(Collectors.toList());
+    }
+
     @Override
     public List<RAGCandidate> retrieveSimilarCases(String factoryId, String userInput, int topK, double minSimilarity) {
         if (!embeddingClient.isAvailable()) {
@@ -130,7 +146,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
             List<RAGExampleDTO> examples = new ArrayList<>();
 
             // 1. 优先从已验证的 LearnedExpression 获取
-            List<LearnedExpression> verifiedExpressions = expressionRepository.findActiveByFactory(factoryId)
+            List<LearnedExpression> verifiedExpressions = servableActiveByFactory(factoryId)
                     .stream()
                     .filter(e -> Boolean.TRUE.equals(e.getIsVerified()) && e.hasEmbedding())
                     .collect(Collectors.toList());
@@ -154,7 +170,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
 
             // 2. 如果已验证的不够，补充高置信度的未验证表达
             if (examples.size() < count) {
-                List<LearnedExpression> unverifiedExpressions = expressionRepository.findActiveByFactory(factoryId)
+                List<LearnedExpression> unverifiedExpressions = servableActiveByFactory(factoryId)
                         .stream()
                         .filter(e -> !Boolean.TRUE.equals(e.getIsVerified()) && e.hasEmbedding())
                         .filter(e -> e.getHitCount() != null && e.getHitCount() >= 3) // 至少命中3次
@@ -208,7 +224,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
     public Optional<RAGCandidate> findDirectMatch(String factoryId, String userInput, double minConfidence) {
         // 1. 首先检查 LearnedExpression 精确匹配 (hash)
         String inputHash = LearnedExpression.computeHash(userInput);
-        List<LearnedExpression> exactMatches = expressionRepository.findByExpressionHash(inputHash, factoryId);
+        List<LearnedExpression> exactMatches = servableByHash(inputHash, factoryId);
 
         if (!exactMatches.isEmpty()) {
             LearnedExpression match = exactMatches.get(0);
@@ -233,7 +249,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
             float[] inputEmbedding = requestScopedCache.getOrCompute(userInput);
 
             // 检查高相似度的已验证表达
-            List<LearnedExpression> expressions = expressionRepository.findActiveByFactory(factoryId)
+            List<LearnedExpression> expressions = servableActiveByFactory(factoryId)
                     .stream()
                     .filter(e -> Boolean.TRUE.equals(e.getIsVerified()) && e.hasEmbedding())
                     .collect(Collectors.toList());
@@ -267,7 +283,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
     public boolean hasRelevantHistory(String factoryId, String userInput, double threshold) {
         // 1. 检查精确匹配
         String inputHash = LearnedExpression.computeHash(userInput);
-        List<LearnedExpression> exactMatches = expressionRepository.findByExpressionHash(inputHash, factoryId);
+        List<LearnedExpression> exactMatches = servableByHash(inputHash, factoryId);
         if (!exactMatches.isEmpty()) {
             return true;
         }
@@ -276,7 +292,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
         if (embeddingClient.isAvailable()) {
             float[] inputEmbedding = requestScopedCache.getOrCompute(userInput);
 
-            List<LearnedExpression> expressions = expressionRepository.findActiveByFactory(factoryId)
+            List<LearnedExpression> expressions = servableActiveByFactory(factoryId)
                     .stream()
                     .filter(LearnedExpression::hasEmbedding)
                     .limit(100) // 限制检查数量
@@ -304,7 +320,7 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
     private List<RAGCandidate> retrieveFromExpressions(String factoryId, float[] inputEmbedding, double minSimilarity) {
         List<RAGCandidate> candidates = new ArrayList<>();
 
-        List<LearnedExpression> expressions = expressionRepository.findActiveByFactory(factoryId)
+        List<LearnedExpression> expressions = servableActiveByFactory(factoryId)
                 .stream()
                 .filter(LearnedExpression::hasEmbedding)
                 .collect(Collectors.toList());
@@ -432,8 +448,10 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
             return config.get().getDescription();
         }
 
-        // 再尝试全局意图
-        config = intentConfigRepository.findByIntentCode(intentCode);
+        // 再尝试平台级意图 (factory_id 为空的行) —— 以前按代码不分工厂取, 会拿到别厂同代码意图的描述
+        // (复审 L2, 2026-10-29)
+        config = intentConfigRepository.findByFactoryIdAndIntentCode(null, intentCode)
+                .filter(c -> c.getFactoryId() == null);
         if (config.isPresent()) {
             return config.get().getDescription();
         }

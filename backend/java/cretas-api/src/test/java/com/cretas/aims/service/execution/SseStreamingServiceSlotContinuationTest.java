@@ -265,7 +265,7 @@ class SseStreamingServiceSlotContinuationTest {
 
         assertThat(result.getStatus()).as("抽到了就不追问").isEqualTo("WRITE_CONFIRM_REQUIRED");
         assertThat(h.sessions).as("没有建缺参会话").isEmpty();
-        verify(h.toolDispatchService).extractParametersWithLLM(eq("开始1827号工序任务"), eq(h.startTool), anyMap());
+        verify(h.toolDispatchService).extractParametersWithLLM(eq(F), eq("开始1827号工序任务"), eq(h.startTool), anyMap());
         ArgumentCaptor<IntentExecuteRequest> sent = ArgumentCaptor.forClass(IntentExecuteRequest.class);
         verify(h.toolDispatchService).executeWithTool(eq(h.startTool), eq(F), sent.capture(), eq(h.start),
                 eq(USER), eq(ROLE), any());
@@ -298,7 +298,7 @@ class SseStreamingServiceSlotContinuationTest {
 
         h.execute(IntentExecuteRequest.builder().userInput("今天我的工序任务").build());
 
-        verify(h.toolDispatchService, never()).extractParametersWithLLM(anyString(), any(), anyMap());
+        verify(h.toolDispatchService, never()).extractParametersWithLLM(any(), anyString(), any(), anyMap());
         verify(h.toolDispatchService, times(1)).executeWithTool(eq(h.queryTool), eq(F), any(), eq(h.query),
                 eq(USER), eq(ROLE), any());
     }
@@ -592,7 +592,7 @@ class SseStreamingServiceSlotContinuationTest {
         assertThat(r.getStatus()).isEqualTo("NO_PERMISSION");
         assertThat(r.getMessage()).contains("创建生产批次").contains("还没有对操作员开放");
         assertThat(h.sessions).as("不追问参数 —— 没有建缺参会话").isEmpty();
-        verify(h.toolDispatchService, never()).extractParametersWithLLM(anyString(), any(), anyMap());
+        verify(h.toolDispatchService, never()).extractParametersWithLLM(any(), anyString(), any(), anyMap());
         verify(h.toolDispatchService, never()).executeWithTool(eq(h.batchTool), any(), any(), any(), any(), any(), any());
     }
 
@@ -606,7 +606,7 @@ class SseStreamingServiceSlotContinuationTest {
         IntentExecuteResponse r = h.execute(IntentExecuteRequest.builder().userInput("帮我创建一个生产批次").build());
 
         assertThat(r.getStatus()).as("开放后照常走: 缺参就问, 不缺就到写确认").isIn("NEED_MORE_INFO", "WRITE_CONFIRM_REQUIRED");
-        verify(h.toolDispatchService).extractParametersWithLLM(anyString(), eq(h.batchTool), anyMap());
+        verify(h.toolDispatchService).extractParametersWithLLM(eq(F), anyString(), eq(h.batchTool), anyMap());
     }
 
     /** 预览那一侧: 真 ToolDispatchService + 真 MaterialBatchUseTool, 桩掉批次 service / repository / token 签发。 */
@@ -893,7 +893,7 @@ class SseStreamingServiceSlotContinuationTest {
         }
 
         void extracts(String input, ToolExecutor tool, Map<String, Object> extracted) {
-            when(toolDispatchService.extractParametersWithLLM(eq(input), eq(tool), anyMap()))
+            when(toolDispatchService.extractParametersWithLLM(eq(F), eq(input), eq(tool), anyMap()))
                     .thenAnswer(inv -> new HashMap<>(extracted));
         }
 

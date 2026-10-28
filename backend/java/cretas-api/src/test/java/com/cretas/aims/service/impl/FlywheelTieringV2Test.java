@@ -51,15 +51,21 @@ class FlywheelTieringV2Test {
     @BeforeEach
     void setUp() {
         repo = mock(LearnedExpressionRepository.class);
-        // Other deps: all null — tiering/proposal logic doesn't touch them
+        // 训练授权 / 保密产品判断 (2026-10-29 起 learnExpression 先过这道闸, 未注入就不学):
+        // 这里给「已授权、不提保密产品」, 让分层 / 重提议逻辑照常被测; 闸本身见 ExpressionLearningProcessSecretTest
+        com.cretas.aims.service.consent.TrainingConsentService consent =
+                mock(com.cretas.aims.service.consent.TrainingConsentService.class);
+        when(consent.status(anyString()))
+                .thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.AUTHORIZED);
+        // Other deps: null — tiering/proposal logic doesn't touch them
         service = new ExpressionLearningServiceImpl(
                 repo,
                 null,    // TrainingSampleRepository — not needed for tiering tests
                 null,    // EmbeddingClient
                 null,    // RequestScopedEmbeddingCache
                 null,    // IntentEmbeddingCacheService
-                null,    // TrainingConsentService
-                null     // ProcessSecretSampleFilter
+                consent, // TrainingConsentService
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class) // 不提保密产品
         );
 
         // #553 守卫: inject a default "allow-promote" configService mock so that existing

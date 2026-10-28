@@ -11,6 +11,9 @@ from unittest import mock
 
 import pytest
 
+# 2026-10-29: 没有工厂上下文的外发会被拒绝; 本文件测路由 / 出口行为, 按本厂请求跑 (见 conftest)
+pytestmark = pytest.mark.usefixtures("egress_as_factory_request")
+
 from common import llm_router
 from common.llm_router import SLOT
 

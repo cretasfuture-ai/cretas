@@ -74,16 +74,18 @@ public interface ParameterExtractionLearningService {
     /**
      * 删除规则
      *
+     * @param factoryId 路径上的工厂: 只删这一家的规则, 别厂的规则 404 (复审 M2, 2026-10-29)
      * @param ruleId 规则ID
      */
-    void deleteRule(String ruleId);
+    void deleteRule(String factoryId, String ruleId);
 
     /**
      * 清理低成功率的规则
      *
      * @param minHitCount 最小命中次数
      * @param maxSuccessRate 最大成功率阈值
+     * @param factoryId 路径上的工厂: 只清这一家的规则 (复审 M2)
      * @return 清理的规则数量
      */
-    int cleanupLowSuccessRules(int minHitCount, double maxSuccessRate);
+    int cleanupLowSuccessRules(String factoryId, int minHitCount, double maxSuccessRate);
 }

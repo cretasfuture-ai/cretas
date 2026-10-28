@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,42 @@ WHERE created_at > NOW() - INTERVAL '1 hour'
 # ($3=NULL) match ONLY the global (factory_id IS NULL) row. PostgreSQL's
 # `IS NOT DISTINCT FROM` treats NULL=NULL as true and NULL=non-NULL as false,
 # preventing tenant-specific keywords from leaking into the global config.
+#
+# 2026-10-29 (Steve, 工艺保密): 只更新原话所属工厂自己的那一行 —— 平台级 (NULL) 行和别厂的行一律不写
+# (以前按 intent_code 汇总所有工厂的新词, 再写进「第一条样本」那家的行或全局行)。factory_id 必须非空。
 UPDATE_KEYWORDS_SQL = """
 UPDATE ai_intent_configs
 SET keywords = COALESCE(keywords, '[]'::jsonb) || $1::jsonb,
     updated_at = NOW()
-WHERE intent_code = $2 AND factory_id IS NOT DISTINCT FROM $3
+WHERE intent_code = $2 AND factory_id = $3
 """
+
+# 本厂那一行的现有关键词 (复审 L5): 只认 factory_id = $2 的行, 平台级 / 别厂行不算
+OWN_KEYWORDS_SQL = """
+SELECT keywords FROM ai_intent_configs
+WHERE intent_code = $1 AND factory_id = $2 AND deleted_at IS NULL
+"""
+
+# 本厂自动学习开关 (Java FactoryConfigService.isAutoLearnEnabled): 没有配置行 = 默认开
+AUTO_LEARN_SQL = "SELECT auto_learn_enabled FROM factory_ai_learning_config WHERE factory_id = $1"
+
+
+async def _auto_learn_enabled(conn, factory_id: str) -> bool:
+    """没有配置行 → 默认开 (Java createDefault); 有行但值为空 → 关 (Java Boolean.TRUE.equals(null))。"""
+    row = await conn.fetchrow(AUTO_LEARN_SQL, factory_id)
+    return True if row is None else row["auto_learn_enabled"] is True
+
+
+def _keyword_list(raw) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    return [str(k) for k in raw] if isinstance(raw, list) else []
+
 
 # Single-char stopwords (filtered separately even though regex below requires 2-4 chars)
 STOP_WORDS = {"的", "是", "在", "了", "我", "你", "他", "她", "它", "和", "与", "或", "也"}
@@ -134,19 +164,29 @@ def extract_new_keywords(query: str, existing: Iterable[str]) -> Set[str]:
 
 
 class KeywordLearner:
-    def __init__(self, pool, existing_keywords: Dict[str, List[str]]):
+    def __init__(self, pool, existing_keywords: Dict[str, List[str]], *,
+                 consent_scope=None, protected_names=None):
         """existing_keywords: {intent_code: [keyword, ...]} loaded from ai_intent_configs."""
+        from ai.learning import learning_rules
+
         self.pool = pool
         self.existing_keywords = existing_keywords
+        self._consent_scope = consent_scope or learning_rules.default_consent_scope
+        self._protected_names = protected_names or learning_rules.default_protected_names
 
-    async def run_once(self, min_confidence: float = 0.9) -> Dict[str, Set[str]]:
-        """One pass over recent ai_training_samples. Returns {intent_code: set(new_keywords)}.
+    async def run_once(self, min_confidence: float = 0.9) -> Dict[Tuple[str, str], Set[str]]:
+        """One pass over recent ai_training_samples. Returns {(factory_id, intent_code): set(new_keywords)}.
+
+        工艺保密 (Steve 2026-10-29): 按 (工厂, 意图) 分组, 只写进那家工厂自己的意图行; 没有工厂的样本不学;
+        训练授权撤回 / 查不到、提到本厂工艺保密产品、配方参数 / 客户 / 人名的原话不学。
 
         Persistence: UPDATE ai_intent_configs.keywords with JSON-merge of new keywords.
         DB read error → returns {} gracefully (degrade not crash).
         DB write error → logged, returned dict still reflects what was learned in-memory.
         """
-        learned: Dict[str, Set[str]] = {}
+        from ai.learning.learning_rules import factory_learnable
+
+        learned: Dict[Tuple[str, str], Set[str]] = {}
         rows: List[dict] = []
         try:
             async with self.pool.acquire() as conn:
@@ -155,29 +195,52 @@ class KeywordLearner:
             logger.exception("KeywordLearner: read ai_training_samples failed")
             return learned
 
+        groups: Dict[Tuple[str, str], List[str]] = {}
         for row in rows:
-            existing = self.existing_keywords.get(row["intent_code"], [])
-            new = extract_new_keywords(row["query"], existing)
-            if new:
-                learned.setdefault(row["intent_code"], set()).update(new)
+            factory_id = row["factory_id"]
+            if not await factory_learnable(factory_id, row["query"],
+                                           consent_scope=self._consent_scope,
+                                           protected_names=self._protected_names):
+                continue
+            groups.setdefault((factory_id, row["intent_code"]), []).append(row["query"])
+
+        # 复审 L5 (2026-10-29): 每组现读「本厂那一行」的关键词 (不用启动时按意图代码取的快照 ——
+        # 那份快照不分工厂), 并遵守本厂的自动学习开关 (与 Java KeywordLearningService.learnKeywords 一致)。
+        # 本厂没有这一行 / 关了自动学习 / 查不了 → 这一组不学。
+        try:
+            async with self.pool.acquire() as conn:
+                for (factory_id, intent_code), queries in groups.items():
+                    try:
+                        if not await _auto_learn_enabled(conn, factory_id):
+                            continue
+                        own = await conn.fetchrow(OWN_KEYWORDS_SQL, intent_code, factory_id)
+                    except Exception:
+                        logger.warning("KeywordLearner: config lookup failed for %s/%s, skipping",
+                                       factory_id, intent_code)
+                        continue
+                    if own is None:
+                        continue
+                    existing = _keyword_list(own["keywords"])
+                    new: Set[str] = set()
+                    for query in queries:
+                        new.update(extract_new_keywords(query, existing))
+                    if new:
+                        learned[(factory_id, intent_code)] = new
+        except Exception:
+            logger.exception("KeywordLearner: reading own intent rows failed")
+            return {}
 
         # F1 fix-pass: persist learned keywords back to ai_intent_configs.
         # Skip persistence if nothing learned (no UPDATEs to issue).
         if learned:
             try:
                 async with self.pool.acquire() as conn:
-                    for intent_code, new_kws in learned.items():
+                    for (factory_id, intent_code), new_kws in learned.items():
                         if not new_kws:
                             continue
-                        new_kws_json = json.dumps(list(new_kws), ensure_ascii=False)
-                        # Pull factory_id from the first matching row for this intent.
-                        # Multiple factories may share an intent_code; we update the
-                        # tenant-specific config OR the global (NULL factory_id) one.
-                        factory_id = None
-                        for r in rows:
-                            if r["intent_code"] == intent_code:
-                                factory_id = r["factory_id"]
-                                break
+                        new_kws_json = json.dumps(sorted(new_kws), ensure_ascii=False)
+                        # 只写这家工厂自己的行 (UPDATE_KEYWORDS_SQL: factory_id = $3, 非空);
+                        # 本厂没有这一行时 UPDATE 0 行, 不落到平台级或别厂的行上
                         await conn.execute(
                             UPDATE_KEYWORDS_SQL, new_kws_json, intent_code, factory_id,
                         )

@@ -60,6 +60,7 @@ public class IntentAnalysisController {
     private final IntentOptimizationSuggestionRepository suggestionRepository;
     private final AIIntentConfigRepository intentConfigRepository;
     private final SemanticRouterService semanticRouterService;
+    private final com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
 
     // ==================== 统计数据 ====================
 
@@ -391,12 +392,15 @@ public class IntentAnalysisController {
     public ResponseEntity<ApiResponse<Void>> applySuggestion(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @Parameter(description = "建议ID", example = "sug-001") @PathVariable String suggestionId,
-            @Parameter(description = "操作人ID", example = "22") @RequestParam Long operatorId) {
+            @Parameter(description = "已废弃: 操作人取登录身份, 不再信任请求参数", example = "22")
+            @RequestParam(required = false) Long operatorId) {
 
         try {
-            int updated = suggestionRepository.applySuggestion(suggestionId, LocalDateTime.now(), operatorId);
+            // 按 (建议 ID, 路径工厂) 改; 操作人取登录身份 (复审 M3, 2026-10-29)
+            Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
+            int updated = suggestionRepository.applySuggestion(suggestionId, factoryId, LocalDateTime.now(), operator);
             if (updated > 0) {
-                log.info("建议已采纳: suggestionId={}, operatorId={}", suggestionId, operatorId);
+                log.info("建议已采纳: suggestionId={}, operatorId={}", suggestionId, operator);
                 return ResponseEntity.ok(ApiResponse.successMessage("建议已采纳"));
             } else {
                 throw new BusinessException(404, "建议不存在或状态已变更");
@@ -421,7 +425,8 @@ public class IntentAnalysisController {
             @Parameter(description = "拒绝原因", example = "业务场景已变更") @RequestParam String reason) {
 
         try {
-            int updated = suggestionRepository.rejectSuggestion(suggestionId, reason);
+            // 按 (建议 ID, 路径工厂) 改 (复审 M3)
+            int updated = suggestionRepository.rejectSuggestion(suggestionId, factoryId, reason);
             if (updated > 0) {
                 log.info("建议已拒绝: suggestionId={}, reason={}", suggestionId, reason);
                 return ResponseEntity.ok(ApiResponse.successMessage("建议已拒绝"));
@@ -556,7 +561,8 @@ public class IntentAnalysisController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> approveCreateIntent(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @Parameter(description = "建议ID", example = "sug-001") @PathVariable String suggestionId,
-            @Parameter(description = "操作人ID", example = "22") @RequestParam Long operatorId,
+            @Parameter(description = "已废弃: 操作人取登录身份, 不再信任请求参数", example = "22")
+            @RequestParam(required = false) Long operatorId,
             @Parameter(description = "自定义意图代码 (可选，默认使用建议值)")
             @RequestParam(required = false) String customIntentCode,
             @Parameter(description = "自定义意图名称 (可选，默认使用建议值)")
@@ -613,12 +619,14 @@ public class IntentAnalysisController {
             AIIntentConfig savedIntent = intentConfigRepository.save(newIntent);
 
             // 5. 更新建议状态
-            suggestion.apply(operatorId);
+            // 操作人取登录身份, 不信请求参数 (复审 Low 1, 2026-10-29)
+            Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
+            suggestion.apply(operator);
             suggestion.setCreatedIntentId(savedIntent.getId());
             suggestionRepository.save(suggestion);
 
             log.info("创建新意图成功: factoryId={}, intentCode={}, suggestionId={}, operatorId={}",
-                    factoryId, finalIntentCode, suggestionId, operatorId);
+                    factoryId, finalIntentCode, suggestionId, operator);
 
             // 6. 返回结果
             Map<String, Object> result = new HashMap<>();
@@ -831,7 +839,8 @@ public class IntentAnalysisController {
                     intentCode,
                     intent.getIntentName(),
                     request.getReason(),
-                    request.getRequestedBy()
+                    // 申请人取登录身份, 不信请求体 (复审 Low 1)
+                    ActiveLearningController.currentOperatorName()
             );
             suggestionRepository.save(suggestion);
 
@@ -861,6 +870,8 @@ public class IntentAnalysisController {
             @Parameter(description = "工厂ID (用于路由，平台管理员可传PLATFORM)", example = "PLATFORM")
             @PathVariable String factoryId) {
 
+        // 列的是所有工厂的待审批晋升 (含意图名): 只给平台账号 (复审 H-B, 2026-10-29)
+        requirePlatformActor();
         try {
             List<IntentOptimizationSuggestion> pendingPromotions = suggestionRepository
                     .findBySuggestionTypeAndStatus(
@@ -892,6 +903,8 @@ public class IntentAnalysisController {
                     content = @Content(schema = @Schema(implementation = ApprovalRequest.class)))
             @RequestBody ApprovalRequest request) {
 
+        // 审批会把一家工厂的意图改成平台级: 只给平台账号; system:read_write 工厂超管也有, 不够 (复审 H-B)
+        requirePlatformActor();
         try {
             // 1. 查找建议
             Optional<IntentOptimizationSuggestion> suggestionOpt = suggestionRepository.findById(suggestionId);
@@ -922,6 +935,10 @@ public class IntentAnalysisController {
 
                 AIIntentConfig intent = intentOpt.get();
 
+                // 工艺保密 (Steve 2026-10-29): 平台级意图对所有工厂可见。关键词 / 示例 / 描述里提到任何一家工厂的
+                // 保密产品名 (或判断不了) 就不晋升 —— 否则一家工厂的保密产品名经由平台意图出现在别家。
+                rejectPromotionNamingProtectedProducts(intent);
+
                 // 备份原工厂ID，然后设为平台级
                 String originalFactoryId = intent.getFactoryId();
                 intent.setFactoryId(null); // null 表示平台级
@@ -934,7 +951,8 @@ public class IntentAnalysisController {
                 suggestionRepository.save(suggestion);
 
                 result.put("status", "APPROVED");
-                result.put("intent", intent);
+                // 不回整条意图 (关键词 / 示例 / 描述): 只回代码 (复审 H-B)
+                result.put("intentCode", intent.getIntentCode());
                 result.put("message", "意图已晋升为平台级");
 
                 log.info("意图 [{}] 从工厂 [{}] 晋升为平台级", suggestion.getIntentCode(), originalFactoryId);
@@ -958,6 +976,35 @@ public class IntentAnalysisController {
         } catch (Exception e) {
             log.error("审批晋升请求失败: suggestionId={}", suggestionId, e);
             throw new BusinessException(500, "审批失败: " + ErrorSanitizer.sanitize(e), e);
+        }
+    }
+
+    /** 平台级晋升的列表 / 审批: 只给平台账号 (工厂账号 403)。 */
+    static void requirePlatformActor() {
+        boolean platform = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest()
+                .map(com.cretas.aims.security.AuthenticatedActor::isPlatformAdmin).orElse(false);
+        if (!platform) {
+            throw new BusinessException(403, "只有平台账号可以查看或审批平台级晋升");
+        }
+    }
+
+    /** 晋升为平台级前: 意图的文字字段提到任何一家工厂的保密产品名 → 409; 查不了 → 503 (都不晋升)。 */
+    void rejectPromotionNamingProtectedProducts(AIIntentConfig intent) {
+        String[] texts = {intent.getIntentName(), intent.getKeywords(), intent.getNegativeKeywords(),
+                intent.getRegexPattern(), intent.getDescription(), intent.getExampleQueries(),
+                intent.getNegativeExamples(), intent.getResponseTemplate(), intent.getPatterns(),
+                intent.getExamples(), intent.getFollowUpQuestions()};
+        boolean mentions;
+        try {
+            mentions = processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(texts);
+        } catch (RuntimeException e) {
+            log.warn("晋升前的保密产品检查失败, 不晋升: intent={}", intent.getIntentCode());
+            throw new BusinessException(503, "暂时无法核对工艺保密产品, 未晋升, 请稍后重试");
+        }
+        if (mentions) {
+            log.warn("意图 [{}] 的文字提到工艺保密产品, 不晋升为平台级", intent.getIntentCode());
+            throw new BusinessException(409, "该意图的关键词或示例提到工艺保密产品, 不能晋升为平台级")
+                    .withHint("请退回给申请工厂，让其把关键词和示例里的工艺保密产品名去掉后重新申请晋升");
         }
     }
 

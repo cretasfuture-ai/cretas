@@ -142,6 +142,18 @@ public class ToolDispatchService {
                                                   AIIntentConfig intent,
                                                   Long userId, String userRole,
                                                   IntentMatchResult matchResult) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+        }
+    }
+
+    private IntentExecuteResponse executeWithToolInScope(ToolExecutor tool, String factoryId,
+                                                  IntentExecuteRequest request,
+                                                  AIIntentConfig intent,
+                                                  Long userId, String userRole,
+                                                  IntentMatchResult matchResult) {
         try {
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
@@ -412,7 +424,7 @@ public class ToolDispatchService {
             }
 
             // 2.8. LLM 提取剩余参数
-            Map<String, Object> llmExtractedParams = extractParametersWithLLM(userInputToUse, tool, params);
+            Map<String, Object> llmExtractedParams = extractParametersWithLLM(factoryId, userInputToUse, tool, params);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
                 // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
                 // 补缺参时 LLM 从原话「再加十公斤」里读出的 10 不许把它改掉。
@@ -851,6 +863,17 @@ public class ToolDispatchService {
                                                      IntentExecuteRequest request,
                                                      AIIntentConfig intent,
                                                      Long userId, String userRole) {
+        // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
+        // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            return executeToolPreviewInScope(tool, factoryId, request, intent, userId, userRole);
+        }
+    }
+
+    private IntentExecuteResponse executeToolPreviewInScope(ToolExecutor tool, String factoryId,
+                                                     IntentExecuteRequest request,
+                                                     AIIntentConfig intent,
+                                                     Long userId, String userRole) {
         IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
         if (frontlineDenied != null) {
             return frontlineDenied;
@@ -866,7 +889,7 @@ public class ToolDispatchService {
             // 与主执行路径 (executeWithTool 的 LLM 抽参) 一致: 只填缺失的必填项, 不覆盖 context 已有值.
             try {
                 Map<String, Object> llmExtractedParams =
-                        extractParametersWithLLM(request.getUserInput(), tool, params);
+                        extractParametersWithLLM(factoryId, request.getUserInput(), tool, params);
                 if (!llmExtractedParams.isEmpty()) {
                     params.putAll(llmExtractedParams);
                     log.info("Preview 路径 LLM 抽取参数: {}", llmExtractedParams.keySet());
@@ -1524,6 +1547,15 @@ public class ToolDispatchService {
 
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {
+        return extractParametersWithLLM(null, userInput, tool, existingParams);
+    }
+
+    /**
+     * @param factoryId 服务端认定的工厂 (路径 / 可信执行上下文, ⛔ 不取请求 context 里客户端给的值):
+     *                  按这家的工艺保密产品名脱敏原话。平台账号替某厂执行时必须带, 否则外发被拒 (不抽参)。
+     */
+    Map<String, Object> extractParametersWithLLM(String factoryId, String userInput, ToolExecutor tool,
+                                                 Map<String, Object> existingParams) {
         Map<String, Object> extractedParams = new HashMap<>();
         try {
             Map<String, Object> parametersSchema = tool.getParametersSchema();
@@ -1579,7 +1611,7 @@ public class ToolDispatchService {
                 """, tool.getToolName(), tool.getDescription() != null ? tool.getDescription() : "执行业务操作");
 
             // 原话里的号码 / 人名 / 公司名 / 保密产品名换代号再发; 抽出的参数换回真值后再做落地校验; 脱敏不了就不抽
-            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, null, systemPrompt, userInput);
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, factoryId, systemPrompt, userInput);
             if (redacted.refused()) {
                 return extractedParams;
             }

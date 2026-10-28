@@ -505,3 +505,18 @@ def _postgres_reachability_gate():
         yield
     finally:
         mp.undo()
+
+
+@pytest.fixture
+def egress_as_factory_request(monkeypatch):
+    """路由 / 出口单测 (测的是换供应商、回退、校验, 不是保密名单) 按「本厂请求、本厂没有保密产品」跑。
+
+    2026-10-29 起 common.llm_client 没有工厂上下文就拒绝外发 (NoEgressFactoryError, 与 Java 一致);
+    这些用例原来靠「没有工厂 → 名单为空」直接发。这里换成生产上的正常形态: 有工厂、名单为空 (不连库)。
+    没有工厂时被拒绝本身由 tests/test_egress_factory_fail_closed.py 守。"""
+    from common import llm_client as _lc
+
+    async def _no_protected_names():
+        return []
+
+    monkeypatch.setattr(_lc, "_protected_names_for_egress", _no_protected_names)

@@ -74,6 +74,10 @@ public class AIIntentConfigController {
     // 只能靠 factories.type 解析出的业态认出来, isRestaurantFactoryId 需要这个能力。
     private final IntentConfigManagementService intentConfigManagementService;
 
+    /** 意图配置写入只按路径工厂落行 (复审 H-A, 2026-10-29); 字段注入, 不改既有构造参数。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.intent.IntentConfigWriteGuard intentConfigWriteGuard;
+
     /**
      * Sprint 11.5 P0 fix (2026-05-23): Extract JWT token from request supporting BOTH
      * Bearer header (mobile clients) AND HttpOnly cookie (web admin clients).
@@ -913,7 +917,7 @@ public class AIIntentConfigController {
             @Parameter(description = "规则ID") @PathVariable String ruleId) {
 
         log.info("删除参数提取规则: factoryId={}, ruleId={}", factoryId, ruleId);
-        parameterExtractionLearningService.deleteRule(ruleId);
+        parameterExtractionLearningService.deleteRule(factoryId, ruleId);
         return ResponseEntity.ok(ApiResponse.success("规则已删除", null));
     }
 
@@ -928,7 +932,7 @@ public class AIIntentConfigController {
 
         log.info("清理低成功率规则: factoryId={}, minHitCount={}, maxSuccessRate={}",
                 factoryId, minHitCount, maxSuccessRate);
-        int count = parameterExtractionLearningService.cleanupLowSuccessRules(minHitCount, maxSuccessRate);
+        int count = parameterExtractionLearningService.cleanupLowSuccessRules(factoryId, minHitCount, maxSuccessRate);
         return ResponseEntity.ok(ApiResponse.success("已清理 " + count + " 条规则", count));
     }
 
@@ -941,9 +945,10 @@ public class AIIntentConfigController {
             @Parameter(description = "意图代码") @PathVariable String intentCode,
             @Parameter(description = "用户角色") @RequestParam String userRole) {
 
-        boolean hasPermission = aiIntentService.hasPermission(intentCode, userRole);
-        boolean requiresApproval = aiIntentService.requiresApproval(intentCode);
-        int quotaCost = aiIntentService.getQuotaCost(intentCode);
+        // 按路径工厂查 (本厂行优先, 再平台级), 不用不分工厂的旧重载 (复审 L1, 2026-10-29)
+        boolean hasPermission = aiIntentService.hasPermission(factoryId, intentCode, userRole);
+        boolean requiresApproval = aiIntentService.requiresApproval(factoryId, intentCode);
+        int quotaCost = aiIntentService.getQuotaCost(factoryId, intentCode);
 
         PermissionCheckResult result = new PermissionCheckResult();
         result.setIntentCode(intentCode);
@@ -965,8 +970,19 @@ public class AIIntentConfigController {
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody AIIntentConfig intentConfig) {
 
-        AIIntentConfig created = aiIntentService.createIntent(intentConfig);
-        log.info("Created AI intent: {} for factory context: {}", intentConfig.getIntentCode(), factoryId);
+        // 工厂取路径, 体里的 id / factoryId 不认; 平台级只给平台账号且不许提保密产品 (Steve 2026-10-29)
+        AIIntentConfig safe = intentConfigWriteGuard.prepareCreate(factoryId, intentConfig,
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
+        AIIntentConfig created;
+        try {
+            created = aiIntentService.createIntent(safe);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // 意图代码全库唯一 (含已删除的行): 不透露占用方 (复审 L3)
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    com.cretas.aims.service.intent.IntentConfigWriteGuard.CODE_TAKEN_MESSAGE)
+                    .withHint(com.cretas.aims.service.intent.IntentConfigWriteGuard.CODE_TAKEN_HINT);
+        }
+        log.info("Created AI intent: {} for factory context: {}", safe.getIntentCode(), factoryId);
         return ResponseEntity.ok(ApiResponse.success("意图配置创建成功", created));
     }
 
@@ -979,8 +995,10 @@ public class AIIntentConfigController {
             @Parameter(description = "意图代码") @PathVariable String intentCode,
             @RequestBody AIIntentConfig intentConfig) {
 
-        intentConfig.setIntentCode(intentCode);
-        AIIntentConfig updated = aiIntentService.updateIntent(intentConfig);
+        // 按 (路径工厂, 意图代码) 取本厂的行, 只拷业务字段; 平台级只给平台账号 (Steve 2026-10-29)
+        AIIntentConfig safe = intentConfigWriteGuard.prepareUpdate(factoryId, intentCode, intentConfig,
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
+        AIIntentConfig updated = aiIntentService.updateIntent(safe);
         log.info("Updated AI intent: {}", intentCode);
         return ResponseEntity.ok(ApiResponse.success("意图配置更新成功", updated));
     }
@@ -994,7 +1012,9 @@ public class AIIntentConfigController {
             @Parameter(description = "意图代码") @PathVariable String intentCode,
             @RequestBody ActiveStatusRequest request) {
 
-        aiIntentService.setIntentActive(intentCode, request.isActive());
+        // 只改路径工厂自己的行; PLATFORM 路径只给平台账号 (复审 H1, 2026-10-29)
+        String target = intentConfigWriteGuard.resolveTarget(factoryId, com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
+        aiIntentService.setIntentActive(target, intentCode, request.isActive());
         String action = request.isActive() ? "启用" : "禁用";
         log.info("{} AI intent: {}", action, intentCode);
         return ResponseEntity.ok(ApiResponse.successMessage("意图已" + action));
@@ -1008,7 +1028,9 @@ public class AIIntentConfigController {
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @Parameter(description = "意图代码") @PathVariable String intentCode) {
 
-        aiIntentService.deleteIntent(intentCode);
+        // 只删路径工厂自己的行 (本厂没有 → 404); PLATFORM 路径只给平台账号 (复审 H1)
+        AIIntentConfig owned = intentConfigWriteGuard.loadOwned(factoryId, intentCode, com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
+        aiIntentService.deleteIntent(owned.getFactoryId(), intentCode);
         log.info("Deleted AI intent: {}", intentCode);
         return ResponseEntity.ok(ApiResponse.successMessage("意图配置删除成功"));
     }
@@ -1030,9 +1052,8 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String username = jwtUtil.getUsernameFromToken(token);
 
-        // 先获取配置ID
-        AIIntentConfig config = aiIntentService.getIntentByCode(factoryId, intentCode)
-                .orElseThrow(() -> new IllegalArgumentException("意图配置不存在: " + intentCode));
+        // 只回滚路径工厂自己的行 (getIntentByCode 会退回平台级行, 不用); PLATFORM 只给平台账号 (复审 H2)
+        AIIntentConfig config = intentConfigWriteGuard.loadOwned(factoryId, intentCode, com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
 
         AIIntentConfig rolled = rollbackService.rollbackToLastVersion(
                 config.getId(), userId, username, request.getReason());
@@ -1047,8 +1068,8 @@ public class AIIntentConfigController {
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @Parameter(description = "意图代码") @PathVariable String intentCode) {
 
-        AIIntentConfig config = aiIntentService.getIntentByCode(factoryId, intentCode)
-                .orElseThrow(() -> new IllegalArgumentException("意图配置不存在: " + intentCode));
+        // 版本历史 (含各版快照) 只给本厂的行; 平台级行只给平台账号 (复审 H2)
+        AIIntentConfig config = intentConfigWriteGuard.loadOwned(factoryId, intentCode, com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
 
         java.util.List<AIIntentConfigHistory> history = rollbackService.getVersionHistory(config.getId());
         return ResponseEntity.ok(ApiResponse.success(history));
@@ -1068,8 +1089,10 @@ public class AIIntentConfigController {
         Long userId = jwtUtil.getUserIdFromToken(token);
         String username = jwtUtil.getUsernameFromToken(token);
 
+        // 只回滚本厂自己的行; PLATFORM 路径 + 平台账号才回滚平台级行 (复审 H2)
+        String target = intentConfigWriteGuard.resolveTarget(factoryId, com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
         java.util.Map<String, Object> result = rollbackService.rollbackFactoryToLastVersion(
-                factoryId, userId, username, request.getReason());
+                target, userId, username, request.getReason());
 
         log.info("Batch rollback for factory {}: {}", factoryId, result);
         return ResponseEntity.ok(ApiResponse.success("批量回滚完成", result));

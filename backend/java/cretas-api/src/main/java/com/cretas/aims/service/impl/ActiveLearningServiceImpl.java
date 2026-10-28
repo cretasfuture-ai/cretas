@@ -423,10 +423,18 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     @Override
     @Transactional
     public void recordKnowledgeFeedback(Long knowledgeId, String factoryId, boolean isPositive) {
+        // 只有采用了这条知识的工厂才能给它打分 (复审 Low 2, 2026-10-29): 以前任何工厂按 ID 都能改全局知识的评分
+        Optional<CrossFactoryKnowledgeAdoption> adoption = factoryId == null ? Optional.empty()
+                : adoptionRepository.findByKnowledgeIdAndFactoryId(knowledgeId, factoryId);
+        // 没采用和不存在给同一个 404 (复审 L5: 不让人借回应区分「别厂有这条知识」)
+        if (adoption.isEmpty()) {
+            log.warn("Knowledge feedback refused: factory {} has not adopted knowledge {}", factoryId, knowledgeId);
+            throw new com.cretas.aims.exception.BusinessException(404, KNOWLEDGE_NOT_FOUND);
+        }
         // Update global knowledge
         CrossFactoryKnowledge knowledge = knowledgeRepository.findById(knowledgeId).orElse(null);
         if (knowledge == null) {
-            return;
+            throw new com.cretas.aims.exception.BusinessException(404, KNOWLEDGE_NOT_FOUND);
         }
 
         if (isPositive) {
@@ -437,28 +445,31 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         knowledgeRepository.save(knowledge);
 
         // Update factory-level adoption
-        Optional<CrossFactoryKnowledgeAdoption> adoption = adoptionRepository
-                .findByKnowledgeIdAndFactoryId(knowledgeId, factoryId);
-
-        if (adoption.isPresent()) {
-            CrossFactoryKnowledgeAdoption record = adoption.get();
-            if (isPositive) {
-                record.recordPositiveFeedback();
-            } else {
-                record.recordNegativeFeedback();
-            }
-            adoptionRepository.save(record);
+        CrossFactoryKnowledgeAdoption record = adoption.get();
+        if (isPositive) {
+            record.recordPositiveFeedback();
+        } else {
+            record.recordNegativeFeedback();
         }
+        adoptionRepository.save(record);
     }
 
     @Override
     @Transactional
     public int promoteKnowledgeToGlobal(BigDecimal minEffectiveness, int minAdoptions) {
+        // 跨工厂知识共享已停用 (登记 / 列出 / 采用都关了): 定时任务照样调这里, 晋升同样不做
+        if (!CROSS_FACTORY_KNOWLEDGE_ENABLED) {
+            log.info("跨工厂知识共享已停用: 本轮不晋升全局知识");
+            return 0;
+        }
         List<CrossFactoryKnowledge> candidates = knowledgeRepository
                 .findPromotionCandidates(minEffectiveness, minAdoptions);
 
         int promoted = 0;
         for (CrossFactoryKnowledge knowledge : candidates) {
+            if (!promotableToGlobal(knowledge)) {
+                continue;
+            }
             knowledge.promoteToGlobal();
             knowledgeRepository.save(knowledge);
             promoted++;
@@ -500,6 +511,47 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         return knowledgeRepository.findNotAdoptedByFactory(factoryId);
     }
 
+    /**
+     * 晋升为全局前的保密检查 (恢复跨厂共享时也生效): 内容提到任何一家工厂的工艺保密产品名就不晋升;
+     * 判断不了 (未注入 / 查库出错) 也不晋升 (Steve 2026-10-29: 保密内容不许被学走、在别的工厂复现)。
+     */
+    boolean promotableToGlobal(CrossFactoryKnowledge knowledge) {
+        return knowledge != null && !namesAnyProtectedProduct(knowledge.getContent());
+    }
+
+    /** 学习建议 (新关键词 / 新说法) 不能应用的原因 (只有类别, 不含原文); 能应用返回 null。 */
+    String suggestionNotApplicable(String factoryId, String content) {
+        if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(factoryId)) {
+            return "suggestion has no factory (would become a global MANUAL expression)";
+        }
+        if (!com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(
+                trainingConsentService, processSecretSampleFilter, factoryId, content)) {
+            return "factory learning rules (consent / process-secret / blocked content)";
+        }
+        if (namesAnyProtectedProduct(content)) {
+            return "content names a process-secret product (shared phrase table)";
+        }
+        return null;
+    }
+
+    /** 文本提到任何一家工厂的保密产品名, 或无法判断 → true (调用方据此不写全局)。 */
+    boolean namesAnyProtectedProduct(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        if (processSecretSampleFilter == null) {
+            return true;
+        }
+        try {
+            return processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(text, text.toLowerCase().trim());
+        } catch (RuntimeException e) {
+            log.warn("全局写入前的保密产品检查失败, 按提到处理: {}", e.getClass().getSimpleName());
+            return true;
+        }
+    }
+
+    static final String KNOWLEDGE_NOT_FOUND = "知识不存在";
+
     /** 跨工厂知识共享 (登记 / 列出 / 采用) 已停用; 要恢复必须改这里并重新评审数据边界。 */
     static final boolean CROSS_FACTORY_KNOWLEDGE_ENABLED = false;
 
@@ -526,6 +578,37 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     public List<LearningSuggestion> getPendingSuggestions(String factoryId, int limit) {
         return suggestionRepository.findPendingForReview(
                 factoryId, LocalDateTime.now(), PageRequest.of(0, limit));
+    }
+
+    @Override
+    @Transactional
+    public void approveSuggestion(String factoryId, Long suggestionId, String reviewer, String notes) {
+        requireOwnSuggestion(factoryId, suggestionId);
+        approveSuggestion(suggestionId, reviewer, notes);
+    }
+
+    @Override
+    @Transactional
+    public void rejectSuggestion(String factoryId, Long suggestionId, String reviewer, String notes) {
+        requireOwnSuggestion(factoryId, suggestionId);
+        rejectSuggestion(suggestionId, reviewer, notes);
+    }
+
+    @Override
+    @Transactional
+    public void applySuggestion(String factoryId, Long suggestionId, String applier) {
+        requireOwnSuggestion(factoryId, suggestionId);
+        applySuggestion(suggestionId, applier);
+    }
+
+    /** 建议必须属于路径上的工厂; 别厂 / 不存在 / 没有工厂的建议一律 404 (复审 M-B)。 */
+    void requireOwnSuggestion(String factoryId, Long suggestionId) {
+        boolean own = factoryId != null && !factoryId.isBlank() && suggestionId != null
+                && suggestionRepository.findById(suggestionId)
+                        .map(s -> factoryId.equals(s.getFactoryId())).orElse(false);
+        if (!own) {
+            throw new com.cretas.aims.exception.BusinessException(404, "学习建议不存在");
+        }
     }
 
     @Override
@@ -566,6 +649,20 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
                 suggestionId, type, intentCode, truncate(content, 80));
 
         boolean applied = false;
+
+        // 新关键词 / 新说法会进 intentKnowledgeBase 的短语表 —— 那张表不分工厂, 所有工厂共用 —— 再按
+        // 建议所属工厂存成 MANUAL 说法。先判断再动短语表 (Steve 2026-10-29):
+        //   没有工厂的建议不应用 (不许以 MANUAL 身份写成全局, 也查不了授权);
+        //   本厂规则 (训练授权、本厂保密产品名、配方参数 / 客户 / 人名) 不过不应用;
+        //   提到任何一家工厂的保密产品名 (或判断不了) 不应用。
+        if (type == LearningSuggestion.SuggestionType.NEW_KEYWORD
+                || type == LearningSuggestion.SuggestionType.NEW_EXPRESSION) {
+            String reason = suggestionNotApplicable(suggestion.getFactoryId(), content);
+            if (reason != null) {
+                log.warn("Suggestion {} not applied: {}", suggestionId, reason);
+                return;
+            }
+        }
 
         switch (type) {
             case NEW_KEYWORD:
@@ -809,17 +906,29 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         List<Long> ids = pending.stream().map(AnnotationQueue::getId).collect(Collectors.toList());
         LocalDateTime dueDate = LocalDateTime.now().plusDays(3);
 
-        annotationRepository.assignToAnnotator(ids, annotator, LocalDateTime.now(), dueDate);
-
-        return annotationRepository.findByAssignedToAndAnnotationStatus(
-                annotator, AnnotationQueue.AnnotationStatus.ASSIGNED);
+        // 领取时间截到毫秒: 回读时按它精确匹配 (库里时间精度不到纳秒)
+        LocalDateTime assignedAt = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        int claimed = annotationRepository.assignToAnnotator(ids, annotator, assignedAt, dueDate);
+        if (claimed == 0) {
+            return Collections.emptyList();
+        }
+        // 只回这一次真正领到的、本厂的那几条 (复审 M1/M2, 2026-10-29): 以前按标注人名字回「他名下所有已分配的」,
+        // 不分工厂; 上一版在内存里改实体再返回, 提交时会把并发被别人领走的行写回成自己的。
+        // 现在 UPDATE 只领还是 PENDING 的、执行后清空上下文, 再按 (本厂, 这批 ID, 本人, 本次领取时间) 回读。
+        return annotationRepository.findByIdInAndFactoryIdAndAssignedToAndAssignedAt(
+                ids, factoryId, annotator, assignedAt);
     }
 
     @Override
     @Transactional
-    public void completeAnnotation(Long annotationId, String intentCode, String annotator, String notes) {
-        annotationRepository.completeAnnotation(
-                annotationId, intentCode, annotator, LocalDateTime.now(), notes);
+    public void completeAnnotation(String factoryId, Long annotationId, String intentCode,
+                                   String annotator, String notes) {
+        // 按 (标注 ID, 路径工厂) 改, 别厂的标注 404 (复审 M4, 2026-10-29)
+        int updated = factoryId == null || factoryId.isBlank() ? 0 : annotationRepository.completeAnnotation(
+                annotationId, factoryId, intentCode, annotator, LocalDateTime.now(), notes);
+        if (updated == 0) {
+            throw new com.cretas.aims.exception.BusinessException(404, "标注任务不存在");
+        }
         log.info("Annotation {} completed by {}: intent={}", annotationId, annotator, intentCode);
     }
 

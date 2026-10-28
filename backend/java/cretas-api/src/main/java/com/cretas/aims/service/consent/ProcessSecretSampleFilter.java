@@ -9,8 +9,10 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -34,9 +36,43 @@ public class ProcessSecretSampleFilter {
 
     /** 文本是否提到本厂某个工艺保密产品。 */
     public boolean mentionsProtectedProduct(String factoryId, String... texts) {
-        for (String name : protectedProductNames(factoryId)) {
-            for (String text : texts) {
-                if (text != null && text.contains(name)) {
+        return mentionsAny(protectedProductNames(factoryId), texts);
+    }
+
+    /**
+     * 文本是否提到<b>任何一家</b>工厂的工艺保密产品。写全局 (所有工厂共享) 的说法 / 知识前用:
+     * 全局内容对每家工厂可见, 只查写入方自己那家不够 (Steve 2026-10-29: 保密内容不出本厂)。
+     * 查库出错照样抛, 调用方据此不写全局。一批写入 (种子、批量学习) 先取一次 {@link #allFactoriesProtectedNames()}
+     * 再用 {@link #mentionsAny} 逐条比对, 不要逐条查库。
+     */
+    public boolean mentionsAnyFactoryProtectedProduct(String... texts) {
+        return mentionsAny(allFactoriesProtectedNames(), texts);
+    }
+
+    /** 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。 */
+    public Set<String> allFactoriesProtectedNames() {
+        Set<String> names = new LinkedHashSet<>();
+        for (String factoryId : accessService.factoriesWithProtectedProducts()) {
+            names.addAll(protectedProductNames(factoryId));
+        }
+        return names;
+    }
+
+    /**
+     * 名单里任一名字出现在任一文本里。字母不分大小写 (「SecretX」与「secretx」算同一个名字 —— 说法学习会把原话转小写),
+     * 汉字照原样比; Python {@code smartbi.services.process_secret_names.mentions_any} 同一规则。
+     */
+    public static boolean mentionsAny(Collection<String> names, String... texts) {
+        if (names == null || names.isEmpty() || texts == null) {
+            return false;
+        }
+        for (String text : texts) {
+            if (text == null || text.isEmpty()) {
+                continue;
+            }
+            String folded = text.toLowerCase(Locale.ROOT);
+            for (String name : names) {
+                if (name != null && !name.isEmpty() && folded.contains(name.toLowerCase(Locale.ROOT))) {
                     return true;
                 }
             }

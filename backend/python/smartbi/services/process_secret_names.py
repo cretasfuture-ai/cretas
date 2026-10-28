@@ -32,8 +32,9 @@ _all_cache: Dict[str, Tuple[float, Mapping[str, FrozenSet[str]]]] = {}
 
 
 def mentions_any(names: Iterable[str], *texts: Optional[str]) -> bool:
-    names = tuple(names)
-    return any(t and any(n in t for n in names) for t in texts)
+    """字母不分大小写 (学习会把原话转小写), 汉字照原样比 —— 与 Java ``ProcessSecretSampleFilter.mentionsAny`` 一致。"""
+    folded_names = tuple(n.lower() for n in names if n)
+    return any(t and any(n in t.lower() for n in folded_names) for t in texts)
 
 
 async def protected_product_names(factory_id: str, pool=None) -> FrozenSet[str]:

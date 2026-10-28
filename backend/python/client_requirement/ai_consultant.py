@@ -122,7 +122,11 @@ async def _call_llm(
         "enable_thinking": False,
     }
 
-    with llm_caller_context("ai_consultant"):
+    from common.llm_client import all_factories_egress
+
+    # 平台需求向导 (平台账号用, 内容是客户调研 / 建厂前的需求, 还不是某一家工厂的数据): 没有工厂上下文时
+    # 按所有工厂的保密产品名脱敏, 而不是拒绝 (Steve 2026-10-29 复审 M1); 有工厂时仍按那家。
+    with llm_caller_context("ai_consultant"), all_factories_egress():
         data = await call_chain(SLOT.CHAT, payload, timeout=60.0)
     return data["choices"][0]["message"]["content"]
 

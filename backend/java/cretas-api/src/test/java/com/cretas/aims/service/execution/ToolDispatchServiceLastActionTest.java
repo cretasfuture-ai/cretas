@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -133,7 +134,7 @@ class ToolDispatchServiceLastActionTest {
         ScriptedTool tool = useTool();
         ToolDispatchService dispatch = spy(newDispatch());
         doReturn(new HashMap<>(Map.of("quantity", 10, "productionPlanId", "PP-1")))
-                .when(dispatch).extractParametersWithLLM(anyString(), any(), anyMap());
+                .when(dispatch).extractParametersWithLLM(eq("F006"), anyString(), any(), anyMap());
         Map<String, Object> context = new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30,
                 FollowUpResolver.FOLLOW_UP_RULE_KEY, FollowUpResolver.RULE_QTY_CHANGE));
 
@@ -149,12 +150,41 @@ class ToolDispatchServiceLastActionTest {
         ScriptedTool tool = useTool();
         ToolDispatchService dispatch = spy(newDispatch());
         doReturn(new HashMap<>(Map.of("quantity", 10, "productionPlanId", "PP-1")))
-                .when(dispatch).extractParametersWithLLM(anyString(), any(), anyMap());
+                .when(dispatch).extractParametersWithLLM(eq("F006"), anyString(), any(), anyMap());
 
         dispatch.executeWithTool(tool, "F006", confirmed(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30))),
                 intent("MATERIAL_BATCH_USE", "原料领用", tool), 42L, "warehouse_manager", null);
 
         assertThat(tool.arguments).containsEntry("quantity", 10);
+    }
+
+    /**
+     * 工具执行入口把路径上的工厂绑给深层外发 (Steve 2026-10-29): 这里没有任何登录身份 (平台账号的 token 同样
+     * 没有那家工厂), 执行期间不带工厂的外发 (纠错 Agent 这类深层方法) 仍按 F006 的保密产品名脱敏, 而不是被拒;
+     * 入口返回后绑定解除 (阴性对照: 同一调用在入口外被拒)。
+     */
+    @Test
+    void executionEntryBindsThePathFactoryForDeepEgressWithoutAFactoryArgument() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter names =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(names.protectedProductNames("F006")).thenReturn(java.util.Set.of("秘制酱牛肉"));
+        com.cretas.aims.service.consent.LlmEgressGuard guard =
+                new com.cretas.aims.service.consent.LlmEgressGuard(new ObjectMapper(), names);
+        List<com.cretas.aims.service.consent.LlmEgressRedactor.Result> seen = new java.util.ArrayList<>();
+        ScriptedTool tool = useTool();
+        ToolDispatchService dispatch = spy(newDispatch());
+        org.mockito.Mockito.doAnswer(inv -> {
+            seen.add(guard.texts("deep", null, "秘制酱牛肉再领十公斤"));
+            return new HashMap<>();
+        }).when(dispatch).extractParametersWithLLM(eq("F006"), anyString(), any(), anyMap());
+
+        dispatch.executeWithTool(tool, "F006", confirmed(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30))),
+                intent("MATERIAL_BATCH_USE", "原料领用", tool), 42L, "warehouse_manager", null);
+
+        assertThat(seen).hasSize(1);
+        assertThat(seen.get(0).refused()).isFalse();
+        assertThat(seen.get(0).text(0)).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+        assertThat(guard.texts("deep", null, "秘制酱牛肉再领十公斤").refused()).isTrue();
     }
 
     // ------------------------------------------------------------------

@@ -158,6 +158,8 @@ public class DynamicFewShotService {
         // 1. 从 LearnedExpression 获取候选 (优先已验证的)
         List<LearnedExpression> expressions = expressionRepository.findActiveByFactory(factoryId)
                 .stream()
+                // 系统学来的全局行来自某一家工厂, 不进别家的 few-shot 提示词 (Steve 2026-10-29)
+                .filter(com.cretas.aims.service.consent.LearningContentRules::servable)
                 .filter(LearnedExpression::hasEmbedding)
                 .collect(Collectors.toList());
 
@@ -326,7 +328,9 @@ public class DynamicFewShotService {
         if (config.isPresent()) {
             return config.get().getIntentName();
         }
-        config = intentConfigRepository.findByIntentCode(intentCode);
+        // 平台级行 (factory_id 为空) 兜底; 不按代码跨厂取别家的意图名 (复审 L2, 2026-10-29)
+        config = intentConfigRepository.findByFactoryIdAndIntentCode(null, intentCode)
+                .filter(c -> c.getFactoryId() == null);
         return config.map(AIIntentConfig::getIntentName).orElse(intentCode);
     }
 

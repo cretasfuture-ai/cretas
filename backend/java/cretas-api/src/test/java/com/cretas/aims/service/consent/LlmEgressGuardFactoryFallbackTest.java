@@ -60,9 +60,69 @@ class LlmEgressGuardFactoryFallbackTest {
         }
     }
 
+    /**
+     * Steve 2026-10-29: 不知道按哪家工厂脱敏时不发 (以前名单为空、原文照发 —— 本测试原来钉的正是那个旧行为)。
+     * 守的性质: 「没有工厂上下文 → 外发被拒、原文不出去」, 而不是某个字面输出。
+     */
     @Test
-    void noRequestAndNoTrustedActorMeansNoFactoryLookup() {
-        assertThat(guard.texts("t", null, SAID).text(0)).contains("秘制酱牛肉");
+    void noRequestAndNoTrustedActorIsRefusedInsteadOfSentUnmasked() {
+        LlmEgressRedactor.Result r = guard.texts("t", null, SAID);
+        assertThat(r.refused()).isTrue();
+        assertThat(r.refusal()).isEqualTo("没有工厂上下文");
         verify(processSecret, never()).protectedProductNames(anyString());
+    }
+
+    @Test
+    void platformActorAnalysingAFactoryWithExplicitFactoryGetsThatFactorysNamesMasked() {
+        bindPlatformRequest(null);
+        LlmEgressRedactor.Result r = guard.texts("t", "F006", SAID);
+        assertThat(r.refused()).isFalse();
+        assertThat(r.text(0)).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+    }
+
+    @Test
+    void platformActorWithoutExplicitFactoryIsRefusedEvenIfTheTokenCarriesAFactory() {
+        // 平台账号的 token 里即使带了某个工厂, 也不能代表它此刻在分析的那家: 不按 token 猜
+        bindPlatformRequest("F006");
+        LlmEgressRedactor.Result r = guard.texts("t", null, SAID);
+        assertThat(r.refused()).isTrue();
+        verify(processSecret, never()).protectedProductNames(anyString());
+    }
+
+    @Test
+    void platformActorOnTheSseWorkerThreadWithoutExplicitFactoryIsRefused() {
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 1L, "F006", "super_admin"))) {
+            assertThat(guard.texts("t", null, SAID).refused()).isTrue();
+            assertThat(guard.texts("t", "F006", SAID).text(0)).contains("[保密产品A]");
+        }
+    }
+
+    @Test
+    void factoryUserExplicitFactoryIsUnchanged() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute("factoryId", "F006");
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 77L, "F006", "factory_super_admin"));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+        assertThat(guard.texts("t", "F006", SAID).text(0)).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+        assertThat(guard.texts("t", null, SAID).text(0)).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+    }
+
+    @Test
+    void standaloneInstanceForUnitTestsStillSendsWithoutFactory() {
+        // 单测直接 new 被测类用的默认实例: 不查保密产品名, 也不因没有工厂而拒绝 (生产实例都由容器注入)
+        assertThat(LlmEgressGuard.standalone().texts("t", null, "今天入库多少").refused()).isFalse();
+    }
+
+    private static void bindPlatformRequest(String tokenFactory) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        if (tokenFactory != null) {
+            request.setAttribute("factoryId", tokenFactory);
+        }
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 1L, tokenFactory, "super_admin"));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     }
 }

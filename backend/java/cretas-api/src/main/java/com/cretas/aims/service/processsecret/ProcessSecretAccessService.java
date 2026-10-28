@@ -87,6 +87,18 @@ public class ProcessSecretAccessService {
         return loaded;
     }
 
+    /**
+     * 有任一工艺保密产品的工厂 (每次现查, 不缓存)。只给「写全局共享内容」这种低频路径用:
+     * 写进全局的东西所有工厂都看得到, 要对每一家工厂的保密产品名都查一遍 (Steve 2026-10-29)。
+     * 查库出错照样抛给调用方, 调用方据此不写全局。
+     */
+    public Set<String> factoriesWithProtectedProducts() {
+        return policyRepository.findAll().stream()
+                .map(ProcessSecretPolicy::getFactoryId)
+                .filter(f -> f != null && !f.isBlank())
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
     public void invalidate(String factoryId) {
         if (factoryId == null) return;
         protectedByFactory.remove(factoryId);

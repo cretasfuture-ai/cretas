@@ -41,6 +41,10 @@ public class IntentConfigRollbackService {
     private final AIIntentConfigHistoryRepository historyRepo;
     private final ObjectMapper objectMapper;
 
+    /** 平台级行回滚前的保密产品检查 (复审 H2); 字段注入, 不改构造参数。缺失时平台级行回滚 fail-closed。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.intent.IntentConfigWriteGuard intentConfigWriteGuard;
+
     // ==================== 快照保存 ====================
 
     /**
@@ -186,6 +190,14 @@ public class IntentConfigRollbackService {
                                                   Long rollbackBy,
                                                   String rollbackByName,
                                                   String reason) {
+        return rollbackToLastVersion(configId, rollbackBy, rollbackByName, reason, null);
+    }
+
+    private AIIntentConfig rollbackToLastVersion(String configId,
+                                                 Long rollbackBy,
+                                                 String rollbackByName,
+                                                 String reason,
+                                                 java.util.Set<String> allFactoryNames) {
         // 1. 获取当前配置
         AIIntentConfig config = configRepo.findById(configId)
                 .orElseThrow(() -> new IllegalArgumentException("Config not found: " + configId));
@@ -199,7 +211,7 @@ public class IntentConfigRollbackService {
         String currentSnapshot = createSnapshot(config);
 
         // 4. 从快照恢复
-        restoreFromSnapshot(config, config.getPreviousSnapshot());
+        restoreFromSnapshot(config, config.getPreviousSnapshot(), allFactoryNames);
 
         // 5. 设置新快照为当前状态（支持"反向回滚"）
         config.setPreviousSnapshot(currentSnapshot);
@@ -238,12 +250,29 @@ public class IntentConfigRollbackService {
                                                               String reason) {
         log.info("Starting factory rollback: factoryId={}, by={}", factoryId, rollbackByName);
 
-        List<AIIntentConfig> configs = configRepo.findByFactoryIdOrPlatformLevel(factoryId);
+        // 只回滚这一家自己的行 (复审 H2, 2026-10-29: 以前把平台级行一起回滚了 —— 平台级行所有工厂共用);
+        // factoryId 为空 = 平台级, 只由平台账号经 PLATFORM 路径调用 (控制器用 IntentConfigWriteGuard 判定)
+        List<AIIntentConfig> configs = factoryId == null
+                ? configRepo.findGlobalIntents()
+                : configRepo.findByFactoryIdOrPlatformLevel(factoryId).stream()
+                        .filter(c -> factoryId.equals(c.getFactoryId()))
+                        .collect(java.util.stream.Collectors.toList());
+
+        // 平台级批量回滚: 全厂保密产品名在动任何一行之前取一次; 取不到 → 503, 整批不做 (复审 M1)
+        java.util.Set<String> allFactoryNames = null;
+        if (factoryId == null) {
+            if (intentConfigWriteGuard == null) {
+                throw new com.cretas.aims.exception.BusinessException(503, "暂时无法核对工艺保密产品, 未回滚");
+            }
+            allFactoryNames = intentConfigWriteGuard.allFactoriesProtectedNames();
+        }
 
         int success = 0;
         int skipped = 0;
         int failed = 0;
+        int refused = 0;
         List<String> errors = new ArrayList<>();
+        List<String> refusedCodes = new ArrayList<>();
 
         for (AIIntentConfig config : configs) {
             try {
@@ -252,9 +281,14 @@ public class IntentConfigRollbackService {
                     continue;
                 }
 
-                rollbackToLastVersion(config.getId(), rollbackBy, rollbackByName, reason);
+                rollbackToLastVersion(config.getId(), rollbackBy, rollbackByName, reason, allFactoryNames);
                 success++;
 
+            } catch (com.cretas.aims.exception.BusinessException e) {
+                // 保密产品检查拒绝 (409) / 查不了 (503): 这一行没动 (检查在副本上做), 单独报出 (复审 H1)
+                refused++;
+                refusedCodes.add(config.getIntentCode());
+                log.warn("Rollback refused: code={}, status={}", config.getIntentCode(), e.getCode());
             } catch (Exception e) {
                 failed++;
                 errors.add(String.format("%s: %s", config.getIntentCode(), e.getMessage()));
@@ -272,6 +306,8 @@ public class IntentConfigRollbackService {
         result.put("successCount", success);
         result.put("skippedCount", skipped);
         result.put("failedCount", failed);
+        result.put("refusedCount", refused);
+        result.put("refused", refusedCodes);
         result.put("errors", errors);
         result.put("rollbackAt", LocalDateTime.now());
         result.put("rollbackBy", rollbackByName);
@@ -306,11 +342,12 @@ public class IntentConfigRollbackService {
         AIIntentConfig config = configRepo.findById(configId)
                 .orElseThrow(() -> new IllegalArgumentException("Config not found: " + configId));
 
-        // 3. 保存当前状态作为快照
-        config.setPreviousSnapshot(createSnapshot(config));
+        // 3. 先记下当前状态; 恢复 (含平台级行的保密产品检查) 通过后才写回受管行 (复审 H1)
+        String currentSnapshot = createSnapshot(config);
 
         // 4. 从历史快照恢复
         restoreFromSnapshot(config, history.getSnapshot());
+        config.setPreviousSnapshot(currentSnapshot);
 
         // 5. 更新版本号
         int newVersion = (config.getConfigVersion() != null ? config.getConfigVersion() : 0) + 1;
@@ -389,9 +426,44 @@ public class IntentConfigRollbackService {
      */
     @SuppressWarnings("unchecked")
     private void restoreFromSnapshot(AIIntentConfig config, String snapshot) {
-        try {
-            Map<String, Object> data = objectMapper.readValue(snapshot, Map.class);
+        restoreFromSnapshot(config, snapshot, null);
+    }
 
+    /**
+     * @param allFactoryNames 批量回滚预先取好的全厂保密产品名 (不在循环里查库); null = 需要时现查
+     */
+    @SuppressWarnings("unchecked")
+    private void restoreFromSnapshot(AIIntentConfig config, String snapshot, java.util.Set<String> allFactoryNames) {
+        Map<String, Object> data;
+        try {
+            data = objectMapper.readValue(snapshot, Map.class);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to restore from snapshot: {}", e.getMessage());
+            throw new RuntimeException("Failed to restore config from snapshot", e);
+        }
+        // ⚠️ 一律先在副本上恢复 (复审 L3: 快照字段类型不对时不会把受管行恢复一半) 并检查, 全部通过才动受管的那一行
+        // (复审 H1, 2026-10-29: 批量回滚是同类内自调用, 不经事务代理, 循环的 catch 会吞掉 409 ——
+        // 若先改了受管行, 提交时照样被写进库)。
+        AIIntentConfig probe = new AIIntentConfig();
+        org.springframework.beans.BeanUtils.copyProperties(config, probe);
+        applySnapshotFields(probe, data);
+        // 平台级行所有工厂可见: 恢复出来的旧版本提到任何一家工厂的保密产品名就不保存 (409 / 查不了 503)
+        if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(config.getFactoryId())) {
+            if (allFactoryNames != null) {
+                com.cretas.aims.service.intent.IntentConfigWriteGuard.requireNoProtectedNames(probe, allFactoryNames);
+            } else if (intentConfigWriteGuard == null) {
+                throw new com.cretas.aims.exception.BusinessException(503, "暂时无法核对工艺保密产品, 未回滚");
+            } else {
+                intentConfigWriteGuard.requireNoProtectedNames(probe);
+            }
+        }
+        applySnapshotFields(config, data);
+    }
+
+    /** 把快照里的业务字段写到 config 上 (不恢复 ID、factoryId 等标识字段)。 */
+    @SuppressWarnings("unchecked")
+    private void applySnapshotFields(AIIntentConfig config, Map<String, Object> data) {
+        {
             // 恢复关键字段（不恢复 ID、factoryId 等标识字段）
             if (data.containsKey("intentName")) {
                 config.setIntentName((String) data.get("intentName"));
@@ -448,9 +520,6 @@ public class IntentConfigRollbackService {
                 config.setSemanticObject((String) data.get("semanticObject"));
             }
 
-        } catch (JsonProcessingException e) {
-            log.error("Failed to restore from snapshot: {}", e.getMessage());
-            throw new RuntimeException("Failed to restore config from snapshot", e);
         }
     }
 

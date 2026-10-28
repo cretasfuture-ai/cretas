@@ -31,6 +31,26 @@ class EgressRedactionError(RuntimeError):
     """
 
 
+def egress_refusal_message(err: BaseException) -> str:
+    """给用户看的拒绝说明 (不含原文、不含工厂): 外发被拦时调用方必须把它报出来, ⛔ 不许当成供应商故障重试,
+    也不许返回空串 / 统计兜底冒充 AI 结果 (Steve 2026-10-29 复审 H3)。
+
+    平台账号 (token 里是 PLATFORM) 没有工厂: 有意拒绝 —— 平台读工厂数据走平台读取留痕的规则, 不经这里直接
+    把工厂数据发给模型 (复审 M2)。"""
+    if "NoEgressFactoryError" in str(err) or isinstance(err, NoEgressFactoryError):
+        if _egress_platform_caller.get():
+            return "AI 分析没有发出：平台账号不能直接对工厂数据做 AI 分析"
+        return "AI 分析没有发出：无法确定这份数据属于哪家工厂，请登录后重试"
+    return "AI 分析没有发出：发给模型前的脱敏没有完成，请稍后重试"
+
+
+import contextvars as _contextvars  # noqa: E402
+
+# 本次请求是平台账号 (token 的 factoryId 为 PLATFORM): 只用来给出准确的拒绝说明, 不放行任何外发 (复审 M2)
+_egress_platform_caller: _contextvars.ContextVar[bool] = _contextvars.ContextVar(
+    "llm_egress_platform_caller", default=False)
+
+
 class _RedactingLLMClient:
     """P0 数据主权 — 共享 httpx 客户端的脱敏包装层。
 
@@ -100,18 +120,51 @@ def current_egress_tokens() -> dict:
     return _egress_tokens.get()
 
 
-async def _protected_names_for_egress() -> list:
-    """当前请求工厂的工艺保密产品名, 每次现查 (不走 60 秒缓存: 刚设为保密的产品名不能再原样发出去)。
-    没有工厂上下文 (定时任务等) 时为空, 与 Java 一致; 查库出错向上抛 → 不发。"""
+class NoEgressFactoryError(RuntimeError):
+    """不知道按哪家工厂脱敏 (没有工厂上下文, 也不是服务端内部调用): 不发 (2026-10-29, 与 Java 一致)。"""
+
+
+# 服务端内部调用 (Java 带 X-Internal-Secret、没带 X-Factory-Id) / 平台建厂这类「不是某一家工厂的数据」的外发:
+# 没有工厂时按**所有工厂**的保密产品名脱敏 (多换代号无害, 原样发出不行); 由 auth_middleware 内部分支 /
+# all_factories_egress() 设置。普通请求不设 —— 没有工厂就拒绝。
+_egress_all_factories: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "llm_egress_all_factories", default=False)
+
+
+class all_factories_egress:
+    """这一段里没有工厂上下文的外发按所有工厂的保密产品名脱敏 (而不是拒绝)。"""
+
+    def __enter__(self) -> None:
+        self._token = _egress_all_factories.set(True)
+
+    def __exit__(self, *_exc) -> None:
+        _egress_all_factories.reset(self._token)
+
+
+def _egress_factory() -> Optional[str]:
+    """当前请求的工厂; 空白 / PLATFORM 不算工厂。"""
     try:
         from common.llm_metrics import _llm_factory
         factory_id = _llm_factory.get()
     except Exception:
         factory_id = None
-    if not factory_id:
-        return []
+    if not factory_id or not str(factory_id).strip() or str(factory_id).strip().upper() == "PLATFORM":
+        return None
+    return factory_id
+
+
+async def _protected_names_for_egress() -> list:
+    """当前请求工厂的工艺保密产品名, 每次现查 (不走 60 秒缓存: 刚设为保密的产品名不能再原样发出去)。
+
+    Steve 2026-10-29 (fail-closed, 与 Java ``LlmEgressGuard`` 一致): 没有工厂上下文时不再返回空名单 (那等于
+    原名发出) —— 服务端内部调用 / 平台建厂 (``_egress_all_factories``) 按所有工厂的保密产品名脱敏, 其余抛
+    :class:`NoEgressFactoryError` → 调用方按 EgressRedactionError 不发。查库出错向上抛 → 不发。"""
+    factory_id = _egress_factory()
+    if not factory_id and not _egress_all_factories.get():
+        raise NoEgressFactoryError("no factory context for egress")
     from smartbi.config import get_cretas_pool
-    from common.process_secret_sql import PROTECTED_NAMES_SQL, usable_names
+    from common.process_secret_sql import (ALL_FACTORIES_PROTECTED_NAMES_SQL, PROTECTED_NAMES_SQL,
+                                           usable_names)
     import asyncio
 
     async def _read() -> list:
@@ -119,7 +172,10 @@ async def _protected_names_for_egress() -> list:
         if pool is None:
             raise RuntimeError("cretas database pool unavailable")
         async with pool.acquire() as conn:
-            rows = await conn.fetch(PROTECTED_NAMES_SQL, factory_id)
+            if factory_id:
+                rows = await conn.fetch(PROTECTED_NAMES_SQL, factory_id)
+            else:
+                rows = await conn.fetch(ALL_FACTORIES_PROTECTED_NAMES_SQL)
         return sorted(usable_names(r["name"] for r in rows))
 
     # 库卡住时不让外发请求一起卡住: 5 秒没查到按查不了处理 (不发)
@@ -131,9 +187,14 @@ _PROTECTED_NAMES_TIMEOUT_S = 5.0
 
 async def _names_for_this_request() -> list:
     """原话模式 (意图识别) 与 Java ``LlmEgressGuard.utterance`` 一样不查库、不认保密产品名 (识别链路不加库查询);
-    其余每次现查; 同一次 call_chain 已预取过就复用 (重试下一家供应商不再查库)。"""
+    其余每次现查; 同一次 call_chain 已预取过就复用 (重试下一家供应商不再查库)。
+
+    已知例外 (有意保留, Steve 2026-10-29 裁定): 意图识别把用户原话连同其中的工艺保密产品名不脱敏发给
+    外部模型 (下面原话模式返回空名单); 除意图识别以外的所有外发一律把保密产品名换代号。
+    Java 侧同一例外在 LlmEgressGuard.utterance; 说明见 docs/security/process-secret-ai-egress.md。"""
     from common.llm_redactor import _egress_detect_names
     if not _egress_detect_names.get():
+        # 已知例外 (Steve 2026-10-29): 意图识别原话模式保留保密产品原名, 故意返回空名单
         return []
     prefetched = _prefetched_names.get()
     if prefetched is not None:
