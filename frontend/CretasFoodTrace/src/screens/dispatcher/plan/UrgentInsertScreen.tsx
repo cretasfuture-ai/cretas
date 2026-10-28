@@ -58,7 +58,7 @@ function feasibilityView(
   if (state !== 'loaded' || !impact) {
     return {
       color: '#d48806', bg: '#fffbe6', icon: 'help-circle', title: '资源未验证',
-      lines: ['影响分析未取到，原料 / 设备 / 人员都没有核对'],
+      lines: ['影响分析未取到，原料 / 设备 / 产能 / 人员都没有核对'],
     };
   }
   if (status === 'FEASIBLE') {
@@ -745,8 +745,8 @@ export default function UrgentInsertScreen() {
             {feasibility !== 'FEASIBLE' && (
               <Text style={styles.confirmWarn} testID="urgent-insert-confirm-unverified">
                 {feasibility === 'INFEASIBLE'
-                  ? '注意：资源核对结果为不可行，确认后原料 / 设备 / 人员可能不到位。'
-                  : '注意：资源未验证（原料 / 设备 / 人员没有全部核对），系统不保证到位。'}
+                  ? '注意：资源核对结果为不可行，确认后原料 / 设备 / 产能 / 人员可能不到位。'
+                  : '注意：资源未验证（原料 / 设备 / 产能 / 人员没有全部核对），系统不保证到位。'}
               </Text>
             )}
             <View style={styles.confirmButtons}>
