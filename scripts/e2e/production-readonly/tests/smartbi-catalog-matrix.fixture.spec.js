@@ -68,7 +68,7 @@ function pageHtml() {
       const exportPaths = {'导出当前显示图表 Excel':'/smartbi-api/api/smartbi/financial-dashboard/export-excel','导出当前显示图表 PDF':'/smartbi-api/api/smartbi/financial-dashboard/export-pdf','导出当前显示图表 PPT':'/smartbi-api/api/smartbi/financial-dashboard/export-ppt'};
       document.querySelector('[data-testid="factory-chart-refresh"]').onclick = () => fetch(recPath, {method:'POST',headers:jsonHeaders,body:'{}'});
       let chosenFamily = null;
-      document.querySelector('[data-testid="factory-chart-guide-topic"]').onclick = () => { document.querySelector('#topic-options').style.display = 'block'; };
+      document.querySelector('[data-testid="factory-chart-guide-topic"]').onclick = () => { setTimeout(() => { document.querySelector('#topic-options').style.display = 'block'; }, 50); };
       [...document.querySelectorAll('#topic-options .el-select-dropdown__item')].forEach((option, index) => option.onclick = () => {
         chosenFamily = index ? allCandidates[index - 1].analysis.familyId : null;
         document.querySelector('#topic-options').style.display = 'none';

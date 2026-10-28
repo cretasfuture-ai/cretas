@@ -278,6 +278,7 @@ async function selectFamilyPreview(page, item, allGroups, deadline) {
   if (index < 0) return false;
   await testId(page, 'factory-chart-guide-topic').click({ timeout: remainingTimeout(deadline) });
   const options = page.locator('.el-select-dropdown__item:visible');
+  await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
   if (await options.count() !== scopedGroups.length + 1) throw new Error('Catalogue topic identities drifted');
   const option = options.nth(index + 1);
   if (!(await option.innerText()).includes(item.familyLabel)) throw new Error('Catalogue topic label drifted');
@@ -362,7 +363,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
       };
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
       summary.checks.factsPresent = summary.facts.length > 0;
-      summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch(() => false);
+      summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch((error) => {
+        summary.selectionError = String(error?.message || error).slice(0, 500);
+        return false;
+      });
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
       summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
