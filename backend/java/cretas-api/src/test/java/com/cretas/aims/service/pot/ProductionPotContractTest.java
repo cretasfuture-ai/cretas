@@ -77,6 +77,8 @@ class ProductionPotContractTest {
     @Autowired private BatchLineageEdgeRepository edgeRepo;
     @Autowired private BatchLineageClosureRepository closureRepo;
     @Autowired private ProductionPotRepository potRepo;
+    @Autowired private com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository policyRepo;
+    @Autowired private com.cretas.aims.service.processsecret.ProcessSecretAccessService secretAccess;
 
     private Long operatorId;
     private String planId;
@@ -454,5 +456,121 @@ class ProductionPotContractTest {
                 2, null, null, null, null, null, null, null, null, null, null, null, null, "x"), operatorId, "x"))
                 .isInstanceOf(BusinessException.class).satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(404));
         assertThat(potController.listForBatches(OTHER, String.valueOf(row.getBatchId())).getData()).isEmpty();
+    }
+
+    private static void actAs(Long userId) {
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, F, "operator"));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
+    }
+
+    @Test
+    @DisplayName("工艺保密: 无完整查看权的账号拿不到锅次的工序名 / 工艺参数 / 备注 (锅号、时间、用料照给); 保密负责人看得到")
+    void processSecretRedactsPotProcessFields() {
+        ProcessSheetRowResult row = save(cookRow("pott-sec", List.of(pot(1, "80", List.of(mat(rawA, "60"), mat(rawB, "40"))))));
+        Long potId = potController.listForBatch(F, row.getBatchId()).getData().pots().get(0).id();
+        potController.correct(F, potId, new ProductionPotService.CorrectionCommand(null, null, null, null, null, null,
+                null, null, null, Map.of("temperatureC", 96), null, null, null, "复测温度"), operatorId, "主管乙");
+        User owner = new User();
+        owner.setFactoryId(F);
+        owner.setUsername("pott_owner_" + UUID.randomUUID().toString().substring(0, 6));
+        owner.setPasswordHash("$2a$10$DUMMYHASHFORTESTPLACEHOLDERONLY1");
+        owner.setIsActive(true);
+        Long ownerId = userRepo.saveAndFlush(owner).getId();
+        LocalDateTime now = LocalDateTime.now();
+        policyRepo.saveAndFlush(com.cretas.aims.entity.processsecret.ProcessSecretPolicy.builder()
+                .factoryId(F).productTypeId(PT_SEMI)
+                .storageMode(com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CLOUD_RESTRICTED)
+                .ownerUserId(ownerId).createdBy(ownerId).createdAt(now).updatedAt(now).build());
+        secretAccess.invalidate(F);
+        try {
+            actAs(operatorId);   // 本厂普通账号, 不是保密负责人、没有授权
+            ProductionPotService.PotView hidden = potController.listForBatch(F, row.getBatchId()).getData().pots().get(0);
+            System.out.println("POT_SECRET_READING operator processRedacted=" + hidden.processRedacted()
+                    + " params=" + hidden.processParams() + " name=" + hidden.processName());
+            assertThat(hidden.processRedacted()).isTrue();
+            assertThat(hidden.processParams()).isEmpty();
+            assertThat(hidden.processName()).isNull();
+            assertThat(hidden.processCode()).isNull();
+            assertThat(hidden.corrections()).singleElement().satisfies(c -> {
+                assertThat(c.oldValue()).isNull();
+                assertThat(c.newValue()).isNull();
+            });
+            assertThat(hidden.potNumber()).isEqualTo(1);
+            assertThat(hidden.inputs()).hasSize(2);
+            assertThat(potController.listForBatches(F, String.valueOf(row.getBatchId())).getData().get(0).processParams()).isEmpty();
+            assertThat(potController.forward(F, potId).getData().pot().processParams()).isEmpty();
+            assertThat(potController.consumers(F, "MATERIAL_BATCH", rawA).getData().batches().get(0)
+                    .affectedPots().get(0).processName()).isNull();
+
+            // 看不到就不许改: 空的工艺参数不能把看不见的值覆盖掉
+            assertThatThrownBy(() -> potController.correct(F, potId, new ProductionPotService.CorrectionCommand(null,
+                    null, null, null, null, null, null, null, null, Map.of(), null, null, null, "x"), operatorId, "x"))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+
+            actAs(ownerId);      // 阳性对照: 保密负责人
+            ProductionPotService.PotView full = potController.listForBatch(F, row.getBatchId()).getData().pots().get(0);
+            assertThat(full.processRedacted()).isFalse();
+            assertThat(full.processParams()).containsEntry("temperatureC", 96);
+            assertThat(full.processName()).isEqualTo("卤煮");
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            policyRepo.deleteAll(policyRepo.findByFactoryIdOrderByProductTypeIdAsc(F));
+            policyRepo.flush();
+            secretAccess.invalidate(F);
+        }
+    }
+
+    @Test
+    @DisplayName("有一锅待确认 ⇒ 不按锅收窄 (即使分摊已全); 确认后恢复收窄 (阳性对照)")
+    void pendingPotPreventsNarrowing() {
+        ProcessSheetRowResult row = save(cookRow("pott-pend", List.of(
+                pot(1, "50", List.of(mat(rawA, "60"))),
+                pot(2, "30", List.of(mat(rawB, "40"))))));
+        ProductionPotService.PotView p3 = potController.record(F, new ProductionPotService.PotCommand(
+                row.getBatchId(), null, null, "lzhu", "卤煮", 3, null,
+                LocalDateTime.of(2026, 10, 28, 12, 0), LocalDateTime.of(2026, 10, 28, 12, 30),
+                "CAMERA_CANDIDATE", null, null, null, null, null, null, null, null, null), operatorId).getData();
+        PotTraceService.MaterialPotTrace pending = potController.consumers(F, "MATERIAL_BATCH", rawA).getData();
+        assertThat(pending.batches()).singleElement().satisfies(s -> {
+            assertThat(s.narrowed()).isFalse();
+            assertThat(s.reason()).contains("待确认");
+            assertThat(s.affectedPots()).extracting(PotTraceService.PotBrief::potNumber).containsExactly(1, 2, 3);
+            assertThat(s.excludedOutputs()).isEmpty();
+        });
+        assertThat(potController.producers(F, "MATERIAL_BATCH", wipOf(row)).getData().narrowed()).isFalse();
+
+        potController.confirm(F, p3.id(), new ProductionPotService.ConfirmCommand(null, null, "已核对监控"), operatorId, "主管乙");
+        assertThat(potController.consumers(F, "MATERIAL_BATCH", rawA).getData().batches()).singleElement()
+                .satisfies(s -> {
+                    assertThat(s.narrowed()).isTrue();
+                    assertThat(s.affectedPots()).extracting(PotTraceService.PotBrief::potNumber).containsExactly(1);
+                });
+    }
+
+    @Test
+    @DisplayName("报工行 / 生产计划必须属于这个批次; 锅的出锅单位与批次产出单位不一致 ⇒ 拒绝, 不拿批次单位盖掉")
+    void rowPlanAndUnitMustMatchTheBatch() {
+        ProcessSheetRowResult row = save(cookRow("pott-own", null));
+        assertThatThrownBy(() -> potController.record(F, new ProductionPotService.PotCommand(row.getBatchId(),
+                "POTT-OTHER-PLAN", null, "lzhu", null, 1, null, null, null, null, null, null, null, null, null, null,
+                null, null, null), operatorId))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("生产计划与生产批次不一致");
+        ProcessSheetRowResult other = save(cookRow("pott-own-2", null));
+        Long otherRowId = jdbcTemplate.queryForObject(
+                "SELECT id FROM process_sheet_rows WHERE factory_id = ? AND batch_id = ?", Long.class, F, other.getBatchId());
+        assertThatThrownBy(() -> potController.record(F, new ProductionPotService.PotCommand(row.getBatchId(),
+                null, otherRowId, "lzhu", null, 1, null, null, null, null, null, null, null, null, null, null,
+                null, null, null), operatorId))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("报工行不属于这个生产批次");
+
+        ProcessSheetPotEntry boxes = pot(1, "8", List.of());
+        boxes.setOutputUnit("箱");
+        assertThatThrownBy(() -> save(cookRow("pott-unit", List.of(boxes))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("单位");
     }
 }

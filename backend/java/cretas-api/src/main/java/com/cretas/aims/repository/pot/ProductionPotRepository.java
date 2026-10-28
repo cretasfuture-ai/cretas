@@ -26,5 +26,7 @@ public interface ProductionPotRepository extends JpaRepository<ProductionPot, Lo
 
     List<ProductionPot> findByFactoryIdAndIdIn(String factoryId, Collection<Long> ids);
 
+    boolean existsByFactoryId(String factoryId);
+
     List<ProductionPot> findByFactoryIdAndProcessSheetRowId(String factoryId, Long processSheetRowId);
 }

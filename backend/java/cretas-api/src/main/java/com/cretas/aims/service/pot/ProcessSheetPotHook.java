@@ -109,15 +109,17 @@ public class ProcessSheetPotHook {
                 unallocatedInputs++;
             }
             List<ProductionPotService.PotLink> outputs = List.of();
+            String potUnit = p.getOutputUnit() != null ? p.getOutputUnit() : req.getUnit();
             if (onlyOutput != null && p.getOutputQuantity() != null && p.getOutputQuantity().signum() > 0) {
+                // 用锅自己的单位: 与批次产出单位不一致时由 validateLinks 拒绝, 不拿批次单位盖掉 (审查 #1279)
                 outputs = List.of(new ProductionPotService.PotLink(onlyOutput.type(), onlyOutput.id(),
-                        p.getOutputQuantity(), onlyOutput.unit()));
+                        p.getOutputQuantity(), potUnit));
             }
             potService.record(factoryId, new ProductionPotService.PotCommand(
                     pbId, planId, rowId, req.getProcessCode(), req.getProcessName(), p.getPotNumber(),
                     p.getEquipmentLabel(), p.getStartedAt(), p.getEndedAt(), p.getTimeSource(), p.getBindingStatus(),
                     userId, p.getOperatorName() != null ? p.getOperatorName() : userName,
-                    p.getOutputQuantity(), p.getOutputUnit() != null ? p.getOutputUnit() : req.getUnit(),
+                    p.getOutputQuantity(), potUnit,
                     p.getProcessParams(), inputs, outputs, p.getRemark()), userId);
         }
         if (unallocatedInputs > 0) {

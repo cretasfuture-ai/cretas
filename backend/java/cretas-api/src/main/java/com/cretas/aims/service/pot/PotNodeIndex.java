@@ -22,7 +22,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -39,6 +38,7 @@ public class PotNodeIndex {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final ProductionBatchRepository productionBatchRepository;
     private final MaterialConsumptionRepository consumptionRepository;
+    private final com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     static final String SOURCE_DOC_PRODUCTION_BATCH = "PRODUCTION_BATCH";
 
@@ -65,7 +65,7 @@ public class PotNodeIndex {
      * 同一批次两边都有时以投料为准, 不重复计)。
      */
     public Map<String, BatchNode> inputsOf(String factoryId, Long productionBatchId) {
-        Map<String, BatchNode> out = aggregate(edgeRepository.findByFactoryIdAndTargetIdAndTargetType(
+        Map<String, BatchNode> out = aggregate(factoryId, edgeRepository.findByFactoryIdAndTargetIdAndTargetType(
                 factoryId, String.valueOf(productionBatchId), LineageEdgeRecorder.NODE_PRODUCTION_BATCH), true);
         Map<String, List<MaterialConsumption>> byBatch = new LinkedHashMap<>();
         for (MaterialConsumption c : consumptionRepository.findByProductionBatchIdAndFactoryId(productionBatchId, factoryId)) {
@@ -95,7 +95,7 @@ public class PotNodeIndex {
      * (在制批的 receiptQuantity 会随下游消耗减少, 不能当产出量)。
      */
     public Map<String, BatchNode> outputsOf(String factoryId, Long productionBatchId) {
-        Map<String, BatchNode> out = aggregate(edgeRepository.findByFactoryIdAndSourceIdAndSourceType(
+        Map<String, BatchNode> out = aggregate(factoryId, edgeRepository.findByFactoryIdAndSourceIdAndSourceType(
                 factoryId, String.valueOf(productionBatchId), LineageEdgeRecorder.NODE_PRODUCTION_BATCH), false);
         materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                         factoryId, SOURCE_DOC_PRODUCTION_BATCH, String.valueOf(productionBatchId))
@@ -156,7 +156,7 @@ public class PotNodeIndex {
         return out;
     }
 
-    private static Map<String, BatchNode> aggregate(List<BatchLineageEdge> edges, boolean sourceSide) {
+    private Map<String, BatchNode> aggregate(String factoryId, List<BatchLineageEdge> edges, boolean sourceSide) {
         Map<String, List<BatchLineageEdge>> grouped = new LinkedHashMap<>();
         for (BatchLineageEdge e : edges) {
             String type = sourceSide ? e.getSourceType() : e.getTargetType();
@@ -181,7 +181,7 @@ public class PotNodeIndex {
                 }
                 if (unit == null) {
                     unit = e.getUnit();
-                } else if (e.getUnit() != null && !sameUnit(unit, e.getUnit())) {
+                } else if (e.getUnit() != null && !sameUnit(factoryId, unit, e.getUnit())) {
                     known = false;
                     break;
                 }
@@ -192,11 +192,12 @@ public class PotNodeIndex {
         return out;
     }
 
-    public static boolean sameUnit(String a, String b) {
-        if (a == null || b == null) {
+    /** 单位同一性问单位契约 (kg / 千克 等价); 任一侧没写单位 ⇒ 不拦 (旧边常常不带单位)。 */
+    public boolean sameUnit(String factoryId, String a, String b) {
+        if (a == null || a.isBlank() || b == null || b.isBlank()) {
             return true;
         }
-        return a.trim().toLowerCase(Locale.ROOT).equals(b.trim().toLowerCase(Locale.ROOT));
+        return unitContractService.areEquivalent(factoryId, a, b);
     }
 
     /** 节点展示批号 (只取本厂的实体; 查不到时为 null, 前端显示 id)。 */

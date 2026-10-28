@@ -205,6 +205,8 @@ public class TraceabilityDTO {
          * 只在<b>能证明</b>时收窄 (见 PotTraceService); 上面三组批次级列表不受影响、一行不减。
          */
         private List<com.cretas.aims.service.pot.PotTraceService.BatchPotScope> potScopes;
+        /** 按锅收窄没算成时的原因 (此时 potScopes 为 null; 批次级三组照常有效)。 */
+        private String potScopesError;
     }
 
     /**

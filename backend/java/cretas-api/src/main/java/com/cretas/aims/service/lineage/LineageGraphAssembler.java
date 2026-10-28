@@ -321,16 +321,24 @@ public class LineageGraphAssembler {
         List<TraceabilityDTO.LineageNode> shipments = byType(all, LineageEdgeRecorder.NODE_SHIPMENT_RECORD);
 
         // S3-16: 影响面里有锅次的批次再按锅收窄 (额外一层, 不改上面的批次级结果)
+        //     锅次这一层出错 ⇒ potScopes 为 null 并带原因, ⛔ 不让它把批次级召回影响面一起打挂
         List<com.cretas.aims.service.pot.PotTraceService.BatchPotScope> potScopes = null;
+        String potScopesError = null;
         if (potTraceService != null) {
             java.util.Set<String> impacted = new java.util.LinkedHashSet<>();
             impacted.add(rootType + "#" + rootId);
             all.forEach(n -> impacted.add(n.getNodeType() + "#" + n.getNodeId()));
-            potScopes = potTraceService.scopesFor(factoryId, impacted, null);
+            try {
+                potScopes = potTraceService.scopesFor(factoryId, impacted, null);
+            } catch (RuntimeException e) {
+                log.warn("[impact] 按锅收窄失败, 只返回批次级影响面: factory={} root={}:{}", factoryId, rootType, rootId, e);
+                potScopesError = "按锅收窄暂时取不到, 请按批次级影响面召回";
+            }
         }
 
         return TraceabilityDTO.ImpactResponse.builder()
                 .potScopes(potScopes)
+                .potScopesError(potScopesError)
                 .rootType(rootType)
                 .rootId(rootId)
                 .productionBatches(production)

@@ -38,9 +38,10 @@ import java.util.stream.Collectors;
  *       ⇒ 受影响的锅 = 分到了这个节点的锅; 否则 (没分完 / 批次量未知) ⇒ 全部锅都算受影响 (不收窄)。</li>
  *   <li>产出节点同理: 该节点的批次量已全部分到锅上且没有一锅来自受影响的锅 ⇒ 才能排除; 否则照算受影响。</li>
  *   <li>没有锅次记录的生产批次 ⇒ 按整批 (批次级召回影响面本来就包含它)。</li>
+ *   <li>批次里有任何一锅待确认 (时间未确认 / 锅批关联不明) ⇒ 不收窄: 那是设计上就不算精确的数据。</li>
  * </ol>
  * 批次级召回影响面 ({@code /traceability/impact}) 一行不减; 这里只是加一层「具体是哪几锅」。
- * 待确认的锅 (时间未确认 / 关联不明) 照样计入, 并标 pending。
+ * 待确认的锅照样计入, 并标 pending。
  */
 @Service
 @RequiredArgsConstructor
@@ -54,6 +55,7 @@ public class PotTraceService {
     private final BatchLineageClosureRepository closureRepository;
     private final PotNodeIndex nodeIndex;
     private final ProductionPotService potService;
+    private final PotProcessSecretRedactor secretRedactor;
 
     public record PotBrief(Long potId, Long productionBatchId, String processCode, String processName,
                            Integer potNumber, String equipmentLabel, LocalDateTime startedAt, LocalDateTime endedAt,
@@ -112,9 +114,13 @@ public class PotTraceService {
      * @param impactedKeys 影响面里的全部节点 ("TYPE#id", 含根)
      * @param potlessRootKey 这个节点直接进入的无锅批次也列出来 (说明「没有锅次, 按整批」); null = 只列有锅的
      */
-    @Transactional(readOnly = true)
+    // noRollbackFor: 召回影响面调用这里时, 锅次这一层出错不能把外层 (批次级) 事务标成只回滚
+    @Transactional(readOnly = true, noRollbackFor = RuntimeException.class)
     public List<BatchPotScope> scopesFor(String factoryId, Collection<String> impactedKeys, String potlessRootKey) {
         List<BatchPotScope> out = new ArrayList<>();
+        if (potlessRootKey == null && !potRepository.existsByFactoryId(factoryId)) {
+            return out;   // 本厂还没有任何锅次: 召回影响面不做额外查询
+        }
         for (String key : impactedKeys) {
             int i = key.indexOf('#');
             String type = key.substring(0, i);
@@ -170,7 +176,10 @@ public class PotTraceService {
                 allocated = allocated.add(in.getQuantity());
             }
         }
-        boolean complete = inNode != null && inNode.quantity() != null && allocated.compareTo(inNode.quantity()) >= 0;
+        boolean allocatedFully = inNode != null && inNode.quantity() != null && allocated.compareTo(inNode.quantity()) >= 0;
+        // 待确认的锅 (时间未确认 / 锅批关联不明) 是设计上就不精确的数据: 有一锅待确认就不收窄 (审查 #1279-2)
+        long pendingInBatch = pots.stream().filter(ProductionPotService::isPending).count();
+        boolean complete = allocatedFully && pendingInBatch == 0;
         String reason;
         List<ProductionPot> affected;
         if (complete) {
@@ -178,10 +187,13 @@ public class PotTraceService {
             reason = "该批次投入已全部分到锅上, 按锅收窄到 " + affected.size() + " / " + pots.size() + " 锅";
         } else {
             affected = pots;
-            reason = inNode == null || inNode.quantity() == null
+            reason = allocatedFully
+                    ? "本批次有 " + pendingInBatch + " 锅待确认, 锅次数据不算精确, 不按锅收窄, 全部锅都算受影响"
+                    : inNode == null || inNode.quantity() == null
                     ? "批次投入数量未知, 无法按锅收窄, 全部锅都算受影响"
                     : "已分到锅上 " + plain(allocated) + " / " + plain(inNode.quantity())
-                            + Objects.toString(inNode.unit(), "") + ", 未分完, 全部锅都算受影响";
+                            + (inNode.unit() == null ? "" : com.cretas.aims.service.unit.UnitDisplayNames.display(inNode.unit()))
+                            + ", 未分完, 全部锅都算受影响";
         }
         Set<Long> affectedIds = affected.stream().map(ProductionPot::getId).collect(Collectors.toSet());
 
@@ -194,15 +206,17 @@ public class PotTraceService {
         for (PotNodeIndex.BatchNode n : outNodes.values()) {
             boolean fullyAllocated = n.quantity() != null
                     && outAllocated.getOrDefault(n.key(), BigDecimal.ZERO).compareTo(n.quantity()) >= 0;
-            if (!touched.contains(n.key()) && fullyAllocated) {
+            if (complete && !touched.contains(n.key()) && fullyAllocated) {
                 excludedOut.add(n.key());
             } else {
                 affectedOut.add(n.key());
             }
         }
 
+        boolean redact = secretRedactor.restrictedBatches(factoryId, List.of(pbId)).contains(pbId);
         List<PotBrief> briefs = affected.stream()
-                .map(p -> new PotBrief(p.getId(), p.getProductionBatchId(), p.getProcessCode(), p.getProcessName(),
+                .map(p -> new PotBrief(p.getId(), p.getProductionBatchId(),
+                        redact ? null : p.getProcessCode(), redact ? null : p.getProcessName(),
                         p.getPotNumber(), p.getEquipmentLabel(), p.getStartedAt(), p.getEndedAt(),
                         ProductionPotService.isPending(p), qtyByPot.get(p.getId()),
                         inNode == null ? null : inNode.unit()))
@@ -261,9 +275,11 @@ public class PotTraceService {
             }
             batchQty = batchQty == null ? n.quantity() : batchQty.add(n.quantity());
         }
-        boolean complete = batchQty != null && allocated.compareTo(batchQty) >= 0;
+        boolean anyPending = pots.stream().anyMatch(ProductionPotService::isPending);
+        boolean complete = batchQty != null && allocated.compareTo(batchQty) >= 0 && !anyPending;
         List<ProductionPot> result = complete ? pots.stream().filter(p -> fromPots.contains(p.getId())).toList() : pots;
         String reason = complete ? "产出已全部分到锅上, 来自 " + result.size() + " 锅"
+                : anyPending ? "该批次有锅待确认, 不按锅收窄, 可能来自该批次任一锅"
                 : "产出未全部分到锅上, 可能来自该批次任一锅";
         return new OutputPotTrace(nodeType, nodeId, label, producingBatches.stream().findFirst().orElse(null),
                 complete, reason, potService.toViews(factoryId, result));

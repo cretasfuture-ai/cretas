@@ -68,6 +68,8 @@ export interface PotView {
   inputs: PotLinkView[];
   outputs: PotLinkView[];
   corrections: PotCorrectionView[];
+  /** 该产品工艺保密且当前账号无完整查看权: 工序名 / 代码 / 工艺参数 / 备注已由后端去掉。 */
+  processRedacted: boolean;
 }
 
 export interface PotAllocationLine {

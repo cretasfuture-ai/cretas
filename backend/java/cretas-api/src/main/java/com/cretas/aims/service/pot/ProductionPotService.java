@@ -1,6 +1,7 @@
 package com.cretas.aims.service.pot;
 
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.pot.ProductionPot;
 import com.cretas.aims.entity.pot.ProductionPotCorrection;
 import com.cretas.aims.entity.pot.ProductionPotInput;
@@ -11,6 +12,7 @@ import com.cretas.aims.repository.pot.ProductionPotCorrectionRepository;
 import com.cretas.aims.repository.pot.ProductionPotInputRepository;
 import com.cretas.aims.repository.pot.ProductionPotOutputRepository;
 import com.cretas.aims.repository.pot.ProductionPotRepository;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +63,11 @@ public class ProductionPotService {
     private final ProductionBatchRepository productionBatchRepository;
     private final PotNodeIndex nodeIndex;
     private final EntityManager entityManager;
+    private final PotProcessSecretRedactor secretRedactor;
+    private final com.cretas.aims.repository.ProcessSheetRowRepository processSheetRowRepository;
+
+    /** 工艺保密时一并去掉的更正记录字段 (原值 / 新值本身就是工艺)。 */
+    static final Set<String> SECRET_FIELDS = Set.of("processParams", "remark");
 
     // ==================== 命令 / 视图 ====================
 
@@ -140,7 +147,9 @@ public class ProductionPotService {
             String remark,
             List<LinkView> inputs,
             List<LinkView> outputs,
-            List<CorrectionView> corrections) {}
+            List<CorrectionView> corrections,
+            /** true = 该产品工艺保密且当前账号无完整查看权: 工序名 / 代码 / 工艺参数 / 备注已去掉。 */
+            boolean processRedacted) {}
 
     /** 批次级节点 vs 已分到锅上的量; complete = 已全部分完 (召回才能按锅收窄)。 */
     public record AllocationLine(String nodeType, String nodeId, String batchNumber, BigDecimal batchQuantity,
@@ -157,11 +166,13 @@ public class ProductionPotService {
         if (cmd == null || cmd.productionBatchId() == null) {
             throw invalid("必须指定生产批次");
         }
-        ProductionBatch batch = requireBatch(factoryId, cmd.productionBatchId());
+        // 锁生产批次行: 同一批次的并发录入 / 更正串行, 「各锅之和不超过批次量」不会被两个事务各算一半绕过
+        ProductionBatch batch = requireBatchForUpdate(factoryId, cmd.productionBatchId());
+        assertRowAndPlanBelongToBatch(factoryId, batch, cmd.processSheetRowId(), cmd.productionPlanId());
         ProductionPot pot = ProductionPot.builder()
                 .factoryId(factoryId)
                 .productionBatchId(batch.getId())
-                .productionPlanId(cmd.productionPlanId() != null ? cmd.productionPlanId() : batch.getProductionPlanId())
+                .productionPlanId(batch.getProductionPlanId() != null ? batch.getProductionPlanId() : cmd.productionPlanId())
                 .processSheetRowId(cmd.processSheetRowId())
                 .processCode(blankToNull(cmd.processCode()))
                 .processName(blankToNull(cmd.processName()))
@@ -203,6 +214,13 @@ public class ProductionPotService {
         }
         String reason = requireReason(cmd.reason());
         ProductionPot pot = requireActivePotForUpdate(factoryId, potId);
+        if ((cmd.processParams() != null || cmd.remark() != null)
+                && secretRedactor.restrictedBatches(factoryId, List.of(pot.getProductionBatchId()))
+                        .contains(pot.getProductionBatchId())) {
+            // 看不到原值就不许改: 否则一个空值会把看不见的工艺参数覆盖掉
+            throw new BusinessException(403, "该产品工艺已设为保密，无权修改这一锅的工艺参数和备注")
+                    .withHint("其它字段 (时间、出锅量、用料、去向) 可以照常更正; 工艺参数请找保密负责人");
+        }
         List<ProductionPotCorrection> log = new ArrayList<>();
 
         if (cmd.potNumber() != null && !cmd.potNumber().equals(pot.getPotNumber())) {
@@ -251,7 +269,7 @@ public class ProductionPotService {
             log.add(change(pot, "outputQuantity", plain(pot.getOutputQuantity()), plain(cmd.outputQuantity()), reason, userId, userName));
             pot.setOutputQuantity(cmd.outputQuantity());
         }
-        if (cmd.outputUnit() != null && !Objects.equals(blankToNull(cmd.outputUnit()), pot.getOutputUnit())) {
+        if (cmd.outputUnit() != null && unitChanged(factoryId, pot.getOutputUnit(), blankToNull(cmd.outputUnit()))) {
             log.add(change(pot, "outputUnit", pot.getOutputUnit(), blankToNull(cmd.outputUnit()), reason, userId, userName));
             pot.setOutputUnit(blankToNull(cmd.outputUnit()));
         }
@@ -266,6 +284,9 @@ public class ProductionPotService {
         validateScalars(pot);
         assertNumberFree(factoryId, pot, pot.getId());
 
+        if (cmd.inputs() != null || cmd.outputs() != null || cmd.potNumber() != null) {
+            requireBatchForUpdate(factoryId, pot.getProductionBatchId());   // 与 record 同一把锁
+        }
         List<ProductionPotInput> oldInputs = inputRepository.findByFactoryIdAndPotIdIn(factoryId, List.of(potId));
         List<ProductionPotOutput> oldOutputs = outputRepository.findByFactoryIdAndPotIdIn(factoryId, List.of(potId));
         boolean replaceInputs = cmd.inputs() != null && !describeInputs(oldInputs).equals(describeLinks(cmd.inputs()));
@@ -411,9 +432,12 @@ public class ProductionPotService {
         inputs.values().forEach(l -> l.forEach(i -> keys.add(PotNodeIndex.key(i.getSourceType(), i.getSourceId()))));
         outputs.values().forEach(l -> l.forEach(o -> keys.add(PotNodeIndex.key(o.getTargetType(), o.getTargetId()))));
         Map<String, String> labels = nodeIndex.labels(factoryId, keys);
+        Set<Long> restricted = secretRedactor.restrictedBatches(factoryId,
+                pots.stream().map(ProductionPot::getProductionBatchId).collect(Collectors.toSet()));
 
         List<PotView> out = new ArrayList<>();
         for (ProductionPot p : pots) {
+            boolean redact = restricted.contains(p.getProductionBatchId());
             List<LinkView> in = inputs.getOrDefault(p.getId(), List.of()).stream()
                     .map(i -> new LinkView(i.getSourceType(), i.getSourceId(),
                             labels.get(PotNodeIndex.key(i.getSourceType(), i.getSourceId())), i.getQuantity(), i.getUnit()))
@@ -423,15 +447,20 @@ public class ProductionPotService {
                             labels.get(PotNodeIndex.key(x.getTargetType(), x.getTargetId())), x.getQuantity(), x.getUnit()))
                     .toList();
             List<CorrectionView> cs = corrections.getOrDefault(p.getId(), List.of()).stream()
-                    .map(c -> new CorrectionView(c.getAction(), c.getFieldName(), c.getOldValue(), c.getNewValue(),
-                            c.getReason(), c.getCorrectedBy(), c.getCorrectedByName(), c.getCorrectedAt()))
+                    .map(c -> {
+                        boolean hide = redact && SECRET_FIELDS.contains(c.getFieldName());
+                        return new CorrectionView(c.getAction(), c.getFieldName(), hide ? null : c.getOldValue(),
+                                hide ? null : c.getNewValue(), c.getReason(), c.getCorrectedBy(),
+                                c.getCorrectedByName(), c.getCorrectedAt());
+                    })
                     .toList();
             out.add(new PotView(p.getId(), p.getProductionBatchId(), p.getProductionPlanId(), p.getProcessSheetRowId(),
-                    p.getProcessCode(), p.getProcessName(), p.getPotNumber(), p.getEquipmentLabel(),
+                    redact ? null : p.getProcessCode(), redact ? null : p.getProcessName(), p.getPotNumber(),
+                    p.getEquipmentLabel(),
                     p.getStartedAt(), p.getEndedAt(), p.getTimeSource(), Boolean.TRUE.equals(p.getTimeConfirmed()),
                     durationMinutes(p), p.getBindingStatus(), p.getOperatorId(), p.getOperatorName(),
-                    p.getOutputQuantity(), p.getOutputUnit(), p.getProcessParams(), p.getSource(), p.getStatus(),
-                    p.getVoidReason(), p.getRemark(), in, o, cs));
+                    p.getOutputQuantity(), p.getOutputUnit(), redact ? Map.of() : p.getProcessParams(),
+                    p.getSource(), p.getStatus(), p.getVoidReason(), redact ? null : p.getRemark(), in, o, cs, redact));
         }
         return out;
     }
@@ -517,8 +546,9 @@ public class ProductionPotService {
                         .withHint("锅次只能分摊生产批次已经记录的" + side + "批次")
                         .withHintTarget(inputSide ? "inputs" : "outputs");
             }
-            if (!PotNodeIndex.sameUnit(l.unit(), node.unit())) {
-                throw invalid("锅次" + side + "单位 " + l.unit() + " 与批次单位 " + node.unit() + " 不一致");
+            if (!nodeIndex.sameUnit(factoryId, l.unit(), node.unit())) {
+                throw invalid("锅次" + side + "单位「" + UnitDisplayNames.display(l.unit()) + "」与批次单位「"
+                        + UnitDisplayNames.display(node.unit()) + "」不一致");
             }
         }
         // 上限: 同节点所有未作废锅之和
@@ -540,7 +570,7 @@ public class ProductionPotService {
             BigDecimal total = already.getOrDefault(k, BigDecimal.ZERO).add(l.quantity());
             if (total.compareTo(node.quantity()) > 0) {
                 throw new BusinessException(400, "各锅" + side + "之和 " + plain(total) + " 超过批次" + side + " "
-                        + plain(node.quantity()) + Objects.toString(node.unit(), ""))
+                        + plain(node.quantity()) + (node.unit() == null ? "" : UnitDisplayNames.display(node.unit())))
                         .withCode(CODE_OVER_ALLOCATED)
                         .withHint("请核对每一锅的量; 批次级数量以报工为准")
                         .withHintTarget(inputSide ? "inputs" : "outputs");
@@ -590,6 +620,32 @@ public class ProductionPotService {
         return out;
     }
 
+    private ProductionBatch requireBatchForUpdate(String factoryId, Long productionBatchId) {
+        return productionBatchRepository.findByIdAndFactoryIdForUpdate(productionBatchId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产批次不存在或不属于本工厂: " + productionBatchId)
+                        .withHintTarget("productionBatchId"));
+    }
+
+    /** 报工行 / 生产计划必须是这个批次的 (不许把锅挂到别的计划、别的报工行上)。 */
+    private void assertRowAndPlanBelongToBatch(String factoryId, ProductionBatch batch, Long rowId, String planId) {
+        if (planId != null && !planId.isBlank() && batch.getProductionPlanId() != null
+                && !planId.equals(batch.getProductionPlanId())) {
+            throw invalid("生产计划与生产批次不一致").withHintTarget("productionPlanId");
+        }
+        if (rowId == null) {
+            return;
+        }
+        ProcessSheetRow row = processSheetRowRepository.findById(rowId)
+                .filter(r -> factoryId.equals(r.getFactoryId()))
+                .orElseThrow(() -> invalid("报工行不存在或不属于本工厂: " + rowId).withHintTarget("processSheetRowId"));
+        boolean planMismatch = batch.getProductionPlanId() != null && !batch.getProductionPlanId().equals(row.getPlanId());
+        // 报工行在物化时回写 batch_id; 已回写就必须是这个批次
+        boolean batchMismatch = row.getBatchId() != null && !row.getBatchId().equals(batch.getId());
+        if (planMismatch || batchMismatch) {
+            throw invalid("报工行不属于这个生产批次").withHintTarget("processSheetRowId");
+        }
+    }
+
     private ProductionBatch requireBatch(String factoryId, Long productionBatchId) {
         return productionBatchRepository.findByIdAndFactoryId(productionBatchId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "生产批次不存在或不属于本工厂: " + productionBatchId)
@@ -636,18 +692,30 @@ public class ProductionPotService {
 
     private static String describeInputs(List<ProductionPotInput> rows) {
         return rows.stream().map(r -> r.getSourceType() + ":" + r.getSourceId() + "=" + plain(r.getQuantity())
-                        + Objects.toString(r.getUnit(), "")).sorted().collect(Collectors.joining(", "));
+                        + unitText(r.getUnit())).sorted().collect(Collectors.joining(", "));
     }
 
     private static String describeOutputs(List<ProductionPotOutput> rows) {
         return rows.stream().map(r -> r.getTargetType() + ":" + r.getTargetId() + "=" + plain(r.getQuantity())
-                        + Objects.toString(r.getUnit(), "")).sorted().collect(Collectors.joining(", "));
+                        + unitText(r.getUnit())).sorted().collect(Collectors.joining(", "));
     }
 
     private static String describeLinks(List<PotLink> links) {
         return links.stream().filter(Objects::nonNull)
-                .map(l -> l.nodeType() + ":" + l.nodeId() + "=" + plain(l.quantity()) + Objects.toString(blankToNull(l.unit()), ""))
+                .map(l -> l.nodeType() + ":" + l.nodeId() + "=" + plain(l.quantity()) + unitText(blankToNull(l.unit())))
                 .sorted().collect(Collectors.joining(", "));
+    }
+
+    /** 单位是否真的改了: 两边都空 = 没改; 一边空 = 改了; 都有 = 问单位契约。 */
+    private boolean unitChanged(String factoryId, String before, String after) {
+        if (before == null || after == null) {
+            return !(before == null && after == null);
+        }
+        return !nodeIndex.sameUnit(factoryId, before, after);
+    }
+
+    private static String unitText(String unit) {
+        return unit == null ? "" : UnitDisplayNames.display(unit);
     }
 
     private static String plain(BigDecimal v) {

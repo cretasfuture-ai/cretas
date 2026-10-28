@@ -53,6 +53,7 @@ function qty(v: number | null | undefined, unit?: string | null) {
   return v == null ? '-' : `${Number(v)}${unit ? ' ' + unit : ''}`;
 }
 function params(p: PotView) {
+  if (p.processRedacted) return '工艺保密，需授权查看';
   const entries = Object.entries(p.processParams || {});
   return entries.length ? entries.map(([k, v]) => `${PARAM_LABEL[k] ?? k} ${v}`).join('，') : '-';
 }
@@ -146,8 +147,11 @@ async function submit() {
     if (editing.value) {
       await correctPot(props.factoryId, editing.value.id, {
         potNumber: f.potNumber ?? undefined, equipmentLabel: f.equipmentLabel, startedAt: f.startedAt, endedAt: f.endedAt,
-        timeSource: f.timeSource, outputQuantity: f.outputQuantity, outputUnit: f.outputUnit, remark: f.remark,
-        processParams: processParams(), inputs: links(f.inputs), outputs: links(f.outputs), reason: reasonText.value,
+        timeSource: f.timeSource, outputQuantity: f.outputQuantity, outputUnit: f.outputUnit,
+        // 工艺保密时看不到原值: 不回传 (否则空值会把看不见的工艺参数 / 备注覆盖掉)
+        remark: editing.value.processRedacted ? undefined : f.remark,
+        processParams: editing.value.processRedacted ? undefined : processParams(),
+        inputs: links(f.inputs), outputs: links(f.outputs), reason: reasonText.value,
       });
       ElMessage.success(`第 ${f.potNumber} 锅已更正，原值已留痕`);
     } else {
@@ -334,8 +338,11 @@ defineExpose({ reload: load });
           <el-input-number v-model="form.outputQuantity" :min="0" :precision="3" :controls="false" />
           <el-input v-model="form.outputUnit" placeholder="单位" style="width: 80px; margin-left: 8px" />
         </el-form-item>
-        <el-form-item label="温度 ℃"><el-input-number v-model="form.temperatureC" :controls="false" /></el-form-item>
-        <el-form-item label="时长 min"><el-input-number v-model="form.durationMin" :min="0" :controls="false" /></el-form-item>
+        <template v-if="!editing?.processRedacted">
+          <el-form-item label="温度 ℃"><el-input-number v-model="form.temperatureC" :controls="false" /></el-form-item>
+          <el-form-item label="时长 min"><el-input-number v-model="form.durationMin" :min="0" :controls="false" /></el-form-item>
+        </template>
+        <p v-else class="pot-note">该产品工艺保密：工艺参数和备注不显示、也不能在这里修改。</p>
         <el-form-item label="这一锅用料">
           <div class="pot-links">
             <p v-if="form.inputs.length === 0" class="pot-sub">本批次还没有用料记录</p>
@@ -357,7 +364,7 @@ defineExpose({ reload: load });
             </div>
           </div>
         </el-form-item>
-        <el-form-item label="备注"><el-input v-model="form.remark" /></el-form-item>
+        <el-form-item v-if="!editing?.processRedacted" label="备注"><el-input v-model="form.remark" /></el-form-item>
         <el-form-item v-if="editing" label="更正原因" required>
           <el-select v-model="reasonPick" placeholder="请选择" style="width: 200px">
             <el-option v-for="r in REASONS" :key="r" :label="r" :value="r" />

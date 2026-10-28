@@ -21,13 +21,13 @@ const pot = (n: number, extra: Record<string, unknown>) => ({
   potNumber: n, equipmentLabel: `${n} 号锅`, startedAt: '2026-10-28T09:00:00', endedAt: '2026-10-28T09:45:00',
   timeSource: 'MANUAL', timeConfirmed: true, durationMinutes: 45, bindingStatus: 'CONFIRMED', operatorId: 5,
   operatorName: '甲', outputQuantity: 50, outputUnit: 'kg', processParams: { temperatureC: 98 }, source: 'PROCESS_SHEET',
-  status: 'RECORDED', voidReason: null, remark: null, inputs: [], outputs: [], corrections: [], ...extra,
+  status: 'RECORDED', voidReason: null, remark: null, inputs: [], outputs: [], corrections: [], processRedacted: false, ...extra,
 });
 const view = {
   productionBatchId: 7, batchNumber: 'CLK-W-7', potCount: 2, pendingCount: 1,
   pots: [
     pot(1, { inputs: [{ nodeType: 'MATERIAL_BATCH', nodeId: 'mb-a', batchNumber: 'RAW-A', quantity: 40, unit: 'kg' }] }),
-    pot(2, { timeSource: 'CAMERA_CANDIDATE', timeConfirmed: false, durationMinutes: null }),
+    pot(2, { timeSource: 'CAMERA_CANDIDATE', timeConfirmed: false, durationMinutes: null, processRedacted: true, processParams: {} }),
   ],
   inputAllocation: [{ nodeType: 'MATERIAL_BATCH', nodeId: 'mb-a', batchNumber: 'RAW-A', batchQuantity: 60, allocatedQuantity: 40, unit: 'kg', complete: false }],
   outputAllocation: [],
@@ -53,6 +53,7 @@ describe('锅次面板', () => {
     expect(text).toContain('1 锅待确认');
     expect(text).toContain('摄像候选');
     expect(text).toContain('未分完，召回按整批');
+    expect(text).toContain('工艺保密，需授权查看');
   });
 
   it('录入一锅: 预填下一个锅号, 显示用料还可分 20, 提交带上批次 id', async () => {
