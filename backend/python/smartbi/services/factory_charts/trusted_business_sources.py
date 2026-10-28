@@ -24,6 +24,28 @@ from .operational_sources import reconcile_sales_rows
 
 
 _LIMIT = 10000
+COMMERCE_JOINT_SOURCE = "commerce-joint · 订单-发货-当前库存/客户-显式渠道联合"
+COMMERCE_CHANNEL_SCHEMA_SQL = """
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'sales_orders'
+      AND column_name = 'cf_smartbi_sales_channel'
+)
+AND EXISTS (
+    SELECT 1
+    FROM canvas_dynamic_field
+    WHERE factory_id = $1
+      AND module_code = 'sales_order'
+      AND status = 'ACTIVE'
+      AND field_code = 'smartbi_sales_channel'
+    GROUP BY factory_id
+    HAVING count(*) = 1 AND bool_and(field_type = 'TEXT'
+      AND column_name = 'cf_smartbi_sales_channel'
+      AND config->>'smartbiSemantic' = 'sales_channel.v1')
+) AS channel_ready
+"""
 
 # Customer.source is intentionally named "客户来源" and never "渠道".  The
 # custom SmartBI order-channel field lives in captured_sources.py.
@@ -60,6 +82,79 @@ JOIN customers c ON c.id = so.customer_id AND c.factory_id = so.factory_id
  AND c.deleted_at IS NULL
 LEFT JOIN product_types pt
   ON pt.id = i.product_type_id AND pt.factory_id = so.factory_id AND pt.deleted_at IS NULL
+WHERE so.factory_id = $1 AND so.deleted_at IS NULL AND i.deleted_at IS NULL
+  AND so.status NOT IN ('CANCELLED', 'DRAFT', 'FINANCE_REJECTED')
+  AND ($2::date IS NULL OR so.order_date >= $2::date)
+  AND ($3::date IS NULL OR so.order_date < ($3::date + INTERVAL '1 day'))
+ORDER BY so.order_date, so.id, i.id
+LIMIT 10001
+"""
+
+# This is deliberately a separate source from Customer.source sales.  The
+# channel is admitted only when the one ACTIVE SmartBI sales-channel field
+# definition exists; Customer.source remains acquisition attribution.
+COMMERCE_BASE_SALES_SQL = CUSTOMER_SOURCE_SALES_SQL.replace(
+    'so.id AS "订单ID", so.order_date',
+    'so.id AS "订单ID", so.factory_id AS "工厂ID", so.order_date',
+).replace('c.source AS "客户来源"', 'c.name AS "客户"')
+COMMERCE_BASE_SALES_NO_PRICE_SQL = CUSTOMER_SOURCE_SALES_NO_PRICE_SQL.replace(
+    'so.id AS "订单ID", so.order_date',
+    'so.id AS "订单ID", so.factory_id AS "工厂ID", so.order_date',
+).replace('c.source AS "客户来源"', 'c.name AS "客户"')
+
+COMMERCE_JOINT_SALES_SQL = """
+WITH channel_definition AS (
+    SELECT factory_id
+    FROM canvas_dynamic_field
+    WHERE factory_id = $1 AND module_code = 'sales_order' AND status = 'ACTIVE'
+      AND field_code = 'smartbi_sales_channel'
+    GROUP BY factory_id
+    HAVING count(*) = 1 AND bool_and(field_type = 'TEXT'
+      AND column_name = 'cf_smartbi_sales_channel'
+      AND config->>'smartbiSemantic' = 'sales_channel.v1')
+)
+SELECT i.id AS "订单行ID", so.id AS "订单ID", so.factory_id AS "工厂ID", so.order_date AS "日期",
+       so.customer_id AS "客户ID", c.name AS "客户",
+       so.cf_smartbi_sales_channel AS "渠道",
+       'cf_smartbi_sales_channel' AS "渠道定义列", i.product_type_id AS "产品ID",
+       COALESCE(NULLIF(BTRIM(pt.name), ''), NULLIF(BTRIM(i.product_name), '')) AS "产品",
+       i.unit AS "单位", i.quantity AS "数量", i.unit_price AS "单价",
+       COALESCE(i.discount_rate, 0) AS "折扣率", so.total_amount AS "订单总额"
+FROM sales_order_items i
+JOIN sales_orders so ON so.id = i.sales_order_id AND so.factory_id = $1
+JOIN customers c ON c.id = so.customer_id AND c.factory_id = so.factory_id AND c.deleted_at IS NULL
+JOIN channel_definition cd ON cd.factory_id = so.factory_id
+LEFT JOIN product_types pt ON pt.id = i.product_type_id AND pt.factory_id = so.factory_id AND pt.deleted_at IS NULL
+WHERE so.factory_id = $1 AND so.deleted_at IS NULL AND i.deleted_at IS NULL
+  AND so.status NOT IN ('CANCELLED', 'DRAFT', 'FINANCE_REJECTED')
+  AND ($2::date IS NULL OR so.order_date >= $2::date)
+  AND ($3::date IS NULL OR so.order_date < ($3::date + INTERVAL '1 day'))
+ORDER BY so.order_date, so.id, i.id
+LIMIT 10001
+"""
+
+COMMERCE_JOINT_SALES_NO_PRICE_SQL = """
+WITH channel_definition AS (
+    SELECT factory_id
+    FROM canvas_dynamic_field
+    WHERE factory_id = $1 AND module_code = 'sales_order' AND status = 'ACTIVE'
+      AND field_code = 'smartbi_sales_channel'
+    GROUP BY factory_id
+    HAVING count(*) = 1 AND bool_and(field_type = 'TEXT'
+      AND column_name = 'cf_smartbi_sales_channel'
+      AND config->>'smartbiSemantic' = 'sales_channel.v1')
+)
+SELECT i.id AS "订单行ID", so.id AS "订单ID", so.factory_id AS "工厂ID", so.order_date AS "日期",
+       so.customer_id AS "客户ID", c.name AS "客户",
+       so.cf_smartbi_sales_channel AS "渠道",
+       'cf_smartbi_sales_channel' AS "渠道定义列", i.product_type_id AS "产品ID",
+       COALESCE(NULLIF(BTRIM(pt.name), ''), NULLIF(BTRIM(i.product_name), '')) AS "产品",
+       i.unit AS "单位", i.quantity AS "数量"
+FROM sales_order_items i
+JOIN sales_orders so ON so.id = i.sales_order_id AND so.factory_id = $1
+JOIN customers c ON c.id = so.customer_id AND c.factory_id = so.factory_id AND c.deleted_at IS NULL
+JOIN channel_definition cd ON cd.factory_id = so.factory_id
+LEFT JOIN product_types pt ON pt.id = i.product_type_id AND pt.factory_id = so.factory_id AND pt.deleted_at IS NULL
 WHERE so.factory_id = $1 AND so.deleted_at IS NULL AND i.deleted_at IS NULL
   AND so.status NOT IN ('CANCELLED', 'DRAFT', 'FINANCE_REJECTED')
   AND ($2::date IS NULL OR so.order_date >= $2::date)
@@ -124,17 +219,20 @@ LIMIT 10001
 """
 
 # This relation is audit-supporting evidence, not a sales allocation.  Both
-# paths are selected because deployed data may use either the direct item FK or
-# the explicit allocation table.  The Python qualifier rejects duplicate or
-# cross-unit relationships rather than summing them.
+# paths are supported, but active allocations are authoritative. Java's
+# recordDeductedBatch also keeps the first allocated batch on the item for
+# traceability; that pointer is not a second shipment. An invalid allocation
+# must not reactivate the legacy pointer. The qualifier still rejects duplicate
+# or cross-unit relationships rather than summing them.
 FINISHED_GOODS_SHIPMENT_SQL = """
-SELECT sdi.id::text AS "发货行ID", sdr.id AS "发货单ID", sdr.sales_order_id AS "订单ID",
+SELECT sdi.id::text AS "发货行ID", sdi.sales_order_item_id AS "销售订单行ID", sdr.id AS "发货单ID", sdr.sales_order_id AS "订单ID",
        sdr.customer_id AS "客户ID", sdr.delivery_date AS "发货日期", sdr.status AS "发货状态",
        sdi.finished_goods_batch_id AS "成品批次ID", sdi.product_type_id AS "产品ID",
        sdi.delivered_quantity AS "发货数量", sdi.unit AS "发货单位",
        sdi.delivered_quantity AS "申报发货数量", sdi.unit AS "申报发货单位",
        sdi.id::text AS "发货关系ID", 'DELIVERY_ITEM_FK' AS "关系来源",
-       fgb.factory_id AS "批次工厂ID", fgb.product_type_id AS "批次产品ID", fgb.unit AS "批次单位"
+       fgb.factory_id AS "批次工厂ID", fgb.product_type_id AS "批次产品ID", fgb.unit AS "批次单位",
+       fgb.ownership AS "所有权", fgb.owner_customer_id AS "所有客户ID"
 FROM sales_delivery_items sdi
 JOIN sales_delivery_records sdr ON sdr.id = sdi.delivery_record_id
  AND sdr.factory_id = $1 AND sdr.deleted_at IS NULL
@@ -142,17 +240,25 @@ JOIN finished_goods_batches fgb ON fgb.id = sdi.finished_goods_batch_id
  AND fgb.factory_id = sdr.factory_id AND fgb.deleted_at IS NULL
 WHERE sdr.factory_id = $1 AND sdi.deleted_at IS NULL
   AND sdr.status IN ('SHIPPED', 'DELIVERED')
+  AND COALESCE(sdr.record_role, 'LEGACY') <> 'MASTER'
   AND sdi.finished_goods_batch_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM sales_delivery_item_batch_allocations active_allocation
+      WHERE active_allocation.factory_id = sdr.factory_id
+        AND active_allocation.delivery_item_id = sdi.id::text
+        AND active_allocation.deleted_at IS NULL
+  )
   AND ($2::date IS NULL OR sdr.delivery_date >= $2::date)
   AND ($3::date IS NULL OR sdr.delivery_date < ($3::date + INTERVAL '1 day'))
 UNION ALL
-SELECT sdi.id::text AS "发货行ID", sdr.id AS "发货单ID", sdr.sales_order_id AS "订单ID",
+SELECT sdi.id::text AS "发货行ID", sdi.sales_order_item_id AS "销售订单行ID", sdr.id AS "发货单ID", sdr.sales_order_id AS "订单ID",
        sdr.customer_id AS "客户ID", sdr.delivery_date AS "发货日期", sdr.status AS "发货状态",
        a.finished_goods_batch_id AS "成品批次ID", sdi.product_type_id AS "产品ID",
        a.allocated_qty AS "发货数量", COALESCE(a.unit, sdi.unit) AS "发货单位",
        sdi.delivered_quantity AS "申报发货数量", sdi.unit AS "申报发货单位",
        a.id AS "发货关系ID", 'BATCH_ALLOCATION' AS "关系来源",
-       fgb.factory_id AS "批次工厂ID", fgb.product_type_id AS "批次产品ID", fgb.unit AS "批次单位"
+       fgb.factory_id AS "批次工厂ID", fgb.product_type_id AS "批次产品ID", fgb.unit AS "批次单位",
+       fgb.ownership AS "所有权", fgb.owner_customer_id AS "所有客户ID"
 FROM sales_delivery_item_batch_allocations a
 JOIN sales_delivery_items sdi ON sdi.id::text = a.delivery_item_id
  AND sdi.deleted_at IS NULL
@@ -162,6 +268,7 @@ JOIN finished_goods_batches fgb ON fgb.id = a.finished_goods_batch_id
  AND fgb.factory_id = sdr.factory_id AND fgb.deleted_at IS NULL
 WHERE a.factory_id = $1 AND a.deleted_at IS NULL
   AND sdr.status IN ('SHIPPED', 'DELIVERED')
+  AND COALESCE(sdr.record_role, 'LEGACY') <> 'MASTER'
   AND ($2::date IS NULL OR sdr.delivery_date >= $2::date)
   AND ($3::date IS NULL OR sdr.delivery_date < ($3::date + INTERVAL '1 day'))
 ORDER BY "发货日期", "发货单ID", "发货关系ID"
@@ -274,6 +381,10 @@ def qualify_finished_goods_rows(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Validate current finished-goods balances without reconstructing history."""
     materialized = [dict(row) for row in rows]
+    for row in materialized:
+        for field in ("成品批次ID", "产品ID", "单位"):
+            value = row.get(field)
+            row[field] = (str(value).strip() or None) if value is not None and not pd.isna(value) else None
     id_counts: defaultdict[Any, int] = defaultdict(int)
     for row in materialized:
         id_counts[row.get("成品批次ID")] += 1
@@ -285,8 +396,8 @@ def qualify_finished_goods_rows(
         reason: str | None = None
         if batch_id in duplicate_ids:
             reason = "成品批次重复"
-        if not batch_id or row.get("工厂ID") != factory_id:
-            reason = reason or "成品批次缺失或租户不一致"
+        if not batch_id or not row.get("产品ID") or row.get("工厂ID") != factory_id:
+            reason = reason or "成品批次或SKU缺失或租户不一致"
         if "状态" not in row or row.get("状态") != "AVAILABLE":
             reason = reason or "成品批次非AVAILABLE"
         unit = row.get("单位")
@@ -321,6 +432,12 @@ def qualify_finished_goods_shipments(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Validate delivery-to-FG relationships without unit conversion or allocation."""
     materialized = [dict(row) for row in rows]
+    identity_fields = ("发货关系ID", "发货行ID", "发货单ID", "成品批次ID", "产品ID",
+                       "批次产品ID", "发货单位", "批次单位", "申报发货单位", "销售订单行ID")
+    for row in materialized:
+        for field in identity_fields:
+            value = row.get(field)
+            row[field] = (str(value).strip() or None) if value is not None and not pd.isna(value) else None
     relation_counts: defaultdict[Any, int] = defaultdict(int)
     allocation_by_item: defaultdict[Any, list[dict[str, Any]]] = defaultdict(list)
     for row in materialized:
@@ -344,7 +461,7 @@ def qualify_finished_goods_shipments(
         allocated_qtys = [_decimal(row.get("发货数量")) for row in item_rows]
         relation_ids = [row.get("发货关系ID") for row in item_rows]
         invalid_relation = any(
-            not row.get("发货单ID") or not row.get("发货行ID") or not row.get("成品批次ID")
+            any(not row.get(field) for field in identity_fields[:8])
             or not row.get("关系来源") == "BATCH_ALLOCATION"
             or not row.get("批次工厂ID") == factory_id
             or row.get("产品ID") != row.get("批次产品ID")
@@ -368,6 +485,8 @@ def qualify_finished_goods_shipments(
         relation = row.get("发货关系ID")
         reason: str | None = None
         item_id = row.get("发货行ID")
+        if any(not row.get(field) for field in identity_fields[:8]):
+            reason = "发货关系业务ID、SKU或物理单位缺失"
         if item_id in ambiguous_items:
             reason = "同一发货行同时存在直接批次和allocation路径"
         if item_id in allocation_gaps:
@@ -477,6 +596,11 @@ async def load(factory_id: str, request: Any, can_price: bool):
             materialized = [dict(row) for row in rows]
             raw_rows[name] = materialized
             local_gaps: list[dict[str, Any]] = []
+            if name in {"commerce-joint-sales", "commerce-base-sales"}:
+                # This raw frame is consumed only by commerce_joint.prepare;
+                # exposing it as a normal dataset would create generic charts
+                # before the relation and price guards have run.
+                return None, None, []
             if name == "customer-source-sales":
                 sales_rows, local_gaps = qualify_customer_source_sales_rows(materialized, can_price)
                 frame = pd.DataFrame(sales_rows)
@@ -500,4 +624,67 @@ async def load(factory_id: str, request: Any, can_price: bool):
     errors = [error for _, error, _ in results if error]
     for _, _, local_gaps in results:
         gaps.extend(local_gaps)
+    # A joint sales query is only needed when there is at least one real
+    # delivery relationship to join.  This keeps the existing trusted source
+    # read path unchanged for factories with no shipment facts.
+    commerce_schema_ready = False
+    if raw_rows.get("finished-goods-shipment"):
+        _, base_error, _ = await read(
+            "commerce-base-sales", "同厂销售订单行（独立于渠道配置）",
+            COMMERCE_BASE_SALES_SQL if can_price else COMMERCE_BASE_SALES_NO_PRICE_SQL, True)
+        if base_error:
+            errors.append(base_error)
+        try:
+            pool = await config.get_cretas_pool()
+            if pool is None:
+                raise RuntimeError("pool unavailable")
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
+                    schema_row = await conn.fetchrow(COMMERCE_CHANNEL_SCHEMA_SQL, factory_id)
+            commerce_schema_ready = bool(schema_row and schema_row["channel_ready"])
+        except Exception:
+            commerce_schema_ready = False
+        if commerce_schema_ready:
+            _, commerce_error, _ = await read(
+                "commerce-joint-sales", "订单客户与ACTIVE显式渠道联合原始行",
+                COMMERCE_JOINT_SALES_NO_PRICE_SQL, True)
+            if commerce_error:
+                errors.append(commerce_error)
+        else:
+            gaps.append({"id": "commerce.channel", "title": "客户-显式渠道联合",
+                         "missing": ["sales_orders.cf_smartbi_sales_channel列或唯一ACTIVE显式渠道定义不可核验，未读取客户渠道/金额"]})
+    # The joint adapter consumes the same tenant-scoped raw rows as the four
+    # named trusted datasets.  It validates the stored sales_order_item_id →
+    # delivery → finished_goods_batch relationship before exposing one merged
+    # detail frame; it never uses Customer.source or an FGB source snapshot as
+    # an order-line foreign key.
+    if raw_rows.get("commerce-base-sales"):
+        from . import commerce_joint
+        channel_by_id = {str(row["订单行ID"]): row
+                         for row in raw_rows.get("commerce-joint-sales", [])}
+        joint_sales = []
+        for original in raw_rows["commerce-base-sales"]:
+            row = dict(original)
+            channel_row = channel_by_id.get(str(row["订单行ID"]))
+            if channel_row is not None and all(
+                    str(channel_row.get(key)) == str(row.get(key))
+                    for key in ("订单ID", "工厂ID", "客户ID", "产品ID", "单位", "数量")):
+                row["渠道"] = channel_row.get("渠道")
+                row["渠道定义列"] = channel_row.get("渠道定义列")
+            joint_sales.append(row)
+        joint_frame, joint_gaps = commerce_joint.prepare(
+            joint_sales,
+            raw_rows.get("finished-goods-shipment", []),
+            raw_rows.get("finished-goods-inventory", []),
+            factory_id, request, can_price,
+        )
+        gaps.extend(joint_gaps)
+        if joint_frame is not None and not joint_frame.empty:
+            datasets.append(Dataset(
+                joint_frame,
+                COMMERCE_JOINT_SOURCE,
+                financial=can_price,
+                currency="CNY" if can_price else "",
+            ))
     return datasets, errors, gaps

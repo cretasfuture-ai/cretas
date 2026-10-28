@@ -226,6 +226,16 @@ def _classify(columns: Sequence[str]) -> tuple[frozenset[str], tuple[str, ...]]:
     return frozenset(prices), tuple(dict.fromkeys(dimensions))
 
 
+def point_drilldown_enabled(candidate: Mapping[str, Any]) -> bool:
+    """An explicit opt-out may only remove point drilling, never authorize it."""
+    metadata = candidate.get("engine")
+    if isinstance(metadata, Mapping) and metadata.get("pointDrilldown") is False:
+        return False
+    return bool(candidate.get("chart", {}).get("echartsOption")) and str(
+        candidate.get("chart", {}).get("chartType", "")).lower() not in {
+            "gauge", "kpi", "kpi_scorecard", "multi_axis", "dual_axis"}
+
+
 def _currency_quantity_independent(candidate: Mapping[str, Any], dataset: Any) -> bool:
     """Only reconciled CNY SKU revenue keeps rows in their original units.
 
@@ -419,10 +429,7 @@ def register(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], r
                            source, _period_label(request), rows, columns, dimensions, point_dimension, prices, financial,
                            candidate_unit or None, storage_key, expires_at, size)
             _put(frame)
-            chart_type = str(item.get("chart", {}).get("chartType", "")).lower()
-            drilldown = bool(item.get("chart", {}).get("echartsOption")) and chart_type not in {
-                "gauge", "kpi", "kpi_scorecard", "multi_axis", "dual_axis",
-            }
+            drilldown = point_drilldown_enabled(item)
             item["detailContext"] = {"id": context_id, "expiresAt": datetime.now(timezone.utc).isoformat(),
                                       "drilldown": drilldown}
         except DetailError:
