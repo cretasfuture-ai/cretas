@@ -165,8 +165,11 @@ class ProcessSecretCrossFactoryRound4Test {
     void singleRollbackAndHistoryOnlyForTheOwnRow() {
         bindFactoryAdmin();
         IntentConfigRollbackService rollback = mock(IntentConfigRollbackService.class);
-        AIIntentConfigController c = controller(mock(AIIntentService.class), rollback);
+        AIIntentService service = mock(AIIntentService.class);
+        AIIntentConfigController c = controller(service, rollback);
         when(intents.findByFactoryIdAndIntentCode(FA, "PRODUCTION_QUERY")).thenReturn(Optional.of(row(null, "[]")));
+        // 旧写法 getIntentByCode 本厂没有时退回平台级行 —— 按它就会回滚 / 读出平台级行
+        when(service.getIntentByCode(FA, "PRODUCTION_QUERY")).thenReturn(Optional.of(row(null, "[]")));
         AIIntentConfigController.RollbackRequest req = new AIIntentConfigController.RollbackRequest();
 
         assertThatThrownBy(() -> c.rollbackIntent(FA, "PRODUCTION_QUERY", req, new MockHttpServletRequest()))
