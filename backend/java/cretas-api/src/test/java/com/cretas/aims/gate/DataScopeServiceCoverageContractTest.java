@@ -24,7 +24,7 @@ class DataScopeServiceCoverageContractTest {
     private static final Map<String, String> EXPECTED_METHODS = expectedMethods();
 
     @Test
-    void exactlyFourteenReviewedServiceMethodsAreDataScoped() throws IOException {
+    void exactlyFifteenReviewedServiceMethodsAreDataScoped() throws IOException {
         Map<String, Integer> annotationCounts = new LinkedHashMap<>();
 
         try (var paths = Files.walk(SERVICES)) {
@@ -47,7 +47,7 @@ class DataScopeServiceCoverageContractTest {
                 expectedCounts.merge(key.substring(0, key.indexOf('#')), 1, Integer::sum));
         assertThat(annotationCounts).isEqualTo(expectedCounts);
         assertThat(annotationCounts.values()).containsOnly(1, 8);
-        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(14);
+        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(15);
 
         EXPECTED_METHODS.forEach((methodKey, ignored) -> {
             try {
@@ -91,6 +91,10 @@ class DataScopeServiceCoverageContractTest {
         expected.put("inventory/impl/ReturnOrderServiceImpl.java#getReturnOrders", "getReturnOrders");
         expected.put("inventory/impl/SalesServiceImpl.java#getSalesOrders", "getSalesOrders");
         expected.put("listsummary/impl/ListSummaryServiceImpl.java#computeSummary", "computeSummary");
+        // Reviewed (S6-09 task badge): the sales-order count mirrors SalesServiceImpl#getSalesOrders for
+        // SELF / SELF_AND_BELOW / DEPT_AND_BELOW / ALL, and fails closed (UNKNOWN, never a factory-wide count)
+        // when the caller has no scope context, no user id, or a scope it cannot narrow by (CUSTOM).
+        expected.put("TaskBadgeService.java#countActionableSalesOrders", "countActionableSalesOrders");
         return expected;
     }
 
