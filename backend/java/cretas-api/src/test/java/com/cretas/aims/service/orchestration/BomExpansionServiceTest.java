@@ -7,6 +7,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.uom.MaterialUomConverter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -155,6 +156,38 @@ class BomExpansionServiceTest {
         assertEquals(true, result.isAllSatisfied());
         assertEquals(List.of("MB-TODAY"), result.getAllocations().stream()
                 .map(com.cretas.aims.dto.orchestration.MaterialAllocation::getMaterialBatchId).toList());
+    }
+
+    /**
+     * 缺料单的单位由这里产出: 配方按 g、库存按 kg 时, 三个数量已换算到 kg, quantityUnit 必须跟着是 kg。
+     * 不填 (null) 时缺料单显示「单位未知」, 在途采购行全被当成单位不一致, 永远到不了「等供应」。
+     */
+    @Test
+    void shortfallCarriesTheStockUnitItWasComparedIn() {
+        MaterialUomConverter converter = org.mockito.Mockito.mock(MaterialUomConverter.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "materialUomConverter", converter);
+        when(converter.toComparableQuantity("MAT-SALT", new BigDecimal("5000"), "g", "kg"))
+                .thenReturn(MaterialUomConverter.ConversionResult.converted(new BigDecimal("5"), "kg"));
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
+        when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-SALT", "WH-WKS"))
+                .thenReturn(List.of(stockBatch("MB-SALT", "3", null)));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-SALT", "WH-LOG"))
+                .thenReturn(List.of());
+
+        MaterialRequirement req = new MaterialRequirement();
+        req.setMaterialTypeId("MAT-SALT");
+        req.setMaterialTypeName("盐");
+        req.setRequiredQuantity(new BigDecimal("5000"));
+        req.setSourceUnit("g");
+
+        com.cretas.aims.dto.orchestration.MaterialShortfall sf =
+                service.checkMaterialAvailability("F006", List.of(req)).getShortfalls().get(0);
+
+        assertEquals("kg", sf.getQuantityUnit());
+        assertEquals(0, new BigDecimal("5").compareTo(sf.getRequiredQuantity()));
+        assertEquals(0, new BigDecimal("3").compareTo(sf.getAvailableQuantity()));
+        assertEquals(0, new BigDecimal("2").compareTo(sf.getShortfallQuantity()));
     }
 
     private static com.cretas.aims.entity.MaterialBatch stockBatch(String id, String qty, java.time.LocalDate expire) {

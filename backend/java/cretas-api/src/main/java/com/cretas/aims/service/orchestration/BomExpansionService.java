@@ -245,6 +245,7 @@ public class BomExpansionService {
             // T144: 把需求量 (sourceUnit, e.g. g) 换算到称重批次单位 (kg) 再比较 + 分配.
             // requiredInStockUnit 默认 = req.getRequiredQuantity() (单位一致或无换算器).
             BigDecimal requiredInStockUnit = req.getRequiredQuantity();
+            boolean converted = false;
             boolean abacaSkip = false;
             String stockUnit = resolveMaterialStockUnit(req.getMaterialTypeId(), batches);
             String bomUnit = req.getSourceUnit();
@@ -268,6 +269,7 @@ public class BomExpansionService {
                             .withSeverity("BLOCKING");
                 } else {
                     requiredInStockUnit = conv.getQuantity();
+                    converted = true;
                 }
             }
 
@@ -299,6 +301,9 @@ public class BomExpansionService {
                 sf.setRequiredQuantity(requiredInStockUnit);
                 sf.setAvailableQuantity(totalAvailable);
                 sf.setShortfallQuantity(requiredInStockUnit.subtract(totalAvailable));
+                // 三个数量所在的单位: 换算过就是库存单位, 没换算 (单位相同 / 无换算器) 就仍是配方单位
+                sf.setQuantityUnit(converted && stockUnit != null
+                        ? stockUnit : (bomUnit != null ? bomUnit : stockUnit));
                 shortfalls.add(sf);
             } else {
                 // 库存充足，按FEFO逐批次分配 (库存单位口径)
