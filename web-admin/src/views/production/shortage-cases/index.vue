@@ -61,6 +61,10 @@ const REASON_LABEL: Record<string, string> = {
   MATERIAL_RECEIVED: '物料入库',
   MATERIAL_BATCH_RELEASED: '质检放行',
   MANUAL_REFRESH: '手动核对',
+  PURCHASE_DRAFT_CREATED: '生成采购草稿',
+  DECISION_CANCEL: '取消',
+  DECISION_MANUAL: '转人工',
+  DECISION_CLOSE: '关闭',
 };
 
 const openOnly = ref(true);
@@ -78,6 +82,9 @@ const deciding = ref(false);
 
 const TERMINAL: ShortageCaseStage[] = ['CANCELLED', 'MANUAL', 'CLOSED'];
 const isOpen = computed(() => !!detail.value && !TERMINAL.includes(detail.value.case.stage));
+// 转人工只停自动处理, 实例还没关 (closedAt 为空): 仍要能取消 / 关闭
+const canStillDecide = computed(() => !!detail.value && detail.value.case.closedAt == null);
+const isManual = computed(() => detail.value?.case.stage === 'MANUAL');
 
 function qty(v: number | null | undefined, unit: string | null) {
   if (v === null || v === undefined) return '—';
@@ -315,16 +322,16 @@ onMounted(load);
             </el-table-column>
           </el-table>
 
-          <div v-if="canDecide && isOpen" class="decision-bar">
-            <el-button :loading="deciding" @click="decide('MANUAL')">转人工</el-button>
+          <div v-if="canDecide && canStillDecide" class="decision-bar">
+            <el-button v-if="!isManual" :loading="deciding" @click="decide('MANUAL')">转人工</el-button>
             <el-button :loading="deciding" type="danger" plain @click="decide('CANCEL')">取消</el-button>
             <el-button
               :loading="deciding"
               type="success"
-              :disabled="detail.case.stage !== 'GAP_RESOLVED'"
+              :disabled="detail.case.stage !== 'GAP_RESOLVED' && !isManual"
               @click="decide('CLOSE')"
             >
-              关闭（缺口已解决）
+              {{ isManual ? '关闭（人工处理完毕）' : '关闭（缺口已解决）' }}
             </el-button>
           </div>
 

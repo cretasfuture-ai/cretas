@@ -10,6 +10,8 @@ import com.cretas.aims.entity.shortage.ShortageCaseAction;
 import com.cretas.aims.entity.shortage.ShortageCaseLine;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierMaterialRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseActionRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseEventRepository;
@@ -51,6 +53,7 @@ class ShortageCaseActionServiceContractTest {
     private final PurchaseOrderRepository purchaseOrders = mock(PurchaseOrderRepository.class);
     private final PurchaseService purchaseService = mock(PurchaseService.class);
     private final UnitContractService units = mock(UnitContractService.class);
+    private final UserRepository users = mock(UserRepository.class);
     private ShortageCaseActionService service;
 
     private ShortageCase theCase;
@@ -61,7 +64,8 @@ class ShortageCaseActionServiceContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new ShortageCaseActionService(cases, lines, events, actions, supplierMaterials, purchaseOrders, purchaseService, units);
+        service = new ShortageCaseActionService(cases, lines, events, actions, supplierMaterials, purchaseOrders, purchaseService, units, users);
+        when(users.findByIdAndFactoryId(77L, "F1")).thenReturn(Optional.of(new User()));
         when(units.areEquivalent(eq("F1"), anyString(), anyString())).thenAnswer(i -> {
             String a = ((String) i.getArgument(1)).trim().toLowerCase(), b = ((String) i.getArgument(2)).trim().toLowerCase();
             return a.replace("千克", "kg").equals(b.replace("千克", "kg"));
@@ -111,6 +115,7 @@ class ShortageCaseActionServiceContractTest {
                         .filter(a -> a.getMaterialTypeId() != null && a.getMaterialTypeId().equals(i.getArgument(1)))
                         .filter(a -> a.getActionType() == i.getArgument(2) && a.getStatus() == i.getArgument(3))
                         .findFirst());
+        when(actions.findByCaseIdOrderByIdAsc("C1")).thenAnswer(i -> List.copyOf(actionStore));
         when(purchaseOrders.findByIdAndFactoryId(anyString(), eq("F1")))
                 .thenAnswer(i -> Optional.ofNullable(poStore.get((String) i.getArgument(0))));
         when(purchaseService.createPurchaseOrder(eq("F1"), any(), anyLong())).thenAnswer(i -> {
@@ -228,5 +233,72 @@ class ShortageCaseActionServiceContractTest {
 
         assertThat(theCase.getStage()).isEqualTo(Stage.CANCELLED);
         assertThat(theCase.getClosedAt()).isNotNull();
+    }
+
+    @Test
+    void aCaseMovedToManualCanStillBeClosedOrCancelledWhichFreesTheOrdersSlot() {
+        service.decide("F1", "C1", ShortageCaseAction.Decision.MANUAL, "人工跟进", 77L, BUYER);
+        assertThat(theCase.getClosedAt()).isNull();
+
+        service.decide("F1", "C1", ShortageCaseAction.Decision.CLOSE, "供应商已直接送货", null, BUYER);
+
+        assertThat(theCase.getStage()).isEqualTo(Stage.CLOSED);
+        assertThat(theCase.getClosedAt()).isNotNull();   // 不再是「未关闭」⇒ 同一订单的唯一位置释放, 下次缺料可建新实例
+        assertThat(cases.findOpenForUpdate("F1", ShortageCase.SourceType.SALES_ORDER, "SO-1")).isEmpty();
+        assertThatThrownBy(() -> service.decide("F1", "C1", ShortageCaseAction.Decision.CANCEL, "再取消", null, BUYER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已结束");
+
+        theCase.setClosedAt(null);
+        theCase.setStage(Stage.DETECTED);
+        service.decide("F1", "C1", ShortageCaseAction.Decision.MANUAL, "人工跟进", null, BUYER);
+        service.decide("F1", "C1", ShortageCaseAction.Decision.CANCEL, "订单作废", null, BUYER);
+        assertThat(theCase.getStage()).isEqualTo(Stage.CANCELLED);
+        assertThat(theCase.getClosedAt()).isNotNull();
+    }
+
+    @Test
+    void onOrderLinesInAnotherUnitBlockTheAutomaticDraft() {
+        line.setGapQty(new BigDecimal("50"));
+        line.setOnOrderQty(BigDecimal.ZERO);
+        line.setOnOrderUnitMismatchLines(1);   // 一张按「箱」下的在途单, 没计进在途量
+
+        var p = service.proposals("F1", "C1").get(0);
+
+        assertThat(p.canDraft()).isFalse();
+        assertThat(p.notes()).anyMatch(n -> n.contains("有 1 行在途采购单位不同"));
+        assertThatThrownBy(() -> service.createProcurementDraft("F1", "C1", "M1", BUYER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("在途采购单位不同");
+        verify(purchaseService, never()).createPurchaseOrder(any(), any(), anyLong());
+    }
+
+    @Test
+    void aMinimumOrderWithoutAPurchaseUnitIsNotApplied() {
+        supplier.setPurchaseUnit(null);   // 起订量 20 —— 20 箱还是 20 kg 不知道
+
+        var p = service.proposals("F1", "C1").get(0);
+
+        assertThat(p.suggestedQty()).isEqualByComparingTo("5");   // 缺 8 − 在途 3, 没被抬成 20
+        assertThat(p.notes()).anyMatch(n -> n.contains("没填采购单位, 未套用"));
+    }
+
+    @Test
+    void aManualOwnerMustBelongToThisFactory() {
+        assertThatThrownBy(() -> service.decide("F1", "C1", ShortageCaseAction.Decision.MANUAL, "人工跟进", 88L, BUYER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不是本厂用户");
+        assertThat(theCase.getStage()).isEqualTo(Stage.DETECTED);
+        assertThat(actionStore).isEmpty();
+    }
+
+    @Test
+    void cancellingSaysHowManyLiveDraftsAreLeft() {
+        service.createProcurementDraft("F1", "C1", "M1", BUYER);
+        ArgumentCaptor<com.cretas.aims.entity.shortage.ShortageCaseEvent> ev =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.shortage.ShortageCaseEvent.class);
+
+        service.decide("F1", "C1", ShortageCaseAction.Decision.CANCEL, "订单作废", null, BUYER);
+
+        verify(events, atLeastOnce()).save(ev.capture());
+        assertThat(ev.getValue().getTriggerReason()).isEqualTo("DECISION_CANCEL");
+        assertThat(ev.getValue().getDetail()).contains("仍有 1 张在走的采购单");
     }
 }

@@ -11,6 +11,7 @@ import com.cretas.aims.entity.shortage.ShortageCaseEvent;
 import com.cretas.aims.entity.shortage.ShortageCaseLine;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierMaterialRepository;
+import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseActionRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseEventRepository;
@@ -62,6 +63,7 @@ public class ShortageCaseActionService {
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseService purchaseService;
     private final UnitContractService unitContractService;
+    private final UserRepository userRepository;
 
     /** 某种物料的采购建议 (只读)。 */
     public record ProcurementProposal(String materialTypeId, String materialName, String unit, BigDecimal gapQty,
@@ -169,7 +171,7 @@ public class ShortageCaseActionService {
         return new DraftResult(po.getId(), po.getOrderNumber(), false, p.suggestedQty(), line.getUnit(), p.notes());
     }
 
-    /** 人工决定: 取消 / 转人工 / 关闭。原因必填; 关闭只在缺口已解决时允许。 */
+    /** 人工决定: 取消 / 转人工 / 关闭。原因必填; 关闭只在缺口已解决或已转人工时允许。 */
     @Transactional
     public ShortageCase decide(String factoryId, String caseId, ShortageCaseAction.Decision decision, String reason,
                                Long ownerUserId, ActorRef actor) {
@@ -182,24 +184,35 @@ public class ShortageCaseActionService {
         if (reason == null || reason.isBlank()) {
             throw new BusinessException(400, "请写明原因");
         }
-        ShortageCase c = own(factoryId, caseId);
-        if (c.getStage().isTerminal()) {
-            throw new BusinessException(409, "缺料实例已结束 (" + c.getStage().label() + ")")
-                    .withHint("已结束的实例不能再改; 刷新页面查看最新状态");
-        }
+        // 与生成草稿抢同一把行锁: 否则并发的「取消」和「生成草稿」会各自提交
+        ShortageCase c = caseRepository.findOpenForUpdate(factoryId, ShortageCase.SourceType.SALES_ORDER,
+                        own(factoryId, caseId).getSourceId())
+                .filter(open -> open.getId().equals(caseId))
+                .orElseThrow(() -> new BusinessException(409, "缺料实例已结束")
+                        .withHint("已结束的实例不能再改; 刷新页面查看最新状态"));
+        // 转人工 (MANUAL) 只停自动刷新, 实例仍未关闭 (closedAt 为空) —— 之后还要能取消 / 关闭, 否则它永远占着这张订单的位置
         Stage from = c.getStage();
         LocalDateTime now = LocalDateTime.now();
+        String detail = reason.trim();
         switch (decision) {
             case CANCEL -> {
                 c.setStage(Stage.CANCELLED);
                 c.setClosedAt(now);
+                long liveDrafts = liveDraftCount(c);
+                if (liveDrafts > 0) {
+                    detail += " (仍有 " + liveDrafts + " 张在走的采购单, 需到「采购订单」自行处理)";
+                }
             }
             case MANUAL -> {
+                if (ownerUserId != null && userRepository.findByIdAndFactoryId(ownerUserId, factoryId).isEmpty()) {
+                    throw new BusinessException(400, "指定的负责人不是本厂用户");
+                }
                 c.setStage(Stage.MANUAL);
                 c.setOwnerUserId(ownerUserId);
             }
             case CLOSE -> {
-                if (from != Stage.GAP_RESOLVED) {
+                // 转人工后由负责人确认结束, 不再要求系统算出的「缺口已解决」(人工处理期间不自动刷新)
+                if (from != Stage.GAP_RESOLVED && from != Stage.MANUAL) {
                     throw new BusinessException(409, "缺口还没解决, 不能关闭; 不再处理请用「取消」并写明原因")
                             .withHint("等缺口解决后再关闭, 或改用「取消」/「转人工」");
                 }
@@ -219,8 +232,17 @@ public class ShortageCaseActionService {
         a.setActorType(actor.type().name());
         a.setActorId(actor.id());
         actionRepository.saveAndFlush(a);
-        event(c, from, c.getStage(), "DECISION_" + decision.name(), reason.trim(), actor);
+        event(c, from, c.getStage(), "DECISION_" + decision.name(), detail, actor);
         return c;
+    }
+
+    private long liveDraftCount(ShortageCase c) {
+        return actionRepository.findByCaseIdOrderByIdAsc(c.getId()).stream()
+                .filter(a -> a.getActionType() == ShortageCaseAction.ActionType.PURCHASE_DRAFT
+                        && a.getStatus() == ShortageCaseAction.Status.DONE && a.getResultRef() != null)
+                .map(a -> purchaseOrderRepository.findByIdAndFactoryId(a.getResultRef(), c.getFactoryId()).orElse(null))
+                .filter(po -> po != null && LIVE_PO.contains(po.getStatus()))
+                .count();
     }
 
     // ---------------------------------------------------------------- internals
@@ -246,6 +268,11 @@ public class ShortageCaseActionService {
             notes.add("在途量已覆盖缺口, 不建议再下单");
             canDraft = false;
         }
+        if (l.getOnOrderUnitMismatchLines() > 0) {
+            // 单位不同的在途行没计进在途量: 照缺口再下一张就可能重复采购
+            notes.add("有 " + l.getOnOrderUnitMismatchLines() + " 行在途采购单位不同, 未计入, 请人工核对");
+            canDraft = false;
+        }
         if (l.getUnit() == null) {
             notes.add("物料单位未知, 不能自动定量");
             canDraft = false;
@@ -262,8 +289,11 @@ public class ShortageCaseActionService {
                         + UnitDisplayNames.display(l.getUnit()) + "」计, 不换算, 需采购员手工下单");
                 canDraft = false;
             }
-            if (sm.getMinOrderQuantity() != null && sm.getMinOrderQuantity().signum() > 0
-                    && suggested.signum() > 0 && suggested.compareTo(sm.getMinOrderQuantity()) < 0) {
+            boolean hasMoq = sm.getMinOrderQuantity() != null && sm.getMinOrderQuantity().signum() > 0;
+            if (hasMoq && sm.getPurchaseUnit() == null) {
+                // 起订量的单位就是采购单位; 没填就不知道「20」是 20 箱还是 20 kg, 不套用
+                notes.add("供应商起订量 " + plain(sm.getMinOrderQuantity()) + " 没填采购单位, 未套用, 请采购员核对");
+            } else if (hasMoq && suggested.signum() > 0 && suggested.compareTo(sm.getMinOrderQuantity()) < 0) {
                 notes.add("缺口 " + plain(suggested) + " 低于起订量 " + plain(sm.getMinOrderQuantity()) + ", 按起订量下单");
                 suggested = sm.getMinOrderQuantity();
             }
