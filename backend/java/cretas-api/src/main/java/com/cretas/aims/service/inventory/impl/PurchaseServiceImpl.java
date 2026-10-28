@@ -1767,6 +1767,102 @@ public class PurchaseServiceImpl implements PurchaseService {
         return order;
     }
 
+    @Override
+    @Transactional
+    public PurchaseOrder applyQuoteToDraftLine(String factoryId, String orderId, String materialTypeId,
+                                               String expectedUnit, BigDecimal expectedQuantity,
+                                               String supplierId, BigDecimal unitPrice, String priceUnit,
+                                               BigDecimal taxRate, String purchasePackagingSpecId) {
+        PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+        if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
+            throw new BusinessException(409, String.format(
+                    "采购单 %s 当前状态为 %s, 只有草稿可以回填报价",
+                    order.getOrderNumber(), order.getStatus().getDisplayName()))
+                    .withCode("PURCHASE_DRAFT_NOT_EDITABLE")
+                    .withHint("请刷新采购单查看最新状态");
+        }
+        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(orderId);
+        List<PurchaseOrderItem> targets = items.stream()
+                .filter(i -> materialTypeId.equals(i.getMaterialTypeId()))
+                .collect(Collectors.toList());
+        if (targets.size() != 1) {
+            throw new BusinessException(409, String.format(
+                    "采购草稿 %s 中本物料有 %d 行, 需要恰好 1 行才能回填报价",
+                    order.getOrderNumber(), targets.size()))
+                    .withCode("PURCHASE_DRAFT_LINE_AMBIGUOUS")
+                    .withHint("请先编辑采购草稿, 把本物料合并成一行后再选定报价");
+        }
+        requireActiveSupplier(factoryId, supplierId);
+        if (order.getSupplierId() != null && !order.getSupplierId().equals(supplierId) && items.size() > 1) {
+            throw new BusinessException(409, String.format(
+                    "采购草稿 %s 已指定其他供应商且含其他物料行, 换供应商会改变其他行的采购依据",
+                    order.getOrderNumber()))
+                    .withCode("PURCHASE_DRAFT_SUPPLIER_CONFLICT")
+                    .withHint("请把本物料拆到单独的草稿再比价, 或选择草稿原供应商的报价");
+        }
+        PurchaseOrderItem target = targets.get(0);
+        boolean unitChanged = !sameDraftLineUnit(factoryId, target.getUnit(), expectedUnit);
+        boolean quantityChanged = target.getQuantity() == null || expectedQuantity == null
+                || target.getQuantity().compareTo(expectedQuantity) != 0;
+        if (unitChanged || quantityChanged) {
+            throw new BusinessException(409, String.format(
+                    "采购草稿 %s 的本物料行已改为 %s %s, 与发起比价时的 %s %s 不同",
+                    order.getOrderNumber(),
+                    target.getQuantity() == null ? "(空)" : target.getQuantity().stripTrailingZeros().toPlainString(),
+                    target.getUnit(),
+                    expectedQuantity == null ? "(空)" : expectedQuantity.stripTrailingZeros().toPlainString(),
+                    expectedUnit))
+                    .withCode("PURCHASE_DRAFT_LINE_CHANGED")
+                    .withHint("请刷新采购草稿, 按当前数量和单位重新发起比价");
+        }
+        CreatePurchaseOrderRequest.PurchaseOrderItemDTO dto = new CreatePurchaseOrderRequest.PurchaseOrderItemDTO();
+        dto.setMaterialTypeId(target.getMaterialTypeId());
+        dto.setMaterialName(target.getMaterialName());
+        dto.setQuantity(target.getQuantity());
+        dto.setUnit(target.getUnit());
+        dto.setQuantityUnit(target.getUnit());
+        dto.setUnitPrice(unitPrice);
+        dto.setPriceUnit(priceUnit);
+        dto.setTaxRate(taxRate);
+        dto.setPurchasePackagingSpecId(purchasePackagingSpecId);
+        dto.setMaterialPackagingSpecId(target.getMaterialPackagingSpecId());
+        target.setSupplierMaterialId(null);
+        target.setPurchasePackagingSpecId(null);
+        applySupplierPurchaseContract(factoryId, supplierId, target, dto);
+        applyPurchaseTaxContract(target, taxRate);
+        purchaseOrderItemRepository.save(target);
+
+        order.setSupplierId(supplierId);
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        BigDecimal taxAmount = BigDecimal.ZERO;
+        for (PurchaseOrderItem item : items) {
+            BigDecimal lineAmount = item.getLineAmount();
+            if (lineAmount != null) {
+                totalAmount = totalAmount.add(lineAmount);
+                BigDecimal lineAmountWithTax = item.getLineAmountWithTax();
+                if (lineAmountWithTax != null) {
+                    taxAmount = taxAmount.add(lineAmountWithTax.subtract(lineAmount));
+                }
+            }
+        }
+        order.setTotalAmount(totalAmount);
+        order.setTaxAmount(taxAmount);
+        order = purchaseOrderRepository.save(order);
+        log.info("报价回填采购草稿: orderId={}, orderNumber={}, materialTypeId={}, supplierId={}",
+                orderId, order.getOrderNumber(), materialTypeId, supplierId);
+        return order;
+    }
+
+    /** 草稿行单位是否仍是发起比价时的单位: 问单位契约, ⛔ 不比字符串 (kg / 公斤 是同一个)。 */
+    private boolean sameDraftLineUnit(String factoryId, String current, String expected) {
+        if (current == null || current.isBlank() || expected == null || expected.isBlank()) {
+            return false;
+        }
+        String currentCode = canonicalUnitOrRaw(factoryId, current);
+        String expectedCode = canonicalUnitOrRaw(factoryId, expected);
+        return currentCode != null && currentCode.equals(expectedCode);
+    }
+
     /**
      * 复制采购订单 — 见 {@link PurchaseService#copyPurchaseOrder} 文档.
      *

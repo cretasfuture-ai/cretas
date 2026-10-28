@@ -5,6 +5,8 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.purchase.AddSupplierPriceRequest;
 import com.cretas.aims.dto.purchase.CreateInquiryQuoteRequest;
+import com.cretas.aims.dto.purchase.InquiryQuoteComparisonDTO;
+import com.cretas.aims.dto.purchase.InquiryQuotePriceImpactDTO;
 import com.cretas.aims.dto.purchase.SelectAndConvertRequest;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.purchase.InquiryQuote;
@@ -118,6 +120,28 @@ public class InquiryQuoteController {
             @PathVariable @NotBlank String inquiryId) {
         return ApiResponse.success("查询成功",
                 inquiryQuoteService.listSupplierPrices(factoryId, inquiryId));
+    }
+
+    @GetMapping("/{inquiryId}/comparison")
+    @Operation(summary = "比价: 逐条报价的可比 / 可选定判定与排序",
+            description = "币种 / 计价单位 / 规格 / 税率任一未知或不同的报价标为不可比并给原因, 不参与排序; "
+                    + "过期、未生效、低于起订量的报价不能选定")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<InquiryQuoteComparisonDTO> compare(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String inquiryId) {
+        return ApiResponse.success("查询成功", inquiryQuoteService.compare(factoryId, inquiryId));
+    }
+
+    @GetMapping("/{inquiryId}/supplier-prices/{priceId}/bom-impact")
+    @Operation(summary = "报价价格对 BOM 的影响估算 (只读)",
+            description = "按报价未税单价与价格生效日重算 BOM 行成本; 不回写 BOM, 不改历史批次成本")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<InquiryQuotePriceImpactDTO> priceImpact(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String inquiryId,
+            @PathVariable @NotBlank String priceId) {
+        return ApiResponse.success("查询成功", inquiryQuoteService.priceImpact(factoryId, inquiryId, priceId));
     }
 
     // ==================== 选定 + 转化采购单 ====================
