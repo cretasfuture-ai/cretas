@@ -55,3 +55,83 @@ def test_stray_family_clamped_no_keyerror():
     assert cands[0]["family"] == "query"
     bd = mod.family_breakdown(cands)  # must not raise
     assert bd["query"] == 1
+
+
+# ---- privacy clause 6 + training rule (review 2026-10-29) ----
+
+import pytest  # noqa: E402
+
+_PROTECTED = {"F_A": frozenset({"秘制牛肉干"}), "F_B": frozenset({"祖传卤汁鸭"})}
+
+
+def _sample(fid, query, answer="原因是原料涨价"):
+    return {"factory_id": fid, "query": query, "input_text": f"{query}\n\n【数据上下文】",
+            "teacher_output": answer, "family": "attribution",
+            "business_type": "factory", "created_at": None}
+
+
+_SAMPLES = [
+    _sample("F_A", "秘制牛肉干利润为什么下降"),                 # own factory's product -> hidden
+    _sample(None, "为什么上周退货变多", "祖传卤汁鸭退货最多"),     # no factory, F_B's product -> hidden
+    _sample("F006", "秘制牛肉干销量为什么下滑"),                 # not F006's product -> shown
+    _sample(None, "为什么毛利率下降"),                          # control, twice -> count 2
+    _sample(None, "为什么毛利率下降"),
+]
+
+
+class _Pool:
+    def __init__(self, rows):
+        self.rows = rows
+        self.sql = []
+
+    def acquire(self):
+        pool = self
+
+        class _C:
+            async def fetch(self, sql, *args):
+                pool.sql.append(sql)
+                return pool.rows
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        return _C()
+
+
+def _patch_pool(monkeypatch, pool):
+    import smartbi.config as cfg
+
+    async def get_pool():
+        return pool
+    monkeypatch.setattr(cfg, "get_pg_pool", get_pool)
+
+
+async def test_report_hides_rows_naming_a_process_secret_product(monkeypatch, capsys):
+    async def names(*_a, **_k):
+        return _PROTECTED
+
+    pool = _Pool(_SAMPLES)
+    _patch_pool(monkeypatch, pool)
+    monkeypatch.setattr(mod, "all_protected_product_names", names)
+    await mod._run(None, min_count=1)
+    out = capsys.readouterr().out
+    assert "training_rule" in pool.sql[0]                   # usable_rows_sql is applied
+    assert "秘制牛肉干利润为什么下降" not in out
+    assert "为什么上周退货变多" not in out and "祖传卤汁鸭" not in out
+    assert "秘制牛肉干销量为什么下滑" in out                  # F006: not its product
+    assert "snapshots=2" in out and "为什么毛利率下降" in out  # control, aggregated in Python
+    assert "2 sample(s) naming a process-secret product not shown" in out
+
+
+async def test_report_aborts_when_the_name_lookup_fails(monkeypatch, capsys):
+    async def boom(*_a, **_k):
+        raise RuntimeError("cretas db unavailable")
+
+    _patch_pool(monkeypatch, _Pool(_SAMPLES))
+    monkeypatch.setattr(mod, "all_protected_product_names", boom)
+    with pytest.raises(RuntimeError, match="cretas db unavailable"):
+        await mod._run(None, min_count=1)
+    assert "为什么毛利率下降" not in capsys.readouterr().out

@@ -749,7 +749,7 @@ public class ProcessSecretPayloadScrubber {
      */
     static final List<String> NON_MONEY_SUFFIXES = List.of("quantity", "qty", "minutes");
 
-    static boolean isCostTotalField(String name) {
+    public static boolean isCostTotalField(String name) {
         if (EXACT_COST_FIELDS.contains(name)) return true;
         if (isIdentifierLike(name)) return false;
         String lower = name.toLowerCase(Locale.ROOT);

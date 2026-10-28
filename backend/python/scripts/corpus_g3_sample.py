@@ -68,6 +68,13 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 # Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
+# Privacy clause 6: rows naming a process-secret product (own factory's, or ANY
+# factory's for rows with no factory) never go into human review files. A failed
+# name lookup propagates and aborts the run.
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    drop_rows_naming_protected_products,
+)
 
 _USABLE_ROWS = usable_rows_sql()
 
@@ -78,7 +85,7 @@ logger = logging.getLogger("corpus_g3_sample")
 # ---------------------------------------------------------------------------
 
 _SAMPLE_SQL = """
-    SELECT id, input_text, teacher_output, metadata, source,
+    SELECT id, factory_id, input_text, teacher_output, metadata, source,
            COALESCE(metadata->>'business_type', 'all') AS business_type
     FROM smart_bi_distillation_samples
     WHERE quality >= 4
@@ -90,7 +97,7 @@ _SAMPLE_SQL = """
 
 # Grouped sample: N per (source, business_type) combination via LATERAL
 _SAMPLE_GROUPED_SQL = """
-    SELECT s.id, s.input_text, s.teacher_output, s.metadata, s.source,
+    SELECT s.id, s.factory_id, s.input_text, s.teacher_output, s.metadata, s.source,
            COALESCE(s.metadata->>'business_type', 'all') AS business_type
     FROM (
         SELECT DISTINCT
@@ -102,7 +109,7 @@ _SAMPLE_GROUPED_SQL = """
         {source_clause}
     ) buckets
     JOIN LATERAL (
-        SELECT id, input_text, teacher_output, metadata, source
+        SELECT id, factory_id, input_text, teacher_output, metadata, source
         FROM smart_bi_distillation_samples
         WHERE quality >= 4
           AND """ + _USABLE_ROWS + """
@@ -197,6 +204,8 @@ async def fetch_sample_rows(
         async with pool.acquire() as conn:
             params = [n, source] if source else [n]
             rows = await conn.fetch(sql, *params)
+    # lookup failure raises -> the run aborts (never "nothing protected")
+    rows = drop_rows_naming_protected_products(rows, await all_protected_product_names())
 
     return [
         {
