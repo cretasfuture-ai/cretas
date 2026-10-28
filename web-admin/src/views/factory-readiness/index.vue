@@ -55,7 +55,10 @@ onBeforeUnmount(() => { alive = false; ++sequence })
         <h2>建厂就绪</h2>
         <p class="hint">本页只读取本厂的建厂进度和日常业务准备情况，不会应用配置、发布工艺或修改单据。</p>
       </div>
-      <el-button :loading="loading" data-testid="self-readiness-refresh" @click="load">刷新</el-button>
+      <div class="head-actions">
+        <router-link to="/factory-readiness/facts" data-testid="self-readiness-facts-link">已确认资料与版本历史</router-link>
+        <el-button :loading="loading" data-testid="self-readiness-refresh" @click="load">刷新</el-button>
+      </div>
     </div>
     <el-skeleton v-if="loading" :rows="3" animated />
     <el-alert v-else-if="unavailable" data-testid="self-readiness-unavailable" type="info" :closable="false"
@@ -76,6 +79,7 @@ onBeforeUnmount(() => { alive = false; ++sequence })
 .factory-self-readiness { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
 .head { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
 .head h2 { font-size: 20px; margin: 0 0 4px; }
+.head-actions { align-items: center; display: flex; gap: 12px; }
 .hint { color: var(--el-text-color-secondary); margin: 0; }
 @media (max-width: 560px) {
   .head { flex-direction: column; align-items: stretch; }

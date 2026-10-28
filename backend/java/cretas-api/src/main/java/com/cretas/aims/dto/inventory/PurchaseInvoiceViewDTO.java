@@ -7,6 +7,7 @@ import lombok.Value;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /** 采购收票列表行，补齐发票实体本身没有冗余保存的采购单号与供应商名称。 */
 @Value
@@ -25,10 +26,18 @@ public class PurchaseInvoiceViewDTO {
     String ocrRawResult;
     LocalDateTime createdAt;
     LocalDateTime updatedAt;
+    /** 逐行三单：发票行及其差异；空列表 = 这张票没有行级资料 */
+    List<PurchaseInvoiceLineViewDTO> lines;
 
     public static PurchaseInvoiceViewDTO from(PurchaseInvoice invoice, String purchaseOrderNumber,
                                               String supplierName) {
+        return from(invoice, purchaseOrderNumber, supplierName, List.of());
+    }
+
+    public static PurchaseInvoiceViewDTO from(PurchaseInvoice invoice, String purchaseOrderNumber,
+                                              String supplierName, List<PurchaseInvoiceLineViewDTO> lines) {
         return PurchaseInvoiceViewDTO.builder()
+                .lines(lines)
                 .id(invoice.getId())
                 .purchaseOrderId(invoice.getPurchaseOrderId())
                 .purchaseOrderNumber(purchaseOrderNumber)

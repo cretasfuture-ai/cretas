@@ -81,6 +81,9 @@ class FactoryBusinessReadinessRepositoryQueryValidationTest {
     @Autowired ProductionPlanRepository productionPlanRepository;
     @Autowired SalesDeliveryRecordRepository deliveryRepository;
     @Autowired SupplierMaterialRepository supplierMaterialRepository;
+    @Autowired com.cretas.aims.repository.UserRepository userRepository;
+    @Autowired com.cretas.aims.repository.material.MaterialPackagingSpecRepository materialPackagingSpecRepository;
+    @Autowired com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository supplierPurchaseSpecRepository;
 
     private FactoryBusinessReadinessReader reader;
     private User user;
@@ -94,7 +97,9 @@ class FactoryBusinessReadinessRepositoryQueryValidationTest {
     @BeforeEach void setup() {
         reader = new FactoryBusinessReadinessReader(new WarehouseResolver(warehouseRepository, defaultRepository),
                 warehouseRepository, supplierRepository, customerRepository, rawMaterialRepository,
-                purchaseOrderRepository, productionPlanRepository, deliveryRepository, supplierMaterialRepository);
+                purchaseOrderRepository, productionPlanRepository, deliveryRepository, supplierMaterialRepository,
+                userRepository, materialPackagingSpecRepository, supplierPurchaseSpecRepository,
+                org.mockito.Mockito.mock(com.cretas.aims.service.unit.UnitContractService.class));
         factory("F-READY");
         factory("F-OTHER");
         user = new User();
@@ -103,6 +108,15 @@ class FactoryBusinessReadinessRepositoryQueryValidationTest {
         user.setPasswordHash("test-only");
         user.setIsActive(true);
         entityManager.persist(user);
+        for (String role : List.of("procurement_manager", "workshop_supervisor", "sales_manager")) {
+            User holder = new User();
+            holder.setFactoryId("F-READY");
+            holder.setUsername("readiness-" + role);
+            holder.setPasswordHash("test-only");
+            holder.setIsActive(true);
+            holder.setRoleCode(role);
+            entityManager.persist(holder);
+        }
         warehouse("WH-LOG-READY", "F-READY", "WH-LOG", "主仓", FactoryWarehouse.WarehouseType.LOGISTICS, true);
         warehouse("WH-WKS-READY", "F-READY", "WH-WKS", "生产仓", FactoryWarehouse.WarehouseType.WORKSHOP, true);
         material("RM-READY", "F-READY", "YL001", true);

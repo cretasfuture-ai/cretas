@@ -6,6 +6,13 @@ import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.Check;
 import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.FirstRecord;
 import com.cretas.aims.blueprint.canonical.FactoryReadinessReport.ProductRuntime;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.SupplierMaterial;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
@@ -49,6 +56,10 @@ public class FactoryBusinessReadinessReader {
     static final Set<String> PURCHASE_CAPABILITIES = Set.of("materials", "supplier-receiving");
     static final Set<String> PRODUCTION_CAPABILITIES = Set.of("processes", "routes", "bom", "workflow");
     static final Set<String> SHIPPING_CAPABILITIES = Set.of("products");
+    /** Day-to-day post holders, i.e. someone besides the factory super admin who can do the work. */
+    static final List<String> PURCHASE_ROLES = List.of("procurement_manager", "warehouse_manager");
+    static final List<String> PRODUCTION_ROLES = List.of("workshop_supervisor", "operator");
+    static final List<String> SHIPPING_ROLES = List.of("sales_manager", "warehouse_manager");
 
     private final WarehouseResolver warehouses;
     private final FactoryWarehouseRepository factoryWarehouses;
@@ -59,6 +70,10 @@ public class FactoryBusinessReadinessReader {
     private final ProductionPlanRepository productionPlans;
     private final SalesDeliveryRecordRepository deliveries;
     private final SupplierMaterialRepository supplierMaterials;
+    private final UserRepository users;
+    private final MaterialPackagingSpecRepository materialPackagingSpecs;
+    private final SupplierMaterialPurchaseSpecRepository supplierPurchaseSpecs;
+    private final UnitContractService unitContracts;
 
     public List<BusinessDomain> read(String factoryId, List<CapabilityView> capabilities,
             List<ProductRuntime> runtime) {
@@ -72,16 +87,20 @@ public class FactoryBusinessReadinessReader {
                         () -> activeSupplyRelationships(factoryId),
                         "SUPPLIERS", "供应商管理（供应原料）"),
                 warehouse("PURCHASE_INBOUND_WAREHOUSE", "采购入库仓可用", factoryId,
-                        warehouses::resolvePurchaseInboundWh));
-        return domain("PURCHASE", "采购", PURCHASE_CAPABILITIES, capabilities, checks,
+                        warehouses::resolvePurchaseInboundWh),
+                purchasePackaging(factoryId),
+                postHolder("PURCHASE_POST_HOLDER", "有采购岗位账号可下单收货", factoryId, PURCHASE_ROLES));
+        BusinessDomain purchaseDomain = domain("PURCHASE", "采购", PURCHASE_CAPABILITIES, capabilities, checks,
                 List.of("采购价格（供应商规格价、含税参考价）在下单时校验，此处不检查",
-                        "按包装采购的换算按采购明细与供应商规格核对；按基本单位采购无需包装换算，此处不要求",
-                        "采购岗位账号与当前权限另行交付，此处不检查"),
+                        "按基本单位采购无需包装换算，只核对按包装采购的供应关系",
+                        "岗位账号只核对是否存在有效的采购/仓库岗位，不核对每个账号的具体菜单权限"),
                 firstRecord(() -> purchaseOrders.findByFactoryIdOrderByCreatedAtDesc(
                                 factoryId, PageRequest.of(0, 1)).getTotalElements(),
                         () -> purchaseOrders.findByFactoryIdAndStatusOrderByCreatedAtDesc(
                                 factoryId, PurchaseOrderStatus.COMPLETED, PageRequest.of(0, 1)).getTotalElements(),
                         "采购单", "全部到货"));
+        return "READY".equals(purchaseDomain.state()) ? purchaseDomain.withFirstAction(purchaseAction(factoryId))
+                : purchaseDomain;
     }
 
     private BusinessDomain production(String factoryId, List<CapabilityView> capabilities,
@@ -97,13 +116,17 @@ public class FactoryBusinessReadinessReader {
         List<Check> checks = List.of(runtimeCheck,
                 warehouse("WORKSHOP_WAREHOUSE", "生产成品/报工仓可用", factoryId, warehouses::resolveWorkshopId),
                 warehouse("PRODUCTION_RAW_WAREHOUSE", "生产领料仓可用", factoryId,
-                        warehouses::resolveProductionRawWh));
-        return domain("PRODUCTION", "生产", PRODUCTION_CAPABILITIES, capabilities, checks,
+                        warehouses::resolveProductionRawWh),
+                postHolder("PRODUCTION_POST_HOLDER", "有车间主管或操作员账号可报工", factoryId, PRODUCTION_ROLES));
+        BusinessDomain productionDomain = domain("PRODUCTION", "生产", PRODUCTION_CAPABILITIES, capabilities, checks,
                 List.of("建厂能力目录不含研发业务，不要求研发仓",
-                        "操作员与班组账号、岗位权限另行交付，此处不检查"),
+                        "岗位账号只核对是否存在有效的车间岗位，不核对班组编排和每个账号的具体菜单权限"),
                 firstRecord(() -> productionPlans.countByFactoryId(factoryId),
                         () -> productionPlans.countByFactoryIdAndStatus(factoryId, ProductionPlanStatus.COMPLETED),
                         "生产计划", "已完工"));
+        return "READY".equals(productionDomain.state())
+                ? productionDomain.withFirstAction(productAction(runtime, "新建第一张生产计划", "/production/plans"))
+                : productionDomain;
     }
 
     private BusinessDomain shipping(String factoryId, List<CapabilityView> capabilities,
@@ -115,15 +138,56 @@ public class FactoryBusinessReadinessReader {
                 new Check("SALEABLE_PRODUCT", "至少一个在用成品", runtime.isEmpty() ? "MISSING" : "MET",
                         runtime.size() + " 个在用成品", "PRODUCTS", "SKU 管理"),
                 warehouse("SALES_OUTBOUND_WAREHOUSE", "销售出货仓可用", factoryId,
-                        warehouses::resolveSalesOutboundWh));
-        return domain("SHIPPING", "发货", SHIPPING_CAPABILITIES, capabilities, checks,
+                        warehouses::resolveSalesOutboundWh),
+                postHolder("SHIPPING_POST_HOLDER", "有销售或仓管岗位账号可发货", factoryId, SHIPPING_ROLES));
+        BusinessDomain shippingDomain = domain("SHIPPING", "发货", SHIPPING_CAPABILITIES, capabilities, checks,
                 List.of("按箱销售的箱规在下单时明确选择，此处不要求每个成品都有箱规",
-                        "销售与仓管岗位账号、权限另行交付，此处不检查"),
+                        "岗位账号只核对是否存在有效的销售/仓管岗位，不核对每个账号的具体菜单权限"),
                 firstRecord(() -> deliveries.findByFactoryIdOrderByCreatedAtDesc(
                                 factoryId, PageRequest.of(0, 1)).getTotalElements(),
                         () -> deliveries.findByFactoryIdAndStatusIn(factoryId, List.of(SalesDeliveryStatus.DELIVERED),
                                 PageRequest.of(0, 1)).getTotalElements(),
                         "发货单", "客户已签收"));
+        return "READY".equals(shippingDomain.state())
+                ? shippingDomain.withFirstAction(salesAction(factoryId, runtime)) : shippingDomain;
+    }
+
+    private FactoryReadinessReport.FirstAction purchaseAction(String factoryId) {
+        try {
+            return activeSupplyRelations(factoryId).stream().findFirst()
+                    .map(relation -> new FactoryReadinessReport.FirstAction("新建第一张采购单", "/procurement/orders",
+                            java.util.Map.of("fromReadiness", "1", "supplierId", relation.getSupplierId(),
+                                    "materialTypeId", relation.getMaterialTypeId()),
+                            "带入已建立供应关系的供应商和原料"))
+                    .orElse(null);
+        } catch (RuntimeException failure) {
+            log.warn("factory readiness purchase action unreadable: {}", failure.getMessage());
+            return null;
+        }
+    }
+
+    private FactoryReadinessReport.FirstAction salesAction(String factoryId, List<ProductRuntime> runtime) {
+        try {
+            var customer = customers.findByFactoryIdAndIsActive(factoryId, true).stream().findFirst();
+            var product = runtime.stream().filter(row -> "PUBLISHED".equals(row.state())).findFirst();
+            if (customer.isEmpty() || product.isEmpty()) return null;
+            return new FactoryReadinessReport.FirstAction("新建第一张销售订单", "/sales/orders/new",
+                    java.util.Map.of("fromReadiness", "1", "customerId", String.valueOf(customer.get().getId()),
+                            "productId", product.get().productId()),
+                    "带入启用的客户和已生效的成品");
+        } catch (RuntimeException failure) {
+            log.warn("factory readiness sales action unreadable: {}", failure.getMessage());
+            return null;
+        }
+    }
+
+    private static FactoryReadinessReport.FirstAction productAction(List<ProductRuntime> runtime, String label,
+            String path) {
+        return runtime.stream().filter(row -> "PUBLISHED".equals(row.state())).findFirst()
+                .map(product -> new FactoryReadinessReport.FirstAction(label, path,
+                        java.util.Map.of("fromReadiness", "1", "productTypeId", product.productId()),
+                        "带入已生效工艺与BOM的成品「" + product.productName() + "」"))
+                .orElse(null);
     }
 
     static BusinessDomain domain(String domain, String label, Set<String> capabilityIds,
@@ -184,6 +248,86 @@ public class FactoryBusinessReadinessReader {
     }
 
     /**
+     * Only relationships bought by package need a conversion: each must carry an active purchase spec,
+     * or exactly one active material packaging spec of that package unit (the rule the order path
+     * applies). Buying in the base unit needs none and never counts as missing.
+     */
+    private Check purchasePackaging(String factoryId) {
+        String code = "PACKAGING_PURCHASE_CONVERSION";
+        String label = "按包装采购的供应关系都有包装换算";
+        String remedyKey = "MATERIAL_PACKAGING";
+        String remedyLabel = "原料类型（包装规格）";
+        try {
+            java.util.Map<String, RawMaterialType> materialsById = new java.util.HashMap<>();
+            for (RawMaterialType material : rawMaterials.findByFactoryIdAndIsActive(factoryId, true)) {
+                materialsById.put(material.getId(), material);
+            }
+            int packaged = 0;
+            List<String> gaps = new java.util.ArrayList<>();
+            for (var supplier : suppliers.findByFactoryIdAndIsActive(factoryId, true)) {
+                for (SupplierMaterial relation : supplierMaterials
+                        .findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc(
+                                factoryId, supplier.getId())) {
+                    RawMaterialType material = materialsById.get(relation.getMaterialTypeId());
+                    if (!Boolean.TRUE.equals(relation.getActive()) || material == null) continue;
+                    String purchaseUnit = relation.getPurchaseUnit();
+                    if (purchaseUnit == null || purchaseUnit.isBlank()
+                            || sameUnit(factoryId, purchaseUnit, material.getUnit())) continue;
+                    packaged++;
+                    boolean hasPurchaseSpec = !supplierPurchaseSpecs
+                            .findByFactoryIdAndSupplierMaterialIdAndActiveTrue(factoryId, relation.getId()).isEmpty();
+                    long matching = materialPackagingSpecs
+                            .findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc(
+                                    factoryId, material.getId()).stream()
+                            .filter(spec -> sameUnit(factoryId, spec.getPackageUnit(), purchaseUnit))
+                            .count();
+                    if (!hasPurchaseSpec && matching != 1) {
+                        gaps.add(supplier.getName() + "·" + material.getName() + "（" + purchaseUnit
+                                + (matching == 0 ? "，缺换算" : "，换算不唯一") + "）");
+                    }
+                }
+            }
+            if (packaged == 0) {
+                return new Check(code, label, "MET", "没有按包装采购的供应关系，无需换算", remedyKey, remedyLabel);
+            }
+            return gaps.isEmpty()
+                    ? new Check(code, label, "MET", packaged + " 个按包装采购的供应关系均有换算", remedyKey, remedyLabel)
+                    : new Check(code, label, "MISSING", "缺换算：" + String.join("；", gaps), remedyKey, remedyLabel);
+        } catch (RuntimeException failure) {
+            log.warn("factory readiness check {} unreadable: {}", code, failure.getMessage());
+            return new Check(code, label, "UNKNOWN", "读取失败，不能判断", remedyKey, remedyLabel);
+        }
+    }
+
+    private boolean sameUnit(String factoryId, String a, String b) {
+        if (a == null || b == null) return false;
+        UnitNormalizationResult left = unitContracts.normalize(factoryId, a);
+        UnitNormalizationResult right = unitContracts.normalize(factoryId, b);
+        String leftCode = left != null && left.recognized() ? left.code() : a.trim();
+        String rightCode = right != null && right.recognized() ? right.code() : b.trim();
+        return leftCode.equals(rightCode);
+    }
+
+    /** At least one active account of this factory holds one of the day-to-day roles. */
+    private Check postHolder(String code, String label, String factoryId, List<String> roles) {
+        String remedyKey = "USERS";
+        String remedyLabel = "用户与角色管理";
+        try {
+            long holders = roles.stream()
+                    .flatMap(role -> users.findByFactoryIdAndRoleCode(factoryId, role).stream())
+                    .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+                    .map(User::getId).distinct().count();
+            return new Check(code, label, holders > 0 ? "MET" : "MISSING",
+                    holders > 0 ? "当前 " + holders + " 个有效岗位账号"
+                            : "没有人担任 " + String.join(" / ", roles) + " 岗位",
+                    remedyKey, remedyLabel);
+        } catch (RuntimeException failure) {
+            log.warn("factory readiness check {} unreadable: {}", code, failure.getMessage());
+            return new Check(code, label, "UNKNOWN", "读取失败，不能判断", remedyKey, remedyLabel);
+        }
+    }
+
+    /**
      * A document existing (any status, drafts included) is not a completed first business: only
      * the domain's own terminal status counts (purchase COMPLETED = fully received, production
      * plan COMPLETED, delivery DELIVERED = signed by the customer).
@@ -213,9 +357,13 @@ public class FactoryBusinessReadinessReader {
      * factory (soft-deleted rows are filtered by the entities' @Where).
      */
     private long activeSupplyRelationships(String factoryId) {
+        return activeSupplyRelations(factoryId).size();
+    }
+
+    private List<SupplierMaterial> activeSupplyRelations(String factoryId) {
         Set<String> activeMaterials = rawMaterials.findByFactoryIdAndIsActive(factoryId, true).stream()
                 .map(RawMaterialType::getId).collect(Collectors.toSet());
-        if (activeMaterials.isEmpty()) return 0;
+        if (activeMaterials.isEmpty()) return List.of();
         return suppliers.findByFactoryIdAndIsActive(factoryId, true).stream()
                 .flatMap(supplier -> supplierMaterials
                         .findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc(factoryId, supplier.getId())
@@ -223,6 +371,6 @@ public class FactoryBusinessReadinessReader {
                 .filter(relation -> Boolean.TRUE.equals(relation.getActive())
                         && factoryId.equals(relation.getFactoryId())
                         && activeMaterials.contains(relation.getMaterialTypeId()))
-                .count();
+                .toList();
     }
 }

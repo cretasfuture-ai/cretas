@@ -52,4 +52,12 @@ public interface ProductWorkflowResolutionService {
     WorkflowPlanOutputContract resolvePinnedPlanOutputContract(
             String factoryId, String ownerProductTypeId, Long workflowId, Integer definitionVersion,
             List<String> targetFinishedGoodIds);
+
+    /**
+     * Read-only route preview of the exact workflow row/version a production plan pinned, whether or not
+     * it is still the enabled activation. Replaced versions stay readable (SNAPSHOT or PUBLISHED); a DRAFT,
+     * a different factory, a version mismatch or a broken graph yields an empty result, never another version.
+     */
+    Optional<WorkflowOutputResolutionDTO.Candidate> findPinnedCandidate(
+            String factoryId, Long workflowId, Integer definitionVersion);
 }
