@@ -309,7 +309,7 @@ def test_http_accepts_factory_and_still_rejects_other_domains():
 
 def test_factory_trace_migration_is_tenant_isolated_and_append_only():
     sql = (REPO / "backend/python/smartbi/database/migrations"
-           / "V20261103_111__factory_agent_trace.sql").read_text(encoding="utf-8")
+           / "V20261103_01__factory_agent_trace.sql").read_text(encoding="utf-8")
     assert "ENABLE ROW LEVEL SECURITY" in sql and "FORCE ROW LEVEL SECURITY" in sql
     assert sql.count("current_setting('app.factory_id', true)") >= 2
     assert "smart_bi_agentops_append_only" in sql
