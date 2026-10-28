@@ -223,6 +223,36 @@ def test_analyze_metrics_keeps_the_refusal_message(upstream, monkeypatch):
     assert "没有发出" in (body.get("error") or "") and "没有发出" in (body.get("message") or "")
 
 
+def test_generic_insight_failures_never_return_the_exception_text(upstream, monkeypatch):
+    """复审 L2 (第六轮): 只有外发拒绝说明原样带出; 其余失败 → 固定说明, 异常原文只进日志。"""
+    import sys
+    from smartbi.api import insight
+    asgi = _insight_app(monkeypatch)
+    gen = insight.insight_generator
+    gen_mod = sys.modules[type(gen).__module__]
+
+    async def boom(*a, **kw):
+        raise RuntimeError("internal detail F006 table xyz")
+
+    monkeypatch.setattr(gen, "_generate_llm_insights", boom)
+    body = _post(asgi, "/api/insight/generate", PAYLOAD,
+                 {"Authorization": "Bearer " + _token("F006")}).json()
+    assert body["success"] is False
+    assert body["error"] == "分析生成失败，请稍后重试" and "internal detail" not in json.dumps(body, ensure_ascii=False)
+
+    async def boom_stream(*a, **kw):
+        raise RuntimeError("internal detail F006 table xyz")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gen_mod.llm, "call_llm_stream", boom_stream)
+
+    async def collect():
+        return [e async for e in gen.generate_insights_stream(data=PAYLOAD["data"])]
+    done = asyncio.run(collect())[-1]
+    assert done["event"] == "done"
+    assert "分析生成失败，请稍后重试" in done["data"] and "internal detail" not in done["data"]
+
+
 def test_chat_stream_failure_message_names_the_egress_refusal():
     from smartbi.api.chat import _stream_failure_message
     assert "没有发出" in _stream_failure_message(lc.EgressRedactionError("NoEgressFactoryError"))

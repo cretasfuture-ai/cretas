@@ -426,14 +426,15 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         // 只有采用了这条知识的工厂才能给它打分 (复审 Low 2, 2026-10-29): 以前任何工厂按 ID 都能改全局知识的评分
         Optional<CrossFactoryKnowledgeAdoption> adoption = factoryId == null ? Optional.empty()
                 : adoptionRepository.findByKnowledgeIdAndFactoryId(knowledgeId, factoryId);
+        // 没采用和不存在给同一个 404 (复审 L5: 不让人借回应区分「别厂有这条知识」)
         if (adoption.isEmpty()) {
-            log.warn("Knowledge feedback ignored: factory {} has not adopted knowledge {}", factoryId, knowledgeId);
-            return;
+            log.warn("Knowledge feedback refused: factory {} has not adopted knowledge {}", factoryId, knowledgeId);
+            throw new com.cretas.aims.exception.BusinessException(404, KNOWLEDGE_NOT_FOUND);
         }
         // Update global knowledge
         CrossFactoryKnowledge knowledge = knowledgeRepository.findById(knowledgeId).orElse(null);
         if (knowledge == null) {
-            return;
+            throw new com.cretas.aims.exception.BusinessException(404, KNOWLEDGE_NOT_FOUND);
         }
 
         if (isPositive) {
@@ -548,6 +549,8 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             return true;
         }
     }
+
+    static final String KNOWLEDGE_NOT_FOUND = "知识不存在";
 
     /** 跨工厂知识共享 (登记 / 列出 / 采用) 已停用; 要恢复必须改这里并重新评审数据边界。 */
     static final boolean CROSS_FACTORY_KNOWLEDGE_ENABLED = false;
@@ -903,18 +906,17 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         List<Long> ids = pending.stream().map(AnnotationQueue::getId).collect(Collectors.toList());
         LocalDateTime dueDate = LocalDateTime.now().plusDays(3);
 
-        LocalDateTime assignedAt = LocalDateTime.now();
-        annotationRepository.assignToAnnotator(ids, annotator, assignedAt, dueDate);
-
-        // 只回这次分到的、本厂的那几条 (复审 M1, 2026-10-29): 以前按标注人名字回「他名下所有已分配的」,
-        // 不分工厂 —— 别厂同名标注人的原话也会回来。批量 UPDATE 不刷新受管实体, 这里把同样的值写回再返回。
-        for (AnnotationQueue a : pending) {
-            a.setAssignedTo(annotator);
-            a.setAssignedAt(assignedAt);
-            a.setDueAt(dueDate);
-            a.setAnnotationStatus(AnnotationQueue.AnnotationStatus.ASSIGNED);
+        // 领取时间截到毫秒: 回读时按它精确匹配 (库里时间精度不到纳秒)
+        LocalDateTime assignedAt = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        int claimed = annotationRepository.assignToAnnotator(ids, annotator, assignedAt, dueDate);
+        if (claimed == 0) {
+            return Collections.emptyList();
         }
-        return pending;
+        // 只回这一次真正领到的、本厂的那几条 (复审 M1/M2, 2026-10-29): 以前按标注人名字回「他名下所有已分配的」,
+        // 不分工厂; 上一版在内存里改实体再返回, 提交时会把并发被别人领走的行写回成自己的。
+        // 现在 UPDATE 只领还是 PENDING 的、执行后清空上下文, 再按 (本厂, 这批 ID, 本人, 本次领取时间) 回读。
+        return annotationRepository.findByIdInAndFactoryIdAndAssignedToAndAssignedAt(
+                ids, factoryId, annotator, assignedAt);
     }
 
     @Override

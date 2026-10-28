@@ -190,6 +190,14 @@ public class IntentConfigRollbackService {
                                                   Long rollbackBy,
                                                   String rollbackByName,
                                                   String reason) {
+        return rollbackToLastVersion(configId, rollbackBy, rollbackByName, reason, null);
+    }
+
+    private AIIntentConfig rollbackToLastVersion(String configId,
+                                                 Long rollbackBy,
+                                                 String rollbackByName,
+                                                 String reason,
+                                                 java.util.Set<String> allFactoryNames) {
         // 1. 获取当前配置
         AIIntentConfig config = configRepo.findById(configId)
                 .orElseThrow(() -> new IllegalArgumentException("Config not found: " + configId));
@@ -203,7 +211,7 @@ public class IntentConfigRollbackService {
         String currentSnapshot = createSnapshot(config);
 
         // 4. 从快照恢复
-        restoreFromSnapshot(config, config.getPreviousSnapshot());
+        restoreFromSnapshot(config, config.getPreviousSnapshot(), allFactoryNames);
 
         // 5. 设置新快照为当前状态（支持"反向回滚"）
         config.setPreviousSnapshot(currentSnapshot);
@@ -250,6 +258,15 @@ public class IntentConfigRollbackService {
                         .filter(c -> factoryId.equals(c.getFactoryId()))
                         .collect(java.util.stream.Collectors.toList());
 
+        // 平台级批量回滚: 全厂保密产品名在动任何一行之前取一次; 取不到 → 503, 整批不做 (复审 M1)
+        java.util.Set<String> allFactoryNames = null;
+        if (factoryId == null) {
+            if (intentConfigWriteGuard == null) {
+                throw new com.cretas.aims.exception.BusinessException(503, "暂时无法核对工艺保密产品, 未回滚");
+            }
+            allFactoryNames = intentConfigWriteGuard.allFactoriesProtectedNames();
+        }
+
         int success = 0;
         int skipped = 0;
         int failed = 0;
@@ -264,7 +281,7 @@ public class IntentConfigRollbackService {
                     continue;
                 }
 
-                rollbackToLastVersion(config.getId(), rollbackBy, rollbackByName, reason);
+                rollbackToLastVersion(config.getId(), rollbackBy, rollbackByName, reason, allFactoryNames);
                 success++;
 
             } catch (com.cretas.aims.exception.BusinessException e) {
@@ -409,6 +426,14 @@ public class IntentConfigRollbackService {
      */
     @SuppressWarnings("unchecked")
     private void restoreFromSnapshot(AIIntentConfig config, String snapshot) {
+        restoreFromSnapshot(config, snapshot, null);
+    }
+
+    /**
+     * @param allFactoryNames 批量回滚预先取好的全厂保密产品名 (不在循环里查库); null = 需要时现查
+     */
+    @SuppressWarnings("unchecked")
+    private void restoreFromSnapshot(AIIntentConfig config, String snapshot, java.util.Set<String> allFactoryNames) {
         Map<String, Object> data;
         try {
             data = objectMapper.readValue(snapshot, Map.class);
@@ -416,17 +441,21 @@ public class IntentConfigRollbackService {
             log.error("Failed to restore from snapshot: {}", e.getMessage());
             throw new RuntimeException("Failed to restore config from snapshot", e);
         }
-        // 平台级行所有工厂可见: 恢复出来的旧版本提到任何一家工厂的保密产品名就不保存 (409 / 查不了 503)。
-        // ⚠️ 先在副本上恢复并检查, 通过了才动受管的那一行 (复审 H1, 2026-10-29): 批量回滚是同类内自调用,
-        // 不经事务代理, 循环的 catch 会吞掉 409 —— 若先改了受管行, 提交时照样被写进库。
+        // ⚠️ 一律先在副本上恢复 (复审 L3: 快照字段类型不对时不会把受管行恢复一半) 并检查, 全部通过才动受管的那一行
+        // (复审 H1, 2026-10-29: 批量回滚是同类内自调用, 不经事务代理, 循环的 catch 会吞掉 409 ——
+        // 若先改了受管行, 提交时照样被写进库)。
+        AIIntentConfig probe = new AIIntentConfig();
+        org.springframework.beans.BeanUtils.copyProperties(config, probe);
+        applySnapshotFields(probe, data);
+        // 平台级行所有工厂可见: 恢复出来的旧版本提到任何一家工厂的保密产品名就不保存 (409 / 查不了 503)
         if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(config.getFactoryId())) {
-            if (intentConfigWriteGuard == null) {
+            if (allFactoryNames != null) {
+                com.cretas.aims.service.intent.IntentConfigWriteGuard.requireNoProtectedNames(probe, allFactoryNames);
+            } else if (intentConfigWriteGuard == null) {
                 throw new com.cretas.aims.exception.BusinessException(503, "暂时无法核对工艺保密产品, 未回滚");
+            } else {
+                intentConfigWriteGuard.requireNoProtectedNames(probe);
             }
-            AIIntentConfig probe = new AIIntentConfig();
-            org.springframework.beans.BeanUtils.copyProperties(config, probe);
-            applySnapshotFields(probe, data);
-            intentConfigWriteGuard.requireNoProtectedNames(probe);
         }
         applySnapshotFields(config, data);
     }

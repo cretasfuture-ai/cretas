@@ -130,6 +130,26 @@ public class IntentConfigWriteGuard {
         }
     }
 
+    /**
+     * 一批平台级写入 (批量回滚) 先取一次全厂保密产品名; 取不到 → 503, 调用方在动任何一行之前整批失败
+     * (复审 M1, 2026-10-29: 循环里逐行查库, 查库异常会把外层事务标成只能回滚, 前面成功的也一起撤销、报 500)。
+     */
+    public java.util.Set<String> allFactoriesProtectedNames() {
+        try {
+            return java.util.Set.copyOf(processSecretSampleFilter.allFactoriesProtectedNames());
+        } catch (RuntimeException e) {
+            log.warn("批量写平台级意图前的保密产品名查询失败, 整批不做");
+            throw new BusinessException(503, "暂时无法核对工艺保密产品, 未回滚, 请稍后重试");
+        }
+    }
+
+    /** 用预先取好的全厂名单检查 (不查库): 提到 → 409。 */
+    public static void requireNoProtectedNames(AIIntentConfig intent, java.util.Set<String> allFactoryNames) {
+        if (ProcessSecretSampleFilter.mentionsAny(allFactoryNames, textFields(intent))) {
+            throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存");
+        }
+    }
+
     /** 意图里会被别的工厂看到 / 匹配到的文字字段 (晋升审批也用这一份)。 */
     public static String[] textFields(AIIntentConfig intent) {
         return new String[]{intent.getIntentName(), intent.getKeywords(), intent.getNegativeKeywords(),

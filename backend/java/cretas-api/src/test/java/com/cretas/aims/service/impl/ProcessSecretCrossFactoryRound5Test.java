@@ -54,10 +54,11 @@ class ProcessSecretCrossFactoryRound5Test {
 
     IntentConfigWriteGuard guard;
     AIIntentConfigRepository intents;
+    ProcessSecretAccessService access;
 
     @BeforeEach
     void setUp() {
-        ProcessSecretAccessService access = mock(ProcessSecretAccessService.class);
+        access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
         when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
@@ -117,6 +118,53 @@ class ProcessSecretCrossFactoryRound5Test {
         assertThat(plain.getKeywords()).isEqualTo("[\"出货\"]");
     }
 
+    /**
+     * 复审 M1 (第六轮): 批量回滚的全厂保密产品名只在动任何一行之前取一次; 取不到 → 503, 一行都不碰
+     * (以前循环里逐行查库, 查库异常把外层事务标成只能回滚, 前面成功的也被撤销、报 500)。
+     */
+    @Test
+    void platformRollbackAllLooksUpNamesOnceAndFailsWholeBatchBeforeTouchingRows() {
+        IntentConfigRollbackService service = rollbackService();
+        AIIntentConfig secret = platformRow("p1", "SECRET_CODE", "[\"产量\"]", "[\"" + SECRET + "\"]");
+        AIIntentConfig plain = platformRow("p2", "PLAIN_CODE", "[\"产量\"]", "[\"出货\"]");
+        AIIntentConfig plain2 = platformRow("p3", "PLAIN_CODE_2", "[\"产量\"]", "[\"库存\"]");
+        when(intents.findGlobalIntents()).thenReturn(List.of(secret, plain, plain2));
+        when(intents.findById("p1")).thenReturn(Optional.of(secret));
+        when(intents.findById("p2")).thenReturn(Optional.of(plain));
+        when(intents.findById("p3")).thenReturn(Optional.of(plain2));
+
+        service.rollbackFactoryToLastVersion(null, 1L, "admin", "r");
+        verify(access, Mockito.times(1)).factoriesWithProtectedProducts();   // 一批只查一次
+
+        // 查不到名单: 503, 一行都没动
+        when(access.factoriesWithProtectedProducts()).thenThrow(new IllegalStateException("db down"));
+        AIIntentConfig fresh = platformRow("p4", "PLAIN_CODE_3", "[\"产量\"]", "[\"出货\"]");
+        when(intents.findGlobalIntents()).thenReturn(List.of(fresh));
+        when(intents.findById("p4")).thenReturn(Optional.of(fresh));
+        Mockito.clearInvocations(intents);
+        assertThatThrownBy(() -> service.rollbackFactoryToLastVersion(null, 1L, "admin", "r"))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .satisfies(e -> assertThat(((com.cretas.aims.exception.BusinessException) e).getCode()).isEqualTo(503));
+        assertThat(fresh.getKeywords()).isEqualTo("[\"产量\"]");
+        verify(intents, never()).findById(anyString());
+        verify(intents, never()).save(any());
+    }
+
+    /** 复审 L3: 快照字段类型不对时不会把行恢复一半 (本厂行也先在副本上恢复)。 */
+    @Test
+    void aBadSnapshotNeverHalfRestoresAFactoryRow() {
+        IntentConfigRollbackService service = rollbackService();
+        AIIntentConfig own = platformRow("f1", "OWN_CODE", "[\"产量\"]", "[\"出货\"]");
+        own.setFactoryId(FA);
+        own.setPreviousSnapshot("{\"keywords\":\"[\\\"出货\\\"]\",\"quotaCost\":\"not-a-number\"}");
+        when(intents.findById("f1")).thenReturn(Optional.of(own));
+
+        assertThatThrownBy(() -> service.rollbackToLastVersion("f1", 1L, "u", "r"))
+                .isInstanceOf(ClassCastException.class);
+        assertThat(own.getKeywords()).isEqualTo("[\"产量\"]");       // keywords 在 quotaCost 之前, 以前已被改掉
+        verify(intents, never()).save(any());
+    }
+
     @Test
     void rollbackToVersionDoesNotTouchTheRowWhenRefused() {
         AIIntentConfigHistoryRepository history = mock(AIIntentConfigHistoryRepository.class);
@@ -148,13 +196,31 @@ class ProcessSecretCrossFactoryRound5Test {
         // 别厂同名标注人名下的行: 以前会被一起返回
         AnnotationQueue foreign = AnnotationQueue.builder().id(99L).factoryId("FB").userInput(SECRET + "多少").build();
         when(annotations.findByAssignedToAndAnnotationStatus(anyString(), any())).thenReturn(List.of(a, foreign));
+        // 这一次真正领到的 (库里回读, 复审 M2)
+        AnnotationQueue claimed = AnnotationQueue.builder().id(11L).factoryId(FA).userInput("今天产量")
+                .assignedTo("alice").annotationStatus(AnnotationQueue.AnnotationStatus.ASSIGNED).build();
+        when(annotations.assignToAnnotator(eq(List.of(11L)), eq("alice"), any(), any())).thenReturn(1);
+        when(annotations.findByIdInAndFactoryIdAndAssignedToAndAssignedAt(eq(List.of(11L)), eq(FA), eq("alice"), any()))
+                .thenReturn(List.of(claimed));
 
         List<AnnotationQueue> assigned = service.assignAnnotations(FA, "alice", 5);
 
-        assertThat(assigned).extracting(AnnotationQueue::getId).containsExactly(11L);
-        assertThat(assigned.get(0).getAssignedTo()).isEqualTo("alice");
-        assertThat(assigned.get(0).getAnnotationStatus()).isEqualTo(AnnotationQueue.AnnotationStatus.ASSIGNED);
+        assertThat(assigned).containsExactly(claimed);
+        assertThat(a.getAssignedTo()).isNull();          // 手里的旧实体没被改 (提交时不会写回覆盖别人的领取)
         verify(annotations, never()).findByAssignedToAndAnnotationStatus(anyString(), any());
+    }
+
+    @Test
+    void assignWithNothingActuallyClaimedReturnsNothing() {
+        AnnotationQueueRepository annotations = mock(AnnotationQueueRepository.class);
+        ActiveLearningServiceImpl service = Mockito.mock(ActiveLearningServiceImpl.class, Mockito.CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(service, "annotationRepository", annotations);
+        when(annotations.findPendingForAssignment(eq(FA), any())).thenReturn(List.of(
+                AnnotationQueue.builder().id(11L).factoryId(FA).userInput("今天产量").build()));
+        when(annotations.assignToAnnotator(any(), anyString(), any(), any())).thenReturn(0);   // 并发被别人领走
+
+        assertThat(service.assignAnnotations(FA, "alice", 5)).isEmpty();
+        verify(annotations, never()).findByIdInAndFactoryIdAndAssignedToAndAssignedAt(any(), any(), any(), any());
     }
 
     // ---------------------------------------------------------------- Low 1 操作人取登录身份
@@ -193,8 +259,18 @@ class ProcessSecretCrossFactoryRound5Test {
         ReflectionTestUtils.setField(service, "adoptionRepository", adoptions);
         when(adoptions.findByKnowledgeIdAndFactoryId(1L, FA)).thenReturn(Optional.empty());
 
-        service.recordKnowledgeFeedback(1L, FA, true);
+        // 没采用 → 和「不存在」同一个 404 (复审 L5)
+        assertThatThrownBy(() -> service.recordKnowledgeFeedback(1L, FA, true))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessage("知识不存在")
+                .satisfies(e -> assertThat(((com.cretas.aims.exception.BusinessException) e).getCode()).isEqualTo(404));
         verifyNoInteractions(knowledge);
+        com.cretas.aims.entity.learning.CrossFactoryKnowledgeAdoption adopted =
+                com.cretas.aims.entity.learning.CrossFactoryKnowledgeAdoption.createNew(2L, FA);
+        when(adoptions.findByKnowledgeIdAndFactoryId(2L, FA)).thenReturn(Optional.of(adopted));
+        when(knowledge.findById(2L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.recordKnowledgeFeedback(2L, FA, true))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class).hasMessage("知识不存在");
 
         // 阴性对照: 采用了的工厂照常打分
         com.cretas.aims.entity.learning.CrossFactoryKnowledgeAdoption adoption =

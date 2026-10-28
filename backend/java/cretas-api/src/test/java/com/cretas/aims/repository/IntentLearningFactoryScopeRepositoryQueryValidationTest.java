@@ -71,6 +71,9 @@ class IntentLearningFactoryScopeRepositoryQueryValidationTest {
         assertThat(suggestions.applySuggestion(s.getId(), FA, LocalDateTime.now(), 7L)).isZero();
         assertThat(suggestions.rejectSuggestion(s.getId(), FA, "x")).isZero();
         assertThat(suggestions.rejectSuggestion(s.getId(), FB, "x")).isEqualTo(1);
+        // 复审 L4: 只改还在 PENDING 的 —— 已拒绝的不能再被采纳 / 再拒绝
+        assertThat(suggestions.applySuggestion(s.getId(), FB, LocalDateTime.now(), 7L)).isZero();
+        assertThat(suggestions.rejectSuggestion(s.getId(), FB, "y")).isZero();
     }
 
     /**
@@ -84,8 +87,8 @@ class IntentLearningFactoryScopeRepositoryQueryValidationTest {
         IntentOptimizationSuggestion s = suggestions.save(IntentOptimizationSuggestion
                 .createPromotionSuggestion(FB + "-TX", "PRODUCTION_QUERY", "产量", "原因", "u"));
         try {
-            assertThat(suggestions.rejectSuggestion(s.getId(), FB + "-TX", "x")).isEqualTo(1);
             assertThat(suggestions.applySuggestion(s.getId(), FB + "-TX", LocalDateTime.now(), 7L)).isEqualTo(1);
+            assertThat(suggestions.rejectSuggestion(s.getId(), FB + "-TX", "x")).isZero();   // 已采纳, 不再 PENDING
         } finally {
             suggestions.deleteById(s.getId());
         }
@@ -100,5 +103,25 @@ class IntentLearningFactoryScopeRepositoryQueryValidationTest {
 
         assertThat(annotations.completeAnnotation(q.getId(), FA, "I", "u", LocalDateTime.now(), null)).isZero();
         assertThat(annotations.completeAnnotation(q.getId(), FB, "I", "u", LocalDateTime.now(), null)).isEqualTo(1);
+    }
+
+    /**
+     * 复审 M2 (第六轮): 领取只领还在 PENDING 的; 回读按 (本厂, 这批 ID, 本人, 本次领取时间) 只拿到这一次真正领到的。
+     */
+    @Test
+    void assignClaimsOnlyPendingRowsAndTheReReadReturnsJustThisClaim() {
+        AnnotationQueue mine = em.persist(AnnotationQueue.builder().factoryId(FA).userInput("今天产量").build());
+        AnnotationQueue taken = em.persist(AnnotationQueue.builder().factoryId(FA).userInput("今天出货")
+                .assignedTo("bob").annotationStatus(AnnotationQueue.AnnotationStatus.ASSIGNED).build());
+        em.flush();
+        em.clear();
+
+        LocalDateTime at = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        java.util.List<Long> ids = java.util.List.of(mine.getId(), taken.getId());
+        assertThat(annotations.assignToAnnotator(ids, "alice", at, at.plusDays(3))).isEqualTo(1);
+        assertThat(annotations.findByIdInAndFactoryIdAndAssignedToAndAssignedAt(ids, FA, "alice", at))
+                .extracting(AnnotationQueue::getId).containsExactly(mine.getId());
+        assertThat(annotations.findByIdInAndFactoryIdAndAssignedToAndAssignedAt(ids, FB, "alice", at)).isEmpty();
+        assertThat(em.find(AnnotationQueue.class, taken.getId()).getAssignedTo()).isEqualTo("bob");
     }
 }

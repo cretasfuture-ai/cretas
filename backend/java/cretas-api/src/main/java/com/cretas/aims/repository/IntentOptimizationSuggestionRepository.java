@@ -157,7 +157,7 @@ public interface IntentOptimizationSuggestionRepository extends JpaRepository<In
     @org.springframework.transaction.annotation.Transactional
     @Modifying
     @Query("UPDATE IntentOptimizationSuggestion s SET s.status = 'APPLIED', " +
-           "s.appliedAt = :appliedAt, s.appliedBy = :appliedBy WHERE s.id = :id AND s.factoryId = :factoryId")
+           "s.appliedAt = :appliedAt, s.appliedBy = :appliedBy WHERE s.id = :id AND s.factoryId = :factoryId AND s.status = 'PENDING'")
     int applySuggestion(
             @Param("id") String id,
             @Param("factoryId") String factoryId,
@@ -171,7 +171,7 @@ public interface IntentOptimizationSuggestionRepository extends JpaRepository<In
     @org.springframework.transaction.annotation.Transactional
     @Modifying
     @Query("UPDATE IntentOptimizationSuggestion s SET s.status = 'REJECTED', " +
-           "s.rejectReason = :reason WHERE s.id = :id AND s.factoryId = :factoryId")
+           "s.rejectReason = :reason WHERE s.id = :id AND s.factoryId = :factoryId AND s.status = 'PENDING'")
     int rejectSuggestion(
             @Param("id") String id,
             @Param("factoryId") String factoryId,

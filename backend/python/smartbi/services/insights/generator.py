@@ -22,6 +22,9 @@ from . import scenario_context as sc
 from . import prompt_builder as pb
 from . import llm_client as llm
 from common.llm_client import EgressRedactionError, egress_refusal_message
+
+# 洞察失败时给用户的固定说明 (异常细节只进服务端日志; 外发拒绝另有说明)
+ANALYSIS_FAILED_MESSAGE = "分析生成失败，请稍后重试"
 from .statistical import generate_statistical_insights
 
 logger = logging.getLogger(__name__)
@@ -141,7 +144,8 @@ class InsightGenerator:
             return {"success": False, "error": egress_refusal_message(e), "insights": []}
         except Exception as e:
             logger.error("Insight generation failed: %s", e, exc_info=True)
-            return {"success": False, "error": str(e), "insights": []}
+            # 不把异常原文回给前端 (复审 L2, 2026-10-29): 只有外发拒绝说明原样带出, 其余一律固定说明, 细节留在日志
+            return {"success": False, "error": ANALYSIS_FAILED_MESSAGE, "insights": []}
 
     # ------------------------------------------------------------------
     # Streaming entry point
@@ -304,7 +308,8 @@ class InsightGenerator:
             logger.error("Streaming insight generation failed: %s", e, exc_info=True)
             yield {
                 "event": "done",
-                "data": json.dumps({"success": False, "error": str(e)}),
+                "data": json.dumps({"success": False, "error": ANALYSIS_FAILED_MESSAGE},
+                                   ensure_ascii=False),  # 不回异常原文 (复审 L2)
             }
 
     # ------------------------------------------------------------------
