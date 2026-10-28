@@ -2,12 +2,17 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceLineRequest;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceLineViewDTO;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceMatchStatusDTO;
 import com.cretas.aims.dto.inventory.PurchaseInvoiceTodoDTO;
 import com.cretas.aims.dto.inventory.PurchaseInvoiceViewDTO;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
+import com.cretas.aims.entity.inventory.PurchaseInvoiceLine;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.PurchaseInvoiceChaseLogRepository;
+import com.cretas.aims.repository.inventory.PurchaseInvoiceLineRepository;
 import com.cretas.aims.repository.inventory.PurchaseInvoiceRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.service.inventory.PurchaseInvoiceService;
@@ -21,6 +26,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -28,6 +34,9 @@ import java.util.stream.Collectors;
  * 采购发票 Service 实现（SP6）
  *
  * <p>上传发票 → 对账（PENDING/MATCHED/MISMATCHED）→ 逾期提醒。
+ *
+ * <p>S5-05/06/07: 自动对账只看逐行三单（{@link PurchaseInvoiceThreeWayMatcher}），
+ * 不再比较「发票总额 == 订单总额」—— 同金额但错料、少收、分票都会被那条规则误判相符。
  */
 @Slf4j
 @Service
@@ -37,6 +46,8 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     private final PurchaseInvoiceRepository invoiceRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseInvoiceChaseLogRepository chaseLogRepository;
+    private final PurchaseInvoiceLineRepository lineRepository;
+    private final PurchaseInvoiceThreeWayMatcher threeWayMatcher;
 
     // ─── upload ───────────────────────────────────────────────────────────────
 
@@ -44,7 +55,8 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     @Transactional
     public PurchaseInvoice upload(String factoryId, String poId, String supplierId,
                                   String invoiceNumber, BigDecimal amount,
-                                  String ocrRawResult, Long uploadedBy) {
+                                  String ocrRawResult, Long uploadedBy,
+                                  List<PurchaseInvoiceLineRequest> lines) {
 
         if (invoiceNumber == null || invoiceNumber.isBlank()) {
             throw new BusinessException(400, "发票号码不能为空");
@@ -86,22 +98,43 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         invoice.setAmount(amount);
         invoice.setOcrRawResult(ocrRawResult);
         invoice.setUploadedBy(uploadedBy);
-        if (canAutoReconcile(po, amount)) {
+        invoice.setReconcileStatus("PENDING");
+        invoice.setLineMatchRequired(Boolean.TRUE);
+
+        // S5-05: 新登记的发票必须逐行对应采购单行。只登表头 = 不占任何量,
+        // 再被人工核成相符就绕过了三单匹配; 旧口径只留给切换前的历史发票。
+        if (lines == null || lines.isEmpty()) {
+            throw new BusinessException(400, "发票必须逐行登记（每行对应采购单行和数量），不能只登记表头金额")
+                    .withCode("PURCHASE_INVOICE_LINES_REQUIRED")
+                    .withHint("请先读取采购单行，按票面逐行填写数量和金额")
+                    .withHintTarget("lines");
+        }
+
+        // 行先校验再落发票: 超开 409 时不能留下一张孤立的表头发票。
+        List<PurchaseInvoiceLineRequest> requested = lines;
+        PurchaseInvoiceThreeWayMatcher.Ledger ledger = threeWayMatcher.load(factoryId, po);
+        List<PurchaseInvoiceLine> builtLines = threeWayMatcher.buildLines(factoryId, ledger, null, requested);
+
+        String blockingNote = autoMatchBlocker(builtLines, amount);
+        if (blockingNote == null) {
             invoice.setReconcileStatus("MATCHED");
-            invoice.setReconcileNote("AUTO_MATCHED_ON_UPLOAD");
+            invoice.setReconcileNote("AUTO_MATCHED_LINE_LEVEL");
             invoice.setReconciledBy(uploadedBy);
             invoice.setReconciledAt(LocalDateTime.now());
-            po.setInvoiceStatus(PurchaseInvoiceStatus.RECONCILED);
         } else {
-            invoice.setReconcileStatus("PENDING");
-            po.setInvoiceStatus(PurchaseInvoiceStatus.RECEIVED);
+            invoice.setReconcileNote(blockingNote);
         }
 
         PurchaseInvoice saved = invoiceRepository.save(invoice);
+        for (PurchaseInvoiceLine line : builtLines) {
+            line.setInvoiceId(saved.getId());
+        }
+        lineRepository.saveAll(builtLines);
+        refreshOrderInvoiceStatus(factoryId, po);
         purchaseOrderRepository.save(po);
         chaseLogRepository.closeOpenChases(factoryId, poId, LocalDateTime.now());
-        log.info("[SP6] 上传采购发票 invoiceNumber={} poId={} amount={} by userId={}",
-                invoiceNumber, poId, amount, uploadedBy);
+        log.info("[SP6] 上传采购发票 invoiceNumber={} poId={} amount={} lines={} status={} by userId={}",
+                invoiceNumber, poId, amount, builtLines.size(), saved.getReconcileStatus(), uploadedBy);
         return saved;
     }
 
@@ -120,6 +153,20 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
             throw new BusinessException("发票已完成对账（当前状态: " +
                     invoice.getReconcileStatus() + "），无法重复操作");
         }
+        if ("MATCHED".equals(reconcileStatus)) {
+            List<String> differences = Optional.ofNullable(lineRepository.findByFactoryIdAndInvoiceIdInOrderByIdAsc(
+                            factoryId, List.of(invoiceId))).orElse(List.of()).stream()
+                    .filter(l -> PurchaseInvoiceLine.MATERIAL_MISMATCH.equals(l.getMatchStatus())
+                            || PurchaseInvoiceLine.PRICE_MISMATCH.equals(l.getMatchStatus()))
+                    .map(l -> l.getMatchNote() != null ? l.getMatchNote() : l.getMatchStatus())
+                    .toList();
+            if (!differences.isEmpty()) {
+                // 行级差异还在, 人工「相符」会把错料 / 错价盖成三单相符 (S5-06)
+                throw new BusinessException(409, "发票存在行级差异，不能核对为相符：" + String.join("；", differences))
+                        .withCode("PURCHASE_INVOICE_LINE_DIFFERENCE")
+                        .withHint("请核对为「不符」并让供应商重开，或更正采购单后重新登记");
+            }
+        }
 
         invoice.setReconcileStatus(reconcileStatus);
         invoice.setReconcileNote(note);
@@ -129,24 +176,65 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
 
         purchaseOrderRepository.findByIdAndFactoryIdForUpdate(invoice.getPurchaseOrderId(), factoryId)
                 .ifPresent(po -> {
-                    if ("MATCHED".equals(reconcileStatus)) {
-                        po.setInvoiceStatus(PurchaseInvoiceStatus.RECONCILED);
-                        purchaseOrderRepository.save(po);
+                    refreshOrderInvoiceStatus(factoryId, po);
+                    purchaseOrderRepository.save(po);
+                    if (po.getInvoiceStatus() == PurchaseInvoiceStatus.RECONCILED) {
                         chaseLogRepository.closeOpenChases(factoryId, po.getId(), LocalDateTime.now());
-                    } else if (po.getInvoiceStatus() == PurchaseInvoiceStatus.NOT_RECEIVED) {
-                        po.setInvoiceStatus(PurchaseInvoiceStatus.RECEIVED);
-                        purchaseOrderRepository.save(po);
                     }
                 });
 
         log.info("[SP6] 发票 {} 对账完成 status={} by userId={}", invoiceId, reconcileStatus, reconciledBy);
     }
 
-    private boolean canAutoReconcile(PurchaseOrder po, BigDecimal invoiceAmount) {
-        BigDecimal gross = invoiceOrderAmount(po);
-        return gross != null
-                && invoiceAmount != null
-                && gross.compareTo(invoiceAmount) == 0;
+    /**
+     * 自动判相符的唯一条件: 每行物料/金额都与采购单行一致、行合计 = 发票总额（行不能为空, 上游已拦）。
+     * 返回 null 表示可自动相符, 否则返回留给核对员看的原因。
+     */
+    private String autoMatchBlocker(List<PurchaseInvoiceLine> lines, BigDecimal invoiceAmount) {
+        List<String> problems = new java.util.ArrayList<>();
+        for (PurchaseInvoiceLine line : lines) {
+            if (!PurchaseInvoiceLine.MATCHED.equals(line.getMatchStatus())) {
+                problems.add(line.getMatchNote() != null ? line.getMatchNote() : line.getMatchStatus());
+            }
+        }
+        BigDecimal lineTotal = lines.stream().map(PurchaseInvoiceLine::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (lineTotal.subtract(invoiceAmount).abs().compareTo(new BigDecimal("0.01")) > 0) {
+            problems.add("发票总额 " + invoiceAmount.stripTrailingZeros().toPlainString()
+                    + " ≠ 行合计 " + lineTotal.stripTrailingZeros().toPlainString());
+        }
+        return problems.isEmpty() ? null : "行级差异：" + String.join("；", problems);
+    }
+
+    /**
+     * 采购单收票状态: 只有每条可开票行都被「已核对」发票开满、且没有待核对发票才算 RECONCILED。
+     * 只有切换前的历史发票（line_match_required = FALSE）的采购单沿用旧口径
+     * （有一张人工核对相符的发票即视为已核对）。判据是显式切换标记, 不是「有没有发票行」。
+     */
+    private void refreshOrderInvoiceStatus(String factoryId, PurchaseOrder po) {
+        List<PurchaseInvoice> invoices = Optional.ofNullable(
+                invoiceRepository.findByFactoryIdAndPurchaseOrderId(factoryId, po.getId())).orElse(List.of());
+        boolean lineMatchRequired = invoices.stream().anyMatch(i -> Boolean.TRUE.equals(i.getLineMatchRequired()));
+        boolean reconciled;
+        if (lineMatchRequired) {
+            reconciled = threeWayMatcher.fullyMatched(threeWayMatcher.load(factoryId, po))
+                    && invoices.stream().noneMatch(i -> "PENDING".equals(i.getReconcileStatus()));
+        } else {
+            reconciled = invoices.stream().anyMatch(i -> "MATCHED".equals(i.getReconcileStatus()));
+        }
+        if (reconciled) {
+            po.setInvoiceStatus(PurchaseInvoiceStatus.RECONCILED);
+        } else if (!invoices.isEmpty()) {
+            po.setInvoiceStatus(PurchaseInvoiceStatus.RECEIVED);
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PurchaseInvoiceMatchStatusDTO matchStatus(String factoryId, String poId) {
+        PurchaseOrder po = purchaseOrderRepository.findByIdAndFactoryId(poId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "采购订单不存在或不属于工厂: " + poId));
+        return threeWayMatcher.toStatus(threeWayMatcher.load(factoryId, po));
     }
 
     private BigDecimal invoiceOrderAmount(PurchaseOrder po) {
@@ -203,12 +291,19 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
                 .collect(Collectors.toMap(
                         com.cretas.aims.entity.inventory.PurchaseOrder::getId,
                         Function.identity()));
+        Map<String, List<PurchaseInvoiceLineViewDTO>> linesByInvoice = invoices.isEmpty() ? Map.of()
+                : Optional.ofNullable(lineRepository.findByFactoryIdAndInvoiceIdInOrderByIdAsc(
+                                factoryId, invoices.stream().map(PurchaseInvoice::getId).toList()))
+                        .orElse(List.of()).stream()
+                        .collect(Collectors.groupingBy(PurchaseInvoiceLine::getInvoiceId,
+                                Collectors.mapping(PurchaseInvoiceLineViewDTO::from, Collectors.toList())));
         return invoices.stream().map(invoice -> {
             var order = orders.get(invoice.getPurchaseOrderId());
             return PurchaseInvoiceViewDTO.from(
                     invoice,
                     order != null ? order.getOrderNumber() : null,
-                    order != null ? order.getSupplierName() : null);
+                    order != null ? order.getSupplierName() : null,
+                    linesByInvoice.getOrDefault(invoice.getId(), List.of()));
         }).toList();
     }
 }
