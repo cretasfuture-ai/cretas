@@ -131,9 +131,14 @@ _PROTECTED_NAMES_TIMEOUT_S = 5.0
 
 async def _names_for_this_request() -> list:
     """原话模式 (意图识别) 与 Java ``LlmEgressGuard.utterance`` 一样不查库、不认保密产品名 (识别链路不加库查询);
-    其余每次现查; 同一次 call_chain 已预取过就复用 (重试下一家供应商不再查库)。"""
+    其余每次现查; 同一次 call_chain 已预取过就复用 (重试下一家供应商不再查库)。
+
+    已知例外 (有意保留, Steve 2026-10-29 裁定): 意图识别把用户原话连同其中的工艺保密产品名不脱敏发给
+    外部模型 (下面原话模式返回空名单); 除意图识别以外的所有外发一律把保密产品名换代号。
+    Java 侧同一例外在 LlmEgressGuard.utterance; 说明见 docs/security/process-secret-ai-egress.md。"""
     from common.llm_redactor import _egress_detect_names
     if not _egress_detect_names.get():
+        # 已知例外 (Steve 2026-10-29): 意图识别原话模式保留保密产品原名, 故意返回空名单
         return []
     prefetched = _prefetched_names.get()
     if prefetched is not None:
