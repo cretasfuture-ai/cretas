@@ -851,6 +851,10 @@ public class PlatformAssemblyInterviewController {
         private List<String> writtenThresholds = new ArrayList<>();
         private List<String> writtenWarehouses = new ArrayList<>();
         private List<String> skippedWarehouses = new ArrayList<>();
+        /** 蓝图仓库补上的默认用途, 形如 {@code PURCHASE_INBOUND_DEFAULT→WH-RAW}。 */
+        private List<String> writtenWarehouseDefaults = new ArrayList<>();
+        /** 没补的默认用途, 带原因(已有配置 / 已可用 / 蓝图没有对应类型的仓 / 有多个不替用户挑)。 */
+        private List<String> skippedWarehouseDefaults = new ArrayList<>();
         /** S4: 新建的产线与写下的产能 (键与预览「产线与设备产能」分组同形) */
         private List<String> writtenProductionLines = new ArrayList<>();
         /** S4: 同名已存在而复用的产线 */

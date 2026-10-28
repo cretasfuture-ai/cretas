@@ -114,6 +114,9 @@ public class FactoryBuildApplyService {
     private FactoryWarehouseService factoryWarehouseService;
 
     @Autowired
+    private BlueprintWarehouseDefaultsWriter warehouseDefaultsWriter;
+
+    @Autowired
     private com.cretas.aims.repository.ProductionLineRepository productionLineRepository;
 
     @Autowired
@@ -1111,14 +1114,20 @@ public class FactoryBuildApplyService {
     /**
      * 存放区落库。走 {@link FactoryWarehouseService#create} 而不是直接存 repository ——
      * 那里有工厂内编号唯一的防呆(撞号抛 409), 绕过去会让两个同号仓静默共存。
+     *
+     * <p>仓建好之后同一事务里补默认用途: 不补的话业务路径回退 WH-LOG / WH-WKS,
+     * 蓝图建的厂没有这两个仓, 采购入库 / 领料 / 发货当场 500。规则见
+     * {@link BlueprintWarehouseDefaultsWriter}。
      */
-    private void applyWarehouses(String factoryId, ApplyAIInitRequest request,
-                                 ApplyAIInitResult result) {
+    void applyWarehouses(String factoryId, ApplyAIInitRequest request,
+                         ApplyAIInitResult result) {
         if (request.getSuggestedData() == null || request.getSuggestedData().getWarehouses() == null) {
             return;
         }
+        List<String> codes = new ArrayList<>();
         for (ApplyAIInitRequest.WarehouseItem w : request.getSuggestedData().getWarehouses()) {
             String code = w.getCode().trim();
+            codes.add(code);
             if (factoryWarehouseService.findByCode(factoryId, code).isPresent()) {
                 result.getSkippedWarehouses().add(code);
                 continue;
@@ -1128,6 +1137,7 @@ public class FactoryBuildApplyService {
                     Boolean.TRUE, w.getRemarks());
             result.getWrittenWarehouses().add(code);
         }
+        warehouseDefaultsWriter.write(factoryId, codes, result);
     }
 
     /**
