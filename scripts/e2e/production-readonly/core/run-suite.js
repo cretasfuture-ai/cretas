@@ -133,6 +133,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedUsername,
         expectedFactoryId,
         loginEvidence,
+        factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         scenarioRef,
         mutationGuard,
         network,

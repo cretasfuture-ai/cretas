@@ -4,6 +4,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const scenario = require('../scenarios/smartbi-factory-analysis-readonly');
 
+test('joint subject selection uses the requested authorized product and rejects unknown subjects', () => {
+  const subjects = [{ id: 'missing-data', label: 'First product' }, { id: 'eligible', label: 'Eligible product' }];
+  assert.equal(scenario.selectAuthorizedSubject(subjects).id, 'missing-data');
+  assert.equal(scenario.selectAuthorizedSubject(subjects, 'eligible'), subjects[1]);
+  assert.throws(() => scenario.selectAuthorizedSubject(subjects, 'foreign-product'), /authorized response/);
+});
+
 function response(status, data, request) {
   return {
     summary: scenario.summaryFromResponse(status, { success: true, data }, request),
