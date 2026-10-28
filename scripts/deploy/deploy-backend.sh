@@ -948,6 +948,36 @@ prod_already_runs_local_artifact() {
         return 1
     fi
 
+    # 再问进程**手里打开的** jar 字节是不是本地这份: 逐个读 /proc/<pid>/fd 里指向运行 jar 的句柄,
+    # 每个都必须没被删除且 MD5 等于本地。启动时刻只能说明「进程比盘上文件新」, 而 jar 的 mtime
+    # 来自制品缓存 / rsync, 可以早于进程启动 —— 那时上面一条拦不住, 这一条拦得住。
+    # 2026-10-28 实测的句柄形状: 两个已删除的旧 jar (fd1739f2) + 一个后来打开的新 jar。
+    # 远端最后打一行 END: 本脚本没开 pipefail, ssh 中途断开不会反映在退出码上;
+    # 只收到「<md5> live」而丢了后面的 deleted 行时, 没有 END 就不认。
+    local open_jars
+    open_jars=$(ssh -o ConnectTimeout=5 "$SERVER" \
+        "for fd in /proc/$active_pid/fd/*; do t=\$(readlink \"\$fd\" 2>/dev/null) || continue; case \"\$t\" in '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME') s=live ;; '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME (deleted)') s=deleted ;; *) continue ;; esac; printf '%s %s\\n' \"\$(md5sum < \"\$fd\" | awk '{print \$1}')\" \"\$s\"; done; echo END" \
+        2>/dev/null | tr -d '\r')
+    case "$open_jars" in
+        END|*$'\n'END) ;;
+        *)
+            echo "   ⚠️  没收到完整的进程句柄清单 (pid $active_pid) —— 不能算已部署, 继续走正常部署流程。" >&2
+            return 1
+            ;;
+    esac
+    open_jars=${open_jars%END}
+    open_jars=${open_jars%$'\n'}
+    if [ -z "$open_jars" ]; then
+        echo "   ⚠️  读不到运行进程 (pid $active_pid) 打开的 JAR —— 不能算已部署, 继续走正常部署流程。" >&2
+        return 1
+    fi
+    if printf '%s\n' "$open_jars" | grep -qvx "$local_md5 live"; then
+        echo "   ⚠️  盘上 JAR 与本地一致, 但**运行中的进程打开的不是这份字节** —— 不能算已部署。" >&2
+        printf '%s\n' "$open_jars" | sed 's/^/      进程句柄: /' >&2
+        echo "      (典型成因: 上次部署装了 jar 但切流/重启失败) => 继续走正常部署流程。" >&2
+        return 1
+    fi
+
     FINAL_ACTIVE_PORT=$active_port
     FINAL_ACTIVE_SERVICE=$active_service
     echo "   ✓ 生产已运行相同 JAR: upstream=$active_port service=$active_service MD5=$local_md5"
