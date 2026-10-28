@@ -113,9 +113,45 @@ export interface WorkerSuggestion {
 }
 
 /** AI 排产结果（扩展 SchedulingPlan） */
+/** APS v2 排程时当场补的日产能 (一天能做多少, 单位 = 计划单位)。 */
+export interface DailyCapacityOverride {
+  productTypeId: string;
+  quantityPerDay: number;
+  unit: string;
+}
+
+/** APS v2: 两样都没有日产能的产品 (后端 outcome = CAPACITY_REQUIRED 时返回, 什么都没保存)。 */
+export interface DailyCapacityRequired {
+  productTypeId: string;
+  productName: string;
+  unit: string;
+  jointPlan: boolean;
+  question: string;
+  reason: 'MISSING' | 'UNIT_MISMATCH' | string;
+  currentQuantityPerDay?: number | null;
+  currentUnit?: string | null;
+  experienceNote?: string | null;
+  planNumbers: string[];
+}
+
+/** APS v2 一条排程的按天分配。 */
+export interface DailyAllocations {
+  unit: string;
+  capacityPerDay: number;
+  capacitySource: 'MANUAL' | 'EXPERIENCE' | string;
+  capacitySourceLabel: string;
+  plannedQuantity?: number | null;
+  reportedQuantity?: number | null;
+  remainingQuantity?: number | null;
+  days: Array<{ date: string; quantity: number; shareOfDay: number }>;
+}
+
 export interface AISchedulingResult {
   /** 后端有时直接返回 SchedulingPlanDTO，id 在根级别 */
   id?: string;
+  /** APS v2: SCHEDULED = 已排出并保存; CAPACITY_REQUIRED = 先补日产能 (见 capacityRequired) */
+  outcome?: 'SCHEDULED' | 'CAPACITY_REQUIRED' | null;
+  capacityRequired?: DailyCapacityRequired[] | null;
   plan: SchedulingPlan;
   completionProbability: number;
   simulationRuns: number;
@@ -564,6 +600,8 @@ class SchedulingApiClient {
       optimizeFor?: 'efficiency' | 'cost' | 'balanced';
       autoAssignWorkers?: boolean;
       enableLinUCB?: boolean;
+      /** APS v2: 排程时当场补的日产能, 后端先保存到产品再排 */
+      dailyCapacityOverrides?: DailyCapacityOverride[];
     },
     factoryId?: string
   ): Promise<ApiResponse<AISchedulingResult>> {
@@ -571,13 +609,16 @@ class SchedulingApiClient {
     const requestData = {
       planDate: data.planDate || data.startDate || formatDate(new Date()),
       shiftType: data.shiftType,
-      // 后端 GenerateScheduleRequest 读的是 planIds (APS v1, 2026-10-28); productionPlanIds 旧字段后端从未读过
+      // 后端 GenerateScheduleRequest 读的是 planIds (APS, 2026-10-28); productionPlanIds 旧字段后端从未读过
       planIds: data.planIds || data.productionPlanIds,
       productionPlanIds: data.productionPlanIds || data.planIds,
       batchIds: data.batchIds,
       optimizeFor: data.optimizeFor,
       autoAssignWorkers: data.autoAssignWorkers,
       enableLinUCB: data.enableLinUCB,
+      ...(data.dailyCapacityOverrides && data.dailyCapacityOverrides.length > 0
+        ? { dailyCapacityOverrides: data.dailyCapacityOverrides }
+        : {}),
     };
     return await apiClient.post(`${this.getPath(factoryId)}/generate`, requestData);
   }
