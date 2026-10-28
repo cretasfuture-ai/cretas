@@ -330,6 +330,13 @@ export function FAHomeScreen() {
           />
         }
       >
+        <TouchableOpacity
+          testID="fa-home-factory-readiness"
+          style={styles.readinessEntry}
+          onPress={() => navigation.navigate('FactoryReadiness')}
+        >
+          <Text style={styles.readinessEntryText}>建厂就绪：查看采购、生产、发货是否可以开展</Text>
+        </TouchableOpacity>
         {/* Welcome header */}
         <WelcomeHeader
           username={user?.username}
@@ -430,6 +437,15 @@ export function FAHomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  readinessEntry: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#eef3ff',
+  },
+  readinessEntryText: { color: '#667eea', fontSize: 14 },
   container: {
     flex: 1,
     backgroundColor: '#f5f7fa',

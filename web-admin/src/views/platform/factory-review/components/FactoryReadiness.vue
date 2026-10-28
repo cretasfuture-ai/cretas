@@ -28,6 +28,7 @@ const tagType = (state: string) => ['DONE', 'READY', 'MET', 'COMPLETED'].include
 const remedyPath: Partial<Record<FactoryRemedyKey, string>> = {
   SUPPLIERS: '/procurement/suppliers', CUSTOMERS: '/sales/customers', MATERIAL_TYPES: '/warehouse/material-types',
   PRODUCTS: '/system/products', PRODUCT_PROCESSES: '/system/product-processes',
+  MATERIAL_PACKAGING: '/warehouse/material-types', USERS: '/system/users',
 }
 // Default warehouses have no page of their own: they sit in a sub-tab of the canvas editor, which a
 // plain link cannot open. Name the exact steps and the field instead of a link that lands elsewhere.
@@ -114,6 +115,10 @@ onBeforeUnmount(() => { alive = false; ++sequence })
               <span v-else class="remedy">由工厂管理员在「{{ check.remedyLabel }}」补齐</span>
             </li>
           </ul>
+          <p v-if="ownFactory && domain.firstAction" class="domain-note" data-testid="first-action">
+            <router-link :to="{ path: domain.firstAction.path, query: domain.firstAction.query }">{{ domain.firstAction.label }}</router-link>
+            <span>（{{ domain.firstAction.detail }}）</span>
+          </p>
           <p v-if="domain.applicability !== 'NOT_APPLICABLE'" class="domain-note">
             首笔业务：{{ firstState[domain.firstRecord.state] }}，{{ domain.firstRecord.detail }}
           </p>

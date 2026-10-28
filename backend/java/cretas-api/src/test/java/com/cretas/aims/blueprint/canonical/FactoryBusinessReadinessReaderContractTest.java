@@ -43,8 +43,16 @@ class FactoryBusinessReadinessReaderContractTest {
     private final ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
     private final SalesDeliveryRecordRepository deliveries = mock(SalesDeliveryRecordRepository.class);
     private final SupplierMaterialRepository relations = mock(SupplierMaterialRepository.class);
+    private final com.cretas.aims.repository.UserRepository users = mock(com.cretas.aims.repository.UserRepository.class);
+    private final com.cretas.aims.repository.material.MaterialPackagingSpecRepository packagingSpecs =
+            mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class);
+    private final com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository purchaseSpecs =
+            mock(com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository.class);
+    private final com.cretas.aims.service.unit.UnitContractService units =
+            mock(com.cretas.aims.service.unit.UnitContractService.class);
     private final FactoryBusinessReadinessReader reader = new FactoryBusinessReadinessReader(resolver, warehouses,
-            suppliers, customers, raws, purchases, plans, deliveries, relations);
+            suppliers, customers, raws, purchases, plans, deliveries, relations, users, packagingSpecs,
+            purchaseSpecs, units);
     private final List<ProductRuntime> live = List.of(new ProductRuntime("p1", "盒装", "PUBLISHED", 7L, 1, "b", 1, "匹配"));
     private final List<CapabilityView> all = List.of(included("materials"), included("processes"), included("products"));
 
@@ -54,6 +62,9 @@ class FactoryBusinessReadinessReaderContractTest {
         when(relations.findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc("FA", "S1"))
                 .thenReturn(List.of(relation("S1", "M1", true)));
         when(customers.countByFactoryIdAndIsActive("FA", true)).thenReturn(2L);
+        for (String role : List.of("procurement_manager", "workshop_supervisor", "sales_manager")) {
+            when(users.findByFactoryIdAndRoleCode("FA", role)).thenReturn(List.of(holder(role)));
+        }
         when(resolver.resolvePurchaseInboundWh("FA")).thenReturn("wh-log");
         when(resolver.resolveSalesOutboundWh("FA")).thenReturn("wh-log");
         when(resolver.resolveProductionRawWh("FA")).thenReturn("wh-log");
@@ -82,6 +93,71 @@ class FactoryBusinessReadinessReaderContractTest {
         assertThat(completed.state()).isEqualTo("COMPLETED");
         assertThat(completed.count()).isEqualTo(4L);
         assertThat(completed.completedCount()).isEqualTo(1L);
+    }
+
+    @Test void packagePurchaseWithoutConversionIsMissingButBaseUnitPurchaseIsNotDemandedOne() {
+        RawMaterialType box = material("M1");
+        box.setName("面粉"); box.setUnit("kg");
+        when(raws.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(box));
+        when(units.normalize(eq("FA"), any())).thenAnswer(call -> null);
+        SupplierMaterial byBag = relation("S1", "M1", true);
+        byBag.setId("R1"); byBag.setPurchaseUnit("袋");
+        when(relations.findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc("FA", "S1"))
+                .thenReturn(List.of(byBag));
+        BusinessDomain purchase = domain(reader.read("FA", all, live), "PURCHASE");
+        assertThat(check(purchase, "PACKAGING_PURCHASE_CONVERSION").state()).isEqualTo("MISSING");
+        assertThat(check(purchase, "PACKAGING_PURCHASE_CONVERSION").detail()).contains("面粉").contains("袋");
+        assertThat(purchase.state()).isEqualTo("MISSING");
+
+        var spec = new com.cretas.aims.entity.material.MaterialPackagingSpec();
+        spec.setPackageUnit("袋"); spec.setActive(true);
+        when(packagingSpecs.findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc("FA", "M1"))
+                .thenReturn(List.of(spec));
+        assertThat(check(domain(reader.read("FA", all, live), "PURCHASE"), "PACKAGING_PURCHASE_CONVERSION").state())
+                .isEqualTo("MET");
+
+        byBag.setPurchaseUnit("kg");
+        when(packagingSpecs.findByFactoryIdAndMaterialTypeIdAndActiveTrueOrderBySortOrderAscCreatedAtAsc("FA", "M1"))
+                .thenReturn(List.of());
+        assertThat(check(domain(reader.read("FA", all, live), "PURCHASE"), "PACKAGING_PURCHASE_CONVERSION").state())
+                .as("基本单位采购不强求包装换算").isEqualTo("MET");
+    }
+
+    @Test void readyDomainsOfferTheFirstBusinessActionCarryingRealIdsAndMissingOnesOfferNone() {
+        var customer = new com.cretas.aims.entity.Customer();
+        customer.setId("C1"); customer.setFactoryId("FA"); customer.setIsActive(true);
+        when(customers.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(customer));
+        var rows = reader.read("FA", all, live);
+        var purchase = domain(rows, "PURCHASE").firstAction();
+        assertThat(purchase.path()).isEqualTo("/procurement/orders");
+        assertThat(purchase.query()).containsEntry("supplierId", "S1").containsEntry("materialTypeId", "M1");
+        var sales = domain(rows, "SHIPPING").firstAction();
+        assertThat(sales.path()).isEqualTo("/sales/orders/new");
+        assertThat(sales.query()).containsEntry("customerId", "C1").containsEntry("productId", "p1");
+        assertThat(domain(rows, "PRODUCTION").firstAction().query()).containsEntry("productTypeId", "p1");
+
+        when(suppliers.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of());
+        var blocked = reader.read("FA", all, live);
+        assertThat(domain(blocked, "PURCHASE").state()).isEqualTo("MISSING");
+        assertThat(domain(blocked, "PURCHASE").firstAction()).as("缺项时不给「去下单」入口").isNull();
+    }
+
+    @Test void aDomainWithNobodyInThePostIsMissingAndInactiveHoldersDoNotCount() {
+        var inactive = holder("procurement_manager");
+        inactive.setIsActive(false);
+        when(users.findByFactoryIdAndRoleCode("FA", "procurement_manager")).thenReturn(List.of(inactive));
+        when(users.findByFactoryIdAndRoleCode("FA", "warehouse_manager")).thenReturn(List.of());
+        when(users.findByFactoryIdAndRoleCode("FA", "workshop_supervisor")).thenReturn(List.of());
+        when(users.findByFactoryIdAndRoleCode("FA", "operator")).thenReturn(List.of());
+        var rows = reader.read("FA", all, live);
+        assertThat(check(domain(rows, "PURCHASE"), "PURCHASE_POST_HOLDER").state()).isEqualTo("MISSING");
+        assertThat(check(domain(rows, "PURCHASE"), "PURCHASE_POST_HOLDER").remedyKey()).isEqualTo("USERS");
+        assertThat(check(domain(rows, "PRODUCTION"), "PRODUCTION_POST_HOLDER").state()).isEqualTo("MISSING");
+        assertThat(check(domain(rows, "SHIPPING"), "SHIPPING_POST_HOLDER").state())
+                .as("销售经理仍在岗").isEqualTo("MET");
+        when(users.findByFactoryIdAndRoleCode("FA", "sales_manager")).thenThrow(new IllegalStateException("db"));
+        assertThat(check(domain(reader.read("FA", all, live), "SHIPPING"), "SHIPPING_POST_HOLDER").state())
+                .isEqualTo("UNKNOWN");
     }
 
     @Test void independentSuppliersAndMaterialsWithoutAValidRelationshipAreNotReadyToPurchase() {
@@ -160,6 +236,11 @@ class FactoryBusinessReadinessReaderContractTest {
     private static RawMaterialType material(String id) {
         RawMaterialType material = new RawMaterialType(); material.setId(id); material.setFactoryId("FA"); material.setIsActive(true);
         return material;
+    }
+    private static com.cretas.aims.entity.User holder(String role) {
+        var user = new com.cretas.aims.entity.User();
+        user.setId((long) role.hashCode()); user.setFactoryId("FA"); user.setRoleCode(role); user.setIsActive(true);
+        return user;
     }
     private static SupplierMaterial relation(String supplierId, String materialId, boolean active) {
         SupplierMaterial relation = new SupplierMaterial();

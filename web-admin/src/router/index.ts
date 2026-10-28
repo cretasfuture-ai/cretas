@@ -2557,6 +2557,18 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
         },
       },
       {
+        // 已确认资料: 冲突逐条选择来源 + 版本历史; 从「建厂就绪」页进入。
+        path: 'factory-readiness/facts',
+        name: 'FactoryConfirmedFacts',
+        component: () => import('@/views/factory-readiness/facts.vue'),
+        meta: {
+          title: '已确认资料与版本历史',
+          requiresAuth: true,
+          hidden: true,
+          roles: ['factory_super_admin'],
+        },
+      },
+      {
         path: 'factory-review',
         name: 'FactoryBuildReview',
         component: () => import('@/views/platform/factory-review/index.vue'),

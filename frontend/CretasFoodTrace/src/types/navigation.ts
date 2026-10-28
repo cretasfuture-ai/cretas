@@ -379,6 +379,7 @@ export type FactoryAdminTabParamList = {
 
 export type FAHomeStackParamList = {
   FAHome: undefined;
+  FactoryReadiness: undefined;
   TodayProduction: undefined;
   TodayBatches: undefined;
   MaterialBatch: { statusFilter?: string } | undefined;

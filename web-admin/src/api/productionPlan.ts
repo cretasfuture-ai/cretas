@@ -576,6 +576,18 @@ export function resolveWorkflowByOutputs(factoryId: string, productTypeIds: stri
   )
 }
 
+/**
+ * 读取计划固定的那一版工序路线预览 —— 不要求它仍是启用版本(路线被新版本替换后旧计划仍要能看)。
+ * GET /{factoryId}/product-process-workflows/pinned?workflowId=..&version=..
+ * 版本不存在/串厂/草稿 → data 为 null。
+ */
+export function findPinnedWorkflow(factoryId: string, workflowId: number, version: number) {
+  return get<WorkflowResolutionCandidate | null>(
+    `/${factoryId}/product-process-workflows/pinned`
+      + `?workflowId=${encodeURIComponent(String(workflowId))}&version=${encodeURIComponent(String(version))}`
+  )
+}
+
 /** 配置侧反查结果里的一张图。 */
 export interface WorkflowOutputDirectoryEntry {
   workflowId: number

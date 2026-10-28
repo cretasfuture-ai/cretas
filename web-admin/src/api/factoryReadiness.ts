@@ -39,6 +39,10 @@ export interface FactoryReadinessStage {
 }
 
 export type FactoryRemedyKey = 'SUPPLIERS' | 'CUSTOMERS' | 'MATERIAL_TYPES' | 'PRODUCTS' | 'PRODUCT_PROCESSES' | 'WAREHOUSE_DEFAULTS'
+  | 'MATERIAL_PACKAGING' | 'USERS'
+
+/** First business action of a READY domain; query holds ids read from the factory's own master data. */
+export interface FactoryFirstAction { label: string; path: string; query: Record<string, string>; detail: string }
 
 export interface FactoryBusinessDomain {
   domain: 'PURCHASE' | 'PRODUCTION' | 'SHIPPING'
@@ -51,6 +55,8 @@ export interface FactoryBusinessDomain {
     remedyKey: FactoryRemedyKey; remedyLabel: string
   }>
   notChecked: string[]
+  /** Present only when every check is met. */
+  firstAction?: FactoryFirstAction | null
   /** COMPLETED needs a document in its terminal status; RECORDED = documents exist (drafts too), none completed. */
   firstRecord: {
     state: 'COMPLETED' | 'RECORDED' | 'NONE' | 'UNKNOWN'

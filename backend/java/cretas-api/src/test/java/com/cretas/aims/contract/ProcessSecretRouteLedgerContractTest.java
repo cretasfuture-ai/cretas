@@ -84,6 +84,8 @@ class ProcessSecretRouteLedgerContractTest {
             Map.entry("ProductProcessWorkflowController#getActivation", "只有激活状态元信息"),
             Map.entry("ProductProcessWorkflowController#resolveByOutputs", "V1 未纳管: 按产出反查工艺, S1 补"),
             Map.entry("ProductProcessWorkflowController#findWorkflowsProducing", "V1 未纳管: 产出目录, S1 补"),
+            Map.entry("ProductProcessWorkflowController#findPinned",
+                    "V1 未纳管: 与 resolveByOutputs 同一份已裁剪预览 DTO (只有工序名/物料名/单位, 无公式与配比); 按 workflowId 而非产品入口, 无法套 PRODUCT_PATH 守卫, S1 一并补"),
             Map.entry("BomController#getProductTypesWithBom", "只有产品 ID 列表"),
             Map.entry("BomController#recalculatePreview", "V2 统一裁剪: currentYieldRate 等标准出成率按产品归属去掉"),
             Map.entry("BomController#listYieldSuggestions", "V2 统一裁剪: previous/suggestedYieldRate 按产品归属去掉"),

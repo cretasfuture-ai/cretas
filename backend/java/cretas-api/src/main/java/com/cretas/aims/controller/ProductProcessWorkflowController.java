@@ -117,6 +117,21 @@ public class ProductProcessWorkflowController {
                 outputDirectoryService.findWorkflowsProducing(factoryId, finishedGoodProductTypeId));
     }
 
+    /**
+     * 只读: 计划固定的那一版工序路线(哪怕它已被新版本替换、不再是启用版本)。
+     * 计划列表不能只在「当前启用」里找, 否则旧计划会显示「未读取到计划固定的工序路线」。
+     * 字面量段 /pinned 与 GET /{productTypeId} 不冲突。
+     */
+    @GetMapping("/pinned")
+    @Operation(summary = "只读: 读取计划固定的 Workflow 版本路线预览(不要求仍为启用版本)")
+    public ApiResponse<WorkflowOutputResolutionDTO.Candidate> findPinned(
+            @PathVariable String factoryId,
+            @RequestParam Long workflowId,
+            @RequestParam Integer version) {
+        return ApiResponse.success(
+                resolutionService.findPinnedCandidate(factoryId, workflowId, version).orElse(null));
+    }
+
     @GetMapping("/{productTypeId}/versions")
     @Operation(summary = "读取某产品的全部 Workflow 版本历史(DRAFT + SNAPSHOT + PUBLISHED), 按版本号倒序")
     public ApiResponse<List<ProductProcessWorkflowVersionSummaryDTO>> listVersions(
