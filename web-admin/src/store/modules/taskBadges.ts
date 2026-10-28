@@ -2,9 +2,7 @@ import { computed, reactive, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { get } from '@/api/request';
 import { getPendingWarehouseReceivingTasks } from '@/api/purchaseReceive';
-import { listCustomerMaterialArrivals } from '@/api/customerMaterialArrival';
 import { usePermissionStore, type ModuleName } from '@/store/modules/permission';
-import type { TableRow } from '@/types/api';
 
 export type TaskBadgeKey = 'salesOrders' | 'warehouseReceiving' | 'unorderedInbound';
 
@@ -45,15 +43,31 @@ const BADGE_MODULES: Record<TaskBadgeKey, ModuleName[]> = {
 interface BadgeState {
   count: number;
   available: boolean;
+  /**
+   * 请求过、但这次没算出来(接口失败 / 服务端说 UNKNOWN)。⇒ 角标显示「?」, 不是 0、也不是隐藏。
+   * 没权限(根本没发请求)与还没加载都不算 unknown。
+   */
+  unknown: boolean;
 }
 
-const TERMINAL_SALES_STATUSES = new Set([
-  'COMPLETED', 'CLOSED', 'CANCELLED', 'REJECTED', 'REFUNDED',
-]);
+/** 服务端 `GET /task-badges/*` 的返回: state=KNOWN 时 count 是授权范围内的真实总数。 */
+interface ServerBadgeCount {
+  state: 'KNOWN' | 'UNKNOWN';
+  count: number | null;
+  reason?: string | null;
+}
 
-export function countActionableSalesOrders(rows: TableRow[]): number {
-  return rows.filter((row) =>
-    !TERMINAL_SALES_STATUSES.has(String(row.status || '').toUpperCase())).length;
+/** 数字在服务端算(真正的 COUNT), 前端不再取第一页再数 —— 超过一页就会数错。 */
+async function loadServerCount(currentFactoryId: string, path: string, label: string): Promise<number> {
+  const response = await get<ServerBadgeCount>(`/${currentFactoryId}/task-badges/${path}`, {
+    _silent: true,
+  } as never);
+  if (!response.success) throw new Error(response.message || `${label} task badge unavailable`);
+  const data = response.data;
+  if (!data || data.state !== 'KNOWN' || typeof data.count !== 'number' || !Number.isFinite(data.count)) {
+    throw new Error(data?.reason || `${label} task badge count is unknown`);
+  }
+  return data.count;
 }
 
 export const useTaskBadgeStore = defineStore('taskBadges', () => {
@@ -64,9 +78,9 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
   let loadingFactory = '';
   let refreshQueued = false;
   const states = reactive<Record<TaskBadgeKey, BadgeState>>({
-    salesOrders: { count: 0, available: false },
-    warehouseReceiving: { count: 0, available: false },
-    unorderedInbound: { count: 0, available: false },
+    salesOrders: { count: 0, available: false, unknown: false },
+    warehouseReceiving: { count: 0, available: false, unknown: false },
+    unorderedInbound: { count: 0, available: false, unknown: false },
   });
   let loadToken = 0;
 
@@ -86,23 +100,12 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
     for (const state of Object.values(states)) {
       state.count = 0;
       state.available = false;
+      state.unknown = false;
     }
   }
 
-  async function loadSales(currentFactoryId: string): Promise<number> {
-    const response = await get(`/${currentFactoryId}/sales/orders`, {
-      params: { page: 1, size: 500 },
-      _silent: true,
-    } as never);
-    if (!response.success) throw new Error(response.message || 'Sales order task badge unavailable');
-    const rows = Array.isArray(response.data?.content)
-      ? response.data.content as TableRow[]
-      : Array.isArray(response.data) ? response.data as TableRow[] : [];
-    const totalElements = Number(response.data?.totalElements);
-    if (Number.isFinite(totalElements) && totalElements > rows.length) {
-      throw new Error('Sales order task badge requires a complete result set');
-    }
-    return countActionableSalesOrders(rows);
+  function loadSales(currentFactoryId: string): Promise<number> {
+    return loadServerCount(currentFactoryId, 'sales-orders', 'Sales order');
   }
 
   async function loadReceiving(currentFactoryId: string): Promise<number> {
@@ -111,12 +114,8 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
     return Array.isArray(response.data) ? response.data.length : 0;
   }
 
-  async function loadUnorderedInbound(currentFactoryId: string): Promise<number> {
-    const response = await listCustomerMaterialArrivals(currentFactoryId, false);
-    if (!response.success) throw new Error(response.message || 'Unordered inbound task badge unavailable');
-    return Array.isArray(response.data)
-      ? response.data.filter((row) => row.status === 'PENDING_APPROVAL').length
-      : 0;
+  function loadUnorderedInbound(currentFactoryId: string): Promise<number> {
+    return loadServerCount(currentFactoryId, 'unordered-inbound', 'Unordered inbound');
   }
 
   async function loadAll(force = false): Promise<void> {
@@ -145,6 +144,7 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
         // 权限不足 ⇒ 【根本不发这个请求】。角标同样隐藏(与请求失败时一致),
         // 区别只在于不再制造一条 403。
         states[key].available = false;
+        states[key].unknown = false;
         states[key].count = 0;
         return;
       }
@@ -158,9 +158,11 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
       if (result.status === 'fulfilled') {
         states[key].count = Math.max(0, Number(result.value) || 0);
         states[key].available = true;
+        states[key].unknown = false;
       } else {
-        // Fail closed: hide an unavailable badge instead of showing a misleading zero.
+        // 算不出来就明说「未知」: 既不显示 0, 也不悄悄隐藏(隐藏会让人以为没有待办)。
         states[key].available = false;
+        states[key].unknown = true;
       }
     });
     nextRefreshAt = loaders.length === 0 ? 0 : Date.now()
@@ -178,5 +180,10 @@ export const useTaskBadgeStore = defineStore('taskBadges', () => {
     return states[key].count;
   }
 
-  return { states, loading, totalActionable, setFactory, loadAll, badge };
+  /** 这个角标的数字这次没能算出来(区别于「没权限」「没有待办」)。 */
+  function isUnknown(key?: TaskBadgeKey): boolean {
+    return !!key && states[key].unknown;
+  }
+
+  return { states, loading, totalActionable, setFactory, loadAll, badge, isUnknown };
 });

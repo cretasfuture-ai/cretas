@@ -63,7 +63,11 @@ class FactoryErasurePostgresContractTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        String tag = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
+        // Letters only: a tag holding 8+ consecutive digits (hex gives that ~1-2% of the time, seen as
+        // backup_fe_7861767814) makes the copy schema look dated, so the "undated copy" blocker is never raised.
+        String tag = UUID.randomUUID().toString().replace("-", "").substring(0, 10)
+                .chars().mapToObj(ch -> String.valueOf(ch >= '0' && ch <= '9' ? (char) ('g' + (ch - '0')) : (char) ch))
+                .collect(java.util.stream.Collectors.joining());
         schema = "fe_" + tag;
         appRole = "fe_app_" + tag;
         main = ds(url(), user(), password());
