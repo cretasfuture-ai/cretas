@@ -137,7 +137,7 @@ async function refreshStandard(): Promise<void> {
 <template>
   <div class="dynamic-quality-form">
     <el-alert
-      :title="`动态质检标准 · ${currentForm.standardRevision}`"
+      title="当前产品质检标准"
       type="info"
       :closable="false"
       show-icon

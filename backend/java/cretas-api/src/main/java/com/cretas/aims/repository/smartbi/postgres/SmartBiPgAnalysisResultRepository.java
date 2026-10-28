@@ -32,6 +32,10 @@ public interface SmartBiPgAnalysisResultRepository extends JpaRepository<SmartBi
     Optional<SmartBiPgAnalysisResult> findByUploadIdAndAnalysisType(
             Long uploadId, String analysisType);
 
+    /** Query one cached analysis without allowing a colliding upload ID from another factory. */
+    Optional<SmartBiPgAnalysisResult> findByFactoryIdAndUploadIdAndAnalysisType(
+            String factoryId, Long uploadId, String analysisType);
+
     /**
      * Find latest analysis for an upload
      */

@@ -33,6 +33,7 @@ import com.cretas.aims.service.smartbi.DynamicDataPersistenceService.DynamicPers
 import com.cretas.aims.entity.smartbi.enums.UploadStatus;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiPgExcelUpload;
 import com.cretas.aims.repository.smartbi.postgres.SmartBiPgExcelUploadRepository;
+import com.cretas.aims.repository.smartbi.SmartBiExcelUploadRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.cretas.aims.dto.smartbi.UploadProgressEvent;
+import com.cretas.aims.exception.BusinessException;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -97,6 +99,11 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
     // PostgreSQL upload repository (optional, for storedFilePath updates)
     @Autowired(required = false)
     private SmartBiPgExcelUploadRepository pgUploadRepository;
+
+    // Legacy MySQL upload metadata; do not use a same-ID PostgreSQL row as
+    // ownership proof for the static-table path.
+    @Autowired(required = false)
+    private SmartBiExcelUploadRepository excelUploadRepository;
 
     // Analysis cache repository (invalidate on re-upload)
     @Autowired(required = false)
@@ -391,6 +398,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
         // — rows were pre-persisted during executeUploadFlow. Only update
         // field_definitions with user-confirmed mappings.
         if (uploadId != null && postgresEnabled && dynamicPersistenceService != null) {
+            if (!isOwnedUpload(factoryId, uploadId, true)) {
+                return UploadFlowResult.failure("上传数据不属于当前工厂，拒绝确认");
+            }
             log.info("Bug #43 path: confirm with uploadId={} — skip re-persist, update field_defs only", uploadId);
             try {
                 if (confirmedMappings != null && !confirmedMappings.isEmpty()) {
@@ -414,6 +424,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
                         chartConfig = chartWithAnalysis;
                         aiAnalysis = (String) chartWithAnalysis.get("aiAnalysis");
                     } catch (Exception e) {
+                        if (e instanceof BusinessException businessException) {
+                            throw businessException;
+                        }
                         log.warn("Chart generation 失败 (不影响 save): {}", e.getMessage());
                     }
                 }
@@ -429,6 +442,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
                         .aiAnalysis(aiAnalysis)
                         .build();
             } catch (Exception e) {
+                if (e instanceof BusinessException businessException) {
+                    throw businessException;
+                }
                 log.error("Bug #43 path failed, fallback to full confirm: {}", e.getMessage(), e);
                 // fall through to legacy path below
             }
@@ -543,6 +559,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
                     .build();
 
         } catch (Exception e) {
+            if (e instanceof BusinessException businessException) {
+                throw businessException;
+            }
             log.error("确认持久化失败: {}", e.getMessage(), e);
             return UploadFlowResult.failure("处理失败: " + e.getMessage());
         }
@@ -562,9 +581,14 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
             return Map.of("error", "模板代码不能为空");
         }
 
+        if (!isOwnedUpload(factoryId, uploadId, false)) {
+            log.warn("拒绝跨工厂静态图表/AI分析: factoryId={}, uploadId={}", factoryId, uploadId);
+            return Map.of("error", "上传数据不属于当前工厂");
+        }
+
         try {
             // 1. 查询数据（先尝试销售数据，再尝试财务数据）
-            List<SmartBiSalesData> salesData = salesDataRepository.findByUploadId(uploadId);
+            List<SmartBiSalesData> salesData = salesDataRepository.findByFactoryIdAndUploadId(factoryId, uploadId);
             DataType dataType;
             Map<String, Object> chartData;
 
@@ -572,7 +596,7 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
                 dataType = DataType.SALES;
                 chartData = aggregateSalesData(salesData);
             } else {
-                List<SmartBiFinanceData> financeData = financeDataRepository.findByUploadId(uploadId);
+                List<SmartBiFinanceData> financeData = financeDataRepository.findByFactoryIdAndUploadId(factoryId, uploadId);
                 if (!financeData.isEmpty()) {
                     dataType = DataType.FINANCE;
                     chartData = aggregateFinanceData(financeData);
@@ -929,33 +953,75 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
      * 优先使用 PostgreSQL 动态数据（如果启用），否则使用 MySQL 静态表
      */
     private Map<String, Object> buildChartData(String factoryId, Long uploadId, DataType dataType) {
-        // 优先使用 PostgreSQL 动态分析服务
-        if (postgresEnabled && dynamicAnalysisService != null) {
+        if (factoryId == null || uploadId == null) {
+            log.warn("拒绝跨工厂图表/AI分析: factoryId={}, uploadId={}", factoryId, uploadId);
+            return Collections.emptyMap();
+        }
+
+        // The upload metadata determines the storage source. A colliding
+        // legacy/MySQL id must never authorize or replace a real PostgreSQL
+        // upload, even when the PostgreSQL analysis happens to be empty.
+        Optional<SmartBiPgExcelUpload> pgUpload = pgUploadRepository == null
+                ? Optional.empty() : pgUploadRepository.findById(uploadId);
+        if (pgUpload.isPresent()) {
+            if (!factoryId.equals(pgUpload.get().getFactoryId())) {
+                log.warn("拒绝跨工厂图表/AI分析: factoryId={}, uploadId={}", factoryId, uploadId);
+                return Collections.emptyMap();
+            }
+            if (!postgresEnabled || dynamicAnalysisService == null) {
+                throw new com.cretas.aims.exception.BusinessException(
+                        503, "PostgreSQL 动态分析服务不可用");
+            }
             try {
                 log.debug("使用 PostgreSQL 动态分析服务构建图表数据: uploadId={}", uploadId);
                 DynamicAnalysisService.DashboardResponse dashboard =
                     dynamicAnalysisService.analyzeDynamic(factoryId, uploadId, dataType.name().toLowerCase());
 
-                if (dashboard != null && dashboard.getCharts() != null && !dashboard.getCharts().isEmpty()) {
-                    // 将 DynamicAnalysisService 的图表格式转换为 ChartTemplateService 期望的格式
-                    return convertDynamicChartsToChartData(dashboard);
+                if (dashboard == null) {
+                    throw new com.cretas.aims.exception.BusinessException(
+                            503, "PostgreSQL 动态分析未返回结果");
                 }
+                if (dashboard.getCharts() == null || dashboard.getCharts().isEmpty()) {
+                    throw new com.cretas.aims.exception.BusinessException(
+                            422, "上传数据暂无可分析图表");
+                }
+                // 将 DynamicAnalysisService 的图表格式转换为 ChartTemplateService 期望的格式
+                return convertDynamicChartsToChartData(dashboard);
             } catch (Exception e) {
-                log.warn("PostgreSQL 动态分析失败，回退到 MySQL: {}", e.getMessage());
+                if (e instanceof com.cretas.aims.exception.BusinessException businessException) {
+                    throw businessException;
+                }
+                log.warn("PostgreSQL 动态分析失败，不回退到同 ID 的 MySQL 数据: {}", e.getMessage());
+                throw new com.cretas.aims.exception.BusinessException(
+                        503, "PostgreSQL 动态分析失败", e);
             }
         }
 
-        // 回退到 MySQL 静态表
+        // Only a real absence of PostgreSQL upload metadata permits the
+        // legacy static source, and its rows remain factory-scoped.
+        if (!isOwnedUpload(factoryId, uploadId, false)) {
+            log.warn("未找到当前工厂的 legacy 上传元数据: factoryId={}, uploadId={}", factoryId, uploadId);
+            return Collections.emptyMap();
+        }
+
+        // Legacy/MySQL static source
+        Map<String, Object> staticData;
         switch (dataType) {
             case SALES:
-                List<SmartBiSalesData> salesData = salesDataRepository.findByUploadId(uploadId);
-                return aggregateSalesData(salesData);
+                List<SmartBiSalesData> salesData = salesDataRepository.findByFactoryIdAndUploadId(factoryId, uploadId);
+                staticData = aggregateSalesData(salesData);
+                break;
             case FINANCE:
-                List<SmartBiFinanceData> financeData = financeDataRepository.findByUploadId(uploadId);
-                return aggregateFinanceData(financeData);
+                List<SmartBiFinanceData> financeData = financeDataRepository.findByFactoryIdAndUploadId(factoryId, uploadId);
+                staticData = aggregateFinanceData(financeData);
+                break;
             default:
-                return Collections.emptyMap();
+                staticData = Collections.emptyMap();
         }
+        if (staticData.isEmpty()) {
+            throw new BusinessException(422, "上传数据暂无可分析数据");
+        }
+        return staticData;
     }
 
     /**
@@ -971,6 +1037,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
         List<Map<String, Object>> charts = dashboard.getCharts();
         if (charts == null || charts.isEmpty()) {
             log.debug("无图表数据可转换");
+            if (dashboard.getAnalysisFacts() != null) {
+                chartData.put("analysisFacts", dashboard.getAnalysisFacts());
+            }
             return chartData;
         }
 
@@ -1036,7 +1105,25 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
             }
         }
 
+        // Keep unit/coverage facts alongside the aggregated chart series. The
+        // latter intentionally contains only labels and values and is not a
+        // sufficient grounding contract for quantity or loss claims.
+        if (dashboard.getAnalysisFacts() != null && !dashboard.getAnalysisFacts().isEmpty()) {
+            chartData.put("analysisFacts", dashboard.getAnalysisFacts());
+        }
+
         return chartData;
+    }
+
+    private boolean isOwnedUpload(String factoryId, Long uploadId, boolean postgresUpload) {
+        if (factoryId == null || uploadId == null) return false;
+        if (postgresUpload) {
+            return pgUploadRepository != null && pgUploadRepository.findById(uploadId)
+                    .map(upload -> factoryId.equals(upload.getFactoryId()))
+                    .orElse(false);
+        }
+        return excelUploadRepository != null
+                && excelUploadRepository.findByIdAndFactoryId(uploadId, factoryId).isPresent();
     }
 
     /**
@@ -2074,6 +2161,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
         SmartBiPgExcelUpload upload = pgUploadRepository.findById(uploadId).orElse(null);
         if (upload == null) {
             return UploadFlowResult.failure("未找到上传记录: " + uploadId);
+        }
+        if (!factoryId.equals(upload.getFactoryId())) {
+            return UploadFlowResult.failure("上传数据不属于当前工厂，拒绝重试");
         }
 
         // 2. Validate status (only FAILED or PARSING can be retried)

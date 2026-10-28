@@ -12,6 +12,7 @@ import com.cretas.aims.service.smartbi.AnalysisPromptGenerator;
 import com.cretas.aims.service.smartbi.AnalysisPromptGenerator.AnalysisContext;
 import com.cretas.aims.service.smartbi.AnalysisPromptGenerator.GeneratedPrompt;
 import com.cretas.aims.service.smartbi.ChartTemplateService;
+import com.cretas.aims.service.smartbi.LegacyAiAnalysisGuard;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -489,7 +490,12 @@ public class ChartTemplateServiceImpl implements ChartTemplateService {
     @Override
     public Map<String, Object> buildChartWithAnalysis(String templateCode, Map<String, Object> data, String factoryId) {
         // 1. 首先获取基础图表配置
-        Map<String, Object> chartConfig = new LinkedHashMap<>(buildChart(templateCode, data, factoryId));
+        // analysisFacts is an internal grounding contract. It must reach the
+        // prompt/guard, but never be copied into chartConfig.data returned to
+        // the client or persisted as chart JSON.
+        Map<String, Object> chartDataForUi = data == null ? new LinkedHashMap<>() : new LinkedHashMap<>(data);
+        chartDataForUi.remove("analysisFacts");
+        Map<String, Object> chartConfig = new LinkedHashMap<>(buildChart(templateCode, chartDataForUi, factoryId));
 
         // 2. 获取模板配置
         SmartBiChartTemplate template = getTemplate(templateCode, factoryId);
@@ -561,8 +567,15 @@ public class ChartTemplateServiceImpl implements ChartTemplateService {
                     redacted.text(0),
                     redacted.text(1)
             ));
-
-            chartConfig.put("aiAnalysis", analysis);
+            LegacyAiAnalysisGuard.GuardResult guarded = LegacyAiAnalysisGuard.validate(data, analysis);
+            if (!guarded.usable()) {
+                log.warn("拒绝未被数据契约支持的旧上传 AI 分析: templateCode={}, reason={}",
+                        templateCode, guarded.reason());
+                chartConfig.put("aiAnalysis", guarded.text());
+                chartConfig.put("analysisUnavailableReason", guarded.reason());
+            } else {
+                chartConfig.put("aiAnalysis", guarded.text());
+            }
             chartConfig.put("analysisType", generatedPrompt.getTemplateType().name());
             log.debug("模板 {} AI 分析生成成功, 分析类型: {}",
                     templateCode, generatedPrompt.getTemplateType());

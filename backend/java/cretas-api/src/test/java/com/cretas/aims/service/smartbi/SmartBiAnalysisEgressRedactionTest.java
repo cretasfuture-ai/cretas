@@ -78,9 +78,11 @@ class SmartBiAnalysisEgressRedactionTest {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("customerName", "张记食品有限公司");
         data.put("amount", 12800);
+        data.put("analysisFacts", Map.of("unitValues", List.of("kg"), "explicitWasteAmounts", List.of(100D)));
 
         Map<String, Object> chart = service.buildChartWithAnalysis("sales_by_customer", data, "F006");
 
+        assertThat(((Map<?, ?>) chart.get("data")).containsKey("analysisFacts")).isFalse();
         assertThat(user.getValue()).doesNotContain("张记食品", "周晓明", "13912345678", "秘制酱牛肉").contains("12800");
         assertThat(chart.get("aiAnalysis")).isEqualTo("张记食品有限公司 贡献最大");
 

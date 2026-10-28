@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；原SMARTBI-FULL-QA-20261026代码收尾见archive/2026-10-28-smartbi-complete.md；待合并部署/34场景验收；F006 only。
+- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；PR1267已部署；34场景与QA修复见archive/2026-10-28-smartbi-acceptance-fixes.md；F006 only。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
@@ -84,6 +84,8 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `SMARTBI-F006-QA-20261028`：Root；本批代码冻结、子任务回执归档，合入时释放产品scope；仅发布协调与F006私有业务验收/证据。发现新代码问题须重新登记明确scope与Base；禁Entity/迁移/权限矩阵。
 
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。

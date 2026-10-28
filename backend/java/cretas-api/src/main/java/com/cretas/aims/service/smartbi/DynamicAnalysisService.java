@@ -5,6 +5,7 @@ import com.cretas.aims.dto.smartbi.BatchBackfillResult;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiDynamicData;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiPgFieldDefinition;
 import org.springframework.data.domain.Page;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.util.List;
 import java.util.Map;
@@ -80,6 +81,13 @@ public interface DynamicAnalysisService {
         private List<Map<String, Object>> charts;
         private List<String> insights;
         private List<FieldDefinitionDTO> fieldDefinitions;
+        /**
+         * Facts used by the legacy chart-analysis prompt/egress guard. This is
+         * deliberately separate from chart series: series lose units and
+         * coverage information during aggregation.
+         */
+        @JsonIgnore
+        private Map<String, Object> analysisFacts;
 
         // Getters and setters
         public Long getUploadId() { return uploadId; }
@@ -94,6 +102,9 @@ public interface DynamicAnalysisService {
         public void setInsights(List<String> insights) { this.insights = insights; }
         public List<FieldDefinitionDTO> getFieldDefinitions() { return fieldDefinitions; }
         public void setFieldDefinitions(List<FieldDefinitionDTO> fieldDefinitions) { this.fieldDefinitions = fieldDefinitions; }
+        @JsonIgnore
+        public Map<String, Object> getAnalysisFacts() { return analysisFacts; }
+        public void setAnalysisFacts(Map<String, Object> analysisFacts) { this.analysisFacts = analysisFacts; }
     }
 
     /**
