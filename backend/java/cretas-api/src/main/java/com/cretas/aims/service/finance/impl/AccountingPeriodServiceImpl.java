@@ -305,7 +305,25 @@ public class AccountingPeriodServiceImpl implements AccountingPeriodService {
         Optional<AccountingPeriod> periodOpt =
                 repo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(factoryId, year, month);
         if (periodOpt.isEmpty()) {
-            return;  // backwards compat: 无 row 默认 OPEN, voucher 可写
+            // S5-11: 无 row 只在「这个月还没走到结账」时才等于 OPEN。若晚于它的某个月已经结账,
+            // 这个月必然早已过了账期, 只是当初没建期间行 —— 静默放行就能把凭证倒签进已关的账。
+            Optional<AccountingPeriod> laterClosed = Optional.ofNullable(
+                            repo.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, AccountingPeriod.Status.CLOSED))
+                    .orElse(List.of()).stream()
+                    .filter(p -> p.getYear() != null && p.getMonth() != null)
+                    .filter(p -> p.getYear() * 12 + p.getMonth() > year * 12 + month)
+                    .min(java.util.Comparator.comparingInt(p -> p.getYear() * 12 + p.getMonth()));
+            if (laterClosed.isPresent()) {
+                AccountingPeriod closed = laterClosed.get();
+                throw new BusinessException(400, String.format(
+                        "%d-%02d 没有会计期间，且其后的 %d-%02d 已结账，该月视同已结账，凭证不可写入",
+                        year, month, closed.getYear(), closed.getMonth()))
+                        .withCode("PERIOD_MISSING_BEFORE_CLOSED")
+                        .withSeverity("BLOCKING")
+                        .withHint(String.format("/finance/accounting-period?year=%d&month=%d",
+                                closed.getYear(), closed.getMonth()));
+            }
+            return;  // 尚未结账的月份: 无 row 即 OPEN, 结账时 requestClose 会建 row
         }
         AccountingPeriod period = periodOpt.get();
         // A caller may have loaded the old adjustment deadline before waiting for the factory lock.

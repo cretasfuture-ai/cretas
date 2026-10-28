@@ -763,6 +763,55 @@ class ProcessSheetServiceImplTest {
     private com.cretas.aims.repository.WorkProcessRepository workProcessRepoForReversal;
 
     @Test
+    @DisplayName("2026-10-28 F006 #22: 撤回只撤这一道 —— 作废它没被动过的在制物料批, 同计划别的报工行和在制批不动")
+    void batchReversal_voidsOwnUntouchedWipAndLeavesOtherRowsOfThePlan() {
+        seedReworkSfi("CLK-SEMI-REV-A", "10");
+        seedReworkSfi("CLK-SEMI-REV-B", "10");
+        ProcessSheetRowResult a = submitXiuyouWithRework("row-rev-scope-a", "CLK-SEMI-REV-A", "4");
+        ProcessSheetRowResult b = submitXiuyouWithRework("row-rev-scope-b", "CLK-SEMI-REV-B", "4");
+        assertThat(materialBatchRepo.findWipBatchesByFactoryIdAndSourceDocIdIn(
+                FACTORY_ID, List.of(String.valueOf(a.getBatchId()))))
+                .as("阳性对照前提: 第一笔报工物化出了在制物料批").isNotEmpty();
+
+        reverseWholeBatch(a.getBatchId());
+
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, a.getBatchId()))
+                .as("撤回真的执行了").isEmpty();
+        assertThat(materialBatchRepo.findWipBatchesByFactoryIdAndSourceDocIdIn(
+                FACTORY_ID, List.of(String.valueOf(a.getBatchId()))))
+                .as("被撤那一批的在制物料批作废, 不再能被选去投料").isEmpty();
+        assertThat(rowRepo.findByFactoryIdAndPlanId(FACTORY_ID, planId))
+                .as("同计划另一笔报工的行不能被一起删 (原来按整个计划删)")
+                .extracting(ProcessSheetRow::getBatchId).contains(b.getBatchId()).doesNotContain(a.getBatchId());
+        assertThat(materialBatchRepo.findWipBatchesByFactoryIdAndSourceDocIdIn(
+                FACTORY_ID, List.of(String.valueOf(b.getBatchId()))))
+                .as("另一笔的在制物料批照旧").isNotEmpty();
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, b.getBatchId())).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("2026-10-28: 这一道的在制物料批已被下道领了 → 拒绝撤回 (不能让下游投了一批不存在的料)")
+    void batchReversal_refusedWhenOwnWipWasDrawnDownstream() {
+        seedReworkSfi("CLK-SEMI-REV-C", "10");
+        ProcessSheetRowResult upstream = submitXiuyouWithRework("row-rev-drawn", "CLK-SEMI-REV-C", "4");
+        ProcessSheetRowRequest down = baseReq("row-rev-drawn-down", "qidiao", 2, "5");
+        down.setFinished(true);
+        down.setProcessDate(LocalDate.of(2026, 7, 22));
+        down.setInputQuantity(new BigDecimal("5"));
+        down.setUpstreamSources(List.of(upstreamRef(upstream.getBatchNumber(), "5")));
+        processSheetService.submitRow(FACTORY_ID, planId, down, operatorId);
+
+        assertThatThrownBy(() -> reportReversalService.submitReversal(
+                FACTORY_ID, upstream.getBatchId(), operatorId, "test"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("DOWNSTREAM_CONSUMED"));
+        assertThat(materialBatchRepo.findWipBatchesByFactoryIdAndSourceDocIdIn(
+                FACTORY_ID, List.of(String.valueOf(upstream.getBatchId()))))
+                .as("被拒时在制物料批原样保留").isNotEmpty();
+        assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, upstream.getBatchId())).isNotEmpty();
+    }
+
+    @Test
     @DisplayName("2026-09-02 票: 提交时扣掉的回料, 整批撤回后还回 (OUT 流水挂到 YIELD 报工, 撤回沿 report_id 找到它)")
     void batchReversal_restoresReworkConsumedAtSubmit() {
         String reworkBatchNo = "CLK-SEMI-REWORK-REV";

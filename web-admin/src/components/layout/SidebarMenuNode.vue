@@ -9,9 +9,16 @@ defineProps<{
   collapsed: boolean;
   iconMap: Record<string, Component>;
   titleForItem: (item: MenuItem) => string;
-  badgeForItem: (item: MenuItem) => number | null;
+  badgeForItem: (item: MenuItem) => number | 'unknown' | null;
   level: number;
 }>();
+
+/** 数字超过 99 显示 99+; 算不出来显示「?」(不是 0, 也不隐藏)。 */
+function badgeLabel(value: number | 'unknown' | null): string {
+  if (value === 'unknown') return '?';
+  if (value === null) return '';
+  return value > 99 ? '99+' : String(value);
+}
 </script>
 
 <template>
@@ -29,7 +36,7 @@ defineProps<{
         <component :is="iconMap[item.icon]" />
       </el-icon>
       <span class="menu-title-copy">{{ titleForItem(item) }}</span>
-      <span v-if="badgeForItem(item) !== null" class="menu-task-badge">{{ Math.min(badgeForItem(item) || 0, 99) }}<template v-if="(badgeForItem(item) || 0) > 99">+</template></span>
+      <span v-if="badgeForItem(item) !== null" class="menu-task-badge" :class="{ 'menu-task-badge--unknown': badgeForItem(item) === 'unknown' }" :title="badgeForItem(item) === 'unknown' ? '待办数量暂时无法确认' : undefined">{{ badgeLabel(badgeForItem(item)) }}</span>
     </template>
 
     <SidebarMenuNode
@@ -50,7 +57,7 @@ defineProps<{
     </el-icon>
     <template #title>
       <span class="menu-title-copy">{{ titleForItem(item) }}</span>
-      <span v-if="badgeForItem(item) !== null" class="menu-task-badge">{{ Math.min(badgeForItem(item) || 0, 99) }}<template v-if="(badgeForItem(item) || 0) > 99">+</template></span>
+      <span v-if="badgeForItem(item) !== null" class="menu-task-badge" :class="{ 'menu-task-badge--unknown': badgeForItem(item) === 'unknown' }" :title="badgeForItem(item) === 'unknown' ? '待办数量暂时无法确认' : undefined">{{ badgeLabel(badgeForItem(item)) }}</span>
     </template>
   </el-menu-item>
 </template>
@@ -90,5 +97,9 @@ defineProps<{
   line-height: 1;
   font-weight: 700;
   box-shadow: 0 0 0 2px rgba(231, 85, 85, 0.14);
+}
+
+.menu-task-badge--unknown {
+  background: #909399;
 }
 </style>

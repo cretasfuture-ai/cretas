@@ -43,7 +43,40 @@ class SchedulingPendingPlansIncludeOverdueTest {
     @Mock private ProductionLineSupervisorRepository supervisorRepository;
     @Mock private WorkerAssignmentService workerAssignmentService;
     @Mock private SchedulingAIService schedulingAIService;
+    @Mock private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
     @InjectMocks private SchedulingPlanCrudServiceImpl service;
+
+    @Test
+    @DisplayName("联产计划的主产品 (__RAW_WORKFLOW_OWNER__…) 在待排产列表显示原料名, 不显示内部编码")
+    void jointPlanShowsRawMaterialNameNotInternalCode() {
+        com.cretas.aims.entity.ProductType owner = new com.cretas.aims.entity.ProductType();
+        owner.setId("RMT_F1_X");
+        owner.setName("__RAW_WORKFLOW_OWNER__RMT_F1_X");
+        com.cretas.aims.entity.ProductType normal = new com.cretas.aims.entity.ProductType();
+        normal.setId("PT-1");
+        normal.setName("卤味三拼 400g");
+        com.cretas.aims.entity.ProductionPlan joint = new com.cretas.aims.entity.ProductionPlan();
+        joint.setId("P-JOINT");
+        joint.setFactoryId("F1");
+        joint.setProductType(owner);
+        com.cretas.aims.entity.ProductionPlan single = new com.cretas.aims.entity.ProductionPlan();
+        single.setId("P-SINGLE");
+        single.setFactoryId("F1");
+        single.setProductType(normal);
+        com.cretas.aims.entity.RawMaterialType raw = new com.cretas.aims.entity.RawMaterialType();
+        raw.setName("LY-FX-安格斯65碎肉");
+        when(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
+                eq("F1"), eq(ProductionPlanStatus.PENDING), any(), any())).thenReturn(List.of(joint, single));
+        when(rawMaterialTypeRepository.findByIdAndFactoryId("RMT_F1_X", "F1")).thenReturn(java.util.Optional.of(raw));
+        // 服务走构造器注入, Mockito 用了构造器就不再做字段注入: 这两个字段注入的依赖手动放进去
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "schedulingAIService", schedulingAIService);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "rawMaterialTypeRepository", rawMaterialTypeRepository);
+
+        var dtos = service.getPendingBatches("F1", null, null);
+
+        assertThat(dtos).extracting(d -> d.getId() + "=" + d.getProductTypeName())
+                .containsExactlyInAnyOrder("P-JOINT=LY-FX-安格斯65碎肉", "P-SINGLE=卤味三拼 400g");
+    }
 
     @Test
     @DisplayName("不传起始日期: 下限早于今天, 逾期的待处理计划在列表里")

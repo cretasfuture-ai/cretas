@@ -9,7 +9,6 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionPlan;
-import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -75,7 +74,6 @@ public class DailyCapacityScheduleGenerator {
     static final String SOURCE_EXPERIENCE = "EXPERIENCE";
     static final String LABEL_MANUAL = "人工填写";
     static final String LABEL_EXPERIENCE = "按历史估算";
-    static final String RAW_OWNER_PREFIX = "__RAW_WORKFLOW_OWNER__";
     static final LocalTime DAY_END = LocalTime.of(23, 59);
 
     private final ProductionPlanRepository productionPlanRepository;
@@ -429,21 +427,7 @@ public class DailyCapacityScheduleGenerator {
     }
 
     private String displayName(String factoryId, ProductType product) {
-        String name = product.getName();
-        boolean rawAnchor = (name != null && name.startsWith(RAW_OWNER_PREFIX))
-                || ProductCategory.RAW_MATERIAL.equals(product.getProductCategory())
-                || ProductCategory.RAW_MATERIAL.equals(product.getCategory());
-        if (rawAnchor) {
-            Optional<String> rawName = rawMaterialTypeRepository.findByIdAndFactoryId(product.getId(), factoryId)
-                    .map(r -> r.getName());
-            if (rawName.isPresent() && !rawName.get().isBlank()) {
-                return rawName.get();
-            }
-            if (name != null && name.startsWith(RAW_OWNER_PREFIX)) {
-                return name.substring(RAW_OWNER_PREFIX.length());
-            }
-        }
-        return name != null ? name : product.getId();
+        return ScheduleProductNames.displayName(rawMaterialTypeRepository, factoryId, product);
     }
 
     private static Map<String, Object> allocationJson(PlanWork w, JobOut out) {

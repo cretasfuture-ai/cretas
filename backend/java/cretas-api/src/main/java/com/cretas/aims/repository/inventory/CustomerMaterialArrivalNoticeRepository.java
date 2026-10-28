@@ -22,6 +22,9 @@ public interface CustomerMaterialArrivalNoticeRepository
 
     List<CustomerMaterialArrivalNotice> findByFactoryIdOrderByCreatedAtDesc(String factoryId);
 
+    /** Task badge (S6-09): how many notices wait for approval, counted in the database. */
+    long countByFactoryIdAndStatus(String factoryId, CustomerMaterialArrivalStatus status);
+
     Optional<CustomerMaterialArrivalNotice> findByIdAndFactoryId(String id, String factoryId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
