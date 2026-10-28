@@ -3393,7 +3393,6 @@ const EXPORTS = [
   { key: 'pdf', label: 'PDF', button: '导出当前显示图表 PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
   { key: 'ppt', label: 'PPT', button: '导出当前显示图表 PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
 ];
-const MAX_FAMILIES = 4;
 const MAX_OPTION_FAMILIES = 60;
 const STEP_TIMEOUT_MS = 30_000;
 const TOTAL_TIMEOUT_MS = 10 * 60_000;
@@ -3520,7 +3519,7 @@ function selectCatalogCandidates(data, requestedFamilies) {
     }
     return { familyId: group.familyId, familyLabel: group.familyLabel, candidate };
   }).filter(Boolean);
-  // Families are covered in batches of four by inspectCatalog. Keep the
+  // Families are covered through individual previews by inspectCatalog. Keep the
   // explicit 60-family run bound, but never hide the remainder from the
   // assessment.
   const selected = eligibleGroups.slice(0, MAX_OPTION_FAMILIES);
@@ -3640,42 +3639,33 @@ async function chooseBrowseMode(page, deadline) {
   return true;
 }
 
-async function clearBrowseSelection(page, deadline) {
-  const rows = testId(page, 'factory-chart-family');
-  const count = await rows.count();
-  for (let index = 0; index < count; index += 1) {
-    const checkbox = rows.nth(index).locator('input[type="checkbox"]').first();
-    if (await checkbox.count() && await checkbox.isChecked().catch(() => false)) {
-      const label = rows.nth(index).locator('.el-checkbox').first();
-      if (await label.count()) await label.click({ timeout: remainingTimeout(deadline) });
-      else await checkbox.uncheck({ timeout: remainingTimeout(deadline) });
-      if (await checkbox.isChecked()) throw new Error('Catalogue family did not clear');
+async function selectFamilyPreview(page, item, allGroups, deadline) {
+  // Browse checkbox changes deliberately persist user preferences. Read-only
+  // acceptance uses the existing guided preview action instead; no selection
+  // PUT is mocked, allowed or suppressed by this scenario.
+  const guideMode = testId(page, 'factory-chart-mode').locator('button, label').filter({ hasText: '问答引导' }).first();
+  await guideMode.click({ timeout: remainingTimeout(deadline) });
+  const domain = String(item.candidate.domain || '');
+  const labels = testId(page, 'factory-chart-guide-domain').locator('label');
+  let found = false;
+  for (let index = 0; index < await labels.count(); index += 1) {
+    if (await labels.nth(index).locator('input').first().getAttribute('value') === domain) {
+      await labels.nth(index).click({ timeout: remainingTimeout(deadline) });
+      found = true;
+      break;
     }
   }
-}
-
-async function selectFamilyInBrowse(page, familyId, candidate, deadline) {
-  const uiFamilyId = candidate.domain ? `${candidate.domain}:${familyId}` : familyId;
-  const escapedFamilyId = String(uiFamilyId).replace(/"/gu, '\\"');
-  const rows = page.locator(`[data-testid="factory-chart-family"][data-family-id="${escapedFamilyId}"]`);
-  // The family id is the server identity. The label is presentation-only and
-  // may be duplicated across domains or sources.
-  if (!await rows.count()) return false;
-  const row = rows.first();
-  const checkbox = row.locator('input[type="checkbox"]').first();
-  if (await checkbox.count() && !(await checkbox.isChecked())) {
-    const label = row.locator('.el-checkbox').first();
-    if (await label.count()) await label.click({ timeout: remainingTimeout(deadline) });
-    else await checkbox.check({ timeout: remainingTimeout(deadline) });
-  }
-  if (!await checkbox.count() || !await checkbox.isChecked()) return false;
-  const variant = row.locator('.el-select').first();
-  if (await variant.count()) {
-    await variant.click().catch(() => {});
-    const option = page.locator('.el-select-dropdown__item:visible').filter({ hasText: String(candidate.unit) }).first();
-    if (await option.count()) await option.click().catch(() => {});
-  }
-  await page.waitForTimeout(50);
+  if (!found) return false;
+  const scopedGroups = allGroups.filter((group) => group.candidates[0]?.domain === domain);
+  const index = scopedGroups.findIndex((group) => group.familyId === item.familyId);
+  if (index < 0) return false;
+  await testId(page, 'factory-chart-guide-topic').click({ timeout: remainingTimeout(deadline) });
+  const options = page.locator('.el-select-dropdown__item:visible');
+  if (await options.count() !== scopedGroups.length + 1) throw new Error('Catalogue topic identities drifted');
+  const option = options.nth(index + 1);
+  if (!(await option.innerText()).includes(item.familyLabel)) throw new Error('Catalogue topic label drifted');
+  await option.click({ timeout: remainingTimeout(deadline) });
+  await testId(page, 'factory-chart-guide-generate').click({ timeout: remainingTimeout(deadline) });
   return true;
 }
 
@@ -3699,6 +3689,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
   const body = await responseBody(recommendationResponse);
   const data = body?.data || {};
   const selected = selectCatalogCandidates(data, requestedFamilies);
+  const allGroups = groupCandidates(data.recommendations);
   const browse = await chooseBrowseMode(page, deadline).catch(() => false);
   ui.browseVisible = browse;
   if (!browse) ui.missing = true;
@@ -3724,14 +3715,13 @@ async function inspectCatalog(page, _body, inspectCtx) {
   const screenshots = [];
   const processedFamilyIds = new Set();
   const batches = [];
-  for (let index = 0; index < selected.selected.length; index += MAX_FAMILIES) {
-    batches.push(selected.selected.slice(index, index + MAX_FAMILIES));
+  for (const item of selected.selected) {
+    batches.push([item]);
   }
   let batchNumber = 0;
   for (const batch of batches) {
     if (Date.now() >= deadline) break;
     batchNumber += 1;
-    await clearBrowseSelection(page, deadline);
     const batchFamilies = [];
     for (const item of batch) {
       if (Date.now() >= deadline) break;
@@ -3755,9 +3745,9 @@ async function inspectCatalog(page, _body, inspectCtx) {
       };
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
       summary.checks.factsPresent = summary.facts.length > 0;
-      summary.checks.familySelected = await selectFamilyInBrowse(page, item.familyId, candidate, deadline).catch(() => false);
+      summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch(() => false);
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
-      summary.checks.cardRendered = await card.count() > 0 && await card.isVisible().catch(() => false);
+      summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
         await testId(page, 'factory-chart-guide-generate').click().catch(() => {});
         summary.checks.cardRendered = await card.isVisible().catch(() => false);
