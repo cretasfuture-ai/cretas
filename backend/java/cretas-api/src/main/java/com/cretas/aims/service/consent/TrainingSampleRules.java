@@ -41,12 +41,14 @@ public final class TrainingSampleRules {
             "客户(?:名称|名)?\\s*[:：]\\s*[" + HAN + "A-Za-z0-9]{2,}"
             + "|客户\\s*[「“\"『][^」”\"』]{2,}[」”\"』]"
             + "|[「“\"『][^」”\"』]{2,}[」”\"』]\\s*客户");
+    /** 空白: ASCII 空白再加全角空格 (中文输入里「联系人　王五」很常见, 只认 ASCII 会整段漏掉)。 */
+    static final String GAP = "[\\s\\u3000]";
     static final Pattern PERSON = Pattern.compile(
-            PERSON_ROLE + "\\s*[:：|]?\\s*[" + SURNAMES + "][" + HAN + "]{1,2}"
+            PERSON_ROLE + GAP + "*[:：|]?" + GAP + "*[" + SURNAMES + "][" + HAN + "]{1,2}"
             + "|(?<![" + HAN + "])[" + SURNAMES + "][" + HAN + "]?(?:先生|女士|小姐|经理|总监|老板|师傅|厂长)"
             + "|(?<![" + HAN + "])[" + SURNAMES + "]总(?![量额数计成产体部结和监经])"
             + "|(?:联系|找|通知|叫|告诉)(?!方式|方法|方面|电话|人)[" + SURNAMES + "][" + HAN + "]{1,2}"
-            + "(?=[\\s，,。；;、:：（(]|$|\\d)");
+            + "(?=[\\s\\u3000，,。；;、:：（(]|$|\\d)");
 
     static final Pattern ID_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{17}[\\dXx](?![0-9A-Za-z])");
     static final Pattern BANK_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{16,19}(?![0-9A-Za-z])");

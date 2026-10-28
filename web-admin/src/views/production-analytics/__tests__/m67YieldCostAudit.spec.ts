@@ -87,4 +87,13 @@ describe('M67 成品出厂核算审计口径', () => {
     expect(source).toContain('displayAuditUnit(g.outputUnit');
     expect(source).toContain('formatCollectedMoney(row.amount');
   });
+
+  it('shows 已保密 for an upstream source quantity hidden by process secret instead of 0 kg / 0%', () => {
+    // 工艺保密 (独立审查 V2.1 M4): BOM 自动扣料的来源量由后端置 null; 按 0 算会把「看不到」显示成「没投」
+    const source = readFileSync(resolve(process.cwd(), 'src/views/production-analytics/M67YieldCost.vue'), 'utf8');
+    expect(source).toContain("qty: r.quantity == null ? null : Number(r.quantity)");
+    expect(source).toContain("row.qty == null ? '已保密'");
+    expect(source).toContain("row.weightShare == null ? '—'");
+    expect(source).not.toContain('qty: Number(r.quantity || 0)');
+  });
 });

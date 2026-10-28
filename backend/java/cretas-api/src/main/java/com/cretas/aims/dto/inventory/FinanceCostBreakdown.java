@@ -236,6 +236,9 @@ public class FinanceCostBreakdown {
         /** 物料类型 ID. */
         private String materialTypeId;
 
+        /** 报工自动带出 / BOM 自动扣料 (数量 = 配比 × 投入): 工艺保密时按配比类裁剪 (独立审查 V2.1 M4)。 */
+        private boolean automatic;
+
         /** 物料名称 (原料/辅料/包材). materialTypeId 查不到时回退为 ID. */
         private String materialName;
 

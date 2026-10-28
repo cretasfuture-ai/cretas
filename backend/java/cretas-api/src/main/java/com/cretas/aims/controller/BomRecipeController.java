@@ -362,7 +362,12 @@ public class BomRecipeController {
     @Operation(summary = "报工表用: 当前 BOM 哪些工序配了调料 / 要录续锅锅数 (不含配比)")
     public ApiResponse<com.cretas.aims.dto.bom.SeasoningProcessFlagsDTO> getSeasoningProcessFlags(
             @PathVariable String factoryId,
-            @PathVariable String productTypeId) {
+            @PathVariable String productTypeId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // 本厂账号都能拿 (报工要用); 平台 / 他厂不给「哪些工序配了调料」(独立审查 V2.1 L3)
+        processSecretAccessService.requireFactoryUserOrFull(
+                com.cretas.aims.security.AuthenticatedActor.current(httpRequest).orElse(null), factoryId,
+                productTypeId, "GET /bom/recipes/by-product/" + productTypeId + "/seasoning/process-flags");
         return recipeService.getSeasoningByProduct(factoryId, productTypeId)
                 .map(response -> {
                     java.util.Map<String, Boolean> potByProcess = new java.util.LinkedHashMap<>();

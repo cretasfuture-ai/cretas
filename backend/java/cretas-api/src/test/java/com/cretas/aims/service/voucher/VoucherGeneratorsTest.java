@@ -677,6 +677,33 @@ class VoucherGeneratorsTest {
     }
 
     @Test
+    void returnGeneratorSalesReturnWithTaxSplitsOutputVatAndCreditsTaxInclusiveReceivable() {
+        // S3-10: 发货挂账含税, 退货凭证红冲也要价税分离 —— 借 6001 未税 / 借 2221.01 销项税 / 贷 1122 含税
+        ReturnVoucherGenerator gen = new ReturnVoucherGenerator();
+        ReturnOrder r = new ReturnOrder();
+        r.setId("ro-tax");
+        r.setReturnNumber("RT-SR-TAX");
+        r.setReturnDate(LocalDate.of(2026, 10, 27));
+        r.setTotalAmount(new BigDecimal("70.80"));
+        r.setTaxAmount(new BigDecimal("9.20"));
+        r.setReturnType(ReturnType.SALES_RETURN);
+        r.setCounterpartyId("cust-200");
+
+        Voucher v = gen.generate("F001", r);
+        assertEquals(0, new BigDecimal("80.00").compareTo(v.getTotalDebit()));
+        assertEquals(0, new BigDecimal("80.00").compareTo(v.getTotalCredit()));
+        assertEquals(3, v.getEntries().size());
+        assertEquals("6001", v.getEntries().get(0).getSubjectCode());
+        assertEquals(0, new BigDecimal("70.80").compareTo(v.getEntries().get(0).getDebit()));
+        assertEquals("2221.01", v.getEntries().get(1).getSubjectCode());
+        assertEquals(0, new BigDecimal("9.20").compareTo(v.getEntries().get(1).getDebit()));
+        VoucherEntry arLine = v.getEntries().get(2);
+        assertEquals("1122", arLine.getSubjectCode());
+        assertEquals(0, new BigDecimal("80.00").compareTo(arLine.getCredit()));
+        assertEquals(AuxiliaryType.CUSTOMER, arLine.getAuxiliaryType());
+    }
+
+    @Test
     void returnGeneratorPurchaseReturnAttachesSupplierAuxiliary() {
         // Sprint 6 W4-A: 采购退货, 借应付/贷库存, AP 借方 line 挂 SUPPLIER 辅助
         ReturnVoucherGenerator gen = new ReturnVoucherGenerator();

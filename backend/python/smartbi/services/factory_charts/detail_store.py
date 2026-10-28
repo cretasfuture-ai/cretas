@@ -109,7 +109,7 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
         if "/" in unit:
             unit = unit.rsplit("/", 1)[-1]
         unit = unit.strip()
-        if unit_col:
+        if unit_col and not details._currency_quantity_independent(item, by_source[source]):
             quantity_unit = str(item.get("sourceQuantityUnit", item.get("quantityUnit", "")) or "").strip()
             engine_meta = item.get("engine") if isinstance(item.get("engine"), Mapping) else {}
             quantity_unit = quantity_unit or str(engine_meta.get("sourceQuantityUnit", "") or "").strip()

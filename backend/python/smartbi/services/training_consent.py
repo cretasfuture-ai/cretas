@@ -115,35 +115,25 @@ QA_ANSWER_MARKERS = tuple(m for m in QA_INPUT_MARKERS if m not in GENERIC_ANSWER
 UTTERANCE_MARKERS = PARAMETER_MARKERS
 
 # Personal identifiers, replaced in every desensitized text (Q&A and utterances).
-_ID_CARD_RE = re.compile(r"(?<![0-9A-Za-z])\d{17}[\dXx](?![0-9A-Za-z])", re.ASCII)
-_BANK_CARD_RE = re.compile(r"(?<![0-9A-Za-z])\d{16,19}(?![0-9A-Za-z])", re.ASCII)
-_PHONE_RE = re.compile(r"(?<![0-9A-Za-z])1[3-9]\d{9}(?![0-9A-Za-z])", re.ASCII)
+from common.sample_text_rules import (  # noqa: F401  与 common.llm_egress_text 共用, 与 Java 逐字对齐
+    _ID_CARD_RE,
+    _BANK_CARD_RE,
+    _PHONE_RE,
+    _HAN,
+    _ORG_SUFFIX,
+    _ORG_NAME_RE,
+    _SURNAMES,
+    _PERSON_ROLE,
+    _PERSON_RE,
+)
+
 # Numbers in short utterances. Identifiers like F006 / V2 / B12 are kept.
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.<])\d+(?:\.\d+)?", re.ASCII)
 
-
-# Specific customer names and person names (Steve 2026-10-24): a Q&A sample that
-# names one is not stored at all. Marked proxies tuned to over-block.
-_HAN = "一-龥"
-_ORG_SUFFIX = r"(?:股份有限公司|有限公司|公司|集团|超市|商贸|商行|批发部|门市部|连锁|酒店|饭店|食品厂)"
-_ORG_NAME_RE = re.compile(rf"[{_HAN}A-Za-z0-9]{{2,12}}{_ORG_SUFFIX}")
 _CUSTOMER_NAMED_RE = re.compile(
     rf"客户(?:名称|名)?\s*[:：]\s*[{_HAN}A-Za-z0-9]{{2,}}"   # 客户：张记 / 客户名称: XX
     rf"|客户\s*[「“\"『][^」”\"』]{{2,}}[」”\"』]"               # 客户「张记」
     rf"|[「“\"『][^」”\"』]{{2,}}[」”\"』]\s*客户"               # 「张记」客户
-)
-_SURNAMES = (
-    "王李张刘陈杨黄赵吴周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘蒋蔡余杜叶程苏"
-    "魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵"
-    "钱严覃武戴莫孔汤"  # 于 / 向 / 付 / 万 left out: mostly function words / units (测 2026-10-24: "负责人于今日")
-)
-_PERSON_ROLE = (r"(?:联系人|负责人|经办人|业务员|销售员|司机|操作员|质检员|审核人|审批人|签收人|"
-                r"收货人|制单人|姓名|员工|工人|班长|组长|主管|仓管员?)")
-_PERSON_RE = re.compile(
-    rf"{_PERSON_ROLE}\s*[:：|]?\s*[{_SURNAMES}][{_HAN}]{{1,2}}"                       # 操作员：王五
-    rf"|(?<![{_HAN}])[{_SURNAMES}][{_HAN}]?(?:先生|女士|小姐|经理|总监|老板|师傅|厂长)"  # 李经理 / 王老板
-    rf"|(?<![{_HAN}])[{_SURNAMES}]总(?![量额数计成产体部结和监经])"                      # 王总
-    rf"|(?:联系|找|通知|叫|告诉)(?!方式|方法|方面|电话|人)[{_SURNAMES}][{_HAN}]{{1,2}}(?=[\s，,。；;、:：（(]|$|\d)"  # 联系张三
 )
 
 

@@ -168,7 +168,8 @@ public final class LlmEgressRedactor {
     private static final String SINGLE_CHAR_ORG_LEAD_INS = "给让请把往";
     /** 人名正则带着岗位 / 动词前缀 (「质检员：赵铁柱」「通知张三」): 只换名字本身。 */
     private static final Pattern PERSON_LEAD_IN = Pattern.compile(
-            "^(?:" + TrainingSampleRules.PERSON_ROLE + "|联系|找|通知|叫|告诉)\\s*[:：|]?\\s*");
+            "^(?:" + TrainingSampleRules.PERSON_ROLE + "|联系|找|通知|叫|告诉)" + TrainingSampleRules.GAP + "*[:：|]?"
+                    + TrainingSampleRules.GAP + "*");
     /** 号码的其它写法: 分组银行卡 / 身份证、15 位旧身份证、三段座机 / 400、点分 / 全角手机号。 */
     private static final Pattern CARD_GROUPED = Pattern.compile(
             "(?<![0-9])\\d{4}(?:[ -]\\d{4}){3}(?:[ -]?\\d{1,3})?(?![0-9])");
@@ -527,7 +528,7 @@ public final class LlmEgressRedactor {
         s.reserved = corpus.toString();
         if (knownParties != null) {
             for (Map.Entry<String, Party> e : knownParties.entrySet()) {
-                String real = e.getKey() == null ? "" : e.getKey().trim();
+                String real = e.getKey() == null ? "" : e.getKey().strip();
                 if (real.length() >= 2 && !GENERIC.contains(real)) {
                     s.known(e.getValue().kind, real);
                 }
@@ -586,8 +587,9 @@ public final class LlmEgressRedactor {
         Session(Collection<String> names) {
             if (names != null) {
                 for (String n : names) {
-                    if (n != null && n.trim().length() >= ProcessSecretSampleFilter.MIN_NAME_LENGTH) {
-                        protectedNames.add(n.trim());
+                    // strip 而不是 trim: 名字首尾的全角空格也去掉, 否则只认「名字 + 全角空格」, 正文里的名字原样发出
+                    if (n != null && n.strip().length() >= ProcessSecretSampleFilter.MIN_NAME_LENGTH) {
+                        protectedNames.add(n.strip());
                     }
                 }
                 protectedNames.sort(Comparator.comparingInt(String::length).reversed());

@@ -2209,6 +2209,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         allocatedLabor.get(i),
                         allocatedEquipment.get(i),
                         allocatedOther.get(i));
+                batch.setCostIncomplete(false);
                 batch.setMaterialCost(buckets.material());
                 batch.setLaborCost(buckets.labor().signum() == 0 ? null : buckets.labor());
                 batch.setEquipmentCost(buckets.equipment().signum() == 0 ? null : buckets.equipment());

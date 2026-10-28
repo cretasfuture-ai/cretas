@@ -3267,6 +3267,15 @@ async function loadDefinition(): Promise<void> {
     const response = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId);
     if (!isCurrentLoad(generation, identity)) return;
     let nextDefinition = response.success ? response.data : null;
+    // 工艺保密: 无授权的人拿到的是只有 id / 版本 / processSecret 的摘要, 连 nodes / edges 数组都没有 ——
+    // ⛔ 必须在 hydrate 之前截住, 否则 hydrate 读 nodes.map 崩掉, 页面停在「该产品还没有工序图」
+    // (F006 反向验收 2026-10-27)。画布保持空, 显示「已保密」, 编辑按钮由 canEdit 锁住。
+    if (nextDefinition && isProcessSecretRow(nextDefinition)) {
+      workflowSecretRestricted.value = true;
+      workflowSecretMessage.value = processSecretMessage(nextDefinition);
+      loadedDefinitionIdentity.value = identity;
+      return;
+    }
     if (!nextDefinition) {
       let legacyProcesses: Parameters<typeof createWorkflowFromLegacy>[0]['processes'] = [];
       if (!rawOwnerMode.value) {
