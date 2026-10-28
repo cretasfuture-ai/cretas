@@ -38,7 +38,7 @@ class ToolDescriptorCatalogTest {
         assertThat(new RuntimeToolPolicyLoader().loadDefault().policies())
                 .extracting(RuntimeToolPolicyEntry::toolName).doesNotContain(PurchaseGrantExecuteTool.NAME);
         assertThat(RuntimeToolDescriptorRegistry.loadDefault().findApproved(PurchaseGrantExecuteTool.NAME)).isEmpty();
-        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(9);
+        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(10);
     }
 
     @Test
@@ -47,10 +47,10 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(586);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(587);
         assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(569);
-        // +1 explicit audit-only WRITE/HIGH grant Tool; approved/runtime/legacy sets stay frozen.
-        assertThat(statistics.total()).isEqualTo(586);
+        // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
+        assertThat(statistics.total()).isEqualTo(587);
         assertThat(statistics.legacy()).isEqualTo(569);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
         // 总数 584 → 585，LEGACY_INFERRED 不变。
@@ -75,11 +75,11 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.ActionType.WRITE, 62L,
                 ToolExecutor.ActionType.UPDATE, 28L,
                 ToolExecutor.ActionType.DELETE, 11L,
-                ToolExecutor.ActionType.ANALYZE, 19L,
+                ToolExecutor.ActionType.ANALYZE, 20L,
                 ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 510L,
+                ToolExecutor.RiskLevel.LOW, 511L,
                 ToolExecutor.RiskLevel.MEDIUM, 67L,
                 ToolExecutor.RiskLevel.HIGH, 9L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
@@ -95,13 +95,13 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
-        assertThat(statistics.requiresPermission()).isEqualTo(48);
+        assertThat(statistics.requiresPermission()).isEqualTo(49);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
-        //   REVIEW_REQUIRED_P0 / APPROVED 集合逐一核对未变化(仍是同一组 9 个 APPROVED 工具)
+        //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
                 ToolGovernanceStatus.REVIEW_REQUIRED, 560L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 17L,
-                ToolGovernanceStatus.APPROVED, 9L,
+                ToolGovernanceStatus.APPROVED, 10L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         // 2026-08-27 (#185 修复解析器盲区后浮现): 这 3 个 LEGACY_INFERRED 的 HIGH 风险 WRITE
@@ -150,7 +150,8 @@ class ToolDescriptorCatalogTest {
                         "product_create",
                         "material_stock_summary",
                         "material_batch_query",
-                        "material_expired_query");
+                        "material_expired_query",
+                        "smartbi_factory_analysis");
     }
 
     @Test

@@ -6,12 +6,19 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.FactorySkillConfigRepository;
 import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.util.Optional;
 
@@ -52,6 +59,19 @@ class TriggerChainControllerTest {
     @Mock FactorySkillConfigRepository skillConfigRepo;
     @Mock FactoryTriggerChainRepository triggerChainRepo;
     @InjectMocks TriggerChainController controller;
+
+    @BeforeEach
+    void authenticatedFactoryAdmin() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, "F001", "factory_super_admin"));
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    }
+
+    @AfterEach
+    void clearActor() {
+        RequestContextHolder.resetRequestAttributes();
+    }
 
     // ==================== AUD-5 B-A3: eventType > 100 chars ====================
 

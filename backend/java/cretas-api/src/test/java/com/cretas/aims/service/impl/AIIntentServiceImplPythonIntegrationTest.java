@@ -148,7 +148,8 @@ class AIIntentServiceImplPythonIntegrationTest {
                 "好了", "F001", 3, 22L, "admin", null, null, null, turns);
 
         assertSame(py, result);
-        org.junit.jupiter.api.Assertions.assertEquals(turns, sent.getValue().getHistory());
+        // The egress boundary forwards only user turns; assistant answers may contain restored names.
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of(turns.get(0)), sent.getValue().getHistory());
         verify(cache, never()).get(anyString(), anyString(), anyString(), anyString());
         verify(cache, never()).put(anyString(), anyString(), anyString(), anyString(), any());
     }
