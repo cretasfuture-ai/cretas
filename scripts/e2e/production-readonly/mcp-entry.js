@@ -3705,6 +3705,7 @@ async function run(ctx) {
     path: PATH,
     landmarks: ['工厂 AI 问答分析', '当前授权图表目录'],
     timeoutMs: 60_000,
+    appMountTimeoutMs: 90_000,
     inspect: async (page, _body, inspectCtx) => {
       if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory AI acceptance is limited to F006');
       await page.getByTestId('factory-analysis-chat').waitFor({ timeout: 60_000 });

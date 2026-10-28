@@ -435,15 +435,18 @@ async def test_cross_table_joint_asgi_clarifies_then_uses_real_inspection_fused(
             'period': {'label': 'period'}, 'analysisSubject': request.analysis_subject,
             'analysisScopeLabel': '产品P1' if product_selected else '全厂范围',
             'subjects': [{'id': 'P1', 'label': 'P1'}],
-            'recommendations': [real_candidate] if product_selected else [], 'sourceErrors': [],
+            'recommendations': [_candidate('standalone-first', 'production.output'), real_candidate] if product_selected else [], 'sourceErrors': [],
         }}
 
-    async def planner(question, catalog, *_args, **_kwargs):
-        planner_questions.append(question)
-        return [catalog[0]['id']], {'mode': 'ai'}
+    async def provider(_slot, payload, **kwargs):
+        body = json.loads(payload['messages'][1]['content'])
+        planner_questions.append(body['question'])
+        content = json.dumps({'selected_ids': [body['catalog'][0]['id']]})
+        assert kwargs['content_validator'](content) is None
+        return {'choices': [{'message': {'content': content}}]}
 
     monkeypatch.setattr(api, 'factory_recommendations', recommendations)
-    monkeypatch.setattr(conversation, 'plan', planner)
+    monkeypatch.setattr('common.llm_router.call_chain', provider)
     app = FastAPI()
 
     @app.middleware('http')
