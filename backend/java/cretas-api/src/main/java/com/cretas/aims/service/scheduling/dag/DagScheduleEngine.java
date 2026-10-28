@@ -107,7 +107,9 @@ public final class DagScheduleEngine {
                         earliest = pe;
                     }
                 }
-                if (blockedBy != null) {
+                // 自己缺工时先于「被上游卡住」判: 否则只有每条链上第一道缺工时的工序被报出来,
+                // 用户补一道、排一次、再冒出下一道 (2026-10-28 F006 线上实测: 卤制补上后才报分切/成型)。
+                if (blockedBy != null && !missingDuration(t)) {
                     unknown.put(t.taskId(), blockedBy);
                     complete = false;
                     results.add(new TaskOut(t.taskId(), t.name(), t.processOrder(), null, null,
