@@ -78,6 +78,12 @@ describe('scheduling create capability and manual payload contract', () => {
     expect(boundary.success).toHaveBeenCalledWith('人工确认的排程草稿已创建');
   });
 
+  it('renders the unavailable mode as a disabled button (no DAG entry) when the server says UNAVAILABLE', async () => {
+    const wrapper = await page(false);
+    expect(wrapper.find('[data-testid="mode-dag-schedule"]').exists()).toBe(false);
+    expect(wrapper.find('button.mode-option.unavailable').attributes('disabled')).toBeDefined();
+  });
+
   it.each([
     ['no line', async (wrapper: any) => { await wrapper.findAll('input[type="datetime-local"]')[0].setValue('2026-10-03T08:00'); await wrapper.findAll('input[type="datetime-local"]')[1].setValue('2026-10-03T09:00'); }],
     ['fractional quantity', async (wrapper: any) => { await wrapper.get('select').setValue('LINE-1'); await wrapper.find('input[type="number"]').setValue('1.5'); }],
@@ -89,5 +95,78 @@ describe('scheduling create capability and manual payload contract', () => {
     await flushPromises();
     expect(boundary.post).not.toHaveBeenCalled();
     expect(boundary.warning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('scheduling create: DAG auto-schedule when the server says AVAILABLE', () => {
+  const available = {
+    ...capabilities,
+    aiGeneration: { status: 'AVAILABLE', mode: 'DAG_DURATION', reason: '按工艺图的先后关系和每道工序的预计工时排出开始/结束时间；缺预计工时的工序不排；不自动派工。' },
+  };
+  const pending = [
+    { id: 'PP-A', planNumber: 'PLAN-A', productTypeName: '卤猪蹄', plannedQuantity: 12, expectedCompletionDate: '2026-10-20', status: 'PENDING' },
+    { id: 'PP-B', planNumber: 'PLAN-B', productTypeName: '酱牛肉', plannedQuantity: 5, expectedCompletionDate: '2026-10-21', status: 'PENDING' },
+  ];
+
+  function serve(lines: Array<{ id: string; name: string }>) {
+    boundary.get.mockImplementation((url: string) => Promise.resolve({ success: true, data:
+      url.includes('/scheduling/capabilities') ? available
+        : url.includes('/scheduling/pending-batches') ? pending
+        : url.includes('/production-lines') ? lines
+        : url.includes('/processing/batches') ? { content: [] } : [] }));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    boundary.post.mockResolvedValue({ success: true, data: { id: 'SP-1', lineSchedules: [{ id: 'S-1' }], warnings: ['没有指定开工时刻，按 08:00 开工排'] } });
+  });
+
+  async function mountPage() {
+    const wrapper = mount(CreatePlan, { global: { directives: { loading: () => undefined }, stubs: { ElCard: box, ElForm: box, ElFormItem: box, ElIcon: box, ElButton: button, ElDatePicker: dateInput, ElInput: notesInput, ElCheckbox: true, ElEmpty: true } } });
+    await flushPromises();
+    await wrapper.get('input[type="date"]').setValue('2026-10-19');
+    return wrapper;
+  }
+
+  it('lets the user pick plans in order and sends planIds (never batchIds) then opens the detail with warnings', async () => {
+    serve([{ id: 'LINE-1', name: '一号线' }]);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="mode-dag-schedule"]').trigger('click');
+    expect(wrapper.text()).toContain('不自动派工');
+    // 点选顺序就是先到先排的顺序
+    await wrapper.get('[data-testid="aps-plan-PP-B"]').trigger('click');
+    await wrapper.get('[data-testid="aps-plan-PP-A"]').trigger('click');
+    await wrapper.get('[data-testid="aps-start-time"]').setValue('13:30');
+    await wrapper.findAll('.submit-area button')[1].trigger('click');
+    await flushPromises();
+
+    expect(boundary.post).toHaveBeenCalledExactlyOnceWith('/F-P05/scheduling/generate', {
+      planDate: '2026-10-19', planIds: ['PP-B', 'PP-A'], productionLineId: 'LINE-1', startTime: '13:30',
+    });
+    expect(boundary.post.mock.calls[0][1]).not.toHaveProperty('batchIds');
+    expect(boundary.push).toHaveBeenCalledWith({ path: '/scheduling/plans/SP-1', state: { apsWarnings: ['没有指定开工时刻，按 08:00 开工排'] } });
+  });
+
+  it('blocks submission up front when no plan is chosen or several lines exist without a choice', async () => {
+    serve([{ id: 'LINE-1', name: '一号线' }, { id: 'LINE-2', name: '二号线' }]);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="mode-dag-schedule"]').trigger('click');
+    expect(wrapper.get('[data-testid="aps-block-reason"]').text()).toContain('请至少选择一个生产计划');
+    expect(wrapper.findAll('.submit-area button')[1].attributes('disabled')).toBeDefined();
+
+    await wrapper.get('[data-testid="aps-plan-PP-A"]').trigger('click');
+    expect(wrapper.get('[data-testid="aps-block-reason"]').text()).toContain('2 条产线');
+    const state = wrapper.vm as unknown as { handleSubmit: () => Promise<void> };
+    await state.handleSubmit();
+    expect(boundary.post).not.toHaveBeenCalled();
+    expect(boundary.warning).toHaveBeenCalledWith('工厂有 2 条产线，请选择要排在哪条产线上');
+
+    await wrapper.get('[data-testid="aps-line"]').setValue('LINE-2');
+    expect(wrapper.find('[data-testid="aps-block-reason"]').exists()).toBe(false);
+    await wrapper.findAll('.submit-area button')[1].trigger('click');
+    await flushPromises();
+    expect(boundary.post).toHaveBeenCalledExactlyOnceWith('/F-P05/scheduling/generate', {
+      planDate: '2026-10-19', planIds: ['PP-A'], productionLineId: 'LINE-2',
+    });
   });
 });

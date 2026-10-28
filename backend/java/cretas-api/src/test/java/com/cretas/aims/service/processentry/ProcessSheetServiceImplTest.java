@@ -569,6 +569,9 @@ class ProcessSheetServiceImplTest {
 
         assertThat(submitted.getSubmissionStatus()).isEqualTo(ProcessSheetRow.SUBMISSION_SUBMITTED);
         assertThat(submitted.isMaterialized()).isTrue();
+        assertThat(submitted.getWarnings() == null ? List.<String>of() : submitted.getWarnings())
+                .as("阴性对照: 投入 4.5 / 产出 5 偏差 11% 不提示")
+                .noneMatch(w -> w.contains("物料平衡") || w.contains("没有登记任何投入"));
         var after = processSheetService.getInventory(FACTORY_ID, planId, "xiuyou", 1);
         assertThat(after).singleElement().satisfies(item -> {
             assertThat(item.getBatchNumber()).isEqualTo(upstream.getBatchNumber());
@@ -766,6 +769,9 @@ class ProcessSheetServiceImplTest {
         seedReworkSfi(reworkBatchNo, "10");
         ProcessSheetRowResult submitted = submitXiuyouWithRework("row-rework-reversal", reworkBatchNo, "4");
         assertThat(submitted.getBatchId()).isNotNull();
+        assertThat(submitted.getWarnings())
+                .as("web 正式报工入口带出物料平衡提示 (投入 104 / 产出 80 ⇒ 偏差 23%)")
+                .anyMatch(w -> w.startsWith("物料平衡偏差 23%"));
         assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, reworkBatchNo)
                 .orElseThrow().getAvailableQuantity()).as("提交时严格扣了 4").isEqualByComparingTo("6");
         assertThat(reportRepo.findYieldReportsByBatch(FACTORY_ID, submitted.getBatchId()))

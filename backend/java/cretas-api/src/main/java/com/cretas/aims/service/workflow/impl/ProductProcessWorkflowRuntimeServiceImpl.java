@@ -154,9 +154,7 @@ public class ProductProcessWorkflowRuntimeServiceImpl
                         "The batch no longer references its exact immutable published Workflow revision"));
         // 2B.2: 多产出已放开 — 编译产出的全部 OUTPUT 端口都会被持久化 (下方 portsFor 循环),
         // clerk 报工侧按端口分解为 N 个单产出物料化 (原 B1 single-output guard 移除)。
-        ProductProcessWorkflowDTO runtimeDefinition = toDefinition(revision);
-        unitValidator.validateForPublish(factoryId, runtimeDefinition);
-        CompiledProductProcessWorkflow compiled = compiler.compile(runtimeDefinition);
+        CompiledProductProcessWorkflow compiled = compilePublishedRevision(factoryId, revision);
         ProductionWorkflowInstance instance = instanceRepository.save(
                 ProductionWorkflowInstance.create(
                         factoryId,
@@ -192,6 +190,35 @@ public class ProductProcessWorkflowRuntimeServiceImpl
             }
         }
         return Optional.of(tasks.stream().map(this::toTaskDTO).toList());
+    }
+
+    /**
+     * 只读: 把计划钉住的已发布工艺版本编译成任务图 (APS 给还没开工的计划排时间用)。
+     * 与 {@link #materializeIfActive} 走同一份 {@link #compilePublishedRevision}, 不落实例、不落任务。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public CompiledProductProcessWorkflow compilePublishedRevision(String factoryId, Long revisionId) {
+        if (revisionId == null) {
+            throw notFound("WORKFLOW_REVISION_NOT_FOUND", "Workflow revision was not found in this factory");
+        }
+        ProductProcessWorkflowRevision revision = revisionRepository
+                .findByIdAndFactoryId(revisionId, factoryId)
+                .orElseThrow(() -> notFound(
+                        "WORKFLOW_REVISION_NOT_FOUND", "Workflow revision was not found in this factory"));
+        if (revision.getStatus() != ProductProcessWorkflowRevision.Status.PUBLISHED) {
+            throw conflict("WORKFLOW_REVISION_NOT_PUBLISHED",
+                    "The Workflow revision is not an immutable published revision");
+        }
+        return compilePublishedRevision(factoryId, revision);
+    }
+
+    /** 已发布版本 → 运行时编译结果。物料化与 APS 共用这一份, ⛔ 不要复制第二份。 */
+    private CompiledProductProcessWorkflow compilePublishedRevision(
+            String factoryId, ProductProcessWorkflowRevision revision) {
+        ProductProcessWorkflowDTO runtimeDefinition = toDefinition(revision);
+        unitValidator.validateForPublish(factoryId, runtimeDefinition);
+        return compiler.compile(runtimeDefinition);
     }
 
     @Override

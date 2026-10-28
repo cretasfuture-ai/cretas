@@ -75,6 +75,14 @@ public class DisposalRecordService implements IDisposalRecordService {
     /** 唯一有实物扣减与费用过账口径的处置方式 (approveDisposal / DisposalCostAccountingService 同一集合)。 */
     private static final Set<String> PHYSICAL_DISPOSAL_TYPES = Set.of("SCRAP", "DESTROY");
 
+    /**
+     * 客户自有成品退还客户 (Steve 2026-10-28 裁定: 召回/退回的客户货可退还客户, 也可经客户同意报废)。
+     * 与报废同一条「申请 → 审批 → 扣库」链, 但只用于客户自有成品, 不挂应收、不过成本凭证。
+     */
+    static final String RETURN_TO_CUSTOMER = "RETURN_TO_CUSTOMER";
+
+    private static final Set<String> SUPPORTED_DISPOSAL_TYPES = Set.of("SCRAP", "DESTROY", RETURN_TO_CUSTOMER);
+
     /** Damaged/expired/QC-held goods can be scrapped while physical free stock remains. */
     private static final Set<String> DISPOSAL_ELIGIBLE_FG_STATUSES = Set.of(
             FinishedGoodsBatch.Status.AVAILABLE, FinishedGoodsBatch.Status.DEFECTIVE,
@@ -100,15 +108,12 @@ public class DisposalRecordService implements IDisposalRecordService {
     public DisposalRecord createDisposalRecord(DisposalRecord record) {
         // 批准只认 SCRAP/DESTROY (实物扣减与费用过账口径); 其它值建得出来却永远批不了,
         // web 表单曾把「过期/损坏/质量问题」当处置方式提交, prod 上整条报废链从没走通。
-        if (record.getDisposalType() == null || !PHYSICAL_DISPOSAL_TYPES.contains(record.getDisposalType())) {
-            throw new BusinessException(400, "处置方式只支持报废或销毁")
-                    .withCode("DISPOSAL_TYPE_UNSUPPORTED")
-                    .withHint("请选择处置方式「报废」或「销毁」，过期、损坏、质量问题等原因写在废弃原因里")
-                    .withHintTarget("disposalType");
-        }
+        assertSupportedDisposalType(record.getDisposalType());
         assertSingleInventoryTarget(record);
         if (record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
             assertFinishedGoodsDisposalBalance(record);
+        } else if (RETURN_TO_CUSTOMER.equals(record.getDisposalType())) {
+            throw returnToCustomerOnlyForCustomerGoods();
         }
         // 设置默认值
         if (record.getDisposalDate() == null) {
@@ -127,12 +132,72 @@ public class DisposalRecordService implements IDisposalRecordService {
         return finishedGoodsBatchRepository.findDisposalEligibleByFactoryId(
                         factoryId, DISPOSAL_ELIGIBLE_FG_STATUSES).stream()
                 .map(batch -> new EligibleFinishedGoodsBatch(batch.getId(), batch.getBatchNumber(),
-                        batch.getProductName(), batch.getUnit(), batch.getAvailableQuantity()))
+                        batch.getProductName(), batch.getUnit(), batch.getAvailableQuantity(),
+                        batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED))
                 .toList();
     }
 
+    /** customerOwned: 前端据此切换处置方式 (退还客户 / 客户同意报废) 并要求客户确认。 */
     public record EligibleFinishedGoodsBatch(String id, String batchNumber, String productName,
-                                              String unit, BigDecimal availableQuantity) {}
+                                              String unit, BigDecimal availableQuantity,
+                                              boolean customerOwned) {}
+
+    private static void assertSupportedDisposalType(String disposalType) {
+        // 批准只认 SCRAP/DESTROY/RETURN_TO_CUSTOMER; 其它值建得出来却永远批不了 ——
+        // web 表单曾把「过期/损坏/质量问题」当处置方式提交, prod 上整条报废链从没走通。
+        if (disposalType == null || !SUPPORTED_DISPOSAL_TYPES.contains(disposalType)) {
+            throw new BusinessException(400, "处置方式只支持报废、销毁或退还客户")
+                    .withCode("DISPOSAL_TYPE_UNSUPPORTED")
+                    .withHint("请选择处置方式「报废」或「销毁」(客户自有货还可「退还客户」)，过期、损坏、质量问题等原因写在废弃原因里")
+                    .withHintTarget("disposalType");
+        }
+    }
+
+    private static BusinessException returnToCustomerOnlyForCustomerGoods() {
+        return new BusinessException(400, "只有客户自有成品可以退还客户")
+                .withCode("DISPOSAL_RETURN_TO_CUSTOMER_COMPANY_GOODS")
+                .withHint("公司自有库存请选择「报废」或「销毁」")
+                .withHintTarget("disposalType");
+    }
+
+    /**
+     * 客户自有货: 退还需要签收、报废/销毁需要客户同意 —— 三项缺一不可 (人、日期、凭证)。
+     * 公司自有货: 不允许退还客户。
+     */
+    private static void assertOwnershipDisposalRules(DisposalRecord record, FinishedGoodsBatch batch) {
+        boolean customerOwned = batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED;
+        if (!customerOwned) {
+            if (RETURN_TO_CUSTOMER.equals(record.getDisposalType())) throw returnToCustomerOnlyForCustomerGoods();
+            return;
+        }
+        if (FinishedGoodsBatch.Status.AVAILABLE.equals(batch.getStatus())) {
+            throw new BusinessException(409, "客户自有的可售成品请走代加工发货")
+                    .withCode("DISPOSAL_CUSTOMER_GOODS_SELLABLE")
+                    .withHint("只有退回、不良、过期或冻结的客户货才在这里退还或报废；可售的代加工成品发货时才会收加工费");
+        }
+        boolean returning = RETURN_TO_CUSTOMER.equals(record.getDisposalType());
+        String what = returning ? "客户签收" : "客户同意报废";
+        if (isBlank(record.getCustomerConfirmedBy())) {
+            throw customerConfirmationRequired(what + "人", "customerConfirmedBy");
+        }
+        if (record.getCustomerConfirmedAt() == null) {
+            throw customerConfirmationRequired(what + "日期", "customerConfirmedAt");
+        }
+        if (isBlank(record.getCustomerConfirmationEvidence())) {
+            throw customerConfirmationRequired(returning ? "签收单照片" : "客户同意凭证", "customerConfirmationEvidence");
+        }
+    }
+
+    private static BusinessException customerConfirmationRequired(String field, String target) {
+        return new BusinessException(400, "客户自有成品缺少" + field)
+                .withCode("DISPOSAL_CUSTOMER_CONFIRMATION_REQUIRED")
+                .withHint("客户自有货只能在客户确认后处置：请补「" + field + "」")
+                .withHintTarget(target);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
 
     private void assertFinishedGoodsDisposalBalance(DisposalRecord record) {
         FinishedGoodsBatch batch = finishedGoodsBatchRepository.findById(record.getFinishedGoodsBatchId())
@@ -145,10 +210,7 @@ public class DisposalRecordService implements IDisposalRecordService {
             throw new BusinessException(422, "报损数量必须大于0");
         }
         BigDecimal available = batch.getAvailableQuantity();
-        if (batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
-            throw new BusinessException(409, "客户自有成品不能走通用废弃处理")
-                    .withHint("请先与客户确认处置方式，再联系管理员处理");
-        }
+        assertOwnershipDisposalRules(record, batch);
         if (batch.getStatus() == null || !DISPOSAL_ELIGIBLE_FG_STATUSES.contains(batch.getStatus())
                 || available == null || available.signum() <= 0
                 || quantity.compareTo(available) > 0) {
@@ -245,10 +307,14 @@ public class DisposalRecordService implements IDisposalRecordService {
         DisposalRecord record = findForMutation(factoryId, id);
         assertSingleInventoryTarget(record);
 
-        if (record.getDisposalType() == null || !PHYSICAL_DISPOSAL_TYPES.contains(record.getDisposalType())) {
-            throw new BusinessException(409, "仅 SCRAP/DESTROY 支持实物扣减与费用过账；其它处置方式需先确定财务口径")
+        if (record.getDisposalType() == null || !SUPPORTED_DISPOSAL_TYPES.contains(record.getDisposalType())) {
+            throw new BusinessException(409, "仅报废、销毁或退还客户支持实物扣减；其它处置方式需先确定财务口径")
                     .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED")
                     .withHint("请由财务确认处置方式的过账口径，实际报废或销毁的记录可从报损审批继续");
+        }
+        if (RETURN_TO_CUSTOMER.equals(record.getDisposalType())
+                && (record.getFinishedGoodsBatchId() == null || record.getFinishedGoodsBatchId().isBlank())) {
+            throw returnToCustomerOnlyForCustomerGoods();
         }
 
         // 幂等防重 (2026-06-12, Codex Gate2): 已审批/已拒绝 (终态) 不可重复操作.
@@ -262,9 +328,12 @@ public class DisposalRecordService implements IDisposalRecordService {
         BigDecimal actualLoss = applyDisposalToInventory(record, approverId, requestRole);
         record.setActualLoss(actualLoss);
 
-        // 与库存扣减处于同一事务；成本/期间/凭证任一失败都会回滚前面的库存写入。
-        disposalCostAccountingService.postApprovedDisposal(record,
-                actualLoss, approverId == null ? null : approverId.longValue());
+        // 客户自有货 (退还客户 / 客户同意报废) 不是本厂资产: 只扣库存, 不过报废损失凭证。
+        // 公司货与库存扣减处于同一事务；成本/期间/凭证任一失败都会回滚前面的库存写入。
+        if (!isCustomerOwnedFinishedGoods(record)) {
+            disposalCostAccountingService.postApprovedDisposal(record,
+                    actualLoss, approverId == null ? null : approverId.longValue());
+        }
 
         record.approve(approverId, approverName);
         log.info("审批报废记录: id={}, 审批人={} ({}), 实际损失={}", id, approverName, approverId, actualLoss);
@@ -371,10 +440,9 @@ public class DisposalRecordService implements IDisposalRecordService {
                         .withHint("批次不属于当前工厂");
             }
 
-            if (fgBatch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
-                throw new BusinessException(409, "客户自有成品不能走通用废弃处理")
-                        .withHint("请先与客户确认处置方式，再联系管理员处理");
-            }
+            boolean customerOwned = fgBatch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED;
+            // 审批时按锁定后的批次再核一次归属规则 (申请后批次归属不会变, 但审批是最后一道闸)。
+            assertOwnershipDisposalRules(record, fgBatch);
             if (fgBatch.getStatus() == null || !DISPOSAL_ELIGIBLE_FG_STATUSES.contains(fgBatch.getStatus())) {
                 throw new BusinessException(409, "成品批次当前不可报损，请刷新库存状态")
                         .withHint("请重新选择仍有可报损余量的成品批次");
@@ -396,6 +464,27 @@ public class DisposalRecordService implements IDisposalRecordService {
             BigDecimal priorUnitCost = fgBatch.getUnitCost();
             BigDecimal unitCost = priorUnitCost;
             ReturnedGoodsCostResolver.ResolvedCost resolvedCost = null;
+            if (customerOwned) {
+                // 客户货不计本厂损失, 也不要求本厂成本: 只留扣减痕迹。
+                // 召回后续按 "报损审批 [id=" 前缀 + referenceType 认处置证据, 两种处置都沿用该前缀。
+                String reason = "报损审批 [id=" + record.getId() + "] 类型: " + record.getDisposalType()
+                        + (record.getDisposalReason() != null ? " - " + record.getDisposalReason() : "")
+                        + "; 客户自有; 客户确认=" + record.getCustomerConfirmedBy()
+                        + " " + record.getCustomerConfirmedAt() + "; unit=" + fgBatch.getUnit();
+                finishedGoodsAdjustmentLogRepository.save(FinishedGoodsAdjustmentLog.builder()
+                        .factoryId(fgBatch.getFactoryId())
+                        .batchId(fgBatch.getId())
+                        .adjustmentQuantity(disposalQty.negate())
+                        .beforeProduced(beforeProduced)
+                        .afterProduced(afterProduced)
+                        .reason(reason)
+                        .referenceType(RETURN_TO_CUSTOMER.equals(record.getDisposalType())
+                                ? RETURN_TO_CUSTOMER : "SCRAP")
+                        .operatorId(approverId != null ? approverId.longValue() : null)
+                        .build());
+                deductFinishedGoods(fgBatch, afterProduced);
+                return BigDecimal.ZERO;
+            }
             if (unitCost == null && returnedGoodsCostResolver != null) {
                 resolvedCost = returnedGoodsCostResolver.resolve(record.getFactoryId(), fgBatch).orElse(null);
                 if (resolvedCost != null) {
@@ -435,17 +524,7 @@ public class DisposalRecordService implements IDisposalRecordService {
                     .operatorId(approverId != null ? approverId.longValue() : null)
                     .build();
             finishedGoodsAdjustmentLogRepository.save(logEntry);
-
-            fgBatch.setProducedQuantity(afterProduced);
-            // Reserved goods are still physically present. A zero free balance must not
-            // hide them from shipment, or keep them hidden after reservation release.
-            BigDecimal shipped = fgBatch.getShippedQuantity() != null
-                    ? fgBatch.getShippedQuantity() : BigDecimal.ZERO;
-            if (afterProduced.subtract(shipped).signum() <= 0) {
-                fgBatch.setStatus(FinishedGoodsBatch.Status.DEPLETED);
-            }
-            finishedGoodsBatchRepository.save(fgBatch);
-
+            deductFinishedGoods(fgBatch, afterProduced);
             return valuateFinishedGoodsCost(disposalQty, unitCost);
         }
 
@@ -501,6 +580,24 @@ public class DisposalRecordService implements IDisposalRecordService {
 
     private BigDecimal valuateFinishedGoodsCost(BigDecimal qty, BigDecimal unitCost) {
         return qty.multiply(unitCost).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** 扣 producedQuantity; 可用为 0 标 DEPLETED (预留量仍在实物上, 不能因为可用为 0 就藏起来)。 */
+    private void deductFinishedGoods(FinishedGoodsBatch fgBatch, BigDecimal afterProduced) {
+        fgBatch.setProducedQuantity(afterProduced);
+        BigDecimal shipped = fgBatch.getShippedQuantity() != null
+                ? fgBatch.getShippedQuantity() : BigDecimal.ZERO;
+        if (afterProduced.subtract(shipped).signum() <= 0) {
+            fgBatch.setStatus(FinishedGoodsBatch.Status.DEPLETED);
+        }
+        finishedGoodsBatchRepository.save(fgBatch);
+    }
+
+    private boolean isCustomerOwnedFinishedGoods(DisposalRecord record) {
+        if (record.getFinishedGoodsBatchId() == null || record.getFinishedGoodsBatchId().isBlank()) return false;
+        return finishedGoodsBatchRepository.findById(record.getFinishedGoodsBatchId())
+                .map(batch -> batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED)
+                .orElse(false);
     }
 
     /**
@@ -672,13 +769,17 @@ public class DisposalRecordService implements IDisposalRecordService {
             existing.setDisposalQuantity(updateData.getDisposalQuantity());
         }
         if (updateData.getDisposalType() != null) {
-            if (!PHYSICAL_DISPOSAL_TYPES.contains(updateData.getDisposalType())) {
-                throw new BusinessException(400, "处置方式只支持报废或销毁")
-                        .withCode("DISPOSAL_TYPE_UNSUPPORTED")
-                        .withHint("请选择处置方式「报废」或「销毁」")
-                        .withHintTarget("disposalType");
-            }
+            assertSupportedDisposalType(updateData.getDisposalType());
             existing.setDisposalType(updateData.getDisposalType());
+        }
+        if (updateData.getCustomerConfirmedBy() != null) {
+            existing.setCustomerConfirmedBy(updateData.getCustomerConfirmedBy());
+        }
+        if (updateData.getCustomerConfirmedAt() != null) {
+            existing.setCustomerConfirmedAt(updateData.getCustomerConfirmedAt());
+        }
+        if (updateData.getCustomerConfirmationEvidence() != null) {
+            existing.setCustomerConfirmationEvidence(updateData.getCustomerConfirmationEvidence());
         }
         if (updateData.getDisposalReason() != null) {
             existing.setDisposalReason(updateData.getDisposalReason());

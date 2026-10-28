@@ -421,12 +421,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         inputAllocations.addAll(reworkAllocations);
         result.setInputAllocations(List.copyOf(inputAllocations));
         result.setReworkAutoDeductions(reworkAuto.lines());
-        if (!reworkAuto.warnings().isEmpty()) {
+        List<String> balance = materialBalanceWarnings(req);
+        if (!reworkAuto.warnings().isEmpty() || !balance.isEmpty()) {
             List<String> merged = new ArrayList<>();
             if (result.getWarnings() != null) {
                 merged.addAll(result.getWarnings());
             }
             merged.addAll(reworkAuto.warnings());
+            merged.addAll(balance);
             result.setWarnings(merged);
         }
         return result;
@@ -4815,6 +4817,105 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return firstNonBlank(req.getInputUnit(), req.getUnit(), "kg");
     }
 
+    /** 物料平衡提示阈值, 与 App 报工 (YieldReportServiceImpl.BALANCE_WARN_THRESHOLD) 同一口径。 */
+    static final BigDecimal BALANCE_WARN_THRESHOLD = new BigDecimal("0.15");
+
+    /**
+     * 能力核查缺口「web 路无物料平衡校验」(2026-10-24 核查; App 路一直有 15% 提示)。正式报工后追加提示, ⛔ 不拦:
+     * <ul>
+     *   <li>有产出却一点投入都没登记 → 提示 (prod 10-27 实测 3 个生产批 0 条投料就完工, 追溯在这一道断开)。</li>
+     *   <li>投入 − 产出 − Σ副产 − 留样 偏离投入超过 15% → 提示, 带具体数字。</li>
+     * </ul>
+     * 单位不可比 (非 kg/g 且投入产出单位不同) 时不算偏差 —— 算不出就不说, ⛔ 不拿换算猜。
+     */
+    static List<String> materialBalanceWarnings(ProcessSheetRowRequest req) {
+        List<String> out = new ArrayList<>();
+        BigDecimal output = req.getOutputs() != null && !req.getOutputs().isEmpty() ? null : req.getOutputQuantity();
+        String outputUnit = normalizeReportingUnit(firstNonBlank(req.getOutputUnit(), req.getUnit(), "kg"));
+        if (output == null && req.getOutputs() != null) {
+            // 多产出: 只在全部产出同一单位时合计, 否则不比
+            String common = null;
+            BigDecimal sum = BigDecimal.ZERO;
+            for (ProcessSheetRowRequest.OutputLine o : req.getOutputs()) {
+                if (o == null || o.getQuantity() == null) continue;
+                String u = normalizeReportingUnit(firstNonBlank(o.getUnit(), outputUnit));
+                if (common == null) common = u;
+                if (!common.equals(u)) return out;
+                sum = sum.add(o.getQuantity());
+            }
+            if (common == null) return out;
+            output = sum;
+            outputUnit = common;
+        }
+        if (output == null || output.signum() <= 0) {
+            return out;
+        }
+        BigDecimal input = req.getInputQuantity();
+        if (input == null || input.signum() <= 0) {
+            if (!hasAnyRegisteredInput(req)) {
+                out.add("本道有产出 " + output.stripTrailingZeros().toPlainString() + outputUnit
+                        + " 但没有登记任何投入 —— 追溯会在这一道断开, 请补录投入的原料或上一道的半成品");
+            }
+            return out;
+        }
+        String inputUnit = normalizeReportingUnit(requestInputUnit(req));
+        BigDecimal byproducts = BigDecimal.ZERO;
+        if (req.getByproducts() != null) {
+            for (com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct b : req.getByproducts()) {
+                if (b == null || b.getQuantity() == null) continue;
+                String bu = normalizeReportingUnit(firstNonBlank(b.getUnit(), outputUnit));
+                if (!bu.equals(outputUnit)) return out; // 副产单位与产出不同: 不可比
+                byproducts = byproducts.add(b.getQuantity());
+            }
+        }
+        BigDecimal sample = req.getSampleRetainQuantity() == null
+                ? BigDecimal.ZERO : new BigDecimal(req.getSampleRetainQuantity());
+        BigDecimal in = toKgIfMass(input, inputUnit);
+        BigDecimal used = toKgIfMass(output.add(byproducts).add(sample), outputUnit);
+        boolean comparable = reportingUnitsComparable(inputUnit, outputUnit);
+        if (!comparable) {
+            return out;
+        }
+        BigDecimal deviation = in.subtract(used).abs().divide(in, 6, RoundingMode.HALF_UP);
+        if (deviation.compareTo(BALANCE_WARN_THRESHOLD) > 0) {
+            out.add(String.format("物料平衡偏差 %s%% (投入 %s%s, 产出 %s%s, 副产物 %s, 留样 %s) — 请核对, 系统不阻塞",
+                    deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).toPlainString(),
+                    input.stripTrailingZeros().toPlainString(), inputUnit,
+                    output.stripTrailingZeros().toPlainString(), outputUnit,
+                    byproducts.stripTrailingZeros().toPlainString(),
+                    sample.stripTrailingZeros().toPlainString()));
+        }
+        return out;
+    }
+
+    private static boolean hasAnyRegisteredInput(ProcessSheetRowRequest req) {
+        if (req.getRawMaterialInputs() != null && req.getRawMaterialInputs().stream()
+                .anyMatch(r -> r != null && r.getQuantity() != null && r.getQuantity().signum() > 0)) {
+            return true;
+        }
+        if (req.getMaterialInputTotals() != null && req.getMaterialInputTotals().stream()
+                .anyMatch(r -> r != null && r.getQuantity() != null && r.getQuantity().signum() > 0)) {
+            return true;
+        }
+        return req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
+    }
+
+    /**
+     * 已归一化的报工单位能不能直接比数量: 都是质量单位 (kg/g, 换算后比) 或同一个计数单位。
+     * yieldRate 与物料平衡提示共用这一处判定 (BareUnitEqualityRatchet 基线里的那 1 处就是它)。
+     */
+    private static boolean reportingUnitsComparable(String inputUnit, String outputUnit) {
+        return isMassUnit(inputUnit) && isMassUnit(outputUnit) || inputUnit.equals(outputUnit);
+    }
+
+    private static boolean isMassUnit(String unit) {
+        return "kg".equals(unit) || "g".equals(unit);
+    }
+
+    private static BigDecimal toKgIfMass(BigDecimal v, String unit) {
+        return "g".equals(unit) ? v.movePointLeft(3) : v;
+    }
+
     private void ensureRawMaterialWarehouse(String factoryId, String planId, MaterialBatch rawMb) {
         if (warehouseResolver == null) {
             return;
@@ -5281,7 +5382,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (inputMass && outputMass) {
             if ("g".equals(inputUnit)) input = input.movePointLeft(3);
             if ("g".equals(outputUnit)) output = output.movePointLeft(3);
-        } else if (!inputUnit.equals(outputUnit)) {
+        } else if (!reportingUnitsComparable(inputUnit, outputUnit)) {
             return null;
         }
         return output.divide(input, 4, RoundingMode.HALF_UP)

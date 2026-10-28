@@ -16,7 +16,8 @@ import {
   reschedule,
   SchedulingPlan,
   LineSchedule,
-  CompletionProbability
+  CompletionProbability,
+  type ScheduleTaskTimelineEntry
 } from '@/api/scheduling';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -42,6 +43,48 @@ const planId = computed(() => route.params.id as string);
 
 const loading = ref(false);
 const plan = ref<SchedulingPlan | null>(null);
+
+/**
+ * 自动排程的提示 (缺工时 / 没有工艺图 / 默认 08:00 开工): 后端只在生成那次返回,
+ * 创建页跳转时经 history.state 带过来; 直接打开详情页时没有。
+ */
+function readApsWarnings(): string[] {
+  const state = typeof window !== 'undefined' ? (window.history.state as { apsWarnings?: unknown } | null) : null;
+  const raw = state?.apsWarnings;
+  return Array.isArray(raw) ? raw.filter((w): w is string => typeof w === 'string' && w.trim().length > 0) : [];
+}
+const apsWarnings = ref<string[]>(readApsWarnings());
+const warningsMentionProcessSetup = computed(() => apsWarnings.value.some(w => w.includes('工序管理')));
+const timelineSchedules = computed(() => (plan.value?.lineSchedules || [])
+  .filter(s => Array.isArray(s.taskTimeline) && s.taskTimeline.length > 0));
+
+function scheduleLabel(s: LineSchedule) {
+  if (s.batchNumber) return s.batchNumber;
+  if (s.planNumber) return `计划 ${s.planNumber}`;
+  return '未标明';
+}
+
+/** 时间线时刻: 与计划日期同一天只显示 HH:mm, 跨天带上月-日。 */
+function formatTimelineTime(iso: string | null | undefined) {
+  if (!iso) return '—';
+  const day = iso.slice(0, 10);
+  const clock = iso.slice(11, 16);
+  return plan.value?.planDate && day !== plan.value.planDate ? `${day.slice(5)} ${clock}` : clock;
+}
+
+function timelineStatusText(status: ScheduleTaskTimelineEntry['status']) {
+  const map: Record<string, string> = {
+    SCHEDULED: '已排',
+    DONE: '已完成（不占时间）',
+    MISSING_DURATION: '缺预计工时',
+    BLOCKED_BY_MISSING: '等上游工时',
+  };
+  return map[status] || status;
+}
+
+function goWorkProcesses() {
+  router.push('/system/work-processes');
+}
 const probabilities = ref<CompletionProbability[]>([]);
 const ganttChart = ref<echarts.ECharts | null>(null);
 const ganttContainer = ref<HTMLElement | null>(null);
@@ -192,7 +235,7 @@ function updateGanttChart() {
     }
 
     return {
-      name: s.batchNumber,
+      name: scheduleLabel(s),
       value: [lineIndex, startTime, endTime, s.completionRate || 0],
       itemStyle: { color },
       schedule: s
@@ -213,7 +256,7 @@ function updateGanttChart() {
 
         return `
           <div style="padding: 8px;">
-            <div style="font-weight: bold; margin-bottom: 8px;">${schedule.batchNumber}</div>
+            <div style="font-weight: bold; margin-bottom: 8px;">${scheduleLabel(schedule)}</div>
             <div>产线: ${schedule.productionLineName}</div>
             <div>时间: ${start} - ${end}</div>
             <div>进度: ${schedule.completedQuantity || 0}/${schedule.targetQuantity}</div>
@@ -462,6 +505,20 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
       </div>
     </div>
 
+    <div v-if="apsWarnings.length" class="aps-warnings" data-testid="aps-warnings">
+      <el-alert
+        v-for="(warning, index) in apsWarnings"
+        :key="index"
+        :title="warning"
+        type="warning"
+        show-icon
+        :closable="false"
+      />
+      <el-button v-if="warningsMentionProcessSetup" type="primary" link @click="goWorkProcesses">
+        去工序管理填预计工时
+      </el-button>
+    </div>
+
     <el-card v-if="plan" data-testid="plan-notes">
       <template #header>计划备注与调整原因</template>
       <p>这里只记录原因，排程时间和资源未改变。</p>
@@ -538,7 +595,9 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
       </template>
       <el-table :data="plan?.lineSchedules || []" stripe border>
         <el-table-column prop="productionLineName" label="产线" width="150" />
-        <el-table-column prop="batchNumber" label="批次号" width="140" />
+        <el-table-column label="批次 / 计划" width="160">
+          <template #default="{ row }">{{ scheduleLabel(row) }}</template>
+        </el-table-column>
         <el-table-column label="时间" width="200">
           <template #default="{ row }">
             {{ new Date(row.plannedStartTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}
@@ -605,6 +664,32 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
               完成
             </el-button>
           </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- 自动排程: 每条排程的工序时间线 -->
+    <el-card
+      v-for="schedule in timelineSchedules"
+      :key="`timeline-${schedule.id}`"
+      class="timeline-card"
+      data-testid="task-timeline"
+    >
+      <template #header>
+        <span>工序时间 — {{ scheduleLabel(schedule) }}（{{ schedule.productionLineName || '产线未标明' }}）</span>
+      </template>
+      <el-table :data="schedule.taskTimeline || []" size="small" border>
+        <el-table-column label="工序" min-width="160">
+          <template #default="{ row }">{{ row.processOrder }}. {{ row.taskName }}</template>
+        </el-table-column>
+        <el-table-column label="开始" width="120">
+          <template #default="{ row }">{{ formatTimelineTime(row.start) }}</template>
+        </el-table-column>
+        <el-table-column label="结束" width="120">
+          <template #default="{ row }">{{ formatTimelineTime(row.end) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="160">
+          <template #default="{ row }">{{ timelineStatusText(row.status) }}</template>
         </el-table-column>
       </el-table>
     </el-card>
@@ -771,5 +856,16 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
     color: #909399;
     margin-left: 8px;
   }
+}
+
+.aps-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.timeline-card {
+  margin-top: 20px;
 }
 </style>

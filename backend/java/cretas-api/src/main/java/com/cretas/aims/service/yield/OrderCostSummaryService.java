@@ -58,6 +58,7 @@ public class OrderCostSummaryService {
                     .productName(product != null && product.getName() != null && !product.getName().isBlank()
                             ? product.getName() : cb.getProductName())
                     .skuCode(product == null ? null : product.getCode())
+                    .productTypeId(cb.getProductSku())
                     .boxCount(cb.getBoxCount())
                     .overallYieldRate(ys != null ? ys.getOverallYieldRate() : null)
                     .rawMaterialCost(cb.getRawMaterialCost())

@@ -6,16 +6,26 @@ import com.cretas.aims.dto.orchestration.MaterialShortfall;
 import com.cretas.aims.dto.scheduling.ChainImpactResult;
 import com.cretas.aims.dto.scheduling.ConfirmUrgentInsertRequest;
 import com.cretas.aims.dto.scheduling.GetInsertSlotsRequest;
+import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.ProductEquipmentRequirement;
+import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
+import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.InsertSlotRepository;
+import com.cretas.aims.repository.ProductEquipmentRequirementRepository;
+import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
+import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.ImpactAnalysisService;
 import com.cretas.aims.service.ImpactAnalysisService.RecommendScoreResult;
 import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.orchestration.BomExpansionService;
+import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
+import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +40,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -45,19 +56,60 @@ import static org.mockito.Mockito.when;
  * <p>原料核对走真实的 {@link ImpactAnalysisServiceImpl} (只把 BOM 服务换成桩),
  * 所以「写死 10000」这类回退会让这里变红。
  */
-class UrgentInsertResourceGuardTest {
+class UrgentInsertResourceGuardContractTest {
 
     private static final String F = "F-UI-1";
 
     private BomExpansionService bom;
     private ImpactAnalysisServiceImpl impact;
+    private ProductionLineCapacityConfigRepository capacityConfigs;
+    private ProductEquipmentRequirementRepository equipmentRequirements;
+    private ProductionLineRepository productionLines;
+    private EquipmentRepository equipment;
+    private LineCapacityEquipmentCheck lineChecks;
 
     @BeforeEach
     void setUp() {
         bom = mock(BomExpansionService.class);
+        // 有完整查看权的调用方 (#1217 工艺保密之后, 无权时只说哪些料不足、不报数量)
+        ProcessSecretRecipeGuard secrets = mock(ProcessSecretRecipeGuard.class);
+        when(secrets.permitsProduct(anyString(), anyString(), any(), anyString())).thenReturn(true);
         impact = UrgentInsertTestSupport.construct(ImpactAnalysisServiceImpl.class, Map.of(
                 BomExpansionService.class, bom,
+                ProcessSecretRecipeGuard.class, secrets,
                 PlatformTransactionManager.class, mock(PlatformTransactionManager.class)));
+        // 产能 / 设备走真实判定, 只把仓库换成桩; 默认什么都没配 ⇒ MISSING
+        capacityConfigs = mock(ProductionLineCapacityConfigRepository.class);
+        equipmentRequirements = mock(ProductEquipmentRequirementRepository.class);
+        productionLines = mock(ProductionLineRepository.class);
+        equipment = mock(EquipmentRepository.class);
+        lineChecks = new LineCapacityEquipmentCheck(capacityConfigs, equipmentRequirements, productionLines, equipment);
+    }
+
+    /** 一条在运行的线, 该产品每小时 {@code perHour} 件; 一台空闲设备。时段 2 小时。 */
+    private void configuredInPieces(String perHour) {
+        ProductionLine line = new ProductionLine();
+        line.setId("L1");
+        line.setFactoryId(F);
+        line.setName("包装线");
+        when(productionLines.findByFactoryIdAndDeletedAtIsNull(F)).thenReturn(List.of(line));
+        ProductionLineCapacityConfig c = new ProductionLineCapacityConfig();
+        c.setFactoryId(F);
+        c.setProductionLineId("L1");
+        c.setProductTypeId("PT-1");
+        c.setCapacityPerHour(new BigDecimal(perHour));
+        c.setCapacityUnit(ProductionLineCapacityConfig.CapacityUnit.PIECE);
+        when(capacityConfigs.findEffectiveForProduct(eq(F), eq("PT-1"), any())).thenReturn(List.of(c));
+        ProductEquipmentRequirement req = new ProductEquipmentRequirement();
+        req.setEquipmentId(7L);
+        when(equipmentRequirements.findByFactoryIdAndProductTypeId(F, "PT-1")).thenReturn(List.of(req));
+        FactoryEquipment device = new FactoryEquipment();
+        device.setId(7L);
+        device.setFactoryId(F);
+        device.setEquipmentName("封口机");
+        device.setEquipmentCode("EQ-7");
+        device.setStatus("idle");
+        when(equipment.findByIdIn(anyCollection())).thenReturn(List.of(device));
     }
 
     private static MaterialRequirement req() {
@@ -189,6 +241,7 @@ class UrgentInsertResourceGuardTest {
                 InsertSlotRepository.class, slots,
                 ImpactAnalysisService.class, svc,
                 ProductionPlanRepository.class, plans,
+                LineCapacityEquipmentCheck.class, lineChecks,
                 ObjectMapper.class, new ObjectMapper()));
     }
 
@@ -227,9 +280,7 @@ class UrgentInsertResourceGuardTest {
         assertThat((String) out.get("infeasibleReason")).contains("原料不足");
     }
 
-    @Test
-    void analyzeNeverSaysFeasibleWhileAnyResourceIsUnverified() {
-        // 原料 / 设备都「核对过且够」, 人员仍是配置估算 ⇒ 不得为 true
+    private ImpactAnalysisService impactWithEnoughMaterial() {
         ImpactAnalysisService svc = mock(ImpactAnalysisService.class);
         when(svc.calculateChainImpact(anyString(), any(), any(), any(), any()))
                 .thenReturn(ChainImpactResult.builder().impactLevel("none").build());
@@ -237,16 +288,75 @@ class UrgentInsertResourceGuardTest {
                 .thenReturn(new RecommendScoreResult());
         when(svc.checkMaterialAvailability(anyString(), any(), any()))
                 .thenReturn(ResourceCheckResult.available("MATERIAL", new BigDecimal("100"), new BigDecimal("50")));
-        when(svc.checkEquipmentAvailability(anyString(), any(), any(), any()))
-                .thenReturn(ResourceCheckResult.available("EQUIPMENT", BigDecimal.ONE, BigDecimal.ONE));
+        return svc;
+    }
+
+    private Map<String, Object> analyzeConfigured(String unit) {
         InsertSlotRepository slots = mock(InsertSlotRepository.class);
         when(slots.findByIdAndFactoryId("S-1", F)).thenReturn(Optional.of(slot()));
+        GetInsertSlotsRequest req = analyzeReq();
+        req.setQuantityUnit(unit);
+        return urgent(slots, impactWithEnoughMaterial(), mock(ProductionPlanRepository.class))
+                .analyzeInsertImpact(F, "S-1", req);
+    }
 
-        Map<String, Object> out = urgent(slots, svc, mock(ProductionPlanRepository.class))
-                .analyzeInsertImpact(F, "S-1", analyzeReq());
+    @Test
+    @SuppressWarnings("unchecked")
+    void analyzeNeverSaysFeasibleWhileAnyResourceIsUnverified() {
+        // 原料 / 产能 / 设备都「核对过且够」, 人员仍是配置估算 ⇒ 不得为 true
+        configuredInPieces("30");   // 2 小时 60 件 >= 50 件
 
+        Map<String, Object> out = analyzeConfigured("PIECE");
+
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        System.out.println("ANALYZE_CONFIGURED capacity=" + rs.get("capacityStatus") + " equipment=" + rs.get("equipmentStatus")
+                + " status=" + out.get("feasibilityStatus") + " unverified=" + out.get("unverifiedReasons"));
+        assertThat(rs.get("capacityStatus")).isEqualTo("READY");
+        assertThat(rs.get("equipmentStatus")).isEqualTo("READY");
         assertThat(out.get("isFeasible")).isEqualTo(false);
         assertThat(out.get("feasibilityStatus")).isEqualTo("UNVERIFIED");
+        assertThat((List<String>) out.get("unverifiedReasons")).containsExactly(UrgentInsertServiceImpl.WORKER_UNVERIFIED_REASON);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void analyzeWithoutConfigsSaysCapacityAndEquipmentAreMissingNotTheSlotsDefaultKg() {
+        // 时段上挂着按默认 kg 估的 200, 订单 50 —— 旧逻辑会算「产能够」; 现在没配置就是未验证
+        Map<String, Object> out = analyzeConfigured("KG");
+
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        assertThat(rs.get("capacityStatus")).isEqualTo("MISSING");
+        assertThat(rs.get("equipmentStatus")).isEqualTo("MISSING");
+        assertThat(out.get("feasibilityStatus")).isEqualTo("UNVERIFIED");
+        assertThat((List<String>) out.get("unverifiedReasons"))
+                .anyMatch(s -> s.startsWith("产能未验证"))
+                .anyMatch(s -> s.startsWith("设备未验证"));
+    }
+
+    @Test
+    void analyzeWithTooLittleConfiguredCapacityIsInfeasibleInTheConfiguredUnit() {
+        configuredInPieces("10");   // 2 小时 20 件 < 50 件
+
+        Map<String, Object> out = analyzeConfigured("PIECE");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        assertThat(rs.get("capacityStatus")).isEqualTo("CONFLICT");
+        assertThat(out.get("feasibilityStatus")).isEqualTo("INFEASIBLE");
+        assertThat(out.get("riskLevel")).isEqualTo("critical");
+        assertThat((String) out.get("infeasibleReason")).contains("产能不足: 需要 50 件").doesNotContain("kg");
+    }
+
+    @Test
+    void analyzeInAnotherUnitThanConfiguredIsMissingNotConverted() {
+        configuredInPieces("1000");
+
+        Map<String, Object> out = analyzeConfigured("KG");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        assertThat(rs.get("capacityStatus")).isEqualTo("MISSING");
+        assertThat((String) rs.get("capacityMessage")).contains("包装线 配的是 件/小时");
     }
 
     @Test

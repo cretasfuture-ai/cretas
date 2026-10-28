@@ -32,6 +32,8 @@ public class OrderCostBreakdownDTO {
     private String productionPlanNumber;
     private String finishedBatchNumber;
     private String productSku;
+    /** 成品产品类型 ID (与 productSku 同值): 工艺保密按它认归属, 保密产品的成本合计对无授权账号隐藏。 */
+    private String productTypeId;
     private String productName;
     private String pinnedBomRecipeId;
     private Integer pinnedBomVersion;

@@ -104,6 +104,14 @@ it('honors server price masking even when the response contains unexpected amoun
   const wrapper = await openPage(); expect(card(wrapper).text()).toContain('当前账号无权查看成本金额');
   expect(wrapper.text()).toContain('权限隐藏'); expect(wrapper.text()).not.toContain('987,654');
 });
+it('shows process secrecy instead of "pending verification" when a protected product hides its cost totals', async () => {
+  costResult = { ...complete(), totalCost: null, perBoxCost: null, rawMaterialCost: null, packagingCost: null,
+    processSecret: { visibility: 'TOTALS_ONLY', hiddenFields: ['totalCost', 'perBoxCost', 'rawMaterialCost', 'packagingCost'] } };
+  const wrapper = await openPage();
+  expect(card(wrapper).text()).toContain('该产品工艺已设为保密，成本合计已隐藏');
+  expect(card(wrapper).text()).not.toContain('成本口径待核对');
+  expect(wrapper.text()).toContain('已保密');
+});
 it.each([
   { finishedBatchNumber: 'OTHER-BATCH' }, { totalCost: '123.00' }, { hasData: 'true' },
 ])('rejects malformed or different-batch evidence %s', async change => {

@@ -33,6 +33,18 @@ public class LineSchedule {
     @Column(name = "batch_id")
     private Long batchId;
 
+    /** APS 自动排程: 这条排程对应的生产计划 (计划还没开工时没有批次)。手工排程为空。 */
+    @Column(name = "production_plan_id", length = 191)
+    private String productionPlanId;
+
+    /**
+     * APS 自动排程: 每道工序的排程时间线, 元素键 taskName / processOrder / workProcessId / start / end / status
+     * (start / end 为 ISO 本地时间字符串)。手工排程为空。
+     */
+    @org.hibernate.annotations.Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "task_timeline", columnDefinition = "jsonb")
+    private List<java.util.Map<String, Object>> taskTimeline;
+
     @Column(name = "sequence_order")
     private Integer sequenceOrder = 0;
 

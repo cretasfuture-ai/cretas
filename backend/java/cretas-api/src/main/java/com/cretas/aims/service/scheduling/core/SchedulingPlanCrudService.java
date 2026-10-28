@@ -18,6 +18,10 @@ public interface SchedulingPlanCrudService {
 
     SchedulingPlanDTO createPlan(String factoryId, CreateSchedulingPlanRequest request, Long userId);
 
+    /** 自动排程 (APS) 内部落库入口: 计划级排程, 批次可空, 生产计划必填; 同日已有计划 → 409。 */
+    SchedulingPlanDTO createAutoSchedulePlan(String factoryId, LocalDate planDate, String planName,
+                                             String notes, List<AutoScheduleItem> items, Long userId);
+
     SchedulingPlanDTO getPlan(String factoryId, String planId);
 
     Page<SchedulingPlanDTO> getPlans(String factoryId, LocalDate startDate, LocalDate endDate,

@@ -22,6 +22,7 @@ import type {
   UrgentInsertStatistics,
 } from '../../types/dispatcher';
 import { formatDate } from '../../utils/formatters';
+import type { CapacityUnitCode } from '../../utils/capacityUnit';
 
 /**
  * 调度管理API客户端
@@ -571,6 +572,8 @@ class SchedulingApiClient {
     const requestData = {
       planDate: data.planDate || data.startDate || formatDate(new Date()),
       shiftType: data.shiftType,
+      // 后端 GenerateScheduleRequest 读的是 planIds (APS v1, 2026-10-28); productionPlanIds 旧字段后端从未读过
+      planIds: data.planIds || data.productionPlanIds,
       productionPlanIds: data.productionPlanIds || data.planIds,
       batchIds: data.batchIds,
       optimizeFor: data.optimizeFor,
@@ -918,19 +921,21 @@ class SchedulingApiClient {
    *
    * @param slotId 时段ID
    * @param productTypeId 产品类型ID
-   * @param quantity 计划数量 (kg)
+   * @param quantity 计划数量 (按产品自带单位)
    * @param factoryId 工厂ID
+   * @param quantityUnit 数量单位 PIECE / KG / BATCH; 不传则后端如实判产能未验证
    * @returns 完整的链式影响分析结果
    */
   async analyzeSlotImpact(
     slotId: string,
     productTypeId: string,
     quantity: number,
-    factoryId?: string
+    factoryId?: string,
+    quantityUnit?: CapacityUnitCode | null
   ): Promise<ApiResponse<UrgentInsertImpactAnalysis>> {
     return await apiClient.get(
       `${this.getPath(factoryId)}/urgent-insert/slots/${slotId}/impact`,
-      { params: { productTypeId, quantity } }
+      { params: { productTypeId, quantity, ...(quantityUnit ? { quantityUnit } : {}) } }
     );
   }
 
