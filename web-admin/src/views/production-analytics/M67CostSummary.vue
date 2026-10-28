@@ -25,7 +25,7 @@
       <el-table-column prop="skuCode" label="SKU" min-width="130"><template #default="{ row }">{{ row.skuCode || '—' }}</template></el-table-column>
       <el-table-column label="SKU产出" width="120" align="right"><template #default="{ row }">{{ skuOutput(row) }}</template></el-table-column>
       <el-table-column label="整批出成率" width="110" align="right">
-        <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>
+        <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ isProcessSecretHidden(row, 'overallYieldRate') ? PROCESS_SECRET_LABEL : row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>
       </el-table-column>
       <el-table-column label="原料" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'rawMaterialCost', moneyOf) }}</template></el-table-column>
       <el-table-column label="人工" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'laborCost', moneyOf) }}</template></el-table-column>

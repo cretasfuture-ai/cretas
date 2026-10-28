@@ -195,7 +195,7 @@ public class ProcessSecretPayloadScrubber {
         if (!run.anyProtection(reads)) return false;
         run.resolveReads(reads);
         // 第一遍: 输出里出现了哪些产品归属
-        run.collectAttributions(tree, null);
+        run.restrictedInOutput = run.collectAttributions(tree, null);
         run.decideFallback();
         // 第二遍: 裁剪
         run.walk(tree, null);
@@ -399,8 +399,19 @@ public class ProcessSecretPayloadScrubber {
 
         /** 对象自身的归属 (没有则 null, 由上层继承)。 */
         Key ownKey(ObjectNode node, Key inherited) {
+            Key declared = declaredKey(node, inherited);
+            return declared != null ? declared : productIdKey(node, factoryOf(node, inherited));
+        }
+
+        String factoryOf(ObjectNode node, Key inherited) {
             String factory = text(node, "factoryId");
             if (factory == null) factory = inherited != null ? inherited.factoryId() : requestFactory;
+            return factory;
+        }
+
+        /** productTypeId / 配方给出的归属。 */
+        Key declaredKey(ObjectNode node, Key inherited) {
+            String factory = factoryOf(node, inherited);
             for (String field : PRODUCT_KEYS) {
                 String product = text(node, field);
                 if (product != null) return new Key(factory, product);
@@ -411,11 +422,19 @@ public class ProcessSecretPayloadScrubber {
                 Optional<Key> viaRecipe = recipeKey(factory, recipeId);
                 if (viaRecipe.isPresent()) return viaRecipe.get();
             }
-            // 销售行 / 报表行用 productId 指产品: 它在别处也指商城商品等, 所以只在命中本厂受保护产品时才认作归属
-            // (只会让归属更严, 不会把原本按受限处理的对象归到不受保护的产品上)
-            String productId = text(node, "productId");
-            if (productId != null && protectedIn(factory).contains(productId)) return new Key(factory, productId);
             return null;
+        }
+
+        /**
+         * 销售行 / 报表行用 productId 指产品: 它在别处也指商城商品等, 所以只在命中「对当前调用者受限」的
+         * 本厂受保护产品时才认作归属, 且不算进 {@link #attributed} —— 只会让对象更严, 不会让原本按受限处理的
+         * 对象因为归到一个有权的产品而放出, 也不会关掉「归属不可信」(独立审查 PR3 M2)。
+         */
+        Key productIdKey(ObjectNode node, String factory) {
+            String productId = text(node, "productId");
+            if (productId == null || !protectedIn(factory).contains(productId)) return null;
+            Key key = new Key(factory, productId);
+            return level(key) == Level.FULL ? null : key;
         }
 
         /** @return 这一层 (含下层) 里对当前调用者受限的受保护产品; 没有为 null */
@@ -423,7 +442,7 @@ public class ProcessSecretPayloadScrubber {
             if (node instanceof ObjectNode object) {
                 Key own = ownKey(object, inherited);
                 Key effective = own != null ? own : inherited;
-                if (own != null) attributed.add(own);
+                if (declaredKey(object, inherited) != null) attributed.add(own);
                 Key below = own != null && own.productTypeId() != null && isProtected(own) && level(own) != Level.FULL
                         ? own : null;
                 List<JsonNode> children = new ArrayList<>();
@@ -450,6 +469,8 @@ public class ProcessSecretPayloadScrubber {
          * 就是保密产品的成本 (Steve 2026-10-28 选 A)。按身份记, 不改 JSON。
          */
         final Map<ObjectNode, Key> restrictedBelow = new java.util.IdentityHashMap<>();
+        /** 输出里任意位置出现的受限保密产品 (同级的「合计」对象没有自己的归属时用它; 独立审查 PR3 M1)。 */
+        Key restrictedInOutput;
 
         void decideFallback() {
             if (restrictedReads.isEmpty()) return;
@@ -566,7 +587,7 @@ public class ProcessSecretPayloadScrubber {
                 // 成本合计 (Steve 2026-10-28 选 A): 调料 / 包材 / 原料小计、总成本、单位成本里含按配比算出的金额,
                 // 减去可见的人工行就是自动行金额, 再 ÷ 单价 ÷ 投入就是配比; 落库的批次 / 半成品 / 成品单位成本
                 // 也是这样滚出来的。受保护产品的这类字段对无授权账号一律隐藏, 不看本次输出有没有带出自动行
-                else if (value.isNumber() && isCostTotalField(name)) {
+                else if (value.isNumber() && (isCostTotalField(name) || isContextualCostField(object, name))) {
                     ratioFields.add(name);
                     costFields.add(name);
                 }
@@ -588,13 +609,14 @@ public class ProcessSecretPayloadScrubber {
                 auditKey = null;
             } else if (key != null && !distrustAttribution) {
                 if (!isProtected(key)) {
-                    hideCostsAboveRestricted(object, costFields);
+                    hideCostsAboveRestricted(object, key, costFields, quantityFields, otherNumbers);
                     return;
                 }
                 level = level(key);
                 auditKey = key;
                 if (level == Level.FULL) {
-                    if (!ratioFields.isEmpty() && !allowedWithContent.contains(key)) {
+                    // 只有成本合计时不写 ALLOW: 那不是工艺内容, 负责人每看一次成本就记一条会淹没审计 (PR3 L2)
+                    if (ratioFields.size() > costFields.size() && !allowedWithContent.contains(key)) {
                         if (accessService.viewFullAllowedInRequest(key.factoryId(), key.productTypeId())
                                 || accessService.audit(key.factoryId(), key.productTypeId(), actor,
                                 ProcessSecretAction.VIEW_FULL, "ALLOW", "完整工艺随业务数据输出", resourceRef)) {
@@ -606,13 +628,13 @@ public class ProcessSecretPayloadScrubber {
                         }
                     }
                     if (level == Level.FULL) {
-                        hideCostsAboveRestricted(object, costFields);
+                        hideCostsAboveRestricted(object, key, costFields, quantityFields, otherNumbers);
                         return;
                     }
                 }
             } else {
                 if (fallback == null) {
-                    hideCostsAboveRestricted(object, costFields);
+                    hideCostsAboveRestricted(object, key, costFields, quantityFields, otherNumbers);
                     return;
                 }
                 level = fallback;
@@ -628,11 +650,24 @@ public class ProcessSecretPayloadScrubber {
             hide(object, hidden, level, auditKey);
         }
 
-        /** 自身不受限、但下层有受限保密产品行的对象: 只隐藏它的成本合计, 审计记到下层那个产品上。 */
-        void hideCostsAboveRestricted(ObjectNode object, List<String> costFields) {
+        /**
+         * 自身不受限、但下层有受限保密产品行的对象 (或没有任何归属、而输出里别处有受限保密产品行的同级「合计」):
+         * 隐藏它的成本合计, 审计记到那个产品上。那个产品对调用者是无权档 (平台 / 他厂) 或这是汇总视图时,
+         * 上层的总量也一并隐藏 —— 上层总量减去可见的其他行就是被隐藏的那一行 (独立审查 PR3 M1 / M3)。
+         */
+        void hideCostsAboveRestricted(ObjectNode object, Key key, List<String> costFields,
+                                      List<String> quantityFields, List<String> otherNumbers) {
             Key below = restrictedBelow.get(object);
-            if (below == null || costFields.isEmpty()) return;
-            hide(object, costFields, level(below), below);
+            // 用 productId 指了别的 (不受保护 / 有权) 产品的行不是「合计」, 不连带
+            if (below == null && key == null && text(object, "productId") == null) below = restrictedInOutput;
+            if (below == null) return;
+            Level level = level(below);
+            List<String> hidden = new ArrayList<>(costFields);
+            if (level == Level.NONE || aggregateView) {
+                hidden.addAll(quantityFields);
+                hidden.addAll(otherNumbers);
+            }
+            hide(object, hidden, level, below);
         }
 
         void hide(ObjectNode object, List<String> hidden, Level level, Key auditKey) {
@@ -688,7 +723,19 @@ public class ProcessSecretPayloadScrubber {
      * 以及「实际成本 ÷ 计划成本」的达成率和差异 —— 计划侧可见时它们一样能反推自动行金额)。
      * 销售额、单价不算 (与配比无关); 计数 / 标识类数字不算。
      */
-    static final List<String> COST_TOTAL_PARTS = List.of("cost", "profit", "margin", "achievement", "variance");
+    static final List<String> COST_TOTAL_PARTS = List.of("cost", "profit", "margin", "achievement", "variance",
+            // BOM 成本明细的 subtotal = 用量 × 单价; 多段成本的 stageSubtotal / contributionPerBox (独立审查 PR3 H3)
+            "subtotal", "contribution");
+
+    /** 半成品 / 回料的单价就是滚上来的单位成本 (落库的 WIP unit_cost), 不是采购价 (独立审查 PR3 H2)。 */
+    static final Set<String> WIP_COST_MARKERS = Set.of("rowTotalCost", "inheritedCost", "addedCost");
+    static final Set<String> WIP_SOURCE_TYPES = Set.of("REWORK", "REWORK_AUTO");
+
+    static boolean isContextualCostField(ObjectNode object, String name) {
+        if (!"unitPrice".equals(name)) return false;
+        return WIP_COST_MARKERS.stream().anyMatch(object::has)
+                || WIP_SOURCE_TYPES.contains(object.path("sourceType").asText(""));
+    }
 
     static boolean isCostTotalField(String name) {
         if (isIdentifierLike(name)) return false;

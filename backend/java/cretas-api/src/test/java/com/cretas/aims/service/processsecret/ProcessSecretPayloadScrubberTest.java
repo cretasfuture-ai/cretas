@@ -534,9 +534,85 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void semiFinishedUnitPricesAreRolledUpCostsButPurchasePricesStay() throws Exception {
+        // 独立审查 PR3 H2: WIP 行的 unitPrice = 落库单位成本, × 产量 = rowTotalCost
+        String body = "{'productTypeId':'P17','wip':[{'batchNumber':'W1','produced':50,'unitPrice':16.2,'rowTotalCost':810}],"
+                + "'allocations':[{'sourceType':'REWORK','quantity':5,'unitPrice':16.2,'totalCost':81},"
+                + "{'sourceType':'RAW_MATERIAL','materialName':'牛肉','quantity':115,'unitPrice':7}]}";
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, Set.of(), "GET /production-plans/p1/process-sheet/inventory", false);
+        assertThat(operator.at("/wip/0/unitPrice").isNull()).isTrue();
+        assertThat(operator.at("/wip/0/produced").asInt()).isEqualTo(50);
+        assertThat(operator.at("/allocations/0/unitPrice").isNull()).as("回料单价是半成品单位成本").isTrue();
+        assertThat(operator.at("/allocations/1/unitPrice").asInt()).as("原料采购价照给").isEqualTo(7);
+    }
+
+    @Test
+    void aSiblingSummaryWithoutItsOwnProductIsHiddenWhenTheOutputHasARestrictedProtectedRow() throws Exception {
+        // 独立审查 PR3 M1: 合计和产品行同级 (不在上层), 合计 − 其他可见行 = 保密产品那一行
+        String body = "{'rows':[{'productId':'P17','totalCost':900},{'productId':'PLAIN','totalCost':800}],"
+                + "'summary':{'totalCost':1700,'orderCount':2}}";
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, Set.of(), "GET /finance/report/x", false);
+        assertThat(operator.at("/summary/totalCost").isNull()).isTrue();
+        assertThat(operator.at("/summary/orderCount").asInt()).isEqualTo(2);
+        assertThat(operator.at("/rows/1/totalCost").asInt()).isEqualTo(800);
+
+        // 阴性对照: 输出里没有保密产品行, 合计照给
+        ObjectNode plain = tree("{'rows':[{'productId':'PLAIN','totalCost':800}],'summary':{'totalCost':800}}");
+        scrubber.scrub(plain, user(5), F, Set.of(), "GET /finance/report/x", false);
+        assertThat(plain.at("/summary/totalCost").asInt()).isEqualTo(800);
+    }
+
+    @Test
+    void aProductIdNeverSwitchesOffDistrustOfAnOutputThatHidesWhatWasRead() throws Exception {
+        // 独立审查 PR3 M2: 读的是受限计划, 输出只用 productId 指它 —— 不能算「归属可信」把别的行放出来
+        securedPlan("plan-15");
+        String body = "{'lines':[{'productId':'P17','actualLineCost':900},"
+                + "{'productTypeId':'PLAIN','actualLineCost':800,'conversionRate':0.8}]}";
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-15"),
+                "GET /sales/orders/x/cost-breakdown", false);
+        assertThat(operator.at("/lines/1/conversionRate").isNull()).isTrue();
+        assertThat(operator.at("/lines/1/actualLineCost").isNull()).isTrue();
+
+        // 有权的人: productId 不当归属, 照常看
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-15"),
+                "GET /sales/orders/x/cost-breakdown", false);
+        assertThat(owner.at("/lines/0/actualLineCost").asInt()).isEqualTo(900);
+    }
+
+    @Test
+    void platformStaffAlsoLoseTheParentQuantityTotalAboveAProtectedRow() throws Exception {
+        // 独立审查 PR3 M3: 平台看不到保密行的数量, 上层总量 − 其他行 = 那一行
+        String body = "{'totalQuantity':300,'totalAmount':3000,'lines':[{'productId':'P17','quantity':100},"
+                + "{'productId':'PLAIN','quantity':200}]}";
+        ObjectNode platformView = tree(body);
+        scrubber.scrub(platformView, platform(), F, Set.of(), "GET /sales/orders/x", false);
+        assertThat(platformView.at("/lines/0/quantity").isNull()).isTrue();
+        assertThat(platformView.path("totalQuantity").isNull()).isTrue();
+
+        // 本厂账号: 本单总量照给
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, Set.of(), "GET /sales/orders/x", false);
+        assertThat(operator.path("totalQuantity").asInt()).isEqualTo(300);
+    }
+
+    @Test
+    void theOwnerSeeingOnlyCostTotalsDoesNotFloodTheAuditWithFullViewRecords() throws Exception {
+        // 独立审查 PR3 L2: 成本合计不是工艺内容, 不为它写 ALLOW
+        ObjectNode owner = tree("{'productTypeId':'P17','totalCost':900,'unitCost':9}");
+        scrubber.scrub(owner, user(OWNER), F, Set.of(), "GET /processing/batches/1", false);
+        assertThat(owner.path("totalCost").asInt()).isEqualTo(900);
+        verify(recorder, never()).record(any(), any(), any(), any(), eq("ALLOW"), any(), any());
+    }
+
+    @Test
     void costFieldNamesAreRecognisedButPricesRevenueAndCountsAreNot() {
         for (String name : List.of("totalCost", "unitCost", "costUnitPrice", "seasoningCost", "grossProfit",
-                "grossMarginPct", "marginRate", "overallAchievementRate", "varianceAbsolute", "rowTotalCost")) {
+                "grossMarginPct", "marginRate", "overallAchievementRate", "varianceAbsolute", "rowTotalCost",
+                "subtotal", "stageSubtotal", "contributionPerBox")) {
             assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isTrue();
         }
         for (String name : List.of("unitPrice", "totalAmount", "salePrice", "missingCostItemCount", "costVersion",
