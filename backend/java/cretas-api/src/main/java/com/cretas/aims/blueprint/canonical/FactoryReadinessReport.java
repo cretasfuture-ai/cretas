@@ -37,7 +37,24 @@ public record FactoryReadinessReport(
      */
     public record BusinessDomain(String domain, String label, String applicability,
             String applicabilityBasis, String state, List<Check> checks, List<String> notChecked,
-            FirstRecord firstRecord) { }
+            FirstRecord firstRecord, FirstAction firstAction) {
+        public BusinessDomain(String domain, String label, String applicability, String applicabilityBasis,
+                String state, List<Check> checks, List<String> notChecked, FirstRecord firstRecord) {
+            this(domain, label, applicability, applicabilityBasis, state, checks, notChecked, firstRecord, null);
+        }
+
+        public BusinessDomain withFirstAction(FirstAction action) {
+            return new BusinessDomain(domain, label, applicability, applicabilityBasis, state, checks,
+                    notChecked, firstRecord, action);
+        }
+    }
+
+    /**
+     * The first business action this domain can start now, only present when every check is MET.
+     * {@code path} is an existing business page; {@code query} carries ids that really exist in this
+     * factory (read from its own master data, never invented) so the page can open pre-filled.
+     */
+    public record FirstAction(String label, String path, java.util.Map<String, String> query, String detail) { }
 
     /** state: MET / MISSING / UNKNOWN. remedyKey names the existing page where the gap is filled. */
     public record Check(String code, String label, String state, String detail,

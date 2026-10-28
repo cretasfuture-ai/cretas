@@ -11,6 +11,7 @@ import { useProductionPlanCustomerReadAccess } from './productionPlanCustomerRea
 import type { ProductionPlanCustomerOption } from './productionPlanCustomerSelection';
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
+import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { Plus, Search, Refresh, VideoPause, CircleCheck, Download, ChatDotRound, Printer, Warning, ArrowDown } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
@@ -37,6 +38,7 @@ import {
   type InterimSettleReversalRequest,
   stopProduction,
   resolveWorkflowByOutputs,
+  findPinnedWorkflow,
   getProductionDocumentTrace,
 } from '@/api/productionPlan';
 import type {
@@ -597,11 +599,16 @@ async function ensureRowWorkflowPreview(row: TableRow): Promise<void> {
     const selectedWorkflowId = Number(row.selectedWorkflowId);
     const selectedWorkflowVersion = Number(row.selectedWorkflowVersion);
     const hasPinnedWorkflow = Number.isFinite(selectedWorkflowId) && Number.isFinite(selectedWorkflowVersion);
-    const candidate = hasPinnedWorkflow
+    let candidate = hasPinnedWorkflow
       ? resolvedCandidates.find((item) =>
           item.workflowId === selectedWorkflowId
           && item.definitionVersion === selectedWorkflowVersion)
       : resolvedCandidates[0];
+    if (!candidate && hasPinnedWorkflow) {
+      // 计划固定的版本已被新版本替换, 不在「当前启用」里: 直接读计划固定的那一版, 不拿启用版本顶替。
+      const pinned = await findPinnedWorkflow(factoryId.value, selectedWorkflowId, selectedWorkflowVersion);
+      candidate = pinned.success && pinned.data ? pinned.data : undefined;
+    }
     rowWorkflowPreviews.value[key] = candidate
       ? { loading: false, candidate }
       : {
@@ -1576,7 +1583,25 @@ function goAddOrderItems(soId: string) {
   });
 }
 
+// 建厂就绪页「新建第一张生产计划」: 打开新建计划并带入已生效工艺的成品。
+async function maybeOpenFromReadiness(): Promise<boolean> {
+  const prefill = readReadinessPrefill(route.query, ['productTypeId']);
+  if (!prefill) return false;
+  handleCreate();
+  await loadProductTypes();
+  if (!pickPrefilled(productTypes.value, prefill.productTypeId)) {
+    ElMessage.warning('就绪页指定的成品已不在可选范围，请手动选择');
+  } else {
+    planForm.value.productTypeId = String(prefill.productTypeId);
+    handleProductChange(String(prefill.productTypeId));
+  }
+  const { fromReadiness: _a, productTypeId: _b, ...rest } = route.query as Record<string, unknown>;
+  await router.replace({ query: rest as any });
+  return true;
+}
+
 async function maybeReopenFromQuery() {
+  if (await maybeOpenFromReadiness()) return;
   const q = route.query;
   const soId = (q.reopenPlan === '1' && typeof q.planSO === 'string' && q.planSO)
     || (q.action === 'create' && typeof q.salesOrderId === 'string' && q.salesOrderId)

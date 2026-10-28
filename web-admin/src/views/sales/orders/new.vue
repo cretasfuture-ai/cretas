@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -410,9 +411,26 @@ async function loadOrderQuote(): Promise<void> {
   }
 }
 
+// 建厂就绪页「新建第一张销售订单」: 带入客户和成品; 找不到就明说, 不静默打开空表单。
+async function applyReadinessPrefill(): Promise<void> {
+  const prefill = readReadinessPrefill(route.query, ['customerId', 'productId']);
+  if (!prefill) return;
+  const missing: string[] = [];
+  const customer = pickPrefilled(customers.value, prefill.customerId);
+  if (customer) {
+    form.value.customerId = String(customer.id);
+    await onCustomerChange();
+  } else if (prefill.customerId) missing.push('客户');
+  const product = pickPrefilled(products.value, prefill.productId);
+  if (product) await addProduct(product);
+  else if (prefill.productId) missing.push('成品');
+  if (missing.length) ElMessage.warning(`就绪页指定的${missing.join('、')}已不在可选范围，请手动选择`);
+}
+
 onMounted(async () => {
   await Promise.all([loadCustomers(), loadProducts()]);
   await loadOrderQuote();
+  await applyReadinessPrefill();
   void loadWarehouses();
   void loadInventorySummary();
 });

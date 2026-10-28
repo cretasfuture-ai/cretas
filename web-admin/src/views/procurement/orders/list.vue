@@ -8,6 +8,7 @@ import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import request, { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
@@ -693,8 +694,26 @@ onMounted(() => {
   loadSalesOrders();
   const editId = String(route.query.edit || '');
   if (editId) launchEditDialog(editId);
+  else void applyReadinessPrefill();
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
+
+// 建厂就绪页「新建第一张采购单」: 打开新建对话框并带入供应商; 供应商已不可选就明说。
+async function applyReadinessPrefill(): Promise<void> {
+  const prefill = readReadinessPrefill(route.query, ['supplierId', 'materialTypeId']);
+  if (!prefill) return;
+  openCreateDialog();
+  await refreshDropdownSources();
+  const supplier = pickPrefilled(suppliers.value, prefill.supplierId);
+  if (!supplier) {
+    ElMessage.warning('就绪页指定的供应商已不在可选范围，请手动选择');
+    return;
+  }
+  form.value.supplierId = String(supplier.id);
+  await onSupplierChange();
+  const { fromReadiness: _a, supplierId: _b, materialTypeId: _c, ...rest } = route.query as Record<string, unknown>;
+  await router.replace({ path: route.path, query: rest as Record<string, string> });
+}
 
 // 这个入口坏过两次, 两次的症状都是「地址栏变了但什么也没发生」: 先是 watch 缺失, 后是
 // openEditDialog 内部抛异常而 `void` 把 rejection 丢掉. 任何未处理的异常都会复现同一症状,
