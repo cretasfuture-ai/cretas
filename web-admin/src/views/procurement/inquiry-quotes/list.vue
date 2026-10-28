@@ -8,7 +8,8 @@
  * UX 防呆: 状态用 el-tag 颜色区分, CONVERTED 行点击进 PO 详情.
  */
 import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { parseDraftInquiryPrefill } from './draftInquiryPrefill';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
 import { Refresh, Plus } from '@element-plus/icons-vue';
@@ -21,6 +22,7 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 
@@ -40,8 +42,12 @@ const createForm = ref({
   inquiryDate: toDateString(new Date()),
   requiredDate: '',
   remark: '',
+  /** 从采购草稿发起时有值: 选定报价回填这张草稿 */
+  sourcePurchaseOrderId: '',
+  sourceOrderNumber: '',
 });
 const createSubmitting = ref(false);
+const linkedToDraft = computed(() => Boolean(createForm.value.sourcePurchaseOrderId));
 
 const STATUS_TAG: Record<InquiryQuoteStatus, { type: 'info' | 'warning' | 'primary' | 'success' | 'danger'; label: string }> = {
   DRAFT: { type: 'info', label: '草稿' },
@@ -95,8 +101,28 @@ function openCreate() {
     inquiryDate: toDateString(new Date()),
     requiredDate: '',
     remark: '',
+    sourcePurchaseOrderId: '',
+    sourceOrderNumber: '',
   };
   createDialogVisible.value = true;
+}
+
+/** 从采购草稿物料行跳过来: 预填并直接打开新建框 */
+function openCreateFromDraftQuery() {
+  const prefill = parseDraftInquiryPrefill(route.query);
+  if (!prefill) return;
+  openCreate();
+  createForm.value = {
+    ...createForm.value,
+    materialTypeId: prefill.materialTypeId,
+    materialName: prefill.materialName,
+    specification: prefill.specification,
+    quantity: prefill.quantity,
+    unit: prefill.unit,
+    sourcePurchaseOrderId: prefill.sourcePurchaseOrderId,
+    sourceOrderNumber: prefill.sourceOrderNumber,
+    title: prefill.sourceOrderNumber ? `采购草稿 ${prefill.sourceOrderNumber} 比价` : '',
+  };
 }
 
 async function submitCreate() {
@@ -129,10 +155,15 @@ async function submitCreate() {
       inquiryDate: createForm.value.inquiryDate,
       requiredDate: createForm.value.requiredDate || undefined,
       remark: createForm.value.remark || undefined,
+      sourcePurchaseOrderId: createForm.value.sourcePurchaseOrderId || undefined,
     });
     if (res.success && res.data) {
       ElMessage.success(res.message || `核价单 ${res.data.inquiryNumber} 创建成功`);
       createDialogVisible.value = false;
+      if (res.data.sourcePurchaseOrderId) {
+        router.push({ name: 'InquiryQuoteDetail', params: { id: res.data.id } });
+        return;
+      }
       load();
     }
   } finally {
@@ -145,7 +176,10 @@ function formatPrice(v: number | null | undefined): string {
   return `¥${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-onMounted(load);
+onMounted(() => {
+  load();
+  openCreateFromDraftQuery();
+});
 </script>
 
 <template>
@@ -223,12 +257,25 @@ onMounted(load);
 
     <!-- 新建核价单 dialog -->
     <el-dialog v-model="createDialogVisible" title="新建核价单" width="560px" :close-on-click-modal="false">
+      <el-alert
+        v-if="linkedToDraft"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+        :title="`来自采购草稿 ${createForm.sourceOrderNumber || ''}：选定报价会回填这张草稿的本物料行，不另建采购单`"
+      />
       <el-form :model="createForm" label-width="100px">
         <el-form-item label="标题">
           <el-input v-model="createForm.title" placeholder="选填, 如 Q2 辣椒采购询价" maxlength="200" />
         </el-form-item>
         <el-form-item label="物料类型 ID" required>
-          <el-input v-model="createForm.materialTypeId" placeholder="raw_material_types.id" maxlength="191" />
+          <el-input
+            v-model="createForm.materialTypeId"
+            placeholder="raw_material_types.id"
+            maxlength="191"
+            :disabled="linkedToDraft"
+          />
         </el-form-item>
         <el-form-item label="物料名称">
           <el-input v-model="createForm.materialName" placeholder="如 辣椒" maxlength="200" />
@@ -238,7 +285,12 @@ onMounted(load);
         </el-form-item>
         <el-form-item label="数量 / 单位" required>
           <el-input-number v-model="createForm.quantity" :min="0" :precision="4" />
-          <el-input v-model="createForm.unit" placeholder="单位(必填)" style="width: 100px; margin-left: 8px" />
+          <el-input
+            v-model="createForm.unit"
+            placeholder="单位(必填)"
+            style="width: 100px; margin-left: 8px"
+            :disabled="linkedToDraft"
+          />
         </el-form-item>
         <el-form-item label="询价日期" required>
           <el-date-picker v-model="createForm.inquiryDate" type="date" value-format="YYYY-MM-DD" />

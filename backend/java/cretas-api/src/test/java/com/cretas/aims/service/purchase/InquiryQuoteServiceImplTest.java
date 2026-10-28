@@ -10,7 +10,13 @@ import com.cretas.aims.entity.purchase.InquiryQuote;
 import com.cretas.aims.entity.purchase.InquiryQuoteSupplierPrice;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.entity.SupplierMaterial;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
+import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteSupplierPriceRepository;
@@ -55,6 +61,12 @@ class InquiryQuoteServiceImplTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private PurchaseOrderRepository purchaseOrderRepository;
     @Mock private PurchaseService purchaseService;
+    @Mock private RawMaterialTypeRepository materialTypeRepository;
+    @Mock private SupplierMaterialRepository supplierMaterialRepository;
+    @Mock private SupplierMaterialPurchaseSpecRepository purchaseSpecRepository;
+    @Mock private BomRecipeItemRepository bomRecipeItemRepository;
+    @Mock private BomRecipeRepository bomRecipeRepository;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     private InquiryQuoteServiceImpl service;
 
@@ -66,12 +78,20 @@ class InquiryQuoteServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(unitContractService.areEquivalent(any(), any(), any())).thenAnswer(i ->
+                i.getArgument(1) != null && ((String) i.getArgument(1)).equalsIgnoreCase(i.getArgument(2)));
         service = new InquiryQuoteServiceImpl(
                 inquiryQuoteRepository,
                 supplierPriceRepository,
                 supplierRepository,
                 purchaseOrderRepository,
-                purchaseService);
+                purchaseService,
+                materialTypeRepository,
+                supplierMaterialRepository,
+                purchaseSpecRepository,
+                bomRecipeItemRepository,
+                bomRecipeRepository,
+                unitContractService);
     }
 
     // ==================== create ====================
@@ -230,6 +250,17 @@ class InquiryQuoteServiceImplTest {
                 .thenReturn(Optional.of(price));
         when(supplierRepository.findByIdAndFactoryId(SUPPLIER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(newSupplier()));
+        when(supplierPriceRepository.findByInquiryQuoteIdOrderByUnitPriceAsc(INQUIRY_ID))
+                .thenReturn(List.of(price));
+        SupplierMaterial relation = new SupplierMaterial();
+        relation.setId("REL-A");
+        relation.setFactoryId(FACTORY_ID);
+        relation.setSupplierId(SUPPLIER_ID);
+        relation.setMaterialTypeId(MATERIAL_TYPE_ID);
+        relation.setPurchaseUnit("kg");
+        relation.setActive(true);
+        when(supplierMaterialRepository.findByFactoryIdAndSupplierIdAndMaterialTypeId(
+                FACTORY_ID, SUPPLIER_ID, MATERIAL_TYPE_ID)).thenReturn(Optional.of(relation));
         when(purchaseService.createPurchaseOrder(eq(FACTORY_ID), any(), eq(USER_ID)))
                 .thenReturn(createdPo);
         when(purchaseOrderRepository.save(any(PurchaseOrder.class)))
@@ -377,6 +408,7 @@ class InquiryQuoteServiceImplTest {
         s.setId(SUPPLIER_ID);
         s.setFactoryId(FACTORY_ID);
         s.setName("供应商 A");
+        s.setIsActive(true);
         return s;
     }
 
@@ -386,7 +418,9 @@ class InquiryQuoteServiceImplTest {
         p.setInquiryQuoteId(INQUIRY_ID);
         p.setSupplierId(supplierId);
         p.setUnitPrice(unitPrice);
-        p.setTaxRate(BigDecimal.ZERO);
+        p.setTaxRate(new BigDecimal("13"));
+        p.setCurrency("CNY");
+        p.setQuotedUnit("kg");
         return p;
     }
 

@@ -47,4 +47,11 @@ public class CreateInquiryQuoteRequest {
 
     @Size(max = 5000)
     private String remark;
+
+    /**
+     * 发起比价的采购草稿 ID (可选)。有值时选定报价回填这张草稿, 不另建采购单;
+     * 草稿必须是本厂 DRAFT 状态且恰好有一行是本物料。
+     */
+    @Size(max = 191)
+    private String sourcePurchaseOrderId;
 }

@@ -130,6 +130,13 @@ public class InquiryQuote extends BaseEntity {
     @Column(name = "purchase_order_id", length = 191)
     private String purchaseOrderId;
 
+    /**
+     * 发起比价的采购草稿 (可选)。有值时, 选定报价回填这张草稿的对应物料行,
+     * ⛔ 不另建采购单。
+     */
+    @Column(name = "source_purchase_order_id", length = 191)
+    private String sourcePurchaseOrderId;
+
     /** 转换后的采购单号 (冗余, 防呆 R2 context) */
     @Column(name = "purchase_order_number", length = 50)
     private String purchaseOrderNumber;
