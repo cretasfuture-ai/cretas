@@ -86,6 +86,35 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired(required = false)
     private InventoryAnalysisWorkflow inventoryAnalysisWorkflow;
 
+    // S6-02 — a tool with an approved runtime policy runs through the tool gateway, exactly as an
+    // interactive call of that tool does: the gateway re-reads the user, factory and permissions
+    // from the database, checks that the policy admits SKILL_WORKFLOW, enforces confirmation and
+    // writes the audit event. Field-injected so focused tests that construct this class directly
+    // keep their legacy tools; a governed tool with no gateway present is refused, never run directly.
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry toolRuntimeRegistry;
+
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.gateway.ToolExecutionGateway toolExecutionGateway;
+
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory toolPrincipalFactory;
+
+    /** Validates caller parameters of a Skill that declares a parameter contract; absent → such Skills are refused. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.skill.contract.SkillParameterContractValidator contractValidator;
+
+    /** Run receipts; absent (focused tests) → runs are not recorded and carry no runId. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.skill.contract.SkillRunStore runStore;
+
+    /** Steps of the run in progress, per context (parallel tools add from worker threads). */
+    private final Map<SkillContext, List<com.cretas.aims.service.skill.contract.SkillRunStore.Step>> runSteps =
+            Collections.synchronizedMap(new IdentityHashMap<>());
+
+    /** Source prefix of a definition built from a factory's saved Skill; the rest is the saved Skill id. */
+    public static final String SAVED_SKILL_SOURCE_PREFIX = "FACTORY_SAVED:";
+
     // ==================== Configuration ====================
 
     @Value("${ai.skill_executor.parallel_execution_enabled:true}")
@@ -132,6 +161,18 @@ public class SkillExecutorImpl implements SkillExecutor {
 
     @Override
     public SkillResult execute(SkillDefinition skill, SkillContext context, long timeoutMs) {
+        if (context == null) {
+            return executeUnrecorded(skill, null, timeoutMs);
+        }
+        runSteps.put(context, Collections.synchronizedList(new ArrayList<>()));
+        try {
+            return finishRun(skill, context, executeUnrecorded(skill, context, timeoutMs));
+        } finally {
+            runSteps.remove(context);
+        }
+    }
+
+    private SkillResult executeUnrecorded(SkillDefinition skill, SkillContext context, long timeoutMs) {
         long startTime = System.currentTimeMillis();
         List<String> executedTools = new ArrayList<>();
 
@@ -160,6 +201,13 @@ public class SkillExecutorImpl implements SkillExecutor {
                 log.warn("Skill is disabled: {}", skill.getName());
                 return SkillResult.error(skill.getName(), "Skill is disabled",
                         executedTools, System.currentTimeMillis() - startTime);
+            }
+
+            // 2b. Contract mode (S6-02): a Skill that declares a parameter contract runs only the
+            // validated caller parameters, deterministically and only through the tool gateway.
+            if (skill.getConfig() != null
+                    && skill.getConfig().containsKey(com.cretas.aims.service.skill.contract.SkillParameterContract.CONFIG_KEY)) {
+                return executeContracted(skill, context, executedTools, startTime);
             }
 
             // 3. DAG mode: execute conditional branching graph
@@ -879,6 +927,11 @@ public class SkillExecutorImpl implements SkillExecutor {
             throw new IllegalStateException("Tool disabled for factory: " + toolName);
         }
 
+        // S6-02: a governed tool never runs on the legacy path below, whatever the gateway answers.
+        if (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName)) {
+            return executeThroughGateway(toolName, executorOpt.get(), params, context);
+        }
+
         // W0 write-guard (intent-w0) — SITE D: Skill orchestration calls executor.execute() directly,
         // bypassing ToolDispatchService (Site B). Block a write tool unless a confirmed=true signal is
         // present (checked across the immediate tool params AND the SkillContext extractedParams).
@@ -944,17 +997,275 @@ public class SkillExecutorImpl implements SkillExecutor {
         execContext.put("sessionId", context.getSessionId());
 
         long startTime = System.currentTimeMillis();
-        String result = executor.execute(toolCall, execContext);
+        String result;
+        try {
+            result = executor.execute(toolCall, execContext);
+        } catch (Exception e) {
+            recordStep(context, toolName, executor, trustedParams, "FAILED", null);
+            throw e;
+        }
         long duration = System.currentTimeMillis() - startTime;
 
         log.info("Tool {} executed in {}ms", toolName, duration);
 
         // Try to parse as JSON
+        Object parsed;
         try {
-            return objectMapper.readTree(result);
+            parsed = objectMapper.readTree(result);
         } catch (Exception e) {
+            parsed = result;
+        }
+        boolean succeeded = parsed instanceof JsonNode node && node.path("success").asBoolean(false);
+        recordStep(context, toolName, executor, trustedParams, succeeded ? "SUCCEEDED" : "FAILED", null);
+        return parsed;
+    }
+
+    /**
+     * Runs one governed tool through the tool gateway as the Skill's authenticated user. Identity,
+     * confirmation and chain-context keys never reach the gateway parameters: the gateway binds
+     * the tenant and user from its own principal re-read. Anything but SUCCEEDED stops this step
+     * with the gateway's status and audit id; OUTCOME_UNKNOWN is reported as unknown, never success.
+     */
+    private Object executeThroughGateway(String toolName, ToolExecutor executor, Map<String, Object> params,
+                                         SkillContext context) {
+        String factoryId = context != null ? context.getFactoryId() : null;
+        Long userId = context != null ? parseUserId(context.getUserId()) : null;
+        String userRole = context != null ? context.getUserRole() : null;
+        if (toolExecutionGateway == null || toolPrincipalFactory == null) {
+            throw new IllegalStateException("工具网关暂不可用，未执行「" + toolName + "」。");
+        }
+        Map<String, Object> gatewayParams = gatewayParameters(params);
+        com.cretas.aims.ai.tool.gateway.ExecutionPrincipal principal;
+        try {
+            principal = toolPrincipalFactory.create(factoryId, userId, userRole);
+        } catch (SecurityException noIdentity) {
+            recordStep(context, toolName, executor, gatewayParams, "DENIED", null);
+            throw new IllegalStateException("没有可确认的执行人，未执行「" + toolName + "」。");
+        }
+        String correlation = context != null && context.getSessionId() != null && !context.getSessionId().isBlank()
+                ? context.getSessionId() : "skill-" + UUID.randomUUID();
+        com.cretas.aims.ai.tool.gateway.ToolExecutionCommand command =
+                new com.cretas.aims.ai.tool.gateway.ToolExecutionCommand(
+                        "skill-" + UUID.randomUUID(),
+                        correlation,
+                        "skill-" + UUID.randomUUID(),
+                        toolName,
+                        executor.getVersion(),
+                        objectMapper.valueToTree(gatewayParams),
+                        principal,
+                        com.cretas.aims.ai.tool.gateway.ToolExecutionSource.SKILL_WORKFLOW,
+                        com.cretas.aims.ai.tool.gateway.ToolExecutionMode.EXECUTE,
+                        Optional.empty(),
+                        Optional.empty(),
+                        Optional.empty(),
+                        java.time.Instant.now().plusSeconds(Math.max(1, toolTimeoutSeconds)));
+        com.cretas.aims.ai.tool.gateway.ToolExecutionResult result = toolExecutionGateway.execute(command);
+        recordStep(context, toolName, executor, gatewayParams, result.status().name(), result.auditEventId());
+        switch (result.status()) {
+            case SUCCEEDED, IDEMPOTENT_REPLAY -> {
+                return result.payload();
+            }
+            case OUTCOME_UNKNOWN, TIMEOUT -> throw new IllegalStateException("「" + toolName + "」执行结果未知（审计 "
+                    + result.auditEventId() + "），不会自动重试，请核对后再处理。");
+            case CONFIRMATION_REQUIRED, APPROVAL_REQUIRED -> throw new IllegalStateException("「" + toolName
+                    + "」需要先确认才能执行，Skill 不会代为确认（审计 " + result.auditEventId() + "）。");
+            case DENIED -> throw new IllegalStateException("「" + toolName + "」被工具网关拒绝：" + result.message()
+                    + "（审计 " + result.auditEventId() + "）");
+            default -> throw new IllegalStateException("「" + toolName + "」执行失败：" + result.status()
+                    + "（审计 " + result.auditEventId() + "）");
+        }
+    }
+
+    /** Caller/LLM parameters minus identity, confirmation, session and chain-context keys. */
+    static Map<String, Object> gatewayParameters(Map<String, Object> params) {
+        Map<String, Object> clean = new LinkedHashMap<>();
+        if (params == null) {
+            return clean;
+        }
+        Map<String, Object> withoutMarker =
+                com.cretas.aims.ai.tool.WriteGuardService.withoutServerConfirmationMarker(params);
+        for (Map.Entry<String, Object> entry : withoutMarker.entrySet()) {
+            String key = entry.getKey();
+            if (key == null || key.startsWith("_") || key.startsWith("previous_")
+                    || com.cretas.aims.service.skill.contract.SkillParameterContractValidator.isReservedKey(key)
+                    || entry.getValue() == null) {
+                continue;
+            }
+            clean.put(key, entry.getValue());
+        }
+        return clean;
+    }
+
+    private void recordStep(SkillContext context, String toolName, ToolExecutor executor, Map<String, Object> params,
+                            String status, String auditEventId) {
+        if (context == null) {
+            return;
+        }
+        List<com.cretas.aims.service.skill.contract.SkillRunStore.Step> steps = runSteps.get(context);
+        if (steps == null) {
+            return;
+        }
+        Map<String, Object> recorded = gatewayParameters(params);
+        recorded.remove("userQuery");
+        JsonNode node;
+        try {
+            node = objectMapper.valueToTree(recorded);
+        } catch (IllegalArgumentException notSerializable) {
+            node = objectMapper.createObjectNode().put("_unrecordable", true);
+        }
+        steps.add(new com.cretas.aims.service.skill.contract.SkillRunStore.Step(
+                toolName, executor.getVersion(), node, status, auditEventId));
+    }
+
+    /**
+     * Closes a run: a gateway step that did not succeed makes the Skill unsuccessful (it is never
+     * reported as success), and the run's receipt is recorded when there is an authenticated user.
+     */
+    private SkillResult finishRun(SkillDefinition skill, SkillContext context, SkillResult result) {
+        List<com.cretas.aims.service.skill.contract.SkillRunStore.Step> steps;
+        List<com.cretas.aims.service.skill.contract.SkillRunStore.Step> live = runSteps.get(context);
+        if (live == null || result == null) {
             return result;
         }
+        synchronized (live) {
+            steps = List.copyOf(live);
+        }
+        if (steps.isEmpty()) {
+            return result;
+        }
+        String status = runStatus(steps);
+        List<String> refused = steps.stream()
+                .filter(step -> step.auditEventId() != null && !"SUCCEEDED".equals(step.gatewayStatus()))
+                .map(step -> step.tool() + "=" + step.gatewayStatus())
+                .collect(Collectors.toList());
+        if (!refused.isEmpty() && result.isSuccess()) {
+            result.setSuccess(false);
+            result.setMessage("Skill 未完成，工具网关没有放行：" + String.join("，", refused));
+        }
+        if (!result.isSuccess() && "SUCCEEDED".equals(status)) {
+            status = "FAILED";
+        }
+        Long userId = parseUserId(context.getUserId());
+        if (runStore != null && userId != null && context.getFactoryId() != null) {
+            String savedSkillId = skill.getSource() != null && skill.getSource().startsWith(SAVED_SKILL_SOURCE_PREFIX)
+                    ? skill.getSource().substring(SAVED_SKILL_SOURCE_PREFIX.length()) : null;
+            try {
+                result.setRunId(runStore.recordRun(context.getFactoryId(), userId, skill.getName(), savedSkillId,
+                        status, steps));
+            } catch (RuntimeException receiptFailure) {
+                // The tools already ran; without a receipt this run just cannot be saved or traced here.
+                log.error("Skill run receipt not recorded: skill={}, status={}", skill.getName(), status, receiptFailure);
+            }
+        }
+        return result;
+    }
+
+    static String runStatus(List<com.cretas.aims.service.skill.contract.SkillRunStore.Step> steps) {
+        boolean unknown = false;
+        boolean denied = false;
+        boolean failed = false;
+        for (com.cretas.aims.service.skill.contract.SkillRunStore.Step step : steps) {
+            switch (step.gatewayStatus()) {
+                case "SUCCEEDED", "IDEMPOTENT_REPLAY" -> { }
+                case "OUTCOME_UNKNOWN", "TIMEOUT" -> unknown = true;
+                case "DENIED", "CONFIRMATION_REQUIRED", "APPROVAL_REQUIRED", "PREVIEW_UNSUPPORTED" -> denied = true;
+                default -> failed = true;
+            }
+        }
+        return unknown ? "OUTCOME_UNKNOWN" : denied ? "DENIED" : failed ? "FAILED" : "SUCCEEDED";
+    }
+
+    /**
+     * S6-02 contract mode: the caller's parameters are checked against the Skill's contract on the
+     * server before any tool runs; the run then executes only the declared steps, in order, with
+     * the validated values, and only through the tool gateway. The LLM is never consulted, so a
+     * reused Skill cannot pick another tool or invent a parameter.
+     */
+    @SuppressWarnings("unchecked")
+    private SkillResult executeContracted(SkillDefinition skill, SkillContext context,
+                                          List<String> executedTools, long startTime) {
+        com.cretas.aims.service.skill.contract.SkillParameterContract contract;
+        try {
+            contract = com.cretas.aims.service.skill.contract.SkillParameterContract
+                    .fromConfig(skill.getConfig(), objectMapper).orElseThrow();
+        } catch (IllegalArgumentException malformed) {
+            return SkillResult.error(skill.getName(), "Skill 的参数契约无效：" + malformed.getMessage(),
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        if (contractValidator == null || toolRuntimeRegistry == null || toolExecutionGateway == null) {
+            return SkillResult.error(skill.getName(), "参数契约校验或工具网关暂不可用，未执行",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        List<Map<String, Object>> steps = new ArrayList<>();
+        Object configured = skill.getConfig().get("steps");
+        if (configured instanceof List<?> list) {
+            for (Object item : list) {
+                if (!(item instanceof Map<?, ?> step) || !(step.get("tool") instanceof String)) {
+                    return SkillResult.error(skill.getName(), "Skill 的步骤定义无效", executedTools,
+                            System.currentTimeMillis() - startTime);
+                }
+                steps.add((Map<String, Object>) step);
+            }
+        } else if (skill.getTools() != null) {
+            skill.getTools().forEach(tool -> steps.add(Map.of("tool", tool)));
+        }
+        if (steps.isEmpty()) {
+            return SkillResult.error(skill.getName(), "Skill 没有可执行的步骤", executedTools,
+                    System.currentTimeMillis() - startTime);
+        }
+        for (Map<String, Object> step : steps) {
+            String tool = (String) step.get("tool");
+            if (!toolRuntimeRegistry.isGoverned(tool)) {
+                return SkillResult.error(skill.getName(), "「" + tool + "」还没有纳入工具网关治理，不能作为可复用 Skill 执行",
+                        executedTools, System.currentTimeMillis() - startTime);
+            }
+        }
+        com.cretas.aims.service.skill.contract.SkillParameterContractValidator.Validation validation =
+                contractValidator.validate(contract, context.getFactoryId(), context.getExtractedParams());
+        if (!validation.ok()) {
+            return SkillResult.error(skill.getName(), "参数不符合契约，未执行：" + String.join("；", validation.errors()),
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        Map<String, Object> results = new LinkedHashMap<>();
+        for (Map<String, Object> step : steps) {
+            String tool = (String) step.get("tool");
+            Map<String, Object> stepParams = new LinkedHashMap<>();
+            Object defaults = step.get("params");
+            if (defaults instanceof Map<?, ?> map) {
+                map.forEach((key, value) -> stepParams.put(String.valueOf(key), value));
+            }
+            for (Map.Entry<String, Object> accepted : validation.accepted().entrySet()) {
+                // A contract value replaces the captured value of that name; a step that never had
+                // the parameter keeps its captured parameters (a step without captured ones takes all).
+                if (stepParams.containsKey(accepted.getKey()) || !(defaults instanceof Map<?, ?> m) || m.isEmpty()) {
+                    stepParams.put(accepted.getKey(), accepted.getValue());
+                }
+            }
+            try {
+                Object result = executeSingleTool(tool, stepParams, context);
+                results.put(tool, result);
+                executedTools.add(tool);
+            } catch (Exception stepFailure) {
+                executedTools.add(tool + " (failed)");
+                return SkillResult.builder()
+                        .success(false)
+                        .skillName(skill.getName())
+                        .message(stepFailure.getMessage())
+                        .partialResults(results)
+                        .executedTools(executedTools)
+                        .executionTime(System.currentTimeMillis() - startTime)
+                        .build();
+            }
+        }
+        results.put("_executionOrder", "contract");
+        results.put("_toolCount", executedTools.size());
+        return SkillResult.builder()
+                .success(true)
+                .skillName(skill.getName())
+                .data(results)
+                .executedTools(executedTools)
+                .executionTime(System.currentTimeMillis() - startTime)
+                .build();
     }
 
     private static Long parseUserId(String userId) {

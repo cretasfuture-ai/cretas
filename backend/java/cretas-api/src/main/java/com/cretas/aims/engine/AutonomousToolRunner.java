@@ -54,6 +54,16 @@ public class AutonomousToolRunner {
     private final AutonomousGrantIssuer issuer;
 
     /**
+     * S6-04 kill switch (deployment / factory). Field-injected so focused tests that construct the
+     * runner directly keep working; the application context always provides it.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AutonomousWriteSwitch writeSwitch;
+
+    /** Persisted status when the deployment or the factory switched delegated writes off (VARCHAR(20)). */
+    public static final String WRITES_SUSPENDED = "WRITES_SUSPENDED";
+
+    /**
      * @param status persisted status, at most 20 characters
      * @param error  null on success; otherwise the reason, without parameters or payload
      * @param payload the gateway payload on success (may be null)
@@ -104,6 +114,13 @@ public class AutonomousToolRunner {
         if (write && (runKey == null || !runKey.startsWith(PLANNED_FIRE_PREFIX))) {
             return new Outcome(AutonomousToolPolicy.WRITE_DENIED,
                     "no planned fire identity for this write run; refused rather than keyed by its start time", null);
+        }
+        if (write && writeSwitch != null) {
+            // Before consumption: a suspended write spends no grant run and reaches no gateway.
+            Optional<String> suspended = writeSwitch.suspension(factoryId);
+            if (suspended.isPresent()) {
+                return new Outcome(WRITES_SUSPENDED, suspended.get(), null);
+            }
         }
         if (runAsUserId == null) {
             return new Outcome("RUN_AS_MISSING",
