@@ -9,7 +9,7 @@ type DisposalVm = {
   handleTargetTypeChange: () => void;
   submitDisposal: () => Promise<void>;
   disposalForm: {
-    targetType: 'MATERIAL' | 'FINISHED'; batchId: string; disposalType: string;
+    targetType: 'MATERIAL' | 'FINISHED'; batchId: string; disposalType: string; reasonCategory: string;
     quantity: number; reason: string; evidenceImages: string;
   };
   currentBatches: { id: string }[];
@@ -71,13 +71,16 @@ describe('disposal finished-goods selector wiring', () => {
     expect(vm.currentBatches.map(batch => batch.id)).toEqual(['PARTIAL']);
     vm.disposalForm.batchId = 'PARTIAL';
     expect(vm.selectedBatchMax).toBe(30);
-    vm.disposalForm.disposalType = 'SCRAP';
+    // 不手动设处置方式: 表单默认必须是后端批准认的 SCRAP (S3-10 曾因表单只给原因类别而永远批不了)
+    expect(vm.disposalForm.disposalType).toBe('SCRAP');
+    vm.disposalForm.reasonCategory = '损坏';
     vm.disposalForm.quantity = 30;
     vm.disposalForm.reason = '破损';
     vm.disposalForm.evidenceImages = 'https://example.test/evidence.jpg';
     await vm.submitDisposal();
     expect(post).toHaveBeenCalledWith('/F006/disposal-records', expect.objectContaining({
-      finishedGoodsBatchId: 'PARTIAL', disposalQuantity: 30
+      finishedGoodsBatchId: 'PARTIAL', disposalQuantity: 30, disposalType: 'SCRAP',
+      disposalReason: '【损坏】破损'
     }));
     expect(post.mock.calls[0][1]).not.toHaveProperty('materialBatchId');
   });

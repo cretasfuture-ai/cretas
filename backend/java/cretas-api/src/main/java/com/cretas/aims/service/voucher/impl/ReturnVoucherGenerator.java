@@ -34,10 +34,9 @@ import java.util.List;
  * <p>Sprint 6 W4-A: 加 CUSTOMER/SUPPLIER 辅助核算到对应往来账款 line — 支持 R-HJ Round 11 §G.1
  * 客户应收/供应商应付明细账中正确反映退货冲销.
  *
- * <p><b>SP11 价税分离 — 退货退化两行 (向后兼容):</b> {@link ReturnOrder} <b>无 {@code tax_amount}
- * 列</b> (只有 {@code total_amount}), 故退货凭证按 SP11 spec §5 "无税率数据视为 0 税 → 退化两行"
- * 处理, 与历史字节一致, 借贷恒平。退货冲销的价税分离需待 ReturnOrder 补 tax_amount 列后才能拆
- * (本 spec §6 defer: 历史含税精确回填脚本按需单独做)。现状两行已对齐原销售/采购凭证的总额冲销。
+ * <p><b>SP11 价税分离:</b> 销售退货 {@code total_amount} 为未税额, {@code tax_amount} 为销项税额
+ * (回源销售单行税率)。有税时三行: 借 6001 未税 / 借 2221.01 销项税 / 贷 1122 含税;
+ * 零税 (采购退货、旧单) 退化两行, 与历史字节一致, 借贷恒平。
  */
 @Component
 public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder> {
@@ -113,11 +112,23 @@ public class ReturnVoucherGenerator extends AbstractVoucherGenerator<ReturnOrder
                     creditEntry(2, subject[0], subject[1], amount, "退货库存减少")
             );
         }
-        // SALES_RETURN (默认 / 老数据无 type)
+        // SALES_RETURN (默认 / 老数据无 type): 红冲原销售凭证 —— 收入按未税额, 销项税单列,
+        // 应收按含税额 (与发货挂账、应收冲减同一口径); 零税退化两行, 与历史字节一致。
+        BigDecimal taxAmount = nullToZero(r.getTaxAmount());
+        if (taxAmount.signum() <= 0) {
+            return List.of(
+                    debitEntry(1, rev.code(), rev.name(), amount, "退货冲减收入 " + r.getReturnNumber()),
+                    // 应收账款按客户分账 (R-HJ Round 11 §G.1 客户应收明细账冲销)
+                    creditEntryWithAuxiliary(2, ar.code(), ar.name(), amount, "客户应收冲减",
+                            counterpartyId != null ? AuxiliaryType.CUSTOMER : null, counterpartyId)
+            );
+        }
+        VoucherSubjectResolver.Subject vat = subject(factoryId, "TAX_OUTPUT",
+                SalesReceiptVoucherGenerator.OUTPUT_VAT_CODE, SalesReceiptVoucherGenerator.OUTPUT_VAT_NAME);
         return List.of(
                 debitEntry(1, rev.code(), rev.name(), amount, "退货冲减收入 " + r.getReturnNumber()),
-                // 应收账款按客户分账 (R-HJ Round 11 §G.1 客户应收明细账冲销)
-                creditEntryWithAuxiliary(2, ar.code(), ar.name(), amount, "客户应收冲减",
+                debitEntry(2, vat.code(), vat.name(), taxAmount, "退货冲减销项税额 " + r.getReturnNumber()),
+                creditEntryWithAuxiliary(3, ar.code(), ar.name(), amount.add(taxAmount), "客户应收冲减",
                         counterpartyId != null ? AuxiliaryType.CUSTOMER : null, counterpartyId)
         );
     }

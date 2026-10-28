@@ -323,7 +323,7 @@ public class FactoryRecallFollowUpService {
         if (order.getStatus() != ReturnOrderStatus.COMPLETED) {
             return new ReceivableEvidence("NOT_DUE", List.of());
         }
-        BigDecimal total = order.getTotalAmount();
+        BigDecimal total = order.getReceivableAmount();
         if (total == null || total.signum() < 0) {
             return new ReceivableEvidence("INCONSISTENT", List.of());
         }

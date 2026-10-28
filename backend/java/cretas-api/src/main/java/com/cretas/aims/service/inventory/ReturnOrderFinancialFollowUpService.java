@@ -90,7 +90,7 @@ public class ReturnOrderFinancialFollowUpService {
         }
         String previous = rows.stream().map(ArApTransaction::getId).sorted().limit(1).findFirst().orElse("");
         return arApService.recordAdjustment(factoryId, CounterpartyType.CUSTOMER, order.getCounterpartyId(),
-                order.getTotalAmount().negate(), actorId,
+                order.getReceivableAmount().negate(), actorId,
                 "销售退货应收调整重提-" + order.getReturnNumber() + "；原因：" + reason.trim()
                         + "；历史调整：" + (previous.isEmpty() ? "缺失待补" : previous), SOURCE, order.getId());
     }
