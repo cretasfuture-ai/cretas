@@ -29,7 +29,8 @@ so no dedup needed here. NO RLS on the table → reads all factories cross-busin
     等补检。导出时再查一次 qa_has_blocked_content (工艺参数 / 结构 / 问题处理 /
     人员薪酬), 命中排除 —— 任何工厂, 授权与否。
   - SHARED 导出 (默认, 按 business_type 分桶):
-      * 合成行 (SEED_R/SEED_F / metadata.source_kind='synthetic_seed') → 收入。
+      * 合成行 (只认 SEED_R/SEED_F 哨兵工厂; metadata.source_kind / seeded 由调用方写入,
+        不算合成, 无工厂的行照样过训练规则与任意工厂的工艺保密名称检查) → 收入。
       * metadata.desensitized 行 (未授权工厂, 采集时已脱敏) → 收入。
       * shared_anon 工厂的原始行 → 经 desensitize_for_training 脱敏 (名称换通用标记、
         数字全部换占位符) 后收入。
@@ -56,8 +57,7 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 
 from smartbi.services.process_secret_names import (  # noqa: E402
     all_protected_product_names,
-    any_factory_names,
-    mentions_any,
+    row_names_protected_product,
 )
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
     DESENSITIZED_KEY,
@@ -65,6 +65,7 @@ from smartbi.services.training_consent import (  # noqa: E402 (after path bootst
     SYNTHETIC_FACTORY_IDS,
     WITHDRAWN,
     fetch_consent_map,
+    is_synthetic_factory,
     qa_has_blocked_content,
     scope_from_map,
 )
@@ -138,28 +139,13 @@ _SENTINEL_FACTORIES = SYNTHETIC_FACTORY_IDS
 
 def _is_synthetic(row: Dict[str, Any]) -> bool:
     """Synthetic-seed rows are UNCONDITIONALLY usable for shared training — they
-    belong to no real tenant. Detection mirrors corpus_census / seeder tagging:
-    metadata.source_kind == 'synthetic_seed' / metadata.seeded == true / factory
-    id in SEED_R/SEED_F. A row tagged with a real tenant's factory_id is never
-    synthetic, whatever its metadata says (metadata is caller-supplied)."""
-    fid = row.get("factory_id") or ""
-    if fid in _SENTINEL_FACTORIES:
-        return True
-    if fid:
-        return False
-    meta = row.get("metadata")
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except (ValueError, TypeError):
-            meta = None
-    if isinstance(meta, dict):
-        sk = meta.get("source_kind")
-        if isinstance(sk, str) and sk.lower() in ("synthetic_seed", "synthetic"):
-            return True
-        if meta.get("seeded") is True:
-            return True
-    return False
+    belong to no real tenant. A row is synthetic ONLY by its sentinel factory id
+    (SEED_R / SEED_F, the ids the seeder writes; same test as capture's
+    is_synthetic_factory). metadata.source_kind / metadata.seeded is
+    caller-supplied and never makes a row synthetic: a row with a real tenant
+    stays that tenant's data, and a row with no factory still has to pass the
+    training rule, including the any-factory process-secret name check."""
+    return is_synthetic_factory(row.get("factory_id"))
 
 
 async def _load_consent(pool) -> Dict[str, str]:
@@ -244,13 +230,8 @@ def passes_training_rule(row: Dict[str, Any],
         return False
     if qa_has_blocked_content(row.get("input_text"), row.get("teacher_output")):
         return False
-    factory_id = row.get("factory_id")
-    if factory_id:
-        names = (protected_names or {}).get(factory_id, ())
-    else:
-        # no factory: we cannot tell whose product it names -> any factory's
-        names = any_factory_names(protected_names or {})
-    return not mentions_any(names, row.get("input_text"), row.get("teacher_output"))
+    # no factory: we cannot tell whose product it names -> any factory's names
+    return not row_names_protected_product(row, protected_names)
 
 
 def gate_shared_rows(

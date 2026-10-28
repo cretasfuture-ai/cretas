@@ -397,6 +397,47 @@ async def test_no_factory_sample_naming_any_factorys_secret_product_is_not_store
     assert "普通牛肉干" in sink[0][1][6]
 
 
+async def test_empty_string_factory_is_checked_against_all_factories(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    async def all_names(*_a, **_k):
+        return _ALL_PROTECTED
+
+    async def own_names(*_a, **_k):
+        raise AssertionError("an empty factory id has no factory of its own")
+
+    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    monkeypatch.setattr(dc, "protected_product_names", own_names)
+    sink: list = []
+    pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
+    await _capture(pool, factory_id="", input_text="秘制牛肉干本月销量多少")   # factory A's -> out
+    await _capture(pool, factory_id="", input_text="普通牛肉干本月销量多少")   # control -> stored
+    assert [a[2] for _, a in sink] == [None]
+    assert "普通牛肉干" in sink[0][1][6]
+
+
+async def test_process_secret_lookup_runs_before_a_capture_connection_is_taken(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    events: list = []
+
+    async def all_names(*_a, **_k):
+        events.append("lookup")
+        return _ALL_PROTECTED
+
+    class _OrderPool(_RecordingPool):
+        def acquire(self):
+            events.append("acquire")
+            return super().acquire()
+
+    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    sink: list = []
+    await _capture(_OrderPool(sink, {}), input_text="秘制牛肉干本月销量多少")
+    await _capture(_OrderPool(sink, {}), input_text="普通牛肉干本月销量多少")
+    assert events == ["lookup", "lookup", "acquire"]     # named sample never took a connection
+    assert len(sink) == 1
+
+
 async def test_factory_sample_does_not_use_the_all_factories_names(monkeypatch):
     # a factory's sample answers to its own factory's names only (unchanged)
     from smartbi.services import distillation_capture as dc

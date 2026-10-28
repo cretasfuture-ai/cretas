@@ -213,6 +213,23 @@ async def persist_distillation_sample(
         _log_skip_once("process / personnel content is never used for training",
                        factory_id, f"source={source}")
         return
+    if not synthetic:
+        # privacy clause 6: a sample naming one of the factory's process-secret
+        # products is not used for training. With no factory we cannot tell
+        # whose product it names, so the process-secret products of ANY factory
+        # count. Looked up (Cretas main DB) before taking a capture connection.
+        try:
+            if factory_id:
+                names = await protected_product_names(factory_id)
+            else:
+                names = any_factory_names(await all_protected_product_names())
+        except Exception as e:
+            _log_skip_once("process-secret product lookup failed, sample not stored",
+                           factory_id, f"({type(e).__name__}: {e})")
+            return
+        if mentions_any(names, input_text, teacher_output):
+            _log_skip_once("sample names a process-secret product", factory_id)
+            return
     try:
         async with pool.acquire() as conn:
             scope = "none"
@@ -227,23 +244,6 @@ async def persist_distillation_sample(
             if is_withdrawn(scope):
                 _log_skip_once("factory withdrew from training", factory_id)
                 return
-            if not synthetic:
-                # privacy clause 6: a sample naming one of the factory's
-                # process-secret products is not used for training. With no
-                # factory we cannot tell whose product it names, so the
-                # process-secret products of ANY factory count.
-                try:
-                    if factory_id:
-                        names = await protected_product_names(factory_id)
-                    else:
-                        names = any_factory_names(await all_protected_product_names())
-                except Exception as e:
-                    _log_skip_once("process-secret product lookup failed, sample not stored",
-                                   factory_id, f"({type(e).__name__}: {e})")
-                    return
-                if mentions_any(names, input_text, teacher_output):
-                    _log_skip_once("sample names a process-secret product", factory_id)
-                    return
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
                 if not keeps_raw(scope):

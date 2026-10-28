@@ -88,6 +88,13 @@ logger = logging.getLogger("corpus_judge")
 # Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
+# Privacy clause 6: rows naming a process-secret product (own factory's, or ANY
+# factory's for rows with no factory) are never sent to the judge LLM. A failed
+# name lookup propagates and aborts the run.
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    drop_rows_naming_protected_products,
+)
 
 _USABLE_ROWS = usable_rows_sql()
 
@@ -383,7 +390,7 @@ def resolve_judge_chain(
 # ---------------------------------------------------------------------------
 
 _FETCH_SQL = """
-    SELECT id, input_text, teacher_output, metadata, source
+    SELECT id, factory_id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 3
       AND """ + _USABLE_ROWS + """
@@ -403,7 +410,7 @@ _UPDATE_SQL = """
 # Cross-family: fetch quality=4 rows that are NOT from claims-pinned sources
 # and do NOT yet have a 'judge_crossfamily' key in their metadata.
 _CROSSFAMILY_FETCH_SQL = """
-    SELECT id, input_text, teacher_output, metadata, source
+    SELECT id, factory_id, input_text, teacher_output, metadata, source
     FROM smart_bi_distillation_samples
     WHERE quality = 4
       AND """ + _USABLE_ROWS + """
@@ -457,6 +464,8 @@ async def fetch_unjudged_rows(
             rows = await conn.fetch(sql, limit, source)
         else:
             rows = await conn.fetch(sql, limit)
+    # lookup failure raises -> the run aborts (never "nothing protected")
+    rows = drop_rows_naming_protected_products(rows, await all_protected_product_names())
 
     result = []
     for row in rows:
@@ -515,6 +524,8 @@ async def fetch_crossfamily_rows(
         if source:
             params.append(source)
         rows = await conn.fetch(sql, *params)
+    # lookup failure raises -> the run aborts (never "nothing protected")
+    rows = drop_rows_naming_protected_products(rows, await all_protected_product_names())
 
     return [
         {
