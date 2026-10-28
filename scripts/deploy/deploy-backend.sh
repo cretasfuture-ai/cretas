@@ -922,15 +922,21 @@ prod_already_runs_local_artifact() {
     #    才首次被读 ⇒ 判成 no-op, RELEASE_JAVA_OUTCOME=no-op 而新代码根本没跑。
     # ⚠️ 读不到句柄 / 一个都没有 / 任一句柄已删除或字节不符 ⇒ return 1 走正常部署
     #    (多重启一次是小事), ⛔ 不默认放行 ——「读不到」和「确认一致」不是一回事。
-    local active_pid open_jars open_count
+    local active_pid open_jars
     active_pid=$(ssh -o ConnectTimeout=5 "$SERVER" \
         "systemctl show -p MainPID --value '$active_service' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
     case "$active_pid" in ''|0|*[!0-9]*) return 1 ;; esac
+    # 远端最后打一行 END: 本脚本没开 pipefail, ssh 中途断开不会反映在退出码上;
+    # 只收到「<md5> live」而没收到后面的 deleted 行时, 没有 END 就不认。
     open_jars=$(ssh -o ConnectTimeout=5 "$SERVER" \
-        "for fd in /proc/$active_pid/fd/*; do t=\$(readlink \"\$fd\" 2>/dev/null) || continue; case \"\$t\" in '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME') s=live ;; '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME (deleted)') s=deleted ;; *) continue ;; esac; printf '%s %s\\n' \"\$(md5sum < \"\$fd\" | awk '{print \$1}')\" \"\$s\"; done" \
-        2>/dev/null | tr -d '\r') || return 1
-    open_count=$(printf '%s\n' "$open_jars" | grep -c .)
-    if [ "$open_count" -eq 0 ]; then
+        "for fd in /proc/$active_pid/fd/*; do t=\$(readlink \"\$fd\" 2>/dev/null) || continue; case \"\$t\" in '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME') s=live ;; '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME (deleted)') s=deleted ;; *) continue ;; esac; printf '%s %s\\n' \"\$(md5sum < \"\$fd\" | awk '{print \$1}')\" \"\$s\"; done; echo END" \
+        2>/dev/null | tr -d '\r')
+    if [ "$(printf '%s\n' "$open_jars" | tail -n 1)" != "END" ]; then
+        echo "   ⚠️  没收到完整的进程句柄清单 (pid $active_pid) —— 不能算已部署, 继续走正常部署流程。" >&2
+        return 1
+    fi
+    open_jars=$(printf '%s\n' "$open_jars" | sed '$d')
+    if [ -z "$open_jars" ]; then
         echo "   ⚠️  读不到运行进程 (pid $active_pid) 打开的 JAR —— 不能算已部署, 继续走正常部署流程。" >&2
         return 1
     fi

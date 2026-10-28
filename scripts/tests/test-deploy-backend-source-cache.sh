@@ -124,6 +124,7 @@ MOCK_MAIN_PID=4242
 OLD_MD5=fedcba9876543210fedcba9876543210
 MOCK_OPEN_JARS="$LOCAL_MD5 live"
 MOCK_REMOTE_FD_DIR=
+MOCK_TRUNCATED=
 ssh() {
     case "$*" in
         # ⚠️ 句柄这条也跑 md5sum, 必须排在 *md5sum* 之前, 否则被那条吃掉。
@@ -136,6 +137,7 @@ ssh() {
                 bash -c "${remote_cmd//\/proc\/$MOCK_MAIN_PID\/fd/$MOCK_REMOTE_FD_DIR}"
             else
                 [ -z "$MOCK_OPEN_JARS" ] || printf '%s\n' "$MOCK_OPEN_JARS"
+                [ -n "$MOCK_TRUNCATED" ] || printf 'END\n'
             fi
             ;;
         *md5sum*)
@@ -187,6 +189,14 @@ MOCK_OPEN_JARS=
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "unreadable open-JAR handles were treated as an already-deployed no-op"
 fi
+# ssh 中途断开: 只收到「<本地> live」, 后面的 deleted 行和 END 都没到。生产脚本没开 pipefail,
+# 退出码看不出来, 只能靠 END 行。
+MOCK_OPEN_JARS="$LOCAL_MD5 live"
+MOCK_TRUNCATED=1
+if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+    fail "truncated handle list (no END line) was treated as an already-deployed no-op"
+fi
+MOCK_TRUNCATED=
 MOCK_OPEN_JARS="$LOCAL_MD5 live"
 
 # 句柄判定在远端执行, 上面的 mock 直接给成品行, 测不到「(deleted) 认成 deleted」和「按句柄读字节」。
