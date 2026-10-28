@@ -169,11 +169,24 @@ class TestSharedGating:
         # raw text untouched for synthetic
         assert all(g["input_text"] is None for g in gated)
 
-    def test_synthetic_by_metadata_source_kind(self):
-        rows = [_row(None, metadata={"source_kind": "synthetic_seed"})]
-        gated = export_mod.gate_shared_rows(rows, consent={})  # no consent at all
-        assert len(gated) == 1
-        assert gated[0]["consent_class"] == "synthetic"
+    def test_metadata_never_makes_a_factoryless_row_synthetic(self):
+        # Only the sentinel factory id makes a row synthetic (2026-10-29 review):
+        # metadata is caller-supplied, so a factory-less row tagged synthetic_seed /
+        # seeded still has to pass the training rule, incl. the any-factory
+        # process-secret name check.
+        protected = {"F001": frozenset({"秘制牛肉干"})}
+        tagged = {"source_kind": "synthetic_seed", "seeded": True}
+        rows = [
+            _row(None, metadata=tagged),                                       # no rule tag -> out
+            _row(None, metadata={**RULE, **tagged, "desensitized": True},
+                 input_text="秘制牛肉干本月销量"),                                  # names F001's -> out
+            _row(None, metadata={**RULE, **tagged, "desensitized": True}),     # control -> in
+            _row("SEED_R", input_text="秘制牛肉干本月销量"),                     # sentinel -> synthetic
+        ]
+        assert [export_mod._is_synthetic(r) for r in rows] == [False, False, False, True]
+        gated = export_mod.gate_shared_rows(rows, consent={}, protected_names=protected)
+        assert [(g["row"]["factory_id"], g["consent_class"]) for g in gated] == [
+            (None, "desensitized"), ("SEED_R", "synthetic")]
 
     def test_real_tenant_row_is_never_synthetic_by_metadata(self):
         # metadata is caller-supplied; a row tagged with a real tenant stays that
@@ -226,7 +239,7 @@ class TestSharedGating:
     def test_mixed_population(self):
         rows = [
             _row("SEED_R"),                                    # synthetic → in
-            _row(None, metadata={"seeded": True}),             # synthetic → in
+            _row(None, metadata={"seeded": True}),             # metadata ≠ synthetic, no rule tag → out
             _row("F005", metadata={"seeded": True}),           # real tenant, no consent → out
             _row("F002"),                                      # none → out
             _row("F003"),                                      # private → out
@@ -237,8 +250,8 @@ class TestSharedGating:
         consent = {"F002": "none", "F003": "private", "F004": "shared_anon", "F007": "shared_anon"}
         gated = export_mod.gate_shared_rows(rows, consent)
         classes = sorted(g["consent_class"] for g in gated)
-        assert classes == ["desensitized", "shared_anon", "synthetic", "synthetic"]
-        assert len(gated) == 4
+        assert classes == ["desensitized", "shared_anon", "synthetic"]
+        assert len(gated) == 3
 
 
 # ===========================================================================

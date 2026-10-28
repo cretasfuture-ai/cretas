@@ -52,6 +52,13 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 # Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
+# Privacy clause 6: rows naming a process-secret product (own factory's, or ANY
+# factory's for rows with no factory) are never frozen into the eval slice. A
+# failed name lookup propagates and aborts the run.
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    drop_rows_naming_protected_products,
+)
 
 _USABLE_ROWS = usable_rows_sql()
 
@@ -65,7 +72,7 @@ logger = logging.getLogger("corpus_eval_freeze")
 # Fetch quality>=4 rows NOT already frozen, ordered by id for determinism.
 # The LIMIT is applied per-bucket in Python to keep logic transparent.
 _FETCH_SQL = """
-    SELECT id, source, business_type
+    SELECT id, source, business_type, factory_id, input_text, teacher_output
     FROM smart_bi_distillation_samples
     WHERE quality >= 4
       AND """ + _USABLE_ROWS + """
@@ -211,6 +218,10 @@ async def run_freeze(
             raw_totals = []
 
     candidate_rows = [dict(r) for r in raw_candidates]
+    if candidate_rows:
+        # lookup failure raises -> the run aborts (never "nothing protected")
+        candidate_rows = drop_rows_naming_protected_products(
+            candidate_rows, await all_protected_product_names())
     already_frozen: Dict[Tuple[str, str], int] = {
         (r["source"], r["business_type"]): r["cnt"]
         for r in raw_already

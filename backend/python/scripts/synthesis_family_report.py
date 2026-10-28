@@ -48,21 +48,54 @@ from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
     family_breakdown,
 )
 
+# Training rule (2026-10-24) + privacy clause 6: only rule-tagged / synthetic,
+# non-withdrawn rows are read, and rows naming a process-secret product (own
+# factory's, or ANY factory's for rows with no factory) are never printed. A
+# failed name lookup propagates and aborts the report.
+from smartbi.services.process_secret_names import (  # noqa: E402
+    all_protected_product_names,
+    drop_rows_naming_protected_products,
+)
+from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("synthesis_family_report")
 
 
+# One row per sample: the process-secret filter needs each row's factory and
+# texts, so grouping happens in Python after filtering (_aggregate).
 _REPORT_SQL = """
-    SELECT COALESCE(metadata->>'query', input_text)      AS query,
+    SELECT factory_id,
+           input_text,
+           teacher_output,
+           COALESCE(metadata->>'query', input_text)      AS query,
            metadata->>'question_family'                  AS family,
            business_type                                 AS business_type,
-           COUNT(*)                                       AS occurrence_count,
-           MAX(created_at)                                AS last_seen
+           created_at
       FROM smart_bi_distillation_samples
      WHERE source = 'synthesis'
-     GROUP BY 1, 2, 3
-     ORDER BY occurrence_count DESC, last_seen DESC
+       AND """ + usable_rows_sql() + """
 """
+
+_FILTER_FIELDS = ("query", "input_text", "teacher_output")
+
+
+def _aggregate(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """GROUP BY (query, family, business_type) with occurrence_count / last_seen,
+    most-captured first, then most recent."""
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        key = (r.get("query"), r.get("family"), r.get("business_type"))
+        g = groups.setdefault(key, {"query": key[0], "family": key[1], "business_type": key[2],
+                                    "occurrence_count": 0, "last_seen": None})
+        g["occurrence_count"] += 1
+        seen = r.get("created_at")
+        if seen is not None and (g["last_seen"] is None or seen > g["last_seen"]):
+            g["last_seen"] = seen
+    out = list(groups.values())
+    out.sort(key=lambda g: (g["last_seen"] is not None, g["last_seen"] or 0), reverse=True)
+    out.sort(key=lambda g: g["occurrence_count"], reverse=True)
+    return out
 
 
 def _build_candidates(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -145,6 +178,14 @@ async def _run(dsn: Optional[str], *, min_count: int) -> None:
         rows = await conn.fetch(_REPORT_SQL)
 
     records = [dict(r) for r in rows]
+    if records:
+        # lookup failure raises -> the report aborts (never "nothing protected")
+        kept = drop_rows_naming_protected_products(
+            records, await all_protected_product_names(), _FILTER_FIELDS)
+        excluded = len(records) - len(kept)
+        if excluded:
+            print(f"({excluded} sample(s) naming a process-secret product not shown)")
+        records = _aggregate(kept)
     if not records:
         print("No source='synthesis' rows yet — the synthesis path has not been "
               "asked (or captured) anything. Ask a comprehensive question first.")

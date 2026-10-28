@@ -7,7 +7,7 @@ quality sweep).
 
 Output (per bucket):
   - total rows
-  - organic vs synthetic breakdown (metadata.seeded / source_kind)
+  - organic vs synthetic breakdown (synthetic = SEED_R / SEED_F sentinel factory only)
   - quality distribution: count by quality value (5/4/3/NULL)
   - GAP to GREEN threshold (≥1000 rows with quality ≥ 4)
 
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -62,34 +61,17 @@ _CENSUS_SQL = """
 # ---------------------------------------------------------------------------
 
 
-# Sentinel factory IDs used by the seeder (mirrors export_distillation_dataset._SENTINEL_FACTORIES).
-_SENTINEL_FACTORIES: frozenset = frozenset({"SEED_R", "SEED_F"})
-
-
 def _is_synthetic(metadata: Any, factory_id: Any = None) -> bool:
     """Return True if the row is synthetic / seeded (not organic).
 
-    Detection mirrors export_distillation_dataset._is_synthetic — single source of truth:
-      1. factory_id IN ('SEED_R', 'SEED_F') sentinel factories
-      2. metadata.seeded == true
-      3. metadata.source_kind in ('synthetic', 'synthetic_seed')   ← extended from 'synthetic' only
+    Same test as export_distillation_dataset._is_synthetic and capture: ONLY the
+    sentinel factory id (SEED_R / SEED_F, via is_synthetic_factory). metadata
+    (seeded / source_kind) is caller-supplied and is ignored; the parameter is
+    kept for the existing call shape.
     """
-    # Check sentinel factory IDs first (no metadata needed)
-    if factory_id and (factory_id or "") in _SENTINEL_FACTORIES:
-        return True
-    if not metadata:
-        return False
-    if isinstance(metadata, str):
-        try:
-            metadata = json.loads(metadata)
-        except Exception:
-            return False
-    if not isinstance(metadata, dict):
-        return False
-    if metadata.get("seeded") is True:
-        return True
-    sk = metadata.get("source_kind", "")
-    return isinstance(sk, str) and sk.lower() in ("synthetic", "synthetic_seed")
+    from smartbi.services.training_consent import is_synthetic_factory
+
+    return is_synthetic_factory(factory_id if isinstance(factory_id, str) else None)
 
 
 # ---------------------------------------------------------------------------

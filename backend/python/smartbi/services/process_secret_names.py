@@ -13,7 +13,7 @@ Lookup errors propagate: callers treat "unknown" as "do not store".
 from __future__ import annotations
 
 import time
-from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from common.process_secret_sql import MIN_NAME_LENGTH, PROTECTED_NAMES_SQL, usable_names  # noqa: F401
 
@@ -27,6 +27,8 @@ ALL_PROTECTED_NAMES_SQL = """
 """
 
 _cache: Dict[str, Tuple[float, FrozenSet[str]]] = {}
+_ALL = "*"
+_all_cache: Dict[str, Tuple[float, Mapping[str, FrozenSet[str]]]] = {}
 
 
 def mentions_any(names: Iterable[str], *texts: Optional[str]) -> bool:
@@ -53,7 +55,13 @@ async def protected_product_names(factory_id: str, pool=None) -> FrozenSet[str]:
 
 
 async def all_protected_product_names(pool=None) -> Mapping[str, FrozenSet[str]]:
-    """``{factory_id: names}`` for every factory with protected products (export)."""
+    """``{factory_id: names}`` for every factory with protected products
+    (cached 60 s: capture of a sample with no factory calls this per sample).
+    Errors propagate (a failed lookup is never cached)."""
+    now = time.monotonic()
+    hit = _all_cache.get(_ALL)
+    if hit and now - hit[0] < _CACHE_SECONDS:
+        return hit[1]
     if pool is None:
         from smartbi.config import get_cretas_pool
         pool = await get_cretas_pool()
@@ -64,8 +72,54 @@ async def all_protected_product_names(pool=None) -> Mapping[str, FrozenSet[str]]
     by_factory: Dict[str, set] = {}
     for r in rows:
         by_factory.setdefault(r["factory_id"], set()).add(r["name"])
-    return {f: usable_names(n) for f, n in by_factory.items()}
+    result = {f: usable_names(n) for f, n in by_factory.items()}
+    _all_cache[_ALL] = (now, result)
+    return result
+
+
+def any_factory_names(by_factory: Mapping[str, Iterable[str]]) -> FrozenSet[str]:
+    """Union of every factory's protected names.
+
+    For samples with no factory: we cannot tell whose product they name, so a
+    sample naming a process-secret product of ANY factory is not used."""
+    return frozenset(n for names in (by_factory or {}).values() for n in (names or ()))
+
+
+def names_for_row(factory_id: Optional[str],
+                  by_factory: Optional[Mapping[str, Iterable[str]]]) -> FrozenSet[str]:
+    """Names a sample of ``factory_id`` must not mention: its own factory's, or,
+    for a sample with no factory, those of ANY factory."""
+    by_factory = by_factory or {}
+    if factory_id:
+        return frozenset(by_factory.get(factory_id, ()))
+    return any_factory_names(by_factory)
+
+
+SAMPLE_TEXT_FIELDS: Tuple[str, ...] = ("input_text", "teacher_output")
+
+
+def row_names_protected_product(row: Mapping[str, Any],
+                                by_factory: Optional[Mapping[str, Iterable[str]]],
+                                fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
+    """True when a ``smart_bi_distillation_samples`` row (``factory_id`` plus
+    the text ``fields``) names a process-secret product."""
+    return mentions_any(names_for_row(row.get("factory_id"), by_factory),
+                        *(row.get(f) for f in fields))
+
+
+def drop_rows_naming_protected_products(
+        rows: Iterable[Any],
+        by_factory: Optional[Mapping[str, Iterable[str]]],
+        fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> List[Any]:
+    """Rows that name no process-secret product (corpus scripts: LLM judge,
+    human review sampling, eval freeze, synthesis report). Rows must carry
+    ``factory_id`` and the text ``fields``. ``by_factory`` comes from
+    ``all_protected_product_names``: a failed lookup must abort the caller,
+    never be read as "nothing protected"."""
+    fields = tuple(fields)
+    return [r for r in rows if not row_names_protected_product(r, by_factory, fields)]
 
 
 def clear_cache() -> None:
     _cache.clear()
+    _all_cache.clear()

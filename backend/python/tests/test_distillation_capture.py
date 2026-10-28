@@ -369,3 +369,152 @@ async def test_process_secret_lookup_failure_means_not_stored(monkeypatch):
     await _capture(_RecordingPool(sink, {"F_PRIV": "private"}), factory_id="F_PRIV")
     await _capture(_RecordingPool(sink, {}), factory_id="SEED_R")   # synthetic: no lookup, stored
     assert [a[2] for _, a in sink] == ["SEED_R"]
+
+
+# ---- samples with no factory: process-secret products of ANY factory count ----
+# (read-only prod probe 2026-10-29: NULL-factory samples were never checked)
+
+_ALL_PROTECTED = {"F_A": frozenset({"秘制牛肉干"}), "F_B": frozenset({"祖传卤汁鸭"})}
+
+
+async def test_no_factory_sample_naming_any_factorys_secret_product_is_not_stored(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    calls: list = []
+
+    async def all_names(*_a, **_k):
+        calls.append(1)
+        return _ALL_PROTECTED
+
+    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    sink: list = []
+    pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
+    await _capture(pool, input_text="秘制牛肉干本月销量多少")         # factory A's, in input
+    await _capture(pool, teacher_output="祖传卤汁鸭本月销量增长")      # factory B's, in output
+    await _capture(pool, input_text="普通牛肉干本月销量多少")         # control: stored
+    assert len(calls) == 3          # the lookup really ran for every NULL-factory sample
+    assert [a[2] for _, a in sink] == [None]
+    assert "普通牛肉干" in sink[0][1][6]
+
+
+async def test_empty_string_factory_is_checked_against_all_factories(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    async def all_names(*_a, **_k):
+        return _ALL_PROTECTED
+
+    async def own_names(*_a, **_k):
+        raise AssertionError("an empty factory id has no factory of its own")
+
+    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    monkeypatch.setattr(dc, "protected_product_names", own_names)
+    sink: list = []
+    pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
+    await _capture(pool, factory_id="", input_text="秘制牛肉干本月销量多少")   # factory A's -> out
+    await _capture(pool, factory_id="", input_text="普通牛肉干本月销量多少")   # control -> stored
+    assert [a[2] for _, a in sink] == [None]
+    assert "普通牛肉干" in sink[0][1][6]
+
+
+async def test_process_secret_lookup_runs_before_a_capture_connection_is_taken(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    events: list = []
+
+    async def all_names(*_a, **_k):
+        events.append("lookup")
+        return _ALL_PROTECTED
+
+    class _OrderPool(_RecordingPool):
+        def acquire(self):
+            events.append("acquire")
+            return super().acquire()
+
+    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    sink: list = []
+    await _capture(_OrderPool(sink, {}), input_text="秘制牛肉干本月销量多少")
+    await _capture(_OrderPool(sink, {}), input_text="普通牛肉干本月销量多少")
+    assert events == ["lookup", "lookup", "acquire"]     # named sample never took a connection
+    assert len(sink) == 1
+
+
+def _synthesis_metadata():
+    # shape written by synthesis_engine: metadata.query = the raw question
+    return {"query": "华东工厂本月营收 2500000 为什么下降", "question_family": "attribution",
+            "plan": {"finance": True},
+            "grounding": {"clean": False, "reconciled": True, "confidence_adj": -0.1,
+                          "violations": ["华东工厂毛利率 23.5% 未在数据中"]}}
+
+
+async def test_desensitized_sample_does_not_keep_the_raw_question_in_metadata():
+    sink: list = []
+    pool = _RecordingPool(sink, {"F_PRIV": "private"})
+    await _capture(pool, factory_id="F006", input_text="华东工厂本月营收 2500000 为什么下降",
+                   metadata=_synthesis_metadata())
+    await _capture(pool, factory_id="F_PRIV", input_text="华北工厂本月营收为什么下降",
+                   metadata=_synthesis_metadata())                       # control: authorized
+    desensitized, raw = _meta(sink[0][1]), _meta(sink[1][1])
+    assert desensitized["desensitized"] is True
+    stored = _json.dumps(desensitized, ensure_ascii=False)
+    assert "华东" not in stored and "2500000" not in stored and "23.5" not in stored
+    assert desensitized["query"] == "工厂A本月营收 <数值> 为什么下降"
+    assert desensitized["grounding"] == {"clean": False, "reconciled": True,
+                                         "confidence_adj": -0.1, "violation_count": 1}
+    assert desensitized["question_family"] == "attribution" and desensitized["plan"] == {"finance": True}
+    # authorized factory: kept as is (no desensitization anywhere)
+    assert raw["query"] == "华东工厂本月营收 2500000 为什么下降"
+    assert raw["grounding"]["violations"] == ["华东工厂毛利率 23.5% 未在数据中"]
+    assert "desensitized" not in raw
+
+
+async def test_no_factory_sample_metadata_query_is_desensitized():
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), input_text="华东工厂本月营收 2500000",
+                   metadata={"query": "华东工厂本月营收 2500000"})
+    meta = _meta(sink[0][1])
+    assert meta["desensitized"] is True and "华东" not in meta["query"] and "2500000" not in meta["query"]
+
+
+async def test_factory_sample_does_not_use_the_all_factories_names(monkeypatch):
+    # a factory's sample answers to its own factory's names only (unchanged)
+    from smartbi.services import distillation_capture as dc
+
+    async def all_names(*_a, **_k):
+        raise AssertionError("factory sample must not use the all-factories lookup")
+
+    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="秘制牛肉干本月销量多少")
+    assert [a[2] for _, a in sink] == ["F006"]
+
+
+async def test_no_factory_sample_is_not_stored_when_the_all_factories_lookup_fails(monkeypatch):
+    from smartbi.services import distillation_capture as dc
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("cretas db unavailable")
+
+    monkeypatch.setattr(dc, "all_protected_product_names", boom)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), input_text="普通牛肉干本月销量多少")
+    await _capture(_RecordingPool(sink, {}), factory_id="SEED_R")   # control: synthetic, no lookup
+    assert [a[2] for _, a in sink] == ["SEED_R"]
+
+
+def _export_row(factory_id, **kw):
+    row = {"factory_id": factory_id, "input_text": "普通牛肉干本月销量多少",
+           "teacher_output": "本月销量增长",
+           "metadata": {"training_rule": "2026-10-24", "desensitized": True}}
+    row.update(kw)
+    return row
+
+
+def test_export_rule_no_factory_row_naming_any_factorys_secret_product_fails():
+    from scripts.export_distillation_dataset import passes_training_rule
+
+    assert passes_training_rule(_export_row(None, input_text="秘制牛肉干本月销量"), _ALL_PROTECTED) is False
+    assert passes_training_rule(_export_row("", teacher_output="祖传卤汁鸭销量增长"), _ALL_PROTECTED) is False
+    assert passes_training_rule(_export_row(None), _ALL_PROTECTED) is True              # control
+    # a factory row still answers to its own factory's names only (unchanged)
+    assert passes_training_rule(_export_row("F006", input_text="秘制牛肉干本月销量"), _ALL_PROTECTED) is True
+    assert passes_training_rule(_export_row("F_A", input_text="秘制牛肉干本月销量"), _ALL_PROTECTED) is False
