@@ -51,6 +51,9 @@ public class CcpReportFacade {
     private final CcpMonitoringService ccpMonitoringService;
     private final WorkProcessTaskRepository taskRepository;
     private final WorkflowClerkSheetService workflowClerkSheetService;
+    /** S3-16: 随行提交的锅次与报工同一事务落库 (可选注入: 独立构造本类的单测不受影响)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.pot.ProcessSheetPotHook potHook;
 
     // ==================== App: 逐道报工 ====================
 
@@ -112,7 +115,13 @@ public class CcpReportFacade {
         String workProcessId = rowProducesOutput(req) ? sheetWorkProcessId(factoryId, planId, req) : null;
         boolean ccpStep = workProcessId != null
                 && !ccpMonitoringService.validateReadings(factoryId, workProcessId, req.getCcpReadings()).isEmpty();
+        if (potHook != null) {
+            potHook.validateShape(req);
+        }
         ProcessSheetRowResult result = processSheetService.submitRow(factoryId, planId, req, userId);
+        if (potHook != null) {
+            result = potHook.record(factoryId, planId, req, result, userId, userName);
+        }
         // 正式提交的重放由 submitRow 自己挡 (已提交的行再提交 409, 整个事务连同这里的 CCP 一起回滚),
         // 所以这里不再按时间窗去重: 撤销后重新提交同一行, 新读数必须照记 (第二轮审查 H1)。
         return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result, null)
@@ -126,7 +135,13 @@ public class CcpReportFacade {
         String workProcessId = rowProducesOutput(req) ? sheetWorkProcessId(factoryId, planId, req) : null;
         boolean ccpStep = workProcessId != null
                 && !ccpMonitoringService.validateReadings(factoryId, workProcessId, req.getCcpReadings()).isEmpty();
+        if (potHook != null) {
+            potHook.validateShape(req);
+        }
         ProcessSheetRowResult result = processSheetService.saveRow(factoryId, planId, req, userId);
+        if (potHook != null) {
+            result = potHook.record(factoryId, planId, req, result, userId, userName);
+        }
         // 旧契约 saveRow 是幂等 upsert, 重放不会被拒 ⇒ 另按时间窗挡网络重放
         return ccpStep ? recordSheetCcp(factoryId, planId, userId, userName, req, workProcessId, result,
                 sheetRowScope(planId, req))
