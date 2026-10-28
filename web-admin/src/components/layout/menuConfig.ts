@@ -150,6 +150,7 @@ const rawMenuConfig: MenuItem[] = [
     hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production', groupLabel: '生产过程' },
+      { path: '/production/shortage-cases', title: '缺料异常', icon: '', module: 'production' },
       // 🔴 2026-08-26: B8 生产进度数字大屏 —— 客户 2026-04 原话点名要的东西
       //   (ProductionProgressDashboardController:19 「可以做一个数字打屏嘛…看到当天所有商品
       //   工序生产的一个进度」), 2026-04-08 就做完了(后端 203 行零硬编码 + 162 行单测,

@@ -114,6 +114,9 @@ public class QualityDispositionInventoryService {
     @Autowired
     private MaterialBatchRepository materialBatchRepository;
 
+    @Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
     /**
      * 成品/生产批次 repo — {@code required=false} 镜像 {@code QualityInspectionServiceImpl}, 使未 wire 这些
      * bean 的单测不破坏; 生产/成品未关联时桥接 graceful no-op。
@@ -269,6 +272,11 @@ public class QualityDispositionInventoryService {
         if (decision == FlipDecision.FLIP) {
             mb.setStatus(target);
             materialBatchRepository.save(mb);
+            if (target == MaterialBatchStatus.AVAILABLE && eventPublisher != null) {
+                // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
+                eventPublisher.publishEvent(new com.cretas.aims.event.MaterialBatchReleasedEvent(
+                        this, mb.getFactoryId(), mb.getMaterialTypeId(), mb.getId()));
+            }
         }
         return decision;
     }
