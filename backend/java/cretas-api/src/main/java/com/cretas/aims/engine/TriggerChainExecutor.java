@@ -1,9 +1,9 @@
 package com.cretas.aims.engine;
 
 import com.cretas.aims.dev.lineage.LineageBackfillMode;
-import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.entity.config.FactoryTriggerChain;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,6 +36,10 @@ public class TriggerChainExecutor {
     private final FactoryTriggerChainRepository triggerChainRepository;
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
+    // S6-02: every step runs through the tool gateway as the chain's run-as user (source TRIGGER),
+    // never directly: the gateway re-reads that user's account, factory and permissions, applies the
+    // tool's runtime policy and writes the audit event. Chains get no delegated writes.
+    private final AutonomousToolRunner runner;
 
     // Self-reference for proxy-aware @Transactional dispatch.
     // R7 G3: persistExecutionMetadata needs REQUIRES_NEW tx propagation, which
@@ -253,16 +257,24 @@ public class TriggerChainExecutor {
                 continue;
             }
             try {
-
-                // Build proper ToolCall with JSON-serialized arguments
-                String argsJson = objectMapper.writeValueAsString(params);
-                ToolCall toolCall = ToolCall.of(
-                        "chain-" + chain.getChainCode() + "-" + order,
-                        toolName, argsJson);
-
-                Map<String, Object> execContext = new HashMap<>(chainContext);
-
-                String result = executor.get().execute(toolCall, execContext);
+                AutonomousToolRunner.Outcome outcome = runner.run(factoryId, chain.getRunAsUserId(), toolName, params,
+                        ToolExecutionSource.TRIGGER, "chain-" + chain.getChainCode() + "-" + order);
+                if (!outcome.succeeded()) {
+                    // Denied, failed, timed out or unknown: a counted failure with the gateway's status
+                    // and audit id, never a success; an unknown outcome is not retried here.
+                    String reason = outcome.status() + (outcome.error() == null ? "" : ": " + outcome.error());
+                    stepFailures++;
+                    if (errorSummary.length() > 0) errorSummary.append("; ");
+                    errorSummary.append(toolName).append(": ").append(reason);
+                    chainContext.put("step" + order, Map.of("success", false, "error", reason));
+                    log.warn("Chain {} step {} not completed: {}", chain.getChainCode(), toolName, reason);
+                    if ("STOP".equals(chain.getErrorStrategy())) {
+                        self.persistExecutionMetadata(chain, startedAt, "FAILED", errorSummary.toString());
+                        return;
+                    }
+                    continue;
+                }
+                String result = outcome.payload() == null ? "" : outcome.payload().toString();
                 chainContext.put("step" + order, Map.of("result", result, "success", true));
                 log.info("Chain {} step {} executed OK", chain.getChainCode(), toolName);
             } catch (Exception e) {
