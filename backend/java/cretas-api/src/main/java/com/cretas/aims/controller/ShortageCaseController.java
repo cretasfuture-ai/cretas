@@ -11,6 +11,7 @@ import com.cretas.aims.repository.shortage.ShortageCaseEventRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseLineRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.service.shortage.ShortageCaseService;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -40,16 +41,18 @@ public class ShortageCaseController {
     private final ShortageCaseService caseService;
 
     public record CaseView(String id, String sourceType, String sourceId, String salesOrderNumber,
-                           String salesOrderStatus, String stage, String ownerRole, Long ownerUserId,
+                           String salesOrderStatus, String salesOrderStatusLabel, String stage, String stageLabel,
+                           String ownerRole, Long ownerUserId,
                            int gapLineCount, LocalDateTime gapResolvedAt, LocalDateTime lastRefreshedAt,
                            String lastRefreshReason, LocalDateTime closedAt, LocalDateTime createdAt) {
     }
 
-    public record LineView(String materialTypeId, String materialName, String unit, BigDecimal requiredQty,
-                           BigDecimal releasedQty, BigDecimal inspectingQty, BigDecimal onOrderQty,
+    public record LineView(String materialTypeId, String materialName, String unit, String unitLabel,
+                           BigDecimal requiredQty, BigDecimal releasedQty, BigDecimal inspectingQty, BigDecimal onOrderQty,
                            int onOrderUnitMismatchLines, BigDecimal gapQty) {
         static LineView of(ShortageCaseLine l) {
-            return new LineView(l.getMaterialTypeId(), l.getMaterialName(), l.getUnit(), l.getRequiredQty(),
+            return new LineView(l.getMaterialTypeId(), l.getMaterialName(), l.getUnit(),
+                    l.getUnit() == null ? null : UnitDisplayNames.display(l.getUnit()), l.getRequiredQty(),
                     l.getReleasedQty(), l.getInspectingQty(), l.getOnOrderQty(), l.getOnOrderUnitMismatchLines(),
                     l.getGapQty());
         }
@@ -100,7 +103,8 @@ public class ShortageCaseController {
             throw new BusinessException(400, "不支持的来源: " + c.getSourceType());
         }
         if (c.getStage().isTerminal()) {
-            throw new BusinessException(409, "实例已结束 (" + c.getStage() + "), 不再刷新");
+            throw new BusinessException(409, "实例已结束 (" + c.getStage().label() + "), 不再刷新")
+                    .withHint("已结束的实例只能查看; 若又出现缺口, 下一次财务审核 / 入库会自动建新实例");
         }
         caseService.refreshForSalesOrder(factoryId, c.getSourceId(), "MANUAL_REFRESH");
         return ApiResponse.success("已核对", view(own(factoryId, caseId)));
@@ -118,7 +122,8 @@ public class ShortageCaseController {
         return new CaseView(c.getId(), c.getSourceType().name(), c.getSourceId(),
                 order == null ? null : order.getOrderNumber(),
                 order == null || order.getStatus() == null ? null : order.getStatus().name(),
-                c.getStage().name(), c.getOwnerRole(), c.getOwnerUserId(), c.getGapLineCount(), c.getGapResolvedAt(),
+                order == null || order.getStatus() == null ? null : order.getStatus().getDisplayName(),
+                c.getStage().name(), c.getStage().label(), c.getOwnerRole(), c.getOwnerUserId(), c.getGapLineCount(), c.getGapResolvedAt(),
                 c.getLastRefreshedAt(), c.getLastRefreshReason(), c.getClosedAt(), c.getCreatedAt());
     }
 }

@@ -13,9 +13,12 @@ import com.cretas.aims.repository.shortage.ShortageCaseLineRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.repository.shortage.ShortageSupplyQueryRepository;
 import com.cretas.aims.service.shortage.dto.ShortageReport;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -31,6 +34,13 @@ import java.util.*;
  * 阶段由事实算出 (缺口为 0 → GAP_RESOLVED; 每条缺口都有质检中 / 在途 → WAITING_SUPPLY;
  * 比上次少 → PARTIALLY_RESOLVED; 否则 DETECTED)。终态 (CANCELLED / MANUAL / CLOSED) 不再被刷新改动。
  * 输入没变就不写留痕, 所以同一事件来多少次都只有一条 CREATED + 实际变化次数条 REFRESHED。
+ *
+ * <p>数量口径: 需求 / 已放行 / 缺口都取库存检查换算后的<b>库存单位</b> ({@link MaterialShortfall#getQuantityUnit}),
+ * 质检中按批次 (同为库存单位), 在途只计与之等价的采购单位 (问单位契约, ⛔ 不比字符串, ⛔ 不换算)。
+ * 配方单位 (如 g) 和库存单位 (如 kg) 不同时, ⛔ 不能拿配方量去减库存量。
+ *
+ * <p>事务: 两个入口都是 REQUIRES_NEW —— 由监听器在原业务提交之后调用时, 这里失败只回滚这次刷新,
+ * 不会把放行 / 收货本身标成失败。
  */
 @Slf4j
 @Service
@@ -48,14 +58,34 @@ public class ShortageCaseService {
     private final ShortageCaseEventRepository eventRepository;
     private final ShortageSupplyQueryRepository supplyQueries;
     private final SalesOrderRepository salesOrderRepository;
+    private final UnitContractService unitContractService;
 
     /**
-     * 按销售订单的当前事实刷新 (没有实例且有原料缺口才新建)。
+     * 按销售订单的当前事实刷新 (没有实例且有原料缺口才新建)。先锁住已有实例再读事实, 旧快照赢不了新快照。
      *
      * @return 刷新后的实例; 没有缺口也没有实例 / 客供料订单 / 订单不属于本厂 ⇒ empty
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Optional<ShortageCase> refreshForSalesOrder(String factoryId, String salesOrderId, String reason) {
+        return refreshInCurrentTransaction(factoryId, salesOrderId, reason);
+    }
+
+    /** 入库 / 质检放行: 本厂含这种物料的未关闭实例逐个刷新。 */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int refreshForMaterial(String factoryId, String materialTypeId, String reason) {
+        int n = 0;
+        for (ShortageCase c : caseRepository.findOpenByFactoryIdAndMaterial(factoryId, materialTypeId)) {
+            if (c.getSourceType() == ShortageCase.SourceType.SALES_ORDER) {
+                refreshInCurrentTransaction(factoryId, c.getSourceId(), reason);
+                n++;
+            }
+        }
+        return n;
+    }
+
+    // ---------------------------------------------------------------- internals
+
+    private Optional<ShortageCase> refreshInCurrentTransaction(String factoryId, String salesOrderId, String reason) {
         var order = salesOrderRepository.findById(salesOrderId)
                 .filter(o -> factoryId.equals(o.getFactoryId()))
                 .orElse(null);
@@ -67,83 +97,90 @@ public class ShortageCaseService {
             return Optional.empty(); // 客供料不走公司采购, 与缺料报告同口径
         }
 
-        ShortageReport report = shortageAnalysisService.analyzeForSalesOrder(factoryId, salesOrderId);
-        List<Facts> facts = factsFrom(factoryId, report);
-
         ShortageCase existing = caseRepository
                 .findOpenForUpdate(factoryId, ShortageCase.SourceType.SALES_ORDER, salesOrderId)
                 .orElse(null);
+        if (existing != null && existing.getStage().isTerminal()) {
+            return Optional.of(existing);
+        }
+        Map<String, ShortageCaseLine> lines = new LinkedHashMap<>();
+        if (existing != null) {
+            for (ShortageCaseLine l : lineRepository.findByCaseIdOrderByIdAsc(existing.getId())) {
+                lines.put(l.getMaterialTypeId(), l);
+            }
+        }
+
+        ShortageReport report = shortageAnalysisService.analyzeForSalesOrder(factoryId, salesOrderId);
+        List<Facts> facts = factsFrom(factoryId, report, lines);
         boolean anyGap = facts.stream().anyMatch(f -> f.gap.signum() > 0);
         if (existing == null && !anyGap) {
             return Optional.empty();
         }
-        if (existing != null && existing.getStage().isTerminal()) {
-            return Optional.of(existing);
-        }
         return Optional.of(existing == null
                 ? create(factoryId, salesOrderId, facts, reason)
-                : refresh(existing, facts, reason));
+                : refresh(existing, lines, facts, reason));
     }
 
-    /** 入库 / 质检放行: 本厂含这种物料的未关闭实例逐个刷新。 */
-    @Transactional
-    public int refreshForMaterial(String factoryId, String materialTypeId, String reason) {
-        int n = 0;
-        for (ShortageCase c : caseRepository.findOpenByFactoryIdAndMaterial(factoryId, materialTypeId)) {
-            if (c.getSourceType() == ShortageCase.SourceType.SALES_ORDER) {
-                refreshForSalesOrder(factoryId, c.getSourceId(), reason);
-                n++;
-            }
-        }
-        return n;
-    }
-
-    // ---------------------------------------------------------------- internals
-
-    /** 一种物料在当前时点的事实。 */
+    /** 一种物料在当前时点的事实 (数量都在 {@link #unit} 下, 即库存单位)。 */
     record Facts(String materialTypeId, String materialName, String unit, BigDecimal required,
                  BigDecimal released, BigDecimal inspecting, BigDecimal onOrder, int onOrderUnitMismatch,
                  BigDecimal gap) {
     }
 
-    private List<Facts> factsFrom(String factoryId, ShortageReport report) {
-        Map<String, MaterialShortfall> shortByMaterial = new HashMap<>();
+    /**
+     * 缺口清单里的物料按库存检查的口径取数; 这次不缺、但实例里已有一行的物料 ⇒ 缺口记 0 (需求沿用那一行);
+     * 订单已经不需要的物料 ⇒ 不在结果里 (调用方软删那一行)。从没缺过的物料不建行。
+     */
+    private List<Facts> factsFrom(String factoryId, ShortageReport report, Map<String, ShortageCaseLine> existing) {
+        Map<String, MaterialShortfall> shortByMaterial = new LinkedHashMap<>();
         if (report.getMaterialShortages() != null) {
             for (MaterialShortfall s : report.getMaterialShortages()) {
                 shortByMaterial.put(s.getMaterialTypeId(), s);
             }
         }
-        List<Facts> out = new ArrayList<>();
-        if (report.getTotalRequired() == null) {
-            return out;
-        }
-        for (MaterialRequirement r : report.getTotalRequired()) {
-            if (r.getMaterialTypeId() == null) {
-                continue;
-            }
-            BigDecimal required = nz(r.getRequiredQuantity());
-            MaterialShortfall s = shortByMaterial.get(r.getMaterialTypeId());
-            // 不在缺口清单里 = 已放行可用的够用 ⇒ 记成 required (只看对需求的覆盖, 不记总库存)
-            BigDecimal released = s == null ? required : nz(s.getAvailableQuantity()).min(required).max(BigDecimal.ZERO);
-            BigDecimal gap = required.subtract(released).max(BigDecimal.ZERO);
-            String unit = blankToNull(r.getSourceUnit());
-
-            BigDecimal inspecting = nz(supplyQueries.sumInspectingQuantity(factoryId, r.getMaterialTypeId()));
-            BigDecimal onOrder = BigDecimal.ZERO;
-            int mismatch = 0;
-            for (Object[] row : supplyQueries.findOpenOrderRemaining(factoryId, r.getMaterialTypeId())) {
-                String rowUnit = blankToNull(row[0] == null ? null : row[0].toString());
-                BigDecimal remaining = row[1] instanceof BigDecimal b ? b : new BigDecimal(String.valueOf(row[1]));
-                if (unit != null && rowUnit != null && unit.equalsIgnoreCase(rowUnit)) {
-                    onOrder = onOrder.add(remaining);
-                } else {
-                    mismatch++; // ⛔ 不换算: 单位不同 (或需求单位未知) 的采购行只计行数
+        Map<String, String> requiredNames = new LinkedHashMap<>();
+        if (report.getTotalRequired() != null) {
+            for (MaterialRequirement r : report.getTotalRequired()) {
+                if (r.getMaterialTypeId() != null) {
+                    requiredNames.put(r.getMaterialTypeId(), r.getMaterialTypeName());
                 }
             }
-            String name = s != null && s.getMaterialTypeName() != null ? s.getMaterialTypeName() : r.getMaterialTypeName();
-            out.add(new Facts(r.getMaterialTypeId(), name, unit, required, released, inspecting, onOrder, mismatch, gap));
+        }
+        List<Facts> out = new ArrayList<>();
+        for (MaterialShortfall s : shortByMaterial.values()) {
+            String unit = blankToNull(s.getQuantityUnit());
+            BigDecimal required = nz(s.getRequiredQuantity());
+            BigDecimal released = nz(s.getAvailableQuantity()).min(required).max(BigDecimal.ZERO);
+            BigDecimal gap = nz(s.getShortfallQuantity()).max(BigDecimal.ZERO);
+            String name = s.getMaterialTypeName() != null ? s.getMaterialTypeName() : requiredNames.get(s.getMaterialTypeId());
+            out.add(withSupply(factoryId, s.getMaterialTypeId(), name, unit, required, released, gap));
+        }
+        for (Map.Entry<String, ShortageCaseLine> e : existing.entrySet()) {
+            if (shortByMaterial.containsKey(e.getKey()) || !requiredNames.containsKey(e.getKey())) {
+                continue; // 还缺 (上面已处理) / 订单已不需要 (不进结果 ⇒ 软删)
+            }
+            ShortageCaseLine l = e.getValue();
+            out.add(withSupply(factoryId, l.getMaterialTypeId(), l.getMaterialName(), l.getUnit(),
+                    l.getRequiredQty(), l.getRequiredQty(), BigDecimal.ZERO));
         }
         return out;
+    }
+
+    private Facts withSupply(String factoryId, String materialTypeId, String name, String unit, BigDecimal required,
+                             BigDecimal released, BigDecimal gap) {
+        BigDecimal inspecting = nz(supplyQueries.sumInspectingQuantity(factoryId, materialTypeId));
+        BigDecimal onOrder = BigDecimal.ZERO;
+        int mismatch = 0;
+        for (Object[] row : supplyQueries.findOpenOrderRemaining(factoryId, materialTypeId)) {
+            String rowUnit = blankToNull(row[0] == null ? null : row[0].toString());
+            BigDecimal remaining = row[1] instanceof BigDecimal b ? b : new BigDecimal(String.valueOf(row[1]));
+            if (unit != null && rowUnit != null && unitContractService.areEquivalent(factoryId, unit, rowUnit)) {
+                onOrder = onOrder.add(remaining);
+            } else {
+                mismatch++; // ⛔ 不换算: 单位不同 (或缺口单位未知) 的采购行只计行数
+            }
+        }
+        return new Facts(materialTypeId, name, unit, required, released, inspecting, onOrder, mismatch, gap);
     }
 
     private ShortageCase create(String factoryId, String salesOrderId, List<Facts> facts, String reason) {
@@ -170,30 +207,37 @@ public class ShortageCaseService {
         return c;
     }
 
-    private ShortageCase refresh(ShortageCase c, List<Facts> facts, String reason) {
+    private ShortageCase refresh(ShortageCase c, Map<String, ShortageCaseLine> lines, List<Facts> facts, String reason) {
         String fp = fingerprint(facts);
         if (fp.equals(c.getInputFingerprint())) {
             return c; // 输入没变: 不写任何东西 (同一事件重复来是常态)
         }
-        Map<String, ShortageCaseLine> lines = new LinkedHashMap<>();
-        for (ShortageCaseLine l : lineRepository.findByCaseIdOrderByIdAsc(c.getId())) {
-            lines.put(l.getMaterialTypeId(), l);
-        }
         BigDecimal before = lines.values().stream().map(ShortageCaseLine::getGapQty).reduce(BigDecimal.ZERO, BigDecimal::add);
+        Set<String> present = new HashSet<>();
         for (Facts f : facts) {
+            present.add(f.materialTypeId);
             ShortageCaseLine l = lines.getOrDefault(f.materialTypeId, new ShortageCaseLine());
             lineRepository.save(lineFrom(l, c, f));
         }
+        for (ShortageCaseLine l : lines.values()) {
+            if (!present.contains(l.getMaterialTypeId())) {
+                lineRepository.delete(l); // 订单已不需要这种物料: 软删那一行, 不再留一个过期的「还缺」
+            }
+        }
         Stage from = c.getStage();
         Stage to = stageFrom(facts, before);
-        LocalDateTime now = LocalDateTime.now();
+        BigDecimal now = facts.stream().map(f -> f.gap).reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (to == Stage.DETECTED && from == Stage.PARTIALLY_RESOLVED && now.compareTo(before) <= 0) {
+            to = from; // 只是在途变了、缺口没变大: 已经部分解决的不退回「待处理」
+        }
+        LocalDateTime at = LocalDateTime.now();
         c.setStage(to);
         c.setOwnerRole(ownerFor(to, facts));
         c.setGapLineCount(gapLines(facts));
         c.setInputFingerprint(fp);
-        c.setLastRefreshedAt(now);
+        c.setLastRefreshedAt(at);
         c.setLastRefreshReason(reason);
-        c.setGapResolvedAt(to == Stage.GAP_RESOLVED ? (c.getGapResolvedAt() != null ? c.getGapResolvedAt() : now) : null);
+        c.setGapResolvedAt(to == Stage.GAP_RESOLVED ? (c.getGapResolvedAt() != null ? c.getGapResolvedAt() : at) : null);
         c = caseRepository.saveAndFlush(c);
         event(c, from == to ? ShortageCaseEvent.EventType.REFRESHED : ShortageCaseEvent.EventType.STAGE_CHANGED,
                 from, to, reason, summary(facts));
@@ -270,7 +314,7 @@ public class ShortageCaseService {
             if (f.gap.signum() > 0) {
                 b.append(f.materialName != null ? f.materialName : f.materialTypeId)
                         .append(" 缺 ").append(f.gap.stripTrailingZeros().toPlainString())
-                        .append(f.unit != null ? " " + f.unit : " (单位未知)").append("; ");
+                        .append(f.unit != null ? " " + UnitDisplayNames.display(f.unit) : " (单位未知)").append("; ");
             }
         }
         return b.length() == 0 ? "缺口已全部覆盖" : b.toString().trim();
@@ -286,7 +330,8 @@ public class ShortageCaseService {
                     .append(f.released.stripTrailingZeros().toPlainString()).append('|')
                     .append(f.inspecting.stripTrailingZeros().toPlainString()).append('|')
                     .append(f.onOrder.stripTrailingZeros().toPlainString()).append('|')
-                    .append(f.onOrderUnitMismatch).append(';');
+                    .append(f.onOrderUnitMismatch).append('|')
+                    .append(f.gap.stripTrailingZeros().toPlainString()).append(';');
         }
         try {
             byte[] d = MessageDigest.getInstance("SHA-256").digest(b.toString().getBytes(StandardCharsets.UTF_8));

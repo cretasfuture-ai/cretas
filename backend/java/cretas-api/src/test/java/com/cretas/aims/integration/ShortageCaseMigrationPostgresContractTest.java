@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261103_96 在真 PG 上: 同一来源只能有一个未关闭的缺料实例 (部分唯一索引), 关了才能再开;
+ * V20261103_123 在真 PG 上: 同一来源只能有一个未关闭的缺料实例 (部分唯一索引), 关了才能再开;
  * 阶段 / 来源 / 留痕类型只认登记过的值; 缺口行数量不能为负, 一个实例里同一物料只一行。
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
@@ -39,7 +39,7 @@ class ShortageCaseMigrationPostgresContractTest {
              Statement statement = connection.createStatement()) {
             statement.execute("CREATE SCHEMA " + schema);
             statement.execute("SET search_path TO " + schema);
-            ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/flyway/V20261103_96__shortage_cases.sql"));
+            ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/flyway/V20261103_123__shortage_cases.sql"));
 
             statement.execute(caseRow("C1", "F1", "SO-1", "DETECTED"));
             assertThrows(SQLException.class, () -> statement.execute(caseRow("C2", "F1", "SO-1", "DETECTED")),

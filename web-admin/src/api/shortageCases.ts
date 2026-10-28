@@ -22,7 +22,10 @@ export interface ShortageCase {
   sourceId: string;
   salesOrderNumber: string | null;
   salesOrderStatus: string | null;
+  /** 订单状态的中文名 (界面只显示它) */
+  salesOrderStatusLabel: string | null;
   stage: ShortageCaseStage;
+  stageLabel: string;
   ownerRole: string;
   ownerUserId: number | null;
   gapLineCount: number;
@@ -38,6 +41,8 @@ export interface ShortageCaseLine {
   materialName: string | null;
   /** 跟物料走; null = 单位未知 (不默认 kg) */
   unit: string | null;
+  /** 单位的中文显示名; null = 单位未知 */
+  unitLabel: string | null;
   requiredQty: number;
   releasedQty: number;
   inspectingQty: number;

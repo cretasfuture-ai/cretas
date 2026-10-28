@@ -14,6 +14,7 @@ import com.cretas.aims.repository.shortage.ShortageCaseLineRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.repository.shortage.ShortageSupplyQueryRepository;
 import com.cretas.aims.service.shortage.dto.ShortageReport;
+import com.cretas.aims.service.unit.UnitContractService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -39,6 +40,7 @@ class ShortageCaseServiceContractTest {
     private final ShortageCaseEventRepository events = mock(ShortageCaseEventRepository.class);
     private final ShortageSupplyQueryRepository supply = mock(ShortageSupplyQueryRepository.class);
     private final SalesOrderRepository orders = mock(SalesOrderRepository.class);
+    private final UnitContractService units = mock(UnitContractService.class);
     private ShortageCaseService service;
 
     private final Map<String, ShortageCase> caseStore = new HashMap<>();
@@ -53,7 +55,9 @@ class ShortageCaseServiceContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new ShortageCaseService(analysis, cases, lines, events, supply, orders);
+        service = new ShortageCaseService(analysis, cases, lines, events, supply, orders, units);
+        // 单位契约桩: kg ≡ 千克 ≡ 公斤, 其余按字面 (够区分 kg / g / 箱)
+        when(units.areEquivalent(eq("F1"), anyString(), anyString())).thenAnswer(i -> canon(i.getArgument(1)).equals(canon(i.getArgument(2))));
         SalesOrder so = new SalesOrder();
         so.setId("SO-1");
         so.setFactoryId("F1");
@@ -99,6 +103,7 @@ class ShortageCaseServiceContractTest {
             s.setRequiredQuantity(new BigDecimal("10"));
             s.setAvailableQuantity(available);
             s.setShortfallQuantity(new BigDecimal("10").subtract(available));
+            s.setQuantityUnit("kg");
             shorts.add(s);
         }
         return ShortageReport.builder().factoryId("F1").salesOrderId("SO-1")
@@ -210,5 +215,61 @@ class ShortageCaseServiceContractTest {
 
         assertThat(c.getStage()).isEqualTo(Stage.MANUAL);
         assertThat(eventStore).hasSize(1);
+    }
+    private static String canon(String u) {
+        String t = u.trim().toLowerCase();
+        return switch (t) { case "千克", "公斤" -> "kg"; default -> t; };
+    }
+
+    @Test
+    void aRecipeInGramsAgainstStockInKilogramsUsesTheStockUnitThroughout() {
+        // 配方 5000 g; 库存检查已换算成 5 kg 需求、3 kg 可用 ⇒ 缺 2 kg (⛔ 不是 4997 g)
+        MaterialRequirement r = new MaterialRequirement();
+        r.setMaterialTypeId("M1"); r.setMaterialTypeName("白糖");
+        r.setRequiredQuantity(new BigDecimal("5000")); r.setSourceUnit("g");
+        MaterialShortfall s = new MaterialShortfall("M1", "白糖", new BigDecimal("5"), new BigDecimal("3"), new BigDecimal("2"));
+        s.setQuantityUnit("kg");
+        when(analysis.analyzeForSalesOrder("F1", "SO-1")).thenReturn(ShortageReport.builder()
+                .factoryId("F1").salesOrderId("SO-1").totalRequired(List.of(r)).materialShortages(List.of(s)).build());
+        openOrders.add(new Object[] {"千克", new BigDecimal("2")});    // 采购按「千克」下的, 与 kg 等价
+
+        service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED");
+
+        ShortageCaseLine l = onlyLine();
+        assertThat(l.getUnit()).isEqualTo("kg");
+        assertThat(l.getRequiredQty()).isEqualByComparingTo("5");
+        assertThat(l.getReleasedQty()).isEqualByComparingTo("3");
+        assertThat(l.getGapQty()).isEqualByComparingTo("2");
+        assertThat(l.getOnOrderQty()).isEqualByComparingTo("2");
+        assertThat(l.getOnOrderUnitMismatchLines()).isZero();
+    }
+
+    @Test
+    void aMaterialTheOrderNoLongerNeedsIsRemovedNotLeftAsAStaleGap() {
+        service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED");
+        ShortageCaseLine stale = onlyLine();
+        // 订单改了: 不再需要 M1
+        when(analysis.analyzeForSalesOrder("F1", "SO-1")).thenReturn(ShortageReport.builder()
+                .factoryId("F1").salesOrderId("SO-1").totalRequired(List.of()).materialShortages(List.of()).build());
+
+        ShortageCase c = service.refreshForSalesOrder("F1", "SO-1", "MANUAL_REFRESH").orElseThrow();
+
+        org.mockito.Mockito.verify(lines).delete(stale);
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(c.getGapLineCount()).isZero();
+    }
+
+    @Test
+    void partiallyResolvedDoesNotFallBackWhenOnlyOnOrderChanges() {
+        service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED");   // 缺 6
+        available = new BigDecimal("8");
+        service.refreshForMaterial("F1", "M1", "MATERIAL_BATCH_RELEASED");   // 缺 2 ⇒ 部分解决
+        ShortageCase c = caseStore.values().iterator().next();
+        assertThat(c.getStage()).isEqualTo(Stage.PARTIALLY_RESOLVED);
+
+        openOrders.add(new Object[] {"箱", new BigDecimal("1")});            // 只多了一条单位不同的在途
+        service.refreshForMaterial("F1", "M1", "PO_SUBMITTED");
+
+        assertThat(c.getStage()).isEqualTo(Stage.PARTIALLY_RESOLVED);
     }
 }

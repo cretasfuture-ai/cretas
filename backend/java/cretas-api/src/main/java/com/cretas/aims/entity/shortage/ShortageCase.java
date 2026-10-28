@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * 缺料异常处理实例 (S4 L1): 一个缺料事件一条, 同一来源再来只刷新它 (见 V20261103_96)。
+ * 缺料异常处理实例 (S4 L1): 一个缺料事件一条, 同一来源再来只刷新它 (见 V20261103_123)。
  *
  * <p>「缺口已解决」只看物料事实 ({@link #gapResolvedAt}); 订单交付由销售单自己的状态体现, 两者不合并。
  */
@@ -21,7 +21,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @Entity
 @Table(name = "shortage_cases")
-@SQLDelete(sql = "UPDATE shortage_cases SET deleted_at = NOW() WHERE id = ?")
+@SQLDelete(sql = "UPDATE shortage_cases SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ShortageCase extends BaseEntity {
 
@@ -29,7 +29,19 @@ public class ShortageCase extends BaseEntity {
 
     /** 阶段; 终态是 CANCELLED / MANUAL / CLOSED。GAP_RESOLVED 仍未关闭 (等后续确认)。 */
     public enum Stage {
-        DETECTED, PLANNED, EXECUTING, WAITING_SUPPLY, PARTIALLY_RESOLVED, GAP_RESOLVED, CANCELLED, MANUAL, CLOSED;
+        DETECTED("待处理"), PLANNED("已定方案"), EXECUTING("执行中"), WAITING_SUPPLY("等到货 / 放行"),
+        PARTIALLY_RESOLVED("部分解决"), GAP_RESOLVED("缺口已解决"), CANCELLED("已取消"), MANUAL("转人工"), CLOSED("已关闭");
+
+        private final String label;
+
+        Stage(String label) {
+            this.label = label;
+        }
+
+        /** 给人看的名字 (⛔ 不把枚举码露给用户)。 */
+        public String label() {
+            return label;
+        }
 
         public boolean isTerminal() {
             return this == CANCELLED || this == MANUAL || this == CLOSED;

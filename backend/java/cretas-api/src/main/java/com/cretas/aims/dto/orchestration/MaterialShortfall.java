@@ -29,4 +29,15 @@ public class MaterialShortfall {
 
     /** 缺口数量（requiredQuantity - availableQuantity），大于0表示短缺 */
     private BigDecimal shortfallQuantity;
+
+    /**
+     * 上面三个数量实际所用的单位 —— 库存检查已把配方需求换算到库存单位 (如 g → kg) 再比较,
+     * 所以这里是<b>库存单位</b>, ⛔ 不是配方单位。旧调用方不填时为 null (= 未知)。
+     */
+    private String quantityUnit;
+
+    public MaterialShortfall(String materialTypeId, String materialTypeName, BigDecimal requiredQuantity,
+                             BigDecimal availableQuantity, BigDecimal shortfallQuantity) {
+        this(materialTypeId, materialTypeName, requiredQuantity, availableQuantity, shortfallQuantity, null);
+    }
 }

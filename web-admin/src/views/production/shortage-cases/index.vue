@@ -164,7 +164,7 @@ onMounted(load);
           <template #default="{ row }">{{ time(row.gapResolvedAt) }}</template>
         </el-table-column>
         <el-table-column label="订单交付状态" width="130">
-          <template #default="{ row }">{{ row.salesOrderStatus || '—' }}</template>
+          <template #default="{ row }">{{ row.salesOrderStatusLabel || '—' }}</template>
         </el-table-column>
         <el-table-column label="最近核对" min-width="200">
           <template #default="{ row }">
@@ -181,7 +181,7 @@ onMounted(load);
             <el-descriptions-item label="来源订单">{{ detail.case.salesOrderNumber || detail.case.sourceId }}</el-descriptions-item>
             <el-descriptions-item label="阶段">{{ STAGE_LABEL[detail.case.stage] }}</el-descriptions-item>
             <el-descriptions-item label="该谁处理">{{ ROLE_LABEL[detail.case.ownerRole] || detail.case.ownerRole }}</el-descriptions-item>
-            <el-descriptions-item label="订单交付状态">{{ detail.case.salesOrderStatus || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="订单交付状态">{{ detail.case.salesOrderStatusLabel || '—' }}</el-descriptions-item>
             <el-descriptions-item label="缺口解决时间">{{ time(detail.case.gapResolvedAt) }}</el-descriptions-item>
             <el-descriptions-item label="最近核对">{{ time(detail.case.lastRefreshedAt) }}</el-descriptions-item>
           </el-descriptions>
@@ -194,12 +194,12 @@ onMounted(load);
             <el-table-column label="物料" min-width="120">
               <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
             </el-table-column>
-            <el-table-column label="需求"><template #default="{ row }">{{ qty(row.requiredQty, row.unit) }}</template></el-table-column>
-            <el-table-column label="已放行可用"><template #default="{ row }">{{ qty(row.releasedQty, row.unit) }}</template></el-table-column>
-            <el-table-column label="质检中"><template #default="{ row }">{{ qty(row.inspectingQty, row.unit) }}</template></el-table-column>
+            <el-table-column label="需求"><template #default="{ row }">{{ qty(row.requiredQty, row.unitLabel) }}</template></el-table-column>
+            <el-table-column label="已放行可用"><template #default="{ row }">{{ qty(row.releasedQty, row.unitLabel) }}</template></el-table-column>
+            <el-table-column label="质检中"><template #default="{ row }">{{ qty(row.inspectingQty, row.unitLabel) }}</template></el-table-column>
             <el-table-column label="在途">
               <template #default="{ row }">
-                {{ qty(row.onOrderQty, row.unit) }}
+                {{ qty(row.onOrderQty, row.unitLabel) }}
                 <div v-if="row.onOrderUnitMismatchLines > 0" class="hint">
                   另有 {{ row.onOrderUnitMismatchLines }} 行采购单位不同，未计入
                 </div>
@@ -207,7 +207,7 @@ onMounted(load);
             </el-table-column>
             <el-table-column label="还缺">
               <template #default="{ row }">
-                <span :class="{ gap: row.gapQty > 0 }">{{ qty(row.gapQty, row.unit) }}</span>
+                <span :class="{ gap: row.gapQty > 0 }">{{ qty(row.gapQty, row.unitLabel) }}</span>
               </template>
             </el-table-column>
           </el-table>
