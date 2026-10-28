@@ -59,7 +59,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @Import({SkuAssemblyService.class, ProductWorkProcessServiceImpl.class, ProcessSecretRecipeGuard.class,
         ProcessSecretAccessService.class, ProcessSecretAuditRecorder.class,
-        ProcessSecretReadTrackerConfiguration.class})
+        ProcessSecretReadTrackerConfiguration.class, ProcessSecretAggregateExclusions.class,
+        ProcessSecretLlmCostScope.class})
 class ProcessSecretDataLayerJpaTest {
 
     static final String F = "F-PS-DATA";
@@ -78,6 +79,7 @@ class ProcessSecretDataLayerJpaTest {
     @Autowired SkuAssemblyService skuAssembly;
     @Autowired ProductWorkProcessServiceImpl workProcessService;
     @Autowired ProcessSecretAccessService accessService;
+    @Autowired ProcessSecretLlmCostScope costScope;
     Long userId;
 
     @BeforeEach
@@ -219,6 +221,81 @@ class ProcessSecretDataLayerJpaTest {
 
         assertThat(again).isSameAs(managed);
         assertThat(entityManager.contains(managed)).isTrue();
+    }
+
+    private void persistSecretPlan(String id) {
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId(id);
+        plan.setFactoryId(F);
+        plan.setPlanNumber("PLN-" + id);
+        plan.setProductTypeId(SECRET);
+        plan.setPlannedQuantity(new BigDecimal("10.00"));
+        plan.setPlannedUnit("kg");
+        plan.setCreatedBy(userId);
+        // H2 读不回 jsonb 列里的空 Map / 空 List (「"{}"」「"[]"」被当成字符串): 测试库里这几列留空
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        plan.setSourceOrderIds(null);
+        entityManager.persist(plan);
+        entityManager.flush();
+        entityManager.clear();
+    }
+
+    @Test
+    void aPlanTheRequestHoldsThroughALazyProxyStaysAttachedWhenTheScopeLoadsItSoItsWriteIsKept() {
+        persistSecretPlan("PL-PS-HELD");
+        // 外层请求先通过懒关联拿着计划 P 的未初始化代理 (同 MaterialConsumption.productionPlan)
+        com.cretas.aims.entity.ProductionPlan held = entityManager.getReference(com.cretas.aims.entity.ProductionPlan.class, "PL-PS-HELD");
+        assertThat(org.hibernate.Hibernate.isInitialized(held)).isFalse();
+
+        ProcessSecretLlmCostScope.Excluded excluded;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor(OPERATOR))) {
+            excluded = costScope.forCurrentCaller(F);   // 判定范围在不打标段里读全厂计划, 也就载入了 P
+        }
+        assertThat(excluded.planIds()).contains("PL-PS-HELD");   // 一定发生: P 确实在段里读到了
+
+        held.setNotes("外层经代理改的备注");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(entityManager.find(com.cretas.aims.entity.ProductionPlan.class, "PL-PS-HELD").getNotes())
+                .isEqualTo("外层经代理改的备注");
+    }
+
+    @Test
+    void aRecipeHeldThroughALazyAssociationIsKeptAttachedAndItsReadIsRecordedInstead() {
+        BomRecipeItem item = recipeItems.findByRecipeIdOrderBySortOrderAsc("BOM-PS-SECRET").get(0);
+        BomRecipe proxy = item.getRecipe();
+        assertThat(org.hibernate.Hibernate.isInitialized(proxy)).isFalse();
+
+        try (ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
+            ProcessSecretReadTracker.untracked(() -> recipes.findById("BOM-PS-SECRET").orElseThrow());
+            // 没移出 (外层引用着), 之后经代理读不再触发 PostLoad ⇒ 段结束时补打标, 宁可多藏
+            assertThat(ProcessSecretReadTracker.reads()).contains(
+                    new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCT, F, SECRET));
+        }
+        proxy.setProductName("外层改名");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(recipes.findById("BOM-PS-SECRET").orElseThrow().getProductName()).isEqualTo("外层改名");
+    }
+
+    @Test
+    void nothingIsEvictedWhileTheSessionHasUnflushedChangesAndTheReadIsRecordedInstead() {
+        ProductType target = productTypes.findById(TARGET).orElseThrow();
+        target.setName("未刷新的改名");   // 会话里有未刷新的改动
+
+        try (ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
+            BomRecipe loaded = ProcessSecretReadTracker.untracked(() -> recipes.findById("BOM-PS-SECRET").orElseThrow());
+            assertThat(entityManager.contains(loaded)).isTrue();
+            assertThat(ProcessSecretReadTracker.reads()).contains(
+                    new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCT, F, SECRET));
+        }
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(productTypes.findById(TARGET).orElseThrow().getName()).isEqualTo("未刷新的改名");
     }
 
     // ------------------------------------------------------------ 复制类出口

@@ -248,6 +248,63 @@ class ProcessingServiceImplAiProcessSecretTest {
         assertThat(owner).doesNotContainKey("processSecretNote");
     }
 
+    @SuppressWarnings("unchecked")
+    private static BigDecimal todays(Map<String, Object> trends, String series, String field) {
+        List<Map<String, Object>> points = (List<Map<String, Object>>) trends.get(series);
+        Map<String, Object> today = points.get(points.size() - 1);
+        assertThat(today.get("date")).isEqualTo(java.time.LocalDate.now().toString());
+        return (BigDecimal) today.get(field);
+    }
+
+    @Test
+    void trendAnalysisDailyOutputAndYieldOnlyCoverVisibleBatchesForAnUnauthorizedCaller() {
+        ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
+        java.time.LocalDateTime today = java.time.LocalDate.now().atTime(0, 0, 1);
+        com.cretas.aims.entity.ProductionBatch secret = completed(batch(1L, SECRET, SECRET_PLAN, SECRET_COST, new BigDecimal("100")), today);
+        com.cretas.aims.entity.ProductionBatch normal = completed(batch(2L, NORMAL, NORMAL_PLAN, NORMAL_COST, new BigDecimal("100")), today);
+        com.cretas.aims.entity.ProductionBatch normal2 = completed(batch(3L, NORMAL2, null, NORMAL2_COST, new BigDecimal("200")), today);
+        secret.setYieldRate(new BigDecimal("50.00"));
+        normal.setYieldRate(new BigDecimal("90.00"));
+        normal2.setYieldRate(new BigDecimal("80.00"));
+        normal2.setBatchType("CLERK_WIP");   // 按天产量与原查询同口径: 文员在制批次也算
+        when(productionBatchRepository.findByFactoryIdAndCreatedAtAfter(eq(FACTORY), any()))
+                .thenReturn(List.of(secret, normal, normal2));
+        // 原按天查询 (全厂, 含保密批次): 产量 400, 良品率 (50+90+80)/3 = 73.33
+        when(productionBatchRepository.calculateDailyOutput(eq(FACTORY), any(), any())).thenReturn(new BigDecimal("400"));
+        when(productionBatchRepository.calculateDailyYieldRate(eq(FACTORY), any(), any())).thenReturn(new BigDecimal("73.33"));
+
+        Map<String, Object> colleague;
+        try (var ignored = as(sameFactoryUser())) {
+            colleague = service.getTrendAnalysis(FACTORY, "production", 7);
+        }
+        verify(productionBatchRepository, never()).calculateDailyOutput(anyString(), any(), any());
+        verify(productionBatchRepository, never()).calculateDailyYieldRate(anyString(), any(), any());
+        Map<String, Object> owner;
+        try (var ignored = as(owner())) {
+            owner = service.getTrendAnalysis(FACTORY, "production", 7);
+        }
+
+        assertThat(todays(colleague, "productionTrend", "output")).isEqualByComparingTo("300");
+        assertThat(todays(colleague, "qualityTrend", "passRate")).isEqualByComparingTo("85.00");
+        assertThat((String) colleague.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat(todays(owner, "productionTrend", "output")).isEqualByComparingTo("400");
+        assertThat(todays(owner, "qualityTrend", "passRate")).isEqualByComparingTo("73.33");
+        // 前一天没有可见批次: 与原查询无行时一样给 0
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> production = (List<Map<String, Object>>) colleague.get("productionTrend");
+        assertThat((BigDecimal) production.get(production.size() - 2).get("output")).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void trendAnalysisLooksBackAtMostOneYear() {
+        ReflectionTestUtils.setField(service, "llmCostScope", unprotectedScope());
+
+        Map<String, Object> trends = service.getTrendAnalysis(FACTORY, "cost", 100_000);
+
+        assertThat(trends.get("period")).isEqualTo(366);
+        assertThat((List<?>) trends.get("costTrend")).hasSize(367);   // 起止两端都含
+    }
+
     @Test
     void trendAnalysisWithoutDaysDefaultsToThirtyDaysInsteadOfThrowing() {
         ReflectionTestUtils.setField(service, "llmCostScope", unprotectedScope());

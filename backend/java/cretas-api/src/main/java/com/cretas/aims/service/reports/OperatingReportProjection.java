@@ -48,6 +48,7 @@ public class OperatingReportProjection {
     /**
      * 当前调用者无权完整查看的范围 (与经营报告提示词同一口径: 保密产品及牵涉它们的计划锚点):
      * 逐产品毛利 / 毛利率换成「已保密」, 并挪到该榜末尾 (留在原位置会泄露排名); 判定失败 = 所有产品行都遮 (fail-closed)。
+     * 指向被遮指标的解读 (insight) 一并去掉: 「复核这个毛利率」本身就在说这个值不寻常。
      */
     OperatingReportSnapshot maskForCaller(OperatingReportSnapshot snapshot,String factoryId){
         if(snapshot.sections()==null||snapshot.sections().isEmpty())return snapshot;
@@ -61,8 +62,14 @@ public class OperatingReportProjection {
         catch(RuntimeException unknown){hidden=null;hiddenProtected=null;}
         if(hidden!=null&&hidden.isEmpty())return snapshot;
         java.util.List<OperatingReportSnapshot.Section> sections=new java.util.ArrayList<>();
+        java.util.Set<String> maskedIds=new java.util.HashSet<>();
         for(OperatingReportSnapshot.Section section:snapshot.sections()){
-            if(MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED&&"margin".equals(section.id())){sections.add(maskMarginSummary(section));continue;}
+            if(MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED&&"margin".equals(section.id())){
+                OperatingReportSnapshot.Section summary=maskMarginSummary(section);
+                summary.metrics().stream().filter(m->m.value()==null&&OperatingReportCodec.PROCESS_SECRET_MASK.equals(m.missingReason()))
+                        .forEach(m->maskedIds.add(m.id()));
+                sections.add(summary);continue;
+            }
             if(!PRODUCT_RANK_SECTIONS.contains(section.id())){sections.add(section);continue;}
             java.util.List<OperatingReportSnapshot.Metric> metrics=new java.util.ArrayList<>();
             java.util.List<OperatingReportSnapshot.Metric> masked=new java.util.ArrayList<>();
@@ -74,14 +81,17 @@ public class OperatingReportProjection {
                     String reason=hidden==null||product==null||hiddenProtected.contains(product)
                             ?OperatingReportCodec.PROCESS_SECRET_MASK:OperatingReportCodec.CO_PRODUCT_MASK;
                     masked.add(new OperatingReportSnapshot.Metric(metric.id(),metric.label(),null,metric.unit(),reason,null,metric.sourcePath()));
+                    maskedIds.add(metric.id());
                 }
                 else metrics.add(metric);
             }
             metrics.addAll(masked);
             sections.add(new OperatingReportSnapshot.Section(section.id(),section.title(),section.priceSensitive(),section.basis(),metrics));
         }
+        java.util.List<OperatingReportSnapshot.Insight> insights=snapshot.insights()==null?null
+                :snapshot.insights().stream().filter(i->i.metricId()==null||!maskedIds.contains(i.metricId())).toList();
         return new OperatingReportSnapshot(snapshot.schema(),snapshot.status(),snapshot.reportType(),snapshot.periodStart(),snapshot.periodEnd(),
-                snapshot.fetchedAt(),snapshot.sources(),sections,snapshot.insights(),snapshot.failure(),snapshot.audit());
+                snapshot.fetchedAt(),snapshot.sources(),sections,insights,snapshot.failure(),snapshot.audit());
     }
     /** M3 裁定为「遮」时用: 汇总里由逐产品成本算出的已回填成本 / 毛利 / 毛利率换成「已保密」, 收入照常。 */
     static OperatingReportSnapshot.Section maskMarginSummary(OperatingReportSnapshot.Section section){

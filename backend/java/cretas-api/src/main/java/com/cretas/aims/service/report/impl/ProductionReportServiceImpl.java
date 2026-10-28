@@ -997,11 +997,17 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         return report;
     }
 
+    /** 趋势报表最多回看的天数 (每天一次查询)。 */
+    static final int MAX_TREND_DAYS = 366;
+
     @Override
     public Map<String, Object> getTrendAnalysisReport(String factoryId, String type, Integer period) {
         log.info("获取趋势分析报表: factoryId={}, type={}, period={}", factoryId, type, period);
         // 天数没给 / 非正数: 按 30 天 (与生产周报对比工具的默认一致), 不再空指针
         if (period == null || period <= 0) period = 30;
+        period = Math.min(period, MAX_TREND_DAYS);    // 逐日查询: 上限一年
+        // 类型没给: 按产量 (与工具 schema 的默认一致); 不认识的类型照旧给 0 值序列
+        if (type == null || type.isBlank()) type = "production";
         Map<String, Object> report = new HashMap<>();
         List<Map<String, Object>> trendData = new ArrayList<>();
         // 工艺保密: 成本趋势按调用者只算他能看的计划 (一次取全区间, 按天分)

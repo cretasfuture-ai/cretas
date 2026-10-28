@@ -78,7 +78,8 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         log.info("执行财务指标分析 - 工厂ID: {}, 参数: {}", factoryId, params);
 
-        String ratioType = getString(params, "ratioType", "ROA");
+        // 大小写不敏感 (模型常给 "roa"): 统一大写后再过利润闸和下面的分支
+        String ratioType = getString(params, "ratioType", "ROA").trim().toUpperCase(Locale.ROOT);
 
         LocalDate startDate = LocalDate.now().minusDays(30);
         LocalDate endDate = LocalDate.now();

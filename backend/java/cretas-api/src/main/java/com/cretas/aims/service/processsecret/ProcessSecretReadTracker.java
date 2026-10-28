@@ -78,6 +78,11 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
      * 之后普通查询再取到同一行就不再触发 PostLoad, 打标网就漏了)。只移出这一段新载入的 (PostLoad 只对它们触发),
      * 段开始前已托管的实体原样留着 —— 它们当初载入时已经打过标, 也可能正被当前事务修改。
      * 因此段里对实体的读取 (含懒加载) 要在段内做完, 段外只用算好的结果。</p>
+     *
+     * <p>两种情况不移出, 改为在段结束后补打一次标 (宁可多藏, 不漏): 一是段开始前会话里已有这一行的代理
+     * (外层通过懒加载关联拿着它, 例如 {@code MaterialConsumption.productionPlan}; 移出会让代理脱管, 经它的写入丢失,
+     * 再取得到第二个实例); 二是会话有未刷新的改动 (移出可能连带脱管外层正在改的对象)。
+     * 移出走 {@code evict}, 会沿 {@code CascadeType.ALL} 关联级联到<b>已初始化</b>的集合; 段内代码不初始化集合。</p>
      */
     public static <T> T untracked(java.util.function.Supplier<T> read) {
         int[] depth = UNTRACKED.get();
@@ -94,19 +99,50 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
             depth[0]--;
             if (outermost) {
                 LOADED_UNTRACKED.remove();
-                evict(loaded);
+                release(loaded);
             }
         }
     }
 
-    private static void evict(java.util.List<Object[]> loaded) {
-        for (Object[] pair : loaded) {
-            if (!(pair[0] instanceof org.hibernate.Session session)) continue;
-            try {
-                if (session.isOpen() && session.contains(pair[1])) session.evict(pair[1]);
-            } catch (RuntimeException e) {
-                // 移不出 (会话状态异常): 只是之后同一行少打一次标, 不影响读数本身
+    /** 段结束 (已回到打标状态): 能安全移出的移出; 不能移出的补打标。 */
+    private static void release(java.util.List<Object[]> loaded) {
+        java.util.Map<Object, Boolean> dirtyBySession = new java.util.IdentityHashMap<>();
+        for (Object[] loadedEntity : loaded) {
+            Object entity = loadedEntity[1];
+            boolean referencedBefore = Boolean.TRUE.equals(loadedEntity[2]);
+            if (!(loadedEntity[0] instanceof org.hibernate.Session session) || !session.isOpen()) continue;
+            boolean dirty = dirtyBySession.computeIfAbsent(session, ProcessSecretReadTracker::dirtyOrUnknown);
+            boolean evicted = false;
+            if (!referencedBefore && !dirty) {
+                try {
+                    if (session.contains(entity)) {
+                        session.evict(entity);
+                        evicted = true;
+                    }
+                } catch (RuntimeException e) {
+                    evicted = false;   // 移不出: 下面补打标
+                }
             }
+            if (!evicted) record(entity);
+        }
+    }
+
+    private static boolean dirtyOrUnknown(Object session) {
+        try {
+            return ((org.hibernate.Session) session).isDirty();
+        } catch (RuntimeException e) {
+            return true;   // 判断不了就当有改动: 不移出
+        }
+    }
+
+    /** PostLoad 时会话里已有这一行的代理 = 段开始前外层已经通过懒加载关联引用了它。判断不了按「有」处理。 */
+    private static boolean referencedByAProxy(PostLoadEvent event) {
+        try {
+            org.hibernate.engine.spi.PersistenceContext context = event.getSession().getPersistenceContextInternal();
+            org.hibernate.engine.spi.EntityEntry entry = context.getEntry(event.getEntity());
+            return entry == null || context.getProxy(entry.getEntityKey()) != null;
+        } catch (RuntimeException e) {
+            return true;
         }
     }
 
@@ -140,7 +176,7 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     public void onPostLoad(PostLoadEvent event) {
         if (UNTRACKED.get()[0] > 0) {
             java.util.List<Object[]> loaded = LOADED_UNTRACKED.get();
-            if (loaded != null) loaded.add(new Object[]{event.getSession(), event.getEntity()});
+            if (loaded != null) loaded.add(new Object[]{event.getSession(), event.getEntity(), referencedByAProxy(event)});
             return;
         }
         record(event.getEntity());

@@ -2932,6 +2932,9 @@ public class ProcessingServiceImpl implements ProcessingService {
 
         return result;
     }
+    /** 趋势分析最多回看的天数 (逐日查询, 防止一次请求打出成千上万条查询)。 */
+    static final int MAX_TREND_DAYS = 366;
+
     public Map<String, Object> getTrendAnalysis(String factoryId, String metric, Integer days) {
         // Apr 21 2026: return a MULTI-metric bundle, not a single metric.
         // FE /analytics/trends destructures
@@ -2940,9 +2943,11 @@ public class ProcessingServiceImpl implements ProcessingService {
         // chart (empty skeleton page for 100% of users).
         Map<String, Object> analysis = new HashMap<>();
         if (days == null || days <= 0) days = 30;   // 天数没给: 按 30 天, 不再空指针
+        days = Math.min(days, MAX_TREND_DAYS);       // 每天 3 次查询: 上限一年
         LocalDate endDate = LocalDate.now();
         LocalDate startDate = endDate.minusDays(days);
-        // 工艺保密: 调用者对本厂某个保密产品无权时, 每日成本只算他能看的批次 (一次取全区间, 按天分, 带说明)
+        // 工艺保密: 调用者对本厂某个保密产品无权时, 每日产量 / 良品率 / 成本都只算他能看的批次
+        // (跨批次合计不给无权的人看保密产品; 一次取全区间, 按天分, 带说明)
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = secretScope().forCurrentCaller(factoryId);
         com.cretas.aims.service.processsecret.ProcessSecretBatchCosts visibleCosts = hidden.isEmpty() ? null : com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> com.cretas.aims.service.processsecret.ProcessSecretBatchCosts.of(hidden,
                 productionBatchRepository.findByFactoryIdAndCreatedAtAfter(factoryId, startDate.atStartOfDay().minusSeconds(1)),
@@ -2954,10 +2959,10 @@ public class ProcessingServiceImpl implements ProcessingService {
         for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
             LocalDateTime dayStart = date.atStartOfDay();
             LocalDateTime dayEnd = date.atTime(23, 59, 59);
-            BigDecimal dayOutput = productionBatchRepository.calculateDailyOutput(
-                    factoryId, dayStart, dayEnd);
-            BigDecimal dayYieldRate = productionBatchRepository.calculateDailyYieldRate(
-                    factoryId, dayStart, dayEnd);
+            BigDecimal dayOutput = visibleCosts != null ? visibleCosts.outputByDay().get(date)
+                    : productionBatchRepository.calculateDailyOutput(factoryId, dayStart, dayEnd);
+            BigDecimal dayYieldRate = visibleCosts != null ? visibleCosts.yieldRateByDay().get(date)
+                    : productionBatchRepository.calculateDailyYieldRate(factoryId, dayStart, dayEnd);
             BigDecimal dayCost = visibleCosts != null ? visibleCosts.costByDay().get(date)
                     : productionBatchRepository.calculateDailyCost(factoryId, dayStart, dayEnd);
             productionTrend.add(Map.of(

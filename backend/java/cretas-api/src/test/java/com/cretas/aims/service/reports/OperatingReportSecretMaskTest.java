@@ -215,6 +215,39 @@ class OperatingReportSecretMaskTest {
                 .contains(SECRET_NAME + " 毛利：" + OperatingReportCodec.PROCESS_SECRET_MASK);
     }
 
+    private OperatingReportSnapshot withInsightsOnSecretAndNormal() {
+        OperatingReportSnapshot snapshot = codec.decode(storedReport().getAnalysisText()).orElseThrow();
+        List<String> ids = snapshot.sections().stream().filter(s -> s.id().equals("marginHigh"))
+                .flatMap(s -> s.metrics().stream()).map(OperatingReportSnapshot.Metric::id).toList();
+        String secretRate = ids.stream().filter(id -> id.contains("." + SECRET + ".") && id.endsWith(".rate")).findFirst().orElseThrow();
+        String normalRate = ids.stream().filter(id -> id.contains("." + NORMAL + ".") && id.endsWith(".rate")).findFirst().orElseThrow();
+        return snapshot.withInsights(List.of(
+                new OperatingReportSnapshot.Insight(OperatingReportSnapshot.InsightKind.REVIEW_RECORDED_VALUE, secretRate,
+                        OperatingReportSnapshot.Action.REVIEW_PROFIT),
+                new OperatingReportSnapshot.Insight(OperatingReportSnapshot.InsightKind.REVIEW_RECORDED_VALUE, normalRate,
+                        OperatingReportSnapshot.Action.REVIEW_PROFIT),
+                new OperatingReportSnapshot.Insight(OperatingReportSnapshot.InsightKind.MISSING_VALUE, null,
+                        OperatingReportSnapshot.Action.VERIFY_COST)));
+    }
+
+    private List<OperatingReportSnapshot.Insight> insightsFor(AuthenticatedActor actor) {
+        OperatingReportProjection projection = new OperatingReportProjection(codec);
+        ReflectionTestUtils.setField(projection, "secretScope", protectedScope());
+        try (var ignored = as(actor)) {
+            return projection.maskForCaller(withInsightsOnSecretAndNormal(), FACTORY).insights();
+        }
+    }
+
+    @Test
+    void anInsightPointingAtAMaskedMetricIsDroppedForAnUnauthorizedReader() {
+        List<OperatingReportSnapshot.Insight> colleague = insightsFor(sameFactoryUser());
+        List<OperatingReportSnapshot.Insight> owner = insightsFor(owner());
+
+        assertThat(colleague).hasSize(2).noneSatisfy(i -> assertThat(i.metricId()).contains("." + SECRET + "."));
+        assertThat(colleague).anySatisfy(i -> assertThat(i.metricId()).contains("." + NORMAL + "."));
+        assertThat(owner).hasSize(3).anySatisfy(i -> assertThat(i.metricId()).contains("." + SECRET + "."));
+    }
+
     @Test
     void theMarginSummaryIsLeftAsIsUntilTheOwnerRulesButTheSwitchMasksExactlyTheCostDerivedTotals() {
         // 现状: 汇总不遮 (待 Steve 裁定 M3); 开关是一处常量, 打开时只遮由成本算出的三项

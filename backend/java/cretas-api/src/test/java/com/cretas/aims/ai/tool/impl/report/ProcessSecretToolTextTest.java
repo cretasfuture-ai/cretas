@@ -261,6 +261,17 @@ class ProcessSecretToolTextTest {
     }
 
     @Test
+    void financeRatioGateIsCaseInsensitive() throws Exception {
+        for (String ratio : List.of("roa", "Roe", " dupont ")) {
+            Map<String, Object> result = financeRatio(ratio, finance("processSecretNote"));
+            assertThat(result).as(ratio).containsEntry("netProfit", null).doesNotContainKeys("roa", "roe")
+                    .containsKey("unavailableReason");
+        }
+        // 阳性对照: 小写在报表完整时照常算
+        assertThat(financeRatio("roa", finance(null))).containsKey("roa");
+    }
+
+    @Test
     void financeRatioNegativeControlComputesWhenTheReportIsComplete() throws Exception {
         Map<String, Object> roa = financeRatio("ROA", finance(null));
         assertThat((Double) roa.get("netProfit")).isEqualTo(150000.00 - 5555.56);

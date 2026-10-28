@@ -18,6 +18,8 @@ import java.util.Set;
  */
 public record ProcessSecretBatchCosts(BigDecimal totalCost, BigDecimal totalOutput,
                                       java.util.Map<java.time.LocalDate, BigDecimal> costByDay,
+                                      java.util.Map<java.time.LocalDate, BigDecimal> outputByDay,
+                                      java.util.Map<java.time.LocalDate, BigDecimal> yieldRateByDay,
                                       int excludedBatches, int excludedProducts) {
 
     public boolean partial() {
@@ -40,13 +42,18 @@ public record ProcessSecretBatchCosts(BigDecimal totalCost, BigDecimal totalOutp
     }
 
     /**
-     * {@code to} 为 null = 不设上限。{@code costByDay}: 与按天查询 ({@code calculateDailyCost}: 当天 00:00:00 ~ 23:59:59)
-     * 同口径, 每天只算到当天 23:59:59。
+     * {@code to} 为 null = 不设上限。按天的三张表与按天查询 (当天 00:00:00 ~ 23:59:59) 同口径:
+     * {@code costByDay} = {@code calculateDailyCost} (SUM totalCost); {@code outputByDay} = {@code calculateDailyOutput}
+     * (SUM actualQuantity, 含文员在制批次); {@code yieldRateByDay} = {@code calculateDailyYieldRate}
+     * (已完成批次 yieldRate 的平均, 空值不计, 两位小数)。某天没有可见行 = 该天不在表里 (null, 与原查询一致)。
      */
     public static ProcessSecretBatchCosts of(ProcessSecretLlmCostScope.Excluded excluded, List<ProductionBatch> batches,
                                              LocalDateTime from, LocalDateTime to) {
         BigDecimal cost = null, output = null;
         java.util.Map<java.time.LocalDate, BigDecimal> byDay = new java.util.TreeMap<>();
+        java.util.Map<java.time.LocalDate, BigDecimal> outputByDay = new java.util.TreeMap<>();
+        java.util.Map<java.time.LocalDate, BigDecimal> yieldSumByDay = new java.util.TreeMap<>();
+        java.util.Map<java.time.LocalDate, Integer> yieldCountByDay = new java.util.TreeMap<>();
         int excludedBatches = 0;
         Set<String> excludedProducts = new LinkedHashSet<>();
         for (ProductionBatch batch : batches) {
@@ -68,7 +75,19 @@ public record ProcessSecretBatchCosts(BigDecimal totalCost, BigDecimal totalOutp
             if (batch.getActualQuantity() != null && !"CLERK_WIP".equals(batch.getBatchType())) {
                 output = output == null ? batch.getActualQuantity() : output.add(batch.getActualQuantity());
             }
+            java.time.LocalDate day = batch.getCreatedAt().toLocalDate();
+            // 按天查询的窗口止于 23:59:59 (与上面成本同一判据)
+            if (batch.getCreatedAt().isAfter(day.atTime(23, 59, 59))) continue;
+            if (batch.getActualQuantity() != null) outputByDay.merge(day, batch.getActualQuantity(), BigDecimal::add);
+            if (batch.getYieldRate() != null
+                    && batch.getStatus() == com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED) {
+                yieldSumByDay.merge(day, batch.getYieldRate(), BigDecimal::add);
+                yieldCountByDay.merge(day, 1, Integer::sum);
+            }
         }
-        return new ProcessSecretBatchCosts(cost, output, byDay, excludedBatches, excludedProducts.size());
+        java.util.Map<java.time.LocalDate, BigDecimal> yieldByDay = new java.util.TreeMap<>();
+        yieldSumByDay.forEach((day, sum) -> yieldByDay.put(day,
+                sum.divide(BigDecimal.valueOf(yieldCountByDay.get(day)), 2, java.math.RoundingMode.HALF_UP)));
+        return new ProcessSecretBatchCosts(cost, output, byDay, outputByDay, yieldByDay, excludedBatches, excludedProducts.size());
     }
 }

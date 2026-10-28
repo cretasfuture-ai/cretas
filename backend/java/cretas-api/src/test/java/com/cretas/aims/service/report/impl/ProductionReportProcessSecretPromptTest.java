@@ -248,6 +248,19 @@ class ProductionReportProcessSecretPromptTest {
     }
 
     @Test
+    void trendReportWithoutATypeDefaultsToProductionAndLooksBackAtMostOneYear() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+
+        Map<String, Object> untyped = callAs(owner(), () -> service.getTrendAnalysisReport(FACTORY, null, 7));
+        Map<String, Object> huge = callAs(owner(), () -> service.getTrendAnalysisReport(FACTORY, "production", 100_000));
+
+        assertThat(untyped.get("type")).isEqualTo("production");
+        assertThat((List<?>) untyped.get("trendData")).hasSize(7);
+        assertThat(huge.get("period")).isEqualTo(366);
+        assertThat((List<?>) huge.get("trendData")).hasSize(366);
+    }
+
+    @Test
     void anomalyDataContextCarriesTheVisibleTotalForTheTool() throws Exception {
         ProductionReportServiceImpl service = service(Set.of(SECRET));
         Map<String, Object> report = callAs(sameFactoryUser(),
