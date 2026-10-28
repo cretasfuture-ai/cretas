@@ -4,6 +4,8 @@ import com.cretas.aims.dto.smartbi.chart.*;
 import com.cretas.aims.dto.smartbi.chart.ChartSufficiencyResult.SuggestedChart;
 import com.cretas.aims.service.smartbi.chart.ChartSufficiencyEvaluator;
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,6 +37,12 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
 
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "smartbi-chart-sufficiency";
 
     // Threshold for determining if a chart is sufficient
     private static final int SUFFICIENCY_THRESHOLD = 70;
@@ -161,11 +169,17 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
                 return ruleBasedEvaluation(features, currentChartType);
             }
 
+            // 列名可能就是人名 / 客户名 (透视表): 换代号再发, 脱敏不了按规则评估
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, null, prompt);
+            if (redacted.refused()) {
+                return ruleBasedEvaluation(features, currentChartType);
+            }
+
             // Call LLM with low temperature for consistent output
-            String response = dashScopeClient.chatLowTemp(SYSTEM_PROMPT, prompt);
+            String response = dashScopeClient.chatLowTemp(SYSTEM_PROMPT, redacted.text(0));
 
             // Parse JSON response
-            ChartSufficiencyResult result = parseEvaluationResult(response);
+            ChartSufficiencyResult result = parseEvaluationResult(redacted.restoreJsonText(response));
 
             log.info("[ChartSufficiencyEvaluator] Evaluation complete: sufficient={}, score={}",
                     result.isSufficient(), result.getSufficiencyScore());
@@ -194,8 +208,12 @@ public class ChartSufficiencyEvaluatorImpl implements ChartSufficiencyEvaluator 
                 return ruleBasedInitialRecommendation(features);
             }
 
-            String response = dashScopeClient.chatLowTemp(SYSTEM_PROMPT, prompt);
-            ChartSufficiencyResult result = parseEvaluationResult(response);
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(EGRESS_SITE, null, prompt);
+            if (redacted.refused()) {
+                return ruleBasedInitialRecommendation(features);
+            }
+            String response = dashScopeClient.chatLowTemp(SYSTEM_PROMPT, redacted.text(0));
+            ChartSufficiencyResult result = parseEvaluationResult(redacted.restoreJsonText(response));
 
             log.info("[ChartSufficiencyEvaluator] Initial evaluation complete: {} charts recommended",
                     result.getSuggestedCharts() != null ? result.getSuggestedCharts().size() : 0);

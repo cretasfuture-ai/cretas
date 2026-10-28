@@ -8,6 +8,7 @@ test('allows only exact authentication and documented query POST contracts', () 
   assert.equal(classifyMutation('GET', 'https://admin.example/api/mobile/F006/skus').kind, 'safe-method');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/auth/unified-login').kind, 'auth');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/purchaseOrder').kind, 'readonly-post');
+  assert.equal(classifyMutation('POST', 'https://admin.example/smartbi-api/api/smartbi/financial-dashboard/factory-details').kind, 'readonly-post');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/internalTransfer').kind, 'readonly-post');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/inventory').kind, 'readonly-post');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/shipment').kind, 'readonly-post');
@@ -149,7 +150,36 @@ test('rejects altered purchaser forecast and price-history query payloads', () =
 });
 
 test('does not allow a suffix or prefix near an allowlisted path', () => {
+  assert.equal(classifyMutation('POST', 'https://admin.example/smartbi-api/api/smartbi/financial-dashboard/factory-details/extra').kind, 'business-mutation');
+  assert.equal(classifyMutation('GET', 'https://admin.example/smartbi-api/api/smartbi/financial-dashboard/factory-details').kind, 'safe-method');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/list-summary/purchaseOrder/delete').kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/not-list-summary/purchaseOrder').kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/product-process-workflows/resolve-by-outputs/delete').kind, 'business-mutation');
+});
+
+test('allows only the exact factory analysis contract while generic chat remains blocked', () => {
+  assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/ai/chat').kind, 'business-mutation');
+  const url = 'https://admin.example/api/mobile/F006/smart-bi/factory-analysis';
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '汇总当前库存、生产和销售表现', source: 'business', year: 2026,
+    periodType: 'all', startMonth: 1, endMonth: 12, analysisSubject: null,
+  }).kind, 'readonly-post');
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '再看质量', contextId: 'rotated-context',
+  }).kind, 'readonly-post');
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '关联生产、检验和成本做多表分析', contextId: 'clarification-context', analysisSubject: 'P1',
+  }).kind, 'readonly-post');
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '分析', source: 'upload', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12,
+    analysisSubject: null,
+  }).kind, 'business-mutation');
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '分析', source: 'business', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12,
+    analysisSubject: null, role: 'factory_super_admin',
+  }).kind, 'business-mutation');
+  assert.equal(classifyMutation('POST', url, undefined, {
+    question: '分析', contextId: 'clarification-context', analysisSubject: 'P1', actorId: 'unknown-actor',
+  }).kind, 'business-mutation');
+  assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/smart-bi/factory-analysis/extra').kind, 'business-mutation');
 });

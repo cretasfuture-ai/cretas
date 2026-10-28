@@ -3,6 +3,12 @@
 set -euo pipefail
 [ "$#" -gt 0 ] || { echo 'Usage: run-with-test-postgres.sh command [args...]' >&2; exit 2; }
 [ "$(id -u)" -ne 0 ] || { echo 'Refusing to run the test database as root' >&2; exit 2; }
+# GitHub-hosted ubuntu-latest ships PostgreSQL 16 only; install 17 (prod major) from PGDG.
+# The package auto-starts a 5432 cluster; this helper uses its own cluster on a free port.
+if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] && [ ! -x /usr/lib/postgresql/17/bin/initdb ]; then
+    sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-17-pgvector >/dev/null
+fi
 for candidate in "${CRETAS_CI_PG_BIN:-}" /usr/lib/postgresql/17/bin /opt/homebrew/opt/postgresql@17/bin; do
     if [ -n "$candidate" ] && [ -x "$candidate/initdb" ]; then export PATH="$candidate:$PATH"; break; fi
 done

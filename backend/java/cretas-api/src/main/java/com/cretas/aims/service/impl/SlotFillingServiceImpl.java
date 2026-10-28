@@ -61,6 +61,13 @@ public class SlotFillingServiceImpl implements SlotFillingService {
     // LLM 客户端 (用于第 5 步: extract 缺失参数的兜底). Optional — 不可用时静默退化为 NEED_MORE_INFO。
     private PythonLLMClient pythonLLMClient;
 
+    /** 原话发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "slot-filling";
+
     @Autowired(required = false)
     public void setPythonLLMClient(PythonLLMClient pythonLLMClient) {
         this.pythonLLMClient = pythonLLMClient;
@@ -327,7 +334,11 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                 "输出格式: {\"param1\": \"value1\", \"param2\": \"value2\"}"
             );
 
-            String response = pythonLLMClient.chatLowTemp(systemPrompt, userInput);
+            // 原话里的号码 / 人名 / 公司名换代号再发, 抽出的参数换回真值; 脱敏不了就不抽 (走追问)
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                    llmEgressGuard.texts(EGRESS_SITE, null, systemPrompt, userInput);
+            if (redacted.refused()) return Collections.emptyMap();
+            String response = redacted.restoreJsonText(pythonLLMClient.chatLowTemp(redacted.text(0), redacted.text(1)));
             if (response == null || response.isEmpty()) return Collections.emptyMap();
 
             // 去掉 markdown code fence (有些模型不听话)

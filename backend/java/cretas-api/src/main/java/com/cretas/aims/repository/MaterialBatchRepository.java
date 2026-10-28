@@ -416,7 +416,14 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
 
     /**
      * 正式报工自动分摊专用：锁定生产库候选批次，串行化并发分配。
-     * 生产库中的 batch 是调拨入库时新生成，createdAt 即不可变的转入顺序。
+     *
+     * <p>排序是真正的 FEFO: 到期日升序、无到期日排最后, 同到期日再按转入顺序 (生产库中的 batch
+     * 是调拨入库时新生成, createdAt 即不可变的转入顺序), 最后按 id 定序。
+     * 🔴 此前方法名叫 FEFO 实际只按 createdAt 排: 后到期但先转入的批次会被先吃掉,
+     * 先到期的那批留在库里过期。与 {@link #findAvailableBatchesFEFOByWarehouse} 排序口径一致。
+     *
+     * <p>⚠️ 本查询仍只按状态筛选, 不比较到期日 (状态还是 AVAILABLE 的过期批会被返回, 并排在最前);
+     * 过期判断在调用方 {@code ProductionStockAllocationServiceImpl} 按东八区业务日做。
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
@@ -426,7 +433,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0 " +
            "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') " +
            "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
-           "ORDER BY m.createdAt ASC, m.id ASC")
+           "ORDER BY m.expireDate ASC NULLS LAST, m.createdAt ASC, m.id ASC")
     List<MaterialBatch> findAvailableBatchesFEFOByWarehouseForUpdate(
             @Param("factoryId") String factoryId,
             @Param("materialTypeId") String materialTypeId,
@@ -1035,4 +1042,31 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     BigDecimal calculateConsumedValue(@Param("factoryId") String factoryId,
                                        @Param("startDateTime") LocalDateTime startDateTime,
                                        @Param("endDateTime") LocalDateTime endDateTime);
+
+    // ==================== 质检放行 (缺口 11/13) ====================
+
+    /**
+     * 质检放行待办: 逐道录入的在制半成品批次 (sourceDocType=PRODUCTION_BATCH) 中处于某状态
+     * (INSPECTING = 待检) 的批次。⛔ 只看在制批次 —— 原料的「质检中」有自己的放行流程, 不进这张待办。
+     */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.sourceDocType = 'PRODUCTION_BATCH' AND m.status = :status " +
+           "ORDER BY m.updatedAt DESC")
+    List<MaterialBatch> findWipBatchesByFactoryIdAndStatus(
+            @Param("factoryId") String factoryId,
+            @Param("status") com.cretas.aims.entity.enums.MaterialBatchStatus status);
+
+    /** CCP 偏离扣留: 这些生产批次物化出来的在制半成品批次。 */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.sourceDocType = 'PRODUCTION_BATCH' AND m.sourceDocId IN :productionBatchIds")
+    List<MaterialBatch> findWipBatchesByFactoryIdAndSourceDocIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
+
+    /** CCP 偏离扣留 (审查中 8): 行锁读取这些生产批次物化的在制批次, 锁内再改 (见 SemiFinishedInventoryRepository#lockForDeviationHold)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId AND m.sourceDocType = 'PRODUCTION_BATCH' " +
+           "AND m.sourceDocId IN :productionBatchIds AND m.deletedAt IS NULL ORDER BY m.id")   // 固定加锁顺序 (审查 L2)
+    List<MaterialBatch> lockWipBatchesForDeviationHold(@Param("factoryId") String factoryId,
+                                                       @Param("productionBatchIds") java.util.Collection<String> productionBatchIds);
 }

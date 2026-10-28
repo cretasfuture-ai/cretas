@@ -72,6 +72,8 @@ class WipMovingAverageCostingTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    @org.mockito.Mock
+    private com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
     @InjectMocks
     private WipInventoryServiceImpl service;
 

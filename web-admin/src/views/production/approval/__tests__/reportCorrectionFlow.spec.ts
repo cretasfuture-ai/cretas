@@ -20,6 +20,8 @@ describe('报工核对修正主链', () => {
     const dialog = approval.slice(approval.indexOf('v-model="correctionDialogVisible"'));
     expect(dialog).not.toContain('投入数量');
     expect(dialog).not.toContain('原料批次');
+    expect(dialog).toContain('报工阶段');
+    expect(dialog).toContain('可信产出单位');
   });
 
   it('OA 待办展示修正前后并把该业务类型作为可操作审批', () => {
@@ -28,6 +30,7 @@ describe('报工核对修正主链', () => {
     expect(oaPending).toContain('reportCorrectionDetails.after');
     expect(oaPending).toContain('reportCorrectionDetails.reason');
     expect(oaPending).toContain('label="修正内容"');
+    expect(oaPending).toContain('可信产出单位');
   });
 
   it('盘点详情回读后展示重点核对提醒但不自动提交盘盈盘亏', () => {

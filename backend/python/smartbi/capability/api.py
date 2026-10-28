@@ -20,13 +20,22 @@ router = APIRouter(prefix="/api/smartbi/capability", tags=["Capability"])
 
 # spec §9.2: backend per-factory 灰度 — return 503 for non-whitelisted factories.
 # FE useCapability 收到 503 → fail-open → 老体验. 灰度通过 env var 调整, 不需 redeploy FE.
-# Default = "F001,RES_3101_009" (Day 13 starter cohort, ~17% of 12 factories).
+# Default = "F001,RES_3101_009,F006" (Day 13 starter cohort plus F006).
 # Set CAPABILITY_ROLLOUT_FACTORIES="*" to enable all (post-cohort observation period).
 import os  # noqa: E402
-_ROLLOUT_RAW = os.environ.get("CAPABILITY_ROLLOUT_FACTORIES", "F001,RES_3101_009")
-_ROLLOUT_FACTORIES: Optional[set[str]] = None if _ROLLOUT_RAW.strip() == "*" else {
-    f.strip() for f in _ROLLOUT_RAW.split(",") if f.strip()
-}
+_DEFAULT_ROLLOUT_FACTORIES = ("F001", "RES_3101_009", "F006")
+
+
+def _parse_rollout_factories(raw: Optional[str]) -> Optional[set[str]]:
+    """Parse the operator override while retaining the default cohort."""
+    value = raw if raw is not None else ",".join(_DEFAULT_ROLLOUT_FACTORIES)
+    if value.strip() == "*":
+        return None
+    return {factory.strip() for factory in value.split(",") if factory.strip()}
+
+
+_ROLLOUT_RAW = os.environ.get("CAPABILITY_ROLLOUT_FACTORIES")
+_ROLLOUT_FACTORIES = _parse_rollout_factories(_ROLLOUT_RAW)
 
 # Module-level singleton (lazy). Multi-worker → see spec §3.4.
 _calculator: Optional[CapabilityCalculator] = None

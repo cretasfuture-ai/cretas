@@ -109,6 +109,13 @@ public class AIEnterpriseService {
 
     static final String STREAM_PROVENANCE_SITE = "cost-analysis-stream";
 
+    /** 流式成本分析发给 Python (再到大模型) 前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String STREAM_EGRESS_SITE = "cost-analysis-stream";
+
     @Autowired
     private com.cretas.aims.utils.JwtUtil jwtUtil;
 
@@ -906,11 +913,23 @@ public class AIEnterpriseService {
                         .name("progress")
                         .data("{\"type\":\"progress\",\"message\":\"正在进行AI分析，请稍候...\"}"));
 
+                // 批次成本数据 (含供应商名 / 联系人) 与提示词共用一套代号再发; 脱敏不了就不发、不扣配额
+                com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted = llmEgressGuard.combined(
+                        STREAM_EGRESS_SITE, factoryId, batchesData, Map.of(), List.of(promptMessage));
+                if (redacted.refused()) {
+                    emitter.send(SseEmitter.event().name("error").data(Map.of(
+                            "type", "error", "message", "成本数据里有无法脱敏的内容, 未发给 AI")));
+                    emitter.complete();
+                    return;
+                }
+                List<Map<String, Object>> sentBatches = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                        redacted.payload(), new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Object>>>() {});
+
                 // 5. 调用固定、认证且有界的 Python general-analysis SSE 端点。
                 PythonSmartBIClient.GeneralAnalysisCall streamRequest =
                         new PythonSmartBIClient.GeneralAnalysisCall(
-                                promptMessage,
-                                batchesData,
+                                redacted.text(0),
+                                sentBatches,
                                 "time_range_cost",
                                 null,
                                 enableThinking,
@@ -925,7 +944,7 @@ public class AIEnterpriseService {
                         trustedUserRole,
                         streamRequest,
                         event -> forwardGeneralAnalysisEvent(
-                                event, emitter, bufferedAnswer, batchesData, promptMessage));
+                                event, emitter, bufferedAnswer, batchesData, promptMessage, redacted));
 
                 // 6. 消耗配额
                 int quotaCost = getQuotaCostFromConfig(factoryId, "time_range");
@@ -975,7 +994,8 @@ public class AIEnterpriseService {
             SseEmitter emitter,
             StringBuilder bufferedAnswer,
             Object costSource,
-            String llmInput) throws java.io.IOException {
+            String llmInput,
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted) throws java.io.IOException {
         switch (event.event()) {
             case "status" -> emitter.send(SseEmitter.event()
                     .name("progress")
@@ -993,6 +1013,8 @@ public class AIEnterpriseService {
                 if (answer == null || answer.isBlank()) {
                     answer = bufferedAnswer.toString();
                 }
+                // 代号换回真名后再过数字出处闸 (闸的源是没脱敏的原数据)
+                answer = redacted.restore(answer);
                 String checked = numberProvenance.enforceText(
                         STREAM_PROVENANCE_SITE, answer, costSource, llmInput);
                 emitter.send(SseEmitter.event()

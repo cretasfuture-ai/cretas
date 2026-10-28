@@ -35,12 +35,14 @@ class DataScopeRecordAccessContractTest {
 
     @org.junit.jupiter.api.Test void mvcRegistersTheRequiredRouteGuardAfterAuthenticationAndModuleChecks() {
         var guard=mock(DataScopeRouteInterceptor.class);
+        var processSecretGuard=mock(ProcessSecretGuardInterceptor.class);
         var config=new com.cretas.aims.config.WebMvcConfig(mock(com.cretas.aims.config.JwtAuthInterceptor.class),
             mock(com.cretas.aims.config.DemoReadOnlyInterceptor.class),mock(com.cretas.aims.config.PermissionInterceptor.class),
-            mock(com.cretas.aims.config.RequireRoleInterceptor.class),mock(com.cretas.aims.config.ModuleEnabledInterceptor.class),guard);
+            mock(com.cretas.aims.config.RequireRoleInterceptor.class),mock(com.cretas.aims.config.ModuleEnabledInterceptor.class),guard,
+            processSecretGuard, mock(com.cretas.aims.audit.PlatformDataAccessLogInterceptor.class));
         var registry=new Registered();config.addInterceptors(registry);
         assertThat(registry.all().stream().filter(x->x instanceof org.springframework.web.servlet.handler.MappedInterceptor)
-            .map(x->((org.springframework.web.servlet.handler.MappedInterceptor)x).getInterceptor()).toList()).contains(guard);
+            .map(x->((org.springframework.web.servlet.handler.MappedInterceptor)x).getInterceptor()).toList()).contains(guard, processSecretGuard);
     }
     static class Registered extends org.springframework.web.servlet.config.annotation.InterceptorRegistry {
         java.util.List<Object> all() { return getInterceptors(); }

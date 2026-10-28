@@ -1,5 +1,6 @@
 {
   "hint": "Notice",
+  "aiImageNotice": "Photos are sent to AI for recognition",
   "confirmDelete": "Confirm Delete",
   "deleteFailed": "Delete failed",
   "uncategorized": "Uncategorized",

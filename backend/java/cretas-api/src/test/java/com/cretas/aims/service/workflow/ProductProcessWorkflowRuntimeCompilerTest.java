@@ -95,6 +95,27 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     }
 
     @Test
+    void compilesMixedRawAndExternalSemiInputWithRuntimeIdentity() {
+        ProductProcessWorkflowDTO definition = linearWorkflow();
+        definition.getNodes().add(material("external-semi", "SEMI_FINISHED", "SKU-EXTERNAL-SEMI", "kg"));
+        materialData(definition, "external-semi").put("inputSource", "EXTERNAL");
+        processPorts(definition, "pack").add(port(
+                "pack-external", "INPUT", "external-semi", "SEMI_FINISHED", "kg", 1));
+        definition.getEdges().add(edge(
+                "external-pack", "external-semi", "output", "pack", "pack-external"));
+
+        CompiledProductProcessWorkflow.CompiledPort external = compiler.compile(definition)
+                .portsFor("pack").stream()
+                .filter(port -> "pack-external".equals(port.workflowPortId()))
+                .findFirst().orElseThrow();
+
+        assertEquals("SEMI_FINISHED", external.materialKind());
+        assertEquals("SKU-EXTERNAL-SEMI", external.skuId());
+        assertEquals("kg", external.unit());
+        assertEquals("external-semi", external.materialNodeId());
+    }
+
+    @Test
     void derivesPlannedUnitFromPrimaryOutputAndRejectsConflictingSummaryUnit() {
         ProductProcessWorkflowDTO definition = linearWorkflow();
         processData(definition, "cut").put("outputUnit", "box");

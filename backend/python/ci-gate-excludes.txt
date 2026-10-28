@@ -141,7 +141,6 @@ smartbi/tests/test_full_e2e_with_save.py       # (c) 收集期 import 失败
 smartbi/tests/test_auto_learning.py            # (c) 收集期 AttributeError
 smartbi/tests/test_revenue_report_helpers.py   # (d) ValueError: too many values to unpack ×3
 smartbi/tests/test_revenue_report_dual_write_hook.py  # (d) 断言失败 ×1
-smartbi/tests/test_training_consent.py         # (d) 断言失败 ×1
 
 # ⛔ 往这里加一条之前, 先把上面五组的判据读一遍: 到目前为止查明真因的 29 条里,
 #    **0 条是生产代码坏了** —— 22 条守卫失效, 6 条测试过期, 1 条依赖只属于测试。

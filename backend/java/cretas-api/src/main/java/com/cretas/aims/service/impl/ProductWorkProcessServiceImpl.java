@@ -36,11 +36,15 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     private final ProductTypeRepository productTypeRepository;
     private final ProductWorkProcessAssigneeRepository assigneeRepository;
     private final UserRepository userRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
     @Override
     @Transactional
     public ProductWorkProcessDTO create(String factoryId, ProductWorkProcessDTO dto) {
         log.info("Creating product-work-process association for factory: {}", factoryId);
+        // 工艺保密: 工序链就是工艺图, 给受保护产品加工序要编辑授权
+        processSecretGuard.requireProduct(factoryId, dto.getProductTypeId(),
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-work-process create");
 
         if (repository.existsByFactoryIdAndProductTypeIdAndWorkProcessId(
                 factoryId, dto.getProductTypeId(), dto.getWorkProcessId())) {
@@ -163,6 +167,11 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         log.info("Updating product-work-process {} for factory: {}", id, factoryId);
         ProductWorkProcess entity = repository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductWorkProcess", "id", id.toString()));
+        // 工艺保密: 改标准出成率 / 工序顺序是改工艺; 只改人员指派等不算 (班组长照常排人)
+        if (dto.getStandardYieldRate() != null || dto.getProcessOrder() != null) {
+            processSecretGuard.requireProduct(factoryId, entity.getProductTypeId(),
+                    com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-work-process update " + id);
+        }
 
         if (dto.getProcessOrder() != null) entity.setProcessOrder(dto.getProcessOrder());
         if (dto.getUnitOverride() != null) entity.setUnitOverride(dto.getUnitOverride());
@@ -223,6 +232,8 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         log.info("Deleting product-work-process {} for factory: {}", id, factoryId);
         ProductWorkProcess entity = repository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("ProductWorkProcess", "id", id.toString()));
+        processSecretGuard.requireProduct(factoryId, entity.getProductTypeId(),
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "product-work-process delete " + id);
         repository.delete(entity);
     }
 
@@ -233,6 +244,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         for (ProductWorkProcessDTO.SortItem item : items) {
             repository.findByFactoryIdAndId(factoryId, item.getId())
                     .ifPresent(entity -> {
+                        processSecretGuard.requireProduct(factoryId, entity.getProductTypeId(),
+                                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                                "product-work-process batch-sort " + entity.getId());
                         entity.setProcessOrder(item.getProcessOrder());
                         repository.save(entity);
                     });
@@ -245,6 +259,12 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         if (sourceProductId == null || targetProductId == null || sourceProductId.equals(targetProductId)) {
             throw new BusinessException(400, "源产品与目标产品必须是两个不同的产品");
         }
+        // 工艺保密: 工序链 (含标准出成率) 复制到没有保密策略的产品上 = 搬出保护范围
+        processSecretGuard.requireCopySource(factoryId, sourceProductId,
+                "copy-chain " + sourceProductId + " -> " + targetProductId);
+        processSecretGuard.requireProduct(factoryId, targetProductId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                "copy-chain target " + targetProductId);
         List<ProductWorkProcess> source = repository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, sourceProductId);
         if (source.isEmpty()) {

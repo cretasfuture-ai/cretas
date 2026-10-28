@@ -90,13 +90,13 @@ class SchedulingProbabilityTenantBoundaryContractTest {
         when(scheduleRepository.findById(SCHEDULE)).thenReturn(Optional.of(schedule));
         when(planRepository.findByIdAndFactoryIdAndDeletedAtIsNull(PLAN, FACTORY))
                 .thenReturn(Optional.of(plan(FACTORY)));
-        when(lineRepository.findById("LINE-PROB")).thenReturn(Optional.of(line()));
+        when(lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-PROB", FACTORY)).thenReturn(Optional.of(line()));
 
         CompletionProbabilityResponse response = aiService.calculateCompletionProbability(FACTORY, SCHEDULE);
 
         assertThat(response.getScheduleId()).isEqualTo(SCHEDULE);
         assertThat(response.getRemainingQuantity()).isZero();
-        verify(lineRepository).findById("LINE-PROB");
+        verify(lineRepository).findByIdAndFactoryIdAndDeletedAtIsNull("LINE-PROB", FACTORY);
         verifyNoInteractions(batchRepository, restTemplate, featureEngineeringService);
     }
 
@@ -107,14 +107,14 @@ class SchedulingProbabilityTenantBoundaryContractTest {
                 .thenReturn(Optional.of(plan(FACTORY)));
         when(scheduleRepository.findByPlanId(PLAN)).thenReturn(List.of(schedule));
         when(scheduleRepository.findById(SCHEDULE)).thenReturn(Optional.of(schedule));
-        when(lineRepository.findById("LINE-PROB")).thenReturn(Optional.of(line()));
+        when(lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-PROB", FACTORY)).thenReturn(Optional.of(line()));
 
         List<CompletionProbabilityResponse> responses = aiService.calculateBatchProbabilities(FACTORY, PLAN);
 
         assertThat(responses).hasSize(1);
         verify(scheduleRepository).findByPlanId(PLAN);
         verify(planRepository, times(2)).findByIdAndFactoryIdAndDeletedAtIsNull(PLAN, FACTORY);
-        verify(lineRepository).findById("LINE-PROB");
+        verify(lineRepository).findByIdAndFactoryIdAndDeletedAtIsNull("LINE-PROB", FACTORY);
         verifyNoInteractions(batchRepository, restTemplate, featureEngineeringService);
     }
 
@@ -172,7 +172,7 @@ class SchedulingProbabilityTenantBoundaryContractTest {
                 .thenReturn(Optional.of(plan(FACTORY)));
         when(scheduleRepository.findByPlanId(PLAN)).thenReturn(List.of(schedule(FACTORY)));
         when(scheduleRepository.findById(SCHEDULE)).thenReturn(Optional.of(schedule(FACTORY)));
-        when(lineRepository.findById("LINE-PROB")).thenReturn(Optional.of(line()));
+        when(lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull("LINE-PROB", FACTORY)).thenReturn(Optional.of(line()));
         mvc.perform(get(url).requestAttr("userId", user.getId()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));

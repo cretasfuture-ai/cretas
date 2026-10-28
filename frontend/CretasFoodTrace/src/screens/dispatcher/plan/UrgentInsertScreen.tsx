@@ -35,9 +35,46 @@ import {
   ImpactedPlan,
   ConfirmUrgentInsertRequest,
   UrgentInsertImpactAnalysis,
+  UrgentInsertFeasibilityStatus,
+  resolveUrgentInsertFeasibility,
 } from '../../../types/dispatcher';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import { productTypeApiClient } from '../../../services/api/productTypeApiClient';
+import { getErrorMsg } from '../../../utils/errorHandler';
+import { toCapacityUnit } from '../../../utils/capacityUnit';
+
+/** 影响分析的加载状态: 没拿到分析 ≠ 可行 */
+type ImpactLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
+
+/** 资源核对三态 + 「分析没取到」在界面上的样子 */
+function feasibilityView(
+  state: ImpactLoadState,
+  status: UrgentInsertFeasibilityStatus,
+  impact: UrgentInsertImpactAnalysis | null
+): { color: string; bg: string; icon: 'check-circle' | 'close-circle' | 'help-circle' | 'progress-clock'; title: string; lines: string[] } {
+  if (state === 'loading') {
+    return { color: '#1890ff', bg: '#e6f7ff', icon: 'progress-clock', title: '正在核对资源…', lines: [] };
+  }
+  if (state !== 'loaded' || !impact) {
+    return {
+      color: '#d48806', bg: '#fffbe6', icon: 'help-circle', title: '资源未验证',
+      lines: ['影响分析未取到，原料 / 设备 / 产能 / 人员都没有核对'],
+    };
+  }
+  if (status === 'FEASIBLE') {
+    return { color: '#389e0d', bg: '#f6ffed', icon: 'check-circle', title: '资源已核对，可行', lines: [] };
+  }
+  if (status === 'INFEASIBLE') {
+    return {
+      color: '#cf1322', bg: '#fff1f0', icon: 'close-circle', title: '不可行',
+      lines: impact.infeasibleReason ? [impact.infeasibleReason] : [],
+    };
+  }
+  const reasons = impact.unverifiedReasons && impact.unverifiedReasons.length > 0
+    ? impact.unverifiedReasons
+    : ['后端没有返回资源核对结果'];
+  return { color: '#d48806', bg: '#fffbe6', icon: 'help-circle', title: '资源未验证', lines: reasons };
+}
 
 /** 产品类型 */
 interface ProductType {
@@ -62,6 +99,8 @@ export default function UrgentInsertScreen() {
   // 表单状态
   const [productTypeId, setProductTypeId] = useState('');
   const [productTypeName, setProductTypeName] = useState('');
+  // 订单数量按产品自带单位算 (Owner 2026-10-28); 产品没设单位就是空, ⛔ 不默认 kg
+  const [productUnit, setProductUnit] = useState('');
   const [quantity, setQuantity] = useState('');
   const [deadline, setDeadline] = useState('');
   const [urgencyLevel, setUrgencyLevel] = useState<'normal' | 'urgent' | 'critical'>('urgent');
@@ -73,7 +112,9 @@ export default function UrgentInsertScreen() {
   const [insertSlots, setInsertSlots] = useState<InsertSlot[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<InsertSlot | null>(null);
   const [selectedImpact, setSelectedImpact] = useState<UrgentInsertImpactAnalysis | null>(null);
+  const [impactLoadState, setImpactLoadState] = useState<ImpactLoadState>('idle');
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
+  const feasibility = resolveUrgentInsertFeasibility(impactLoadState === 'loaded' ? selectedImpact : null);
 
   const [showProductPicker, setShowProductPicker] = useState(false);
 
@@ -90,17 +131,14 @@ export default function UrgentInsertScreen() {
         setProductTypes(response.data.map((pt: { id: string; name: string; unit?: string }) => ({
           id: pt.id,
           name: pt.name,
-          unit: pt.unit ?? 'kg',
+          unit: pt.unit ?? '',
         })));
       }
     } catch (error) {
       console.error('Failed to load product types:', error);
-      // 使用备用数据
-      setProductTypes([
-        { id: 'PT001', name: '带鱼片', unit: 'kg' },
-        { id: 'PT002', name: '黄鱼片', unit: 'kg' },
-        { id: 'PT003', name: '鱿鱼圈', unit: 'kg' },
-      ]);
+      // ⛔ 不用备用假产品 (假 ID 会被拿去建计划); 明确报错, 列表留空
+      setProductTypes([]);
+      Alert.alert(t('common.error'), `产品列表加载失败：${getErrorMsg(error)}`);
     } finally {
       setLoadingProducts(false);
     }
@@ -123,6 +161,7 @@ export default function UrgentInsertScreen() {
   const selectProduct = (product: ProductType) => {
     setProductTypeId(product.id);
     setProductTypeName(product.name);
+    setProductUnit(product.unit ?? '');
     setShowProductPicker(false);
   };
 
@@ -159,20 +198,30 @@ export default function UrgentInsertScreen() {
 
   const selectSlot = async (slot: InsertSlot) => {
     setSelectedSlot(slot);
+    // 换时段先清掉上一个时段的分析, 否则会把别的时段的结论显示在这里
+    setSelectedImpact(null);
+    setImpactLoadState('idle');
 
     // 获取详细影响分析
     if (productTypeId && quantity) {
+      setImpactLoadState('loading');
       try {
         const response = await schedulingApiClient.analyzeSlotImpact(
           slot.id,
           productTypeId,
-          parseFloat(quantity)
+          parseFloat(quantity),
+          undefined,
+          toCapacityUnit(productUnit)
         );
         if (response.success && response.data) {
           setSelectedImpact(response.data);
+          setImpactLoadState('loaded');
+        } else {
+          setImpactLoadState('failed');
         }
       } catch (error) {
         console.error('Failed to analyze impact:', error);
+        setImpactLoadState('failed');
       }
     }
   };
@@ -252,7 +301,8 @@ export default function UrgentInsertScreen() {
       }
     } catch (error) {
       console.error('Failed to insert:', error);
-      Alert.alert(t('common.error'), t('urgentInsert.confirm.failed'));
+      // 原样显示后端原因 (如「该时段刚刚已被占用…未创建新计划」409 / 时段不存在 404)
+      Alert.alert(t('common.error'), getErrorMsg(error) || t('urgentInsert.confirm.failed'));
     } finally {
       setLoading(false);
       setShowConfirm(false);
@@ -295,10 +345,7 @@ export default function UrgentInsertScreen() {
         </View>
 
         <View style={styles.slotStats}>
-          <View style={styles.slotStatItem}>
-            <MaterialCommunityIcons name="gauge" size={16} color="#666" />
-            <Text style={styles.slotStatText}>产能: {slot.availableCapacity}kg/h</Text>
-          </View>
+          {/* 不显示时段产能: 那是全厂粗配额×2 小时, 单位不定, 真正的产能结论在下面的资源核对里按产线配置给 */}
           <View style={styles.slotStatItem}>
             <MaterialCommunityIcons name="account-group" size={16} color="#666" />
             <Text style={styles.slotStatText}>
@@ -389,6 +436,25 @@ export default function UrgentInsertScreen() {
           </View>
         )}
 
+        {/* 资源核对结果: 只有后端明确 FEASIBLE 才显示可行, 其余一律「未验证 / 不可行」 */}
+        {isSelected && (() => {
+          const view = feasibilityView(impactLoadState, feasibility, selectedImpact);
+          return (
+            <View
+              style={[styles.feasibilityBox, { backgroundColor: view.bg, borderColor: view.color }]}
+              testID="urgent-insert-feasibility"
+            >
+              <View style={styles.feasibilityHeader}>
+                <MaterialCommunityIcons name={view.icon} size={16} color={view.color} />
+                <Text style={[styles.feasibilityTitle, { color: view.color }]}>{view.title}</Text>
+              </View>
+              {view.lines.map((line, idx) => (
+                <Text key={`${idx}-${line}`} style={styles.feasibilityLine}>· {line}</Text>
+              ))}
+            </View>
+          );
+        })()}
+
         {/* 查看详细影响分析按钮 */}
         {isSelected && selectedImpact && (
           <TouchableOpacity
@@ -463,7 +529,9 @@ export default function UrgentInsertScreen() {
 
           {/* 数量 */}
           <View style={styles.formRow}>
-            <Text style={styles.label}>数量 (kg) <Text style={styles.required}>*</Text></Text>
+            <Text style={styles.label}>
+              数量{productUnit ? ` (${productUnit})` : ''} <Text style={styles.required}>*</Text>
+            </Text>
             <TextInput
               style={styles.textInput}
               value={quantity}
@@ -472,6 +540,13 @@ export default function UrgentInsertScreen() {
               placeholder="请输入数量"
               placeholderTextColor="#999"
             />
+            {productTypeId !== '' && toCapacityUnit(productUnit) === null && (
+              <Text style={styles.unitHint}>
+                {productUnit
+                  ? `该产品单位「${productUnit}」不能按产线产能核对（产能只按 件 / kg / 批 配），结果会显示产能未验证`
+                  : '该产品没设计量单位，产能会显示未验证；可先在产品类型里补上单位'}
+              </Text>
+            )}
           </View>
 
           {/* 交期 */}
@@ -667,6 +742,13 @@ export default function UrgentInsertScreen() {
               将在 {selectedSlot?.productionLineName} 创建紧急生产计划，
               可能影响 {selectedSlot?.impactedPlans?.length || 0} 个现有计划。
             </Text>
+            {feasibility !== 'FEASIBLE' && (
+              <Text style={styles.confirmWarn} testID="urgent-insert-confirm-unverified">
+                {feasibility === 'INFEASIBLE'
+                  ? '注意：资源核对结果为不可行，确认后原料 / 设备 / 产能 / 人员可能不到位。'
+                  : '注意：资源未验证（原料 / 设备 / 产能 / 人员没有全部核对），系统不保证到位。'}
+              </Text>
+            )}
             <View style={styles.confirmButtons}>
               <TouchableOpacity
                 style={styles.confirmCancelBtn}
@@ -936,6 +1018,11 @@ const styles = StyleSheet.create({
   },
   required: {
     color: '#ff4d4f',
+  },
+  unitHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#d48806',
   },
   selectInput: {
     flexDirection: 'row',
@@ -1260,6 +1347,34 @@ const styles = StyleSheet.create({
     color: '#333',
     marginTop: 12,
     marginBottom: 8,
+  },
+  confirmWarn: {
+    fontSize: 13,
+    color: '#d48806',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 18,
+  },
+  feasibilityBox: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  feasibilityHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  feasibilityTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  feasibilityLine: {
+    fontSize: 12,
+    color: '#595959',
+    marginTop: 4,
+    lineHeight: 17,
   },
   confirmDesc: {
     fontSize: 14,

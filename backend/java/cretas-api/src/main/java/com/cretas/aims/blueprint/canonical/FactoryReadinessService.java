@@ -95,7 +95,8 @@ public class FactoryReadinessService {
                 : applicable.stream().allMatch(row -> "READY".equals(row.state())) ? "DONE" : "PENDING";
         String first = applicable.isEmpty() ? "NOT_APPLICABLE"
                 : applicable.stream().anyMatch(row -> "UNKNOWN".equals(row.firstRecord().state())) ? "UNKNOWN"
-                : applicable.stream().allMatch(row -> "RECORDED".equals(row.firstRecord().state())) ? "DONE"
+                // Only a verified terminal document completes it; drafts or any other existing document do not.
+                : applicable.stream().allMatch(row -> "COMPLETED".equals(row.firstRecord().state())) ? "DONE"
                 : "PENDING";
         return List.of(
                 new FactoryReadinessReport.Stage("CONFIRMATION", "资料确认", confirmation,
@@ -109,11 +110,18 @@ public class FactoryReadinessService {
                 new FactoryReadinessReport.Stage("FORMAL_RUNTIME", "工艺与BOM正式生效", formal,
                         runtime.isEmpty() ? "尚无在用成品" : live + "/" + runtime.size() + " 个在用成品已生效并匹配"),
                 new FactoryReadinessReport.Stage("BUSINESS_READY", "采购/生产/发货就绪", ready,
-                        applicable.stream().map(row -> row.label() + "：" + row.state()).collect(Collectors.joining("；"))),
+                        applicable.stream().map(row -> row.label() + "：" + READY_WORDS.getOrDefault(row.state(), row.state()))
+                                .collect(Collectors.joining("；"))),
                 new FactoryReadinessReport.Stage("FIRST_BUSINESS", "首笔业务", first,
-                        applicable.stream().map(row -> row.label() + "：" + row.firstRecord().state())
-                                .collect(Collectors.joining("；"))));
+                        applicable.stream().map(row -> row.label() + "：" + FIRST_WORDS.getOrDefault(
+                                row.firstRecord().state(), row.firstRecord().state())).collect(Collectors.joining("；"))));
     }
+
+    private static final Map<String, String> READY_WORDS = Map.of(
+            "READY", "可以开展", "MISSING", "还差资料", "UNKNOWN", "无法判断", "NOT_APPLICABLE", "本次不适用");
+    private static final Map<String, String> FIRST_WORDS = Map.of(
+            "COMPLETED", "已有完成的单据", "RECORDED", "有单据但尚未完成（草稿等不算完成）",
+            "NONE", "尚无单据", "UNKNOWN", "无法判断");
 
     static FactoryReadinessReport.Capability capability(CapabilityView capability) {
         List<Map<String, Object>> receipts = safe(capability.getConfigurationReceipts());

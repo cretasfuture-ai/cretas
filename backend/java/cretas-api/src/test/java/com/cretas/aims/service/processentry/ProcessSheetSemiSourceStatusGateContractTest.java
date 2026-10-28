@@ -102,6 +102,8 @@ class ProcessSheetSemiSourceStatusGateContractTest {
                 new ObjectMapper(), wipRepo, taskRepo, processRepo,
                 productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo,
                 wipInventoryService, finishedGoodsFeedService);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "intermediateOwnershipGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

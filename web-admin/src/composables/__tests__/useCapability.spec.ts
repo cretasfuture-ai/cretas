@@ -185,6 +185,64 @@ describe('useCapability', () => {
     errSpy.mockRestore();
   });
 
+  it.each([
+    {
+      label: 'envelope message',
+      body: {
+        success: false,
+        data: null,
+        message: 'Capability layer not enabled for factory=F006 (gradual rollout)',
+        code: 'CAPABILITY_ROLLOUT_DISABLED',
+      },
+    },
+    {
+      label: 'legacy detail',
+      body: { detail: 'Capability layer not enabled for factory=F006 (gradual rollout)' },
+    },
+  ])('case 6: 503 $label is a silent rollout opt-out', async ({ body }) => {
+    const fetchMock = mockFetchOnce(body, { ok: false, status: 503 });
+    vi.stubGlobal('fetch', fetchMock);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { fetchCapability, available, error } = useCapability();
+    expect(await fetchCapability()).toBeNull();
+
+    expect(available.value).toBeNull();
+    expect(error.value).toBeNull();
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    infoSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('case 7: real 503 pool failure surfaces error state and logging', async () => {
+    const fetchMock = mockFetchOnce(
+      {
+        success: false,
+        data: null,
+        message: 'Database pool not initialized',
+        code: 'CAPABILITY_POOL_UNAVAILABLE',
+      },
+      { ok: false, status: 503 },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { fetchCapability, available, error } = useCapability();
+    expect(await fetchCapability()).toBeNull();
+
+    expect(available.value).toBeNull();
+    expect(error.value?.message).toMatch(/503.*Database pool not initialized/);
+    expect(infoSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    infoSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it('bonus: no factoryId — fetchCapability returns null without calling fetch (S8)', async () => {
     mockFactoryId = '';
     const fetchMock = vi.fn();

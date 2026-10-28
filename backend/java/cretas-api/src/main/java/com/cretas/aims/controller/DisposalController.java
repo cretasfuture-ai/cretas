@@ -492,6 +492,9 @@ public class DisposalController {
         rec.setEstimatedLoss(r.getEstimatedLoss());
         rec.setRecoveryValue(r.getRecoveryValue());
         rec.setEvidenceImages(r.getEvidenceImages());
+        rec.setCustomerConfirmedBy(r.getCustomerConfirmedBy());
+        rec.setCustomerConfirmedAt(r.getCustomerConfirmedAt());
+        rec.setCustomerConfirmationEvidence(r.getCustomerConfirmationEvidence());
         rec.setNotes(r.getNotes());
         return rec;
     }
@@ -512,6 +515,9 @@ public class DisposalController {
         rec.setEstimatedLoss(r.getEstimatedLoss());
         rec.setRecoveryValue(r.getRecoveryValue());
         rec.setEvidenceImages(r.getEvidenceImages());
+        rec.setCustomerConfirmedBy(r.getCustomerConfirmedBy());
+        rec.setCustomerConfirmedAt(r.getCustomerConfirmedAt());
+        rec.setCustomerConfirmationEvidence(r.getCustomerConfirmationEvidence());
         rec.setNotes(r.getNotes());
         return rec;
     }

@@ -1,5 +1,6 @@
 package com.cretas.aims.service.inventory;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.processentry.FinishedGoodsStockItem;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
@@ -65,7 +66,7 @@ class FinishedGoodsFeedServiceTest {
     void setUp() {
         service = new FinishedGoodsFeedServiceImpl(
                 finishedGoodsBatchRepository, productFamilyResolver, finishedGoodsAdjustmentLogRepository,
-                productTypeRepository, internalTransferItemRepository, internalTransferRepository);
+                productTypeRepository, internalTransferItemRepository, internalTransferRepository, org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
     }
 
     /** 桩: 让 productTypeId 对应的产品配了每盒克重 gramsPerUnit。 */
@@ -137,7 +138,7 @@ class FinishedGoodsFeedServiceTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-A"))
                 .thenReturn(Optional.of(b));
 
-        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-A", new BigDecimal("30"), "kg");
+        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-A", new BigDecimal("30"), "kg");
 
         assertThat(drawn).isEqualByComparingTo("30");
         // 🔴 shippedQuantity 绝不动 (避免被 VoucherExportServiceImpl 误当"成品发出"按售价计入)
@@ -162,7 +163,7 @@ class FinishedGoodsFeedServiceTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-MISSING"))
                 .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-MISSING", new BigDecimal("10"), "kg"))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-MISSING", new BigDecimal("10"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("成品库存不存在");
         verify(finishedGoodsBatchRepository, never()).save(any());
@@ -176,7 +177,7 @@ class FinishedGoodsFeedServiceTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-A"))
                 .thenReturn(Optional.of(b));
 
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-A", new BigDecimal("100"), "kg"))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-A", new BigDecimal("100"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("成品库存不足");
         assertThat(b.getProducedQuantity()).isEqualByComparingTo("30");   // 未改
@@ -194,7 +195,7 @@ class FinishedGoodsFeedServiceTest {
         stubGramsPerUnit(PT_PIG, "200");                       // 每盒 200g = 0.2kg
 
         // 投 2kg → 盒数 = 2 × 1000 / 200 = 10 盒
-        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-BOX", new BigDecimal("2"), "kg");
+        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-BOX", new BigDecimal("2"), "kg");
 
         assertThat(drawn).isEqualByComparingTo("10");          // 返回值 = 扣减盒数 (供撤销精确还回)
         assertThat(b.getProducedQuantity()).isEqualByComparingTo("40");   // 50 − 10 盒
@@ -216,7 +217,7 @@ class FinishedGoodsFeedServiceTest {
                 .thenReturn(Optional.of(b));
         when(productTypeRepository.findById(PT_PIG)).thenReturn(Optional.empty());   // 未配每盒克重
 
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-BOX", new BigDecimal("2"), "kg"))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-BOX", new BigDecimal("2"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_NO_GRAMS_PER_UNIT"))
                 .hasMessageContaining("每盒");
@@ -237,7 +238,7 @@ class FinishedGoodsFeedServiceTest {
         stubGramsPerUnit(PT_PIG, "200");
 
         // 投 2.2kg → 盒数 = 2.2 × 1000 / 200 = 11 盒 > 余 10 盒
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-BOX", new BigDecimal("2.2"), "kg"))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-BOX", new BigDecimal("2.2"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_INSUFFICIENT"))
                 .hasMessageContaining("不足");
@@ -254,7 +255,7 @@ class FinishedGoodsFeedServiceTest {
                 .thenReturn(Optional.of(b));
         stubGramsPerUnit(PT_PIG, "200");
 
-        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-BOX", new BigDecimal("2"), "kg");
+        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-BOX", new BigDecimal("2"), "kg");
 
         assertThat(drawn).isEqualByComparingTo("10");
         assertThat(b.getProducedQuantity()).isEqualByComparingTo("0");
@@ -269,7 +270,7 @@ class FinishedGoodsFeedServiceTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-PAL"))
                 .thenReturn(Optional.of(b));
 
-        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, "FG-PAL", new BigDecimal("10"), "kg"))
+        assertThatThrownBy(() -> service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-PAL", new BigDecimal("10"), "kg"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("FG_UNIT_MISMATCH"))
                 .hasMessageContaining("不一致");
@@ -313,7 +314,7 @@ class FinishedGoodsFeedServiceTest {
         when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumberForUpdate(FACTORY, "FG-KG"))
                 .thenReturn(Optional.of(b));
 
-        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, "FG-KG", new BigDecimal("10"), "kg");
+        BigDecimal drawn = service.consumeForFeedStrict(FACTORY, Owner.COMPANY, "FG-KG", new BigDecimal("10"), "kg");
 
         assertThat(drawn).isEqualByComparingTo("10");
         assertThat(b.getProducedQuantity()).isEqualByComparingTo("40");

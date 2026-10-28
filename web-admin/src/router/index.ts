@@ -691,6 +691,20 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/quality/inspections/list.vue'),
             meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
           },
+          // 缺口 11: 质检放行 (需检产品产出待检 → 放行 / 不合格)
+          {
+            path: 'release',
+            name: 'QualityRelease',
+            component: () => import('@/views/quality/release/index.vue'),
+            meta: { requiresAuth: true, title: '质检放行', module: 'quality' }
+          },
+          // 缺口 13: CCP 监控记录 (偏离处理 / 按批次导出)
+          {
+            path: 'ccp',
+            name: 'QualityCcp',
+            component: () => import('@/views/quality/ccp/index.vue'),
+            meta: { requiresAuth: true, title: 'CCP 监控记录', module: 'quality' }
+          },
           {
             path: 'disposition',
             name: 'QualityDisposition',
@@ -1654,6 +1668,42 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: { requiresAuth: true, title: '操作日志', module: 'system' }
           },
           {
+            // 训练/隐私条款第六条 (2026-10-24): 工艺保密对客户开启。后端 ProcessSecretController
+            // (PR #1096) 早已上线, 此前没有任何页面。谁能设/改由服务端决定 (工厂总监首次设置,
+            // 之后仅负责人), 负责人未必有系统管理权限 → modulesAny 放宽到生产 / 研发。
+            path: 'process-secret',
+            name: 'SystemProcessSecret',
+            component: () => import('@/views/system/process-secret/index.vue'),
+            meta: { requiresAuth: true, title: '工艺保密', module: 'system',
+                    modulesAny: ['system', 'production', 'rd'] }
+          },
+          {
+            // 隐私条款第十一条: 工厂可查看平台人员访问记录。后端 PlatformDataAccessLogController
+            // (PR #1109) 只允许 factory_super_admin / permission_admin。
+            path: 'platform-access-log',
+            name: 'SystemPlatformAccessLog',
+            component: () => import('@/views/system/platform-access-log/index.vue'),
+            meta: { requiresAuth: true, title: '平台访问记录', module: 'system',
+                    roles: ['factory_super_admin', 'permission_admin'] }
+          },
+          {
+            // 按工厂备份套餐 (Steve 2026-10-26 口径 Q5): 工厂只读查看本厂备份记录。
+            // 后端 FactoryDataBackupController 只允许 factory_super_admin / permission_admin。
+            path: 'data-backups',
+            name: 'SystemDataBackups',
+            component: () => import('@/views/system/data-backups/index.vue'),
+            meta: { requiresAuth: true, title: '数据备份', module: 'system',
+                    roles: ['factory_super_admin', 'permission_admin'] }
+          },
+          {
+            // 按工厂备份套餐: 平台开通 / 修改 / 查看全部工厂 (口径 Q6: 只有平台能改)。
+            // 后端 PlatformTenantBackupController 只允许平台 super_admin。
+            path: 'tenant-backups',
+            name: 'SystemTenantBackups',
+            component: () => import('@/views/system/tenant-backups/index.vue'),
+            meta: { requiresAuth: true, title: '工厂数据备份', module: 'system', roles: platformAdminOnlyRoles }
+          },
+          {
             // Sprint 4 Chat K C-EXPORT-CENTER-1 (2026-05-16): 用户可配置的跨模块导出规则.
             // backend: ExportRuleController + ExportExecutor (EntityManager + SpEL + EasyExcel).
             path: 'export-center',
@@ -2052,6 +2102,13 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
             name: 'SchedulingPlanDetail',
             component: () => import('@/views/scheduling/plans/detail.vue'),
             meta: { requiresAuth: true, title: '计划详情', module: 'scheduling', hidden: true, hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
+            // S4 2026-10-27: 产线 (可细到产品) 每小时产能及单位、产品所需设备; 插单可行性只读这里
+            path: 'line-capacity',
+            name: 'SchedulingLineCapacity',
+            component: () => import('@/views/scheduling/line-capacity/index.vue'),
+            meta: { requiresAuth: true, title: '产线产能与设备', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
             path: 'realtime',
@@ -2483,6 +2540,20 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
           showInMenu: true,
           roles: factoryAssemblyRoles,
           assemblyFeature: true,
+        },
+      },
+      {
+        // The factory's own read-only readiness. Not an assemblyFeature route: that guard admits
+        // platform super admins only, and the backend endpoint already follows the assembly switch.
+        path: 'factory-readiness',
+        name: 'FactorySelfReadiness',
+        component: () => import('@/views/factory-readiness/index.vue'),
+        meta: {
+          title: '建厂就绪',
+          icon: 'DocumentChecked',
+          requiresAuth: true,
+          showInMenu: true,
+          roles: ['factory_super_admin'],
         },
       },
       {

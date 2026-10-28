@@ -224,7 +224,10 @@ public class FactoryRecallFollowUpService {
             if (!evidenceComplete) {
                 issues.add(issue("RETURN_STOCK_UNRESOLVED", "退回成品库存数量与已完成退货数量不守恒"));
             } else if (!resolved) {
-                issues.add(issue("INVENTORY_DISPOSAL_PENDING", "退回成品仍有隔离库存待完成报废"));
+                issues.add(issue("INVENTORY_DISPOSAL_PENDING",
+                        returned.getOwnership() == com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED
+                                ? "退回的客户自有成品待处置（退还客户或经客户同意报废）"
+                                : "退回成品仍有隔离库存待完成报废"));
             }
             BigDecimal reportedDisposal = direct ? BigDecimal.ZERO : disposed;
             StockEvidence evidence = new StockEvidence(current, reportedDisposal, evidenceComplete, resolved);
@@ -254,9 +257,14 @@ public class FactoryRecallFollowUpService {
         boolean direct = original && statusAllows
                 && current.compareTo(freezeBaseline) == 0
                 && FinishedGoodsBatch.Status.DEFECTIVE.equals(batch.getStatus());
-        boolean evidenceComplete = direct || (statusAllows && freezeBaseline != null && disposed != null
-                && current.add(disposed).compareTo(freezeBaseline) == 0);
-        boolean resolved = statusAllows && (freezeBaseline.signum() == 0
+        // 冻结时原库存已经是 0 (货在召回前已全部发出), 现在也还是 0: 没有任何东西要隔离或处置。
+        // 这种批次状态是正常发货留下的 DEPLETED, 不会有报废证据; 此前要求 DEFECTIVE / 报废证据,
+        // 待办「原库存未按冻结事实完成隔离或处置」就永远消不掉 (F006 RECALL-20261027-E2EABB1F 实测)。
+        boolean nothingFrozen = original && freezeBaseline != null && freezeBaseline.signum() == 0
+                && current != null && current.signum() == 0;
+        boolean evidenceComplete = nothingFrozen || direct || (statusAllows && freezeBaseline != null
+                && disposed != null && current.add(disposed).compareTo(freezeBaseline) == 0);
+        boolean resolved = nothingFrozen || statusAllows && (freezeBaseline.signum() == 0
                 ? current.signum() == 0
                 : disposed != null && current.signum() == 0
                 && disposed.compareTo(freezeBaseline) == 0);
@@ -265,7 +273,7 @@ public class FactoryRecallFollowUpService {
         } else if (!resolved) {
             issues.add(issue("INVENTORY_DISPOSAL_PENDING", "原库存仍有隔离库存待完成报废"));
         }
-        BigDecimal reportedDisposal = direct ? BigDecimal.ZERO : disposed;
+        BigDecimal reportedDisposal = direct || nothingFrozen ? BigDecimal.ZERO : disposed;
         return new StockEvidence(current, reportedDisposal, evidenceComplete, resolved);
     }
 
@@ -323,7 +331,7 @@ public class FactoryRecallFollowUpService {
         if (order.getStatus() != ReturnOrderStatus.COMPLETED) {
             return new ReceivableEvidence("NOT_DUE", List.of());
         }
-        BigDecimal total = order.getTotalAmount();
+        BigDecimal total = order.getReceivableAmount();
         if (total == null || total.signum() < 0) {
             return new ReceivableEvidence("INCONSISTENT", List.of());
         }

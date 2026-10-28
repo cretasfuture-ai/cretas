@@ -19,6 +19,19 @@ import java.util.Optional;
 @Repository
 public interface AIIntentConfigRepository extends JpaRepository<AIIntentConfig, String> {
 
+    /** Native authority projection intentionally includes tombstones hidden by the Entity filter. */
+    interface SupplierComparisonAuthority {
+        String getId();
+        String getFactoryId();
+        Boolean getActive();
+        Boolean getDeleted();
+    }
+
+    @Query(value = "SELECT id AS \"id\", factory_id AS \"factoryId\", is_active AS \"active\", "
+            + "CASE WHEN deleted_at IS NULL THEN false ELSE true END AS \"deleted\" "
+            + "FROM ai_intent_configs WHERE intent_code = :intentCode", nativeQuery = true)
+    List<SupplierComparisonAuthority> findSupplierComparisonAuthority(@Param("intentCode") String intentCode);
+
     /**
      * 根据意图代码查询配置
      */

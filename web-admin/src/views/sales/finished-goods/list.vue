@@ -499,8 +499,13 @@ function availableQty(row: TableRow) {
 function isDefective(row: TableRow): boolean {
   return String((row as Record<string, unknown>).status || '').toUpperCase() === 'DEFECTIVE';
 }
+// 缺口 11 质检放行: 待检批次同理 —— 数量看着「充足」, 但放行前不能分配/发货, 状态必须优先显示。
+function isPendingInspection(row: TableRow): boolean {
+  return String((row as Record<string, unknown>).status || '').toUpperCase() === 'PENDING_INSPECTION';
+}
 function statusType(row: TableRow) {
   if (isDefective(row)) return 'danger';
+  if (isPendingInspection(row)) return 'warning';
   const avail = availableQty(row);
   if (avail <= 0) return 'danger';
   if (avail < (Number(row.producedQuantity) || 1) * 0.2) return 'warning';
@@ -508,6 +513,7 @@ function statusType(row: TableRow) {
 }
 function statusLabel(row: TableRow) {
   if (isDefective(row)) return '不良品(已隔离)';
+  if (isPendingInspection(row)) return '待检(质检放行后可发货)';
   const avail = availableQty(row);
   if (avail <= 0) return '已售罄';
   if (avail < (Number(row.producedQuantity) || 1) * 0.2) return '库存低';

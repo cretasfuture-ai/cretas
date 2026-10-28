@@ -7,6 +7,7 @@ from .base import (
     AbstractFinancialChartBuilder, COLORS,
     _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -28,105 +29,58 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
         start_month = period.get('start_month', 1)
         end_month = period.get('end_month', 12)
 
-        # Aggregate totals
-        has_budget = 'budget' in df.columns
-        has_ly = 'last_year' in df.columns
-        has_item = 'item' in df.columns
+        months = list(range(start_month, end_month + 1))
+        # 损益表 (有科目): 收入 / 成本 / 毛利 / 净利由指标库按科目计算;
+        # 普通业绩表 (没有科目): 整表就是业绩, 不出毛利率 / 净利率 / 成本率 (算不出来, 不显示 0)
+        has_subjects = M.has_subjects(df)
+        perf, _ = M.performance_rows(df)
+        pnl = M.pnl(df) if has_subjects else None
+        revenue = pnl.revenue if pnl else None
+        if has_subjects and revenue is None:
+            return self._insufficient(period, year, M.NO_REVENUE_MESSAGE)
+        cost = pnl.cost if pnl else None
+        gross_profit = pnl.gross_profit if pnl else None
+        net_profit = pnl.net_profit if pnl else None
+        gross_margin = pnl.gross_margin().value if pnl else None
+        net_margin = pnl.net_margin().value if pnl else None
 
-        # Revenue items vs cost/expense items
-        from ..financial_data_normalizer import FinancialDataNormalizer
-        normalizer = FinancialDataNormalizer()
+        # 预算达成 / 同比只按业绩口径 (收入行) 计算, 不把成本费用一起加进去
+        monthly_revenue = M.monthly(perf, 'actual', months)
+        monthly_budget = M.monthly(perf, 'budget', months)
+        monthly_ly = M.monthly(perf, 'last_year', months)
+        # 合计直接按明细求和: 没有月份的年度数据 (月份为 0) 也要算进去
+        total_actual = M.total(perf['actual'].tolist()) if not perf.empty else None
+        total_budget = M.total(perf['budget'].tolist()) if not perf.empty else None
+        total_ly = M.total(perf['last_year'].tolist()) if not perf.empty else None
+        budget_achievement = M.ratio(total_actual, total_budget).value
+        yoy_growth = M.growth(total_actual, total_ly).value
+        has_budget = total_budget is not None
+        has_ly = total_ly is not None
 
-        revenue = 0
-        cost = 0
-        expense = 0
-        tax = 0
-        total_actual = 0
-        total_budget = 0
-        total_ly = 0
+        scale = _detect_value_scale([v for v in (revenue, total_actual, total_ly) if v is not None])
 
-        if has_item:
-            for item_name in df['item'].dropna().unique():
-                item_df = df[df['item'] == item_name]
-                actual_sum = item_df['actual'].sum() if 'actual' in item_df.columns else 0
-                pnl_type = normalizer.classify_pnl_item(str(item_name))
+        def scaled(series):
+            return [None if v is None else round(v / scale['divisor'], 2) for v in series]
 
-                if pnl_type == 'revenue':
-                    revenue += actual_sum
-                elif pnl_type == 'cost':
-                    cost += abs(actual_sum)
-                elif pnl_type == 'expense':
-                    expense += abs(actual_sum)
-                elif pnl_type == 'tax':
-                    tax += abs(actual_sum)
-        else:
-            # No item column — treat all actual as revenue
-            revenue = df['actual'].sum() if 'actual' in df.columns else 0
-
-        total_actual = df['actual'].sum() if 'actual' in df.columns else 0
-        total_budget = df['budget'].sum() if has_budget else 0
-        total_ly = df['last_year'].sum() if has_ly else 0
-
-        gross_profit = revenue - cost
-        net_profit = gross_profit - expense - tax
-        gross_margin = round(gross_profit / revenue * 100, 1) if revenue > 0 else 0
-        net_margin = round(net_profit / revenue * 100, 1) if revenue > 0 else 0
-        budget_achievement = self._calc_achievement_rate(total_actual, total_budget)
-        yoy_growth = self._calc_growth_rate(total_actual, total_ly)
-
-        # Monthly sparkline data for revenue trend
-        monthly_revenue = []
-        if 'month' in df.columns and 'actual' in df.columns:
-            if has_item:
-                rev_df = df[df['item'].apply(lambda x: normalizer.classify_pnl_item(str(x)) == 'revenue' if pd.notna(x) else False)]  # noqa: E501
-            else:
-                rev_df = df
-            monthly = rev_df.groupby('month')['actual'].sum().reindex(
-                range(start_month, end_month + 1)
-            ).fillna(0)
-            monthly_revenue = monthly.tolist()
-
-        scale = _detect_value_scale([revenue, total_actual, total_ly])
-
-        # Monthly actual sparkline (scaled)
-        monthly_actual_sparkline = []
-        if 'month' in df.columns and 'actual' in df.columns:
-            monthly_all = df.groupby('month')['actual'].sum().reindex(
-                range(start_month, end_month + 1)
-            ).fillna(0)
-            monthly_actual_sparkline = [round(v / scale['divisor'], 2) for v in monthly_all.tolist()]
-
-        # Monthly budget sparkline (scaled)
-        monthly_budget_sparkline = []
-        if has_budget and 'month' in df.columns:
-            monthly_bgt = df.groupby('month')['budget'].sum().reindex(
-                range(start_month, end_month + 1)
-            ).fillna(0)
-            monthly_budget_sparkline = [round(v / scale['divisor'], 2) for v in monthly_bgt.tolist()]
-
-        # Monthly last_year sparkline (scaled)
-        monthly_ly_sparkline = []
-        if has_ly and 'month' in df.columns:
-            monthly_ly = df.groupby('month')['last_year'].sum().reindex(
-                range(start_month, end_month + 1)
-            ).fillna(0)
-            monthly_ly_sparkline = [round(v / scale['divisor'], 2) for v in monthly_ly.tolist()]
+        monthly_actual_sparkline = scaled(monthly_revenue)
+        monthly_budget_sparkline = scaled(monthly_budget)
+        monthly_ly_sparkline = scaled(monthly_ly)
 
         # Build KPI cards
         cards = []
 
         # 1. Revenue
         cards.append({
-            "label": "营业收入" if has_item else "实际总额",
-            "value": self._format_value(revenue if has_item else total_actual, scale),
+            "label": "营业收入" if has_subjects else "实际总额",
+            "value": self._format_value(revenue if has_subjects else total_actual, scale),
             "unit": "元",
             "trend": self._trend_from_value(yoy_growth),
             "subtitle": f"同比 {yoy_growth:+.1f}%" if yoy_growth is not None else None,
-            "sparkline": monthly_revenue[:12] if monthly_revenue else None,
+            "sparkline": monthly_actual_sparkline[:12] if monthly_actual_sparkline else None,
         })
 
         # 2. Gross Margin (only if we have P&L breakdown)
-        if has_item and revenue > 0:
+        if gross_margin is not None:
             cards.append({
                 "label": "毛利率",
                 "value": f"{gross_margin:.1f}",
@@ -136,7 +90,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
             })
 
         # 3. Net Margin
-        if has_item and revenue > 0:
+        if net_margin is not None:
             cards.append({
                 "label": "净利率",
                 "value": f"{net_margin:.1f}",
@@ -146,14 +100,9 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
             })
 
         # 4. Budget Achievement
-        if has_budget and total_budget > 0:
-            # Monthly achievement rates for sparkline
-            monthly_ach_sparkline = []
-            if monthly_budget_sparkline and monthly_actual_sparkline:
-                monthly_ach_sparkline = [
-                    round(a / b * 100, 1) if b > 0 else 0
-                    for a, b in zip(monthly_actual_sparkline, monthly_budget_sparkline)
-                ]
+        if has_budget and budget_achievement is not None:
+            # Monthly achievement rates for sparkline (算不出的月份为空)
+            monthly_ach_sparkline = [M.ratio(a, b).value for a, b in zip(monthly_revenue, monthly_budget)]
             cards.append({
                 "label": "预算达成率",
                 "value": f"{budget_achievement:.1f}" if budget_achievement is not None else "-",
@@ -164,7 +113,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
             })
 
         # 5. YoY Growth
-        if has_ly and total_ly > 0:
+        if has_ly and yoy_growth is not None:
             cards.append({
                 "label": "同比增长",
                 "value": f"{yoy_growth:+.1f}" if yoy_growth is not None else "-",
@@ -175,7 +124,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
             })
 
         # 6. Cost ratio
-        if has_item and revenue > 0:
+        if has_subjects and revenue and cost is not None:
             cost_ratio = round(cost / revenue * 100, 1)
             cards.append({
                 "label": "成本率",
@@ -193,6 +142,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
 
         # Use a series of gauge charts arranged horizontally
         gauges = []
+        gauge_count = min(len(cards), 6)
         for i, card in enumerate(cards[:6]):
             val = 0
             try:
@@ -204,8 +154,8 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
             gauge_max = 100 if card['unit'] == '%' else val * 1.5 if val > 0 else 100
             gauges.append({
                 "type": "gauge",
-                "center": [f"{8 + i * 17}%", "55%"],
-                "radius": "40%",
+                "center": [f"{(i + 0.5) * 100 / gauge_count:g}%", "55%"],
+                "radius": f"{min(40, 75 / gauge_count):g}%",
                 "min": 0,
                 "max": gauge_max,
                 "startAngle": 200,
@@ -227,7 +177,7 @@ class KpiScorecardBuilder(AbstractFinancialChartBuilder):
                     "fontWeight": "bold",
                     "color": COLORS['primary'],
                     "offsetCenter": [0, "30%"],
-                    "formatter": f"{{value}}{scale['suffix']}{card['unit']}" if card['unit'] == '元' else f"{{value}}{card['unit']}",  # noqa: E501
+                    "formatter": f"{card['value']}{card['unit']}",
                 },
                 "data": [{"value": round(val, 1), "name": card['label']}],
             })

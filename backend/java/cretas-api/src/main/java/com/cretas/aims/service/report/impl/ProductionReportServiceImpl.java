@@ -1203,6 +1203,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalPlannedQuantity = BigDecimal.ZERO;
         BigDecimal totalActualQuantity = BigDecimal.ZERO;
         BigDecimal totalGoodQuantity = BigDecimal.ZERO;
+        BigDecimal qualityBaseQuantity = BigDecimal.ZERO;
+        int batchesReportingGood = 0;
 
         for (ProductionBatch batch : batches) {
             if (batch.getPlannedQuantity() != null) {
@@ -1211,9 +1213,13 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             if (batch.getActualQuantity() != null) {
                 totalActualQuantity = totalActualQuantity.add(batch.getActualQuantity());
             }
-            if (batch.getActualQuantity() != null) {
-                totalGoodQuantity = totalGoodQuantity.add(
-                        batch.getActualQuantity().multiply(new BigDecimal("0.95")));
+            // ⛔ 原来良品 = 产出 × 0.95 —— 编出来的常量, 良品率恒 95%。
+            //    改读批次真实报的良品数; 分母只取同时报了良品的那些批次的产出,
+            //    没报良品的批次不进良品率 (不当 0 也不当 100%)。
+            if (batch.getActualQuantity() != null && batch.getGoodQuantity() != null) {
+                totalGoodQuantity = totalGoodQuantity.add(batch.getGoodQuantity());
+                qualityBaseQuantity = qualityBaseQuantity.add(batch.getActualQuantity());
+                batchesReportingGood++;
             }
         }
 
@@ -1257,8 +1263,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 totalActualQuantity.divide(totalPlannedQuantity, 4, RoundingMode.HALF_UP)
                         .multiply(hundred).min(hundred) : null;
 
-        BigDecimal quality = totalActualQuantity.compareTo(BigDecimal.ZERO) > 0 ?
-                totalGoodQuantity.divide(totalActualQuantity, 4, RoundingMode.HALF_UP)
+        BigDecimal quality = qualityBaseQuantity.compareTo(BigDecimal.ZERO) > 0 ?
+                totalGoodQuantity.divide(qualityBaseQuantity, 4, RoundingMode.HALF_UP)
                         .multiply(hundred).min(hundred) : null;
 
         // 三因子缺任意一个, OEE 就没有定义 —— 用剩下两个乘出来的数没有意义。
@@ -1281,8 +1287,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 // 与 availability 的 .min(hundred) 封顶对齐, 停机量封到 0 下限。
                 .downtime(Math.max(0, plannedHours - totalRunningHours) * 60)
                 .totalOutput(totalActualQuantity)
-                .goodOutput(totalGoodQuantity.setScale(2, RoundingMode.HALF_UP))
-                .defectOutput(totalActualQuantity.subtract(totalGoodQuantity).setScale(2, RoundingMode.HALF_UP))
+                // 一个批次都没报良品数 ⇒ 良品/不良品都不知道, 为 null (⛔ 不是 0)
+                .goodOutput(batchesReportingGood == 0 ? null
+                        : totalGoodQuantity.setScale(2, RoundingMode.HALF_UP))
+                .defectOutput(batchesReportingGood == 0 ? null
+                        : qualityBaseQuantity.subtract(totalGoodQuantity).setScale(2, RoundingMode.HALF_UP))
                 .availabilityLoss(lossOrNull(availability))
                 .performanceLoss(lossOrNull(performance))
                 .qualityLoss(lossOrNull(quality))
@@ -1300,7 +1309,6 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         List<ProductionBatch> batches = productionBatchRepository.findByFactoryIdAndCreatedAtBetween(
                 factoryId, startTime, endTime);
 
-        BigDecimal totalBomCost = BigDecimal.ZERO;
         BigDecimal totalActualCost = BigDecimal.ZERO;
         int batchCount = batches.size();
 
@@ -1311,21 +1319,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             if (batch.getTotalCost() != null) {
                 totalActualCost = totalActualCost.add(batch.getTotalCost());
             }
-            if (batch.getActualQuantity() != null) {
-                BigDecimal bomCost = batch.getTotalCost() != null ?
-                        batch.getTotalCost().multiply(new BigDecimal("0.95")) :
-                        batch.getActualQuantity().multiply(new BigDecimal("10"));
-                totalBomCost = totalBomCost.add(bomCost);
-            }
         }
 
-        BigDecimal totalVariance = totalActualCost.subtract(totalBomCost);
-        // ⚠️ 没有 BOM 成本(没有批次)时, 差异率【算不出来】——⛔ 不是「差异 0%」。
-        //    原来返 ZERO, 而 calculateOverallScore 把「差异 0」当成满分成本控制,
-        //    于是一家一条批次都没有的工厂能靠这一项白拿 15 分。
-        BigDecimal varianceRate = totalBomCost.compareTo(BigDecimal.ZERO) > 0 ?
-                totalVariance.divide(totalBomCost, 4, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100")) : null;
+        // 🔴 标准成本(BOM 理论成本)【没有独立来源】 ⇒ 差异与差异率【不可比较】, 一律 null。
+        //
+        //    原来: 有实际成本时 BOM 成本 = 实际 × 0.95, 没有时 = 实际产量 × 10;
+        //    于是差异率恒约 5.26% (= 1/0.95 - 1), 标准跟着实际同比涨落, 读不出任何成本控制信息;
+        //    产品级「差异原因」再按 60/30/10 固定切成 材料/人工/制造费用 —— 同样是编的。
+        //
+        //    ⛔ 不拿 StandardCostServiceImpl 的「当前配方」去算历史批次: 批次投产时锁定的配方
+        //       版本未必是当前版本, 用当前版本算出来的「差异」混进了配方变更, 一样是假的。
+        //    ⇒ 版本化标准成本落地之前, comparable=false, 由前端 / AI 明说「无法比较」。
+        //
+        //    ⚠️ 差异率为 null 时 KpiMetricsDTO.calculateOverallScore 把成本这一维排除出加权
+        //       (weight 不增) —— 既不加分, 也不按 0 记 (见 getKpiMetricsDTO)。
+        BigDecimal totalBomCost = null;
+        BigDecimal totalVariance = null;
+        BigDecimal varianceRate = null;
 
         List<CostVarianceReportDTO.ProductCostVariance> productVariances = new ArrayList<>();
         for (Map.Entry<String, List<ProductionBatch>> entry : productBatches.entrySet()) {
@@ -1339,30 +1349,25 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 BigDecimal prodActualCost = productBatchList.stream()
                         .map(b -> b.getTotalCost() != null ? b.getTotalCost() : BigDecimal.ZERO)
                         .reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal prodBomCost = prodActualCost.multiply(new BigDecimal("0.95"));
 
+                // 实际单位成本是真实读数; 没有产量时算不出来 —— ⛔ 不是 0。
                 BigDecimal unitActualCost = prodQuantity.compareTo(BigDecimal.ZERO) > 0 ?
-                        prodActualCost.divide(prodQuantity, 4, RoundingMode.HALF_UP) : BigDecimal.ZERO;
-                BigDecimal unitBomCost = unitActualCost.multiply(new BigDecimal("0.95"));
-                BigDecimal unitVariance = unitActualCost.subtract(unitBomCost);
-                BigDecimal prodVarianceRate = unitBomCost.compareTo(BigDecimal.ZERO) > 0 ?
-                        unitVariance.divide(unitBomCost, 4, RoundingMode.HALF_UP).multiply(new BigDecimal("100")) :
-                        BigDecimal.ZERO;
+                        prodActualCost.divide(prodQuantity, 4, RoundingMode.HALF_UP) : null;
 
                 productVariances.add(CostVarianceReportDTO.ProductCostVariance.builder()
                         .productTypeId(entry.getKey())
                         .productName(firstBatch.getProductName() != null ? firstBatch.getProductName() : "未知产品")
                         .quantity(prodQuantity)
-                        .bomUnitCost(unitBomCost.setScale(2, RoundingMode.HALF_UP))
-                        .actualUnitCost(unitActualCost.setScale(2, RoundingMode.HALF_UP))
-                        .unitVariance(unitVariance.setScale(2, RoundingMode.HALF_UP))
-                        .varianceRate(prodVarianceRate.setScale(2, RoundingMode.HALF_UP))
-                        .totalVariance(prodActualCost.subtract(prodBomCost).setScale(2, RoundingMode.HALF_UP))
+                        .bomUnitCost(null)
+                        .actualUnitCost(scaleOrNull(unitActualCost))
+                        .unitVariance(null)
+                        .varianceRate(null)
+                        .totalVariance(null)
                         .batchCount(productBatchList.size())
-                        .varianceReason(CostVarianceReportDTO.analyzeVarianceReason(
-                                unitVariance.multiply(new BigDecimal("0.6")),
-                                unitVariance.multiply(new BigDecimal("0.3")),
-                                unitVariance.multiply(new BigDecimal("0.1"))))
+                        // ⛔ 原来按 60/30/10 把差异切成材料/人工/制造费用, 那是编的原因。
+                        .varianceReason(null)
+                        .comparable(false)
+                        .comparabilityReason(CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON)
                         .build());
             }
         }
@@ -1377,9 +1382,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .factoryId(factoryId)
                 .startDate(startDate)
                 .endDate(endDate)
-                .totalBomCost(totalBomCost.setScale(2, RoundingMode.HALF_UP))
+                .comparable(false)
+                .comparabilityReason(CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON)
+                .totalBomCost(totalBomCost)
                 .totalActualCost(totalActualCost.setScale(2, RoundingMode.HALF_UP))
-                .totalVariance(totalVariance.setScale(2, RoundingMode.HALF_UP))
+                .totalVariance(totalVariance)
                 .totalVarianceRate(scaleOrNull(varianceRate))
                 .varianceStatus(CostVarianceReportDTO.calculateStatus(varianceRate))
                 .productCount(productBatches.size())
@@ -1526,7 +1533,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .fpy(scaleOrNull(fpy))
                 .overallQualityRate(oeeReport.getQuality())
                 .scrapRate(lossOrNull(oeeReport.getQuality()))
-                .bomVarianceRate(costReport.getTotalVarianceRate())
+                // 成本差异不可比较(缺独立标准成本)时为 null ⇒ calculateOverallScore 不计这一维:
+                // ⛔ 不加分(原来 ×0.95 恒给 5.26% ⇒ 恒得 47.4 分), ⛔ 也不按 0 分记。
+                .bomVarianceRate(Boolean.FALSE.equals(costReport.getComparable())
+                        ? null : costReport.getTotalVarianceRate())
                 .materialCostRatio(costReport.getMaterialCostRatio())
                 .laborCostRatio(costReport.getLaborCostRatio())
                 .overheadCostRatio(costReport.getOverheadCostRatio())

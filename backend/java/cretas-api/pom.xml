@@ -360,13 +360,6 @@
             <version>2.10.4</version>
         </dependency>
 
-        <!-- OkHttp for AI Service HTTP Client with Connection Pool -->
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>4.12.0</version>
-        </dependency>
-
         <!-- gRPC Client Spring Boot Starter (Boot 3) -->
         <dependency>
             <groupId>net.devh</groupId>
@@ -507,16 +500,6 @@
         </extensions>
 
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <testIncludes>
-                        <include>${cretas.testIncludes}</include>
-                    </testIncludes>
-                </configuration>
-            </plugin>
-
             <!-- Protobuf Maven Plugin for gRPC -->
             <plugin>
                 <groupId>org.xolstice.maven.plugins</groupId>
@@ -570,6 +553,11 @@
                     <testExcludes>
                         <testExclude>**/arena/ArenaRLTournamentServiceTest.java</testExclude>
                     </testExcludes>
+                    <!-- Java Gate selects test classes through this property (merged from a second,
+                         duplicate maven-compiler-plugin declaration that newer Maven rejects). -->
+                    <testIncludes>
+                        <include>${cretas.testIncludes}</include>
+                    </testIncludes>
                 </configuration>
             </plugin>
 

@@ -53,6 +53,7 @@ class BusinessRuleControllerTest {
     @Mock private FactoryFormulaRepository formulaRepo;
     @Mock private FactorySchedulerConfigRepository schedulerRepo;
     @Mock private DynamicSchedulerService dynamicSchedulerService;
+    @Mock private com.cretas.aims.engine.AutonomousGrantIssuer grantIssuer;
 
     /** Use real SpEL evaluator — verifies actual sandbox behavior, not a stub. */
     private final SandboxedSpelEvaluator spelEvaluator = new SandboxedSpelEvaluator();
@@ -69,7 +70,8 @@ class BusinessRuleControllerTest {
                 formulaRepo,
                 schedulerRepo,
                 dynamicSchedulerService,
-                spelEvaluator);
+                spelEvaluator,
+                grantIssuer);
     }
 
     // ==================== Validation rule SpEL injection ====================

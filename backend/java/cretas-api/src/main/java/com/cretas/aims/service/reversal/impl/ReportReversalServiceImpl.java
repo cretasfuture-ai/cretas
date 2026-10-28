@@ -127,6 +127,15 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
 
+    /** 缺口 11 第二轮审查 M1: 撤回某次报工时只解除它自己未放行的待检 (分笔账)。未注入 = 不解除 (保守)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.release.SemiQcHoldLots semiQcHoldLots;
+
+    /** 缺口 13 第二轮审查 M1: 撤回的报工随带的 CCP 偏离作废。{@code @Lazy} 打断装配环。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService ccpMonitoringService;
+
     /**
      * R3 修复 (2026-06-14, 六扇门撤回库存恢复): 撤回必须回扣结单消耗的原料量。
      *
@@ -550,6 +559,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ② 每份报工: IN 写负 REVERSE；本整单内的正式 WIP OUT 写正 REVERSE。
         //    OUT 是本批次下游工序的领用，不是新的产出；正量 REVERSE 只恢复 consumed。
         for (ProductionReport r : reports) {
+            // 缺口 13 (第二轮审查 M1): 撤回的报工随带的 CCP 偏离作废, 不再挡放行
+            if (ccpMonitoringService != null) {
+                ccpMonitoringService.voidDeviationsOfReport(factoryId,
+                        com.cretas.aims.service.foodsafety.ccp.CcpReportFacade.REF_YIELD_PREFIX + r.getId(),
+                        reversalOperatorId(log_), "所属报工已撤回");
+            }
             List<SemiFinishedInventoryTransaction> inTxns = reportTxns.getOrDefault(r.getId(), List.of());
             if (inTxns == null) {
                 continue;
@@ -592,6 +607,14 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 revertedTxnIds.add(saved.getId());
                 if (SemiFinishedInventoryTransaction.TxnType.IN.equals(inTxn.getTxnType())) {
                     revertedInTxnIds.add(saved.getId());
+                    // 缺口 11 (第二轮审查 M1): 撤回的这笔入账若还在待检, 只解除它自己未放行的量 ——
+                    // 已放行的存量不再被误挡, 别人的待检不被抵消。回放 (下一行) 只重算数量/成本, 不动待检。
+                    if (semiQcHoldLots != null) {
+                        wipRepo.findByIdForUpdate(inTxn.getSemiFinishedId()).ifPresent(sfi -> {
+                            semiQcHoldLots.unwindForReport(sfi, r.getId(), quantity);
+                            wipRepo.save(sfi);
+                        });
+                    }
                 }
 
                 // 回放移动均价到 SemiFinishedInventory
@@ -817,6 +840,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     continue;
                 }
                 if (SemiFinishedInventoryTransaction.TxnType.ADJUST.equals(txn.getTxnType())) {
+                    if (WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())) {
+                        throw new BusinessException(409,
+                                "该报工已存在已审批的 WIP 数量更正，不能直接撤回原报工")
+                                .withCode("WIP_CORRECTION_REVERSAL_CONFLICT")
+                                .withHint("请继续使用已审批的报工修正流程，或先由负责人核对更正流水后再撤回")
+                                .withHintTarget("报工修正审批");
+                    }
                     throw malformedWipTransaction("报工关联 ADJUST 不属于撤回集合", "WIP_LEDGER_INVALID");
                 }
                 if (!SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType()))
@@ -2353,6 +2383,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // 正量 REVERSE = 还回领用 (OUT 的逆) 的累计量 —— 抵扣 consumedOut, ⛔ 不进 producedQty。
         BigDecimal restoredConsumption = BigDecimal.ZERO;
         boolean hasUnknownCost = false;
+        BigDecimal correctionUnitCostSnapshot = null;
 
         for (SemiFinishedInventoryTransaction txn : allTxns) {
             if (SemiFinishedInventoryTransaction.TxnType.IN.equals(txn.getTxnType())) {
@@ -2397,6 +2428,23 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 BigDecimal q = txn.getQuantity();
                 if (q != null) {
                     consumedOut = consumedOut.add(q.abs());
+                }
+            } else if (SemiFinishedInventoryTransaction.TxnType.ADJUST.equals(txn.getTxnType())
+                    && WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE.equals(txn.getSourceType())) {
+                // 报工数量更正是唯一允许进入净产出回放的 ADJUST。它只改变数量证据，
+                // 不携带成本 delta；原 IN/REVERSE 的总成本与未知成本标记保持原口径。
+                BigDecimal q = txn.getQuantity();
+                if (q != null && q.signum() != 0) {
+                    producedQty = producedQty.add(q);
+                    ledgerInTotal = ledgerInTotal.add(q);
+                    // apply 已按 persistent accumulated_cost(scale-2) / corrected produced
+                    // 写入 scale-4 balanceCostAfter。回放沿用该 correction 快照，避免用
+                    // 原始 IN 的未舍入 quantity * unitCost 重建出另一套成本口径。
+                    correctionUnitCostSnapshot = txn.getBalanceCostAfter();
+                    if (!hasUnknownCost && correctionUnitCostSnapshot != null
+                            && producedQty.signum() > 0) {
+                        weightedCost = correctionUnitCostSnapshot.multiply(producedQty);
+                    }
                 }
             }
         }

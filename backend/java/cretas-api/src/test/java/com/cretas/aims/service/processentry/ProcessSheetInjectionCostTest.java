@@ -91,6 +91,8 @@ class ProcessSheetInjectionCostTest {
                 new ObjectMapper(), wipRepo, taskRepo, processRepo,
                 productWorkProcessRepo, productTypeRepo, finishedGoodsBatchRepo,
                 wipInventoryService, finishedGoodsFeedService);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "intermediateOwnershipGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
 
         // plan 归属 factory (跨租户守卫通过)
         ProductionPlan plan = new ProductionPlan();
@@ -148,8 +150,22 @@ class ProcessSheetInjectionCostTest {
         ArgumentCaptor<BigDecimal> cap = ArgumentCaptor.forClass(BigDecimal.class);
         verify(wipInventoryService, times(1)).postClerkOutput(
                 eq(FACTORY), any(), eq(PRODUCT_TYPE), eq(new BigDecimal("40")), any(),
-                cap.capture(), any(), eq(2), eq(false));
+                cap.capture(), any(), eq(2), eq(false), any());   // 末参: 质检分笔凭据 (缺口 11)
         return cap.getValue();
+    }
+
+    @Test
+    @DisplayName("缺口 11 第三轮审查 L-2: 保存入账的质检分笔凭据 = PS:计划:工序:行; 不同工序同名的行凭据不同 (阴性对照)")
+    void savePostsHoldRefWithProcessCode() {
+        when(wipInventoryService.getSemiUnitCost(FACTORY, "SFI-A")).thenReturn(new BigDecimal("10"));
+        when(clerkService.computeLaborCost(any(), eq(LABOR_RATE))).thenReturn(new BigDecimal("100"));
+        service.saveRow(FACTORY, PLAN_ID, pureSfiReq("qiepian", "40", "50"), 7L);
+        service.saveRow(FACTORY, PLAN_ID, pureSfiReq("lu", "40", "50"), 7L);
+        ArgumentCaptor<String> refs = ArgumentCaptor.forClass(String.class);
+        verify(wipInventoryService, times(2)).postClerkOutput(
+                eq(FACTORY), any(), eq(PRODUCT_TYPE), any(), any(), any(), any(), eq(2), eq(false), refs.capture());
+        assertThat(refs.getAllValues()).containsExactly(
+                "PS:" + PLAN_ID + ":qiepian:row-inj-cost", "PS:" + PLAN_ID + ":lu:row-inj-cost");
     }
 
     @Test

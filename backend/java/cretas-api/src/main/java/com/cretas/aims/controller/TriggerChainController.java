@@ -1,6 +1,8 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.engine.AutonomousToolPolicy;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.config.*;
@@ -26,6 +28,9 @@ public class TriggerChainController {
     private final FactoryToolConfigRepository toolConfigRepo;
     private final FactorySkillConfigRepository skillConfigRepo;
     private final FactoryTriggerChainRepository triggerChainRepo;
+
+    @Autowired
+    private ToolRegistry toolRegistry;
 
     @Autowired(required = false)
     private FactoryTemplateRepository templateRepo;
@@ -171,7 +176,33 @@ public class TriggerChainController {
         if (body.getErrorStrategy() != null) chain.setErrorStrategy(body.getErrorStrategy());
         if (body.getEventType() != null) chain.setEventType(body.getEventType());
         if (body.getDescription() != null) chain.setDescription(body.getDescription());
+        if (Boolean.TRUE.equals(chain.getEnabled())) requireAutonomousSteps(chain.getSteps());
         return ApiResponse.success(triggerChainRepo.save(chain));
+    }
+
+    /**
+     * An enabled chain runs with no user behind it, so its steps must pass the same policy the
+     * executor applies at run time (read-only tools, no identity parameters).
+     */
+    @SuppressWarnings("unchecked")
+    private void requireAutonomousSteps(List<Map<String, Object>> steps) {
+        if (steps == null || steps.isEmpty()) return;
+        if (toolRegistry == null) {
+            throw new BusinessException(500, "工具注册表不可用，不能校验事件链步骤");
+        }
+        for (Map<String, Object> step : steps) {
+            if (step == null || Boolean.FALSE.equals(step.get("enabled"))) continue;
+            if (!(step.get("tool") instanceof String toolName) || toolName.isBlank()) continue;
+            var tool = toolRegistry.getExecutor(toolName);
+            if (tool.isEmpty()) continue;
+            Object rawParams = step.getOrDefault("params", Map.of());
+            if (!(rawParams instanceof Map<?, ?> map)) {
+                throw new BusinessException(400, "事件链步骤「" + toolName + "」的参数必须是对象")
+                        .withHint("把 params 改成键值形式，例如 {\"limit\": 10}");
+            }
+            String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), (Map<String, Object>) map);
+            if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
+        }
     }
 
     // ========== Templates ==========

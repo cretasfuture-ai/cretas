@@ -58,11 +58,23 @@ public class ConversionServiceImpl implements ConversionService {
     private final MaterialBatchRepository materialBatchRepository;
     private final ConversionChangeHistoryRepository historyRepository;
     private final UserRepository userRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
+    /**
+     * 工艺保密: 转换率就是配方。受保护产品的转换率只有保密负责人 / 有编辑授权的人能写 ——
+     * 无权的人在页面上看到的是「已保密」(值为空), 让他保存就会把空值 / 0 写回去。
+     */
+    private void requireEditable(String factoryId, String productTypeId, String resourceRef) {
+        processSecretGuard.requireProduct(factoryId, productTypeId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, resourceRef);
+    }
+
     @Override
     @Transactional
     public ConversionDTO createConversion(String factoryId, ConversionDTO dto) {
         log.info("创建转换率配置: factoryId={}, materialTypeId={}, productTypeId={}",
                 factoryId, dto.getMaterialTypeId(), dto.getProductTypeId());
+        requireEditable(factoryId, dto.getProductTypeId(), "conversion create");
         // 检查是否已存在相同配置
         if (conversionRepository.existsByFactoryIdAndMaterialTypeIdAndProductTypeId(
                 factoryId, dto.getMaterialTypeId(), dto.getProductTypeId())) {
@@ -108,6 +120,9 @@ public class ConversionServiceImpl implements ConversionService {
             throw new BusinessException(403, "无权访问该转换率配置")
                     .withHint("当前转换率配置不属于该工厂, 无法访问");
         }
+        // 原产品与改后的产品都要可编辑 (不能把保密产品的转换率挪走或改写)
+        requireEditable(factoryId, conversion.getProductTypeId(), "conversion update " + id);
+        requireEditable(factoryId, dto.getProductTypeId(), "conversion update " + id);
 
         // 如果要更改原材料或产品类型，检查是否会重复
         if (!conversion.getMaterialTypeId().equals(dto.getMaterialTypeId()) ||
@@ -160,6 +175,7 @@ public class ConversionServiceImpl implements ConversionService {
             throw new BusinessException(403, "无权访问该转换率配置")
                     .withHint("当前转换率配置不属于该工厂, 无法访问");
         }
+        requireEditable(factoryId, conversion.getProductTypeId(), "conversion delete " + id);
 
         // 记录删除历史（在删除前记录）
         recordHistory(conversion, conversion.getConversionRate(), null,
@@ -374,6 +390,7 @@ public class ConversionServiceImpl implements ConversionService {
         for (String id : ids) {
             MaterialProductConversion conversion = conversionRepository.findById(id).orElse(null);
             if (conversion != null && conversion.getFactoryId().equals(factoryId)) {
+                requireEditable(factoryId, conversion.getProductTypeId(), "conversion activate " + id);
                 Boolean oldIsActive = conversion.getIsActive();
                 conversion.setIsActive(isActive);
                 conversionRepository.save(conversion);

@@ -507,19 +507,58 @@ class DisposalRecordServiceCrossTenantTest {
     }
 
     @Test
-    void approveDisposal_customerOwnedFinishedGoodsCannotDeductInventory() {
+    void approveDisposal_customerOwnedWithoutConfirmationCannotDeductInventory() {
         DisposalRecord r = record(690L, "F006");
         r.setFinishedGoodsBatchId("FG-CUSTOMER");
         r.setDisposalQuantity(BigDecimal.ONE);
         FinishedGoodsBatch batch = fgBatch("FG-CUSTOMER", "F006", BigDecimal.TEN,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ONE);
         batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        batch.setOwnerCustomerId("CUST-1");
+        batch.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
         when(repo.findById(690L)).thenReturn(Optional.of(r));
         when(fgBatchRepo.findById("FG-CUSTOMER")).thenReturn(Optional.of(batch));
         assertThatThrownBy(() -> service.approveDisposal("F006", 690L, 7, "财务", FINANCE_ROLE))
                 .isInstanceOf(BusinessException.class)
-                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(400));
         verify(fgBatchRepo, never()).save(any());
+        org.mockito.Mockito.verify(disposalCostAccountingService, never())
+                .postApprovedDisposal(any(), any(), any());
+    }
+
+    @Test
+    void approveDisposal_customerOwnedReturnOrConsentedScrap_deductsWithoutCompanyCost() {
+        for (String type : new String[]{"RETURN_TO_CUSTOMER", "SCRAP"}) {
+            org.mockito.Mockito.clearInvocations(fgAdjustmentLogRepo, disposalCostAccountingService);
+            long id = "SCRAP".equals(type) ? 692L : 691L;
+            DisposalRecord r = record(id, "F006");
+            r.setDisposalType(type);
+            r.setFinishedGoodsBatchId("FG-CUSTOMER");
+            r.setDisposalQuantity(new BigDecimal("4"));
+            r.setCustomerConfirmedBy("客户王经理");
+            r.setCustomerConfirmedAt(java.time.LocalDate.of(2026, 10, 28));
+            r.setCustomerConfirmationEvidence("https://example.test/signed.jpg");
+            // 客户货没有本厂成本也必须能处置: unitCost 为 null
+            FinishedGoodsBatch batch = fgBatch("FG-CUSTOMER", "F006", new BigDecimal("16"),
+                    BigDecimal.ZERO, BigDecimal.ZERO, null);
+            batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+            batch.setOwnerCustomerId("CUST-1");
+            batch.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
+            when(repo.findById(id)).thenReturn(Optional.of(r));
+            when(fgBatchRepo.findById("FG-CUSTOMER")).thenReturn(Optional.of(batch));
+            when(repo.save(any(DisposalRecord.class))).thenAnswer(i -> i.getArgument(0));
+
+            DisposalRecord approved = service.approveDisposal("F006", id, 7, "财务", FINANCE_ROLE);
+
+            assertThat(batch.getProducedQuantity()).isEqualByComparingTo("12");
+            assertThat(approved.getActualLoss()).isEqualByComparingTo("0");
+            verify(fgAdjustmentLogRepo).save(argThat((FinishedGoodsAdjustmentLog a) ->
+                    type.equals(a.getReferenceType())
+                            && a.getAdjustmentQuantity().compareTo(new BigDecimal("-4")) == 0
+                            && a.getReason().startsWith("报损审批 [id=" + id + "]")));
+            org.mockito.Mockito.verify(disposalCostAccountingService, never())
+                    .postApprovedDisposal(any(), any(), any());
+        }
     }
 
     @Test

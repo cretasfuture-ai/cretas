@@ -20,15 +20,13 @@ test-ci-gate-runs-merge-result.sh
 test-fresh-db-baseline-contract.sh
 test-fresh-db-baseline-replays.sh
 test-fresh-db-progress-ratchet.sh
-test-fresh-db-local-runner.sh
 test-fresh-db-startup-outcome.sh
 test-guarded-paths-are-in-the-trigger-surface.sh
 test-java-gate-selector-covers-gate-classes.sh
 test-pipeline-tail-swallows-rc.sh
 test-release-ci-artifact-prewarm.sh
 test-release-jdk-version-preamble.sh
-test-java-heavy-jobs-need-8g-runner.sh
-test-selfhosted-jobs-have-timeouts.sh
 test-reap-orphan-testenvs-retired.sh
 test-f006-aurora-runtime.sh
-test-web-light-runner-routing.sh
+test-public-repo-hosted-only.sh
+test-backup-copy-retention.sh

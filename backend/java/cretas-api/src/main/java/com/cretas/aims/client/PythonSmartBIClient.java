@@ -2739,6 +2739,109 @@ public class PythonSmartBIClient {
 
     // ==================== 财务看板 ====================
 
+    /** Fixed read-only factory analysis route; caller cannot select an endpoint or SQL source. */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> callFactoryChartAnalysis(
+            String factoryId,
+            String userId,
+            String userRole,
+            String correlationId,
+            Map<String, Object> request) throws IOException {
+        if (!config.isEnabled()) {
+            throw new IOException("Python SmartBI service is disabled");
+        }
+        String trustedFactory = requireFactoryId(factoryId);
+        String trustedUser = optionalIdentity(userId);
+        String trustedRole = optionalIdentity(userRole);
+        if (request == null || request.isEmpty() || !request.containsKey("question")) {
+            throw new IOException("Factory analysis question is required");
+        }
+        Set<String> allowed = Set.of("question", "source", "upload_id", "year", "period_type",
+                "start_month", "end_month", "analysis_subject", "context_id");
+        if (!allowed.containsAll(request.keySet())) {
+            throw new IOException("Unsupported factory analysis parameter");
+        }
+        HttpUrl url = serviceBaseUrl.newBuilder()
+                .addPathSegments("api/smartbi/financial-dashboard/factory-analysis")
+                .build();
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .header("X-Factory-Id", trustedFactory)
+                .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)));
+        if (trustedUser != null) builder.header("X-User-Id", trustedUser);
+        if (trustedRole != null) builder.header("X-User-Role", trustedRole);
+        if (correlationId != null && !correlationId.isBlank()) {
+            builder.header("X-Correlation-ID", correlationId);
+        }
+        return executeFactoryChartAnalysisOnce(builder.build());
+    }
+
+    private Map<String, Object> executeFactoryChartAnalysisOnce(Request request) throws IOException {
+        if (!circuitBreaker.isCallPermitted()) {
+            throw new PythonServiceUnavailableException(
+                    circuitBreaker.getState().name(), circuitBreaker.getRemainingOpenTimeMs());
+        }
+        try (Response response = httpClient.newCall(request).execute()) {
+            int status = response.code();
+            if (Set.of(403, 409, 410, 422).contains(status)) {
+                inspectErrorBodyBounded(response.body());
+                circuitBreaker.recordSuccess();
+                throw new FactoryAnalysisUpstreamException(status, factoryAnalysisMessage(status));
+            }
+            if (!response.isSuccessful()) {
+                inspectErrorBodyBounded(response.body());
+                throw sanitizedUpstreamFailure(status);
+            }
+            ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException("Factory analysis returned no response");
+            }
+            requireJsonResponse(body);
+            BoundedInputStream input = boundedStream(body, MAX_JSON_RESPONSE_BYTES);
+            try {
+                Map<String, Object> result = objectMapper.readValue(input, Map.class);
+                input.drainToEnd();
+                if (result == null || !Boolean.TRUE.equals(result.get("success"))
+                        || !(result.get("data") instanceof Map<?, ?>)) {
+                    throw new IOException("Factory analysis returned an invalid response");
+                }
+                circuitBreaker.recordSuccess();
+                return result;
+            } finally {
+                input.closeDelegate();
+            }
+        } catch (FactoryAnalysisUpstreamException businessFailure) {
+            throw businessFailure;
+        } catch (IOException transportFailure) {
+            circuitBreaker.recordFailure();
+            serviceAvailable.set(false);
+            throw transportFailure;
+        }
+    }
+
+    private static String factoryAnalysisMessage(int statusCode) {
+        return switch (statusCode) {
+            case 403 -> "无权访问本厂分析数据，请核对当前工厂和权限";
+            case 409 -> "对话上下文正在更新，请稍后重试";
+            case 410 -> "本厂分析数据已失效，请刷新后重试";
+            case 422 -> "分析问题或范围无效，请调整后重试";
+            default -> "工厂分析请求未完成";
+        };
+    }
+
+    public static final class FactoryAnalysisUpstreamException extends IOException {
+        private final int statusCode;
+
+        public FactoryAnalysisUpstreamException(int statusCode, String message) {
+            super(message);
+            this.statusCode = statusCode;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+    }
+
     /**
      * 调用财务看板 Python 服务
      *

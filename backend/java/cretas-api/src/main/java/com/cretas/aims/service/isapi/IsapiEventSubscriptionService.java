@@ -1,5 +1,7 @@
 package com.cretas.aims.service.isapi;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
+
 import com.cretas.aims.client.isapi.IsapiClient;
 import com.cretas.aims.config.IsapiConfig;
 import com.cretas.aims.dto.isapi.IsapiEventDTO;
@@ -397,7 +399,7 @@ public class IsapiEventSubscriptionService {
     /**
      * 应用启动时自动订阅
      */
-    @EventListener(ContextRefreshedEvent.class)
+    @EventListener(value = ContextRefreshedEvent.class, condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     public void onApplicationStart() {
         // 可选：启动时自动订阅所有在线设备
         // 如果设备较多，建议改为手动触发或按工厂订阅
@@ -417,12 +419,6 @@ public class IsapiEventSubscriptionService {
 
     // ==================== 查询方法 ====================
 
-    /**
-     * 获取活动订阅数量
-     */
-    public int getActiveSubscriptionCount() {
-        return activeSubscriptions.size();
-    }
 
     /**
      * 检查设备是否已订阅
@@ -432,9 +428,16 @@ public class IsapiEventSubscriptionService {
     }
 
     /**
-     * 获取所有活动订阅的设备ID
+     * 本厂设备中正在订阅的 id (订阅表是全进程共用的, 不能把别厂的设备 id 返回给前端)
      */
-    public List<String> getActiveSubscriptionIds() {
-        return List.copyOf(activeSubscriptions.keySet());
+    public List<String> getActiveSubscriptionIds(String factoryId) {
+        if (factoryId == null) {
+            return List.of();
+        }
+        return activeSubscriptions.keySet().stream()
+                .filter(id -> deviceRepository.findById(id)
+                        .map(d -> factoryId.equals(d.getFactoryId())).orElse(false))
+                .sorted()
+                .toList();
     }
 }

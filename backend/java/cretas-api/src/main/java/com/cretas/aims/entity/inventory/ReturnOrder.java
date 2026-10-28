@@ -91,6 +91,16 @@ public class ReturnOrder extends BaseEntity {
     @Column(name = "total_amount", precision = 15, scale = 2)
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
+    /**
+     * 销项税额 (销售退货). totalAmount 与销售单头一样是未税额; 发货挂账是含税的
+     * (SalesServiceImpl#taxInclusiveShippedValue), 所以应收冲减必须按 totalAmount + taxAmount,
+     * 否则冲完客户还残留一笔税。税率回源销售单行借; 采购退货恒 0。
+     */
+    @PriceSensitive
+    @org.hibernate.annotations.ColumnDefault("0")
+    @Column(name = "tax_amount", precision = 15, scale = 2, nullable = false)
+    private BigDecimal taxAmount = BigDecimal.ZERO;
+
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
 
@@ -192,6 +202,13 @@ public class ReturnOrder extends BaseEntity {
     private String approvedByName;
 
     // ==================== 计算属性 ====================
+
+    /** 应收/应付冲减额 = 未税额 + 税额 (与发货/收货挂账同一含税口径). null 未税额 → null. */
+    @Transient
+    public BigDecimal getReceivableAmount() {
+        if (totalAmount == null) return null;
+        return totalAmount.add(taxAmount == null ? BigDecimal.ZERO : taxAmount);
+    }
 
     @Transient
     public BigDecimal calculateTotalAmount() {

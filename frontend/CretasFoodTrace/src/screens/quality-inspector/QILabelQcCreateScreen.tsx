@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import AiImageNotice from '../../components/common/AiImageNotice';
 import { appAlert } from '../../components/ui/AppDialog';
 import { Image, Modal, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -446,6 +447,7 @@ export default function QILabelQcCreateScreen() {
           <Text style={styles.sectionTitle}>2. 拍摄包装照片</Text>
           <Text style={styles.photoCounter}>{photos.length}/{MAX_PHOTOS}</Text>
         </View>
+        <AiImageNotice style={{ justifyContent: 'flex-start', marginBottom: 8 }} />
 
         <View style={styles.photoGrid}>
           {photos.map((photo, index) => (

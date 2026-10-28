@@ -9,6 +9,7 @@ import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.LinUCBService;
 import com.cretas.aims.service.ResultFormatterService;
+import com.cretas.aims.service.execution.DemoConversationScope;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.swagger.v3.oas.annotations.Operation;
@@ -151,6 +152,8 @@ public class AIPublicDemoController {
         log.debug("Demo会话: sessionId={}, tempUserId={}, isNew={}",
                 sessionId, demoUserId, request.getSessionId() == null);
 
+        try (DemoConversationScope ignored = DemoConversationScope.openTrusted(demoUserId, sessionId)) {
+
         // 1. 检测未解析的指代词（只有在没有会话上下文时才需要）
         // 如果有会话ID，说明可能在多轮对话中，指代词可能可以解析
         if (request.getSessionId() == null) {
@@ -283,6 +286,7 @@ public class AIPublicDemoController {
 
             return ResponseEntity.ok(ApiResponse.success(response));
         }
+        }
     }
 
     @PostMapping("/recognize")
@@ -305,6 +309,8 @@ public class AIPublicDemoController {
         DemoSession session = getOrCreateSession(request.getSessionId());
         String sessionId = session.getSessionId();
         Long demoUserId = session.getTempUserId();
+
+        try (DemoConversationScope ignored = DemoConversationScope.openTrusted(demoUserId, sessionId)) {
 
         IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(
                 userInput, DEMO_FACTORY_ID, 1, demoUserId, DEMO_USER_ROLE, sessionId);
@@ -339,6 +345,7 @@ public class AIPublicDemoController {
         }
 
         return ResponseEntity.ok(ApiResponse.success(response));
+        }
     }
 
     /**

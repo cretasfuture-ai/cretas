@@ -64,6 +64,16 @@ public class WorkProcessTaskDTO {
      */
     private Boolean overdue;
 
+    /**
+     * 按工艺图能不能报这一道 (缺口 04): 上游产出的料到了就是 true。由后端
+     * {@link com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard} 算, 与开工 / 报工写入口拦截用的是同一份判定。
+     * {@code null} = 没算 (终态任务) —— 前端不要把 null 当成 false。
+     */
+    private Boolean unlocked;
+
+    /** {@code unlocked=false} 时给人看的原因, 写明在等哪一道上游。 */
+    private String blockedReason;
+
     private Integer estimatedMinutes;
 
     private BigDecimal actualQuantity;

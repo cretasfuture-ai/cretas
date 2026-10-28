@@ -15,6 +15,8 @@ import com.cretas.aims.repository.inventory.InternalTransferItemRepository;
 import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.service.inventory.FeedUnitConverter;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +53,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
     private final InternalTransferItemRepository internalTransferItemRepository;
     /** #1214 静默漂移缺口修复: TRF-child 子批被整批退回归零时, 连带把源 InternalTransfer 记录置 REVERSED。 */
     private final InternalTransferRepository internalTransferRepository;
+    /** 缺口 16: 成品作投料来源的跨客户归属闸 (与半成品同一道)。 */
+    private final IntermediateOwnershipGuard ownershipGuard;
 
     /** ①c 成品投料扣减的调整来源标记 (审计口径, 区别于 SCRAP 报损 / 手工 adjust)。 */
     private static final String REF_PRODUCTION_FEED = "PRODUCTION_FEED";
@@ -58,7 +62,21 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
     @Override
     @Transactional(readOnly = true)
     public List<FinishedGoodsStockItem> listAvailableForFeed(String factoryId, String productTypeId) {
+        return listAvailableForFeed(factoryId, productTypeId, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<FinishedGoodsStockItem> listAvailableForFeed(String factoryId, String productTypeId,
+                                                             Owner consumer) {
         List<FinishedGoodsBatch> batches = finishedGoodsBatchRepository.findAvailableForFeedByFactory(factoryId);
+        // 缺口 16: 投料下拉只给领用计划自己归属的成品 (consumer null = 非领用视图, 不过滤)
+        if (consumer != null) {
+            batches = batches.stream()
+                    .filter(b -> IntermediateOwnershipGuard.sameOwner(consumer,
+                            IntermediateOwnershipGuard.ofFinishedGoods(b)))
+                    .collect(Collectors.toList());
+        }
         if (batches.isEmpty()) {
             return List.of();
         }
@@ -114,7 +132,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
 
     @Override
     @Transactional
-    public BigDecimal consumeForFeedStrict(String factoryId, String batchNumber, BigDecimal qty, String feedUnit) {
+    public BigDecimal consumeForFeedStrict(String factoryId, Owner consumer, String batchNumber, BigDecimal qty,
+                                           String feedUnit) {
         if (qty == null || qty.signum() <= 0) {
             return BigDecimal.ZERO;
         }
@@ -125,6 +144,10 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                         .withHint("请重新选择仍有库存的成品批次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(batchNumber));
+        // 跨客户领料 (缺口 16): 代工客户的成品只能投进同一客户的计划 (行锁之后、扣减之前)。
+        ownershipGuard.assertFinishedGoodsDrawable(factoryId, consumer, fg, batchNumber);
+        // 质检放行 (缺口 11): 待检成品不能作投料来源 (下拉本来就只列 AVAILABLE, 这里兜住直接引用批号的情况)。
+        com.cretas.aims.service.quality.release.QcInspectionGuard.assertFinishedGoodsFeedable(fg, batchNumber);
 
         // 🟠 单位折算 (禁止降级): 气调成品常按 盒/托 计量, 逐道投料量 feedUnit 为 kg。
         //   (a) 计数单位成品 (盒/个/件/只) + kg 投料: 依据 ProductType.gramsPerUnit 把 kg 折算为盒数扣减
@@ -548,9 +571,11 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
         finishedGoodsAdjustmentLogRepository.save(logEntry);
 
         fg.setProducedQuantity(after);
-        // 还量后有可用 → 从 DEPLETED/REVERSED 恢复 AVAILABLE。
-        if (!fg.isDepleted() && !FinishedGoodsBatch.Status.EXPIRED.equals(fg.getStatus())
-                && !FinishedGoodsBatch.Status.FROZEN.equals(fg.getStatus())) {
+        // 还量后有可用 → 只有因量耗尽而变的 DEPLETED/REVERSED 才恢复 AVAILABLE。
+        // ⛔ 白名单而非黑名单: 待检 (PENDING_INSPECTION) / 不良品 (DEFECTIVE) / 冻结 / 过期都是质量或业务判定,
+        //    撤销一笔投料不能把它们洗成可售 (缺口 11 审查: 旧的「除 EXPIRED/FROZEN 外一律改回」会洗白)。
+        if (!fg.isDepleted() && (FinishedGoodsBatch.Status.DEPLETED.equals(fg.getStatus())
+                || FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()))) {
             fg.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
         }
         finishedGoodsBatchRepository.save(fg);

@@ -167,6 +167,63 @@ public class SemiFinishedInventory {
     @Builder.Default
     private String status = Status.AVAILABLE;
 
+    /** 质检放行状态 (缺口 11) —— 与按余额自动翻转的 {@link #status} 正交, 所以单独一列。 */
+    public static final class InspectionStatus {
+        /** 待检: 下道不能领用, 等质检放行。 */
+        public static final String PENDING = "PENDING";
+        /** 已放行 (或放行后未再入新产出)。 */
+        public static final String RELEASED = "RELEASED";
+        /** 质检不合格: 不能领用。 */
+        public static final String REJECTED = "REJECTED";
+
+        private InspectionStatus() {
+        }
+    }
+
+    /**
+     * 质检放行状态: {@code null} = 不需检 (存量全部 null, 行为与以前完全一样) /
+     * PENDING / RELEASED / REJECTED。
+     *
+     * <p>由产出入账时按「产品需检 或 该批次/计划有未处理 CCP 偏离」置 PENDING
+     * ({@code QcInspectionPolicy}), 由 {@code QcReleaseService} 放行/判不合格。
+     * ⛔ 不放进 {@link #status}: status 会在每次入账/扣减时按余额重算成 AVAILABLE/DEPLETED,
+     * 待检状态放在那里会被下一次入账静默抹掉。
+     */
+    @Column(name = "inspection_status", length = 20)
+    private String inspectionStatus;
+
+    /**
+     * 待检数量 (缺口 11 审查高 2): 余额中还没放行的部分。这一行按产品码 / 计划锚<b>跨批次累加</b>,
+     * 所以待检必须落到数量上: 可领 = 余额 − 待检数量; 放行只放这部分, 判不合格只转出这部分。
+     * null / 0 且 inspectionStatus 非 PENDING = 没有待检。
+     */
+    @Column(name = "inspection_pending_quantity", precision = 12, scale = 2)
+    private BigDecimal inspectionPendingQuantity;
+
+    /** 当前可领 (余额 − 待检数量, 不低于 0)。方法名不带 get 前缀: 本实体会被直接序列化。 */
+    public BigDecimal drawableBalance() {
+        BigDecimal balance = computeBalance();
+        BigDecimal pending = pendingInspectionQuantity();
+        if (pending == null) {
+            return balance;
+        }
+        BigDecimal free = balance.subtract(pending);
+        return free.signum() < 0 ? BigDecimal.ZERO : free;
+    }
+
+    /**
+     * 实际待检数量: 不在待检 ⇒ null; 待检但没记数量 (旧数据) ⇒ 整个余额都按待检算 (宁可多挡);
+     * 封顶为余额、不低于 0。⛔ 别处不要再各写一遍这套口径。
+     */
+    public BigDecimal pendingInspectionQuantity() {
+        if (!InspectionStatus.PENDING.equals(inspectionStatus)) {
+            return null;
+        }
+        BigDecimal balance = computeBalance().max(BigDecimal.ZERO);
+        BigDecimal pending = inspectionPendingQuantity == null ? balance : inspectionPendingQuantity;
+        return pending.min(balance).max(BigDecimal.ZERO);
+    }
+
     /**
      * 溯源 (从产出报工继承)。
      * 格式镜像 {@link ProductionReport#getMaterialBatchRefs()}:
@@ -177,6 +234,19 @@ public class SemiFinishedInventory {
     @Column(name = "material_batch_refs", columnDefinition = "jsonb")
     private List<Map<String, Object>> materialBatchRefs;
 
+    /**
+     * 这一行半成品归谁 (缺口 16 跨客户领料): 与原料批次同口径 —— 公司自有, 或某个客户所有
+     * (代工 / 来料加工计划的产出)。入账时从产出它的计划的 {@code outputOwnership} 继承,
+     * 由 {@code IntermediateOwnershipGuard} 统一写入和比对。null 只出现在迁移前的旧行, 按公司自有读。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ownership", length = 32)
+    private com.cretas.aims.entity.enums.InventoryOwnership ownership;
+
+    /** 客户所有时的客户 id ({@link #ownership} = CUSTOMER_OWNED 时必有)。 */
+    @Column(name = "owner_customer_id", length = 191)
+    private String ownerCustomerId;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -185,6 +255,41 @@ public class SemiFinishedInventory {
 
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
+
+    // ===================== 余额口径 (唯一实现) =====================
+    //
+    // G02 (2026-10-24): 扣减校验曾用 produced − consumed (漏了 adjustment), 写回却用
+    // produced − consumed + adjustment —— 盘亏 −30 时领 60 被放行、写回 −10; 盘盈 +30 时领 100 被错拒。
+    // ⇒ 校验 / 扣减 / 撤回 / 流水 balanceAfter 一律走下面这几个方法, ⛔ 不在调用方再手写一遍减法。
+    //
+    // 方法名刻意不用 get/is 前缀: 本实体在部分接口里被直接序列化, 带 get 前缀会凭空多出 JSON 字段。
+    // null 视为 0: 与历史全部重算站点一致 (占位行建行时三列都落 0; adjustment 列 default 0)。
+
+    /** 余额公式本体: {@code produced − consumed + adjustment}。 */
+    public static BigDecimal balanceOf(BigDecimal produced, BigDecimal consumed, BigDecimal adjustment) {
+        return zeroIfNull(produced).subtract(zeroIfNull(consumed)).add(zeroIfNull(adjustment));
+    }
+
+    /** 按当前 produced / consumed / adjustment 现算的余额 (不读 availableQuantity 存量列)。 */
+    public BigDecimal computeBalance() {
+        return balanceOf(producedQuantity, consumedQuantity, adjustmentQuantity);
+    }
+
+    /** 若再消耗 {@code extraConsumed} (原生单位) 之后的余额; 不改任何字段。 */
+    public BigDecimal balanceAfterConsuming(BigDecimal extraConsumed) {
+        return balanceOf(producedQuantity, zeroIfNull(consumedQuantity).add(zeroIfNull(extraConsumed)),
+                adjustmentQuantity);
+    }
+
+    /** 把 availableQuantity 刷成公式值并返回 —— produced / consumed 改完之后调用。 */
+    public BigDecimal refreshAvailableQuantity() {
+        this.availableQuantity = computeBalance();
+        return this.availableQuantity;
+    }
+
+    private static BigDecimal zeroIfNull(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
 
     @PrePersist
     protected void onCreate() {

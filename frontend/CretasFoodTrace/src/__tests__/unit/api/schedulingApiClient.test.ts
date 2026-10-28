@@ -288,6 +288,16 @@ describe('schedulingApiClient', () => {
       const result = await schedulingApiClient.generateSchedule(config);
       expect(result.data.completionProbability).toBe(0.92);
     });
+
+    it('sends the selected plans as planIds (the field the backend APS reads)', async () => {
+      mock.onPost(`${BASE}/generate`).reply(200, { success: true, data: { id: 'SP-1' }, message: 'ok' });
+
+      await schedulingApiClient.generateSchedule({ planDate: '2026-10-29', shiftType: 'day', planIds: ['PP-A', 'PP-B'] });
+
+      const body = JSON.parse(mock.history.post[mock.history.post.length - 1].data);
+      expect(body.planIds).toEqual(['PP-A', 'PP-B']);
+      expect(body.planDate).toBe('2026-10-29');
+    });
   });
 
   describe('optimizeWorkers', () => {

@@ -1,5 +1,6 @@
 package com.cretas.aims.engine;
 
+import com.cretas.aims.dev.lineage.LineageBackfillMode;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
@@ -121,7 +122,10 @@ public class TriggerChainExecutor {
      * 会导致这些 chain 永不触发。fallbackExecution=true 让无事务时仍同步执行 (此时无 doom 风险,
      * 因为没有外层事务可被回滚)。
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    // 回填进程里不触发: 它监听的是 ApplicationEvent 全集, 启动事件(ContextRefreshed/Started/Ready)也会走到这里
+    // (无事务 ⇒ fallbackExecution), 于是把它和 ToolRegistry 下面整张工具依赖图在懒加载的回填进程里全部实例化。
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true,
+            condition = LineageBackfillMode.NOT_ACTIVE_CONDITION)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onApplicationEvent(ApplicationEvent event) {
         String eventType = event.getClass().getSimpleName();
@@ -199,36 +203,56 @@ public class TriggerChainExecutor {
                 chain.getChainCode(), steps.size(), factoryId);
 
         for (Map<String, Object> step : steps) {
-            Boolean stepEnabled = (Boolean) step.getOrDefault("enabled", true);
-            if (!stepEnabled) continue;
+            Object enabledValue = step.getOrDefault("enabled", true);
+            if (Boolean.FALSE.equals(enabledValue)) continue;
 
-            String toolName = (String) step.get("tool");
-            String condition = (String) step.getOrDefault("condition", "always");
-            int order = step.containsKey("order") ? ((Number) step.get("order")).intValue() : 0;
-
-            if (!"always".equals(condition) && !evaluateCondition(condition, chainContext)) {
-                log.debug("Chain {} step {} skipped (condition: {})", chain.getChainCode(), toolName, condition);
-                continue;
-            }
-
-            Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
-            if (executor.isEmpty()) {
-                log.warn("Tool not found in chain {}: {}", chain.getChainCode(), toolName);
-                continue;
-            }
-
-            // Round 9 Fix (R8-β tail): respect factory_tool_configs disable flag.
-            // R7b fixed ToolDispatchService; R9 fixes SkillExecutor + this trigger chain path.
-            if (!toolRegistry.isToolEnabledForFactory(factoryId, toolName)) {
-                log.warn("Chain {} step {} skipped — tool disabled for factory {} via Canvas config",
-                        chain.getChainCode(), toolName, factoryId);
-                continue;
+            Object toolValue = step.get("tool");
+            Object conditionValue = step.getOrDefault("condition", "always");
+            Object orderValue = step.get("order");
+            String toolName = toolValue instanceof String text && !text.isBlank() ? text : String.valueOf(toolValue);
+            int order = orderValue instanceof Number number ? number.intValue() : 0;
+            // A step that should have run but could not (malformed, missing/blank/unregistered tool,
+            // tool disabled for this factory) is a counted failure, never a silent skip.
+            String refusal = stepDefectOrNull(enabledValue, toolValue, conditionValue, orderValue);
+            Optional<ToolExecutor> executor = Optional.empty();
+            Map<String, Object> params = null;
+            if (refusal == null) {
+                String condition = (String) conditionValue;
+                if (!"always".equals(condition) && !evaluateCondition(condition, chainContext)) {
+                    log.debug("Chain {} step {} skipped (condition: {})", chain.getChainCode(), toolName, condition);
+                    continue;
+                }
+                executor = toolRegistry.getExecutor(toolName);
+                if (executor.isEmpty()) {
+                    refusal = "tool not registered: " + toolName;
+                } else if (!toolRegistry.isToolEnabledForFactory(factoryId, toolName)) {
+                    // Round 9 Fix (R8-β tail): respect factory_tool_configs disable flag — not run, and reported.
+                    refusal = "tool disabled for this factory: " + toolName;
+                } else {
+                    Object rawParams = step.getOrDefault("params", Map.of());
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> map = rawParams instanceof Map<?, ?> raw ? (Map<String, Object>) raw : null;
+                    params = map;
+                    // An event chain runs with no user: refused steps count as failures, never as silent skips.
+                    refusal = params == null ? "step params must be an object"
+                            : AutonomousToolPolicy.rejection(toolName, executor.get(), params);
+                }
             }
 
             stepAttempts++;
+            if (refusal != null) {
+                stepFailures++;
+                if (errorSummary.length() > 0) errorSummary.append("; ");
+                errorSummary.append(toolName).append(": ").append(refusal);
+                chainContext.put("step" + order, Map.of("success", false, "error", refusal));
+                log.warn("Chain {} step {} refused: {}", chain.getChainCode(), toolName, refusal);
+                if ("STOP".equals(chain.getErrorStrategy())) {
+                    self.persistExecutionMetadata(chain, startedAt, "FAILED", errorSummary.toString());
+                    return;
+                }
+                continue;
+            }
             try {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> params = (Map<String, Object>) step.getOrDefault("params", Map.of());
 
                 // Build proper ToolCall with JSON-serialized arguments
                 String argsJson = objectMapper.writeValueAsString(params);
@@ -255,13 +279,24 @@ public class TriggerChainExecutor {
             }
         }
 
-        // R7 G3: final status — SUCCESS if no failures, PARTIAL if some, FAILED if all failed.
+        // R7 G3: final status — SUCCESS if no failures, PARTIAL if some, FAILED if all failed;
+        // SKIPPED when no step was due (all disabled or their condition false): nothing ran.
         String finalStatus;
-        if (stepFailures == 0) finalStatus = "SUCCESS";
+        if (stepAttempts == 0) finalStatus = "SKIPPED";
+        else if (stepFailures == 0) finalStatus = "SUCCESS";
         else if (stepFailures < stepAttempts) finalStatus = "PARTIAL";
         else finalStatus = "FAILED";
         self.persistExecutionMetadata(chain, startedAt,
                 finalStatus, stepFailures > 0 ? errorSummary.toString() : null);
+    }
+
+    /** Why a step cannot run as configured, or null when its fields have the expected types. */
+    static String stepDefectOrNull(Object enabled, Object tool, Object condition, Object order) {
+        if (!(enabled instanceof Boolean)) return "step enabled must be true or false";
+        if (!(tool instanceof String text) || text.isBlank()) return "step has no tool";
+        if (!(condition instanceof String)) return "step condition must be text";
+        if (order != null && !(order instanceof Number)) return "step order must be a number";
+        return null;
     }
 
     /**

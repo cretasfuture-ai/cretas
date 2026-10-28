@@ -30,11 +30,11 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from smartbi.database.connection import get_db_context, is_postgres_enabled
-from smartbi.database.models import SmartBiPgAnalysisResult
+from smartbi.database.models import SmartBiPgAnalysisResult, SmartBiPgExcelUpload
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -43,7 +43,9 @@ router = APIRouter()
 # ─── Request / Response Models ───────────────────────────────────
 
 class SaveCacheRequest(BaseModel):
-    factory_id: str
+    # Ignored for authorization: the owning factory always comes from the login token.
+    # Kept optional so older web-admin builds that still send it keep working.
+    factory_id: Optional[str] = None
     charts: Optional[List[Dict[str, Any]]] = None
     kpiSummary: Optional[Dict[str, Any]] = None
     aiAnalysis: Optional[str] = None
@@ -51,22 +53,48 @@ class SaveCacheRequest(BaseModel):
     financialMetrics: Optional[Dict[str, Any]] = None
 
 
+# ─── Tenant gate ──────────────────────────────────────────────────
+# 2026-10-22: these routes used to sit in PUBLIC_PREFIXES and filtered only by
+# upload_id, so anyone on the internet could read, overwrite or delete any
+# factory's cached charts / KPIs / AI analysis by counting upload ids.
+# Now they require a login and the upload must belong to the caller's factory.
+# Unknown and foreign uploads both answer 404 so ids cannot be probed.
+
+def _caller_factory(request: Request) -> str:
+    factory_id = getattr(request.state, "factory_id", None)
+    if not factory_id:
+        raise HTTPException(status_code=401, detail="Authenticated tenant identity required")
+    return str(factory_id)
+
+
+def _require_own_upload(db, upload_id: int, factory_id: str) -> None:
+    owned = db.query(SmartBiPgExcelUpload.id).filter(
+        SmartBiPgExcelUpload.id == upload_id,
+        SmartBiPgExcelUpload.factory_id == factory_id,
+    ).first()
+    if owned is None:
+        raise HTTPException(status_code=404, detail="upload not found")
+
+
 # ─── GET: Load cached enrichment result ──────────────────────────
 
 @router.get("/analysis-cache/{upload_id}")
-async def get_analysis_cache(upload_id: int):
+async def get_analysis_cache(upload_id: int, request: Request):
     """
     Retrieve cached enrichment result for a given upload_id.
     Merges chart_recommendation + insight_generation + kpi_calculation records
     into a single response that matches the frontend EnrichResult shape.
     """
+    factory_id = _caller_factory(request)
     if not is_postgres_enabled():
         return {"success": False, "cached": False, "message": "PostgreSQL not enabled"}
 
     try:
         with get_db_context() as db:
+            _require_own_upload(db, upload_id, factory_id)
             rows = db.query(SmartBiPgAnalysisResult).filter(
                 SmartBiPgAnalysisResult.upload_id == upload_id,
+                SmartBiPgAnalysisResult.factory_id == factory_id,
                 SmartBiPgAnalysisResult.analysis_type.in_([
                     "enrichment_cache"
                 ])
@@ -95,6 +123,8 @@ async def get_analysis_cache(upload_id: int):
                 "_partial": bool(result.get("_partial")),
             }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get analysis cache for upload {upload_id}: {e}", exc_info=True)
         return {"success": False, "cached": False, "message": "处理失败，请稍后重试"}
@@ -103,12 +133,15 @@ async def get_analysis_cache(upload_id: int):
 # ─── POST: Save enrichment result to cache ───────────────────────
 
 @router.post("/analysis-cache/{upload_id}")
-async def save_analysis_cache(upload_id: int, body: SaveCacheRequest):
+async def save_analysis_cache(upload_id: int, body: SaveCacheRequest, request: Request):
     """
     Save a complete EnrichResult to the database.
     Uses a single 'enrichment_cache' analysis_type record with all data in JSONB.
     Upserts: replaces existing cache for the same upload_id.
     """
+    factory_id = _caller_factory(request)
+    if body.factory_id and body.factory_id != factory_id:
+        raise HTTPException(status_code=403, detail="cross-tenant access denied")
     if not is_postgres_enabled():
         return {"success": False, "message": "PostgreSQL not enabled"}
 
@@ -129,6 +162,7 @@ async def save_analysis_cache(upload_id: int, body: SaveCacheRequest):
             payload["financialMetrics"] = body.financialMetrics
 
         with get_db_context() as db:
+            _require_own_upload(db, upload_id, factory_id)
             existing = db.query(SmartBiPgAnalysisResult).filter(
                 SmartBiPgAnalysisResult.upload_id == upload_id,
                 SmartBiPgAnalysisResult.analysis_type == "enrichment_cache"
@@ -136,12 +170,12 @@ async def save_analysis_cache(upload_id: int, body: SaveCacheRequest):
 
             if existing:
                 existing.analysis_result = payload
-                existing.factory_id = body.factory_id
+                existing.factory_id = factory_id
                 existing.created_at = datetime.utcnow()
                 logger.info(f"Updated enrichment cache for upload {upload_id}")
             else:
                 record = SmartBiPgAnalysisResult(
-                    factory_id=body.factory_id,
+                    factory_id=factory_id,
                     upload_id=upload_id,
                     analysis_type="enrichment_cache",
                     analysis_result=payload,
@@ -151,6 +185,8 @@ async def save_analysis_cache(upload_id: int, body: SaveCacheRequest):
 
         return {"success": True}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to save analysis cache for upload {upload_id}: {e}", exc_info=True)
         return {"success": False, "message": "处理失败，请稍后重试"}
@@ -159,16 +195,18 @@ async def save_analysis_cache(upload_id: int, body: SaveCacheRequest):
 # ─── DELETE: Invalidate cache (for "refresh analysis") ──────────
 
 @router.delete("/analysis-cache/{upload_id}")
-async def delete_analysis_cache(upload_id: int):
+async def delete_analysis_cache(upload_id: int, request: Request):
     """
     Delete all cached enrichment results for an upload_id.
     Called when the user clicks "刷新分析" to force re-enrichment.
     """
+    factory_id = _caller_factory(request)
     if not is_postgres_enabled():
         return {"success": False, "message": "PostgreSQL not enabled"}
 
     try:
         with get_db_context() as db:
+            _require_own_upload(db, upload_id, factory_id)
             deleted = db.query(SmartBiPgAnalysisResult).filter(
                 SmartBiPgAnalysisResult.upload_id == upload_id,
                 SmartBiPgAnalysisResult.analysis_type == "enrichment_cache"
@@ -177,6 +215,8 @@ async def delete_analysis_cache(upload_id: int):
 
         return {"success": True, "deleted": deleted}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete analysis cache for upload {upload_id}: {e}", exc_info=True)
         return {"success": False, "message": "处理失败，请稍后重试"}
@@ -193,8 +233,8 @@ async def precompute_enrichment_cache_for_upload(
     Lives here next to the rest of the cache CRUD so the persistence
     shape stays consistent with save_analysis_cache. The HTTP route is
     on materialized_analytics.router (which is JWT/X-Factory-Id
-    protected) — analysis_cache.router is in PUBLIC_PREFIXES so it
-    cannot enforce tenant scope on its own.
+    protected); it was placed there while analysis_cache.router was public
+    (it now requires a login too, 2026-10-22).
 
     Apr 25 2026 (P3 architecture cleanup): also populates
     smart_bi_pg_field_definitions.statistics + re-runs infer_agg_strategy

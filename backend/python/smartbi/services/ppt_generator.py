@@ -2,7 +2,10 @@
 import base64
 import io
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from textwrap import wrap
+
+from smartbi.services.financial.export_conclusions import conclusion_rows
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -40,7 +43,12 @@ class FinancialPPTGenerator:
                  period_type: str = "year",
                  start_month: int = 1, end_month: int = 12,
                  kpi_summary: Optional[Dict] = None,
-                 template: str = "default") -> bytes:
+                 template: str = "default",
+                 headline: Optional[Dict] = None,
+                 findings: Optional[Dict[str, List[str]]] = None,
+                 chart_titles: Optional[Dict[str, str]] = None,
+                 period_label: Optional[str] = None,
+                 report_title: Optional[str] = None) -> bytes:
         """Generate PPTX bytes from chart images and analysis results."""
         try:
             from pptx import Presentation
@@ -61,7 +69,7 @@ class FinancialPPTGenerator:
         GRAY = RGBColor(0x6B, 0x77, 0x8C)
         GREEN = RGBColor(0x36, 0xB3, 0x7E)  # noqa: F841
 
-        period_label = self._period_label(year, period_type, start_month, end_month)
+        period_label = period_label or self._period_label(year, period_type, start_month, end_month)
 
         # --- Slide 1: Cover ---
         slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank
@@ -72,13 +80,30 @@ class FinancialPPTGenerator:
         # Title
         self._add_text(slide, company_name, Inches(1), Inches(2), Inches(11), Inches(1.2),
                        font_size=Pt(44), color=WHITE, bold=True, alignment=PP_ALIGN.CENTER)
-        self._add_text(slide, "财务分析报告", Inches(1), Inches(3.2), Inches(11), Inches(0.8),
+        self._add_text(slide, report_title or "财务分析报告", Inches(1), Inches(3.2), Inches(11), Inches(0.8),
                        font_size=Pt(32), color=WHITE, alignment=PP_ALIGN.CENTER)
         self._add_text(slide, period_label, Inches(1), Inches(4.2), Inches(11), Inches(0.6),
                        font_size=Pt(20), color=RGBColor(0xBF, 0xDB, 0xFE), alignment=PP_ALIGN.CENTER)
         self._add_text(slide, f"生成日期: {datetime.now().strftime('%Y-%m-%d')}",
                        Inches(1), Inches(6.5), Inches(11), Inches(0.4),
                        font_size=Pt(14), color=RGBColor(0x93, 0xC5, 0xFD), alignment=PP_ALIGN.CENTER)
+
+        # Rule conclusions precede KPI/chart/AI pages. Wrap and paginate rather
+        # than truncating long findings or allowing text to run off the slide.
+        rows = conclusion_rows(headline, findings)
+        lines = []
+        for title, text in rows:
+            for paragraph in f"{title}：{text}".splitlines():
+                lines.extend(wrap(paragraph, width=46) or [''])
+            lines.append('')
+        for start in range(0, len(lines), 15):
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            title = "分析结论" if start == 0 else "分析结论（续）"
+            self._add_text(slide, title, Inches(0.5), Inches(0.3), Inches(12), Inches(0.7),
+                           font_size=Pt(28), color=BLUE, bold=True)
+            self._add_text(slide, '\n'.join(lines[start:start + 15]),
+                           Inches(0.5), Inches(1.2), Inches(12), Inches(5.8),
+                           font_size=Pt(18), color=DARK)
 
         # --- Slide 2: Executive Summary (if KPI summary provided) ---
         if kpi_summary:
@@ -105,7 +130,7 @@ class FinancialPPTGenerator:
         for chart_type in ordered_types:
             img_b64 = chart_images.get(chart_type, '')
             analysis = analysis_results.get(chart_type, '')
-            display_name = CHART_DISPLAY_NAMES.get(chart_type, chart_type)
+            display_name = (chart_titles or {}).get(chart_type) or CHART_DISPLAY_NAMES.get(chart_type, chart_type)
 
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             # Title bar
@@ -131,7 +156,19 @@ class FinancialPPTGenerator:
                                font_size=Pt(16), color=GRAY)
 
             # Analysis panel (right 35%)
-            if analysis:
+            if analysis and report_title:
+                # Factory facts and provenance are not AI prose. Preserve every
+                # line on dedicated pages instead of truncating a narrow panel.
+                lines = []
+                for paragraph in analysis.splitlines():
+                    lines.extend(wrap(paragraph, width=46) or [''])
+                for start in range(0, len(lines), 15):
+                    page = prs.slides.add_slide(prs.slide_layouts[6])
+                    self._add_text(page, display_name + ' · 规则分析与来源', Inches(.5), Inches(.3), Inches(12), Inches(.7),
+                                   font_size=Pt(24), color=BLUE, bold=True)
+                    self._add_text(page, '\n'.join(lines[start:start+15]), Inches(.5), Inches(1.2), Inches(12), Inches(5.8),
+                                   font_size=Pt(18), color=DARK)
+            elif analysis:
                 self._add_text(slide, "AI 分析", Inches(9.0), Inches(1.0), Inches(4), Inches(0.5),
                                font_size=Pt(16), color=BLUE, bold=True)
                 self._add_text(slide, analysis[:800], Inches(9.0), Inches(1.6), Inches(4), Inches(5.0),

@@ -28,10 +28,14 @@ public class GetInsertSlotsRequest {
     @NotNull(message = "产品类型不能为空")
     private String productTypeId;
 
-    @Schema(description = "需求数量 (kg)", required = true)
+    @Schema(description = "需求数量, 单位见 quantityUnit", required = true)
     @NotNull(message = "需求数量不能为空")
     @DecimalMin(value = "0.01", message = "需求数量必须大于0")
     private BigDecimal requiredQuantity;
+
+    @Schema(description = "需求数量的单位: PIECE 件 / KG 千克 / BATCH 批; 不填则产能判为未验证 (不套默认单位)")
+    @Pattern(regexp = "(?i)PIECE|KG|BATCH", message = "数量单位只能是 PIECE / KG / BATCH")
+    private String quantityUnit;
 
     @Schema(description = "交期", required = true)
     @NotNull(message = "交期不能为空")

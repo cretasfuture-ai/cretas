@@ -368,7 +368,7 @@ export default function ProcessTaskListScreen() {
             </View>
           ) : waitingPrevious ? (
             <View style={styles.cardFooter}>
-              <Text style={styles.waitingText}>等上一道完成后再报</Text>
+              <Text style={styles.waitingText}>{item.blockedReason || '等上一道完成后再报'}</Text>
             </View>
           ) : null}
         </NeoCard>

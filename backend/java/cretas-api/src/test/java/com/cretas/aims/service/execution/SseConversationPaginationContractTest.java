@@ -17,6 +17,8 @@ import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.FactoryRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ConversationMemoryService;
@@ -657,8 +659,16 @@ class SseConversationPaginationContractTest {
         }
 
         private void execute(IntentExecuteRequest request, Long userId) throws Exception {
-            ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, FACTORY, request,
-                    userId, ROLE);
+            if (userId == null) {
+                ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, FACTORY, request,
+                        null, ROLE);
+                return;
+            }
+            try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                    new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, userId, FACTORY, ROLE))) {
+                ReflectionTestUtils.invokeMethod(service, "executeStreamAsync", emitter, FACTORY, request,
+                        userId, ROLE);
+            }
         }
 
         private static IntentExecuteResponse pageResponse(int page, boolean onlyOnePage,

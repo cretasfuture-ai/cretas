@@ -111,6 +111,8 @@ interface MaterialBatchPickerProps {
   required?: boolean;
   /** Emits client-side stock limit state so parent forms can disable submit before backend 409. */
   onValidationChange?: (validation: MaterialBatchPickerValidation) => void;
+  /** 任务绑定的领料选项加载完成 (含原料类型/份额) —— 父组件做「配比核对」用 (缺口 06)。 */
+  onOptionsLoaded?: (options: TaskMaterialBatchOption[]) => void;
 }
 
 /** 组件内部行状态 */
@@ -191,6 +193,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   disabled = false,
   required = false,
   onValidationChange,
+  onOptionsLoaded,
 }) => {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -218,6 +221,8 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
   const candidateBatchIdsRef = useRef<Set<string>>(new Set());
   const validationRef = useRef(onValidationChange);
   validationRef.current = onValidationChange;
+  const optionsLoadedRef = useRef(onOptionsLoaded);
+  optionsLoadedRef.current = onOptionsLoaded;
 
   rowsRef.current = rows;
   const selectedRowEntries = rows
@@ -360,6 +365,7 @@ export const MaterialBatchPicker: React.FC<MaterialBatchPickerProps> = ({
       if (queryKeyRef.current !== requestQueryKey) return;
       if (res.success && Array.isArray(res.data)) {
         const taskBound = taskId != null && productionBatchId != null;
+        if (taskBound) optionsLoadedRef.current?.(res.data as TaskMaterialBatchOption[]);
         const batches: MaterialBatch[] = taskBound
           ? (res.data as TaskMaterialBatchOption[]).map((option) => ({
               id: option.id,

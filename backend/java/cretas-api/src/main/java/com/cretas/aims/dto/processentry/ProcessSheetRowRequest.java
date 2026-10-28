@@ -151,6 +151,19 @@ public class ProcessSheetRowRequest {
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     private Boolean rework;
 
+    /**
+     * 缺口 13 (审查中 7): 本道挂了关键控制点时, 正式报工把 CCP 实测值随请求提交, 与产出同一事务落库。
+     * WRITE_ONLY: 只收不回写 —— 不进 row_payload (CCP 的权威记录在 haccp_monitoring_records)。
+     */
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private List<com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService.Reading> ccpReadings;
+
+    /**
+     * 缺口 06 汇合配比: 客户端只填 reason/note (超差时必填); 其余由 BlendRatioCheck 在正式提交时计算并覆盖,
+     * 随 row_payload 落库留痕。草稿不校验。
+     */
+    private com.cretas.aims.dto.workflow.BlendRatioDeviation blendRatio;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {

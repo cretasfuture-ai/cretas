@@ -194,7 +194,9 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
                 .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(batch.getFactoryId(), planId);
         int quarantined = 0;
         for (var fg : fgBatches) {
-            if ("AVAILABLE".equals(fg.getStatus())) {
+            // 缺口 11: 待检 (PENDING_INSPECTION) 的同样隔离 —— 否则质检员之后一放行, 失败计划的成品就成了可售。
+            if ("AVAILABLE".equals(fg.getStatus())
+                    || com.cretas.aims.entity.inventory.FinishedGoodsBatch.Status.PENDING_INSPECTION.equals(fg.getStatus())) {
                 fg.setStatus("DEFECTIVE");
                 finishedGoodsBatchRepository.save(fg);
                 quarantined++;
@@ -236,6 +238,17 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
 
         QualityInspection existing = getInspectionById(factoryId, inspectionId);
 
+        boolean dynamicSnapshot = existing.getCustomFields() != null
+                && "DYNAMIC_PRODUCT_BINDING".equals(existing.getCustomFields().get("standardBasis"));
+        if (dynamicSnapshot && (inspection.getResult() != null || inspection.getSampleSize() != null
+                || inspection.getPassCount() != null || inspection.getFailCount() != null
+                || inspection.getPassRate() != null)) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "动态标准质检记录的判定字段不可修改，请通过重新质检产生新记录")
+                    .withCode("QUALITY_INSPECTION_DECISION_IMMUTABLE")
+                    .withHint("仅可补充备注或非判定扩展字段").withHintTarget("质检记录");
+        }
+
         // 更新允许修改的字段
         if (inspection.getInspectorId() != null) {
             existing.setInspectorId(inspection.getInspectorId());
@@ -263,7 +276,15 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         if (inspection.getCustomFields() != null && !inspection.getCustomFields().isEmpty()) {
             java.util.Map<String, Object> merged = new java.util.HashMap<>(
                     existing.getCustomFields() != null ? existing.getCustomFields() : java.util.Map.of());
-            merged.putAll(inspection.getCustomFields());
+            if (!"DYNAMIC_PRODUCT_BINDING".equals(merged.get("standardBasis"))) {
+                merged.putAll(inspection.getCustomFields());
+            } else {
+                inspection.getCustomFields().forEach((key, value) -> {
+                    if (!"standardBasis".equals(key) && !"standardRevision".equals(key) && !"items".equals(key)) {
+                        merged.put(key, value);
+                    }
+                });
+            }
             existing.setCustomFields(merged);
         }
 

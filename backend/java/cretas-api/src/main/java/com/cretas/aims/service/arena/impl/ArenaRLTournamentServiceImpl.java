@@ -42,6 +42,13 @@ public class ArenaRLTournamentServiceImpl implements ArenaRLTournamentService {
     private final PythonLLMClient pythonLLMClient;
     private final ObjectMapper objectMapper;
 
+    /** 比较提示词发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "arena-intent-comparison";
+
     // 用于缓存比较结果的简单内存缓存
     private final Map<String, MatchResult> comparisonCache = new LinkedHashMap<String, MatchResult>() {
         @Override
@@ -404,11 +411,17 @@ public class ArenaRLTournamentServiceImpl implements ArenaRLTournamentService {
         try {
             // 使用 CompletableFuture 实现超时控制，委托给 PythonLLMClient（4-provider fallback）
             String systemPrompt = "你是一个专业的比较评估专家。请严格按 JSON 格式输出: {\"winner\":\"A/B\",\"win_confidence\":0.5-1.0,\"reasoning\":\"理由\"}";
+            // 比较提示词里带用户原话: 号码 / 人名 / 公司名换代号再发 (结果只要 A/B); 脱敏不了按比较失败处理
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                    llmEgressGuard.texts(EGRESS_SITE, null, prompt);
+            if (redacted.refused()) {
+                throw new IllegalStateException("arena prompt could not be redacted, not sending");
+            }
             CompletableFuture<String> future = CompletableFuture.supplyAsync(() ->
-                    pythonLLMClient.chatLowTemp(systemPrompt, prompt));
+                    pythonLLMClient.chatLowTemp(systemPrompt, redacted.text(0)));
 
             // 等待结果，带超时
-            String responseText = future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            String responseText = redacted.restoreJsonText(future.get(timeoutMs, TimeUnit.MILLISECONDS));
 
             // 解析 JSON 响应
             return parseComparisonResponse(matchId, responseText, candidateA, candidateB, matchStart);

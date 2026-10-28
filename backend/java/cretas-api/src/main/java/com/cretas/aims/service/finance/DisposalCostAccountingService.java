@@ -134,6 +134,9 @@ public class DisposalCostAccountingService {
         lockFactory(factoryId);
         var batch = finishedGoodsBatchRepository.findByIdAndFactoryIdForUpdate(finishedGoodsBatchId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "成品批次不存在或不属于当前工厂"));
+        if (batch.getOwnership() == com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED) {
+            return; // 客户货的处置从不过本厂成本凭证, 成本更正也不该补出凭证
+        }
         BigDecimal unitCost = batch.getUnitCost();
         if (unitCost == null || unitCost.signum() < 0) {
             throw new BusinessException(409, "成本证据不完整，不能重估报废")

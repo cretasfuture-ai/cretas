@@ -102,6 +102,10 @@ export function conserveFactoryAssemblyIntent(
       auxMaterials: process.auxMaterials?.map((item) => ({ ...item })),
       packMaterials: process.packMaterials?.map((item) => ({ ...item })),
     })),
+    productionLines: suggested.productionLines?.map((line) => ({
+      ...line,
+      capacities: line.capacities.map((capacity) => ({ ...capacity })),
+    })),
     productProcesses: suggested.productProcesses?.map((route) => ({
       ...route,
       processNames: [...route.processNames],

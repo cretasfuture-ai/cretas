@@ -131,6 +131,7 @@ class YieldReportServiceImplTest {
                 pwpAssigneeRepository, productWorkProcessRepository, new com.cretas.aims.service.yield.CostReconcileService(),
                 processSheetRowRepository);
         ReflectionTestUtils.setField(svc, "wipTransactionRepository", wipTransactionRepository);
+        ReflectionTestUtils.setField(svc, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(svc, "workflowTaskPortRepository", workflowTaskPortRepository);
         ReflectionTestUtils.setField(svc, "workshopReservationService",
                 mock(com.cretas.aims.service.production.WorkshopReportReservationService.class));
@@ -1071,6 +1072,52 @@ class YieldReportServiceImplTest {
         assertThat(step.getTotalWorkMinutes()).isEqualTo(10);
         assertThat(step.getTotalWorkers()).isEqualTo(1);
         assertThat(step.getLaborCost()).isEqualByComparingTo("3.33");
+    }
+
+    /**
+     * Workflow 逐道录入每道是各自的批次; 上游道的人工记在它自己批次的 YIELD 报工上。
+     * 修复前只合并目标(末道)批次的报工 ⇒ 上游道 laborCost 恒 null ⇒ 成本明细判 LABOR_COST_UNKNOWN
+     * (F006【演示L1】计划 836010b8, 2026-10-24)。
+     */
+    private BatchYieldDTO twoStepYieldWithUpstreamReports(List<ProductionReport> upstreamReports) throws Exception {
+        when(reportRepo.findYieldReportsByBatch("F006", 778L)).thenReturn(List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(778L).processOrder(2).laborCost(new BigDecimal("3.33")).build()));
+        when(reportRepo.findYieldReportsByBatch("F006", 100L)).thenReturn(upstreamReports);
+        when(taskRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+        ProductionBatch finalBatch = ProductionBatch.builder()
+                .id(778L).factoryId("F006").batchNumber("CLK-B-LABOR")
+                .productionPlanId("PLAN-LABOR").productTypeId("PT-LABOR")
+                .actualQuantity(new BigDecimal("40")).quantity(new BigDecimal("40"))
+                .unit("盒").status(ProductionBatchStatus.COMPLETED).build();
+        when(productionBatchRepo.findByIdAndFactoryId(778L, "F006")).thenReturn(Optional.of(finalBatch));
+        ProductionPlan pinnedPlan = plan("PLAN-LABOR");
+        pinnedPlan.setPlannedUnit("盒");
+        when(productionPlanRepo.findByIdAndFactoryId("PLAN-LABOR", "F006")).thenReturn(Optional.of(pinnedPlan));
+        ProductType productType = new ProductType();
+        productType.setId("PT-LABOR");
+        productType.setFactoryId("F006");
+        when(productTypeRepo.findByIdAndFactoryId("PT-LABOR", "F006")).thenReturn(Optional.of(productType));
+        ProcessSheetRow first = sheetRow(10L, 100L, "PLAN-LABOR", "PT-WIP", 1, "前道", "50", "52", "kg", "kg", null);
+        ProcessSheetRow target = sheetRow(11L, 778L, "PLAN-LABOR", "PT-LABOR", 2, "末道", "52", "40", "kg", "盒", "B-100");
+        when(processSheetRowRepository.findByFactoryIdAndPlanId("F006", "PLAN-LABOR")).thenReturn(List.of(first, target));
+        return svc.getYield("F006", 778L);
+    }
+
+    @Test
+    void getYield_upstreamWorkflowStepTakesLaborFromItsOwnBatchReport() throws Exception {
+        BatchYieldDTO dto = twoStepYieldWithUpstreamReports(List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(100L).processOrder(1).laborCost(new BigDecimal("104.00")).build()));
+
+        assertThat(dto.getSteps().get(0).getLaborCost()).isEqualByComparingTo("104.00");
+        assertThat(dto.getSteps().get(1).getLaborCost()).isEqualByComparingTo("3.33");
+    }
+
+    @Test
+    void getYield_upstreamWorkflowStepWithoutLaborStaysUnknownNotZero() throws Exception {
+        BatchYieldDTO dto = twoStepYieldWithUpstreamReports(List.of(ProductionReport.builder()
+                .factoryId("F006").batchId(100L).processOrder(1).laborCost(null).build()));
+
+        assertThat(dto.getSteps().get(0).getLaborCost()).isNull();
     }
 
     private ProcessSheetRow sheetRow(Long id, Long batchId, String planId, String productTypeId,
@@ -2483,7 +2530,7 @@ class YieldReportServiceImplTest {
                 .availableQuantity(new BigDecimal("500"))
                 .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
-        when(wipInventoryService.validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("500"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("500"), "kg", null))
                 .thenReturn(source);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2496,7 +2543,7 @@ class YieldReportServiceImplTest {
 
         svc.submitReport("F006", 1L, 5L, req);
 
-        verify(wipInventoryService).validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("500"), "kg", null);
+        verify(wipInventoryService).validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("500"), "kg", null);
         assertThat(source.getConsumedQuantity()).isEqualByComparingTo("0");
         assertThat(source.getAvailableQuantity()).isEqualByComparingTo("500");
         verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
@@ -2516,7 +2563,7 @@ class YieldReportServiceImplTest {
                 .availableQuantity(new BigDecimal("500"))
                 .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
-        when(wipInventoryService.validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null))
                 .thenReturn(source);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2529,7 +2576,7 @@ class YieldReportServiceImplTest {
 
         svc.submitReport("F006", 1L, 5L, req);
 
-        verify(wipInventoryService).validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null);
+        verify(wipInventoryService).validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null);
         assertThat(source.getConsumedQuantity()).isEqualByComparingTo("0");
         assertThat(source.getAvailableQuantity()).isEqualByComparingTo("500");
         verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
@@ -2544,7 +2591,7 @@ class YieldReportServiceImplTest {
                 .withHint("库存剩余 200 kg，待审批已占用 0 kg，本次申请 250 kg，最多还能申请 200 kg。")
                 .withSeverity("BLOCKING")
                 .withHintTarget("inputQuantity");
-        when(wipInventoryService.validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("250"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("250"), "kg", null))
                 .thenThrow(overDraw);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2576,7 +2623,7 @@ class YieldReportServiceImplTest {
                 .withHint("WIP 单位为 kg, 本道投入单位为 件")
                 .withSeverity("BLOCKING")
                 .withHintTarget("inputUnit");
-        when(wipInventoryService.validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("100"), "件", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("100"), "件", null))
                 .thenThrow(mismatch);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2612,7 +2659,7 @@ class YieldReportServiceImplTest {
                 .availableQuantity(new BigDecimal("500"))
                 .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
-        when(wipInventoryService.validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null))
                 .thenReturn(source);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2626,7 +2673,7 @@ class YieldReportServiceImplTest {
         Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
 
         assertThat(out.get("reportId")).isEqualTo(900L);
-        verify(wipInventoryService).validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null);
+        verify(wipInventoryService).validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("300"), "kg", null);
         assertThat(source.getConsumedQuantity()).isEqualByComparingTo("0");
         assertThat(source.getAvailableQuantity()).isEqualByComparingTo("500");
         verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
@@ -2645,7 +2692,7 @@ class YieldReportServiceImplTest {
                 .availableQuantity(new BigDecimal("500"))
                 .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
                 .build();
-        when(wipInventoryService.validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("200"), null, null))
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("200"), null, null))
                 .thenReturn(source);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2658,7 +2705,7 @@ class YieldReportServiceImplTest {
 
         svc.submitReport("F006", 1L, 5L, req);
 
-        verify(wipInventoryService).validateSourceWip("F006", "PT-LU-B1-S1-100", new BigDecimal("200"), null, null);
+        verify(wipInventoryService).validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("200"), null, null);
         assertThat(source.getConsumedQuantity()).isEqualByComparingTo("0");
         assertThat(source.getAvailableQuantity()).isEqualByComparingTo("500");
         verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
@@ -2668,7 +2715,7 @@ class YieldReportServiceImplTest {
     void submitReport_unknownSourceWipNo_throws404() {
         WorkProcessTask t = task(105L, 2, "WP-P6");
         when(taskRepo.findByFactoryIdAndId("F006", 105L)).thenReturn(Optional.of(t));
-        when(wipInventoryService.validateSourceWip("F006", "NO-SUCH-WIP", new BigDecimal("10"), null, null))
+        when(wipInventoryService.validateSourceWip("F006", null, "NO-SUCH-WIP", new BigDecimal("10"), null, null))
                 .thenThrow(new BusinessException(404, "源半成品库存不存在: NO-SUCH-WIP"));
 
         YieldReportRequest req = new YieldReportRequest();
@@ -2699,7 +2746,7 @@ class YieldReportServiceImplTest {
         Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
 
         assertThat(out.get("reportId")).isEqualTo(900L);
-        verify(wipInventoryService, never()).validateSourceWip(anyString(), anyString(), any(), any(), any());
+        verify(wipInventoryService, never()).validateSourceWip(anyString(), any(), anyString(), any(), any(), any());
         verify(reportRepo).save(any(ProductionReport.class));
         verify(wipRepo, never()).save(any(SemiFinishedInventory.class));
         verify(lineageEdgeRepo, never()).save(any(BatchLineageEdge.class));
@@ -2725,6 +2772,37 @@ class YieldReportServiceImplTest {
     }
 
     // ── G7 getLimits 返回 wipAvailable ────────────────────────────────────────────
+
+    @Test
+    void getLimits_parallelBranch_takesWipFromItsWorkflowUpstreamNotThePreviousStep() {
+        // 缺口 04: 分割(道1) 一出三 → 熟制(道2) / 滚揉(道3) 并行。滚揉的源 WIP 是道1 的产出,
+        // 不是前一道熟制 (道2) 的。原来一律取 processOrder-1 —— 滚揉会读到熟制的余额 (或没有), 领不到料。
+        WorkProcessTask t = task(130L, 3, "WP-L1");
+        // 工艺图上游由 guard 给出 (它的规则在 WorkflowStepUnlockGuardContractTest 里测)
+        when(taskRepo.findByFactoryIdAndId("F006", 130L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L1").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L1")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 130L)).thenReturn(List.of());
+        SemiFinishedInventory splitWip = SemiFinishedInventory.builder()
+                .processOrder(1).availableQuantity(new BigDecimal("52")).unit("kg").intermediateBatchNo("WIP-SPLIT")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory siblingBranchWip = SemiFinishedInventory.builder()
+                .processOrder(2).availableQuantity(new BigDecimal("7")).unit("kg").intermediateBatchNo("WIP-COOK")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
+                .thenReturn(List.of(splitWip, siblingBranchWip));
+        com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard guard =
+                org.mockito.Mockito.mock(com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard.class);
+        when(guard.upstreamProcessOrders("F006", t)).thenReturn(new java.util.TreeSet<>(java.util.Set.of(1)));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "unlockGuard", guard);
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 130L, new BigDecimal("40"));
+
+        assertThat(dto.getWipAvailable()).as("取工艺图上游 道1, 不是前一道 道2").isEqualByComparingTo("52");
+        assertThat(dto.getSourceWipNo()).isEqualTo("WIP-SPLIT");
+    }
 
     @Test
     void getLimits_secondProcess_returnsWipAvailableFromPrevProcess() {
@@ -3325,7 +3403,7 @@ class YieldReportServiceImplTest {
                 .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("100"))
                 .unitCost(new BigDecimal("10.6000")).unit("kg")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
-        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-1", new BigDecimal("80"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "WIP-SRC-1", new BigDecimal("80"), "kg", null))
                 .thenReturn(sourceWip);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -3374,7 +3452,7 @@ class YieldReportServiceImplTest {
                 .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("100"))
                 .unitCost(new BigDecimal("10.6000")).unit("kg")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
-        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-1", new BigDecimal("80"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "WIP-SRC-1", new BigDecimal("80"), "kg", null))
                 .thenReturn(sourceWip);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -3395,7 +3473,7 @@ class YieldReportServiceImplTest {
         assertThat(saved.getSourceWipNo()).isEqualTo("WIP-SRC-1");
         assertThat(saved.getCustomFields()).containsEntry("sourceWipQuantity", new BigDecimal("80"));
         assertThat(saved.getMaterialCost()).isEqualByComparingTo("1348.00");
-        verify(wipInventoryService).validateSourceWip("F006", "WIP-SRC-1", new BigDecimal("80"), "kg", null);
+        verify(wipInventoryService).validateSourceWip("F006", null, "WIP-SRC-1", new BigDecimal("80"), "kg", null);
     }
 
     @Test
@@ -3429,7 +3507,7 @@ class YieldReportServiceImplTest {
                 .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("500"))
                 .unitCost(new BigDecimal("10.0000")).unit("kg")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
-        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-PRETAX", new BigDecimal("500"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "WIP-SRC-PRETAX", new BigDecimal("500"), "kg", null))
                 .thenReturn(sourceWip);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -3479,7 +3557,7 @@ class YieldReportServiceImplTest {
                 .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("500"))
                 .unitCost(new BigDecimal("10.0000")).unit("kg")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
-        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-KNOWN", new BigDecimal("500"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "WIP-SRC-KNOWN", new BigDecimal("500"), "kg", null))
                 .thenReturn(sourceWip);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -3527,7 +3605,7 @@ class YieldReportServiceImplTest {
                 .consumedQuantity(new BigDecimal("0")).availableQuantity(new BigDecimal("500"))
                 .unitCost(null).unit("kg")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
-        when(wipInventoryService.validateSourceWip("F006", "WIP-SRC-NULL", new BigDecimal("500"), "kg", null))
+        when(wipInventoryService.validateSourceWip("F006", null, "WIP-SRC-NULL", new BigDecimal("500"), "kg", null))
                 .thenReturn(sourceWip);
 
         YieldReportRequest req = new YieldReportRequest();
@@ -3562,7 +3640,7 @@ class YieldReportServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("半成品领用数量不能超过本次总投入量");
 
-        verify(wipInventoryService, never()).validateSourceWip(anyString(), anyString(), any(), anyString(), any());
+        verify(wipInventoryService, never()).validateSourceWip(anyString(), any(), anyString(), any(), anyString(), any());
         verify(reportRepo, never()).save(any(ProductionReport.class));
     }
 

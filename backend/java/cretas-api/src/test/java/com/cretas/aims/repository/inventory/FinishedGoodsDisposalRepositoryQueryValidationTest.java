@@ -37,7 +37,7 @@ class FinishedGoodsDisposalRepositoryQueryValidationTest {
     }
 
     @Test
-    void eligibleQueryIncludesOnlyCompanyOwnedFreeBalanceInSameFactory() {
+    void eligibleQueryIncludesCompanyFreeBalanceAndOnlyUnsellableCustomerGoodsInSameFactory() {
         Factory factory = new Factory();
         factory.setId("DISPOSAL-FACTORY");
         factory.setName("Disposal fixture factory");
@@ -61,6 +61,8 @@ class FinishedGoodsDisposalRepositoryQueryValidationTest {
         persistBatch("RESERVED", "AVAILABLE", "10", "0", "10", InventoryOwnership.COMPANY_OWNED);
         persistBatch("CUSTOMER", "AVAILABLE", "10", "0", "0", InventoryOwnership.CUSTOMER_OWNED);
         persistBatch("DEFECTIVE", "DEFECTIVE", "5", "0", "0", InventoryOwnership.COMPANY_OWNED);
+        // 退回/不良的客户货可以退还客户或经同意报废; 可售的客户货 (上面 CUSTOMER) 仍只能走代加工发货
+        persistBatch("CUSTOMER-RETURNED", "DEFECTIVE", "16", "0", "0", InventoryOwnership.CUSTOMER_OWNED);
         persistBatch("REVERSED", "REVERSED", "5", "0", "0", InventoryOwnership.COMPANY_OWNED);
         entityManager.flush();
         entityManager.clear();
@@ -68,7 +70,7 @@ class FinishedGoodsDisposalRepositoryQueryValidationTest {
         List<FinishedGoodsBatch> result = repository.findDisposalEligibleByFactoryId("DISPOSAL-FACTORY",
                 List.of("AVAILABLE", "DEFECTIVE", "EXPIRED", "FROZEN"));
         assertThat(result).extracting(FinishedGoodsBatch::getId)
-                .containsExactlyInAnyOrder("DISPOSAL-PARTIAL", "DISPOSAL-DEFECTIVE");
+                .containsExactlyInAnyOrder("DISPOSAL-PARTIAL", "DISPOSAL-DEFECTIVE", "DISPOSAL-CUSTOMER-RETURNED");
         assertThat(result.stream().filter(b -> b.getId().equals("DISPOSAL-PARTIAL")).findFirst().orElseThrow()
                 .getAvailableQuantity()).isEqualByComparingTo("30");
         assertThat(repository.findDisposalEligibleByFactoryId("OTHER-FACTORY", List.of("AVAILABLE"))).isEmpty();

@@ -166,9 +166,11 @@ public class CustomerRevenueTrendTool extends AbstractBusinessTool {
 
         String scope = customerId != null
                 ? String.format("%s 客户", nameForDisplay(customerName))
-                : "全 factory 客户";
-        String message = String.format("%s 近 %d 个月销售趋势 (共 %d 个月数据点)",
-                scope, periodMonths, series.size());
+                : "全厂客户";
+        // periodMonths 是往前数几个月, 序列还含本月 (periodMonths=2 → 3 个点); 文案直接写实际起止月份与点数,
+        // 以前「近 2 个月 (共 3 个月数据点)」前后对不上 (2026-10-25 F006 线上复验)
+        String message = String.format("%s %s 至 %s 销售趋势（含本月，共 %d 个月）",
+                scope, series.get(0).get("month"), series.get(series.size() - 1).get("month"), series.size());
         return buildSimpleResult(message, data);
     }
 

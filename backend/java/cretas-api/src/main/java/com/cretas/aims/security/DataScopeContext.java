@@ -59,6 +59,25 @@ public class DataScopeContext {
         STACK_HOLDER.get().push(ctx);
     }
 
+    /**
+     * Removes the whole stack from this thread and returns it, so a run on behalf of another
+     * identity (autonomous tool runs) cannot inherit the caller's scope. Pair with {@link #restore}.
+     */
+    public static java.util.Deque<DataScopeContext> detach() {
+        java.util.Deque<DataScopeContext> stack = STACK_HOLDER.get();
+        STACK_HOLDER.remove();
+        return stack;
+    }
+
+    /** Puts back a stack returned by {@link #detach}; an empty stack leaves the thread clean. */
+    public static void restore(java.util.Deque<DataScopeContext> stack) {
+        if (stack == null || stack.isEmpty()) {
+            STACK_HOLDER.remove();
+        } else {
+            STACK_HOLDER.set(stack);
+        }
+    }
+
     /** Aspect exit: pop context. 没有 active 时 no-op (defensive). */
     public static void pop() {
         java.util.Deque<DataScopeContext> stack = STACK_HOLDER.get();

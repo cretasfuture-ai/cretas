@@ -10,6 +10,9 @@ import {
   QualityStatistics,
   QualityStatisticsResponse,
   QualityInspectionForm,
+  DynamicQualityForm,
+  DynamicQualityAnswer,
+  DynamicQualitySubmitResponse,
   ClockRecord,
   QINotification,
   QIApiResponse,
@@ -122,13 +125,33 @@ class QualityInspectorApiClient {
     return response.data;
   }
 
+  async getDynamicQualityForm(batchId: string): Promise<DynamicQualityForm> {
+    const response = await apiClient.get<QIApiResponse<DynamicQualityForm>>(
+      `${this.getBasePath()}/processing/batches/${batchId}/quality-form`,
+    );
+    return response.data;
+  }
+
+  async submitDynamicInspection(
+    batchId: string,
+    data: { standardRevision: string; sampleSize: number; answers: DynamicQualityAnswer[]; notes?: string },
+  ): Promise<DynamicQualitySubmitResponse> {
+    const response = await apiClient.post<QIApiResponse<DynamicQualitySubmitResponse>>(
+      `${this.getBasePath()}/processing/batches/${batchId}/quality-inspections`,
+      data,
+    );
+    return response.data;
+  }
+
   /**
    * 通过二维码获取批次
    */
   async getBatchByQRCode(qrData: string): Promise<QIBatch> {
-    const response = await apiClient.post<QIApiResponse<QIBatch>>(
-      `${this.getBasePath()}/processing/batches/scan`,
-      { qrCode: qrData }
+    const batchNumber = qrData.trim();
+    if (!batchNumber) throw new Error('Batch number is required');
+    const response = await apiClient.get<QIApiResponse<QIBatch>>(
+      `${this.getBasePath()}/processing/batches/lookup`,
+      { params: { batchNumber } },
     );
     return response.data;
   }
@@ -236,6 +259,9 @@ class QualityInspectorApiClient {
         ? `${raw.inspectionDate}T00:00:00`
         : new Date().toISOString(),
       remarks: raw.notes ? String(raw.notes) : undefined,
+      standardBasis: customFields.standardBasis === 'DYNAMIC_PRODUCT_BINDING' ? 'DYNAMIC_PRODUCT_BINDING' : 'UNKNOWN',
+      standardRevision: typeof customFields.standardRevision === 'string' ? customFields.standardRevision : undefined,
+      standardSnapshot: customFields,
     };
   }
 

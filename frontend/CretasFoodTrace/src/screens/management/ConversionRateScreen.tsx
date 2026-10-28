@@ -21,6 +21,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
 import { ManagementStackParamList } from '../../types/navigation';
 import { logger } from '../../utils/logger';
+import { PROCESS_SECRET_LABEL } from '../../utils/processSecretField';
 
 // 创建ConversionRate专用logger
 const conversionLogger = logger.createContextLogger('ConversionRate');
@@ -38,8 +39,9 @@ interface ConversionRate {
   id?: string;
   materialTypeId: string;
   productTypeId: string;
-  conversionRate: number;
-  wastageRate?: number;
+  /** 工艺保密产品对无授权账号为 null */
+  conversionRate: number | null;
+  wastageRate?: number | null;
   notes?: string;
 }
 
@@ -122,9 +124,11 @@ export default function ConversionRateScreen() {
         let avgConversionRate: number | undefined;
         let avgWastageRate: number | undefined;
 
-        if (configuredCount > 0) {
-          avgConversionRate = materialConversions.reduce((sum, c) => sum + c.conversionRate, 0) / configuredCount;
-          const wastageRates = materialConversions.filter((c) => c.wastageRate != null);
+        // 工艺保密: 隐藏的转换率是 null, 不能按 0 算进平均; 全部隐藏时显示「已保密」
+        const visibleRates = materialConversions.filter((c) => c.conversionRate != null);
+        if (visibleRates.length > 0) {
+          avgConversionRate = visibleRates.reduce((sum, c) => sum + (c.conversionRate ?? 0), 0) / visibleRates.length;
+          const wastageRates = visibleRates.filter((c) => c.wastageRate != null);
           if (wastageRates.length > 0) {
             avgWastageRate = wastageRates.reduce((sum, c) => sum + (c.wastageRate ?? 0), 0) / wastageRates.length;
           }
@@ -235,7 +239,9 @@ export default function ConversionRateScreen() {
               <>
                 <View style={styles.statItem}>
                   <Text style={styles.statValue}>
-                    {Number(item.avgConversionRate ?? 0).toFixed(1)}%
+                    {item.avgConversionRate == null
+                      ? PROCESS_SECRET_LABEL
+                      : `${Number(item.avgConversionRate).toFixed(1)}%`}
                   </Text>
                   <Text style={styles.statLabel}>{t('conversionRate.avgConversionRate')}</Text>
                 </View>

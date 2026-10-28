@@ -39,11 +39,6 @@ public class IntentMatchingConfig {
     private LlmFallbackConfig llmFallback = new LlmFallbackConfig();
 
     /**
-     * LLM 澄清问题配置
-     */
-    private LlmClarificationConfig llmClarification = new LlmClarificationConfig();
-
-    /**
      * 意图匹配记录配置
      */
     private RecordingConfig recording = new RecordingConfig();
@@ -133,17 +128,6 @@ public class IntentMatchingConfig {
          */
         @Positive
         private int twoPhaseThreshold = 50;
-    }
-
-    /**
-     * LLM 澄清问题配置
-     */
-    @Data
-    public static class LlmClarificationConfig {
-        /**
-         * 是否使用 LLM 生成澄清问题
-         */
-        private boolean enabled = true;
     }
 
     /**
@@ -517,13 +501,6 @@ public class IntentMatchingConfig {
      */
     public double getLlmFallbackConfidenceThreshold() {
         return llmFallback.getConfidenceThreshold();
-    }
-
-    /**
-     * 检查 LLM 澄清问题生成是否启用
-     */
-    public boolean isLlmClarificationEnabled() {
-        return llmClarification.isEnabled();
     }
 
     /**

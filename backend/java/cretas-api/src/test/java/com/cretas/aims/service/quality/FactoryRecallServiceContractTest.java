@@ -222,6 +222,36 @@ class FactoryRecallServiceContractTest {
                         && BATCH_ID.equals(action.getTargetEntityId())));
     }
 
+    /** 缺口 11 审查中 5: 召回冻结覆盖待检批次 —— 否则召回中的批次之后被质检放行成可售。 */
+    @Test
+    void createFreezesPendingInspectionSourceToo() {
+        source.setStatus(FinishedGoodsBatch.Status.PENDING_INSPECTION);
+        RecallEvent saved = RecallEvent.builder().id(902L).factoryId(FACTORY)
+                .eventCode("RECALL-20261027-QC000001").status("FROZEN").triggerReason("ccp").build();
+        when(recallEventRepository.findByEventCode(anyString())).thenReturn(Optional.empty());
+        when(recallEventRepository.saveAndFlush(any(RecallEvent.class))).thenReturn(saved);
+        when(recallActionRepository.save(any(RecallAction.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.create(FACTORY, BATCH_ID, "ccp", 7L);
+
+        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, source.getStatus());
+    }
+
+    /** 阴性对照: 已耗尽 (DEPLETED) 的源批次不被冻结改写 —— 冻结只针对还能流出去的可售 / 待检。 */
+    @Test
+    void createLeavesDepletedSourceAlone() {
+        source.setStatus(FinishedGoodsBatch.Status.DEPLETED);
+        RecallEvent saved = RecallEvent.builder().id(903L).factoryId(FACTORY)
+                .eventCode("RECALL-20261027-QC000002").status("FROZEN").triggerReason("ccp").build();
+        when(recallEventRepository.findByEventCode(anyString())).thenReturn(Optional.empty());
+        when(recallEventRepository.saveAndFlush(any(RecallEvent.class))).thenReturn(saved);
+        when(recallActionRepository.save(any(RecallAction.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.create(FACTORY, BATCH_ID, "ccp", 7L);
+
+        assertEquals(FinishedGoodsBatch.Status.DEPLETED, source.getStatus());
+    }
+
     @Test
     void unmanagedLegacyEventDoesNotActivateReleaseGuard() {
         RecallEvent event = RecallEvent.builder().id(902L).factoryId(FACTORY)
@@ -521,6 +551,34 @@ class FactoryRecallServiceContractTest {
                 () -> service.close(FACTORY, 914L, "done", 7L));
         assertEquals("RECALL_CLOSE_BLOCKED", wrongOperatorError.getErrorCode());
         verify(recallEventRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void closeAcceptsReturnedCustomerGoodsHandedBackToCustomer() {
+        // Steve 2026-10-28: 客户自有退回货「退还客户」与报废同样算处置完成; 但扣减类型必须与单据一致
+        FinishedGoodsBatch returned = stubDisposedClose(915L, "returned-customer-goods");
+        FinishedGoodsAdjustmentLog handBack = scrapLog(1501L, FACTORY, returned.getId(),
+                "RETURN_TO_CUSTOMER", new BigDecimal("10"), BigDecimal.ZERO);
+        handBack.setOperatorId(7L);
+        when(finishedGoodsAdjustmentLogRepository.findByBatchIdOrderByCreatedAtDesc(returned.getId()))
+                .thenReturn(List.of(handBack));
+        DisposalRecord scrapRecord = DisposalRecord.builder()
+                .id(7501L).factoryId(FACTORY).finishedGoodsBatchId(returned.getId())
+                .disposalType("SCRAP").disposalQuantity(new BigDecimal("10")).build();
+        scrapRecord.approve(7, "财务");
+        when(disposalRecordRepository.findById(7501L)).thenReturn(Optional.of(scrapRecord));
+
+        BusinessException mismatch = assertThrows(BusinessException.class,
+                () -> service.close(FACTORY, 915L, "done", 7L));
+        assertEquals("RECALL_CLOSE_BLOCKED", mismatch.getErrorCode());
+
+        scrapRecord.setDisposalType("RETURN_TO_CUSTOMER");
+        RecallEvent event = recallEventRepository.findById(915L).orElseThrow();
+        when(recallEventRepository.saveAndFlush(event)).thenReturn(event);
+
+        FactoryRecallDTO.RecallView view = service.close(FACTORY, 915L, "handed back", 7L);
+
+        assertEquals("COMPLETED", view.getStatus());
     }
 
     @Test

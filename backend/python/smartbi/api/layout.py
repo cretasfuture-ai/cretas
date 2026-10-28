@@ -8,15 +8,18 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
+
+from common.tenant_identity import caller_user_id, require_same_factory
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 class LayoutSaveRequest(BaseModel):
-    factory_id: str
+    # 工厂与用户一律取登录身份; 这两个字段只为兼容旧前端, 与身份不一致即 403
+    factory_id: Optional[str] = None
     upload_id: int
     sheet_index: int = 0
     user_id: Optional[int] = None
@@ -31,8 +34,10 @@ class LayoutResponse(BaseModel):
 
 
 @router.post("/layouts/save", response_model=LayoutResponse)
-async def save_layout(req: LayoutSaveRequest):
+async def save_layout(req: LayoutSaveRequest, request: Request):
     """Save or update a dashboard layout for a specific upload/sheet."""
+    factory_id = require_same_factory(request, req.factory_id)
+    user_id = caller_user_id(request)
     try:
         from smartbi.database.connection import get_db_context, is_postgres_enabled
         if not is_postgres_enabled():
@@ -43,12 +48,12 @@ async def save_layout(req: LayoutSaveRequest):
         with get_db_context() as db:
             # Upsert: find existing layout for this upload+sheet+user
             existing = db.query(SmartBiDashboardLayout).filter(
-                SmartBiDashboardLayout.factory_id == req.factory_id,
+                SmartBiDashboardLayout.factory_id == factory_id,
                 SmartBiDashboardLayout.upload_id == req.upload_id,
                 SmartBiDashboardLayout.sheet_index == req.sheet_index,
             )
-            if req.user_id:
-                existing = existing.filter(SmartBiDashboardLayout.user_id == req.user_id)
+            if user_id:
+                existing = existing.filter(SmartBiDashboardLayout.user_id == user_id)
 
             record = existing.first()
 
@@ -57,10 +62,10 @@ async def save_layout(req: LayoutSaveRequest):
                 record.layout_name = req.layout_name or record.layout_name
             else:
                 record = SmartBiDashboardLayout(
-                    factory_id=req.factory_id,
+                    factory_id=factory_id,
                     upload_id=req.upload_id,
                     sheet_index=req.sheet_index,
-                    user_id=req.user_id,
+                    user_id=user_id,
                     layout_name=req.layout_name,
                     layout_data=req.layout_data,
                 )
@@ -81,10 +86,12 @@ async def save_layout(req: LayoutSaveRequest):
 @router.get("/layouts/{upload_id}")
 async def get_layout(
     upload_id: int,
+    request: Request,
     sheet_index: int = 0,
-    factory_id: str = "F001",
+    factory_id: Optional[str] = None,
 ):
     """Load a saved dashboard layout for a specific upload/sheet."""
+    factory_id = require_same_factory(request, factory_id)
     try:
         from smartbi.database.connection import get_db_context, is_postgres_enabled
         if not is_postgres_enabled():
@@ -111,10 +118,12 @@ async def get_layout(
 @router.delete("/layouts/{upload_id}")
 async def delete_layout(
     upload_id: int,
+    request: Request,
     sheet_index: int = 0,
-    factory_id: str = "F001",
+    factory_id: Optional[str] = None,
 ):
     """Delete a saved dashboard layout."""
+    factory_id = require_same_factory(request, factory_id)
     try:
         from smartbi.database.connection import get_db_context, is_postgres_enabled
         if not is_postgres_enabled():

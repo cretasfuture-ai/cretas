@@ -32,6 +32,8 @@ import WorkHoursTable from './WorkHoursTable.vue';
 import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
+import BlendRatioPanel from './BlendRatioPanel.vue';
+import { evaluateBlend, blendReasonBlockedReason, type BlendEvaluation, type BlendLineInput } from './blendRatio';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
 import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
 import { deriveByShare } from '@/views/system/product-processes/workflow/workflowInputShare';
@@ -56,6 +58,10 @@ import {
   withProcessSheetUnits,
 } from '@/utils/processSheetUnits';
 import { buildEqualPotWeightsKg } from './potAllocation';
+import { isProcessSecretHidden } from '@/utils/processSecretField';
+import { loadHeldBatchNumbers } from '@/api/qcRelease';
+import type { CcpReading } from '@/api/ccp';
+import CcpEntryDialog from './CcpEntryDialog.vue';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
 
@@ -188,6 +194,10 @@ interface SheetRow {
   rawBatchQty: number | null;
   /** 新报工路径：只录各原料总投料量，由后端正式提交时自动分摊生产库批次。 */
   materialInputTotals: MaterialInputTotalLine[];
+  /** 缺口 06 配比核对: 多主料偏离配方份额 >±2pp 时必选的原因 (正式报工才要求)。 */
+  blendReason: string;
+  /** 原因 = 「其他」时的说明。 */
+  blendNote: string;
   /** 已存在显式原料批次的旧行保持原选择器，不能在回显时改写为新契约。 */
   legacyExplicitRawInput: boolean;
   /** 焯水: single upstream WIP batch number (WIP batchNumber 或 SFI intermediateBatchNo) */
@@ -329,6 +339,10 @@ function autoFillInputsByShare(row: SheetRow, changed: MaterialInputTotalLine): 
   }
   changed.autoFilled = false;
 }
+/** 工艺保密: 后端隐藏了端口配比 (无授权的本厂账号只看物料和本单总量) */
+const workflowShareHidden = computed(() =>
+  (props.workflowContext?.inputs ?? []).some((p) => isProcessSecretHidden(p, 'inputShareRatio')),
+);
 const workflowRawInputs = computed(() =>
   (props.workflowContext?.inputs ?? []).filter((p) => p.materialKind === 'RAW_MATERIAL'),
 );
@@ -877,6 +891,8 @@ function blankRow(): SheetRow {
       selected: portSelectedByDefault(port),
     })),
     legacyExplicitRawInput: false,
+    blendReason: '',
+    blendNote: '',
     upstreamBatch: '',
     finishedInputKg: null,
     upstreamSemiFinished: false,
@@ -1003,6 +1019,8 @@ function hydrateRow(view: ProcessSheetRowView): SheetRow {
   row.persistedOutputUnit = p.outputUnit || p.unit || processUnits.value.outputUnit;
   row.interimSettledAt = view.interimSettledAt ?? null;
   row.productionDate = p.processDate || todayStr();
+  row.blendReason = p.blendRatio?.reason ?? '';
+  row.blendNote = p.blendRatio?.note ?? '';
 
   if (isXiuYou.value) {
     const explicitRaw = p.rawMaterialInputs?.[0];
@@ -1450,11 +1468,52 @@ function finishedInputOverAvailableHint(row: SheetRow): string | null {
   return `填写的投入 ${entered}kg 超过所选批次可用量 ${available}kg；如确实多投请核对批次，账实差异由盘点纠正。`;
 }
 
+/**
+ * 缺口 06: 本行带份额主料的实际投料 —— 原料总量行 + 已选上游来源, 端口份额取自工艺端口。
+ * 与后端 BlendRatioCheck.enforceProcessSheet 收集的是同一批投入。
+ */
+function blendInputs(row: SheetRow): BlendLineInput[] {
+  const lines: BlendLineInput[] = row.materialInputTotals
+    .filter((item) => item.selected)
+    .map((item) => {
+      const port = portById(item.workflowPortId);
+      return {
+        id: item.workflowPortId || item.materialTypeId,
+        name: item.materialName || item.materialTypeId,
+        share: port?.inputShareRatio ?? null,
+        shareHidden: isProcessSecretHidden(port, 'inputShareRatio'),
+        quantity: item.quantity,
+        unit: item.unit,
+        gramsPerUnit: port?.gramsPerUnit ?? null,
+      };
+    });
+  for (const source of row.upstreamSources) {
+    if (!source.selected || !source.workflowPortId || source.automaticRework) continue;
+    const port = portById(source.workflowPortId);
+    lines.push({
+      id: source.workflowPortId,
+      name: port?.materialName || source.skuId || source.workflowPortId,
+      share: port?.inputShareRatio ?? null,
+      shareHidden: isProcessSecretHidden(port, 'inputShareRatio'),
+      quantity: source.feedQuantityKg,
+      unit: (port && workflowPortDisplayUnit(port)) || processUnits.value.inputUnit,
+      gramsPerUnit: port?.gramsPerUnit ?? null,
+    });
+  }
+  return lines;
+}
+
+function blendEvaluation(row: SheetRow): BlendEvaluation {
+  return evaluateBlend(blendInputs(row));
+}
+
 function formalSubmitBlockedReason(row: SheetRow): string | null {
   if (props.upstreamSubmissionReady === false) {
     return props.upstreamSubmissionMessage
       || `上游工序尚未正式报工，请先完成「${upstreamProcessName.value}」后再提交本道工序`;
   }
+  const blendBlocked = blendReasonBlockedReason(blendEvaluation(row), row.blendReason, row.blendNote);
+  if (blendBlocked) return blendBlocked;
   if (requiresManualCostAllocation(row)) {
     const activeOutputs = row.multiOutputs.filter((output) => output.selected && output.quantity != null && output.quantity > 0);
     if (activeOutputs.some((output) => output.costAllocationRatio == null || output.costAllocationRatio <= 0)) {
@@ -2399,6 +2458,13 @@ function buildRequest(row: SheetRow): ProcessSheetRowRequest & Record<string, un
     if (totals.length) base.materialInputTotals = totals;
   }
 
+  // 缺口 06: 超差时带上原因 (其余快照字段由后端计算覆盖)。容差内不发, 免得留下没必要的原因。
+  // 工艺保密 (SECRET): 本页核对不了, 选了原因就带上, 由后端按真实份额裁决
+  const blendStatus = blendEvaluation(row).status;
+  if ((blendStatus === 'OVER' || blendStatus === 'SECRET') && row.blendReason) {
+    base.blendRatio = { reason: row.blendReason, note: row.blendNote.trim() || undefined };
+  }
+
   return base;
 }
 
@@ -2430,6 +2496,15 @@ function formalSubmitSummary(row: SheetRow): string {
   ].join('\n');
 }
 
+// -------------------------------------------------------------------------
+// 缺口 13 CCP: 本工序挂了关键控制点时, 正式报工前先录实测值, 随报工请求一起提交 (后端同一事务落库,
+// 缺值整笔拒绝, 审查中 7); 超限偏离由后端写进返回的 warnings, 走下面统一的「正式报工成功(含提示)」。
+// CCP 定义随 Workflow 录入配置下发 (workflowContext.ccpCheckpoints) —— 配置加载失败时整张表不可用,
+// 不存在「CCP 没查到却照常报工」的半态。legacy 计划没有工序身份 → 不出现 CCP 录入。
+// -------------------------------------------------------------------------
+const ccpDialogRef = ref<InstanceType<typeof CcpEntryDialog> | null>(null);
+const stepCheckpoints = computed(() => props.workflowContext?.ccpCheckpoints ?? []);
+
 async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   if (row.saving) return;
   if (action === 'submit') {
@@ -2443,7 +2518,14 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     ElMessage({ message: reason, type: 'error', duration: 0, showClose: true });
     return;
   }
+  let ccpReadings: CcpReading[] | null = null;
   if (action === 'submit') {
+    const checkpoints = stepCheckpoints.value;
+    if (checkpoints.length > 0) {
+      const label = `${props.processLabel || props.processCode}${row.batchNumber ? ' · ' + row.batchNumber : ''}`;
+      ccpReadings = (await ccpDialogRef.value?.collect(checkpoints, label)) ?? null;
+      if (!ccpReadings) return;   // 取消 = 不报工
+    }
     if (isPortOutputMode.value) {
       try {
         await ElMessageBox.confirm(formalSubmitSummary(row), '确认正式报工', {
@@ -2460,6 +2542,7 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
   row.saving = true;
   try {
     const req = buildRequest(row);
+    if (action === 'submit' && ccpReadings) req.ccpReadings = ccpReadings;
     const resp = action === 'draft'
       ? await saveDraftRow(props.factoryId, props.planId, req)
       : await submitRow(props.factoryId, props.planId, req);
@@ -2680,8 +2763,21 @@ function srcKey(kind: string, batchNo: string): string {
   return `${kind}::${batchNo}`;
 }
 
+/**
+ * 半成品现在能投的量 = 余额 − 待检数量 (缺口 11 审查高 2: 一行跨批次累加, 待检的只是其中一部分;
+ * 与后端 SemiFinishedInventory#drawableBalance 同一口径)。用量上限 / 标签 / 可选与否都按它。
+ */
 function sfiAvailable(item: SemiFinishedStockItem): number {
-  return Number(item.availableQuantity ?? 0) || 0;
+  const balance = Number(item.availableQuantity ?? 0) || 0;
+  return Math.max(0, balance - sfiPending(item));
+}
+
+/** 这一行里待检的数量: 不在待检 → 0; 待检但没给数量 (旧数据) → 整个余额都算待检。 */
+function sfiPending(item: SemiFinishedStockItem): number {
+  if (item.inspectionStatus !== 'PENDING') return 0;
+  const balance = Math.max(0, Number(item.availableQuantity ?? 0) || 0);
+  const pending = item.inspectionPendingQuantity == null ? balance : Number(item.inspectionPendingQuantity) || 0;
+  return Math.min(balance, Math.max(0, pending));
 }
 
 function fgAvailable(item: FinishedGoodsStockItem): number {
@@ -2706,7 +2802,36 @@ function wipLabel(item: ProcessSheetInventoryItem): string {
   const name = item.productTypeName || '在制';
   const parts = [name, item.batchNumber, dateText(item.productionDate),
     `余${item.remaining}${item.unit || processUnits.value.inputUnit}`, costText(item.unitPrice)];
-  return parts.join(' | ');
+  const block = wipQcBlock(item);
+  return (block ? `【${block}】` : '') + parts.join(' | ');
+}
+
+// -------------------------------------------------------------------------
+// 质检放行 (缺口 11): 待检 / 不合格的上游批次照样列出, 但不可选, 并在标签里写明原因 ——
+// 藏起来会让操作员以为系统坏了 (同「余量 0 仍列出」的口径)。后端保存时还有同一道闸兜底。
+// -------------------------------------------------------------------------
+const qcHeldBatchNumbers = ref<Set<string>>(new Set());
+/** 待检清单没取到 (审查低 11): 不能当成「都不待检」—— 界面写明状态未知, 后端保存时仍会按同一道闸拒绝。 */
+const qcHeldStatusUnknown = ref(false);
+async function loadQcHeldBatches() {
+  if (!props.factoryId) return;
+  const result = await loadHeldBatchNumbers(props.factoryId);
+  qcHeldBatchNumbers.value = result.held;
+  qcHeldStatusUnknown.value = !result.ok;
+}
+function wipQcBlock(item: ProcessSheetInventoryItem): string | null {
+  return qcHeldBatchNumbers.value.has(item.batchNumber) ? '待检·质检放行后可选' : null;
+}
+function sfiQcBlock(item: SemiFinishedStockItem): string | null {
+  if (item.inspectionStatus === 'REJECTED') return '质检不合格';
+  if (item.inspectionStatus === 'PENDING' && sfiAvailable(item) <= 0) return '待检·质检放行后可选';
+  return null;
+}
+function wipDisabled(item: ProcessSheetInventoryItem): boolean {
+  return item.remaining <= 0 || wipQcBlock(item) != null;
+}
+function sfiDisabled(item: SemiFinishedStockItem): boolean {
+  return sfiAvailable(item) <= 0 || sfiQcBlock(item) != null;
 }
 
 /**
@@ -2740,8 +2865,11 @@ function sfiLabel(item: SemiFinishedStockItem): string {
   const unit = item.unit || 'kg';
   // 盒装半成品作 kg 道投料来源时展示折算 (余 N 盒 ≈ M kg) 或缺克重警告 (防呆 pre-display)。
   const conv = countUnitLabelSuffix(item.unit, item.gramsPerUnit, sfiAvailable(item));
-  return `半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
-    + `| 余${sfiAvailable(item)}${unit}${conv} | ${costText(item.unitCost)}`;
+  const block = sfiQcBlock(item);
+  const pending = sfiPending(item);
+  const pendingText = !block && pending > 0 ? ` (另有${pending}${unit}待检)` : '';
+  return `${block ? `【${block}】` : ''}半成品: ${name} | ${item.intermediateBatchNo} | ${dateText(item.productionDate)} `
+    + `| 余${sfiAvailable(item)}${unit}${conv}${pendingText} | ${costText(item.unitCost)}`;
 }
 
 /** ②/①c 成品库存选项标签: "成品: {品名} | {批号} | {生产日期} | 余{available}{unit} | {成本}"。 */
@@ -2761,7 +2889,8 @@ async function loadFgOptions() {
   fgLoading.value = true;
   try {
     // 防呆过滤 (07-01): 传当前计划 productTypeId → 后端解析成产品族仅返回同族成品 (猪蹄计划不显牛肉)。
-    const resp = await getFinishedGoodsInventory(props.factoryId, props.productTypeId);
+    // 归属 (缺口 16): 传本计划 → 只列与本计划同一归属的成品 (代工客户的成品只出现在同客户的计划里)。
+    const resp = await getFinishedGoodsInventory(props.factoryId, props.productTypeId, props.planId);
     if (seq !== fgLoadSeq) return;
     const all = Array.isArray(resp.data) ? resp.data : [];
     fgOptions.value = all.filter((f) => fgAvailable(f) > 0);
@@ -2786,14 +2915,16 @@ async function loadSfiOptions() {
     //         故猪蹄计划能看到所有猪蹄族半成品, 但不显牛肉。
     //   阶段: 仅当本道 processOrder 为正整数时传 → 后端仅返回更早阶段 (processOrder < 本道)。
     //         processOrder 缺失/为0 (链起步/未配) → 省略, 只按同族过滤 (务实: 不因缺阶段信息而清空可选项)。
-    const filter: SemiFinishedInventoryFilter = { productTypeId: props.productTypeId };
+    //   归属 (缺口 16): 传本计划 → 后端只列与本计划同一归属的半成品 (代工客户的料只出现在同客户的计划里)。
+    const filter: SemiFinishedInventoryFilter = { productTypeId: props.productTypeId, planId: props.planId };
     if (typeof props.processOrder === 'number' && props.processOrder > 0) {
       filter.maxProcessOrder = props.processOrder;
     }
     const resp = await getSemiFinishedInventory(props.factoryId, filter);
     if (seq !== sfiLoadSeq) return;
     const all = Array.isArray(resp.data) ? resp.data : [];
-    sfiOptions.value = all.filter((s) => sfiAvailable(s) > 0).filter(sfiMatchesUpstreamPort);
+    // 按余额过滤 (不是按可投量): 整行待检的照样列出、灰显并写原因 —— 藏起来操作员会以为系统坏了
+    sfiOptions.value = all.filter((s) => (Number(s.availableQuantity ?? 0) || 0) > 0).filter(sfiMatchesUpstreamPort);
   } catch (err) {
     if (seq !== sfiLoadSeq) return;
     sfiOptions.value = [];
@@ -2978,14 +3109,14 @@ function onSingleUpstreamSelect(row: SheetRow, key: string | null | undefined) {
 function wipCandidate(item: ProcessSheetInventoryItem): UpstreamBatchOption {
   return {
     kind: 'wip', batchNumber: item.batchNumber, value: srcKey(SRC_WIP, item.batchNumber),
-    label: wipLabel(item), disabled: item.remaining <= 0,
+    label: wipLabel(item), disabled: wipDisabled(item),
   };
 }
 
 function sfiCandidate(item: SemiFinishedStockItem): UpstreamBatchOption {
   return {
     kind: 'sfi', batchNumber: item.intermediateBatchNo, value: srcKey(SRC_SFI, item.intermediateBatchNo),
-    label: sfiLabel(item), disabled: sfiAvailable(item) <= 0,
+    label: sfiLabel(item), disabled: sfiDisabled(item),
   };
 }
 
@@ -3186,6 +3317,7 @@ watch(
     sfiLoadSeq++;
     sfiLoading.value = false;
     if (showSfi.value) void loadSfiOptions();
+    void loadQcHeldBatches();
     // ①c 同工序集加载常驻成品库存供 FG 投料下拉
     fgOptions.value = [];
     fgLoadSeq++;
@@ -3273,6 +3405,7 @@ function refreshSharedInventories() {
   if (isXiuYou.value || workflowRawInputs.value.length > 0) { void loadRawBatches(); void loadInputAvailability(); }
   if (showSfi.value) void loadSfiOptions();
   if (showFg.value) void loadFgOptions();
+  void loadQcHeldBatches();
 }
 
 defineExpose({ hasUnsavedRows, refreshSharedInventories });
@@ -3280,6 +3413,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 <template>
   <div class="sp-grid-wrap">
+    <CcpEntryDialog ref="ccpDialogRef" />
 
     <!-- ====================================================================
          2B Task F2 (additive, fool-proof Rule 2/3/5): workflow 计划产出/所需原料只读展示。
@@ -3309,6 +3443,31 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           需要原料：{{ workflowRawInputsLabel }}
         </span>
       </template>
+    </el-alert>
+    <el-alert
+      v-if="workflowShareHidden"
+      data-testid="workflow-share-secret"
+      class="sp-workflow-banner"
+      type="info"
+      :closable="false"
+      show-icon
+      title="该产品工艺已保密：配比不显示，按配比自动带出已关闭，请逐项填写本单实际投入量"
+    />
+    <el-alert
+      v-if="qcHeldStatusUnknown"
+      data-testid="qc-held-status-unknown"
+      class="sp-workflow-banner sp-workflow-banner-warning"
+      type="warning"
+      :closable="false"
+      show-icon
+    >
+      <template #title>
+        <span>待检状态未知：上道在制批次的质检状态没加载出来</span>
+      </template>
+      <div>
+        下拉里不会标出哪些批次在等质检放行；选中待检批次时保存会被拒绝。
+        <el-link type="primary" underline="always" data-testid="qc-held-reload" @click="loadQcHeldBatches">重新加载</el-link>
+      </div>
     </el-alert>
     <el-alert
       v-if="outputPorts.some((p) => p.skuResolved === false)"
@@ -3440,6 +3599,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
           type="error"
           :closable="false"
           show-icon
+          style="margin:8px 12px 0"
+        />
+        <!-- 缺口 06 配比核对 (表格模板有同一块, 改动需同步) -->
+        <BlendRatioPanel
+          :evaluation="blendEvaluation(row)"
+          v-model:reason="row.blendReason"
+          v-model:note="row.blendNote"
+          :disabled="row.submissionStatus === 'SUBMITTED'"
           style="margin:8px 12px 0"
         />
 
@@ -3649,14 +3816,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     v-for="item in wipOptionsDisplay" :key="item.batchNumber"
                     :label="wipLabel(item)"
                     :value="srcKey(SRC_WIP, item.batchNumber)"
-                    :disabled="item.remaining <= 0" />
+                    :disabled="wipDisabled(item)" />
                 </el-option-group>
                 <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                   <el-option
                     v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                     :label="sfiLabel(s)"
                     :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                    :disabled="sfiAvailable(s) <= 0" />
+                    :disabled="sfiDisabled(s)" />
                 </el-option-group>
                 <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                   <el-option
@@ -3762,6 +3929,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 @update:model-value="(v: number) => row.fields[col.key] = v"
                 :min="0" :precision="fieldPrecision(col.key)"
                 controls-position="right"
+                :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
                 style="width:160px" size="small" />
 
               <el-date-picker
@@ -3782,6 +3950,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 end-placeholder="结束日期"
                 value-format="YYYY-MM-DD"
                 style="width:100%" size="small" />
+
+              <el-input
+                v-else-if="col.type === 'text'"
+                :model-value="(row.fields[col.key] as string) ?? ''"
+                @update:model-value="(v: string) => row.fields[col.key] = v"
+                :disabled="row.submissionStatus === 'SUBMITTED' || isReadOnlyRow(row)"
+                :data-testid="`custom-field-${col.key}`"
+                style="width:160px" size="small" />
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
                 {{ calcReverseInput(row) != null ? `${calcReverseInput(row)!.toFixed(2)}${processUnits.inputUnit}` : '—' }}
@@ -3816,7 +3992,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 {{ formattedWeight(finishedWeightKg(row, true)) }}
               </span>
 
-              <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+              <span v-else-if="col.type === 'readonly'" class="sp-readonly">
                 {{ row.fields[col.key] ?? '—' }}
               </span>
             </div>
@@ -4279,14 +4455,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                         :key="item.batchNumber"
                         :label="wipLabel(item)"
                         :value="srcKey(SRC_WIP, item.batchNumber)"
-                        :disabled="item.remaining <= 0" />
+                        :disabled="wipDisabled(item)" />
                     </el-option-group>
                     <el-option-group v-if="sfiOptionsDisplay.length" :label="sfiGroupLabel">
                       <el-option
                         v-for="s in sfiOptionsDisplay" :key="'sfi-' + s.intermediateBatchNo"
                         :label="sfiLabel(s)"
                         :value="srcKey(SRC_SFI, s.intermediateBatchNo)"
-                        :disabled="sfiAvailable(s) <= 0" />
+                        :disabled="sfiDisabled(s)" />
                     </el-option-group>
                     <el-option-group v-if="fgOptionsDisplay.length" :label="fgGroupLabel">
                       <el-option
@@ -4362,6 +4538,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @update:model-value="(v: number) => row.fields[col.key] = v"
                     :min="0" :precision="fieldPrecision(col.key)"
                     controls-position="right"
+                    :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
                     style="width:110px" size="small" />
 
                   <!-- date picker (single) -->
@@ -4383,6 +4560,14 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     end-placeholder="结束"
                     value-format="YYYY-MM-DD"
                     style="width:230px" size="small" />
+
+                  <el-input
+                    v-else-if="col.type === 'text'"
+                    :model-value="(row.fields[col.key] as string) ?? ''"
+                    @update:model-value="(v: string) => row.fields[col.key] = v"
+                    :disabled="row.submissionStatus === 'SUBMITTED' || isReadOnlyRow(row)"
+                    :data-testid="`custom-field-${col.key}`"
+                    style="width:160px" size="small" />
 
                   <!-- auto: reverseInput (去舌苔: input = scrap + output) -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'reverseInput'" class="sp-readonly">
@@ -4421,7 +4606,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   </span>
 
                   <!-- readonly / text -->
-                  <span v-else-if="col.type === 'readonly' || col.type === 'text'" class="sp-readonly">
+                  <span v-else-if="col.type === 'readonly'" class="sp-readonly">
                     {{ row.fields[col.key] ?? '—' }}
                   </span>
                 </td>
@@ -4522,6 +4707,22 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @batch-picker-visible="onBatchSelectVisibleChange"
                   />
                 </div>
+              </td>
+            </tr>
+
+            <!-- 缺口 06 配比核对 (卡片模板有同一块, 改动需同步) -->
+            <tr
+              v-if="blendEvaluation(row).status !== 'NOT_APPLICABLE'"
+              :key="row.clientRowId + '-blend'"
+              class="sp-tr-expand"
+            >
+              <td :colspan="999" class="sp-td-expand">
+                <BlendRatioPanel
+                  :evaluation="blendEvaluation(row)"
+                  v-model:reason="row.blendReason"
+                  v-model:note="row.blendNote"
+                  :disabled="row.submissionStatus === 'SUBMITTED'"
+                />
               </td>
             </tr>
 

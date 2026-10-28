@@ -10,6 +10,7 @@ interface ScreenWrapperProps {
   edges?: ('top' | 'right' | 'bottom' | 'left')[];
   backgroundColor?: string;
   testID?: string;
+  statusBarTranslucent?: boolean;
 }
 
 export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
@@ -18,6 +19,7 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
   edges = ['top', 'left', 'right', 'bottom'],
   backgroundColor = theme.colors.background,
   testID,
+  statusBarTranslucent = true,
 }) => {
   return (
     <SafeAreaView 
@@ -32,7 +34,7 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
       <StatusBar
         barStyle="dark-content"
         backgroundColor="transparent"
-        translucent={true}
+        translucent={statusBarTranslucent}
       />
       <View style={styles.content}>
         {children}

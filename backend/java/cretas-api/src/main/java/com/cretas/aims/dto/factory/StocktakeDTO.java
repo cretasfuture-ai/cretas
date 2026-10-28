@@ -49,10 +49,19 @@ public class StocktakeDTO {
     private boolean historicalTimingFallback;
     private ApprovalEvidence approvalEvidence;
     private String notes;
+    private Long cancelledBy;
+    private LocalDateTime cancelledAt;
+    private String cancelReason;
     private LocalDateTime createdAt;
     private String workflowInstanceId;
     /** 批量导入模式: NORMAL / OPENING(期初建账) / null(逐项UI盘点)。用于列表区分「期初建账」与常规盘点。*/
     private String importMode;
+    private Long recountRequestedBy;
+    private LocalDateTime recountRequestedAt;
+    private String recountReason;
+    private Long recountSourceVersion;
+    private String recountStocktakeId;
+    private String recountSourceStocktakeId;
     private List<StocktakeItemDTO> items;
     private String reportCorrectionWarningMessage;
     private List<com.cretas.aims.dto.production.ProductionReportCorrectionDTO> reportCorrectionWarnings;
@@ -142,9 +151,18 @@ public class StocktakeDTO {
         dto.setSelfConfirmedZeroDifference(stocktake.isSelfConfirmedZeroDifference());
         dto.setHistoricalTimingFallback(stocktake.getInventoryCutoffAt() == null);
         dto.setNotes(stocktake.getNotes());
+        dto.setCancelledBy(stocktake.getCancelledBy());
+        dto.setCancelledAt(stocktake.getCancelledAt());
+        dto.setCancelReason(stocktake.getCancelReason());
         dto.setCreatedAt(stocktake.getCreatedAt());
         dto.setWorkflowInstanceId(stocktake.getWorkflowInstanceId());
         dto.setImportMode(stocktake.getImportMode() != null ? stocktake.getImportMode().name() : null);
+        dto.setRecountRequestedBy(stocktake.getRecountRequestedBy());
+        dto.setRecountRequestedAt(stocktake.getRecountRequestedAt());
+        dto.setRecountReason(stocktake.getRecountReason());
+        dto.setRecountSourceVersion(stocktake.getRecountSourceVersion());
+        dto.setRecountStocktakeId(stocktake.getRecountStocktakeId());
+        dto.setRecountSourceStocktakeId(stocktake.getRecountSourceStocktakeId());
         if (stocktake.getItems() != null) {
             dto.setItems(stocktake.getItems().stream()
                     .map(StocktakeItemDTO::from)

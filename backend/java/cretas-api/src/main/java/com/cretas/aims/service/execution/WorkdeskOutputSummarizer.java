@@ -3,6 +3,8 @@ package com.cretas.aims.service.execution;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
+import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -12,7 +14,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -54,9 +58,14 @@ public class WorkdeskOutputSummarizer {
     @Autowired(required = false)
     private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
 
+    /** 工艺保密产品名, 用于发给模型前把它们换成代号。测试里两参构造时为 null (视为本厂没有保密产品)。 */
+    @Autowired(required = false)
+    private ProcessSecretSampleFilter processSecretSampleFilter;
+
     static final String PROVENANCE_SITE = "workdesk-summarizer";
     static final String LLM_UNAVAILABLE_HEADER = " 数据摘要 (LLM 暂不可用, 显示结构化结果):";
     static final String PROVENANCE_FALLBACK_HEADER = " 数据摘要 (AI 摘要里有无法与数据核对的数字, 改为显示系统返回的结构化结果):";
+    static final String PRIVACY_FALLBACK_HEADER = " 数据摘要 (结果里有无法脱敏的内容, 未发给 AI, 显示系统返回的结构化结果):";
 
     @Value("${cretas.ai.workdesk-summarizer.enabled:true}")
     private boolean enabled;
@@ -90,22 +99,58 @@ public class WorkdeskOutputSummarizer {
      * @param response the response to clean up (must not be null)
      */
     public void apply(IntentExecuteResponse response) {
+        apply(response, null);
+    }
+
+    /**
+     * @param factoryId 当前工厂; 用来查工艺保密产品名, 发给模型前换成代号 (null = 不查)
+     */
+    public void apply(IntentExecuteResponse response, String factoryId) {
         if (!enabled || response == null) {
             return;
         }
 
         String formattedText = response.getFormattedText();
         String message = response.getMessage();
-        Object resultData = response.getResultData();
+        // Skill 组合结果里的工具输出是 JsonNode (SkillExecutorImpl readTree): JsonNode 也是 Iterable,
+        // 直接走 stripUnderscoreKeys 会被拆成空列表 —— 先统一转成 Map / List / 标量
+        Object rawResultData = response.getResultData();
+        boolean treeFailed = false;
+        Object plain;
+        try {
+            plain = LlmEgressRedactor.toPlainTree(objectMapper, rawResultData);
+        } catch (RuntimeException e) {
+            plain = rawResultData;
+            treeFailed = true;
+        }
+        final Object resultData = plain;
 
-        boolean ftDirty = isDirty(formattedText);
+        // formattedText 是 Skill 的「未返回可直接展示的明细」占位 → 数据其实在, 也要出摘要。
+        // 只看 formattedText: message 会写进对话记忆, 换成带真名的摘要会让名字随历史再发给模型。
+        boolean ftDirty = isDirty(formattedText) || isSkillNoDisplayPlaceholder(formattedText);
         boolean msgDirty = isDirty(message);
 
         if (!ftDirty && !msgDirty) {
             return; // both clean, nothing to do
         }
 
-        String summary = tryLlmSummarize(resultData, response);
+        Attempt attempt = treeFailed ? Attempt.REFUSED : tryLlmSummarize(resultData, response, factoryId);
+        if (attempt.privacyRefused()) {
+            // 脱敏不了就不发: 结构化摘要只在本机拼, 不出服务器
+            String local = buildDeterministicFallback(resultData, response, PRIVACY_FALLBACK_HEADER);
+            if (local != null && isDirty(local)) {
+                local = hardStripDirty(local);
+            }
+            if (local == null || local.isBlank()) {
+                local = hardStripDirty(ftDirty ? formattedText : message);
+            }
+            if (local != null && !local.isBlank()) {
+                if (ftDirty) response.setFormattedText(local);
+                if (msgDirty) response.setMessage(local);
+            }
+            return;
+        }
+        String summary = attempt.text();
         // Sprint 12 fix: the LLM can echo the raw resultData back (incl. underscore
         // metadata keys / JSON braces), producing a summary that is ITSELF dirty.
         // Previously we accepted any non-blank LLM summary, so a dirty LLM output
@@ -198,6 +243,11 @@ public class WorkdeskOutputSummarizer {
             sb.append("- ").append(toChineseLabel(key)).append(": ");
             sb.append(describeLeaf(value));
             sb.append("\n");
+            // 工具结果里有条目列表 (客户 / 记录 / 商机 / 月度): 列出前几条, 比「N 个字段」有用。
+            // 本地拼的文字, 不发给模型, 可以用真名。
+            for (String line : itemLines(value)) {
+                sb.append("  · ").append(line).append("\n");
+            }
         }
         sb.append("\n详细数据请在对应工作台模块查看 (批次放行 / 质检 / HACCP 监控 / 库存 / 采购 / 客户跟进).\n");
 
@@ -217,6 +267,12 @@ public class WorkdeskOutputSummarizer {
     private String toChineseLabel(String key) {
         if (key == null) return "数据项";
         String k = key.toLowerCase();
+        // 先判更具体的 (customer_revenue_trend 里也有 customer, opportunity_stage_alert 里也有 alert)
+        if (k.contains("wechat")) return "微信沟通记录";
+        if (k.contains("call_record") || k.startsWith("call_")) return "通话待跟进";
+        if (k.contains("opportunit")) return "商机阶段提醒";
+        if (k.contains("revenue_trend") || k.contains("trend")) return "销售趋势";
+        if (k.contains("customer_priority")) return "重点客户";
         if (k.contains("quality_check") || k.contains("inspection")) return "质检汇总";
         if (k.contains("haccp")) return "HACCP 监控状态";
         if (k.contains("additive")) return "添加剂合规检查";
@@ -233,6 +289,80 @@ public class WorkdeskOutputSummarizer {
         return key.replace('_', ' ');
     }
 
+    private static final int FALLBACK_ITEMS = 5;
+    private static final String[] ITEM_NAME_KEYS = {
+            "customerName", "name", "title", "productName", "materialName", "supplierName", "month"};
+    private static final String[][] ITEM_NUMBER_LABELS = {
+            {"priorityScore", "评分"}, {"totalAmount", "金额"}, {"valueAmount", "金额"}, {"orderCount", "订单数"},
+            {"activeOpportunityCount", "活跃商机"}, {"stagnantDays", "停滞天数"}, {"daysAgo", "天前"},
+            {"quantity", "数量"}, {"stock", "库存"}, {"probability", "成交概率"}};
+
+    /** 工具结果 (Map) 里第一张条目列表的前几条, 每条一行: 名称 + 联系人 + 状态文字 + 带中文标签的数字。 */
+    @SuppressWarnings("unchecked")
+    List<String> itemLines(Object value) {
+        List<String> lines = new java.util.ArrayList<>();
+        List<Object> items = firstItemList(value, 0);
+        if (items == null) {
+            return lines;
+        }
+        for (Object item : items) {
+            if (lines.size() >= FALLBACK_ITEMS) {
+                lines.add("…等共 " + items.size() + " 项");
+                break;
+            }
+            if (!(item instanceof Map)) {
+                continue;
+            }
+            Map<String, Object> m = (Map<String, Object>) item;
+            String label = null;
+            for (String k : ITEM_NAME_KEYS) {
+                if (m.get(k) instanceof String s && !s.isBlank()) {
+                    label = s;
+                    break;
+                }
+            }
+            if (label == null) {
+                continue;
+            }
+            List<String> details = new java.util.ArrayList<>();
+            if (m.get("contactPerson") instanceof String cp && !cp.isBlank()) {
+                details.add("联系人 " + cp);
+            }
+            for (Map.Entry<String, Object> e : m.entrySet()) {
+                if (e.getKey().endsWith("Display") && e.getValue() instanceof String s && !s.isBlank()) {
+                    details.add(s);
+                }
+            }
+            for (String[] pair : ITEM_NUMBER_LABELS) {
+                if (m.get(pair[0]) instanceof Number n) {
+                    details.add(pair[1] + " " + n);
+                }
+            }
+            lines.add(details.isEmpty() ? label : label + "（" + String.join("，", details) + "）");
+        }
+        return lines;
+    }
+
+    /** 深度 ≤ 2 的第一张「元素是 Map」的列表 (工具结果常包一层 data)。 */
+    @SuppressWarnings("unchecked")
+    private List<Object> firstItemList(Object value, int depth) {
+        if (depth > 2 || !(value instanceof Map)) {
+            return null;
+        }
+        for (Object v : ((Map<String, Object>) value).values()) {
+            if (v instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map) {
+                return (List<Object>) list;
+            }
+        }
+        for (Object v : ((Map<String, Object>) value).values()) {
+            List<Object> nested = firstItemList(v, depth + 1);
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
+    }
+
     /**
      * Render a leaf value as a short Chinese description (count / size / scalar),
      * never JSON-dumping nested structure.
@@ -242,14 +372,34 @@ public class WorkdeskOutputSummarizer {
         if (value == null) return "无数据";
         if (value instanceof Map) {
             Map<String, Object> m = (Map<String, Object>) value;
+            // 工具自己的中文说明 (含 data 包一层的情况) 比「N 个字段」有用
+            Object msg = m.get("message");
+            if (!(msg instanceof String) && m.get("data") instanceof Map<?, ?> data) {
+                msg = data.get("message");
+            }
+            if (msg instanceof String s && !s.isBlank() && !isDirty(s)) {
+                return s.length() > 100 ? s.substring(0, 100) + "..." : s;
+            }
+            List<Object> items = firstItemList(m, 0);
+            if (items != null) {
+                Object count = m.get("count");
+                if (count == null && m.get("data") instanceof Map<?, ?> data) {
+                    count = data.get("count");
+                }
+                return "共 " + (count instanceof Number ? count : items.size()) + " 项";
+            }
             // Look for common count fields
             for (String countKey : new String[]{"count", "total", "size", "totalCount", "rowCount"}) {
                 if (m.containsKey(countKey)) {
                     Object cv = m.get(countKey);
-                    if (cv != null) return cv + " 项";
+                    if (cv == null) continue;
+                    // 金额类 total (611355.40) 不是条目数, 原样给数, 不加「项」
+                    boolean whole = !(cv instanceof Number n) || n.doubleValue() == Math.rint(n.doubleValue());
+                    return whole ? cv + " 项" : cv.toString();
                 }
             }
-            return m.size() + " 个字段";
+            // 「N 个字段」对用户没有意义
+            return "无可列出的明细";
         }
         if (value instanceof Iterable) {
             int n = 0;
@@ -291,6 +441,10 @@ public class WorkdeskOutputSummarizer {
         return cleaned;
     }
 
+    static boolean isSkillNoDisplayPlaceholder(String text) {
+        return text != null && text.trim().equals(DynamicToolSelectionService.SKILL_NO_DISPLAY_PLACEHOLDER);
+    }
+
     /**
      * Returns true when the text contains underscore-prefixed metadata keys,
      * is a bare template, or is a raw JSON dump.
@@ -320,20 +474,40 @@ public class WorkdeskOutputSummarizer {
         return false;
     }
 
+    /** text = 模型摘要 (已换回真名), null = 没拿到; privacyRefused = 脱敏不了, 根本没发。 */
+    record Attempt(String text, boolean privacyRefused) {
+        static final Attempt NONE = new Attempt(null, false);
+        static final Attempt REFUSED = new Attempt(null, true);
+    }
+
     /**
      * Call LLM to summarize resultData into a Chinese natural-language summary.
-     *
-     * @return summary string (≤ maxChars), or null on failure
+     * 发出前先经 {@link LlmEgressRedactor} 脱敏; 脱敏不了、或查保密产品名出错, 就不发。
+     * factoryId 为 null (没有工厂上下文) 时没有「本厂保密产品」可查, 只做通用脱敏。
      */
-    private String tryLlmSummarize(Object resultData, IntentExecuteResponse response) {
+    private Attempt tryLlmSummarize(Object resultData, IntentExecuteResponse response, String factoryId) {
         if (resultData == null) {
-            return null;
+            return Attempt.NONE;
         }
+        LlmEgressRedactor.Result redacted;
         try {
-            // Build cleaned-up payload (drop underscore-prefixed metadata keys)
-            String payloadJson = buildCleanPayload(resultData);
+            Set<String> protectedNames = processSecretSampleFilter == null || factoryId == null
+                    ? Set.of() : processSecretSampleFilter.protectedProductNames(factoryId);
+            redacted = new LlmEgressRedactor(objectMapper).redact(stripUnderscoreKeys(resultData), protectedNames);
+        } catch (Exception e) {
+            log.warn("WorkdeskOutputSummarizer: redaction failed ({}), not sending to LLM", e.getClass().getSimpleName());
+            return Attempt.REFUSED;
+        }
+        if (redacted.refused()) {
+            log.warn("WorkdeskOutputSummarizer: redaction refused ({}), not sending to LLM", redacted.refusal());
+            return Attempt.REFUSED;
+        }
+        log.info("WorkdeskOutputSummarizer: redacted {} name(s), dropped {} field(s) before LLM",
+                redacted.tokenCount(), redacted.droppedFields());
+        try {
+            String payloadJson = redacted.payload();
             if (payloadJson == null || payloadJson.length() < 5) {
-                return null;
+                return Attempt.NONE;
             }
             if (payloadJson.length() > MAX_SUMMARIZE_BUDGET_CHARS) {
                 // truncate to keep LLM call fast (Workdesk skill rich payloads OK to clip tail)
@@ -351,19 +525,19 @@ public class WorkdeskOutputSummarizer {
                 llmResult = dashScopeClient.chatFast(systemPrompt, userInput);
             } catch (Exception llmEx) {
                 log.warn("WorkdeskOutputSummarizer: LLM call failed: {}", llmEx.getMessage());
-                return null;
+                return Attempt.NONE;
             }
             if (llmResult == null || llmResult.isBlank()) {
-                return null;
+                return Attempt.NONE;
             }
-            llmResult = llmResult.trim();
+            llmResult = redacted.restore(llmResult.trim());
             if (llmResult.length() > maxChars) {
                 llmResult = llmResult.substring(0, maxChars) + "...";
             }
-            return llmResult;
+            return new Attempt(llmResult, false);
         } catch (Exception e) {
             log.warn("WorkdeskOutputSummarizer: summarize failed: {}", e.getMessage());
-            return null;
+            return Attempt.NONE;
         }
     }
 
@@ -417,6 +591,7 @@ public class WorkdeskOutputSummarizer {
                 // 与数字出处闸同一条边界: 闸不认算术派生, 这里就不让模型去算 ——
                 // 否则算对了的占比也会被闸换成结构化摘要。
                 + "9. 只能引用数据里已经出现的数字, 不要自行计算合计 / 占比 / 环比 / 同比, 也不要估算; "
-                + "也不要自己按状态 / 类型去数「有几个」(数据里给了 count 才写个数, 没给就列名称).\n";
+                + "也不要自己按状态 / 类型去数「有几个」(数据里给了 count 才写个数, 没给就列名称).\n"
+                + "10. 数据里方括号代号 (如 [客户A] [人员B] [保密产品A]) 是脱敏占位, 原样照抄, 不要改写, 也不要猜真实名称.\n";
     }
 }

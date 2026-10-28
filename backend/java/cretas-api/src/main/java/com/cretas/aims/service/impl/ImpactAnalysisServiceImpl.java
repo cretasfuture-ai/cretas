@@ -10,8 +10,16 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.TimeClockRecordRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.dto.orchestration.MaterialCheckResult;
+import com.cretas.aims.dto.orchestration.MaterialRequirement;
+import com.cretas.aims.dto.orchestration.MaterialShortfall;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.ImpactAnalysisService;
+import com.cretas.aims.service.orchestration.BomExpansionService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -49,6 +57,15 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
     private final EquipmentRepository equipmentRepository;
     private final TimeClockRecordRepository timeClockRecordRepository;
     private final ProductTypeRepository productTypeRepository;
+    /** 原料核对的唯一真值路径: 当前 ACTIVE BOM 展开 + 批次 receipt−used−reserved (与生产/领料同源)。 */
+    private final BomExpansionService bomExpansionService;
+    private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+    /** 用于把 BOM 展开放进独立只读子事务 (见 checkMaterialAvailability 注释)。 */
+    private final PlatformTransactionManager transactionManager;
+
+    /** 设备核对没有真实数据可接时的固定原因 (插单时段是动态分配, 不绑产线/设备)。 */
+    static final String EQUIPMENT_UNVERIFIED_REASON =
+            "设备未验证: 插单时段未绑定产线/设备, 系统没有该时段的设备占用与维修数据可核对";
 
     // 权重配置
     private static final double W_CAPACITY = 0.30;
@@ -106,14 +123,17 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
         ResourceCheckResult materialCheck = checkMaterialAvailability(
                 factoryId, productTypeId, requiredQuantity);
         if (!materialCheck.isAvailable()) {
-            return FeasibilityResult.notFeasible("原料不足: " + materialCheck.getMessage());
+            // unverified 的 message 自带「原料未验证: …」前缀, 不再冠以「原料不足」
+            return FeasibilityResult.notFeasible(materialCheck.isVerified()
+                    ? "原料不足: " + materialCheck.getMessage() : materialCheck.getMessage());
         }
 
         // 4. 检查设备是否可用
         ResourceCheckResult equipmentCheck = checkEquipmentAvailability(
                 factoryId, startTime, endTime, null);
         if (!equipmentCheck.isAvailable()) {
-            return FeasibilityResult.notFeasible("设备不可用: " + equipmentCheck.getMessage());
+            return FeasibilityResult.notFeasible(equipmentCheck.isVerified()
+                    ? "设备不可用: " + equipmentCheck.getMessage() : equipmentCheck.getMessage());
         }
 
         // 5. 检查工人是否充足
@@ -357,27 +377,86 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
             String productTypeId,
             BigDecimal requiredQuantity) {
 
-        // 简化实现：检查是否有可用的原料批次
-        // 实际应该通过转换率计算需要多少原料
-        try {
-            // 查找产品类型关联的原料
-            // 这里简化处理，假设有足够原料
-            BigDecimal availableStock = BigDecimal.valueOf(10000); // 模拟可用库存
-
-            if (requiredQuantity.compareTo(availableStock) <= 0) {
-                return ResourceCheckResult.available("MATERIAL", availableStock, requiredQuantity);
-            } else {
-                return ResourceCheckResult.unavailable(
-                        "MATERIAL",
-                        String.format("原料不足: 需要 %.1f, 可用 %.1f",
-                                requiredQuantity.doubleValue(), availableStock.doubleValue()),
-                        availableStock,
-                        requiredQuantity);
-            }
-        } catch (Exception e) {
-            log.error("检查原料可用性失败", e);
-            return ResourceCheckResult.available("MATERIAL", BigDecimal.ZERO, requiredQuantity);
+        // 2026-10-24 止血: 原来这里写死「可用库存 10000」, 异常分支也返回可用 ⇒ 插单永远判原料够。
+        // 现在只接真实数据: 当前 ACTIVE BOM 展开 → 批次 receipt−used−reserved (BomExpansionService,
+        // 与生产/领料同一口径)。拿不到真实数据 (没选产品 / 没数量 / 无激活 BOM / 单位无法换算 /
+        // 数据源异常) 一律返回「未验证」, ⛔ 不返回可用。
+        if (productTypeId == null || productTypeId.isBlank()) {
+            return ResourceCheckResult.unverified("MATERIAL",
+                    "原料未验证: 未指定产品, 无法按配方核对原料", requiredQuantity);
         }
+        if (requiredQuantity == null || requiredQuantity.compareTo(BigDecimal.ZERO) <= 0) {
+            return ResourceCheckResult.unverified("MATERIAL",
+                    "原料未验证: 未指定插单数量, 无法核对原料", requiredQuantity);
+        }
+        try {
+            MaterialCheckResult check = expandBomAndCheckIsolated(factoryId, productTypeId, requiredQuantity);
+            if (check == null) {
+                return ResourceCheckResult.unverified("MATERIAL",
+                        "原料未验证: 原料核对没有返回结果", requiredQuantity);
+            }
+            if (check.isAllSatisfied()) {
+                return ResourceCheckResult.available("MATERIAL", null, requiredQuantity);
+            }
+            List<MaterialShortfall> shortfalls = check.getShortfalls() != null
+                    ? check.getShortfalls() : Collections.emptyList();
+            // 工艺保密: 插单数量由调用方随意填, 「需要 X」÷ 数量 = 单位用量; 无完整查看权只说哪些料不足
+            boolean revealQuantities = processSecretGuard == null || processSecretGuard.permitsProduct(factoryId,
+                    productTypeId, com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+                    "urgent-insert material check");
+            String detail = shortfalls.stream()
+                    .map(sf -> {
+                        String name = sf.getMaterialTypeName() != null ? sf.getMaterialTypeName() : sf.getMaterialTypeId();
+                        return revealQuantities
+                                ? String.format("%s 需要 %s, 可用 %s", name,
+                                        plain(sf.getRequiredQuantity()), plain(sf.getAvailableQuantity()))
+                                : name + " 不足";
+                    })
+                    .collect(Collectors.joining("; "));
+            // 调用方会冠以「原料不足: 」, 这里只放明细
+            return ResourceCheckResult.unavailable("MATERIAL",
+                    detail.isEmpty() ? "库存不满足配方需求" : detail,
+                    null, requiredQuantity);
+        } catch (BusinessException e) {
+            // 无激活 BOM / 配方没有投入行 / BOM 单位与库存单位不可换算 —— 这是「没法核对」, 不是「够」。
+            log.warn("插单原料无法核对: factoryId={}, productTypeId={}, reason={}",
+                    factoryId, productTypeId, e.getMessage());
+            return ResourceCheckResult.unverified("MATERIAL",
+                    "原料未验证: " + e.getMessage(), requiredQuantity);
+        } catch (Exception e) {
+            log.error("检查原料可用性失败: factoryId={}, productTypeId={}", factoryId, productTypeId, e);
+            return ResourceCheckResult.unverified("MATERIAL",
+                    "原料未验证: 库存数据读取失败", requiredQuantity);
+        }
+    }
+
+    /**
+     * BOM 展开 + 库存核对放进独立只读子事务 (REQUIRES_NEW)。
+     *
+     * <p>expandBOM 在无激活 BOM 时抛 BusinessException; 若直接调用, 它会在自己的 AOP 边界上把
+     * 外层共享事务标成 rollback-only, 这里 catch 住也抹不掉 (SupplyChainOrchestrator 2026-08-01
+     * doomed-tx 事故同一机制)。独立子事务让失败只回滚它自己。
+     */
+    private MaterialCheckResult expandBomAndCheckIsolated(
+            String factoryId, String productTypeId, BigDecimal requiredQuantity) {
+        TransactionTemplate isolated = new TransactionTemplate(transactionManager);
+        isolated.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        isolated.setReadOnly(true);
+        isolated.setName("ImpactAnalysisServiceImpl.expandBomAndCheckIsolated");
+        return isolated.execute(status -> {
+            List<MaterialRequirement> requirements =
+                    bomExpansionService.expandBOM(factoryId, productTypeId, requiredQuantity);
+            if (requirements == null || requirements.isEmpty()) {
+                // 配方只有副产行 / 物料未绑定: 没有可核对的投入 ⇒ 不能说「够」
+                throw new BusinessException(409, "该产品配方没有可核对的原料投入行")
+                        .withHint("先在该产品的 BOM 配方里补上原料投入行并绑定物料，再回来做插单分析");
+            }
+            return bomExpansionService.checkMaterialAvailability(factoryId, requirements);
+        });
+    }
+
+    private static String plain(BigDecimal v) {
+        return v == null ? "?" : v.stripTrailingZeros().toPlainString();
     }
 
     @Override
@@ -388,16 +467,10 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
             LocalDateTime endTime,
             String productionLineId) {
 
-        try {
-            // 查找指定时段内维护中或故障的设备
-            // 简化实现：假设设备正常可用
-            BigDecimal availableEquipment = BigDecimal.valueOf(5); // 5台设备
-
-            return ResourceCheckResult.available("EQUIPMENT", availableEquipment, BigDecimal.ONE);
-        } catch (Exception e) {
-            log.error("检查设备可用性失败", e);
-            return ResourceCheckResult.available("EQUIPMENT", BigDecimal.ONE, BigDecimal.ONE);
-        }
+        // 2026-10-24 止血: 原来写死「5 台设备可用」, 异常分支也返回可用。
+        // 插单时段是动态分配 (productionLineId="default"), 系统里没有「该时段哪台设备被占 / 在修」
+        // 的真实数据可核对 ⇒ 如实返回「未验证」, 不编数字。接上产线/设备排程后再替换这里。
+        return ResourceCheckResult.unverified("EQUIPMENT", EQUIPMENT_UNVERIFIED_REASON, BigDecimal.ONE);
     }
 
     @Override
@@ -426,8 +499,8 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
             }
         } catch (Exception e) {
             log.error("检查工人可用性失败", e);
-            return ResourceCheckResult.available("WORKER",
-                    BigDecimal.valueOf(6),
+            return ResourceCheckResult.unverified("WORKER",
+                    "人员未验证: 人员数据读取失败",
                     BigDecimal.valueOf(requiredWorkers));
         }
     }

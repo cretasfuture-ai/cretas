@@ -28,16 +28,34 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             String factoryId, java.util.Collection<Long> owners,
             java.time.LocalDate startDate, java.time.LocalDate endDate, Pageable pageable);
 
-    /** Disposal may consume only stock still physically present and not reserved for an order. */
+    /**
+     * Disposal may consume only stock still physically present and not reserved for an order.
+     * Customer-owned stock is eligible only once it is no longer sellable (returned/defective/expired/frozen):
+     * sellable toll output must leave through the toll delivery so the processing fee is billed.
+     */
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
             "AND b.status IN :statuses " +
-            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) " +
+            "AND (b.ownership IS NULL OR b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED " +
+            "     OR (b.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+            "         AND b.status <> 'AVAILABLE')) " +
             "AND (b.producedQuantity - b.shippedQuantity - b.reservedQuantity) > 0 " +
             "ORDER BY b.createdAt DESC, b.id DESC")
     List<FinishedGoodsBatch> findDisposalEligibleByFactoryId(@Param("factoryId") String factoryId,
             @Param("statuses") Collection<String> statuses);
 
     List<FinishedGoodsBatch> findByFactoryIdAndProductTypeIdAndStatus(String factoryId, String productTypeId, String status);
+
+    /**
+     * 成品过期定时任务用 (跨全部工厂): 状态仍是 AVAILABLE 但到期日<b>早于</b> {@code today} 的批次。
+     *
+     * <p>口径与原料 {@code MaterialBatchRepository#findAllExpiredAvailableBatches} 逐字相同
+     * ({@code expireDate < :today}): 到期日当天仍可用, 次日起过期; 到期日为空的批次永不被选中。
+     * {@code today} 由调用方按东八区业务日传入 ({@link com.cretas.aims.util.InventoryExpiry#today()}),
+     * ⛔ 不用 JPQL {@code CURRENT_DATE} —— 那是数据库会话时区的日子, 不是业务日。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.status = 'AVAILABLE' " +
+            "AND b.expireDate IS NOT NULL AND b.expireDate < :today")
+    List<FinishedGoodsBatch> findAllExpiredAvailableBatches(@Param("today") java.time.LocalDate today);
 
     Optional<FinishedGoodsBatch> findByFactoryIdAndBatchNumber(String factoryId, String batchNumber);
 
@@ -509,6 +527,28 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
      * 默认 @Where(deleted_at IS NULL) 已在 entity 起作用。
      */
     List<FinishedGoodsBatch> findByFactoryIdAndWarehouseId(String factoryId, String warehouseId);
+
+    /** 质检放行待办 (缺口 11): 本厂处于某状态 (PENDING_INSPECTION) 的成品批次, 新的在前。 */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.status = :status ORDER BY b.createdAt DESC")
+    List<FinishedGoodsBatch> findByFactoryIdAndStatusForRelease(
+            @Param("factoryId") String factoryId,
+            @Param("status") String status);
+
+    /** CCP 偏离扣留 (缺口 13): 按批次号找成品 (逐道录入/结单入库的成品批号 = 报工生产批号)。 */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.batchNumber IN :batchNumbers")
+    List<FinishedGoodsBatch> findByFactoryIdAndBatchNumberInForHold(
+            @Param("factoryId") String factoryId,
+            @Param("batchNumbers") java.util.Collection<String> batchNumbers);
+
+    /** CCP 偏离扣留 (审查中 8): 行锁读取批号命中或同一计划的成品批次, 锁内再改 (不覆盖并发发货/预留)。 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL " +
+            "AND (b.batchNumber IN :batchNumbers OR b.productionPlanId IN :planIds) ORDER BY b.id")   // 固定加锁顺序 (审查 L2)
+    List<FinishedGoodsBatch> lockForDeviationHold(@Param("factoryId") String factoryId,
+                                                  @Param("batchNumbers") java.util.Collection<String> batchNumbers,
+                                                  @Param("planIds") java.util.Collection<String> planIds);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.id = :id AND b.factoryId = :factoryId")

@@ -221,6 +221,13 @@ class VideoEfficiencyAnalyzer:
         # Routing through call_chain(SLOT.VL) requires making this async and
         # awaiting it up the whole chain. Left direct for now; efficiency VL
         # (offline video analysis) can be migrated to call_chain separately.
+        # 提示词里的工厂类型 / 工序提示来自请求: 自建客户端不经出境口, 在这里按同一套规则脱敏, 脱敏不了就不发
+        from common.llm_egress_text import redact_texts
+        egress = redact_texts([prompt])
+        if egress.refused:
+            return EfficiencySnapshot(notes=f"未发送: {egress.refusal}")
+        prompt = egress.texts[0]
+
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",

@@ -58,7 +58,14 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
-from common.llm_client import get_llm_http_client
+from common.llm_client import (
+    EgressRedactionError,
+    current_egress_tokens,
+    get_llm_http_client,
+    prefetch_names_for_request,
+    reset_prefetched_names,
+)
+from common.llm_egress_text import StreamRestorer
 # ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
 #    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
 #    llm_budget 不 import llm_router, 无循环依赖。
@@ -2310,6 +2317,25 @@ async def call_chain(
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
 ) -> Dict[str, Any]:
+    """见 ``_call_chain_attempts``。先查好本厂工艺保密产品名 (在每次尝试的超时之外, 库慢不会被当成供应商超时
+    去熔断健康的供应商; 换下一家重试也不再查库); 查不了抛 EgressRedactionError, 一个字节都不发。"""
+    names_token = await prefetch_names_for_request()
+    try:
+        return await _call_chain_attempts(slot, payload, chain, timeout, total_timeout,
+                                          content_validator, body_validator)
+    finally:
+        reset_prefetched_names(names_token)
+
+
+async def _call_chain_attempts(
+    slot: SLOT,
+    payload: Dict[str, Any],
+    chain: Optional[List[str]] = None,
+    timeout: float = 30.0,
+    total_timeout: Optional[float] = None,
+    content_validator: Optional[Callable[[str], Optional[str]]] = None,
+    body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+) -> Dict[str, Any]:
     """
     Call LLM via provider chain with automatic fallback on 403 FreeTierOnly / 429.
 
@@ -2536,6 +2562,9 @@ async def call_chain(
             )
             errors.append(f"{account}/{model}: timeout")
             continue
+        except EgressRedactionError:
+            # 本地脱敏失败: 没有任何内容出境; 换候选只会再失败, 也不是供应商故障 → 不记熔断, 直接抛
+            raise
         except Exception as e:
             _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
@@ -2554,6 +2583,24 @@ async def call_chain(
 # ---------------------------------------------------------------------------
 
 async def call_chain_stream(
+    slot: SLOT,
+    payload: Dict[str, Any],
+    chain: Optional[List[str]] = None,
+    timeout: float = 45.0,
+) -> AsyncIterator[Dict[str, Any]]:
+    """见 ``_call_chain_stream_attempts``; 与 ``call_chain`` 一样先查好保密产品名, 查不了就不发。"""
+    names_token = await prefetch_names_for_request()
+    try:
+        async for event in _call_chain_stream_attempts(slot, payload, chain, timeout):
+            yield event
+    finally:
+        try:
+            reset_prefetched_names(names_token)
+        except ValueError:
+            pass  # 生成器在别的上下文里被关闭 (消费方提前丢弃): 那个上下文里本来就没有这次的预取
+
+
+async def _call_chain_stream_attempts(
     slot: SLOT,
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
@@ -2657,6 +2704,7 @@ async def call_chain_stream(
 
         first_delta_yielded = False
         stream_error_text = ""
+        restorer: Optional[StreamRestorer] = None
         try:
             logger.debug(f"[llm_router_stream] slot={slot.value} try {account}/{model}")
             async with client.stream(
@@ -2690,6 +2738,9 @@ async def call_chain_stream(
 
                 logger.info(f"[llm_router_stream] slot={slot.value} streaming via {account}/{model}")
 
+                # 发出去的代号 (公司名 / 人名 / 号码 / 保密产品名) 边收边换回真名; 代号可能被拆在两段增量里
+                restorer = StreamRestorer(current_egress_tokens())
+
                 async for line in resp.aiter_lines():
                     line = line.strip()
                     if not line:
@@ -2720,6 +2771,9 @@ async def call_chain_stream(
                                 f"mid-stream error body ({upstream_error}) — "
                                 "preserving partial result"
                             )
+                            rest = restorer.flush()
+                            if rest:
+                                yield {"type": "delta", "text": rest}
                             return
                         break
 
@@ -2729,7 +2783,9 @@ async def call_chain_stream(
                         content = delta.get("content")
                         if content:
                             first_delta_yielded = True
-                            yield {"type": "delta", "text": content}
+                            ready = restorer.push(content)
+                            if ready:
+                                yield {"type": "delta", "text": ready}
 
                     usage = obj.get("usage")
                     if usage:
@@ -2765,6 +2821,9 @@ async def call_chain_stream(
                             logger.debug(f"[llm_router_stream] usage record skipped: {_e}")
                         if total:
                             yield {"type": "usage", "tokens": total}
+                rest = restorer.flush()
+                if rest:
+                    yield {"type": "delta", "text": rest}
                 if not first_delta_yielded:
                     _cb_record_failure(cb_key)
                     if stream_error_text and _is_quota_exhausted(200, stream_error_text):
@@ -2792,6 +2851,10 @@ async def call_chain_stream(
                     f"[llm_router_stream] {account}/{model} mid-stream timeout — "
                     "propagating partial result (no fallback)"
                 )
+                # 攒着的半个代号 / 尾巴照样换回发出去 (以前直接丢了)
+                rest = restorer.flush() if restorer is not None else ""
+                if rest:
+                    yield {"type": "delta", "text": rest}
                 return
             _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
@@ -2801,6 +2864,8 @@ async def call_chain_stream(
             )
             errors.append(f"{account}/{model}: timeout")
             continue
+        except EgressRedactionError:
+            raise
         except Exception as e:
             if first_delta_yielded:
                 # Mid-stream errors don't trip CB (we got partial value from this provider)
@@ -2808,6 +2873,10 @@ async def call_chain_stream(
                     f"[llm_router_stream] {account}/{model} mid-stream exception {type(e).__name__}: {e} — "
                     "propagating partial result (no fallback)"
                 )
+                # 攒着的半个代号 / 尾巴照样换回发出去 (以前直接丢了)
+                rest = restorer.flush() if restorer is not None else ""
+                if rest:
+                    yield {"type": "delta", "text": rest}
                 return
             _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)

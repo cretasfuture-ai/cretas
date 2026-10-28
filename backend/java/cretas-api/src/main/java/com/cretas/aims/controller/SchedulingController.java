@@ -43,7 +43,8 @@ public class SchedulingController {
     // ==================== 调度计划 CRUD ====================
 
     /**
-     * Returns the server capability contract. Automation is unavailable until a verified engine is wired.
+     * Returns the server capability contract. aiGeneration = APS v1 (按工艺图 + 预计工时排工序时间);
+     * workerOptimization stays unavailable until a verified engine is wired.
      */
     @RequirePermission({"scheduling:read", "production:read"})
     @RequireModule("scheduling")
@@ -51,9 +52,10 @@ public class SchedulingController {
     @Operation(summary = "获取调度能力", description = "返回当前可用的调度能力及明确的不可用原因")
     public ApiResponse<SchedulingCapabilitiesDTO> getCapabilities(
             @PathVariable String factoryId) {
-        SchedulingCapabilitiesDTO.Capability unavailableAi = SchedulingCapabilitiesDTO.Capability.builder()
-                .status("UNAVAILABLE").mode("UNAVAILABLE")
-                .reason("AI自动排程暂不可用；本次不创建或调整排程，请使用手动创建并明确产线和起止时间。")
+        SchedulingCapabilitiesDTO.Capability dagAi = SchedulingCapabilitiesDTO.Capability.builder()
+                .status("AVAILABLE").mode("DAG_DURATION")
+                .reason("按工艺图的先后关系和每道工序的预计工时排出开始/结束时间；"
+                        + "缺预计工时的工序不排（该计划整体不排，请到「工序管理」填预计分钟）；不自动派工。")
                 .build();
         SchedulingCapabilitiesDTO.Capability unavailableWorkers = SchedulingCapabilitiesDTO.Capability.builder()
                 .status("UNAVAILABLE").mode("UNAVAILABLE")
@@ -61,7 +63,7 @@ public class SchedulingController {
                 .build();
         SchedulingCapabilitiesDTO capabilities = SchedulingCapabilitiesDTO.builder()
                 .contractVersion("scheduling-capabilities/v1")
-                .aiGeneration(unavailableAi)
+                .aiGeneration(dagAi)
                 .workerOptimization(unavailableWorkers)
                 .reschedule(SchedulingCapabilitiesDTO.Capability.builder()
                         .status("AVAILABLE").mode("RECORD_REASON_ONLY")
@@ -441,7 +443,7 @@ public class SchedulingController {
     @RequirePermission({"scheduling:read_write", "production:read_write"})
     @RequireModule("scheduling")
     @PostMapping("/generate")
-    @Operation(summary = "AI生成调度计划", description = "使用AI算法自动生成最优调度计划，考虑产能、人员、设备等因素")
+    @Operation(summary = "按工艺图自动排程", description = "选生产计划, 按工艺图先后关系和每道工序预计工时排出开始/结束时间; 缺工时的计划不排; 不自动派工")
     public ApiResponse<SchedulingPlanDTO> generateSchedule(
             @Parameter(description = "工厂ID", example = "F001")
             @PathVariable String factoryId,
@@ -799,23 +801,41 @@ public class SchedulingController {
             @Parameter(description = "产品类型ID", example = "PT-001")
             @RequestParam(required = false) String productTypeId,
             @Parameter(description = "需求数量", example = "100")
-            @RequestParam(required = false) Integer quantity,
+            @RequestParam(required = false) java.math.BigDecimal quantity,
             @Parameter(description = "截止时间（ISO格式）", example = "2025-01-15T18:00:00")
-            @RequestParam(required = false) String deadline) {
+            @RequestParam(required = false) String deadline,
+            @Parameter(description = "数量单位 PIECE / KG / BATCH; 不传则产能判为未验证", example = "KG")
+            @RequestParam(required = false) String quantityUnit,
+            @Parameter(description = "指定产线 ID; 只按这条产线核对产能")
+            @RequestParam(required = false) String preferredProductionLineId) {
         log.info("获取可用插单时段: factoryId={}, productTypeId={}, quantity={}",
                 factoryId, productTypeId, quantity);
 
         GetInsertSlotsRequest request = new GetInsertSlotsRequest();
         request.setProductTypeId(productTypeId);
         if (quantity != null) {
-            request.setRequiredQuantity(java.math.BigDecimal.valueOf(quantity));
+            request.setRequiredQuantity(quantity);
         }
         if (deadline != null) {
             request.setDeadline(java.time.LocalDateTime.parse(deadline));
         }
+        applyUnitAndLine(request, quantityUnit, preferredProductionLineId);
 
         List<InsertSlotDTO> slots = urgentInsertService.getAvailableSlots(factoryId, request);
         return ApiResponse.success("获取成功", slots);
+    }
+
+    /** GET 入口和 POST 请求体一样带上数量单位与指定产线; 单位不认识直接 400, ⛔ 不当成没传 */
+    private static void applyUnitAndLine(GetInsertSlotsRequest request, String quantityUnit, String preferredProductionLineId) {
+        if (quantityUnit != null && !quantityUnit.isBlank()) {
+            if (com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck.parseUnit(quantityUnit) == null) {
+                throw new BusinessException(400, "数量单位只能是 PIECE / KG / BATCH: " + quantityUnit);
+            }
+            request.setQuantityUnit(quantityUnit.trim());
+        }
+        if (preferredProductionLineId != null && !preferredProductionLineId.isBlank()) {
+            request.setPreferredProductionLineId(preferredProductionLineId.trim());
+        }
     }
 
     /**
@@ -849,20 +869,25 @@ public class SchedulingController {
             @Parameter(description = "产品类型ID", example = "PT-001")
             @RequestParam(required = false) String productTypeId,
             @Parameter(description = "需求数量", example = "100")
-            @RequestParam(required = false) Integer quantity,
+            @RequestParam(required = false) java.math.BigDecimal quantity,
             @Parameter(description = "截止时间（ISO格式）", example = "2025-01-15T18:00:00")
-            @RequestParam(required = false) String deadline) {
+            @RequestParam(required = false) String deadline,
+            @Parameter(description = "数量单位 PIECE / KG / BATCH; 不传则产能判为未验证", example = "KG")
+            @RequestParam(required = false) String quantityUnit,
+            @Parameter(description = "指定产线 ID; 只按这条产线核对产能")
+            @RequestParam(required = false) String preferredProductionLineId) {
         log.info("分析插单影响: factoryId={}, slotId={}, productTypeId={}, quantity={}",
                 factoryId, slotId, productTypeId, quantity);
 
         GetInsertSlotsRequest request = new GetInsertSlotsRequest();
         request.setProductTypeId(productTypeId);
         if (quantity != null) {
-            request.setRequiredQuantity(java.math.BigDecimal.valueOf(quantity));
+            request.setRequiredQuantity(quantity);
         }
         if (deadline != null) {
             request.setDeadline(java.time.LocalDateTime.parse(deadline));
         }
+        applyUnitAndLine(request, quantityUnit, preferredProductionLineId);
 
         java.util.Map<String, Object> impact = urgentInsertService.analyzeInsertImpact(factoryId, slotId, request);
         return ApiResponse.success("分析完成", impact);

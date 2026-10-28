@@ -31,7 +31,7 @@ public class ReturnVoucherPostingGuard {
             ReturnOrder order = loadReturn(voucher.getFactoryId(), voucher.getSourceBusinessId());
             if (order.getReturnType() != ReturnType.SALES_RETURN) return;
             assertReturnCredit(order);
-            assertAmount(voucher, order.getTotalAmount());
+            assertAmount(voucher, order.getReceivableAmount());
         } else if ("RETURN_REFUND".equals(voucher.getSourceBusinessType())) {
             PaymentRequest request = paymentRequestRepository.findById(voucher.getSourceBusinessId())
                     .orElseThrow(() -> invalid("找不到原退款记录"));

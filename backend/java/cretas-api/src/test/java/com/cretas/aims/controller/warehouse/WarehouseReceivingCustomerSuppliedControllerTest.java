@@ -13,7 +13,9 @@ import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.CustomerMaterialArrivalNoticeService;
 import com.cretas.aims.service.inventory.SalesOrderSuppliedMaterialRequirementService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -26,6 +28,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class WarehouseReceivingCustomerSuppliedControllerTest {
+
+    @BeforeEach
+    void outsideAnHttpRequest() {
+        // These tests call the controller directly, not through a request. The request context is
+        // thread-local and the full suite shares one fork, so a context leaked by any earlier test
+        // would trip the controller's 503 data-scope guard here.
+        RequestContextHolder.resetRequestAttributes();
+    }
 
     @Test
     void unifiedTasksPreservePurchaseAndAddCustomerSuppliedProjection() {

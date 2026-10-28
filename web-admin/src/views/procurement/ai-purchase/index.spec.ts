@@ -5,6 +5,7 @@ const authFixture = vi.hoisted(() => ({ current: undefined as { factoryId: strin
 const previewMock = vi.fn();
 const statusMock = vi.fn();
 const revokeMock = vi.fn();
+const timerStatusMock = vi.fn();
 const confirmMock = vi.fn();
 const grantStatusMock = vi.fn();
 const boxMock = vi.fn(async () => 'confirm');
@@ -15,6 +16,7 @@ vi.mock('@/api/controlledPurchase', () => ({
   previewControlledPurchase: (...args: unknown[]) => previewMock(...args),
   getControlledPurchaseStatus: (...args: unknown[]) => statusMock(...args),
   revokeControlledPurchase: (...args: unknown[]) => revokeMock(...args),
+  getPurchaseTimer: (...args: unknown[]) => timerStatusMock(...args),
 }));
 vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => getMock(...args),
@@ -77,6 +79,7 @@ describe('AI controlled purchase page', () => {
       : Promise.resolve({ success: true, data: [{ id: 'm1', name: '五花肉' }] }));
     statusMock.mockResolvedValue({ grantId: 'preview-7', state: 'PENDING', version: 3 });
     revokeMock.mockResolvedValue({ grantId: 'preview-7', state: 'REVOKED', version: 4 });
+    timerStatusMock.mockReset().mockResolvedValue(null);
   });
 
   it.each([

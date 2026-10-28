@@ -12,6 +12,9 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/smartbi-factory-analysis-readonly'),
+  require('../scenarios/smartbi-factory-readonly'),
+  require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
   require('../scenarios/table-top-scroll-readonly').sales,
@@ -120,6 +123,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedFactoryId,
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
+        appMountTimeoutMs: options.appMountTimeoutMs,
       });
 
       const scenarioContext = {
@@ -129,6 +133,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedUsername,
         expectedFactoryId,
         loginEvidence,
+        factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         scenarioRef,
         mutationGuard,
         network,

@@ -458,8 +458,11 @@ class PythonSmartBIClientTransportSecurityTest {
 
     private PythonSmartBIClient newClient(MockWebServer server, int maxRetries, String secret)
             throws Exception {
+        // 127.0.0.1, not "localhost": MockWebServer listens on IPv4 only, and where localhost also
+        // resolves to ::1 (GitHub-hosted runners, prod 47) the health-probe retry is sent to the
+        // next route, ::1, and is refused. Prod's python-smartbi.url uses 127.0.0.1 for the same reason.
         return new PythonSmartBIClient(
-                config(server.url("/").toString(), maxRetries),
+                config(server.url("/").newBuilder().host("127.0.0.1").build().toString(), maxRetries),
                 new OkHttpClient.Builder()
                         .callTimeout(Duration.ofSeconds(5))
                         .build(),

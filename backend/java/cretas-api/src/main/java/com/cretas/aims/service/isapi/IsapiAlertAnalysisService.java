@@ -35,6 +35,9 @@ public class IsapiAlertAnalysisService {
 
     private final DashScopeVisionClient visionClient;
     private final IsapiEventLogRepository eventLogRepository;
+    private final CameraSnapshotAiConsent cameraAiConsent;
+
+    static final String CAMERA_AI_DISABLED_MESSAGE = CameraSnapshotAiConsent.DISABLED_MESSAGE;
 
     // 图片下载HTTP客户端
     private static final OkHttpClient HTTP_CLIENT = new OkHttpClient.Builder()
@@ -66,6 +69,13 @@ public class IsapiAlertAnalysisService {
      */
     @Transactional
     public CameraAlertAnalysisResult analyzeAlert(IsapiEventLog eventLog, IsapiDevice device) {
+        // 抓拍里可能有人, 图片识别不做名称脱敏: 默认不发, 本厂在 AI 设置里打开才发 (连下载都不做)
+        String factoryId = device != null ? device.getFactoryId() : null;
+        if (!cameraAiConsent.enabled(factoryId)) {
+            log.info("本厂未开启摄像头抓拍 AI 识别, 不发给模型: eventId={}, factoryId={}", eventLog.getId(), factoryId);
+            return CameraAlertAnalysisResult.error(CAMERA_AI_DISABLED_MESSAGE);
+        }
+
         // 检查是否有图片数据
         byte[] pictureData = eventLog.getPictureData();
         String imageBase64 = null;
@@ -153,8 +163,10 @@ public class IsapiAlertAnalysisService {
      * @return 分析结果
      */
     @Transactional
-    public CameraAlertAnalysisResult reanalyzeEvent(Long eventId) {
+    public CameraAlertAnalysisResult reanalyzeEvent(String factoryId, Long eventId) {
+        // 事件表没有租户过滤: 别厂的事件按「不存在」处理, 否则 A 厂能让 B 厂的抓拍再发一次模型并拿回结果
         IsapiEventLog eventLog = eventLogRepository.findById(eventId)
+                .filter(e -> factoryId != null && factoryId.equals(e.getFactoryId()))
                 .orElseThrow(() -> new IllegalArgumentException("事件不存在: " + eventId));
 
         IsapiDevice device = eventLog.getDevice();

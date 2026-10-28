@@ -13,10 +13,69 @@ const AUTH_REQUESTS = [
   },
 ];
 
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function factoryAnalysisBodyMatches(body) {
+  if (!body || typeof body !== 'object' || typeof body.question !== 'string'
+    || !body.question.trim() || body.question.length > 1000) return false;
+  const keys = Object.keys(body).sort();
+  const followupKeys = ['contextId', 'question'];
+  if (keys.length === followupKeys.length && keys.every((key, index) => key === followupKeys[index])) {
+    return typeof body.contextId === 'string' && body.contextId.length > 0 && body.contextId.length <= 128;
+  }
+  const clarificationKeys = ['analysisSubject', 'contextId', 'question'];
+  if (keys.length === clarificationKeys.length && keys.every((key, index) => key === clarificationKeys[index])) {
+    return typeof body.contextId === 'string' && body.contextId.length > 0 && body.contextId.length <= 128
+      && typeof body.analysisSubject === 'string' && body.analysisSubject.trim().length > 0
+      && body.analysisSubject.length <= 200;
+  }
+  const requiredInitial = ['analysisSubject', 'endMonth', 'periodType', 'question', 'source', 'startMonth', 'year'];
+  if (!requiredInitial.every((key) => keys.includes(key))) return false;
+  const allowedInitial = new Set([...requiredInitial, 'uploadId']);
+  if (keys.some((key) => !allowedInitial.has(key))) return false;
+  if (body.source !== 'business' && body.source !== 'upload') return false;
+  if (!Number.isSafeInteger(body.year) || body.year < 2000 || body.year > 2100) return false;
+  if (!['all', 'year', 'month_range'].includes(body.periodType)) return false;
+  if (!Number.isInteger(body.startMonth) || body.startMonth < 1 || body.startMonth > 12
+    || !Number.isInteger(body.endMonth) || body.endMonth < body.startMonth || body.endMonth > 12) return false;
+  if (body.analysisSubject !== null && (typeof body.analysisSubject !== 'string' || body.analysisSubject.length > 200)) return false;
+  if (body.source === 'upload') {
+    return keys.includes('uploadId') && isPositiveInteger(body.uploadId);
+  }
+  return !keys.includes('uploadId');
+}
+
 // Every entry must point to a server contract that is query-only. Do not add
 // generic prefixes. AI chat is deliberately absent because some modes may
 // execute tools with side effects behind a single HTTP request.
 const READONLY_POST_WHITELIST = [
+  {
+    id: 'smartbi-factory-analysis',
+    method: 'POST',
+    path: /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/,
+    bodyMatches: factoryAnalysisBodyMatches,
+    rationale: 'Root-approved Java factory analysis contract; authenticated planner reads existing tenant-qualified chart facts and returns no business mutation.',
+  },
+  {
+    id: 'smartbi-factory-details',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/factory-details\/?$/,
+    rationale: 'Read-only tenant-qualified original-row details from a short-lived server snapshot.',
+  },
+  {
+    id: 'smartbi-factory-recommendations',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/factory-recommendations\/?$/,
+    rationale: 'Read-only tenant-qualified metrics and bounded chart ranking; handler performs no business writes.',
+  },
+  {
+    id: 'smartbi-factory-document-export',
+    method: 'POST',
+    path: /^\/smartbi-api\/api\/smartbi\/financial-dashboard\/export-(?:excel|pdf|ppt)\/?$/,
+    rationale: 'Pure in-memory document generation from supplied qualified chart snapshots; no database writes.',
+  },
   {
     id: 'purchase-order-list-summary',
     method: 'POST',
@@ -918,6 +977,9 @@ const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
+  require('../scenarios/smartbi-factory-analysis-readonly'),
+  require('../scenarios/smartbi-factory-readonly'),
+  require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
   require('../scenarios/table-top-scroll-readonly').sales,
@@ -1026,6 +1088,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedFactoryId,
         expectedRole: options.expectedRole,
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
+        appMountTimeoutMs: options.appMountTimeoutMs,
       });
 
       const scenarioContext = {
@@ -1035,6 +1098,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedUsername,
         expectedFactoryId,
         loginEvidence,
+        factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         scenarioRef,
         mutationGuard,
         network,
@@ -1336,6 +1400,9 @@ async function performUiLogin(page, options) {
   const expectedRole = options.expectedRole ? String(options.expectedRole).toLowerCase() : null;
   if (!username || !password) throw new Error('E2E_USERNAME and E2E_PASSWORD are required for UI login');
 
+  const loginMount = await waitForAppMount(page, options.appMountTimeoutMs);
+  if (!loginMount.appMounted) throw new Error('Login application did not mount before credential entry');
+
   const usernameInput = page.locator('input[placeholder*="用户名"], input[type="text"]').first();
   const passwordInput = page.locator('input[placeholder*="密码"], input[type="password"]').first();
   await usernameInput.waitFor({ state: 'visible', timeout: 15_000 });
@@ -1415,6 +1482,8 @@ async function performUiLogin(page, options) {
     // ⚠️ 记下来, 否则「落地页没挂载」和「落地页缺东西」在证据里长得一样。
     landingAppMounted: landingMount.appMounted,
     landingAppMountMs: landingMount.appMountMs,
+    loginAppMounted: loginMount.appMounted,
+    loginAppMountMs: loginMount.appMountMs,
   };
 }
 
@@ -3281,6 +3350,1552 @@ module.exports = {
     '人员分配', 'AI 优化分配（暂不可用）', '请使用每个排程卡片上的“添加工人”进行人工指派。'),
   assessCapability,
 };
+
+},
+    "scenarios/smartbi-factory-analysis-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const PATH = '/smart-bi/analysis?tab=query&mode=factory';
+const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
+const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
+const QUESTION = '汇总当前库存、生产和销售表现';
+const JOINT_QUESTION = '关联生产、检验和成本做多表分析';
+
+const EXPORT_FORMATS = [
+  { key: 'excel', label: 'Excel', path: '/smartbi-api/api/smartbi/financial-dashboard/export-excel', extension: 'xlsx' },
+  { key: 'pdf', label: 'PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
+  { key: 'ppt', label: 'PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
+];
+
+function endpointPath(url) {
+  try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
+}
+
+function isAnalysisResponse(response) {
+  return response.request().method() === 'POST' && ANALYSIS_PATH.test(endpointPath(response.url()));
+}
+
+function isDetailsResponse(response) {
+  return response.request().method() === 'POST'
+    && endpointPath(response.url()).replace(/\/$/, '') === DETAILS_PATH;
+}
+
+function isExportResponse(response, format) {
+  const expectedPath = typeof format === 'string'
+    ? EXPORT_FORMATS.find((item) => item.key === format)?.path
+    : format?.path;
+  return response.request().method() === 'POST'
+    && Boolean(expectedPath)
+    && endpointPath(response.url()).replace(/\/$/, '') === expectedPath;
+}
+
+function requestBody(response) {
+  try { return response.request().postDataJSON() || {}; } catch { return {}; }
+}
+
+async function responseBody(response) {
+  return response.json().catch(() => ({}));
+}
+
+function periodSignature(period) {
+  if (!period || typeof period !== 'object') return null;
+  return JSON.stringify({
+    type: period.periodType || period.period_type || period.type || null,
+    year: period.year || null,
+    startMonth: period.startMonth || period.start_month || null,
+    endMonth: period.endMonth || period.end_month || null,
+    label: period.label || null,
+  });
+}
+
+function familyId(candidate) {
+  return candidate?.analysis?.familyId || candidate?.familyId || candidate?.id || null;
+}
+
+function isFusedCandidate(candidate) {
+  return familyId(candidate) === 'production.inspection_fused';
+}
+
+function selectAuthorizedSubject(subjects, requestedId) {
+  if (!requestedId) return subjects[0];
+  const subject = subjects.find((item) => String(item?.id) === String(requestedId));
+  if (!subject) throw new Error('Requested joint-analysis subject is absent from the authorized response');
+  return subject;
+}
+
+function hasThreeAxis(candidate) {
+  const option = candidate?.chart?.echartsOption;
+  return Array.isArray(option?.yAxis) && option.yAxis.length >= 3
+    && Array.isArray(option?.series) && option.series.length >= 3;
+}
+
+function normalizedDomain(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function domainGroup(value) {
+  const text = normalizedDomain(value);
+  if (/(inventory|stock|库存)/u.test(text)) return 'inventory';
+  if (/(production|manufactur|生产)/u.test(text)) return 'production';
+  if (/(sales|order|shipment|销售)/u.test(text)) return 'sales';
+  return null;
+}
+
+function qualitySemantic(value) {
+  return /(quality|inspection|defect|良品|质量|检验|不良|production\.fused)/iu.test(String(value || ''));
+}
+
+function summaryFromResponse(status, body, request) {
+  const data = body?.data || {};
+  const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+  const facts = Array.isArray(data.facts) ? data.facts : [];
+  const limitations = Array.isArray(data.limitations) ? data.limitations : [];
+  const catalog = Array.isArray(data.catalog) ? data.catalog : [];
+  const families = new Set(recommendations.map(familyId).filter(Boolean).map(String));
+  const fusedRecommendations = recommendations.filter(isFusedCandidate);
+  const recommendationDomains = [...new Set(recommendations.flatMap((item) => [item?.domain, familyId(item)]).filter(Boolean).map(String))];
+  const catalogDomains = [...new Set(catalog.flatMap((item) => [item?.domain, item?.familyId]).filter(Boolean).map(String))];
+  const availableOverviewGroups = new Set(catalogDomains.map(domainGroup).filter(Boolean));
+  const selectedOverviewGroups = new Set(recommendationDomains.map(domainGroup).filter(Boolean));
+  const missingOverviewGroups = ['inventory', 'production', 'sales']
+    .filter((group) => availableOverviewGroups.has(group) && !selectedOverviewGroups.has(group));
+  return {
+    http200: status === 200,
+    envelopeSuccess: body?.success === true,
+    status: typeof data.status === 'string' ? data.status : null,
+    answered: data.status === 'answered',
+    unavailable: data.status === 'unavailable',
+    clarification: data.status === 'clarification',
+    factoryScope: data.factoryId === 'F006',
+    source: data.source || null,
+    period: periodSignature(data.period),
+    recommendationCount: recommendations.length,
+    factCount: facts.length,
+    sourceErrorCount: Array.isArray(data.sourceErrors) ? data.sourceErrors.length : 0,
+    limitationCount: limitations.length,
+    familyCount: families.size,
+    familyIds: [...families],
+    domains: recommendationDomains,
+    catalogDomains,
+    qualityGrounded: recommendationDomains.some(qualitySemantic),
+    overviewScopeCoverage: missingOverviewGroups.length === 0 || limitations.length > 0,
+    fusedCount: fusedRecommendations.length,
+    fusedThreeAxis: fusedRecommendations.some(hasThreeAxis),
+    fusedTableRowCount: fusedRecommendations.reduce((count, item) => count + (Array.isArray(item?.tableData?.rows) ? item.tableData.rows.length : 0), 0),
+    catalogCount: catalog.length,
+    contextPresent: typeof data.contextId === 'string' && data.contextId.length > 0,
+    followUpCount: Array.isArray(data.followUpQuestions) ? data.followUpQuestions.length : 0,
+    requestContract: Object.keys(request).sort(),
+    requestSource: request.source || null,
+    requestPeriod: request.periodType
+      ? JSON.stringify({ periodType: request.periodType, year: request.year, startMonth: request.startMonth, endMonth: request.endMonth })
+      : null,
+    requestContextPresent: typeof request.contextId === 'string' && request.contextId.length > 0,
+    requestSubjectPresent: typeof request.analysisSubject === 'string' && request.analysisSubject.trim().length > 0,
+  };
+}
+
+function assessJoint({ initial, selected, ui, details, exportAttempt }) {
+  const initialSummary = initial?.summary || {};
+  const selectedSummary = selected?.summary || {};
+  const hasFused = selectedSummary.fusedCount > 0;
+  const expectedLimitation = !hasFused
+    && selectedSummary.sourceErrorCount === 0
+    && selectedSummary.limitationCount > 0
+    && (selectedSummary.unavailable || selectedSummary.answered || selectedSummary.clarification);
+  const checks = {
+    initialClarification: initialSummary.clarification === true,
+    selectedSubjectRetried: selected?.attempted === true,
+    selectedSubjectProvided: selectedSummary.requestSubjectPresent === true,
+    selectedFactoryF006: selectedSummary.factoryScope === true,
+    selectedSourceBusiness: selectedSummary.source === 'business',
+    selectedAnswered: selectedSummary.answered === true,
+    fusedFamily: hasFused,
+    fusedThreeAxis: selectedSummary.fusedThreeAxis === true,
+    fusedTable: selectedSummary.fusedTableRowCount > 0,
+    fusedFacts: selectedSummary.factCount > 0,
+    detailAttempted: details?.attempted === true,
+    detailSucceeded: details?.success === true,
+    exportAttempted: exportAttempt?.attempted === true,
+    exportSucceeded: exportAttempt?.success === true,
+  };
+  const positivePass = Object.values(checks).every(Boolean);
+  return {
+    result: positivePass ? 'PASS' : expectedLimitation ? 'NEGATIVE_PASS' : 'UNVERIFIED',
+    positiveJoint: positivePass ? 'PASS' : 'UNVERIFIED_DATA_NOT_ELIGIBLE',
+    negativePass: expectedLimitation,
+    expectedLimitation,
+    checks,
+    status: selectedSummary.status || null,
+    note: positivePass
+      ? 'Real production.inspection_fused candidate passed family, three-axis, table, facts, details, and export checks.'
+      : expectedLimitation
+        ? 'Expected limitation recorded: no eligible complete joint dataset; positive joint acceptance remains UNVERIFIED_DATA_NOT_ELIGIBLE.'
+        : 'Joint analysis did not provide either a grounded fused candidate or an evidenced data limitation.',
+  };
+}
+
+function assess({ initial, followup, ui, details, exportAttempt, joint }) {
+  const initialSummary = initial?.summary || {};
+  const followupSummary = followup?.summary || {};
+  const initialAnswered = initialSummary.answered === true;
+  const unavailable = initialSummary.unavailable === true || followupSummary.unavailable === true;
+  const checks = {
+    initialHttp200: initialSummary.http200 === true,
+    initialSuccess: initialSummary.envelopeSuccess === true,
+    factoryF006: initialSummary.factoryScope === true && followupSummary.factoryScope === true,
+    sourceBusiness: initialSummary.source === 'business' && followupSummary.source === 'business',
+    samePeriod: Boolean(initialSummary.period) && initialSummary.period === followupSummary.period,
+    answeredWithChartsAndFacts: initialAnswered && initialSummary.recommendationCount > 0 && initialSummary.factCount > 0,
+    followupAnsweredWithChartsOrFacts: followupSummary.answered === true
+      && (followupSummary.recommendationCount > 0 || followupSummary.factCount > 0),
+    boundedFamilies: initialSummary.familyCount > 0 && initialSummary.familyCount <= 4
+      && followupSummary.familyCount > 0 && followupSummary.familyCount <= 4,
+    catalogRetained: initialSummary.catalogCount > 0 && ui?.catalogVisibleCount > 0,
+    visibleChartsRendered: ui?.visibleChartCount > 0 && ui?.renderedCanvasCount > 0 && ui?.drawingErrorCount === 0,
+    groundedFactsVisible: initialSummary.factCount === 0 || ui?.visibleFactCount > 0,
+    limitationsVisible: initialSummary.limitationCount === 0 || ui?.visibleLimitationCount > 0,
+    sourceErrorsVisible: initialSummary.sourceErrorCount === 0 || ui?.visibleSourceErrorCount > 0,
+    noSourceErrors: initialSummary.sourceErrorCount === 0 && followupSummary.sourceErrorCount === 0,
+    overviewScopeCoverage: initialSummary.overviewScopeCoverage === true,
+    followupContract: followupSummary.requestContract?.join(',') === 'contextId,question'
+      && followupSummary.requestContextPresent === true,
+    followupDifferentDimension: ui?.followupDifferentDimension === true,
+    followupQualityGrounded: followupSummary.qualityGrounded === true,
+    detailsAttempted: details?.attempted === true,
+    detailsSucceeded: details?.success === true,
+    exportAttempted: exportAttempt?.attempted === true,
+    exportSucceeded: exportAttempt?.success === true,
+  };
+  const validChecks = Object.values(checks).every(Boolean);
+  const jointAssessment = joint || assessJoint({});
+  const acceptedJoint = jointAssessment.positiveJoint === 'PASS' || jointAssessment.negativePass === true;
+  const result = unavailable ? 'UNVERIFIED' : validChecks && acceptedJoint ? 'PASS' : 'UNVERIFIED';
+  return {
+    result,
+    rootCauseClass: result === 'PASS' ? 'none' : 'tool',
+    checks,
+    fullPass: result === 'PASS' && validChecks && jointAssessment.positiveJoint === 'PASS',
+    partialReadWarn: !checks.noSourceErrors,
+    joint: jointAssessment,
+    status: initialSummary.status,
+    followupStatus: followupSummary.status,
+    chartCount: ui?.visibleChartCount || 0,
+    factCount: initialSummary.factCount || 0,
+    familyCount: initialSummary.familyCount || 0,
+    catalogCount: initialSummary.catalogCount || 0,
+    unavailableIsUnverified: unavailable ? result === 'UNVERIFIED' : true,
+    clarificationIsUnverified: initialSummary.clarification ? result === 'UNVERIFIED' : true,
+    note: unavailable || initialSummary.clarification
+      ? 'AI returned unavailable/clarification; this run is UNVERIFIED and does not claim AI acceptance.'
+      : validChecks && acceptedJoint
+        ? jointAssessment.negativePass
+          ? 'Overview checks passed; joint analysis recorded an expected data limitation without claiming a positive AI result.'
+          : 'Grounded overview/joint chart-fact, follow-up, details, and export checks passed.'
+        : 'One or more grounded UI checks were incomplete.',
+  };
+}
+
+async function screenshotRedacted(ctx, page, name) {
+  const changed = await page.evaluate(() => {
+    const selectors = [
+      '[data-testid="factory-analysis-question"]',
+      '[data-testid="factory-analysis-answer"]',
+      '[data-testid="factory-analysis-facts"]',
+      '.scope-hint',
+      '.details-meta',
+      '.point-context',
+      '.details-table-wrap',
+    ];
+    const records = [];
+    for (const selector of selectors) {
+      [...document.querySelectorAll(selector)].forEach((element, index) => {
+        records.push({ selector, index, html: element.innerHTML });
+        element.textContent = '[脱敏证据]';
+      });
+    }
+    return records;
+  });
+  try { return await ctx.screenshot(name); }
+  finally {
+    await page.evaluate((records) => {
+      for (const record of records) {
+        const element = document.querySelectorAll(record.selector)[record.index];
+        if (element) element.innerHTML = record.html;
+      }
+    }, changed).catch(() => {});
+  }
+}
+
+async function waitForResponse(page, predicate, action, timeout = 120_000) {
+  const responsePromise = page.waitForResponse(predicate, { timeout });
+  await action();
+  return responsePromise;
+}
+
+function summarizeExportResults(results) {
+  const formats = {};
+  for (const result of results) formats[result.format] = {
+    attempted: result.attempted === true,
+    buttonFound: result.buttonFound === true,
+    downloadStarted: result.downloadStarted === true,
+    httpStatus: Number.isInteger(result.httpStatus) ? result.httpStatus : null,
+    saved: result.saved === true,
+    success: result.success === true,
+    fileName: result.fileName || null,
+  };
+  const complete = EXPORT_FORMATS.every((format) => formats[format.key]);
+  const attempted = complete && EXPORT_FORMATS.every((format) => formats[format.key].attempted);
+  const success = attempted && EXPORT_FORMATS.every((format) => formats[format.key].success);
+  return { attempted, success, formats };
+}
+
+async function downloadExportFormats(page, answer, evidenceDir, prefix, timeout = 30_000) {
+  const results = [];
+  const tools = answer.locator('.answer-tools:visible').first();
+  for (const format of EXPORT_FORMATS) {
+    const fileName = `${prefix}-${format.key}.${format.extension}`;
+    const result = {
+      format: format.key,
+      attempted: true,
+      buttonFound: false,
+      downloadStarted: false,
+      httpStatus: null,
+      saved: false,
+      success: false,
+      fileName,
+    };
+    try {
+      const button = tools.getByRole('button', { name: format.label, exact: true }).first();
+      result.buttonFound = await button.count() > 0;
+      if (!result.buttonFound) {
+        results.push(result);
+        continue;
+      }
+      const downloadPromise = page.waitForEvent('download', { timeout }).catch(() => null);
+      const exportResponsePromise = page.waitForResponse(
+        (response) => isExportResponse(response, format),
+        { timeout },
+      ).catch(() => null);
+      await button.click();
+      const [download, exportResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
+      result.downloadStarted = Boolean(download);
+      result.httpStatus = exportResponse ? exportResponse.status() : null;
+      if (download && exportResponse && exportResponse.status() === 200) {
+        const target = `${String(evidenceDir || '').replace(/[\\/]+$/, '')}/${fileName}`;
+        if (evidenceDir) {
+          await download.saveAs(target);
+          result.saved = true;
+        }
+      }
+      result.success = result.downloadStarted && result.httpStatus === 200 && (Boolean(evidenceDir) ? result.saved : true);
+    } catch {
+      result.success = false;
+    }
+    results.push(result);
+  }
+  return summarizeExportResults(results);
+}
+
+async function run(ctx) {
+  return runReadOnlyPageScenario(ctx, {
+    id: 'smartbi-factory-analysis-readonly',
+    path: PATH,
+    landmarks: ['工厂 AI 问答分析', '当前授权图表目录'],
+    timeoutMs: 60_000,
+    appMountTimeoutMs: 90_000,
+    inspect: async (page, _body, inspectCtx) => {
+      if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory AI acceptance is limited to F006');
+      await page.getByTestId('factory-analysis-chat').waitFor({ timeout: 60_000 });
+      const initialResponse = await waitForResponse(
+        page,
+        isAnalysisResponse,
+        async () => {
+          await page.getByTestId('factory-analysis-input').fill(QUESTION);
+          await page.getByTestId('factory-analysis-submit').click();
+        },
+      );
+      const initialBody = await responseBody(initialResponse);
+      const initial = {
+        status: initialResponse.status(),
+        summary: summaryFromResponse(initialResponse.status(), initialBody, requestBody(initialResponse)),
+      };
+
+      if (!initial.summary.answered) {
+        const screenshot = await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-unverified');
+        const assessment = assess({ initial, followup: { summary: {} }, ui: {}, details: {}, exportAttempt: {} });
+        return { assessment, ...assessment, screenshots: [screenshot] };
+      }
+
+      await page.getByTestId('factory-analysis-answer').waitFor({ timeout: 30_000 });
+      const visibleCards = page.locator('[data-testid^="factory-chart-card-"]:visible');
+      await visibleCards.first().waitFor({ timeout: 30_000 });
+      const visibleChartCount = await visibleCards.count();
+      const renderedCanvasCount = await visibleCards.locator('.factory-chart-canvas canvas').count();
+      const drawingErrorCount = await visibleCards.locator('[role="alert"]').count();
+      const visibleFactCount = await page.locator('[data-testid="factory-analysis-facts"] .fact:visible').count();
+      const visibleLimitationCount = await page.locator('[data-testid="factory-analysis-limitations"]:visible').count();
+      const visibleSourceErrorCount = await page.locator('[data-testid="factory-analysis-source-errors"]:visible').count();
+
+      const catalogToggle = page.getByRole('button', { name: '展开目录', exact: true });
+      if (await catalogToggle.count()) await catalogToggle.click();
+      const catalogVisibleCount = await page.locator('.catalog-item:visible').count();
+      const screenshotBeforeInteraction = await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-answer');
+
+      const firstDetailId = initialBody?.data?.recommendations?.find((item) => item?.detailContext?.id)?.id;
+      let details = { attempted: false, success: false, drawerVisible: false };
+      if (firstDetailId) {
+        const card = page.getByTestId(`factory-chart-card-${firstDetailId}`);
+        const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true });
+        if (await detailsButton.count()) {
+          details.attempted = true;
+          const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: 30_000 }).catch(() => null);
+          await detailsButton.click();
+          const detailResponse = await responsePromise;
+          const detailBody = detailResponse ? await responseBody(detailResponse) : {};
+          details.success = Boolean(detailResponse && detailResponse.status() === 200 && detailBody.success === true
+            && detailBody.data?.factoryId === 'F006' && Array.isArray(detailBody.data?.rows));
+          details.drawerVisible = await page.locator('.el-drawer:visible').count() > 0;
+        }
+      }
+      const screenshotAfterDetails = details.drawerVisible
+        ? await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-details')
+        : null;
+      if (details.drawerVisible) await page.keyboard.press('Escape').catch(() => {});
+
+      const exportAttempt = await downloadExportFormats(
+        page,
+        page.locator('.turn.turn--assistant:visible').last(),
+        inspectCtx.evidenceDir,
+        'smartbi-factory-analysis-overview',
+      );
+
+      const followupButtons = page.locator('.followups:visible .el-button');
+      const qualityFollowup = followupButtons.filter({ hasText: '质量' }).first();
+      const followupButton = await qualityFollowup.count() ? qualityFollowup : followupButtons.first();
+      const followupDifferentDimension = await followupButton.count()
+        ? (await followupButton.innerText()).includes('质量')
+        : false;
+      let followup = { summary: {} };
+      if (await followupButton.count()) {
+        const followupResponse = await waitForResponse(page, isAnalysisResponse, () => followupButton.click());
+        const followupBody = await responseBody(followupResponse);
+        followup = {
+          status: followupResponse.status(),
+          summary: summaryFromResponse(followupResponse.status(), followupBody, requestBody(followupResponse)),
+        };
+      }
+
+      // Start a fresh conversation for the explicit cross-table branch. The
+      // backend must first ask for a real product subject; the selected
+      // subject is taken from that response, never invented by the harness.
+      let jointInitial = { summary: {} };
+      let jointSelected = { attempted: false, summary: {} };
+      let jointSelectedBody = {};
+      let jointDetails = { attempted: false, success: false };
+      let jointExport = { attempted: false, success: false, formats: {} };
+      let jointScreenshot = null;
+      let jointSubjectId = null;
+      const newAnalysisButton = page.getByRole('button', { name: '新分析', exact: true });
+      if (await newAnalysisButton.count()) {
+        const jointInitialResponse = await waitForResponse(
+          page,
+          isAnalysisResponse,
+          async () => {
+            await newAnalysisButton.click();
+            await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
+            await page.getByTestId('factory-analysis-submit').click();
+          },
+        );
+        const jointInitialBody = await responseBody(jointInitialResponse);
+        jointInitial = {
+          status: jointInitialResponse.status(),
+          summary: summaryFromResponse(jointInitialResponse.status(), jointInitialBody, requestBody(jointInitialResponse)),
+        };
+
+        const subjects = Array.isArray(jointInitialBody?.data?.subjects) ? jointInitialBody.data.subjects : [];
+        if (jointInitial.summary.clarification && subjects.length > 0) {
+          const subject = selectAuthorizedSubject(subjects, inspectCtx.factoryAnalysisSubjectId);
+          jointSubjectId = subject.id;
+          if (typeof subject?.label !== 'string' || !subject.label.trim()) throw new Error('Factory AI clarification returned an unusable subject label');
+          const subjectControl = page.getByTestId('factory-analysis-subject');
+          await subjectControl.click();
+          const subjectOption = page.locator('[role="option"], .el-select-dropdown__item')
+            .filter({ hasText: subject.label }).first();
+          await subjectOption.waitFor({ timeout: 15_000 });
+          await subjectOption.click();
+          const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
+          await retryButton.waitFor({ timeout: 15_000 });
+          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          jointSelectedBody = await responseBody(selectedResponse);
+          jointSelected = {
+            attempted: true,
+            status: selectedResponse.status(),
+            summary: summaryFromResponse(selectedResponse.status(), jointSelectedBody, requestBody(selectedResponse)),
+          };
+
+          if (jointSelected.summary.fusedCount > 0) {
+            const fusedId = jointSelectedBody?.data?.recommendations?.find(isFusedCandidate)?.id;
+            const fusedCard = fusedId ? page.getByTestId(`factory-chart-card-${fusedId}`) : null;
+            if (fusedCard) {
+              await fusedCard.waitFor({ state: 'visible', timeout: 30_000 });
+              jointScreenshot = await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-joint');
+              const detailsButton = fusedCard.getByRole('button', { name: '查看原始明细', exact: true });
+              if (await detailsButton.count()) {
+                jointDetails.attempted = true;
+                const detailsPromise = page.waitForResponse(isDetailsResponse, { timeout: 30_000 }).catch(() => null);
+                await detailsButton.click();
+                const detailsResponse = await detailsPromise;
+                const detailBody = detailsResponse ? await responseBody(detailsResponse) : {};
+                jointDetails.success = Boolean(detailsResponse && detailsResponse.status() === 200
+                  && detailBody.success === true && detailBody.data?.factoryId === 'F006'
+                  && Array.isArray(detailBody.data?.rows));
+                if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
+              }
+            }
+            const jointAnswer = page.locator('.turn.turn--assistant:visible').last();
+            jointExport = await downloadExportFormats(
+              page,
+              jointAnswer,
+              inspectCtx.evidenceDir,
+              'smartbi-factory-analysis-joint',
+            );
+          }
+        }
+      }
+      const assessment = assess({
+        initial,
+        followup,
+        ui: { catalogVisibleCount, visibleChartCount, renderedCanvasCount, drawingErrorCount, visibleFactCount, visibleLimitationCount, visibleSourceErrorCount, followupDifferentDimension },
+        details,
+        exportAttempt,
+        joint: assessJoint({
+          initial: jointInitial,
+          selected: jointSelected,
+          ui: {},
+          details: jointDetails,
+          exportAttempt: jointExport,
+        }),
+      });
+      return {
+        assessment,
+        ...assessment,
+        detailsAttempted: details.attempted,
+        detailsSucceeded: details.success,
+        exportAttempted: exportAttempt.attempted,
+        exportSucceeded: exportAttempt.success,
+        exportFormats: exportAttempt.formats,
+        joint: assessment.joint,
+        jointSubjectId,
+        jointTables: (jointSelectedBody?.data?.recommendations || []).filter(isFusedCandidate)
+          .map((item) => ({ unit: item.unit, headers: item.tableData?.headers, rows: item.tableData?.rows })),
+        jointExportFormats: jointExport.formats,
+        screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : []), ...(jointScreenshot ? [jointScreenshot] : [])],
+      };
+    },
+  });
+}
+
+module.exports = {
+  selectAuthorizedSubject,
+  id: 'smartbi-factory-analysis-readonly',
+  defaultEnabled: false,
+  run,
+  assess,
+  assessJoint,
+  summaryFromResponse,
+  isAnalysisResponse,
+  isExportResponse,
+  summarizeExportResults,
+  downloadExportFormats,
+};
+
+},
+    "scenarios/smartbi-factory-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
+const DETAIL_PAGE_SIZE = 50;
+const MAX_CANVAS_CLICK_ATTEMPTS = 7;
+const MAX_DETAIL_CANDIDATES = 6;
+const DETAIL_ACCEPTANCE_DEADLINE_MS = 85_000;
+const DETAIL_RESPONSE_TIMEOUT_MS = 8_000;
+const POINT_CLICK_BUDGET_MS = (MAX_CANVAS_CLICK_ATTEMPTS * 3_500) + 5_000;
+
+function endpointPath(url) {
+  try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
+}
+
+function isDetailsResponse(response) {
+  return response.request().method() === 'POST' && endpointPath(response.url()).replace(/\/$/, '') === DETAILS_PATH;
+}
+
+function requestJson(request) {
+  try { return request.postDataJSON(); } catch { return null; }
+}
+
+function expectedDetailIdentity(expected) {
+  return {
+    factoryId: expected.factoryId,
+    candidateId: expected.candidateId,
+    source: expected.source,
+    period: expected.period,
+    contextIdPresent: typeof expected.contextId === 'string' && expected.contextId.length > 0,
+  };
+}
+
+const DATE_DIMENSIONS = new Set(['日期', '月份', '生产日期', '入库日期', '销售日期', '会计期间', '月', '年月', 'date', 'month']);
+// Mirrors the backend details.py _classify semantic allow-list, narrowed to
+// dimensions that can identify a chart point. Free-text remarks and measures
+// are deliberately excluded even when they happen to equal point.name.
+const POINT_DIMENSION_BASES = new Set([
+  ...DATE_DIMENSIONS,
+  '产品', '产品名称', 'SKU', '品类', '工序', '工序名称', '产线', '原料', '原料名称', '物料',
+  '供应商', '供应商名称', '批次', '批次号', '订单号', '单号', '账单号', '仓库', '库位',
+  '部门', '渠道', '车间', '班组', '状态', '规格', '型号', '单位', '数量单位',
+  '订单ID', '订单行ID', '报工ID', '设备ID', '部门ID', '工序序', '原料ID', '流转记录ID',
+  '来源节点', '去向节点',
+  '来源WIP号', '目标WIP号', '产出WIP号', '库存库龄桶', '库存效期桶',
+]);
+
+function dimensionBaseName(field) {
+  return String(field || '').replace(/[（(].*?[）)]$/, '').trim();
+}
+
+function pointValueMatches(value, name, field) {
+  const text = String(value ?? '').trim();
+  const wanted = String(name ?? '').trim();
+  if (text === wanted) return true;
+  if (!DATE_DIMENSIONS.has(dimensionBaseName(field))) return false;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return false;
+  if (/^\d{4}-\d{2}$/.test(wanted)) {
+    return `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, '0')}` === wanted;
+  }
+  if (/^\d{1,2}月$/.test(wanted)) return String(parsed.getUTCMonth() + 1) === wanted.slice(0, -1);
+  if (/^\d{4}$/.test(wanted)) return String(parsed.getUTCFullYear()) === wanted;
+  return false;
+}
+
+function pointMatchingDimensions(data, point) {
+  const available = Array.isArray(data?.availableFilters)
+    ? data.availableFilters.map((item) => item?.field).filter((field) => typeof field === 'string' && field)
+    : [];
+  const semanticColumns = Array.isArray(data?.columns)
+    ? data.columns.filter((field) => typeof field === 'string' && POINT_DIMENSION_BASES.has(dimensionBaseName(field)))
+    : [];
+  const allowed = [...new Set([...available, ...semanticColumns])]
+    .filter((field) => POINT_DIMENSION_BASES.has(dimensionBaseName(field)));
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const matches = rows.map((row) => allowed.filter((field) => pointValueMatches(row?.[field], point.name, field)));
+  const expectedDimension = point.dimension;
+  const dimensionContract = expectedDimension
+    ? allowed.includes(expectedDimension) && matches.every((fields) => fields.includes(expectedDimension))
+    : true;
+  return {
+    allowedFields: allowed,
+    expectedDimension: expectedDimension || null,
+    rowMatches: matches,
+    everyRowMatchesAllowedDimension: rows.length > 0 && matches.every((fields) => fields.length > 0),
+    dimensionContract,
+  };
+}
+
+function assessDetailsResponse({ status, request, body, expected, point = null }) {
+  const payload = request || {};
+  const data = body?.data;
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const expectedPeriod = expected.period == null ? null : String(expected.period);
+  const checks = {
+    http200: status === 200,
+    success: body?.success === true,
+    factory: data?.factoryId === expected.factoryId,
+    candidate: data?.candidateId === expected.candidateId,
+    source: data?.source === expected.source,
+    period: expectedPeriod === null || String(data?.period) === expectedPeriod,
+    context: payload.context_id === expected.contextId,
+    page: payload.page === 1 && data?.page === 1,
+    pageSize: payload.page_size === DETAIL_PAGE_SIZE && data?.pageSize === DETAIL_PAGE_SIZE,
+    rows: rows.length <= DETAIL_PAGE_SIZE,
+    total: Number.isInteger(data?.total) && data.total >= rows.length,
+  };
+  if (point) {
+    checks.pointRequest = payload.point?.name === point.name
+      && (point.dataIndex == null || payload.point?.dataIndex === point.dataIndex)
+      && (!point.seriesName || payload.point?.seriesName === point.seriesName);
+    const pointDimensions = pointMatchingDimensions(data, point);
+    checks.pointRows = rows.length > 0 && Number.isInteger(data?.total) && data.total > 0
+      && pointDimensions.everyRowMatchesAllowedDimension && pointDimensions.dimensionContract;
+    checks.pointDimensionContract = pointDimensions.dimensionContract;
+    checks.pointRowsMatchDimension = pointDimensions.everyRowMatchesAllowedDimension;
+  } else {
+    checks.noPointRequest = payload.point == null;
+  }
+  const passed = Object.values(checks).every(Boolean);
+  return {
+    result: passed ? 'PASS' : 'CONFIRMED_DEFECT',
+    rootCauseClass: passed ? 'none' : 'backend',
+    checks,
+    identity: expectedDetailIdentity(expected),
+    point: point || null,
+    pointDimensions: point ? pointMatchingDimensions(data, point) : null,
+    rowCount: rows.length,
+    total: Number.isInteger(data?.total) ? data.total : null,
+    columns: Array.isArray(data?.columns) ? data.columns : [],
+    hasMore: data?.hasMore === true,
+    request: {
+      contextIdMatches: payload.context_id === expected.contextId,
+      page: payload.page ?? null,
+      pageSize: payload.page_size ?? null,
+      pointPresent: payload.point != null,
+      pointName: typeof payload.point?.name === 'string' ? payload.point.name : null,
+    },
+  };
+}
+
+function stableRowKey(row) {
+  if (!row || typeof row !== 'object') return JSON.stringify(row);
+  return JSON.stringify(Object.keys(row).sort().reduce((out, key) => {
+    out[key] = row[key];
+    return out;
+  }, {}));
+}
+
+function duplicateCount(rows) {
+  const counts = new Map();
+  for (const row of rows || []) {
+    const key = stableRowKey(row);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.values()].filter((count) => count > 1).reduce((sum, count) => sum + count - 1, 0);
+}
+
+function assessPageContinuity(first, second, expected = {}) {
+  const firstData = first?.body?.data;
+  const secondData = second?.body?.data;
+  const firstRows = Array.isArray(firstData?.rows) ? firstData.rows : [];
+  const secondRows = Array.isArray(secondData?.rows) ? secondData.rows : [];
+  const total = firstData?.total;
+  const expectedSecondCount = Number.isInteger(total) ? Math.min(DETAIL_PAGE_SIZE, Math.max(0, total - DETAIL_PAGE_SIZE)) : -1;
+  const firstRequest = first?.request || {};
+  const secondRequest = second?.request || {};
+  const checks = {
+    firstHttp200: first?.status === 200,
+    secondHttp200: second?.status === 200,
+    firstPage: firstData?.page === 1,
+    secondPage: secondData?.page === 2,
+    sameTotal: Number.isInteger(total) && total === secondData?.total,
+    firstPageSize: firstData?.pageSize === DETAIL_PAGE_SIZE,
+    secondPageSize: secondData?.pageSize === DETAIL_PAGE_SIZE,
+    firstHasMore: firstData?.hasMore === true,
+    secondCount: secondRows.length === expectedSecondCount,
+    loadedCount: firstRows.length + secondRows.length === Math.min(Number.isInteger(total) ? total : 0, DETAIL_PAGE_SIZE * 2),
+    firstRequestContext: !expected.contextId || firstRequest.context_id === expected.contextId,
+    secondRequestContext: !expected.contextId || secondRequest.context_id === expected.contextId,
+    firstRequestPage: firstRequest.page === 1,
+    secondRequestPage: secondRequest.page === 2,
+    firstRequestPageSize: firstRequest.page_size === DETAIL_PAGE_SIZE,
+    secondRequestPageSize: secondRequest.page_size === DETAIL_PAGE_SIZE,
+    secondFactory: !expected.factoryId || secondData?.factoryId === expected.factoryId,
+    secondCandidate: !expected.candidateId || secondData?.candidateId === expected.candidateId,
+    secondSource: !expected.source || secondData?.source === expected.source,
+    secondPeriod: !expected.period || String(secondData?.period) === String(expected.period),
+  };
+  const allRows = [...firstRows, ...secondRows];
+  const passed = Object.values(checks).every(Boolean);
+  return {
+    result: passed ? 'PASS' : 'CONFIRMED_DEFECT',
+    rootCauseClass: passed ? 'none' : 'frontend',
+    completeness: 'UNVERIFIED',
+    completenessReason: 'Page responses prove the navigation contract only; an independent source snapshot or SQL comparison is required to prove no missing rows.',
+    checks,
+    total: Number.isInteger(total) ? total : null,
+    firstRowCount: firstRows.length,
+    secondRowCount: secondRows.length,
+    loadedRowCount: allRows.length,
+    duplicateRowCount: duplicateCount(allRows),
+    request: {
+      contextIdMatches: checks.secondRequestContext,
+      page: secondRequest.page ?? null,
+      pageSize: secondRequest.page_size ?? null,
+      candidateId: secondData?.candidateId ?? null,
+      factoryId: secondData?.factoryId ?? null,
+      source: secondData?.source ?? null,
+      period: secondData?.period ?? null,
+    },
+    note: 'Rows are counted in response order; duplicate business rows are not content-deduplicated. Completeness remains UNVERIFIED pending an independent source comparison.',
+  };
+}
+
+function axisData(option, axisName) {
+  const axis = option?.[axisName];
+  const value = Array.isArray(axis) ? axis[0]?.data : axis?.data;
+  return Array.isArray(value) ? value : [];
+}
+
+function seriesList(option) {
+  return Array.isArray(option?.series) ? option.series : [];
+}
+
+function echartsAssetUrl(name, origin = '') {
+  try {
+    const url = new URL(name, origin || 'http://localhost');
+    return url.origin === (origin || url.origin) && /^\/assets\/echarts-[A-Za-z0-9_-]+\.js$/.test(url.pathname) ? url.href : null;
+  } catch { return null; }
+}
+
+function selectEChartsAssetUrls(entries, origin) {
+  return (entries || []).map((entry) => echartsAssetUrl(typeof entry === 'string' ? entry : entry?.name, origin)).filter(Boolean).slice(0, 4);
+}
+
+function chartPointForCandidate(candidate) {
+  if (candidate?.detailContext && candidate.detailContext.drilldown === false) return null;
+  const option = candidate?.chart?.echartsOption;
+  if (!option || typeof option !== 'object') return null;
+  const series = seriesList(option);
+  const type = String(candidate?.chart?.chartType || '').toLowerCase();
+  const pie = series.find((item) => String(item?.type || '').toLowerCase() === 'pie')
+    || ((type === 'pie' || type === 'donut' || type === 'nested_donut') ? series[0] : null);
+  if (pie && Array.isArray(pie.data)) {
+    const index = pie.data.findIndex((value) => value && typeof value === 'object' && String(value.name || '').trim());
+    const dimension = pie.encode?.itemName || option.dataset?.dimensions?.[0] || null;
+    if (index >= 0) {
+      const seriesIndex = series.indexOf(pie);
+      return { name: String(pie.data[index].name).trim(), seriesName: pie.name, dataIndex: index, dimension, kind: 'pie', ...(seriesIndex > 0 ? { seriesIndex } : {}) };
+    }
+  }
+  const bar = series.find((item) => String(item?.type || '').toLowerCase() === 'bar');
+  if (bar) {
+    const horizontal = type === 'bar_horizontal' || (axisData(option, 'xAxis').length === 0 && axisData(option, 'yAxis').length > 0);
+    const categories = horizontal ? axisData(option, 'yAxis') : axisData(option, 'xAxis');
+    const dataPoint = Array.isArray(bar.data) ? bar.data.find((value) => value && typeof value === 'object' && String(value.name || '').trim()) : null;
+    const dataIndex = dataPoint ? bar.data.indexOf(dataPoint) : 0;
+    const name = dataPoint?.name ?? categories[dataIndex];
+    const axis = horizontal ? option.yAxis : option.xAxis;
+    const dimension = (Array.isArray(axis) ? axis[0]?.name : axis?.name) || null;
+    if (name != null && String(name).trim()) {
+      const seriesIndex = series.indexOf(bar);
+      return { name: String(name).trim(), seriesName: bar.name, dataIndex, dimension, kind: horizontal ? 'bar_horizontal' : 'bar', ...(seriesIndex > 0 ? { seriesIndex } : {}) };
+    }
+  }
+  return null;
+}
+
+function numericDataValue(candidate, point) {
+  const series = seriesList(candidate?.chart?.echartsOption);
+  const item = series.find((entry) => String(entry?.name || '') === String(point?.seriesName || '')) || series[0];
+  const value = Array.isArray(item?.data) ? item.data[point?.dataIndex ?? 0] : null;
+  const raw = value && typeof value === 'object' ? value.value : value;
+  return Number.isFinite(Number(raw)) ? Math.max(0, Number(raw)) : 1;
+}
+
+function pointCandidateCategoryCount(candidate, point) {
+  const option = candidate?.chart?.echartsOption || {};
+  if (point?.kind === 'pie') {
+    const series = seriesList(option).find((item) => String(item?.name || '') === String(point.seriesName || '')) || seriesList(option)[point?.seriesIndex || 0];
+    return Array.isArray(series?.data) ? series.data.length : Number.MAX_SAFE_INTEGER;
+  }
+  return point?.kind === 'bar_horizontal' ? axisData(option, 'yAxis').length : axisData(option, 'xAxis').length;
+}
+
+function selectPointCandidate(mountedCandidates) {
+  return (mountedCandidates || [])
+    .map((entry) => ({ entry, point: chartPointForCandidate(entry?.candidate) }))
+    .filter(({ point }) => point)
+    .sort((a, b) => {
+      const aCartesian = a.point.kind === 'bar' || a.point.kind === 'bar_horizontal' ? 1 : 0;
+      const bCartesian = b.point.kind === 'bar' || b.point.kind === 'bar_horizontal' ? 1 : 0;
+      const aNonZero = numericDataValue(a.entry.candidate, a.point) > 0 ? 1 : 0;
+      const bNonZero = numericDataValue(b.entry.candidate, b.point) > 0 ? 1 : 0;
+      return bCartesian - aCartesian
+        || bNonZero - aNonZero
+        || pointCandidateCategoryCount(a.entry.candidate, a.point) - pointCandidateCategoryCount(b.entry.candidate, b.point);
+    })[0]?.entry || null;
+}
+
+function resolveOptionInset(value, total, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /%$/.test(value)) {
+    const percent = Number.parseFloat(value);
+    if (Number.isFinite(percent)) return total * percent / 100;
+  }
+  return fallback;
+}
+
+function optionGridRect(option, width, height) {
+  const grid = Array.isArray(option?.grid) ? option.grid[0] || {} : option?.grid || {};
+  const left = resolveOptionInset(grid.left, width, width * 0.08);
+  const right = resolveOptionInset(grid.right, width, width * 0.08);
+  const top = resolveOptionInset(grid.top, height, 45);
+  const bottom = resolveOptionInset(grid.bottom, height, 65);
+  return {
+    left: Math.max(0, Math.min(width, left)),
+    right: Math.max(0, Math.min(width, width - right)),
+    top: Math.max(0, Math.min(height, top)),
+    bottom: Math.max(0, Math.min(height, height - bottom)),
+  };
+}
+
+function axisAt(option, axisName, index = 0) {
+  const axis = option?.[axisName];
+  return Array.isArray(axis) ? axis[index] || {} : axis || {};
+}
+
+function numericValue(value) {
+  const raw = Array.isArray(value) ? value[value.length - 1] : value;
+  const number = Number(raw && typeof raw === 'object' ? raw.value : raw);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function valueAxisBounds(axis, values) {
+  const finite = values.map(numericValue).filter(Number.isFinite);
+  const observedMax = finite.length ? Math.max(...finite) : 1;
+  const observedMin = finite.length ? Math.min(...finite) : 0;
+  let min = Number.isFinite(Number(axis?.min)) ? Number(axis.min) : Math.min(0, observedMin);
+  let max = Number.isFinite(Number(axis?.max)) ? Number(axis.max) : Math.max(1, observedMax);
+  if (max <= min) max = min + 1;
+  return { min, max };
+}
+
+function chartPointCoordinate(box, candidate, point) {
+  const width = Number(box?.width || 0);
+  const height = Number(box?.height || 0);
+  const left = Number(box?.x || 0);
+  const top = Number(box?.y || 0);
+  if (width <= 0 || height <= 0 || !point) return null;
+  const option = candidate?.chart?.echartsOption || {};
+  const series = seriesList(option);
+  const selected = series.find((item) => String(item?.name || '') === String(point.seriesName || ''))
+    || series.find((item) => String(item?.type || '').toLowerCase() === (point.kind === 'pie' ? 'pie' : 'bar'))
+    || series[0];
+  if (!selected) return null;
+
+  if (point.kind === 'pie') {
+    const center = Array.isArray(selected.center) ? selected.center : ['50%', '50%'];
+    const centerX = left + resolveOptionInset(center[0], width, width / 2);
+    const centerY = top + resolveOptionInset(center[1], height, height / 2);
+    const radius = Array.isArray(selected.radius) ? selected.radius : [0, selected.radius || '70%'];
+    const radiusBase = Math.min(width, height) / 2;
+    const inner = resolveOptionInset(radius[0], radiusBase, 0);
+    const outer = resolveOptionInset(radius[1], radiusBase, radiusBase * 0.7);
+    const values = Array.isArray(selected.data) ? selected.data.map(numericValue) : [];
+    const total = values.reduce((sum, value) => sum + Math.max(0, value), 0) || values.length || 1;
+    const before = values.slice(0, point.dataIndex).reduce((sum, value) => sum + Math.max(0, value), 0);
+    const value = Math.max(0, values[point.dataIndex] || numericDataValue(candidate, point));
+    const startAngle = Number.isFinite(Number(selected.startAngle)) ? Number(selected.startAngle) : 90;
+    const angle = -Math.PI / 2 + ((90 - startAngle) * Math.PI / 180) + ((before + value / 2) / total) * Math.PI * 2;
+    const radiusMid = (inner + outer) / 2;
+    return { x: centerX + Math.cos(angle) * radiusMid, y: centerY + Math.sin(angle) * radiusMid };
+  }
+
+  const horizontal = point.kind === 'bar_horizontal';
+  const categories = horizontal ? axisData(option, 'yAxis') : axisData(option, 'xAxis');
+  const index = Math.max(0, Number.isInteger(point.dataIndex) ? point.dataIndex : 0);
+  const count = Math.max(1, categories.length || (Array.isArray(selected.data) ? selected.data.length : 0));
+  const grid = optionGridRect(option, width, height);
+  const gridWidth = Math.max(1, grid.right - grid.left);
+  const gridHeight = Math.max(1, grid.bottom - grid.top);
+  const values = Array.isArray(selected.data) ? selected.data : [];
+  const value = numericValue(values[index]);
+  const axis = axisAt(option, horizontal ? 'xAxis' : 'yAxis');
+  const bounds = valueAxisBounds(axis, values);
+  const baseline = (0 - bounds.min) / (bounds.max - bounds.min);
+  const endpoint = (value - bounds.min) / (bounds.max - bounds.min);
+  if (horizontal) {
+    const categoryAxis = axisAt(option, 'yAxis');
+    const physicalIndex = categoryAxis.inverse === true ? index : count - index - 1;
+    const y = grid.top + gridHeight * ((physicalIndex + 0.5) / count);
+    const x = left + grid.left + gridWidth * ((baseline + endpoint) / 2);
+    return { x, y: top + y };
+  }
+  const categoryAxis = axisAt(option, 'xAxis');
+  const physicalIndex = categoryAxis.inverse === true ? count - index - 1 : index;
+  const x = grid.left + gridWidth * ((physicalIndex + 0.5) / count);
+  const y = grid.bottom - gridHeight * ((baseline + endpoint) / 2);
+  return { x: left + x, y: top + y };
+}
+
+function clickAttempts(box, candidate, point) {
+  const width = Number(box?.width || 0);
+  const height = Number(box?.height || 0);
+  const left = Number(box?.x || 0);
+  const top = Number(box?.y || 0);
+  if (width <= 0 || height <= 0 || !point) return [];
+  const primary = chartPointCoordinate(box, candidate, point);
+  if (!primary) return [];
+  const offsets = [{ x: 0, y: 0 }, { x: -6, y: 0 }, { x: 6, y: 0 }, { x: 0, y: -6 }, { x: 0, y: 6 }, { x: -6, y: -6 }, { x: 6, y: 6 }];
+  return offsets.slice(0, MAX_CANVAS_CLICK_ATTEMPTS).map(({ x, y }) => ({
+    x: Math.max(left + 1, Math.min(left + width - 1, primary.x + x)),
+    y: Math.max(top + 1, Math.min(top + height - 1, primary.y + y)),
+  }));
+}
+
+async function mountedEChartsPointCoordinate(chartHost, point, value) {
+  if (!chartHost || !await chartHost.count()) return null;
+  const resourceState = await chartHost.evaluate(() => ({
+    origin: window.location.origin,
+    resources: performance.getEntriesByType('resource').map((entry) => entry.name),
+  })).catch(() => null);
+  if (!resourceState?.origin) return null;
+  const resources = selectEChartsAssetUrls(resourceState.resources, resourceState.origin);
+  if (!resources.length) return null;
+  return chartHost.evaluate(async (element, target) => {
+    for (const resource of target.resources) {
+      try {
+        const url = new URL(resource, window.location.href);
+        if (url.origin !== window.location.origin || !/^\/assets\/echarts-[A-Za-z0-9_-]+\.js$/.test(url.pathname)) continue;
+        const module = await import(resource);
+        const exports = [module, module.default, ...Object.values(module)];
+        const holder = exports.find((candidate) => candidate && typeof candidate.getInstanceByDom === 'function');
+        const instance = holder?.getInstanceByDom(element);
+        if (!instance || typeof instance.convertToPixel !== 'function') continue;
+        const axisValue = Number.isFinite(Number(target.value)) ? Math.max(0, Number(target.value) / 2) : 0;
+        const dataValue = target.kind === 'bar_horizontal' ? [axisValue, target.name] : [target.name, axisValue];
+        const pixel = instance.convertToPixel({ seriesIndex: target.seriesIndex ?? 0 }, dataValue);
+        if (Array.isArray(pixel) && pixel.length >= 2 && Number.isFinite(Number(pixel[0])) && Number.isFinite(Number(pixel[1]))) {
+          return { x: Number(pixel[0]), y: Number(pixel[1]), source: 'mounted-echarts-convertToPixel' };
+        }
+      } catch { /* bounded first-party module probing; geometry remains diagnostic only */ }
+    }
+    return null;
+  }, { kind: point.kind, name: point.name, value, seriesIndex: point.seriesIndex ?? 0, resources });
+}
+
+function estimateVirtualRowCount({ contentHeight, rowHeight } = {}) {
+  if (!Number.isFinite(contentHeight) || !Number.isFinite(rowHeight) || contentHeight <= 0 || rowHeight <= 0) return null;
+  const ratio = contentHeight / rowHeight;
+  return Number.isInteger(ratio) ? ratio : null;
+}
+
+function availablePointAttempts(now, deadline) {
+  return Math.max(0, Math.floor(Math.max(0, deadline - now) / 3_500));
+}
+
+function summarizeCandidateCheck(candidateId, result) {
+  const checks = result?.checks || {};
+  const ui = result?.ui || {};
+  return {
+    candidateId,
+    result: result?.result || 'UNVERIFIED',
+    rootCauseClass: result?.rootCauseClass || null,
+    total: result?.total ?? null,
+    rowCount: result?.rowCount ?? null,
+    failedChecks: Object.keys(checks).filter((key) => checks[key] === false),
+    drawerVisible: ui.drawerVisible === true,
+    virtualTableVisible: ui.tableVisible === true,
+    virtualTableRowCount: ui.rowCountMatches === true,
+    displayedValues: ui.displayedValues === true,
+    concreteValueVisible: ui.concreteValueVisible === true,
+    reason: typeof result?.reason === 'string' ? result.reason : null,
+  };
+}
+
+function assessmentFailureReason(assessment) {
+  const failedChecks = Object.keys(assessment?.checks || {}).filter((key) => assessment.checks[key] === false);
+  return failedChecks.join(',') || assessment?.reason || assessment?.ui?.valueEvidenceReason || 'point evidence did not pass';
+}
+
+function unverified(reason, extra = {}) {
+  return { result: 'UNVERIFIED', rootCauseClass: 'data', reason, ...extra };
+}
+
+async function cardForCandidate(page, candidate) {
+  const cards = page.locator('.recommendation-card');
+  const wanted = `factory-chart-card-${candidate.id}`;
+  for (let index = 0; index < await cards.count(); index += 1) {
+    if (await cards.nth(index).getAttribute('data-testid') === wanted) return cards.nth(index);
+  }
+  return null;
+}
+
+async function closeDetailsDrawer(page) {
+  const drawer = page.locator('.el-drawer:visible').first();
+  if (!await drawer.count()) return;
+  const closeButton = drawer.locator('button.el-drawer__close-btn').first();
+  if (await closeButton.count()) await closeButton.click().catch(() => {});
+  else await page.keyboard.press('Escape').catch(() => {});
+  await drawer.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+}
+
+function displayDetailCell(value) {
+  return value === null || value === undefined ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function readVirtualTableMetrics(element) {
+  const body = element.querySelector('.el-table-v2__main > .el-vl__wrapper.el-table-v2__body')
+    || element.querySelector('.el-table-v2__main .el-vl__wrapper.el-table-v2__body')
+    || element.querySelector('.el-table-v2__body-wrapper');
+  const viewport = body?.firstElementChild || body;
+  const content = viewport?.firstElementChild || viewport;
+  const row = element.querySelector('.el-table-v2__row');
+  return {
+    contentHeight: content ? Math.max(content.getBoundingClientRect().height || 0, content.scrollHeight || 0) : 0,
+    viewportHeight: viewport?.getBoundingClientRect().height || body?.getBoundingClientRect().height || 0,
+    rowHeight: row?.getBoundingClientRect().height || 0,
+    visibleCellTexts: Array.from(row?.querySelectorAll('.el-table-v2__cell-text, .el-table-v2__row-cell') || [])
+      .map((cell) => String(cell.textContent || '').trim()),
+  };
+}
+
+function detailCellEvidence(expectedData, visibleCellTexts) {
+  const expectedRow = Array.isArray(expectedData?.rows) ? expectedData.rows[0] : null;
+  const expectedColumns = Array.isArray(expectedData?.columns) ? expectedData.columns : [];
+  const expectedCells = expectedRow && expectedColumns.length
+    ? expectedColumns.map((column) => displayDetailCell(expectedRow?.[column]))
+    : [];
+  const visible = Array.isArray(visibleCellTexts) ? visibleCellTexts : [];
+  const displayedValues = expectedCells.length > 0 && expectedCells.every((expectedCell) => visible.includes(expectedCell));
+  const concreteValueVisible = expectedCells.some((expectedCell) => expectedCell !== '—')
+    && expectedCells.some((expectedCell) => expectedCell !== '—' && visible.includes(expectedCell));
+  return {
+    displayedValues,
+    concreteValueVisible,
+    valueEvidenceReason: displayedValues
+      ? 'first mounted virtual row displays the API row values'
+      : 'mounted virtual row cells did not display every expected first-row value',
+  };
+}
+
+async function inspectDetailsTableOnce(page, expectedRows, expectedData = null, sampleTimeoutMs = 250) {
+  const drawer = page.locator('.el-drawer:visible').first();
+  const drawerVisible = await drawer.count() > 0 && await drawer.isVisible().catch(() => false);
+  const table = drawer.locator('.el-table-v2').first();
+  if (drawerVisible && await table.count()) await table.waitFor({ state: 'visible', timeout: Math.max(1, sampleTimeoutMs) }).catch(() => {});
+  const tableVisible = drawerVisible && await table.count() > 0 && await table.isVisible().catch(() => false);
+  if (!tableVisible) return {
+    drawerVisible, tableVisible: false, renderedRowCount: 0, rowCountMatches: false,
+    displayedValues: false, concreteValueVisible: false, valueEvidenceReason: 'mounted virtual table is not visible',
+  };
+  const rows = table.locator('.el-table-v2__row');
+  const renderedRowCount = await rows.count();
+  const ariaRowCount = await table.getAttribute('aria-rowcount').catch(() => null);
+  const metrics = await table.evaluate(readVirtualTableMetrics)
+    .catch(() => ({ contentHeight: 0, viewportHeight: 0, rowHeight: 0, visibleCellTexts: [] }));
+  const estimatedRowCount = estimateVirtualRowCount(metrics);
+  const rowCountMatches = expectedRows > 0 && (
+    renderedRowCount === expectedRows
+    || ariaRowCount === String(expectedRows)
+    || estimatedRowCount === expectedRows
+  );
+  const evidence = detailCellEvidence(expectedData, metrics.visibleCellTexts);
+  return {
+    drawerVisible,
+    tableVisible,
+    renderedRowCount,
+    ariaRowCount,
+    estimatedRowCount,
+    contentHeight: metrics.contentHeight,
+    viewportHeight: metrics.viewportHeight,
+    rowHeight: metrics.rowHeight,
+    rowCountMatches,
+    ...evidence,
+  };
+}
+
+function mountedTableEvidenceComplete(result) {
+  return result?.drawerVisible === true
+    && result?.tableVisible === true
+    && result?.rowCountMatches === true
+    && result?.displayedValues === true
+    && result?.concreteValueVisible === true;
+}
+
+async function retryMountedTableEvidence(sample, { timeoutMs = 5_000, sleep = async () => {} } = {}) {
+  const deadline = Date.now() + Math.max(1, timeoutMs);
+  let attempts = 0;
+  let latest = null;
+  while (Date.now() <= deadline) {
+    attempts += 1;
+    latest = await sample(Math.max(1, deadline - Date.now()));
+    if (mountedTableEvidenceComplete(latest)) return { ...latest, sampleAttempts: attempts };
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+  }
+  return { ...(latest || {}), sampleAttempts: attempts };
+}
+
+async function inspectDetailsTable(page, expectedRows, expectedData = null, timeoutMs = 5_000) {
+  return retryMountedTableEvidence(
+    (remainingMs) => inspectDetailsTableOnce(page, expectedRows, expectedData, Math.min(1_000, remainingMs)),
+    { timeoutMs, sleep: (delay) => page.waitForTimeout(delay) },
+  );
+}
+
+async function captureBasicDetails(page, card, candidate, expected, deadline = Date.now() + DETAIL_RESPONSE_TIMEOUT_MS) {
+  const button = card?.locator('button.details-button').first();
+  if (!button || !await button.count()) return unverified('mounted card has no 查看原始明细 button');
+  const stepTimeout = () => Math.max(1, Math.min(DETAIL_RESPONSE_TIMEOUT_MS, deadline - Date.now()));
+  if (deadline <= Date.now()) return unverified('detail acceptance deadline reached before opening the mounted details button', { candidateId: candidate.id });
+  const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: stepTimeout() });
+  try { await button.click({ timeout: stepTimeout() }); } catch { return unverified('查看原始明细 button could not be clicked', { candidateId: candidate.id }); }
+  let response;
+  try { response = await responsePromise; } catch { return unverified('查看原始明细 click produced no factory-details response within the bounded budget', { candidateId: candidate.id }); }
+  const body = await response.json().catch(() => null);
+  await page.locator('.el-drawer:visible').first().waitFor({ timeout: Math.max(1, Math.min(5_000, deadline - Date.now())) }).catch(() => {});
+  const request = requestJson(response.request());
+  const assessment = assessDetailsResponse({ status: response.status(), request, body, expected });
+  const ui = await inspectDetailsTable(page, assessment.rowCount, body?.data, Math.max(1, Math.min(5_000, deadline - Date.now())));
+  assessment.ui = ui;
+  assessment.checks.drawerVisible = ui.drawerVisible;
+  assessment.checks.virtualTableVisible = ui.tableVisible;
+  assessment.checks.virtualTableRowCount = ui.rowCountMatches;
+  assessment.checks.displayedValues = ui.displayedValues === true;
+  assessment.checks.concreteValueVisible = ui.concreteValueVisible === true;
+  if (assessment.result === 'PASS' && (!ui.drawerVisible || !ui.tableVisible || !ui.rowCountMatches || !ui.displayedValues || !ui.concreteValueVisible)) {
+    assessment.result = 'UNVERIFIED';
+    assessment.rootCauseClass = 'tool';
+    assessment.reason = 'API details passed but mounted drawer, virtual-table row count, or concrete cell values could not be proven';
+  }
+  // Keep the exact first response only in memory for the page-boundary check;
+  // non-enumerable fields cannot enter the sanitized evidence JSON.
+  Object.defineProperty(assessment, '_rawBody', { value: body, enumerable: false });
+  Object.defineProperty(assessment, '_status', { value: response.status(), enumerable: false });
+  assessment.candidateId = candidate.id;
+  assessment.interaction = 'mounted-card-view-details';
+  return assessment;
+}
+
+async function capturePointDetails(page, candidate, expected, deadline = Date.now() + 30_000) {
+  const point = chartPointForCandidate(candidate);
+  const card = await cardForCandidate(page, candidate);
+  const canvas = card?.locator('.factory-chart-canvas canvas').first();
+  const chartHost = card?.locator('.factory-chart-canvas').first();
+  if (!point) return unverified('no eligible visible pie/bar point in the recommendation echartsOption', { candidateId: candidate.id });
+  if (!canvas || !await canvas.count()) return unverified('eligible pie/bar candidate has no mounted canvas', { candidateId: candidate.id, point });
+  await canvas.waitFor({ state: 'visible', timeout: Math.max(1_000, Math.min(5_000, deadline - Date.now())) }).catch(() => {});
+  await closeDetailsDrawer(page);
+  await canvas.scrollIntoViewIfNeeded().catch(() => {});
+  const box = await canvas.boundingBox();
+  const mountedPoint = await mountedEChartsPointCoordinate(chartHost, point, numericDataValue(candidate, point));
+  const availableAttempts = availablePointAttempts(Date.now(), deadline);
+  const attempts = (mountedPoint
+    ? clickAttempts(box, candidate, point).map((coordinate, index) => index === 0
+      ? { x: (box?.x || 0) + mountedPoint.x, y: (box?.y || 0) + mountedPoint.y }
+      : coordinate)
+    : clickAttempts(box, candidate, point)).slice(0, Math.min(MAX_CANVAS_CLICK_ATTEMPTS, availableAttempts));
+  if (!attempts.length) return unverified('mounted canvas has no usable click coordinates', { candidateId: candidate.id, point });
+  const attemptEvidence = [];
+  for (const [index, coordinate] of attempts.entries()) {
+    if (Date.now() >= deadline) break;
+    const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: Math.max(1_000, Math.min(3_500, deadline - Date.now())) }).catch(() => null);
+    await page.mouse.click(coordinate.x, coordinate.y);
+    const response = await responsePromise;
+    if (!response) { attemptEvidence.push({ index, response: false, result: 'UNVERIFIED', reason: 'no factory-details response within the bounded click wait' }); continue; }
+    const body = await response.json().catch(() => null);
+    const request = requestJson(response.request());
+    const assessment = assessDetailsResponse({ status: response.status(), request, body, expected, point });
+    const ui = await inspectDetailsTable(page, assessment.rowCount, body?.data, Math.max(1_000, Math.min(5_000, deadline - Date.now())));
+    assessment.ui = ui;
+    assessment.checks.drawerVisible = ui.drawerVisible;
+    assessment.checks.virtualTableVisible = ui.tableVisible;
+    assessment.checks.virtualTableRowCount = ui.rowCountMatches;
+    assessment.checks.displayedValues = ui.displayedValues === true;
+    assessment.checks.concreteValueVisible = ui.concreteValueVisible === true;
+    if (assessment.result === 'PASS' && (!mountedPoint || !ui.drawerVisible || !ui.tableVisible || !ui.rowCountMatches || !ui.displayedValues || !ui.concreteValueVisible)) {
+      assessment.result = 'UNVERIFIED';
+      assessment.rootCauseClass = 'tool';
+      assessment.reason = mountedPoint
+        ? 'Point-filtered API response passed but mounted drawer, virtual-table row count, or concrete cell evidence was incomplete'
+        : 'Point-filtered API response passed after geometry fallback; a mounted ECharts convertToPixel coordinate was unavailable';
+    }
+    attemptEvidence.push({
+      index,
+      response: true,
+      status: response.status(),
+      result: assessment.result,
+      rowCount: assessment.rowCount,
+      total: assessment.total,
+      reason: assessmentFailureReason(assessment),
+    });
+    if (assessment.result === 'PASS') {
+      await page.locator('.el-drawer:visible').first().waitFor({ timeout: 10_000 }).catch(() => {});
+      return { ...assessment, candidateId: candidate.id, interaction: 'mounted-canvas-mouse-click', attempts: attemptEvidence };
+    }
+    await closeDetailsDrawer(page);
+  }
+  return unverified('bounded real canvas clicks did not produce a valid point-filtered details response', { candidateId: candidate.id, point, attempts: attemptEvidence });
+}
+
+module.exports = {
+  id: 'smartbi-factory-readonly',
+  defaultEnabled: false,
+  run: (ctx) => runReadOnlyPageScenario(ctx, {
+    id: 'smartbi-factory-readonly',
+    path: '/smart-bi/analysis-hub?tab=factory',
+    landmarks: ['工厂图表推荐', '数据源'],
+    inspect: async (page, _body, context) => {
+      if (context.expectedFactoryId !== 'F006') throw new Error('SmartBI acceptance is limited to F006');
+      await page.getByTestId('factory-chart-ranking').waitFor({ timeout: 60_000 });
+      const pending = page.waitForResponse((response) => endpointPath(response.url()).replace(/\/$/, '') === '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations' && response.request().method() === 'POST', { timeout: 60_000 });
+      await page.getByTestId('factory-chart-refresh').click();
+      const recommendationResponse = await pending;
+      const recommendationBody = await recommendationResponse.json();
+      const data = recommendationBody.data;
+      await page.getByTestId('factory-chart-ranking').waitFor({ timeout: 60_000 });
+      await page.locator('.recommendation-card canvas').first().waitFor({ timeout: 30_000 }).catch(() => {});
+      const cards = await page.locator('.recommendation-card').count();
+      const drawingErrors = await page.locator('.recommendation-card [role="alert"]').count();
+      const scope = recommendationResponse.status() === 200 && recommendationBody.success === true && data?.factoryId === 'F006' && data?.source === 'business';
+      const recommendations = Array.isArray(data?.recommendations) ? data.recommendations : [];
+      const factsMatch = await page.locator('.recommendation-card').evaluateAll((elements, items) => elements.every((el) => {
+        const testId = el.getAttribute('data-testid') || '';
+        const id = testId.slice('factory-chart-card-'.length);
+        const item = items.find((candidate) => candidate.id === id);
+        const text = (el.innerText || '').replace(/\s/g, '');
+        return item && Array.isArray(item.kpis) && item.kpis.every((kpi) => kpi.value === null || text.includes(String(kpi.value).replace(/\s/g, '')));
+      }), recommendations);
+      const summary = {
+        scope,
+        cards,
+        drawingErrors,
+        factsMatch,
+        candidateCount: recommendations.length,
+        sourceErrorCount: Array.isArray(data?.sourceErrors) ? data.sourceErrors.length : 0,
+        rankingMode: data?.ranking?.mode,
+      };
+      const mountedDetailCandidates = [];
+      for (const candidate of recommendations.filter((item) => item?.detailContext?.id)) {
+        const card = await cardForCandidate(page, candidate);
+        const canvas = card?.locator('.factory-chart-canvas canvas').first();
+        if (card && canvas && await canvas.count()) mountedDetailCandidates.push({ candidate, card });
+      }
+      let basic = unverified('no recommendation with detailContext is mounted with a real details button');
+      let pagination = unverified('basic details interaction was not verified');
+      let point = unverified('no mounted point candidate was available');
+      let selectedCandidate = null;
+      let selectedExpected = null;
+      const candidateChecks = [];
+      const detailDeadline = Date.now() + DETAIL_ACCEPTANCE_DEADLINE_MS;
+      const nonPointDeadline = detailDeadline - POINT_CLICK_BUDGET_MS;
+      for (const candidateRef of mountedDetailCandidates.slice(0, MAX_DETAIL_CANDIDATES)) {
+        if (Date.now() >= nonPointDeadline) break;
+        await closeDetailsDrawer(page);
+        const expected = {
+          factoryId: 'F006', candidateId: candidateRef.candidate.id, source: candidateRef.candidate.source,
+          period: data?.period?.label, contextId: candidateRef.candidate.detailContext.id,
+        };
+        const candidateBasic = await captureBasicDetails(page, candidateRef.card, candidateRef.candidate, expected, nonPointDeadline);
+        candidateChecks.push(summarizeCandidateCheck(candidateRef.candidate.id, candidateBasic));
+        if (candidateBasic.result === 'PASS' && (!selectedCandidate || (candidateBasic.total || 0) > (basic.total || 0))) {
+          selectedCandidate = candidateRef;
+          selectedExpected = expected;
+          basic = candidateBasic;
+        }
+        if (candidateBasic.result === 'PASS' && candidateBasic.total >= DETAIL_PAGE_SIZE + 1) break;
+      }
+      if (selectedCandidate && basic.result === 'PASS') {
+        const total = basic.total;
+        if (total >= DETAIL_PAGE_SIZE + 1) {
+          if (Date.now() >= nonPointDeadline) {
+            pagination = unverified('details pagination could not start while preserving the reserved mounted point-click budget', { total, reservedPointClickMs: POINT_CLICK_BUDGET_MS });
+          } else {
+          const drawer = page.locator('.el-drawer:visible').first();
+          const loadMore = drawer.getByRole('button', { name: '加载更多' }).first();
+          const remaining = Math.max(1_000, Math.min(DETAIL_RESPONSE_TIMEOUT_MS, nonPointDeadline - Date.now()));
+          if (await loadMore.count()) {
+            const responsePromise = page.waitForResponse(isDetailsResponse, { timeout: remaining });
+            await loadMore.click({ timeout: remaining });
+            const response = await responsePromise;
+            const body = await response.json();
+            const request = requestJson(response.request());
+            const pageTwo = { status: response.status(), request, body };
+            // Keep raw page bodies in the Node page object for root's independent
+            // SQL/source comparison; never put them in the sanitized report.
+            page.__smartbiDetailAcceptance = {
+              contextId: selectedExpected.contextId,
+              candidateId: selectedExpected.candidateId,
+              first: { status: basic._status || 200, body: basic._rawBody },
+              second: { status: response.status(), body },
+            };
+            const firstPage = { status: basic._status || 200, request: { context_id: selectedExpected.contextId, page: 1, page_size: DETAIL_PAGE_SIZE }, body: basic._rawBody };
+            pagination = assessPageContinuity(firstPage, pageTwo, selectedExpected);
+            pagination.request = { contextIdMatches: request?.context_id === selectedExpected.contextId, page: request?.page ?? null, pageSize: request?.page_size ?? null };
+            if (pagination.result === 'PASS') pagination.rootCauseClass = 'none';
+          } else pagination = unverified('details response has >=51 rows but mounted drawer has no 加载更多 control', { total });
+          }
+        } else pagination = unverified('details total is below the 51-row pagination qualification threshold', { total, requiredTotal: DETAIL_PAGE_SIZE + 1 });
+      }
+      const pointCandidate = selectPointCandidate(mountedDetailCandidates.slice(0, MAX_DETAIL_CANDIDATES));
+      if (pointCandidate && Date.now() < detailDeadline) {
+        const pointExpected = {
+          factoryId: 'F006', candidateId: pointCandidate.candidate.id, source: pointCandidate.candidate.source,
+          period: data?.period?.label, contextId: pointCandidate.candidate.detailContext.id,
+        };
+        point = await capturePointDetails(page, pointCandidate.candidate, pointExpected, Math.min(detailDeadline, Date.now() + POINT_CLICK_BUDGET_MS));
+      } else if (!pointCandidate) point = unverified('no mounted candidate exposes a visible pie/bar point target');
+      else point = unverified('detail acceptance deadline reached before bounded canvas point probing');
+      const summaryPass = scope && cards > 0 && factsMatch && drawingErrors === 0 && summary.sourceErrorCount === 0;
+      const deepPass = summaryPass && basic.result === 'PASS' && pagination.result === 'PASS' && pagination.completeness === 'PASS' && point.result === 'PASS';
+      const assessment = deepPass
+        ? { result: 'PASS', rootCauseClass: 'none' }
+        : basic.result === 'CONFIRMED_DEFECT' || pagination.result === 'CONFIRMED_DEFECT' || point.result === 'CONFIRMED_DEFECT'
+          ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'backend' }
+          : { result: summaryPass ? 'UNVERIFIED' : 'CONFIRMED_DEFECT', rootCauseClass: summaryPass ? 'data' : 'frontend' };
+      return {
+        ...summary,
+        detailBasicResult: String(basic.result || 'UNVERIFIED'),
+        detailBasicReason: String(basic.reason || basic.ui?.valueEvidenceReason || 'none'),
+        detailPointResult: String(point.result || 'UNVERIFIED'),
+        detailPointReason: String(point.reason || point.ui?.valueEvidenceReason || 'none'),
+        detailPointAttempts: Array.isArray(point.attempts)
+          ? point.attempts.map((attempt) => `#${attempt.index}:${attempt.result}:${attempt.reason || 'unknown'}`).join('|')
+          : 'none',
+        candidateSummary: candidateChecks.map((item) => `${item.candidateId}:${item.result}:cells=${item.displayedValues ? 'visible' : 'missing'}:concrete=${item.concreteValueVisible ? 'yes' : 'no'}`).join('|') || 'none',
+        details: { basic, pagination, point, candidateId: selectedCandidate?.candidate.id || null, candidateChecks },
+        screenshots: [await context.screenshot('smartbi-factory-business'), await context.screenshot('smartbi-factory-details')],
+        assessment,
+      };
+    },
+  }),
+};
+
+module.exports.assessDetailsResponse = assessDetailsResponse;
+module.exports.assessPageContinuity = assessPageContinuity;
+module.exports.chartPointForCandidate = chartPointForCandidate;
+module.exports.chartPointCoordinate = chartPointCoordinate;
+module.exports.clickAttempts = clickAttempts;
+module.exports.echartsAssetUrl = echartsAssetUrl;
+module.exports.selectEChartsAssetUrls = selectEChartsAssetUrls;
+module.exports.mountedEChartsPointCoordinate = mountedEChartsPointCoordinate;
+module.exports.readVirtualTableMetrics = readVirtualTableMetrics;
+module.exports.detailCellEvidence = detailCellEvidence;
+module.exports.mountedTableEvidenceComplete = mountedTableEvidenceComplete;
+module.exports.retryMountedTableEvidence = retryMountedTableEvidence;
+module.exports.inspectDetailsTable = inspectDetailsTable;
+module.exports.selectPointCandidate = selectPointCandidate;
+module.exports.estimateVirtualRowCount = estimateVirtualRowCount;
+module.exports.availablePointAttempts = availablePointAttempts;
+module.exports.POINT_CLICK_BUDGET_MS = POINT_CLICK_BUDGET_MS;
+
+},
+    "scenarios/smartbi-guided-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const PATH = '/smart-bi/analysis-hub?tab=factory';
+const RECOMMENDATIONS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations';
+const MAX_CARDS = 4;
+
+function endpointPath(url) { try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; } }
+function requestBody(response) { try { return response.request().postDataJSON() || {}; } catch { return {}; } }
+function responseIsRecommendations(response) {
+  return response.request().method() === 'POST' && endpointPath(response.url()).replace(/\/$/, '') === RECOMMENDATIONS_PATH;
+}
+async function responseFor(page, action) {
+  const pending = page.waitForResponse(responseIsRecommendations, { timeout: 60_000 });
+  await action();
+  return pending;
+}
+function safeId(value) { return typeof value === 'string' || typeof value === 'number' ? String(value) : null; }
+function candidates(data) { return Array.isArray(data?.recommendations) ? data.recommendations : []; }
+async function readVisibleCards(page, candidateMap) {
+  const cards = page.locator('[data-testid^="factory-chart-card-"]:visible');
+  const values = [];
+  for (let i = 0; i < await cards.count(); i += 1) {
+    const id = (await cards.nth(i).getAttribute('data-testid')).replace('factory-chart-card-', '');
+    const item = candidateMap.get(id);
+    values.push({ id: safeId(id), familyId: safeId(item?.analysis?.familyId), domain: item?.domain || null });
+  }
+  return { count: values.length, values };
+}
+async function assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot, questionnaireVisible, productVisible, productDomainRetained }) {
+  const initialCandidates = candidates(initial?.body?.data);
+  const initialFamilies = new Set(initialVisible.values.map(item => item.familyId).filter(Boolean));
+  const productId = safeId(product?.request?.analysis_subject);
+  const checks = {
+    questionnaireVisible: questionnaireVisible === true,
+    initialHttp200: initial?.status === 200, initialSuccess: initial?.body?.success === true,
+    factoryF006: initial?.body?.data?.factoryId === 'F006', businessSource: initial?.body?.data?.source === 'business',
+    guidedRequest: initial?.request?.guided === true, guidedScope: typeof initial?.body?.data?.analysisScopeLabel === 'string',
+    visibleCardsBounded: initialVisible.count > 0 && initialVisible.count <= MAX_CARDS,
+    visibleCardsAreCandidates: initialVisible.values.every(item => initialCandidates.some(candidate => String(candidate.id) === item.id)),
+    visibleFamiliesDistinct: initialFamilies.size === initialVisible.count,
+    categoryDomainSelected: typeof categoryDomain === 'string' && categoryDomain.length > 0 && categoryDomain !== 'all',
+    familyRowsPresent: familyRows > 0,
+    categoryCardsMatchDomain: categoryVisible.count > 0 && categoryVisible.values.every(item => item.domain === categoryDomain),
+    categoryCardsBounded: categoryVisible.count <= MAX_CARDS,
+    productConditional: !product || (product.status === 200 && product.body?.success === true && productId !== null && product.body?.data?.analysisSubject === productId),
+    productQuestionRetained: !product || productDomainRetained === true,
+    productCardsMatchQuestion: !product || (productVisible && productVisible.count <= MAX_CARDS && productVisible.values.every(item => item.domain === categoryDomain)),
+    noSourceErrors: [initial, product, baseline].filter(Boolean).every(item => !Object.keys(item.body?.data?.sourceErrors || {}).length),
+    baselineReturnedToFactory: !product || (baseline?.status === 200 && baseline.request?.analysis_subject == null && baseline.body?.data?.analysisSubject == null),
+    screenshots: Boolean(beforeGuide && categoryShot && (!product || productShot)),
+  };
+  const result = Object.values(checks).every(Boolean) ? 'PASS' : 'CONFIRMED_DEFECT';
+  return { result, rootCauseClass: result === 'PASS' ? 'none' : 'frontend', checks,
+    source: initial?.body?.data?.source || null, period: initial?.body?.data?.period?.label || null,
+    scope: initial?.body?.data?.analysisScopeLabel || null, domain: categoryDomain,
+    visibleCandidateIds: initialVisible.values.map(item => item.id), visibleFamilies: initialVisible.values.map(item => item.familyId),
+    categoryCandidateIds: categoryVisible.values.map(item => item.id), subjectCount: Array.isArray(initial?.body?.data?.subjects) ? initial.body.data.subjects.length : 0,
+    productScope: product?.body?.data?.analysisScopeLabel || null };
+}
+
+const scenario = {
+  id: 'smartbi-guided-readonly', path: PATH, defaultEnabled: false,
+  // The questionnaire arrives with the recommendations, after the initial shell.
+  // Its visibility remains a required assessment below, after the real wait.
+  landmarks: ['工厂分析'], timeoutMs: 60_000,
+  run: ctx => runReadOnlyPageScenario(ctx, { id: 'smartbi-guided-readonly', path: PATH, landmarks: scenario.landmarks, timeoutMs: scenario.timeoutMs,
+    inspect: async (page, body, inspectCtx) => {
+      await page.getByTestId('factory-chart-guide').waitFor({ timeout: 60_000 });
+      const questionnaireVisible = await page.getByText('1. 想了解什么？', { exact: true }).isVisible();
+      const beforeGuide = await inspectCtx.screenshot('smartbi-guided-before-guide');
+      const initialResponse = await responseFor(page, () => page.getByTestId('factory-chart-refresh').click());
+      const initial = { status: initialResponse.status(), body: await initialResponse.json().catch(() => ({})), request: requestBody(initialResponse) };
+      const candidateMap = new Map(candidates(initial.body.data).map(item => [String(item.id), item]));
+      await page.getByTestId('factory-chart-guide-generate').click();
+      await page.locator('[data-testid^="factory-chart-card-"]:visible').first().waitFor();
+      const initialVisible = await readVisibleCards(page, candidateMap);
+      const domainGroup = page.getByTestId('factory-chart-guide-domain');
+      const domainOption = domainGroup.locator('input[value="库存"], input[value="生产"], input[value="销售"], input[value="采购"]').first();
+      if (!await domainOption.count()) throw new Error('factory-chart-guide-domain has no usable domain radio');
+      const categoryDomain = await domainOption.getAttribute('value');
+      await domainOption.locator('..').click();
+      if (!await domainOption.isChecked()) throw new Error('business question did not become selected');
+      const generate = page.getByTestId('factory-chart-guide-generate');
+      if (await generate.count()) await generate.click();
+      await page.waitForTimeout(100);
+      const categoryVisible = await readVisibleCards(page, candidateMap);
+      const categoryShot = await inspectCtx.screenshot('smartbi-guided-category');
+      const browseRadio = page.getByTestId('factory-chart-mode').locator('input[value="browse"]');
+      await browseRadio.locator('..').click();
+      if (!await browseRadio.isChecked()) throw new Error('classified browse mode did not become selected');
+      const familyRows = await page.getByTestId('factory-chart-family').count();
+      const subject = page.getByTestId('factory-chart-guide-subject');
+      let product = null; let baseline = null; let productShot = null; let productVisible = null; let productDomainRetained = false;
+      const firstSubject = initial.body.data?.subjects?.[0];
+      if (await subject.count() && firstSubject) {
+        await subject.locator('input, button').first().click();
+        {
+          const selectedOption = page.getByRole('option', { name: firstSubject.label, exact: true });
+          const productResponse = await responseFor(page, () => selectedOption.click());
+          product = { status: productResponse.status(), body: await productResponse.json().catch(() => ({})), request: requestBody(productResponse) };
+          await page.getByText(product.body.data.analysisScopeLabel, { exact: false }).first().waitFor();
+          productDomainRetained = await domainGroup.locator(`input[value="${categoryDomain}"]`).isChecked();
+          productVisible = await readVisibleCards(page, new Map(candidates(product.body.data).map(item => [String(item.id), item])));
+          productShot = await inspectCtx.screenshot('smartbi-guided-product');
+          await subject.locator('input, button').first().click();
+          const clearOption = page.getByRole('option', { name: '全部产品 / 全厂范围', exact: true });
+          if (await clearOption.count()) {
+            const baselineResponse = await responseFor(page, () => clearOption.click());
+            baseline = { status: baselineResponse.status(), body: await baselineResponse.json().catch(() => ({})), request: requestBody(baselineResponse) };
+          }
+        }
+      }
+      const assessment = await assess({ initial, product, baseline, initialVisible, categoryVisible, categoryDomain, familyRows, beforeGuide, categoryShot, productShot, questionnaireVisible, productVisible, productDomainRetained });
+      return { assessment, ...assessment, screenshots: [beforeGuide, categoryShot, ...(productShot ? [productShot] : [])] };
+    },
+  }),
+};
+
+module.exports = scenario;
+module.exports.assess = assess;
+module.exports.responseIsRecommendations = responseIsRecommendations;
 
 },
     "scenarios/supplier-readonly.js": function(module, exports, require) {

@@ -7,6 +7,7 @@ from .base import (
     AbstractFinancialChartBuilder, COLORS,
     _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,10 @@ class CategoryStructureDonutBuilder(AbstractFinancialChartBuilder):
     display_order = 7
 
     def build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int = 2026) -> Dict[str, Any]:
+        # 业绩口径: 损益表只取收入科目, 不把成本费用一起算进品类/目标
+        df, reason = M.performance_rows(df)
+        if reason:
+            return self._insufficient(period, year, reason)
         # Aggregate by category
         cat_totals = df.groupby('category').agg(
             actual=('actual', 'sum'),

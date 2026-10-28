@@ -227,7 +227,7 @@ jobs:
     # ⇒ 改用**分支/文件**级切换: 平时保持 ubuntu-latest;
     #    额度耗尽时执行 `python scripts/ci/switch_ci_runner.py self-hosted` 并提交,
     #    额度恢复时 `... hosted`。一条命令改三个文件, 有闸钉着三处一致。
-    runs-on: [self-hosted, Linux, cretas, X64, windows-light]
+    runs-on: ubuntu-latest
     # 2026-09-15: 自托管 job 一律带超时 (正常 21–25 分钟含 npm ci + vue-tsc; 见 rn-gate.yml jest 的 20 小时事故)
     timeout-minutes: 45
     defaults:
@@ -264,5 +264,9 @@ jobs:
           # The full project requires more than Node's ~2 GiB default heap on
           # GitHub-hosted runners. Keep the complete check; raise only V8's
           # ceiling instead of weakening the TypeScript project or exclusions.
-          NODE_OPTIONS: --max-old-space-size=4096
+          # 2026-10-27 4096 -> 6144: measured with --extendedDiagnostics under an 8 GiB cap,
+          # origin/main 6aeabba934 alone peaks at 4,639,419K ("Memory used") —— already above
+          # 4096 MiB, so passing depended on GC luck; PR #1224 (+0.2% types) OOMed twice.
+          # Hosted runners have 16 GB and vitest has finished by this step.
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npx vue-tsc -b --force

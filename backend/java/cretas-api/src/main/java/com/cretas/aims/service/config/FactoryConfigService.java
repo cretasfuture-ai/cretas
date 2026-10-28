@@ -25,6 +25,11 @@ public interface FactoryConfigService {
 
     // ========== 模块级查询 (B 层) ==========
     boolean isModuleEnabled(String factoryId, String moduleCode);
+    /**
+     * 这个门禁码在 module_schemas 里有没有定义。没有定义的码 {@link #isModuleEnabled} 恒为 true
+     * (LEGACY 短路), 也写不进 factory_module_configs —— 它在工厂级开关这层不存在。
+     */
+    boolean isModuleGateDefined(String moduleCode);
     List<ModuleSummaryDTO> getEnabledModules(String factoryId);
 
     // ========== 配置写操作 ==========

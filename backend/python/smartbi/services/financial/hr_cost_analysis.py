@@ -1,19 +1,23 @@
 """HR Cost Analysis Chart Builder — 人力成本分析."""
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 
 from .base import (
     AbstractFinancialChartBuilder, _sanitize_for_json, _detect_value_scale,
 )
+from . import metrics as M
+from .. import financial_subjects as S
 
 logger = logging.getLogger(__name__)
 
-# HR cost breakdown default ratios
-HR_SALARY_RATIO = 0.60
-HR_BENEFITS_RATIO = 0.25
-HR_TRAINING_RATIO = 0.10
-HR_OTHER_RATIO = 0.05
+# 人力成本科目 (按科目名关键词识别): 组 -> 关键词。顺序即匹配优先级。
+HR_GROUPS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+    ("benefits", "福利社保", ("社保", "社会保险", "公积金", "福利", "保险费", "补贴")),
+    ("training", "培训", ("培训", "教育经费")),
+    ("salary", "薪资", ("工资", "薪酬", "薪资", "薪金", "奖金", "绩效", "提成", "计件")),
+    ("other", "其他人力", ("人工", "劳务", "外包", "临时工", "工会经费", "职工")),
+)
 
 # Green/blue shades for HR categories
 HR_COLORS = {
@@ -21,23 +25,29 @@ HR_COLORS = {
     "benefits": "#4C9AFF",    # medium blue — 福利
     "training": "#79B8FF",    # light blue — 培训
     "other": "#B3D4FC",       # pale blue — 其他
-    "efficiency": "#36B37E",  # green — 人均产值 line
-    "yoy_salary": "rgba(45,139,87,0.3)",     # dashed YoY lines
-    "yoy_benefits": "rgba(76,154,255,0.3)",
 }
+
+NO_HR_MESSAGE = ("上传的数据里没有人力成本科目（如工资、社保、福利、培训），无法做人力成本分析。")
+
+
+def _hr_group(item: str) -> Optional[str]:
+    for key, _, keywords in HR_GROUPS:
+        if any(kw in item for kw in keywords):
+            return key
+    return None
 
 
 class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
-    """Dual-axis chart: stacked bars for HR cost breakdown + line for labour efficiency.
+    """Stacked bars for HR cost breakdown, built only from real HR line items.
 
-    Synthesises HR breakdown from actual data using standard ratios:
-    salary=60%, benefits=25%, training=10%, other=5%.
-    If last_year data is available, YoY comparison dashed lines are overlaid.
+    ⛔ 不按「薪资 60% / 福利 25% …」的比例拆分, 不估算人数, 不填占位的人力成本占比。
     """
 
     chart_type = "hr_cost_analysis"
     display_name = "人力成本分析"
-    description = "展示人力成本构成(薪资/福利/培训)的月度趋势，含人均产值效率线及同比对比"
+    gap_kind = 'statement'
+    statement_hint = "需要人工成本明细：一列「项目」写工资、社保、福利、培训等，按月填金额。"
+    description = "展示人力成本构成(薪资/福利/培训)的月度趋势及同比对比"
     required_columns = ['actual', 'period']
     display_order = 15
 
@@ -59,54 +69,41 @@ class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
     def _do_build(self, df: pd.DataFrame, column_mapping, period: Dict, year: int) -> Dict[str, Any]:
         start_month = period.get('start_month', 1)
         end_month = period.get('end_month', 12)
+        months = list(range(start_month, end_month + 1))
         labels = self._month_labels(start_month, end_month)
 
-        # --- Aggregate actual by month ---
-        monthly = df.groupby('month').agg(
-            actual=('actual', 'sum'),
-        ).reindex(range(start_month, end_month + 1)).fillna(0)
-        actual_vals = monthly['actual'].tolist()
+        if 'item' not in df.columns:
+            return self._empty_result(period, year, NO_HR_MESSAGE)
+        groups = df['item'].fillna('').astype(str).map(_hr_group)
+        hr_rows = df.assign(hr_group=groups)[groups.notna()]
+        if hr_rows.empty or hr_rows['actual'].notna().sum() == 0:
+            return self._empty_result(period, year, NO_HR_MESSAGE)
 
-        # --- Synthesise HR breakdown from actual ---
-        salary_vals = [round(v * HR_SALARY_RATIO, 2) for v in actual_vals]
-        benefits_vals = [round(v * HR_BENEFITS_RATIO, 2) for v in actual_vals]
-        training_vals = [round(v * HR_TRAINING_RATIO, 2) for v in actual_vals]
-        other_vals = [round(v * HR_OTHER_RATIO, 2) for v in actual_vals]
+        series_by_group: Dict[str, List[Optional[float]]] = {}
+        ly_by_group: Dict[str, List[Optional[float]]] = {}
+        for key, _, _ in HR_GROUPS:
+            part = hr_rows[hr_rows['hr_group'] == key]
+            if part.empty:
+                continue
+            series_by_group[key] = M.monthly(part, 'actual', months)
+            ly_by_group[key] = M.monthly(part, 'last_year', months)
 
-        # --- Labour efficiency: 人均产值 (use total actual / estimated headcount) ---
-        # Estimate headcount from cost level: avg monthly cost / avg salary per person
-        avg_monthly = sum(actual_vals) / max(len(actual_vals), 1)
-        est_headcount = max(int(avg_monthly / 8000), 10) if avg_monthly > 0 else 50
-        efficiency_vals = [round(v / est_headcount, 2) if est_headcount > 0 else 0 for v in actual_vals]
+        actual_vals = M.monthly(hr_rows, 'actual', months)
+        ly_vals = M.monthly(hr_rows, 'last_year', months)
+        total_hr_cost = M.total(actual_vals)
+        total_ly = M.total(ly_vals)
+        yoy_change = M.growth(total_hr_cost, total_ly).value
+        has_last_year = total_ly is not None
 
-        # --- Last year data for YoY ---
-        has_last_year = 'last_year' in df.columns and df['last_year'].notna().any()
-        ly_salary_vals: List[Optional[float]] = []
-        ly_benefits_vals: List[Optional[float]] = []
-        yoy_change: Optional[float] = None
+        # 人力成本占收入比: 只有表里同时有收入科目才算
+        revenue_total = M.sum_class(df, [S.REVENUE])
+        hr_ratio = M.ratio(total_hr_cost, revenue_total).value
 
-        if has_last_year:
-            ly_monthly = df.groupby('month').agg(
-                last_year=('last_year', 'sum'),
-            ).reindex(range(start_month, end_month + 1)).fillna(0)
-            ly_vals = ly_monthly['last_year'].tolist()
-            ly_salary_vals = [round(v * HR_SALARY_RATIO, 2) for v in ly_vals]
-            ly_benefits_vals = [round(v * HR_BENEFITS_RATIO, 2) for v in ly_vals]
-            total_ly = sum(v or 0 for v in ly_vals)
-            total_actual = sum(v or 0 for v in actual_vals)
-            yoy_change = self._calc_growth_rate(total_actual, total_ly)
-
-        # --- Scale detection ---
-        all_values = actual_vals + salary_vals + benefits_vals
-        scale = _detect_value_scale(all_values)
+        scale = _detect_value_scale([v for v in actual_vals + ly_vals if v is not None])
         divisor = scale['divisor']
 
-        # --- KPIs ---
-        total_hr_cost = sum(v or 0 for v in actual_vals)
-        total_salary = sum(v or 0 for v in salary_vals)  # noqa: F841
-        avg_efficiency = sum(efficiency_vals) / max(len(efficiency_vals), 1)
-        # HR cost ratio (assume HR is ~30% of total revenue — synthetic estimate)
-        hr_cost_ratio = 32.5  # placeholder percentage
+        def scaled(series: List[Optional[float]]) -> List[Optional[float]]:
+            return [None if v is None else round(v / divisor, 2) for v in series]
 
         kpis = [
             {
@@ -114,20 +111,13 @@ class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
                 "value": self._format_value(total_hr_cost, scale),
                 "unit": "元",
                 "trend": "flat",
-                "sparkline": [round(v / divisor, 2) if v else 0 for v in actual_vals],
+                "sparkline": scaled(actual_vals),
             },
             {
-                "label": "人力成本占比",
-                "value": f"{hr_cost_ratio:.1f}",
+                "label": "人力成本占收入比",
+                "value": f"{hr_ratio:.1f}" if hr_ratio is not None else "-",
                 "unit": "%",
                 "trend": "flat",
-            },
-            {
-                "label": "人均产值",
-                "value": self._format_value(avg_efficiency, {"divisor": 1, "suffix": "", "name_suffix": ""}),
-                "unit": "元/人",
-                "trend": self._trend_from_value(avg_efficiency),
-                "sparkline": [round(v, 2) for v in efficiency_vals],
             },
             {
                 "label": "同比变化",
@@ -137,28 +127,34 @@ class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
             },
         ]
 
-        # --- Scale values for display ---
-        salary_scaled = [round(v / divisor, 2) for v in salary_vals]
-        benefits_scaled = [round(v / divisor, 2) for v in benefits_vals]
-        training_scaled = [round(v / divisor, 2) for v in training_vals]
-        other_scaled = [round(v / divisor, 2) for v in other_vals]
-        efficiency_scale = _detect_value_scale(efficiency_vals)
-        eff_divisor = efficiency_scale['divisor']
-        efficiency_scaled = [round(v / eff_divisor, 2) for v in efficiency_vals]
-
         # --- ECharts option ---
         option = self._base_echarts_option()
-
-        legend_data = [
-            f"薪资{scale['name_suffix']}",
-            f"福利{scale['name_suffix']}",
-            f"培训{scale['name_suffix']}",
-            f"其他{scale['name_suffix']}",
-            f"人均产值{efficiency_scale['name_suffix']}",
-        ]
+        names = {key: name for key, name, _ in HR_GROUPS}
+        legend_data = [f"{names[k]}{scale['name_suffix']}" for k in series_by_group]
         if has_last_year:
-            legend_data.append("去年薪资")
-            legend_data.append("去年福利")
+            legend_data.append("去年人力总成本")
+
+        series: List[Dict[str, Any]] = []
+        for idx, (key, values) in enumerate(series_by_group.items()):
+            series.append({
+                "name": f"{names[key]}{scale['name_suffix']}",
+                "type": "bar",
+                "stack": "hr_cost",
+                "data": scaled(values),
+                "itemStyle": {"color": self._gradient_color(HR_COLORS[key]),
+                              "borderRadius": [2, 2, 0, 0] if idx == len(series_by_group) - 1 else [0, 0, 0, 0]},
+                "barMaxWidth": 32,
+                "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.2)"}},
+            })
+        if has_last_year:
+            series.append({
+                "name": "去年人力总成本",
+                "type": "line",
+                "data": scaled(ly_vals),
+                "itemStyle": {"color": "rgba(45,139,87,0.5)"},
+                "lineStyle": {"width": 1.5, "type": "dashed"},
+                "symbol": "none",
+            })
 
         option.update({
             "legend": {
@@ -172,119 +168,28 @@ class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
                 "data": labels,
                 "axisLabel": {"fontSize": 11},
             },
-            "yAxis": [
-                {
-                    "type": "value",
-                    "name": f"成本{scale['name_suffix']}",
-                    "nameTextStyle": {"fontSize": 11},
-                    "axisLabel": {"fontSize": 10},
-                    "splitLine": {"lineStyle": {"type": "dashed", "color": "#e8e8e8"}},
-                },
-                {
-                    "type": "value",
-                    "name": f"人均产值{efficiency_scale['name_suffix']}",
-                    "nameTextStyle": {"fontSize": 11},
-                    "axisLabel": {"fontSize": 10},
-                    "splitLine": {"show": False},
-                },
-            ],
-            "series": [
-                {
-                    "name": f"薪资{scale['name_suffix']}",
-                    "type": "bar",
-                    "stack": "hr_cost",
-                    "data": salary_scaled,
-                    "itemStyle": {"color": self._gradient_color(HR_COLORS['salary']), "borderRadius": [0, 0, 0, 0]},
-                    "barMaxWidth": 32,
-                    "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.2)"}},
-                },
-                {
-                    "name": f"福利{scale['name_suffix']}",
-                    "type": "bar",
-                    "stack": "hr_cost",
-                    "data": benefits_scaled,
-                    "itemStyle": {"color": self._gradient_color(HR_COLORS['benefits'])},
-                    "barMaxWidth": 32,
-                },
-                {
-                    "name": f"培训{scale['name_suffix']}",
-                    "type": "bar",
-                    "stack": "hr_cost",
-                    "data": training_scaled,
-                    "itemStyle": {"color": self._gradient_color(HR_COLORS['training'])},
-                    "barMaxWidth": 32,
-                },
-                {
-                    "name": f"其他{scale['name_suffix']}",
-                    "type": "bar",
-                    "stack": "hr_cost",
-                    "data": other_scaled,
-                    "itemStyle": {"color": self._gradient_color(HR_COLORS['other']), "borderRadius": [2, 2, 0, 0]},
-                    "barMaxWidth": 32,
-                },
-                {
-                    "name": f"人均产值{efficiency_scale['name_suffix']}",
-                    "type": "line",
-                    "yAxisIndex": 1,
-                    "data": efficiency_scaled,
-                    "itemStyle": {"color": HR_COLORS['efficiency']},
-                    "lineStyle": {"width": 2.5, "type": "solid"},
-                    "symbol": "circle",
-                    "symbolSize": 7,
-                    "label": {
-                        "show": True,
-                        "formatter": "{c}",
-                        "fontSize": 9,
-                        "color": HR_COLORS['efficiency'],
-                        "position": "top",
-                    },
-                    "areaStyle": {"color": "rgba(54,179,126,0.08)"},
-                },
-            ],
+            "yAxis": {
+                "type": "value",
+                "name": f"成本{scale['name_suffix']}",
+                "nameTextStyle": {"fontSize": 11},
+                "axisLabel": {"fontSize": 10},
+                "splitLine": {"lineStyle": {"type": "dashed", "color": "#e8e8e8"}},
+            },
+            "series": series,
         })
         self._apply_datazoom(option)
 
-        # --- YoY dashed overlay lines ---
-        if has_last_year and ly_salary_vals:
-            ly_salary_scaled = [round(v / divisor, 2) for v in ly_salary_vals]
-            ly_benefits_scaled = [round(v / divisor, 2) for v in ly_benefits_vals]
-            option["series"].append({
-                "name": "去年薪资",
-                "type": "line",
-                "data": ly_salary_scaled,
-                "itemStyle": {"color": HR_COLORS['yoy_salary']},
-                "lineStyle": {"width": 1.5, "type": "dashed"},
-                "symbol": "none",
-                "tooltip": {"show": True},
-            })
-            option["series"].append({
-                "name": "去年福利",
-                "type": "line",
-                "data": ly_benefits_scaled,
-                "itemStyle": {"color": HR_COLORS['yoy_benefits']},
-                "lineStyle": {"width": 1.5, "type": "dashed"},
-                "symbol": "none",
-                "tooltip": {"show": True},
-            })
-
         # Quarter markArea
         mark_areas = self._quarter_mark_areas(start_month, end_month)
-        if mark_areas:
+        if mark_areas and option["series"]:
             option["series"][0]["markArea"] = {"silent": True, "data": mark_areas}
 
         # --- Table data ---
-        actual_scaled = [round(v / divisor, 2) for v in actual_vals]
-        table_data = {
-            "headers": ["月份"] + labels,
-            "rows": [
-                {"label": "人力总成本", "values": actual_scaled},
-                {"label": "薪资", "values": salary_scaled},
-                {"label": "福利", "values": benefits_scaled},
-                {"label": "培训", "values": training_scaled},
-                {"label": "其他", "values": other_scaled},
-                {"label": "人均产值", "values": efficiency_scaled},
-            ],
-        }
+        rows = [{"label": "人力总成本", "values": scaled(actual_vals)}]
+        rows += [{"label": names[k], "values": scaled(v)} for k, v in series_by_group.items()]
+        if has_last_year:
+            rows.append({"label": "去年人力总成本", "values": scaled(ly_vals)})
+        table_data = {"headers": ["月份"] + labels, "rows": rows}
 
         result = {
             "chartType": self.chart_type,
@@ -297,7 +202,18 @@ class HRCostAnalysisBuilder(AbstractFinancialChartBuilder):
                 "period": period,
                 "scale": scale,
                 "dataQuality": "good",
-                "estimatedHeadcount": est_headcount,
+                "hrItems": sorted({str(v) for v in hr_rows['item']}),
             },
         }
         return _sanitize_for_json(result)
+
+    def _empty_result(self, period: Dict, year: int, reason: str) -> Dict:
+        return {
+            "chartType": self.chart_type,
+            "title": f"{year}年{self.display_name}",
+            "kpis": [],
+            "echartsOption": {},
+            "tableData": None,
+            "analysisContext": reason,
+            "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
+        }

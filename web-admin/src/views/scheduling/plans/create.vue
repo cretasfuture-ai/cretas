@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 创建调度计划页面
- * 支持手动创建和AI自动生成
+ * 支持手动创建; 后端能力 aiGeneration = AVAILABLE 时支持「按工艺图自动排程」
+ * (按工艺图先后关系 + 每道工序预计工时排开始/结束时间; 缺工时的计划不排; 不自动派工)。
  */
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
@@ -9,8 +10,11 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import {
   createSchedulingPlan,
+  generateSchedule,
+  getPendingProductionPlans,
   getProductionLines,
   getSchedulingCapabilities,
+  type PendingProductionPlan,
   type SchedulingCapabilities
 } from '@/api/scheduling';
 import {
@@ -27,6 +31,7 @@ import {
 } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 import { toDateString } from '@/utils/dateFormat';
+import SchedulingDiagnosticsPanel from './SchedulingDiagnosticsPanel.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -35,6 +40,7 @@ const factoryId = computed(() => authStore.factoryId);
 const loading = ref(false);
 const batches = ref<TableRow[]>([]);
 const productionLines = ref<TableRow[]>([]);
+const productionLinesLoadFailed = ref(false);
 const capabilities = ref<SchedulingCapabilities | null>(null);
 const capabilityLoadFailed = ref(false);
 
@@ -51,6 +57,25 @@ const aiUnavailableReason = computed(() => capabilities.value?.aiGeneration?.rea
 const manualUnavailableReason = computed(() => capabilities.value?.manualCreation?.status === 'UNAVAILABLE'
   ? capabilities.value.manualCreation.reason : '');
 
+// ==================== 按工艺图自动排程 ====================
+// 只听后端能力: aiGeneration 不是 AVAILABLE (含能力加载失败) 时这个入口不可点。
+const aiAvailable = computed(() => capabilities.value?.aiGeneration?.status === 'AVAILABLE');
+const pendingPlans = ref<PendingProductionPlan[]>([]);
+const pendingPlansLoadFailed = ref(false);
+const autoForm = ref({ planIds: [] as string[], productionLineId: '', startTime: '' });
+
+/** 预先告诉用户还差什么 (防呆 Rule 1): 空串 = 可以提交。 */
+const autoBlockReason = computed(() => {
+  if (autoForm.value.planIds.length === 0) return '请至少选择一个生产计划';
+  if (!productionLinesLoadFailed.value && productionLines.value.length === 0) {
+    return '工厂还没有可用的产线，不能自动排程；请先新建产线';
+  }
+  if (productionLines.value.length > 1 && !autoForm.value.productionLineId) {
+    return `工厂有 ${productionLines.value.length} 条产线，请选择要排在哪条产线上`;
+  }
+  return '';
+});
+
 onMounted(() => {
   loadBatches();
   loadProductionLines();
@@ -63,6 +88,7 @@ async function loadCapabilities() {
     const response = await getSchedulingCapabilities(factoryId.value);
     if (response.success && response.data) capabilities.value = response.data;
     else capabilityLoadFailed.value = true;
+    if (aiAvailable.value) await loadPendingPlans();
   } catch (error) {
     capabilityLoadFailed.value = true;
     console.error('加载排程能力失败:', error);
@@ -104,9 +130,68 @@ async function loadProductionLines() {
     const response = await getProductionLines(factoryId.value, 'active');
     if (response.success && response.data) {
       productionLines.value = response.data;
+      if (productionLines.value.length === 1) {
+        autoForm.value.productionLineId = String(productionLines.value[0].id);
+      }
+    } else {
+      productionLinesLoadFailed.value = true;
     }
   } catch (error) {
+    productionLinesLoadFailed.value = true;
     console.error('加载产线失败:', error);
+  }
+}
+
+async function loadPendingPlans() {
+  if (!factoryId.value) return;
+  try {
+    const response = await getPendingProductionPlans(factoryId.value);
+    if (response.success && response.data) pendingPlans.value = response.data;
+    else pendingPlansLoadFailed.value = true;
+  } catch (error) {
+    pendingPlansLoadFailed.value = true;
+    console.error('加载待排产计划失败:', error);
+  }
+}
+
+function selectAutoMode() {
+  if (!aiAvailable.value) return;
+  useAI.value = true;
+}
+
+function togglePlan(planId: string) {
+  const index = autoForm.value.planIds.indexOf(planId);
+  if (index > -1) autoForm.value.planIds.splice(index, 1);
+  else autoForm.value.planIds.push(planId);
+}
+
+function planOrder(planId: string) {
+  return autoForm.value.planIds.indexOf(planId) + 1;
+}
+
+async function submitAutoSchedule() {
+  if (autoBlockReason.value) {
+    ElMessage.warning(autoBlockReason.value);
+    return;
+  }
+  try {
+    loading.value = true;
+    const response = await generateSchedule(factoryId.value!, {
+      planDate: form.value.planDate,
+      planIds: [...autoForm.value.planIds],
+      ...(autoForm.value.productionLineId ? { productionLineId: autoForm.value.productionLineId } : {}),
+      ...(autoForm.value.startTime ? { startTime: autoForm.value.startTime } : {}),
+    });
+    if (response.success && response.data) {
+      ElMessage.success(`已按工艺图排出 ${response.data.lineSchedules.length} 个计划`);
+      // warnings 只在生成这次返回 (缺工时 / 没工艺图 / 默认 08:00 开工), 带到详情页展示
+      router.push({ path: `/scheduling/plans/${response.data.id}`, state: { apsWarnings: response.data.warnings || [] } });
+    }
+  } catch (error) {
+    // Interceptor already shows the backend message (e.g. 哪道工序缺预计工时) as a sticky toast.
+    console.error('自动排程失败:', error);
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -150,7 +235,11 @@ function clearSelection() {
 
 async function handleSubmit() {
   if (useAI.value) {
-    ElMessage.warning(aiUnavailableReason.value);
+    if (!aiAvailable.value) {
+      ElMessage.warning(aiUnavailableReason.value);
+      return;
+    }
+    await submitAutoSchedule();
     return;
   }
   const validationErrors = validateManualSchedules(manualDrafts.value);
@@ -238,6 +327,22 @@ async function handleSubmit() {
             </div>
           </div>
           <button
+            v-if="aiAvailable"
+            type="button"
+            class="mode-option"
+            :class="{ active: useAI }"
+            data-testid="mode-dag-schedule"
+            aria-describedby="ai-generation-reason"
+            @click="selectAutoMode"
+          >
+            <el-icon class="mode-icon ai"><MagicStick /></el-icon>
+            <div class="mode-info">
+              <div class="mode-title">按工艺图自动排程</div>
+              <div id="ai-generation-reason" class="mode-desc">{{ capabilities?.aiGeneration?.reason }}</div>
+            </div>
+          </button>
+          <button
+            v-else
             type="button"
             class="mode-option unavailable"
             disabled
@@ -252,7 +357,7 @@ async function handleSubmit() {
           </button>
         </div>
 
-        <div class="capability-notice" role="status">
+        <div v-if="!useAI" class="capability-notice" role="status">
           <strong>人工确认的排程草稿</strong>
           <span>{{ capabilityLoadFailed ? '能力状态暂不可读，自动化保持不可用；请使用人工确认的排程草稿，网络恢复后可重试。' : aiUnavailableReason }}</span>
           <span v-if="manualUnavailableReason">{{ manualUnavailableReason }}</span>
@@ -260,8 +365,55 @@ async function handleSubmit() {
         </div>
       </el-card>
 
+      <!-- 按工艺图自动排程: 选计划 + 可选产线 / 开工时刻 -->
+      <el-card v-if="useAI && aiAvailable" class="auto-card">
+        <template #header>
+          <div class="card-header">
+            <span>选择要排的生产计划（按点选顺序先到先排）</span>
+          </div>
+        </template>
+        <div class="auto-rules">
+          按工艺图的先后关系和每道工序的预计工时排出开始、结束时间；同一道工序同一时刻只做一个计划。
+          缺预计工时的计划不会排，会告诉你是哪道工序，请到
+          <a href="#" @click.prevent="router.push('/system/work-processes')">工序管理</a>
+          填预计分钟。不会自动派工。
+        </div>
+        <div class="plan-list">
+          <div
+            v-for="plan in pendingPlans"
+            :key="plan.id"
+            class="plan-item"
+            :class="{ selected: planOrder(plan.id) > 0 }"
+            :data-testid="`aps-plan-${plan.id}`"
+            @click="togglePlan(plan.id)"
+          >
+            <span class="plan-order">{{ planOrder(plan.id) > 0 ? planOrder(plan.id) : '' }}</span>
+            <div class="batch-info">
+              <div class="batch-number">{{ plan.planNumber }}</div>
+              <div class="batch-product">{{ plan.productTypeName || '产品未标明' }} · 计划数量 {{ plan.plannedQuantity ?? '未知' }}</div>
+            </div>
+            <div class="plan-due">交期 {{ plan.expectedCompletionDate || '未设' }}</div>
+          </div>
+          <div v-if="pendingPlansLoadFailed" class="auto-hint error">待排产计划加载失败，请刷新页面重试。</div>
+          <div v-else-if="pendingPlans.length === 0" class="auto-hint">没有待排产的生产计划（只列出状态为「待处理」、一个月内到期的计划）。</div>
+        </div>
+        <div class="auto-options">
+          <label>产线
+            <select v-model="autoForm.productionLineId" data-testid="aps-line">
+              <option value="">{{ productionLines.length > 1 ? '请选择产线' : '自动（工厂只有一条产线）' }}</option>
+              <option v-for="line in productionLines" :key="line.id" :value="line.id">{{ line.name }}</option>
+            </select>
+          </label>
+          <label>开工时刻
+            <input v-model="autoForm.startTime" type="time" data-testid="aps-start-time" />
+            <span class="auto-hint">不填按计划日期 08:00 开工排</span>
+          </label>
+        </div>
+        <div v-if="autoBlockReason" class="auto-hint warning" data-testid="aps-block-reason">{{ autoBlockReason }}</div>
+      </el-card>
+
       <!-- 选择批次 -->
-      <el-card class="batch-card">
+      <el-card v-if="!useAI" class="batch-card">
         <template #header>
           <div class="card-header">
             <span>选择生产批次</span>
@@ -298,7 +450,7 @@ async function handleSubmit() {
         </div>
       </el-card>
 
-      <el-card v-if="manualDrafts.length" class="manual-schedule-card">
+      <el-card v-if="!useAI && manualDrafts.length" class="manual-schedule-card">
         <template #header><span>明确排程信息（每个批次必填）</span></template>
         <div v-for="draft in manualDrafts" :key="draft.batchId" class="manual-schedule-row">
           <div class="manual-schedule-context">
@@ -323,16 +475,31 @@ async function handleSubmit() {
         </div>
       </el-card>
 
+      <SchedulingDiagnosticsPanel
+        v-if="!useAI && manualDrafts.length === 0"
+        :factory-id="factoryId"
+      />
+      <SchedulingDiagnosticsPanel
+        v-for="diagnosticDraft in (useAI ? [] : manualDrafts)"
+        :key="diagnosticDraft.batchId"
+        :factory-id="factoryId"
+        :production-line-id="diagnosticDraft.productionLineId || undefined"
+        :batch-id="diagnosticDraft.batchId"
+        :start-time="diagnosticDraft.plannedStartTime || undefined"
+        :end-time="diagnosticDraft.plannedEndTime || undefined"
+      />
+
       <!-- 提交按钮 -->
       <div class="submit-area">
         <el-button @click="goBack">取消</el-button>
         <el-button
           type="primary"
           :loading="loading"
-          :icon="Plus"
+          :icon="useAI ? MagicStick : Plus"
+          :disabled="useAI && !!autoBlockReason"
           @click="handleSubmit"
         >
-          创建人工排程草稿
+          {{ useAI ? '按工艺图排程' : '创建人工排程草稿' }}
         </el-button>
       </div>
     </div>
@@ -372,8 +539,92 @@ async function handleSubmit() {
 
 .form-card,
 .mode-card,
-.batch-card {
+.batch-card,
+.auto-card {
   margin-bottom: 20px;
+}
+
+.auto-rules {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+  background: #ecf5ff;
+  border-left: 4px solid #409eff;
+}
+
+.plan-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.plan-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &.selected {
+    border-color: #409eff;
+    background: rgba(64, 158, 255, 0.05);
+  }
+
+  .plan-order {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid #dcdfe6;
+    border-radius: 50%;
+    font-size: 12px;
+    color: #409eff;
+  }
+
+  .batch-info {
+    flex: 1;
+
+    .batch-number { font-weight: 600; color: #303133; }
+    .batch-product { font-size: 12px; color: #909399; }
+  }
+
+  .plan-due { font-size: 12px; color: #909399; }
+}
+
+.auto-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #606266;
+    font-size: 12px;
+  }
+
+  select,
+  input {
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+  }
+}
+
+.auto-hint {
+  font-size: 12px;
+  color: #909399;
+
+  &.warning { margin-top: 10px; color: #b88230; }
+  &.error { color: #f56c6c; }
 }
 
 .mode-selection {

@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 585
+expectedToolCount: 587
 expectedLegacyCount: 569
 descriptors:
   - toolName: "unsupported_capability"
@@ -6458,18 +6458,18 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
+    requiresPermission: true
+    requiredPermissions: ["finance:read_write", "procurement:read_write"]
+    version: "2.0.0"
     domainTags: ["supplier"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: false
+      requiresPermission: true
       hasPermission: false
-      requiredPermissions: false
-      version: false
+      requiredPermissions: true
+      version: true
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
   - toolName: "supplier_delete"
@@ -11721,3 +11721,49 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
+  - toolName: "purchase_grant_execute"
+    implementationClass: "com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool"
+    provenance: EXPLICIT
+    actionType: WRITE
+    riskLevel: HIGH
+    supportsPreview: false
+    requiresPermission: true
+    requiredPermissions: ["procurement:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["purchase"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: false
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: smartbi_factory_analysis
+    implementationClass: com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool
+    actionType: ANALYZE
+    riskLevel: LOW
+    supportsPreview: false
+    requiredPermissions:
+    - analytics:read
+    allowedRoles: []
+    version: 1.0.0
+    domainTags:
+    - factory
+    - smartbi
+    - analytics
+    provenance: EXPLICIT
+    requiresPermission: true
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED

@@ -31,6 +31,11 @@ public class HomeLayoutGenerateTool extends AbstractBusinessTool {
     @Autowired
     private DashScopeClient dashScopeClient;
 
+    /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
     @Autowired
     private LayoutValidator layoutValidator;
 
@@ -87,7 +92,13 @@ public class HomeLayoutGenerateTool extends AbstractBusinessTool {
         String prompt = (userInput != null && !userInput.isEmpty())
                 ? userInput
                 : "生成一个适合工厂管理的首页布局";
-        String llmResponse = dashScopeClient.chatLowTemp(systemPrompt, prompt);
+        // 用户描述里的号码 / 人名 / 公司名 / 保密产品名换代号再发, 生成的配置里换回 (JSON 安全); 脱敏不了就不生成
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(getToolName(), factoryId, systemPrompt, prompt);
+        if (redacted.refused()) {
+            throw new com.cretas.aims.exception.BusinessException("这段描述没能通过发送前的脱敏检查, 未发给 AI。请稍后再试");
+        }
+        String llmResponse = redacted.restoreJsonText(dashScopeClient.chatLowTemp(redacted.text(0), redacted.text(1)));
 
         // 2. 解析生成的布局
         List<Map<String, Object>> generatedLayout;

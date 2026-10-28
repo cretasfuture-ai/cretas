@@ -24,6 +24,10 @@ public class SemiFinishedYieldStatsController {
 
     @GetMapping("/semi-finished/{semiFinishedSkuId}")
     @RequirePermission({"production:read"})
+    // 工艺保密: 全历史加权出成率是跨批汇总 (Steve 第三问 A); 半成品本身设了保密时只给负责人和授权人
+    @com.cretas.aims.annotation.ProcessSecretGuard(
+            action = com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+            from = com.cretas.aims.annotation.ProcessSecretGuard.Source.PRODUCT_PATH, name = "semiFinishedSkuId")
     @Operation(summary = "查询半成品 SKU 全历史加权出成率")
     public ApiResponse<SemiFinishedYieldStatsDTO> getStats(
             @PathVariable String factoryId,

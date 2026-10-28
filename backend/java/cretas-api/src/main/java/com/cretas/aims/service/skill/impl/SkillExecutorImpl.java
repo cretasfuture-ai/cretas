@@ -55,6 +55,17 @@ public class SkillExecutorImpl implements SkillExecutor {
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Skill 提示词 (含已抽参数) 与原话发给模型前脱敏; 单测直接 new 本类时用默认实例。
+     * required=false: 采购授权的 Postgres 切片测试 (@DataJpaTest + @Import) 把本类装进没有守卫 bean 的上下文;
+     * 完整应用里守卫 bean 总在, 切片里沿用默认实例 (号码 / 人名照样脱敏, 只是不查保密产品名)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "skill-executor";
+
     // W0 write-guard (intent-w0) — SITE D. Skill orchestration calls ToolExecutor.execute() directly
     // (executeSingleTool), bypassing ToolDispatchService (Site B). Field-injected (not in the Lombok
     // @RequiredArgsConstructor) so existing direct-construction tests stay unaffected; tests set it via
@@ -168,7 +179,7 @@ public class SkillExecutorImpl implements SkillExecutor {
             // 5. Call LLM to get parameters and execution plan
             Map<String, Object> params;
             try {
-                String llmResponse = callLlm(prompt, context.getUserQuery());
+                String llmResponse = callLlm(prompt, context.getUserQuery(), context.getFactoryId());
                 log.debug("LLM response for skill {}: length={}", skill.getName(),
                         llmResponse != null ? llmResponse.length() : 0);
                 // 6. Parse LLM response and extract parameters
@@ -562,9 +573,15 @@ public class SkillExecutorImpl implements SkillExecutor {
     /**
      * Call LLM
      */
-    private String callLlm(String prompt, String userQuery) {
+    private String callLlm(String prompt, String userQuery, String factoryId) {
+        // 脱敏不了就当 LLM 不可用 (调用点降级为确定性执行), 不发; 抽出的参数换回真值
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(EGRESS_SITE, factoryId, prompt, userQuery);
+        if (redacted.refused()) {
+            throw new IllegalStateException("skill prompt could not be redacted, not sending");
+        }
         try {
-            return dashScopeClient.chat(prompt, userQuery);
+            return redacted.restoreJsonText(dashScopeClient.chat(redacted.text(0), redacted.text(1)));
         } catch (Exception e) {
             log.error("LLM call failed: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to call LLM: " + e.getMessage(), e);
@@ -890,7 +907,11 @@ public class SkillExecutorImpl implements SkillExecutor {
         if (toolPermissionChain == null) {
             throw new IllegalStateException("权限校验暂不可用，未执行「" + toolName + "」。");
         }
-        Optional<String> denied = toolPermissionChain.denyReason(wgTool, factoryId, userRole, null, rbacCtx);
+        // Only this concrete adapter selects the server-owned canonical purchase task. Other
+        // Skills retain null intent; context/LLM intent strings never become policy authority.
+        var fixedIntent = wgTool instanceof com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool
+                ? com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool.canonicalIntent() : null;
+        Optional<String> denied = toolPermissionChain.denyReason(wgTool, factoryId, userRole, fixedIntent, rbacCtx);
         if (denied.isPresent()) {
             log.warn("Skill 工具权限拒绝: tool={}, userRole={}", toolName, userRole);
             throw new IllegalStateException(denied.get());
@@ -901,7 +922,10 @@ public class SkillExecutorImpl implements SkillExecutor {
         // Bind every identity alias (userRole/role/user_id ...) to the authenticated principal so an
         // LLM-extracted "userRole" cannot reach the tool, neither via arguments nor via context —
         // same binding as executeWithTool.
-        Map<String, Object> trustedParams = new HashMap<>(params != null ? params : Map.of());
+        // W0 already consumed the process-local authority above. Never serialize it as a Tool
+        // argument or expose it to business context; persisted domain grants remain authority.
+        Map<String, Object> trustedParams = new HashMap<>(
+                com.cretas.aims.ai.tool.WriteGuardService.withoutServerConfirmationMarker(params != null ? params : Map.of()));
         com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
                 trustedParams, factoryId, userId, userRole);
 

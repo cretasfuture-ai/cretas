@@ -21,6 +21,19 @@ export interface SchedulingPlan {
   createdAt: string;
   confirmedBy?: number;
   confirmedAt?: string;
+  notes?: string | null;
+  /** 自动排程的提示 (缺工时 / 没有工艺图 / 开工时刻默认 08:00 等); 只在生成那次返回。 */
+  warnings?: string[];
+}
+
+/** 自动排程 (按工艺图) 每道工序的排程时间; start / end 为本地时间 ISO 字符串。 */
+export interface ScheduleTaskTimelineEntry {
+  taskName: string;
+  processOrder: number;
+  workProcessId?: string | null;
+  start: string | null;
+  end: string | null;
+  status: 'SCHEDULED' | 'DONE' | 'MISSING_DURATION' | 'BLOCKED_BY_MISSING' | string;
 }
 
 export interface LineSchedule {
@@ -44,6 +57,10 @@ export interface LineSchedule {
   workerAssignments: WorkerAssignment[];
   completionRate?: number;
   isDelayed?: boolean;
+  /** 自动排程: 对应的生产计划; 手工排程为空。 */
+  productionPlanId?: string | null;
+  planNumber?: string | null;
+  taskTimeline?: ScheduleTaskTimelineEntry[] | null;
 }
 
 export interface WorkerAssignment {
@@ -165,6 +182,9 @@ interface SchedulingWireLineSchedule {
   workerAssignments?: SchedulingWireWorkerAssignment[];
   completionRate?: number;
   isDelayed?: boolean;
+  productionPlanId?: string | null;
+  planNumber?: string | null;
+  taskTimeline?: ScheduleTaskTimelineEntry[] | null;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -205,6 +225,9 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     workerAssignments: (wire.workerAssignments || []).map(mapWorkerAssignment),
     completionRate: wire.completionRate,
     isDelayed: wire.isDelayed,
+    productionPlanId: wire.productionPlanId ?? null,
+    planNumber: wire.planNumber ?? null,
+    taskTimeline: wire.taskTimeline ?? null,
   };
 }
 
@@ -581,21 +604,39 @@ export function cancelSchedulingPlan(factoryId: string, planId: string, reason: 
   });
 }
 
+export interface GenerateScheduleRequest {
+  planDate: string;
+  /** 要排的生产计划 id, 按顺序先到先排 (同一工位同一时刻只做一个)。 */
+  planIds: string[];
+  /** 可选: 产线; 工厂只有 1 条可用产线时可不传。 */
+  productionLineId?: string;
+  /** 可选: 开工时刻 HH:mm; 不传按计划日期 08:00。 */
+  startTime?: string;
+}
+
 /**
- * AI生成调度建议
+ * 按工艺图自动排程: 按工艺图先后关系 + 每道工序预计工时排出开始/结束时间。
+ * 缺预计工时的计划不排 (返回 warnings 列出工序名); 不自动派工。
  */
-export function generateSchedule(
-  factoryId: string,
-  data: {
-    planDate: string;
-    batchIds: number[];
-    optimizationGoal?: 'minimize_cost' | 'maximize_efficiency' | 'balanced';
-    considerTemporaryWorkers?: boolean;
-    minCompletionProbability?: number;
-  }
-) {
+export function generateSchedule(factoryId: string, data: GenerateScheduleRequest) {
   return post<SchedulingWirePlan>(`/${factoryId}/scheduling/generate`, data)
     .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
+}
+
+/** 待排产的生产计划 (后端 pending-batches 返回的是生产计划列表)。 */
+export interface PendingProductionPlan {
+  id: string;
+  planNumber: string;
+  productTypeId?: string;
+  productTypeName?: string | null;
+  plannedQuantity?: number | null;
+  expectedCompletionDate?: string | null;
+  status?: string;
+  isUrgent?: boolean;
+}
+
+export function getPendingProductionPlans(factoryId: string) {
+  return get<PendingProductionPlan[]>(`/${factoryId}/scheduling/pending-batches`);
 }
 
 /**
@@ -993,4 +1034,61 @@ export function updateSchedulingSettings(factoryId: string, settings: Partial<Sc
     });
   }
   return put<SchedulingSettings>(`/${factoryId}/scheduling/settings`, settings);
+}
+
+// ==================== S4 产线产能与产品所需设备 ====================
+
+/** 产能单位: 件 / 千克 / 批。插单只认与订单同单位的配置, 不换算。 */
+export type CapacityUnit = 'PIECE' | 'KG' | 'BATCH';
+
+export interface LineCapacityConfig {
+  id: number;
+  productionLineId: string;
+  /** 为空 = 该线通用 */
+  productTypeId: string | null;
+  capacityPerHour: number;
+  capacityUnit: CapacityUnit;
+  source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
+  /** 谁配的: 工厂用户或平台管理员 (对话建厂) */
+  actorType: 'FACTORY_USER' | 'PLATFORM_ADMIN';
+  /** 只在工厂用户配置时有值 */
+  configuredBy: number | null;
+  effectiveFrom: string;
+}
+
+export interface ProductEquipmentRequirement {
+  id: number;
+  productTypeId: string;
+  equipmentId: number;
+  source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
+  /** 只在工厂用户配置时有值 */
+  configuredBy: number | null;
+}
+
+export function getLineCapacityConfigs(factoryId: string) {
+  return get<LineCapacityConfig[]>(`/${factoryId}/scheduling/line-capacity/capacity`);
+}
+
+export function setLineCapacity(factoryId: string, data: {
+  productionLineId: string;
+  productTypeId?: string | null;
+  capacityPerHour: number;
+  capacityUnit: CapacityUnit;
+}) {
+  return put<LineCapacityConfig>(`/${factoryId}/scheduling/line-capacity/capacity`, data);
+}
+
+export function deleteLineCapacity(factoryId: string, configId: number) {
+  return del<void>(`/${factoryId}/scheduling/line-capacity/capacity/${configId}`);
+}
+
+export function getProductEquipmentRequirements(factoryId: string) {
+  return get<ProductEquipmentRequirement[]>(`/${factoryId}/scheduling/line-capacity/equipment`);
+}
+
+export function setProductEquipment(factoryId: string, productTypeId: string, equipmentIds: number[]) {
+  return put<ProductEquipmentRequirement[]>(
+    `/${factoryId}/scheduling/line-capacity/equipment/${encodeURIComponent(productTypeId)}`,
+    { equipmentIds },
+  );
 }

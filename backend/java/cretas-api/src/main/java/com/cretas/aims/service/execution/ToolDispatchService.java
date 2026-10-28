@@ -28,6 +28,7 @@ import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
 import com.cretas.aims.service.calibration.SelfCorrectionService;
 import com.cretas.aims.service.calibration.ToolCallRedundancyService;
@@ -49,6 +50,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -67,6 +69,13 @@ public class ToolDispatchService {
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
     private final DashScopeClient dashScopeClient;
+
+    /** 参数抽取发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String PARAM_EGRESS_SITE = "tool-param-extraction";
     private final ToolCallRedundancyService redundancyService;
     private final SelfCorrectionService selfCorrectionService;
     private final CorrectionAgentService correctionAgentService;
@@ -134,6 +143,24 @@ public class ToolDispatchService {
                                                   Long userId, String userRole,
                                                   IntentMatchResult matchResult) {
         try {
+            // Request identity must be checked before parameter extraction or cache lookup.
+            // A cached supplier result is subject to the same boundary as a fresh Tool call.
+            if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    || (intent != null && SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())))
+                    && (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    || intent == null || !SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                    || com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                    .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                    .filter(actor -> Objects.equals(actor.id(), userId))
+                    .filter(actor -> Objects.equals(actor.factoryId(), factoryId)).isEmpty())) {
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent == null ? null : intent.getIntentCode())
+                        .status("FORBIDDEN").aiMode("READ")
+                        .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
+                        .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
+                        .executedAt(LocalDateTime.now()).build();
+            }
             // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
             // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
             // ToolRegistry.isToolEnabledForFactory() was never called on the execution
@@ -435,7 +462,8 @@ public class ToolDispatchService {
 
             // 4. 冗余检查 (ET-Agent 行为校准)
             String sessionId = request.getSessionId() != null ? request.getSessionId() : "default";
-            if (redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
+            if (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    && redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
                 if (cachedResult.isPresent()) {
@@ -444,7 +472,7 @@ public class ToolDispatchService {
                     String parsedMsg = parsed.getMessage() != null ? parsed.getMessage() : "操作已完成。";
                     Map<String, Object> cachedMetadata = new HashMap<>();
                     cachedMetadata.put("cached", true);
-                    // 冗余缓存复用的也是一次成功执行 (同参数), 一样产出 lastAction
+                    cachedMetadata.put("toolName", tool.getToolName());
                     putLastAction(cachedMetadata, parsed.getStatus(), parsed.getResultData(),
                             intent, tool.getToolName(), params);
                     return IntentExecuteResponse.builder()
@@ -452,7 +480,7 @@ public class ToolDispatchService {
                             .intentCode(intent.getIntentCode())
                             .intentName(intent.getIntentName())
                             .intentCategory(intent.getIntentCategory())
-                            .status("SUCCESS")
+                            .status(parsed.getStatus())
                             .message(parsedMsg)
                             .resultData(parsed.getResultData())
                             .formattedText(parsed.getFormattedText())
@@ -486,8 +514,10 @@ public class ToolDispatchService {
                     resultJson = tool.execute(toolCall, context);
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
+                    boolean toolSucceeded = isToolResultSuccessful(resultJson);
+                    String toolFailureMessage = toolSucceeded ? null : extractToolFailureMessage(resultJson);
 
-                    // 执行成功，记录
+                    // 只有显式 Boolean true 才能审计为成功；无法确认的结果不得进入成功缓存。
                     try {
                         ToolCallRecord record = ToolCallRecord.builder()
                                 .sessionId(sessionId)
@@ -495,13 +525,17 @@ public class ToolDispatchService {
                                 .toolName(tool.getToolName())
                                 .toolParameters(argumentsJson)
                                 .parametersHash(redundancyService.computeParametersHash(params))
-                                .executionStatus(ToolCallRecord.ExecutionStatus.SUCCESS)
+                                .executionStatus(toolSucceeded
+                                        ? ToolCallRecord.ExecutionStatus.SUCCESS
+                                        : ToolCallRecord.ExecutionStatus.FAILED)
+                                .errorMessage(toolFailureMessage)
                                 .executionTimeMs((int) executionTime)
                                 .retryCount(attempt - 1)
                                 .recovered(attempt > 1)
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
-                        if (savedRecord != null && resultJson != null) {
+                        if (toolSucceeded && savedRecord != null && resultJson != null
+                                && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
                             // Don't substring-truncate — that splits tokens and produces
                             // invalid JSON like `{..."previous` which PG rejects at INSERT.
@@ -524,7 +558,7 @@ public class ToolDispatchService {
                     }
 
                     // D7: 快速规则验证
-                    if (resultJson != null && attempt < MAX_RETRIES) {
+                    if (toolSucceeded && resultJson != null && attempt < MAX_RETRIES) {
                         if (isResultClearlyValid(resultJson)) {
                             log.info("[D7-FastValidation] Result clearly valid ({}B), skipping LLM validation for tool={}",
                                     resultJson.length(), tool.getToolName());
@@ -1065,6 +1099,9 @@ public class ToolDispatchService {
         if (conversationService == null || userId == null || factoryId == null || previewData == null) {
             return;
         }
+        if (!hasBoundFactoryActor(factoryId, userId)) {
+            return;
+        }
         List<String> missing = new ArrayList<>();
         if (previewData.get("missingParameters") instanceof List<?> names) {
             for (Object n : names) {
@@ -1106,6 +1143,14 @@ public class ToolDispatchService {
         } catch (Exception e) {
             log.warn("预览追问开会话失败 (追问照常返回): intent={}, error={}", intent.getIntentCode(), e.getMessage());
         }
+    }
+
+    private boolean hasBoundFactoryActor(String factoryId, Long userId) {
+        return com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .filter(actor -> Objects.equals(actor.id(), userId))
+                .filter(actor -> Objects.equals(actor.factoryId(), factoryId))
+                .isPresent();
     }
 
     private static String slotTypeOf(String jsonType) {
@@ -1297,6 +1342,36 @@ public class ToolDispatchService {
     }
 
     // ==================== 内部方法 ====================
+
+    /**
+     * Normal return is not a success verdict. Require explicit Boolean true,
+     * matching the public response parser; absent, malformed and negative
+     * verdicts must not enter success audit/cache or result-correction retries.
+     */
+    private boolean isToolResultSuccessful(String resultJson) {
+        try {
+            Map<?, ?> result = objectMapper.readValue(resultJson, Map.class);
+            return result != null && Boolean.TRUE.equals(result.get("success"));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String extractToolFailureMessage(String resultJson) {
+        try {
+            Map<?, ?> result = objectMapper.readValue(resultJson, Map.class);
+            Object error = result.get("error");
+            if (error != null) return String.valueOf(error);
+            Object data = result.get("data");
+            if (data instanceof Map<?, ?> dataMap) {
+                Object code = dataMap.get("code");
+                if (code != null) return String.valueOf(code);
+            }
+        } catch (Exception ignored) {
+            // parseToolResultToResponse remains the source of the user-facing fallback.
+        }
+        return "工具结果未明确返回 success=true，无法确认执行成功";
+    }
 
     /**
      * 使用 LLM Tool Calling 从用户输入中提取参数
@@ -1503,13 +1578,18 @@ public class ToolDispatchService {
                 请使用 extract_parameters 工具返回提取的参数。
                 """, tool.getToolName(), tool.getDescription() != null ? tool.getDescription() : "执行业务操作");
 
+            // 原话里的号码 / 人名 / 公司名 / 保密产品名换代号再发; 抽出的参数换回真值后再做落地校验; 脱敏不了就不抽
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, null, systemPrompt, userInput);
+            if (redacted.refused()) {
+                return extractedParams;
+            }
             ChatCompletionResponse response = dashScopeClient.chatWithTools(
-                    systemPrompt, userInput, List.of(extractionTool));
+                    redacted.text(0), redacted.text(1), List.of(extractionTool));
 
             if (dashScopeClient.hasToolCalls(response)) {
                 ToolCall toolCall = dashScopeClient.getFirstToolCall(response);
                 if (toolCall != null && toolCall.getFunction() != null) {
-                    String argumentsJson = toolCall.getFunction().getArguments();
+                    String argumentsJson = redacted.restoreJsonText(toolCall.getFunction().getArguments());
                     if (argumentsJson != null && !argumentsJson.isEmpty()) {
                         try {
                             @SuppressWarnings("unchecked")

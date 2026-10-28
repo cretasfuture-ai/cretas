@@ -1,0 +1,76 @@
+<script setup lang="ts">
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { getFactoryChartDetails, type FactoryChartDetailsData, type FactoryRecommendation } from '@/api/smartbi/factory-charts';
+import { appendDetailPage, detailColumns, FACTORY_DETAIL_PAGE_SIZE } from './factoryChartDetails';
+
+const props = defineProps<{ modelValue: boolean; candidate: FactoryRecommendation | null; point?: { name: string; seriesName?: string; dataIndex?: number } }>();
+const emit = defineEmits<{ 'update:modelValue': [boolean] }>();
+const loading = ref(false); const error = ref(''); const data = ref<FactoryChartDetailsData | null>(null); const rows = ref<Record<string, unknown>[]>([]); const page = ref(1); const requestVersion = ref(0); const mode = ref<'continuous' | 'paged'>('continuous');
+const columns = computed(() => detailColumns(data.value).map((column) => ({
+  ...column,
+  cellRenderer: ({ cellData }: { cellData: unknown }) => h('span', { class: 'el-table-v2__cell-text', title: display(cellData) }, display(cellData)),
+})));
+const viewport = ref({ width: 1024, height: 720 });
+const width = computed(() => Math.max(280, Math.min(900, Math.floor(viewport.value.width * 0.9 - 24))));
+const height = computed(() => Math.min(620, Math.max(280, viewport.value.height - 260)));
+const point = ref<{ name: string; seriesName?: string; dataIndex?: number }>();
+const hasMore = computed(() => Boolean(data.value?.hasMore));
+const filterInputs = reactive<Record<string, string>>({});
+const displayedRows = computed(() => rows.value.map((row, index) => ({ ...row, __detailRowKey: `${props.candidate?.detailContext?.id ?? 'context'}:${(page.value - 1) * FACTORY_DETAIL_PAGE_SIZE + index}` })));
+const filterList = computed(() => data.value?.availableFilters ?? []);
+function close() { emit('update:modelValue', false); }
+function apiError(result: { message?: string }, fallback: string) { return result.message || fallback; }
+async function load(targetPage = 1, reset = true) {
+  const context = props.candidate?.detailContext; if (!context) { error.value = '当前图表没有可用的原始明细'; return; }
+  const version = ++requestVersion.value; if (reset) { rows.value = []; data.value = null; }
+  loading.value = true; error.value = '';
+  try {
+    const filters = Object.entries(filterInputs).filter(([, value]) => value.trim()).map(([field, value]) => ({ field, value: value.trim() }));
+    const result = await getFactoryChartDetails({ context_id: context.id, page: targetPage, page_size: FACTORY_DETAIL_PAGE_SIZE, filters, point: point.value });
+    if (version !== requestVersion.value) return;
+    if (!result.success || !result.data) { error.value = apiError(result, '原始明细加载失败'); return; }
+    page.value = result.data.page; data.value = result.data; rows.value = reset ? result.data.rows : appendDetailPage(rows.value, result);
+  } catch (err) { if (version === requestVersion.value) error.value = err instanceof Error && err.message ? err.message : '原始明细加载失败，请稍后重试'; }
+  finally { if (version === requestVersion.value) loading.value = false; }
+}
+function loadMore() { if (!loading.value && hasMore.value) void load(page.value + 1, false); }
+function loadPrevious() { if (!loading.value && page.value > 1) void load(page.value - 1, true); }
+function loadNext() { if (!loading.value && hasMore.value) void load(page.value + 1, true); }
+function applyFilters() { void load(1, true); }
+function clearFilters() { Object.keys(filterInputs).forEach((key) => { delete filterInputs[key]; }); void load(1, true); }
+function onEndReached() { loadMore(); }
+function openAt(candidate: FactoryRecommendation | null) { point.value = props.point; if (candidate?.detailContext) void load(1, true); }
+watch([() => props.modelValue, () => props.candidate?.id, () => props.candidate?.detailContext?.id, () => props.point?.name, () => props.point?.dataIndex], ([open]) => { requestVersion.value += 1; if (open) openAt(props.candidate); else { rows.value = []; data.value = null; } }, { immediate: true });
+function updateViewport() { viewport.value = { width: window.innerWidth, height: window.innerHeight }; }
+onMounted(() => { updateViewport(); window.addEventListener('resize', updateViewport); });
+onBeforeUnmount(() => { requestVersion.value += 1; window.removeEventListener('resize', updateViewport); });
+function display(value: unknown) { return value === null || value === undefined ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value); }
+</script>
+<template>
+  <el-drawer :model-value="modelValue" direction="rtl" size="min(960px, 96vw)" :title="candidate ? `原始明细 · ${candidate.title}` : '原始明细'" @close="close">
+    <div class="details-scope" v-if="candidate">
+      <div class="details-meta">{{ data?.source || candidate.source }} · {{ data?.period || '当前期间' }} · 共 {{ data?.total ?? 0 }} 行</div>
+      <div v-if="point" class="point-context">当前点位：{{ point.name }}<span v-if="point.seriesName"> · {{ point.seriesName }}</span></div>
+      <div class="details-controls"><el-radio-group v-model="mode" size="small"><el-radio-button label="continuous" value="continuous">连续加载</el-radio-button><el-radio-button label="paged" value="paged">分页</el-radio-button></el-radio-group><el-button v-if="data?.appliedFilters?.length" size="small" @click="clearFilters">清除筛选</el-button></div>
+      <div v-if="filterList.length" class="details-filters"><span v-for="filter in filterList" :key="filter.field" class="filter-control"><label>{{ filter.label }}</label><el-input v-model="filterInputs[filter.field]" size="small" :placeholder="filter.kind" @keyup.enter="applyFilters" /></span><el-button size="small" type="primary" @click="applyFilters">应用筛选</el-button></div>
+      <div v-if="data?.appliedFilters?.length" class="applied-filters">已应用：<el-tag v-for="filter in data.appliedFilters" :key="filter.field" size="small">{{ filter.field }}={{ filter.value }}</el-tag></div>
+      <el-alert v-if="error" type="error" show-icon :closable="false">{{ error }}</el-alert>
+      <el-empty v-else-if="!loading && !rows.length" description="没有可用原始行" />
+      <div v-else class="details-table-wrap">
+        <el-table-v2 v-if="columns.length" :columns="columns" :data="displayedRows" :width="width" :height="height" :row-height="44" :header-height="44" row-key="__detailRowKey" :on-end-reached="mode === 'continuous' ? onEndReached : undefined" />
+      </div>
+      <div class="details-actions"><template v-if="mode === 'paged'"><el-button :disabled="page <= 1 || loading" @click="loadPrevious">上一页</el-button><span>第 {{ page }} 页</span><el-button :disabled="!hasMore || loading" @click="loadNext">下一页</el-button></template><el-button v-else-if="hasMore" :loading="loading" @click="loadMore">加载更多</el-button><span v-if="loading">正在读取原始明细…</span><span v-else-if="!hasMore && rows.length">已加载全部 {{ rows.length }} 行</span></div>
+    </div>
+  </el-drawer>
+</template>
+<style scoped>
+.details-meta { margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
+.details-table-wrap { overflow-x: auto; min-height: 280px; }
+.details-actions { display:flex; justify-content:center; align-items:center; gap:12px; padding-top:12px; color:var(--el-text-color-secondary); font-size:12px; }
+.point-context,.applied-filters { margin: 8px 0; color: var(--el-text-color-secondary); font-size: 12px; }
+.details-controls,.details-filters { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin: 10px 0; }
+.filter-control { display:flex; align-items:center; gap:4px; width: min(240px, 100%); }
+.filter-control label { white-space:nowrap; font-size:12px; color:var(--el-text-color-secondary); }
+@media (max-width: 768px) { .details-table-wrap { margin: 0 -12px; } .details-meta { line-height:1.6; } }
+</style>

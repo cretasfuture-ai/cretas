@@ -189,6 +189,37 @@ export interface ProcessSheetRowRequest {
    * (见 ProcessSheetServiceImpl#validateCustomFields)。
    */
   customFields?: Record<string, unknown>;
+  /**
+   * 缺口 06 汇合配比: 前端只发 reason/note (超差时必填); 其余由后端 BlendRatioCheck 在正式提交时
+   * 计算并覆盖, 随 row_payload 回显。草稿不校验。
+   */
+  blendRatio?: BlendRatioDeviation;
+  /**
+   * 缺口 13 (审查中 7): 本道挂了关键控制点时, 正式报工随请求带上 CCP 实测值 ——
+   * 后端与报工同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。超限偏离写进返回的 warnings。
+   */
+  ccpReadings?: Array<{ checkpointId: number; measuredValue: number; notes?: string | null }>;
+}
+
+/** mirrors Java dto/workflow/BlendRatioDeviation。 */
+export interface BlendRatioDeviation {
+  reason?: string | null;
+  note?: string | null;
+  /** WITHIN / OVER_WITH_REASON / SKIPPED_UNITS (服务端计算)。 */
+  status?: string | null;
+  tolerancePp?: number | null;
+  basis?: string | null;
+  maxDeviationPp?: number | null;
+  skipReason?: string | null;
+  lines?: Array<{
+    workflowPortId: string;
+    materialName: string;
+    quantity: number;
+    recipeSharePercent: number;
+    actualSharePercent: number;
+    deviationPp: number;
+    overTolerance: boolean;
+  }> | null;
 }
 
 /**
@@ -612,6 +643,8 @@ export interface WorkflowPortDescriptor {
 export interface WorkflowProcessDescriptor {
   workflowNodeId: string;
   workProcessId: string;
+  /** 缺口 13: 本工序挂的关键控制点; 非空 ⇒ 正式报工前必须录实测值 (CcpEntryDialog)。 */
+  ccpCheckpoints?: import('./ccp').CcpStepCheckpoint[] | null;
   processName: string | null;
   /** 工序类别 (WorkProcess.processCategory, 熟制/注射/…) — Slice C: workflow 计划报工据此驱动锅数录入。 */
   processCategory: string | null;
@@ -630,6 +663,13 @@ export interface WorkflowProcessDescriptor {
    * 录入 N 条产出 (产品只读=端口 SKU, 只填数量) —— 这是"是否多产出"的唯一判据, 不是 toggle。
    */
   outputs: WorkflowPortDescriptor[];
+  /**
+   * 缺口 04: 按工艺图这一道能不能正式报 (上游产出的料到了就是 true)。与正式录入时后端拦截
+   * 同一份判定。`null`/缺省 = 后端没算, 退回旧的「上一道已正式报工」规则。
+   */
+  unlocked?: boolean | null;
+  /** unlocked=false 时给人看的原因 (等哪一道上游)。 */
+  blockedReason?: string | null;
 }
 
 /**
@@ -728,6 +768,10 @@ export interface SemiFinishedStockItem {
   isRework?: boolean | null;
   /** picker 上下文中的纯度闸判定状态，例如 ENFORCED。 */
   reworkPurityStatus?: string | null;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=有待检数量 / RELEASED / REJECTED (旧数据, 不可选)。 */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
+  /** 这一行里待检的数量 (PENDING 时才有); 可投 = availableQuantity − inspectionPendingQuantity。 */
+  inspectionPendingQuantity?: number | null;
 }
 
 /**
@@ -763,6 +807,8 @@ export interface SemiFinishedInventoryFilter {
   productTypeId?: string;
   /** 阶段: 当前道工序序 → 只列 processOrder 严格小于此值的更早阶段半成品 (防回锅)。 */
   maxProcessOrder?: number;
+  /** 归属 (缺口 16): 领用计划 → 只列与它同一归属的半成品 (代工客户 / 本厂自有不混)。 */
+  planId?: string;
 }
 
 /**
@@ -779,6 +825,7 @@ export function getSemiFinishedInventory(
   const params: Record<string, string | number> = {};
   if (filter?.productTypeId) params.productTypeId = filter.productTypeId;
   if (filter?.maxProcessOrder != null) params.maxProcessOrder = filter.maxProcessOrder;
+  if (filter?.planId) params.planId = filter.planId;
   return get<SemiFinishedStockItem[]>(`/${factoryId}/semi-finished/inventory`, { params });
 }
 
@@ -788,12 +835,15 @@ export function getSemiFinishedInventory(
  * (⚠️ 不要在路径前加 /api/mobile — baseURL 已在 request.ts 设置, 见文件顶注释)
  *
  * @param productTypeId 可选产品族过滤 (传当前计划产品 → 后端解析成族键仅返回同族成品; 成品是终态无阶段过滤)。
+ * @param planId 归属 (缺口 16): 领用计划 → 只列与它同一归属的成品 (代工客户 / 本厂自有不混)。
  */
 export function getFinishedGoodsInventory(
   factoryId: string,
   productTypeId?: string,
+  planId?: string,
 ): Promise<ApiResponse<FinishedGoodsStockItem[]>> {
   const params: Record<string, string> = {};
   if (productTypeId) params.productTypeId = productTypeId;
+  if (planId) params.planId = planId;
   return get<FinishedGoodsStockItem[]>(`/${factoryId}/finished-goods/inventory`, { params });
 }

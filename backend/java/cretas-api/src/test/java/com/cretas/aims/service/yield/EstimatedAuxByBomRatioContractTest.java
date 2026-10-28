@@ -208,6 +208,8 @@ class EstimatedAuxByBomRatioContractTest {
         assertThat(line.getRawInputKg()).isEqualByComparingTo(RAW_KG);
         // 10 g/kg × 80kg = 800 g = 0.8 kg
         assertThat(line.getQuantity()).isEqualByComparingTo("0.8");
+        // 工艺保密: 用量 = 配方 g/kg × 主料投入, 两个数同在一行, 一除就是配比 (独立审查 V2.1 M4)
+        assertThat(line.isAutomatic()).isTrue();
         assertThat(line.getUnit()).isEqualTo("kg");
         assertThat(line.getUnitPrice()).isEqualByComparingTo("2.00");
         assertThat(line.getAmount()).isEqualByComparingTo("1.6000");
@@ -229,6 +231,41 @@ class EstimatedAuxByBomRatioContractTest {
         assertThat(dto.getTotalCost()).isEqualByComparingTo("851.6000");
         assertThat(dto.getMissingCostItems())
                 .noneMatch(item -> item.startsWith("ESTIMATED_AUX_"));
+    }
+
+    @Test
+    @DisplayName("🔴 逐道录入: 调料实耗在卤制批, 前处理批有主料无调料 ⇒ 前处理批【不】再估整张 BOM "
+            + "(F006【演示L3】猪舌/猪大肠批把 10 味调料各估一遍, 无价的阻断成本)")
+    void auxConsumedOnAnotherBatchOfTheSamePlanIsNotReEstimated() {
+        stubBatch(List.of());
+        ProductionBatch braise = new ProductionBatch();
+        braise.setId(9202L);
+        braise.setFactoryId(F);
+        braise.setBatchNumber("CLK-AUX-BRAISE");
+        braise.setProductionPlanId(PLAN);
+        braise.setEquipmentCost(BigDecimal.ZERO);
+        braise.setOtherCost(BigDecimal.ZERO);
+        braise.setBatchType("CLERK_WIP");
+        ProductionBatch pre = batchRepository.findByFactoryIdAndProductionPlanIdIn(F, List.of(PLAN)).get(0);
+        // 与 prod 同形: 成本批次清单排除 CLERK_WIP, 卤制批只在含 WIP 的查询里出现
+        // (#1150 第一版只看清单里的批次, 单测把卤制批也放进清单 ⇒ 绿, 上线后 L3A 仍 409)
+        when(batchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(F, PLAN))
+                .thenReturn(List.of(pre, braise));
+        when(yieldReportService.getYield(F, 9202L)).thenReturn(emptyYield());
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(9202L, F))
+                .thenReturn(List.of(consumption("MB-SALT", "MT-SALT", "SEASONING", "0.5", "3.00"),
+                        consumption("MB-BOX", "MT-BOX", "PACKAGING", "10", "0.50")));
+        stubMaterialBatch("MB-SALT", "食用盐-0001", "kg", "3.00", InventoryOwnership.COMPANY_OWNED);
+        // BOM 价没填 —— 若前处理批去估它, 会落 ESTIMATED_AUX_PRICE_MISSING 并阻断
+        stubBom(seasoning("MT-SALT", "食用盐", "10", null, null));
+
+        OrderCostBreakdownDTO dto = compute();
+
+        assertThat(dto.getEstimatedAuxItems()).isEmpty();
+        assertThat(dto.getMissingCostItems()).noneMatch(i -> i.startsWith("ESTIMATED_AUX_"));
+        // 卤制批的调料成本在 prod 上随半成品投料单价进来, 不在本夹具里; 这里只钉「不再估」
+        assertThat(dto.getSeasoningCost()).isZero();
+        assertThat(dto.isCostComplete()).as("missing=%s", dto.getMissingCostItems()).isTrue();
     }
 
     @Test

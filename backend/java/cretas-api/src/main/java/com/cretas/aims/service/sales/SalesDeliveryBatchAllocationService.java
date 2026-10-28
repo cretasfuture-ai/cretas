@@ -30,6 +30,13 @@ public interface SalesDeliveryBatchAllocationService {
 
     List<SalesDeliveryItemBatchAllocation> listByDeliveryItem(String factoryId, String deliveryItemId);
 
+    /**
+     * 「查看/修改批次」用: 已有分配逐条标出按订单库存所有权规则是否仍可发
+     * ({@code eligible} / {@code ineligibleReason}), 判定与仓库确认用的是同一道
+     * {@code SalesFinishedGoodsOwnershipGuard}。
+     */
+    List<SalesDeliveryItemBatchAllocation> listForReview(String factoryId, String deliveryItemId);
+
     void clearAllocations(String factoryId, String deliveryItemId);
 
     /**

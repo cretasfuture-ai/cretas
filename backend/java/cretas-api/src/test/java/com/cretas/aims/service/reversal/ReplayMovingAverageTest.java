@@ -16,6 +16,7 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
+import com.cretas.aims.service.wip.WipLedgerEntries;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -666,6 +667,94 @@ class ReplayMovingAverageTest {
                     "全已知 0 成本: accumulatedCost=0.00 (非 null)");
             assertNotNull(finalSfi.getAccumulatedCost(),
                     "全已知 0 成本: accumulatedCost 不应为 null");
+        }
+
+        @Test
+        @DisplayName("RP-COR-1: 报工更正 ADJUST 增量进入净产出但不改变原累计成本")
+        void reportCorrectionAdjust_increasesProducedWithoutInventingCost() {
+            Long sfiId = 240L;
+            SemiFinishedInventory sfi = stubSfi(sfiId, new BigDecimal("0.82"), BigDecimal.ZERO,
+                    new BigDecimal("0.82"), new BigDecimal("12.3537"), "SEMI-COR-1");
+            sfi.setAccumulatedCost(new BigDecimal("10.13"));
+            SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                    .id(241L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("0.81")).unitCostAtTxn(new BigDecimal("12.50")).build();
+            SemiFinishedInventoryTransaction correction = SemiFinishedInventoryTransaction.builder()
+                    .id(242L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
+                    .sourceType(WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE)
+                    .sourceRef("report-correction:COR-COR-1:report:240")
+                    .reportId(240L).quantity(new BigDecimal("0.01")).unitCostAtTxn(null)
+                    .balanceCostAfter(new BigDecimal("12.3537")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId)).thenReturn(List.of(in, correction));
+
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                    "replayMovingAverage", sfiId, FACTORY_ID, java.time.LocalDateTime.now());
+
+            assertEquals(new BigDecimal("0.82"), sfi.getProducedQuantity());
+            assertEquals(new BigDecimal("10.13"), sfi.getAccumulatedCost());
+            assertEquals(new BigDecimal("12.3537"), sfi.getUnitCost());
+            assertEquals(new BigDecimal("0.82"), sfi.getAvailableQuantity());
+        }
+
+        @Test
+        @DisplayName("RP-COR-2: 下游 INPUT 撤回恢复消费后不丢报工更正量")
+        void downstreamReversal_restoresConsumedQuantityWithoutErasingCorrection() {
+            Long sfiId = 250L;
+            SemiFinishedInventory sfi = stubSfi(sfiId, new BigDecimal("0.82"), new BigDecimal("0.20"),
+                    new BigDecimal("0.62"), new BigDecimal("12.3537"), "SEMI-COR-2");
+            sfi.setAccumulatedCost(new BigDecimal("10.13"));
+            SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                    .id(251L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("0.81")).unitCostAtTxn(new BigDecimal("12.50")).build();
+            SemiFinishedInventoryTransaction correction = SemiFinishedInventoryTransaction.builder()
+                    .id(252L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
+                    .sourceType(WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE).reportId(250L)
+                    .quantity(new BigDecimal("0.01")).unitCostAtTxn(null)
+                    .balanceCostAfter(new BigDecimal("12.3537")).build();
+            SemiFinishedInventoryTransaction out = SemiFinishedInventoryTransaction.builder()
+                    .id(253L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
+                    .quantity(new BigDecimal("-0.20")).build();
+            SemiFinishedInventoryTransaction restore = SemiFinishedInventoryTransaction.builder()
+                    .id(254L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
+                    .quantity(new BigDecimal("0.20")).build();
+            when(txnRepo.findBySemiFinishedIdOrderByCreatedAtAsc(sfiId))
+                    .thenReturn(List.of(in, correction, out, restore));
+
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,
+                    "replayMovingAverage", sfiId, FACTORY_ID, java.time.LocalDateTime.now());
+
+            assertEquals(new BigDecimal("0.82"), sfi.getProducedQuantity());
+            assertEquals(0, BigDecimal.ZERO.compareTo(sfi.getConsumedQuantity()));
+            assertEquals(new BigDecimal("0.82"), sfi.getAvailableQuantity());
+            assertEquals(new BigDecimal("10.13"), sfi.getAccumulatedCost());
+            assertEquals(new BigDecimal("12.3537"), sfi.getUnitCost());
+        }
+
+        @Test
+        @DisplayName("RP-COR-3: 原报工直接撤回遇到更正 ADJUST 时 409 且提示走审批流程")
+        void directReversalOfCorrectedReportFailsWithActionableConflict() {
+            Long logId = 260L, batchId = 261L, sfiId = 262L, reportId = 263L;
+            ProductionReport report = ProductionReport.builder()
+                    .id(reportId).factoryId(FACTORY_ID).batchId(batchId).build();
+            SemiFinishedInventoryTransaction in = SemiFinishedInventoryTransaction.builder()
+                    .id(264L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.IN)
+                    .quantity(new BigDecimal("0.81")).build();
+            SemiFinishedInventoryTransaction correction = SemiFinishedInventoryTransaction.builder()
+                    .id(265L).semiFinishedId(sfiId).txnType(SemiFinishedInventoryTransaction.TxnType.ADJUST)
+                    .sourceType(WipLedgerEntries.REPORT_CORRECTION_SOURCE_TYPE).reportId(reportId)
+                    .quantity(new BigDecimal("0.01")).build();
+            stubExecuteReversalSetup(logId, batchId, sfiId, List.of(report), List.of(in, correction));
+            stubSfi(sfiId, new BigDecimal("0.82"), BigDecimal.ZERO, new BigDecimal("0.82"),
+                    new BigDecimal("12.3537"), "SEMI-COR-3");
+
+            com.cretas.aims.exception.BusinessException error = assertThrows(
+                    com.cretas.aims.exception.BusinessException.class,
+                    () -> service.executeReversal(logId, FACTORY_ID));
+
+            assertEquals("WIP_CORRECTION_REVERSAL_CONFLICT", error.getErrorCode());
+            assertTrue(error.getActionHint().contains("报工修正"));
+            verify(txnRepo, never()).save(any(SemiFinishedInventoryTransaction.class));
+            verify(reportRepo, never()).save(any(ProductionReport.class));
         }
 
         // ─── BUG-R1 / BUG-R2 回归守卫 (#662 已修; 断言 CORRECT math 对修复后代码 PASS) ───

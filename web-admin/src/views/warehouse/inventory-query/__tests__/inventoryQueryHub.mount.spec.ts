@@ -24,7 +24,7 @@ vi.mock('vue-router', () => ({
 }));
 
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'LIUSHANMEN', hasRole: () => false }),
+  useAuthStore: () => ({ factoryId: 'LIUSHANMEN', factoryType: 'FACTORY', hasRole: () => false }),
 }));
 
 vi.mock('@/store/modules/permission', () => ({
@@ -128,7 +128,7 @@ describe('库存查询 hub —— 4 个视角逐一挂载真实子页面 (LIUSHA
     wrapper.unmount();
   });
 
-  it('4 个顶层 tab 导航标签都在 (分仓/总量/批次/半成品) —— 不多不少', async () => {
+  it('保留原 4 个顶层 tab，并追加成品库存入口，顺序及数量准确', async () => {
     mockRoute.query = { tab: 'by-warehouse' };
     const wrapper = mountHub();
     await flushPromises();
@@ -139,7 +139,7 @@ describe('库存查询 hub —— 4 个视角逐一挂载真实子页面 (LIUSHA
     const outerHeader = wrapper.find('.el-tabs__header');
     expect(outerHeader.exists()).toBe(true);
     const labels = outerHeader.findAll('.el-tabs__item').map((n) => n.text());
-    expect(labels).toEqual(['分仓库存查询', '总库存查询', '库存批次查询', '半成品库存']);
+    expect(labels).toEqual(['分仓库存查询', '总库存查询', '库存批次查询', '半成品库存', '成品库存']);
     wrapper.unmount();
   });
 

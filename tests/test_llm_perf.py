@@ -121,8 +121,6 @@ print("\n[Python AI Proxy - D1 Model Routing]")
 tests_proxy = [
     ("P1 intent-classify", f"{PY}/api/ai/intent/classify",
      {"text": "查看本月销售数据", "candidate_intents": ["SALES_QUERY", "PRODUCTION_QUERY", "REPORT_GENERATE"]}),
-    ("P2 intent-clarify",  f"{PY}/api/ai/intent/clarify",
-     {"text": "查一下数据", "current_intent": "SALES_QUERY", "ambiguous_intents": ["SALES_QUERY", "PRODUCTION_QUERY"]}),
     ("P3 rule-parse",      f"{PY}/api/ai/rule/parse",
      {"rule_text": "如果温度超过30度则发出预警", "rule_type": "quality_control"}),
     ("P4 data-op-parse",   f"{PY}/api/ai/intent/parse-data-operation",

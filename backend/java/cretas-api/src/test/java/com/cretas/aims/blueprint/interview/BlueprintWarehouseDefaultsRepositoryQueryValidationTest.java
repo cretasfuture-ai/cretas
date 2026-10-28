@@ -15,11 +15,12 @@ import com.cretas.aims.entity.factory.WarehouseDefaultPurpose;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
-import com.cretas.aims.repository.ShipmentRecordRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseDefaultRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.service.factory.FactoryWarehouseService;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import java.util.List;
@@ -79,7 +80,8 @@ class BlueprintWarehouseDefaultsRepositoryQueryValidationTest {
     @Autowired RawMaterialTypeRepository rawMaterialRepository;
     @Autowired PurchaseOrderRepository purchaseOrderRepository;
     @Autowired ProductionPlanRepository productionPlanRepository;
-    @Autowired ShipmentRecordRepository shipmentRepository;
+    @Autowired SalesDeliveryRecordRepository deliveryRepository;
+    @Autowired SupplierMaterialRepository supplierMaterialRepository;
 
     private WarehouseResolver resolver;
     private FactoryBuildApplyService apply;
@@ -99,7 +101,7 @@ class BlueprintWarehouseDefaultsRepositoryQueryValidationTest {
                 new BlueprintWarehouseDefaultsWriter(warehouseRepository, defaultRepository, resolver));
         reader = new FactoryBusinessReadinessReader(resolver, warehouseRepository, supplierRepository,
                 customerRepository, rawMaterialRepository, purchaseOrderRepository, productionPlanRepository,
-                shipmentRepository);
+                deliveryRepository, supplierMaterialRepository);
         Factory factory = new Factory();
         factory.setId(F);
         factory.setName("blueprint warehouses");

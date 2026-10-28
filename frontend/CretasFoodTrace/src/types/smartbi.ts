@@ -6,6 +6,8 @@
  */
 
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { FactoryChartPeriodType, FactoryChartPoint, FactoryChartSource, FactoryRecommendation } from './factoryCharts';
+import type { FactoryChartContextKey, FactoryChartPeriodSelection } from '../utils/smartbiFactoryChartModel';
 
 // ==================== 导航类型 ====================
 
@@ -42,6 +44,26 @@ export type SmartBIStackParamList = {
 
   // 人效分析
   EfficiencyDashboard: { period?: string };
+  FactoryCharts: undefined;
+  FactoryAnalysisChat: {
+    initialQuestion?: string;
+    preserveFactoryCharts?: false;
+    source?: FactoryChartSource;
+    uploadId?: number;
+    year?: number;
+    periodType?: FactoryChartPeriodType;
+    startMonth?: number;
+    endMonth?: number;
+    analysisSubject?: string;
+  };
+  FactoryChartDetails: {
+    recommendation: FactoryRecommendation;
+    source: FactoryChartSource;
+    period: FactoryChartPeriodSelection;
+    periodLabel: string;
+    contextKey: FactoryChartContextKey;
+    point?: FactoryChartPoint;
+  };
 };
 
 /**

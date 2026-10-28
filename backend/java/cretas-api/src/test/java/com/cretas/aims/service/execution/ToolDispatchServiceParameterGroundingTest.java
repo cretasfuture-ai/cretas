@@ -395,8 +395,13 @@ class ToolDispatchServiceParameterGroundingTest {
     void validationRetryRebindsCallerIdentity() throws Exception {
         List<Map<String, Object>> args = new ArrayList<>();
         List<Map<String, Object>> contexts = new ArrayList<>();
-        // 第一次返回一个「看不出有效」的结果 → 走 LLM 结果校验 → 判无效 → 纠错重试
-        ToolExecutor tool = recordingTool(args, contexts, "{\"rows\":null,\"hint\":1}");
+        // Conditional-defense branch test: strict Boolean success:true normally satisfies the
+        // fast heuristic, so production currently skips D7. Stub only this first fast decision
+        // to exercise real validation/correction/rebinding; this is NOT public D7 reachability.
+        String firstResult = "{\"success\":true,\"rows\":null,\"hint\":1}";
+        ToolExecutor tool = recordingTool(args, contexts, firstResult);
+        ToolDispatchService validationDispatch = org.mockito.Mockito.spy(dispatch);
+        org.mockito.Mockito.doReturn(false).when(validationDispatch).isResultClearlyValid(firstResult);
         when(validator.validate(anyString(), anyString(), anyMap(), anyString()))
                 .thenReturn(new ToolResultValidatorService.ValidationResult(false,
                         ToolResultValidatorService.ValidationIssue.NO_MATCH, "不匹配", 0.1, Map.of(), Map.of(), "x"));
@@ -404,12 +409,14 @@ class ToolDispatchServiceParameterGroundingTest {
                 .thenReturn(new CorrectionAgentService.CorrectionResult(
                         true, "x", hijackedCorrection(), "RETRY", null, 0.9));
 
-        dispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
+        validationDispatch.executeWithTool(tool, FACTORY, IntentExecuteRequest.builder()
                 .userInput("查 MB-7 的 30 公斤").context(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30)))
                 .build(), queryIntent, 42L, "operator", null);
 
         assertThat(args).as("校验触发的重试真的走到").hasSize(2);
         assertCallerIdentity(args.get(1));
+        verify(validator).validate(anyString(), anyString(), anyMap(), eq(firstResult));
+        verify(correctionAgent).analyzeAndCorrect(anyString(), anyString(), anyMap(), anyString(), any(), eq(1));
     }
 
     @Test
@@ -430,6 +437,69 @@ class ToolDispatchServiceParameterGroundingTest {
         assertThat(args).hasSize(2);
         assertThat(args.get(1)).containsEntry("quantity", 30).containsEntry("unit", "kg");
         assertCallerIdentity(args.get(1));
+    }
+
+    // ==================== 外发脱敏 (抽参发给模型的是代号, 落地校验用的是换回的真值) ====================
+
+    @Test
+    @DisplayName("抽参: 原话里的电话 / 人名换代号再发; 模型照抄的备注换回真值后仍落得了地")
+    void extractionSendsTokensAndRestoresThemBeforeGrounding() throws Exception {
+        String said = "1827 做完了 100 公斤，质检员赵铁柱 13912345678 已签字";
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        ChatCompletionResponse resp = mock(ChatCompletionResponse.class);
+        when(llm.chatWithTools(anyString(), user.capture(), anyList())).thenReturn(resp);
+        when(llm.hasToolCalls(resp)).thenReturn(true);
+        when(llm.getFirstToolCall(resp)).thenAnswer(inv -> ToolCall.of("c1", "extract_parameters",
+                mapper.writeValueAsString(Map.of("taskId", 1827, "actualQuantity", 100, "notes", user.getValue()))));
+
+        dispatch.executeToolPreview(completeTool, FACTORY, preview(said), completeIntent, 42L, "operator");
+
+        assertThat(user.getValue()).doesNotContain("赵铁柱", "13912345678").contains("已签字");
+        assertThat(boundParams()).containsEntry("notes", said);
+    }
+
+    @Test
+    @DisplayName("抽参在流式工作线程上 (没有 Servlet 请求): 按控制器绑的可信身份查本厂保密产品名, 不原样外发")
+    void extractionOnTheSseWorkerThreadStillHidesProtectedProductNames() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter secrets =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(secrets.protectedProductNames(FACTORY)).thenReturn(java.util.Set.of("秘制酱牛肉"));
+        ReflectionTestUtils.setField(dispatch, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(mapper, secrets));
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        ChatCompletionResponse resp = mock(ChatCompletionResponse.class);
+        when(llm.chatWithTools(anyString(), user.capture(), anyList())).thenReturn(resp);
+
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 42L, FACTORY, "operator"))) {
+            dispatch.executeToolPreview(completeTool, FACTORY, preview("1827 秘制酱牛肉做完了 100 公斤"),
+                    completeIntent, 42L, "operator");
+        }
+
+        assertThat(user.getValue()).doesNotContain("秘制酱牛肉").contains("[保密产品A]");
+    }
+
+    @Test
+    @DisplayName("抽参: 脱敏不了就不调模型, 缺的参数照常追问")
+    void extractionIsSkippedWhenRedactionFails() throws Exception {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter broken =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(broken.protectedProductNames(anyString())).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(dispatch, "llmEgressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(mapper, broken) {
+                    @Override
+                    public com.cretas.aims.service.consent.LlmEgressRedactor.Result texts(String site,
+                            String factoryId, String... texts) {
+                        return super.texts(site, FACTORY, texts);   // 测试里没有请求线程, 用本厂代替
+                    }
+                });
+
+        IntentExecuteResponse r = dispatch.executeToolPreview(completeTool, FACTORY,
+                preview("1827 质检员赵铁柱 13912345678"), completeIntent, 42L, "operator");
+
+        verify(llm, never()).chatWithTools(anyString(), anyString(), anyList());
+        assertThat(r.getStatus()).isEqualTo("NEED_MORE_INFO");
     }
 
     // ==================== helpers ====================

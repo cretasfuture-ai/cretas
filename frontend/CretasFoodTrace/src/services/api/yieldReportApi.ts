@@ -66,6 +66,13 @@ export interface WorkProcessTask {
    *    把前者说成后者会把一屏「没排期」画成一屏「一切正常」。
    */
   overdue?: boolean | null;
+  /**
+   * 按工艺图能不能报这一道 (mirror WorkProcessTaskDTO.unlocked): 上游产出的料到了就是 true。
+   * 后端开工 / 报工拦截用的是同一份判定。`null` = 后端没算 (终态任务) —— ⛔ 不要当成 false。
+   */
+  unlocked?: boolean | null;
+  /** unlocked=false 时的原因, 写明在等哪一道上游。 */
+  blockedReason?: string | null;
   actualStartAt?: string | null;
   actualEndAt?: string | null;
   actualMinutes?: number | null;
@@ -82,6 +89,8 @@ export interface TaskMaterialBatchOption {
   currentQuantity: number;
   quantityUnit: string;
   warehouseId: string;
+  /** 该原料端口的主料份额(%) —— 配比核对用 (缺口 06); null = 不参与配比。 */
+  inputShareRatio?: number | null;
 }
 
 // ============ BatchYieldDTO (mirror backend dto/yield/BatchYieldDTO.java:16-28) ============
@@ -177,6 +186,10 @@ export interface SemiFinishedInventoryItem {
   availableQuantity: number;
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=有待检数量 / RELEASED / REJECTED(旧数据, 不可领) */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
+  /** 这一行里待检的数量 (PENDING 时才有); 可领 = availableQuantity − inspectionPendingQuantity。 */
+  inspectionPendingQuantity?: number | null;
 }
 
 // ============ WipRowDTO (mirror backend dto/yield/WipRowDTO.java) ============
@@ -192,6 +205,10 @@ export interface WipRowDTO {
   availableQuantity: number | null;        // 余额 = produced − consumed (下道 :max)
   unit: string | null;
   status: 'AVAILABLE' | 'DEPLETED' | 'RETURNED' | string;
+  /** 质检放行 (缺口 11): null=不需检 / PENDING=有待检数量 / RELEASED / REJECTED(旧数据, 不可领) */
+  inspectionStatus?: 'PENDING' | 'RELEASED' | 'REJECTED' | null;
+  /** 这一行里待检的数量 (PENDING 时才有); 可领 = availableQuantity − inspectionPendingQuantity。 */
+  inspectionPendingQuantity?: number | null;
 }
 
 // ============ 请求 DTO ============
@@ -236,6 +253,16 @@ export interface YieldReportRequest {
   targetWorkerId?: number;          // 代报工 (Phase D operator 自报, 默认不传)
   /** A2b: 首道领料批次引用 (随报工单一起提交, 不再单独调用 recordMaterialInput) */
   materialBatchRefs?: { materialBatchId: string; quantity: number; unit?: string }[];
+  /**
+   * 缺口 06 汇合配比: 多主料领料偏离配方份额超 ±2 个百分点时必填的原因 (note 仅「其他」时必填)。
+   * 其余快照由后端计算, 落在报工单 custom_fields.blendRatio。
+   */
+  blendRatio?: { reason: string; note?: string };
+  /**
+   * 缺口 13 (审查中 7): 本道挂了关键控制点时, 完工出成随请求带上 CCP 实测值 ——
+   * 后端与产出同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。
+   */
+  ccpReadings?: Array<{ checkpointId: number; measuredValue: number; notes?: string | null }>;
   /**
    * G7 Wave 4 部分领用: 本道领用哪个上道 WIP (semi_finished_inventory.intermediate_batch_no)。
    * 非空 → 后端扣减该 WIP available_quantity (防呆 inputQuantity ≤ available);
@@ -349,6 +376,8 @@ export interface YieldReportResult {
    * 三阶段 INPUT/SEGMENT/OUTPUT 各只带单边量, 此字段不会出现 (由后端注释明确)。
    */
   balanceWarning?: string;
+  /** 缺口 13: 本次报工随带的 CCP 实测值落库结果 (仅本道挂了 CCP 时出现); 有偏离时产出已转待检。 */
+  ccp?: { deviationCount: number; heldOutputs: number; recordCount: number; message: string };
 }
 
 // recordMaterialInput: 只 put reportId — :160-162

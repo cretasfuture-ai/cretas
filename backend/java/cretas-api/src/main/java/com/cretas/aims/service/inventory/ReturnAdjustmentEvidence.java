@@ -32,7 +32,7 @@ public record ReturnAdjustmentEvidence(String state, BigDecimal expectedAmount,
                     || row.getCounterpartyType() != CounterpartyType.CUSTOMER
                     || !Objects.equals(order.getCounterpartyId(), row.getCounterpartyId())
                     || row.getAmount() == null
-                    || row.getAmount().compareTo(order.getTotalAmount().negate()) != 0
+                    || row.getAmount().compareTo(order.getReceivableAmount().negate()) != 0
                     || row.getApprovalStatus() == null) {
                 return "INCONSISTENT";
             }
@@ -48,7 +48,7 @@ public record ReturnAdjustmentEvidence(String state, BigDecimal expectedAmount,
 
     public static ReturnAdjustmentEvidence of(ReturnOrder order, List<ArApTransaction> rows) {
         return new ReturnAdjustmentEvidence(state(order, rows),
-                order == null || order.getTotalAmount() == null ? null : order.getTotalAmount().negate(),
+                order == null || order.getTotalAmount() == null ? null : order.getReceivableAmount().negate(),
                 rows == null ? List.of() : List.copyOf(rows));
     }
 }

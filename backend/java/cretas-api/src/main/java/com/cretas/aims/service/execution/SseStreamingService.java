@@ -25,6 +25,9 @@ import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ResultFormatterService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.SlotFillingService;
+import com.cretas.aims.repository.config.AIIntentConfigRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.util.ErrorSanitizer;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -85,6 +88,15 @@ public class SseStreamingService {
     private final ToolDispatchService toolDispatchService;
     private final DynamicToolSelectionService dynamicToolSelectionService;
     private final DashScopeClient dashScopeClient;
+
+    /** 流式闲聊 / 咨询发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply-stream";
+    static final String MINI_EGRESS_SITE = "f006-boss-question";
+    static final String EGRESS_REFUSED_REPLY = "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
     private final DashScopeConfig dashScopeConfig;
 
     @Autowired(required = false)
@@ -154,6 +166,10 @@ public class SseStreamingService {
      */
     @Autowired(required = false)
     private com.cretas.aims.service.ConversationService conversationService;
+
+    /** Optional in bare SSE tests; required by the real supplier comparison resolution path. */
+    @Autowired(required = false)
+    private AIIntentConfigRepository intentConfigRepository;
 
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
@@ -244,8 +260,26 @@ public class SseStreamingService {
         try {
             long startTime = System.currentTimeMillis();
 
-            ConversationContext sessionContext = establishOwnedSession(factoryId, request, userId);
-            if (conversationMemoryService != null && (sessionContext == null
+            // Stateless platform execution still requires a server-resolved principal ID.
+            // A missing principal must not be forwarded to a model/provider selector.
+            if (userId == null) {
+                streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
+                return;
+            }
+            boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);
+            boolean requestNamesSession = request != null && request.getSessionId() != null
+                    && !request.getSessionId().isBlank();
+            if (requestNamesSession && !trustedFactoryActor) {
+                streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
+                return;
+            }
+            // Platform/stateless callers may still use unrelated no-session routes. They must
+            // never turn their numeric userId into a conversation lookup; only a typed,
+            // factory-scoped actor may establish or access server-owned conversation state.
+            ConversationContext sessionContext = trustedFactoryActor
+                    ? establishOwnedSession(factoryId, request, userId)
+                    : null;
+            if (trustedFactoryActor && conversationMemoryService != null && (sessionContext == null
                     || !java.util.Objects.equals(factoryId, sessionContext.getFactoryId())
                     || !java.util.Objects.equals(userId, sessionContext.getUserId())
                     || sessionContext.getSessionId() == null || sessionContext.getSessionId().isBlank())) {
@@ -291,7 +325,21 @@ public class SseStreamingService {
             Optional<AIIntentConfig> explicitIntent =
                     request.getIntentCode() == null || request.getIntentCode().isBlank()
                             ? Optional.empty()
-                            : aiIntentService.getIntentByCode(factoryId, request.getIntentCode());
+                            : resolveStreamingIntentByCode(factoryId, request.getIntentCode());
+            if (SupplierComparisonReadIntent.CODE.equals(request.getIntentCode())
+                    && explicitIntent.isEmpty()) {
+                streamSupplierIntentUnavailable(emitter, startTime);
+                return;
+            }
+            if (explicitIntent.isPresent()
+                    && SupplierComparisonReadIntent.CODE.equals(explicitIntent.get().getIntentCode())) {
+                String admissionDenied = permissionDeniedMessage(
+                        factoryId, explicitIntent.get(), userId, userRole);
+                if (admissionDenied != null) {
+                    streamNoPermission(emitter, explicitIntent.get(), admissionDenied, startTime);
+                    return;
+                }
+            }
             if (!factoryPackConstrained && explicitIntent.isPresent()) {
                 AIIntentConfig intent = explicitIntent.get();
                 sendSseEvent(emitter, "intent_recognized", Map.of(
@@ -496,8 +544,10 @@ public class SseStreamingService {
             try {
                 // spec §8.2 洞②: 流式路径同样把 tab 模式带进识别层, 否则咨询 tab 走 SSE 时
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
+                Long recognizerUserId = trustedFactoryActor ? userId : null;
+                String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        userInput, factoryId, 3, userId, userRole, request.getSessionId(),
+                        userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                         request.getMode(), null, recentTurns(request));
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
@@ -534,6 +584,22 @@ public class SseStreamingService {
             }
 
             AIIntentConfig intent = matchResult.getBestMatch();
+            Optional<AIIntentConfig> canonicalIntent = canonicalizeStreamingIntent(factoryId, intent);
+            if (canonicalIntent.isEmpty()) {
+                streamSupplierIntentUnavailable(emitter, startTime);
+                return;
+            }
+            if (canonicalIntent.get() != intent) {
+                intent = canonicalIntent.get();
+                matchResult = matchResult.toBuilder().bestMatch(intent).build();
+            }
+            if (SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())) {
+                String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
+                if (admissionDenied != null) {
+                    streamNoPermission(emitter, intent, admissionDenied, startTime);
+                    return;
+                }
+            }
             if (streamRestaurantWriteReadAmbiguity(
                     emitter, restaurantWriteVerbSuppressedPlan, intent, request, startTime)) {
                 return;
@@ -578,7 +644,7 @@ public class SseStreamingService {
             String streamBoundToolName = intent.getToolName();
             boolean intentHasNoTool = streamBoundToolName == null || streamBoundToolName.isBlank();
             if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool
-                    && permissionDeniedMessage(intent, userId, userRole) == null) {
+                    && permissionDeniedMessage(factoryId, intent, userId, userRole) == null) {
                 try {
                     IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
                             request.getUserInput(), factoryId, userId, userRole);
@@ -616,7 +682,7 @@ public class SseStreamingService {
             //      Slot Filling 只追问真正没抽到的; 被 W0 拦下时随确认卡带去预览 (见 attachPreviewParams)。
             //      ⛔ 先过意图权限再抽: 没权限的请求不许碰执行层 (SseSemanticCacheAdmissionContractTest 守的就是这条),
             //      也不该为一个注定被拒的请求花一次 LLM 抽参、再追问参数。权限只算这一次, 结果带进 7c (不重算)。
-            String admissionDenied = permissionDeniedMessage(intent, userId, userRole);
+            String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
             if (admissionDenied == null) {
                 admissionDenied = frontlineWriteDenied(factoryId, userRole, intent);
             }
@@ -627,7 +693,7 @@ public class SseStreamingService {
             prefillWriteToolParameters(request, intent);
 
             // 7b. Slot Filling
-            if (userId != null && !Boolean.TRUE.equals(request.getSkipSlotFilling())
+            if (trustedFactoryActor && !Boolean.TRUE.equals(request.getSkipSlotFilling())
                     && slotFillingService != null) {
                 try {
                     IntentExecuteResponse slotFillingResponse = slotFillingService.checkAndStartSlotFilling(
@@ -794,12 +860,19 @@ public class SseStreamingService {
             streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询没有可复用的服务端意图。"), startTime);
             return;
         }
-        Optional<AIIntentConfig> intentOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
+        Optional<AIIntentConfig> intentOpt = resolveStreamingIntentByCode(factoryId, intentCode);
         if (intentOpt.isEmpty()) {
             streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询已不可用，无法安全翻页。"), startTime);
             return;
         }
         AIIntentConfig intent = intentOpt.get();
+        if (SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())) {
+            String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
+            if (admissionDenied != null) {
+                streamNoPermission(emitter, intent, admissionDenied, startTime);
+                return;
+            }
+        }
         Optional<ToolExecutor> toolOpt = intent.getToolName() == null
                 ? Optional.empty() : toolRegistry.getExecutor(intent.getToolName());
         if (toolOpt.isEmpty() || toolOpt.get().getAccessMode() != ToolExecutor.AccessMode.READ
@@ -1061,7 +1134,7 @@ public class SseStreamingService {
                                          boolean permissionAlreadyChecked)
             throws IOException {
         if (!permissionAlreadyChecked) {
-            String deniedMessage = permissionDeniedMessage(intent, userId, userRole);
+            String deniedMessage = permissionDeniedMessage(factoryId, intent, userId, userRole);
             if (deniedMessage != null) {
                 streamNoPermission(emitter, intent, deniedMessage, startTime);
                 return;
@@ -1226,7 +1299,9 @@ public class SseStreamingService {
         emitter.complete();
     }
 
-    private String permissionDeniedMessage(AIIntentConfig intent, Long userId, String userRole) {
+    private String permissionDeniedMessage(String factoryId, AIIntentConfig intent, Long userId, String userRole) {
+        String supplierActorDenied = supplierActorDeniedMessage(factoryId, intent, userId);
+        if (supplierActorDenied != null) return supplierActorDenied;
         String requiredPermission = intent.getRequiredPermission();
         if (requiredPermission != null && !requiredPermission.isBlank() && intentPermissionGate != null) {
             IntentPermissionGate.PermissionCheck check = intentPermissionGate.check(intent, userId, userRole);
@@ -1234,10 +1309,72 @@ public class SseStreamingService {
                 return "您没有权限执行此操作。需要权限: " + check.requiredPermission()
                         + "，请联系工厂管理员开通。";
             }
-        } else if (!aiIntentService.hasPermission(intent.getIntentCode(), userRole)) {
+        } else if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
+                : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
             return "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
         }
         return null;
+    }
+
+    private String supplierActorDeniedMessage(String factoryId, AIIntentConfig intent, Long userId) {
+        if (intent != null && SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
+                && !hasBoundSupplierFactoryActor(factoryId, userId)) {
+            return "您没有权限执行此操作。需要绑定的工厂用户身份。";
+        }
+        return null;
+    }
+
+    private boolean streamSupplierSlotAdmissionDenied(SseEmitter emitter, String factoryId,
+                                                      String intentCode, Long userId, String userRole,
+                                                      long startTime) throws IOException {
+        Optional<AIIntentConfig> configured = resolveStreamingIntentByCode(factoryId, intentCode);
+        if (configured.isEmpty() && hasBoundSupplierFactoryActor(factoryId, userId)) return false;
+        AIIntentConfig supplierIntent = configured.orElseGet(() -> AIIntentConfig.builder()
+                .intentCode(SupplierComparisonReadIntent.CODE)
+                .intentName("供应商价格比较")
+                .build());
+        String denied = permissionDeniedMessage(factoryId, supplierIntent, userId, userRole);
+        if (denied == null) return false;
+        streamNoPermission(emitter, supplierIntent, denied, startTime);
+        return true;
+    }
+
+    private Optional<AIIntentConfig> resolveStreamingIntentByCode(String factoryId, String intentCode) {
+        if (SupplierComparisonReadIntent.CODE.equals(intentCode)) {
+            return SupplierComparisonReadIntent.resolve(factoryId, toolRegistry, intentConfigRepository);
+        }
+        return aiIntentService.getIntentByCode(factoryId, intentCode);
+    }
+
+    private Optional<AIIntentConfig> canonicalizeStreamingIntent(String factoryId, AIIntentConfig intent) {
+        if (intent == null || !SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())) {
+            return Optional.ofNullable(intent);
+        }
+        return resolveStreamingIntentByCode(factoryId, intent.getIntentCode());
+    }
+
+    private boolean hasBoundSupplierFactoryActor(String factoryId, Long userId) {
+        return hasBoundFactoryActor(factoryId, userId);
+    }
+
+    private boolean hasBoundFactoryActor(String factoryId, Long userId) {
+        return AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER)
+                .filter(actor -> java.util.Objects.equals(actor.id(), userId))
+                .filter(actor -> java.util.Objects.equals(actor.factoryId(), factoryId))
+                .isPresent();
+    }
+
+    private void streamSupplierIntentUnavailable(SseEmitter emitter, long startTime) throws IOException {
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NO_MATCH")
+                .message("供应商价格比较当前不可用，请联系工厂管理员核对功能配置。")
+                .formattedText("供应商价格比较当前不可用，请联系工厂管理员核对功能配置。")
+                .executedAt(LocalDateTime.now())
+                .build();
+        streamTerminalResponse(emitter, response, startTime);
     }
 
     /**
@@ -1263,13 +1400,13 @@ public class SseStreamingService {
             return false;
         }
         FollowUpResolver.FollowUp followUp = resolved.get();
-        Optional<AIIntentConfig> target = aiIntentService.getIntentByCode(factoryId, followUp.intentCode());
+        Optional<AIIntentConfig> target = resolveStreamingIntentByCode(factoryId, followUp.intentCode());
         if (target.isEmpty()) {
             log.info("[SSE][FollowUp] 规则 {} 命中但目标意图不在用: {}", followUp.ruleId(), followUp.intentCode());
             return false;
         }
         AIIntentConfig intent = target.get();
-        if (permissionDeniedMessage(intent, userId, userRole) != null) {
+        if (permissionDeniedMessage(factoryId, intent, userId, userRole) != null) {
             log.info("[SSE][FollowUp] 规则 {} 命中但当前角色无权执行 {}, 交回正常流程",
                     followUp.ruleId(), followUp.intentCode());
             return false;
@@ -1341,6 +1478,11 @@ public class SseStreamingService {
         }
         com.cretas.aims.entity.conversation.ConversationSession session = open.get();
         String slotSessionId = session.getSessionId();
+        if (SupplierComparisonReadIntent.CODE.equals(session.getKnownIntentCode())
+                && streamSupplierSlotAdmissionDenied(emitter, factoryId, session.getKnownIntentCode(),
+                userId, userRole, startTime)) {
+            return true;
+        }
         List<com.cretas.aims.entity.conversation.ConversationSession.RequiredParameter> pending =
                 session.getRequiredParameters().stream().filter(p -> !p.isCollected()).toList();
         if (!SlotAnswerRule.looksLikeAnswer(request.getUserInput(), pending,
@@ -1352,11 +1494,18 @@ public class SseStreamingService {
         }
         Optional<AIIntentConfig> target = session.getKnownIntentCode() == null
                 ? Optional.empty()
-                : aiIntentService.getIntentByCode(factoryId, session.getKnownIntentCode());
+                : resolveStreamingIntentByCode(factoryId, session.getKnownIntentCode());
         if (target.isEmpty()) {
             log.info("[SSE][SlotContinuation] 会话的意图已不在用, 关闭会话: session={}, intent={}",
                     slotSessionId, session.getKnownIntentCode());
             conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            if (SupplierComparisonReadIntent.CODE.equals(session.getKnownIntentCode())) {
+                streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                        .intentRecognized(false).intentCode(SupplierComparisonReadIntent.CODE)
+                        .status("NO_MATCH").message("供应商比较能力当前不可用，请核对当前工厂配置。")
+                        .executedAt(LocalDateTime.now()).build(), startTime);
+                return true;
+            }
             return false;
         }
         AIIntentConfig intent = target.get();
@@ -1707,9 +1856,20 @@ public class SseStreamingService {
         String model = useThinking ? dashScopeConfig.getModel() : dashScopeConfig.getFastModel();
         int maxTokens = useThinking ? 2000 : 500;
 
+        // 原话里的号码 / 人名 / 公司名 / 保密产品名换代号再发; 流式 token 攒到代号闭合再换回; 脱敏不了就不发
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId, systemPrompt, userInput);
+        if (redacted.refused()) {
+            streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                    .intentRecognized(false).status("COMPLETED")
+                    .message(EGRESS_REFUSED_REPLY).formattedText(EGRESS_REFUSED_REPLY)
+                    .executedAt(LocalDateTime.now()).build(), startTime);
+            return;
+        }
+
         ChatCompletionRequest aiRequest = ChatCompletionRequest.builder()
                 .model(model)
-                .messages(List.of(ChatMessage.system(systemPrompt), ChatMessage.user(userInput)))
+                .messages(List.of(ChatMessage.system(redacted.text(0)), ChatMessage.user(redacted.text(1))))
                 .temperature(0.7)
                 .maxTokens(maxTokens)
                 .extraBody(ChatCompletionRequest.ExtraBody.builder()
@@ -1721,18 +1881,21 @@ public class SseStreamingService {
                 "thinking", useThinking,
                 "questionType", questionType.name()));
 
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
+            try {
+                emitter.send(SseEmitter.event().name("token").data(token));
+            } catch (Exception e) {
+                log.debug("Client disconnected during stream token");
+            }
+        });
         try {
             dashScopeClient.chatCompletionStream(aiRequest,
-                token -> {
-                    try {
-                        emitter.send(SseEmitter.event().name("token").data(token));
-                    } catch (Exception e) {
-                        log.debug("Client disconnected during stream token");
-                    }
-                },
+                restorer,
                 response -> {
                     try {
-                        String fullContent = response.getContent() != null ? response.getContent() : "";
+                        restorer.flush();
+                        String fullContent = response.getContent() != null
+                                ? redacted.restore(response.getContent()) : "";
                         Integer tokensUsed = response.getUsage() != null
                                 ? response.getUsage().getTotalTokens() : null;
                         String finishReason = response.getChoices() != null && !response.getChoices().isEmpty()
@@ -1788,8 +1951,25 @@ public class SseStreamingService {
                                         String userRole, String sessionId, String userInput,
                                         boolean thinking, long startTime,
                                         com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation cancellation) throws IOException {
+        // 问题里的号码 / 人名 / 公司名 / 保密产品名换代号再发 (Python 侧取数自己的; 这里只管原话); 脱敏不了就不发
+        com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                llmEgressGuard.texts(MINI_EGRESS_SITE, factoryId, userInput);
+        if (redacted.refused()) {
+            streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                    .intentRecognized(false).status("COMPLETED").sessionId(sessionId)
+                    .message(EGRESS_REFUSED_REPLY).formattedText(EGRESS_REFUSED_REPLY)
+                    .executedAt(LocalDateTime.now()).build(), startTime);
+            return;
+        }
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
+            try {
+                sendSseEvent(emitter, "token", token);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
         try {
-            var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, userInput, thinking,
+            var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
                         try {
                             sendSseEvent(emitter, "meta", Map.of(
@@ -1799,13 +1979,9 @@ public class SseStreamingService {
                         } catch (IOException e) {
                             throw new java.io.UncheckedIOException(e);
                         }
-                    }, token -> {
-                        try {
-                            sendSseEvent(emitter, "token", token);
-                        } catch (IOException e) {
-                            throw new java.io.UncheckedIOException(e);
-                        }
-                    }, cancellation);
+                    }, restorer, cancellation);
+            restorer.flush();
+            String content = redacted.restore(answer.content());
             Map<String, Object> source = new LinkedHashMap<>();
             source.put("provider", answer.provider());
             source.put("model", answer.model());
@@ -1814,12 +1990,12 @@ public class SseStreamingService {
             source.put("usage", answer.usage());
             sendSseEvent(emitter, "result", IntentExecuteResponse.builder()
                     .intentRecognized(false).status("COMPLETED").sessionId(sessionId)
-                    .message(answer.content()).formattedText(answer.content())
+                    .message(content).formattedText(content)
                     .resultData(source).executedAt(LocalDateTime.now()).build());
             Map<String, Object> complete = new LinkedHashMap<>(source);
             complete.put("status", "SUCCESS");
             complete.put("sessionId", sessionId);
-            complete.put("fullContent", answer.content());
+            complete.put("fullContent", content);
             complete.put("tokensUsed", answer.usage() == null ? null : answer.usage().totalTokens());
             complete.put("finishReason", answer.finishReason());
             complete.put("totalLatencyMs", System.currentTimeMillis() - startTime);

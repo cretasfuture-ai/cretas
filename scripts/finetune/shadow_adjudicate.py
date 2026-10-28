@@ -32,6 +32,8 @@ from typing import Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras
+
+from training_consent_gate import apply_utterance_rule
 import requests
 
 logger = logging.getLogger(__name__)
@@ -89,7 +91,7 @@ def fetch_shadow_disagreements(
     """
     query = """
         SELECT DISTINCT ON (user_input, matched_intent_code, shadow_intent_code)
-               id, user_input,
+               id, factory_id, user_input,
                matched_intent_code, confidence_score,
                shadow_intent_code, shadow_confidence,
                match_method
@@ -108,7 +110,7 @@ def fetch_shadow_disagreements(
         cur.execute(query, params)
         rows = cur.fetchall()
 
-    records = [dict(r) for r in rows]
+    records = apply_utterance_rule([dict(r) for r in rows], ("user_input",))
 
     if limit:
         records = records[:limit]

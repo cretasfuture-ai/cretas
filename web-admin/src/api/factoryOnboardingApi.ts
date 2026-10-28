@@ -387,6 +387,18 @@ export interface WarehouseSuggestion {
   remarks?: string
 }
 
+/** S4: 访谈「产线产能」—— 单位由客户说出 (只认 件 / kg / 批), 产品为空 = 该线通用 */
+export interface LineCapacitySuggestion {
+  productCode?: string | null
+  capacityPerHour: number
+  capacityUnit: 'PIECE' | 'KG' | 'BATCH'
+}
+
+export interface ProductionLineSuggestion {
+  name: string
+  capacities: LineCapacitySuggestion[]
+}
+
 export interface CodeSegmentSuggestion {
   code: string
   label: string
@@ -408,6 +420,7 @@ export interface SuggestedData {
   modules?: Record<string, boolean>
   thresholds?: ThresholdSuggestion[]
   warehouses?: WarehouseSuggestion[]
+  productionLines?: ProductionLineSuggestion[]
   productProcesses?: ProductProcessSuggestion[]
   provisionDefaultUsers?: boolean
   codeSegments?: CodeSegmentSuggestion[]
@@ -480,6 +493,9 @@ export interface ApplyAIInitResult {
   skippedWorkProcesses?: string[]
   writtenWarehouses?: string[]
   skippedWarehouses?: string[]
+  /** S4: 新建的产线 + 写下的产能; skipped = 同名已存在而复用的产线 */
+  writtenProductionLines?: string[]
+  skippedProductionLines?: string[]
   writtenProductProcesses?: string[]
   writtenCodeSegments?: string[]
   skippedCodeSegments?: string[]

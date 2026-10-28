@@ -1,0 +1,73 @@
+# 平台自编工艺模板（隐私条款第七条：仅来源于公开资料、行业标准及平台自编模板）
+# 依据：食品生产许可审查细则（水产制品 · 冷冻水产品）中的基本生产流程与行业通用做法整理。
+# 不含任何客户的工艺：只有工序名称、先后、各步投入/产出与参数名称，不含参数数值与得率。
+industryHint: 水产加工
+intro: 这是平台按公开的冷冻水产品生产流程整理的通用起点，只列常见工序和要记录的参数名称，不含任何工厂的具体做法。请按你们工厂的实际情况逐项确认或修改。
+variants:
+  - 整鱼/整虾冻品可去掉「处理剖片」
+  - 不镀冰衣的产品去掉「镀冰衣」
+  - 调理水产品在「分级」后增加腌制或裹粉
+steps:
+  - name: 原料验收
+    input: 鲜活或冰鲜水产原料
+    aux: []
+    pack: []
+    output: 合格原料
+    outputUnit: kg
+    params: [鲜度检查, 原料温度]
+    yieldNote: 按本厂实际填写
+    byproducts: [不合格原料]
+  - name: 清洗
+    input: 合格原料
+    aux: [加工用水]
+    pack: []
+    output: 清洗后原料
+    outputUnit: kg
+    params: [水温]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 处理剖片
+    input: 清洗后原料
+    aux: []
+    pack: []
+    output: 处理后半成品
+    outputUnit: kg
+    params: [处理方式]
+    yieldNote: 按本厂实际填写
+    byproducts: [头尾内脏, 鳞皮]
+  - name: 分级
+    input: 处理后半成品
+    aux: []
+    pack: []
+    output: 分级半成品
+    outputUnit: kg
+    params: [规格等级]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 速冻
+    input: 分级半成品
+    aux: []
+    pack: []
+    output: 速冻品
+    outputUnit: kg
+    params: [速冻方式, 速冻后中心温度]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 镀冰衣
+    input: 速冻品
+    aux: [加工用水]
+    pack: []
+    output: 镀冰衣冻品
+    outputUnit: kg
+    params: [冰衣比例要求]
+    yieldNote: 按本厂实际填写
+    byproducts: []
+  - name: 包装
+    input: 镀冰衣冻品
+    aux: []
+    pack: [包装袋, 标签, 外箱]
+    output: 包装成品
+    outputUnit: 箱
+    params: [每箱规格]
+    yieldNote: 包装工序一般不计得率
+    byproducts: []

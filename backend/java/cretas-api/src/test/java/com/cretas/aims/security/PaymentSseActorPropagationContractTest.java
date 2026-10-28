@@ -19,17 +19,21 @@ class PaymentSseActorPropagationContractTest {
     void actualSseWorkerPreservesTypedNamespaceAndCleansPoolThread(String role) throws Exception {
         var actor=new AuthenticatedActor(role.equals("factory")?AuthenticatedActorType.FACTORY_USER:
                 AuthenticatedActorType.PLATFORM_ADMIN,56L,role.equals("factory")?"F1":null,role);
-        var service=new SseStreamingService(null,null,null,null,new ObjectMapper(),null,null,null,null,null);
+        var mapper=spy(new ObjectMapper().findAndRegisterModules());
+        var observed=new CompletableFuture<AuthenticatedActor>();
+        // Observe actual worker identity at a stateless event serialization checkpoint.
+        // Platform principals must not touch factory conversation memory merely to be observed.
+        doAnswer(call -> {
+            assertThat(RequestContextHolder.getRequestAttributes()).isNull();
+            observed.complete(AuthenticatedActor.fromCurrentExecution().orElse(null));
+            return call.callRealMethod();
+        }).when(mapper).writeValueAsString(any());
+        var service=new SseStreamingService(null,null,null,null,mapper,null,null,null,null,null);
         var executor=Executors.newSingleThreadExecutor();
         ReflectionTestUtils.setField(service,"sseExecutor",executor);
         var memory=mock(ConversationMemoryService.class);
         ReflectionTestUtils.setField(service,"conversationMemoryService",memory);
-        var observed=new CompletableFuture<AuthenticatedActor>();
-        when(memory.getOrCreateContext(eq("F1"),eq(56L),any())).thenAnswer(call -> {
-            assertThat(RequestContextHolder.getRequestAttributes()).isNull();
-            observed.complete(AuthenticatedActor.fromCurrentExecution().orElse(null));
-            return null; // Stop before recognition/provider calls: this contract is identity transport.
-        });
+        when(memory.getOrCreateContext(eq("F1"),eq(56L),any())).thenReturn(null);
         var request=new MockHttpServletRequest();request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,actor);
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         try {
@@ -37,6 +41,8 @@ class PaymentSseActorPropagationContractTest {
             assertThat(observed.get(5,TimeUnit.SECONDS)).isEqualTo(actor);
             assertThat(executor.submit(() -> AuthenticatedActor.fromCurrentExecution().isEmpty()
                     && com.cretas.aims.utils.SecurityUtils.currentUserId()==null).get(5,TimeUnit.SECONDS)).isTrue();
+            if (role.equals("factory")) verify(memory).getOrCreateContext(eq("F1"),eq(56L),any());
+            else verifyNoInteractions(memory);
         } finally {RequestContextHolder.resetRequestAttributes();service.destroy();executor.shutdownNow();}
     }
 }

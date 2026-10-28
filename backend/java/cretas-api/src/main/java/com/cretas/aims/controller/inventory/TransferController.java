@@ -3,6 +3,8 @@ package com.cretas.aims.controller.inventory;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreateTransferRequest;
+import com.cretas.aims.dto.inventory.WarehouseTransferDeliveryDTO;
+import com.cretas.aims.dto.inventory.WarehouseTransferReceiptRequest;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.TransferService;
@@ -253,6 +255,35 @@ public class TransferController {
         String sourceBatchId = body != null ? body.get("sourceBatchId") : null;
         InternalTransferItem updated = transferService.updateItemSourceBatch(factoryId, transferId, itemId, sourceBatchId);
         return ApiResponse.success("批次选择已保存", updated);
+    }
+
+    @RequireModule("warehouse")
+    @PostMapping("/{transferId}/warehouse-dispatch")
+    @Operation(summary = "仓内分段发运")
+    @RequirePermission("inventory:write")
+    public ApiResponse<InternalTransfer> warehouseDispatch(@PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String transferId, @RequestHeader("Authorization") String authorization) {
+        return ApiResponse.success("仓内发运已登记", transferService.dispatchWarehouseTransfer(
+                factoryId, transferId, extractUserId(authorization)));
+    }
+
+    @GetMapping("/{transferId}/warehouse-delivery")
+    @Operation(summary = "仓内分段交付状态")
+    @RequirePermission({"inventory:write", "inventory:read"})
+    public ApiResponse<WarehouseTransferDeliveryDTO> warehouseDelivery(@PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String transferId) {
+        return ApiResponse.success("查询成功", transferService.getWarehouseDelivery(factoryId, transferId));
+    }
+
+    @RequireModule("warehouse")
+    @PostMapping("/{transferId}/warehouse-receipts")
+    @Operation(summary = "仓内分段收货")
+    @RequirePermission("inventory:write")
+    public ApiResponse<WarehouseTransferDeliveryDTO> warehouseReceipts(@PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String transferId, @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody WarehouseTransferReceiptRequest request) {
+        return ApiResponse.success("仓内收货已登记", transferService.receiveWarehouseTransfer(
+                factoryId, transferId, extractUserId(authorization), request));
     }
 
     private Long extractUserId(String authorization) {

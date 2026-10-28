@@ -13,6 +13,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
+import com.cretas.aims.repository.inventory.SalesDeliveryRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationRepository;
 import com.cretas.aims.service.factory.WarehouseResolver;
@@ -47,6 +48,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     private final ProductTypeRepository productTypeRepository;
     private final SalesOrderRepository salesOrderRepository;
     private final FgReservationLedgerService reservationLedgerService;
+    private final SalesDeliveryRecordRepository deliveryRecordRepository;
 
     @Override
     @Transactional
@@ -88,14 +90,15 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             throw new BusinessException(409, "发货行数量未设置: " + deliveryItemId)
                     .withHint("请先在发货单中设置发货数量").withHintTarget("deliveredQuantity");
         }
-        if (item.getDeliveryRecord() != null) {
-            String role = item.getDeliveryRecord().getRecordRole();
+        SalesDeliveryRecord itemDelivery = deliveryRecordOf(item);
+        if (itemDelivery != null) {
+            String role = itemDelivery.getRecordRole();
             if ("MASTER".equals(role)) {
                 throw new BusinessException(409, "库存批次必须分配到子发运单，不能直接分配到母发货单")
                         .withCode("DELIVERY_SHIPMENT_REQUIRED")
                         .withHint("请先在该发货单下选择或新建子发运单，再在子发运单的发货行上分配批次");
             }
-            var status = item.getDeliveryRecord().getStatus();
+            var status = itemDelivery.getStatus();
             if (status != com.cretas.aims.entity.enums.SalesDeliveryStatus.DRAFT
                     && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
                     && status != com.cretas.aims.entity.enums.SalesDeliveryStatus.PICKED) {
@@ -260,6 +263,39 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<SalesDeliveryItemBatchAllocation> listForReview(String factoryId, String deliveryItemId) {
+        List<SalesDeliveryItemBatchAllocation> allocations = listByDeliveryItem(factoryId, deliveryItemId);
+        if (allocations.isEmpty()) {
+            return allocations;
+        }
+        SalesDeliveryItem item;
+        try {
+            item = deliveryItemRepository.findById(Long.valueOf(deliveryItemId)).orElse(null);
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "非法的 deliveryItemId: " + deliveryItemId)
+                    .withHintTarget("deliveryItemId");
+        }
+        SalesOrder salesOrder = resolveSalesOrder(factoryId, item);
+        boolean prestocked = isPrestockedCustomerStock(salesOrder);
+        for (SalesDeliveryItemBatchAllocation allocation : allocations) {
+            FinishedGoodsBatch batch = finishedGoodsBatchRepository
+                    .findById(allocation.getFinishedGoodsBatchId()).orElse(null);
+            boolean reserved = prestocked && batch != null
+                    && reservationLedgerService.hasActiveReservation(salesOrder.getId(), batch.getId());
+            try {
+                SalesFinishedGoodsOwnershipGuard.assertBatchAllowed(
+                        salesOrder, batch, reserved, "finishedGoodsBatchId");
+                allocation.setEligible(true);
+            } catch (BusinessException e) {
+                allocation.setEligible(false);
+                allocation.setIneligibleReason(e.getMessage());
+            }
+        }
+        return allocations;
+    }
+
+    @Override
     @Transactional
     public void clearAllocations(String factoryId, String deliveryItemId) {
         Long itemId;
@@ -267,10 +303,10 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         catch (RuntimeException e) { throw new BusinessException(400,"发货行编号无效"); }
         SalesDeliveryItem item=deliveryItemRepository.findByIdForUpdate(itemId)
                 .orElseThrow(()->new BusinessException(404,"发货行不存在"));
-        if (item.getDeliveryRecord()==null || !factoryId.equals(item.getDeliveryRecord().getFactoryId())) {
+        SalesDeliveryRecord record=deliveryRecordOf(item);
+        if (record==null || !factoryId.equals(record.getFactoryId())) {
             throw new BusinessException(403,"发货行不属于当前工厂");
         }
-        SalesDeliveryRecord record=item.getDeliveryRecord();
         if (record != null && record.getStatus() != SalesDeliveryStatus.DRAFT
                 && record.getStatus() != SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM
                 && record.getStatus() != SalesDeliveryStatus.PICKED) {
@@ -356,6 +392,12 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     : finishedGoodsBatchRepository.findAvailableBatchesFefoAllWarehousesExcluding(
                             factoryId, productTypeId, WarehouseCodes.WH_RD);
         }
+        // 过期批次不推荐 (到期日早于今天, 东八区; 到期日当天仍可发): 分配对话框里选不到它,
+        // autoAllocateFifo 也挑不到它。即使绕过推荐直接提交, allocateBatches 的 saleability 闸照样拒。
+        int expiredSkipped = batches.size();
+        batches = FinishedGoodsBatchSaleabilityGuard.excludeExpired(
+                batches, com.cretas.aims.util.InventoryExpiry.today());
+        expiredSkipped -= batches.size();
 
         List<Map<String, Object>> result = new ArrayList<>();
         BigDecimal remaining = requiredQty;
@@ -403,19 +445,39 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             remaining = remaining.subtract(allocate);
         }
 
-        log.info("FIFO 成品推荐: factoryId={}, productTypeId={}, requiredQty={}, unit={}, batches={}, skippedUnitMismatch={}, fulfilled={}",
+        log.info("FIFO 成品推荐: factoryId={}, productTypeId={}, requiredQty={}, unit={}, batches={}, skippedUnitMismatch={}, skippedExpired={}, fulfilled={}",
                 factoryId, productTypeId, requiredQty, targetUnit, result.size(), skippedUnitMismatch,
-                remaining.compareTo(BigDecimal.ZERO) <= 0);
+                expiredSkipped, remaining.compareTo(BigDecimal.ZERO) <= 0);
 
         return result;
     }
 
+    /**
+     * 发货行所属的发货单。⛔ 不能只读 {@code item.getDeliveryRecord()}: 那个关联是
+     * insertable=false 的只读映射, 同一事务里刚新建的发货行 (createDeliveryShipment 子发运)
+     * 只写了 {@code deliveryRecordId}, 关联在持久化上下文里一直是 null —— 按 null 判,
+     * 代加工订单就被当成「未关联订单的普通发货」, 预填写进了公司库存
+     * (ERP-S3-TOLL-DELIVERY-PREFILL-COMPANY-FG-001)。所以关联为空时按外键列再取一次。
+     */
+    private SalesDeliveryRecord deliveryRecordOf(SalesDeliveryItem item) {
+        if (item == null) {
+            return null;
+        }
+        if (item.getDeliveryRecord() != null) {
+            return item.getDeliveryRecord();
+        }
+        if (item.getDeliveryRecordId() == null || deliveryRecordRepository == null) {
+            return null;
+        }
+        return deliveryRecordRepository.findById(item.getDeliveryRecordId()).orElse(null);
+    }
+
     private SalesOrder resolveSalesOrder(String factoryId, SalesDeliveryItem item) {
-        if (item == null || item.getDeliveryRecord() == null
-                || item.getDeliveryRecord().getSalesOrderId() == null) {
+        SalesDeliveryRecord delivery = deliveryRecordOf(item);
+        if (delivery == null || delivery.getSalesOrderId() == null) {
             return null; // legacy/unlinked delivery remains company-stock only
         }
-        SalesOrder order = salesOrderRepository.findById(item.getDeliveryRecord().getSalesOrderId())
+        SalesOrder order = salesOrderRepository.findById(delivery.getSalesOrderId())
                 .orElseThrow(() -> new BusinessException(409, "发货单关联的销售订单不存在")
                         .withCode("DELIVERY_SALES_ORDER_NOT_FOUND")
                         .withHint("该发货单关联的销售订单可能已被作废或删除，请核对订单状态；"
@@ -460,7 +522,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                     .orElseThrow(() -> new BusinessException(409, "批次存在失去发货行关联的占用记录")
                             .withCode("BATCH_ALLOCATION_IDENTITY_INVALID")
                             .withHint("请更换其他成品批次进行分配；该批次存在已失效的发货行占用记录"));
-            var delivery = otherItem.getDeliveryRecord();
+            var delivery = deliveryRecordOf(otherItem);
             if (delivery != null) {
                 var status = delivery.getStatus();
                 if (status != com.cretas.aims.entity.enums.SalesDeliveryStatus.DRAFT

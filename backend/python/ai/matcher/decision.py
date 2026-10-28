@@ -229,9 +229,11 @@ class DecisionMatcher:
 
     async def _call(self, payload: Dict[str, Any], body_validator=None, content_validator=None) -> Dict[str, Any]:
         from common.llm_metrics import llm_caller_context  # type: ignore
+        from common.llm_redactor import utterance_egress  # type: ignore
         from common.llm_router import SLOT, call_chain  # type: ignore
 
-        with llm_caller_context("ai_decision"):
+        # 按原话识别意图: 外发只抹号码, 不认公司名人名 (与 Java LlmEgressGuard.utterance 一致)
+        with llm_caller_context("ai_decision"), utterance_egress():
             return await call_chain(SLOT.DECISION, payload, timeout=self.timeout_s,
                                     total_timeout=self.timeout_s, body_validator=body_validator,
                                     content_validator=content_validator)

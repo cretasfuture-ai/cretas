@@ -6,7 +6,7 @@ Provides stub endpoints for /api/ai/* that Java backend calls.
 These endpoints use DashScope LLM to handle:
 - Rule parsing
 - State machine parsing
-- Intent classification/clarification
+- Intent classification
 - Form schema generation
 - Factory batch initialization
 
@@ -127,13 +127,6 @@ class StateMachineParseRequest(BaseModel):
 class IntentClassifyRequest(BaseModel):
     text: str = Field(..., description="User input text")
     candidates: Optional[List[str]] = Field(default=None, description="Candidate intents")
-    context: Optional[Dict[str, Any]] = Field(default=None)
-
-
-class IntentClarifyRequest(BaseModel):
-    text: str = Field(..., description="User input text")
-    current_intent: Optional[str] = Field(None)
-    ambiguous_intents: Optional[List[str]] = Field(default=None)
     context: Optional[Dict[str, Any]] = Field(default=None)
 
 
@@ -321,30 +314,6 @@ async def classify_intent(raw_request: Request):
         }
     except Exception as e:
         logger.error(f"Intent classify error: {e}", exc_info=True)
-        return {"success": False, "message": "处理失败，请稍后重试", "data": None}
-
-
-@router.post("/intent/clarify")
-async def clarify_intent(request: IntentClarifyRequest):
-    """Generate clarification question for ambiguous intent"""
-    start = time.time()
-    try:
-        ambiguous_str = str(request.ambiguous_intents or [])
-        settings = get_settings()
-        ck = AiProxyCache.make_key("intent_clarify", request.text, ambiguous_str)
-        result = await _call_llm(
-            system_prompt="你是对话助手。当用户意图不明确时，生成一个澄清问题帮助确认意图。返回JSON：{\"question\": \"澄清问题\", \"options\": [\"选项1\", \"选项2\"]}",  # noqa: E501
-            user_prompt=f"用户输入：{request.text}\n\n当前识别意图：{request.current_intent or '未识别'}\n模糊意图列表：{request.ambiguous_intents or []}",  # noqa: E501
-            cache_key=ck,
-            model=settings.llm_fast_model,
-        )
-        return {
-            "success": True,
-            "data": {"clarification": result},
-            "elapsed_ms": int((time.time() - start) * 1000)
-        }
-    except Exception as e:
-        logger.error(f"Intent clarify error: {e}", exc_info=True)
         return {"success": False, "message": "处理失败，请稍后重试", "data": None}
 
 

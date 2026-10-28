@@ -1,0 +1,11 @@
+# SMARTBI-MONTH-CLOSE-SNAPSHOT-20261026
+
+Base 891d39c4931276dca02ae7e5945acc48edf2b43e. Status in-progress. Owner Root (DIRECT). Worktree C:/Users/Steve/cretas-smartbi-release-20261025; branch codex/smartbi-month-close-snapshot-20261026. User authorized completing missing SmartBI foundations and automatic verified merge/deployment; F006 only for live acceptance, phone explicitly unaccepted.
+
+Scope: MonthCloseServiceImpl.java and MonthCloseServiceTest.java. Actual F006 UI executeClose closed owned March period 06a465b6-9e2f-4f26-8eef-5913d12f6060 but produced no inventory snapshots. Traditional confirmClose invokes the snapshot service; executeClose did not. Connect the existing tenant-scoped service inside executeClose's transaction and propagate snapshot failure so a successful response cannot silently omit required snapshots. No Entity/Repository/query/migration/security or historical data edits; do not reopen or retry the already CLOSED March period.
+
+Acceptance selector: MonthCloseServiceTest,AccountingPeriodServiceTest. Assert exact factory/period invocation, rejected/repeated closes do not invoke snapshots, and snapshot failure propagates. Independent risk review before merge. Official build before merge and clean exact-main deployment; runtime and F006 business evidence recorded separately. Root alone edits dispatch.
+
+Review PASS (independent full_risk_review). Final target tests: 45 passed, 0 failures/errors/skips; full-month-close-snapshot-target-fixed-selector.log. Original comma-separated compiler include selected no test sources and failed; preserved full-month-close-snapshot-target.log, never counted as pass. Final release selector MonthCloseServiceTest; related AccountingPeriodServiceTest passed separately in the 45-test run. No Entity/Repository/query/migration changes. Code scope releases when this PR merges; FULL-QA business acceptance remains in progress.
+
+Official pre-merge build/stage PASS, 17 target tests in artifact; JAR SHA256 4a4b48e0daaacb8ce0f51b947ec6128e6da913f2dde5db38b549090c4b3ec899. Receipt cretas-1792992080-35.json, 224s, deployment none. CI first head rejected ACTIVE total-byte cap; removed this task's already-merged OEE-TEXT row only. This documentation change preserves the reviewed backend tree and build evidence.

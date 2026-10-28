@@ -78,11 +78,10 @@ _SENSITIVE_COL_SUBSTR_ZH: List[Tuple[str, str]] = [
 _CATEGORY_EXCLUDE = ["类型", "类别", "分类", "级别", "等级", "状态", "属性",
                      "category", "type", "level", "status", "grade", "kind"]
 
+# 手机号 / 座机 / 证件号 / 银行卡号 / 公司名 / 人名 / 保密产品名走 common.llm_egress_text (与 Java 同一套规则与代号);
+# 这里只剩 Java 没有的邮箱。
 _PII_PATTERNS: List[Tuple[str, "re.Pattern"]] = [
-    ("证件", re.compile(r"\b\d{17}[\dXx]\b")),
     ("邮箱", re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")),
-    ("电话", re.compile(r"\b1[3-9]\d{9}\b")),
-    ("电话", re.compile(r"\b0\d{2,3}-?\d{7,8}\b")),
 ]
 
 # 一个值长度超过这个上限就不当作"专名"替换 (避免把整段叙述/JSON 误当一个名字)。
@@ -358,6 +357,51 @@ class RedactionMeta:
     sanitized: bool = False
     redacted_count: int = 0
     redacted_fields: List[str] = field(default_factory=list)
+    # 本次请求按 Java 规则发出去的代号 → 真名; 回答 / 流式增量用它换回 (只换本次发出去的)
+    egress_tokens: Dict[str, str] = field(default_factory=dict)
+
+
+class EgressRefused(RuntimeError):
+    """脱敏后仍有残留 (号码 / 真名 / 保密产品名): 不发。消息只有类别, 不含原始值。"""
+
+
+_egress_detect_names: contextvars.ContextVar[bool] = contextvars.ContextVar("llm_egress_detect_names", default=True)
+
+
+class utterance_egress:
+    """只有用户原话、要按原话识别意图 (意图匹配 / 分层选择): 只抹号码, 不认公司名人名 —— 与 Java
+    ``LlmEgressGuard.utterance`` 一致 (人名误报会改坏原话)。"""
+
+    def __enter__(self) -> None:
+        self._token = _egress_detect_names.set(False)
+
+    def __exit__(self, *_exc) -> None:
+        _egress_detect_names.reset(self._token)
+
+
+def _message_texts(payload: Dict[str, Any]) -> List[str]:
+    out: List[str] = []
+    for msg in payload.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, str):
+            out.append(content)
+        elif isinstance(content, list):
+            out.extend(p["text"] for p in content if isinstance(p, dict) and isinstance(p.get("text"), str))
+    return out
+
+
+def _with_message_texts(payload: Dict[str, Any], texts: List[str]) -> Dict[str, Any]:
+    it = iter(texts)
+    messages = []
+    for msg in payload.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, str):
+            msg = {**msg, "content": next(it)}
+        elif isinstance(content, list):
+            msg = {**msg, "content": [{**p, "text": next(it)} if isinstance(p, dict) and isinstance(p.get("text"), str)
+                                      else p for p in content]}
+        messages.append(msg)
+    return {**payload, "messages": messages}
 
 
 class RedactionScope:
@@ -464,7 +508,8 @@ def restore_in_scope(value: Any) -> Any:
     return restore_obj(value, scope.placeholder_map)
 
 
-def redact_payload_for_egress(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], RedactionMeta]:
+def redact_payload_for_egress(payload: Dict[str, Any],
+                              protected_names: Optional[List[str]] = None) -> Tuple[Dict[str, Any], RedactionMeta]:
     """choke point 调用: 用当前 scope (若有) + factory + PII 脱敏 payload。
 
     - scope 活跃 (insight 路径): 用 scope.allocator + scope.known_values, 把命中的
@@ -485,14 +530,22 @@ def redact_payload_for_egress(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], 
     new_payload, red = redact_payload(
         payload, allocator=allocator, factory_id=factory_id, known_values=known
     )
+    # 再按 Java 同一套规则: 号码 / 公司名 / 人名 / 保密产品名 → [电话A] [单位A] [人员A] [保密产品A]; 残留就不发
+    from common.llm_egress_text import redact_texts
+    egress = redact_texts(_message_texts(new_payload), None, protected_names, _egress_detect_names.get())
+    if egress.refused:
+        raise EgressRefused(egress.refusal)
+    new_payload = _with_message_texts(new_payload, egress.texts)
     if scope is not None:
         scope.placeholder_map.update(red.placeholder_map)
-        scope.redacted_count += red.redacted_count
+        # 本次代号 ([单位A] …) 由出境口在回答 / 流式增量里换回; 不并进 scope: 每次请求都从 A 起, 并进去会互相覆盖
+        scope.redacted_count += red.redacted_count + egress.token_count
 
     meta = RedactionMeta(
-        sanitized=red.did_redact or bool(scope and scope.known_values),
-        redacted_count=red.redacted_count,
+        sanitized=red.did_redact or egress.token_count > 0 or bool(scope and scope.known_values),
+        redacted_count=red.redacted_count + egress.token_count,
         redacted_fields=list(scope.redacted_fields) if scope else [],
+        egress_tokens=dict(egress.token_to_real),
     )
     return new_payload, meta
 

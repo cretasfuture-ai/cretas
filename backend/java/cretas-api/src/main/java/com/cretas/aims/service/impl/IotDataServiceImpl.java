@@ -130,8 +130,9 @@ public class IotDataServiceImpl implements IotDataService {
     public List<IotDeviceData> getRecentData(String factoryId, String deviceId, int limit) {
         log.debug("获取设备最近数据: factoryId={}, deviceId={}, limit={}", factoryId, deviceId, limit);
 
-        return iotDeviceDataRepository.findByDeviceIdOrderByReceivedAtDesc(
-                deviceId,
+        // 设备 id 不带工厂: 只取本厂的数据
+        return iotDeviceDataRepository.findByFactoryIdAndDeviceIdOrderByReceivedAtDesc(
+                factoryId, deviceId,
                 PageRequest.of(0, limit)
         );
     }

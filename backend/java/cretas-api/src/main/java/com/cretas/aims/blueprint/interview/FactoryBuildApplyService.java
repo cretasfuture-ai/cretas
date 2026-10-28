@@ -117,7 +117,16 @@ public class FactoryBuildApplyService {
     private BlueprintWarehouseDefaultsWriter warehouseDefaultsWriter;
 
     @Autowired
+    private com.cretas.aims.repository.ProductionLineRepository productionLineRepository;
+
+    @Autowired
+    private com.cretas.aims.service.scheduling.LineCapacityConfigService lineCapacityConfigService;
+
+    @Autowired
     private ProductWorkProcessRepository productWorkProcessRepository;
+
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
     /**
      * 后端 API 门禁那一层 —— 与 {@code featureConfigRepository}(前端可见性)是**两层**。
@@ -275,6 +284,7 @@ public class FactoryBuildApplyService {
         }
 
         boolean overwrite = Boolean.TRUE.equals(request.getOverwrite());
+        requireProcessSecretEdit(factoryId, request, overwrite);
         ApplyAIInitResult result = new ApplyAIInitResult();
         result.setFactoryId(factoryId);
 
@@ -634,6 +644,10 @@ public class FactoryBuildApplyService {
 
             // 10. productProcesses → product_work_processes(每个产品自己的工序链)
             applyProductProcesses(factoryId, request, result);
+
+            // 10b. S4 productionLines → production_lines + production_line_capacity_configs
+            //      (产品此时都已落库, 按 code 解析得到 id)
+            applyProductionLines(factoryId, request, actor, result);
 
             // 14. metricWatches → alert_thresholds(异常检测那套; 定时任务一直在遍历空表)
             if (request.getSuggestedData() != null
@@ -1127,12 +1141,82 @@ public class FactoryBuildApplyService {
     }
 
     /**
+     * S4 产线与产能落库。同名产线复用 (跳过), 否则新建 (运行状态); 每条产能走
+     * {@link com.cretas.aims.service.scheduling.LineCapacityConfigService#setCapacity} —— 与工厂配置页同一个写入点,
+     * 替换在用行、旧行留作审计, 来源记 CONVERSATIONAL_BUILD, 操作人记 actor (平台管理员也能落库)。
+     * ⛔ 产品 code、单位、同名冲突都已由校验器判过; 这里再出错就是整次回滚, 不吞。
+     */
+    private void applyProductionLines(String factoryId, ApplyAIInitRequest request, ActorRef actor,
+                                      ApplyAIInitResult result) {
+        if (request.getSuggestedData() == null || request.getSuggestedData().getProductionLines() == null) {
+            return;
+        }
+        for (ApplyAIInitRequest.ProductionLineItem item : request.getSuggestedData().getProductionLines()) {
+            String name = item.getName().trim();
+            String key = FactoryBuildProductionLines.lineKey(name);
+            com.cretas.aims.entity.ProductionLine line = productionLineRepository
+                    .findByFactoryIdAndNameAndDeletedAtIsNull(factoryId, name).stream().findFirst().orElse(null);
+            if (line != null) {
+                result.getSkippedProductionLines().add(key);
+            } else {
+                line = new com.cretas.aims.entity.ProductionLine();
+                line.setFactoryId(factoryId);
+                line.setName(name);
+                line.setStatus(com.cretas.aims.entity.ProductionLine.LineStatus.active);
+                line = productionLineRepository.save(line);
+                result.getWrittenProductionLines().add(key);
+            }
+            for (ApplyAIInitRequest.LineCapacityItem c : item.getCapacities()) {
+                String code = c.getProductCode() == null || c.getProductCode().isBlank() ? null : c.getProductCode().trim();
+                String productTypeId = code == null ? null : productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                        .orElseThrow(() -> new IllegalStateException("校验过的产品 code 落库时找不到: " + code))
+                        .getId();
+                lineCapacityConfigService.setCapacity(factoryId, line.getId(), productTypeId, c.getCapacityPerHour(),
+                        c.getCapacityUnit(), com.cretas.aims.entity.ProductionLineCapacityConfig.Source.CONVERSATIONAL_BUILD,
+                        actor);
+                result.getWrittenProductionLines().add(FactoryBuildProductionLines.capacityKey(name, code));
+            }
+        }
+    }
+
+    /**
      * 产品×工序绑定落库。
      *
      * <p>⛔ 按产品**整条链替换**, 不逐条 merge。客户改口说「这个产品不过油炸了」时,
      *    逐条 merge 会把油炸留在链里 —— 而访谈里没有「删除某道工序」这个动作,
      *    客户永远删不掉它。整条替换才是访谈语义(与辅料/包材配方同一口径)。
      */
+    /**
+     * 工艺保密 (写入侧, Steve 2026-10-27): 本次会覆盖<b>已有</b>产品的转换率 (overwrite=true) 或替换已有产品的工序链时,
+     * 调用者必须对该产品有编辑权。任一无权整单 403、什么都不写 —— 与上面「全量校验先于任何写入」同一口径,
+     * 批量写不做「静默跳过一部分」。本次新建的产品还不存在, 没有保密策略, 不判。
+     */
+    void requireProcessSecretEdit(String factoryId, ApplyAIInitRequest request, boolean overwrite) {
+        if (processSecretGuard == null || request.getSuggestedData() == null) return;
+        if (!processSecretGuard.factoryHasProtectedProducts(factoryId)) return;
+        java.util.Map<String, String> touched = new java.util.LinkedHashMap<>();   // productId -> 来源
+        // 不只是覆盖: 给已有保密产品新增一对 (物料, 产品) 转换率, 也是往它的配方里加配比 (独立审查 V2.1 M1)。
+        // 已存在且不覆盖的对会被跳过、不写, 这里一并要求编辑权 (宁可多判一次, 不漏)
+        if (request.getSuggestedData().getConversionRates() != null) {
+            for (ApplyAIInitRequest.ConversionItem c : request.getSuggestedData().getConversionRates()) {
+                if (c == null || c.getToCode() == null) continue;
+                String code = c.getToCode().trim();
+                productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                        .ifPresent(p -> touched.putIfAbsent(p.getId(), "conversion write " + code));
+            }
+        }
+        if (request.getSuggestedData().getProductProcesses() != null) {
+            for (ApplyAIInitRequest.ProductProcessItem pp : request.getSuggestedData().getProductProcesses()) {
+                if (pp == null || pp.getProductCode() == null) continue;
+                String code = pp.getProductCode().trim();
+                productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                        .ifPresent(p -> touched.putIfAbsent(p.getId(), "process chain replace " + code));
+            }
+        }
+        touched.forEach((productId, what) -> processSecretGuard.requireProduct(factoryId, productId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT, "factory-build apply: " + what));
+    }
+
     private void applyProductProcesses(String factoryId, ApplyAIInitRequest request,
                                        ApplyAIInitResult result) {
         if (request.getSuggestedData() == null

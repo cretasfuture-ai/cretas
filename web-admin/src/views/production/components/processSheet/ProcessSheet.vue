@@ -14,6 +14,7 @@ import { initialProcessSheetViewMode } from './processSheetViewMode';
 import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
 import { formatWorkflowPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
+import { RAW_WORKFLOW_OWNER_ANCHOR_LABEL, isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -47,6 +48,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'submitted'): void;
 }>();
+// 多产出计划的 productTypeId 是内部原料锚点; 调用方若误传锚点名, 这里也不露给用户。
+const displayProductName = computed(() =>
+  (isRawWorkflowOwnerAnchorName(props.productName) ? RAW_WORKFLOW_OWNER_ANCHOR_LABEL : props.productName));
 
 // -------------------------------------------------------------------------
 // 工序链 — 动态从产品工序配置(ProductWorkProcess)解析 (G0)
@@ -127,10 +131,35 @@ const terminalWorkflowOutput = computed(() => {
 const upstreamKeyOf = computed<Record<string, string | null>>(() => {
   const map: Record<string, string | null> = {};
   PROCESSES.value.forEach((p, i) => {
-    map[procKey(p)] = i > 0 ? procKey(PROCESSES.value[i - 1]) : null;
+    map[procKey(p)] = workflowUpstreamKey(p, i) ?? (i > 0 ? procKey(PROCESSES.value[i - 1]) : null);
   });
   return map;
 });
+
+/**
+ * 缺口 04: Workflow 计划按工艺图找上游 —— 本道半成品投入 (materialNodeId) 是哪一道更早工序的产出,
+ * 来源批次就从那一道取。原来一律取「前一道」, 网状工艺里并行分支 (分割 → 熟制 / 滚揉 / 卤制) 的
+ * 第二、三支会去前一道 (另一条分支) 找料, 永远显示「暂无可用上游库存」。
+ * 汇合工序有多个上游时取最早的那一道 (来源下拉一次只挂一个上游)。找不到 (legacy / 只吃原料) 返回 null,
+ * 调用方回落「前一道」。
+ */
+function workflowUpstreamKey(proc: ProcEntry, idx: number): string | null {
+  const ctx = proc.workflowContext;
+  if (!ctx) return null;
+  const needed = new Set(
+    ctx.inputs
+      .filter((port) => port.materialKind === 'SEMI_FINISHED' && port.materialNodeId)
+      .map((port) => port.materialNodeId as string),
+  );
+  if (needed.size === 0) return null;
+  for (let j = 0; j < idx; j++) {
+    const outputs = PROCESSES.value[j].workflowContext?.outputs ?? [];
+    if (outputs.some((port) => port.materialNodeId && needed.has(port.materialNodeId))) {
+      return procKey(PROCESSES.value[j]);
+    }
+  }
+  return null;
+}
 
 /**
  * 2B Task F1 (additive): workflow 快照 (WorkflowProcessDescriptor[]) → ProcEntry[]。
@@ -363,16 +392,17 @@ async function resolveProcesses() {
 // 也不是危险方向的错(不会漏掉该录的锅数, 只会多问一次), 但如实记录这个已知差异。
 async function resolveSeasoningProcesses(): Promise<{ configured: Set<string>; potEnabled: Set<string> }> {
   try {
-    const response = await bomSeasoningApi.getByProduct(props.factoryId, props.productTypeId);
-    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.seasoningItems)) {
+    // 只取工序标记 (不含配比): 工艺保密产品对无授权的人也照常返回, 抽屉不会因此整张打不开
+    const response = await bomSeasoningApi.getProcessFlagsByProduct(props.factoryId, props.productTypeId);
+    if (!response || response.success !== true || !response.data || !Array.isArray(response.data.processes)) {
       if (isNotFoundError(response)) return { configured: new Set(), potEnabled: new Set() };
       throw new Error('调料配方响应异常');
     }
     return {
-      configured: new Set((response.data.seasoningItems || []).map((item) => item.workProcessId)),
+      configured: new Set(response.data.processes.map((item) => item.workProcessId)),
       potEnabled: new Set(
-        response.data.seasoningItems
-          .filter((item) => item.subsequentPotRatio != null)
+        response.data.processes
+          .filter((item) => item.potEnabled === true)
           .map((item) => item.workProcessId),
       ),
     };
@@ -469,6 +499,7 @@ watch(
 // After a row is saved: refresh inventory of this process + active tab inventory table
 // -------------------------------------------------------------------------
 async function onRowSaved(savedProc: ProcEntry) {
+  void refreshWorkflowReadiness();
   // Refresh inventory for ALL processes (a saved row can affect downstream dropdowns)。
   // SP-F role-mode fix: 按唯一 procKey 刷新 + 传 order 双键过滤。
   await Promise.all(
@@ -514,8 +545,9 @@ function upstreamItems(proc: ProcEntry): ProcessSheetInventoryItem[] {
 // role-mode/关键词回退下同一 archetype 可能对应不同真实工序名, 硬编码必错。改为按 PROCESSES
 // 实际顺序取前一道的真实 label(工序真实名称), 传给子组件动态渲染, 不再由子组件自己猜测。
 function upstreamLabelOf(proc: ProcEntry): string | undefined {
-  const idx = PROCESSES.value.findIndex((p) => procKey(p) === procKey(proc));
-  return idx > 0 ? PROCESSES.value[idx - 1].label : undefined;
+  // 与 upstreamItems 同一个上游 (Workflow 按工艺图, legacy 取前一道)
+  const upKey = upstreamKeyOf.value[procKey(proc)];
+  return upKey ? PROCESSES.value.find((p) => procKey(p) === upKey)?.label : undefined;
 }
 
 function hasSubmittedRow(proc: ProcEntry): boolean {
@@ -529,14 +561,40 @@ function processTabState(proc: ProcEntry): 'reported' | 'current' | 'pending' {
 }
 
 function upstreamSubmissionReady(proc: ProcEntry): boolean {
+  // 缺口 04: Workflow 计划以后端按工艺图算的结论为准 (上游产出的料到了就解锁, 并行分支各报各的);
+  // 后端正式录入时用同一份判定拦截。没有结论 (legacy 计划) 才退回「上一道已正式报工」。
+  const unlocked = proc.workflowContext?.unlocked;
+  if (unlocked === true || unlocked === false) return unlocked;
   const idx = PROCESSES.value.findIndex((item) => procKey(item) === procKey(proc));
   return idx <= 0 || hasSubmittedRow(PROCESSES.value[idx - 1]);
 }
 
 function upstreamSubmissionMessage(proc: ProcEntry): string | undefined {
+  if (upstreamSubmissionReady(proc)) return undefined;
+  if (proc.workflowContext?.unlocked === false) {
+    return `${proc.workflowContext.blockedReason || '上游工序还没有产出'}；可先保存草稿。`;
+  }
   const idx = PROCESSES.value.findIndex((item) => procKey(item) === procKey(proc));
-  if (idx <= 0 || upstreamSubmissionReady(proc)) return undefined;
+  if (idx <= 0) return undefined;
   return `上游工序「${PROCESSES.value[idx - 1].label}」尚未正式报工；可先保存草稿，正式报工前请先完成上游工序。`;
+}
+
+/** 正式报工后上游产出变了, 重新读一次各道「能不能报」(只更新这两个字段, 不重建工序列表)。 */
+async function refreshWorkflowReadiness() {
+  if (!PROCESSES.value.some((p) => p.workflowContext)) return;
+  try {
+    const resp = await getWorkflowSheetConfig(props.factoryId, props.planId);
+    const byOrder = new Map((resp.data?.processes ?? []).map((d) => [d.processOrder, d]));
+    PROCESSES.value = PROCESSES.value.map((p) => {
+      const fresh = p.workflowContext ? byOrder.get(p.workflowContext.processOrder) : undefined;
+      return fresh && p.workflowContext
+        ? { ...p, workflowContext: { ...p.workflowContext, unlocked: fresh.unlocked, blockedReason: fresh.blockedReason } }
+        : p;
+    });
+  } catch (e) {
+    // 读不到就保留旧结论; 真正的拦截在后端, 不会因为这里没刷新而放过
+    console.warn('[ProcessSheet] refresh workflow readiness failed', e);
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -557,7 +615,7 @@ defineExpose({ hasUnsavedRows });
       <div>
         <div style="font-size:15px;font-weight:600;color:#303133">
           逐工序报工
-          <span v-if="productName" style="font-weight:400;color:#606266;margin-left:8px">{{ productName }}</span>
+          <span v-if="displayProductName" data-testid="process-sheet-product-name" style="font-weight:400;color:#606266;margin-left:8px">{{ displayProductName }}</span>
           <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
             {{ formatWorkflowPlannedOutput(plannedQuantity, plannedUnit, terminalWorkflowOutput) }}
             <el-tooltip content="计划成品数量按产品单位记录；首道投料数量以逐工序报工和配方出成率为准" placement="top">

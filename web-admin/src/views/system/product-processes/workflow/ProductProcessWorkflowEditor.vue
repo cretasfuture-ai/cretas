@@ -44,6 +44,7 @@
             本图产出：尚未画出终端产出
           </el-tag>
           <span v-if="dirty" class="dirty-status">● 有未保存改动</span>
+          <span v-else-if="unsavedNewDefinition" class="dirty-status" data-testid="workflow-unsaved-new">● 新画布，尚未保存</span>
           <span v-else-if="definition" class="saved-status">✓ 已保存</span>
           <span class="stage-note">图定义独立保存，暂不改写现有报工运行时</span>
         </div>
@@ -53,7 +54,7 @@
           <el-button :disabled="!productTypeId || flowNodes.length === 0" @click="fitCanvas">适应画布</el-button>
           <el-button
             type="primary"
-            :disabled="!canEdit || !dirty"
+            :disabled="!canEdit || (!dirty && !unsavedNewDefinition)"
             :loading="saving"
             @click="() => saveDraft()"
           >{{ saveActionLabel }}</el-button>
@@ -523,7 +524,7 @@
         </div>
 
         <div v-if="productTypeId && flowNodes.length === 0 && !loading" class="empty-canvas-action">
-          <el-empty description="该产品还没有工序图">
+          <el-empty :description="emptyCanvasDescription">
             <el-button v-if="canEdit" type="primary" @click="addStandaloneRaw">添加第一个原料 Cell</el-button>
           </el-empty>
         </div>
@@ -965,27 +966,74 @@
       @click.self="closeRawInputDialog"
     >
       <div class="raw-input-panel">
-        <h3 class="raw-input-title">新增原料 Cell · {{ rawInputDialog.processName }}</h3>
+        <h3 class="raw-input-title">新增来源 Cell · {{ rawInputDialog.processName }}</h3>
 
         <div class="raw-input-field">
-          <label class="raw-input-label">选择原料 SKU</label>
+          <label class="raw-input-label">来源类型</label>
+          <div class="raw-input-modes">
+            <label
+              class="raw-input-mode"
+              :class="{ 'is-active': rawInputDialog.inputSource === 'RAW_MATERIAL' }"
+            >
+              <input
+                v-model="rawInputDialog.inputSource"
+                type="radio"
+                name="workflow-input-source"
+                value="RAW_MATERIAL"
+                data-testid="input-source-raw"
+              />
+              <span>原料</span>
+            </label>
+            <label
+              class="raw-input-mode"
+              :class="{ 'is-active': rawInputDialog.inputSource === 'EXTERNAL' }"
+            >
+              <input
+                v-model="rawInputDialog.inputSource"
+                type="radio"
+                name="workflow-input-source"
+                value="EXTERNAL"
+                data-testid="input-source-external-semi"
+              />
+              <span>外部半成品</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="raw-input-field">
+          <label class="raw-input-label">
+            {{ rawInputDialog.inputSource === 'EXTERNAL' ? '选择外部半成品 SKU' : '选择原料 SKU' }}
+          </label>
+          <p
+            v-if="rawInputDialog.inputSource === 'EXTERNAL'"
+            class="raw-input-route-hint"
+            data-testid="external-semi-route-hint"
+          >
+            目前支持按公斤投入外部半成品，工艺中仍需保留原料投入。
+          </p>
           <el-select
             v-model="rawInputDialog.skuId"
             filterable
-            placeholder="从工厂原料档案选择"
+            :placeholder="rawInputDialog.inputSource === 'EXTERNAL'
+              ? '从当前工厂启用的半成品 SKU 选择'
+              : '从工厂原料档案选择'"
             style="width: 100%"
-            data-testid="raw-input-sku"
+            :data-testid="rawInputDialog.inputSource === 'EXTERNAL'
+              ? 'external-semi-input-sku' : 'raw-input-sku'"
           >
             <el-option
-              v-for="option in rawMaterialOptions"
+              v-for="option in rawInputDialog.inputSource === 'EXTERNAL'
+                ? externalSemiInputOptions : rawMaterialOptions"
               :key="option.id"
-              :label="option.name"
+              :label="rawInputDialog.inputSource === 'EXTERNAL'
+                ? `${option.code || option.id} — ${option.name} · ${option.unit || '-'}`
+                : option.name"
               :value="option.id"
             />
           </el-select>
         </div>
 
-        <div class="raw-input-field">
+        <div v-if="rawInputDialog.inputSource === 'RAW_MATERIAL'" class="raw-input-field">
           <label class="raw-input-label">
             它和「{{ rawInputDialog.mainMaterialName }}」是什么关系
           </label>
@@ -1191,6 +1239,7 @@ import {
 } from '@/api/bom';
 import { bigCategoryOf } from '@/utils/materialCategory';
 import { toDateString } from '@/utils/dateFormat';
+import { PROCESS_SECRET_LABEL, isProcessSecretRow, processSecretMessage } from '@/utils/processSecretField';
 import {
   selectAuxiliaryMaterials,
   selectByproductMaterials,
@@ -1264,6 +1313,7 @@ interface SkuOption {
   unit?: string;
   specification?: string;
   productCategory?: string;
+  isActive?: boolean;
   gramsPerUnit?: number | null;
   detailLoaded?: boolean;
 }
@@ -1368,6 +1418,8 @@ const connectingFromKind = ref<'' | 'MATERIAL' | 'PROCESS'>('');
 const selectedEdgeId = ref('');
 const canvasRef = ref<HTMLElement | null>(null);
 let gsapCtx: gsap.Context | null = null;
+/** 画布上是一张还没存过的起步图 (服务端没有这个产品的 Workflow)。可手动保存, 但不自动保存。 */
+const unsavedNewDefinition = computed(() => Boolean(definition.value) && !definition.value?.id);
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let autoSaveGeneration = 0;
 let autoSaveBarrierDepth = 0;
@@ -1423,11 +1475,15 @@ const rawInputDialog = reactive({
   mainMaterialNodeId: '',
   mainMaterialName: '',
   skuId: '',
+  inputSource: 'RAW_MATERIAL' as 'RAW_MATERIAL' | 'EXTERNAL',
   relation: '' as '' | 'SUBSTITUTE' | 'PARALLEL',
 });
 /** 两项都选齐才能确定 —— 关系选项没有默认值, 默认值等于替用户做了决定。 */
 const rawInputDialogReady = computed(
-  () => Boolean(rawInputDialog.skuId) && Boolean(rawInputDialog.relation),
+  () => Boolean(rawInputDialog.skuId)
+    && (rawInputDialog.inputSource === 'EXTERNAL'
+      || Boolean(rawInputDialog.relation)
+      || !rawInputDialog.mainMaterialNodeId),
 );
 const unitCatalog = ref<UnitCatalogItem[]>([]);
 // #3: 该产品 BOM 原辅料清单 (per-product, 随 productTypeId 变化而重新加载,
@@ -2286,7 +2342,12 @@ const outputSkuOptions = computed(() => skuOptions.value.filter(
 // 两级选择器用：把可作产出的 SKU 按分类拆成「半成品」「成品」两组，供物料 Cell 和
 // 工序 Cell 产出行共用同一份数据源（WorkflowSkuPicker 组件负责渲染两级分组 UI）。
 const semiFinishedSkuOptions = computed(() => skuOptions.value.filter(
-  (option) => classifyOutputSkuCategory(option.productCategory) === 'SEMI_FINISHED',
+  (option) => classifyOutputSkuCategory(option.productCategory) === 'SEMI_FINISHED'
+));
+const externalSemiInputOptions = computed(() => semiFinishedSkuOptions.value.filter(
+  (option) => option.isActive !== false
+    && Boolean(option.unit?.trim())
+    && workflowReportingUnit('SEMI_FINISHED', option.unit) === 'kg',
 ));
 const finishedGoodSkuOptions = computed(() => skuOptions.value.filter(
   (option) => classifyOutputSkuCategory(option.productCategory) === 'FINISHED_GOOD',
@@ -2477,6 +2538,10 @@ const previewingVersion = ref<number | null>(null);
 // AI 输入默认可见；用户显式收起后仍保留可键盘访问的展开按钮。
 const aiCollapsed = ref(false);
 const unitReviewPending = ref(false);
+// 工艺保密: 无授权的人拿到的是去掉节点的骨架 (带 processSecret 标记)。⛔ 不能当成「还没有工序图」,
+// 也不能让他在空画布上保存 —— 后端会 403, 但界面会误导人以为可以重画一张 (F006 验收 2026-10-27)。
+const workflowSecretRestricted = ref(false);
+const workflowSecretMessage = ref('');
 const unitIssues = ref<WorkflowUnitIssue[]>([]);
 const publishBindingErrors = ref<WorkflowValidationError[]>([]);
 const publishBindingAttentionNodeIds = ref<Set<string>>(new Set());
@@ -2491,7 +2556,11 @@ const canEdit = computed(() => (
   && loadedCatalogCanWrite.value
   && loadedDefinitionIdentity.value?.factoryId === props.factoryId
   && loadedDefinitionIdentity.value?.productTypeId === props.productTypeId
+  && !workflowSecretRestricted.value
 ));
+const emptyCanvasDescription = computed(() => (workflowSecretRestricted.value
+  ? `${PROCESS_SECRET_LABEL}：${workflowSecretMessage.value || '该产品工艺已设为保密，需要保密负责人授权才能查看和修改'}`
+  : '该产品还没有工序图'));
 const currentDefinitionIsEnabled = computed(() => (
   definition.value?.status === 'PUBLISHED'
   && activation.value?.enabled === true
@@ -2510,6 +2579,7 @@ const publishActionLabel = computed(() => (
   publishActionCompleted.value ? '当前配置已生效' : '更新并应用'
 ));
 const publishDisabledReason = computed(() => {
+  if (workflowSecretRestricted.value) return '该产品工艺已设为保密，需要保密负责人授权才能修改';
   if (publishConfirming.value || publishing.value) return '正在发布 Workflow，请勿重复提交';
   if (!canEdit.value) return '当前正在加载、预览历史版本或没有编辑权限，暂不能发布';
   // 只在“当前显示的版本”已经发布并启用、且没有新的本地草稿改动时禁用。
@@ -3138,7 +3208,8 @@ async function reconcileLoadedUnits(): Promise<void> {
   }
   if (unitsChanged) {
     hydrate(result.definition);
-    dirty.value = true;
+    // 未存过的起步图: 单位校正只改本地预览, 不触发自动保存 (见 loadDefinition)。
+    if (definition.value?.id) dirty.value = true;
   }
 }
 
@@ -3196,6 +3267,15 @@ async function loadDefinition(): Promise<void> {
     const response = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId);
     if (!isCurrentLoad(generation, identity)) return;
     let nextDefinition = response.success ? response.data : null;
+    // 工艺保密: 无授权的人拿到的是只有 id / 版本 / processSecret 的摘要, 连 nodes / edges 数组都没有 ——
+    // ⛔ 必须在 hydrate 之前截住, 否则 hydrate 读 nodes.map 崩掉, 页面停在「该产品还没有工序图」
+    // (F006 反向验收 2026-10-27)。画布保持空, 显示「已保密」, 编辑按钮由 canEdit 锁住。
+    if (nextDefinition && isProcessSecretRow(nextDefinition)) {
+      workflowSecretRestricted.value = true;
+      workflowSecretMessage.value = processSecretMessage(nextDefinition);
+      loadedDefinitionIdentity.value = identity;
+      return;
+    }
     if (!nextDefinition) {
       let legacyProcesses: Parameters<typeof createWorkflowFromLegacy>[0]['processes'] = [];
       if (!rawOwnerMode.value) {
@@ -3229,11 +3309,17 @@ async function loadDefinition(): Promise<void> {
       throw new Error('Workflow definition identity does not match the requested product');
     }
     unitReviewPending.value = nextDefinition.unitReviewRequired === true;
+    workflowSecretRestricted.value = isProcessSecretRow(nextDefinition);
+    workflowSecretMessage.value = processSecretMessage(nextDefinition);
     const inputSelectionMigrated = hydrate(nextDefinition);
     loadedDefinitionIdentity.value = identity;
     await ensureBoundSkuDetails();
     if (!isCurrentLoad(generation, identity)) return;
-    dirty.value = !nextDefinition.id || inputSelectionMigrated;
+    // 还没有存过图的产品: 画布上那张起步图只是本地预览, ⛔ 不标 dirty —— 标了就会在 2.5s 后被
+    // 自动保存成一张草稿, 「打开看一眼」就往库里写一行 (F006 每看一个没图的成品就多一张
+    // 「草稿 v1 · 待完善画布」, 2026-10-25)。用户真正改动后照常 dirty + 自动保存;
+    // 不改也能手动点保存 (见 unsavedNewDefinition)。与下方「已发布图只看不 fork」同一原则。
+    dirty.value = Boolean(nextDefinition.id) && inputSelectionMigrated;
     await reconcileLoadedUnits();
     await nextTick();
     if (!isCurrentLoad(generation, identity)) return;
@@ -3261,6 +3347,8 @@ function invalidateLoadedDefinition(invalidatePersistence = true): void {
   definition.value = null;
   workflowBomSyncPreflight.value = null;
   unitReviewPending.value = false;
+  workflowSecretRestricted.value = false;
+  workflowSecretMessage.value = '';
   unitIssues.value = [];
   flowNodes.value = [];
   flowEdges.value = [];
@@ -5189,8 +5277,6 @@ function confirmAddProcess(): void {
  * 的算法完全不同: 替代料是二选一, 合成一个逻辑投入; 并列投入各自是独立需求。
  * 系统以前不问, 于是两种情况长得一模一样, `logicalRootCount()` 只能一律按 +1 算。
  *
- * ⚠️ 这道工序**还没有任何原料**时不弹窗 —— 没有可替代的对象, 问了也只有一个答案。
- *
  * ⛔ 弹窗只是录入体验, **不是约束**: AI 画布工具是第二个写图入口, 完全绕过这里。
  *    合法性(自引用/悬空/指向非原料/成链)由后端 ProductProcessWorkflowValidator 保证。
  */
@@ -5198,7 +5284,11 @@ function addInputToProcess(processId: string): void {
   const process = flowNodes.value.find((node) => node.id === processId);
   if (!process) return;
   const mainMaterial = primaryRawInputOf(process);
-  if (!mainMaterial) {
+  const inputPorts = ((process.data as ProcessNodeData).ports || [])
+    .filter((port) => port.direction === 'INPUT');
+  // Existing non-RAW upstreams keep the legacy direct RAW route. A truly empty
+  // process still opens the chooser so the external SEMI_FINISHED route remains reachable.
+  if (!mainMaterial && inputPorts.length > 0) {
     createRawInputCell(processId, { skuId: '', substituteOfNodeId: '' });
     return;
   }
@@ -5206,9 +5296,10 @@ function addInputToProcess(processId: string): void {
     visible: true,
     processId,
     processName: String((process.data as ProcessNodeData).processName || '工序'),
-    mainMaterialNodeId: mainMaterial.id,
-    mainMaterialName: String(mainMaterial.data?.name || '主料'),
+    mainMaterialNodeId: mainMaterial?.id || '',
+    mainMaterialName: String(mainMaterial?.data?.name || '主料'),
     skuId: '',
+    inputSource: 'RAW_MATERIAL',
     relation: '',
   });
 }
@@ -5238,6 +5329,27 @@ function closeRawInputDialog(): void {
 
 function confirmAddRawInput(): void {
   if (!rawInputDialogReady.value) return;
+  if (rawInputDialog.inputSource === 'EXTERNAL') {
+    const option = externalSemiInputOptions.value.find((item) => item.id === rawInputDialog.skuId);
+    if (!option || classifyOutputSkuCategory(option.productCategory) !== 'SEMI_FINISHED'
+      || option.isActive === false || !option.unit?.trim()
+      || workflowReportingUnit('SEMI_FINISHED', option.unit) !== 'kg') {
+      ElMessage.warning('请选择当前工厂启用且按 kg 投入的半成品 SKU');
+      return;
+    }
+    const duplicate = flowNodes.value.some((node) => (
+      node.data?.kind === 'SEMI_FINISHED'
+      && (node.data as MaterialNodeData).inputSource === 'EXTERNAL'
+      && String(node.data?.skuId || '') === option.id
+    ));
+    if (duplicate) {
+      ElMessage.warning('该外部半成品 SKU 已在当前 Workflow 中使用');
+      return;
+    }
+    createExternalSemiInputCell(rawInputDialog.processId, option);
+    closeRawInputDialog();
+    return;
+  }
   const option = rawMaterialOptions.value.find((item) => item.id === rawInputDialog.skuId);
   if (!option) {
     ElMessage.warning('请选择一个原料 SKU');
@@ -5258,6 +5370,52 @@ function confirmAddRawInput(): void {
       : '',
   });
   closeRawInputDialog();
+}
+
+function createExternalSemiInputCell(processId: string, option: SkuOption): void {
+  const process = flowNodes.value.find((node) => node.id === processId);
+  if (!process || !option.unit?.trim()) return;
+  mutate(() => {
+    const data = process.data as ProcessNodeData & { kind: 'PROCESS' };
+    const inputCount = data.ports.filter((port) => port.direction === 'INPUT').length;
+    const timestamp = nextGraphIdSeed();
+    const materialId = `material:external-semi:${timestamp}`;
+    const portId = `input:${timestamp}`;
+    const unit = workflowReportingUnit('SEMI_FINISHED', option.unit);
+    const materialData: MaterialNodeData & {
+      kind: 'SEMI_FINISHED';
+      inputSource: 'EXTERNAL';
+    } = {
+      kind: 'SEMI_FINISHED',
+      inputSource: 'EXTERNAL',
+      name: option.name,
+      skuId: option.id,
+      skuCode: option.code || option.id,
+      specification: option.specification,
+      bound: true,
+      baseUnit: unit,
+    };
+    flowNodes.value.push({
+      id: materialId,
+      type: 'material',
+      position: snapPosition({ x: process.position.x - 240, y: process.position.y + inputCount * 160 }),
+      data: materialData,
+    });
+    data.ports = [
+      ...data.ports,
+      {
+        id: portId,
+        direction: 'INPUT',
+        materialNodeId: materialId,
+        materialKind: 'SEMI_FINISHED',
+        skuId: option.id,
+        materialName: option.name,
+        unit,
+        ordinal: inputCount,
+      },
+    ];
+    flowEdges.value.push(flowEdge(materialId, 'output', processId, portId));
+  });
 }
 
 /**
@@ -6364,7 +6522,7 @@ async function publishWorkflowUnderBarrier(initialIdentity: WorkflowIdentity): P
   }
   let identity = initialIdentity;
   if (!(await reconcileForPersistence(identity, true))) return;
-  if (dirty.value && !(await saveDraft())) return;
+  if ((dirty.value || unsavedNewDefinition.value) && !(await saveDraft())) return;
   identity = currentLoadedIdentity();
   if (!identity || !canEdit.value) return;
   if (!definition.value?.lockVersion && definition.value?.lockVersion !== 0) {
@@ -7767,6 +7925,23 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   margin-bottom: 8px;
   font-size: 13px;
   color: var(--el-text-color-regular, #606266);
+}
+.raw-input-modes { display: flex; gap: 8px; }
+.raw-input-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--el-text-color-regular, #606266);
+  font-size: 13px;
+}
+.raw-input-mode.is-active {
+  border-color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary-light-9, #ecf5ff);
 }
 .raw-input-relations { display: grid; gap: 8px; }
 .raw-input-relation {

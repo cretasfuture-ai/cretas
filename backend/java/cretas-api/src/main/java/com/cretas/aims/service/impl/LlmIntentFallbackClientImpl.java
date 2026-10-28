@@ -30,6 +30,8 @@ import com.cretas.aims.exception.LlmSchemaValidationException.ValidationFailureT
 import com.cretas.aims.repository.IntentOptimizationSuggestionRepository;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.service.ConversationService;
+import com.cretas.aims.service.consent.LlmEgressGuard;
+import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.service.LlmIntentFallbackClient;
 import com.cretas.aims.service.RAGRetrievalService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -153,6 +155,29 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
     private final IntentKnowledgeBase intentKnowledgeBase;
 
     private final PythonSmartBIClient pythonSmartBIClient;
+
+    /** 原话 / 提示词 (含同厂其他人的历史原话 few-shot) 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
+    @Autowired
+    private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "intent-llm-fallback";
+
+    /**
+     * 意图分类 / 重排: 提示词与原话脱敏后发, 回答里的代号换回 (JSON 安全)。
+     * 脱敏不了抛 {@link IllegalStateException}, 由各调用点原有的异常降级接住 —— 不发。
+     */
+    private String classifyRedacted(String factoryId, String systemPrompt, String userInput) {
+        LlmEgressRedactor.Result r = redactedOrThrow(factoryId, systemPrompt, userInput);
+        return r.restoreJsonText(dashScopeClient.classifyIntent(r.text(0), r.text(1)));
+    }
+
+    private LlmEgressRedactor.Result redactedOrThrow(String factoryId, String... texts) {
+        LlmEgressRedactor.Result r = llmEgressGuard.texts(EGRESS_SITE, factoryId, texts);
+        if (r.refused()) {
+            throw new IllegalStateException("intent prompt could not be redacted, not sending");
+        }
+        return r;
+    }
 
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
@@ -383,9 +408,10 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             }
 
             if (t.response() != null && !t.response().isEmpty()) {
-                String summary = t.response().entrySet().stream()
+                // 只给字段名: 值是上一轮的查询结果 (客户 / 供应商 / 人名), 判断意图用不着, 也不该发给模型
+                String summary = t.response().keySet().stream()
                         .limit(3)  // keep prompt tight
-                        .map(e -> e.getKey() + "=" + e.getValue())
+                        .map(String::valueOf)
                         .collect(java.util.stream.Collectors.joining(", "));
                 sb.append("  返回关键字段: ").append(summary).append("\n");
             }
@@ -611,11 +637,12 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         log.debug("Using Python service for intent classification");
 
         try {
-            // 构建请求体
-            Map<String, Object> requestBody = buildClassifyRequest(userInput, availableIntents, factoryId);
+            // 构建请求体 (原话脱敏后再发; 解析仍拿原话做匹配)
+            LlmEgressRedactor.Result redacted = redactedOrThrow(factoryId, userInput);
+            Map<String, Object> requestBody = buildClassifyRequest(redacted.text(0), availableIntents, factoryId);
 
             // 调用 Python 端点
-            String responseJson = callPythonEndpoint("/api/ai/intent/classify", requestBody);
+            String responseJson = redacted.restoreJsonText(callPythonEndpoint("/api/ai/intent/classify", requestBody));
 
             // 解析响应
             return parseClassifyResponse(responseJson, userInput, availableIntents, factoryId, userId, userRole);
@@ -927,7 +954,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             // ===== 第一阶段：粗分类 =====
             log.debug("[Two-Phase] Phase 1: Category classification");
             String categoryPrompt = buildCategoryClassifyPrompt();
-            String categoryResponse = dashScopeClient.classifyIntent(categoryPrompt, userInput);
+            String categoryResponse = classifyRedacted(factoryId, categoryPrompt, userInput);
             String matchedCategory = parseCategoryClassifyResponse(categoryResponse);
 
             if (matchedCategory == null || matchedCategory.isEmpty() || "UNKNOWN".equalsIgnoreCase(matchedCategory)) {
@@ -957,7 +984,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
 
             // ===== 第二阶段：细分类 =====
             String intentPrompt = buildIntentClassifyPromptForCategory(matchedCategory, categoryIntents);
-            String intentResponse = dashScopeClient.classifyIntent(intentPrompt, userInput);
+            String intentResponse = classifyRedacted(factoryId, intentPrompt, userInput);
 
             // 解析细分类结果（复用现有解析逻辑）
             IntentMatchResult result = parseDirectClassifyResponse(
@@ -995,7 +1022,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
 
         log.debug("[Single-Phase] Using single-phase classification");
         String systemPrompt = buildIntentClassifyPrompt(availableIntents, userInput, factoryId);
-        String responseJson = dashScopeClient.classifyIntent(systemPrompt, userInput);
+        String responseJson = classifyRedacted(factoryId, systemPrompt, userInput);
         return parseDirectClassifyResponse(responseJson, userInput, availableIntents, factoryId, userId, userRole);
     }
 
@@ -1570,9 +1597,10 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             String responseText;
             if (shouldUseDashScopeDirect()) {
                 log.debug("[Reranking] Using DashScope direct");
-                responseText = dashScopeClient.classifyIntent(systemPrompt, userInput);
+                responseText = classifyRedacted(factoryId, systemPrompt, userInput);
             } else {
                 log.debug("[Reranking] Using Python service");
+                LlmEgressRedactor.Result redacted = redactedOrThrow(factoryId, systemPrompt, userInput);
                 List<Map<String, Object>> candidateData = candidates.stream()
                         .map(candidate -> {
                             Map<String, Object> item = new LinkedHashMap<>();
@@ -1583,11 +1611,11 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                             return item;
                         })
                         .collect(Collectors.toList());
-                responseText = callTypedGeneralAnalysis(
+                responseText = redacted.restoreJsonText(callTypedGeneralAnalysis(
                         factoryId,
-                        systemPrompt + "\n\n用户输入:\n" + userInput,
+                        redacted.text(0) + "\n\n用户输入:\n" + redacted.text(1),
                         candidateData,
-                        "intent_reranking");
+                        "intent_reranking"));
             }
 
             // 3. 解析 Reranking 结果
@@ -1749,30 +1777,6 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         }
     }
 
-    @Override
-    public String generateClarificationQuestion(String userInput,
-                                                  List<CandidateIntent> candidateIntents,
-                                                  String factoryId) {
-        log.info("Generating clarification question: factoryId={}, candidates={}",
-                 factoryId, candidateIntents.size());
-
-        try {
-            // 构建请求体
-            Map<String, Object> requestBody = buildClarifyRequest(userInput, candidateIntents, factoryId);
-
-            // 调用 Python 端点
-            String responseJson = callPythonEndpoint("/api/ai/intent/clarify", requestBody);
-
-            // 解析响应
-            return parseClarifyResponse(responseJson);
-
-        } catch (Exception e) {
-            log.error("Clarification question generation failed: {}", e.getMessage(), e);
-            // 返回默认问题
-            return generateDefaultClarificationQuestion(candidateIntents);
-        }
-    }
-
     /**
      * 为缺失参数生成澄清问题
      *
@@ -1807,23 +1811,25 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         try {
             // 1. 构建提示词
             String prompt = buildClarificationPrompt(userInput, intent, missingParameters);
+            // 提示词里嵌着原话: 两份一起脱敏, 生成的问题里的代号换回; 脱敏不了抛错 → 下面的模板问题
+            LlmEgressRedactor.Result redacted = redactedOrThrow(factoryId, prompt, userInput);
 
             // 2. 调用 LLM（优先使用 DashScope 直接调用）
             String responseText;
             if (shouldUseDashScopeDirect()) {
                 log.debug("Using DashScope direct for clarification questions");
-                responseText = dashScopeClient.chat(prompt, userInput);
+                responseText = redacted.restore(dashScopeClient.chat(redacted.text(0), redacted.text(1)));
             } else {
                 log.debug("Using Python service for clarification questions");
                 Map<String, Object> clarificationContext = new LinkedHashMap<>();
                 clarificationContext.put("intent_code", intent.getIntentCode());
                 clarificationContext.put("intent_name", intent.getIntentName());
                 clarificationContext.put("missing_parameters", List.copyOf(missingParameters));
-                responseText = callTypedGeneralAnalysis(
+                responseText = redacted.restore(callTypedGeneralAnalysis(
                         factoryId,
-                        prompt + "\n\n用户输入:\n" + userInput,
+                        redacted.text(0) + "\n\n用户输入:\n" + redacted.text(1),
                         List.of(clarificationContext),
-                        "intent_clarification");
+                        "intent_clarification"));
             }
 
             // 3. 解析 LLM 返回的问题列表
@@ -2111,29 +2117,6 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
         return simplified;
     }
 
-    private Map<String, Object> buildClarifyRequest(String userInput,
-                                                      List<CandidateIntent> candidateIntents,
-                                                      String factoryId) {
-        Map<String, Object> request = new HashMap<>();
-        request.put("user_input", userInput);
-        request.put("factory_id", factoryId);
-
-        // 候选意图信息
-        List<Map<String, Object>> candidates = candidateIntents.stream()
-                .map(c -> {
-                    Map<String, Object> candidate = new HashMap<>();
-                    candidate.put("intent_code", c.getIntentCode());
-                    candidate.put("intent_name", c.getIntentName());
-                    candidate.put("description", c.getDescription());
-                    candidate.put("confidence", c.getConfidence());
-                    return candidate;
-                })
-                .collect(Collectors.toList());
-        request.put("candidate_intents", candidates);
-
-        return request;
-    }
-
     // ==================== HTTP 调用 (OkHttp) ====================
 
     private String callPythonEndpoint(String endpoint, Map<String, Object> requestBody) throws IOException {
@@ -2395,39 +2378,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 .build();
     }
 
-    @SuppressWarnings("unchecked")
-    private String parseClarifyResponse(String responseJson) throws IOException {
-        Map<String, Object> response = objectMapper.readValue(responseJson,
-                new TypeReference<Map<String, Object>>() {});
-
-        Boolean success = (Boolean) response.get("success");
-        if (success == null || !success) {
-            return null;
-        }
-
-        Map<String, Object> data = (Map<String, Object>) response.get("data");
-        if (data == null) {
-            return null;
-        }
-
-        return (String) data.get("clarification_question");
-    }
-
     // ==================== 工具方法 ====================
-
-    private String generateDefaultClarificationQuestion(List<CandidateIntent> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
-            return "请问您具体想要执行什么操作？";
-        }
-
-        StringBuilder sb = new StringBuilder("请问您想要：\n");
-        for (int i = 0; i < Math.min(candidates.size(), 3); i++) {
-            CandidateIntent candidate = candidates.get(i);
-            sb.append(String.format("%d. %s (%s)\n", i + 1, candidate.getIntentName(), candidate.getDescription()));
-        }
-        sb.append("\n请选择或描述您的需求。");
-        return sb.toString();
-    }
 
     private String truncate(String str, int maxLength) {
         if (str == null) return "null";
@@ -3009,12 +2960,13 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             log.debug("[Tool Calling] Available tools: {}",
                     tools.stream().map(t -> t.getFunction().getName()).collect(Collectors.toList()));
 
-            // 3. 构建请求
+            // 3. 构建请求 (提示词与原话脱敏; 工具参数在执行前换回真值)
+            LlmEgressRedactor.Result redacted = redactedOrThrow(factoryId, systemPrompt, userInput);
             ChatCompletionRequest request = ChatCompletionRequest.builder()
                     .model(dashScopeConfig.getModel())
                     .messages(List.of(
-                            ChatMessage.system(systemPrompt),
-                            ChatMessage.user(userInput)
+                            ChatMessage.system(redacted.text(0)),
+                            ChatMessage.user(redacted.text(1))
                     ))
                     .tools(tools)
                     .toolChoice("auto")  // 让 LLM 自主决定是否调用工具
@@ -3044,6 +2996,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             for (ToolCall toolCall : toolCalls) {
                 String toolName = toolCall.getFunction().getName();
                 log.info("[Tool Calling] Executing tool: {}", toolName);
+                toolCall.getFunction().setArguments(redacted.restoreJsonText(toolCall.getFunction().getArguments()));
 
                 // 获取工具执行器
                 Optional<ToolExecutor> executorOpt = toolRegistry.getExecutor(toolName);
@@ -3364,7 +3317,7 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
             String systemPrompt = buildMultiIntentClassifyPrompt(availableIntents, contextSummary);
 
             // 调用 DashScope 进行多意图识别
-            String responseJson = dashScopeClient.classifyIntent(systemPrompt, userInput);
+            String responseJson = classifyRedacted(factoryId, systemPrompt, userInput);
 
             // 解析响应
             return parseMultiIntentResponse(responseJson, availableIntents);

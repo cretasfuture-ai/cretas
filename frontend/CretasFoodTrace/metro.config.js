@@ -2,6 +2,9 @@ const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
 
+// Bundle the chart engine as signed OTA asset text, so charts work without a CDN script request.
+config.resolver.assetExts = [...new Set([...config.resolver.assetExts, 'txt'])];
+
 // worker 上限 (2026-08-17) —— Metro 的转译池用的是 jest-worker, 默认按 CPU 核数开。
 //
 // 实测(开发机 32 逻辑核): 一次 `expo start` 拉起 17 个 `jest-worker/processChild.js`。

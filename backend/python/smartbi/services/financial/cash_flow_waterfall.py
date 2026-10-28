@@ -38,15 +38,14 @@ def classify_cash_flow_item(name: str) -> str:
 class CashFlowWaterfallBuilder(AbstractFinancialChartBuilder):
     """Cash flow waterfall — 从经营→投资→筹资→净增加额的现金流量瀑布图.
 
-    If the data doesn't contain explicit cash flow items, it synthesizes
-    a simplified cash flow from P&L data:
-      经营活动 = 净利润 + 折旧 (estimated)
-      投资活动 = -(固定资产 or capex if found, else 0)
-      筹资活动 = -(利息 or 分红 if found, else 0)
+    只用表内真实的现金流量科目; 没有时明确提示缺数据。
+    ⛔ 不从损益表按「折旧≈成本15% / 资本开支≈收入8%」之类的比例推算现金流。
     """
 
     chart_type = "cash_flow_waterfall"
     display_name = "现金流量瀑布图"
+    gap_kind = 'statement'
+    statement_hint = "需要现金流量表：一列「项目」写经营活动、投资活动、筹资活动的现金流入和流出，按月填金额。"
     description = "展示经营、投资、筹资三大现金流活动及净增加额的瀑布图分解"
     required_columns = ['item']  # same as pnl_waterfall — needs item column
     display_order = 10
@@ -70,21 +69,19 @@ class CashFlowWaterfallBuilder(AbstractFinancialChartBuilder):
             for item in item_totals.index
         )
 
-        if has_cf_items:
-            waterfall_items = self._build_from_cf_items(item_totals)
-        else:
-            # Synthesize from P&L data
-            waterfall_items = self._synthesize_from_pnl(item_totals, df)
+        waterfall_items = self._build_from_cf_items(item_totals) if has_cf_items else []
 
         if not waterfall_items:
+            reason = ("上传的数据里没有现金流量科目（经营活动、投资活动、筹资活动现金流量），无法生成现金流量瀑布图。"
+                      if not has_cf_items else "无可用的现金流数据")
             return {
                 "chartType": self.chart_type,
                 "title": f"{year}年{self.display_name}",
                 "kpis": [],
                 "echartsOption": {},
                 "tableData": None,
-                "analysisContext": "无可用的现金流数据",
-                "metadata": {"period": period, "dataQuality": "insufficient"},
+                "analysisContext": reason,
+                "metadata": {"period": period, "dataQuality": "insufficient", "reason": reason},
             }
 
         # Build waterfall visualization
@@ -121,51 +118,6 @@ class CashFlowWaterfallBuilder(AbstractFinancialChartBuilder):
             {"name": "投资活动", "value": investing, "type": "investing", "is_total": False},
             {"name": "筹资活动", "value": financing, "type": "financing", "is_total": False},
             {"name": "现金净增加额", "value": net_change, "type": "net", "is_total": True},
-        ]
-
-    def _synthesize_from_pnl(self, item_totals: pd.Series, df: pd.DataFrame) -> List[Dict]:
-        """Synthesize simplified cash flow from P&L data."""
-        from ..financial_data_normalizer import FinancialDataNormalizer
-        normalizer = FinancialDataNormalizer()
-
-        revenue = 0
-        cost = 0
-        expense = 0
-        tax = 0
-
-        for item_name, value in item_totals.items():
-            if value is None or pd.isna(value) or value == 0:
-                continue
-            pnl_type = normalizer.classify_pnl_item(str(item_name))
-            v = float(value)
-            if pnl_type == 'revenue':
-                revenue += v
-            elif pnl_type == 'cost':
-                cost += abs(v)
-            elif pnl_type == 'expense':
-                expense += abs(v)
-            elif pnl_type == 'tax':
-                tax += abs(v)
-
-        if revenue == 0:
-            return []
-
-        net_profit = revenue - cost - expense - tax
-        # Simplified: operating CF ≈ net profit + depreciation estimate (15% of cost)
-        depreciation_est = cost * 0.15
-        operating_cf = net_profit + depreciation_est
-        # Investing: estimate capex as 8% of revenue
-        investing_cf = -(revenue * 0.08)
-        # Financing: estimate as remainder to balance
-        financing_cf = -(operating_cf * 0.1)  # debt service estimate
-        net_change = operating_cf + investing_cf + financing_cf
-
-        return [
-            {"name": "经营活动现金流", "value": round(operating_cf, 2), "type": "operating", "is_total": True},
-            {"name": "折旧摊销(估)", "value": round(depreciation_est, 2), "type": "operating_detail", "is_total": False},
-            {"name": "投资活动现金流", "value": round(investing_cf, 2), "type": "investing", "is_total": False},
-            {"name": "筹资活动现金流", "value": round(financing_cf, 2), "type": "financing", "is_total": False},
-            {"name": "现金净增加额", "value": round(net_change, 2), "type": "net", "is_total": True},
         ]
 
     def _build_waterfall(self, items: List[Dict], period: Dict, year: int) -> Dict[str, Any]:

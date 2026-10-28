@@ -1480,7 +1480,8 @@
     "lineage": {
       "sourceCount": "{{n}} sources",
       "directSource": "Direct sources",
-      "upstreamLevel": "Sources {{depth}} levels up"
+      "upstreamLevel": "Sources {{depth}} levels up",
+      "rawSource": "Raw material sources"
     },
     "entry": {
       "title": "Trace lookup",

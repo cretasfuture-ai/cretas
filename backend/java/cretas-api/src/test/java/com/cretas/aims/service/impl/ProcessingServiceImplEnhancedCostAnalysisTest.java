@@ -110,6 +110,41 @@ class ProcessingServiceImplEnhancedCostAnalysisTest {
     }
 
     @Test
+    @DisplayName("process secret: consumption lines written from the recipe are marked automatic, manual ones are not")
+    void enhancedCost_marksRecipeDerivedConsumptionLines() {
+        ProductionBatch batch = batch();
+        batch.setLaborCost(BigDecimal.ZERO);
+        batch.setOtherCost(BigDecimal.ZERO);
+        MaterialConsumption seasoning = new MaterialConsumption();
+        seasoning.setId(8);
+        seasoning.setFactoryId(FACTORY);
+        seasoning.setProductionBatchId(BATCH_ID);
+        seasoning.setBatchId("MB-CINNAMON");
+        seasoning.setQuantity(new BigDecimal("0.1725"));
+        seasoning.setUnitPrice(new BigDecimal("40.00"));
+        seasoning.setSourceType("SEASONING");
+        MaterialConsumption beef = new MaterialConsumption();
+        beef.setId(9);
+        beef.setFactoryId(FACTORY);
+        beef.setProductionBatchId(BATCH_ID);
+        beef.setBatchId("MB-BEEF");
+        beef.setQuantity(new BigDecimal("115"));
+        beef.setUnitPrice(new BigDecimal("50.00"));
+        beef.setSourceType("RAW_MATERIAL");
+
+        when(productionBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY)).thenReturn(Optional.of(batch));
+        when(materialConsumptionRepository.findByProductionBatchId(BATCH_ID)).thenReturn(List.of(seasoning, beef));
+        when(batchEquipmentUsageRepository.findByBatchId(BATCH_ID)).thenReturn(List.of());
+
+        Map<String, Object> result = service.getEnhancedBatchCostAnalysis(FACTORY, BATCH_ID.toString());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) result.get("materialConsumptions");
+        assertThat(lines).extracting(line -> line.get("batchNumber") + "=" + line.get("automatic"))
+                .containsExactlyInAnyOrder("MB-CINNAMON=true", "MB-BEEF=false");
+    }
+
+    @Test
     @DisplayName("enhanced cost is null-safe when material consumption has no joined material batch")
     void enhancedCost_handlesConsumptionWithoutJoinedMaterialBatch() {
         ProductionBatch batch = batch();

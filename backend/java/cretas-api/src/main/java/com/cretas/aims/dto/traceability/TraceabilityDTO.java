@@ -236,6 +236,9 @@ public class TraceabilityDTO {
     @AllArgsConstructor
     public static class MaterialInfo {
         private String batchNumber;
+
+        /** 报工自动带出 / BOM 自动扣料 (数量 = 配比 × 投入): 工艺保密时按配比类裁剪 (独立审查 V2.1 M4)。 */
+        private boolean automatic;
         private String materialName;
         private String materialType;
         private String supplierName;

@@ -52,12 +52,19 @@ class AdditiveBomComplianceCheckToolTest {
     @Mock
     private AdditiveSmartMatchTool additiveSmartMatchTool;
 
+    /** 工艺保密判定: 这些用例的配方没有保密策略, 放行 (受保护时的拦截在 ProcessSecret* 测试里)。 */
+    @Mock
+    private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() throws Exception {
         injectField(tool, "objectMapper", objectMapper);
+        org.mockito.Mockito.lenient().when(processSecretGuard.permitsFullContent(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
     }
 
     @Test

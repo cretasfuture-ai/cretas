@@ -89,6 +89,9 @@ public class ProductTypeDTO {
     @Schema(description = "这个产品收不收回料。false(汉堡排)=任何来源的回料都不可投入, 与等级是否配置无关; null/true=收")
     private Boolean acceptsRework;
 
+    @Schema(description = "质检放行: 需检。true=生产产出默认待检, 放行后才可被下道领用/分配发货; null(更新时)=不改, false=不需检")
+    private Boolean inspectionRequired;
+
     @PriceSensitive
     @Schema(description = "SP5 standard unit cost; null means margin redline check is skipped")
     private BigDecimal standardCost;

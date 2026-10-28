@@ -40,6 +40,13 @@ public class LongTextHandlerImpl implements LongTextHandler {
     private final DashScopeConfig dashScopeConfig;
     private final PythonLLMClient pythonLLMClient;
 
+    /** 长文本发给模型做摘要前脱敏; 单测直接 new 本类时用默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
+            com.cretas.aims.service.consent.LlmEgressGuard.standalone();
+
+    static final String EGRESS_SITE = "long-text-summary";
+
     /**
      * 摘要结果缓存
      * Key: 原始输入的 hash
@@ -217,11 +224,17 @@ public class LongTextHandlerImpl implements LongTextHandler {
         try {
             // 构建摘要请求，使用 correctionModel (qwen-turbo)
             String systemPrompt = String.format(INTENT_SUMMARY_SYSTEM_PROMPT, config.getSummaryMaxLength());
+            // 长文本里的号码 / 人名 / 公司名换代号再发, 摘要换回; 脱敏不了就退回截断原文 (不发)
+            com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
+                    llmEgressGuard.texts(EGRESS_SITE, null, input);
+            if (redacted.refused()) {
+                return truncateText(input, config.getSummaryMaxLength());
+            }
 
             ChatCompletionRequest request = ChatCompletionRequest.simple(
                     dashScopeConfig.getCorrectionModel(),  // 使用 qwen-turbo
                     systemPrompt,
-                    input
+                    redacted.text(0)
             );
             request.setMaxTokens(200);  // 摘要不需要太多 token
             request.setTemperature(0.3);  // 低温度确保稳定输出
@@ -239,8 +252,8 @@ public class LongTextHandlerImpl implements LongTextHandler {
                 return truncateText(input, config.getSummaryMaxLength());
             }
 
-            // 确保摘要不超过最大长度
-            summary = summary.trim();
+            // 确保摘要不超过最大长度 (代号先换回真名)
+            summary = redacted.restore(summary.trim());
             if (summary.length() > config.getSummaryMaxLength()) {
                 summary = truncateText(summary, config.getSummaryMaxLength());
             }

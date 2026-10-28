@@ -127,6 +127,27 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /**
+     * 质检放行 (缺口 11/13): 在制半成品批次产出时判「要不要扣成待检」。同上字段注入 required=false ——
+     * 未注入 (既有按位置 new 的单测) ⇒ 从不扣 = 旧行为。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
+
+    /** 在制批次 (逐道录入 CLK-W) 这次产出要不要扣成待检。 */
+    private boolean holdWipOutput(String factoryId, ProductionBatch batch, String outputProductId) {
+        if (qcInspectionPolicy == null) {
+            return false;
+        }
+        return qcInspectionPolicy.shouldHoldSemi(factoryId,
+                new com.cretas.aims.service.quality.release.QcInspectionPolicy.OutputRef(
+                        outputProductId, null,
+                        com.cretas.aims.service.quality.release.QcInspectionPolicy.batchNumbers(
+                                batch == null ? null : batch.getBatchNumber()),
+                        batch == null ? null : batch.getProductionPlanId(),
+                        batch == null ? null : batch.getId()));
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Public API
     // ─────────────────────────────────────────────────────────────
@@ -405,6 +426,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ctx.getFactoryId(), batch,
                     requireOutputMaterialIdentity(ctx.getRawMaterialTypeId(), batch.getBatchNumber()),
                     lastOutputQty, lastOutputUnit, wipUnitPrice, ctx.getWarehouseId(), ctx.getUserId());
+            recordWipStockLineage(ctx.getFactoryId(), batch.getId(), wipMbId,
+                    lastOutputQty, lastOutputUnit, ctx.getUserId(), "CLERK_PROCESS_ENTRY");
         }
         applyBatchCostSummary(batch, batchMaterialCost, batchLaborCost, batchTotalCost,
                 firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
@@ -520,8 +543,19 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     ? batchTotalCost.divide(lastOutputQty, 4, RoundingMode.HALF_UP)
                     : BigDecimal.ZERO);
             wip.setUnitPrice(wipUnitPrice);
+            // 质检放行: 重存改了产出量 = 一笔新的产出, 已放行的在制批次重新待检 (只动 AVAILABLE)。
+            if (qcInspectionPolicy != null && holdWipOutput(ctx.getFactoryId(),
+                    batchRepo.findByIdAndFactoryId(existingBatchId, ctx.getFactoryId()).orElse(null),
+                    wip.getProductTypeId())) {
+                wip.setStatus(com.cretas.aims.service.quality.release.QcInspectionPolicy
+                        .wipBatchStatusAfterOutput(wip.getStatus(), true));
+            }
             // 立即 flush，确保身份/FK 错误在写审计日志前暴露，避免污染 Hibernate Session。
             materialBatchRepo.saveAndFlush(wip);
+            // 重物化保 id: 边的幂等键只看库存批 id, 已有边 ⇒ ALREADY_EXISTS (不重复写);
+            // 本次接线前物化、从没有边的存量批次在这里补上。
+            recordWipStockLineage(ctx.getFactoryId(), existingBatchId, existingWipMbId,
+                    lastOutputQty, wip.getQuantityUnit(), ctx.getUserId(), "CLERK_PROCESS_ENTRY_REMATERIALIZE");
         }
 
         // 4. 更新 ProductionBatch.quantity (保 id) —— factory-scoped (🔒).
@@ -747,6 +781,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 🔒 honest-null: 任一消耗源未计价 (unitPrice==null, 成本未知而非 0) → 批次总成本/单价不可知,
         // 写 null 而非 nz-求和后的低估值 (与纯 SFI 投料路径 ProcessSheetServiceImpl:151 「成本诚实 null」一致)。
         // materialCost/laborCost 仍写已知分量, 仅 ROLL-UP totalCost/unitCost 诚实置 null。
+        // costIncomplete 必须持久化: 实体 @PreUpdate (calculateMetrics) 会用分项重新求和, 只置 null 会在
+        // save 时被改回「原料按 0 计的已知数」(S3-13 实测批次 10998: total_cost 114.80 / unit_cost 空)。
+        batch.setCostIncomplete(anyUncosted);
         if (anyUncosted) {
             batch.setTotalCost(null);
             batch.setUnitCost(null);
@@ -801,7 +838,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         mb.setUsedQuantity(BigDecimal.ZERO);
         mb.setReservedQuantity(BigDecimal.ZERO);
         mb.setUnitPrice(unitPrice);
-        mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        // 质检放行: 需检半成品 (或批次/计划有未处理 CCP 偏离) 产出即「质检中」, 下道投料被
+        // QcInspectionGuard.assertWipBatchDrawable 拦住; 其余与以前一样 AVAILABLE。
+        mb.setStatus(com.cretas.aims.service.quality.release.QcInspectionPolicy.wipBatchInitialStatus(
+                holdWipOutput(factoryId, batch, mb.getProductTypeId())));
         mb.setSourceDocType("PRODUCTION_BATCH");
         mb.setSourceDocId(String.valueOf(batch.getId()));
         mb.setCreatedBy(operatorId);
@@ -898,6 +938,28 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         lineageEdgeRecorder.recordRawToProduction(factoryId, upstreamBatchId, productionBatchId,
                 qty, null, operatorId,
                 consumptionId == null ? null : "consumption:" + consumptionId, meta);
+    }
+
+    /**
+     * 生产批次 → 它产出的在制库存批 (PRODUCTION_TO_WIP) —— 文员录入这条路上唯一的写点。
+     *
+     * <p>🔴 2026-10-24 prod 实测: 中间道产出的 WIP 库存批只用 {@code source_doc_id} 指回生产批,
+     * 没有边 ⇒ 闭包在每一道中间产出处断开 (10 道工序的批只追到 depth 1)。下一道投入它时的
+     * RAW_TO_PRODUCTION 一直有, 缺的就是这一跳。
+     *
+     * <p>新建 ({@link #materializeBatch}) 与原地重物化 ({@link #rematerializeInPlace}) 两条路都调这里 ——
+     * 两份实现写在哪一份上另一份就漏 (形态 D)。幂等键 = 库存批 id (与回填同一个键)。
+     */
+    private void recordWipStockLineage(String factoryId, Long productionBatchId, String wipMaterialBatchId,
+                                       BigDecimal quantity, String unit, Long operatorId, String origin) {
+        if (lineageEdgeRecorder == null || wipMaterialBatchId == null) {
+            return;
+        }
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("origin", origin);
+        lineageEdgeRecorder.recordProductionToWipStock(factoryId, productionBatchId, wipMaterialBatchId,
+                quantity, unit, operatorId,
+                com.cretas.aims.service.lineage.LineageEdgeRecorder.wipStockRefKey(wipMaterialBatchId), meta);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1524,9 +1586,17 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     }
 
     private static BigDecimal edgeUnitPrice(ResolvedEdge edge) {
-        return edge.getResolvedUnitPrice() != null
-                ? edge.getResolvedUnitPrice()
-                : edge.getSourceBatch().getUnitPrice();
+        if (edge.getResolvedUnitPrice() != null) {
+            return edge.getResolvedUnitPrice();
+        }
+        MaterialBatch source = edge.getSourceBatch();
+        if (source.getUnitPrice() == null
+                && source.getOwnership() == com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED) {
+            // 客户自带料对本厂是「已知 0」(加工口径, 见结单 describeCustomerSuppliedNote), 不是「未知」;
+            // 只有本厂自有料缺单价才让批次成本不完整。
+            return BigDecimal.ZERO;
+        }
+        return source.getUnitPrice();
     }
 
     private static BigDecimal nz(BigDecimal v) {

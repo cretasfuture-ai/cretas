@@ -1,5 +1,6 @@
 package com.cretas.aims.service.processentry;
 
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard.Owner;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef;
 import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
@@ -65,12 +66,14 @@ class ReworkPolicyAutoDeductionTest {
     @Mock private ProductionWorkflowInstanceRepository instanceRepo;
     @Mock private SemiFinishedInventoryRepository sfiRepo;
     @Mock private WipInventoryService wip;
+    @Mock private IntermediateOwnershipGuard ownershipGuard;
 
     private ReworkPolicyAutoDeduction sut;
 
     @BeforeEach
     void setUp() {
-        sut = new ReworkPolicyAutoDeduction(sheetService, instanceRepo, sfiRepo, wip);
+        sut = new ReworkPolicyAutoDeduction(sheetService, instanceRepo, sfiRepo, wip, ownershipGuard);
+        org.mockito.Mockito.lenient().when(ownershipGuard.ofPlanId(FACTORY, PLAN)).thenReturn(Owner.COMPANY);
         WorkflowClerkSheetConfigDTO.ProcessDescriptor grind = new WorkflowClerkSheetConfigDTO.ProcessDescriptor();
         grind.setProcessOrder(4);
         grind.setWorkflowNodeId("process:grind");
@@ -112,7 +115,7 @@ class ReworkPolicyAutoDeductionTest {
     @Test
     @DisplayName("主料 100kg × 8.5% = 8.5kg: 按生产日期 FIFO 从已授权回料批次追加, inputQuantity 变 108.5")
     void drawsByRatioFifoAndBumpsInput() {
-        when(wip.listWipByFactory(FACTORY, TARGET, 4)).thenReturn(List.of(
+        when(wip.listWipByFactory(FACTORY, TARGET, 4, Owner.COMPANY)).thenReturn(List.of(
                 rework("RW-NEW", "50", LocalDate.of(2026, 9, 2)),
                 rework("RW-OLD", "5", LocalDate.of(2026, 9, 1))));
         ProcessSheetRowRequest r = req(4, "100");
@@ -149,7 +152,7 @@ class ReworkPolicyAutoDeductionTest {
         assertThat(out.lines()).isEmpty();
         assertThat(r.getUpstreamSources()).isEmpty();
         assertThat(r.getInputQuantity()).isEqualByComparingTo("100");
-        verify(wip, never()).listWipByFactory(any(), any(), any());
+        verify(wip, never()).listWipByFactory(any(), any(), any(), any());
     }
 
     @Test
@@ -166,13 +169,13 @@ class ReworkPolicyAutoDeductionTest {
         });
         assertThat(r.getUpstreamSources()).isEmpty();
         assertThat(out.warnings()).singleElement().asString().contains("主料投入量未知");
-        verify(wip, never()).listWipByFactory(any(), any(), any());
+        verify(wip, never()).listWipByFactory(any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("库存不足: 只有 3kg 回料 → 追加 3kg, 缺口 5.5kg 记 warning, 不抛 (不拦报工)")
     void shortfallIsRecordedNotThrown() {
-        when(wip.listWipByFactory(FACTORY, TARGET, 4)).thenReturn(List.of(
+        when(wip.listWipByFactory(FACTORY, TARGET, 4, Owner.COMPANY)).thenReturn(List.of(
                 rework("RW-1", "3", LocalDate.of(2026, 9, 1))));
         ProcessSheetRowRequest r = req(4, "100");
 
@@ -211,7 +214,7 @@ class ReworkPolicyAutoDeductionTest {
         });
         assertThat(r.getUpstreamSources()).hasSize(1);
         assertThat(r.getInputQuantity()).isEqualByComparingTo("110");
-        verify(wip, never()).listWipByFactory(any(), any(), any());
+        verify(wip, never()).listWipByFactory(any(), any(), any(), any());
     }
 
     @Test
@@ -221,7 +224,7 @@ class ReworkPolicyAutoDeductionTest {
         plain.setIsRework(false);
         WipRowDTO otherSku = rework("RW-OTHER", "100", LocalDate.of(2026, 8, 1));
         otherSku.setProductTypeId("PT-OTHER-REWORK");
-        when(wip.listWipByFactory(FACTORY, TARGET, 4)).thenReturn(List.of(plain, otherSku));
+        when(wip.listWipByFactory(FACTORY, TARGET, 4, Owner.COMPANY)).thenReturn(List.of(plain, otherSku));
         ProcessSheetRowRequest r = req(4, "100");
 
         ReworkPolicyAutoDeduction.Outcome out = sut.apply(FACTORY, PLAN, r);
@@ -237,7 +240,7 @@ class ReworkPolicyAutoDeductionTest {
     @Test
     @DisplayName("幂等 (终审 #514): 载荷里已含 automaticRework=true 的引用 → 不再追加、不查库存、inputQuantity 不动")
     void payloadAlreadyCarryingAutoRefsIsNotAppliedTwice() {
-        when(wip.listWipByFactory(FACTORY, TARGET, 4)).thenReturn(List.of(
+        when(wip.listWipByFactory(FACTORY, TARGET, 4, Owner.COMPANY)).thenReturn(List.of(
                 rework("RW-1", "50", LocalDate.of(2026, 9, 1))));
         ProcessSheetRowRequest r = req(4, "108.5");
         UpstreamRef echoed = new UpstreamRef();
@@ -252,7 +255,7 @@ class ReworkPolicyAutoDeductionTest {
         assertThat(out.lines()).isEmpty();
         assertThat(r.getUpstreamSources()).hasSize(1);
         assertThat(r.getInputQuantity()).isEqualByComparingTo("108.5");
-        verify(wip, never()).listWipByFactory(any(), any(), any());
+        verify(wip, never()).listWipByFactory(any(), any(), any(), any());
         verify(sfiRepo, never()).findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(any(), any());
     }
 

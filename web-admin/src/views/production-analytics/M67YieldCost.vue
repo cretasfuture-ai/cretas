@@ -358,11 +358,11 @@
             <tbody>
               <tr v-for="row in mixCostSplit.rows" :key="row.key">
                 <td>{{ row.name }}</td>
-                <td>{{ row.qty }} {{ displayAuditUnit(row.unit) }}</td>
+                <td>{{ row.qty == null ? '已保密' : `${row.qty} ${displayAuditUnit(row.unit)}` }}</td>
                 <td>{{ row.unitPrice == null ? '未归集' : `¥${Number(row.unitPrice).toFixed(2)}/${displayAuditUnit(row.unit)}` }}</td>
                 <td>{{ money2(row.cost) }}</td>
-                <td>{{ row.weightShare }}%</td>
-                <td :class="{ hl: row.costShare !== row.weightShare }">{{ row.costShare }}%</td>
+                <td>{{ row.weightShare == null ? '—' : `${row.weightShare}%` }}</td>
+                <td :class="{ hl: row.costShare !== row.weightShare }">{{ row.costShare == null ? '—' : `${row.costShare}%` }}</td>
               </tr>
             </tbody>
           </table>
@@ -1236,18 +1236,21 @@ const mixCostSplit = computed(() => {
   const rows = mixRels.value.filter(r => r.totalCost != null);
   const totalCost = rows.reduce((s, r) => s + Number(r.totalCost || 0), 0);
   const totalQty = mixRels.value.reduce((s, r) => s + Number(r.quantity || 0), 0) || 1;
+  // 工艺保密: 按配方自动扣料的来源量 / 金额由后端置 null —— 显示「已保密」, ⛔ 不按 0 算占比 (独立审查 V2.1 M4)
   return {
     hasCost: rows.length > 0,
     totalCost,
     rows: mixRels.value.map((r, index) => ({
       key: `${r.batchId || r.batchNumber || 'upstream'}-${index}`,
       name: r.batchNumber || r.batchId || '上游',
-      qty: Number(r.quantity || 0),
+      qty: r.quantity == null ? null : Number(r.quantity),
       unit: r.unit,
       unitPrice: r.unitPrice,
       cost: r.totalCost,
-      weightShare: r.weightSharePct != null ? Number(r.weightSharePct) : Math.round((Number(r.quantity || 0) / totalQty) * 1000) / 10,
-      costShare: r.costSharePct != null ? Number(r.costSharePct) : (totalCost ? Math.round((Number(r.totalCost || 0) / totalCost) * 1000) / 10 : null),
+      weightShare: r.weightSharePct != null ? Number(r.weightSharePct)
+        : (r.quantity == null ? null : Math.round((Number(r.quantity) / totalQty) * 1000) / 10),
+      costShare: r.costSharePct != null ? Number(r.costSharePct)
+        : (totalCost && r.totalCost != null ? Math.round((Number(r.totalCost) / totalCost) * 1000) / 10 : null),
     })),
   };
 });
