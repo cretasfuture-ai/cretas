@@ -188,6 +188,7 @@ function assessCatalog({ families, requestedUnknown, deferred, excluded, eligibi
   const rootCauseClass = result === 'PASS' ? 'none'
     : ui?.missing ? 'frontend'
       : ui?.httpFailure ? 'backend'
+        : ui?.selectionFailure ? 'tool'
         : 'data';
   return {
     result,
@@ -272,14 +273,14 @@ async function selectFamilyPreview(page, item, allGroups, deadline) {
       break;
     }
   }
-  if (!found) return false;
+  if (!found) throw new Error(`Catalogue domain control missing: ${domain}`);
   const scopedGroups = allGroups.filter((group) => group.candidates[0]?.domain === domain);
   const index = scopedGroups.findIndex((group) => group.familyId === item.familyId);
-  if (index < 0) return false;
+  if (index < 0) throw new Error(`Catalogue family missing from domain: ${item.familyId}`);
   await testId(page, 'factory-chart-guide-topic').click({ timeout: remainingTimeout(deadline) });
   const options = page.locator('.el-select-dropdown__item:visible');
   await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
-  if (await options.count() !== scopedGroups.length + 1) throw new Error('Catalogue topic identities drifted');
+  if (await options.count() !== scopedGroups.length + 1) throw new Error(`Catalogue topic identities drifted: actual ${await options.count()}, expected ${scopedGroups.length + 1}`);
   const option = options.nth(index + 1);
   if (!(await option.innerText()).includes(item.familyLabel)) throw new Error('Catalogue topic label drifted');
   await option.click({ timeout: remainingTimeout(deadline) });
@@ -337,6 +338,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
     batches.push([item]);
   }
   let batchNumber = 0;
+  let selectionFailed = false;
   for (const batch of batches) {
     if (Date.now() >= deadline) break;
     batchNumber += 1;
@@ -367,6 +369,14 @@ async function inspectCatalog(page, _body, inspectCtx) {
         summary.selectionError = String(error?.message || error).slice(0, 500);
         return false;
       });
+      if (!summary.checks.familySelected) {
+        summary.checkFailures = ['familySelected'];
+        families.push(summary);
+        processedFamilyIds.add(summary.familyId);
+        ui.selectionFailure = true;
+        selectionFailed = true;
+        break;
+      }
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
       summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
@@ -398,6 +408,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
       }
       batchFamilies.push(summary);
     }
+    if (selectionFailed) break;
     if (batchFamilies.length && Date.now() < deadline) {
       const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline, batchNumber);
       exports.push({ batch: batchNumber, ...result });
@@ -435,6 +446,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
     assessment,
     ...assessment,
     families,
+    selectionErrors: families.filter(item => item.selectionError).map(item => `${item.familyId}: ${item.selectionError}`),
     screenshots,
     exports,
     eligibilityGaps,
