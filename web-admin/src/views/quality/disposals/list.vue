@@ -432,7 +432,8 @@ async function handleApprove(row: TableRow) {
   // 防呆 Rule 2: confirm 带品名/批次/数量/损失 context, 不再笼统 "确定批准?"
   const ctx = approvalContextHtml(row);
   try {
-    await ElMessageBox.confirm(ctx, '审批确认 — 批准报废', {
+    const action = row.disposalType === 'RETURN_TO_CUSTOMER' ? '批准退还客户' : '批准报废';
+    await ElMessageBox.confirm(ctx, `审批确认 — ${action}`, {
       type: 'warning',
       dangerouslyUseHTMLString: true,
       confirmButtonText: '确认批准',
