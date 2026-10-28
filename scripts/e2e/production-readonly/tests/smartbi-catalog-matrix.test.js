@@ -68,6 +68,8 @@ test('quantity-family facts cannot silently drift to another unit', () => {
   assert.equal(catalog.candidateUnitsAligned(candidate('kg-ok', 'production.output', { kpis: [{ label: '产量', value: 1, unit: 'kg' }] })), true);
   assert.equal(catalog.candidateUnitsAligned(candidate('kg-drift', 'production.output', { kpis: [{ label: '产量', value: 1, unit: '件' }] })), false);
   assert.equal(catalog.candidateUnitsAligned(candidate('financial-mixed', 'finance.margin', { unit: '', kpis: [{ label: '金额', value: 1, unit: '元' }, { label: '比率', value: 2, unit: '%' }] })), true);
+  assert.equal(catalog.candidateUnitsAligned(candidate('plan', 'production.plan', { kpis: [{ label: '实际产量', value: 10, unit: 'kg' }, { label: '计划达成率', value: 90, unit: '%' }] })), true);
+  assert.equal(catalog.candidateUnitsAligned(candidate('wrong-percent', 'production.output', { kpis: [{ label: '产量', value: 10, unit: '%' }] })), false);
 });
 
 test('stateless discovery snapshot can load details lazily without admitting unavailable or full contexts', () => {

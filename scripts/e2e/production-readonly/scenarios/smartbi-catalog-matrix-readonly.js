@@ -100,9 +100,11 @@ function candidateIsQualified(candidate) {
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
   if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
-  const factUnits = (Array.isArray(candidate?.kpis) ? candidate.kpis : [])
-    .map((fact) => String(fact?.unit || '').trim()).filter(Boolean);
-  return factUnits.every((factUnit) => factUnit === unit);
+  return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
+    const factUnit = String(fact?.unit || '').trim();
+    return !factUnit || factUnit === unit
+      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')));
+  });
 }
 
 function selectCatalogCandidates(data, requestedFamilies) {
@@ -218,7 +220,7 @@ async function waitResponse(page, predicate, deadline) {
   return page.waitForResponse(predicate, { timeout: remainingTimeout(deadline) });
 }
 
-async function captureExport(page, format, inspectCtx, deadline) {
+async function captureExport(page, format, inspectCtx, deadline, batchNumber) {
   const result = { format: format.key, buttonFound: false, downloadStarted: false, httpStatus: null, filename: null, saved: false, candidateIds: [], success: false };
   const button = page.locator('button:visible').filter({ hasText: format.button }).first();
   result.buttonFound = await button.count() > 0;
@@ -231,7 +233,8 @@ async function captureExport(page, format, inspectCtx, deadline) {
     result.httpStatus = response ? response.status() : null;
     result.candidateIds = summarizeExportIds(response ? requestBody(response) : {});
     result.downloadStarted = Boolean(download);
-    result.filename = download ? download.suggestedFilename() : null;
+    result.suggestedFilename = download ? download.suggestedFilename() : null;
+    result.filename = download ? `factory-catalog-batch-${batchNumber}-${format.key}.${format.extension}` : null;
     if (download && inspectCtx.evidenceDir && result.filename) {
       try {
         await download.saveAs(`${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/${result.filename}`);
@@ -254,26 +257,35 @@ async function chooseBrowseMode(page, deadline) {
   return true;
 }
 
-async function clearBrowseSelection(page) {
+async function clearBrowseSelection(page, deadline) {
   const rows = testId(page, 'factory-chart-family');
   const count = await rows.count();
   for (let index = 0; index < count; index += 1) {
     const checkbox = rows.nth(index).locator('input[type="checkbox"]').first();
     if (await checkbox.count() && await checkbox.isChecked().catch(() => false)) {
-      await checkbox.click().catch(() => {});
+      const label = rows.nth(index).locator('.el-checkbox').first();
+      if (await label.count()) await label.click({ timeout: remainingTimeout(deadline) });
+      else await checkbox.uncheck({ timeout: remainingTimeout(deadline) });
+      if (await checkbox.isChecked()) throw new Error('Catalogue family did not clear');
     }
   }
 }
 
 async function selectFamilyInBrowse(page, familyId, candidate, deadline) {
-  const escapedFamilyId = String(familyId).replace(/"/gu, '\\"');
+  const uiFamilyId = candidate.domain ? `${candidate.domain}:${familyId}` : familyId;
+  const escapedFamilyId = String(uiFamilyId).replace(/"/gu, '\\"');
   const rows = page.locator(`[data-testid="factory-chart-family"][data-family-id="${escapedFamilyId}"]`);
   // The family id is the server identity. The label is presentation-only and
   // may be duplicated across domains or sources.
   if (!await rows.count()) return false;
   const row = rows.first();
   const checkbox = row.locator('input[type="checkbox"]').first();
-  if (await checkbox.count() && !(await checkbox.isChecked().catch(() => false))) await checkbox.check().catch(() => {});
+  if (await checkbox.count() && !(await checkbox.isChecked())) {
+    const label = row.locator('.el-checkbox').first();
+    if (await label.count()) await label.click({ timeout: remainingTimeout(deadline) });
+    else await checkbox.check({ timeout: remainingTimeout(deadline) });
+  }
+  if (!await checkbox.count() || !await checkbox.isChecked()) return false;
   const variant = row.locator('.el-select').first();
   if (await variant.count()) {
     await variant.click().catch(() => {});
@@ -326,6 +338,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
     blockedReason: item.reason,
   }));
   const exports = [];
+  const screenshots = [];
   const processedFamilyIds = new Set();
   const batches = [];
   for (let index = 0; index < selected.selected.length; index += MAX_FAMILIES) {
@@ -335,7 +348,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
   for (const batch of batches) {
     if (Date.now() >= deadline) break;
     batchNumber += 1;
-    await clearBrowseSelection(page);
+    await clearBrowseSelection(page, deadline);
     const batchFamilies = [];
     for (const item of batch) {
       if (Date.now() >= deadline) break;
@@ -392,7 +405,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
       batchFamilies.push(summary);
     }
     if (batchFamilies.length && Date.now() < deadline) {
-      const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline);
+      const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline, batchNumber);
       exports.push({ batch: batchNumber, ...result });
       for (const family of batchFamilies) {
         if (result.success && result.candidateIds.includes(family.candidateId)) {
@@ -408,6 +421,9 @@ async function inspectCatalog(page, _body, inspectCtx) {
       family.status = family.checkFailures.length ? 'UNVERIFIED' : 'PASS';
       families.push(family);
       processedFamilyIds.add(family.familyId);
+    }
+    if (batchFamilies.length && inspectCtx.screenshot) {
+      screenshots.push(await inspectCtx.screenshot(`factory-catalog-batch-${batchNumber}`));
     }
   }
   const eligibilityGaps = Array.isArray(data.unavailable) ? data.unavailable.map((item) => ({
@@ -425,6 +441,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
     assessment,
     ...assessment,
     families,
+    screenshots,
     exports,
     eligibilityGaps,
     sourceErrors,

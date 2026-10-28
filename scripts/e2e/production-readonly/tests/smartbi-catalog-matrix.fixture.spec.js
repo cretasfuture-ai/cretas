@@ -10,6 +10,7 @@ const candidates = Array.from({ length: 8 }, (_, index) => {
     id: `${familyId}@P${index + 1}@kg`,
     title: index === 0 || index === 4 ? '重复标签' : `生产族 ${index + 1}`,
     source: 'business',
+    domain: '生产',
     unit: 'kg',
     analysis: { familyId, familyLabel: index === 0 || index === 4 ? '重复标签' : `生产族 ${index + 1}` },
     chart: { chartType: 'bar', echartsOption: { series: [{ data: [500 + index] }] } },
@@ -40,7 +41,7 @@ function recommendationBody(withContext = false, selectedId = null) {
 }
 
 function pageHtml() {
-  const familyRows = candidates.map((item, index) => `<div data-testid="factory-chart-family" data-family-id="${item.analysis.familyId}">${item.analysis.familyLabel} <input type="checkbox"${index < 4 ? ' checked' : ''}><div class="el-select">${item.unit}</div></div>`).join('');
+  const familyRows = candidates.map((item, index) => `<div data-testid="factory-chart-family" data-family-id="${item.domain}:${item.analysis.familyId}"><label class="el-checkbox">${item.analysis.familyLabel}<input type="checkbox" style="position:absolute;width:0;height:0;opacity:0"${index < 4 ? ' checked' : ''}></label><div class="el-select">${item.unit}</div></div>`).join('');
   const cards = candidates.map((item) => `<div data-testid="factory-chart-card-${item.id}" data-candidate-id="${item.id}"><div class="factory-chart-canvas"><canvas></canvas></div><button>查看原始明细</button></div>`).join('');
   return `<!doctype html><html><body>
     <main><h2>工厂分析</h2><p>按分类浏览</p>
@@ -76,7 +77,7 @@ function pageHtml() {
         if (!exportPaths[button.textContent]) continue;
         button.onclick = async () => {
           const familyIds = [...document.querySelectorAll('[data-testid="factory-chart-family"] input:checked')].map(input => input.closest('[data-family-id]').dataset.familyId);
-          const ids = allCandidates.filter(item => familyIds.includes(item.analysis.familyId)).map(item => item.id);
+          const ids = allCandidates.filter(item => familyIds.includes(item.domain + ':' + item.analysis.familyId)).map(item => item.id);
           const response = await fetch(exportPaths[button.textContent], {method:'POST',headers:jsonHeaders,body:JSON.stringify({charts:ids.map(id => ({id})), selected_ids:ids})});
           const blob = await response.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = button.textContent.includes('Excel') ? 'factory.xlsx' : button.textContent.includes('PDF') ? 'factory.pdf' : 'factory.pptx'; link.click();
         };
@@ -123,6 +124,8 @@ test('catalog matrix fixture uses the real browse, detail, and export endpoint s
     expect(result.failedFamilyCount).toBe(0);
     expect(result.remainingFamilyCount).toBe(0);
     expect(result.families.every((item) => item.rowTotal === 1 && item.exportCoverage.includes('excel'))).toBe(true);
+    expect(result.exports[0].filename).toBe('factory-catalog-batch-1-excel.xlsx');
+    expect(result.exports[1].filename).toBe('factory-catalog-batch-2-excel.xlsx');
     const exports = requests.filter(item => item.path.endsWith('/export-excel'));
     expect(exports).toHaveLength(2);
     expect(exports[0].body.selected_ids).toEqual(candidates.slice(0, 4).map((item) => item.id));
