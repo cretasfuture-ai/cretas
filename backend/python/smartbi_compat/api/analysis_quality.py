@@ -48,8 +48,9 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
+from smartbi.services.factory_charts import cost_scope as process_secret
 from smartbi_compat._rbac_role import require_analytics_read
 from smartbi_compat._rbac_strip import strip_price_for_role
 from smartbi_compat.api import analysis_production as factory_gold
@@ -210,7 +211,37 @@ def _build_factory_quality_fpy_metrics(summary: dict) -> list:
     ]
 
 
+def _scope_quality_cost(summary: dict, rows: list, scope) -> Optional[dict]:
+    """工艺保密: make ``summary["qualityCost"]`` safe for this caller.
+
+    ``qualityCost`` is the factory-wide sum of the per-day per-product Gold
+    rows.  FULL callers keep it; for others it is REBUILT by summing only the
+    allowed products' rows (⛔ never ``total - secret``); without an
+    authorization answer it is ``None`` (fail closed, never 0).  Returns the
+    ``costScope`` annotation or ``None`` when nothing was left out.
+    """
+    if scope.is_full:
+        return None
+    if scope.is_unavailable:
+        summary["qualityCost"] = None
+        return process_secret.rollup_annotation(scope, 0)
+    excluded = scope.excluded_product_ids(r["product_type_id"] for r in rows)
+    if not excluded:
+        return None
+    allowed_rows = [r for r in rows if scope.allows(r["product_type_id"])]
+    # No visible product at all: there is no visible total (None, not 0).
+    summary["qualityCost"] = (
+        factory_gold._calculate_factory_production_rates(allowed_rows)["totalCost"]
+        if allowed_rows else None
+    )
+    return process_secret.rollup_annotation(scope, len(excluded))
+
+
 def _build_factory_quality_rework_metrics(summary: dict) -> list:
+    cost_description = "Gold only exposes total production cost; rework/scrap split is unavailable."
+    note = summary.get("qualityCostNote")
+    if note:
+        cost_description = f"{cost_description} {note}"
     return [
         factory_gold._factory_metric("REWORK_COUNT", "返工数", None, "件"),
         factory_gold._factory_metric("REWORK_COST", "返工成本", None, "元"),
@@ -222,7 +253,7 @@ def _build_factory_quality_rework_metrics(summary: dict) -> list:
             summary["qualityCost"],
             "元",
             "GREEN",
-            "Gold only exposes total production cost; rework/scrap split is unavailable.",
+            cost_description,
         ),
         factory_gold._factory_metric("REWORK_RATE", "返工率", None, "%"),
         factory_gold._factory_metric("SCRAP_RATE", "报废率", None, "%"),
@@ -729,6 +760,8 @@ async def _factory_quality_dispatch(
     start_date: date,
     end_date: date,
     analysis_type: Optional[str],
+    *,
+    cost_resolver: Optional[process_secret.CostScopeResolver] = None,
 ) -> dict:
     """Factory-tenant quality analysis dispatcher (Phase 2D placeholder).
 
@@ -776,6 +809,14 @@ async def _factory_quality_dispatch(
 
     now_iso = _java_isoformat(datetime.now())
     summary = _calculate_factory_quality_summary(rows)
+    # 工艺保密: no resolver (internal call, no caller identity) = fail closed.
+    if cost_resolver is None:
+        scope = process_secret.unavailable(process_secret.REASON_NOT_RUN)
+    else:
+        scope = await cost_resolver.scope_for(r["product_type_id"] for r in rows)
+    cost_scope = _scope_quality_cost(summary, rows, scope)
+    if cost_scope is not None:
+        summary["qualityCostNote"] = cost_scope.get("note") or cost_scope.get("reason")
     fpy_metrics = _build_factory_quality_fpy_metrics(summary)
     trend_chart = _build_factory_quality_trend_chart(rows)
     defect_ranking = _build_factory_quality_defect_ranking(rows)
@@ -794,11 +835,14 @@ async def _factory_quality_dispatch(
         return {**base, "ranking": defect_ranking, "paretoChart": pareto_chart}
 
     if analysis_type == "rework":
-        return {
+        result = {
             **base,
             "metrics": _build_factory_quality_rework_metrics(summary),
             "costChart": cost_chart,
         }
+        if cost_scope is not None:
+            result["costScope"] = cost_scope
+        return result
 
     kpi_cards = [
         factory_gold._factory_kpi_card(
@@ -809,7 +853,7 @@ async def _factory_quality_dispatch(
         )
         for m in fpy_metrics
     ]
-    return {
+    overview = {
         "period": "CUSTOM",
         "startDate": start_date.isoformat(),
         "endDate": end_date.isoformat(),
@@ -829,6 +873,9 @@ async def _factory_quality_dispatch(
         "fromCache": False,
         "cacheExpireAt": None,
     }
+    if cost_scope is not None:
+        overview["costScope"] = cost_scope
+    return overview
 
 
 async def _restaurant_quality_dispatch(
@@ -927,6 +974,7 @@ async def _restaurant_quality_dispatch(
 @router.get("/api/mobile/{factory_id}/smart-bi/analysis/quality")
 async def get_quality_analysis(
     factory_id: str,
+    request: Request,
     startDate: date = Query(...),
     endDate: date = Query(...),
     analysisType: Optional[str] = Query(
@@ -982,6 +1030,7 @@ async def get_quality_analysis(
     # — fixes R1 P2 finding 3 (asymmetric envelope between factory/restaurant
     # branches; factory previously emitted raw dict, restaurant emitted envelope).
     raw = await _factory_quality_dispatch(
-        factory_id, startDate, endDate, analysisType
+        factory_id, startDate, endDate, analysisType,
+        cost_resolver=process_secret.CostScopeResolver(request, auth.factory_id),
     )
     return wrap_response(strip_price_for_role(raw, auth.role))

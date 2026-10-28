@@ -57,6 +57,18 @@ def db(monkeypatch):
     connection.close()
 
 
+@pytest.fixture(autouse=True)
+def _full_cost_authority(monkeypatch):
+    """口径测试按「有权看全部产品成本」的账号跑 (工艺保密 FULL)。"""
+    from smartbi.services.factory_charts import cost_authorization
+
+    async def _authorize_batches(request, factory_id, product_ids, *, unscoped=False):
+        return cost_authorization.CostAuthorization(
+            factory_id, 1, frozenset(product_ids), True)
+
+    monkeypatch.setattr(cost_authorization, "authorize_batches", _authorize_batches)
+
+
 def add_line(db, product, discount, cost, qty=2, price=100):
     db.execute("INSERT INTO sales_order_items VALUES ('o1',?,?,?,'kg',?,?,?,NULL)",
                (product, product, qty, price, discount, cost))

@@ -74,6 +74,21 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _full_cost_authority(monkeypatch):
+    """毛利率口径测试按「有权看全部产品成本」的账号跑 (工艺保密 FULL)。
+
+    保密产品的隐藏/汇总规则另由 tests/test_process_secret_cost_exits.py 覆盖。
+    """
+    from smartbi.services.factory_charts import cost_authorization
+
+    async def _authorize_batches(request, factory_id, product_ids, *, unscoped=False):
+        return cost_authorization.CostAuthorization(
+            factory_id, 1, frozenset(product_ids), True)
+
+    monkeypatch.setattr(cost_authorization, "authorize_batches", _authorize_batches)
+
+
 # ─── 地址 → 省 ───────────────────────────────────────────────────────────
 
 

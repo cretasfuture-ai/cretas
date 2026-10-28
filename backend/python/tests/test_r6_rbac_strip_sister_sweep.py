@@ -354,7 +354,7 @@ def test_quality_factory_viewer_role_strips_money(
     """R6 strip-wrap lock for /analysis/quality factory branch."""
     mod, client = quality_factory_client
 
-    async def _fake_factory(factory_id, start_date, end_date, analysis_type):
+    async def _fake_factory(factory_id, start_date, end_date, analysis_type, **_kw):
         return _money_payload()
 
     monkeypatch.setattr(mod, "_factory_quality_dispatch", _fake_factory)
