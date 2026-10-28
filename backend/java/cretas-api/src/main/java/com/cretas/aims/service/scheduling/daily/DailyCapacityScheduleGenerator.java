@@ -140,7 +140,8 @@ public class DailyCapacityScheduleGenerator {
                 warnings.add("计划「" + planLabel(plan) + "」的产品不存在或已删除，没有排");
                 continue;
             }
-            Capacity capacity = capacityByKey.computeIfAbsent(capacityKey(product.getId(), unit),
+            // 同一产品同一单位: 联产与单品计划的经验值口径不同 (联产不用历史), 分开判
+            Capacity capacity = capacityByKey.computeIfAbsent(capacityKey(product.getId(), unit) + (joint ? "|J" : ""),
                     k -> resolveCapacity(factoryId, product, unit, joint, today, warnings));
             if (capacity.perDay() == null) {
                 DailyCapacityRequiredDTO item = required.computeIfAbsent(capacityKey(product.getId(), unit),
@@ -201,7 +202,7 @@ public class DailyCapacityScheduleGenerator {
         if (items.isEmpty()) {
             throw new BusinessException(422, "没有能排出的计划：" + String.join("；", warnings))
                     .withCode("APS_NOTHING_SCHEDULABLE")
-                    .withHint("所选计划都已完成、取消或已入库达到计划量")
+                    .withHint("原因见上面每个计划的说明（已完成、已取消、已入库达到计划量，或日产能填得明显不对）")
                     .withSeverity("warning");
         }
 
