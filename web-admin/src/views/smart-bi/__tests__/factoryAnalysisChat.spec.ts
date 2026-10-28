@@ -102,6 +102,53 @@ async function mountChat() {
 }
 
 describe('FactoryAnalysisChat mounted workflow', () => {
+  it('keeps the explicitly selected three reports in first questions and original detail refresh scopes', async () => {
+    h.route.query = { source: 'upload', upload_id: '101', inspection_upload_id: '102', cost_upload_id: '103' };
+    h.uploads.mockResolvedValue({ success: true, data: [101, 102, 103].map((id, index) => ({ id, fileName: '验收.xlsx', sheetName: ['生产', '质检', '成本'][index] })) });
+    h.post.mockResolvedValue(response({ source: 'upload', uploadId: 101, jointUploads: { inspectionUploadId: 102, costUploadId: 103 } }));
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('联合分析');
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    expect(h.post).toHaveBeenNthCalledWith(1, 'F006', expect.objectContaining({ source: 'upload', uploadId: 101, inspectionUploadId: 102, costUploadId: 103 }));
+    expect(page!.get('[data-testid="factory-analysis-turn-scope"]').text()).toContain('生产：验收.xlsx · 生产；质检：验收.xlsx · 质检；成本：验收.xlsx · 成本');
+    const follow = page!.findAll('button').find(button => button.text() === '再看质量指标');
+    await follow!.trigger('click');
+    await flushPromises();
+    expect(h.post).toHaveBeenNthCalledWith(2, 'F006', { question: '再看质量指标', contextId: 'ctx-1' });
+  });
+
+  it('does not send a partially selected three-table question or accept mismatching response IDs', async () => {
+    h.route.query = { source: 'upload', upload_id: '101', inspection_upload_id: '102' };
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('联合分析');
+    await page!.get('form.composer').trigger('submit');
+    expect(h.post).not.toHaveBeenCalled();
+    expect(page!.text()).toContain('三份不同的报表');
+    page!.findComponent('[data-testid="factory-analysis-cost-upload"]').vm.$emit('update:modelValue', 103);
+    await flushPromises();
+    h.post.mockResolvedValue(response({ source: 'upload', uploadId: 101, jointUploads: { inspectionUploadId: 102, costUploadId: 104 } }));
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    expect(page!.text()).toContain('返回的数据范围与所选报表不一致');
+    expect(page!.find('[data-testid="factory-analysis-facts"]').exists()).toBe(false);
+  });
+
+  it('drops an in-flight uploaded answer if either related source is changed', async () => {
+    h.route.query = { source: 'upload', upload_id: '101', inspection_upload_id: '102', cost_upload_id: '103' };
+    let resolveAnswer: ((value: ReturnType<typeof response>) => void) | undefined;
+    h.post.mockImplementationOnce(() => new Promise(resolve => { resolveAnswer = resolve; }));
+    const page = await mountChat();
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('联合分析');
+    await page!.get('form.composer').trigger('submit');
+    page!.findComponent('[data-testid="factory-analysis-inspection-upload"]').vm.$emit('update:modelValue', 104);
+    await flushPromises();
+    resolveAnswer!(response({ source: 'upload', uploadId: 101, jointUploads: { inspectionUploadId: 102, costUploadId: 103 } }));
+    await flushPromises();
+    expect(page!.find('[data-testid="factory-analysis-facts"]').exists()).toBe(false);
+    expect(page!.text()).not.toContain('已根据授权数据完成分析。');
+  });
+
   it('sends the factory question and renders the server-selected chart and facts', async () => {
     const page = await mountChat();
     await page!.get('[data-testid="factory-analysis-input"]').setValue('生产表现怎样？');

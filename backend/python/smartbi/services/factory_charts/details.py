@@ -73,6 +73,7 @@ class _Frame:
     rows: tuple[dict[str, Any], ...]
     columns: tuple[str, ...]
     dimensions: tuple[str, ...]
+    point_dimension: str | None
     price_columns: frozenset[str]
     financial: bool
     unit_filter: str | None
@@ -100,6 +101,8 @@ _NON_MONEY_NAMES = {
     "合格数", "不良数", "缺陷数", "不合格数", "检验数", "检验数量", "库存数量", "可用数量",
     "库龄天数", "距到期天数", "临期天数", "设备开机时长", "运行时长", "停机时长", "节拍", "标准节拍",
     "OEE", "稼动率", "性能率", "良率", "数量", "重量", "数量单位", "id", "ID", "source_id",
+    # Trusted catalogue dimensions are exact source labels, never inferred from IDs.
+    "客户来源", "物料（单位）", "产品（单位）",
 }
 _MONEY_NAMES = {
     "总成本", "材料成本", "原料成本", "人工成本", "设备成本", "其他成本", "销售金额", "销售额",
@@ -351,6 +354,12 @@ def register(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], r
                 output.append(item)
                 continue
             financial = _is_financial(source, item)
+            engine_meta = item.get("engine") if isinstance(item.get("engine"), Mapping) else {}
+            point_dimension = engine_meta.get("pointDimension")
+            if point_dimension is not None:
+                point_dimension = str(point_dimension)
+                if point_dimension not in dimensions:
+                    raise DetailError(422, "图表定位维度不属于来源明细")
             unit_column = next((c for c in columns if _base_name(c) in _UNIT_NAMES), None)
             stock_contract = item.get("engine", {}).get(CONTRACT_KEY) if isinstance(item.get("engine"), Mapping) else None
             if stock_contract is not None:
@@ -374,7 +383,8 @@ def register(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], r
                 candidate_unit = candidate_unit.rsplit("/", 1)[-1]
             candidate_unit = candidate_unit.strip()
             distinct_units = {str(row.get(unit_column, "")).strip() for row in rows} if unit_column else set()
-            if unit_column and not _currency_quantity_independent(item, dataset):
+            trusted_quantity_rows = engine_meta.get("detailUnitPolicy") == "trusted_quantity_rows"
+            if unit_column and not trusted_quantity_rows and not _currency_quantity_independent(item, dataset):
                 quantity_unit = str(item.get("sourceQuantityUnit", item.get("quantityUnit", "")) or "").strip()
                 engine_meta = item.get("engine") if isinstance(item.get("engine"), Mapping) else {}
                 quantity_unit = quantity_unit or str(engine_meta.get("sourceQuantityUnit", "") or "").strip()
@@ -406,7 +416,7 @@ def register(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], r
                                       source, _period_label(request), candidate_unit, unit_fingerprint,
                                       content_digest], ensure_ascii=False)
             frame = _Frame(context_id, trusted_owner, str(item.get("id", "")), str(item.get("title", item.get("metric", ""))),
-                           source, _period_label(request), rows, columns, dimensions, prices, financial,
+                           source, _period_label(request), rows, columns, dimensions, point_dimension, prices, financial,
                            candidate_unit or None, storage_key, expires_at, size)
             _put(frame)
             chart_type = str(item.get("chart", {}).get("chartType", "")).lower()
@@ -440,7 +450,8 @@ def _point_rows(frame: _Frame, point: Mapping[str, Any]) -> set[int]:
         except (TypeError, ValueError):
             raise DetailError(422, "图表定位索引无效") from None
     matches: list[set[int]] = []
-    for column in frame.dimensions:
+    point_columns = (frame.point_dimension,) if frame.point_dimension else frame.dimensions
+    for column in point_columns:
         def matches_value(value: Any) -> bool:
             text = str(value or "").strip()
             if _base_name(column) in _DATE_NAMES:

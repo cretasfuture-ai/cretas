@@ -577,6 +577,22 @@ def touch_context(context: ConversationContext, question: str, selected_ids: Seq
 async def create_shared_context(owner, source, upload_id, scope, *, question="", unresolved_product=False):
     """Create production state in PostgreSQL; no in-process fallback."""
     from .conversation_store import get_store
+    # Keep explicit uploaded role selection in the durable scope.  It is
+    # authority for every follow-up, not a hint from which siblings may be
+    # rediscovered.  The API validates values; this canonicalization prevents
+    # aliases or omitted role ids being persisted by a caller.
+    if isinstance(scope, Mapping) and isinstance(scope.get("uploadedJoinSelection"), Mapping):
+        selected = scope["uploadedJoinSelection"]
+        keys = ("uploadId", "inspectionUploadId", "costUploadId")
+        if all(key in selected for key in keys):
+            scope = {**dict(scope), "uploadedJoinSelection": {
+                **{key: int(selected[key]) for key in keys},
+                "roles": {
+                    "production": int(selected["uploadId"]),
+                    "inspection": int(selected["inspectionUploadId"]),
+                    "cost": int(selected["costUploadId"]),
+                },
+            }}
     context = await get_store().create(owner, source, upload_id, scope, ConversationContext)
     # The accepted turn is recorded by touch_context after rendering; do not
     # pre-seed the same question here (which would duplicate history).

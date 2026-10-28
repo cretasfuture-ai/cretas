@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { getFactoryChartDetails, type FactoryChartDetailsData, type FactoryRecommendation } from '@/api/smartbi/factory-charts';
+import { getFactoryChartDetails, getFactoryChartRecommendations, type FactoryChartDetailsData, type FactoryRecommendation } from '@/api/smartbi/factory-charts';
 import { appendDetailPage, detailColumns, FACTORY_DETAIL_PAGE_SIZE } from './factoryChartDetails';
+import { refreshedDetailCandidate, type FactoryDetailRefreshScope } from './factoryChartDetailRefresh';
 
-const props = defineProps<{ modelValue: boolean; candidate: FactoryRecommendation | null; point?: { name: string; seriesName?: string; dataIndex?: number } }>();
+const props = defineProps<{ modelValue: boolean; candidate: FactoryRecommendation | null; point?: { name: string; seriesName?: string; dataIndex?: number }; refreshScope?: FactoryDetailRefreshScope | null }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>();
 const loading = ref(false); const error = ref(''); const data = ref<FactoryChartDetailsData | null>(null); const rows = ref<Record<string, unknown>[]>([]); const page = ref(1); const requestVersion = ref(0); const mode = ref<'continuous' | 'paged'>('continuous');
+const activeCandidate = ref<FactoryRecommendation | null>(null);
 const columns = computed(() => detailColumns(data.value).map((column) => ({
   ...column,
   cellRenderer: ({ cellData }: { cellData: unknown }) => h('span', { class: 'el-table-v2__cell-text', title: display(cellData) }, display(cellData)),
@@ -22,7 +24,9 @@ const filterList = computed(() => data.value?.availableFilters ?? []);
 function close() { emit('update:modelValue', false); }
 function apiError(result: { message?: string }, fallback: string) { return result.message || fallback; }
 async function load(targetPage = 1, reset = true) {
-  const context = props.candidate?.detailContext; if (!context) { error.value = '当前图表没有可用的原始明细'; return; }
+  const context = activeCandidate.value?.detailContext;
+  if (!context) { error.value = props.candidate?.detailStatus?.message || '当前图表没有可用的原始明细'; return; }
+  if (!Number.isFinite(Date.parse(context.expiresAt)) || Date.parse(context.expiresAt) <= Date.now()) { error.value = '原始明细已过期，请重新获取；数据变化时需要重新分析'; return; }
   const version = ++requestVersion.value; if (reset) { rows.value = []; data.value = null; }
   loading.value = true; error.value = '';
   try {
@@ -30,6 +34,10 @@ async function load(targetPage = 1, reset = true) {
     const result = await getFactoryChartDetails({ context_id: context.id, page: targetPage, page_size: FACTORY_DETAIL_PAGE_SIZE, filters, point: point.value });
     if (version !== requestVersion.value) return;
     if (!result.success || !result.data) { error.value = apiError(result, '原始明细加载失败'); return; }
+    if (result.data.candidateId !== activeCandidate.value?.id || result.data.source !== activeCandidate.value?.source
+      || (props.refreshScope && (result.data.factoryId !== props.refreshScope.request.factory_id || result.data.period !== props.refreshScope.periodLabel))) {
+      error.value = '明细与原分析范围不一致，已拒绝加载'; return;
+    }
     page.value = result.data.page; data.value = result.data; rows.value = reset ? result.data.rows : appendDetailPage(rows.value, result);
   } catch (err) { if (version === requestVersion.value) error.value = err instanceof Error && err.message ? err.message : '原始明细加载失败，请稍后重试'; }
   finally { if (version === requestVersion.value) loading.value = false; }
@@ -40,8 +48,28 @@ function loadNext() { if (!loading.value && hasMore.value) void load(page.value 
 function applyFilters() { void load(1, true); }
 function clearFilters() { Object.keys(filterInputs).forEach((key) => { delete filterInputs[key]; }); void load(1, true); }
 function onEndReached() { loadMore(); }
-function openAt(candidate: FactoryRecommendation | null) { point.value = props.point; if (candidate?.detailContext) void load(1, true); }
-watch([() => props.modelValue, () => props.candidate?.id, () => props.candidate?.detailContext?.id, () => props.point?.name, () => props.point?.dataIndex], ([open]) => { requestVersion.value += 1; if (open) openAt(props.candidate); else { rows.value = []; data.value = null; } }, { immediate: true });
+async function refreshDetails() {
+  const scope = props.refreshScope; const original = props.candidate;
+  if (!scope || !original || loading.value) return;
+  const version = ++requestVersion.value; const identity = scope.identity;
+  loading.value = true; error.value = '';
+  try {
+    const result = await getFactoryChartRecommendations({ ...scope.request, use_ai: false, detail_candidate_ids: [original.id] });
+    if (version !== requestVersion.value || !props.modelValue || identity !== props.refreshScope?.identity) return;
+    if (!result.success || !result.data) throw new Error(result.message || '无法恢复明细，请稍后重试');
+    activeCandidate.value = refreshedDetailCandidate(original, result.data, scope);
+    loading.value = false;
+    await load(1, true);
+  } catch (err) { if (version === requestVersion.value) error.value = err instanceof Error ? err.message : '明细恢复失败'; }
+  finally { if (version === requestVersion.value) loading.value = false; }
+}
+function openAt(candidate: FactoryRecommendation | null) {
+  activeCandidate.value = candidate; point.value = props.point;
+  if (candidate?.detailSnapshotKey && !candidate.detailContext && props.refreshScope && candidate.detailStatus?.state !== 'capacity') void refreshDetails();
+  else void load(1, true);
+}
+watch([() => props.modelValue, () => props.candidate?.id, () => props.candidate?.detailContext?.id, () => props.point?.name, () => props.point?.dataIndex], ([open]) => { requestVersion.value += 1; loading.value = false; if (open) openAt(props.candidate); else { rows.value = []; data.value = null; } }, { immediate: true });
+watch(() => props.refreshScope?.identity, () => { requestVersion.value += 1; rows.value = []; data.value = null; loading.value = false; });
 function updateViewport() { viewport.value = { width: window.innerWidth, height: window.innerHeight }; }
 onMounted(() => { updateViewport(); window.addEventListener('resize', updateViewport); });
 onBeforeUnmount(() => { requestVersion.value += 1; window.removeEventListener('resize', updateViewport); });
@@ -56,6 +84,7 @@ function display(value: unknown) { return value === null || value === undefined 
       <div v-if="filterList.length" class="details-filters"><span v-for="filter in filterList" :key="filter.field" class="filter-control"><label>{{ filter.label }}</label><el-input v-model="filterInputs[filter.field]" size="small" :placeholder="filter.kind" @keyup.enter="applyFilters" /></span><el-button size="small" type="primary" @click="applyFilters">应用筛选</el-button></div>
       <div v-if="data?.appliedFilters?.length" class="applied-filters">已应用：<el-tag v-for="filter in data.appliedFilters" :key="filter.field" size="small">{{ filter.field }}={{ filter.value }}</el-tag></div>
       <el-alert v-if="error" type="error" show-icon :closable="false">{{ error }}</el-alert>
+      <el-button v-if="error && refreshScope" class="details-refresh" :loading="loading" @click="refreshDetails">重新获取原始明细</el-button>
       <el-empty v-else-if="!loading && !rows.length" description="没有可用原始行" />
       <div v-else class="details-table-wrap">
         <el-table-v2 v-if="columns.length" :columns="columns" :data="displayedRows" :width="width" :height="height" :row-height="44" :header-height="44" row-key="__detailRowKey" :on-end-reached="mode === 'continuous' ? onEndReached : undefined" />

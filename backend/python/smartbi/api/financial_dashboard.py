@@ -27,6 +27,8 @@ dashboard_service = FinancialDashboardService()
 class FactoryRecommendationRequest(BaseModel):
     source: Literal['upload', 'business'] = 'business'
     upload_id: Optional[int] = Field(None, ge=1)
+    inspection_upload_id: Optional[int] = Field(None, ge=1, alias='inspectionUploadId')
+    cost_upload_id: Optional[int] = Field(None, ge=1, alias='costUploadId')
     factory_id: Optional[str] = None
     year: int = Field(2026, ge=1900, le=2100)
     period_type: Literal['all', 'year', 'month_range'] = 'all'
@@ -36,6 +38,45 @@ class FactoryRecommendationRequest(BaseModel):
     use_ai: bool = True
     guided: bool = False
     analysis_subject: Optional[str] = Field(None, max_length=80)
+    # None keeps the legacy direct-route behaviour.  An empty list is used by
+    # the AI catalogue pass, while a non-empty list lazily allocates only the
+    # explicitly selected, already-authorized candidates.
+    detail_candidate_ids: Optional[List[str]] = Field(None, max_items=4)
+
+    class Config:
+        allow_population_by_field_name = True
+        populate_by_name = True
+
+    @root_validator(pre=True)
+    def reject_invalid_joint_ids(cls, values):
+        source = values.get('source', 'business')
+        keys = ('upload_id', 'inspection_upload_id', 'cost_upload_id',
+                'uploadId', 'inspectionUploadId', 'costUploadId')
+        for key in keys:
+            if key in values and isinstance(values[key], bool):
+                raise ValueError(f'{key}必须是正整数')
+        related = values.get('inspection_upload_id', values.get('inspectionUploadId'))
+        cost = values.get('cost_upload_id', values.get('costUploadId'))
+        if source != 'upload' and (related is not None or cost is not None):
+            raise ValueError('只有upload来源允许联合上传ID')
+        return values
+
+    @validator('detail_candidate_ids')
+    def valid_detail_candidates(cls, value):
+        if value is None:
+            return value
+        if any(not item or len(item) > 300 for item in value) or len(value) != len(set(value)):
+            raise ValueError('详情图表标识必须非空、唯一且不超过300字符')
+        return value
+
+    @root_validator(skip_on_failure=True)
+    def validate_uploaded_joint_ids(cls, values):
+        inspection, cost, anchor = values.get('inspection_upload_id'), values.get('cost_upload_id'), values.get('upload_id')
+        if (inspection is None) != (cost is None):
+            raise ValueError('inspectionUploadId 与 costUploadId 必须同时提供')
+        if inspection is not None and (anchor is None or len({anchor, inspection, cost}) != 3):
+            raise ValueError('联合上传必须提供互不相同的 uploadId、inspectionUploadId、costUploadId')
+        return values
 
 
 class FactorySelectionRequest(BaseModel):
@@ -55,6 +96,8 @@ class FactoryAnalysisRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000)
     source: Optional[Literal['upload', 'business']] = None
     upload_id: Optional[int] = Field(None, ge=1, alias='uploadId')
+    inspection_upload_id: Optional[int] = Field(None, ge=1, alias='inspectionUploadId')
+    cost_upload_id: Optional[int] = Field(None, ge=1, alias='costUploadId')
     factory_id: Optional[str] = Field(None, alias='factoryId')
     year: Optional[int] = Field(None, ge=1900, le=2100)
     period_type: Optional[Literal['all', 'year', 'month_range']] = Field(None, alias='periodType')
@@ -66,6 +109,29 @@ class FactoryAnalysisRequest(BaseModel):
     class Config:
         allow_population_by_field_name = True
         populate_by_name = True
+
+    @root_validator(pre=True)
+    def reject_invalid_joint_ids(cls, values):
+        source = values.get('source', 'business')
+        keys = ('upload_id', 'inspection_upload_id', 'cost_upload_id',
+                'uploadId', 'inspectionUploadId', 'costUploadId')
+        for key in keys:
+            if key in values and isinstance(values[key], bool):
+                raise ValueError(f'{key}必须是正整数')
+        related = values.get('inspection_upload_id', values.get('inspectionUploadId'))
+        cost = values.get('cost_upload_id', values.get('costUploadId'))
+        if source != 'upload' and (related is not None or cost is not None):
+            raise ValueError('只有upload来源允许联合上传ID')
+        return values
+
+    @root_validator(skip_on_failure=True)
+    def validate_uploaded_joint_ids(cls, values):
+        inspection, cost, anchor = values.get('inspection_upload_id'), values.get('cost_upload_id'), values.get('upload_id')
+        if (inspection is None) != (cost is None):
+            raise ValueError('inspectionUploadId 与 costUploadId 必须同时提供')
+        if inspection is not None and (anchor is None or len({anchor, inspection, cost}) != 3):
+            raise ValueError('联合上传必须提供互不相同的 uploadId、inspectionUploadId、costUploadId')
+        return values
 
     @validator('question')
     def question_is_not_blank(cls, value):
@@ -92,7 +158,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
     from smartbi.api.factory_production_gold import _can_view_cost
     from starlette.concurrency import run_in_threadpool
-    from smartbi.services.factory_charts import engine, sources, ranking, finance_sources, operational_sources, captured_sources, detail_store, details
+    from smartbi.services.factory_charts import engine, sources, ranking, finance_sources, operational_sources, captured_sources, trusted_business_sources, detail_store, details
 
     factory_id = require_same_factory(http_request, request.factory_id)
     role = getattr(http_request.state, 'role', None)
@@ -107,15 +173,35 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     if request.source == 'upload':
         if not request.upload_id:
             raise HTTPException(422, '请先选择本厂上传报表')
-        load_request = FinancialDashboardRequest(upload_id=request.upload_id)
+        if request.inspection_upload_id is not None and not can_price:
+            raise HTTPException(403, '当前身份没有成本查看权限，不能读取联合成本上传')
         try:
+            load_request = FinancialDashboardRequest(upload_id=request.upload_id)
             frame = await _load_data(load_request, factory_id)
+            if request.inspection_upload_id is not None:
+                from smartbi.services.factory_charts.uploaded_joint import parse_selection, prepare_uploaded_join, dataset_for_join
+                selection = parse_selection({'uploadId': request.upload_id,
+                                             'inspectionUploadId': request.inspection_upload_id,
+                                             'costUploadId': request.cost_upload_id})
+                inspection = await _load_data(FinancialDashboardRequest(upload_id=selection.inspection_upload_id), factory_id)
+                cost = await _load_data(FinancialDashboardRequest(upload_id=selection.cost_upload_id), factory_id)
+                if len(frame) > 20000 or len(inspection) > 20000 or len(cost) > 20000:
+                    raise HTTPException(422, '联合上传任一报表超过两万行安全上限，请拆分报表后重试')
+                joined, join_gaps = prepare_uploaded_join(
+                    engine.Dataset(frame, f'upload-{selection.production_upload_id}'),
+                    engine.Dataset(inspection, f'upload-{selection.inspection_upload_id}'),
+                    engine.Dataset(cost, f'upload-{selection.cost_upload_id}'))
+                if joined is None:
+                    return JSONResponse(status_code=422, content={'success': False, 'message': '上传数据无法形成完整生产-质检-成本联合分析', 'data': {'gaps': join_gaps, 'jointUploads': {'inspectionUploadId': selection.inspection_upload_id, 'costUploadId': selection.cost_upload_id}}})
+                datasets = [dataset_for_join(selection, joined)]
+                extra_gaps.extend(join_gaps)
+            else:
+                datasets = [engine.Dataset(frame, f'upload-{request.upload_id} · 本厂上传报表',
+                                           engine.is_financial(frame), load_request.sheet_name or '')]
         except DataSourceError as e:
             return e.response()
         if len(frame) > 20000:
             raise HTTPException(422, '报表超过两万行安全上限，请拆分报表后重试')
-        datasets = [engine.Dataset(frame, f'upload-{request.upload_id} · 本厂上传报表',
-                                   engine.is_financial(frame), load_request.sheet_name or '')]
     else:
         datasets, errors, extra_gaps = await sources.load(factory_id, request, can_price)
         from smartbi.services.factory_charts.finance_auth import full_factory_finance_access
@@ -124,7 +210,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         datasets.extend(extra_data)
         errors.extend(extra_errors)
         extra_gaps.extend(more_gaps)
-        for loader in (operational_sources.load, captured_sources.load):
+        for loader in (operational_sources.load, captured_sources.load, trusted_business_sources.load):
             more_data, more_errors, source_gaps = await loader(factory_id, request, can_price)
             datasets.extend(more_data)
             errors.extend(more_errors)
@@ -160,15 +246,39 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     extra_gaps = [gap for gap in extra_gaps if gap.get('id') not in proven]
     from common.tenant_identity import caller_user_id
     user_id = caller_user_id(http_request)
-    if user_id is not None and user_id > 0:
+    if request.detail_candidate_ids is not None:
+        authorized_by_id = {str(item.get('id')): item for item in candidates if item.get('id')}
+        requested_ids = list(request.detail_candidate_ids)
+        unknown_ids = [item_id for item_id in requested_ids if item_id not in authorized_by_id]
+        if unknown_ids:
+            raise HTTPException(422, '详情图表不在当前授权目录中')
+        detail_candidates = [authorized_by_id[item_id] for item_id in requested_ids]
+    else:
+        detail_candidates = candidates
+    if user_id is not None and user_id > 0 and request.detail_candidate_ids == []:
+        # Discovery remains stateless: prepare the same opaque immutable
+        # snapshot proof, but do not consume a shared context or touch PG.
+        candidates = detail_store.prepare_shared_metadata(
+            candidates, scoped_datasets, request, (factory_id, user_id, role), can_price)
+    elif user_id is not None and user_id > 0 and (request.detail_candidate_ids is None or detail_candidates):
         try:
-            candidates = await detail_store.register_shared(candidates, scoped_datasets, request, (factory_id, user_id, role), can_price)
+            registered = await detail_store.register_shared(detail_candidates, scoped_datasets,
+                                                             request, (factory_id, user_id, role), can_price)
+            if request.detail_candidate_ids is None:
+                candidates = registered
+            else:
+                registered_by_id = {str(item.get('id')): item for item in registered if item.get('id')}
+                candidates = [registered_by_id.get(str(item.get('id')), item) for item in candidates]
         except details.DetailError as exc:
             raise HTTPException(exc.status_code, exc.detail) from None
     from smartbi.services.factory_charts.selection_groups import default_selection
     label = canonical_period_label(request)
     return _sanitize_for_json({'success': True, 'data': {
         'factoryId': factory_id, 'source': request.source,
+        'uploadId': request.upload_id if request.source == 'upload' else None,
+        'jointUploads': ({'inspectionUploadId': request.inspection_upload_id,
+                          'costUploadId': request.cost_upload_id}
+                         if request.inspection_upload_id is not None else None),
         'sourceLabel': '本厂业务系统' if request.source == 'business' else f'本厂上传报表 #{request.upload_id}',
         'period': {'label': label, 'year': request.year, 'periodType': request.period_type,
                    'startMonth': request.start_month, 'endMonth': request.end_month}, 'ranking': order,
@@ -199,7 +309,14 @@ def _recommendation_body(response: Any) -> dict[str, Any]:
 
 def _recommendation_request(source: str, upload_id: Optional[int], factory_id: str,
                             scope: dict[str, Any], *, guided: bool = False,
-                            analysis_subject: Optional[str] = None) -> FactoryRecommendationRequest:
+                            analysis_subject: Optional[str] = None,
+                            detail_candidate_ids: Optional[List[str]] = (),
+                            inspection_upload_id: Optional[int] = None,
+                            cost_upload_id: Optional[int] = None) -> FactoryRecommendationRequest:
+    selection = scope.get('uploadedJoinSelection') if isinstance(scope, dict) else None
+    if isinstance(selection, dict):
+        inspection_upload_id = inspection_upload_id or selection.get('inspectionUploadId')
+        cost_upload_id = cost_upload_id or selection.get('costUploadId')
     return FactoryRecommendationRequest(
         source=source, upload_id=upload_id, factory_id=factory_id,
         year=int(scope.get('year', 2026)),
@@ -208,6 +325,9 @@ def _recommendation_request(source: str, upload_id: Optional[int], factory_id: s
         end_month=int(scope.get('end_month', 12)),
         include_optional=True, use_ai=False, guided=guided,
         analysis_subject=analysis_subject,
+        detail_candidate_ids=detail_candidate_ids,
+        inspection_upload_id=inspection_upload_id,
+        cost_upload_id=cost_upload_id,
     )
 
 
@@ -222,7 +342,9 @@ def _analysis_response(data: dict[str, Any], *, factory_id: str, source: str,
     return _sanitize_for_json({'success': True, 'data': {
         'factoryId': factory_id,
         'source': source,
+        'uploadId': data.get('uploadId'),
         'sourceLabel': data.get('sourceLabel'),
+        'jointUploads': data.get('jointUploads'),
         'period': data.get('period', {}),
         'analysisSubject': data.get('analysisSubject'),
         'analysisScopeLabel': data.get('analysisScopeLabel'),
@@ -282,13 +404,21 @@ async def factory_analysis(request: FactoryAnalysisRequest, http_request: Reques
         'guided': True,
         'analysis_subject': None,
     }
+    if request.inspection_upload_id is not None:
+        scope['uploadedJoinSelection'] = {
+            'uploadId': upload_id,
+            'inspectionUploadId': request.inspection_upload_id,
+            'costUploadId': request.cost_upload_id,
+        }
     explicit_scope, scope_error, explicit_present = conversation.apply_explicit_period(
         scope, year=request.year, period_type=request.period_type,
         start_month=request.start_month, end_month=request.end_month)
     if scope_error:
         raise HTTPException(422, scope_error)
     scope = explicit_scope
-    rec_request = _recommendation_request(source, upload_id, factory_id, scope, guided=True)
+    rec_request = _recommendation_request(source, upload_id, factory_id, scope, guided=True,
+                                           inspection_upload_id=request.inspection_upload_id,
+                                           cost_upload_id=request.cost_upload_id)
     recommendation_data = _recommendation_body(await factory_recommendations(rec_request, http_request))['data']
     subjects = list(recommendation_data.get('subjects') or [])
     resolved_subject, subject_error = conversation.resolve_subject(request.question, subjects, request.analysis_subject)
@@ -509,6 +639,45 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                                   recommendations=[], catalog=catalog, facts=[],
                                   limitations=['AI选择不在当前授权目录中'], context_id=context.context_id,
                                   subjects=subjects, follow_up_questions=['请重新提问'])
+    # The planner only saw a metadata catalogue.  Re-read the same authorized
+    # source/scope and lazily allocate contexts for its actual 1-4 selections.
+    # This second pass also prevents stale IDs, source changes, or unit changes
+    # from gaining a detail context through an old recommendation response.
+    selected_request = _recommendation_request(
+        context.source, context.upload_id, factory_id, effective_scope,
+        guided=True, analysis_subject=effective_scope.get('analysis_subject'),
+        detail_candidate_ids=selected_ids,
+    )
+    selected_data = _recommendation_body(
+        await factory_recommendations(selected_request, http_request)
+    )['data']
+    if selected_data.get('period') != recommendation_data.get('period') \
+            or selected_data.get('source') != recommendation_data.get('source'):
+        conversation.touch_context(context, request.question, [], scope=scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='unavailable',
+                                  answer='当前授权数据已变化，AI选择的图表无法重新验证。', selected_ids=[],
+                                  recommendations=[], catalog=catalog, facts=[],
+                                  limitations=['AI选择的图表来源或范围已变化'],
+                                  context_id=context.context_id, subjects=subjects,
+                                  follow_up_questions=['请重新提问'])
+    fresh_by_id = conversation._catalog_by_id(selected_data.get('recommendations') or [])
+    for item_id in selected_ids:
+        old_item = by_id[item_id]
+        fresh_item = fresh_by_id.get(item_id)
+        if fresh_item is None or str(fresh_item.get('source', '')) != str(old_item.get('source', '')) \
+                or str(fresh_item.get('unit', '')) != str(old_item.get('unit', '')):
+            conversation.touch_context(context, request.question, [], scope=scope)
+            return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                      question=request.question, status='unavailable',
+                                      answer='当前授权数据已变化，AI选择的图表无法重新验证。', selected_ids=[],
+                                      recommendations=[], catalog=catalog, facts=[],
+                                      limitations=['AI选择的图表来源、范围或单位已变化'],
+                                      context_id=context.context_id, subjects=subjects,
+                                      follow_up_questions=['请重新提问'])
+    recommendation_data = selected_data
+    catalog = conversation.semantic_catalog(recommendation_data.get('recommendations') or [])
+    by_id = fresh_by_id
     selected = [by_id[item_id] for item_id in selected_ids]
     if conversation.is_joint_intent(request.question):
         required_family = conversation.joint_family_requirement(request.question)
@@ -647,6 +816,7 @@ async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[st
                 FROM smart_bi_dynamic_data d
                 JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
                 WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                  AND u.upload_status = 'COMPLETED'
                 ORDER BY d.row_index
                 """,
                 request.upload_id,

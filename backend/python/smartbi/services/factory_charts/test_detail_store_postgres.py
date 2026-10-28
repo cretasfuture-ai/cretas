@@ -8,6 +8,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -47,7 +48,21 @@ def test_prepared_shared_snapshot_dedup_key_binds_owner_source_period_unit():
     assert first["rows"] == second["rows"]
 
 
+def test_shared_snapshot_binds_all_three_upload_ids_even_for_identical_rows():
+    frame = pd.DataFrame([{"日期": "2026-01-01", "单位": "kg", "产品": "A", "产量": 1}])
+    dataset = {"frame": frame, "source": "uploaded-production-inspection-fused · 显式上传"}
+    item = {"id": "joint", "source": dataset["source"], "unit": "kg"}
+    owner = ("F006", 12, "factory_super_admin")
+    request = {"source": "upload", "upload_id": 101, "inspection_upload_id": 102, "cost_upload_id": 103, "period_type": "all"}
+    first = list(detail_store._prepared([item], [dataset], request, owner))[0][1]
+    for field in ("upload_id", "inspection_upload_id", "cost_upload_id"):
+        changed = list(detail_store._prepared([item], [dataset], {**request, field: 999}, owner))[0][1]
+        assert first["rows"] == changed["rows"]
+        assert first["snapshot_key"] != changed["snapshot_key"]
+
+
 @pytest.mark.asyncio
+@pytest.mark.timeout(180)
 async def test_two_processes_register_then_read_shared_context(monkeypatch):
     dsn = os.getenv("FACTORY_SELECTION_TEST_PG_URL") or os.getenv("DETAIL_STORE_TEST_PG_URL")
     if not dsn:
@@ -82,6 +97,41 @@ async def test_two_processes_register_then_read_shared_context(monkeypatch):
         registered = await detail_store.register_shared([item], [{"frame": frame, "source": item["source"]}],
                                                          {"period_type": "all"}, owner, True)
         context_id = registered[0]["detailContext"]["id"]
+        snapshot_key = registered[0]["detailSnapshotKey"]
+        same_snapshot = await detail_store.register_shared(
+            [item], [{"frame": frame, "source": item["source"]}],
+            {"period_type": "all"}, owner, True)
+        assert same_snapshot[0]["detailContext"]["id"] == context_id
+        assert same_snapshot[0]["detailSnapshotKey"] == snapshot_key
+
+        # A changed immutable row must not reuse the old context even when its
+        # aggregate value remains the same.
+        changed_frame = frame.copy()
+        changed_frame.loc[0, "产品"] = "cross-worker-changed"
+        changed = await detail_store.register_shared(
+            [item], [{"frame": changed_frame, "source": item["source"]}],
+            {"period_type": "all"}, owner, True)
+        assert changed[0]["detailContext"]["id"] != context_id
+        assert changed[0]["detailSnapshotKey"] != snapshot_key
+
+        other_owner = ("F006", 9982, "factory_super_admin")
+        cross_owner = await detail_store.register_shared(
+            [item], [{"frame": frame, "source": item["source"]}],
+            {"period_type": "all"}, other_owner, True)
+        assert cross_owner[0]["detailContext"]["id"] != context_id
+        assert cross_owner[0]["detailSnapshotKey"] != snapshot_key
+
+        assert await admin.fetchval(
+            "SELECT has_table_privilege($1,$2,'UPDATE')", role,
+            f"{schema}.smart_bi_factory_chart_detail_snapshots",
+        ) is False
+        snapshot_id = await admin.fetchval(
+            "SELECT snapshot_id FROM smart_bi_factory_chart_detail_contexts WHERE context_id=$1", context_id)
+        with pytest.raises(asyncpg.PostgresError):
+            await admin.execute(
+                "UPDATE smart_bi_factory_chart_detail_snapshots SET source=source WHERE snapshot_id=$1",
+                snapshot_id,
+            )
     finally:
         detail_store.config.get_pg_pool = original
         await pool.close()
@@ -123,8 +173,30 @@ asyncio.run(main())
     env["DETAIL_STORE_TEST_PG_URL"] = dsn
     env["DETAIL_CONTEXT"] = context_id
     env["DETAIL_SCHEMA"] = schema
-    result = subprocess.run([sys.executable, "-c", script], cwd=str(ROOT.parent.parent), env=env,
-                            capture_output=True, text=True, timeout=45)
+    child_started = time.monotonic()
+    child = subprocess.Popen([sys.executable, "-c", script], cwd=str(ROOT.parent.parent), env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        child_stdout, child_stderr = child.communicate(timeout=120)
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.monotonic() - child_started
+        child.kill()
+        child_stdout, child_stderr = child.communicate()
+        log_dir = ROOT.parent.parent / "test-output"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / "sc28-pg-cross-process-timeout.txt").write_text(
+            "original_timeout_seconds=45\n"
+            "original_failure=subprocess.TimeoutExpired during child import/startup\n"
+            f"new_timeout_seconds=120\nelapsed_seconds={elapsed:.2f}\n"
+            f"stdout={child_stdout or exc.stdout!r}\nstderr={child_stderr or exc.stderr!r}\n",
+            encoding="utf-8",
+        )
+        await admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        await admin.close()
+        raise
+    child_elapsed = time.monotonic() - child_started
+    print(f"CROSS_PROCESS_CHILD_STARTUP_SECONDS={child_elapsed:.2f}")
+    result = subprocess.CompletedProcess(child.args, child.returncode, child_stdout, child_stderr)
     if result.returncode != 0 or "CROSS_PROCESS_READ=PASS" not in result.stdout:
         await admin.execute(f"DROP SCHEMA {schema} CASCADE")
         await admin.close()
@@ -138,16 +210,45 @@ asyncio.run(main())
     detail_store.config.get_pg_pool = lambda: pool
     monkeypatch.setattr(detail_store, "MAX_CONTEXTS", 1)
     try:
+        overcap_owner = ("F006-overcap", 9980, "factory_super_admin")
+        overcap_source = "production · overcap"
+        overcap_frame = pd.DataFrame([{"日期": "2026-01-01", "单位": "kg", "产品": "C", "产量": 1}])
+        overcap_first = await detail_store.register_shared(
+            [{"id": "overcap-1", "title": "产量", "source": overcap_source, "unit": "kg"}],
+            [{"frame": overcap_frame, "source": overcap_source}],
+            {"period_type": "all"}, overcap_owner, True)
+        assert overcap_first[0]["detailContext"]["id"]
+        overcap_second = await detail_store.register_shared(
+            [{"id": "overcap-2", "title": "产量", "source": overcap_source, "unit": "kg"}],
+            [{"frame": overcap_frame, "source": overcap_source}],
+            {"period_type": "all"}, overcap_owner, True)
+        assert "detailContext" not in overcap_second[0]
+        assert overcap_second[0]["detailStatus"]["state"] == "capacity"
+        assert overcap_second[0]["detailSnapshotKey"]
+
         reclaim_owner = ("F006-reclaim", 9983, "factory_super_admin")
         reclaim_item = {"id": "reclaim-1", "title": "产量", "source": "production · reclaim", "unit": "kg"}
         reclaim_ds = [{"frame": pd.DataFrame([{"日期": "2026-01-01", "单位": "kg", "产品": "R", "产量": 1}]),
                        "source": "production · reclaim"}]
         first = await detail_store.register_shared([reclaim_item], reclaim_ds, {"period_type": "all"}, reclaim_owner, True)
         first_id = first[0]["detailContext"]["id"]
+        first_snapshot_key = first[0]["detailSnapshotKey"]
+        first_snapshot_id = await admin.fetchval(
+            "SELECT snapshot_id FROM smart_bi_factory_chart_detail_contexts WHERE context_id=$1", first_id)
         await admin.execute("UPDATE smart_bi_factory_chart_detail_contexts SET expires_at=CURRENT_TIMESTAMP - interval '1 second' WHERE context_id=$1", first_id)
         second = await detail_store.register_shared([{**reclaim_item, "id": "reclaim-2"}], reclaim_ds,
                                                      {"period_type": "all"}, reclaim_owner, True)
         assert second[0]["detailContext"]["id"]
+        assert second[0]["detailContext"]["id"] != first_id
+        replacement_snapshot_id = await admin.fetchval(
+            "SELECT snapshot_id FROM smart_bi_factory_chart_detail_contexts WHERE context_id=$1",
+            second[0]["detailContext"]["id"],
+        )
+        assert replacement_snapshot_id != first_snapshot_id
+        assert await admin.fetchval(
+            "SELECT count(*) FROM smart_bi_factory_chart_detail_snapshots WHERE dedup_key=$1",
+            first_snapshot_key,
+        ) == 1
         concurrent_owner = ("F006-concurrent", 9984, "factory_super_admin")
         results = await asyncio.gather(
             detail_store.register_shared([{**reclaim_item, "id": "concurrent-1", "source": "production · concurrent"}],
@@ -221,6 +322,26 @@ async def test_real_shared_store_stock_count_mixed_units_and_bucket_point(monkey
         with pytest.raises(details.DetailError) as denied:
             await detail_store.page_shared({"context_id": context_id, "page": 1}, ("F999", 771, "factory_super_admin"), True, True)
         assert denied.value.status_code == 410
+        trusted_frame = pd.DataFrame([
+            {"日期": "2026-10-01", "单位": "kg", "产品（单位）": "相同SKU（kg）", "数量": 2},
+            {"日期": "2026-10-01", "单位": "盒", "产品（单位）": "相同SKU（盒）", "数量": 3},
+        ])
+        trusted_source = "finished-goods-inventory · PG混单位精确点位"
+        trusted_candidate = {"id": "trusted-point", "source": trusted_source, "unit": "数量",
+                             "engine": {"pointDimension": "产品（单位）", "detailUnitPolicy": "trusted_quantity_rows"},
+                             "chart": {"chartType": "bar_horizontal", "echartsOption": {}}}
+        registered = await detail_store.register_shared([trusted_candidate], [Dataset(trusted_frame, trusted_source)], request, owner, True)
+        trusted_context = registered[0]["detailContext"]["id"]
+        loaded = await detail_store._load(trusted_context, owner)
+        assert loaded.point_dimension == "产品（单位）"
+        for label, unit, quantity in (("相同SKU（kg）", "kg", 2), ("相同SKU（盒）", "盒", 3)):
+            result = await detail_store.page_shared({"context_id": trusted_context, "point": {"name": label}}, owner, True, True)
+            assert result["data"]["total"] == 1
+            assert result["data"]["rows"][0]["单位"] == unit
+            assert result["data"]["rows"][0]["数量"] == quantity
+        with pytest.raises(details.DetailError) as bad_point:
+            await detail_store.page_shared({"context_id": trusted_context, "point": {"name": "不存在"}}, owner, True, True)
+        assert bad_point.value.status_code == 422
     finally:
         detail_store.config.get_pg_pool = original
         await pool.close()

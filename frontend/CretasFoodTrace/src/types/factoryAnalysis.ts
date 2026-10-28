@@ -5,6 +5,8 @@ export interface FactoryAnalysisRequest {
   question: string;
   source?: FactoryChartSource;
   uploadId?: number;
+  inspectionUploadId?: number;
+  costUploadId?: number;
   year?: number;
   periodType?: FactoryChartPeriodType;
   startMonth?: number;
@@ -64,6 +66,7 @@ export interface FactoryAnalysisData {
   followUpQuestions: string[];
   contextId: string;
   subjects: Array<{ id: string; label: string }>;
+  jointUploads?: { inspectionUploadId: number; costUploadId: number } | null;
 }
 
 export interface FactoryAnalysisResponse {

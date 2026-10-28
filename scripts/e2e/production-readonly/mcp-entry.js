@@ -33,7 +33,7 @@ function factoryAnalysisBodyMatches(body) {
   }
   const requiredInitial = ['analysisSubject', 'endMonth', 'periodType', 'question', 'source', 'startMonth', 'year'];
   if (!requiredInitial.every((key) => keys.includes(key))) return false;
-  const allowedInitial = new Set([...requiredInitial, 'uploadId']);
+  const allowedInitial = new Set([...requiredInitial, 'uploadId', 'inspectionUploadId', 'costUploadId']);
   if (keys.some((key) => !allowedInitial.has(key))) return false;
   if (body.source !== 'business' && body.source !== 'upload') return false;
   if (!Number.isSafeInteger(body.year) || body.year < 2000 || body.year > 2100) return false;
@@ -42,9 +42,14 @@ function factoryAnalysisBodyMatches(body) {
     || !Number.isInteger(body.endMonth) || body.endMonth < body.startMonth || body.endMonth > 12) return false;
   if (body.analysisSubject !== null && (typeof body.analysisSubject !== 'string' || body.analysisSubject.length > 200)) return false;
   if (body.source === 'upload') {
-    return keys.includes('uploadId') && isPositiveInteger(body.uploadId);
+    if (!keys.includes('uploadId') || !isPositiveInteger(body.uploadId)) return false;
+    const hasInspection = keys.includes('inspectionUploadId');
+    const hasCost = keys.includes('costUploadId');
+    if (hasInspection !== hasCost) return false;
+    return !hasInspection || (isPositiveInteger(body.inspectionUploadId) && isPositiveInteger(body.costUploadId)
+      && new Set([body.uploadId, body.inspectionUploadId, body.costUploadId]).size === 3);
   }
-  return !keys.includes('uploadId');
+  return !keys.includes('uploadId') && !keys.includes('inspectionUploadId') && !keys.includes('costUploadId');
 }
 
 // Every entry must point to a server contract that is query-only. Do not add

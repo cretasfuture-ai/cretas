@@ -96,10 +96,23 @@ describe('smartbiFactoryCharts native API', () => {
   });
 
   it('normalizes upload names while rejecting a foreign upload scope', async () => {
-    client.get.mockResolvedValueOnce({ success: true, data: { content: [{ id: 9, fileName: 'a.xlsx', status: 'COMPLETED' }, { id: 10, fileName: 'bad.xlsx', status: 'PENDING' }] } } as never);
-    await expect(getFactoryChartUploads()).resolves.toEqual([{ id: 9, fileName: 'a.xlsx' }]);
+    client.get.mockResolvedValueOnce({ success: true, data: { content: [{ id: 9, fileName: 'a.xlsx', sheetName: '生产', status: 'COMPLETED' }, { id: 10, fileName: 'bad.xlsx', status: 'PENDING' }] } } as never);
+    await expect(getFactoryChartUploads()).resolves.toEqual([{ id: 9, fileName: 'a.xlsx', sheetName: '生产' }]);
     expect(client.get).toHaveBeenCalledWith('/api/mobile/F006/smart-bi/uploads', { params: { page: 0, size: 200 } });
     client.get.mockResolvedValueOnce({ success: true, data: { content: [{ id: 10, fileName: 'bad.xlsx', status: 'PENDING' }] } } as never);
     await expect(getFactoryChartUploads()).resolves.toEqual([]);
+  });
+
+  it('preserves same-file workbook sheet names so role selectors can distinguish them', async () => {
+    client.get.mockResolvedValueOnce({ success: true, data: { content: [
+      { id: 11, fileName: '同一上传.xlsx', sheetName: '生产', status: 'COMPLETED' },
+      { id: 12, fileName: '同一上传.xlsx', sheetName: '质检', status: 'COMPLETED' },
+      { id: 13, fileName: '同一上传.xlsx', sheetName: '成本', status: 'COMPLETED' },
+    ] } } as never);
+    await expect(getFactoryChartUploads()).resolves.toEqual([
+      { id: 11, fileName: '同一上传.xlsx', sheetName: '生产' },
+      { id: 12, fileName: '同一上传.xlsx', sheetName: '质检' },
+      { id: 13, fileName: '同一上传.xlsx', sheetName: '成本' },
+    ]);
   });
 });

@@ -130,7 +130,8 @@ def test_mixed_units_stay_separate_and_unscoped_or_price_denied_cannot_construct
 async def test_loader_bounds_join_to_authorized_product_and_preserves_later_inspection_date(monkeypatch):
     production, quality = raw_datasets()
     calls = []
-    rows = [('production', 'fact_production_batch', production.frame.to_dict('records')),
+    rows = [('settled', 'production_settlement_output_lines', []),
+            ('production', 'fact_production_batch', production.frame.to_dict('records')),
             ('join', 'ANY($2::text[])', quality.frame.to_dict('records')),
             ('quality', 'quality_inspections qi', []), ('sales', 'sales_orders so', []),
             ('purchase', 'purchase_receive_records pr', []), ('process', 'fact_production_report', [])]

@@ -3,10 +3,13 @@ import { exportExcel, exportPDF, exportPPT, type ExcelExportRequest, type PDFExp
 
 export type FactoryChartSource = 'upload' | 'business';
 export type FactoryChartPeriodType = 'all' | 'year' | 'month_range';
+export interface FactoryJointUploads { inspectionUploadId: number; costUploadId: number; }
 
 export interface FactoryRecommendationRequest {
   source: FactoryChartSource;
   upload_id?: number;
+  inspection_upload_id?: number;
+  cost_upload_id?: number;
   factory_id?: string;
   year: number;
   period_type: FactoryChartPeriodType;
@@ -16,6 +19,7 @@ export interface FactoryRecommendationRequest {
   use_ai: boolean;
   guided?: boolean;
   analysis_subject?: string | null;
+  detail_candidate_ids?: string[];
 }
 
 export interface FactoryChartKpi { label: string; value: number | string | null; unit: string; }
@@ -37,6 +41,8 @@ export interface FactoryRecommendation {
   /** Financial candidates may return a structured table object; rendering is intentionally deferred. */
   tableData: Record<string, unknown> | Array<Record<string, unknown> | { label: string; value: number | string | null }> | null;
   detailContext?: FactoryChartDetailContext;
+  detailSnapshotKey?: string;
+  detailStatus?: { state: 'unavailable' | 'capacity'; message: string; retryAfterSeconds?: number };
   analysis?: { familyId: string; familyLabel: string };
 }
 
@@ -57,8 +63,10 @@ export interface FactorySourceError { source: string; message: string; }
 export interface FactoryRecommendationsData {
   factoryId: string;
   source: FactoryChartSource;
+  uploadId: number | null;
+  jointUploads?: FactoryJointUploads | null;
   sourceLabel: string;
-  period: { label: string };
+  period: { label: string; year: number; periodType: FactoryChartPeriodType; startMonth: number; endMonth: number };
   defaultSelection?: string[];
   ranking: { mode: 'ai' | 'rule'; reason: string };
   recommendations: FactoryRecommendation[];

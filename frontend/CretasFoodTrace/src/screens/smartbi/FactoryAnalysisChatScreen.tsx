@@ -7,11 +7,12 @@ import { ScreenWrapper } from '../../components/ui/ScreenWrapper';
 import FactoryChartCanvas, { type FactoryChartCanvasHandle } from '../../components/smartbi/FactoryChartCanvas';
 import { useAuthStore } from '../../store/authStore';
 import { askFactoryAnalysis, FactoryAnalysisApiError } from '../../services/api/smartbiFactoryAnalysis';
-import { exportFactoryCharts, shareFactoryChartFile } from '../../services/api/smartbiFactoryCharts';
-import type { FactoryChartExportFormat, FactoryChartSource, FactoryRecommendation } from '../../types/factoryCharts';
+import { exportFactoryCharts, getFactoryRecommendations, saveFactoryChartFile, shareFactoryChartFile } from '../../services/api/smartbiFactoryCharts';
+import type { FactoryChartExportFile, FactoryChartExportFormat, FactoryChartSource, FactoryRecommendation } from '../../types/factoryCharts';
 import { buildFactoryChartExportPayload } from '../../utils/smartbiFactoryChartExport';
 import type { FactoryChartPeriodSelection } from '../../utils/smartbiFactoryChartModel';
-import { isValidPeriod } from '../../utils/smartbiFactoryChartModel';
+import { buildRecommendationRequest, isValidPeriod } from '../../utils/smartbiFactoryChartModel';
+import { mergeRefreshedDetailContext, type FactoryDetailRefreshScope } from '../../utils/smartbiFactoryDetailRefresh';
 import type {
   FactoryAnalysisCatalogItem,
   FactoryAnalysisData,
@@ -110,9 +111,11 @@ function FactList({ facts }: { facts: readonly FactoryAnalysisFact[] }) {
 function ChartList({
   items,
   onDetails,
+  detailLoadingId,
 }: {
   items: readonly FactoryRecommendation[];
   onDetails: (item: FactoryRecommendation) => void;
+  detailLoadingId: string | null;
 }) {
   return <View testID="factory-analysis-chart-list">
     {items.map(item => <Card key={item.id} style={styles.chartCard} testID={`factory-analysis-chart-${item.id}`}>
@@ -124,7 +127,12 @@ function ChartList({
           {item.kpis.map(kpi => <View key={kpi.label} style={styles.kpi}><Text style={styles.muted}>{kpi.label}</Text><Text>{String(kpi.value ?? '—')} {kpi.unit}</Text></View>)}
         </View>
         <Text style={styles.sourceLine}>来源：{item.source || '未提供'} · 原始单位：{item.unit || '—'}</Text>
-        <Button mode="outlined" onPress={() => onDetails(item)} disabled={!item.detailContext}>查看原始明细</Button>
+        {!item.detailContext && <Text style={styles.muted} testID={`factory-analysis-detail-status-${item.id}`}>
+          {item.detailStatus?.message || '原始明细尚未就绪，可按需获取'}
+        </Text>}
+        <Button mode="outlined" onPress={() => onDetails(item)} loading={detailLoadingId === item.id} disabled={detailLoadingId === item.id}>
+          {item.detailContext ? '查看原始明细' : '获取原始明细'}
+        </Button>
       </Card.Content>
     </Card>)}
   </View>;
@@ -171,6 +179,7 @@ function AnswerCard({
   selectedSubject,
   onClarificationRetry,
   onDetails,
+  detailLoadingId,
   onExport,
   exporting,
   isChartTurn,
@@ -182,6 +191,7 @@ function AnswerCard({
   selectedSubject: string | null;
   onClarificationRetry: () => void;
   onDetails: (item: FactoryRecommendation) => void;
+  detailLoadingId: string | null;
   onExport: (answer: FactoryAnalysisData, format: FactoryChartExportFormat) => void;
   exporting: FactoryChartExportFormat | null;
   isChartTurn: boolean;
@@ -220,7 +230,7 @@ function AnswerCard({
         <FactList facts={data.facts} />
         {charts.length > 0 && <>
           <Text variant="titleMedium" style={styles.sectionTitle}>关联图表（最多 4 类）</Text>
-          {isChartTurn ? <ChartList items={charts} onDetails={onDetails} /> : <Button mode="outlined" onPress={onActivateCharts} testID={`factory-analysis-show-charts-${turn.id}`}>查看本轮图表</Button>}
+          {isChartTurn ? <ChartList items={charts} onDetails={onDetails} detailLoadingId={detailLoadingId} /> : <Button mode="outlined" onPress={onActivateCharts} testID={`factory-analysis-show-charts-${turn.id}`}>查看本轮图表</Button>}
           <View style={styles.exportRow} testID={`factory-analysis-export-${turn.id}`}>
             <Text style={styles.muted}>导出此回答的真实图表快照：</Text>
             {(['excel', 'pdf', 'ppt'] as FactoryChartExportFormat[]).map(format => <Button key={format} mode="outlined" compact onPress={() => onExport(data, format)} loading={exporting === format} disabled={exporting !== null}>{format.toUpperCase()}</Button>)}
@@ -245,10 +255,15 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     endMonth: route.params?.endMonth ?? DEFAULT_PERIOD.endMonth,
   }), [route.params]);
   const source = route.params?.source ?? 'business';
+  const inspectionUploadId = route.params?.inspectionUploadId;
+  const costUploadId = route.params?.costUploadId;
+  const jointSelected = route.params?.uploadId != null && inspectionUploadId != null && costUploadId != null;
   const scopeKey = JSON.stringify([
     currentAuthEpoch,
     source,
     route.params?.uploadId ?? null,
+    inspectionUploadId ?? null,
+    costUploadId ?? null,
     period,
     route.params?.analysisSubject ?? null,
   ]);
@@ -262,8 +277,10 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
   const [contextExpired, setContextExpired] = useState(false);
   const [exportJob, setExportJob] = useState<ExportJob | null>(null);
   const [exporting, setExporting] = useState<FactoryChartExportFormat | null>(null);
+  const [pendingExport, setPendingExport] = useState<FactoryChartExportFile | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const requestToken = useRef(0);
   const initialSent = useRef(false);
   const scopeKeyRef = useRef(scopeKey);
@@ -271,8 +288,10 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
   const exportRef = useRef<FactoryChartCanvasHandle | null>(null);
   const exportReadyId = useRef<string | null>(null);
   const exportRenderError = useRef<string | null>(null);
+  const detailRequestToken = useRef(0);
+  const mounted = useRef(true);
 
-  const sendQuestion = useCallback(async (rawQuestion: string, options: { analysisSubject?: string; resetContext?: boolean; periodSnapshot?: FactoryChartPeriodSelection; sourceSnapshot?: FactoryChartSource } = {}) => {
+  const sendQuestion = useCallback(async (rawQuestion: string, options: { analysisSubject?: string; resetContext?: boolean; periodSnapshot?: FactoryChartPeriodSelection; sourceSnapshot?: FactoryChartSource; inspectionUploadId?: number; costUploadId?: number } = {}) => {
     const question = rawQuestion.trim();
     if (!question || loading) return;
     const requestAuth = authEpoch();
@@ -288,6 +307,8 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     setPendingQuestion(null);
     setMessages(current => [...current, { id: turnId, question }]);
     try {
+      const requestInspectionUploadId = options.inspectionUploadId ?? (requestContext ? undefined : inspectionUploadId);
+      const requestCostUploadId = options.costUploadId ?? (requestContext ? undefined : costUploadId);
       const data = await askFactoryAnalysis(requestContext
         ? {
           question,
@@ -298,6 +319,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
           question,
           source: requestSource,
           ...(route.params?.uploadId !== undefined ? { uploadId: route.params.uploadId } : {}),
+          ...(requestInspectionUploadId !== undefined && requestCostUploadId !== undefined ? { inspectionUploadId: requestInspectionUploadId, costUploadId: requestCostUploadId } : {}),
           year: requestPeriod.year,
           periodType: requestPeriod.periodType,
           startMonth: requestPeriod.startMonth,
@@ -317,7 +339,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     } finally {
       if (token === requestToken.current && requestAuth === authEpoch() && requestScope === scopeKeyRef.current) setLoading(false);
     }
-  }, [contextId, loading, period, route.params?.uploadId, scopeKey, source]);
+  }, [contextId, costUploadId, inspectionUploadId, jointSelected, loading, period, route.params?.uploadId, scopeKey, source]);
 
   useEffect(() => {
     if (scopeKeyRef.current === scopeKey) return;
@@ -372,27 +394,82 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
       periodSnapshot: acceptedPeriod || undefined,
       sourceSnapshot: latestAccepted?.source,
       analysisSubject: latestAccepted?.analysisSubject || route.params?.analysisSubject,
+      inspectionUploadId: latestAccepted?.jointUploads?.inspectionUploadId,
+      costUploadId: latestAccepted?.jointUploads?.costUploadId,
     });
   };
 
   const latestClarification = [...messages].reverse().find(turn => turn.answer?.status === 'clarification');
   const onDetails = (item: FactoryRecommendation, answer?: FactoryAnalysisData) => {
     const data = answer || [...messages].reverse().map(item => item.answer).find(value => value?.recommendations.some(candidate => candidate.id === item.id));
-    if (!data?.factoryId || !item.detailContext) return;
+    if (!data?.factoryId) return;
     const periodSnapshot = answerPeriod(data);
     if (!periodSnapshot) {
       setDetailError('回答缺少合法的结构化期间，无法打开原始明细');
       return;
     }
-    setDetailError(null);
-    navigation.navigate('FactoryChartDetails', {
-      recommendation: item,
+    const currentAuth = authEpoch();
+    const requestScope = scopeKeyRef.current;
+    const uploadId = data.source === 'upload' ? route.params?.uploadId : undefined;
+    const answerJoint = data.jointUploads;
+    const expectedInspectionUploadId = answerJoint?.inspectionUploadId ?? (jointSelected ? inspectionUploadId : undefined);
+    const expectedCostUploadId = answerJoint?.costUploadId ?? (jointSelected ? costUploadId : undefined);
+    if (jointSelected && (!answerJoint || answerJoint.inspectionUploadId !== inspectionUploadId || answerJoint.costUploadId !== costUploadId)) {
+      setDetailError('回答的联合上传范围与当前选择不一致，已拒绝打开明细');
+      return;
+    }
+    const analysisSubject = data.analysisSubject || null;
+    const contextKey = {
+      factoryId: data.factoryId,
       source: data.source,
+      periodLabel: periodSnapshot.label,
+      period: periodSnapshot,
+      authEpoch: currentAuth,
+      ...(uploadId !== undefined ? { uploadId } : {}),
+      ...(expectedInspectionUploadId !== undefined ? { inspectionUploadId: expectedInspectionUploadId, costUploadId: expectedCostUploadId } : {}),
+      analysisSubject,
+    };
+    const expiresAt = item.detailContext ? Date.parse(item.detailContext.expiresAt) : NaN;
+    if (item.detailContext?.id && Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+      setDetailError(null);
+      navigation.navigate('FactoryChartDetails', { recommendation: item, source: data.source, period: periodSnapshot, periodLabel: periodSnapshot.label, contextKey });
+      return;
+    }
+    const requestToken = ++detailRequestToken.current;
+    const refreshScope: FactoryDetailRefreshScope = {
+      factoryId: data.factoryId,
+      authEpoch: currentAuth,
+      source: data.source,
+      ...(uploadId !== undefined ? { uploadId } : {}),
+      ...(expectedInspectionUploadId !== undefined ? { inspectionUploadId: expectedInspectionUploadId, costUploadId: expectedCostUploadId } : {}),
       period: periodSnapshot,
       periodLabel: periodSnapshot.label,
-      contextKey: { factoryId: data.factoryId, source: data.source, periodLabel: periodSnapshot.label, authEpoch: authEpoch() },
+      analysisSubject,
+      candidateId: item.id,
+      unit: item.unit,
+    };
+    setDetailLoadingId(item.id);
+    setDetailError(null);
+    void getFactoryRecommendations(buildRecommendationRequest(data.source, periodSnapshot, true, true, uploadId, false, analysisSubject, [item.id], expectedInspectionUploadId, expectedCostUploadId)).then(response => {
+      if (!mounted.current || requestToken !== detailRequestToken.current || requestScope !== scopeKeyRef.current || currentAuth !== authEpoch()) return;
+      if (!response.success || !response.data) throw new Error(response.message || '原始明细暂不可用');
+      const refreshed = response.data.recommendations.find(candidate => candidate.id === item.id);
+      const nextItem = mergeRefreshedDetailContext(item, refreshed, response.data, refreshScope);
+      navigation.navigate('FactoryChartDetails', {
+        recommendation: nextItem,
+        source: data.source,
+        period: periodSnapshot,
+        periodLabel: periodSnapshot.label,
+        contextKey,
+      });
+    }).catch(error => {
+      if (mounted.current && requestToken === detailRequestToken.current && requestScope === scopeKeyRef.current && currentAuth === authEpoch()) setDetailError(error instanceof Error ? error.message : '原始明细暂不可用');
+    }).finally(() => {
+      if (mounted.current && requestToken === detailRequestToken.current) setDetailLoadingId(null);
     });
   };
+
+  useEffect(() => () => { mounted.current = false; detailRequestToken.current += 1; }, []);
 
   const startExport = async (answer: FactoryAnalysisData, format: FactoryChartExportFormat) => {
     const periodSnapshot = answerPeriod(answer);
@@ -450,7 +527,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
       });
       const file = await exportFactoryCharts(format, payload);
       assertCurrent();
-      await shareFactoryChartFile(file);
+      setPendingExport(file);
       assertCurrent();
     } catch (error) {
       if (exportScope === scopeKeyRef.current && exportEpoch === scopeEpochRef.current && exportAuth === authEpoch()) {
@@ -464,6 +541,19 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     }
   };
 
+  const deliverExport = async (destination: 'share' | 'save') => {
+    const file = pendingExport;
+    if (!file) return;
+    setExportError(null);
+    try {
+      if (destination === 'share') await shareFactoryChartFile(file);
+      else if (!await saveFactoryChartFile(file)) return;
+      setPendingExport(null);
+    } catch (deliveryError) {
+      setExportError(deliveryError instanceof Error ? deliveryError.message : '文件交付失败');
+    }
+  };
+
   return <ScreenWrapper testID="factory-analysis-chat-screen" statusBarTranslucent={false}>
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView testID="factory-analysis-thread" style={styles.thread} contentContainerStyle={styles.threadContent} keyboardShouldPersistTaps="handled">
@@ -474,7 +564,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
         {messages.map(turn => <View key={turn.id}>
           {turn.question && <View style={styles.userQuestion}><Text style={styles.userQuestionText}>{turn.question}</Text></View>}
           {turn.error && <Card style={styles.errorCard}><Card.Content><Text style={styles.errorText}>{turn.error}</Text>{contextExpired ? <Button mode="contained" onPress={retryAfterClearingContext} testID="factory-analysis-clear-context-retry">清除上下文并重试</Button> : <Button onPress={() => void sendQuestion(turn.question || '')}>再试一次</Button>}</Card.Content></Card>}
-          <AnswerCard turn={turn} onFollowUp={question => void sendQuestion(question)} onSubjectSelect={setSelectedSubject} selectedSubject={selectedSubject} onClarificationRetry={() => { if (latestClarification?.answer?.contextId && selectedSubject) { setContextId(latestClarification.answer.contextId); void sendQuestion(latestClarification.question || pendingQuestion || '', { analysisSubject: selectedSubject }); } }} onDetails={item => onDetails(item, turn.answer)} onExport={(answer, format) => void startExport(answer, format)} exporting={exporting} isChartTurn={turn.id === activeChartTurnId} onActivateCharts={() => setActiveChartTurnId(turn.id)} />
+          <AnswerCard turn={turn} onFollowUp={question => void sendQuestion(question)} onSubjectSelect={setSelectedSubject} selectedSubject={selectedSubject} onClarificationRetry={() => { if (latestClarification?.answer?.contextId && selectedSubject) { setContextId(latestClarification.answer.contextId); void sendQuestion(latestClarification.question || pendingQuestion || '', { analysisSubject: selectedSubject }); } }} onDetails={item => onDetails(item, turn.answer)} detailLoadingId={detailLoadingId} onExport={(answer, format) => void startExport(answer, format)} exporting={exporting} isChartTurn={turn.id === activeChartTurnId} onActivateCharts={() => setActiveChartTurnId(turn.id)} />
         </View>)}
         {loading && <Text style={styles.loading} testID="factory-analysis-loading">正在读取授权图表并生成分析…</Text>}
         {exportError && <View style={styles.errorBox} testID="factory-analysis-export-error"><Text style={styles.errorText}>导出未完成：{exportError}</Text></View>}
@@ -504,6 +594,15 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
           <Button onPress={() => { scopeEpochRef.current += 1; setExportJob(null); setExporting(null); }}>取消导出</Button>
         </View>
       </View>
+    </Modal>
+    <Modal visible={pendingExport !== null} transparent animationType="none" onRequestClose={() => setPendingExport(null)}>
+      <View style={styles.exportOverlay}><View style={styles.exportPreview}>
+        <Text variant="titleMedium">导出完成：选择文件去向</Text>
+        <Text style={styles.muted}>{pendingExport?.name}</Text>
+        {Platform.OS === 'android' && <Button mode="contained" onPress={() => void deliverExport('save')} testID="factory-analysis-export-save">保存到手机</Button>}
+        <Button mode="outlined" onPress={() => void deliverExport('share')} testID="factory-analysis-export-share">分享</Button>
+        <Button onPress={() => setPendingExport(null)} testID="factory-analysis-export-cancel">取消</Button>
+      </View></View>
     </Modal>
   </ScreenWrapper>;
 }

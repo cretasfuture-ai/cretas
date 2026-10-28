@@ -10,6 +10,7 @@ from datetime import date
 import pandas as pd
 import smartbi.config as config
 from .engine import Dataset
+from . import settled_sources
 
 PRODUCTION_SQL = """
 SELECT stat_date AS "日期", source_pk AS "来源主键", batch_number AS "批次", product_type_id AS "产品ID",
@@ -138,12 +139,54 @@ async def load(factory_id, request, can_price):
     datasets = [dataset for dataset, _ in results if dataset is not None]
     errors = [error for _, error in results if error]
     production = production_result[0]
+    # SAFETY_STOCK/interim-settle facts use the real production/FG lineage and
+    # may legitimately have an IN_PROGRESS production_batches row.  Load this
+    # read-only source before the optional quality join so its stable batch keys
+    # are included in the same bounded relationship query.
+    settled_datasets, settled_errors, settled_gaps = await settled_sources.load(
+        factory_id, request, can_price
+    )
+    # The legacy completed-batch fact remains authoritative for keys it owns.
+    # Do not double-count a row that happens to be visible through both paths;
+    # retain an explicit gap instead of selecting an arbitrary representation.
+    completed_keys = set()
+    if production is not None and '来源主键' in production.frame:
+        completed_keys = {str(value).strip() for value in production.frame['来源主键'].dropna()
+                          if str(value).strip()}
+    for dataset in settled_datasets:
+        if completed_keys and '来源主键' in dataset.frame:
+            keys = dataset.frame['来源主键'].map(lambda value: str(value).strip()
+                                                 if pd.notna(value) else '')
+            overlap = set(keys) & completed_keys
+            if overlap:
+                settled_gaps.append({'id': 'settled.production.overlap',
+                                     'source': 'settled-production',
+                                     'missing': ['已完成生产事实已覆盖稳定批次键，settled副本未重复累计'],
+                                     'keys': sorted(overlap)})
+                dataset.frame = dataset.frame.loc[~keys.isin(overlap)].reset_index(drop=True)
+    datasets.extend(settled_datasets)
+    errors.extend(settled_errors)
+    gaps.extend(settled_gaps)
+    join_production = production
+    if settled_datasets:
+        from .engine import Dataset as _Dataset
+        frames = [dataset.frame for dataset in [production, *settled_datasets]
+                  if dataset is not None and not dataset.frame.empty]
+        if frames:
+            columns = list(dict.fromkeys(column for frame in frames for column in frame.columns))
+            normalized = [frame.reindex(columns=columns) for frame in frames]
+            join_production = _Dataset(pd.concat(normalized, ignore_index=True),
+                                       production.source if production is not None
+                                       else 'production · 已停产安全库存小结事实',
+                                       currency='CNY')
     # A product scope is required before reading this optional relationship.
     # Do not create a chart or perform an extra join query per SKU on startup.
     if (can_price and getattr(request, 'guided', False) and getattr(request, 'analysis_subject', None)
-            and production is not None and '来源主键' in production.frame and not production.frame.empty):
+            and join_production is not None and '来源主键' in join_production.frame
+            and not join_production.frame.empty):
         from .engine import analysis_subjects, scope_datasets
-        selected, _, _ = scope_datasets([production], request, analysis_subjects([production], can_price), can_price)
+        selected, _, _ = scope_datasets([join_production], request,
+                                         analysis_subjects([join_production], can_price), can_price)
         production = selected[0] if selected else None
         keys = (list(dict.fromkeys(str(v).strip() for v in production.frame['来源主键'].dropna() if str(v).strip()))
                 if production is not None else [])

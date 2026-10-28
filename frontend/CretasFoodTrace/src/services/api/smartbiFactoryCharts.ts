@@ -148,7 +148,12 @@ export async function getFactoryChartUploads(): Promise<FactoryChartUpload[]> {
   if (!Array.isArray(rows)) throw new Error('SmartBI upload history response is malformed');
   return rows
     .filter(upload => String(upload.status || '').toUpperCase() === 'COMPLETED')
-    .map(upload => ({ id: Number(upload.id), fileName: upload.fileName }))
+    .map(upload => {
+      const id = Number(upload.id);
+      const fileName = upload.fileName;
+      const sheetName = typeof upload.sheetName === 'string' && upload.sheetName.trim() ? upload.sheetName.trim() : undefined;
+      return sheetName ? { id, fileName, sheetName } : { id, fileName };
+    })
     .filter(upload => Number.isInteger(upload.id) && upload.id > 0 && typeof upload.fileName === 'string' && upload.fileName.length > 0) as FactoryChartUpload[];
 }
 
@@ -223,4 +228,22 @@ export async function shareFactoryChartFile(file: FactoryChartExportFile): Promi
   if (!(await Sharing.isAvailableAsync())) throw new Error('系统不支持文件分享');
   assertIdentity(identity);
   await Sharing.shareAsync(file.uri, { mimeType: file.mimeType, dialogTitle: file.name });
+}
+
+/** Save an exported file through Android's user-selected Storage Access Framework directory. */
+export async function saveFactoryChartFile(file: FactoryChartExportFile): Promise<{ uri: string } | null> {
+  const identity = captureIdentity();
+  if (file.factoryId !== identity.factoryId || file.userId !== identity.userId || file.role !== identity.role) {
+    throw new Error('SmartBI file owner, role, or factory mismatch');
+  }
+  const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+  assertIdentity(identity);
+  if (!permissions.granted || !permissions.directoryUri) return null;
+  const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
+  assertIdentity(identity);
+  const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(permissions.directoryUri, file.name, file.mimeType);
+  assertIdentity(identity);
+  await FileSystem.StorageAccessFramework.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+  assertIdentity(identity);
+  return { uri: targetUri };
 }
