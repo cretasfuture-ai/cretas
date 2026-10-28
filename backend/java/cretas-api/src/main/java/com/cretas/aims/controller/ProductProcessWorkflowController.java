@@ -120,13 +120,14 @@ public class ProductProcessWorkflowController {
     /**
      * 只读: 计划固定的那一版工序路线(哪怕它已被新版本替换、不再是启用版本)。
      * 计划列表不能只在「当前启用」里找, 否则旧计划会显示「未读取到计划固定的工序路线」。
-     * 字面量段 /pinned 与 GET /{productTypeId} 不冲突。
+     * 工艺保密: 按 workflowId 经 Workflow 解析所属产品与终端成品, 受保护的无权者 403 (比现行 resolve-by-outputs 更严)。
      */
-    @GetMapping("/pinned")
+    @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.WORKFLOW_PATH, name = "workflowId")
+    @GetMapping("/pinned/{workflowId}")
     @Operation(summary = "只读: 读取计划固定的 Workflow 版本路线预览(不要求仍为启用版本)")
     public ApiResponse<WorkflowOutputResolutionDTO.Candidate> findPinned(
             @PathVariable String factoryId,
-            @RequestParam Long workflowId,
+            @PathVariable Long workflowId,
             @RequestParam Integer version) {
         return ApiResponse.success(
                 resolutionService.findPinnedCandidate(factoryId, workflowId, version).orElse(null));

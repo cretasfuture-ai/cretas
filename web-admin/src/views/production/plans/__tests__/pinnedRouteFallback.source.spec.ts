@@ -14,7 +14,7 @@ const api = strip(readFileSync(resolve(process.cwd(), 'src/api/productionPlan.ts
 describe('生产计划列表: 固定版本路线回落读取', () => {
   it('接口指向 /pinned 且带 workflowId + version', () => {
     expect(api).toContain('/product-process-workflows/pinned');
-    expect(api).toMatch(/workflowId=.*version=/s);
+    expect(api).toMatch(/pinned\/\$\{encodeURIComponent\(String\(workflowId\)\)\}.*version=/s);
   });
 
   it('未在启用候选中命中固定版本时调用 findPinnedWorkflow, 且在报错文案之前', () => {
