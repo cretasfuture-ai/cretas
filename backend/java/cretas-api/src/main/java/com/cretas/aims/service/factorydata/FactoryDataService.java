@@ -330,6 +330,11 @@ public class FactoryDataService {
     /**
      * 把整厂数据写成 ZIP 流。出错时回执标 FAILED 并抛出 —— 流已经开始写的话, 包里没有 manifest.json,
      * 收件人据此判断它不完整。
+     *
+     * <p>⚠️ 工艺保密的明示例外 (Steve 2026-10-28 裁定 A): 这是把数据完整交还工厂的导出,
+     * <b>不</b>经过工艺保密裁剪 —— 平台超级管理员执行整厂导出时会看到保密产品的配方和成本。
+     * 每次导出都有回执留痕 ({@link FactoryDataRequestLedger})。对外承诺不能写成「平台任何情况下都看不到配方」;
+     * 见 docs/security/factory-data-export-and-erasure-runbook.md「工艺保密」一节。</p>
      */
     public void writeExport(long requestId, AuthenticatedActor actor, String factoryId, AttachmentMode mode,
                             Set<Format> formats, OutputStream rawOut) throws IOException {
