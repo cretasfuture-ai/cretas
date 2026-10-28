@@ -193,7 +193,7 @@ public class LineCapacityEquipmentCheck {
                 "所需设备 " + String.join("、", up) + " 均不在检修/报废 (未核对设备排程)");
     }
 
-    static CapacityUnit parseUnit(String unit) {
+    public static CapacityUnit parseUnit(String unit) {
         if (unit == null || unit.isBlank()) {
             return null;
         }
@@ -204,7 +204,7 @@ public class LineCapacityEquipmentCheck {
         }
     }
 
-    static String unitLabel(CapacityUnit u) {
+    public static String unitLabel(CapacityUnit u) {
         return switch (u) {
             case PIECE -> "件";
             case KG -> "kg";

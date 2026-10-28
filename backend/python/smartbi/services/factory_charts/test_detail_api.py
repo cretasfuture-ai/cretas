@@ -28,8 +28,10 @@ def clean_details(monkeypatch):
     # Router/auth/engine contracts use a deterministic unit store here. The
     # actual PostgreSQL store and independent workers have a separate PG test.
     async def register(*args): return details.register(*args)
-    async def requires(*args): return details.requires_finance(*args)
-    async def page(*args): return details.page(*args)
+    async def requires(context_id, owner, auth_request=None):
+        return details.requires_finance(context_id, owner)
+    async def page(payload, owner, can_price, finance_allowed, auth_request=None):
+        return details.page(payload, owner, can_price, finance_allowed)
     monkeypatch.setattr(detail_store, 'register_shared', register)
     monkeypatch.setattr(detail_store, 'requires_finance_shared', requires)
     monkeypatch.setattr(detail_store, 'page_shared', page)

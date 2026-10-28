@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface ProductionLineCapacityConfigRepository extends JpaRepository<ProductionLineCapacityConfig, Long> {
@@ -19,4 +20,12 @@ public interface ProductionLineCapacityConfigRepository extends JpaRepository<Pr
     List<ProductionLineCapacityConfig> findEffectiveForProduct(@Param("factoryId") String factoryId,
                                                               @Param("productTypeId") String productTypeId,
                                                               @Param("at") LocalDateTime at);
+
+    List<ProductionLineCapacityConfig> findByFactoryId(String factoryId);
+
+    Optional<ProductionLineCapacityConfig> findByIdAndFactoryId(Long id, String factoryId);
+
+    /** 当前在用的那一行; productTypeId 为 null 时按 IS NULL 匹配 (通用行)。 */
+    Optional<ProductionLineCapacityConfig> findByFactoryIdAndProductionLineIdAndProductTypeId(
+            String factoryId, String productionLineId, String productTypeId);
 }

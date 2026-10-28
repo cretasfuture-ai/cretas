@@ -21,7 +21,7 @@ public class FactoryChartAnalysisTool extends AbstractBusinessTool implements Eg
     private static final String TOOL_NAME = "smartbi_factory_analysis";
     private static final Set<String> ALLOWED_PARAMETERS = Set.of(
             "question", "source", "uploadId", "year", "periodType", "startMonth",
-            "endMonth", "analysisSubject", "contextId");
+            "endMonth", "analysisSubject", "contextId", "inspectionUploadId", "costUploadId");
 
     private final PythonSmartBIClient pythonClient;
     private final FactoryChartAnalysisFailureRelay failureRelay;
@@ -40,16 +40,18 @@ public class FactoryChartAnalysisTool extends AbstractBusinessTool implements Eg
     public Map<String, Object> getParametersSchema() {
         return Map.of(
                 "type", "object",
-                "properties", Map.of(
-                        "question", Map.of("type", "string", "minLength", 1, "maxLength", 1000),
-                        "source", Map.of("type", "string", "enum", List.of("business", "upload")),
-                        "uploadId", Map.of("type", "integer"),
-                        "year", Map.of("type", "integer"),
-                        "periodType", Map.of("type", "string", "enum", List.of("all", "year", "month_range")),
-                        "startMonth", Map.of("type", "integer", "minimum", 1, "maximum", 12),
-                        "endMonth", Map.of("type", "integer", "minimum", 1, "maximum", 12),
-                        "analysisSubject", Map.of("type", "string", "maxLength", 200),
-                        "contextId", Map.of("type", "string", "maxLength", 128)),
+                "properties", Map.ofEntries(
+                        Map.entry("question", Map.of("type", "string", "minLength", 1, "maxLength", 1000)),
+                        Map.entry("source", Map.of("type", "string", "enum", List.of("business", "upload"))),
+                        Map.entry("uploadId", Map.of("type", "integer")),
+                        Map.entry("inspectionUploadId", Map.of("type", "integer", "minimum", 1)),
+                        Map.entry("costUploadId", Map.of("type", "integer", "minimum", 1)),
+                        Map.entry("year", Map.of("type", "integer")),
+                        Map.entry("periodType", Map.of("type", "string", "enum", List.of("all", "year", "month_range"))),
+                        Map.entry("startMonth", Map.of("type", "integer", "minimum", 1, "maximum", 12)),
+                        Map.entry("endMonth", Map.of("type", "integer", "minimum", 1, "maximum", 12)),
+                        Map.entry("analysisSubject", Map.of("type", "string", "maxLength", 200)),
+                        Map.entry("contextId", Map.of("type", "string", "maxLength", 128))),
                 "required", List.of("question"));
     }
 
@@ -70,6 +72,8 @@ public class FactoryChartAnalysisTool extends AbstractBusinessTool implements Eg
         copy(request, params, "question", "question");
         copy(request, params, "source", "source");
         copy(request, params, "uploadId", "upload_id");
+        copy(request, params, "inspectionUploadId", "inspection_upload_id");
+        copy(request, params, "costUploadId", "cost_upload_id");
         copy(request, params, "year", "year");
         copy(request, params, "periodType", "period_type");
         copy(request, params, "startMonth", "start_month");

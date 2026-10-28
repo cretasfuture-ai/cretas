@@ -805,23 +805,41 @@ public class SchedulingController {
             @Parameter(description = "产品类型ID", example = "PT-001")
             @RequestParam(required = false) String productTypeId,
             @Parameter(description = "需求数量", example = "100")
-            @RequestParam(required = false) Integer quantity,
+            @RequestParam(required = false) java.math.BigDecimal quantity,
             @Parameter(description = "截止时间（ISO格式）", example = "2025-01-15T18:00:00")
-            @RequestParam(required = false) String deadline) {
+            @RequestParam(required = false) String deadline,
+            @Parameter(description = "数量单位 PIECE / KG / BATCH; 不传则产能判为未验证", example = "KG")
+            @RequestParam(required = false) String quantityUnit,
+            @Parameter(description = "指定产线 ID; 只按这条产线核对产能")
+            @RequestParam(required = false) String preferredProductionLineId) {
         log.info("获取可用插单时段: factoryId={}, productTypeId={}, quantity={}",
                 factoryId, productTypeId, quantity);
 
         GetInsertSlotsRequest request = new GetInsertSlotsRequest();
         request.setProductTypeId(productTypeId);
         if (quantity != null) {
-            request.setRequiredQuantity(java.math.BigDecimal.valueOf(quantity));
+            request.setRequiredQuantity(quantity);
         }
         if (deadline != null) {
             request.setDeadline(java.time.LocalDateTime.parse(deadline));
         }
+        applyUnitAndLine(request, quantityUnit, preferredProductionLineId);
 
         List<InsertSlotDTO> slots = urgentInsertService.getAvailableSlots(factoryId, request);
         return ApiResponse.success("获取成功", slots);
+    }
+
+    /** GET 入口和 POST 请求体一样带上数量单位与指定产线; 单位不认识直接 400, ⛔ 不当成没传 */
+    private static void applyUnitAndLine(GetInsertSlotsRequest request, String quantityUnit, String preferredProductionLineId) {
+        if (quantityUnit != null && !quantityUnit.isBlank()) {
+            if (com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck.parseUnit(quantityUnit) == null) {
+                throw new BusinessException(400, "数量单位只能是 PIECE / KG / BATCH: " + quantityUnit);
+            }
+            request.setQuantityUnit(quantityUnit.trim());
+        }
+        if (preferredProductionLineId != null && !preferredProductionLineId.isBlank()) {
+            request.setPreferredProductionLineId(preferredProductionLineId.trim());
+        }
     }
 
     /**
@@ -855,20 +873,25 @@ public class SchedulingController {
             @Parameter(description = "产品类型ID", example = "PT-001")
             @RequestParam(required = false) String productTypeId,
             @Parameter(description = "需求数量", example = "100")
-            @RequestParam(required = false) Integer quantity,
+            @RequestParam(required = false) java.math.BigDecimal quantity,
             @Parameter(description = "截止时间（ISO格式）", example = "2025-01-15T18:00:00")
-            @RequestParam(required = false) String deadline) {
+            @RequestParam(required = false) String deadline,
+            @Parameter(description = "数量单位 PIECE / KG / BATCH; 不传则产能判为未验证", example = "KG")
+            @RequestParam(required = false) String quantityUnit,
+            @Parameter(description = "指定产线 ID; 只按这条产线核对产能")
+            @RequestParam(required = false) String preferredProductionLineId) {
         log.info("分析插单影响: factoryId={}, slotId={}, productTypeId={}, quantity={}",
                 factoryId, slotId, productTypeId, quantity);
 
         GetInsertSlotsRequest request = new GetInsertSlotsRequest();
         request.setProductTypeId(productTypeId);
         if (quantity != null) {
-            request.setRequiredQuantity(java.math.BigDecimal.valueOf(quantity));
+            request.setRequiredQuantity(quantity);
         }
         if (deadline != null) {
             request.setDeadline(java.time.LocalDateTime.parse(deadline));
         }
+        applyUnitAndLine(request, quantityUnit, preferredProductionLineId);
 
         java.util.Map<String, Object> impact = urgentInsertService.analyzeInsertImpact(factoryId, slotId, request);
         return ApiResponse.success("分析完成", impact);

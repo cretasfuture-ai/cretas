@@ -192,17 +192,23 @@ async def test_real_api_tenant_and_role_guard_before_data_load(monkeypatch, fact
     app = FastAPI()
     @app.middleware('http')
     async def identity(r, call_next):
-        r.state.factory_id, r.state.role = factory, role
+        r.state.factory_id, r.state.user_id, r.state.role = factory, 1309, role
         return await call_next(r)
     app.include_router(api.router)
     calls = []
-    async def load(req, fid):
+    async def load(req, fid, auth_request=None, require_cost_authorization=False):
+        assert auth_request is not None
+        assert auth_request.state.factory_id == fid == 'F006'
+        assert auth_request.state.user_id == 1309
+        if require_cost_authorization:
+            assert auth_request.state.role == 'factory_super_admin'
         calls.append(fid)
         return pd.DataFrame(rows())
     monkeypatch.setattr(api, '_load_data', load)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        r = await client.post('/factory-recommendations', json={'source': 'upload', 'upload_id': 5258, 'factory_id': claimed, 'use_ai': False})
-    assert r.status_code == expected
+        r = await client.post('/factory-recommendations', json={'source': 'upload', 'upload_id': 5258, 'factory_id': claimed, 'use_ai': False,
+                                                                'detail_candidate_ids': []})
+    assert r.status_code == expected, r.text
     if expected == 200:
         assert r.json()['data']['factoryId'] == 'F006'
         assert chart(r.json()['data']['recommendations'], 'production.quality')['kpis'][0]['value'] == '91.25'

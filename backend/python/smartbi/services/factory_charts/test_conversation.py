@@ -548,10 +548,13 @@ async def test_each_followup_revalidates_current_data_finance_and_source_errors(
             'year': 2025, 'periodType': 'year', 'startMonth': 1, 'endMonth': 12,
         })
         body = follow.json()['data']
-        assert len(calls) == 3
+        # Each AI answer performs a second authorized read for the selected
+        # chart so only its immutable detail context is allocated.
+        assert len(calls) == 5
         assert calls[-1].year == 2025 and calls[-1].period_type == 'year'
+        assert calls[-1].detail_candidate_ids == ['production.output:line']
         assert body['sourceErrors'] == [{'source': 'cost', 'message': '权限已收回'}]
-        assert body['facts'][0]['value'] == '13'
+        assert body['facts'][0]['value'] == '15'
 
 
 @pytest.mark.asyncio

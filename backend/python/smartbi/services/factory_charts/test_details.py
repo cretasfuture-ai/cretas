@@ -125,6 +125,42 @@ def test_candidate_unit_is_an_exact_scope_for_multi_unit_source():
     assert details.page({"context_id": result[1]["detailContext"]["id"], "page": 1, "page_size": 10}, owner, True, True)["data"]["rows"][0]["单位"] == "盒"
 
 
+def test_trusted_point_dimension_is_exact_and_preserves_duplicate_labels_and_units():
+    owner = ("F006", 12, "factory_super_admin")
+    frame = details_dataset(pd.DataFrame([
+        {"日期": "2026-01-01", "产品ID": "sku-a", "产品（单位）": "sku-a（kg）", "数量": 2, "数量单位": "kg"},
+        {"日期": "2026-01-02", "产品ID": "sku-a", "产品（单位）": "sku-a（kg）", "数量": 3, "数量单位": "kg"},
+        {"日期": "2026-01-03", "产品ID": "sku-a", "产品（单位）": "sku-a（盒）", "数量": 20, "数量单位": "盒"},
+    ]), "finished-goods-inventory · current")
+    item = {"id": "finished_goods.inventory.current", "title": "当前库存", "source": frame["source"],
+            "unit": "数量", "engine": {"pointDimension": "产品（单位）", "detailUnitPolicy": "trusted_quantity_rows"},
+            "chart": {"echartsOption": {"xAxis": {"data": ["sku-a（kg）", "sku-a（盒）"]}}},
+            "tableData": [{"label": "sku-a（kg）", "value": 5}, {"label": "sku-a（盒）", "value": 20}]}
+    context = details.register([item], [frame], RequestAll(), owner, True)[0]["detailContext"]["id"]
+    result = details.page({"context_id": context, "page": 1, "page_size": 10,
+                           "point": {"name": "sku-a（kg）"}}, owner, True, True)
+    assert result["data"]["total"] == 2
+    assert {row["数量单位"] for row in result["data"]["rows"]} == {"kg"}
+
+
+def test_trusted_customer_source_point_dimension_does_not_alias_order_channel():
+    owner = ("F006", 12, "factory_super_admin")
+    frame = details_dataset(pd.DataFrame([
+        {"日期": "2026-01-01", "客户来源": "REFERRAL", "订单行ID": "l1", "订单行小计": 10},
+        {"日期": "2026-01-02", "客户来源": "REFERRAL", "订单行ID": "l2", "订单行小计": 15},
+        {"日期": "2026-01-03", "客户来源": "WEBSITE", "订单行ID": "l3", "订单行小计": 20},
+    ]), "customer-source-sales · acquisition")
+    item = {"id": "sales.customer_source", "title": "客户来源销售金额（获客归因，非订单销售渠道）",
+            "source": frame["source"], "unit": "元", "engine": {"pointDimension": "客户来源"},
+            "chart": {"echartsOption": {"xAxis": {"data": ["REFERRAL", "WEBSITE"]}}},
+            "tableData": [{"label": "REFERRAL", "value": 25}, {"label": "WEBSITE", "value": 20}]}
+    context = details.register([item], [frame], RequestAll(), owner, True)[0]["detailContext"]["id"]
+    result = details.page({"context_id": context, "page": 1, "page_size": 10,
+                           "point": {"name": "REFERRAL"}}, owner, True, True)
+    assert result["data"]["total"] == 2
+    assert {row["客户来源"] for row in result["data"]["rows"]} == {"REFERRAL"}
+
+
 def test_money_or_ratio_display_uses_single_source_unit_and_rejects_ambiguous_units():
     owner = ("F006", 12, "factory_super_admin")
     single = details_dataset(pd.DataFrame([

@@ -3,7 +3,10 @@ import { Text } from 'react-native';
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import FactoryChartsScreen from '../../../screens/smartbi/FactoryChartsScreen';
 import { useAuthStore } from '../../../store/authStore';
-import { exportFactoryCharts, shareFactoryChartFile, getFactoryChartSelection, getFactoryChartUploads, getFactoryRecommendations, saveFactoryChartSelection } from '../../../services/api/smartbiFactoryCharts';
+import { exportFactoryCharts, saveFactoryChartFile, shareFactoryChartFile, getFactoryChartSelection, getFactoryChartUploads, getFactoryRecommendations, saveFactoryChartSelection } from '../../../services/api/smartbiFactoryCharts';
+
+const mockNavigate = jest.fn();
+jest.mock('@react-navigation/native', () => ({ ...jest.requireActual('@react-navigation/native'), useNavigation: () => ({ navigate: mockNavigate }) }));
 
 const mockCapturePng = jest.fn<Promise<string>, [string]>();
 const firstPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lK0AAAAASUVORK5CYII=';
@@ -15,6 +18,7 @@ jest.mock('../../../services/api/smartbiFactoryCharts', () => ({
   saveFactoryChartSelection: jest.fn(),
   getFactoryChartUploads: jest.fn(),
   exportFactoryCharts: jest.fn(),
+  saveFactoryChartFile: jest.fn(),
   shareFactoryChartFile: jest.fn(),
 }));
 
@@ -37,7 +41,7 @@ const inventoryRecommendation = { ...recommendation, id: 'inventory', title: '�
 const productionRecommendation = { ...recommendation, id: 'production', title: '生产效率', domain: '生产', analysis: { familyId: 'production', familyLabel: '生产效率' }, chart: { chartType: 'bar_horizontal', echartsOption: { testCandidate: 'production', series: [] } } };
 
 function successData() {
-  return { factoryId: 'F006', source: 'business', analysisSubject: null, sourceLabel: '业务数据', period: { label: '全部历史' }, defaultSelection: ['sales'], ranking: { mode: 'rule', reason: '' }, recommendations: [recommendation, optionalRecommendation], unavailable: [], sourceErrors: [] };
+  return { factoryId: 'F006', source: 'business', uploadId: null, analysisSubject: null, sourceLabel: '业务数据', period: { label: '全部历史', year: new Date().getFullYear(), periodType: 'all' as const, startMonth: 1, endMonth: 12 }, defaultSelection: ['sales'], ranking: { mode: 'rule' as const, reason: '' }, recommendations: [recommendation, optionalRecommendation], unavailable: [], sourceErrors: [] };
 }
 
 describe('FactoryChartsScreen', () => {
@@ -49,12 +53,45 @@ describe('FactoryChartsScreen', () => {
     mockCapturePng.mockReset().mockImplementation(async id => id === 'sales' ? firstPng : secondPng);
     (exportFactoryCharts as jest.Mock).mockResolvedValue({ uri: 'file:///cache/result.pdf', name: 'result.pdf', mimeType: 'application/pdf', size: 1000, factoryId: 'F006', userId: '1309', role: 'factory_super_admin' });
     (shareFactoryChartFile as jest.Mock).mockResolvedValue(undefined);
+    (saveFactoryChartFile as jest.Mock).mockResolvedValue({ uri: 'content://saved/result.pdf' });
+  });
+
+  it.each(['source', 'upload', 'period', 'subject', 'unmount'] as const)('drops a pending detail refresh when the %s scope changes', async kind => {
+    const missing = { ...recommendation, detailContext: undefined, detailSnapshotKey: 'snapshot-1' };
+    const initial = { ...successData(), recommendations: [missing], subjects: [{ id: 'sku-1', label: '产品一' }] };
+    let resolveRefresh!: (value: unknown) => void;
+    (getFactoryRecommendations as jest.Mock)
+      .mockResolvedValueOnce({ success: true, data: initial })
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
+    const screen = render(<FactoryChartsScreen />);
+    await waitFor(() => expect(screen.getByTestId('factory-details-sales')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-details-sales'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledTimes(2));
+    if (kind === 'source' || kind === 'upload') {
+      if (kind === 'upload') (getFactoryChartUploads as jest.Mock).mockResolvedValueOnce([{ id: 42, fileName: 'upload.xlsx' }]);
+      fireEvent.press(screen.getByText('上传数据'));
+      if (kind === 'upload') {
+        await waitFor(() => expect(screen.getByText('upload.xlsx')).toBeTruthy());
+        fireEvent.press(screen.getByText('upload.xlsx'));
+      }
+    }
+    if (kind === 'period') fireEvent.changeText(screen.getByLabelText('年份'), '2025');
+    if (kind === 'subject') {
+      fireEvent.press(screen.getByText('销售'));
+      fireEvent.press(screen.getByText('推荐组合（最多 4 张）'));
+      fireEvent.press(screen.getByText('产品一'));
+    }
+    if (kind === 'unmount') screen.unmount();
+    resolveRefresh({ success: true, data: { ...initial, recommendations: [{ ...missing, detailContext: { id: 'ctx-new', expiresAt: '2099-01-01T00:00:00Z' } }] } });
+    await act(async () => { await Promise.resolve(); });
+    expect(mockNavigate).not.toHaveBeenCalled();
+    if (kind !== 'unmount') screen.unmount();
   });
 
   it('shows retry after recommendation failure and recovers asynchronously', async () => {
     (getFactoryRecommendations as jest.Mock).mockRejectedValueOnce(new Error('network down')).mockResolvedValueOnce({ success: true, data: successData() });
     const screen = render(<FactoryChartsScreen />);
-    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledWith(expect.objectContaining({ guided: true, analysis_subject: null })));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledWith(expect.objectContaining({ guided: true, analysis_subject: null, detail_candidate_ids: [] })));
     await waitFor(() => expect(screen.getByText('network down')).toBeTruthy());
     fireEvent.press(screen.getByText('重试'));
     await waitFor(() => expect(screen.getAllByText('销售渠道').length).toBeGreaterThan(0));
@@ -164,6 +201,8 @@ describe('FactoryChartsScreen', () => {
     const screen = render(<FactoryChartsScreen />);
     await waitFor(() => expect(screen.getByTestId('factory-chart-card-sales')).toBeTruthy());
     fireEvent.press(screen.getByText('PDF'));
+    await waitFor(() => expect(screen.getByTestId('factory-chart-export-share')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-chart-export-share'));
     await waitFor(() => expect(shareFactoryChartFile).toHaveBeenCalledTimes(1));
     expect(mockCapturePng.mock.calls).toEqual([['sales'], ['optional']]);
     expect(exportFactoryCharts).toHaveBeenCalledWith('pdf', expect.objectContaining({
@@ -230,6 +269,24 @@ describe('FactoryChartsScreen', () => {
       screen.unmount();
       await act(async () => { useAuthStore.setState(original, true); });
     }
+  });
+
+  it('requires explicit production, inspection and cost uploads and forwards all three IDs', async () => {
+    const uploadData = { ...successData(), source: 'upload' as const, uploadId: 101, sourceLabel: '本厂上传报表 #101', jointUploads: { inspectionUploadId: 102, costUploadId: 103 } };
+    (getFactoryChartUploads as jest.Mock).mockResolvedValue([{ id: 101, fileName: '同一上传.xlsx', sheetName: '生产' }, { id: 102, fileName: '同一上传.xlsx', sheetName: '质检' }, { id: 103, fileName: '同一上传.xlsx', sheetName: '成本' }]);
+    (getFactoryChartSelection as jest.Mock).mockImplementation(async source => ({ success: true, data: { factoryId: 'F006', source, selectedIds: null } }));
+    (getFactoryRecommendations as jest.Mock).mockImplementation(async request => ({ success: true, data: { ...uploadData, jointUploads: request.inspection_upload_id ? { inspectionUploadId: request.inspection_upload_id, costUploadId: request.cost_upload_id } : null } }));
+    const screen = render(<FactoryChartsScreen />);
+    fireEvent.press(screen.getByText('上传数据'));
+    await waitFor(() => expect(screen.getByText('同一上传.xlsx · 生产')).toBeTruthy());
+    expect(screen.getByText('同一上传.xlsx · 质检')).toBeTruthy();
+    expect(screen.getByText('同一上传.xlsx · 成本')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('factory-upload-production-101'));
+    fireEvent.press(screen.getByText('生产+质检+成本'));
+    fireEvent.press(screen.getByTestId('factory-upload-inspection-102'));
+    fireEvent.press(screen.getByTestId('factory-upload-cost-103'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ upload_id: 101, inspection_upload_id: 102, cost_upload_id: 103 })));
+    expect(screen.getByText(/不会按文件名自动推断角色/)).toBeTruthy();
   });
 
   it('keeps selected charts reachable before hundreds of optional gap explanations without hiding source errors', async () => {

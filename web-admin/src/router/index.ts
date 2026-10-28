@@ -2104,6 +2104,13 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
             meta: { requiresAuth: true, title: '计划详情', module: 'scheduling', hidden: true, hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
+            // S4 2026-10-27: 产线 (可细到产品) 每小时产能及单位、产品所需设备; 插单可行性只读这里
+            path: 'line-capacity',
+            name: 'SchedulingLineCapacity',
+            component: () => import('@/views/scheduling/line-capacity/index.vue'),
+            meta: { requiresAuth: true, title: '产线产能与设备', module: 'scheduling', hideForFactoryTypes: ['LOGISTICS'] }
+          },
+          {
             path: 'realtime',
             name: 'SchedulingRealtime',
             component: () => import('@/views/scheduling/realtime/index.vue'),

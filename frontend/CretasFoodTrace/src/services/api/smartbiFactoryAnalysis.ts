@@ -19,6 +19,15 @@ interface Identity {
   role: string;
 }
 
+function assertJointSelection(request: FactoryAnalysisRequest, data: FactoryAnalysisData): void {
+  const selected = request.inspectionUploadId !== undefined || request.costUploadId !== undefined;
+  if (!selected) return;
+  const joint = data.jointUploads;
+  if (!joint || joint.inspectionUploadId !== request.inspectionUploadId || joint.costUploadId !== request.costUploadId) {
+    throw new FactoryAnalysisApiError('联合上传范围与当前选择不一致，已拒绝本次分析');
+  }
+}
+
 function captureIdentity(): Identity {
   const factoryId = requireFactoryId();
   const auth = useAuthStore.getState();
@@ -63,6 +72,8 @@ export async function askFactoryAnalysis(request: FactoryAnalysisRequest): Promi
       question: request.question,
       ...(request.source ? { source: request.source } : {}),
       ...(request.uploadId !== undefined ? { uploadId: request.uploadId } : {}),
+      ...(request.inspectionUploadId !== undefined ? { inspectionUploadId: request.inspectionUploadId } : {}),
+      ...(request.costUploadId !== undefined ? { costUploadId: request.costUploadId } : {}),
       ...(request.year !== undefined ? { year: request.year } : {}),
       ...(request.periodType ? { periodType: request.periodType } : {}),
       ...(request.startMonth !== undefined ? { startMonth: request.startMonth } : {}),
@@ -81,6 +92,7 @@ export async function askFactoryAnalysis(request: FactoryAnalysisRequest): Promi
     if (response.data.factoryId !== identity.factoryId) {
       throw new FactoryAnalysisApiError('分析响应与当前工厂不一致');
     }
+    assertJointSelection(request, response.data);
     return response.data;
   } catch (error) {
     if (error instanceof FactoryAnalysisApiError) throw error;

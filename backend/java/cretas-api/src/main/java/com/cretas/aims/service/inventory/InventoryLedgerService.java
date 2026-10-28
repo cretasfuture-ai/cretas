@@ -20,6 +20,16 @@ import java.util.List;
 public interface InventoryLedgerService {
 
     /**
+     * Controls whether a ledger read may use presentation-only fallbacks.
+     * STRICT_REPAIR is reserved for immutable period-snapshot repair and must
+     * fail closed when any source component cannot be read coherently.
+     */
+    enum LedgerReadMode {
+        NORMAL,
+        STRICT_REPAIR
+    }
+
+    /**
      * 查询进销存台账.
      *
      * @param factoryId      工厂 ID
@@ -30,6 +40,20 @@ public interface InventoryLedgerService {
      */
     List<InventoryLedgerLineDTO> getLedger(String factoryId, LocalDate startDate,
                                            LocalDate endDate, String materialTypeId);
+
+    /**
+     * Read the ledger with an explicit fallback policy. Existing callers use
+     * {@link #getLedger(String, LocalDate, LocalDate, String)} and retain the
+     * normal presentation behavior.
+     */
+    default List<InventoryLedgerLineDTO> getLedger(String factoryId, LocalDate startDate,
+                                                   LocalDate endDate, String materialTypeId,
+                                                   LedgerReadMode mode) {
+        if (mode == LedgerReadMode.STRICT_REPAIR) {
+            throw new IllegalStateException("Strict historical ledger reads require an explicit implementation");
+        }
+        return getLedger(factoryId, startDate, endDate, materialTypeId);
+    }
 
     /**
      * P11: 查询进销存台账 — 按物料大类(原料/辅料/包材)筛选.

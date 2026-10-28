@@ -114,6 +114,15 @@ public class FactoryBuildApplyService {
     private FactoryWarehouseService factoryWarehouseService;
 
     @Autowired
+    private BlueprintWarehouseDefaultsWriter warehouseDefaultsWriter;
+
+    @Autowired
+    private com.cretas.aims.repository.ProductionLineRepository productionLineRepository;
+
+    @Autowired
+    private com.cretas.aims.service.scheduling.LineCapacityConfigService lineCapacityConfigService;
+
+    @Autowired
     private ProductWorkProcessRepository productWorkProcessRepository;
 
     @Autowired(required = false)
@@ -636,6 +645,10 @@ public class FactoryBuildApplyService {
             // 10. productProcesses → product_work_processes(每个产品自己的工序链)
             applyProductProcesses(factoryId, request, result);
 
+            // 10b. S4 productionLines → production_lines + production_line_capacity_configs
+            //      (产品此时都已落库, 按 code 解析得到 id)
+            applyProductionLines(factoryId, request, actor, result);
+
             // 14. metricWatches → alert_thresholds(异常检测那套; 定时任务一直在遍历空表)
             if (request.getSuggestedData() != null
                     && request.getSuggestedData().getMetricWatches() != null) {
@@ -1101,14 +1114,20 @@ public class FactoryBuildApplyService {
     /**
      * 存放区落库。走 {@link FactoryWarehouseService#create} 而不是直接存 repository ——
      * 那里有工厂内编号唯一的防呆(撞号抛 409), 绕过去会让两个同号仓静默共存。
+     *
+     * <p>仓建好之后同一事务里补默认用途: 不补的话业务路径回退 WH-LOG / WH-WKS,
+     * 蓝图建的厂没有这两个仓, 采购入库 / 领料 / 发货当场 500。规则见
+     * {@link BlueprintWarehouseDefaultsWriter}。
      */
-    private void applyWarehouses(String factoryId, ApplyAIInitRequest request,
-                                 ApplyAIInitResult result) {
+    void applyWarehouses(String factoryId, ApplyAIInitRequest request,
+                         ApplyAIInitResult result) {
         if (request.getSuggestedData() == null || request.getSuggestedData().getWarehouses() == null) {
             return;
         }
+        List<String> codes = new ArrayList<>();
         for (ApplyAIInitRequest.WarehouseItem w : request.getSuggestedData().getWarehouses()) {
             String code = w.getCode().trim();
+            codes.add(code);
             if (factoryWarehouseService.findByCode(factoryId, code).isPresent()) {
                 result.getSkippedWarehouses().add(code);
                 continue;
@@ -1117,6 +1136,46 @@ public class FactoryBuildApplyService {
                     FactoryWarehouse.WarehouseType.valueOf(w.getType().trim()),
                     Boolean.TRUE, w.getRemarks());
             result.getWrittenWarehouses().add(code);
+        }
+        warehouseDefaultsWriter.write(factoryId, codes, result);
+    }
+
+    /**
+     * S4 产线与产能落库。同名产线复用 (跳过), 否则新建 (运行状态); 每条产能走
+     * {@link com.cretas.aims.service.scheduling.LineCapacityConfigService#setCapacity} —— 与工厂配置页同一个写入点,
+     * 替换在用行、旧行留作审计, 来源记 CONVERSATIONAL_BUILD, 操作人记 actor (平台管理员也能落库)。
+     * ⛔ 产品 code、单位、同名冲突都已由校验器判过; 这里再出错就是整次回滚, 不吞。
+     */
+    private void applyProductionLines(String factoryId, ApplyAIInitRequest request, ActorRef actor,
+                                      ApplyAIInitResult result) {
+        if (request.getSuggestedData() == null || request.getSuggestedData().getProductionLines() == null) {
+            return;
+        }
+        for (ApplyAIInitRequest.ProductionLineItem item : request.getSuggestedData().getProductionLines()) {
+            String name = item.getName().trim();
+            String key = FactoryBuildProductionLines.lineKey(name);
+            com.cretas.aims.entity.ProductionLine line = productionLineRepository
+                    .findByFactoryIdAndNameAndDeletedAtIsNull(factoryId, name).stream().findFirst().orElse(null);
+            if (line != null) {
+                result.getSkippedProductionLines().add(key);
+            } else {
+                line = new com.cretas.aims.entity.ProductionLine();
+                line.setFactoryId(factoryId);
+                line.setName(name);
+                line.setStatus(com.cretas.aims.entity.ProductionLine.LineStatus.active);
+                line = productionLineRepository.save(line);
+                result.getWrittenProductionLines().add(key);
+            }
+            for (ApplyAIInitRequest.LineCapacityItem c : item.getCapacities()) {
+                String code = c.getProductCode() == null || c.getProductCode().isBlank() ? null : c.getProductCode().trim();
+                String productTypeId = code == null ? null : productTypeRepository.findByFactoryIdAndCode(factoryId, code)
+                        .orElseThrow(() -> new IllegalStateException("校验过的产品 code 落库时找不到: " + code))
+                        .getId();
+                lineCapacityConfigService.setCapacity(factoryId, line.getId(), productTypeId, c.getCapacityPerHour(),
+                        c.getCapacityUnit(), com.cretas.aims.entity.ProductionLineCapacityConfig.Source.CONVERSATIONAL_BUILD,
+                        actor);
+                result.getWrittenProductionLines().add(FactoryBuildProductionLines.capacityKey(name, code));
+            }
         }
     }
 

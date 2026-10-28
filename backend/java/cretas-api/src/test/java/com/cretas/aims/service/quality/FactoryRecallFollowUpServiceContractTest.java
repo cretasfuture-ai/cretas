@@ -374,6 +374,50 @@ class FactoryRecallFollowUpServiceContractTest {
     }
 
     @Test
+    void originalStockAlreadyShippedOutBeforeFreezeNeedsNoDisposal() {
+        // 召回前原批次已全部发出: 冻结基准 0, 状态是发货留下的 DEPLETED, 没有报废证据 —— 没东西可处置
+        when(recallService.followUpActions(EVENT_ID)).thenReturn(List.of(
+                RecallAction.builder().recallEventId(EVENT_ID).actionType("FREEZE_INVENTORY")
+                        .targetEntityId(BATCH_ID).status("COMPLETED")
+                        .executedAt(LocalDateTime.of(2026, 10, 27, 23, 49))
+                        .executionNotes("{\"remainingInventory\":0}").build()));
+        when(recallService.followUpPhysicalQuantity(original)).thenReturn(BigDecimal.ZERO);
+        when(recallService.followUpScrappedQuantity(FACTORY, original)).thenReturn(null);
+        lenient().when(recallService.followUpStatusAllowsReceipt(eq(FACTORY), eq(original), any()))
+                .thenReturn(false);
+
+        FactoryRecallDTO.FollowUpView result = service.get(FACTORY, EVENT_ID);
+
+        assertThat(result.getIssues()).extracting(FactoryRecallDTO.FollowUpIssue::getCode)
+                .doesNotContain("ORIGINAL_STOCK_UNRESOLVED");
+        assertThat(result.getStock()).filteredOn(stock -> "ORIGINAL".equals(stock.getOrigin()))
+                .singleElement().satisfies(stock -> {
+                    assertThat(stock.getEvidenceComplete()).isTrue();
+                    assertThat(stock.getDisposalQuantity()).isEqualByComparingTo("0");
+                });
+    }
+
+    @Test
+    void zeroFreezeBaselineWithStockReappearingIsStillUnresolved() {
+        // 阴性对照: 冻结时 0, 现在却有货 —— 不能当成「没东西可处置」
+        when(recallService.followUpActions(EVENT_ID)).thenReturn(List.of(
+                RecallAction.builder().recallEventId(EVENT_ID).actionType("FREEZE_INVENTORY")
+                        .targetEntityId(BATCH_ID).status("COMPLETED")
+                        .executedAt(LocalDateTime.of(2026, 10, 27, 23, 49))
+                        .executionNotes("{\"remainingInventory\":0}").build()));
+        when(recallService.followUpPhysicalQuantity(original)).thenReturn(new BigDecimal("3"));
+        when(recallService.followUpScrappedQuantity(FACTORY, original)).thenReturn(null);
+        lenient().when(recallService.followUpStatusAllowsReceipt(eq(FACTORY), eq(original), any()))
+                .thenReturn(false);
+
+        FactoryRecallDTO.FollowUpView result = service.get(FACTORY, EVENT_ID);
+
+        assertThat(result.getInventoryResolved()).isFalse();
+        assertThat(result.getIssues()).extracting(FactoryRecallDTO.FollowUpIssue::getCode)
+                .contains("ORIGINAL_STOCK_UNRESOLVED");
+    }
+
+    @Test
     void isolatedInventoryWithNoApprovedScrapRemainsPending() {
         when(recallService.followUpPhysicalQuantity(original)).thenReturn(new BigDecimal("10"));
         when(recallService.followUpPhysicalQuantity(returned)).thenReturn(new BigDecimal("10"));

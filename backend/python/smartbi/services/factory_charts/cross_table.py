@@ -132,13 +132,35 @@ def build(datasets: list[Dataset], request: Any, can_price: bool):
         return [], []
     if not can_price:
         return [], [_gap('当前身份没有成本查看权限，未返回联合成本或其明细')]
-    dataset = next((d for d in datasets if str(d.source).split(' · ', 1)[0] == SOURCE), None)
+    dataset = next((d for d in datasets if str(d.source).split(' · ', 1)[0]
+                    in {SOURCE, 'uploaded-production-inspection-fused'}), None)
     if dataset is None or dataset.frame.empty:
         return [], [_gap('缺少同厂同产品且完整对齐的生产、真实质检与成本来源')]
+    uploaded = str(dataset.source).split(' · ', 1)[0] == 'uploaded-production-inspection-fused'
+    if uploaded and (dataset.currency != 'CNY' or dataset.frame.attrs.get('joint_currency') != 'CNY'):
+        return [], [_gap('联合上传成本缺少已验证的人民币币种')]
     required = {'日期', '来源主键', '产品ID', '单位', '产量', '良品数', '总成本', '检验数', '合格数', '质检不良数'}
     if not required.issubset(dataset.frame.columns):
         return [], [_gap('联合明细缺少稳定批次、产品ID、日期、单位或完整数值列')]
-    records = dataset.frame.to_dict('records')
+    frame = dataset.frame
+    coverage = frame.attrs.get('joint_coverage', {})
+    if getattr(request, 'period_type', 'all') != 'all':
+        dates = pd.to_datetime(frame['日期'], errors='coerce')
+        if dates.isna().any():
+            return [], [_gap('联合明细存在无效生产日期，无法核对期间')]
+        frame = frame.loc[dates.dt.year.eq(request.year) & dates.dt.month.between(request.start_month, request.end_month)].copy()
+        if frame.empty:
+            return [], [_gap('所选生产期间没有已验证的联合批次')]
+        if uploaded:
+            census = pd.DataFrame(dataset.frame.attrs.get('joint_production_scope', []))
+            if not {'日期', '产品ID', '单位', '来源主键'}.issubset(census.columns):
+                return [], [_gap('联合上传缺少期间覆盖率来源凭证')]
+            source_dates = pd.to_datetime(census['日期'], errors='coerce')
+            census = census.loc[source_dates.dt.year.eq(request.year) & source_dates.dt.month.between(request.start_month, request.end_month)]
+            totals = census.groupby(['产品ID', '单位'])['来源主键'].nunique()
+            coverage = {(p, u): {'totalBatches': int(n), 'coveredBatches': int(((frame['产品ID'] == p) & (frame['单位'] == u)).sum())}
+                        for (p, u), n in totals.items()}
+    records = frame.to_dict('records')
     if len({_key(r['来源主键']) for r in records}) != len(records):
         return [], [_gap('联合明细生产批次键重复，拒绝重复累计')]
     for row in records:
@@ -146,6 +168,13 @@ def build(datasets: list[Dataset], request: Any, can_price: bool):
         if (_production(row) is None or inspected is None or inspected <= 0 or passed is None
                 or not 0 <= passed <= inspected or failed is None or failed < 0 or abs(inspected - passed - failed) > 1e-6):
             return [], [_gap('联合明细校验失败，不使用缺失值或跨单位比较')]
-    coverage = dataset.frame.attrs.get('joint_coverage', {})
-    return [_candidate(g, str(p), str(u), dataset.source, coverage.get((p, u), {}))
-            for (p, u), g in dataset.frame.groupby(['产品ID', '单位'], dropna=False)], []
+    candidates = [_candidate(g, str(p), str(u), dataset.source, coverage.get((p, u), {}))
+                  for (p, u), g in frame.groupby(['产品ID', '单位'], dropna=False)]
+    if dataset.source.split(' · ', 1)[0] == 'uploaded-production-inspection-fused':
+        for candidate in candidates:
+            candidate['sourceMetadata'].update({
+                'sourceKey': 'uploaded-production-inspection-fused',
+                'sources': ['uploaded-production', 'uploaded-inspection', 'uploaded-cost'],
+                'joinKey': 'explicit tenant-owned uploads + unique production batch/product + exact cost unit',
+            })
+    return candidates, []

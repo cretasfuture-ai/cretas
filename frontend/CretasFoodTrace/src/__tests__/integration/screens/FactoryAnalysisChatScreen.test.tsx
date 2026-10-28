@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import FactoryAnalysisChatScreen from '../../../screens/smartbi/FactoryAnalysisChatScreen';
 import { askFactoryAnalysis, FactoryAnalysisApiError } from '../../../services/api/smartbiFactoryAnalysis';
-import { exportFactoryCharts, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
+import { exportFactoryCharts, saveFactoryChartFile, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
 
 const navigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({ useNavigation: () => ({ navigate }) }));
@@ -14,6 +14,7 @@ jest.mock('../../../services/api/smartbiFactoryAnalysis', () => ({
 }));
 jest.mock('../../../services/api/smartbiFactoryCharts', () => ({
   exportFactoryCharts: jest.fn(),
+  saveFactoryChartFile: jest.fn(),
   shareFactoryChartFile: jest.fn(),
 }));
 jest.mock('../../../store/authStore', () => {
@@ -63,6 +64,30 @@ describe('FactoryAnalysisChatScreen', () => {
     (askFactoryAnalysis as jest.Mock).mockResolvedValue(answered());
     (exportFactoryCharts as jest.Mock).mockResolvedValue({ uri: 'file:///cache/result.pdf', name: 'result.pdf', mimeType: 'application/pdf', size: 1000, factoryId: 'F006', userId: '1309', role: 'factory_super_admin' });
     (shareFactoryChartFile as jest.Mock).mockResolvedValue(undefined);
+    (saveFactoryChartFile as jest.Mock).mockResolvedValue({ uri: 'content://saved/result.pdf' });
+  });
+
+  it('sends all three upload IDs on the mounted first question and context only on follow-up', async () => {
+    (askFactoryAnalysis as jest.Mock)
+      .mockResolvedValueOnce(answered({ source: 'upload', jointUploads: { inspectionUploadId: 43, costUploadId: 44 } }))
+      .mockResolvedValueOnce(answered({ source: 'upload', jointUploads: { inspectionUploadId: 43, costUploadId: 44 } }));
+    const screen = renderScreen({ initialQuestion: '联合看生产质量成本', source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 44 });
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-followups')).toBeTruthy());
+    expect(askFactoryAnalysis).toHaveBeenNthCalledWith(1, expect.objectContaining({ question: '联合看生产质量成本', source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 44 }));
+    fireEvent.press(screen.getByText('再看质量指标'));
+    await waitFor(() => expect(askFactoryAnalysis).toHaveBeenCalledTimes(2));
+    expect(askFactoryAnalysis).toHaveBeenNthCalledWith(2, { question: '再看质量指标', contextId: 'ctx-latest' });
+  });
+
+  it('drops a mounted first response when a related upload ID changes', async () => {
+    let resolveRequest!: (value: ReturnType<typeof answered>) => void;
+    (askFactoryAnalysis as jest.Mock).mockImplementationOnce(() => new Promise(resolve => { resolveRequest = resolve; }));
+    const screen = renderScreen({ initialQuestion: '联合分析', source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 44 });
+    await waitFor(() => expect(askFactoryAnalysis).toHaveBeenCalledTimes(1));
+    screen.rerender(<FactoryAnalysisChatScreen route={{ key: 'FactoryAnalysisChat', name: 'FactoryAnalysisChat', params: { source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 45 } } as never} navigation={{} as never} />);
+    resolveRequest(answered({ source: 'upload', jointUploads: { inspectionUploadId: 43, costUploadId: 44 } }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.queryByText('可信事实：OEE=83%')).toBeNull();
   });
 
   it('renders trusted facts, source errors, limitations and an expandable full catalogue', async () => {
@@ -185,6 +210,8 @@ describe('FactoryAnalysisChatScreen', () => {
         'cost.unit': expect.stringMatching(/^data:image\/png;base64,/),
       }),
     })));
+    await waitFor(() => expect(screen.getByTestId('factory-analysis-export-share')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-analysis-export-share'));
     expect(shareFactoryChartFile).toHaveBeenCalledTimes(1);
     fireEvent.press(screen.getAllByText('查看原始明细')[0]);
     expect(navigate).toHaveBeenCalledWith('FactoryChartDetails', expect.objectContaining({

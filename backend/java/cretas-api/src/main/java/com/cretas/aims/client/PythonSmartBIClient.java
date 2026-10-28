@@ -13,6 +13,8 @@ import com.cretas.aims.dto.smartbi.PythonForecastResponse;
 import com.cretas.aims.dto.smartbi.MetricResult;
 import com.cretas.aims.exception.PythonServiceUnavailableException;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.utils.CookieAuthHelper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -25,6 +27,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import jakarta.annotation.PostConstruct;
 import okio.BufferedSink;
@@ -2756,8 +2760,9 @@ public class PythonSmartBIClient {
         if (request == null || request.isEmpty() || !request.containsKey("question")) {
             throw new IOException("Factory analysis question is required");
         }
-        Set<String> allowed = Set.of("question", "source", "upload_id", "year", "period_type",
-                "start_month", "end_month", "analysis_subject", "context_id");
+        Set<String> allowed = Set.of("question", "source", "upload_id", "inspection_upload_id",
+                "cost_upload_id", "year", "period_type", "start_month", "end_month",
+                "analysis_subject", "context_id");
         if (!allowed.containsAll(request.keySet())) {
             throw new IOException("Unsupported factory analysis parameter");
         }
@@ -2770,10 +2775,43 @@ public class PythonSmartBIClient {
                 .post(RequestBody.create(JSON, objectMapper.writeValueAsString(request)));
         if (trustedUser != null) builder.header("X-User-Id", trustedUser);
         if (trustedRole != null) builder.header("X-User-Role", trustedRole);
+        String authorization = currentRequestAuthorization(trustedFactory, trustedUser);
+        if (authorization != null) builder.header("Authorization", authorization);
         if (correlationId != null && !correlationId.isBlank()) {
             builder.header("X-Correlation-ID", correlationId);
         }
         return executeFactoryChartAnalysisOnce(builder.build());
+    }
+
+    /** Forward only the already-authenticated HTTP request credential to Python. */
+    private static String currentRequestAuthorization(String factoryId, String userId) throws IOException {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
+            return null;
+        }
+        jakarta.servlet.http.HttpServletRequest request = attributes.getRequest();
+        AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
+        if (userId == null || actor == null || actor.id() == null || actor.id() <= 0
+                || !factoryId.equals(actor.factoryId()) || !userId.equals(String.valueOf(actor.id()))) {
+            throw new IOException("Authenticated request identity does not match factory analysis context");
+        }
+        String rawHeader = request.getHeader("Authorization");
+        if (rawHeader != null && rawHeader.startsWith("Bearer ")) {
+            String selected = rawHeader.substring(7).trim();
+            if (!selected.isEmpty()) return normalizeSelectedToken(selected);
+        }
+        String cookie = CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.ACCESS_TOKEN_COOKIE);
+        return cookie == null ? null : normalizeSelectedToken(cookie);
+    }
+
+    private static String normalizeSelectedToken(String value) throws IOException {
+        if (value == null || value.length() > 8192 || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0) {
+            throw new IOException("Invalid authentication token");
+        }
+        String token = value.trim();
+        if (token.isEmpty() || token.length() > 8192 || token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
+            throw new IOException("Invalid authentication token");
+        }
+        return "Bearer " + token;
     }
 
     private Map<String, Object> executeFactoryChartAnalysisOnce(Request request) throws IOException {

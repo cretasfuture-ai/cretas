@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from httpx import AsyncClient, ASGITransport
 from .test_detail_api import app_for, clean_details
-from . import sources, finance_sources, operational_sources, captured_sources
+from . import sources, finance_sources, operational_sources, captured_sources, trusted_business_sources
 from .engine import Dataset
 from .test_operational_sources import FakePool
 from decimal import Decimal
@@ -12,11 +12,11 @@ from decimal import Decimal
 @pytest.mark.asyncio
 @pytest.mark.parametrize('qualified', [True, False])
 async def test_business_route_reconciles_trusted_positive_capture_only(monkeypatch, qualified):
-    async def empty(*args): return [], [], []
-    async def finance(*args):
+    async def empty(*args, **kwargs): return [], [], []
+    async def finance(*args, **kwargs):
         return [], [], [{'id': i, 'title': i, 'missing': ['capture required']} for i in
                         ('sales.channel', 'finance.unit-source', 'production.oee-source')]
-    async def captured(*args):
+    async def captured(*args, **kwargs):
         if not qualified: return [], [], []
         return [
                 Dataset(pd.DataFrame([{'日期':'2026-10-01','渠道':'QA直营','订单ID':'qa1','实际（元）':100},
@@ -33,6 +33,7 @@ async def test_business_route_reconciles_trusted_positive_capture_only(monkeypat
     monkeypatch.setattr(operational_sources, 'load', empty)
     monkeypatch.setattr(finance_sources, 'load', finance)
     monkeypatch.setattr(captured_sources, 'load', captured)
+    monkeypatch.setattr(trusted_business_sources, 'load', empty)
     monkeypatch.setattr('smartbi.services.factory_charts.finance_auth.full_factory_finance_access', allowed)
     async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as c:
         response=await c.post('/factory-recommendations',json={'use_ai':False})
@@ -70,11 +71,12 @@ async def test_route_loads_canonical_sales_sku_and_detail_preserves_line_provena
     }
     async def get_pool():
         return FakePool(rows, [])
-    async def empty(*args): return [], [], []
+    async def empty(*args, **kwargs): return [], [], []
     monkeypatch.setattr(operational_sources.config, 'get_cretas_pool', get_pool)
     monkeypatch.setattr(sources, 'load', empty)
     monkeypatch.setattr(finance_sources, 'load', empty)
     monkeypatch.setattr(captured_sources, 'load', empty)
+    monkeypatch.setattr(trusted_business_sources, 'load', empty)
     async def allowed(*args): return True
     monkeypatch.setattr('smartbi.services.factory_charts.finance_auth.full_factory_finance_access', allowed)
     async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as c:
@@ -91,9 +93,39 @@ async def test_route_loads_canonical_sales_sku_and_detail_preserves_line_provena
 
 
 @pytest.mark.asyncio
+async def test_route_loads_named_trusted_customer_source_candidate_without_channel_alias(monkeypatch):
+    async def empty(*args, **kwargs): return [], [], []
+    async def trusted(*args, **kwargs):
+        return [Dataset(pd.DataFrame([
+            {'日期': '2026-10-01', '订单ID': 'so-source-1', '订单行ID': 'line-source-1',
+             '客户来源': 'REFERRAL', '订单行小计': Decimal('20'), '单位': 'kg',
+             '事实限定': '已逐单对账'},
+            {'日期': '2026-10-02', '订单ID': 'so-source-2', '订单行ID': 'line-source-2',
+             '客户来源': 'WEBSITE', '订单行小计': Decimal('5'), '单位': 'kg',
+             '事实限定': '已逐单对账'},
+        ]), 'customer-source-sales · 客户来源获客归因（非订单销售渠道）', financial=True, currency='CNY')], [], []
+    async def allowed(*args): return True
+    monkeypatch.setattr(sources, 'load', empty)
+    monkeypatch.setattr(operational_sources, 'load', empty)
+    monkeypatch.setattr(finance_sources, 'load', empty)
+    monkeypatch.setattr(captured_sources, 'load', empty)
+    monkeypatch.setattr(trusted_business_sources, 'load', trusted)
+    monkeypatch.setattr('smartbi.services.factory_charts.finance_auth.full_factory_finance_access', allowed)
+    async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as c:
+        response = await c.post('/factory-recommendations', json={'use_ai': False})
+        assert response.status_code == 200
+        data = response.json()['data']
+        candidate = next(card for card in data['recommendations'] if 'customer-source-sales.sales.customer_source' in card['id'])
+        assert '非订单销售渠道' in '；'.join(candidate['metadata']['limitations'])
+        detail = await c.post('/factory-details', json={'context_id': candidate['detailContext']['id']})
+        assert detail.status_code == 200
+        assert detail.json()['data']['total'] == 2
+
+
+@pytest.mark.asyncio
 async def test_route_loads_sheet_oee_and_details_keep_electronic_row_provenance(monkeypatch):
-    async def empty(*args): return [], [], []
-    async def captured(*args):
+    async def empty(*args, **kwargs): return [], [], []
+    async def captured(*args, **kwargs):
         return [Dataset(pd.DataFrame([{
             '计划运行分钟': 20, '实际运行分钟': 15, '理想周期秒': 60,
             '总数': 10, '良品数': 0, '单位': 'kg', '日期': '2026-10-01',
@@ -104,6 +136,7 @@ async def test_route_loads_sheet_oee_and_details_keep_electronic_row_provenance(
     monkeypatch.setattr(operational_sources, 'load', empty)
     monkeypatch.setattr(finance_sources, 'load', empty)
     monkeypatch.setattr(captured_sources, 'load', captured)
+    monkeypatch.setattr(trusted_business_sources, 'load', empty)
     monkeypatch.setattr('smartbi.services.factory_charts.finance_auth.full_factory_finance_access', allowed)
     async with AsyncClient(transport=ASGITransport(app=app_for()), base_url='http://test') as c:
         response = await c.post('/factory-recommendations', json={'use_ai': False})

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   authStore: null as { factoryId: string; currentRole?: string; user?: { id: number } } | null,
-  api: { getFactoryChartRecommendations: vi.fn(), getUploadHistory: vi.fn(), getFactoryChartSelection: vi.fn(), saveFactoryChartSelection: vi.fn() },
+  api: { getFactoryChartRecommendations: vi.fn(), getFactoryChartDetails: vi.fn(), getUploadHistory: vi.fn(), getFactoryChartSelection: vi.fn(), saveFactoryChartSelection: vi.fn() },
   route: { query: {} as Record<string, unknown> },
   replace: vi.fn(),
   push: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock('@/store/modules/auth', async () => {
 vi.mock('vue-router', () => ({ useRoute: () => h.route, useRouter: () => ({ replace: h.replace, push: h.push }) }));
 vi.mock('@/api/smartbi/factory-charts', async () => {
   const actual = await vi.importActual<typeof import('@/api/smartbi/factory-charts')>('@/api/smartbi/factory-charts');
-  return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations, getFactoryChartSelection: h.api.getFactoryChartSelection, saveFactoryChartSelection: h.api.saveFactoryChartSelection };
+  return { ...actual, getFactoryChartRecommendations: h.api.getFactoryChartRecommendations, getFactoryChartDetails: h.api.getFactoryChartDetails, getFactoryChartSelection: h.api.getFactoryChartSelection, saveFactoryChartSelection: h.api.saveFactoryChartSelection };
 });
 vi.mock('@/api/smartbi/upload', () => ({
   getUploadHistory: h.api.getUploadHistory,
@@ -39,7 +39,7 @@ import PeriodSelector from '@/components/smartbi/PeriodSelector.vue';
 const response = (overrides: Record<string, unknown> = {}) => ({
   success: true,
   data: {
-    factoryId: 'F006', source: 'business', sourceLabel: '业务系统', period: { label: '全部历史' },
+    factoryId: 'F006', source: 'business', uploadId: null, sourceLabel: '业务系统', period: { label: '全部历史', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 },
     analysisSubject: null,
     ranking: { mode: 'rule', reason: '按规则优先级排序，未经AI排序' },
     recommendations: [
@@ -87,12 +87,26 @@ beforeEach(() => {
     { id: 42, fileName: '生产报表.xlsx', sheetName: '产量', rowCount: 8, columnCount: 4, status: 'COMPLETED', createdAt: '2026-10-01' },
   ] });
   h.api.getFactoryChartRecommendations.mockReset().mockResolvedValue(response());
+  h.api.getFactoryChartDetails.mockReset();
   h.api.getFactoryChartSelection.mockReset().mockResolvedValue({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: null, updatedAt: null } });
   h.api.saveFactoryChartSelection.mockReset().mockResolvedValue({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: [], updatedAt: 'now' } });
 });
 afterEach(() => { wrapper?.unmount(); wrapper = null; document.body.innerHTML = ''; });
 
 describe('FactoryChartRecommendations mounted workflow', () => {
+  it('browses without allocating contexts and obtains only the clicked original snapshot', async () => {
+    const candidate = { ...response().data.recommendations[0], detailSnapshotKey: 'original-rows', detailStatus: { state: 'unavailable', message: '点击查看时加载明细' } };
+    h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ recommendations: [candidate] }))
+      .mockResolvedValueOnce(response({ recommendations: [{ ...candidate, detailContext: { id: 'one-context', expiresAt: '2099-01-01' } }] }));
+    h.api.getFactoryChartDetails.mockResolvedValue({ success: true, data: { factoryId: 'F006', candidateId: 'yield', title: '产量趋势', source: 'business', period: '全部历史', columns: ['批次', '产量'], rows: [{ 批次: 'B1', 产量: 120 }], total: 1, page: 1, pageSize: 50, hasMore: false, appliedFilters: [], availableFilters: [], snapshotAt: '2026-10-28' } });
+    const page = await mountPage();
+    expect(h.api.getFactoryChartRecommendations.mock.calls[0][0].detail_candidate_ids).toEqual([]);
+    expect(h.api.getFactoryChartDetails).not.toHaveBeenCalled();
+    await page!.get('.details-button').trigger('click'); await flushPromises();
+    expect(h.api.getFactoryChartRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ factory_id: 'F006', detail_candidate_ids: ['yield'], use_ai: false }));
+    expect(h.api.getFactoryChartDetails).toHaveBeenCalledWith(expect.objectContaining({ context_id: 'one-context', page: 1 }));
+    expect(page!.text()).toContain('已加载全部 1 行');
+  });
   it('AI entry serializes the current scope and drops legacy q', async () => {
     const page = await mountPage();
     const vm = page!.vm as unknown as {

@@ -1,12 +1,14 @@
 import request from '@/api/request';
 import type { ApiResponse } from '@/types/api';
-import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation, FactorySourceError } from './factory-charts';
+import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation, FactorySourceError, FactoryJointUploads } from './factory-charts';
 
 /** Fixed public request for the authenticated factory conversation endpoint. */
 export interface FactoryAnalysisRequest {
   question: string;
   source?: FactoryChartSource;
   uploadId?: number;
+  inspectionUploadId?: number;
+  costUploadId?: number;
   year?: number;
   periodType?: FactoryChartPeriodType;
   startMonth?: number;
@@ -47,6 +49,8 @@ export interface FactoryAnalysisPeriodSnapshot {
 export interface FactoryAnalysisData {
   factoryId: string;
   source: FactoryChartSource;
+  uploadId?: number | null;
+  jointUploads?: FactoryJointUploads | null;
   sourceLabel?: string;
   period: FactoryAnalysisPeriodSnapshot;
   analysisSubject?: string | null;

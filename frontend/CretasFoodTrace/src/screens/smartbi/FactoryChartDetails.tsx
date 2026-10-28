@@ -4,10 +4,11 @@ import { Button, Card, Chip, Text, TextInput } from 'react-native-paper';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { ScreenWrapper } from '../../components/ui/ScreenWrapper';
 import { useAuthStore } from '../../store/authStore';
-import { getFactoryChartDetails } from '../../services/api/smartbiFactoryCharts';
+import { getFactoryChartDetails, getFactoryRecommendations } from '../../services/api/smartbiFactoryCharts';
 import type { FactoryChartDetailFilter, FactoryChartDetailsData } from '../../types/factoryCharts';
 import type { SmartBIStackParamList } from '../../types/smartbi';
-import { appendDetailsPage, buildDetailsRequest, formatChartCell, isSameChartContext } from '../../utils/smartbiFactoryChartModel';
+import { appendDetailsPage, buildDetailsRequest, buildRecommendationRequest, formatChartCell, isSameChartContext } from '../../utils/smartbiFactoryChartModel';
+import { mergeRefreshedDetailContext, type FactoryDetailRefreshScope } from '../../utils/smartbiFactoryDetailRefresh';
 
 type Props = NativeStackScreenProps<SmartBIStackParamList, 'FactoryChartDetails'>;
 
@@ -29,8 +30,10 @@ interface DetailAttempt {
 
 export default function FactoryChartDetails({ route }: Props) {
   const { user, getFactoryId, getUserRole } = useAuthStore();
-  const { recommendation, point, periodLabel, contextKey } = route.params;
-  const detailContext = recommendation.detailContext;
+  const { recommendation, point, period, periodLabel, contextKey } = route.params;
+  const [activeRecommendation, setActiveRecommendation] = useState(recommendation);
+  const activeRecommendationRef = useRef(recommendation);
+  const detailContext = activeRecommendation.detailContext;
   const [data, setData] = useState<FactoryChartDetailsData | null>(null);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -38,19 +41,25 @@ export default function FactoryChartDetails({ route }: Props) {
   const [filterField, setFilterField] = useState<string | null>(null);
   const [filterValue, setFilterValue] = useState('');
   const [activeFilters, setActiveFilters] = useState<FactoryChartDetailFilter[]>([]);
+  const [refreshingDetail, setRefreshingDetail] = useState(false);
+  const [detailRecoveryRequired, setDetailRecoveryRequired] = useState(false);
   const requestToken = useRef(0);
+  const refreshRequestToken = useRef(0);
   const closed = useRef(false);
   const lastAttempt = useRef<DetailAttempt | null>(null);
   const authEpoch = `${user?.id || ''}|${getFactoryId() || ''}|${getUserRole() || ''}`;
 
-  const loadPage = useCallback(async (nextPage: number, filters: readonly FactoryChartDetailFilter[] = [], append = false) => {
-    if (!detailContext?.id) {
+  const loadPage = useCallback(async (nextPage: number, filters: readonly FactoryChartDetailFilter[] = [], append = false, contextOverride?: typeof detailContext) => {
+    const currentDetailContext = contextOverride || activeRecommendationRef.current.detailContext;
+    if (!currentDetailContext?.id) {
+      setDetailRecoveryRequired(true);
       setError('该图表没有可用的明细上下文');
       return;
     }
-    const expiresAt = Date.parse(detailContext.expiresAt);
+    const expiresAt = Date.parse(currentDetailContext.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      setError('明细上下文已过期，请返回图表页重新打开');
+      setDetailRecoveryRequired(true);
+      setError('明细上下文已过期，可在当前原分析范围内重新获取；数据变化时请重新分析');
       return;
     }
     if (contextKey.authEpoch !== authEpoch || readAuthEpoch() !== authEpoch) {
@@ -64,8 +73,8 @@ export default function FactoryChartDetails({ route }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const detailPoint = detailContext.drilldown === false ? undefined : point;
-      const response = await getFactoryChartDetails(buildDetailsRequest(detailContext.id, detailPoint, nextPage, filters));
+      const detailPoint = currentDetailContext.drilldown === false ? undefined : point;
+      const response = await getFactoryChartDetails(buildDetailsRequest(currentDetailContext.id, detailPoint, nextPage, filters));
       if (closed.current || token !== requestToken.current || readAuthEpoch() !== attempt.authEpoch) return;
       if (!response.success || !response.data) throw new Error(response.message || '明细加载失败');
       const next = response.data;
@@ -80,15 +89,67 @@ export default function FactoryChartDetails({ route }: Props) {
         throw new Error('明细响应与请求分页契约不一致');
       }
       setPage(nextPage);
+      setDetailRecoveryRequired(false);
       setData(previous => append ? appendDetailsPage(previous, next) : { ...next, rows: [...next.rows] });
     } catch (loadError) {
       if (!closed.current && token === requestToken.current && readAuthEpoch() === attempt.authEpoch) setError(messageFor(loadError));
     } finally {
       if (!closed.current && token === requestToken.current && readAuthEpoch() === attempt.authEpoch) setLoading(false);
     }
-  }, [authEpoch, contextKey, detailContext, periodLabel, point, recommendation.id, recommendation.source]);
+  }, [authEpoch, contextKey, periodLabel, point, recommendation.id, recommendation.source]);
+
+  const refreshDetail = useCallback(async () => {
+    const currentAuth = readAuthEpoch();
+    if (contextKey.authEpoch !== currentAuth) {
+      setError('登录状态或权限已变化，请重新打开明细');
+      return;
+    }
+    const refreshPeriod = contextKey.period || period;
+    const refreshScope: FactoryDetailRefreshScope = {
+      factoryId: contextKey.factoryId,
+      authEpoch: currentAuth,
+      source: contextKey.source,
+      ...(contextKey.uploadId !== undefined ? { uploadId: contextKey.uploadId } : {}),
+      period: refreshPeriod,
+      periodLabel,
+      analysisSubject: contextKey.analysisSubject || null,
+      candidateId: recommendation.id,
+      unit: recommendation.unit,
+    };
+    const refreshToken = ++refreshRequestToken.current;
+    setRefreshingDetail(true);
+    setError(null);
+    try {
+      const response = await getFactoryRecommendations(buildRecommendationRequest(
+        contextKey.source,
+        refreshPeriod,
+        true,
+        true,
+        contextKey.uploadId,
+        false,
+        contextKey.analysisSubject || null,
+        [recommendation.id],
+      ));
+      if (closed.current || refreshToken !== refreshRequestToken.current || readAuthEpoch() !== currentAuth) return;
+      if (!response.success || !response.data) throw new Error(response.message || '原始明细暂不可用');
+      const refreshed = response.data.recommendations.find(candidate => candidate.id === recommendation.id);
+      const nextRecommendation = mergeRefreshedDetailContext(recommendation, refreshed, response.data, refreshScope);
+      activeRecommendationRef.current = nextRecommendation;
+      setActiveRecommendation(nextRecommendation);
+      setDetailRecoveryRequired(false);
+      await loadPage(1, [], false, nextRecommendation.detailContext);
+    } catch (refreshError) {
+      if (!closed.current && refreshToken === refreshRequestToken.current && readAuthEpoch() === currentAuth) {
+        setDetailRecoveryRequired(true);
+        setError(refreshError instanceof Error ? refreshError.message : '原始明细暂不可用');
+      }
+    } finally {
+      if (!closed.current && refreshToken === refreshRequestToken.current) setRefreshingDetail(false);
+    }
+  }, [contextKey, loadPage, period, periodLabel, recommendation.id, recommendation.unit]);
 
   useEffect(() => {
+    refreshRequestToken.current += 1;
     setData(null);
     setPage(1);
     setError(null);
@@ -97,7 +158,7 @@ export default function FactoryChartDetails({ route }: Props) {
   useEffect(() => {
     closed.current = false;
     void loadPage(1);
-    return () => { closed.current = true; requestToken.current += 1; };
+    return () => { closed.current = true; requestToken.current += 1; refreshRequestToken.current += 1; };
   }, [loadPage]);
 
   const applyFilter = () => {
@@ -130,7 +191,7 @@ export default function FactoryChartDetails({ route }: Props) {
         {data && <Text style={styles.muted}>第 {page} 页 · 每页 {data.pageSize} 行 · 总计 {data.total} 行</Text>}
       </View>
       {data?.availableFilters.length ? <View style={styles.filters}><View style={styles.filterChips}>{data.availableFilters.map(filter => <Chip key={filter.field} selected={filterField === filter.field} onPress={() => setFilterField(filter.field)}>{filter.label}</Chip>)}</View><View style={styles.filterInput}><TextInput testID="factory-detail-filter-input" label="过滤值" value={filterValue} onChangeText={setFilterValue} style={styles.input} /><Button mode="contained" onPress={applyFilter} disabled={loading}>筛选</Button></View></View> : null}
-      {error && <Card style={styles.errorCard}><Card.Content><Text style={styles.errorText}>{error}</Text><Button onPress={retryLastAttempt}>重试</Button></Card.Content></Card>}
+      {error && <Card style={styles.errorCard}><Card.Content><Text style={styles.errorText}>{error}</Text><Button testID="factory-detail-recover" onPress={detailRecoveryRequired ? () => void refreshDetail() : retryLastAttempt} loading={refreshingDetail} disabled={refreshingDetail}>{detailRecoveryRequired ? '重新获取原始明细' : '重试'}</Button></Card.Content></Card>}
       <ScrollView horizontal style={styles.tableViewport} contentContainerStyle={styles.tableScroll} nestedScrollEnabled>
         <View style={styles.table}>
           <View style={styles.tableHeader}>{data?.columns.map(column => <Text key={column} style={styles.headerCell}>{column}</Text>)}</View>

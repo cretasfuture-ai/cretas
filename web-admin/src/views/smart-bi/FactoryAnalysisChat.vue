@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { toDateString } from '@/utils/dateFormat';
 import PeriodSelector, { type PeriodSelection } from '@/components/smartbi/PeriodSelector.vue';
 import { getUploadHistory, type UploadHistoryItem } from '@/api/smartbi/upload';
-import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation } from '@/api/smartbi/factory-charts';
+import type { FactoryChartPeriodType, FactoryChartSource, FactoryRecommendation, FactoryJointUploads } from '@/api/smartbi/factory-charts';
 import {
   postFactoryAnalysis,
   type FactoryAnalysisCatalogItem,
@@ -19,6 +19,8 @@ import {
 import { periodSelectionToRequest } from './financialDashboardState';
 import FactoryChartCanvas from './FactoryChartCanvas.vue';
 import FactoryChartDetails from './FactoryChartDetails.vue';
+import type { FactoryDetailRefreshScope } from './factoryChartDetailRefresh';
+import { sameJointUploads, validJointUploads } from './factoryJointUploads';
 import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport } from './factoryChartExport';
 
 interface ChatTurn {
@@ -43,6 +45,7 @@ interface ChatTurn {
     period: FactoryAnalysisPeriodSnapshot;
     scopeLabel?: string;
     selectedIds: string[];
+    detailScope?: FactoryDetailRefreshScope;
   };
 }
 
@@ -51,6 +54,9 @@ interface FactoryRouteScope {
   uploadId: number | null;
   period: PeriodSelection;
   analysisSubject: string | null;
+  jointRequested: boolean;
+  inspectionUploadId: number | null;
+  costUploadId: number | null;
 }
 
 interface AcceptedAnswerScope {
@@ -58,6 +64,7 @@ interface AcceptedAnswerScope {
   uploadId: number | null;
   period: FactoryAnalysisPeriodSnapshot;
   analysisSubject: string | null;
+  jointUploads: FactoryJointUploads | null;
 }
 
 function queryValue(query: Record<string, unknown>, key: string): string | undefined {
@@ -99,7 +106,12 @@ function factoryScopeFromRoute(query: Record<string, unknown>): FactoryRouteScop
     };
   }
   const subject = queryValue(query, 'analysis_subject');
-  return { source, uploadId: source === 'upload' ? upload : null, period, analysisSubject: subject?.slice(0, 200) || null };
+  return {
+    source, uploadId: source === 'upload' ? upload : null, period, analysisSubject: subject?.slice(0, 200) || null,
+    jointRequested: source === 'upload' && Boolean(queryValue(query, 'inspection_upload_id') || queryValue(query, 'cost_upload_id')),
+    inspectionUploadId: positiveInt(queryValue(query, 'inspection_upload_id')),
+    costUploadId: positiveInt(queryValue(query, 'cost_upload_id')),
+  };
 }
 
 const route = useRoute();
@@ -114,6 +126,9 @@ const identityKey = computed(() => JSON.stringify([
 
 const source = ref<FactoryChartSource>(initialScope.source);
 const uploadId = ref<number | null>(initialScope.uploadId);
+const jointMode = ref(initialScope.jointRequested);
+const inspectionUploadId = ref<number | null>(initialScope.inspectionUploadId);
+const costUploadId = ref<number | null>(initialScope.costUploadId);
 const uploads = ref<UploadHistoryItem[]>([]);
 const uploadsLoading = ref(false);
 const uploadError = ref('');
@@ -135,6 +150,7 @@ const lastQuestion = ref('');
 const retryQuestion = ref('');
 const detailsVisible = ref(false);
 const detailsCandidate = ref<FactoryRecommendation | null>(null);
+const detailsScope = ref<FactoryDetailRefreshScope | null>(null);
 const detailsPoint = ref<{ name: string; seriesName?: string; dataIndex?: number }>();
 const detailsTurnKey = ref('');
 const activeTurnId = ref<string | null>(null);
@@ -151,6 +167,17 @@ const filteredCatalog = computed(() => {
     .some(value => String(value || '').toLocaleLowerCase().includes(needle)));
 });
 const sourceLabel = computed(() => source.value === 'business' ? '业务系统' : '上传报表');
+const selectedJointUploads = computed<FactoryJointUploads | null>(() => {
+  const value = { inspectionUploadId: inspectionUploadId.value, costUploadId: costUploadId.value };
+  return source.value === 'upload' && jointMode.value && validJointUploads(value, uploadId.value) ? value : null;
+});
+function uploadLabel(item: UploadHistoryItem): string {
+  return `${item.originalFileName || item.fileName || '上传报表'}${item.sheetName ? ` · ${item.sheetName}` : ''}`;
+}
+function selectedUploadLabel(selectedId: number): string {
+  const item = uploads.value.find(upload => upload.id === selectedId);
+  return item ? uploadLabel(item) : '所选报表';
+}
 /**
  * The server request is scoped by more than the data source. Keep the exact
  * period request and product subject in the captured key so a first request
@@ -165,6 +192,9 @@ const activeScopeKey = computed(() => {
     factoryId: factoryId.value,
     source: source.value,
     uploadId: uploadId.value ?? null,
+    jointMode: source.value === 'upload' && jointMode.value,
+    inspectionUploadId: source.value === 'upload' && jointMode.value ? inspectionUploadId.value : null,
+    costUploadId: source.value === 'upload' && jointMode.value ? costUploadId.value : null,
     period: periodScope,
     analysisSubject: analysisSubject.value || null,
   });
@@ -298,7 +328,12 @@ async function loadUploads() {
 
 function onSourceChange(value: FactoryChartSource) {
   source.value = value;
-  if (value === 'business') uploadId.value = null;
+  if (value === 'business') {
+    uploadId.value = null;
+    jointMode.value = false;
+    inspectionUploadId.value = null;
+    costUploadId.value = null;
+  }
   else if (!uploadId.value) uploadId.value = uploads.value[0]?.id ?? null;
   analysisSubject.value = null;
   subjectOptions.value = [];
@@ -356,6 +391,7 @@ function openDetails(item: FactoryRecommendation, point?: { name?: string; serie
     return;
   }
   detailsCandidate.value = item;
+  detailsScope.value = turn.metadata.detailScope || null;
   detailsPoint.value = point?.name ? { name: point.name, seriesName: point.seriesName, dataIndex: point.dataIndex } : undefined;
   detailsTurnKey.value = turn?.scopeKey || turn?.id || '';
   detailsVisible.value = true;
@@ -383,8 +419,13 @@ async function sendQuestion(
   }
   const requestSource = scopeOverride?.source || source.value;
   const requestUploadId = scopeOverride?.uploadId ?? uploadId.value;
+  const requestJointUploads = scopeOverride ? scopeOverride.jointUploads : selectedJointUploads.value;
   if (requestSource === 'upload' && !requestUploadId) {
     error.value = '请选择一份已上传的报表';
+    return;
+  }
+  if (requestSource === 'upload' && !scopeOverride && jointMode.value && !requestJointUploads) {
+    error.value = '请分别选择生产、质检和成本三份不同的报表。系统会先核对批次、产品、单位和关联覆盖率。';
     return;
   }
   const periodRequest = scopeOverride
@@ -421,6 +462,7 @@ async function sendQuestion(
       question: text,
       source: requestSource,
       ...(requestSource === 'upload' && requestUploadId ? { uploadId: requestUploadId } : {}),
+      ...(requestJointUploads || {}),
       ...periodRequest,
       analysisSubject: explicitSubject,
     };
@@ -429,6 +471,11 @@ async function sendQuestion(
     if (version !== requestVersion.value || capturedIdentity !== identityKey.value || capturedScope !== activeScopeKey.value) return;
     if (!result.success || !result.data) throw new Error(result.message || '工厂分析未返回有效结果');
     const data = result.data;
+    if (data.factoryId !== factoryId.value || data.source !== requestSource
+      || !sameJointUploads(data.jointUploads, requestJointUploads)
+      || (requestJointUploads && data.uploadId !== requestUploadId)) {
+      throw new Error('返回的数据范围与所选报表不一致，已拒绝结果，请重新分析。');
+    }
     if (!validPeriodSnapshot(data.period)) {
       throw new Error('工厂分析响应缺少有效期间，已拒绝该结果，请重新提问。');
     }
@@ -440,6 +487,7 @@ async function sendQuestion(
       uploadId: data.source === 'upload' ? requestUploadId : null,
       period: data.period,
       analysisSubject: acceptedSubject,
+      jointUploads: requestJointUploads ? { ...requestJointUploads } : null,
     };
     // The server may rotate the opaque token on every response; always retain
     // the latest one and never construct one in the browser.
@@ -460,11 +508,25 @@ async function sendQuestion(
     assistantTurn.scopeKey = turnScopeKey.value;
     assistantTurn.metadata = {
       source: data.source,
-      sourceLabel: data.sourceLabel || sourceLabel.value,
+      sourceLabel: requestJointUploads
+        ? `生产：${selectedUploadLabel(requestUploadId!)}；质检：${selectedUploadLabel(requestJointUploads.inspectionUploadId)}；成本：${selectedUploadLabel(requestJointUploads.costUploadId)}`
+        : data.sourceLabel || sourceLabel.value,
       periodLabel: data.period.label,
       period: data.period,
       scopeLabel: data.analysisScopeLabel,
       selectedIds: [...(data.selectedIds || [])],
+      detailScope: {
+        identity: capturedIdentity,
+        periodLabel: data.period.label,
+        request: {
+          factory_id: factoryId.value, source: data.source,
+          ...(data.source === 'upload' && requestUploadId ? { upload_id: requestUploadId } : {}),
+          ...(requestJointUploads ? { inspection_upload_id: requestJointUploads.inspectionUploadId, cost_upload_id: requestJointUploads.costUploadId } : {}),
+          year: data.period.year, period_type: data.period.periodType,
+          start_month: data.period.startMonth, end_month: data.period.endMonth,
+          analysis_subject: acceptedSubject, include_optional: true, use_ai: false,
+        },
+      },
     };
     activeTurnId.value = data.status === 'answered' && assistantTurn.recommendations.length ? assistantTurn.id : null;
     if (data.status === 'unavailable') notice.value = 'AI 规划不可用；未展示未经验证的图表或事实。';
@@ -559,13 +621,16 @@ watch(identityKey, () => {
   uploadLoadVersion.value += 1;
   uploads.value = [];
   uploadId.value = null;
+  jointMode.value = false;
+  inspectionUploadId.value = null;
+  costUploadId.value = null;
   uploadError.value = '';
   resetConversation('登录身份或工厂已变化，已清除旧分析上下文。');
   subjectOptions.value = [];
   analysisSubject.value = null;
   scheduleIdentityUploadLoad();
 }, { flush: 'sync' });
-watch([source, uploadId], () => {
+watch([source, uploadId, jointMode, inspectionUploadId, costUploadId], () => {
   detailsVisible.value = false;
   resetConversation('数据源已变化，请重新提问。');
 }, { flush: 'sync' });
@@ -591,12 +656,24 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
           <el-option label="上传报表" value="upload" />
         </el-select>
         <template v-if="source === 'upload'">
-          <label>报表</label>
+          <label>{{ jointMode ? '生产报表' : '报表' }}</label>
           <el-select v-model="uploadId" filterable :loading="uploadsLoading" placeholder="选择已上传报表" data-testid="factory-analysis-upload">
-            <el-option v-for="item in uploads" :key="item.id" :label="item.originalFileName || item.fileName || `上传 #${item.id}`" :value="item.id" />
+            <el-option v-for="item in uploads" :key="item.id" :label="uploadLabel(item)" :value="item.id" />
           </el-select>
+          <el-switch v-model="jointMode" active-text="生产＋质检＋成本联合分析" data-testid="factory-analysis-joint-mode" />
           <span v-if="uploadError" class="scope-error">{{ uploadError }}</span>
         </template>
+      </div>
+      <div v-if="source === 'upload' && jointMode" class="scope-row" data-testid="factory-analysis-joint-selection">
+        <label>质检报表</label>
+        <el-select v-model="inspectionUploadId" filterable clearable :loading="uploadsLoading" placeholder="选择质检明细" data-testid="factory-analysis-inspection-upload">
+          <el-option v-for="item in uploads" :key="item.id" :label="uploadLabel(item)" :value="item.id" :disabled="item.id === uploadId || item.id === costUploadId" />
+        </el-select>
+        <label>成本报表</label>
+        <el-select v-model="costUploadId" filterable clearable :loading="uploadsLoading" placeholder="选择批次成本明细" data-testid="factory-analysis-cost-upload">
+          <el-option v-for="item in uploads" :key="item.id" :label="uploadLabel(item)" :value="item.id" :disabled="item.id === uploadId || item.id === inspectionUploadId" />
+        </el-select>
+        <span class="scope-hint">先核对批次、产品、计量单位与重复记录，再关联汇总；无法关联时会说明原因。</span>
       </div>
       <div class="scope-row">
         <label>期间</label>
@@ -630,7 +707,8 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
             <div v-for="item in turn.recommendations" :key="item.id" class="answer-chart" :data-testid="`factory-chart-card-${item.id}`">
               <div class="answer-chart__heading"><strong>{{ item.title }}</strong><span>{{ item.metric }} · {{ item.unit }} · {{ item.chart.chartType }}</span></div>
               <FactoryChartCanvas :option="item.chart.echartsOption" @ready="markChartReady(turn, item)" @click="openDetails(item, $event, turn)" />
-              <el-button v-if="item.detailContext" link type="primary" @click="openDetails(item, undefined, turn)">查看原始明细</el-button>
+              <el-button link type="primary" @click="openDetails(item, undefined, turn)">查看原始明细</el-button>
+              <p v-if="item.detailStatus" class="detail-status">{{ item.detailStatus.message }}</p>
             </div>
           </div>
           <div v-if="turn.followUps?.length" class="followups"><el-button v-for="followUp in turn.followUps" :key="followUp" size="small" plain @click="sendFollowUp(followUp)">{{ followUp }}</el-button></div>
@@ -648,7 +726,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
       <el-input v-model="question" type="textarea" :rows="3" maxlength="1000" show-word-limit :disabled="pending" placeholder="例如：最近生产和质量表现有什么值得关注的变化？" data-testid="factory-analysis-input" />
       <div class="composer__footer"><span>上下文：{{ contextId ? '已建立（仅限当前工厂、用户、角色和数据源）' : '新问题' }}</span><el-button type="primary" native-type="submit" :loading="pending" data-testid="factory-analysis-submit">发送问题</el-button></div>
     </form>
-    <FactoryChartDetails v-if="detailsVisible" :key="detailsRenderKey" v-model="detailsVisible" :candidate="detailsCandidate" :point="detailsPoint" />
+    <FactoryChartDetails v-if="detailsVisible" :key="detailsRenderKey" v-model="detailsVisible" :candidate="detailsCandidate" :point="detailsPoint" :refresh-scope="detailsScope" />
   </section>
 </template>
 

@@ -407,6 +407,19 @@ const REVIEW_CLASSES: ReviewClass[] = [
     jumpTo: '/inventory/by-warehouse',
     page: 'views/inventory/by-warehouse/index.vue',
   },
+  {
+    key: 'productionLines',
+    title: '产线与设备产能',
+    what: '有几条线、每条线每小时能做多少（件 / kg / 批）',
+    group: '产线与设备产能',
+    writtenKey: 'writtenProductionLines',
+    skippedKey: 'skippedProductionLines',
+    livePath: 'scheduling/production-lines',
+    jumpKind: 'LIST_ONLY',
+    jumpTo: '/scheduling/line-capacity',
+    page: 'views/scheduling/line-capacity/index.vue',
+    jumpNote: '所需设备不在建厂里问，在这一页给每个产品勾选',
+  },
 ]
 
 const route = useRoute()

@@ -76,9 +76,19 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
     @Override
     public List<InventoryLedgerLineDTO> getLedger(String factoryId, LocalDate startDate,
                                                    LocalDate endDate, String materialTypeId) {
+        return getLedger(factoryId, startDate, endDate, materialTypeId,
+                InventoryLedgerService.LedgerReadMode.NORMAL);
+    }
+
+    @Override
+    public List<InventoryLedgerLineDTO> getLedger(String factoryId, LocalDate startDate,
+                                                   LocalDate endDate, String materialTypeId,
+                                                   InventoryLedgerService.LedgerReadMode mode) {
         Objects.requireNonNull(factoryId, "factoryId required");
         Objects.requireNonNull(startDate, "startDate required");
         Objects.requireNonNull(endDate, "endDate required");
+        InventoryLedgerService.LedgerReadMode readMode = mode == null
+                ? InventoryLedgerService.LedgerReadMode.NORMAL : mode;
 
         // 1. 确定需要计算的物料类型
         List<RawMaterialType> materials;
@@ -108,7 +118,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
         // 3. 对每种物料聚合期间流水
         return materials.stream()
-                .map(mt -> buildLine(factoryId, mt, startDate, endDate, openingSnapshots.get(mt.getId())))
+                .map(mt -> buildLine(factoryId, mt, startDate, endDate,
+                        openingSnapshots.get(mt.getId()), readMode))
                 .collect(Collectors.toList());
     }
 
@@ -147,7 +158,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
         // 3. 聚合期间流水
         return materials.stream()
-                .map(mt -> buildLine(factoryId, mt, startDate, endDate, openingSnapshots.get(mt.getId())))
+                .map(mt -> buildLine(factoryId, mt, startDate, endDate,
+                        openingSnapshots.get(mt.getId()), InventoryLedgerService.LedgerReadMode.NORMAL))
                 .collect(Collectors.toList());
     }
 
@@ -332,9 +344,10 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
     private InventoryLedgerLineDTO buildLine(String factoryId, RawMaterialType mt,
                                               LocalDate start, LocalDate end,
-                                              InventoryLedgerSnapshot openingSnap) {
+                                              InventoryLedgerSnapshot openingSnap,
+                                              InventoryLedgerService.LedgerReadMode readMode) {
         // === 期初 (2026-07 修复: 滚算至 start 前一天真实结存, 不透传可能过期的快照) ===
-        OpeningBalance opening = resolveOpening(factoryId, mt.getId(), start, openingSnap);
+        OpeningBalance opening = resolveOpening(factoryId, mt.getId(), start, openingSnap, readMode);
         BigDecimal openingQty = opening.qty();
         BigDecimal openingAmount = opening.amount(); // PriceSensitive — may be null for warehouse role
 
@@ -343,23 +356,23 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
         BigDecimal inboundAmount = aggregateInboundAmount(factoryId, mt.getId(), start, end);
 
         // === 出库-生产领用 (MaterialBatch usedQuantity 变化) ===
-        BigDecimal outboundProductionQty = aggregateProductionOutQty(factoryId, mt.getId(), start, end);
+        BigDecimal outboundProductionQty = aggregateProductionOutQty(factoryId, mt.getId(), start, end, readMode);
 
         // === 出库-销售出货 (SalesDeliveryItem / SalesDeliveryRecord) ===
         BigDecimal outboundSalesQty = aggregateSalesOutQty(factoryId, mt.getId(), start, end);
 
         // === 调拨 ===
-        BigDecimal transferInQty = aggregateTransferQty(factoryId, mt.getId(), start, end, true);
-        BigDecimal transferOutQty = aggregateTransferQty(factoryId, mt.getId(), start, end, false);
+        BigDecimal transferInQty = aggregateTransferQty(factoryId, mt.getId(), start, end, true, readMode);
+        BigDecimal transferOutQty = aggregateTransferQty(factoryId, mt.getId(), start, end, false, readMode);
 
         // === 盘盈/损 (MaterialBatchAdjustment) — W8: 分列 ===
-        BigDecimal profitQty = aggregateStocktakeProfitQty(factoryId, mt.getId(), start, end);
-        BigDecimal lossQty = aggregateStocktakeLossQty(factoryId, mt.getId(), start, end);
+        BigDecimal profitQty = aggregateStocktakeProfitQty(factoryId, mt.getId(), start, end, readMode);
+        BigDecimal lossQty = aggregateStocktakeLossQty(factoryId, mt.getId(), start, end, readMode);
         // adjustQty 保留向后兼容: 净调整 = profitQty - lossQty
         BigDecimal adjustQty = nvl(profitQty).subtract(nvl(lossQty))
                 .setScale(QTY_SCALE, RoundingMode.HALF_UP);
-        BigDecimal profitAmount = aggregateStocktakeProfitAmount(factoryId, mt.getId(), start, end);
-        BigDecimal lossAmount = aggregateStocktakeLossAmount(factoryId, mt.getId(), start, end);
+        BigDecimal profitAmount = aggregateStocktakeProfitAmount(factoryId, mt.getId(), start, end, readMode);
+        BigDecimal lossAmount = aggregateStocktakeLossAmount(factoryId, mt.getId(), start, end, readMode);
         // adjustAmount 保留向后兼容: 净金额 = profitAmount - lossAmount (诚实 null 当两者均 null)
         BigDecimal adjustAmount = (profitAmount != null || lossAmount != null)
                 ? nvl(profitAmount).subtract(nvl(lossAmount)).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP)
@@ -458,15 +471,30 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      * 而不是抛异常阻断整张报表.
      */
     private OpeningBalance resolveOpening(String factoryId, String materialTypeId, LocalDate start,
-                                           InventoryLedgerSnapshot openingSnap) {
+                                           InventoryLedgerSnapshot openingSnap,
+                                           InventoryLedgerService.LedgerReadMode readMode) {
         if (openingSnap == null) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read requires a period-close opening snapshot for material "
+                        + materialTypeId);
+            }
             // 兜底: 从 MaterialBatch 全量聚合 startDate 之前的净入库数量 (无快照时唯一数据源,
             // 已经是 as-of-start 的诚实聚合, 不需要额外滚算)
             return new OpeningBalance(aggregateBatchQtyBefore(factoryId, materialTypeId, start), null);
         }
 
+        if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR
+                && openingSnap.getClosingQty() == null) {
+            throw new IllegalStateException("Strict inventory ledger read requires a non-null opening quantity for material "
+                    + materialTypeId);
+        }
+
         LocalDate periodEnd = resolveSnapshotPeriodEnd(openingSnap);
         if (periodEnd == null) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read cannot resolve the accounting period for opening snapshot "
+                        + openingSnap.getId());
+            }
             // 防御: 快照关联的 AccountingPeriod 找不到(测试桩或数据异常) — 无法校验缺口,
             // 退回快照原始值(不是新 bug, 是维持旧行为而非抛异常阻断整张报表)
             log.warn("[InventoryLedger] AccountingPeriod {} not found for snapshot {} (material={}) "
@@ -484,7 +512,7 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
         // 缺口存在 (跨未结账月 和/或 查询起点非月初) — 用同口径流水聚合滚算补齐
         return rollForwardOpening(factoryId, materialTypeId,
-                nvl(openingSnap.getClosingQty()), openingSnap.getClosingAmount(), gapStart, gapEnd);
+                nvl(openingSnap.getClosingQty()), openingSnap.getClosingAmount(), gapStart, gapEnd, readMode);
     }
 
     /** 快照所属 AccountingPeriod 的期末日期 (该月最后一天); 期间记录缺失时返回 null. */
@@ -504,17 +532,18 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      */
     private OpeningBalance rollForwardOpening(String factoryId, String materialTypeId,
                                                BigDecimal baseQty, BigDecimal baseAmount,
-                                               LocalDate gapStart, LocalDate gapEnd) {
+                                               LocalDate gapStart, LocalDate gapEnd,
+                                               InventoryLedgerService.LedgerReadMode readMode) {
         BigDecimal inboundQty = aggregateInboundQty(factoryId, materialTypeId, gapStart, gapEnd);
         BigDecimal inboundAmount = aggregateInboundAmount(factoryId, materialTypeId, gapStart, gapEnd);
-        BigDecimal outProdQty = aggregateProductionOutQty(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal outProdQty = aggregateProductionOutQty(factoryId, materialTypeId, gapStart, gapEnd, readMode);
         BigDecimal outSalesQty = aggregateSalesOutQty(factoryId, materialTypeId, gapStart, gapEnd);
-        BigDecimal transferInQty = aggregateTransferQty(factoryId, materialTypeId, gapStart, gapEnd, true);
-        BigDecimal transferOutQty = aggregateTransferQty(factoryId, materialTypeId, gapStart, gapEnd, false);
-        BigDecimal profitQty = aggregateStocktakeProfitQty(factoryId, materialTypeId, gapStart, gapEnd);
-        BigDecimal lossQty = aggregateStocktakeLossQty(factoryId, materialTypeId, gapStart, gapEnd);
-        BigDecimal profitAmount = aggregateStocktakeProfitAmount(factoryId, materialTypeId, gapStart, gapEnd);
-        BigDecimal lossAmount = aggregateStocktakeLossAmount(factoryId, materialTypeId, gapStart, gapEnd);
+        BigDecimal transferInQty = aggregateTransferQty(factoryId, materialTypeId, gapStart, gapEnd, true, readMode);
+        BigDecimal transferOutQty = aggregateTransferQty(factoryId, materialTypeId, gapStart, gapEnd, false, readMode);
+        BigDecimal profitQty = aggregateStocktakeProfitQty(factoryId, materialTypeId, gapStart, gapEnd, readMode);
+        BigDecimal lossQty = aggregateStocktakeLossQty(factoryId, materialTypeId, gapStart, gapEnd, readMode);
+        BigDecimal profitAmount = aggregateStocktakeProfitAmount(factoryId, materialTypeId, gapStart, gapEnd, readMode);
+        BigDecimal lossAmount = aggregateStocktakeLossAmount(factoryId, materialTypeId, gapStart, gapEnd, readMode);
 
         BigDecimal totalOut = nvl(outProdQty).add(nvl(outSalesQty)).add(nvl(transferOutQty));
         BigDecimal adjustQty = nvl(profitQty).subtract(nvl(lossQty));
@@ -602,7 +631,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateProductionOutQty(String factoryId, String materialTypeId,
-                                                  LocalDate start, LocalDate end) {
+                                                  LocalDate start, LocalDate end,
+                                                  InventoryLedgerService.LedgerReadMode readMode) {
         // MaterialConsumption 记录领料消耗; 兜底用 MaterialBatch.usedQuantity 变化
         try {
             List<Object> result = em.createQuery(
@@ -618,6 +648,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .getResultList();
             return result.isEmpty() ? ZERO : toBD(result.get(0));
         } catch (Exception e) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read failed for production consumption", e);
+            }
             log.debug("[InventoryLedger] MaterialConsumption query failed (entity may not exist): {}", e.getMessage());
             return ZERO;
         }
@@ -633,7 +666,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
 
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateTransferQty(String factoryId, String materialTypeId,
-                                             LocalDate start, LocalDate end, boolean isIn) {
+                                            LocalDate start, LocalDate end, boolean isIn,
+                                            InventoryLedgerService.LedgerReadMode readMode) {
         try {
             String factoryField = isIn ? "t.targetFactoryId" : "t.sourceFactoryId";
             List<Object> result = em.createQuery(
@@ -650,6 +684,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .getResultList();
             return result.isEmpty() ? ZERO : toBD(result.get(0));
         } catch (Exception e) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read failed for transfer quantity", e);
+            }
             log.debug("[InventoryLedger] Transfer query failed: {}", e.getMessage());
             return ZERO;
         }
@@ -670,7 +707,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeProfitQty(String factoryId, String materialTypeId,
-                                                    LocalDate start, LocalDate end) {
+                                                    LocalDate start, LocalDate end,
+                                                    InventoryLedgerService.LedgerReadMode readMode) {
         try {
             List<Object> result = em.createQuery(
                     "SELECT COALESCE(SUM(a.adjustmentQuantity), 0) " +
@@ -687,6 +725,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .getResultList();
             return result.isEmpty() ? ZERO : toBD(result.get(0)).setScale(QTY_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read failed for stocktake profit quantity", e);
+            }
             log.debug("[InventoryLedger] Stocktake profit qty query failed: {}", e.getMessage());
             return ZERO;
         }
@@ -702,7 +743,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeLossQty(String factoryId, String materialTypeId,
-                                                  LocalDate start, LocalDate end) {
+                                                  LocalDate start, LocalDate end,
+                                                  InventoryLedgerService.LedgerReadMode readMode) {
         try {
             List<Object> result = em.createQuery(
                     "SELECT COALESCE(SUM(ABS(a.adjustmentQuantity)), 0) " +
@@ -718,6 +760,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                     .getResultList();
             return result.isEmpty() ? ZERO : toBD(result.get(0)).abs().setScale(QTY_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read failed for stocktake loss quantity", e);
+            }
             log.debug("[InventoryLedger] Stocktake loss qty query failed: {}", e.getMessage());
             return ZERO;
         }
@@ -729,7 +774,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeProfitAmount(String factoryId, String materialTypeId,
-                                                       LocalDate start, LocalDate end) {
+                                                       LocalDate start, LocalDate end,
+                                                       InventoryLedgerService.LedgerReadMode readMode) {
         try {
             List<Object> result = em.createQuery(
                     "SELECT SUM(a.adjustmentQuantity * b.unitPrice) " +
@@ -748,6 +794,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
             Object val = result.isEmpty() ? null : result.get(0);
             return val == null ? null : toBD(val).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read failed for stocktake profit amount", e);
+            }
             log.debug("[InventoryLedger] Stocktake profit amount query failed: {}", e.getMessage());
             return null;
         }
@@ -760,7 +809,8 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
      */
     @SuppressWarnings("unchecked")
     private BigDecimal aggregateStocktakeLossAmount(String factoryId, String materialTypeId,
-                                                     LocalDate start, LocalDate end) {
+                                                     LocalDate start, LocalDate end,
+                                                     InventoryLedgerService.LedgerReadMode readMode) {
         try {
             List<Object> result = em.createQuery(
                     "SELECT SUM(ABS(a.adjustmentQuantity) * b.unitPrice) " +
@@ -779,6 +829,9 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
             // ABS() 已在 SQL 层逐行取绝对值; Java 侧 .abs() 作双重防御 (理论上 unitPrice 若为负会破坏此不变式)
             return val == null ? null : toBD(val).abs().setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
         } catch (Exception e) {
+            if (readMode == InventoryLedgerService.LedgerReadMode.STRICT_REPAIR) {
+                throw new IllegalStateException("Strict inventory ledger read failed for stocktake loss amount", e);
+            }
             log.debug("[InventoryLedger] Stocktake loss amount query failed: {}", e.getMessage());
             return null;
         }

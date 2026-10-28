@@ -17,6 +17,7 @@ import {
 import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport } from './factoryChartExport';
 import FactoryChartCanvas from './FactoryChartCanvas.vue';
 import FactoryChartDetails from './FactoryChartDetails.vue';
+import type { FactoryDetailRefreshScope } from './factoryChartDetailRefresh';
 import FactoryChartGuide from './FactoryChartGuide.vue';
 import { chartTypeLabel, recommendedAnalysisIds } from './factoryChartGuide';
 import {
@@ -82,6 +83,7 @@ const recommendations = computed(() => data.value?.recommendations ?? []);
 const displayedRecommendations = computed(() => recommendations.value.filter(item => selectedIds.value.includes(item.id)));
 const filteredDisplayedRecommendations = displayedRecommendations;
 const detailsVisible = ref(false); const detailsCandidate = ref<FactoryRecommendation | null>(null); const detailsPoint = ref<{ name: string; seriesName?: string; dataIndex?: number }>();
+const acceptedDetailScope = ref<FactoryDetailRefreshScope | null>(null);
 const hasNoSelectedCharts = computed(() => recommendations.value.length > 0 && displayedRecommendations.value.length === 0);
 const sourceLabel = computed(() => source.value === 'business' ? '业务系统' : '上传报表');
 const uploadLabel = (item: UploadHistoryItem) => `${item.originalFileName || item.fileName}${item.sheetName ? ` · ${item.sheetName}` : ''}`;
@@ -119,6 +121,7 @@ async function loadDataSources() {
 }
 
 function resetVisibleData() {
+  acceptedDetailScope.value = null;
   data.value = null;
   detailsVisible.value = false;
   detailsCandidate.value = null;
@@ -197,7 +200,7 @@ async function loadRecommendations() {
     error.value = baseQuery.error;
     return;
   }
-  const query = { ...baseQuery, guided: true, analysis_subject: analysisSubject.value };
+  const query = { ...baseQuery, guided: true, analysis_subject: analysisSubject.value, detail_candidate_ids: [] as string[] };
   loading.value = true;
   try {
     const result = await getFactoryChartRecommendations(query);
@@ -212,6 +215,7 @@ async function loadRecommendations() {
       return;
     }
     data.value = result.data;
+    acceptedDetailScope.value = { request: { ...query }, identity: authEpoch.value, periodLabel: result.data.period.label };
     guideItems.value = result.data.recommendations;
     subjectOptions.value = result.data.subjects || [];
     applyGeneratedGuideIntent(result.data.recommendations);
@@ -499,14 +503,15 @@ function findingsFor(item: FactoryRecommendation) {
           <div class="rule-reason"><strong>规则依据</strong><span>{{ item.reason }}</span></div>
           <p class="scope-note">来源：{{ item.source }}</p>
           <FactoryChartCanvas :option="item.chart.echartsOption" @click="openDetails(item, $event)" />
-          <el-button v-if="item.detailContext" class="details-button" size="small" plain @click="openDetails(item)">查看原始明细</el-button>
+          <el-button class="details-button" size="small" plain @click="openDetails(item)">查看原始明细</el-button>
+          <p v-if="item.detailStatus">{{ item.detailStatus.message }}</p>
           <table class="source-details" aria-label="图表来源详情"><caption>来源详情</caption><tbody><tr><th>工厂</th><td>{{ factoryId }}</td><th>数据源</th><td>{{ item.source || data.sourceLabel }}</td></tr><tr><th>期间</th><td>{{ data.period?.label || '当前期间' }}</td><th>单位</th><td>{{ item.unit || '—' }}</td></tr></tbody></table>
           <div class="kpi-grid"><div v-for="kpi in item.kpis" :key="`${item.id}-${kpi.label}`" class="kpi-item"><span>{{ kpi.label }}</span><strong>{{ kpi.value ?? '—' }} <small>{{ kpi.unit }}</small></strong></div></div>
           <div v-for="section in findingsFor(item)" :key="section.key" class="finding-section"><div class="finding-title" :class="`finding-title--${section.type}`">{{ section.title }}</div><ul><li v-for="text in section.items" :key="text">{{ text }}</li></ul></div>
           <div v-if="item.aiReason" class="ai-reason"><el-tag type="success" size="small">AI 补充</el-tag><span>{{ item.aiReason }}</span></div>
         </el-card>
       </div>
-      <FactoryChartDetails v-model="detailsVisible" :candidate="detailsCandidate" :point="detailsPoint" />
+      <FactoryChartDetails v-model="detailsVisible" :candidate="detailsCandidate" :point="detailsPoint" :refresh-scope="acceptedDetailScope" />
 
       <el-card v-if="data.unavailable?.length" shadow="never" class="unavailable-card" data-testid="factory-chart-unavailable">
         <template #header><div class="unavailable-title"><el-icon><TrendCharts /></el-icon><el-button text @click="showUnavailable = !showUnavailable">{{ showUnavailable ? '收起条件说明' : `查看未满足条件说明（${data.unavailable.length}）` }}</el-button></div></template>

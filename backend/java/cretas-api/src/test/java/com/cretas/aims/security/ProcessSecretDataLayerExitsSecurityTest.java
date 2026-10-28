@@ -245,6 +245,48 @@ class ProcessSecretDataLayerExitsSecurityTest {
         verifyNothingDenied();
     }
 
+    MockMvc costTotals() throws Exception {
+        when(dep(OrderCostBreakdownService.class).compute(eq(F), eq("o2"), anyBoolean()))
+                .thenAnswer(afterReadingSecretRecipe(() -> OrderCostBreakdownDTO.builder()
+                        .orderId("o2").outputQuantity(new BigDecimal("100"))
+                        .costDenominatorQuantity(new BigDecimal("310")).costDenominatorUnit("袋")
+                        .rawMaterialCost(new BigDecimal("805")).seasoningCost(new BigDecimal("12.5"))
+                        .packagingCost(new BigDecimal("31")).laborCost(new BigDecimal("60"))
+                        .totalCost(new BigDecimal("908.5")).perBoxCost(new BigDecimal("9.085"))
+                        .build()));
+        return mvc(controller(OrderCostBreakdownController.class));
+    }
+
+    @Test
+    void orderCostTotalsOfAProtectedProductAreHiddenFromFactoryStaffWithoutAGrant() throws Exception {
+        // Steve 2026-10-28 选 A: 调料 / 包材 / 原料合计与总成本一律「已保密」, 本单产出照给
+        JsonNode body = call(costTotals(), get("/api/mobile/F-A/production/orders/o2/cost-breakdown"), user(OPERATOR));
+        for (String field : List.of("rawMaterialCost", "seasoningCost", "packagingCost", "totalCost", "perBoxCost")) {
+            assertThat(body.get(field).isNull()).as(field).isTrue();
+        }
+        assertThat(body.get("outputQuantity").asInt()).isEqualTo(100);
+        // 成本分母产量是产量, 不是金额 (Steve: 产量不算保密); 金额仍然隐藏
+        assertThat(body.get("costDenominatorQuantity").asInt()).isEqualTo(310);
+        assertThat(body.get("processSecret").get("hiddenFields").toString())
+                .contains("seasoningCost").doesNotContain("costDenominatorQuantity");
+        verifyDenied(user(OPERATOR), "seasoningCost");
+    }
+
+    @Test
+    void platformStaffStillGetNeitherCostTotalsNorTheCostDenominatorQuantity() throws Exception {
+        JsonNode body = call(costTotals(), get("/api/mobile/F-A/production/orders/o2/cost-breakdown"), platform());
+        assertThat(body.get("totalCost").isNull()).isTrue();
+        assertThat(body.get("costDenominatorQuantity").isNull()).as("平台连本单总量也不给").isTrue();
+    }
+
+    @Test
+    void orderCostTotalsStayForTheOwner() throws Exception {
+        JsonNode body = call(costTotals(), get("/api/mobile/F-A/production/orders/o2/cost-breakdown"), user(OWNER));
+        assertThat(body.get("seasoningCost").decimalValue()).isEqualByComparingTo("12.5");
+        assertThat(body.get("totalCost").decimalValue()).isEqualByComparingTo("908.5");
+        verifyNothingDenied();
+    }
+
     // ------------------------------------------------------------------ 报工 workflow-config
 
     MockMvc workflowConfig() throws Exception {

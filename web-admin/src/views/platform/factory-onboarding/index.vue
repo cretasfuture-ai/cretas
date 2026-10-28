@@ -1559,6 +1559,8 @@ const doneGroups = computed(() => {
     // 以下四类预览里**有**, 做完不复述就违反「两者对得上」
     { label: '工序', written: a.writtenWorkProcesses ?? [], skipped: a.skippedWorkProcesses ?? [] },
     { label: '存放区', written: a.writtenWarehouses ?? [], skipped: a.skippedWarehouses ?? [] },
+    // S4: 产线与每小时产能 (插单可行性只读这里); 跳过 = 同名产线已存在, 复用
+    { label: '产线与设备产能', written: a.writtenProductionLines ?? [], skipped: a.skippedProductionLines ?? [] },
     { label: '产品工序链', written: a.writtenProductProcesses ?? [], skipped: [] },
     { label: '编码分段', written: a.writtenCodeSegments ?? [], skipped: a.skippedCodeSegments ?? [] },
     // ⚠️ 常显层: 缺临界限值的控制点 apply **整条不写**(库里三列非空, 且不许补默认值),

@@ -686,6 +686,8 @@ public class OrderCostBreakdownService {
                 .finishedBatchNumber(auditBatch == null ? null : auditBatch.getBatchNumber())
                 .productSku(auditPlan != null ? auditPlan.getProductTypeId()
                         : (auditBatch == null ? null : auditBatch.getProductTypeId()))
+                .productTypeId(auditPlan != null ? auditPlan.getProductTypeId()
+                        : (auditBatch == null ? null : auditBatch.getProductTypeId()))
                 .productName(auditBatch == null ? null : auditBatch.getProductName())
                 .pinnedBomRecipeId(auditPlan == null ? null : auditPlan.getSelectedBomRecipeId())
                 .pinnedBomVersion(auditPlan == null ? null : auditPlan.getSelectedBomVersion())
