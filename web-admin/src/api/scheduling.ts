@@ -22,8 +22,63 @@ export interface SchedulingPlan {
   confirmedBy?: number;
   confirmedAt?: string;
   notes?: string | null;
-  /** 自动排程的提示 (缺工时 / 没有工艺图 / 开工时刻默认 08:00 等); 只在生成那次返回。 */
+  /** 自动排程的提示 (按历史估算 / 人工与历史相差大 / 计划已完成不排等); 只在生成那次返回。 */
   warnings?: string[];
+  /**
+   * 自动排程结果 (只在生成那次返回): SCHEDULED = 已排出并保存;
+   * CAPACITY_REQUIRED = 有产品要先补日产能, 什么都没保存 (id 为空), 见 capacityRequired。
+   */
+  outcome?: 'SCHEDULED' | 'CAPACITY_REQUIRED' | null;
+  capacityRequired?: DailyCapacityRequired[] | null;
+}
+
+/** 自动排程需要当场补日产能的一个产品。 */
+export interface DailyCapacityRequired {
+  productTypeId: string;
+  productName: string;
+  /** 要填的单位 = 计划单位。 */
+  unit: string;
+  /** 联产计划: 问的是「这个计划一天能做多少」。 */
+  jointPlan: boolean;
+  question: string;
+  /** MISSING = 没填; UNIT_MISMATCH = 填了但单位与计划单位不一致。 */
+  reason: 'MISSING' | 'UNIT_MISMATCH' | string;
+  currentQuantityPerDay?: number | null;
+  currentUnit?: string | null;
+  experienceQuantityPerDay?: number | null;
+  experienceNote?: string | null;
+  planNumbers: string[];
+}
+
+/** 排程页当场补的日产能 (先保存到产品, 再参与本次排程)。 */
+export interface DailyCapacityOverride {
+  productTypeId: string;
+  quantityPerDay: number;
+  unit: string;
+}
+
+/** 按天排程 (APS v2) 某一天给这个计划的量。 */
+export interface DailyAllocationDay {
+  date: string;
+  quantity: number;
+  /** 占当天产线产能的比例 (0, 1]。 */
+  shareOfDay: number;
+}
+
+/** 按天排程 (APS v2) 一条排程的按天分配。 */
+export interface DailyAllocations {
+  unit: string;
+  capacityPerDay: number;
+  capacitySource: 'MANUAL' | 'EXPERIENCE' | string;
+  /** 人工填写 / 按历史估算 */
+  capacitySourceLabel: string;
+  experiencePerDay?: number | null;
+  experienceNote?: string | null;
+  jointPlan?: boolean;
+  plannedQuantity?: number | null;
+  reportedQuantity?: number | null;
+  remainingQuantity?: number | null;
+  days: DailyAllocationDay[];
 }
 
 /** 自动排程 (按工艺图) 每道工序的排程时间; start / end 为本地时间 ISO 字符串。 */
@@ -61,6 +116,7 @@ export interface LineSchedule {
   productionPlanId?: string | null;
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
+  dailyAllocations?: DailyAllocations | null;
 }
 
 export interface WorkerAssignment {
@@ -185,6 +241,7 @@ interface SchedulingWireLineSchedule {
   productionPlanId?: string | null;
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
+  dailyAllocations?: DailyAllocations | null;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -228,6 +285,7 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     productionPlanId: wire.productionPlanId ?? null,
     planNumber: wire.planNumber ?? null,
     taskTimeline: wire.taskTimeline ?? null,
+    dailyAllocations: wire.dailyAllocations ?? null,
   };
 }
 
@@ -606,21 +664,38 @@ export function cancelSchedulingPlan(factoryId: string, planId: string, reason: 
 
 export interface GenerateScheduleRequest {
   planDate: string;
-  /** 要排的生产计划 id, 按顺序先到先排 (同一工位同一时刻只做一个)。 */
+  /** 要排的生产计划 id, 按顺序先到先排 (同一条产线一天的产能按顺序分着用)。 */
   planIds: string[];
   /** 可选: 产线; 工厂只有 1 条可用产线时可不传。 */
   productionLineId?: string;
-  /** 可选: 开工时刻 HH:mm; 不传按计划日期 08:00。 */
-  startTime?: string;
+  /** 当场补的日产能: 先保存到产品, 再参与本次排程。 */
+  dailyCapacityOverrides?: DailyCapacityOverride[];
 }
 
 /**
- * 按工艺图自动排程: 按工艺图先后关系 + 每道工序预计工时排出开始/结束时间。
- * 缺预计工时的计划不排 (返回 warnings 列出工序名); 不自动派工。
+ * 按产品日产能自动排程 (APS v2): 按天排出哪天做哪个计划、做多少, 一天做不完顺延。
+ * 产品填了日产能用人工的, 没填用历史估算; 两样都没有时返回 outcome = CAPACITY_REQUIRED
+ * 与 capacityRequired 清单 (什么都没保存), 当场补填后带 dailyCapacityOverrides 重新提交。不自动派工。
  */
 export function generateSchedule(factoryId: string, data: GenerateScheduleRequest) {
   return post<SchedulingWirePlan>(`/${factoryId}/scheduling/generate`, data)
     .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
+}
+
+/**
+ * 设置 / 清掉产品人工日产能 (一天能做多少 + 单位, 单位与该产品计划的计划单位一致)。
+ * quantityPerDay 传 null = 清掉 (排程改用历史估算或当场问)。
+ */
+export function setProductDailyCapacity(
+  factoryId: string,
+  productTypeId: string,
+  quantityPerDay: number | null,
+  unit: string | null,
+) {
+  return put<Record<string, unknown>>(
+    `/${factoryId}/product-types/${encodeURIComponent(productTypeId)}/daily-capacity`,
+    quantityPerDay == null ? { quantityPerDay: null, unit: null } : { quantityPerDay, unit },
+  );
 }
 
 /** 待排产的生产计划 (后端 pending-batches 返回的是生产计划列表)。 */

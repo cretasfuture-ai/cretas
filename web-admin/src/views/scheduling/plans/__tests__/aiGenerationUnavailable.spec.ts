@@ -80,7 +80,7 @@ describe('scheduling create capability and manual payload contract', () => {
 
   it('renders the unavailable mode as a disabled button (no DAG entry) when the server says UNAVAILABLE', async () => {
     const wrapper = await page(false);
-    expect(wrapper.find('[data-testid="mode-dag-schedule"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="mode-daily-schedule"]').exists()).toBe(false);
     expect(wrapper.find('button.mode-option.unavailable').attributes('disabled')).toBeDefined();
   });
 
@@ -98,15 +98,23 @@ describe('scheduling create capability and manual payload contract', () => {
   });
 });
 
-describe('scheduling create: DAG auto-schedule when the server says AVAILABLE', () => {
+describe('scheduling create: daily-capacity auto-schedule when the server says AVAILABLE', () => {
   const available = {
     ...capabilities,
-    aiGeneration: { status: 'AVAILABLE', mode: 'DAG_DURATION', reason: '按工艺图的先后关系和每道工序的预计工时排出开始/结束时间；缺预计工时的工序不排；不自动派工。' },
+    aiGeneration: { status: 'AVAILABLE', mode: 'DAILY_CAPACITY', reason: '按产品「一天能做多少」按天排；两样都没有时当场填一个日产能再排；不自动派工。' },
   };
   const pending = [
     { id: 'PP-A', planNumber: 'PLAN-A', productTypeName: '卤猪蹄', plannedQuantity: 12, expectedCompletionDate: '2026-10-20', status: 'PENDING' },
     { id: 'PP-B', planNumber: 'PLAN-B', productTypeName: '酱牛肉', plannedQuantity: 5, expectedCompletionDate: '2026-10-21', status: 'PENDING' },
   ];
+  const scheduled = { success: true, data: { id: 'SP-1', outcome: 'SCHEDULED', lineSchedules: [{ id: 'S-1' }], warnings: ['「卤猪蹄」没有填日产能，按历史估算 150 袋/天'] } };
+  const capacityRequired = { success: true, data: {
+    id: null, outcome: 'CAPACITY_REQUIRED', lineSchedules: [], warnings: [],
+    capacityRequired: [
+      { productTypeId: 'PT-BEEF', productName: '酱牛肉', unit: '袋', jointPlan: false, question: '「酱牛肉」一天能做多少 袋？', reason: 'MISSING', experienceNote: '近 90 天只有 2 天有成品入库，不足 3 天，算不出历史日产能', planNumbers: ['PLAN-B'] },
+      { productTypeId: 'RAW-CHICKEN', productName: '西装鸡', unit: 'kg', jointPlan: true, question: '这个联产计划（西装鸡）一天能做多少 kg？', reason: 'MISSING', planNumbers: ['PLAN-A'] },
+    ],
+  } };
 
   function serve(lines: Array<{ id: string; name: string }>) {
     boundary.get.mockImplementation((url: string) => Promise.resolve({ success: true, data:
@@ -118,7 +126,7 @@ describe('scheduling create: DAG auto-schedule when the server says AVAILABLE', 
 
   beforeEach(() => {
     vi.clearAllMocks();
-    boundary.post.mockResolvedValue({ success: true, data: { id: 'SP-1', lineSchedules: [{ id: 'S-1' }], warnings: ['没有指定开工时刻，按 08:00 开工排'] } });
+    boundary.post.mockResolvedValue(scheduled);
   });
 
   async function mountPage() {
@@ -128,29 +136,71 @@ describe('scheduling create: DAG auto-schedule when the server says AVAILABLE', 
     return wrapper;
   }
 
-  it('lets the user pick plans in order and sends planIds (never batchIds) then opens the detail with warnings', async () => {
+  it('lets the user pick plans in order and sends planIds (never batchIds or a start time) then opens the detail with warnings', async () => {
     serve([{ id: 'LINE-1', name: '一号线' }]);
     const wrapper = await mountPage();
-    await wrapper.get('[data-testid="mode-dag-schedule"]').trigger('click');
+    await wrapper.get('[data-testid="mode-daily-schedule"]').trigger('click');
     expect(wrapper.text()).toContain('不自动派工');
+    expect(wrapper.text()).toContain('一天能做多少');
+    expect(wrapper.find('[data-testid="aps-start-time"]').exists()).toBe(false); // 按天排, 不再问开工时刻
     // 点选顺序就是先到先排的顺序
     await wrapper.get('[data-testid="aps-plan-PP-B"]').trigger('click');
     await wrapper.get('[data-testid="aps-plan-PP-A"]').trigger('click');
-    await wrapper.get('[data-testid="aps-start-time"]').setValue('13:30');
     await wrapper.findAll('.submit-area button')[1].trigger('click');
     await flushPromises();
 
     expect(boundary.post).toHaveBeenCalledExactlyOnceWith('/F-P05/scheduling/generate', {
-      planDate: '2026-10-19', planIds: ['PP-B', 'PP-A'], productionLineId: 'LINE-1', startTime: '13:30',
+      planDate: '2026-10-19', planIds: ['PP-B', 'PP-A'], productionLineId: 'LINE-1',
     });
     expect(boundary.post.mock.calls[0][1]).not.toHaveProperty('batchIds');
-    expect(boundary.push).toHaveBeenCalledWith({ path: '/scheduling/plans/SP-1', state: { apsWarnings: ['没有指定开工时刻，按 08:00 开工排'] } });
+    expect(boundary.push).toHaveBeenCalledWith({ path: '/scheduling/plans/SP-1', state: { apsWarnings: ['「卤猪蹄」没有填日产能，按历史估算 150 袋/天'] } });
+  });
+
+  it('asks on the spot for the missing daily capacities, blocks until all are filled, then resubmits with overrides', async () => {
+    serve([{ id: 'LINE-1', name: '一号线' }]);
+    boundary.post.mockResolvedValueOnce(capacityRequired).mockResolvedValueOnce(scheduled);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="mode-daily-schedule"]').trigger('click');
+    await wrapper.get('[data-testid="aps-plan-PP-B"]').trigger('click');
+    await wrapper.get('[data-testid="aps-plan-PP-A"]').trigger('click');
+    await wrapper.findAll('.submit-area button')[1].trigger('click');
+    await flushPromises();
+
+    // 什么都没保存: 不跳详情页, 当场列出要补的产品和该问的话
+    expect(boundary.push).not.toHaveBeenCalled();
+    const card = wrapper.get('[data-testid="aps-capacity-required"]');
+    expect(card.get('[data-testid="aps-capacity-PT-BEEF"]').text()).toContain('「酱牛肉」一天能做多少 袋？');
+    expect(card.get('[data-testid="aps-capacity-PT-BEEF"]').text()).toContain('不足 3 天');
+    expect(card.get('[data-testid="aps-capacity-RAW-CHICKEN"]').text()).toContain('联产计划');
+    expect(card.get('[data-testid="aps-capacity-RAW-CHICKEN"]').text()).toContain('kg/天');
+    // 防呆: 没填完不能提交, 并说清差哪个
+    expect(card.get('[data-testid="aps-capacity-block-reason"]').text()).toContain('酱牛肉');
+    expect(card.get('[data-testid="aps-capacity-submit"]').attributes('disabled')).toBeDefined();
+
+    await card.get('[data-testid="aps-capacity-PT-BEEF"] input').setValue('300');
+    expect(wrapper.get('[data-testid="aps-capacity-block-reason"]').text()).toContain('西装鸡');
+    await wrapper.get('[data-testid="aps-capacity-RAW-CHICKEN"] input').setValue('0');
+    expect(wrapper.get('[data-testid="aps-capacity-block-reason"]').text()).toContain('西装鸡'); // 0 不是产能
+    await wrapper.get('[data-testid="aps-capacity-RAW-CHICKEN"] input').setValue('200');
+    expect(wrapper.find('[data-testid="aps-capacity-block-reason"]').exists()).toBe(false);
+    await wrapper.get('[data-testid="aps-capacity-submit"]').trigger('click');
+    await flushPromises();
+
+    expect(boundary.post).toHaveBeenCalledTimes(2);
+    expect(boundary.post.mock.calls[1]).toEqual(['/F-P05/scheduling/generate', {
+      planDate: '2026-10-19', planIds: ['PP-B', 'PP-A'], productionLineId: 'LINE-1',
+      dailyCapacityOverrides: [
+        { productTypeId: 'PT-BEEF', quantityPerDay: 300, unit: '袋' },
+        { productTypeId: 'RAW-CHICKEN', quantityPerDay: 200, unit: 'kg' },
+      ],
+    }]);
+    expect(boundary.push).toHaveBeenCalledWith({ path: '/scheduling/plans/SP-1', state: { apsWarnings: ['「卤猪蹄」没有填日产能，按历史估算 150 袋/天'] } });
   });
 
   it('blocks submission up front when no plan is chosen or several lines exist without a choice', async () => {
     serve([{ id: 'LINE-1', name: '一号线' }, { id: 'LINE-2', name: '二号线' }]);
     const wrapper = await mountPage();
-    await wrapper.get('[data-testid="mode-dag-schedule"]').trigger('click');
+    await wrapper.get('[data-testid="mode-daily-schedule"]').trigger('click');
     expect(wrapper.get('[data-testid="aps-block-reason"]').text()).toContain('请至少选择一个生产计划');
     expect(wrapper.findAll('.submit-area button')[1].attributes('disabled')).toBeDefined();
 
