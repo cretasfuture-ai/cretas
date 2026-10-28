@@ -60,6 +60,8 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
     private SchedulingPlanCrudService schedulingPlanCrudService;
     @Lazy @Autowired
     private WorkerAssignmentService workerAssignmentService;
+    @Lazy @Autowired
+    private com.cretas.aims.service.scheduling.dag.DagScheduleGenerator dagScheduleGenerator;
 
     @Value("${cretas.ai.service.url:http://localhost:8083}")
     private String aiServiceUrl;
@@ -83,8 +85,8 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
     @Override
     @Transactional
     public SchedulingPlanDTO generateSchedule(String factoryId, GenerateScheduleRequest request, Long userId) {
-        throw new BusinessException("AI自动排程暂不可用，本次未创建或调整排程，请使用手动创建并明确产线和起止时间");
-
+        // APS v1 (Steve 2026-10-28): 按工艺图 + 预计工时排工序时间; 缺工时的不排、不拿默认值猜; 不自动派工。
+        return dagScheduleGenerator.generate(factoryId, request, userId);
     }
 
     @Override
