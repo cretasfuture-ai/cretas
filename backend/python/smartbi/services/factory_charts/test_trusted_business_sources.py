@@ -111,13 +111,13 @@ def test_purchase_lineage_rejects_missing_or_cross_factory_material_master():
 
 def test_current_finished_goods_snapshot_is_independent_and_conserving():
     rows = [
-        {"成品批次ID": "fg1", "工厂ID": "F006", "状态": "AVAILABLE", "单位": "kg",
+        {"成品批次ID": "fg1", "产品ID": "p1", "工厂ID": "F006", "状态": "AVAILABLE", "单位": "kg",
          "已生产数量": Decimal("100"), "已发货数量": Decimal("20"), "已预留数量": Decimal("10"),
          "可用数量": Decimal("70")},
-        {"成品批次ID": "fg2", "工厂ID": "F006", "状态": "AVAILABLE", "单位": "kg",
+        {"成品批次ID": "fg2", "产品ID": "p1", "工厂ID": "F006", "状态": "AVAILABLE", "单位": "kg",
          "已生产数量": Decimal("100"), "已发货数量": Decimal("20"), "已预留数量": Decimal("10"),
          "可用数量": Decimal("71")},
-        {"成品批次ID": "fg3", "工厂ID": "F007", "状态": "AVAILABLE", "单位": "kg",
+        {"成品批次ID": "fg3", "产品ID": "p1", "工厂ID": "F007", "状态": "AVAILABLE", "单位": "kg",
          "已生产数量": Decimal("1"), "已发货数量": Decimal("0"), "已预留数量": Decimal("0"),
          "可用数量": Decimal("1")},
     ]
@@ -128,7 +128,7 @@ def test_current_finished_goods_snapshot_is_independent_and_conserving():
 
 
 def test_finished_goods_missing_status_and_duplicate_ids_quarantine_all_rows():
-    base = {"成品批次ID": "fg1", "工厂ID": "F006", "单位": "kg", "已生产数量": Decimal("10"),
+    base = {"成品批次ID": "fg1", "产品ID": "p1", "工厂ID": "F006", "单位": "kg", "已生产数量": Decimal("10"),
             "已发货数量": Decimal("1"), "已预留数量": Decimal("1"), "可用数量": Decimal("8")}
     _, missing_status_gaps = sources.qualify_finished_goods_rows([base], "F006")
     assert any("非AVAILABLE" in item for gap in missing_status_gaps for item in gap["missing"])
