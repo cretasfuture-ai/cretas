@@ -9,7 +9,7 @@
 --    这是失败即关闭的方向: 宁可让一条真 0% 报价重填一次, 也不让一条没填的报价被当成最低价。
 -- 3. 核价单可挂在一张采购草稿上 (source_purchase_order_id):
 --    选定报价时回填这张草稿, 不另建采购单。
--- Pre-assigned Flyway slot V20261103_103 (lane L3).
+-- Lane L3. Originally slot V20261103_103; renumbered to _122 (above every in-flight lane) per organizer rule: must exceed main's max at merge.
 -- ============================================================
 
 ALTER TABLE inquiry_quote_supplier_prices

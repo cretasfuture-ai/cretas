@@ -95,7 +95,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
             InquiryQuoteStatus.DRAFT, InquiryQuoteStatus.INQUIRING,
             InquiryQuoteStatus.QUOTED, InquiryQuoteStatus.SELECTED);
 
-    /** V20261103_103 的部分唯一索引名 (同一草稿行只允许一张进行中核价单)。 */
+    /** V20261103_122 的部分唯一索引名 (同一草稿行只允许一张进行中核价单)。 */
     static final String OPEN_DRAFT_LINE_CONSTRAINT = "uk_iq_open_source_draft_line";
 
     /** 后端全线东八区: 有效期 / 生效日按工厂所在时区的「今天」判断。 */
