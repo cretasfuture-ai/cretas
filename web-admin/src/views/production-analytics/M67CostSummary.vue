@@ -36,7 +36,7 @@
       <el-table-column prop="totalCost" label="总成本" width="150" align="right">
         <template #default="{ row }">
           <b>{{ totalCostCell(row) }}</b>
-          <el-tooltip v-if="!isProcessSecretHidden(row, 'totalCost') && row.totalCost == null && row.knownCostSubtotal != null" placement="top">
+          <el-tooltip v-if="!isAnyProcessSecretHidden(row, ['totalCost', 'knownCostSubtotal']) && row.totalCost == null && row.knownCostSubtotal != null" placement="top">
             <template #content>
               <div>此金额只含已录入的成本项，尚未包含：</div>
               <div v-for="label in missingCostLabels(row)" :key="label">· {{ label }}</div>
@@ -80,7 +80,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { toDateString } from '@/utils/dateFormat';
-import { PROCESS_SECRET_LABEL, isProcessSecretHidden, secretAwareCell } from '@/utils/processSecretField';
+import { PROCESS_SECRET_LABEL, isAnyProcessSecretHidden, isProcessSecretHidden, secretAwareCell } from '@/utils/processSecretField';
 import { costSummaryTotal } from './costSummaryTotal';
 
 interface Row {
@@ -111,7 +111,7 @@ const empties = computed(() => masked.value ? '无价格查看权限或区间内
 const money = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
 const moneyOf = (v: unknown) => money(typeof v === 'number' ? v : null);
 // 工艺保密: 保密产品的成本合计对无授权账号是 null, 显示「已保密」而不是「—」
-const totalCostCell = (row: Row) => (isProcessSecretHidden(row, 'totalCost')
+const totalCostCell = (row: Row) => (isAnyProcessSecretHidden(row, ['totalCost', 'knownCostSubtotal'])
   ? PROCESS_SECRET_LABEL : money(row.totalCost ?? row.knownCostSubtotal));
 const skuUnit = (row: Row) => canonicalUnitCode(row.skuUnit) || (row.boxCount != null ? 'box' : '');
 const skuOutput = (row: Row) => {
@@ -122,7 +122,9 @@ const skuOutput = (row: Row) => {
 // 🔴 `perKg` 已随「元/kg」列一起删除 (2026-08-19) —— 它读的 costPerKg / perKgCost
 // 后端从未产出, 结构上只能返回「—」。装回来的前提见 template 里那段注释。
 const perSkuUnit = (row: Row) => {
-  if (isProcessSecretHidden(row, 'perBoxCost')) return PROCESS_SECRET_LABEL;
+  if (isAnyProcessSecretHidden(row, ['perBoxCost', 'knownPerBoxCost', 'costPerSkuUnit', 'perSkuUnitCost'])) {
+    return PROCESS_SECRET_LABEL;
+  }
   const unit = skuUnit(row);
   // 与「总成本」同口径: 完整值优先, 没有就用已知合计的单位成本 (行上已有"待补"标记说明不完整)。
   const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? row.perBoxCost ?? row.knownPerBoxCost;

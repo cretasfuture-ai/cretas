@@ -1,4 +1,4 @@
-import { isProcessSecretHidden } from '@/utils/processSecretField';
+import { isAnyProcessSecretHidden } from '@/utils/processSecretField';
 
 export interface BatchCostEvidence {
   finishedBatchNumber?: string | null;
@@ -55,7 +55,7 @@ export function batchCostState(data: BatchCostEvidence | null, loading: boolean,
   if (error) return 'ERROR';
   if (data?.priceMasked) return 'MASKED';
   // 工艺保密: 保密产品的成本合计对无授权账号是 null, ⛔ 不能落进「待核对」让人去查报工
-  if (data && isProcessSecretHidden(data, 'totalCost')) return 'SECRET';
+  if (data && isAnyProcessSecretHidden(data, ['totalCost', 'knownCostSubtotal'])) return 'SECRET';
   if (!data?.hasData || data.calculationStatus === 'NO_DATA') return 'NO_DATA';
   if (typeof data.priceMasked !== 'boolean') return 'UNVERIFIED';
   if (data.calculationStatus === 'PARTIAL' && data.costComplete === false) return 'PARTIAL';

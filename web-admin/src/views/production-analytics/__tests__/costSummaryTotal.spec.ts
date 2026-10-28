@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { costSummaryTotal } from '../costSummaryTotal';
 import { secretAwareCell } from '@/utils/processSecretField';
+import { batchCostState, type BatchCostEvidence } from '@/views/production/batches/batchCostEvidence';
 
 const money = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
 const secretRow = {
@@ -19,6 +20,17 @@ describe('成本汇总: 工艺保密隐藏的成本', () => {
   it('待补和已保密同时出现时两个都标', () => {
     expect(costSummaryTotal([{ totalCost: null, knownCostSubtotal: 30 }, secretRow], money))
       .toBe('¥30.00（含待补，不含 1 单已保密）');
+  });
+
+  it('成本没采集齐的保密行 (完整成本本来就是 null, 只有已知合计被隐藏) 也算已保密', () => {
+    const partialSecret = {
+      totalCost: null,
+      knownCostSubtotal: null,
+      processSecret: { visibility: 'TOTALS_ONLY', hiddenFields: ['knownCostSubtotal'] },
+    };
+    expect(costSummaryTotal([{ totalCost: 100 }, partialSecret], money)).toBe('¥100.00（不含 1 单已保密）');
+    expect(batchCostState({ hasData: true, priceMasked: false, calculationStatus: 'PARTIAL', costComplete: false,
+      ...partialSecret } as BatchCostEvidence, false, '')).toBe('SECRET');
   });
 
   it('阴性对照: 没有保密行时合计照旧', () => {

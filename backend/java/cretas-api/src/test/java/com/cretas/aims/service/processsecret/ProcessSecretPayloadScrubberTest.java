@@ -49,13 +49,14 @@ class ProcessSecretPayloadScrubberTest {
     ProcessSecretPayloadScrubber scrubber;
     ProductionPlanRepository plans;
     com.cretas.aims.repository.ProductionBatchRepository batches;
+    ProcessSecretPolicyRepository policies;
 
     @BeforeEach
     void setUp() {
         // 打标的「本厂有无保密产品」探针是静态的; 同一 JVM 里先跑的 Spring 测试上下文会装上它自己的 (缓存的
         // 上下文不销毁), 这里恢复默认「有」, 让工艺图照常解析
         ProcessSecretReadTracker.useProtectedFactoryProbe(null);
-        ProcessSecretPolicyRepository policies = mock(ProcessSecretPolicyRepository.class);
+        policies = mock(ProcessSecretPolicyRepository.class);
         ProcessSecretGrantRepository grants = mock(ProcessSecretGrantRepository.class);
         recorder = mock(ProcessSecretAuditRecorder.class);
         when(grants.findActive(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
@@ -600,6 +601,38 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void aTotalsObjectNestedUnderAnUnprotectedProductIsStillATotal() throws Exception {
+        // 复核 M-a: 合计对象继承了上层不受保护的产品, 但它自己没有产品, 照样是合计
+        String body = "{'productTypeId':'PLAIN','outputs':[{'productTypeId':'P17','totalCost':900},"
+                + "{'productTypeId':'PLAIN2','totalCost':800}],'totals':{'totalCost':1700}}";
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, Set.of(), "GET /production/settlement/x", false);
+        assertThat(operator.at("/totals/totalCost").isNull()).isTrue();
+        assertThat(operator.at("/outputs/1/totalCost").asInt()).as("不受保护的兄弟行照给").isEqualTo(800);
+    }
+
+    @Test
+    void aGrantedMainProductDoesNotUnlockMergedPlanCostsThatIncludeAnUngrantedProtectedSibling() throws Exception {
+        // 复核 M-c: 主产品 P17 有权, 同一计划的副产出 P18 受保护且无权 —— 合并的计划成本里有 P18 的配方金额
+        ProcessSecretPolicy p17 = ProcessSecretPolicy.builder().id(1L).factoryId(F).productTypeId(SECRET)
+                .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
+        ProcessSecretPolicy p18 = ProcessSecretPolicy.builder().id(2L).factoryId(F).productTypeId("P18")
+                .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(99L).createdBy(99L).build();
+        when(policies.findByFactoryIdAndProductTypeId(F, "P18")).thenReturn(Optional.of(p18));
+        when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(p17, p18));
+        ProductionPlan plan = securedPlan("plan-16");
+        plan.setTargetFinishedGoodIds(List.of("P18"));
+        String body = "{'rows':[{'productTypeId':'P17','totalCost':900,'outputQuantity':100},"
+                + "{'productTypeId':'P18','totalCost':50}]}";
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-16"),
+                "GET /production/cost-summary", false);
+        assertThat(owner.at("/rows/0/totalCost").isNull()).isTrue();
+        assertThat(owner.at("/rows/1/totalCost").isNull()).isTrue();
+        assertThat(owner.at("/rows/0/outputQuantity").asInt()).as("本厂账号的本单总量档").isEqualTo(100);
+    }
+
+    @Test
     void theOwnerSeeingOnlyCostTotalsDoesNotFloodTheAuditWithFullViewRecords() throws Exception {
         // 独立审查 PR3 L2: 成本合计不是工艺内容, 不为它写 ALLOW
         ObjectNode owner = tree("{'productTypeId':'P17','totalCost':900,'unitCost':9}");
@@ -612,7 +645,7 @@ class ProcessSecretPayloadScrubberTest {
     void costFieldNamesAreRecognisedButPricesRevenueAndCountsAreNot() {
         for (String name : List.of("totalCost", "unitCost", "costUnitPrice", "seasoningCost", "grossProfit",
                 "grossMarginPct", "marginRate", "overallAchievementRate", "varianceAbsolute", "rowTotalCost",
-                "subtotal", "stageSubtotal", "contributionPerBox")) {
+                "subtotal", "stageSubtotal", "contributionPerBox", "batchShare")) {
             assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isTrue();
         }
         for (String name : List.of("unitPrice", "totalAmount", "salePrice", "missingCostItemCount", "costVersion",

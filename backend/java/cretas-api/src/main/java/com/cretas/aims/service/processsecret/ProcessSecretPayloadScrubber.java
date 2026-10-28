@@ -495,7 +495,7 @@ public class ProcessSecretPayloadScrubber {
                 // V1 摘要本身不含配比字段, 走一遍也不会改它
                 Key own = ownKey(object, inherited);
                 Key effective = own != null ? own : inherited;
-                scrubObject(object, effective, derived);
+                scrubObject(object, effective, own != null, derived);
                 boolean childrenDerived = derived || isRecipeDerived(object) || isReworkDeduction(object);
                 List<JsonNode> children = new ArrayList<>();
                 object.elements().forEachRemaining(children::add);
@@ -564,7 +564,7 @@ public class ProcessSecretPayloadScrubber {
          */
         static final Set<String> DERIVED_LINE_ACTUAL_FIELDS = Set.of("rawInputKg", "initialQuantity", "remainingQuantity");
 
-        void scrubObject(ObjectNode object, Key key, boolean derived) {
+        void scrubObject(ObjectNode object, Key key, boolean ownKeyed, boolean derived) {
             List<String> ratioFields = new ArrayList<>();
             List<String> quantityFields = new ArrayList<>();
             // 无权档 (平台 / 他厂) 连总量也不给: 词表列不全 (独立审查 #6), 所以除了标识类数字一律去掉
@@ -603,13 +603,15 @@ public class ProcessSecretPayloadScrubber {
 
             Level level;
             Key auditKey;
-            if (key != null && !distrustAttribution && !isProtected(key) && planSiblings.contains(key)) {
-                // 受限计划里的兄弟产出: 按受限处理, 审计记到被读的受限产品上
+            if (key != null && !distrustAttribution && planSiblings.contains(key)
+                    && (!isProtected(key) || level(key) == Level.FULL)) {
+                // 受限计划里的兄弟产出 (含调用者有权的主产品: 合并的计划成本里有它看不到的兄弟产出的配方金额;
+                // 独立审查 PR3 复核 M-c): 按受限处理, 审计记到被读的受限产品上
                 level = fallback;
                 auditKey = null;
             } else if (key != null && !distrustAttribution) {
                 if (!isProtected(key)) {
-                    hideCostsAboveRestricted(object, key, costFields, quantityFields, otherNumbers);
+                    hideCostsAboveRestricted(object, ownKeyed, costFields, quantityFields, otherNumbers);
                     return;
                 }
                 level = level(key);
@@ -628,13 +630,13 @@ public class ProcessSecretPayloadScrubber {
                         }
                     }
                     if (level == Level.FULL) {
-                        hideCostsAboveRestricted(object, key, costFields, quantityFields, otherNumbers);
+                        hideCostsAboveRestricted(object, ownKeyed, costFields, quantityFields, otherNumbers);
                         return;
                     }
                 }
             } else {
                 if (fallback == null) {
-                    hideCostsAboveRestricted(object, key, costFields, quantityFields, otherNumbers);
+                    hideCostsAboveRestricted(object, ownKeyed, costFields, quantityFields, otherNumbers);
                     return;
                 }
                 level = fallback;
@@ -655,11 +657,12 @@ public class ProcessSecretPayloadScrubber {
          * 隐藏它的成本合计, 审计记到那个产品上。那个产品对调用者是无权档 (平台 / 他厂) 或这是汇总视图时,
          * 上层的总量也一并隐藏 —— 上层总量减去可见的其他行就是被隐藏的那一行 (独立审查 PR3 M1 / M3)。
          */
-        void hideCostsAboveRestricted(ObjectNode object, Key key, List<String> costFields,
+        void hideCostsAboveRestricted(ObjectNode object, boolean ownKeyed, List<String> costFields,
                                       List<String> quantityFields, List<String> otherNumbers) {
             Key below = restrictedBelow.get(object);
-            // 用 productId 指了别的 (不受保护 / 有权) 产品的行不是「合计」, 不连带
-            if (below == null && key == null && text(object, "productId") == null) below = restrictedInOutput;
+            // 「自己没有产品」看对象本身, 不看从上层继承的: 挂在不受保护产品下面的合计对象照样是合计
+            // (独立审查 PR3 复核 M-a)。用 productId 指了别的 (不受保护 / 有权) 产品的行不是「合计」, 不连带
+            if (below == null && !ownKeyed && text(object, "productId") == null) below = restrictedInOutput;
             if (below == null) return;
             Level level = level(below);
             List<String> hidden = new ArrayList<>(costFields);
@@ -737,7 +740,11 @@ public class ProcessSecretPayloadScrubber {
                 || WIP_SOURCE_TYPES.contains(object.path("sourceType").asText(""));
     }
 
+    /** 名字不带上面片段的金额: 共锅调料成本分到本批的那一份 (元; 独立审查 PR3 复核 M-b)。 */
+    static final Set<String> EXACT_COST_FIELDS = Set.of("batchShare");
+
     static boolean isCostTotalField(String name) {
+        if (EXACT_COST_FIELDS.contains(name)) return true;
         if (isIdentifierLike(name)) return false;
         String lower = name.toLowerCase(Locale.ROOT);
         return COST_TOTAL_PARTS.stream().anyMatch(lower::contains);

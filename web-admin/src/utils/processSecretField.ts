@@ -43,6 +43,14 @@ export function secretAwareCell(row: unknown, field: string, render: (value: unk
   return render((row as Record<string, unknown> | null | undefined)?.[field]);
 }
 
+/**
+ * 一组同义字段 (完整成本 / 已知合计) 里任一个被隐藏就算隐藏: 后端只隐藏非空字段, 成本没采集齐时完整成本本来就是
+ * null, 只有已知合计会出现在 hiddenFields 里。
+ */
+export function isAnyProcessSecretHidden(row: unknown, fields: string[]): boolean {
+  return fields.some((field) => isProcessSecretHidden(row, field));
+}
+
 /** 给 tooltip 用的说明; 没有标记时为空串。 */
 export function processSecretMessage(row: unknown): string {
   return markerOf(row)?.message ?? '';

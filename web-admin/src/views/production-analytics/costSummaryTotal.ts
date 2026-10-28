@@ -1,4 +1,4 @@
-import { isProcessSecretHidden } from '@/utils/processSecretField';
+import { isAnyProcessSecretHidden } from '@/utils/processSecretField';
 
 export interface CostSummaryRow {
   totalCost?: number | null;
@@ -17,7 +17,7 @@ export function costSummaryTotal(rows: CostSummaryRow[], money: (v?: number | nu
   let partial = false;
   let secret = 0;
   for (const row of rows) {
-    if (isProcessSecretHidden(row, 'totalCost')) {
+    if (isAnyProcessSecretHidden(row, ['totalCost', 'knownCostSubtotal'])) {
       secret += 1;
       continue;
     }
