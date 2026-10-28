@@ -256,6 +256,30 @@ class ProductWorkflowUnifiedResolutionTest {
         assertTrue(error.getActionHint().contains("P2"), error.getActionHint());
     }
 
+    /** S2-06: 路线被新版本替换后, 旧计划固定的那一版仍能读到(不再只看启用版本)。 */
+    @Test
+    void pinnedCandidateStaysReadableAfterTheVersionIsReplaced() {
+        activate(61L, "ANCHOR-OLD", List.of("RAW-A"), List.of("P1"), LocalDateTime.now());
+        // 61 号行被新版本替换: 状态降为 SNAPSHOT, 启用关系指向别的行
+        ProductProcessWorkflow old = workflows.findByIdAndFactoryId(61L, "F1").orElseThrow();
+        old.setStatus(ProductProcessWorkflow.Status.SNAPSHOT);
+        enabled.clear();
+
+        assertThat(service.resolveForOutputs("F1", List.of("P1")).getCandidates())
+                .as("启用列表里已经没有它, 这正是旧页面报「未读取到」的原因").isEmpty();
+        WorkflowOutputResolutionDTO.Candidate pinned =
+                service.findPinnedCandidate("F1", 61L, 1).orElseThrow();
+        assertEquals(61L, pinned.getWorkflowId());
+        assertEquals(List.of("原料处理"), pinned.getProcessSteps());
+        assertThat(service.findPinnedCandidate("F1", 61L, 2))
+                .as("版本号对不上不许换成别的版本").isEmpty();
+        assertThat(service.findPinnedCandidate("F2", 61L, 1))
+                .as("串厂读不到").isEmpty();
+        old.setStatus(ProductProcessWorkflow.Status.DRAFT);
+        assertThat(service.findPinnedCandidate("F1", 61L, 1))
+                .as("草稿不是计划能固定的版本").isEmpty();
+    }
+
     private void activate(
             Long id, String anchor, List<String> roots, List<String> terminals,
             LocalDateTime activatedAt) {

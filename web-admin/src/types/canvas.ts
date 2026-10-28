@@ -85,6 +85,40 @@ export interface SchedulerConfig {
   description?: string
 }
 
+/** 一次定时运行的记录: status 只有 SUCCESS / FAILED / UNKNOWN, 未裁定的 UNKNOWN 不算成功。 */
+export type SchedulerRunStatus = 'SUCCESS' | 'FAILED' | 'UNKNOWN'
+
+export interface SchedulerRun {
+  runId: string
+  configId: number
+  factoryId: string
+  taskCode: string
+  toolName: string | null
+  startedAt: string
+  finishedAt: string
+  status: SchedulerRunStatus
+  rawStatus: string
+  /** 有人工裁定时是裁定值, 否则等于 status */
+  effectiveStatus: SchedulerRunStatus
+  error: string | null
+  summary: string | null
+  hasDataSnapshot: boolean
+  snapshotTruncated: boolean
+  resolution: 'SUCCESS' | 'FAILED' | null
+  resolvedBy: number | null
+  resolvedAt: string | null
+  resolutionNote: string | null
+  /** KNOWN=合计可信; UNKNOWN=provider 没给 usage; NONE=本次没调用 LLM */
+  tokenUsageState: 'KNOWN' | 'UNKNOWN' | 'NONE'
+  llmCallCount: number
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  /** 只有 latest / detail 返回 */
+  dataSnapshot?: unknown
+  configSnapshot?: Record<string, unknown> | null
+}
+
 export type AIAgentMode = 'autopilot' | 'plan' | 'action'
 
 export interface AIMessage {

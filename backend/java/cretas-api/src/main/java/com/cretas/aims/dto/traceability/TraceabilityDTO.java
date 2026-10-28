@@ -200,6 +200,13 @@ public class TraceabilityDTO {
         private Integer shipmentCount;
         private Integer maxDepth;
         private LocalDateTime queryTime;
+        /**
+         * S3-16 按锅收窄: 影响面里有锅次记录的生产批次, 具体是哪几锅、出到哪些批次。
+         * 只在<b>能证明</b>时收窄 (见 PotTraceService); 上面三组批次级列表不受影响、一行不减。
+         */
+        private List<com.cretas.aims.service.pot.PotTraceService.BatchPotScope> potScopes;
+        /** 按锅收窄没算成时的原因 (此时 potScopes 为 null; 批次级三组照常有效)。 */
+        private String potScopesError;
     }
 
     /**

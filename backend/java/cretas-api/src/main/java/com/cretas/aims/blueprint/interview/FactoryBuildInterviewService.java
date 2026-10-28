@@ -43,6 +43,10 @@ public class FactoryBuildInterviewService {
     @Autowired
     private FactoryAssemblyConversationSessionRepository sessionRepository;
 
+    /** 已确认事实: 新访谈沿用它只问差异; 与它不同的新答案进入逐条冲突。 */
+    @Autowired
+    private FactoryConfirmedFactService confirmedFacts;
+
     /** 见 {@code packagingSection}: 单位是不是单位问权威表, ⛔ 不在这里自建词表。 */
     @Autowired
     private UnitContractService unitContractService;
@@ -97,11 +101,66 @@ public class FactoryBuildInterviewService {
             }
         }
 
-        return conversationService.startParameterCollection(
+        FactoryAssemblyConversationService.ConversationResponse started = conversationService.startParameterCollection(
                 factoryId, actor,
                 FACTORY_BUILD_PARAMS_INTENT, "对话建厂",
                 FACTORY_BUILD_PARAMS,
                 List.of("我来问几个问题，把这家厂的情况摸清楚。"));
+        if (started != null && started.getSessionId() != null) {
+            sessionRepository.findBySessionIdAndFactoryIdAndUserIdAndActorType(
+                            started.getSessionId(), factoryId, actor.userId(), actor.type())
+                    .ifPresent(session -> reuseConfirmedFacts(factoryId, session));
+        }
+        return started;
+    }
+
+    /**
+     * 沿用本厂已确认事实: 只填「还没答」的题, 留下 REUSED_CONFIRMED_FACT 回执 (来源可追查),
+     * 因此这些题不再被问; 工序道数被沿用后展开的子项也再沿用一轮。差异靠用户的新答案体现。
+     */
+    void reuseConfirmedFacts(String factoryId, FactoryAssemblyConversationSession session) {
+        Map<String, String> reused = new LinkedHashMap<>();
+        for (int pass = 0; pass < 2; pass++) {
+            Map<String, String> round = confirmedFacts.reusableFor(factoryId, session);
+            if (round.isEmpty()) break;
+            round.forEach(session::addCollectedParameter);
+            reused.putAll(round);
+            FactoryInterviewExpansion.expandIfReady(session);
+            FactoryInterviewExpansion.expandProductsIfReady(session);
+        }
+        if (reused.isEmpty()) return;
+        List<FactoryAssemblyConversationSession.ReplyFieldReceipt> fields = new ArrayList<>();
+        StringJoiner message = new StringJoiner("；");
+        for (Map.Entry<String, String> entry : reused.entrySet()) {
+            message.add(entry.getKey() + "：" + entry.getValue());
+            fields.add(FactoryAssemblyConversationSession.ReplyFieldReceipt.builder()
+                    .field(entry.getKey())
+                    .resolution("ACCEPTED")
+                    .canonicalValue(entry.getValue())
+                    .reasonCode(FactoryConfirmedFactService.REUSE_REASON_CODE)
+                    .build());
+        }
+        FactoryAssemblyConversationSession.ReplyReceipt receipt = FactoryAssemblyConversationSession.ReplyReceipt.builder()
+                .extractionOutcome("SUCCESS")
+                .currentRound(session.getCurrentRound())
+                .maxRounds(session.getMaxRounds())
+                .status(session.getStatus() == null ? null : session.getStatus().name())
+                .completed(false)
+                .message("沿用本厂已确认资料")
+                .intentCode(session.getKnownIntentCode())
+                .progressMutated(true)
+                .correctionApplied(false)
+                .fieldReceipts(fields)
+                .build();
+        FactoryAssemblyConversationSession.Message note =
+                FactoryAssemblyConversationSession.Message.user("沿用本厂已确认资料（" + message + "）");
+        note.setReplyReceipt(receipt);
+        session.addMessage(note);
+        if (session.allParametersCollected()) {
+            session.completeParameterCollection();
+        }
+        sessionRepository.save(session);
+        log.info("对话建厂沿用已确认事实 {} 项: factoryId={}, sessionId={}", reused.size(), factoryId, session.getSessionId());
     }
 
     public List<InterviewDefaults.Section> interviewDefaults(String factoryId) {
@@ -307,6 +366,12 @@ public class FactoryBuildInterviewService {
         }
 
         p.setFactEvidence(buildFactEvidence(session, p));
+        for (FactoryBuildProgress.FactEvidenceItem item : p.getFactEvidence()) {
+            if (FactoryConfirmedFactService.REUSE_REASON_CODE.equals(item.getReasonCode())) {
+                p.getReusedFacts().put(item.getField(), item.getValue());
+            }
+        }
+        p.setFactConflicts(confirmedFacts.openConflicts(factoryId));
         p.setRoutePreviews(
                 com.cretas.aims.blueprint.canonical.FactoryRouteIntentCompiler.compile(collected));
 
@@ -566,6 +631,10 @@ public class FactoryBuildInterviewService {
         appendStructuredDecisionReceipt(
                 session, accepted, deferred, before, previouslyDeferred, byName);
         sessionRepository.save(session);
+        Map<String, String> labelsByName = new LinkedHashMap<>();
+        byName.forEach((name, rp) -> labelsByName.put(name, rp.getLabel()));
+        confirmedFacts.recordAnswers(factoryId, sessionId, actor.type() + ":" + actor.userId(),
+                accepted, labelsByName);
         log.info("结构化答题写入 {} 项、暂时未决 {} 项: session={}, keys={}",
                 accepted.size(), deferred.size(), sessionId, answers.keySet());
 
