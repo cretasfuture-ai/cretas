@@ -454,11 +454,19 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     @Override
     @Transactional
     public int promoteKnowledgeToGlobal(BigDecimal minEffectiveness, int minAdoptions) {
+        // 跨工厂知识共享已停用 (登记 / 列出 / 采用都关了): 定时任务照样调这里, 晋升同样不做
+        if (!CROSS_FACTORY_KNOWLEDGE_ENABLED) {
+            log.info("跨工厂知识共享已停用: 本轮不晋升全局知识");
+            return 0;
+        }
         List<CrossFactoryKnowledge> candidates = knowledgeRepository
                 .findPromotionCandidates(minEffectiveness, minAdoptions);
 
         int promoted = 0;
         for (CrossFactoryKnowledge knowledge : candidates) {
+            if (!promotableToGlobal(knowledge)) {
+                continue;
+            }
             knowledge.promoteToGlobal();
             knowledgeRepository.save(knowledge);
             promoted++;
@@ -498,6 +506,30 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             return List.of();
         }
         return knowledgeRepository.findNotAdoptedByFactory(factoryId);
+    }
+
+    /**
+     * 晋升为全局前的保密检查 (恢复跨厂共享时也生效): 内容提到任何一家工厂的工艺保密产品名就不晋升;
+     * 判断不了 (未注入 / 查库出错) 也不晋升 (Steve 2026-10-29: 保密内容不许被学走、在别的工厂复现)。
+     */
+    boolean promotableToGlobal(CrossFactoryKnowledge knowledge) {
+        return knowledge != null && !namesAnyProtectedProduct(knowledge.getContent());
+    }
+
+    /** 文本提到任何一家工厂的保密产品名, 或无法判断 → true (调用方据此不写全局)。 */
+    boolean namesAnyProtectedProduct(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        if (processSecretSampleFilter == null) {
+            return true;
+        }
+        try {
+            return processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(text, text.toLowerCase().trim());
+        } catch (RuntimeException e) {
+            log.warn("全局写入前的保密产品检查失败, 按提到处理: {}", e.getClass().getSimpleName());
+            return true;
+        }
     }
 
     /** 跨工厂知识共享 (登记 / 列出 / 采用) 已停用; 要恢复必须改这里并重新评审数据边界。 */
@@ -566,6 +598,16 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
                 suggestionId, type, intentCode, truncate(content, 80));
 
         boolean applied = false;
+
+        // 新关键词 / 新说法会进 intentKnowledgeBase 的短语表 —— 那张表不分工厂, 所有工厂共用。
+        // 提到任何一家工厂的工艺保密产品名 (或判断不了) 就不应用 (Steve 2026-10-29)。
+        if ((type == LearningSuggestion.SuggestionType.NEW_KEYWORD
+                || type == LearningSuggestion.SuggestionType.NEW_EXPRESSION)
+                && namesAnyProtectedProduct(content)) {
+            log.warn("Suggestion {} not applied: content names a process-secret product (shared phrase table)",
+                    suggestionId);
+            return;
+        }
 
         switch (type) {
             case NEW_KEYWORD:

@@ -44,6 +44,20 @@ public class ProcessSecretSampleFilter {
         return false;
     }
 
+    /**
+     * 文本是否提到<b>任何一家</b>工厂的工艺保密产品。写全局 (所有工厂共享) 的说法 / 知识前用:
+     * 全局内容对每家工厂可见, 只查写入方自己那家不够 (Steve 2026-10-29: 保密内容不出本厂)。
+     * 查库出错照样抛, 调用方据此不写全局。
+     */
+    public boolean mentionsAnyFactoryProtectedProduct(String... texts) {
+        for (String factoryId : accessService.factoriesWithProtectedProducts()) {
+            if (mentionsProtectedProduct(factoryId, texts)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 本厂工艺保密产品名 (只含本厂、长度够的名字; 已 trim)。 */
     public Set<String> protectedProductNames(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) {

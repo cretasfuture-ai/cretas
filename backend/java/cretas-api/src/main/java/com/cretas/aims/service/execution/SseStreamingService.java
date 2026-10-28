@@ -528,6 +528,9 @@ public class SseStreamingService {
                 // scope. A hit is metadata only, as on /execute: never replay business rows
                 // or old intent configuration/parameters. Continue fresh recognition so
                 // clarification, current admission and tool scope checks all run below.
+                // ⛔ 工艺保密 (Steve 2026-10-29): 缓存里是按「工厂 + 原话」存的完整执行结果, 不分调用者;
+                // 回放前必须先按调用者的保密访问档位隔离 (工厂 + 调用者能 FULL 查看的保密产品集合),
+                // 没有这层隔离不许回放 (见 SemanticCacheServiceImpl.cacheResult)。
             } else {
                 sendSseEvent(emitter, "cache_miss", Map.of(
                         "latencyMs", cacheHit.getLatencyMs()
@@ -690,7 +693,7 @@ public class SseStreamingService {
                 streamNoPermission(emitter, intent, admissionDenied, startTime);
                 return;
             }
-            prefillWriteToolParameters(request, intent);
+            prefillWriteToolParameters(factoryId, request, intent);
 
             // 7b. Slot Filling
             if (trustedFactoryActor && !Boolean.TRUE.equals(request.getSkipSlotFilling())
@@ -1609,7 +1612,7 @@ public class SseStreamingService {
      * 读意图不提前: executeWithTool 会先用学习规则、再用同一个方法补缺, 提前跑会绕过学习规则。
      * 抽到的只补 context 里没有的键。
      */
-    private void prefillWriteToolParameters(IntentExecuteRequest request, AIIntentConfig intent) {
+    private void prefillWriteToolParameters(String factoryId, IntentExecuteRequest request, AIIntentConfig intent) {
         String toolName = intent.getToolName();
         if (toolName == null || toolName.isBlank()
                 || request.getUserInput() == null || request.getUserInput().isBlank()) {
@@ -1626,7 +1629,8 @@ public class SseStreamingService {
         }
         Map<String, Object> extracted;
         try {
-            extracted = toolDispatchService.extractParametersWithLLM(request.getUserInput(), tool.get(), context);
+            // 带服务端认定的工厂 (不是 context 里客户端给的): 按这家的保密产品名脱敏; 平台账号也能正确脱敏
+            extracted = toolDispatchService.extractParametersWithLLM(factoryId, request.getUserInput(), tool.get(), context);
         } catch (Exception e) {
             log.warn("[SSE] 写意图抽参失败, 交给 Slot Filling: intentCode={}, error={}",
                     intent.getIntentCode(), e.getMessage());

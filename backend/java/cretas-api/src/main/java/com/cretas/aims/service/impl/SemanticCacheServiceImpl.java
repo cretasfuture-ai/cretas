@@ -140,6 +140,15 @@ public class SemanticCacheServiceImpl implements SemanticCacheService {
         }
     }
 
+    /**
+     * ⚠️ 工艺保密 (Steve 2026-10-29): 这里按「工厂 + 原话」存<b>完整执行结果</b>, 不分是谁问的。
+     * 结果里可能有工艺保密产品的完整内容 (只有被授权完整查看的人才该看到)。
+     * 现在命中只回元数据、从不回放结果 (IntentExecutionOrchestrator.handleSemanticCache /
+     * SseStreamingService 的 cache_hit 分支), 所以没有泄漏。
+     * ⛔ 要实现「命中直接回放执行结果」, 缓存键和命中条件必须先按调用者的保密访问档位隔离:
+     * 工厂 + 调用者能完整查看 (FULL) 的保密产品集合; 没有这一层不许回放。
+     * 「命中不回放」由 SseSemanticCacheAdmissionContractTest 钉着 (老板的缓存结果不替代当前调用者的新执行)。
+     */
     @Override
     @Transactional
     public void cacheResult(String factoryId, String userInput,

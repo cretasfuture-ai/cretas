@@ -55,6 +55,20 @@ class PromptEgressRedactionTest {
     void setUp() {
         processSecret = mock(ProcessSecretSampleFilter.class);
         when(processSecret.protectedProductNames(anyString())).thenReturn(Set.of());
+        // 不带工厂的出口生产上跑在本厂用户的请求线程里: 按登录身份的工厂脱敏。
+        // 2026-10-29 起没有工厂上下文就拒绝外发 (LlmEgressGuardFactoryFallbackTest), 这里绑上真实环境里一定有的请求。
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setAttribute("factoryId", FACTORY);
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 77L, FACTORY, "quality_inspector"));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void tearDown() {
+        org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
     }
 
     private LlmEgressGuard guard() {

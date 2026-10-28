@@ -104,4 +104,83 @@ class NoCrossFactoryLearningContractTest {
         assertThat(cache.get("*")).containsOnlyKeys("manual");
         assertThat(cache.get("F006")).containsOnlyKeys("own");
     }
+
+    // ---------- 工艺保密 (Steve 2026-10-29): 保密产品名不许经由全局内容出现在别的工厂 ----------
+
+    private static ActiveLearningServiceImpl activeLearning(
+            com.cretas.aims.service.consent.ProcessSecretSampleFilter filter) {
+        ActiveLearningServiceImpl service = Mockito.mock(ActiveLearningServiceImpl.class, Mockito.CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(service, "processSecretSampleFilter", filter);
+        return service;
+    }
+
+    @Test
+    void knowledgePromotionToGlobalIsOffWhileCrossFactorySharingIsOff() {
+        CrossFactoryKnowledgeRepository knowledge = mock(CrossFactoryKnowledgeRepository.class);
+        ActiveLearningServiceImpl service = activeLearning(
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class));
+        ReflectionTestUtils.setField(service, "knowledgeRepository", knowledge);
+
+        assertThat(service.promoteKnowledgeToGlobal(new BigDecimal("0.1"), 1)).isZero();
+        verifyNoInteractions(knowledge);
+    }
+
+    @Test
+    void knowledgeNamingAnyFactorysProtectedProductIsNeverPromotable() {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.mentionsAnyFactoryProtectedProduct("秘制酱牛肉怎么卖", "秘制酱牛肉怎么卖")).thenReturn(true);
+        ActiveLearningServiceImpl service = activeLearning(filter);
+
+        com.cretas.aims.entity.learning.CrossFactoryKnowledge secret =
+                com.cretas.aims.entity.learning.CrossFactoryKnowledge.builder().content("秘制酱牛肉怎么卖").build();
+        com.cretas.aims.entity.learning.CrossFactoryKnowledge plain =
+                com.cretas.aims.entity.learning.CrossFactoryKnowledge.builder().content("今天卖了多少").build();
+        assertThat(service.promotableToGlobal(secret)).isFalse();
+        assertThat(service.promotableToGlobal(plain)).isTrue();
+        // 判断不了 (没注入 / 查库出错) 按「提到了」处理, 不晋升
+        assertThat(activeLearning(null).promotableToGlobal(plain)).isFalse();
+        when(filter.mentionsAnyFactoryProtectedProduct("今天卖了多少", "今天卖了多少"))
+                .thenThrow(new IllegalStateException("db down"));
+        assertThat(service.promotableToGlobal(plain)).isFalse();
+    }
+
+    @Test
+    void suggestionNamingAProtectedProductIsNotAddedToTheSharedPhraseTable() {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.mentionsAnyFactoryProtectedProduct(anyString(), anyString()))
+                .thenAnswer(inv -> ((String) inv.getArgument(0)).contains("秘制酱牛肉"));
+        ActiveLearningServiceImpl service = activeLearning(filter);
+        com.cretas.aims.repository.learning.LearningSuggestionRepository suggestions =
+                mock(com.cretas.aims.repository.learning.LearningSuggestionRepository.class);
+        com.cretas.aims.config.IntentKnowledgeBase phrases = mock(com.cretas.aims.config.IntentKnowledgeBase.class);
+        com.cretas.aims.service.ExpressionLearningService expressions =
+                mock(com.cretas.aims.service.ExpressionLearningService.class);
+        ReflectionTestUtils.setField(service, "suggestionRepository", suggestions);
+        ReflectionTestUtils.setField(service, "adoptionRepository", mock(CrossFactoryKnowledgeAdoptionRepository.class));
+        ReflectionTestUtils.setField(service, "intentKnowledgeBase", phrases);
+        ReflectionTestUtils.setField(service, "expressionLearningService", expressions);
+        when(phrases.getPhraseToIntentMapping()).thenReturn(Map.of());
+        when(suggestions.findById(1L)).thenReturn(java.util.Optional.of(suggestion("秘制酱牛肉今天做了多少")));
+        when(suggestions.findById(2L)).thenReturn(java.util.Optional.of(suggestion("今天做了多少")));
+
+        service.applySuggestion(1L, "reviewer");
+        verify(phrases, never()).addPhraseMapping(anyString(), anyString());
+        verifyNoInteractions(expressions);
+
+        // 阴性对照: 不提保密产品的建议照常应用
+        service.applySuggestion(2L, "reviewer");
+        verify(phrases).addPhraseMapping("今天做了多少", "PRODUCTION_QUERY");
+    }
+
+    private static com.cretas.aims.entity.learning.LearningSuggestion suggestion(String content) {
+        return com.cretas.aims.entity.learning.LearningSuggestion.builder()
+                .factoryId("F006")
+                .intentCode("PRODUCTION_QUERY")
+                .suggestionType(com.cretas.aims.entity.learning.LearningSuggestion.SuggestionType.NEW_EXPRESSION)
+                .content(content)
+                .status(com.cretas.aims.entity.learning.LearningSuggestion.SuggestionStatus.APPROVED)
+                .build();
+    }
 }

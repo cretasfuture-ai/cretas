@@ -87,6 +87,10 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         String normalized = expression.toLowerCase().trim();
+        // 工艺保密 / 训练授权 (Steve 2026-10-29): 放在去重之前, 新写入和「重提议激活」两条路都过这道闸
+        if (!learnable(factoryId, expression.trim(), normalized, sourceType)) {
+            return null;
+        }
         String hash = LearnedExpression.computeHash(normalized);
 
         // 飞轮 v2: dedup 命中时，不只 skip — 追踪重提议并尝试 promote
@@ -148,6 +152,64 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
 
         return saved;
+    }
+
+    /** 全局说法 (所有工厂共享): 工厂字段为空或 "*" (种子用 "*", 历史写入有空)。 */
+    static boolean isGlobalFactory(String factoryId) {
+        return factoryId == null || factoryId.isBlank() || "*".equals(factoryId);
+    }
+
+    /**
+     * 这句说法能不能学 (Steve 2026-10-29: 保密产品可以出现在授权用户的对话里, 但不许被学走、在别的工厂复现)。
+     *
+     * <ul>
+     *   <li>全局 (空 / "*"): 只收人工预置 (MANUAL) 的说法 —— 系统从某家工厂学来的说法不许变成全局;
+     *       并且不许提到<b>任何一家</b>工厂的保密产品名 (全局说法每家工厂都匹配得到)。</li>
+     *   <li>本厂: 与 {@link #recordSample} 同一套规则 —— 撤回 / 查不到授权状态不学; 提到本厂保密产品不学;
+     *       配方 / 工艺参数、具体客户名、人名不学 ({@link TrainingSampleRules#utteranceHasBlockedContent})。</li>
+     * </ul>
+     * 判断所需的服务没有注入、或查询出错, 一律不学 (fail-closed)。
+     */
+    boolean learnable(String factoryId, String expression, String normalized,
+                      LearnedExpression.SourceType sourceType) {
+        try {
+            if (isGlobalFactory(factoryId)) {
+                if (sourceType != LearnedExpression.SourceType.MANUAL) {
+                    log.warn("拒绝把系统学到的说法写成全局: factory={}, source={}", factoryId, sourceType);
+                    return false;
+                }
+                if (processSecretSampleFilter == null
+                        || processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(expression, normalized)) {
+                    log.warn("全局说法提到工艺保密产品 (或无法判断), 不写: source={}", sourceType);
+                    return false;
+                }
+                return true;
+            }
+            if (trainingConsentService == null || processSecretSampleFilter == null) {
+                log.warn("训练授权 / 保密产品判断未注入, 不学说法: factory={}", factoryId);
+                return false;
+            }
+            if (!trainingConsentService.status(factoryId).storable()) {
+                return false;
+            }
+            if (processSecretSampleFilter.mentionsProtectedProduct(factoryId, expression, normalized)) {
+                log.info("说法提到本厂工艺保密产品, 不学: factory={}", factoryId);
+                return false;
+            }
+            return !TrainingSampleRules.utteranceHasBlockedContent(expression);
+        } catch (RuntimeException e) {
+            log.warn("说法学习前的保密 / 授权判断失败, 不学: factory={}, error={}",
+                    factoryId, e.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * 读出口的第二道: 系统学来的、没有工厂字段的历史行 (空 / "*" 且不是 MANUAL) 不给任何工厂用 ——
+     * 它来自某一家工厂, 不能被合并进别家的识别 (与 {@code IntentEmbeddingCacheServiceImpl.learnedGlobalExpression} 同一判据)。
+     */
+    private static boolean servable(LearnedExpression e) {
+        return e != null && !IntentEmbeddingCacheServiceImpl.learnedGlobalExpression(e);
     }
 
     /**
@@ -295,7 +357,9 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         String hash = LearnedExpression.computeHash(normalized);
 
         // Step 1: 尝试 SHA256 哈希精确匹配 (O(1))
-        List<LearnedExpression> matches = expressionRepository.findByExpressionHash(hash, factoryId);
+        List<LearnedExpression> matches = expressionRepository.findByExpressionHash(hash, factoryId).stream()
+                .filter(ExpressionLearningServiceImpl::servable)
+                .collect(Collectors.toList());
         if (!matches.isEmpty()) {
             // 优先返回工厂特定的匹配，其次是全局匹配
             LearnedExpression best = matches.get(0);
@@ -341,6 +405,9 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         double bestSimilarity = 0.0;
 
         for (LearnedExpression expr : allExpressions) {
+            if (!servable(expr)) {
+                continue;
+            }
             String candidateExpr = expr.getExpression();
             if (candidateExpr == null || candidateExpr.isEmpty()) {
                 continue;
@@ -398,6 +465,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
 
         // 计算编辑距离相似度
         List<ExpressionMatchResult> results = candidates.stream()
+                .filter(ExpressionLearningServiceImpl::servable)
                 .map(expr -> {
                     double similarity = calculateSimilarity(normalized, expr.getExpression());
                     return new ExpressionMatchResult(
@@ -751,7 +819,9 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     @Override
     @Transactional(readOnly = true)
     public List<LearnedExpression> getExpressionsByIntent(String factoryId, String intentCode) {
-        return expressionRepository.findByIntentCode(intentCode, factoryId);
+        return expressionRepository.findByIntentCode(intentCode, factoryId).stream()
+                .filter(ExpressionLearningServiceImpl::servable)
+                .collect(Collectors.toList());
     }
 
     // ========== 工具方法 ==========

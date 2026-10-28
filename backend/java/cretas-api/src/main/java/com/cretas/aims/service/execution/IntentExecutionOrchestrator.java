@@ -1693,6 +1693,10 @@ public class IntentExecutionOrchestrator {
                     // 结果标记进 request context (__cacheHit/__cacheHitType), 流程仍会继续
                     // 走完整识别流水线。此分支目前是 no-op (曾设想的"直接返回缓存执行结果"
                     // 未实现)。
+                    // ⛔ 工艺保密 (Steve 2026-10-29): 缓存按「工厂 + 原话」存完整执行结果, 不分调用者。
+                    // 要在这里回放执行结果, 必须先按调用者的保密访问档位隔离缓存 (工厂 + 调用者能
+                    // FULL 查看的保密产品集合), 否则未授权的人会拿到授权用户问出来的保密产品完整内容。
+                    // 没有这层隔离不许实现回放 (见 SemanticCacheServiceImpl.cacheResult)。
                 }
                 IntentMatchResult cachedMatch = deserializeIntentResult(cacheHit.getIntentResult());
                 if (cachedMatch != null && cachedMatch.hasMatch()) {

@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
@@ -133,7 +134,7 @@ class ToolDispatchServiceLastActionTest {
         ScriptedTool tool = useTool();
         ToolDispatchService dispatch = spy(newDispatch());
         doReturn(new HashMap<>(Map.of("quantity", 10, "productionPlanId", "PP-1")))
-                .when(dispatch).extractParametersWithLLM(anyString(), any(), anyMap());
+                .when(dispatch).extractParametersWithLLM(eq("F006"), anyString(), any(), anyMap());
         Map<String, Object> context = new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30,
                 FollowUpResolver.FOLLOW_UP_RULE_KEY, FollowUpResolver.RULE_QTY_CHANGE));
 
@@ -149,7 +150,7 @@ class ToolDispatchServiceLastActionTest {
         ScriptedTool tool = useTool();
         ToolDispatchService dispatch = spy(newDispatch());
         doReturn(new HashMap<>(Map.of("quantity", 10, "productionPlanId", "PP-1")))
-                .when(dispatch).extractParametersWithLLM(anyString(), any(), anyMap());
+                .when(dispatch).extractParametersWithLLM(eq("F006"), anyString(), any(), anyMap());
 
         dispatch.executeWithTool(tool, "F006", confirmed(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30))),
                 intent("MATERIAL_BATCH_USE", "原料领用", tool), 42L, "warehouse_manager", null);

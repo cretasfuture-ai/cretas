@@ -101,9 +101,17 @@ public class LlmEgressGuard {
     /**
      * 只有用户原话、要按原话识别意图 / 抽参数: 只把手机号、座机、身份证号、银行卡号换成可还原的代号
      * (不查库, 不认人名 —— 识别链路上不加库查询, 也不让人名误报改坏原话)。
+     *
+     * <p><b>已知例外 (有意保留, Steve 2026-10-29 裁定):</b> 意图识别把用户原话连同其中的工艺保密产品名
+     * <b>不脱敏</b>发给外部模型 —— 这里传的保密产品名单是空集, 也不因没有工厂上下文而拒绝。
+     * 除意图识别以外的所有外发 ({@link #texts} / {@link #structured} / {@link #textsWithRecord} /
+     * {@link #combined}) 一律把保密产品名换代号。⛔ 不要把别的出口改走这个方法来绕过脱敏;
+     * Python 侧同一例外在 {@code backend/python/common/llm_client.py} 的 {@code _names_for_this_request};
+     * 说明见 {@code docs/security/process-secret-ai-egress.md}。
      */
     public LlmEgressRedactor.Result utterance(String site, String... texts) {
         try {
+            // 已知例外 (Steve 2026-10-29): 意图识别保留原名, 保密产品名单故意为空 —— 见上方 javadoc
             LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper)
                     .redactTexts(Arrays.asList(texts), Map.of(), Set.of(), false);
             return logged(site, r);
@@ -151,14 +159,49 @@ public class LlmEgressGuard {
     }
 
     /**
-     * 调用点没带工厂 (Excel 解析 / 纠错 Agent 这类深层方法) 时, 取本次请求登录 token 里的工厂;
-     * 请求线程之外 (定时任务、异步线程) 取不到就当没有工厂上下文。
+     * 按哪家工厂的保密产品名脱敏: 调用点显式带的工厂优先; 没带 (Excel 解析 / 纠错 Agent 这类深层方法)
+     * 才取本次执行的登录身份所属工厂 ({@link #currentFactory()})。
+     *
+     * <p>Steve 2026-10-29: 保密产品名不许出本厂。以前两头都取不到工厂时名单为空、原样发出; 平台账号替某厂分析时
+     * token 里没有 (或不是) 那家工厂, 那家的保密产品名同样原样发出。现在 fail-closed:
+     * <ul>
+     *   <li>平台账号 ({@link com.cretas.aims.security.AuthenticatedActor#isPlatformAdmin()}) 必须由调用点显式带工厂,
+     *       不按 token 推断;</li>
+     *   <li>显式工厂和登录身份工厂都没有 (定时任务、没绑身份的异步线程) → 拒绝外发, 不再发未脱敏的原文。</li>
+     * </ul>
+     * 只在容器实例上生效; {@link #standalone()} (单测直接 new, 不查保密产品名) 行为不变。
      */
     private Collection<String> protectedNames(String factoryId) {
-        String factory = factoryId != null ? factoryId : currentFactory();
+        if (processSecretSampleFilter == null) {
+            return Set.of();
+        }
+        String factory = egressFactory(factoryId);
+        if (factory == null) {
+            throw new NoEgressFactoryException();
+        }
         // 缓存在 ProcessSecretSampleFilter 里 (按「工厂 + 当前保密产品集合」作键, 改保密设置立即生效)
-        return processSecretSampleFilter == null || factory == null
-                ? Set.of() : processSecretSampleFilter.protectedProductNames(factory);
+        return processSecretSampleFilter.protectedProductNames(factory);
+    }
+
+    /** 显式工厂优先; 没有时平台账号返回 null (不按 token 猜), 其余取本次执行的登录身份工厂。 */
+    static String egressFactory(String explicitFactoryId) {
+        if (explicitFactoryId != null && !explicitFactoryId.isBlank()) {
+            return explicitFactoryId;
+        }
+        boolean platformActor = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .map(com.cretas.aims.security.AuthenticatedActor::isPlatformAdmin).orElse(false);
+        if (platformActor) {
+            return null;
+        }
+        String fromExecution = currentFactory();
+        return fromExecution == null || fromExecution.isBlank() ? null : fromExecution;
+    }
+
+    /** 不知道按哪家工厂脱敏: 拒绝外发 (原因只写类别)。 */
+    static final class NoEgressFactoryException extends RuntimeException {
+        NoEgressFactoryException() {
+            super("no factory context for egress", null, false, false);
+        }
     }
 
     /**
@@ -184,6 +227,10 @@ public class LlmEgressGuard {
     }
 
     private static LlmEgressRedactor.Result failed(String site, RuntimeException e) {
+        if (e instanceof NoEgressFactoryException) {
+            log.warn("LLM egress [{}]: refused (no factory context), not sending", site);
+            return LlmEgressRedactor.Result.refusedFor("没有工厂上下文");
+        }
         log.warn("LLM egress [{}]: redaction failed ({}), not sending", site, e.getClass().getSimpleName());
         return LlmEgressRedactor.Result.refusedFor("脱敏失败");
     }
