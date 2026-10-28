@@ -1,9 +1,9 @@
 // web-admin/src/api/canvasApi.ts
 import request from './request'
-import type { ApiResponse } from '@/types/api'
+import type { ApiResponse, PageResponse } from '@/types/api'
 import type {
   ToolConfig, SkillConfig, TriggerChain, ValidationRule,
-  DefaultValue, Formula, SchedulerConfig,
+  DefaultValue, Formula, SchedulerConfig, SchedulerRun,
   ConfigVersion, PublishWindow, CompletenessCheck,
   DynamicField, DDLLog
 } from '@/types/canvas'
@@ -58,6 +58,17 @@ export const getSchedulerConfigs = (factoryId: string) =>
 
 export const setSchedulerConfig = (factoryId: string, taskCode: string, body: Partial<SchedulerConfig>) =>
   request.put<SchedulerConfig>(`${v2(factoryId)}/scheduler/${taskCode}`, body)
+
+// Scheduler run history (S6-03) and ruling on unknown outcomes (S6-06)
+export const getSchedulerRuns = (factoryId: string, taskCode: string, page = 1, size = 20) =>
+  request.get<PageResponse<SchedulerRun>>(`${v2(factoryId)}/scheduler/${taskCode}/runs`, { params: { page, size } })
+
+export const getLatestSchedulerRun = (factoryId: string, taskCode: string) =>
+  request.get<SchedulerRun | null>(`${v2(factoryId)}/scheduler/${taskCode}/runs/latest`)
+
+export const resolveSchedulerRun = (
+  factoryId: string, runId: string, resolution: 'SUCCESS' | 'FAILED', note: string,
+) => request.post<SchedulerRun>(`${v2(factoryId)}/scheduler/runs/${runId}/resolve`, { resolution, note })
 
 // Templates
 export const getTemplates = (factoryId: string) =>

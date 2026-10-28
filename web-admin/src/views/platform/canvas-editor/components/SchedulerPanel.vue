@@ -22,12 +22,15 @@
           <el-switch v-model="row.enabled" @change="toggleEnabled(row)" size="small" />
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120">
+      <el-table-column label="操作" width="170">
         <template #default="{ row }">
           <el-button type="primary" link size="small" @click="editConfig(row)">编辑</el-button>
+          <el-button type="primary" link size="small" @click="openHistory(row)">运行记录</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <SchedulerRunHistory v-model="showHistory" :factory-id="props.factoryId" :task-code="historyTaskCode" />
 
     <!-- Create/Edit Dialog -->
     <el-dialog v-model="showCreateDialog" :title="editMode ? '编辑定时任务' : '新建定时任务'" width="600px">
@@ -65,12 +68,20 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getSchedulerConfigs, setSchedulerConfig } from '@/api/canvasApi'
 import type { SchedulerConfig } from '@/types/canvas'
+import SchedulerRunHistory from './SchedulerRunHistory.vue'
 
 const props = defineProps<{ factoryId: string }>()
 
 const schedulerConfigs = ref<SchedulerConfig[]>([])
 const loading = ref(false)
 const showCreateDialog = ref(false)
+const showHistory = ref(false)
+const historyTaskCode = ref('')
+
+function openHistory(config: SchedulerConfig) {
+  historyTaskCode.value = config.taskCode
+  showHistory.value = true
+}
 const editMode = ref(false)
 
 const form = ref({
