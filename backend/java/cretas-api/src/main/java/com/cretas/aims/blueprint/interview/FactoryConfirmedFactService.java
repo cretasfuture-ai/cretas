@@ -127,7 +127,8 @@ public class FactoryConfirmedFactService {
         FactoryConfirmedFact current = facts
                 .findByFactoryIdAndFieldKeyAndStatus(factoryId, field, FactoryConfirmedFact.CONFIRMED)
                 .orElseThrow(() -> new BusinessException(409, "这一项已没有已确认事实，无法选择来源")
-                        .withCode("FACT_CONFIRMED_MISSING"));
+                        .withCode("FACT_CONFIRMED_MISSING")
+                        .withHint("请刷新「已确认资料」页面后重新作答"));
         LocalDateTime now = LocalDateTime.now();
         if (CHOICE_USE_NEW.equals(choice)) {
             current.setStatus(FactoryConfirmedFact.SUPERSEDED);
