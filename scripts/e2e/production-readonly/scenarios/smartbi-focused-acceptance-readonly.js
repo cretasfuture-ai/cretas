@@ -290,7 +290,8 @@ async function inspectCommercePage(page, inspectCtx, expected) {
   }
   const screenshot = inspectCtx.screenshot ? await inspectCtx.screenshot('smartbi-commerce-joint-readonly-answer') : null;
   const assessment = assessCommerce({ body, request, ui, expected });
-  return { assessment, ...assessment, screenshot, detailsRequests: ui.detailsRequests, detailNames, ui };
+  return { assessment, ...assessment, screenshot, detailsRequests: ui.detailsRequests, detailNames, ui,
+    catalogFamilyIds: [...new Set((body.data?.catalog || []).map(familyOf).filter(Boolean))] };
 }
 
 async function runLegacy(ctx) {
