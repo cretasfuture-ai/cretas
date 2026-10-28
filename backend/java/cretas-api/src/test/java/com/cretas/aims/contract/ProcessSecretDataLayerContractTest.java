@@ -240,7 +240,9 @@ class ProcessSecretDataLayerContractTest {
             // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里
             "blendRatio",
             // 工作流节点配置 schema 里的参数名 (允许超额百分比 / 质检抽样率), 不是配方
-            "maxExceedPercent", "samplingRate");
+            "maxExceedPercent", "samplingRate",
+            // APS 按天排: 某天这个计划占当天产线产能的比例, 是排程量, 不是配方
+            "shareOfDay");
 
     @Test
     void everyRatioLikeMapKeyIsClassified() throws IOException {

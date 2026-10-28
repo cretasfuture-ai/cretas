@@ -73,6 +73,24 @@ public class ProductType extends BaseEntity {
     @Column(name = "single_pot_capacity", precision = 14, scale = 3)
     private java.math.BigDecimal singlePotCapacity;
 
+    /**
+     * APS v2 人工日产能 (Steve 2026-10-28): 一天能做多少, 单位见 {@link #dailyCapacityUnit}
+     * (与该产品计划的计划单位一致, 如 袋 / kg)。联产计划存在原料归属锚点这一行上 (这个计划一天能处理多少)。
+     * null = 没填 —— 排程回落经验日产能, 两样都没有时排程页当场让人填。⛔ 不给默认值。
+     * 只经 {@code ProductDailyCapacityService} 写入 (数值与单位成对, 数值 &gt; 0, 库里有 CHECK 钉住)。
+     */
+    @Column(name = "daily_capacity", precision = 12, scale = 2)
+    private java.math.BigDecimal dailyCapacity;
+
+    @Column(name = "daily_capacity_unit", length = 32)
+    private String dailyCapacityUnit;
+
+    @Column(name = "daily_capacity_updated_at")
+    private java.time.LocalDateTime dailyCapacityUpdatedAt;
+
+    @Column(name = "daily_capacity_updated_by")
+    private Long dailyCapacityUpdatedBy;
+
     // ==================== Sprint 2 S2-1: Form Template Association ====================
 
     /**

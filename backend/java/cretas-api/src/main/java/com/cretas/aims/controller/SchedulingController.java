@@ -43,7 +43,7 @@ public class SchedulingController {
     // ==================== 调度计划 CRUD ====================
 
     /**
-     * Returns the server capability contract. aiGeneration = APS v1 (按工艺图 + 预计工时排工序时间);
+     * Returns the server capability contract. aiGeneration = APS v2 (按产品日产能按天排, Steve 2026-10-28);
      * workerOptimization stays unavailable until a verified engine is wired.
      */
     @RequirePermission({"scheduling:read", "production:read"})
@@ -52,10 +52,11 @@ public class SchedulingController {
     @Operation(summary = "获取调度能力", description = "返回当前可用的调度能力及明确的不可用原因")
     public ApiResponse<SchedulingCapabilitiesDTO> getCapabilities(
             @PathVariable String factoryId) {
-        SchedulingCapabilitiesDTO.Capability dagAi = SchedulingCapabilitiesDTO.Capability.builder()
-                .status("AVAILABLE").mode("DAG_DURATION")
-                .reason("按工艺图的先后关系和每道工序的预计工时排出开始/结束时间；"
-                        + "缺预计工时的工序不排（该计划整体不排，请到「工序管理」填预计分钟）；不自动派工。")
+        SchedulingCapabilitiesDTO.Capability dailyAi = SchedulingCapabilitiesDTO.Capability.builder()
+                .status("AVAILABLE").mode("DAILY_CAPACITY")
+                .reason("按产品「一天能做多少」按天排：哪天做哪个计划、做多少，一天做不完顺延，"
+                        + "同一条产线一天的产能按计划顺序分着用；产品填了日产能用人工的，没填用历史成品入库算出的经验值（标「按历史估算」），"
+                        + "两样都没有时当场填一个日产能再排；不排到每道工序几点，不自动派工。")
                 .build();
         SchedulingCapabilitiesDTO.Capability unavailableWorkers = SchedulingCapabilitiesDTO.Capability.builder()
                 .status("UNAVAILABLE").mode("UNAVAILABLE")
@@ -63,7 +64,7 @@ public class SchedulingController {
                 .build();
         SchedulingCapabilitiesDTO capabilities = SchedulingCapabilitiesDTO.builder()
                 .contractVersion("scheduling-capabilities/v1")
-                .aiGeneration(dagAi)
+                .aiGeneration(dailyAi)
                 .workerOptimization(unavailableWorkers)
                 .reschedule(SchedulingCapabilitiesDTO.Capability.builder()
                         .status("AVAILABLE").mode("RECORD_REASON_ONLY")
@@ -443,7 +444,7 @@ public class SchedulingController {
     @RequirePermission({"scheduling:read_write", "production:read_write"})
     @RequireModule("scheduling")
     @PostMapping("/generate")
-    @Operation(summary = "按工艺图自动排程", description = "选生产计划, 按工艺图先后关系和每道工序预计工时排出开始/结束时间; 缺工时的计划不排; 不自动派工")
+    @Operation(summary = "按产品日产能自动排程", description = "选生产计划, 按产品日产能按天排出哪天做哪个计划、做多少; 人工日产能优先, 没填用历史经验; 两样都没有时返回 outcome=CAPACITY_REQUIRED 与需补清单 (不落库), 带 dailyCapacityOverrides 重新提交; 不自动派工")
     public ApiResponse<SchedulingPlanDTO> generateSchedule(
             @Parameter(description = "工厂ID", example = "F001")
             @PathVariable String factoryId,
@@ -452,6 +453,9 @@ public class SchedulingController {
         Long userId = getUserId(httpRequest);
         log.info("AI生成调度计划: factoryId={}, planDate={}", factoryId, request.getPlanDate());
         SchedulingPlanDTO plan = schedulingService.generateSchedule(factoryId, request, userId);
+        if (SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED.equals(plan.getOutcome())) {
+            return ApiResponse.success("有产品还没有日产能，请先补填后再排（本次没有生成调度计划）", plan);
+        }
         return ApiResponse.success("生成成功", plan);
     }
 

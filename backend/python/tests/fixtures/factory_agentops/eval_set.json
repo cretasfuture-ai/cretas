@@ -1,0 +1,144 @@
+{
+  "name": "factory-material-intents",
+  "version": 1,
+  "domain": "FACTORY",
+  "cases": [
+    {
+      "caseId": "fx-001",
+      "expectedRoute": "MATERIAL_BATCH_QUERY",
+      "requiredTools": [
+        "material_batch_query"
+      ],
+      "numericTruthRefs": {},
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-002",
+      "expectedRoute": "MATERIAL_EXPIRING_ALERT",
+      "requiredTools": [
+        "material_expiring_alert"
+      ],
+      "numericTruthRefs": {
+        "expiring:count": "4"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-003",
+      "expectedRoute": "MATERIAL_EXPIRED_QUERY",
+      "requiredTools": [
+        "material_expired_query"
+      ],
+      "numericTruthRefs": {
+        "expired:count": "2"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-004",
+      "expectedRoute": "MATERIAL_FIFO_RECOMMEND",
+      "requiredTools": [
+        "material_batch_query",
+        "material_fifo_recommend"
+      ],
+      "numericTruthRefs": {},
+      "maxRounds": 2,
+      "maxToolCalls": 4
+    },
+    {
+      "caseId": "fx-005",
+      "expectedRoute": "MATERIAL_BATCH_WIP_QUERY",
+      "requiredTools": [
+        "material_batch_wip_query"
+      ],
+      "numericTruthRefs": {
+        "wip:qty": "120.5"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-006",
+      "expectedRoute": "MATERIAL_BATCH_CREATE",
+      "requiredTools": [
+        "material_batch_create"
+      ],
+      "numericTruthRefs": {},
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-007",
+      "expectedRoute": "MATERIAL_BATCH_RESERVE",
+      "requiredTools": [
+        "material_batch_query",
+        "material_batch_reserve"
+      ],
+      "numericTruthRefs": {
+        "reserve:qty": "35"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 4
+    },
+    {
+      "caseId": "fx-008",
+      "expectedRoute": "MATERIAL_BATCH_RELEASE",
+      "requiredTools": [
+        "material_batch_release"
+      ],
+      "numericTruthRefs": {},
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-009",
+      "expectedRoute": "MATERIAL_BATCH_CONSUME",
+      "requiredTools": [
+        "material_fifo_recommend",
+        "material_batch_consume"
+      ],
+      "numericTruthRefs": {
+        "consume:qty": "18.25"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 4
+    },
+    {
+      "caseId": "fx-010",
+      "expectedRoute": "MATERIAL_ADJUST_QUANTITY",
+      "requiredTools": [
+        "material_adjust_quantity"
+      ],
+      "numericTruthRefs": {
+        "adjust:delta": "-3"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-011",
+      "expectedRoute": "BATCH_CONSUMPTION_QUERY",
+      "requiredTools": [
+        "batch_consumption_query"
+      ],
+      "numericTruthRefs": {
+        "consumption:total": "260.75"
+      },
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    },
+    {
+      "caseId": "fx-012",
+      "expectedRoute": "MATERIAL_BATCH_DELETE",
+      "requiredTools": [
+        "material_batch_delete"
+      ],
+      "numericTruthRefs": {},
+      "maxRounds": 2,
+      "maxToolCalls": 3
+    }
+  ]
+}

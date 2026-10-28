@@ -2,6 +2,7 @@ package com.cretas.aims.service.aps.impl;
 
 import com.cretas.aims.dto.aps.*;
 import com.cretas.aims.entity.*;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.aps.APSAdaptiveSchedulingService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -179,12 +180,13 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
     }
 
     @Override
-    public GlobalDashboard getGlobalDashboard() {
+    public GlobalDashboard getGlobalDashboard(String factoryId) {
         GlobalDashboard dashboard = new GlobalDashboard();
         dashboard.setUpdateTime(LocalDateTime.now());
 
-        // 获取所有进行中的任务
-        List<LineSchedule> activeTasks = lineScheduleRepository.findByStatus(LineSchedule.ScheduleStatus.in_progress);
+        // 本厂进行中的任务 (⛔ 不取全平台: 别厂的任务不该出现在这家厂的看板上)
+        List<LineSchedule> activeTasks = lineScheduleRepository.findByFactoryIdAndStatus(
+            factoryId, LineSchedule.ScheduleStatus.in_progress);
         dashboard.setTotalActiveTasks(activeTasks.size());
 
         int onTrack = 0, atRisk = 0, delayed = 0;
@@ -212,8 +214,8 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
         dashboard.setAverageCompletionProbability(activeTasks.isEmpty() ? 0 : totalProb / activeTasks.size());
         dashboard.setAverageEfficiency(efficiencyCount == 0 ? 1.0 : totalEfficiency / efficiencyCount);
 
-        // 产线状态
-        List<ProductionLine> lines = productionLineRepository.findAll();
+        // 本厂产线状态 (⛔ 不 findAll: 那是全平台的产线)
+        List<ProductionLine> lines = productionLineRepository.findByFactoryIdAndDeletedAtIsNull(factoryId);
         dashboard.setActiveLines((int) lines.stream()
             .filter(l -> l.getStatus() == ProductionLine.LineStatus.active).count());
         dashboard.setMaintenanceLines((int) lines.stream()
@@ -222,10 +224,10 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
             .filter(l -> l.getStatus() == ProductionLine.LineStatus.inactive).count());
 
         // 高风险任务
-        dashboard.setTopRisks(getLowProbabilityTasks(PROBABILITY_WARNING_THRESHOLD));
+        dashboard.setTopRisks(getLowProbabilityTasks(factoryId, PROBABILITY_WARNING_THRESHOLD));
 
         // 重排建议
-        dashboard.setRescheduleRecommendation(checkRescheduleNeed());
+        dashboard.setRescheduleRecommendation(checkRescheduleNeed(factoryId));
 
         return dashboard;
     }
@@ -411,8 +413,9 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
     }
 
     @Override
-    public List<TaskRiskInfo> getLowProbabilityTasks(double threshold) {
-        List<LineSchedule> inProgressTasks = lineScheduleRepository.findByStatus(LineSchedule.ScheduleStatus.in_progress);
+    public List<TaskRiskInfo> getLowProbabilityTasks(String factoryId, double threshold) {
+        List<LineSchedule> inProgressTasks = lineScheduleRepository.findByFactoryIdAndStatus(
+            factoryId, LineSchedule.ScheduleStatus.in_progress);
         List<TaskRiskInfo> riskTasks = new ArrayList<>();
 
         for (LineSchedule task : inProgressTasks) {
@@ -784,21 +787,21 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
     // ==================== 重排触发机制 ====================
 
     @Override
-    public RescheduleRecommendation checkRescheduleNeed() {
+    public RescheduleRecommendation checkRescheduleNeed(String factoryId) {
         RescheduleRecommendation recommendation = new RescheduleRecommendation();
         List<String> reasons = new ArrayList<>();
         List<String> affectedTaskIds = new ArrayList<>();
 
         // 检查低概率任务
-        List<TaskRiskInfo> lowProbTasks = getLowProbabilityTasks(PROBABILITY_RESCHEDULE_THRESHOLD);
+        List<TaskRiskInfo> lowProbTasks = getLowProbabilityTasks(factoryId, PROBABILITY_RESCHEDULE_THRESHOLD);
         if (!lowProbTasks.isEmpty()) {
             reasons.add("有" + lowProbTasks.size() + "个任务完成概率低于50%");
             affectedTaskIds.addAll(lowProbTasks.stream().map(TaskRiskInfo::getTaskId).collect(Collectors.toList()));
         }
 
         // 检查产线故障 - 使用条件查询避免全表扫描
-        List<ProductionLine> faultLines = productionLineRepository.findByStatusAndDeletedAtIsNull(
-            ProductionLine.LineStatus.maintenance);
+        List<ProductionLine> faultLines = productionLineRepository.findByFactoryIdAndStatusAndDeletedAtIsNull(
+            factoryId, ProductionLine.LineStatus.maintenance);
         if (!faultLines.isEmpty()) {
             reasons.add("有" + faultLines.size() + "条产线处于维护状态");
         }
@@ -812,75 +815,91 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
         return recommendation;
     }
 
+    /**
+     * 「自适应重排」现在只给任务打调整标记 (次数 / 时间 / 原因), ⛔ 不改计划时间和产线资源 ——
+     * 真正按差异改时间与资源的重排还没有实现, 返回消息照实说。
+     *
+     * <p>只处理路径上这家工厂的任务: 不传任务 = 本厂全部进行中的任务; 传了任务 id 而其中有不属于本厂的
+     * (或不存在的) ⇒ 整次 404, 一个都不改。
+     */
     @Override
     @Transactional
-    public SchedulingResult adaptiveReschedule(List<String> affectedTaskIds) {
+    public SchedulingResult adaptiveReschedule(String factoryId, List<String> affectedTaskIds) {
+        List<LineSchedule> tasks = resolveOwnTasks(factoryId, affectedTaskIds);
         SchedulingResult result = new SchedulingResult();
         result.setScheduleBatchNo("RS-" + System.currentTimeMillis());
-        result.setTotalTasks(affectedTaskIds.size());
+        result.setTotalTasks(tasks.size());
 
-        int scheduledCount = 0;
-        for (String taskId : affectedTaskIds) {
-            try {
-                LineSchedule task = lineScheduleRepository.findById(taskId).orElse(null);
-                if (task != null) {
-                    // 重新计算任务的排程参数
-                    task.setAdjustmentCount(task.getAdjustmentCount() != null ? task.getAdjustmentCount() + 1 : 1);
-                    task.setLastAdjustmentTime(LocalDateTime.now());
-                    task.setAdjustmentReason("自适应重排");
-                    lineScheduleRepository.save(task);
-                    scheduledCount++;
-                }
-            } catch (Exception e) {
-                log.warn("Failed to reschedule task {}: {}", taskId, e.getMessage());
-            }
+        for (LineSchedule task : tasks) {
+            task.setAdjustmentCount(task.getAdjustmentCount() != null ? task.getAdjustmentCount() + 1 : 1);
+            task.setLastAdjustmentTime(LocalDateTime.now());
+            task.setAdjustmentReason("自适应重排");
+            lineScheduleRepository.save(task);
         }
 
-        result.setScheduledTasks(scheduledCount);
-        result.setSuccess(scheduledCount > 0);
-        result.setMessage(String.format("重排完成: %d/%d 任务已调整", scheduledCount, affectedTaskIds.size()));
-
+        result.setScheduledTasks(tasks.size());
+        result.setSuccess(true);
+        result.setMessage(String.format("已给 %d 个任务登记调整标记; 计划时间和产线资源未改动 (按差异重排尚未实现)",
+                tasks.size()));
         return result;
     }
 
+    /**
+     * 只给当前完成概率。重排这一步不改时间和资源, ⛔ 不编「重排后」的概率, 也不据此推荐执行。
+     * 算不出概率的任务不计入 (⛔ 不填 0.5 冒充读数), 留在 afterProbabilities 之外由调用方看出缺口。
+     */
     @Override
-    public RescheduleSimulation simulateReschedule(List<String> affectedTaskIds) {
+    public RescheduleSimulation simulateReschedule(String factoryId, List<String> affectedTaskIds) {
+        List<LineSchedule> tasks = resolveOwnTasks(factoryId, affectedTaskIds);
         RescheduleSimulation simulation = new RescheduleSimulation();
 
-        // 记录当前概率
         Map<String, Double> beforeProbabilities = new HashMap<>();
-        for (String taskId : affectedTaskIds) {
+        for (LineSchedule task : tasks) {
             try {
-                beforeProbabilities.put(taskId, predictCompletionProbability(taskId));
+                beforeProbabilities.put(task.getId(), predictCompletionProbability(task.getId()));
             } catch (Exception e) {
-                beforeProbabilities.put(taskId, 0.5);
+                log.warn("无法计算任务完成概率, 不计入: taskId={}, {}", task.getId(), e.getMessage());
             }
         }
         simulation.setBeforeProbabilities(beforeProbabilities);
-
-        // 模拟重排后的概率 (简化: 假设重排后概率提升10%)
-        Map<String, Double> afterProbabilities = new HashMap<>();
-        for (Map.Entry<String, Double> entry : beforeProbabilities.entrySet()) {
-            afterProbabilities.put(entry.getKey(), Math.min(1.0, entry.getValue() + 0.1));
-        }
-        simulation.setAfterProbabilities(afterProbabilities);
-
-        // 计算延迟任务数
+        simulation.setAfterProbabilities(Map.of());
         simulation.setBeforeDelayedTasks((int) beforeProbabilities.values().stream()
             .filter(p -> p < PROBABILITY_RESCHEDULE_THRESHOLD).count());
-        simulation.setAfterDelayedTasks((int) afterProbabilities.values().stream()
-            .filter(p -> p < PROBABILITY_RESCHEDULE_THRESHOLD).count());
-
-        // 计算准时率
         simulation.setBeforeOnTimeRate(beforeProbabilities.values().stream()
-            .mapToDouble(d -> d).average().orElse(0.5));
-        simulation.setAfterOnTimeRate(afterProbabilities.values().stream()
-            .mapToDouble(d -> d).average().orElse(0.5));
-
-        // 推荐执行
-        simulation.setRecommendExecute(simulation.getAfterOnTimeRate() > simulation.getBeforeOnTimeRate());
-
+            .mapToDouble(d -> d).average().orElse(Double.NaN));
+        simulation.setRecommendExecute(false);
         return simulation;
+    }
+
+    @Override
+    public boolean taskBelongsToFactory(String factoryId, String taskId) {
+        return factoryId != null && taskId != null
+            && lineScheduleRepository.findByIdAndFactoryId(taskId, factoryId).isPresent();
+    }
+
+    @Override
+    public boolean lineBelongsToFactory(String factoryId, String lineId) {
+        return factoryId != null && lineId != null
+            && productionLineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(lineId, factoryId).isPresent();
+    }
+
+    /** 不传 = 本厂进行中的任务; 传了 id 就逐个按本厂取, 有一个取不到整次 404 (⛔ 不跳过, 不跨厂)。 */
+    private List<LineSchedule> resolveOwnTasks(String factoryId, List<String> taskIds) {
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new BusinessException(400, "缺少工厂");
+        }
+        if (taskIds == null || taskIds.isEmpty()) {
+            return lineScheduleRepository.findByFactoryIdAndStatus(factoryId, LineSchedule.ScheduleStatus.in_progress);
+        }
+        List<LineSchedule> tasks = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (String id : new LinkedHashSet<>(taskIds)) {
+            lineScheduleRepository.findByIdAndFactoryId(id, factoryId).ifPresentOrElse(tasks::add, () -> missing.add(id));
+        }
+        if (!missing.isEmpty()) {
+            throw new BusinessException(404, "任务不存在或不属于本厂: " + missing);
+        }
+        return tasks;
     }
 
     // ==================== 私有辅助方法 ====================

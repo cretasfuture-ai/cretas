@@ -22,6 +22,10 @@ public interface LineScheduleRepository extends JpaRepository<LineSchedule, Stri
 
     Optional<LineSchedule> findByIdAndPlanId(String id, String planId);
 
+    /** 按 id 取任务, 但只取路径上这家工厂的 (任务经 plan 归属工厂)。 */
+    @Query("SELECT ls FROM LineSchedule ls WHERE ls.id = :id AND ls.plan.factoryId = :factoryId")
+    Optional<LineSchedule> findByIdAndFactoryId(@Param("id") String id, @Param("factoryId") String factoryId);
+
     List<LineSchedule> findByProductionLineIdAndStatus(
         String productionLineId, LineSchedule.ScheduleStatus status);
 

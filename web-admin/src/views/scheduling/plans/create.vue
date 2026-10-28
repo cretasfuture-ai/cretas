@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
  * 创建调度计划页面
- * 支持手动创建; 后端能力 aiGeneration = AVAILABLE 时支持「按工艺图自动排程」
- * (按工艺图先后关系 + 每道工序预计工时排开始/结束时间; 缺工时的计划不排; 不自动派工)。
+ * 支持手动创建; 后端能力 aiGeneration = AVAILABLE 时支持「按日产能自动排程」(APS v2, Steve 2026-10-28):
+ * 按产品「一天能做多少」按天排, 一天做不完顺延; 人工日产能优先, 没填用历史估算;
+ * 两样都没有时后端返回需补清单 (什么都没保存), 本页当场弹出让人填, 填完保存到产品并重新排。不自动派工。
  */
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
@@ -14,9 +15,17 @@ import {
   getPendingProductionPlans,
   getProductionLines,
   getSchedulingCapabilities,
+  type DailyCapacityOverride,
+  type DailyCapacityRequired,
   type PendingProductionPlan,
   type SchedulingCapabilities
 } from '@/api/scheduling';
+import {
+  buildCapacityOverrides,
+  capacityBlockReason,
+  capacityKey,
+  type CapacityInputs
+} from './dailyCapacityForm';
 import {
   buildManualSchedulePayload,
   validateManualSchedules,
@@ -57,12 +66,17 @@ const aiUnavailableReason = computed(() => capabilities.value?.aiGeneration?.rea
 const manualUnavailableReason = computed(() => capabilities.value?.manualCreation?.status === 'UNAVAILABLE'
   ? capabilities.value.manualCreation.reason : '');
 
-// ==================== 按工艺图自动排程 ====================
+// ==================== 按日产能自动排程 ====================
 // 只听后端能力: aiGeneration 不是 AVAILABLE (含能力加载失败) 时这个入口不可点。
 const aiAvailable = computed(() => capabilities.value?.aiGeneration?.status === 'AVAILABLE');
 const pendingPlans = ref<PendingProductionPlan[]>([]);
 const pendingPlansLoadFailed = ref(false);
-const autoForm = ref({ planIds: [] as string[], productionLineId: '', startTime: '' });
+const autoForm = ref({ planIds: [] as string[], productionLineId: '' });
+// 两样都没有日产能时当场补填
+const capacityDialogVisible = ref(false);
+const capacityRequired = ref<DailyCapacityRequired[]>([]);
+const capacityInputs = ref<CapacityInputs>({});
+const capacityDialogBlockReason = computed(() => capacityBlockReason(capacityRequired.value, capacityInputs.value));
 
 /** 预先告诉用户还差什么 (防呆 Rule 1): 空串 = 可以提交。 */
 const autoBlockReason = computed(() => {
@@ -160,6 +174,8 @@ function selectAutoMode() {
 }
 
 function togglePlan(planId: string) {
+  // 换了计划, 上一次「要补的产品」清单就不作数了
+  capacityDialogVisible.value = false;
   const index = autoForm.value.planIds.indexOf(planId);
   if (index > -1) autoForm.value.planIds.splice(index, 1);
   else autoForm.value.planIds.push(planId);
@@ -169,7 +185,7 @@ function planOrder(planId: string) {
   return autoForm.value.planIds.indexOf(planId) + 1;
 }
 
-async function submitAutoSchedule() {
+async function submitAutoSchedule(overrides: DailyCapacityOverride[] = []) {
   if (autoBlockReason.value) {
     ElMessage.warning(autoBlockReason.value);
     return;
@@ -180,19 +196,46 @@ async function submitAutoSchedule() {
       planDate: form.value.planDate,
       planIds: [...autoForm.value.planIds],
       ...(autoForm.value.productionLineId ? { productionLineId: autoForm.value.productionLineId } : {}),
-      ...(autoForm.value.startTime ? { startTime: autoForm.value.startTime } : {}),
+      ...(overrides.length ? { dailyCapacityOverrides: overrides } : {}),
     });
-    if (response.success && response.data) {
-      ElMessage.success(`已按工艺图排出 ${response.data.lineSchedules.length} 个计划`);
-      // warnings 只在生成这次返回 (缺工时 / 没工艺图 / 默认 08:00 开工), 带到详情页展示
-      router.push({ path: `/scheduling/plans/${response.data.id}`, state: { apsWarnings: response.data.warnings || [] } });
+    if (!response.success || !response.data) return;
+    if (response.data.outcome === 'CAPACITY_REQUIRED') {
+      // 两样都没有: 后端什么都没保存, 当场问每个产品一天能做多少
+      openCapacityDialog(response.data.capacityRequired || []);
+      return;
     }
+    capacityDialogVisible.value = false;
+    ElMessage.success(`已按日产能排出 ${response.data.lineSchedules.length} 个计划`);
+    // warnings 只在生成这次返回 (按历史估算 / 人工与历史相差大 / 已完成不排), 带到详情页展示
+    router.push({ path: `/scheduling/plans/${response.data.id}`, state: { apsWarnings: response.data.warnings || [] } });
   } catch (error) {
-    // Interceptor already shows the backend message (e.g. 哪道工序缺预计工时) as a sticky toast.
+    // Interceptor already shows the backend message as a sticky toast.
     console.error('自动排程失败:', error);
   } finally {
     loading.value = false;
   }
+}
+
+function openCapacityDialog(required: DailyCapacityRequired[]) {
+  if (required.length === 0) {
+    // 后端说要补却没给清单: 不假装成功, 也不让人卡在一个空弹窗里
+    ElMessage.warning('有产品缺日产能，但没有拿到清单；请刷新页面重试');
+    return;
+  }
+  capacityRequired.value = required;
+  const inputs: CapacityInputs = {};
+  for (const item of required) inputs[capacityKey(item)] = capacityInputs.value[capacityKey(item)] ?? null;
+  capacityInputs.value = inputs;
+  capacityDialogVisible.value = true;
+}
+
+async function submitCapacityAndSchedule() {
+  if (capacityDialogBlockReason.value) {
+    ElMessage.warning(capacityDialogBlockReason.value);
+    return;
+  }
+  // 后端收到就先存到产品 (即使这次还缺别的产品也已经存下), 所以只发这一轮填的, 不累积重发
+  await submitAutoSchedule(buildCapacityOverrides(capacityRequired.value, capacityInputs.value));
 }
 
 function goBack() {
@@ -331,13 +374,13 @@ async function handleSubmit() {
             type="button"
             class="mode-option"
             :class="{ active: useAI }"
-            data-testid="mode-dag-schedule"
+            data-testid="mode-daily-schedule"
             aria-describedby="ai-generation-reason"
             @click="selectAutoMode"
           >
             <el-icon class="mode-icon ai"><MagicStick /></el-icon>
             <div class="mode-info">
-              <div class="mode-title">按工艺图自动排程</div>
+              <div class="mode-title">按日产能自动排程</div>
               <div id="ai-generation-reason" class="mode-desc">{{ capabilities?.aiGeneration?.reason }}</div>
             </div>
           </button>
@@ -365,7 +408,7 @@ async function handleSubmit() {
         </div>
       </el-card>
 
-      <!-- 按工艺图自动排程: 选计划 + 可选产线 / 开工时刻 -->
+      <!-- 按日产能自动排程: 选计划 + 可选产线 -->
       <el-card v-if="useAI && aiAvailable" class="auto-card">
         <template #header>
           <div class="card-header">
@@ -373,10 +416,9 @@ async function handleSubmit() {
           </div>
         </template>
         <div class="auto-rules">
-          按工艺图的先后关系和每道工序的预计工时排出开始、结束时间；同一道工序同一时刻只做一个计划。
-          缺预计工时的计划不会排，会告诉你是哪道工序，请到
-          <a href="#" @click.prevent="router.push('/system/work-processes')">工序管理</a>
-          填预计分钟。不会自动派工。
+          从计划日期开始按天排：每个产品按「一天能做多少」算，一天做不完顺延到第二天；
+          同一条产线一天的产能按点选顺序分着用。产品填了日产能用填的，没填用历史估算；
+          两样都没有的，排的时候会当场问你，填一次就记在产品上。不会自动派工。
         </div>
         <div class="plan-list">
           <div
@@ -404,12 +446,60 @@ async function handleSubmit() {
               <option v-for="line in productionLines" :key="line.id" :value="line.id">{{ line.name }}</option>
             </select>
           </label>
-          <label>开工时刻
-            <input v-model="autoForm.startTime" type="time" data-testid="aps-start-time" />
-            <span class="auto-hint">不填按计划日期 08:00 开工排</span>
-          </label>
         </div>
         <div v-if="autoBlockReason" class="auto-hint warning" data-testid="aps-block-reason">{{ autoBlockReason }}</div>
+      </el-card>
+
+      <!-- 两样都没有日产能: 当场补填 (保存到产品后重新排) -->
+      <el-card v-if="useAI && capacityDialogVisible" class="capacity-card" data-testid="aps-capacity-required">
+        <template #header>
+          <div class="card-header">
+            <span>这些产品还不知道一天能做多少，填一下就能排（会记在产品上，下次不用再填）</span>
+          </div>
+        </template>
+        <div
+          v-for="item in capacityRequired"
+          :key="capacityKey(item)"
+          class="capacity-row"
+          :data-testid="`aps-capacity-${item.productTypeId}`"
+        >
+          <div class="capacity-question">
+            <strong>{{ item.question }}</strong>
+            <span class="auto-hint">
+              计划：{{ item.planNumbers.join('、') }}
+              <template v-if="item.reason === 'UNIT_MISMATCH'">
+                ；产品上填的是 {{ item.currentQuantityPerDay }} {{ item.currentUnit }}/天，和计划单位 {{ item.unit }} 对不上
+              </template>
+              <template v-if="item.experienceNote">；{{ item.experienceNote }}</template>
+            </span>
+          </div>
+          <label class="capacity-input">
+            <input
+              v-model.number="capacityInputs[capacityKey(item)]"
+              type="number"
+              min="0.01"
+              step="any"
+              inputmode="decimal"
+              :aria-label="item.question"
+            />
+            <span>{{ item.unit }}/天</span>
+          </label>
+        </div>
+        <div v-if="capacityDialogBlockReason" class="auto-hint warning" data-testid="aps-capacity-block-reason">
+          {{ capacityDialogBlockReason }}
+        </div>
+        <div class="capacity-actions">
+          <el-button @click="capacityDialogVisible = false">先不排</el-button>
+          <el-button
+            type="primary"
+            :loading="loading"
+            :disabled="!!capacityDialogBlockReason"
+            data-testid="aps-capacity-submit"
+            @click="submitCapacityAndSchedule"
+          >
+            保存日产能并排程
+          </el-button>
+        </div>
       </el-card>
 
       <!-- 选择批次 -->
@@ -499,7 +589,7 @@ async function handleSubmit() {
           :disabled="useAI && !!autoBlockReason"
           @click="handleSubmit"
         >
-          {{ useAI ? '按工艺图排程' : '创建人工排程草稿' }}
+          {{ useAI ? '按日产能排程' : '创建人工排程草稿' }}
         </el-button>
       </div>
     </div>
@@ -625,6 +715,52 @@ async function handleSubmit() {
 
   &.warning { margin-top: 10px; color: #b88230; }
   &.error { color: #f56c6c; }
+}
+
+.capacity-card {
+  margin-bottom: 20px;
+  border-color: #e6a23c;
+}
+
+.capacity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid #ebeef5;
+
+  &:last-of-type { border-bottom: none; }
+}
+
+.capacity-question {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.capacity-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: #606266;
+
+  input {
+    width: 140px;
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+  }
+}
+
+.capacity-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .mode-selection {

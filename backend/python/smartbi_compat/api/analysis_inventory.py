@@ -24,8 +24,9 @@ from datetime import date, datetime, time
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
+from smartbi.services.factory_charts import cost_scope as process_secret
 from smartbi_compat.api.analysis_finance import (
     _decimal_to_number,
     _to_decimal,
@@ -176,12 +177,25 @@ async def _query_material_consumptions_in_range(
         )
     start_dt = datetime.combine(start_date, time.min)
     end_dt = datetime.combine(end_date, time(23, 59, 59))
+    # 工艺保密: resolve the product each consumption row is booked against
+    # (production batch first, then production plan).  Soft-deleted batches /
+    # plans still identify the product, so the joins do not filter deleted_at.
+    # cost_link_present tells "raw material not tied to any product" (visible)
+    # apart from "tied to a product we could not resolve" (hidden for callers
+    # without full cost scope).
     sql = """
-        SELECT *
-        FROM material_consumptions
-        WHERE factory_id = $1
-          AND consumption_time BETWEEN $2 AND $3
-        ORDER BY id
+        SELECT mc.*,
+               COALESCE(pb.product_type_id, pp.product_type_id) AS cost_product_type_id,
+               (mc.production_batch_id IS NOT NULL
+                OR mc.production_plan_id IS NOT NULL) AS cost_link_present
+        FROM material_consumptions mc
+        LEFT JOIN production_batches pb
+          ON pb.id = mc.production_batch_id AND pb.factory_id = mc.factory_id
+        LEFT JOIN production_plans pp
+          ON pp.id = mc.production_plan_id AND pp.factory_id = mc.factory_id
+        WHERE mc.factory_id = $1
+          AND mc.consumption_time BETWEEN $2 AND $3
+        ORDER BY mc.id
     """
     return await _fetch_all(sql, factory_id, start_dt, end_dt)
 
@@ -558,23 +572,112 @@ def _metric_result_of(code: str, name: str, value: Decimal, unit: str) -> dict:
     }
 
 
+async def _visible_consumption_total(
+    consumptions: list[dict], cost_resolver
+) -> tuple[Optional[Decimal], Optional[dict]]:
+    """工艺保密: sum ``total_cost`` over the consumption rows this caller may see.
+
+    FULL callers get every row (Java parity).  Otherwise the total is BUILT by
+    summing only rows of allowed products plus rows tied to no product at all
+    (⛔ never "total − secret").  Rows tied to a product that cannot be
+    resolved are left out.  Without an authorization answer the total is
+    ``None`` (fail closed, never 0).  Returns ``(total, costScope annotation)``.
+    """
+    if cost_resolver is None:
+        scope = process_secret.unavailable(process_secret.REASON_NOT_RUN)
+    else:
+        scope = await cost_resolver.scope_for(c.get("cost_product_type_id") for c in consumptions)
+    if scope.is_unavailable:
+        return None, process_secret.rollup_annotation(scope, 0)
+    total = Decimal("0")
+    contributed = False
+    unresolved = 0
+    for c in consumptions:
+        if not scope.is_full:
+            pid = c.get("cost_product_type_id")
+            if pid is None and c.get("cost_link_present"):
+                unresolved += 1
+                continue
+            if not scope.allows(pid):
+                continue
+        tc = c.get("total_cost")
+        if tc is not None:
+            total += _to_decimal(tc)
+            contributed = True
+    excluded = scope.excluded_product_ids(c.get("cost_product_type_id") for c in consumptions)
+    annotation = process_secret.rollup_annotation(scope, len(excluded))
+    if unresolved:
+        annotation = annotation or {"status": "ALLOWED_PRODUCTS_ONLY",
+                                    "excludedProtectedProductCount": 0,
+                                    "note": process_secret.excluded_note(0)}
+        annotation["unresolvedProductRowCount"] = unresolved
+        annotation["note"] += f"；{unresolved} 条消耗无法确认所属产品，未计入"
+    if annotation is not None and not contributed:
+        # Everything costed was left out (protected / unresolved): the visible
+        # total is unknown, not 0 — a 0 would read as "no consumption" and
+        # drive turnover to 0 / days to 999 / a RED alert.
+        return None, annotation
+    return total, annotation
+
+
+def _consumption_hidden_metrics(current_inventory_value: Decimal, cost_scope: Optional[dict]) -> list[dict]:
+    """Fail-closed turnover metrics: every consumption-derived value is null.
+
+    TURNOVER_RATE / INVENTORY_DAYS are consumption ÷ visible inventory value,
+    so publishing them would let the hidden consumption be backed out.
+    Same 11-key MetricResult shape; ``alertLevel`` is null (nothing measured).
+    """
+    # Authorization failure carries a reason; a scoped caller whose costed
+    # consumption is entirely protected carries the 「不含 N 个保密产品」 note.
+    reason = ((cost_scope or {}).get("reason") or (cost_scope or {}).get("note")
+              or process_secret.REASON_FAILED)
+    metrics = []
+    for code, name, unit in (("TURNOVER_RATE", "库存周转率", "次/年"),
+                             ("INVENTORY_DAYS", "库存天数", "天"),
+                             ("CONSUMPTION_AMOUNT", "期间消耗", "元")):
+        metrics.append({
+            "metricCode":      code,
+            "metricName":      name,
+            "value":           None,
+            "formattedValue":  None,
+            "unit":            unit,
+            "changePercent":   None,
+            "changeDirection": None,
+            "changeValue":     None,
+            "alertLevel":      None,
+            "dimensionValue":  None,
+            "description":     reason,
+        })
+    metrics.append(_metric_result_of("INVENTORY_VALUE", "库存价值", current_inventory_value, "元"))
+    return metrics
+
+
 async def _get_turnover_analysis(
-    factory_id: str, start_date: date, end_date: date
+    factory_id: str, start_date: date, end_date: date, cost_resolver=None
 ) -> list[dict]:
     """4 metrics: TURNOVER_RATE / INVENTORY_DAYS / CONSUMPTION_AMOUNT / INVENTORY_VALUE.
 
     Mirror Java InventoryHealthAnalysisServiceImpl.getTurnoverAnalysis L141-203.
     Spec §3.7.1.
+
+    ``cost_resolver`` (工艺保密) comes from the HTTP route; ``None`` = internal
+    call without caller identity → consumption-derived values fail closed.
     """
+    metrics, _ = await _turnover_analysis_scoped(factory_id, start_date, end_date, cost_resolver)
+    return metrics
+
+
+async def _turnover_analysis_scoped(
+    factory_id: str, start_date: date, end_date: date, cost_resolver
+) -> tuple[list[dict], Optional[dict]]:
     current_inventory_value = await _query_inventory_value_total(factory_id)
     # _query_inventory_value_total already coalesces null → Decimal('0')
 
     consumptions = await _query_material_consumptions_in_range(factory_id, start_date, end_date)
-    total_consumption = Decimal("0")
-    for c in consumptions:
-        tc = c.get("total_cost")
-        if tc is not None:
-            total_consumption += _to_decimal(tc)
+    total_consumption, cost_scope = await _visible_consumption_total(consumptions, cost_resolver)
+    if total_consumption is None:
+        return _consumption_hidden_metrics(current_inventory_value, cost_scope), cost_scope
+    scope_note = (cost_scope or {}).get("note")
 
     days_between = (end_date - start_date).days + 1
     annualized = (total_consumption * Decimal("365") / Decimal(days_between)).quantize(
@@ -605,7 +708,7 @@ async def _get_turnover_analysis(
         "changeValue":     None,
         "alertLevel":      _determine_turnover_alert_level(turnover_rate),
         "dimensionValue":  None,
-        "description":     None,
+        "description":     scope_note,
     })
 
     # Metric 2: INVENTORY_DAYS — Java fallback 999 when turnover_rate <= 0
@@ -627,20 +730,23 @@ async def _get_turnover_analysis(
         "changeValue":     None,
         "alertLevel":      _determine_inventory_days_alert_level(inventory_days),
         "dimensionValue":  None,
-        "description":     None,
+        "description":     scope_note,
     })
 
     # Metric 3: CONSUMPTION_AMOUNT (MetricResult.of factory — no formattedValue, alertLevel=GREEN)
-    metrics.append(_metric_result_of("CONSUMPTION_AMOUNT", "期间消耗", total_consumption, "元"))
+    consumption_metric = _metric_result_of("CONSUMPTION_AMOUNT", "期间消耗", total_consumption, "元")
+    consumption_metric["description"] = scope_note
+    metrics.append(consumption_metric)
 
     # Metric 4: INVENTORY_VALUE
     metrics.append(_metric_result_of("INVENTORY_VALUE", "库存价值", current_inventory_value, "元"))
 
-    return metrics
+    return metrics, cost_scope
 
 
 async def _get_turnover_trend_chart(
-    factory_id: str, start_date: date, end_date: date, period: str = "MONTH"
+    factory_id: str, start_date: date, end_date: date, period: str = "MONTH",
+    cost_resolver=None,
 ) -> dict:
     """LINE chart with MONTH iteration. Mirror Java L207-251. Spec §3.7.2.
 
@@ -663,16 +769,17 @@ async def _get_turnover_trend_chart(
         month_consumptions = await _query_material_consumptions_in_range(
             factory_id, current, month_end
         )
-        month_consumption = Decimal("0")
-        for c in month_consumptions:
-            tc = c.get("total_cost")
-            if tc is not None:
-                month_consumption += _to_decimal(tc)
+        # 工艺保密: same per-row rule as the turnover metrics (allowed rows only;
+        # no authorization answer → null, never 0).
+        month_consumption, _ = await _visible_consumption_total(month_consumptions, cost_resolver)
 
         chart_data.append({
             "month":       f"{current.year}-{current.month:02d}",
-            "consumption": _decimal_to_number(
-                month_consumption.quantize(_DISPLAY_SCALE, rounding=_QUANTIZE_HALF_UP)
+            "consumption": (
+                _decimal_to_number(
+                    month_consumption.quantize(_DISPLAY_SCALE, rounding=_QUANTIZE_HALF_UP)
+                )
+                if month_consumption is not None else None
             ),
         })
         current = _plus_months(current, 1)
@@ -732,23 +839,30 @@ async def _get_turnover_by_category(
 
 
 async def _get_turnover_mode(
-    factory_id: str, start_date: date, end_date: date
+    factory_id: str, start_date: date, end_date: date, cost_resolver=None
 ) -> dict:
     """Turnover mode entry — composes 3 sub-services into 5-key envelope.
 
     F999 golden Jackson HashMap key order (verified): [endDate, ranking, metrics,
-    trendChart, startDate]. Python dict literal mirrors exactly.
+    trendChart, startDate]. Python dict literal mirrors exactly.  A 6th key
+    ``costScope`` is appended only when 工艺保密 left something out (FULL
+    callers keep the 5-key golden shape).
     """
-    metrics = await _get_turnover_analysis(factory_id, start_date, end_date)
+    metrics, cost_scope = await _turnover_analysis_scoped(
+        factory_id, start_date, end_date, cost_resolver)
     ranking = await _get_turnover_by_category(factory_id, start_date, end_date)
-    trend_chart = await _get_turnover_trend_chart(factory_id, start_date, end_date)
-    return {
+    trend_chart = await _get_turnover_trend_chart(
+        factory_id, start_date, end_date, cost_resolver=cost_resolver)
+    result = {
         "endDate":    end_date.isoformat(),
         "ranking":    ranking,
         "metrics":    metrics,
         "trendChart": trend_chart,
         "startDate":  start_date.isoformat(),
     }
+    if cost_scope is not None:
+        result["costScope"] = cost_scope
+    return result
 
 
 # ============================================================
@@ -1402,7 +1516,7 @@ async def _calculate_loss_rate_for_health_score(
 
 
 async def _get_health_score(
-    factory_id: str, start_date: date, end_date: date
+    factory_id: str, start_date: date, end_date: date, cost_resolver=None
 ) -> dict:
     """Mirror Java getHealthScore (L824-921).
 
@@ -1446,7 +1560,8 @@ async def _get_health_score(
     health_score = Decimal("0")
 
     # Dimension 1 — TURNOVER (max 30 pts) — null → +0 (Java L835-844 NO else)
-    turnover_metrics = await _get_turnover_analysis(factory_id, start_date, end_date)
+    turnover_metrics = await _get_turnover_analysis(
+        factory_id, start_date, end_date, cost_resolver=cost_resolver)
     turnover_rate = next(
         (m for m in turnover_metrics if m.get("metricCode") == "TURNOVER_RATE"),
         None,
@@ -1537,7 +1652,8 @@ async def _get_health_score(
 
 
 async def _calculate_kpi_cards(
-    batches: list[dict], factory_id: str, start_date: date, end_date: date
+    batches: list[dict], factory_id: str, start_date: date, end_date: date,
+    cost_resolver=None,
 ) -> list[dict]:
     """Mirror Java calculateKpiCards (L1005-1053).
 
@@ -1586,7 +1702,8 @@ async def _calculate_kpi_cards(
     })
 
     # KPI 3: TURNOVER_RATE — pulled from getTurnoverAnalysis result
-    turnover_metrics = await _get_turnover_analysis(factory_id, start_date, end_date)
+    turnover_metrics = await _get_turnover_analysis(
+        factory_id, start_date, end_date, cost_resolver=cost_resolver)
     turnover = next(
         (m for m in turnover_metrics if m.get("metricCode") == "TURNOVER_RATE"),
         None,
@@ -1604,7 +1721,8 @@ async def _calculate_kpi_cards(
         kpi_cards.append(expiry_risk)
 
     # KPI 5: HEALTH_SCORE — always added (Java L1049-1050)
-    health_score = await _get_health_score(factory_id, start_date, end_date)
+    health_score = await _get_health_score(
+        factory_id, start_date, end_date, cost_resolver=cost_resolver)
     kpi_cards.append(health_score)
 
     return kpi_cards
@@ -1719,13 +1837,17 @@ def _generate_ai_insights(
         (m for m in kpi_cards if m.get("metricCode") == "TURNOVER_RATE"),
         None,
     )
+    # 工艺保密: the turnover metric's description carries 「不含 N 个保密产品」
+    # (or the authorization-failure reason); FULL callers have None → unchanged.
+    scope_note = turnover.get("description") if turnover is not None else None
+    note_suffix = f"（{scope_note}）" if scope_note else ""
     if turnover is not None and turnover.get("value") is not None:
         rate = _to_decimal(turnover["value"])
         if rate < _TURNOVER_RED:
             insights.append({
                 "level":            "RED",
                 "category":         "周转效率",
-                "message":          f"库存周转率仅 {_format_decimal_half_up(rate, 1)} 次/年，库存积压严重",
+                "message":          f"库存周转率仅 {_format_decimal_half_up(rate, 1)} 次/年，库存积压严重{note_suffix}",
                 "relatedEntity":    None,
                 "actionSuggestion": "建议减少采购量，加快库存消化，优化安全库存设置",
             })
@@ -1733,10 +1855,19 @@ def _generate_ai_insights(
             insights.append({
                 "level":            "YELLOW",
                 "category":         "周转效率",
-                "message":          f"库存周转率 {_format_decimal_half_up(rate, 1)} 次/年，有优化空间",
+                "message":          f"库存周转率 {_format_decimal_half_up(rate, 1)} 次/年，有优化空间{note_suffix}",
                 "relatedEntity":    None,
                 "actionSuggestion": "建议优化采购批次和频率，提高周转效率",
             })
+    elif turnover is not None and scope_note:
+        # Consumption hidden by 工艺保密 → turnover not computed; say so, no alert.
+        insights.append({
+            "level":            "INFO",
+            "category":         "周转效率",
+            "message":          f"库存周转率未计算：{scope_note}",
+            "relatedEntity":    None,
+            "actionSuggestion": None,
+        })
 
     # Insight 3: Health score (only emits when score >= 80, NOT for low scores)
     health_score = next(
@@ -1800,7 +1931,7 @@ def _generate_suggestions(batches: list[dict], kpi_cards: list[dict]) -> list[st
 
 
 async def _get_inventory_health(
-    factory_id: str, start_date: date, end_date: date
+    factory_id: str, start_date: date, end_date: date, cost_resolver=None
 ) -> dict:
     """Mirror Java getInventoryHealth (L89-135).
 
@@ -1827,7 +1958,8 @@ async def _get_inventory_health(
         return _build_empty_dashboard()
 
     # Java line 101: kpiCards
-    metric_results = await _calculate_kpi_cards(all_batches, factory_id, start_date, end_date)
+    metric_results = await _calculate_kpi_cards(
+        all_batches, factory_id, start_date, end_date, cost_resolver=cost_resolver)
     kpi_cards = _convert_to_kpi_cards(metric_results)
 
     # Java line 105-108: charts list (3 charts) + LinkedHashMap by title.replace(" ", "_")
@@ -1876,11 +2008,12 @@ async def _get_inventory_health(
 
 
 async def _get_default_mode(
-    factory_id: str, start_date: date, end_date: date
+    factory_id: str, start_date: date, end_date: date, cost_resolver=None
 ) -> dict:
     """Outer envelope wrapper for default mode.
     F999 golden Jackson HashMap order: [overview, endDate, startDate]."""
-    overview = await _get_inventory_health(factory_id, start_date, end_date)
+    overview = await _get_inventory_health(
+        factory_id, start_date, end_date, cost_resolver=cost_resolver)
     return {
         "overview":  overview,
         "endDate":   end_date.isoformat(),
@@ -1891,6 +2024,7 @@ async def _get_default_mode(
 @router.get("/api/mobile/{factory_id}/smart-bi/analysis/inventory")
 async def get_inventory_analysis(
     factory_id: str,
+    request: Request,
     startDate: date = Query(..., alias="startDate"),
     endDate: date = Query(..., alias="endDate"),
     analysisType: Optional[str] = Query(None, alias="analysisType"),
@@ -1908,8 +2042,12 @@ async def get_inventory_analysis(
                                default mode envelope is literally keyed `overview`)
       analysisType=other     → 501 envelope (un-ported)
     """
+    # 工艺保密: one resolver per request; Java decides which products' costs
+    # (material consumption amounts) this caller may see.
+    cost_resolver = process_secret.CostScopeResolver(request, auth.factory_id)
     if analysisType == "turnover":
-        result = await _get_turnover_mode(auth.factory_id, startDate, endDate)
+        result = await _get_turnover_mode(
+            auth.factory_id, startDate, endDate, cost_resolver=cost_resolver)
         return wrap_response(strip_price_for_role(result, auth.role))
     if analysisType == "expiry":
         result = await _get_expiry_mode(auth.factory_id, startDate, endDate)
@@ -1919,7 +2057,8 @@ async def get_inventory_analysis(
         return wrap_response(strip_price_for_role(result, auth.role))
     if not analysisType or analysisType == "overview":
         # PR-B: default mode (getInventoryHealth + DashboardResponse wrapped)
-        result = await _get_default_mode(auth.factory_id, startDate, endDate)
+        result = await _get_default_mode(
+            auth.factory_id, startDate, endDate, cost_resolver=cost_resolver)
         return wrap_response(strip_price_for_role(result, auth.role))
     # Unknown analysisType → 501
     return wrap_response(

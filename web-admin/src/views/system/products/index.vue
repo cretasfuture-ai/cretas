@@ -25,6 +25,8 @@ import { formatDateTime, toDateString } from '@/utils/dateFormat';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
+import { setProductDailyCapacity } from '@/api/scheduling';
+import { dailyCapacityBlockReason, saveDailyCapacityIfChanged } from './productDailyCapacity';
 
 // T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 20")
 const conversionPlaceholder = computed(() => {
@@ -323,6 +325,10 @@ const NET_CONTENT_UNIT_OPTIONS: Array<{ value: NetContentUnit; label: string }> 
   { value: 'L', label: 'L' },
 ];
 const netContentAmount = ref<number | null>(null);
+// APS v2 日产能 (一天能做多少): 单独接口保存, 不夹在产品通用更新里
+const dailyCapacityAmount = ref<number | null>(null);
+const dailyCapacityUnit = ref('');
+const dailyCapacityOriginal = ref<{ quantity: number | null; unit: string }>({ quantity: null, unit: '' });
 const netContentUnit = ref<NetContentUnit>('g');
 let previousNetContentUnit: NetContentUnit = 'g';
 
@@ -936,6 +942,9 @@ function resetForm() {
   formData.targetGrossMargin = null;
   formData.targetGrossMarginPercent = null;
   formData.inspectionRequired = false;
+  dailyCapacityAmount.value = null;
+  dailyCapacityUnit.value = '';
+  dailyCapacityOriginal.value = { quantity: null, unit: '' };
   netContentAmount.value = null;
   netContentUnit.value = 'g';
   previousNetContentUnit = 'g';
@@ -981,6 +990,9 @@ async function handleEdit(row: ProductType) {
     );
     formData.standardCost = product.standardCost ?? null;
     formData.inspectionRequired = product.inspectionRequired === true;
+    dailyCapacityAmount.value = product.dailyCapacity != null ? Number(product.dailyCapacity) : null;
+    dailyCapacityUnit.value = String(product.dailyCapacityUnit || '');
+    dailyCapacityOriginal.value = { quantity: dailyCapacityAmount.value, unit: dailyCapacityUnit.value };
     formData.targetGrossMargin = product.targetGrossMargin ?? null;
     formData.targetGrossMarginPercent = product.targetGrossMargin != null
       ? Number((Number(product.targetGrossMargin) * 100).toFixed(2))
@@ -1078,6 +1090,11 @@ async function handleSubmit() {
       ElMessage.warning('装箱换算数量必须是正整数，例如 1箱=10袋');
       return;
     }
+    const capacityBlock = dailyCapacityBlockReason(dailyCapacityAmount.value, dailyCapacityUnit.value);
+    if (capacityBlock) {
+      ElMessage.warning(capacityBlock);
+      return;
+    }
     submitting.value = true;
 
     const submittedPackagingSpecs = packagingSpecs.value
@@ -1136,6 +1153,20 @@ async function handleSubmit() {
       : await post<ProductType>(`/${factoryId.value}/product-types`, payload);
 
     if (response.success) {
+      // 日产能走单独接口: 产品先存成功, 再存日产能; 日产能失败时明确告诉用户 (拦截器已弹后端原因), 不假装都存好了
+      const savedProductId = isEditing.value ? String(formData.id || '') : String(response.data?.id || '');
+      try {
+        await saveDailyCapacityIfChanged(
+          savedProductId, dailyCapacityOriginal.value, dailyCapacityAmount.value, dailyCapacityUnit.value,
+          (productId, quantityPerDay, unit) => setProductDailyCapacity(factoryId.value!, productId, quantityPerDay, unit),
+        );
+      } catch (capacityError) {
+        console.error('日产能保存失败:', capacityError);
+        ElMessage.warning('产品已保存，但日产能没有保存成功，请重新打开编辑再填一次');
+        dialogVisible.value = false;
+        await Promise.all([loadData(), loadFilterOptionsSource()]);
+        return;
+      }
       ElMessage.success(isEditing.value ? '产品已保存，毛利红线配置已同步' : '产品已新增，毛利红线配置已同步');
       dialogVisible.value = false;
       await Promise.all([loadData(), loadFilterOptionsSource()]);
@@ -2024,6 +2055,34 @@ watch(aiProductDialogVisible, (visible) => {
           <div class="form-tip">{{ inspectionRequiredTip }}</div>
         </el-form-item>
 
+        <el-form-item label="日产能">
+          <div class="daily-capacity-row">
+            <span>一天能做</span>
+            <el-input-number
+              v-model="dailyCapacityAmount"
+              :min="0.01"
+              :precision="2"
+              :controls="false"
+              placeholder="不知道可留空"
+              data-testid="product-daily-capacity"
+            />
+            <el-input
+              v-model="dailyCapacityUnit"
+              :placeholder="formData.unit || '单位'"
+              style="width: 110px"
+              maxlength="32"
+              data-testid="product-daily-capacity-unit"
+            />
+            <span>/天</span>
+          </div>
+          <div class="form-tip">
+            自动排程按它按天排；单位要和这个产品生产计划的单位一致（如 袋、kg）。留空时用历史成品入库估算，没有历史就在排程时当场问。
+          </div>
+          <div v-if="dailyCapacityBlockReason(dailyCapacityAmount, dailyCapacityUnit)" class="form-tip warning-tip">
+            {{ dailyCapacityBlockReason(dailyCapacityAmount, dailyCapacityUnit) }}
+          </div>
+        </el-form-item>
+
         <!-- ========== 高级设置 (T157): 非必要项收起, 内分 关联客户/温区/图片 + 成本 + 产能 + 库存 ========== -->
         <el-collapse class="product-advanced">
           <el-collapse-item name="advanced">
@@ -2561,6 +2620,15 @@ watch(aiProductDialogVisible, (visible) => {
   color: #909399;
   margin-top: 4px;
   line-height: 1.4;
+
+  &.warning-tip { color: #b88230; }
+}
+
+.daily-capacity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .margin-redline-tip {

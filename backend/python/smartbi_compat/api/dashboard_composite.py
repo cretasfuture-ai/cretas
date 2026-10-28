@@ -64,7 +64,9 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+
+from smartbi.services.factory_charts import cost_scope as process_secret
 
 from smartbi_compat.api.analysis_finance import _get_finance_overview
 from smartbi_compat.api.analysis_inventory import _get_inventory_health
@@ -255,11 +257,14 @@ async def _fetch_finance_safe(
 
 
 async def _fetch_inventory_safe(
-    factory_id: str, period: str, range_: DateRange
+    factory_id: str, period: str, range_: DateRange, cost_resolver=None
 ) -> dict:
+    # cost_resolver (工艺保密): the inventory TURNOVER_RATE KPI is derived from
+    # material-consumption costs; without a resolver it fails closed (null).
     try:
         return await _get_inventory_health(
-            factory_id, range_.start_date, range_.end_date
+            factory_id, range_.start_date, range_.end_date,
+            cost_resolver=cost_resolver,
         )
     except asyncio.CancelledError:
         raise
@@ -369,7 +374,7 @@ async def _build_executive_dashboard(
 
 
 async def _build_unified_dashboard(
-    factory_id: str, period: str, range_: DateRange
+    factory_id: str, period: str, range_: DateRange, cost_resolver=None
 ) -> dict:
     """4-primitive parallel composite — pilot scope.
 
@@ -386,7 +391,7 @@ async def _build_unified_dashboard(
     """
     sales_task = _fetch_sales_safe(factory_id, period, range_)
     finance_task = _fetch_finance_safe(factory_id, period, range_)
-    inventory_task = _fetch_inventory_safe(factory_id, period, range_)
+    inventory_task = _fetch_inventory_safe(factory_id, period, range_, cost_resolver=cost_resolver)
     procurement_task = _fetch_procurement_safe(factory_id, period, range_)
 
     sales, finance, inventory, procurement = await asyncio.gather(
@@ -487,6 +492,7 @@ async def get_executive_dashboard_custom_range(
 @router.get("/api/mobile/{factory_id}/smart-bi/dashboard")
 async def get_unified_dashboard(
     factory_id: str,
+    request: Request,
     period: str = Query(
         "month",
         description="today / week / month / quarter / year (defaults to month)",
@@ -501,5 +507,8 @@ async def get_unified_dashboard(
     return empty lists per pilot HOLD list in module docstring.
     """
     range_ = _resolve_period(period)
-    data = await _build_unified_dashboard(factory_id, period, range_)
+    data = await _build_unified_dashboard(
+        factory_id, period, range_,
+        cost_resolver=process_secret.CostScopeResolver(request, auth.factory_id),
+    )
     return wrap_response(strip_price_for_role(data, auth.role))
