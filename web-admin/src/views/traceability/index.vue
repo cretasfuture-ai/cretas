@@ -36,6 +36,7 @@ import {
 import LineageNodeRow from './LineageNodeRow.vue';
 import IndividualDrawer from './IndividualDrawer.vue';
 import BatchDispositionEvidence from './BatchDispositionEvidence.vue';
+import PotTracePanel from '@/components/pot/PotTracePanel.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -406,6 +407,14 @@ function openIndividual(id: string) {
           <el-table-column prop="receiptDate" label="入库日期" width="120" />
         </el-table>
       </el-card>
+
+      <!-- S3-16 按锅追溯 -->
+      <PotTracePanel
+        v-if="factoryId && trace.production.factoryId === factoryId"
+        :factory-id="factoryId"
+        :root-production-batch-id="trace.production.batchId ?? null"
+        :nodes="lineageGroups.flatMap(g => g.nodes)"
+      />
 
       <!-- 加工环节 -->
       <el-card v-if="processingStages.length > 0" shadow="never" class="content-card" data-testid="processing-card">
