@@ -1,4 +1,4 @@
--- generated-from 775c2f205b51-dirty 2026-10-28 18:02:06Z
+-- generated-from d63ed8a83a87 2026-10-28 18:24:32Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 --
