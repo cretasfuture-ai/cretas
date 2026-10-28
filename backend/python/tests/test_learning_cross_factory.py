@@ -15,12 +15,27 @@ SECRET = "秘制酱牛肉"
 
 
 class _Conn:
-    def __init__(self, rows):
+    """按 SQL 分派的假连接: 样本行 / 本厂意图行 (intent_rows[(factory, intent)] = keywords JSON) /
+    自动学习开关 (auto_learn[factory] = True/False/None, 不在表里 = 没有配置行)。"""
+
+    def __init__(self, rows, intent_rows=None, auto_learn=None):
         self.rows = rows
+        self.intent_rows = intent_rows or {}
+        self.auto_learn = auto_learn or {}
         self.executed = []
 
     async def fetch(self, sql, *args):
         return self.rows
+
+    async def fetchrow(self, sql, *args):
+        if "factory_ai_learning_config" in sql:
+            f = args[0]
+            return {"auto_learn_enabled": self.auto_learn[f]} if f in self.auto_learn else None
+        if "ai_intent_configs" in sql:
+            intent, factory = args
+            key = (factory, intent)
+            return {"keywords": self.intent_rows[key]} if key in self.intent_rows else None
+        raise AssertionError(sql)
 
     async def execute(self, sql, *args):
         self.executed.append((sql, args))
@@ -38,8 +53,8 @@ class _Acquire:
 
 
 class _Pool:
-    def __init__(self, rows):
-        self.conn = _Conn(rows)
+    def __init__(self, rows, **kw):
+        self.conn = _Conn(rows, **kw)
 
     def acquire(self):
         return _Acquire(self.conn)
@@ -97,10 +112,10 @@ def fake_embedding(monkeypatch):
 
 async def test_expression_learner_writes_only_own_factory_learnable_rows(fake_embedding):
     pool = _Pool([
-        {"query": "今天产量多少", "intent_code": "PRODUCTION_QUERY", "factory_id": "FA"},       # 写
-        {"query": SECRET + "今天产量", "intent_code": "PRODUCTION_QUERY", "factory_id": "FA"},  # 保密产品
-        {"query": "今天产量多少", "intent_code": "PRODUCTION_QUERY", "factory_id": None},       # 全局
-        {"query": "库存多少", "intent_code": "INVENTORY_QUERY", "factory_id": "F_GONE"},         # 撤回
+        {"query": "今天产量多少", "intent_code": "PRODUCTION_QUERY", "factory_id": "FA", "confidence": 0.97},
+        {"query": SECRET + "今天产量", "intent_code": "PRODUCTION_QUERY", "factory_id": "FA", "confidence": 0.97},
+        {"query": "今天产量多少", "intent_code": "PRODUCTION_QUERY", "factory_id": None, "confidence": 0.97},
+        {"query": "库存多少", "intent_code": "INVENTORY_QUERY", "factory_id": "F_GONE", "confidence": 0.97},
     ])
     learner = el.ExpressionLearner(pool, consent_scope=CONSENT, protected_names=NAMES)
 
@@ -112,6 +127,22 @@ async def test_expression_learner_writes_only_own_factory_learnable_rows(fake_em
     assert all(a[4] is not None for _, a in pool.conn.executed)
 
 
+async def test_expression_learner_matches_java_hash_and_activation(fake_embedding):
+    """复审 L6: 与 Java 同一去重键 (小写 + 去首尾空白后算 SHA-256), 置信度 >= 0.90 才直接激活。"""
+    import hashlib
+    pool = _Pool([
+        {"query": "  Check SKU 库存 ", "intent_code": "INVENTORY_QUERY", "factory_id": "FA", "confidence": 0.97},
+        {"query": "查一下 SKU 出货", "intent_code": "SHIPMENT_QUERY", "factory_id": "FA", "confidence": 0.85},
+    ])
+    learner = el.ExpressionLearner(pool, consent_scope=CONSENT, protected_names=NAMES)
+
+    assert await learner.run_once(min_confidence=0.8) == 2
+    (_, high), (_, low) = pool.conn.executed
+    assert high[1] == "check sku 库存"
+    assert high[2] == hashlib.sha256("check sku 库存".encode("utf-8")).hexdigest()
+    assert high[5] is True and low[5] is False
+
+
 # ------------------------------------------------------------------ H2 KeywordLearner
 
 async def test_keyword_learner_groups_by_factory_and_updates_only_own_rows():
@@ -120,7 +151,7 @@ async def test_keyword_learner_groups_by_factory_and_updates_only_own_rows():
         {"query": "退货情况", "intent_code": "SHIPMENT_QUERY", "factory_id": "FB", "confidence": 0.95},
         {"query": SECRET + "出货", "intent_code": "SHIPMENT_QUERY", "factory_id": "FA", "confidence": 0.95},
         {"query": "发货进度", "intent_code": "SHIPMENT_QUERY", "factory_id": None, "confidence": 0.95},
-    ])
+    ], intent_rows={("FA", "SHIPMENT_QUERY"): "[]", ("FB", "SHIPMENT_QUERY"): "[]"})
     learner = kl.KeywordLearner(pool, existing_keywords={}, consent_scope=CONSENT, protected_names=NAMES)
 
     learned = await learner.run_once()
@@ -152,3 +183,26 @@ def test_ascii_names_match_case_insensitively():
     assert mentions_any({"secretx"}, "SECRETX 库存")      # 两边都要折叠, 只折叠名字测不出来
     assert mentions_any({SECRET}, SECRET + "库存")
     assert not mentions_any({"SecretX"}, "SecretY 今天产量")
+
+
+# ------------------------------------------------------------------ L5 KeywordLearner: 本厂行现读 + 自动学习开关
+
+async def test_keyword_learner_reads_own_row_and_respects_auto_learn_switch():
+    rows = [
+        {"query": "出货情况", "intent_code": "SHIPMENT_QUERY", "factory_id": "FA", "confidence": 0.95},
+        {"query": "出货情况", "intent_code": "SHIPMENT_QUERY", "factory_id": "F_OFF", "confidence": 0.95},
+        {"query": "出货情况", "intent_code": "SHIPMENT_QUERY", "factory_id": "F_NOROW", "confidence": 0.95},
+    ]
+    pool = _Pool(rows,
+                 intent_rows={("FA", "SHIPMENT_QUERY"): '["出货"]', ("F_OFF", "SHIPMENT_QUERY"): "[]"},
+                 auto_learn={"F_OFF": False})
+    # 启动快照里同一意图代码有别厂的词: 不应影响 FA 的新词判断 (以本厂行为准)
+    learner = kl.KeywordLearner(pool, existing_keywords={"SHIPMENT_QUERY": ["情况"]},
+                                consent_scope=CONSENT, protected_names=NAMES)
+
+    learned = await learner.run_once()
+
+    assert set(learned) == {("FA", "SHIPMENT_QUERY")}          # F_OFF 关了自动学习; F_NOROW 没有本厂行
+    assert "情况" in learned[("FA", "SHIPMENT_QUERY")]           # 本厂行只有「出货」, 快照里的别厂词不算
+    assert "出货" not in learned[("FA", "SHIPMENT_QUERY")]
+    assert {args[2] for _, args in pool.conn.executed} == {"FA"}

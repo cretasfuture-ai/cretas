@@ -16,6 +16,14 @@ PROTECTED_NAMES_SQL = """
     WHERE p.factory_id = $1 AND pt.name IS NOT NULL
 """
 
+# 所有工厂的保密产品名 (并集): 服务端内部调用没带工厂时按它脱敏 (common.llm_client, 2026-10-29)
+ALL_FACTORIES_PROTECTED_NAMES_SQL = """
+    SELECT DISTINCT pt.name
+    FROM process_secret_policies p
+    JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
+    WHERE pt.name IS NOT NULL
+"""
+
 
 _JAVA_TRIM = "".join(chr(c) for c in range(33))
 

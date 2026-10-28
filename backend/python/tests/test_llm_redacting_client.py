@@ -4,6 +4,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+# 2026-10-29: 没有工厂上下文的外发会被拒绝; 本文件测路由 / 出口行为, 按本厂请求跑 (见 conftest)
+pytestmark = pytest.mark.usefixtures("egress_as_factory_request")
+
 import common.llm_client as lc
 from common.llm_client import _RedactingLLMClient
 from common.llm_redactor import redaction_scope, register_df_in_scope

@@ -100,18 +100,51 @@ def current_egress_tokens() -> dict:
     return _egress_tokens.get()
 
 
-async def _protected_names_for_egress() -> list:
-    """当前请求工厂的工艺保密产品名, 每次现查 (不走 60 秒缓存: 刚设为保密的产品名不能再原样发出去)。
-    没有工厂上下文 (定时任务等) 时为空, 与 Java 一致; 查库出错向上抛 → 不发。"""
+class NoEgressFactoryError(RuntimeError):
+    """不知道按哪家工厂脱敏 (没有工厂上下文, 也不是服务端内部调用): 不发 (2026-10-29, 与 Java 一致)。"""
+
+
+# 服务端内部调用 (Java 带 X-Internal-Secret、没带 X-Factory-Id) / 平台建厂这类「不是某一家工厂的数据」的外发:
+# 没有工厂时按**所有工厂**的保密产品名脱敏 (多换代号无害, 原样发出不行); 由 auth_middleware 内部分支 /
+# all_factories_egress() 设置。普通请求不设 —— 没有工厂就拒绝。
+_egress_all_factories: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "llm_egress_all_factories", default=False)
+
+
+class all_factories_egress:
+    """这一段里没有工厂上下文的外发按所有工厂的保密产品名脱敏 (而不是拒绝)。"""
+
+    def __enter__(self) -> None:
+        self._token = _egress_all_factories.set(True)
+
+    def __exit__(self, *_exc) -> None:
+        _egress_all_factories.reset(self._token)
+
+
+def _egress_factory() -> Optional[str]:
+    """当前请求的工厂; 空白 / PLATFORM 不算工厂。"""
     try:
         from common.llm_metrics import _llm_factory
         factory_id = _llm_factory.get()
     except Exception:
         factory_id = None
-    if not factory_id:
-        return []
+    if not factory_id or not str(factory_id).strip() or str(factory_id).strip().upper() == "PLATFORM":
+        return None
+    return factory_id
+
+
+async def _protected_names_for_egress() -> list:
+    """当前请求工厂的工艺保密产品名, 每次现查 (不走 60 秒缓存: 刚设为保密的产品名不能再原样发出去)。
+
+    Steve 2026-10-29 (fail-closed, 与 Java ``LlmEgressGuard`` 一致): 没有工厂上下文时不再返回空名单 (那等于
+    原名发出) —— 服务端内部调用 / 平台建厂 (``_egress_all_factories``) 按所有工厂的保密产品名脱敏, 其余抛
+    :class:`NoEgressFactoryError` → 调用方按 EgressRedactionError 不发。查库出错向上抛 → 不发。"""
+    factory_id = _egress_factory()
+    if not factory_id and not _egress_all_factories.get():
+        raise NoEgressFactoryError("no factory context for egress")
     from smartbi.config import get_cretas_pool
-    from common.process_secret_sql import PROTECTED_NAMES_SQL, usable_names
+    from common.process_secret_sql import (ALL_FACTORIES_PROTECTED_NAMES_SQL, PROTECTED_NAMES_SQL,
+                                           usable_names)
     import asyncio
 
     async def _read() -> list:
@@ -119,7 +152,10 @@ async def _protected_names_for_egress() -> list:
         if pool is None:
             raise RuntimeError("cretas database pool unavailable")
         async with pool.acquire() as conn:
-            rows = await conn.fetch(PROTECTED_NAMES_SQL, factory_id)
+            if factory_id:
+                rows = await conn.fetch(PROTECTED_NAMES_SQL, factory_id)
+            else:
+                rows = await conn.fetch(ALL_FACTORIES_PROTECTED_NAMES_SQL)
         return sorted(usable_names(r["name"] for r in rows))
 
     # 库卡住时不让外发请求一起卡住: 5 秒没查到按查不了处理 (不发)

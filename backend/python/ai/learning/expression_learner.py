@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 
 # Reads recent high-confidence matches. SQL aliases preserve original loop body.
 READ_SQL = """
-SELECT user_input AS query, matched_intent_code AS intent_code, factory_id
+SELECT user_input AS query, matched_intent_code AS intent_code, factory_id,
+       confidence_score AS confidence
 FROM intent_match_records
 WHERE confidence_score >= $1
   AND created_at > NOW() - INTERVAL '1 hour'
@@ -48,15 +49,24 @@ INSERT INTO ai_learned_expressions(
     embedding_vec, factory_id, is_active, created_at, updated_at
 )
 VALUES(gen_random_uuid()::text, $1, $2, $3, 'SEMANTIC_HIGH',
-       $4::vector, $5, true, NOW(), NOW())
+       $4::vector, $5, $6, NOW(), NOW())
 ON CONFLICT (expression_hash, factory_id) DO NOTHING
 """
 
 
+# Java ExpressionLearningServiceImpl.HIGH_CONF_THRESHOLD: 置信度 >= 0.90 直接激活, 低于的先挂起 (staged)。
+HIGH_CONF_THRESHOLD = 0.90
+
+
+def normalize_expression(expression: str) -> str:
+    """与 Java 一致: 存小写、去首尾空白的原话 (Java learnExpression 的 normalized)。"""
+    return expression.lower().strip()
+
+
 def _compute_expression_hash(expression: str) -> str:
-    """SHA256 hex digest. Real schema enforces NOT NULL + UNIQUE on expression_hash
-    so Python must compute the same hash Java would (UTF-8, hex)."""
-    return hashlib.sha256(expression.encode("utf-8")).hexdigest()
+    """SHA256 hex digest of the normalized expression —— 与 Java ``LearnedExpression.computeHash`` 相同
+    (先 toLowerCase().trim() 再算), 两边写同一句说法时去重键一致 (复审 L6, 2026-10-29)。"""
+    return hashlib.sha256(normalize_expression(expression).encode("utf-8")).hexdigest()
 
 
 class ExpressionLearner:
@@ -91,12 +101,16 @@ class ExpressionLearner:
                         logger.warning("ExpressionLearner: embedding failed for %r, skipping",
                                        row["query"][:50])
                         continue
+                    expression = normalize_expression(row["query"])
                     expr_hash = _compute_expression_hash(row["query"])
                     vec_text = vec_to_pgvector_text(vec)
+                    # 激活规则与 Java 分层写入一致: >= 0.90 激活, 否则挂起等重提议 (复审 L6)
+                    confidence = row.get("confidence") if hasattr(row, "get") else row["confidence"]
+                    active = confidence is not None and float(confidence) >= HIGH_CONF_THRESHOLD
                     await conn.execute(
                         INSERT_SQL,
-                        row["intent_code"], row["query"], expr_hash,
-                        vec_text, row["factory_id"],
+                        row["intent_code"], expression, expr_hash,
+                        vec_text, row["factory_id"], active,
                     )
                     count += 1
         except Exception:

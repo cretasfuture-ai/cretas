@@ -59,6 +59,33 @@ SET keywords = COALESCE(keywords, '[]'::jsonb) || $1::jsonb,
 WHERE intent_code = $2 AND factory_id = $3
 """
 
+# 本厂那一行的现有关键词 (复审 L5): 只认 factory_id = $2 的行, 平台级 / 别厂行不算
+OWN_KEYWORDS_SQL = """
+SELECT keywords FROM ai_intent_configs
+WHERE intent_code = $1 AND factory_id = $2 AND deleted_at IS NULL
+"""
+
+# 本厂自动学习开关 (Java FactoryConfigService.isAutoLearnEnabled): 没有配置行 = 默认开
+AUTO_LEARN_SQL = "SELECT auto_learn_enabled FROM factory_ai_learning_config WHERE factory_id = $1"
+
+
+async def _auto_learn_enabled(conn, factory_id: str) -> bool:
+    """没有配置行 → 默认开 (Java createDefault); 有行但值为空 → 关 (Java Boolean.TRUE.equals(null))。"""
+    row = await conn.fetchrow(AUTO_LEARN_SQL, factory_id)
+    return True if row is None else row["auto_learn_enabled"] is True
+
+
+def _keyword_list(raw) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    return [str(k) for k in raw] if isinstance(raw, list) else []
+
+
 # Single-char stopwords (filtered separately even though regex below requires 2-4 chars)
 STOP_WORDS = {"的", "是", "在", "了", "我", "你", "他", "她", "它", "和", "与", "或", "也"}
 
@@ -168,16 +195,40 @@ class KeywordLearner:
             logger.exception("KeywordLearner: read ai_training_samples failed")
             return learned
 
+        groups: Dict[Tuple[str, str], List[str]] = {}
         for row in rows:
             factory_id = row["factory_id"]
             if not await factory_learnable(factory_id, row["query"],
                                            consent_scope=self._consent_scope,
                                            protected_names=self._protected_names):
                 continue
-            existing = self.existing_keywords.get(row["intent_code"], [])
-            new = extract_new_keywords(row["query"], existing)
-            if new:
-                learned.setdefault((factory_id, row["intent_code"]), set()).update(new)
+            groups.setdefault((factory_id, row["intent_code"]), []).append(row["query"])
+
+        # 复审 L5 (2026-10-29): 每组现读「本厂那一行」的关键词 (不用启动时按意图代码取的快照 ——
+        # 那份快照不分工厂), 并遵守本厂的自动学习开关 (与 Java KeywordLearningService.learnKeywords 一致)。
+        # 本厂没有这一行 / 关了自动学习 / 查不了 → 这一组不学。
+        try:
+            async with self.pool.acquire() as conn:
+                for (factory_id, intent_code), queries in groups.items():
+                    try:
+                        if not await _auto_learn_enabled(conn, factory_id):
+                            continue
+                        own = await conn.fetchrow(OWN_KEYWORDS_SQL, intent_code, factory_id)
+                    except Exception:
+                        logger.warning("KeywordLearner: config lookup failed for %s/%s, skipping",
+                                       factory_id, intent_code)
+                        continue
+                    if own is None:
+                        continue
+                    existing = _keyword_list(own["keywords"])
+                    new: Set[str] = set()
+                    for query in queries:
+                        new.update(extract_new_keywords(query, existing))
+                    if new:
+                        learned[(factory_id, intent_code)] = new
+        except Exception:
+            logger.exception("KeywordLearner: reading own intent rows failed")
+            return {}
 
         # F1 fix-pass: persist learned keywords back to ai_intent_configs.
         # Skip persistence if nothing learned (no UPDATEs to issue).

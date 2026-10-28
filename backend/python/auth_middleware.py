@@ -265,6 +265,18 @@ class JWTAuthMiddleware:
                 tenant_token = set_factory_id(internal_factory)
             except Exception:
                 tenant_token = None
+            # 外发脱敏的工厂 (Steve 2026-10-29): 以前内部分支从不设 _llm_factory, Java 带了 X-Factory-Id 的调用也按
+            # 「没有工厂」原名发出。带了就按那家; 没带 (Java 内部调用不针对某一家) 就按所有工厂的保密产品名脱敏。
+            llm_token = egress_token = None
+            try:
+                from common.llm_metrics import _llm_factory
+                from common.llm_client import _egress_all_factories
+                if internal_factory and internal_factory.strip().upper() != "PLATFORM":
+                    llm_token = _llm_factory.set(internal_factory)
+                else:
+                    egress_token = _egress_all_factories.set(True)
+            except Exception:
+                pass
             try:
                 await self.app(scope, receive, send)
             finally:
@@ -273,6 +285,15 @@ class JWTAuthMiddleware:
                         reset_factory_id(tenant_token)
                     except Exception:
                         pass
+                try:
+                    if llm_token is not None:
+                        from common.llm_metrics import _llm_factory
+                        _llm_factory.reset(llm_token)
+                    if egress_token is not None:
+                        from common.llm_client import _egress_all_factories
+                        _egress_all_factories.reset(egress_token)
+                except Exception:
+                    pass
             return
 
         # An internal-only route must not fall through into PUBLIC_PREFIXES when
@@ -392,6 +413,8 @@ class JWTAuthMiddleware:
         #      (RLS policies key off this; see smartbi/tenant_ctx.py)
         try:
             from common.llm_metrics import _llm_factory
+            # 平台账号 token 里的 PLATFORM 照常记进用量行; 外发脱敏不把它当工厂
+            # (common.llm_client._egress_factory: 没有工厂 → 外发拒绝, 2026-10-29)
             llm_token = _llm_factory.set(factory_id)
         except Exception:
             llm_token = None

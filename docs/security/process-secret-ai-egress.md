@@ -37,6 +37,26 @@
 
 只在 Spring 容器里的实例上生效；单测用的 `LlmEgressGuard.standalone()` 不查保密产品名，行为不变。
 
+### Java 与 Python 的 fail-closed 对照
+
+| 情形 | Java `LlmEgressGuard` | Python `common/llm_client.py` |
+|---|---|---|
+| 有工厂（显式 / 入口绑定 / 登录身份） | 按那家的保密产品名换代号 | 按那家（`_llm_factory`：JWT 的 factoryId；Java 内部调用带的 `X-Factory-Id`） |
+| 平台账号（Java `PLATFORM_ADMIN`；Python token 里的 `PLATFORM`）没有显式工厂 | 拒绝外发 | 拒绝外发（`PLATFORM` 不算工厂） |
+| 服务端内部调用、没带工厂（Java→Python 带 `X-Internal-Secret` 但没带 `X-Factory-Id`） | — | 按**所有工厂**的保密产品名换代号（`_egress_all_factories`），不拒绝：这批调用不针对某一家，拒绝会让 Excel 解析 / 平台建厂等内部流程整体失效，多换代号无害 |
+| 其余没有工厂（定时任务、无身份的后台协程、未登录的公开路径） | 拒绝外发 | 拒绝外发（`NoEgressFactoryError` → `EgressRedactionError`，不发、不换候选重试） |
+| 意图识别原话模式（已知例外） | `utterance()` 不查名单、不拒绝 | `utterance_egress` 不查名单、不拒绝 |
+| 查保密产品名出错 | 拒绝 | 拒绝 |
+
+Python 侧以前：内部分支从不设 `_llm_factory`，Java 带了 `X-Factory-Id` 的调用也按「没有工厂」原名发出；没有工厂时名单为空、原文照发。
+
+Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / 原话模式）：
+- 平台账号 JWT（factoryId 为 `PLATFORM` 或空）直接调 Python 里会走大模型的接口（SmartBI 对话 / 分析、Food KB 问答、餐饮 Agent 等）；
+- 启动时起的后台协程 / 定时任务里没带工厂的大模型调用（例如 `main.py` 里的 warmup、ETL、benchmark 循环，若它们调用大模型）；
+- 未登录访问公开前缀（`/api/ai/`、`/api/efficiency/` 等）里会走大模型、又不是原话模式的接口；
+- `food_kb/services/reranker.py` 拒绝时退回检索原顺序（不发）。
+以上按代码路径归类，未逐个线上实测；正常工厂请求（JWT 带工厂、Java 带 `X-Factory-Id`）不受影响，单测 `tests/test_egress_factory_fail_closed.py` 覆盖两侧。
+
 ## 2. 学习（说法 / 关键词 / 短语表 / 跨厂知识）
 
 本厂规则统一在 Java `LearningContentRules.factoryLearnable` / Python `ai/learning/learning_rules.factory_learnable`，与训练样本同一套：撤回或查不到授权状态不学；提到本厂保密产品不学；配方 / 工艺参数、具体客户名、人名不学。全局（工厂字段为空、空白或 `*`）一律不由系统学习写入。
@@ -47,10 +67,14 @@
 | Java `KeywordLearningServiceImpl`（`learnKeywords` / `learnFromMatchedIntent` / `addKeywordsToIntent`） | 本厂规则；只写**调用方本厂**的意图行（`findByFactoryIdAndIntentCode` 且行的工厂相等），平台级 / 别厂的行不写，本厂没有这一行就不写 |
 | Java `ActiveLearningServiceImpl.applySuggestion`（进不分工厂的短语表 + MANUAL 说法） | 没有工厂的建议不应用；本厂规则不过不应用；提到任何一家工厂保密产品名不应用；判断都在动短语表之前 |
 | Java `ActiveLearningServiceImpl.promoteKnowledgeToGlobal` | 跨厂共享关闭时不执行；恢复后内容提到任何一家工厂保密产品名的不晋升 |
-| Java `IntentAnalysisController.approvePromotion`（工厂意图 → 平台级） | 意图的名称 / 关键词 / 示例 / 描述等文字提到任何一家工厂的保密产品名 → 409 不晋升；查不了 → 503 |
+| Java `IntentAnalysisController.approvePromotion` / `getPendingPromotions`（工厂意图 → 平台级） | 只给平台账号（工厂账号 403，`system:read_write` 不够）；意图的名称 / 关键词 / 示例 / 描述等文字提到任何一家工厂的保密产品名 → 409 不晋升；查不了 → 503；审批回执只回意图代码，不回整条意图 |
+| Java `AIIntentConfigController` 新建 / 修改意图配置（`IntentConfigWriteGuard`） | 工厂取路径，请求体里的 `factoryId` / `id` 不认；修改按（路径工厂, 意图代码）取本厂的行，只拷业务字段；平台级行（路径 `PLATFORM`）只给平台账号，且不许提到任何一家工厂的保密产品名 |
+| Java `UpdateIntentTool`（AI 对话改意图） | 只改调用方本厂的行；`getIntentByCode` 退回来的平台级行不改 |
+| Java `ActiveLearningController` 审批 / 驳回 / 应用学习建议 | 按（建议 ID, 路径工厂）取，别厂的建议 404 |
+| Java `LLMFieldMappingServiceImpl.saveToDatabase`（自动分析的字段映射） | 没有工厂不写（以前写成全局字典行） |
 | Java `KeywordPromotionServiceImpl` | 仍由常量关闭 |
-| Python `ai/learning/expression_learner.py` | 本厂规则；没有工厂的记录不学（以前写成 NULL 工厂的 SEMANTIC_HIGH 行） |
-| Python `ai/learning/keyword_learner.py` | 本厂规则；按（工厂, 意图）分组；`UPDATE … WHERE factory_id = $3`，只写本厂的行（以前按意图汇总全部工厂、写进第一条样本那家或全局行） |
+| Python `ai/learning/expression_learner.py` | 本厂规则；没有工厂的记录不学（以前写成 NULL 工厂的 SEMANTIC_HIGH 行）；与 Java 同一去重键（小写 + 去首尾空白后 SHA-256），置信度 ≥ 0.90 才激活（Java 分层写入规则） |
+| Python `ai/learning/keyword_learner.py` | 本厂规则；按（工厂, 意图）分组；每次现读本厂那一行的关键词（不用启动时不分工厂的快照）；遵守本厂自动学习开关（`factory_ai_learning_config.auto_learn_enabled`，没有配置行 = 开）；`UPDATE … WHERE factory_id = $3`，本厂没有这一行就不写 |
 
 保密产品名比对：字母不分大小写（学习会把原话转小写），汉字照原样（Java `ProcessSecretSampleFilter.mentionsAny`，Python `process_secret_names.mentions_any`）。
 
@@ -58,7 +82,8 @@
 
 系统学来的全局行（工厂字段为空 / 空白 / `*` 且不是 MANUAL）来自某一家工厂，不给任何工厂用（`LearningContentRules.servable`）：
 
-- Java：`ExpressionLearningServiceImpl` 匹配与按意图列表、`IntentEmbeddingCacheServiceImpl` 向量缓存、`RAGRetrievalServiceImpl`（7 处读取）、`DynamicFewShotService`（few-shot 示例会进提示词）；
+- Java：`ExpressionLearningServiceImpl` 匹配与按意图列表、`IntentEmbeddingCacheServiceImpl` 向量缓存（全量重建与增量都把空 / 空白 / `*` 归为全局）、`RAGRetrievalServiceImpl`（7 处读取）、`DynamicFewShotService`（few-shot 示例会进提示词）；
+- 意图名 / 描述兜底（`RAGRetrievalServiceImpl.getIntentName`、`DynamicFewShotService.getIntentName`）：先本厂行，再只取平台级行（factory_id 为空），不再按意图代码跨厂取；
 - Python：`ai/rag/retrieval.py` 的 SQL 只取 `factory_id = $2 OR (factory_id IS NULL AND source_type = 'MANUAL')`。
 
 ## 4. 语义缓存
@@ -70,8 +95,12 @@
 - **存量数据**：历史上已写进平台级意图行的关键词、已存在的无工厂学习行没有清理；读出口已不再使用系统学来的无工厂说法，但平台级意图行 `keywords` 里的存量词仍对所有工厂生效。清理要先在线上计数（只读）再定。
 - **外发脱敏的大小写**：`LlmEgressRedactor` 的名字替换仍按原样大小写比对（本轮按要求不改替换逻辑），只有学习侧的判断不分大小写。
 - **全局 MANUAL 种子**只在写入时查全厂保密名单；产品之后才设为保密时，已有种子不复查。
-- **字段映射字典**：`LLMFieldMappingServiceImpl.saveUserMapping` 在工厂为空时写全局字典，未加保密产品检查（目前只有工厂调用）。
+- **字段映射字典**：`LLMFieldMappingServiceImpl.saveUserMapping`（人工确认的映射）在工厂为空时仍写全局字典，未加保密产品检查；自动分析的映射已不写全局。`ExcelDynamicParserServiceImpl.parseExcel` 用请求对象里的工厂，当前 `src/main` 没有调用方，新接调用方时必须填服务端认定的工厂。
 - **入口绑定之外的深层调用**：7 个仍传 `null` 的出口若被新入口直接调用，工厂用户按登录身份，平台账号会被拒绝外发（fail-closed，功能上表现为退回规则 / 不抽参），需要在新入口补 `analysing(factoryId)` 或显式传工厂。
+- **意图配置其余写接口**：`AIIntentConfigController` 的启用 / 停用（`setIntentActive`）、删除、回滚仍按意图代码不分工厂取行（本轮只改了新建 / 修改）。
+- **意图优化建议状态**：`IntentAnalysisController` 的「采纳 / 拒绝建议」按建议 ID 改状态、不核对工厂（只改状态，不涉及内容外流）。
+- **Python 没有工厂会被拒绝的调用**未逐个线上实测（见上方对照表下的清单）。
+- **Python 自动学习开关**只接到关键词学习；说法学习（`expression_learner`）与 Java 意图管线一样按全局配置，不看本厂开关。
 
 ## 官网承诺台账需要同步
 
