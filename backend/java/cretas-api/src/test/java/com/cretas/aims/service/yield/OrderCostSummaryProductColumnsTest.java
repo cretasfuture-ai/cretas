@@ -119,6 +119,8 @@ class OrderCostSummaryProductColumnsTest {
 
         assertEquals("CPF0060020", row.getSkuCode(), "SKU 列必须是编码, 不能是 UUID");
         assertEquals("SOP-20260729-01-黄油鸡-成品800g", row.getProductName());
+        // 不展示, 给工艺保密认归属: 保密产品的成本合计对无授权账号隐藏, 其他订单照常
+        assertEquals(PRODUCT_TYPE_ID, row.getProductTypeId());
     }
 
     @Test
@@ -144,6 +146,7 @@ class OrderCostSummaryProductColumnsTest {
 
         assertNull(row.getSkuCode(), "跨产品订单不得伪造 SKU");
         assertNull(row.getProductName(), "跨产品订单不得挑一个产品名冒充整张订单");
+        assertNull(row.getProductTypeId(), "跨产品订单没有单一归属, 由读取记录兜底按受限处理");
     }
 
     @Test

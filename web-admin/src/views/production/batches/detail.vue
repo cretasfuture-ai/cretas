@@ -23,6 +23,7 @@ import {
 } from './taskAssignment';
 import { shouldFocusAssignmentSection } from './assignmentDeepLink';
 import { batchCostState, missingBatchCostLabels, readBatchCostEvidence, type BatchCostEvidence } from './batchCostEvidence';
+import { PROCESS_SECRET_LABEL, secretAwareCell } from '@/utils/processSecretField';
 
 const route = useRoute();
 const router = useRouter();
@@ -819,6 +820,7 @@ const unitCostDisplay = computed(() => {
   if (costEvidenceState.value === 'LOADING') return '读取中';
   if (costEvidenceState.value === 'ERROR') return '读取失败';
   if (costEvidenceState.value === 'MASKED') return '权限隐藏';
+  if (costEvidenceState.value === 'SECRET') return PROCESS_SECRET_LABEL;
   if (costEvidenceState.value === 'UNVERIFIED') return '待核对';
   return costAmountsVisible.value ? `${formatCost(displayUnitCost.value)}/${displayCostUnit.value}` : '暂无数据';
 });
@@ -1118,6 +1120,7 @@ function goToReversalList() {
             <el-button size="small" @click="loadBatchCost">重试读取成本</el-button>
           </el-alert>
           <el-alert v-else-if="costEvidenceState === 'MASKED'" title="当前账号无权查看成本金额" type="warning" :closable="false" />
+          <el-alert v-else-if="costEvidenceState === 'SECRET'" title="该产品工艺已设为保密，成本合计已隐藏；需要保密负责人授权才能查看" type="info" :closable="false" />
           <el-empty v-else-if="costEvidenceState === 'NO_DATA'" description="暂无可核对的成本数据，不以旧批次汇总代替">
             <el-button size="small" @click="loadBatchCost">重试读取成本</el-button>
           </el-empty>
@@ -1460,13 +1463,13 @@ function goToReversalList() {
             </el-table-column>
             <!-- A.6 逐道成本: 人工/材料/小计. null (未配工价 / 无原料单价) → "—" (非 ¥0). canViewPrice 门控. -->
             <el-table-column v-if="canViewPrice" label="人工成本" width="120" align="right">
-              <template #default="{ row }">{{ formatCostDash(row.laborCost) }}</template>
+              <template #default="{ row }">{{ secretAwareCell(row, 'laborCost', formatCostDash) }}</template>
             </el-table-column>
             <el-table-column v-if="canViewPrice" label="材料成本" width="120" align="right">
-              <template #default="{ row }">{{ formatCostDash(row.materialCost) }}</template>
+              <template #default="{ row }">{{ secretAwareCell(row, 'materialCost', formatCostDash) }}</template>
             </el-table-column>
             <el-table-column v-if="canViewPrice" label="小计" width="120" align="right">
-              <template #default="{ row }">{{ formatCostDash(row.stepCost) }}</template>
+              <template #default="{ row }">{{ secretAwareCell(row, 'stepCost', formatCostDash) }}</template>
             </el-table-column>
           </el-table>
           <div class="yield-summary">
@@ -1484,9 +1487,9 @@ function goToReversalList() {
           </div>
           <!-- A.6 整批逐道成本汇总: 总人工/总材料/总成本. null (无法计算) → "—" (非 ¥0). canViewPrice 门控. -->
           <div v-if="canViewPrice" class="yield-cost-summary">
-            <span class="cost-item">报工人工成本 {{ formatCostDash(yieldData.totalLaborCost) }}</span>
-            <span class="cost-item">报工材料成本 {{ formatCostDash(yieldData.totalMaterialCost) }}</span>
-            <span class="cost-item cost-item-total">报工记录小计 {{ formatCostDash(yieldData.totalCost) }}</span>
+            <span class="cost-item">报工人工成本 {{ secretAwareCell(yieldData, 'totalLaborCost', formatCostDash) }}</span>
+            <span class="cost-item">报工材料成本 {{ secretAwareCell(yieldData, 'totalMaterialCost', formatCostDash) }}</span>
+            <span class="cost-item cost-item-total">报工记录小计 {{ secretAwareCell(yieldData, 'totalCost', formatCostDash) }}</span>
           </div>
         </el-card>
 
@@ -1612,7 +1615,7 @@ function goToReversalList() {
               <template #default="{ row }">{{ formatCost(row.unitPrice) }}</template>
             </el-table-column>
             <el-table-column v-if="canViewPrice" prop="totalCost" label="小计" width="120" align="right">
-              <template #default="{ row }">{{ formatCost(row.totalCost) }}</template>
+              <template #default="{ row }">{{ secretAwareCell(row, 'totalCost', formatCost) }}</template>
             </el-table-column>
             <el-table-column prop="consumptionTime" label="消耗时间" width="160">
               <template #default="{ row }">{{ formatDateTime(row.consumedAt || row.consumptionTime || row.createdAt) }}</template>
@@ -1979,9 +1982,9 @@ function goToReversalList() {
               各批次单位不一致, 无法跨单位合计 (整体出成率不可比)
             </div>
             <div v-if="canViewPrice" class="order-yield-cost">
-              <span class="cost-item">报工人工成本 {{ formatCostDash(orderYield.totalLaborCost) }}</span>
-              <span class="cost-item">报工材料成本 {{ formatCostDash(orderYield.totalMaterialCost) }}</span>
-              <span class="cost-item cost-item-total">报工记录小计 {{ formatCostDash(orderYield.totalCost) }}</span>
+              <span class="cost-item">报工人工成本 {{ secretAwareCell(orderYield, 'totalLaborCost', formatCostDash) }}</span>
+              <span class="cost-item">报工材料成本 {{ secretAwareCell(orderYield, 'totalMaterialCost', formatCostDash) }}</span>
+              <span class="cost-item cost-item-total">报工记录小计 {{ secretAwareCell(orderYield, 'totalCost', formatCostDash) }}</span>
             </div>
           </template>
         </template>

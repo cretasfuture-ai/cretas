@@ -33,6 +33,8 @@ public class OrderCostSummaryRowDTO {
      * ⚠️ 不是 {@code productTypeId}: 后者是 UUID, 直接展示对操作员毫无意义。
      */
     private String skuCode;
+    /** 产品类型 ID: 不展示, 给工艺保密认归属用 (保密产品的成本合计对无授权账号隐藏, 其他订单照常)。 */
+    private String productTypeId;
     private Integer boxCount;
     /** 整批出成率 0-1; 单位不可比时 null。 */
     private BigDecimal overallYieldRate;
