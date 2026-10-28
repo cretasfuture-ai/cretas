@@ -176,7 +176,12 @@ public class TriggerChainController {
         if (body.getErrorStrategy() != null) chain.setErrorStrategy(body.getErrorStrategy());
         if (body.getEventType() != null) chain.setEventType(body.getEventType());
         if (body.getDescription() != null) chain.setDescription(body.getDescription());
-        if (Boolean.TRUE.equals(chain.getEnabled())) requireAutonomousSteps(chain.getSteps());
+        if (Boolean.TRUE.equals(chain.getEnabled())) {
+            requireAutonomousSteps(chain.getSteps());
+            // S6-02: an enabled chain runs its steps through the tool gateway as the factory user who
+            // enabled it; the gateway re-checks that user's permissions on every run.
+            chain.setRunAsUserId(AutonomousToolPolicy.requireRunAsUser(factoryId));
+        }
         return ApiResponse.success(triggerChainRepo.save(chain));
     }
 

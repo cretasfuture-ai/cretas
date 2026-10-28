@@ -13,8 +13,10 @@ import java.util.Set;
 /**
  * What a tool run with no interactive user behind it (cron schedule, event trigger chain) may do.
  *
- * <p>These entry points carry only a factory id: no user, no permission check, no confirmation.
- * Until a delegated grant exists for them, they may run read-only tools only. Write is decided by
+ * <p>Both run every tool through the tool gateway as their run-as user. A cron schedule may run a
+ * write tool, but each run needs a delegated grant of a factory super admin (see
+ * {@link AutonomousGrantIssuer}) and the factory's write switch on ({@link AutonomousWriteSwitch});
+ * an event chain gets no delegated writes and runs read-only tools only. Write is decided by
  * {@link ToolAccessModes} (fail-closed: an undeclared tool counts as WRITE). Identity keys in the
  * configured parameters are refused outright, because several tools read the tenant from their
  * parameters before the context, which would let a configured step act on another factory.</p>
@@ -26,7 +28,7 @@ public final class AutonomousToolPolicy {
     static final String WRITE_PREFIX = "write tool not allowed without a user: ";
     static final String IDENTITY_PREFIX = "identity parameters are not accepted: ";
 
-    static final Set<String> IDENTITY_KEYS = Set.of(
+    public static final Set<String> IDENTITY_KEYS = Set.of(
             "factoryId", "factory_id", "tenantId", "tenant_id", "userId", "user_id",
             "userRole", "user_role", "role", "roleCode", "role_code", "permissions");
 
@@ -71,7 +73,7 @@ public final class AutonomousToolPolicy {
             String entry = source == ToolExecutionSource.SCHEDULER ? "定时任务" : "事件链";
             throw new BusinessException(400, "工具「" + toolName + "」还没有开放给" + entry + "使用")
                     .withCode("AUTONOMOUS_SOURCE_NOT_ALLOWED")
-                    .withHint("目前只开放了经过审核的只读工具（如 material_expired_query）；需要其他工具请先申请审核其运行策略");
+                    .withHint("只有运行策略经过审核、并开放给该入口的工具才能自动执行；需要其他工具请先申请审核其运行策略");
         }
     }
 
@@ -106,9 +108,9 @@ public final class AutonomousToolPolicy {
     public static BusinessException refusal(String reason) {
         if (isWriteDenial(reason)) {
             String tool = reason.substring(WRITE_PREFIX.length());
-            return new BusinessException(400, "定时任务和事件链没有操作人，只能使用只读工具；「" + tool + "」会写入数据")
+            return new BusinessException(400, "事件链只能使用只读工具；「" + tool + "」会写入数据")
                     .withCode("AUTONOMOUS_WRITE_TOOL_DENIED")
-                    .withHint("写操作要等任务授权功能上线后才能自动执行；现在请改用只读工具，或由人员在业务页面操作");
+                    .withHint("需要自动写入时请改用定时任务，并由本厂超级管理员为它签发委托授权；或由人员在业务页面操作");
         }
         String key = reason.startsWith(IDENTITY_PREFIX) ? reason.substring(IDENTITY_PREFIX.length()) : reason;
         return new BusinessException(400, "定时任务和事件链的参数里不能指定工厂、用户或角色：" + key)
