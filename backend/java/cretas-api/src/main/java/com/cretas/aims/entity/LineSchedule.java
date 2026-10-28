@@ -45,6 +45,16 @@ public class LineSchedule {
     @Column(name = "task_timeline", columnDefinition = "jsonb")
     private List<java.util.Map<String, Object>> taskTimeline;
 
+    /**
+     * APS v2 (按产品日产能按天排): 这个计划的按天分配
+     * {unit, capacityPerDay, capacitySource, capacitySourceLabel, experiencePerDay, plannedQuantity,
+     * reportedQuantity, remainingQuantity, days: [{date, quantity, shareOfDay}]}。
+     * v1 排程与手工排程为空。
+     */
+    @org.hibernate.annotations.Type(io.hypersistence.utils.hibernate.type.json.JsonBinaryType.class)
+    @Column(name = "daily_allocations", columnDefinition = "jsonb")
+    private java.util.Map<String, Object> dailyAllocations;
+
     @Column(name = "sequence_order")
     private Integer sequenceOrder = 0;
 
