@@ -134,7 +134,8 @@ ssh() {
         # ⚠️ MainPID 这条必须排在通用 *systemctl* 之前 —— 否则会被那条吃掉,
         #    返回 "active\n200" 当成 pid, 测试会以错误的理由通过/失败。
         *"MainPID"*) printf '%s\n' "$MOCK_MAIN_PID" ;;
-        *"/proc/$MOCK_MAIN_PID"*) printf '%s\n' "$MOCK_PROC_STARTED" ;;
+        *"etimes= -p '$MOCK_MAIN_PID'"*) printf '%s\n' "$MOCK_PROC_STARTED" ;;
+        *"/proc/"*) fail "process start time read from /proc mtime (that is first-access time, not start time)" ;;
         *"stat -c %Y '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME'"*) printf '%s\n' "$MOCK_JAR_MTIME" ;;
         *systemctl*) printf '%s\n%s' "$MOCK_SERVICE_STATE" "$MOCK_HTTP_STATUS" ;;
         *) return 1 ;;
@@ -188,6 +189,29 @@ MOCK_SERVICE_STATE=active
 MOCK_HTTP_STATUS=503
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "unhealthy active slot was accepted"
+fi
+
+# 🔴 2026-10-28: 上面的桩只证明「拿到数字后怎么比」, 证明不了远端命令拿到的是**启动时刻**
+# (旧实现读 /proc/<pid> 目录 mtime = 第一次被读的时刻, 桩一样给数字, 测试全绿而线上 no-op 了旧字节码)。
+# 这里在 Linux 上真跑那条远端命令: 起一个进程, 等 3 秒再第一次读它 —— 启动时刻必须是 3 秒前,
+# 而 /proc mtime 会是「现在」。ps 不支持 etimes 的平台 (Git Bash) 明确报跳过, 不算通过。
+if ps -o etimes= -p $$ >/dev/null 2>&1; then
+    sleep 30 &
+    probe_pid=$!
+    sleep 3
+    started=$(bash -c "$(proc_start_epoch_cmd "$probe_pid")")
+    now=$(date +%s)
+    kill "$probe_pid" 2>/dev/null || true
+    case "$started" in ''|*[!0-9]*) fail "proc_start_epoch_cmd printed a non-number: '$started'" ;; esac
+    age=$((now - started))
+    [ "$age" -ge 2 ] && [ "$age" -le 6 ] \
+        || fail "proc_start_epoch_cmd is not the start time: process age read as ${age}s, expected ~3s"
+    if bash -c "$(proc_start_epoch_cmd 999999999)" >/dev/null 2>&1; then
+        fail "proc_start_epoch_cmd succeeded for a missing pid"
+    fi
+    echo "  proc start time measured on this host: age=${age}s (expected ~3s)"
+else
+    echo "  SKIP (not a pass): ps -o etimes unsupported here; start-time command not exercised"
 fi
 
 grep -Fq 'if reuse_local_source_artifact_cache "$JAR_TARGET"; then' "$DEPLOY_SCRIPT" \

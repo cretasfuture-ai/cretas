@@ -874,6 +874,12 @@ store_local_source_artifact_cache() {
     fi
 }
 
+# 远端执行的一行命令: 打印 pid 的启动时刻 (epoch 秒) = 现在 − 已运行秒数 (ps etimes)。
+# 读不到 (进程不在 / 输出非数字) 时非 0 退出、不打印。单独成函数, 让测试能在 Linux 上真跑它。
+proc_start_epoch_cmd() {
+    printf '%s' "e=\$(ps -o etimes= -p '$1' 2>/dev/null | tr -d ' '); case \"\$e\" in ''|*[!0-9]*) exit 1 ;; esac; echo \$(( \$(date +%s) - e ))"
+}
+
 prod_already_runs_local_artifact() {
     local local_md5="$1"
     local remote_md5 upstream_text active_port active_service live_state
@@ -914,7 +920,10 @@ prod_already_runs_local_artifact() {
     # ▎四个判据没有一个在问「**跑着的东西**是不是这个制品」。
     # ▎本仓硬约束 2 原话: DEPLOY_EXIT=0 不是判据, 「进程启动时间晚于制品」才是。
     #
-    # /proc/<pid> 目录的 mtime 就是进程启动时间, 直接与 jar mtime 比, 不必解析 ps 的日期格式。
+    # 进程启动时刻见 proc_start_epoch_cmd (现在 − ps 的已运行秒数), 直接与 jar mtime 比。
+    # 🔴 2026-10-28: 原来读 /proc/<pid> 目录的 mtime —— 那是该目录**第一次被读**的时刻, 不是启动时刻。
+    #    实测进程 13:10:58 起, /proc mtime 15:06:19 (有人刚看过它), jar 14:59:19 ⇒ 闸判「进程比 jar 新」,
+    #    #1253 报 no-op 而线上跑的是旧字节码。测试桩直接返回数字, 量不到这个。
     # ⚠️ 取不到就 return 1 走正常部署(多重启一次是小事), ⛔ 不默认放行 ——
     #    「读不到」和「确认一致」不是一回事。
     local proc_started jar_touched active_pid
@@ -922,7 +931,7 @@ prod_already_runs_local_artifact() {
         "systemctl show -p MainPID --value '$active_service' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
     [ -n "$active_pid" ] && [ "$active_pid" != "0" ] || return 1
     proc_started=$(ssh -o ConnectTimeout=5 "$SERVER" \
-        "stat -c %Y '/proc/$active_pid' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
+        "$(proc_start_epoch_cmd "$active_pid")" 2>/dev/null | tr -d '\r\n')
     jar_touched=$(ssh -o ConnectTimeout=5 "$SERVER" \
         "stat -c %Y '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
     # ⚠️ 两个值必须**各自**校验。
