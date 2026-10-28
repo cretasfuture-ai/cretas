@@ -60,18 +60,32 @@ def _compute_expression_hash(expression: str) -> str:
 
 
 class ExpressionLearner:
-    def __init__(self, pool):
+    """工艺保密 (Steve 2026-10-29): 只学进原话所属工厂自己; 没有工厂的记录不学 (不写全局 —— 以前
+    factory_id 为 NULL 的记录会写成 NULL 工厂的 SEMANTIC_HIGH 行, 被每家工厂检索到); 训练授权撤回 /
+    查不到、提到本厂工艺保密产品、配方参数 / 客户 / 人名的原话不学 (``learning_rules.factory_learnable``)。"""
+
+    def __init__(self, pool, *, consent_scope=None, protected_names=None):
+        from ai.learning import learning_rules
+
         self.pool = pool
+        self._consent_scope = consent_scope or learning_rules.default_consent_scope
+        self._protected_names = protected_names or learning_rules.default_protected_names
 
     async def run_once(self, min_confidence: float = 0.95) -> int:
         """Returns number of new expressions inserted (best-effort, ON CONFLICT skips dup).
         0 on error or empty.
         """
+        from ai.learning.learning_rules import factory_learnable
+
         count = 0
         try:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch(READ_SQL, min_confidence)
                 for row in rows:
+                    if not await factory_learnable(row["factory_id"], row["query"],
+                                                   consent_scope=self._consent_scope,
+                                                   protected_names=self._protected_names):
+                        continue
                     vec = await get_embedding(row["query"])
                     if vec is None:
                         logger.warning("ExpressionLearner: embedding failed for %r, skipping",
