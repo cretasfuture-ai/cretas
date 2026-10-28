@@ -87,6 +87,7 @@ class InventoryLedgerRepairTransactionContractTest {
             properties.put("hibernate.hbm2ddl.auto", "create-drop");
             properties.put("hibernate.default_schema", schema);
             properties.put("hibernate.show_sql", "false");
+            properties.put("hibernate.archive.autodetection", "none");
             factory.setJpaPropertyMap(properties);
             factory.afterPropertiesSet();
             emf = factory.getObject();
@@ -191,7 +192,8 @@ class InventoryLedgerRepairTransactionContractTest {
         assumeTrue(url != null && !url.isBlank(), "owned local PostgreSQL fixture required");
         assertThat(url).matches("jdbc:postgresql://(?:localhost|127\\.0\\.0\\.1):55439/cretas_sc28_disposable_test");
         String schema = "sc28_inbound_" + UUID.randomUUID().toString().replace("-", "");
-        DriverManagerDataSource source = new DriverManagerDataSource(url, "postgres", "");
+        // Let PostgreSQL infer JSONB types for String-backed entity fields.
+        DriverManagerDataSource source = new DriverManagerDataSource(url + "?stringtype=unspecified", "postgres", "");
         JdbcTemplate jdbc = new JdbcTemplate(source);
         jdbc.execute("CREATE SCHEMA " + schema);
         LocalContainerEntityManagerFactoryBean factory = new LocalContainerEntityManagerFactoryBean();
@@ -204,6 +206,7 @@ class InventoryLedgerRepairTransactionContractTest {
             properties.put("hibernate.hbm2ddl.auto", "create-drop");
             properties.put("hibernate.default_schema", schema);
             properties.put("hibernate.show_sql", "false");
+            properties.put("hibernate.archive.autodetection", "none");
             factory.setJpaPropertyMap(properties);
             factory.afterPropertiesSet();
             emf = factory.getObject();

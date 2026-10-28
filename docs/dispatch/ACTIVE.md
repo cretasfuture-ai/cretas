@@ -8,12 +8,6 @@
 ## 在飞任务
 
 - `SMARTBI-F006-QA-20261028` — `in-progress` — Root；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；PR1267已部署；34场景与QA修复见archive/2026-10-28-smartbi-acceptance-fixes.md；F006 only。
-- `SC28-UNIT-FIX` — `claimed` — capability_impl；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；成品库存/发货/采购数量按单位拆分；pytest test_trusted_business_metrics/test_contract/test_stock_count_details；回执归档至本批QA修复文档。
-- `SC28-LEGACY-AI` — `claimed` — ai_analysis_foundation；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；旧上传分析保留原单位、拒绝无依据损耗金额/因果/基准；Maven目标回归；无权限/Repository/迁移改动。
-- `SC28-SCOPED-QUERY` — `claimed` — capability_impl；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；静态销售/财务/动态缓存按factoryId+uploadId查询；真实JPA启动及数据隔离测试。
-- `SC28-LEDGER-DRAFT` — `claimed` — capability_impl；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；确认收货才记入台账入库量/金额；目标单测+真实PostgreSQL/Hibernate查询执行；与legacy Maven顺序。
-- `SC28-LIFECYCLE-QA` — `claimed` — capacity_executor；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；canonical可选长对话/原明细过期恢复验收；node unit/目标fixture；仅测试，不改生产业务源码。
-- `SC28-CATALOG-MATRIX` — `claimed` — capacity_executor；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；逐业务图表族网页渲染/原始明细/导出验收；node目标测试+本地fixture；不访问生产。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
@@ -91,13 +85,7 @@
 
 ## Scope 锁地图
 
-- `SMARTBI-F006-QA-20261028`：Root；LegacyAiAnalysisGuard及测试；Web质检标题/聊天详情guided/RN同因/Guide族ID；canonical core及测试；pytest/Web/RN/Java/JPA门禁；禁Entity/Repository/迁移。
-- `SC28-UNIT-FIX`：capability_impl；仅 `backend/python/smartbi/services/factory_charts/trusted_business_metrics.py`、`test_trusted_business_metrics.py`。按真实单位独立candidate/KPI/排序/明细，禁跨单位相加；不得改权限/价格/来源SQL/engine/台账。
-- `SC28-LEDGER-DRAFT`：capability_impl；仅 `service/inventory/impl/InventoryLedgerServiceImpl.java`及`InventoryLedgerServiceTest`、`InventoryLedgerRepairTransactionContractTest`；仅已确认收货入账状态；真实Hibernate/PG门禁；禁止Entity/Repository/迁移/权限/其他计算。
-- `SC28-LEGACY-AI`：ai_analysis_foundation；Java smartbi服务/impl（不含LegacyAiAnalysisGuard及其测试）、Dashboard动态缓存入口及测试；Python smart_analyzer/测试；禁Entity/Repository/权限矩阵/迁移/台账。
-- `SC28-SCOPED-QUERY`：capability_impl；仅SmartBiSalesDataRepository、SmartBiFinanceDataRepository、postgres/SmartBiPgAnalysisResultRepository及新SmartBiTenantScopedRepositoryQueryValidationTest；禁Entity/迁移/服务/Controller/台账；真实JPA门禁不得跳过。
-- `SC28-LIFECYCLE-QA`：capacity_executor；canonical `scenarios/smartbi-factory-analysis-readonly.js`、独立生命周期helper及对应目标测试/generated mcp-entry；不改mutation guard/whitelist/run-suite/生产代码；不访问生产。
-- `SC28-CATALOG-MATRIX`：capacity_executor；仅新建canonical `scenarios/smartbi-catalog-matrix-readonly.js`及对应test/fixture；Root集成registry/generated entry；不得改生产UI/guard/whitelist/台账，不起生产浏览器。
+- `SMARTBI-F006-QA-20261028`：Root；本批代码冻结、子任务回执归档，合入时释放产品scope；仅发布协调与F006私有业务验收/证据。发现新代码问题须重新登记明确scope与Base；禁Entity/迁移/权限矩阵。
 
 
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
