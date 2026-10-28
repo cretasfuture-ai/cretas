@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `SMARTBI-FULL-QA-20261026` — `blocked` — Root；图表Web/App通过，OSS UserDisable待外部恢复；代码scope已释放，见archive/2026-10-26-smartbi-native-factory.md。
+- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；原SMARTBI-FULL-QA-20261026代码收尾见archive/2026-10-28-smartbi-complete.md；待合并部署/34场景验收；F006 only。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 - `ERP-S2-08A-CLAUDE-20261024` — `claimed` — Owner local_f6b118ce-f036-4ece-9a0b-322073b20c74 — Base 315ab97addfd9f1295a4855a7ea8ece430034e4f — 精确6文件/无迁移；待办恢复及真实JPA，见archive/2026-10-24-s245-next-slices.md。

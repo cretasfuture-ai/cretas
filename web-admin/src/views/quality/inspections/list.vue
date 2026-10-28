@@ -15,6 +15,8 @@ import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
+import DynamicQualityInspectionForm from './DynamicQualityInspectionForm.vue';
+import { hasDynamicItems, type DynamicQualityForm, type DynamicQualitySubmitResponse } from './dynamicQualityInspection';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -62,6 +64,11 @@ const { summary: footerSummary, loading: footerLoading } = useListSummary('quali
 
 // 新建对话框
 const dialogVisible = ref(false);
+const dynamicForm = ref<DynamicQualityForm | null>(null);
+const dynamicFormLoading = ref(false);
+const dynamicFormError = ref('');
+let dynamicRequest = 0;
+const dynamicDialogMode = computed(() => dynamicFormLoading.value || !!dynamicFormError.value || hasDynamicItems(dynamicForm.value));
 const dialogForm = ref({
   batchId: '',
   sampleSize: null as number | null,
@@ -191,6 +198,7 @@ watch(() => [route.query.batchId, factoryId.value], async () => {
   searchKeyword.value = '';
   filterResult.value = '';
   dialogVisible.value = false;
+  invalidateDynamicRequest();
   if (!hasBatchContext.value) {
     void loadData();
     return;
@@ -274,9 +282,65 @@ function handleSizeChange(size: number) {
 
 function handleCreate() {
   if (hasBatchContext.value && !scopedBatch.value) return;
+  invalidateDynamicRequest();
   dialogForm.value = { batchId: scopedBatchId.value, sampleSize: null, passCount: null, failCount: null, result: '', notes: '', customFields: {} as TableRow };
   dialogVisible.value = true;
   if (!hasBatchContext.value) void loadProductionBatches();
+}
+
+function invalidateDynamicRequest(): void {
+  dynamicRequest += 1;
+  dynamicFormLoading.value = false;
+  dynamicForm.value = null;
+  dynamicFormError.value = '';
+}
+
+async function loadDynamicForm(batchId: string): Promise<void> {
+  const requestId = ++dynamicRequest;
+  dynamicForm.value = null;
+  dynamicFormError.value = '';
+  if (!batchId || !factoryId.value) return;
+  dynamicFormLoading.value = true;
+  try {
+    const response = await get<DynamicQualityForm>(
+      `/${factoryId.value}/processing/batches/${encodeURIComponent(batchId)}/quality-form`,
+    );
+    if (requestId !== dynamicRequest) return;
+    if (!response.success || !response.data) {
+      throw new Error(response.message || '当前批次质检标准读取失败，请重试');
+    }
+    if (String(response.data.batchId) !== String(batchId) || !response.data.standardRevision || !Array.isArray(response.data.items)) {
+      throw new Error('当前批次质检标准响应无效，请重试');
+    }
+    // An explicitly empty standard keeps the existing generic form. Any load
+    // error remains blocking so a stale/unknown standard can never silently
+    // fall back to the legacy POST path.
+    dynamicForm.value = response.data.items.length > 0 ? response.data : null;
+  } catch (error) {
+    if (requestId !== dynamicRequest) return;
+    dynamicFormError.value = error instanceof Error ? error.message : '质检标准读取失败，请重试';
+  } finally {
+    if (requestId === dynamicRequest) dynamicFormLoading.value = false;
+  }
+}
+
+watch(() => [dialogVisible.value, dialogForm.value.batchId, factoryId.value], ([visible, batchId]) => {
+  if (visible && typeof batchId === 'string' && batchId) void loadDynamicForm(batchId);
+}, { flush: 'post' });
+
+function retryDynamicForm(): void {
+  if (dialogForm.value.batchId) void loadDynamicForm(dialogForm.value.batchId);
+}
+
+function closeDynamicDialog(): void {
+  dialogVisible.value = false;
+  invalidateDynamicRequest();
+}
+
+function onDynamicSubmitted(_response: DynamicQualitySubmitResponse): void {
+  ElMessage.success('动态质检记录已创建');
+  closeDynamicDialog();
+  void loadData();
 }
 
 async function submitCreateForm() {
@@ -448,10 +512,10 @@ function registerDefect(row: TableRow) {
     </el-card>
 
     <!-- 新建质检对话框 -->
-    <el-dialog v-model="dialogVisible" title="新建质检记录" width="480px" :close-on-click-modal="false">
+    <el-dialog v-model="dialogVisible" title="新建质检记录" width="560px" :close-on-click-modal="false">
       <el-form :model="dialogForm" label-width="90px">
         <el-form-item label="生产批次" required>
-          <el-select v-model="dialogForm.batchId" placeholder="选择生产批次" filterable :disabled="hasBatchContext" style="width: 100%">
+          <el-select v-model="dialogForm.batchId" placeholder="选择生产批次" filterable :disabled="hasBatchContext || dynamicFormLoading" style="width: 100%">
             <el-option
               v-for="b in productionBatches"
               :key="String(b.id)"
@@ -461,6 +525,28 @@ function registerDefect(row: TableRow) {
           </el-select>
           <UpstreamMissingHint v-if="productionBatches.length === 0" description="暂无生产批次，无法发起质检" target-module="production" require-write action-text="去生产管理" contact-text="请联系生产部门先开工生产批次" @action="goCreate('/production/plans')" />
         </el-form-item>
+        <template v-if="dynamicFormLoading">
+          <el-alert title="正在读取当前批次的质检标准…" type="info" :closable="false" show-icon />
+          <div class="dynamic-loading" role="status">请稍候，标准读取完成后才能提交。</div>
+        </template>
+        <template v-else-if="dynamicFormError">
+          <el-alert :title="dynamicFormError" type="error" :closable="false" show-icon />
+          <div class="dynamic-error-actions">
+            <span>未能确认标准版本，不能改用旧表单提交。</span>
+            <el-button type="primary" @click="retryDynamicForm">重试读取标准</el-button>
+          </div>
+        </template>
+        <DynamicQualityInspectionForm
+          v-else-if="dynamicForm && hasDynamicItems(dynamicForm)"
+          :factory-id="factoryId"
+          :batch-id="dialogForm.batchId"
+          :batch-number="scopedBatch?.batchNumber"
+          :product-name="scopedBatch?.productName"
+          :form="dynamicForm"
+          @submitted="onDynamicSubmitted"
+          @cancel="closeDynamicDialog"
+        />
+        <template v-else>
         <el-alert title="请记录实际抽样结果；抽样数量与生产数量分别统计，不会改写生产良品率。" type="info" :closable="false" />
         <!-- Issue #745: 抽样/合格/不合格 联动自动平衡 - 填两个第三自动算 -->
         <el-form-item label="抽样数量" required>
@@ -509,8 +595,9 @@ function registerDefect(row: TableRow) {
           <el-input v-model="dialogForm.notes" type="textarea" :rows="2" />
         </el-form-item>
         <CanvasDynamicFields v-model="dialogForm.customFields" module-code="quality_inspection" />
+        </template>
       </el-form>
-      <template #footer>
+      <template v-if="!dynamicDialogMode" #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="submitCreateForm">确定</el-button>
       </template>

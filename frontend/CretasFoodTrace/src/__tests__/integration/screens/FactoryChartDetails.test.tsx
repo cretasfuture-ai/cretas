@@ -1,9 +1,10 @@
 import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import FactoryChartDetails from '../../../screens/smartbi/FactoryChartDetails';
-import { getFactoryChartDetails } from '../../../services/api/smartbiFactoryCharts';
+import { getFactoryChartDetails, getFactoryRecommendations } from '../../../services/api/smartbiFactoryCharts';
+import { useAuthStore } from '../../../store/authStore';
 
-jest.mock('../../../services/api/smartbiFactoryCharts', () => ({ getFactoryChartDetails: jest.fn() }));
+jest.mock('../../../services/api/smartbiFactoryCharts', () => ({ getFactoryChartDetails: jest.fn(), getFactoryRecommendations: jest.fn() }));
 
 const route = {
   key: 'FactoryChartDetails-test',
@@ -24,6 +25,68 @@ const page = (number: number, rows: Record<string, unknown>[], hasMore: boolean,
 
 describe('FactoryChartDetails', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  it('recovers an absent detail context only from the same immutable candidate snapshot', async () => {
+    const missingContextRoute = { ...route, params: { ...route.params, recommendation: { ...route.params.recommendation, detailContext: undefined, detailSnapshotKey: 'snapshot-1' } } };
+    (getFactoryRecommendations as jest.Mock).mockResolvedValue({ success: true, data: {
+      factoryId: 'F006', source: 'business', analysisSubject: null, period: { label: '2026全年', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 }, uploadId: null,
+      ranking: { mode: 'rule', reason: '' }, recommendations: [{ ...missingContextRoute.params.recommendation, detailContext: { id: 'ctx-new', expiresAt: '2099-01-01T00:00:00Z' }, detailSnapshotKey: 'snapshot-1' }],
+      unavailable: [], sourceErrors: [],
+    } });
+    (getFactoryChartDetails as jest.Mock).mockResolvedValue(page(1, [{ '订单号': 'RECOVERED' }], false));
+    const screen = render(<FactoryChartDetails route={missingContextRoute} navigation={{} as never} />);
+    await waitFor(() => expect(screen.getByText('该图表没有可用的明细上下文')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-detail-recover'));
+    await waitFor(() => expect(screen.getByText('RECOVERED')).toBeTruthy());
+    expect(getFactoryRecommendations).toHaveBeenCalledWith(expect.objectContaining({ detail_candidate_ids: ['sales'], analysis_subject: null }));
+    expect(getFactoryChartDetails).toHaveBeenCalledWith(expect.objectContaining({ context_id: 'ctx-new' }));
+  });
+
+  it('refuses a refresh when the immutable source fingerprint changes', async () => {
+    const expiredRoute = { ...route, params: { ...route.params, recommendation: { ...route.params.recommendation, detailContext: { id: 'ctx-old', expiresAt: '2000-01-01T00:00:00Z' }, detailSnapshotKey: 'snapshot-old' } } };
+    (getFactoryRecommendations as jest.Mock).mockResolvedValue({ success: true, data: {
+      factoryId: 'F006', source: 'business', analysisSubject: null, period: { label: '2026全年', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 }, uploadId: null,
+      ranking: { mode: 'rule', reason: '' }, recommendations: [{ ...expiredRoute.params.recommendation, detailContext: { id: 'ctx-new', expiresAt: '2099-01-01T00:00:00Z' }, detailSnapshotKey: 'snapshot-new' }],
+      unavailable: [], sourceErrors: [],
+    } });
+    const screen = render(<FactoryChartDetails route={expiredRoute} navigation={{} as never} />);
+    await waitFor(() => expect(screen.getByText(/已过期/)).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-detail-recover'));
+    await waitFor(() => expect(screen.getByText(/快照无法证明/)).toBeTruthy());
+    expect(getFactoryChartDetails).not.toHaveBeenCalled();
+  });
+
+  it('drops a pending context refresh after the details screen unmounts', async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    (getFactoryRecommendations as jest.Mock).mockReturnValueOnce(new Promise(resolve => { resolveRefresh = resolve; }));
+    const missingContextRoute = { ...route, params: { ...route.params, recommendation: { ...route.params.recommendation, detailContext: undefined, detailSnapshotKey: 'snapshot-1' } } };
+    const screen = render(<FactoryChartDetails route={missingContextRoute} navigation={{} as never} />);
+    await waitFor(() => expect(screen.getByTestId('factory-detail-recover')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-detail-recover'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledTimes(1));
+    screen.unmount();
+    resolveRefresh({ success: true, data: { factoryId: 'F006', source: 'business', analysisSubject: null, uploadId: null, period: { label: '2026全年', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 }, ranking: { mode: 'rule', reason: '' }, recommendations: [], unavailable: [], sourceErrors: [] } });
+    await act(async () => { await Promise.resolve(); });
+    expect(getFactoryChartDetails).not.toHaveBeenCalled();
+  });
+
+  it('drops a pending context refresh after logout changes the actor', async () => {
+    const auth = useAuthStore.getState();
+    const actor = { id: 1309, username: 'smartbi-test', email: 'smartbi@example.com', userType: 'factory' as const, factoryUser: { role: 'factory_admin' as never, factoryId: 'F006', permissions: [] } };
+    act(() => { auth.setUser(actor as never); });
+    let resolveRefresh!: (value: unknown) => void;
+    (getFactoryRecommendations as jest.Mock).mockReturnValueOnce(new Promise(resolve => { resolveRefresh = resolve; }));
+    const missingContextRoute = { ...route, params: { ...route.params, contextKey: { ...route.params.contextKey, authEpoch: '1309|F006|factory_admin' }, recommendation: { ...route.params.recommendation, detailContext: undefined, detailSnapshotKey: 'snapshot-1' } } };
+    const screen = render(<FactoryChartDetails route={missingContextRoute} navigation={{} as never} />);
+    await waitFor(() => expect(screen.getByTestId('factory-detail-recover')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('factory-detail-recover'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledTimes(1));
+    act(() => { auth.logout(); });
+    resolveRefresh({ success: true, data: { factoryId: 'F006', source: 'business', analysisSubject: null, uploadId: null, period: { label: '2026全年', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 }, ranking: { mode: 'rule', reason: '' }, recommendations: [], unavailable: [], sourceErrors: [] } });
+    await act(async () => { await Promise.resolve(); });
+    expect(getFactoryChartDetails).not.toHaveBeenCalled();
+    screen.unmount();
+  });
 
   it('uses page size 50, replaces next page, and appends only explicit load-more', async () => {
     (getFactoryChartDetails as jest.Mock)

@@ -50,6 +50,8 @@ export type SmartBIStackParamList = {
     preserveFactoryCharts?: false;
     source?: FactoryChartSource;
     uploadId?: number;
+    inspectionUploadId?: number;
+    costUploadId?: number;
     year?: number;
     periodType?: FactoryChartPeriodType;
     startMonth?: number;

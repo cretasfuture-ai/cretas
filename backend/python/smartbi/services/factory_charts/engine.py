@@ -63,6 +63,10 @@ _UNSCOPABLE_SUBJECT_SOURCES = ('cashflow', 'allfactorycash', 'oee', 'oee-sheet',
                                'receivables', 'historical-inventory')
 _GUIDED_SPECIALIZED_PREFIXES = ('cost.dual', 'cost.distribution', 'cost.scatter',
                                  'production.fused', 'production.anomaly')
+_TRUSTED_SOURCE_PREFIXES = frozenset({
+    'customer-source-sales', 'purchase-batch-lineage',
+    'finished-goods-shipment', 'finished-goods-inventory',
+})
 _FAMILY_LABELS = {
     'production.output': '产量趋势', 'production.products': '产品产量',
     'production.quality': '生产良品率', 'production.yield': '生产出成率',
@@ -642,19 +646,25 @@ def _card_layout(option):
 def build(datasets, request, can_price):
     candidates, unavailable = [], []
     for dataset in datasets:
+        trusted_source = dataset.source.split(' · ')[0] in _TRUSTED_SOURCE_PREFIXES
         if dataset.frame.empty:
             charts, gaps = [], [{'id': dataset.source, 'title': dataset.source, 'missing': ['所选期间没有来源记录']}]
         elif dataset.source.startswith(('cashflow ·', 'receivables ·')):
             charts, gaps = [], []
-        elif dataset.source.startswith('production-inspection-fused ·'):
+        elif dataset.source.startswith(('production-inspection-fused ·', 'uploaded-production-inspection-fused ·')):
             charts, gaps = [], []
         elif dataset.source.startswith('historical-inventory ·'):
             charts, gaps = historical_inventory(dataset)
+        elif trusted_source:
+            from .trusted_business_metrics import build as trusted_business_metrics
+            charts, gaps = trusted_business_metrics(
+                dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
+            )
         elif dataset.financial:
             charts, gaps = financial_candidates(dataset, request, can_price)
         else:
             charts, gaps = factory_candidates(dataset, request, can_price)
-        business_source = dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused'}
+        business_source = trusted_source or dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused','uploaded-production-inspection-fused'}
         if not dataset.frame.empty and not business_source:
             from .financial_addons import build as financial_addons
             extra, extra_gaps = financial_addons(dataset, request, can_price)

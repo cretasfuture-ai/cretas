@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Modal, StyleSheet, View } from 'react-native';
+import { FlatList, Modal, Platform, StyleSheet, View } from 'react-native';
 import { Button, Card, Chip, SegmentedButtons, Switch, Text, TextInput } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -12,12 +12,14 @@ import {
   getFactoryChartSelection,
   getFactoryChartUploads,
   getFactoryRecommendations,
+  saveFactoryChartFile,
   saveFactoryChartSelection,
   shareFactoryChartFile,
 } from '../../services/api/smartbiFactoryCharts';
 import { buildFactoryChartExportPayload } from '../../utils/smartbiFactoryChartExport';
 import type {
   FactoryChartExportFormat,
+  FactoryChartExportFile,
   FactoryChartPeriodType,
   FactoryChartPoint,
   FactoryChartSource,
@@ -32,6 +34,7 @@ import {
   selectRecommendations,
   type FactoryChartPeriodSelection,
 } from '../../utils/smartbiFactoryChartModel';
+import { mergeRefreshedDetailContext, type FactoryDetailRefreshScope } from '../../utils/smartbiFactoryDetailRefresh';
 import {
   filterSubjects,
   groupChartFamilies,
@@ -50,6 +53,8 @@ const initialPeriod: FactoryChartPeriodSelection = {
   startMonth: 1,
   endMonth: 12,
 };
+type UploadMode = 'single' | 'joint';
+type ScopedUploadChoice = { id: number; authEpoch: string } | null;
 
 interface GuideIntent {
   scope: string;
@@ -80,6 +85,10 @@ function asMessage(error: unknown): string {
   return error instanceof Error ? error.message : '请求失败，请稍后重试';
 }
 
+function uploadLabel(upload: FactoryChartUpload): string {
+  return upload.sheetName ? `${upload.fileName} · ${upload.sheetName}` : upload.fileName;
+}
+
 function readAuthEpoch(): string {
   const auth = useAuthStore.getState();
   return `${auth.user?.id || ''}|${auth.getFactoryId() || ''}|${auth.getUserRole() || ''}`;
@@ -107,9 +116,10 @@ interface ChartCardProps {
   chartRef: (value: FactoryChartCanvasHandle | null) => void;
   onPoint: (point: FactoryChartPoint) => void;
   onDetails: () => void;
+  detailLoading: boolean;
 }
 
-function ChartCard({ item, mounted, chartRef, onPoint, onDetails }: ChartCardProps) {
+function ChartCard({ item, mounted, chartRef, onPoint, onDetails, detailLoading }: ChartCardProps) {
   return (
     <Card style={styles.card} testID={`factory-chart-card-${item.id}`}>
       <Card.Content>
@@ -140,7 +150,12 @@ function ChartCard({ item, mounted, chartRef, onPoint, onDetails }: ChartCardPro
         {item.findings.good.length > 0 && <Text style={styles.good}>表现：{item.findings.good.join('；')}</Text>}
         {item.findings.attention.length > 0 && <Text style={styles.attention}>关注：{item.findings.attention.join('；')}</Text>}
         {item.findings.suggestions.length > 0 && <Text style={styles.suggestion}>建议：{item.findings.suggestions.join('；')}</Text>}
-        <Button mode="outlined" onPress={onDetails} disabled={!item.detailContext} testID={`factory-details-${item.id}`}>查看原始明细</Button>
+        {!item.detailContext && <Text style={styles.muted} testID={`factory-detail-status-${item.id}`}>
+          {item.detailStatus?.message || '原始明细尚未就绪，可按需获取'}
+        </Text>}
+        <Button mode="outlined" onPress={onDetails} loading={detailLoading} disabled={detailLoading} testID={`factory-details-${item.id}`}>
+          {item.detailContext ? '查看原始明细' : '获取原始明细'}
+        </Button>
       </Card.Content>
     </Card>
   );
@@ -157,6 +172,14 @@ export default function FactoryChartsScreen() {
   const [uploadChoice, setUploadChoice] = useState<{ id: number; authEpoch: string } | null>(null);
   const uploadId = uploadChoice?.authEpoch === authEpoch ? uploadChoice.id : undefined;
   const setUploadId = (id: number | undefined) => setUploadChoice(id == null ? null : { id, authEpoch });
+  const [uploadMode, setUploadMode] = useState<UploadMode>('single');
+  const [inspectionChoice, setInspectionChoice] = useState<ScopedUploadChoice>(null);
+  const [costChoice, setCostChoice] = useState<ScopedUploadChoice>(null);
+  const inspectionUploadId = inspectionChoice?.authEpoch === authEpoch ? inspectionChoice.id : undefined;
+  const costUploadId = costChoice?.authEpoch === authEpoch ? costChoice.id : undefined;
+  const jointSelectionValid = uploadMode === 'joint'
+    && uploadId != null && inspectionUploadId != null && costUploadId != null
+    && new Set([uploadId, inspectionUploadId, costUploadId]).size === 3;
   const [loadedUploads, setUploads] = useState<FactoryChartUpload[]>([]);
   const [uploadsAuth, setUploadsAuth] = useState(authEpoch);
   const uploads = uploadsAuth === authEpoch ? loadedUploads : [];
@@ -166,14 +189,16 @@ export default function FactoryChartsScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<FactoryChartExportFormat | null>(null);
+  const [pendingExport, setPendingExport] = useState<FactoryChartExportFile | null>(null);
   const [mountedIds, setMountedIds] = useState<string[]>([]);
   const [showSelection, setShowSelection] = useState(false);
   const [showUnavailable, setShowUnavailable] = useState(false);
   const [guideStep, setGuideStep] = useState<1 | 2 | 3>(1);
   const [subjectChoice, setSubjectChoice] = useState<{ id: string; scope: string } | null>(null);
-  const subjectScope = JSON.stringify([authEpoch, source, uploadId]);
+  const subjectScope = JSON.stringify([authEpoch, source, uploadId, inspectionUploadId, costUploadId]);
   const analysisSubject = subjectChoice?.scope === subjectScope ? subjectChoice.id : null;
   const setAnalysisSubject = (id: string | null) => setSubjectChoice(id ? { id, scope: subjectScope } : null);
   const [subjectQuery, setSubjectQuery] = useState('');
@@ -194,8 +219,8 @@ export default function FactoryChartsScreen() {
   const dataRef = useRef<FactoryRecommendationsData | null>(null);
   const [guideSnapshot, setGuideSnapshot] = useState<{ scope: string; data: FactoryRecommendationsData } | null>(null);
   const selectionScopeRef = useRef('');
-  const selectionScope = JSON.stringify([authEpoch, source, uploadId, analysisSubject]);
-  const guideScope = JSON.stringify([authEpoch, source, uploadId]);
+  const selectionScope = JSON.stringify([authEpoch, source, uploadId, inspectionUploadId, costUploadId, analysisSubject]);
+  const guideScope = JSON.stringify([authEpoch, source, uploadId, inspectionUploadId, costUploadId]);
   const [exportPreviewId, setExportPreviewId] = useState<string | null>(null);
   const loadToken = useRef(0);
   const chartRefs = useRef<Record<string, FactoryChartCanvasHandle | null>>({});
@@ -203,8 +228,12 @@ export default function FactoryChartsScreen() {
   const exportReadyId = useRef<string | null>(null);
   const exportRenderError = useRef<string | null>(null);
   const viewEpoch = useRef(0);
+  const detailRequestToken = useRef(0);
+  const detailScopeKey = JSON.stringify([authEpoch, source, uploadId, inspectionUploadId, costUploadId, period, analysisSubject]);
+  const detailScopeRef = useRef(detailScopeKey);
+  detailScopeRef.current = detailScopeKey;
   const mounted = useRef(true);
-  const queryKey = JSON.stringify([authEpoch, source, period, uploadId, includeOptional, useAi, analysisSubject]);
+  const queryKey = JSON.stringify([authEpoch, source, period, uploadId, inspectionUploadId, costUploadId, includeOptional, useAi, analysisSubject]);
   const data = loadedKey === queryKey ? loadedData : null;
   const guideData = data || (guideSnapshot?.scope === guideScope ? guideSnapshot.data : null);
   const viewKey = JSON.stringify([queryKey, selectedIds]);
@@ -220,6 +249,7 @@ export default function FactoryChartsScreen() {
       mounted.current = false;
       loadToken.current += 1;
       viewEpoch.current += 1;
+      detailRequestToken.current += 1;
     };
   }, []);
 
@@ -232,12 +262,12 @@ export default function FactoryChartsScreen() {
     setSelectionError(null);
     setData(null);
     const requestAuthEpoch = authEpoch;
-    if (source === 'upload' && uploadId == null) {
+    if (source === 'upload' && (uploadId == null || (uploadMode === 'joint' && !jointSelectionValid))) {
       setLoading(false);
       return;
     }
     try {
-      const request = buildRecommendationRequest(source, period, includeOptional, useAi, uploadId, true, analysisSubject);
+      const request = buildRecommendationRequest(source, period, includeOptional, useAi, uploadId, true, analysisSubject, [], jointSelectionValid ? inspectionUploadId : undefined, jointSelectionValid ? costUploadId : undefined);
       const recommendationResponse = await getFactoryRecommendations(request);
       if (!recommendationResponse.success) throw new Error(recommendationResponse.message || '推荐加载失败');
       const selectionResponse = await getFactoryChartSelection(source);
@@ -245,6 +275,9 @@ export default function FactoryChartsScreen() {
       if (!mounted.current || token !== loadToken.current || requestAuthEpoch !== readAuthEpoch()) return;
       if (recommendationResponse.data.source !== source || selectionResponse.data.source !== source) throw new Error('返回的数据来源与当前选择不一致');
       if (recommendationResponse.data.analysisSubject !== analysisSubject) throw new Error('返回的分析产品与当前选择不一致');
+      const returnedJoint = recommendationResponse.data.jointUploads;
+      if (jointSelectionValid && (!returnedJoint || returnedJoint.inspectionUploadId !== inspectionUploadId || returnedJoint.costUploadId !== costUploadId)) throw new Error('返回的联合上传范围与当前选择不一致');
+      if (!jointSelectionValid && returnedJoint) throw new Error('返回了未选择的联合上传范围');
       const activeGuideIntent = guideIntentRef.current?.scope === guideScope ? guideIntentRef.current : null;
       setData(recommendationResponse.data);
       setGuideSnapshot({ scope: guideScope, data: recommendationResponse.data });
@@ -262,7 +295,7 @@ export default function FactoryChartsScreen() {
     } finally {
       if (mounted.current && token === loadToken.current) setLoading(false);
     }
-  }, [analysisSubject, authEpoch, guideScope, includeOptional, period, queryKey, selectionScope, source, uploadId, useAi]);
+  }, [analysisSubject, authEpoch, guideScope, includeOptional, inspectionUploadId, costUploadId, jointSelectionValid, period, queryKey, selectionScope, source, uploadId, uploadMode, useAi]);
 
   useEffect(() => { selectionRef.current = selectedIds; }, [selectedIds]);
 
@@ -283,13 +316,77 @@ export default function FactoryChartsScreen() {
   const filteredSubjects = useMemo(() => filterSubjects(subjects, subjectQuery), [subjects, subjectQuery]);
   const domains = useMemo(() => [...new Set(families.map(family => family.variants[0]?.domain).filter(Boolean))] as string[], [families]);
   const browseFamilies = useMemo(() => browseDomain ? families.filter(family => family.variants.some(item => item.domain === browseDomain)) : families, [browseDomain, families]);
-  const contextKey = data ? { factoryId: data.factoryId, source, periodLabel: data.period.label, authEpoch } : null;
+  const contextKey = data ? { factoryId: data.factoryId, source, periodLabel: data.period.label, authEpoch, ...(uploadId !== undefined ? { uploadId } : {}), ...(jointSelectionValid ? { inspectionUploadId, costUploadId } : {}), analysisSubject } : null;
+
+  const openDetails = useCallback(async (item: FactoryRecommendation, point?: FactoryChartPoint) => {
+    if (!data?.factoryId || !contextKey) return;
+    const currentData = data;
+    const currentAuth = readAuthEpoch();
+    const requestScopeKey = detailScopeKey;
+    const requestToken = ++detailRequestToken.current;
+    const refreshScope: FactoryDetailRefreshScope = {
+      factoryId: currentData.factoryId,
+      authEpoch: currentAuth,
+      source,
+      ...(uploadId !== undefined ? { uploadId } : {}),
+      ...(jointSelectionValid ? { inspectionUploadId, costUploadId } : {}),
+      period,
+      periodLabel: currentData.period.label,
+      analysisSubject,
+      candidateId: item.id,
+      unit: item.unit,
+    };
+    const expiresAt = item.detailContext ? Date.parse(item.detailContext.expiresAt) : NaN;
+    if (item.detailContext?.id && Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+      navigation.navigate('FactoryChartDetails', {
+        recommendation: item,
+        source,
+        period,
+        periodLabel: currentData.period.label,
+        contextKey: { ...contextKey, period, ...(uploadId !== undefined ? { uploadId } : {}), analysisSubject },
+        ...(point ? { point } : {}),
+      });
+      return;
+    }
+    setDetailLoadingId(item.id);
+    setSelectionError(null);
+    try {
+      const response = await getFactoryRecommendations(buildRecommendationRequest(
+        source, period, includeOptional, useAi, uploadId, true, analysisSubject, [item.id], jointSelectionValid ? inspectionUploadId : undefined, jointSelectionValid ? costUploadId : undefined,
+      ));
+      if (!mounted.current || requestToken !== detailRequestToken.current || requestScopeKey !== detailScopeRef.current || currentAuth !== readAuthEpoch()) return;
+      if (!response.success || !response.data) throw new Error(response.message || '原始明细暂不可用');
+      const refreshed = response.data.recommendations.find(candidate => candidate.id === item.id);
+      const nextItem = mergeRefreshedDetailContext(item, refreshed, response.data, refreshScope);
+      setData(previous => previous ? { ...previous, recommendations: previous.recommendations.map(candidate => candidate.id === nextItem.id ? nextItem : candidate) } : previous);
+      dataRef.current = { ...currentData, recommendations: currentData.recommendations.map(candidate => candidate.id === nextItem.id ? nextItem : candidate) };
+      navigation.navigate('FactoryChartDetails', {
+        recommendation: nextItem,
+        source,
+        period,
+        periodLabel: currentData.period.label,
+        contextKey: { ...contextKey, period, ...(uploadId !== undefined ? { uploadId } : {}), analysisSubject },
+        ...(point ? { point } : {}),
+      });
+    } catch (detailError) {
+      if (mounted.current && requestToken === detailRequestToken.current && requestScopeKey === detailScopeRef.current && currentAuth === readAuthEpoch()) setSelectionError(detailError instanceof Error ? detailError.message : '原始明细暂不可用');
+    } finally {
+      if (mounted.current && requestToken === detailRequestToken.current && requestScopeKey === detailScopeRef.current) setDetailLoadingId(null);
+    }
+  }, [analysisSubject, contextKey, costUploadId, data, detailScopeKey, includeOptional, inspectionUploadId, jointSelectionValid, navigation, period, source, uploadId, useAi]);
+
+  useEffect(() => {
+    detailRequestToken.current += 1;
+  }, [detailScopeKey]);
 
   const changeSource = (next: FactoryChartSource) => {
     setSource(next);
     setGuideIntent(null);
     setSelectedIds(null);
     setUploadId(undefined);
+    setUploadMode('single');
+    setInspectionChoice(null);
+    setCostChoice(null);
     setAnalysisSubject(null);
     setSelectedDomain(null);
     setActiveFamily(null);
@@ -404,11 +501,24 @@ export default function FactoryChartsScreen() {
       assertExportContext();
       const file = await exportFactoryCharts(format, payload);
       assertExportContext();
-      await shareFactoryChartFile(file);
+      setPendingExport(file);
       assertExportContext();
     } catch (exportFailure) {
       if (mounted.current) setExportError(asMessage(exportFailure));
     } finally { if (mounted.current) { setExportPreviewId(null); setExporting(null); } }
+  };
+
+  const deliverExport = async (destination: 'share' | 'save') => {
+    const file = pendingExport;
+    if (!file) return;
+    setExportError(null);
+    try {
+      if (destination === 'share') await shareFactoryChartFile(file);
+      else if (!await saveFactoryChartFile(file)) return;
+      setPendingExport(null);
+    } catch (deliveryError) {
+      setExportError(deliveryError instanceof Error ? deliveryError.message : '文件交付失败');
+    }
   };
 
   const renderItem = ({ item }: { item: FactoryRecommendation }) => {
@@ -418,13 +528,13 @@ export default function FactoryChartsScreen() {
       mounted={mounted}
       chartRef={value => { chartRefs.current[item.id] = value; }}
       onPoint={point => {
-        if (!data?.factoryId || !item.detailContext || item.detailContext.drilldown === false || !contextKey) return;
-        navigation.navigate('FactoryChartDetails', { recommendation: item, source, period, periodLabel: data.period.label, contextKey, point });
+        if (item.detailContext?.drilldown === false) return;
+        void openDetails(item, point);
       }}
       onDetails={() => {
-        if (!data?.factoryId || !item.detailContext || !contextKey) return;
-        navigation.navigate('FactoryChartDetails', { recommendation: item, source, period, periodLabel: data.period.label, contextKey });
+        void openDetails(item);
       }}
+      detailLoading={detailLoadingId === item.id}
     />;
   };
 
@@ -442,9 +552,21 @@ export default function FactoryChartsScreen() {
         ListHeaderComponent={<View style={styles.controls}>
           <Text variant="headlineSmall">工厂经营分析</Text>
           <Text style={styles.muted}>真实业务/上传数据的推荐图表与可追溯明细</Text>
-           <Button mode="contained-tonal" onPress={() => navigation.navigate('FactoryAnalysisChat', { preserveFactoryCharts: false, source, uploadId, year: period.year, periodType: period.periodType, startMonth: period.startMonth, endMonth: period.endMonth, ...(analysisSubject ? { analysisSubject } : {}) })} testID="factory-analysis-ai-entry">问 AI 分析当前范围</Button>
+           <Button mode="contained-tonal" onPress={() => navigation.navigate('FactoryAnalysisChat', { preserveFactoryCharts: false, source, uploadId, ...(jointSelectionValid ? { inspectionUploadId, costUploadId } : {}), year: period.year, periodType: period.periodType, startMonth: period.startMonth, endMonth: period.endMonth, ...(analysisSubject ? { analysisSubject } : {}) })} testID="factory-analysis-ai-entry">问 AI 分析当前范围</Button>
           <SegmentedButtons value={source} onValueChange={value => changeSource(value as FactoryChartSource)} buttons={[{ value: 'business', label: '业务数据' }, { value: 'upload', label: '上传数据' }]} />
-          {source === 'upload' && <View style={styles.uploadRow}>{uploads.length === 0 ? <Text style={styles.muted}>暂无可用上传文件</Text> : uploads.map(upload => <Chip key={upload.id} selected={uploadId === upload.id} onPress={() => { setGuideIntent(null); setSelectedIds(null); selectionRef.current = null; dataRef.current = null; setAnalysisSubject(null); setSelectedDomain(null); setActiveFamily(null); setGuideStep(1); setUploadId(upload.id); }}>{upload.fileName}</Chip>)}</View>}
+          {source === 'upload' && <>
+            <SegmentedButtons value={uploadMode} onValueChange={value => { const next = value as UploadMode; setUploadMode(next); if (next === 'single') { setInspectionChoice(null); setCostChoice(null); } setSelectedIds(null); selectionRef.current = null; }} buttons={[{ value: 'single', label: '单表' }, { value: 'joint', label: '生产+质检+成本' }]} />
+            <Text style={styles.muted}>{uploadMode === 'joint' ? '先选生产报表，再明确选择两张已上传报表；不会按文件名自动推断角色。' : '请选择生产报表作为当前分析依据。'}</Text>
+            <Text style={styles.uploadRoleLabel}>生产报表（主锚点）</Text>
+            <View style={styles.uploadRow}>{uploads.length === 0 ? <Text style={styles.muted}>暂无可用上传文件</Text> : uploads.map(upload => <Chip key={`production-${upload.id}`} testID={`factory-upload-production-${upload.id}`} selected={uploadId === upload.id} onPress={() => { setGuideIntent(null); setSelectedIds(null); selectionRef.current = null; dataRef.current = null; setAnalysisSubject(null); setSelectedDomain(null); setActiveFamily(null); setGuideStep(1); setUploadId(upload.id); }}>{uploadLabel(upload)}</Chip>)}</View>
+            {uploadMode === 'joint' && <>
+              <Text style={styles.uploadRoleLabel}>质检报表（明确选择）</Text>
+              <View style={styles.uploadRow}>{uploads.filter(upload => upload.id !== uploadId && upload.id !== costUploadId).map(upload => <Chip key={`inspection-${upload.id}`} testID={`factory-upload-inspection-${upload.id}`} selected={inspectionUploadId === upload.id} onPress={() => setInspectionChoice({ id: upload.id, authEpoch })}>{uploadLabel(upload)}</Chip>)}</View>
+              <Text style={styles.uploadRoleLabel}>成本报表（明确选择）</Text>
+              <View style={styles.uploadRow}>{uploads.filter(upload => upload.id !== uploadId && upload.id !== inspectionUploadId).map(upload => <Chip key={`cost-${upload.id}`} testID={`factory-upload-cost-${upload.id}`} selected={costUploadId === upload.id} onPress={() => setCostChoice({ id: upload.id, authEpoch })}>{uploadLabel(upload)}</Chip>)}</View>
+              {!jointSelectionValid && <Text style={styles.attention} testID="factory-upload-joint-incomplete">请分别选择生产、质检、成本三张不同的已上传报表。</Text>}
+            </>}
+          </>}
           <SegmentedButtons value={period.periodType} onValueChange={value => setPeriod(current => ({ ...current, periodType: value as FactoryChartPeriodType, ...(value !== 'month_range' ? { startMonth: 1, endMonth: 12 } : {}) }))} buttons={[{ value: 'all', label: '全部历史' }, { value: 'year', label: '指定年度' }, { value: 'month_range', label: '月范围' }]} />
           <View style={styles.periodRow}>
             <TextInput label="年份" accessibilityLabel="年份" disabled={period.periodType === 'all'} value={String(period.year)} keyboardType="number-pad" onChangeText={value => setPeriod(current => ({ ...current, year: Number(value) || current.year }))} style={styles.periodInput} />
@@ -514,6 +636,15 @@ export default function FactoryChartsScreen() {
           </View>
         </View>
       </Modal>
+      <Modal visible={pendingExport !== null} transparent animationType="none" onRequestClose={() => setPendingExport(null)}>
+        <View style={styles.exportOverlay}><View style={styles.exportPreview}>
+          <Text variant="titleMedium">导出完成：选择文件去向</Text>
+          <Text>{pendingExport?.name}</Text>
+          {Platform.OS === 'android' && <Button mode="contained" onPress={() => void deliverExport('save')} testID="factory-chart-export-save">保存到手机</Button>}
+          <Button mode="outlined" onPress={() => void deliverExport('share')} testID="factory-chart-export-share">分享</Button>
+          <Button onPress={() => setPendingExport(null)} testID="factory-chart-export-cancel">取消</Button>
+        </View></View>
+      </Modal>
     </ScreenWrapper>
   );
 }
@@ -534,6 +665,7 @@ const styles = StyleSheet.create({
   attention: { marginTop: 6, color: '#B54708' },
   suggestion: { marginTop: 6, color: '#175CD3' },
   uploadRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  uploadRoleLabel: { marginTop: 4, fontWeight: '600', color: '#344054' },
   selectionBox: { gap: 8 },
   guideCard: { borderRadius: 12, backgroundColor: '#E6F7FF' },
   guideQuestion: { marginTop: 10, color: '#1F2937', fontWeight: '600' },

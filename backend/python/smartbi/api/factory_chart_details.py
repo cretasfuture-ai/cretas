@@ -43,11 +43,11 @@ async def factory_details(payload: FactoryDetailsRequest, request: Request):
     owner = (factory, user, role)
     can_price = _can_view_cost(role)
     try:
-        needs_finance = await detail_store.requires_finance_shared(payload.context_id, owner)
+        needs_finance = await detail_store.requires_finance_shared(payload.context_id, owner, request)
         finance_allowed = not needs_finance
         if needs_finance and can_price:
             from smartbi.services.factory_charts.finance_auth import full_factory_finance_access
             finance_allowed = await full_factory_finance_access(request, factory)
-        return await detail_store.page_shared(payload.model_dump(exclude_none=True), owner, can_price, finance_allowed)
+        return await detail_store.page_shared(payload.model_dump(exclude_none=True), owner, can_price, finance_allowed, request)
     except details.DetailError as exc:
         raise HTTPException(exc.status_code, exc.detail) from None

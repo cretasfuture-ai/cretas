@@ -4,6 +4,8 @@ export type FactoryChartPeriodType = 'all' | 'year' | 'month_range';
 export interface FactoryRecommendationRequest {
   source: FactoryChartSource;
   upload_id?: number;
+  inspection_upload_id?: number;
+  cost_upload_id?: number;
   factory_id?: string;
   year: number;
   period_type: FactoryChartPeriodType;
@@ -13,6 +15,8 @@ export interface FactoryRecommendationRequest {
   use_ai: boolean;
   guided?: boolean;
   analysis_subject?: string | null;
+  /** Allocate a detail context only for these already-authorized candidates. */
+  detail_candidate_ids?: string[];
 }
 
 export interface FactoryChartKpi { label: string; value: number | string | null; unit: string; }
@@ -34,10 +38,18 @@ export interface FactoryRecommendation {
   /** Financial candidates may return a structured table object; rendering is intentionally deferred. */
   tableData: Record<string, unknown> | Array<Record<string, unknown> | { label: string; value: number | string | null }> | null;
   detailContext?: FactoryChartDetailContext;
+  detailStatus?: FactoryChartDetailStatus;
+  /** Opaque immutable source proof returned with an allocated context. */
+  detailSnapshotKey?: string;
   analysis?: { familyId?: string | null; familyLabel?: string | null };
 }
 
 export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: boolean; }
+export interface FactoryChartDetailStatus {
+  state: 'unavailable' | 'capacity';
+  message: string;
+  retryAfterSeconds?: number;
+}
 export interface FactoryChartDetailFilter { field: string; value: string | number | boolean | null; }
 export interface FactoryChartDetailsRequest { context_id: string; page?: number; page_size?: number; filters?: FactoryChartDetailFilter[]; point?: { name: string; seriesName?: string; dataIndex?: number }; }
 export interface FactoryChartDetailsData {
@@ -55,7 +67,7 @@ export interface FactoryRecommendationsData {
   factoryId: string;
   source: FactoryChartSource;
   sourceLabel: string;
-  period: { label: string };
+  period: { label: string; year: number; periodType: FactoryChartPeriodType; startMonth: number; endMonth: number };
   defaultSelection?: string[];
   ranking: { mode: 'ai' | 'rule'; reason: string };
   recommendations: FactoryRecommendation[];
@@ -64,6 +76,8 @@ export interface FactoryRecommendationsData {
   subjects?: Array<{ id: string; label: string }>;
   analysisScopeLabel?: string;
   analysisSubject?: string | null;
+  uploadId: number | null;
+  jointUploads?: { inspectionUploadId: number; costUploadId: number } | null;
 }
 
 export interface FactoryRecommendationsResponse {
@@ -75,7 +89,7 @@ export interface FactoryRecommendationsResponse {
 
 export interface FactoryChartSelectionData { factoryId: string; source: FactoryChartSource; selectedIds: string[] | null; updatedAt: string | null; }
 export interface FactoryChartSelectionResponse { success: boolean; data: FactoryChartSelectionData; message?: string; }
-export interface FactoryChartUpload { id: number; fileName: string; }
+export interface FactoryChartUpload { id: number; fileName: string; sheetName?: string; }
 export type FactoryChartExportFormat = 'excel' | 'pdf' | 'ppt';
 export interface FactoryChartExportFile { uri: string; name: string; mimeType: string; size: number; factoryId: string; userId: string; role: string; }
 export interface FactoryChartExportContext { factoryId: string; source: FactoryChartSource; sourceLabel: string; periodLabel: string; scopeLabel?: string; selectedIds: readonly string[]; year?: number; periodType?: string; startMonth?: number; endMonth?: number; }

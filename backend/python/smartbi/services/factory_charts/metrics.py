@@ -1,5 +1,6 @@
 """Compute factory facts once; renderers and findings consume the same points."""
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import math
 import re
 from typing import Optional
@@ -14,6 +15,23 @@ def number(value) -> Optional[float]:
         return v if math.isfinite(v) else None
     except (TypeError, ValueError):
         return None
+
+
+def complete_manufacturing_cost(row) -> bool:
+    """Require actual, finite, reconciled cost components; never infer zeros."""
+    amounts = []
+    for column in ('材料成本', '人工成本', '设备成本', '其他成本', '总成本'):
+        value = row.get(column)
+        if value is None or isinstance(value, bool):
+            return False
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+        if not amount.is_finite() or amount < 0:
+            return False
+        amounts.append(amount)
+    return sum(amounts[:4], Decimal('0')) == amounts[4]
 
 
 def display(value: float) -> str:

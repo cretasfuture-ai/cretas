@@ -70,6 +70,90 @@ function selectAuthorizedSubject(subjects, requestedId) {
   return subject;
 }
 
+function validateUploadedJointOptions(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object') throw new Error('factoryAnalysisUploadedJoint must be an object');
+  const ids = ['uploadId', 'inspectionUploadId', 'costUploadId'].map((key) => value[key]);
+  if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== 3) {
+    throw new Error('factoryAnalysisUploadedJoint requires three positive distinct upload IDs');
+  }
+  if (value.subjectId != null && (typeof value.subjectId !== 'string' || !value.subjectId.trim())) {
+    throw new Error('factoryAnalysisUploadedJoint subjectId must be a non-empty string when provided');
+  }
+  return {
+    uploadId: ids[0],
+    inspectionUploadId: ids[1],
+    costUploadId: ids[2],
+    subjectId: value.subjectId || null,
+    expectedSubjectCount: Number.isSafeInteger(value.expectedSubjectCount) ? value.expectedSubjectCount : 100,
+    expectedRows: Number.isSafeInteger(value.expectedRows) ? value.expectedRows : 5,
+    expectedKpis: value.expectedKpis && typeof value.expectedKpis === 'object' ? value.expectedKpis : { production: 500, inspection: 96, quality: 95, cost: 6250 },
+  };
+}
+
+function exactJointUploads(data, expected) {
+  const joint = data?.jointUploads;
+  return data?.source === 'upload' && data?.uploadId === expected.uploadId
+    && joint?.inspectionUploadId === expected.inspectionUploadId
+    && joint?.costUploadId === expected.costUploadId;
+}
+
+function candidateHasExpectedKpis(candidate, expectedKpis) {
+  const parse = (value) => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
+    if (typeof value !== 'string') return NaN;
+    const normalized = value.replace(/[,%，％\s]/gu, '');
+    return Number(normalized);
+  };
+  const values = (candidate?.kpis || []).map((item) => parse(item?.value));
+  return Object.values(expectedKpis).every((value, index) => values[index] === parse(value));
+}
+
+function assessUploadedJoint({ initial, selected, followup, details, expected }) {
+  const selectedData = selected?.body?.data || {};
+  const candidate = (selectedData.recommendations || [])[0];
+  const rows = candidate?.tableData?.rows;
+  const selectedRequest = selected?.request || {};
+  const followupRequest = followup?.request || {};
+  const checks = {
+    initialUploadRequest: initial?.request?.source === 'upload'
+      && initial.request.uploadId === expected.uploadId
+      && initial.request.inspectionUploadId === expected.inspectionUploadId
+      && initial.request.costUploadId === expected.costUploadId,
+    initialSubjectCount: initial?.body?.data?.subjects?.length === expected.expectedSubjectCount,
+    selectedRequestExactIds: selectedRequest.source === 'upload'
+      && selectedRequest.uploadId === expected.uploadId
+      && selectedRequest.inspectionUploadId === expected.inspectionUploadId
+      && selectedRequest.costUploadId === expected.costUploadId,
+    selectedResponseExactIds: exactJointUploads(selectedData, expected),
+    selectedSubject: selectedRequest.analysisSubject === expected.subjectId
+      && selectedData.analysisSubject === expected.subjectId,
+    samePeriod: JSON.stringify(selectedData.period || null) === JSON.stringify(initial?.body?.data?.period || null),
+    oneCandidate: Array.isArray(selectedData.recommendations) && selectedData.recommendations.length === 1,
+    expectedRows: Array.isArray(rows) && rows.length === expected.expectedRows,
+    expectedKpis: candidateHasExpectedKpis(candidate, expected.expectedKpis),
+    detailAttempted: details?.attempted === true,
+    detailSucceeded: details?.success === true && details?.total === expected.expectedRows,
+    followupContextOnly: followupRequest.contextId === selectedData.contextId
+      && typeof followupRequest.question === 'string'
+      && Object.keys(followupRequest).sort().join(',') === 'contextId,question',
+    followupResponseExactIds: exactJointUploads(followup?.body?.data, expected),
+  };
+  const pass = Object.values(checks).every(Boolean);
+  return {
+    result: pass ? 'PASS' : 'PARTIAL_DEFECT',
+    rootCauseClass: pass ? 'none' : 'frontend',
+    checks,
+    requestIds: { uploadId: selectedRequest.uploadId || null, inspectionUploadId: selectedRequest.inspectionUploadId || null, costUploadId: selectedRequest.costUploadId || null },
+    responseJointUploads: selectedData.jointUploads || null,
+    subjectId: selectedData.analysisSubject || null,
+    period: selectedData.period || null,
+    candidateCount: Array.isArray(selectedData.recommendations) ? selectedData.recommendations.length : 0,
+    rowCount: Array.isArray(rows) ? rows.length : 0,
+    note: pass ? 'Explicit three-upload UI selection, metadata, subject, bounded candidate, original details, KPI, and context-only follow-up passed.' : 'Optional explicit three-upload acceptance was attempted but one or more grounded UI/API checks failed.',
+  };
+}
+
 function hasThreeAxis(candidate) {
   const option = candidate?.chart?.echartsOption;
   return Array.isArray(option?.yAxis) && option.yAxis.length >= 3
@@ -182,7 +266,7 @@ function assessJoint({ initial, selected, ui, details, exportAttempt }) {
   };
 }
 
-function assess({ initial, followup, ui, details, exportAttempt, joint }) {
+function assess({ initial, followup, ui, details, exportAttempt, joint, uploadedJoint }) {
   const initialSummary = initial?.summary || {};
   const followupSummary = followup?.summary || {};
   const initialAnswered = initialSummary.answered === true;
@@ -217,12 +301,12 @@ function assess({ initial, followup, ui, details, exportAttempt, joint }) {
   const validChecks = Object.values(checks).every(Boolean);
   const jointAssessment = joint || assessJoint({});
   const acceptedJoint = jointAssessment.positiveJoint === 'PASS' || jointAssessment.negativePass === true;
-  const result = unavailable ? 'UNVERIFIED' : validChecks && acceptedJoint ? 'PASS' : 'UNVERIFIED';
+  const result = unavailable ? 'UNVERIFIED' : validChecks && acceptedJoint && (!uploadedJoint || uploadedJoint.result === 'PASS') ? 'PASS' : uploadedJoint ? 'PARTIAL_DEFECT' : 'UNVERIFIED';
   return {
     result,
-    rootCauseClass: result === 'PASS' ? 'none' : 'tool',
+    rootCauseClass: result === 'PASS' ? 'none' : result === 'PARTIAL_DEFECT' ? 'frontend' : 'tool',
     checks,
-    fullPass: result === 'PASS' && validChecks && jointAssessment.positiveJoint === 'PASS',
+    fullPass: result === 'PASS' && validChecks && jointAssessment.positiveJoint === 'PASS' && (!uploadedJoint || uploadedJoint.result === 'PASS'),
     partialReadWarn: !checks.noSourceErrors,
     joint: jointAssessment,
     status: initialSummary.status,
@@ -368,6 +452,10 @@ async function run(ctx) {
         summary: summaryFromResponse(initialResponse.status(), initialBody, requestBody(initialResponse)),
       };
 
+      const uploadedJoint = validateUploadedJointOptions(
+        inspectCtx.factoryAnalysisUploadedJoint || inspectCtx.options?.factoryAnalysisUploadedJoint,
+      );
+
       if (!initial.summary.answered) {
         const screenshot = await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-unverified');
         const assessment = assess({ initial, followup: { summary: {} }, ui: {}, details: {}, exportAttempt: {} });
@@ -510,6 +598,75 @@ async function run(ctx) {
           }
         }
       }
+
+      let uploadedJointAssessment = null;
+      if (uploadedJoint) {
+        const uploadedPath = `${inspectCtx.baseUrl}${PATH}&source=upload&upload_id=${uploadedJoint.uploadId}&inspection_upload_id=${uploadedJoint.inspectionUploadId}&cost_upload_id=${uploadedJoint.costUploadId}`;
+        await page.goto(uploadedPath, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await page.getByTestId('factory-analysis-chat').waitFor({ timeout: 60_000 });
+        const jointMode = page.getByTestId('factory-analysis-joint-mode');
+        const productionUpload = page.getByTestId('factory-analysis-upload');
+        const inspectionUpload = page.getByTestId('factory-analysis-inspection-upload');
+        const costUpload = page.getByTestId('factory-analysis-cost-upload');
+        if (!await jointMode.count() || !await productionUpload.count() || !await inspectionUpload.count() || !await costUpload.count()) {
+          throw new Error('Explicit uploaded-joint UI selectors are not mounted');
+        }
+        const uploadedInitialResponse = await waitForResponse(
+          page,
+          isAnalysisResponse,
+          async () => {
+            await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
+            await page.getByTestId('factory-analysis-submit').click();
+          },
+        );
+        const uploadedInitialBody = await responseBody(uploadedInitialResponse);
+        const uploadedInitial = { status: uploadedInitialResponse.status(), body: uploadedInitialBody, request: requestBody(uploadedInitialResponse) };
+        let uploadedSelected = { attempted: false, body: {}, request: {} };
+        let uploadedFollowup = { attempted: false, body: {}, request: {} };
+        const uploadedSubjects = Array.isArray(uploadedInitialBody?.data?.subjects) ? uploadedInitialBody.data.subjects : [];
+        let uploadedDetails = { attempted: false, success: false, total: null };
+        if (uploadedInitialBody?.data?.status === 'clarification' && uploadedSubjects.length > 0) {
+          const subject = selectAuthorizedSubject(uploadedSubjects, uploadedJoint.subjectId);
+          const selectedSubjectId = subject.id;
+          const subjectControl = page.getByTestId('factory-analysis-subject');
+          await subjectControl.click();
+          await page.locator('[role="option"], .el-select-dropdown__item').filter({ hasText: subject.label }).first().click();
+          const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
+          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          uploadedSelected = { attempted: true, body: await responseBody(selectedResponse), request: requestBody(selectedResponse) };
+          uploadedJoint.subjectId = selectedSubjectId;
+          const uploadedCandidate = (uploadedSelected.body?.data?.recommendations || []).find(isFusedCandidate) || uploadedSelected.body?.data?.recommendations?.[0];
+          if (uploadedCandidate) {
+            const card = page.getByTestId(`factory-chart-card-${uploadedCandidate.id}`);
+            const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true });
+            if (await detailsButton.count()) {
+              uploadedDetails.attempted = true;
+              const detailResponse = await waitForResponse(page, isDetailsResponse, () => detailsButton.click());
+              const detailBody = await responseBody(detailResponse);
+              uploadedDetails.total = Number(detailBody?.data?.total);
+              uploadedDetails.success = detailResponse.status() === 200
+                && detailBody?.success === true
+                && Array.isArray(detailBody?.data?.rows)
+                && detailBody.data.rows.length > 0
+                && await page.locator('.el-drawer:visible').count() > 0;
+              if (uploadedDetails.success) await page.keyboard.press('Escape').catch(() => {});
+            }
+          }
+          const followupButtons = page.locator('.followups:visible .el-button');
+          const followupButton = followupButtons.filter({ hasText: '质量' }).first();
+          const followupResponse = await waitForResponse(page, isAnalysisResponse, async () => {
+            if (await followupButton.count()) await followupButton.click();
+            else {
+              await page.getByTestId('factory-analysis-input').fill('再看质量指标');
+              await page.getByTestId('factory-analysis-submit').click();
+            }
+          });
+          uploadedFollowup = { attempted: true, body: await responseBody(followupResponse), request: requestBody(followupResponse) };
+          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint });
+        } else {
+          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint });
+        }
+      }
       const assessment = assess({
         initial,
         followup,
@@ -523,6 +680,7 @@ async function run(ctx) {
           details: jointDetails,
           exportAttempt: jointExport,
         }),
+        uploadedJoint: uploadedJointAssessment,
       });
       return {
         assessment,
@@ -537,6 +695,7 @@ async function run(ctx) {
         jointTables: (jointSelectedBody?.data?.recommendations || []).filter(isFusedCandidate)
           .map((item) => ({ unit: item.unit, headers: item.tableData?.headers, rows: item.tableData?.rows })),
         jointExportFormats: jointExport.formats,
+        uploadedJoint: uploadedJointAssessment,
         screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : []), ...(jointScreenshot ? [jointScreenshot] : [])],
       };
     },
@@ -545,6 +704,8 @@ async function run(ctx) {
 
 module.exports = {
   selectAuthorizedSubject,
+  validateUploadedJointOptions,
+  assessUploadedJoint,
   id: 'smartbi-factory-analysis-readonly',
   defaultEnabled: false,
   run,

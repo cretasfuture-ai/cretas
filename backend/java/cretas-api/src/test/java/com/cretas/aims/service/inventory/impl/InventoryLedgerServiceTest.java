@@ -9,6 +9,7 @@ import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.inventory.InventoryLedgerSnapshotRepository;
+import com.cretas.aims.service.inventory.InventoryLedgerService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -235,6 +236,57 @@ class InventoryLedgerServiceTest {
         // 期末 = 30 + 10 - 0 = 40
         assertEquals(0, new BigDecimal("40.000000").compareTo(line.getClosingQty()),
                 "期末 = 期初兜底30 + 入库10 = 40");
+    }
+
+    @Test
+    @DisplayName("严格修复读取: 缺少期初快照时拒绝使用 MaterialBatch 当前聚合兜底")
+    void strictRepairRead_rejectsMissingOpeningSnapshot() {
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪蹄", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(Collections.emptyList());
+
+        assertThrows(IllegalStateException.class,
+                () -> service.getLedger(FACTORY_ID, START, END, MAT_ID,
+                        InventoryLedgerService.LedgerReadMode.STRICT_REPAIR));
+        verify(em, never()).createQuery(anyString());
+    }
+
+    @Test
+    @DisplayName("严格修复读取: 期初快照数量为空时拒绝零值补位")
+    void strictRepairRead_rejectsNullOpeningQuantity() {
+        InventoryLedgerSnapshot snap = buildSnapshot(MAT_ID, null, null);
+        snap.setAccountingPeriodId("AP-2026-04");
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪蹄", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(snap));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.getLedger(FACTORY_ID, START, END, MAT_ID,
+                        InventoryLedgerService.LedgerReadMode.STRICT_REPAIR));
+        verify(em, never()).createQuery(anyString());
+    }
+
+    @Test
+    @DisplayName("严格修复读取: 期间组件查询失败不得吞掉并返回零")
+    void strictRepairRead_propagatesComponentQueryFailure() {
+        InventoryLedgerSnapshot snap = buildSnapshotWithPeriod(MAT_ID,
+                new BigDecimal("50.000000"), null, "AP-2026-04", 2026, 4);
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪蹄", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(List.of(snap));
+
+        Query q = mock(Query.class);
+        when(q.setParameter(anyString(), any())).thenReturn(q);
+        when(q.getResultList()).thenReturn(List.of(BigDecimal.ZERO), Collections.emptyList());
+        when(em.createQuery(anyString())).thenReturn(q).thenReturn(q)
+                .thenThrow(new IllegalArgumentException("invalid MaterialConsumption query"));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.getLedger(FACTORY_ID, START, END, MAT_ID,
+                        InventoryLedgerService.LedgerReadMode.STRICT_REPAIR));
     }
 
     @Test

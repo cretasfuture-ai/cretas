@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const scenario = require('../scenarios/smartbi-factory-analysis-readonly');
 
@@ -9,6 +11,58 @@ test('joint subject selection uses the requested authorized product and rejects 
   assert.equal(scenario.selectAuthorizedSubject(subjects).id, 'missing-data');
   assert.equal(scenario.selectAuthorizedSubject(subjects, 'eligible'), subjects[1]);
   assert.throws(() => scenario.selectAuthorizedSubject(subjects, 'foreign-product'), /authorized response/);
+});
+
+test('uploaded-joint option contract requires three positive distinct IDs', () => {
+  assert.deepEqual(scenario.validateUploadedJointOptions({ uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, subjectId: 'QA-SC28-SKU-001' }), {
+    uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, subjectId: 'QA-SC28-SKU-001',
+    expectedSubjectCount: 100, expectedRows: 5,
+    expectedKpis: { production: 500, inspection: 96, quality: 95, cost: 6250 },
+  });
+  assert.throws(() => scenario.validateUploadedJointOptions({ uploadId: 5278, inspectionUploadId: 5278, costUploadId: 5279 }), /positive distinct/);
+});
+
+test('suite context forwards the optional uploaded-joint contract without changing the guard', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'run-suite.js'), 'utf8');
+  assert.match(source, /factoryAnalysisUploadedJoint:\s*options\.factoryAnalysisUploadedJoint/);
+  assert.match(source, /mutationGuard = await installMutationGuard/);
+});
+
+test('uploaded-joint assessment requires exact IDs, one candidate, five rows, KPI values and context-only followup', () => {
+  const expected = scenario.validateUploadedJointOptions({ uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, subjectId: 'QA-SC28-SKU-001' });
+  const selectedBody = {
+    data: {
+      source: 'upload', uploadId: 5278, jointUploads: { inspectionUploadId: 5277, costUploadId: 5279 },
+      analysisSubject: 'QA-SC28-SKU-001', contextId: 'ctx-upload', period: { year: 2026, periodType: 'all', startMonth: 1, endMonth: 12, label: '全部历史' },
+      recommendations: [{ kpis: [{ value: 500 }, { value: '96%' }, { value: '95%' }, { value: '6,250' }], tableData: { rows: [1, 2, 3, 4, 5] } }],
+    },
+  };
+  const result = scenario.assessUploadedJoint({
+    initial: { body: { data: { subjects: Array.from({ length: 100 }, (_, i) => ({ id: `s-${i}` })), period: selectedBody.data.period } }, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279 } },
+    selected: { body: selectedBody, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, analysisSubject: 'QA-SC28-SKU-001' } },
+    followup: { body: selectedBody, request: { question: '再看质量', contextId: 'ctx-upload' } },
+    details: { attempted: true, success: true, total: 5 },
+    expected,
+  });
+  assert.equal(result.result, 'PASS');
+  assert.equal(result.checks.oneCandidate, true);
+  assert.equal(result.checks.followupContextOnly, true);
+  const swapped = scenario.assessUploadedJoint({
+    initial: { body: { data: { subjects: Array.from({ length: 100 }, (_, i) => ({ id: `s-${i}` })), period: selectedBody.data.period } }, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279 } },
+    selected: { body: selectedBody, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, analysisSubject: 'QA-SC28-SKU-001' } },
+    followup: { body: selectedBody, request: { question: '再看质量', contextId: 'ctx-upload' } }, expected: { ...expected, expectedKpis: { production: 500, inspection: 95, quality: 96, cost: 6250 } },
+    details: { attempted: true, success: true, total: 5 },
+  });
+  assert.equal(swapped.result, 'PARTIAL_DEFECT');
+  const mismatch = scenario.assessUploadedJoint({
+    initial: { body: { data: { subjects: [] } }, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279 } },
+    selected: { body: selectedBody, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5280, analysisSubject: 'QA-SC28-SKU-001' } },
+    followup: { body: selectedBody, request: { question: '再看质量', contextId: 'ctx-upload' } }, details: { attempted: true, success: true, total: 5 }, expected,
+  });
+  assert.equal(mismatch.result, 'PARTIAL_DEFECT');
+  const overall = scenario.assess({ initial: { summary: {} }, followup: { summary: {} }, ui: {}, details: {}, exportAttempt: {}, joint: scenario.assessJoint({}), uploadedJoint: mismatch });
+  assert.equal(overall.result, 'PARTIAL_DEFECT');
+  assert.equal(overall.fullPass, false);
 });
 
 function response(status, data, request) {

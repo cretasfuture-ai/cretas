@@ -21,6 +21,11 @@ export interface FactoryChartContextKey {
   source: FactoryChartSource;
   periodLabel: string;
   authEpoch: string;
+  period?: FactoryChartPeriodSelection;
+  uploadId?: number;
+  inspectionUploadId?: number;
+  costUploadId?: number;
+  analysisSubject?: string | null;
 }
 
 export function normalizeSelectedIds(value: readonly string[] | null | undefined): string[] | null {
@@ -48,6 +53,9 @@ export function buildRecommendationRequest(
   uploadId?: number,
   guided = false,
   analysisSubject: string | null = null,
+  detailCandidateIds?: readonly string[],
+  inspectionUploadId?: number,
+  costUploadId?: number,
 ): FactoryRecommendationRequest {
   if (!isValidPeriod(period)) {
     throw new Error('请选择有效的时间范围');
@@ -55,6 +63,7 @@ export function buildRecommendationRequest(
   return {
     source,
     ...(source === 'upload' && uploadId != null ? { upload_id: uploadId } : {}),
+    ...(source === 'upload' && inspectionUploadId != null && costUploadId != null ? { inspection_upload_id: inspectionUploadId, cost_upload_id: costUploadId } : {}),
     year: period.year,
     period_type: period.periodType,
     start_month: period.startMonth,
@@ -63,6 +72,7 @@ export function buildRecommendationRequest(
     use_ai: useAi,
     guided,
     analysis_subject: analysisSubject,
+    ...(detailCandidateIds !== undefined ? { detail_candidate_ids: [...detailCandidateIds] } : {}),
   };
 }
 
@@ -113,7 +123,11 @@ export function isSameChartContext(a: FactoryChartContextKey, b: FactoryChartCon
   return a.factoryId === b.factoryId
     && a.source === b.source
     && a.periodLabel === b.periodLabel
-    && a.authEpoch === b.authEpoch;
+    && a.authEpoch === b.authEpoch
+    && a.uploadId === b.uploadId
+    && a.inspectionUploadId === b.inspectionUploadId
+    && a.costUploadId === b.costUploadId
+    && (a.analysisSubject || null) === (b.analysisSubject || null);
 }
 
 export function formatChartCell(value: unknown): string {

@@ -45,6 +45,15 @@ describe('smartbiFactoryAnalysis API', () => {
     );
   });
 
+  it('posts the explicitly selected joint upload IDs on the initial question and rejects a mismatched response', async () => {
+    (apiClient.post as jest.Mock).mockResolvedValue({ success: true, data: { ...responseData, jointUploads: { inspectionUploadId: 43, costUploadId: 44 } } });
+    await askFactoryAnalysis({ question: '联合看生产质量成本', source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 44, year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 });
+    expect(apiClient.post).toHaveBeenCalledWith('/api/mobile/F006/smart-bi/factory-analysis', expect.objectContaining({ uploadId: 42, inspectionUploadId: 43, costUploadId: 44 }));
+
+    (apiClient.post as jest.Mock).mockResolvedValue({ success: true, data: { ...responseData, jointUploads: { inspectionUploadId: 43, costUploadId: 45 } } });
+    await expect(askFactoryAnalysis({ question: '联合看生产质量成本', source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 44 })).rejects.toThrow(/联合上传范围/);
+  });
+
   it('preserves HTTP 410 for the screen explicit clear-context retry', async () => {
     (apiClient.post as jest.Mock).mockRejectedValue({ response: { status: 410 }, message: '对话上下文已过期' });
     await expect(askFactoryAnalysis({ question: '继续看质量', contextId: 'ctx-old' })).rejects.toMatchObject<Partial<FactoryAnalysisApiError>>({ status: 410 });

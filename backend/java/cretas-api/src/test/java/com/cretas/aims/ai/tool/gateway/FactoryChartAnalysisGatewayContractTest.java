@@ -80,6 +80,20 @@ class FactoryChartAnalysisGatewayContractTest {
     }
 
     @Test
+    void explicitUploadedJointSelectionReachesPythonWithAllThreeIds() throws Exception {
+        when(pythonClient.callFactoryChartAnalysis(
+                eq("F006"), eq("42"), eq("factory_super_admin"), any(), any()))
+                .thenReturn(Map.of("success", true, "data", Map.of("factoryId", "F006")));
+        ToolExecutionResult result = gateway.execute(commandWithUploads("F006", "42"));
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        verify(pythonClient).callFactoryChartAnalysis(eq("F006"), eq("42"), eq("factory_super_admin"), any(),
+                argThat(body -> "upload".equals(body.get("source"))
+                        && Integer.valueOf(101).equals(body.get("upload_id"))
+                        && Integer.valueOf(202).equals(body.get("inspection_upload_id"))
+                        && Integer.valueOf(303).equals(body.get("cost_upload_id"))));
+    }
+
+    @Test
     void crossFactoryOrRevokedPrincipalCannotReachPython() throws Exception {
         when(principalPolicy.rehydrate(any())).thenReturn(Optional.empty());
 
@@ -123,5 +137,16 @@ class FactoryChartAnalysisGatewayContractTest {
                         Set.of("factory_super_admin"), Set.of("analytics:read"), Set.of()),
                 ToolExecutionSource.HTTP_CONTROLLER, ToolExecutionMode.EXECUTE,
                 Optional.empty(), Optional.empty(), Optional.empty(), Instant.now().plusSeconds(90));
+    }
+
+    private ToolExecutionCommand commandWithUploads(String factoryId, String userId) {
+        ToolExecutionCommand base = command(factoryId, userId);
+        return new ToolExecutionCommand(base.requestId() + "-uploads", base.correlationId(), base.traceId(),
+                base.toolName(), base.expectedDescriptorVersion(),
+                new ObjectMapper().createObjectNode().put("question", "联合分析")
+                        .put("source", "upload").put("uploadId", 101)
+                        .put("inspectionUploadId", 202).put("costUploadId", 303),
+                base.principal(), base.source(), base.mode(), base.idempotencyKey(), base.confirmationProof(),
+                base.approvalProof(), base.deadline());
     }
 }

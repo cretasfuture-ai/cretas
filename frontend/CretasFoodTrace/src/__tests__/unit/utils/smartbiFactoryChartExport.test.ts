@@ -1,5 +1,5 @@
 import { buildFactoryChartExportPayload } from '../../../utils/smartbiFactoryChartExport';
-import { exportFactoryCharts, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
+import { exportFactoryCharts, saveFactoryChartFile, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
 import { apiClient } from '../../../services/api/apiClient';
 import * as FileSystem from 'expo-file-system';
 
@@ -70,6 +70,24 @@ describe('smartbiFactoryChartExport', () => {
   it('shares only a file owned by the current user and factory', async () => {
     await expect(shareFactoryChartFile({ uri: 'file:///ok.pdf', name: 'ok.pdf', mimeType: 'application/pdf', size: 120, factoryId: 'F006', userId: '42', role: 'factory_admin' })).resolves.toBeUndefined();
     await expect(shareFactoryChartFile({ uri: 'file:///old.pdf', name: 'old.pdf', mimeType: 'application/pdf', size: 120, factoryId: 'F006', userId: '43', role: 'factory_admin' })).rejects.toThrow(/owner|factory/i);
+  });
+
+  it('saves through Android SAF only after the user grants a directory and preserves ownership checks', async () => {
+    const saf = { requestDirectoryPermissionsAsync: jest.fn(async () => ({ granted: true, directoryUri: 'content://downloads' })), createFileAsync: jest.fn(async () => 'content://downloads/result.pdf'), writeAsStringAsync: jest.fn(async () => undefined) };
+    Object.defineProperty(FileSystem, 'StorageAccessFramework', { configurable: true, value: saf });
+    const read = jest.spyOn(FileSystem, 'readAsStringAsync').mockResolvedValue('base64-bytes');
+    await expect(saveFactoryChartFile({ uri: 'file:///cache/result.pdf', name: 'result.pdf', mimeType: 'application/pdf', size: 120, factoryId: 'F006', userId: '42', role: 'factory_admin' })).resolves.toEqual({ uri: 'content://downloads/result.pdf' });
+    expect(read).toHaveBeenCalledWith('file:///cache/result.pdf', { encoding: FileSystem.EncodingType.Base64 });
+    expect(saf.createFileAsync).toHaveBeenCalledWith('content://downloads', 'result.pdf', 'application/pdf');
+    expect(saf.writeAsStringAsync).toHaveBeenCalledWith('content://downloads/result.pdf', 'base64-bytes', { encoding: FileSystem.EncodingType.Base64 });
+    read.mockRestore();
+  });
+
+  it('does not write when the SAF directory picker is cancelled', async () => {
+    const saf = { requestDirectoryPermissionsAsync: jest.fn(async () => ({ granted: false })), createFileAsync: jest.fn(), writeAsStringAsync: jest.fn() };
+    Object.defineProperty(FileSystem, 'StorageAccessFramework', { configurable: true, value: saf });
+    await expect(saveFactoryChartFile({ uri: 'file:///cache/result.pdf', name: 'result.pdf', mimeType: 'application/pdf', size: 120, factoryId: 'F006', userId: '42', role: 'factory_admin' })).resolves.toBeNull();
+    expect(saf.createFileAsync).not.toHaveBeenCalled();
   });
 
   it('rejects an HTML/error body instead of caching it as an export', async () => {

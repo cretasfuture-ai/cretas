@@ -183,3 +183,16 @@ test('allows only the exact factory analysis contract while generic chat remains
   }).kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/smart-bi/factory-analysis/extra').kind, 'business-mutation');
 });
+
+test('uploaded three-table analysis allows only distinct explicit read-only source IDs', () => {
+  const url = 'https://admin.example/api/mobile/F006/smart-bi/factory-analysis';
+  const body = { question: '关联生产、质检和成本', source: 'upload', uploadId: 101,
+    inspectionUploadId: 102, costUploadId: 103, year: 2026, periodType: 'all', startMonth: 1, endMonth: 12, analysisSubject: null };
+  assert.equal(classifyMutation('POST', url, undefined, body).kind, 'readonly-post');
+  const partial = { ...body }; delete partial.costUploadId;
+  for (const changed of [partial, { ...body, source: 'business' }, { ...body, costUploadId: 101 },
+    { ...body, inspectionUploadId: 103 }, { ...body, costUploadId: '103' }, { ...body, costUploadId: -1 },
+    { ...body, execute: true }, { question: '再问', contextId: 'ctx', costUploadId: 103 }]) {
+    assert.equal(classifyMutation('POST', url, undefined, changed).kind, 'business-mutation');
+  }
+});

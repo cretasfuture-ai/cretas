@@ -1,5 +1,7 @@
 package com.cretas.aims.service.inventory;
 
+import java.util.List;
+
 /**
  * SP11: 进销存台账期末快照服务.
  *
@@ -15,4 +17,15 @@ public interface InventoryLedgerSnapshotService {
      * @param accountingPeriodId 会计期 ID
      */
     void createForPeriod(String factoryId, String accountingPeriodId);
+
+    /**
+     * Repair a CLOSED period that has no inventory snapshots. The operation is
+     * idempotent: an existing snapshot set is returned as-is and is never
+     * overwritten.
+     */
+    RepairResult repairMissingInventorySnapshots(String factoryId, String accountingPeriodId);
+
+    record RepairResult(String factoryId, String accountingPeriodId, int created,
+                        int existing, List<String> materialTypeIds) {
+    }
 }

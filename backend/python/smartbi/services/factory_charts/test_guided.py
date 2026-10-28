@@ -151,10 +151,10 @@ async def test_route_echoes_subject_and_detail_uses_filtered_rows(monkeypatch):
         return original.copy()
     async def register(*args):
         return details.register(*args)
-    async def page(*args):
-        return details.page(*args)
-    async def requires(*args):
-        return details.requires_finance(*args)
+    async def page(payload, owner, can_price, finance_allowed, auth_request=None):
+        return details.page(payload, owner, can_price, finance_allowed)
+    async def requires(context_id, owner, auth_request=None):
+        return details.requires_finance(context_id, owner)
     monkeypatch.setattr(api, '_load_data', load)
     monkeypatch.setattr(detail_store, 'register_shared', register)
     monkeypatch.setattr(detail_store, 'page_shared', page)

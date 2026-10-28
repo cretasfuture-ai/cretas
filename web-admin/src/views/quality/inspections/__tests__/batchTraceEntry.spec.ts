@@ -31,7 +31,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.canWrite = true;
   route.query = { batchId: '8', factoryId: 'VISION-ENTRY-B', batchNumber: 'FORGED-NUMBER' };
-  state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : { content: [], totalElements: 0 })));
+  state.get.mockImplementation((url: string) => Promise.resolve(
+    url.endsWith('/batches/8') ? ok(batch)
+      : url.endsWith('/quality-form') ? ok({ batchId: '8', standardRevision: 'legacy-empty', items: [] })
+        : ok({ content: [], totalElements: 0 }),
+  ));
   state.post.mockResolvedValue(ok({ inspection: { id: 'new-qc' } }));
 });
 describe('追溯进入既有质检页面', () => {
@@ -70,7 +74,7 @@ describe('追溯进入既有质检页面', () => {
     expect(state.post).not.toHaveBeenCalled(); wrapper.unmount();
   });
   it('不合格行直接进入原异常复核；正常行不展示复核动作', async () => {
-    state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : {
+    state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : url.endsWith('/quality-form') ? { batchId: '8', standardRevision: 'legacy-empty', items: [] } : {
       content: [
         { id: 'failed-qc', productionBatchId: 8, result: 'FAIL', batchNumber: 'BOX-8' },
         { id: 'passed-qc', productionBatchId: 8, result: 'PASS', batchNumber: 'BOX-8' },
@@ -84,7 +88,7 @@ describe('追溯进入既有质检页面', () => {
     wrapper.unmount();
   });
   it('缓存页面切换批次清除旧结果筛选，补录后不会被此前FAIL筛选隐藏', async () => {
-    state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : url.endsWith('/batches/9') ? { ...batch, id: 9, batchNumber: 'BOX-9' } : { content: [], totalElements: 0 })));
+    state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : url.endsWith('/batches/9') ? { ...batch, id: 9, batchNumber: 'BOX-9' } : url.endsWith('/quality-form') ? { batchId: String(route.query.batchId), standardRevision: 'legacy-empty', items: [] } : { content: [], totalElements: 0 })));
     const wrapper = mountPage();
     await flushPromises();
     wrapper.findAllComponents(ElSelect)[0].vm.$emit('update:modelValue', 'FAIL');
@@ -120,7 +124,7 @@ describe('追溯进入既有质检页面', () => {
   });
   it('无权写入仍可查看，隐藏新建；批次读取失败不能落成全厂列表', async () => {
     state.canWrite = false;
-    state.get.mockRejectedValue(new Error('当前工厂未找到该批次'));
+    state.get.mockImplementation((url: string) => Promise.reject(new Error(url.endsWith('/quality-form') ? '标准读取失败' : '当前工厂未找到该批次')));
     const wrapper = mountPage();
     await flushPromises();
     expect(wrapper.text()).toContain('当前工厂未找到该批次');
