@@ -72,6 +72,9 @@ public class DisposalRecordService implements IDisposalRecordService {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
 
+    /** 唯一有实物扣减与费用过账口径的处置方式 (approveDisposal / DisposalCostAccountingService 同一集合)。 */
+    private static final Set<String> PHYSICAL_DISPOSAL_TYPES = Set.of("SCRAP", "DESTROY");
+
     /** Damaged/expired/QC-held goods can be scrapped while physical free stock remains. */
     private static final Set<String> DISPOSAL_ELIGIBLE_FG_STATUSES = Set.of(
             FinishedGoodsBatch.Status.AVAILABLE, FinishedGoodsBatch.Status.DEFECTIVE,
@@ -95,6 +98,14 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Override
     @Transactional
     public DisposalRecord createDisposalRecord(DisposalRecord record) {
+        // 批准只认 SCRAP/DESTROY (实物扣减与费用过账口径); 其它值建得出来却永远批不了,
+        // web 表单曾把「过期/损坏/质量问题」当处置方式提交, prod 上整条报废链从没走通。
+        if (record.getDisposalType() == null || !PHYSICAL_DISPOSAL_TYPES.contains(record.getDisposalType())) {
+            throw new BusinessException(400, "处置方式只支持报废或销毁")
+                    .withCode("DISPOSAL_TYPE_UNSUPPORTED")
+                    .withHint("请选择处置方式「报废」或「销毁」，过期、损坏、质量问题等原因写在废弃原因里")
+                    .withHintTarget("disposalType");
+        }
         assertSingleInventoryTarget(record);
         if (record.getFinishedGoodsBatchId() != null && !record.getFinishedGoodsBatchId().isBlank()) {
             assertFinishedGoodsDisposalBalance(record);
@@ -234,7 +245,7 @@ public class DisposalRecordService implements IDisposalRecordService {
         DisposalRecord record = findForMutation(factoryId, id);
         assertSingleInventoryTarget(record);
 
-        if (!"SCRAP".equals(record.getDisposalType()) && !"DESTROY".equals(record.getDisposalType())) {
+        if (record.getDisposalType() == null || !PHYSICAL_DISPOSAL_TYPES.contains(record.getDisposalType())) {
             throw new BusinessException(409, "仅 SCRAP/DESTROY 支持实物扣减与费用过账；其它处置方式需先确定财务口径")
                     .withCode("DISPOSAL_ACCOUNTING_POLICY_REQUIRED")
                     .withHint("请由财务确认处置方式的过账口径，实际报废或销毁的记录可从报损审批继续");
@@ -661,6 +672,12 @@ public class DisposalRecordService implements IDisposalRecordService {
             existing.setDisposalQuantity(updateData.getDisposalQuantity());
         }
         if (updateData.getDisposalType() != null) {
+            if (!PHYSICAL_DISPOSAL_TYPES.contains(updateData.getDisposalType())) {
+                throw new BusinessException(400, "处置方式只支持报废或销毁")
+                        .withCode("DISPOSAL_TYPE_UNSUPPORTED")
+                        .withHint("请选择处置方式「报废」或「销毁」")
+                        .withHintTarget("disposalType");
+            }
             existing.setDisposalType(updateData.getDisposalType());
         }
         if (updateData.getDisposalReason() != null) {

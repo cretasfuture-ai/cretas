@@ -472,6 +472,7 @@ public class OrderCostBreakdownService {
                             .materialCode(c.getMaterialTypeId())
                             .materialName(mb != null ? mb.getBatchNumber() : c.getMaterialTypeId())
                             .quantity(c.getQuantity())
+                            .automatic(com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType()))
                             .unit(mb != null ? mb.getQuantityUnit() : null)
                             .unitPrice(actualPriceKnown ? c.getUnitPrice() : null)
                             .priceSource("ACTUAL_MATERIAL_BATCH")
@@ -511,6 +512,7 @@ public class OrderCostBreakdownService {
                         .batchId(c.getBatchId())
                         .batchName(mb != null ? mb.getBatchNumber() : c.getBatchId())
                         .quantity(c.getQuantity())
+                        .automatic(com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType()))
                         .unit(mb != null ? mb.getQuantityUnit() : "kg")
                         .unitPrice(c.getUnitPrice())
                         .cost(cost)
@@ -528,6 +530,7 @@ public class OrderCostBreakdownService {
                         .materialCode(mb != null ? mb.getMaterialTypeId() : null)
                         .materialName(mb != null ? mb.getBatchNumber() : c.getBatchId())
                         .quantity(c.getQuantity())
+                        .automatic(com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType()))
                         .unit(mb != null ? mb.getQuantityUnit() : "kg")
                         .unitPrice(c.getUnitPrice())
                         .priceSource(customerSupplied
@@ -642,6 +645,7 @@ public class OrderCostBreakdownService {
                     .map(item -> PackagingItem.builder()
                             .name(item.getMaterialName())
                             .cost(item.getAmount())
+                            .automatic(item.isAutomatic())
                             .build())
                     .collect(Collectors.toList());
         } else {

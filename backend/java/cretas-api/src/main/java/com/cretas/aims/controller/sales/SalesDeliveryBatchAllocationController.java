@@ -33,7 +33,7 @@ public class SalesDeliveryBatchAllocationController {
     public ApiResponse<List<SalesDeliveryItemBatchAllocation>> list(
             @PathVariable String factoryId,
             @PathVariable String deliveryItemId) {
-        return ApiResponse.success("查询成功", service.listByDeliveryItem(factoryId, deliveryItemId));
+        return ApiResponse.success("查询成功", service.listForReview(factoryId, deliveryItemId));
     }
 
     /*

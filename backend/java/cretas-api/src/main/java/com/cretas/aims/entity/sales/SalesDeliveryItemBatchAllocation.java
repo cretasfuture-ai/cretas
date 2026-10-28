@@ -61,4 +61,15 @@ public class SalesDeliveryItemBatchAllocation extends BaseEntity {
 
     @Column(name = "unit", length = 16)
     private String unit;
+
+    /**
+     * 只读视图字段 (不落库): 这条已有分配按当前订单的库存所有权规则还能不能发。
+     * 由 {@code listForReview} 填写; 其它读取路径保持 null。
+     */
+    @Transient
+    private Boolean eligible;
+
+    /** {@link #eligible} 为 false 时, 所有权闸给出的原话。 */
+    @Transient
+    private String ineligibleReason;
 }

@@ -98,14 +98,16 @@ def test_substring_longest_first_no_collision():
 
 
 def test_pii_regex_phone_email_id():
-    alloc = PlaceholderAllocator()
-    from common.llm_redactor import redact_text
-    r = redact_text("联系 13812345678 邮箱 a@b.com 身份证 11010119900307391X",
-                    allocator=alloc)
-    assert "13812345678" not in r.text
-    assert "a@b.com" not in r.text
-    assert "11010119900307391X" not in r.text
-    assert r.redacted_count >= 3
+    # 邮箱仍在这里; 手机号 / 证件号与 Java 同规则, 在出境口 (redact_payload_for_egress) 统一处理
+    from common.llm_redactor import redact_payload_for_egress
+    out, meta = redact_payload_for_egress(
+        {"messages": [{"role": "user", "content": "联系 13812345678 邮箱 a@b.com 身份证 11010119900307391X"}]})
+    text = out["messages"][0]["content"]
+    assert "13812345678" not in text
+    assert "a@b.com" not in text
+    assert "11010119900307391X" not in text
+    assert "[电话A]" in text and "[证件号A]" in text
+    assert meta.redacted_count >= 3
 
 
 def test_numbers_dates_untouched():

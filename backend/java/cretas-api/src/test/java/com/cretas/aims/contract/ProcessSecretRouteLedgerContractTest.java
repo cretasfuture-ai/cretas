@@ -67,6 +67,8 @@ class ProcessSecretRouteLedgerContractTest {
             "BomRecipeController#createRecipe",
             "BomRecipeController#ensureDraft",
             "BomRecipeController#copyToDraft",
+            // 只有工序 id 和续锅布尔值 (报工表必需); 本厂账号放行, 平台 / 他厂按完整查看判 (V2.1 L3)
+            "BomRecipeController#getSeasoningProcessFlags",
             "BomController#calculateCostsBatch",
             "BomController#exportWorkflowBom");
 
@@ -75,8 +77,6 @@ class ProcessSecretRouteLedgerContractTest {
             Map.entry("BomRecipeController#getRecipe", "响应裁剪: 详情返回摘要 + RESTRICTED (页面可显示抬头而非报错)"),
             Map.entry("BomRecipeController#getCurrentByProduct", "响应裁剪: 同上"),
             Map.entry("BomRecipeController#getVersionsByProduct", "响应裁剪: 版本列表每条换成摘要"),
-            Map.entry("BomRecipeController#getSeasoningProcessFlags",
-                    "只有工序 id 和是否续锅的布尔值, 不含配比; 报工表必需 (F006 验收 2026-10-27)"),
             Map.entry("BomRecipeController#getCopyCandidates",
                     "V2 统一裁剪: 按 sourceProductTypeId / sourceRecipeId 归属, 用量与调味配比去掉 (DataLayerExits 测试)"),
             Map.entry("ProductProcessWorkflowController#getEditorDefinition", "响应裁剪: DTO 换成摘要, 节点不下发"),

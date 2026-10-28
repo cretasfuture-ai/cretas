@@ -907,11 +907,18 @@ describe('ProductProcessWorkflowEditor load identity isolation', () => {
   it('shows a process-secret skeleton as secret and locked, not as an empty workflow to redraw', async () => {
     // F006 验收 2026-10-27: 无授权账号拿到的是去掉节点的骨架 + processSecret 标记, 曾显示「该产品还没有工序图」
     // 且保存 / 应用 / 停用都能点 —— 会让人以为可以重画一张
+    // 线上接口的原样: 只有 id / 版本 / processSecret, 没有 nodes / edges 数组 (F006 反向验收 2026-10-27 实抓)
     const skeleton = {
-      ...definitionFor('PT-A'),
-      nodes: [],
-      edges: [],
-      processSecret: { visibility: 'RESTRICTED', message: '该产品工艺已设为保密，需要保密负责人授权才能查看完整内容' },
+      id: 1,
+      factoryId: 'F006',
+      productTypeId: 'PT-A',
+      status: 'PUBLISHED',
+      version: 3,
+      processSecret: {
+        visibility: 'RESTRICTED',
+        storageMode: 'CLOUD_RESTRICTED',
+        message: '该产品工艺已设为保密，需要保密负责人授权才能查看完整内容',
+      },
     } as unknown as ProductProcessWorkflowDefinition;
     apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: skeleton });
     const wrapper = mountEditor();

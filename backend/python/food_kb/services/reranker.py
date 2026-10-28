@@ -112,6 +112,17 @@ class DashScopeReranker:
                 text = f"{title}\n{content[:1500]}"
                 doc_texts.append(text)
 
+            # 自建客户端直连重排接口, 不经 common.llm_client 的出境口: 在这里按同一套规则脱敏 (号码 / 公司名 /
+            # 人名 / 本厂保密产品名); 脱敏不了就不发, 用检索原顺序。重排只回分数, 不用还原。
+            from common.llm_client import _protected_names_for_egress
+            from common.llm_egress_text import redact_texts
+            egress = redact_texts([query] + doc_texts, None, await _protected_names_for_egress())
+            if egress.refused:
+                logger.warning("LLM egress [food-kb-rerank]: refused (%s), not sending", egress.refusal)
+                return documents[:top_n]
+            logger.info("LLM egress [food-kb-rerank]: redacted %d name(s)", egress.token_count)
+            query, doc_texts = egress.texts[0], egress.texts[1:]
+
             # Call DashScope Reranker API
             # gte-rerank-v2 uses input/parameters wrapper; documents are plain strings
             # qwen3-rerank uses flat format

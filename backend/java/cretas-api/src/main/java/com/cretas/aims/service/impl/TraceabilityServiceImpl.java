@@ -454,6 +454,7 @@ public class TraceabilityServiceImpl implements TraceabilityService {
                     .receiptDate(materialBatch.getReceiptDate())
                     .expireDate(materialBatch.getExpireDate())
                     .quantity(consumption.getQuantity() != null ? consumption.getQuantity().doubleValue() : null)
+                    .automatic(com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(consumption.getSourceType()))
                     .unit(materialBatch.getQuantityUnit())
                     .storageLocation(materialBatch.getStorageLocation())
                     .status(materialBatch.getStatus() != null ? materialBatch.getStatus().name() : "UNKNOWN")

@@ -182,6 +182,30 @@ class TraceabilityServiceImplTest {
     }
 
     @Test
+    @DisplayName("process secret: full trace marks seasoning written from the recipe as automatic")
+    void getFullTrace_marksRecipeDerivedSeasoningAsAutomatic() {
+        ProductionBatch target = traceBatch(102L, "B-1", "sku-b", "plan-joint");
+        when(productionBatchRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-1"))
+                .thenReturn(Optional.of(target));
+        when(factoryRepository.findById(FACTORY)).thenReturn(Optional.empty());
+        MaterialConsumption seasoning = material("raw-1", 102L, "0.1725");
+        seasoning.setSourceType("SEASONING");
+        when(materialConsumptionRepository.findByProductionBatchId(102L)).thenReturn(List.of(seasoning));
+        when(materialBatchRepository.findAllById(java.util.Set.of("raw-1")))
+                .thenReturn(List.of(materialBatch("raw-1", "CINNAMON-1")));
+        when(processingStageRecordRepository.findByProductionBatchIdOrderByStageOrderAsc(102L)).thenReturn(List.of());
+        when(qualityInspectionRepository.findByProductionBatchId(102L)).thenReturn(List.of());
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY, "B-1")).thenReturn(List.of());
+        when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY, "plan-joint")).thenReturn(List.of());
+        when(labelRepository.findByProductionBatchIdAndDeletedAtIsNull(102L)).thenReturn(List.of());
+
+        TraceabilityDTO.FullTraceResponse response = service.getFullTrace(FACTORY, "B-1");
+
+        assertThat(response.getMaterials()).extracting(TraceabilityDTO.MaterialInfo::isAutomatic)
+                .containsExactly(true);
+    }
+
+    @Test
     @DisplayName("full trace binds shared material and process row to the exact multi-output report group")
     void getFullTrace_bindsSharedInputsAndStagesToExactMultiOutputGroup() {
         ProductionBatch target = traceBatch(102L, "B-1", "sku-b", "plan-joint");
@@ -214,6 +238,7 @@ class TraceabilityServiceImplTest {
         assertThat(response.getMaterials()).extracting(TraceabilityDTO.MaterialInfo::getBatchNumber)
                 .containsExactly("RAW-1");
         assertThat(response.getMaterials().getFirst().getQuantity()).isEqualTo(2.0);
+        assertThat(response.getMaterials().getFirst().isAutomatic()).as("人工投料不标自动").isFalse();
         assertThat(response.getSharedInputSourceBatchNumber()).isEqualTo("A-1");
         assertThat(response.getProcessingStages()).extracting(TraceabilityDTO.ProcessingStageInfo::getInputWeight)
                 .containsExactly(2.0);

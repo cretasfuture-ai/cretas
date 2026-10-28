@@ -273,6 +273,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
         returnOrderItemRepository.saveAll(items);
         order.setTotalAmount(totalAmount);
+        order.setTaxAmount(returnType == ReturnType.SALES_RETURN
+                ? salesReturnTaxAmount(order.getSourceOrderId(), items) : BigDecimal.ZERO);
         if (purchasePreparation != null && purchasePreparation.deterministicId() != null) {
             entityManager.flush();
         } else {
@@ -904,11 +906,11 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                     arApService.recordAdjustment(factoryId,
                             com.cretas.aims.entity.enums.CounterpartyType.CUSTOMER,
                             order.getCounterpartyId(),
-                            order.getTotalAmount().negate(),
+                            order.getReceivableAmount().negate(),
                             approverId,
                             "销售退货冲减(无货)-" + order.getReturnNumber(),
                             ADJUSTMENT_SOURCE_TYPE, order.getId());
-                    log.info("销售退货冲减应收(无货, 审批立即触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getTotalAmount());
+                    log.info("销售退货冲减应收(无货, 审批立即触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getReceivableAmount());
                 }
             } catch (Exception e) {
                 log.error("退货AR/AP冲减失败 (无货path): returnOrderId={}", returnOrderId, e);
@@ -997,6 +999,50 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
 
     private record ResolvedSalesReturnLine(ReturnOrderItem item, FinishedGoodsBatch source,
                                            String sourceUnit) {
+    }
+
+    /**
+     * 销售退货的销项税额, 与发货挂账同一口径 (SalesServiceImpl#taxInclusiveShippedValueBeforeDiscount):
+     * 每行 含税额 = 数量 × 报价含税单价 (有则用) 或 round(未税额 × (1 + 税率)), 税额 = 含税额 − 未税额。
+     * 退货行没有源订单行 id, 按 SKU + 未税单价回源销售单行; 同 SKU 只有一种税率时只按 SKU。
+     * 找不到源行时按销售单默认税率, 再没有视为 0 税 (与无税率数据的旧单一致)。
+     */
+    private BigDecimal salesReturnTaxAmount(String sourceOrderId, List<ReturnOrderItem> items) {
+        if (sourceOrderId == null || sourceOrderId.isBlank() || salesOrderRepository == null) {
+            return BigDecimal.ZERO;
+        }
+        com.cretas.aims.entity.inventory.SalesOrder salesOrder =
+                salesOrderRepository.findById(sourceOrderId).orElse(null);
+        if (salesOrder == null) return BigDecimal.ZERO;
+        List<com.cretas.aims.entity.inventory.SalesOrderItem> orderItems =
+                salesOrder.getItems() == null ? List.of() : salesOrder.getItems();
+        BigDecimal tax = BigDecimal.ZERO;
+        for (ReturnOrderItem item : items) {
+            BigDecimal net = item.getLineAmount();
+            if (net == null || net.signum() <= 0) continue;
+            List<com.cretas.aims.entity.inventory.SalesOrderItem> sameSku = orderItems.stream()
+                    .filter(oi -> item.getProductTypeId() != null
+                            && Objects.equals(item.getProductTypeId(), oi.getProductTypeId()))
+                    .toList();
+            com.cretas.aims.entity.inventory.SalesOrderItem source = sameSku.stream()
+                    .filter(oi -> oi.getUnitPrice() != null && item.getUnitPrice() != null
+                            && oi.getUnitPrice().compareTo(item.getUnitPrice()) == 0)
+                    .findFirst()
+                    .orElse(sameSku.stream().map(com.cretas.aims.entity.inventory.SalesOrderItem::getTaxRate)
+                            .distinct().count() == 1 ? sameSku.get(0) : null);
+            BigDecimal gross;
+            if (source != null && source.getQuotedGrossUnitPrice() != null && item.getQuantity() != null) {
+                gross = item.getQuantity().multiply(source.getQuotedGrossUnitPrice())
+                        .setScale(2, java.math.RoundingMode.HALF_UP);
+            } else {
+                BigDecimal rate = source != null ? source.getTaxRate() : salesOrder.getDefaultTaxRate();
+                if (rate == null || rate.signum() == 0) continue;
+                gross = net.multiply(BigDecimal.ONE.add(rate.divide(new BigDecimal("100"), 6,
+                        java.math.RoundingMode.HALF_UP))).setScale(2, java.math.RoundingMode.HALF_UP);
+            }
+            tax = tax.add(gross.subtract(net));
+        }
+        return tax.signum() < 0 ? BigDecimal.ZERO : tax;
     }
 
     /**
@@ -1177,12 +1223,12 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                     arApService.recordAdjustment(factoryId,
                             com.cretas.aims.entity.enums.CounterpartyType.CUSTOMER,
                             order.getCounterpartyId(),
-                            order.getTotalAmount().negate(),
+                            order.getReceivableAmount().negate(),
                             order.getApprovedBy(),
                             "销售退货冲减(实物已入库)-" + order.getReturnNumber(),
                             ADJUSTMENT_SOURCE_TYPE, order.getId());
                     adjustmentRecorded = true;
-                    log.info("销售退货冲减应收(实物已入库, completion 触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getTotalAmount());
+                    log.info("销售退货冲减应收(实物已入库, completion 触发): returnNumber={}, amount={}", order.getReturnNumber(), order.getReceivableAmount());
                 }
             } catch (BusinessException e) {
                 throw e; // 明确业务错误原样上抛 (客户/供应商不存在等), 保留 message + hint。
@@ -1194,7 +1240,7 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             // 防呆 Rule 2/5: recordAdjustment 建的是 PENDING 冲减 (余额未变, 待财务审批调整)。
             // 完成响应必须提示操作员余额尚未变动, 避免误以为客户/供应商欠款已冲平。
             if (adjustmentRecorded) {
-                order.setCompletionHint("退货已完成并移库。余额冲减 " + order.getTotalAmount().stripTrailingZeros().toPlainString()
+                order.setCompletionHint("退货已完成并移库。余额冲减 " + order.getReceivableAmount().stripTrailingZeros().toPlainString()
                         + " 元已提交, 待财务审批后才会变动"
                         + (order.getReturnType() == ReturnType.PURCHASE_RETURN ? "供应商应付" : "客户应收") + "余额。");
             }
@@ -1242,6 +1288,10 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                         // return line price is a selling price and must not become
                         // the cost basis for later disposal/accounting.
                         batch.setUnitCost(resolved.source().getUnitCost());
+                        // Returned goods keep their legal owner: a toll-processing (customer-owned)
+                        // batch coming back must not turn into company stock.
+                        batch.setOwnership(resolved.source().getOwnership());
+                        batch.setOwnerCustomerId(resolved.source().getOwnerCustomerId());
                         batch.setProductionDate(LocalDate.now());
                         batch.setWarehouseId(fgWarehouseId);
                         batch.setStatus("DEFECTIVE");

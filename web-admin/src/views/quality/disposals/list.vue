@@ -41,7 +41,9 @@ const dialogLoading = ref(false);
 const disposalForm = ref({
   targetType: 'MATERIAL' as 'MATERIAL' | 'FINISHED',
   batchId: '',
-  disposalType: '',
+  // 处置方式 = 后端 disposalType, 批准只认 SCRAP/DESTROY; 过期/损坏/质量问题是原因类别, 写进原因。
+  disposalType: 'SCRAP',
+  reasonCategory: '',
   quantity: 0,
   reason: '',
   evidenceImages: '',  // Gap-3: 证据照片 URL (逗号分隔), 独立列 evidence_images (V20261024_15)
@@ -295,7 +297,8 @@ function handleCreate() {
   disposalForm.value = {
     targetType: scopedFinishedGoodsBatchId.value ? 'FINISHED' : 'MATERIAL',
     batchId: scopedFinishedGoodsBatchId.value,
-    disposalType: '',
+    disposalType: 'SCRAP',
+    reasonCategory: '',
     quantity: 0,
     reason: '',
     evidenceImages: '',
@@ -317,7 +320,11 @@ async function submitDisposal() {
     return;
   }
   if (!disposalForm.value.disposalType) {
-    ElMessage.warning('请选择废弃类型');
+    ElMessage.warning('请选择处置方式');
+    return;
+  }
+  if (!disposalForm.value.reasonCategory) {
+    ElMessage.warning('请选择原因类别');
     return;
   }
   if (!disposalForm.value.quantity) {
@@ -348,7 +355,7 @@ async function submitDisposal() {
   const payload: Record<string, unknown> = {
     disposalType: disposalForm.value.disposalType,
     disposalQuantity: disposalForm.value.quantity,
-    disposalReason: disposalForm.value.reason,
+    disposalReason: `【${disposalForm.value.reasonCategory}】${disposalForm.value.reason}`,
     evidenceImages: disposalForm.value.evidenceImages.trim() || undefined,
     notes: disposalForm.value.notes.trim() || undefined
   };
@@ -561,6 +568,7 @@ function getTypeText(type: string) {
     DAMAGED: '损坏',
     QUALITY_ISSUE: '质量问题',
     SCRAP: '报废',
+    DESTROY: '销毁',
     MATERIAL: '原料',
     OTHER: '其他'
   };
@@ -759,12 +767,18 @@ function getDisposalReason(row: TableRow): string {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="废弃类型" required>
-          <el-select v-model="disposalForm.disposalType" placeholder="选择类型" style="width: 100%">
-            <el-option label="过期" value="EXPIRED" />
-            <el-option label="损坏" value="DAMAGED" />
-            <el-option label="质量问题" value="QUALITY_ISSUE" />
-            <el-option label="其他" value="OTHER" />
+        <el-form-item label="处置方式" required>
+          <el-select v-model="disposalForm.disposalType" placeholder="选择处置方式" style="width: 100%">
+            <el-option label="报废" value="SCRAP" />
+            <el-option label="销毁" value="DESTROY" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原因类别" required>
+          <el-select v-model="disposalForm.reasonCategory" placeholder="选择原因类别" style="width: 100%">
+            <el-option label="过期" value="过期" />
+            <el-option label="损坏" value="损坏" />
+            <el-option label="质量问题" value="质量问题" />
+            <el-option label="其他" value="其他" />
           </el-select>
         </el-form-item>
         <el-form-item label="数量" required>

@@ -69,7 +69,9 @@ class llm_caller_context:
 
     def __enter__(self):
         self._caller_token = _llm_caller.set(self.caller)
-        self._factory_token = _llm_factory.set(self.factory_id)
+        # 没传工厂时沿用请求的工厂 (登录身份): 以前一律设成 None, 这段里的外发就查不到本厂保密产品名
+        if self.factory_id is not None:
+            self._factory_token = _llm_factory.set(self.factory_id)
         return self
 
     def __exit__(self, *_exc):

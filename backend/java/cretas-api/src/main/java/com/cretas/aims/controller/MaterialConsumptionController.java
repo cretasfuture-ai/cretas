@@ -301,6 +301,7 @@ public class MaterialConsumptionController {
                         .collect(Collectors.toMap(MaterialBatch::getId, Function.identity()));
 
         Map<String, Map<String, BigDecimal>> byMaterialType = new HashMap<>();
+        Set<String> automaticTypes = new HashSet<>();
         for (MaterialConsumption c : consumptions) {
             String batchId = c.getBatchId();
             if (batchId != null) {
@@ -316,6 +317,9 @@ public class MaterialConsumptionController {
                 });
 
                 Map<String, BigDecimal> stats = byMaterialType.get(materialTypeName);
+                if (com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType())) {
+                    automaticTypes.add(materialTypeName);
+                }
                 if (c.getQuantity() != null) {
                     stats.put("quantity", stats.get("quantity").add(c.getQuantity()));
                 }
@@ -329,6 +333,7 @@ public class MaterialConsumptionController {
                 .map(e -> {
                     Map<String, Object> item = new HashMap<>();
                     item.put("materialTypeName", e.getKey());
+                    item.put("automatic", automaticTypes.contains(e.getKey()));
                     item.put("quantity", e.getValue().get("quantity"));
                     if (!maskPrice) {
                         item.put("cost", e.getValue().get("cost"));
@@ -343,6 +348,8 @@ public class MaterialConsumptionController {
             stats.put("totalCost", totalCost);
         }
         stats.put("consumptionCount", consumptions.size());
+        // 合计里含自动带出行: 减去可见的人工行就是按配比算出的量, 整份按配比类处理
+        stats.put("automatic", consumptions.stream().anyMatch(c -> com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType())));
         stats.put("byMaterialType", byMaterialTypeList);
 
         return ApiResponse.success(stats);
@@ -389,6 +396,7 @@ public class MaterialConsumptionController {
         }
         result.put("totalQuantity", totalQuantity);
         result.put("recordCount", consumptions.size());
+        result.put("automatic", consumptions.stream().anyMatch(c -> com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType())));
 
         return ApiResponse.success(result);
     }
@@ -582,6 +590,8 @@ public class MaterialConsumptionController {
         map.put("notes", c.getNotes());
         map.put("plannedQuantity", c.getPlannedQuantity());
         map.put("sourceType", c.getSourceType());
+        // 报工自动带出 / BOM 自动扣料: 数量 = 配比 × 投入, 保密产品按配比类裁剪 (独立审查 V2.1 M4)
+        map.put("automatic", com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived.isAutomaticConsumption(c.getSourceType()));
         map.put("createdAt", c.getCreatedAt());
         map.put("updatedAt", c.getUpdatedAt());
 

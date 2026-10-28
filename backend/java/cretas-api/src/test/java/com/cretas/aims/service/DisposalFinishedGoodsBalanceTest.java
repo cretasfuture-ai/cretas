@@ -61,7 +61,22 @@ class DisposalFinishedGoodsBalanceTest {
         record.setFactoryId("F006");
         record.setFinishedGoodsBatchId("FG-1");
         record.setDisposalQuantity(new BigDecimal(quantity));
+        record.setDisposalType("SCRAP");
         return record;
+    }
+
+    @Test
+    void reasonCategoryAsDisposalTypeIsRejectedBeforeSave() {
+        // S3-10: web 表单曾把「质量问题」当处置方式提交, 建得出来却永远批不了 (approve 只认 SCRAP/DESTROY)
+        when(batches.findById("FG-1")).thenReturn(Optional.of(batch("F006", "5", "0", "0")));
+        for (String type : new String[]{"QUALITY_ISSUE", "EXPIRED", "DAMAGED", "OTHER", "RECYCLE", null}) {
+            DisposalRecord record = request("1");
+            record.setDisposalType(type);
+            assertThatThrownBy(() -> service.createDisposalRecord(record))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(400));
+        }
+        verify(records, never()).save(any());
     }
 
     @Test

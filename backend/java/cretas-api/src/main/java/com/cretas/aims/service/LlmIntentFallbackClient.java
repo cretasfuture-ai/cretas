@@ -78,16 +78,6 @@ public interface LlmIntentFallbackClient {
     }
 
     /**
-     * 生成澄清问题
-     *
-     * @param userInput 用户输入
-     * @param candidateIntents 候选意图列表
-     * @param factoryId 工厂ID
-     * @return 澄清问题文本
-     */
-    String generateClarificationQuestion(String userInput, List<IntentMatchResult.CandidateIntent> candidateIntents, String factoryId);
-
-    /**
      * 为缺失参数生成澄清问题
      *
      * 当意图已经识别成功，但执行时发现缺少必需的参数时调用。

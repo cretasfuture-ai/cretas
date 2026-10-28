@@ -43,7 +43,10 @@ async def _call_classifier(query: str, timeout_s: int = 5) -> str:
     ]
     payload = {"messages": messages, "temperature": 0.0, "max_tokens": 50}
 
-    with llm_caller_context("llm_tier_selector"):
+    from common.llm_redactor import utterance_egress  # type: ignore
+
+    # 按原话分层: 外发只抹号码, 不认公司名人名 (与 Java LlmEgressGuard.utterance 一致)
+    with llm_caller_context("llm_tier_selector"), utterance_egress():
         response = await asyncio.wait_for(
             llm_router.call_chain(llm_router.SLOT.MAPPER, payload),
             timeout=timeout_s,

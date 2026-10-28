@@ -195,11 +195,20 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
     # The full public catalogue is retained, but an oversized provider payload
     # is a provider-unavailable condition, never a silent keyword fallback.
     semantic = list(catalog)
+    if len(semantic) > MAX_PLANNER_CATALOG:
+        return [], {"mode": "unavailable", "reason": "合格图表目录超过AI规划安全上限"}
+    # The public catalog stays complete. For an explicit joint question, the
+    # provider may choose only the already-validated relationship required by
+    # that question. Separate charts cannot satisfy a real joint relation.
+    # No candidate is invented or appended when that relationship is absent.
+    if is_joint_intent(question):
+        required_family = joint_family_requirement(question)
+        joint_catalog = [item for item in semantic if item.get("familyId") == required_family]
+        if joint_catalog:
+            semantic = joint_catalog
     aliases = {str(item.get("id")): "chart_" + hashlib.sha256(str(item.get("id")).encode("utf-8")).hexdigest()[:16]
                for item in semantic if item.get("id")}
     provider_semantic = [{**item, "id": aliases[str(item["id"])]} for item in semantic]
-    if len(semantic) > MAX_PLANNER_CATALOG:
-        return [], {"mode": "unavailable", "reason": "合格图表目录超过AI规划安全上限"}
     payload = {
         "messages": [
             {
