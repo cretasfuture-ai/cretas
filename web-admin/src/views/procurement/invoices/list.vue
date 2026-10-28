@@ -825,7 +825,7 @@ async function loadUploadLines() {
   try {
     const status = await fetchMatchStatus(poId)
     uploadMatch.value = status
-    uploadDrafts.value = status.lines.map((line) => ({
+    uploadDrafts.value = status.lines.map((line): UploadLineDraft => ({
       ...line,
       receiveItemId: null,
       invoiceMaterialTypeId: line.materialTypeId,
