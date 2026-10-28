@@ -14,6 +14,16 @@ const page = (pageNumber: number, rows: Record<string, unknown>[], hasMore: bool
 
 describe('FactoryChartDetails mounted workflow', () => {
   beforeEach(() => { h.get.mockReset(); h.recommend.mockReset(); });
+  it('shows whole-chart details without claiming an unsupported point filter', async () => {
+    const wholeChart = { ...candidate, detailContext: { ...candidate.detailContext, drilldown: false } };
+    h.get.mockResolvedValue(page(1, [{ 批次: 'B1', 金额: 2.64 }], false));
+    const wrapper = mount(FactoryChartDetails, { props: { modelValue: true, candidate: wholeChart,
+      point: { name: '客户 / 渠道 / 产品' } }, global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(h.get).toHaveBeenCalledWith(expect.objectContaining({ context_id: 'ctx-1', point: undefined }));
+    expect(wrapper.text()).toContain('显示当前图表的全部明细');
+    expect(wrapper.text()).not.toContain('当前点位：');
+  });
   it('explicitly renews an expired exact snapshot with the original selected scope', async () => {
     const expired = { ...candidate, detailSnapshotKey: 'same-raw-rows', detailContext: { id: 'expired', expiresAt: '2020-01-01' } };
     const scope = { identity: 'F006:admin', periodLabel: '2026年3月', request: { factory_id: 'F006', source: 'business' as const, year: 2026, period_type: 'month_range' as const, start_month: 3, end_month: 3, include_optional: true, use_ai: false, analysis_subject: 'sku-1' } };

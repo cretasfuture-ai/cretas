@@ -7,6 +7,10 @@
 
 ## 在飞任务
 
+- `SC29-COMMERCE-PG` — `claimed` — Root/capacity_executor；Base `166e3f3d7faf803da32a892c6db706ccc00cd7e7`；scope仅test_commerce_joint_postgres.py；接管已冻结SQL的实际PG/RLS反例与schema shadow/缺列/MASTER/所有权/状态/定义异常验证，独立schema，禁改产品/台账；目标真实PG lane无skip。
+
+
+- `SC29-COMMERCE-JOINT` — `in-progress` — Root；Base `166e3f3d7faf803da32a892c6db706ccc00cd7e7`；scope factory_charts commerce_joint/ratio_detail_units/trusted_business_sources及测试，engine/advanced/details/detail_store.py；规范事实粒度、比例单位及禁点钻，禁猜键/分摊/迁移；目标pytest/真实PG/终审。
 - `SC29-COMMERCE-RELEASE-WINDOW` — `claimed` — Root；Base `9159711e4540f33a1f9f2992222359c56b8b5826`；PR1292及commerce联合修复已冻结/终审，拟Web+Python构建合入发布；暂缓无关主线合并/同组件切流，已有构建继续；服务回执和F006关键复验后归档释放，不等待手机登录。
 
 

@@ -10,7 +10,6 @@ const EXPORTS = [
   { key: 'pdf', label: 'PDF', button: '导出当前显示图表 PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
   { key: 'ppt', label: 'PPT', button: '导出当前显示图表 PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
 ];
-const MAX_FAMILIES = 4;
 const MAX_OPTION_FAMILIES = 60;
 const STEP_TIMEOUT_MS = 30_000;
 const TOTAL_TIMEOUT_MS = 10 * 60_000;
@@ -89,17 +88,22 @@ function groupCandidates(candidates) {
 }
 
 function candidateIsQualified(candidate) {
+  const lazyDetails = typeof candidate?.detailSnapshotKey === 'string'
+    && candidate.detailSnapshotKey.trim().length > 0;
   return Boolean(candidate?.id && candidate?.source && candidate?.chart
     && typeof candidate.chart === 'object' && candidate?.analysis?.familyId
-    && candidate?.detailStatus?.state !== 'unavailable' && candidate?.detailStatus?.state !== 'capacity');
+    && (candidate?.detailStatus?.state !== 'unavailable' || lazyDetails)
+    && candidate?.detailStatus?.state !== 'capacity');
 }
 
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
   if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
-  const factUnits = (Array.isArray(candidate?.kpis) ? candidate.kpis : [])
-    .map((fact) => String(fact?.unit || '').trim()).filter(Boolean);
-  return factUnits.every((factUnit) => factUnit === unit);
+  return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
+    const factUnit = String(fact?.unit || '').trim();
+    return !factUnit || factUnit === unit
+      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')));
+  });
 }
 
 function selectCatalogCandidates(data, requestedFamilies) {
@@ -132,7 +136,7 @@ function selectCatalogCandidates(data, requestedFamilies) {
     }
     return { familyId: group.familyId, familyLabel: group.familyLabel, candidate };
   }).filter(Boolean);
-  // Families are covered in batches of four by inspectCatalog. Keep the
+  // Families are covered through individual previews by inspectCatalog. Keep the
   // explicit 60-family run bound, but never hide the remainder from the
   // assessment.
   const selected = eligibleGroups.slice(0, MAX_OPTION_FAMILIES);
@@ -184,6 +188,7 @@ function assessCatalog({ families, requestedUnknown, deferred, excluded, eligibi
   const rootCauseClass = result === 'PASS' ? 'none'
     : ui?.missing ? 'frontend'
       : ui?.httpFailure ? 'backend'
+        : ui?.selectionFailure ? 'tool'
         : 'data';
   return {
     result,
@@ -215,7 +220,7 @@ async function waitResponse(page, predicate, deadline) {
   return page.waitForResponse(predicate, { timeout: remainingTimeout(deadline) });
 }
 
-async function captureExport(page, format, inspectCtx, deadline) {
+async function captureExport(page, format, inspectCtx, deadline, batchNumber) {
   const result = { format: format.key, buttonFound: false, downloadStarted: false, httpStatus: null, filename: null, saved: false, candidateIds: [], success: false };
   const button = page.locator('button:visible').filter({ hasText: format.button }).first();
   result.buttonFound = await button.count() > 0;
@@ -228,7 +233,8 @@ async function captureExport(page, format, inspectCtx, deadline) {
     result.httpStatus = response ? response.status() : null;
     result.candidateIds = summarizeExportIds(response ? requestBody(response) : {});
     result.downloadStarted = Boolean(download);
-    result.filename = download ? download.suggestedFilename() : null;
+    result.suggestedFilename = download ? download.suggestedFilename() : null;
+    result.filename = download ? `factory-catalog-batch-${batchNumber}-${format.key}.${format.extension}` : null;
     if (download && inspectCtx.evidenceDir && result.filename) {
       try {
         await download.saveAs(`${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/${result.filename}`);
@@ -251,33 +257,34 @@ async function chooseBrowseMode(page, deadline) {
   return true;
 }
 
-async function clearBrowseSelection(page) {
-  const rows = testId(page, 'factory-chart-family');
-  const count = await rows.count();
-  for (let index = 0; index < count; index += 1) {
-    const checkbox = rows.nth(index).locator('input[type="checkbox"]').first();
-    if (await checkbox.count() && await checkbox.isChecked().catch(() => false)) {
-      await checkbox.click().catch(() => {});
+async function selectFamilyPreview(page, item, allGroups, deadline) {
+  // Browse checkbox changes deliberately persist user preferences. Read-only
+  // acceptance uses the existing guided preview action instead; no selection
+  // PUT is mocked, allowed or suppressed by this scenario.
+  const guideMode = testId(page, 'factory-chart-mode').locator('button, label').filter({ hasText: '问答引导' }).first();
+  await guideMode.click({ timeout: remainingTimeout(deadline) });
+  const domain = String(item.candidate.domain || '');
+  const labels = testId(page, 'factory-chart-guide-domain').locator('label');
+  let found = false;
+  for (let index = 0; index < await labels.count(); index += 1) {
+    if (await labels.nth(index).locator('input').first().getAttribute('value') === domain) {
+      await labels.nth(index).click({ timeout: remainingTimeout(deadline) });
+      found = true;
+      break;
     }
   }
-}
-
-async function selectFamilyInBrowse(page, familyId, candidate, deadline) {
-  const escapedFamilyId = String(familyId).replace(/"/gu, '\\"');
-  const rows = page.locator(`[data-testid="factory-chart-family"][data-family-id="${escapedFamilyId}"]`);
-  // The family id is the server identity. The label is presentation-only and
-  // may be duplicated across domains or sources.
-  if (!await rows.count()) return false;
-  const row = rows.first();
-  const checkbox = row.locator('input[type="checkbox"]').first();
-  if (await checkbox.count() && !(await checkbox.isChecked().catch(() => false))) await checkbox.check().catch(() => {});
-  const variant = row.locator('.el-select').first();
-  if (await variant.count()) {
-    await variant.click().catch(() => {});
-    const option = page.locator('.el-select-dropdown__item:visible').filter({ hasText: String(candidate.unit) }).first();
-    if (await option.count()) await option.click().catch(() => {});
-  }
-  await page.waitForTimeout(50);
+  if (!found) throw new Error(`Catalogue domain control missing: ${domain}`);
+  const scopedGroups = allGroups.filter((group) => group.candidates[0]?.domain === domain);
+  const index = scopedGroups.findIndex((group) => group.familyId === item.familyId);
+  if (index < 0) throw new Error(`Catalogue family missing from domain: ${item.familyId}`);
+  await testId(page, 'factory-chart-guide-topic').click({ timeout: remainingTimeout(deadline) });
+  const options = page.locator('.el-select-dropdown__item:visible');
+  await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  if (await options.count() !== scopedGroups.length + 1) throw new Error(`Catalogue topic identities drifted: actual ${await options.count()}, expected ${scopedGroups.length + 1}`);
+  const option = options.nth(index + 1);
+  if (!(await option.innerText()).includes(item.familyLabel)) throw new Error('Catalogue topic label drifted');
+  await option.click({ timeout: remainingTimeout(deadline) });
+  await testId(page, 'factory-chart-guide-generate').click({ timeout: remainingTimeout(deadline) });
   return true;
 }
 
@@ -301,6 +308,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
   const body = await responseBody(recommendationResponse);
   const data = body?.data || {};
   const selected = selectCatalogCandidates(data, requestedFamilies);
+  const allGroups = groupCandidates(data.recommendations);
   const browse = await chooseBrowseMode(page, deadline).catch(() => false);
   ui.browseVisible = browse;
   if (!browse) ui.missing = true;
@@ -323,16 +331,17 @@ async function inspectCatalog(page, _body, inspectCtx) {
     blockedReason: item.reason,
   }));
   const exports = [];
+  const screenshots = [];
   const processedFamilyIds = new Set();
   const batches = [];
-  for (let index = 0; index < selected.selected.length; index += MAX_FAMILIES) {
-    batches.push(selected.selected.slice(index, index + MAX_FAMILIES));
+  for (const item of selected.selected) {
+    batches.push([item]);
   }
   let batchNumber = 0;
+  let selectionFailed = false;
   for (const batch of batches) {
     if (Date.now() >= deadline) break;
     batchNumber += 1;
-    await clearBrowseSelection(page);
     const batchFamilies = [];
     for (const item of batch) {
       if (Date.now() >= deadline) break;
@@ -356,14 +365,32 @@ async function inspectCatalog(page, _body, inspectCtx) {
       };
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
       summary.checks.factsPresent = summary.facts.length > 0;
-      summary.checks.familySelected = await selectFamilyInBrowse(page, item.familyId, candidate, deadline).catch(() => false);
+      summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch((error) => {
+        summary.selectionError = String(error?.message || error).slice(0, 500);
+        return false;
+      });
+      if (!summary.checks.familySelected) {
+        summary.checkFailures = ['familySelected'];
+        families.push(summary);
+        processedFamilyIds.add(summary.familyId);
+        ui.selectionFailure = true;
+        selectionFailed = true;
+        break;
+      }
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
-      summary.checks.cardRendered = await card.count() > 0 && await card.isVisible().catch(() => false);
+      summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
         await testId(page, 'factory-chart-guide-generate').click().catch(() => {});
         summary.checks.cardRendered = await card.isVisible().catch(() => false);
       }
-      summary.checks.chartRendered = summary.checks.cardRendered && await card.locator('.factory-chart-canvas canvas').count() > 0;
+      if (summary.checks.cardRendered) {
+        // Chart mounting is viewport-driven; DOM visibility alone does not
+        // mean the observer has initialized ECharts below the fold.
+        await card.scrollIntoViewIfNeeded({ timeout: remainingTimeout(deadline) });
+        summary.checks.chartRendered = await card.locator('.factory-chart-canvas canvas, .factory-chart-canvas svg')
+          .first().waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) })
+          .then(() => true).catch(() => false);
+      }
 
       if (summary.checks.cardRendered) {
     const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true }).first();
@@ -388,8 +415,9 @@ async function inspectCatalog(page, _body, inspectCtx) {
       }
       batchFamilies.push(summary);
     }
+    if (selectionFailed) break;
     if (batchFamilies.length && Date.now() < deadline) {
-      const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline);
+      const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline, batchNumber);
       exports.push({ batch: batchNumber, ...result });
       for (const family of batchFamilies) {
         if (result.success && result.candidateIds.includes(family.candidateId)) {
@@ -405,6 +433,9 @@ async function inspectCatalog(page, _body, inspectCtx) {
       family.status = family.checkFailures.length ? 'UNVERIFIED' : 'PASS';
       families.push(family);
       processedFamilyIds.add(family.familyId);
+    }
+    if (batchFamilies.length && inspectCtx.screenshot) {
+      screenshots.push(await inspectCtx.screenshot(`factory-catalog-batch-${batchNumber}`));
     }
   }
   const eligibilityGaps = Array.isArray(data.unavailable) ? data.unavailable.map((item) => ({
@@ -422,6 +453,8 @@ async function inspectCatalog(page, _body, inspectCtx) {
     assessment,
     ...assessment,
     families,
+    selectionErrors: families.filter(item => item.selectionError).map(item => `${item.familyId}: ${item.selectionError}`),
+    screenshots,
     exports,
     eligibilityGaps,
     sourceErrors,
@@ -434,7 +467,9 @@ async function run(ctx) {
   return runReadOnlyPageScenario(ctx, {
     id: 'smartbi-catalog-matrix-readonly',
     path: PATH,
-    landmarks: ['工厂分析', '按分类浏览'],
+    // The browse control appears after asynchronous catalogue discovery;
+    // inspectCatalog waits for it and proves selection/details/exports.
+    landmarks: ['工厂分析'],
     timeoutMs: 60_000,
     appMountTimeoutMs: 90_000,
     inspect: inspectCatalog,

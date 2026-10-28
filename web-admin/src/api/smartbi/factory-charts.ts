@@ -46,7 +46,7 @@ export interface FactoryRecommendation {
   analysis?: { familyId: string; familyLabel: string };
 }
 
-export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: Record<string, unknown>; }
+export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: boolean; }
 export interface FactoryChartDetailFilter { field: string; value: string | number | boolean | null; }
 export interface FactoryChartDetailsRequest { context_id: string; page?: number; page_size?: number; filters?: FactoryChartDetailFilter[]; point?: { name: string; seriesName?: string; dataIndex?: number }; }
 export interface FactoryChartDetailsData {
