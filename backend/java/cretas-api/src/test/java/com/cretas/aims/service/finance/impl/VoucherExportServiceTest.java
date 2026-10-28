@@ -372,6 +372,39 @@ class VoucherExportServiceTest {
     }
 
     @Test
+    @DisplayName("工艺保密: 普通计划领用受限计划的半成品批次、发出受限计划的副产成品 —— 成本按来源遮")
+    void exportQuantityAmountLedger_crossPlanDrawsAndShipmentsFollowTheirSource() throws Exception {
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any())).thenReturn(new PageImpl<>(List.of()));
+        MaterialConsumption draw = consumption("MB-W", "SEMI-BASE", "2026-05-03T10:00:00", "5.000", "16.20", "81.00");
+        draw.setSourceType("SEMI_FINISHED");
+        draw.setProductionPlanId("PLAN-P");
+        when(materialConsumptionRepo.findByTimeRange(eq(FACTORY_ID), any(), any())).thenReturn(List.of(draw));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(salesDeliveryItemRepo.findShippedMovementsForLedger(eq(FACTORY_ID), any(), any()))
+                .thenReturn(java.util.Collections.singletonList(shipmentRow("2026-05-20", "4.000", "12.00",
+                        "P-PLAIN", "FG-BY", "DLV-1")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        com.cretas.aims.service.processsecret.ProcessSecretCostMask mask = org.mockito.Mockito.mock(
+                com.cretas.aims.service.processsecret.ProcessSecretCostMask.class,
+                org.mockito.Mockito.withSettings().strictness(org.mockito.quality.Strictness.LENIENT));
+        when(mask.materialBatchProducts(eq(FACTORY_ID), eq("MB-W"), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        when(mask.finishedGoodsProducts(eq(FACTORY_ID), eq("FG-BY"), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        when(mask.hiddenFor(eq(FACTORY_ID), any(), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        service.setCostMask(mask);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        List<String> drawRow = rows.stream().filter(r -> r.size() > 2 && r.get(2).startsWith("原料发出 SEMI-BASE"))
+                .findFirst().orElseThrow();
+        assertEquals("已保密", drawRow.get(8), "领用的半成品单价是受限计划滚进配方金额的单位成本");
+        List<String> shipRow = rows.stream().filter(r -> r.size() > 2 && r.get(2).startsWith("成品发出"))
+                .findFirst().orElseThrow();
+        assertEquals("已保密", shipRow.get(8), "副产成品的单位成本含受限计划分摊的配方金额");
+    }
+
+    @Test
     @DisplayName("工艺保密: 平台 / 他厂调用者连保密成品的数量也看不到")
     void exportQuantityAmountLedger_platformCallerLosesQuantitiesOfProtectedProducts() throws Exception {
         when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any())).thenReturn(new PageImpl<>(List.of()));

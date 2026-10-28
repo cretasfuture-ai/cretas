@@ -220,4 +220,16 @@ class ExportExecutorProcessSecretTest {
         assertThat(rows.get(0)).as("采购价不是秘密").containsEntry("unitPrice", 7);
         assertThat(rows.get(1)).containsEntry("unitPrice", "已保密");
     }
+
+    @Test
+    void aWipBatchWhoseSourceCannotBeIdentifiedIsMasked() {
+        List<Map<String, Object>> input = List.of(
+                row("batchNumber", "MB-X", "sourceDocType", "PRODUCTION_BATCH", "sourceDocId", "not-a-number",
+                        "unitPrice", 16.2));
+        List<Map<String, Object>> rows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            rows = executor.maskProcessSecret(rule, input);
+        }
+        assertThat(rows.get(0)).containsEntry("unitPrice", "已保密");
+    }
 }

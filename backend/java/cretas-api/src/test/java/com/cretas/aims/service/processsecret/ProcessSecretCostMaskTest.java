@@ -166,4 +166,11 @@ class ProcessSecretCostMaskTest {
         assertThat(mask.finishedGoodsProducts(F, "FG-1", new java.util.HashMap<>()))
                 .containsExactlyInAnyOrder("BYPRODUCT", SECRET);
     }
+
+    @Test
+    void anUnidentifiableSourceCountsAsHidden() {
+        assertThat(ProcessSecretCostMask.isHiddenAmong(java.util.Set.of(ProcessSecretCostMask.UNKNOWN_PRODUCT),
+                java.util.Set.of())).isTrue();
+        assertThat(ProcessSecretCostMask.isHiddenAmong(java.util.Set.of("PLAIN"), java.util.Set.of())).isFalse();
+    }
 }
