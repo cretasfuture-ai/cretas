@@ -25,6 +25,7 @@ test('uploaded-joint option contract requires three positive distinct IDs', () =
 test('suite context forwards the optional uploaded-joint contract without changing the guard', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'run-suite.js'), 'utf8');
   assert.match(source, /factoryAnalysisUploadedJoint:\s*options\.factoryAnalysisUploadedJoint/);
+  assert.match(source, /factoryAnalysisLifecycle:\s*options\.factoryAnalysisLifecycle/);
   assert.match(source, /mutationGuard = await installMutationGuard/);
 });
 

@@ -135,6 +135,7 @@ async function runSuiteWithPage(page, options = {}) {
         loginEvidence,
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
+        factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
         scenarioRef,
         mutationGuard,
         network,
