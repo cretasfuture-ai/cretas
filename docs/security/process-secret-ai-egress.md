@@ -100,7 +100,7 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 
 ## 4. 语义缓存
 
-`SemanticCacheServiceImpl.cacheResult` 按「工厂 + 原话」存完整执行结果，不分调用者。现在命中只回元数据，不回放结果（`SseSemanticCacheAdmissionContractTest` 钉着）。⛔ 要实现回放，必须先按调用者的保密访问档位隔离（工厂 + 调用者能 FULL 查看的保密产品集合）。
+`SemanticCacheServiceImpl.cacheResult` 按「工厂 + 原话」存，不分调用者；有工艺保密产品（或判定失败）的工厂只存意图、不存执行结果（#1295），没有保密产品的工厂仍存完整执行结果。现在命中只回元数据，不回放结果（`SseSemanticCacheAdmissionContractTest` 钉着）。⛔ 要实现回放，必须先按调用者的保密访问档位隔离（工厂 + 调用者能 FULL 查看的保密产品集合）。
 
 ## 5. 已知缺口（未处理）
 
