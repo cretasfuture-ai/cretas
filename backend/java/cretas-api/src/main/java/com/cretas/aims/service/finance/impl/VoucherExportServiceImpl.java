@@ -1,5 +1,6 @@
 package com.cretas.aims.service.finance.impl;
 
+import com.cretas.aims.service.processsecret.ProcessSecretCostMask;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.write.metadata.WriteSheet;
@@ -69,6 +70,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
@@ -131,6 +133,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
     private final DepartmentRepository departmentRepo;
     private final ProductTypeRepository productTypeRepo;
     private final UserRepository userRepo;
+    /** 工艺保密的成本遮蔽; 手工构造的单测里为 null (不遮蔽)。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private ProcessSecretCostMask costMask;
+
+    void setCostMask(ProcessSecretCostMask costMask) {
+        this.costMask = costMask;
+    }
 
     @Override
     @Transactional
@@ -799,6 +808,11 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 .thenComparing(InventoryMovement::voucherNo, Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(InventoryMovement::summary, Comparator.nullsLast(Comparator.naturalOrder())));
 
+        // 工艺保密: 半成品 / 成品的单位成本是按配方把调料、包材金额滚进去的; 无完整查看权的保密产品
+        // 单价、金额、结存金额一律「已保密」, 数量照给 (Steve 2026-10-28 选 A)
+        Set<String> secretProducts = costMask == null ? Set.of() : costMask.hiddenFor(factoryId,
+                movements.stream().map(InventoryMovement::productTypeId).filter(Objects::nonNull).toList(),
+                "EXPORT /finance/quantity-amount-ledger");
         Map<String, RunningInventoryBalance> runningByItem = new HashMap<>();
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("日期", "凭证字号", "摘要", "收入数量", "收入单价", "收入金额",
@@ -817,6 +831,23 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 running.amountReliable = false;
             } else {
                 running.amount = running.amount.add(nvl(movement.inAmount())).subtract(nvl(movement.outAmount()));
+            }
+            if (movement.productTypeId() != null && secretProducts.contains(movement.productTypeId())) {
+                rows.add(List.of(
+                        movement.date() == null ? "" : movement.date().toString(),
+                        nvlStr(movement.voucherNo()),
+                        nvlStr(movement.summary()),
+                        quantityText(movement.inQuantity()),
+                        ProcessSecretCostMask.LABEL,
+                        ProcessSecretCostMask.LABEL,
+                        quantityText(movement.outQuantity()),
+                        ProcessSecretCostMask.LABEL,
+                        ProcessSecretCostMask.LABEL,
+                        quantityText(running.quantity),
+                        ProcessSecretCostMask.LABEL,
+                        ProcessSecretCostMask.LABEL
+                ));
+                continue;
             }
             rows.add(List.of(
                     movement.date() == null ? "" : movement.date().toString(),
@@ -992,13 +1023,13 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             if (produced.compareTo(BigDecimal.ZERO) > 0) {
                 movements.add(InventoryMovement.inbound(date, wip.getIntermediateBatchNo(),
                         "半成品入库 " + nvlStr(wip.getProductTypeId()) + " " + nvlStr(wip.getIntermediateBatchNo()),
-                        itemKey, produced, unitCost, produced.multiply(unitCost)));
+                        itemKey, produced, unitCost, produced.multiply(unitCost), wip.getProductTypeId()));
             }
             BigDecimal consumed = nvl(wip.getConsumedQuantity());
             if (consumed.compareTo(BigDecimal.ZERO) > 0) {
                 movements.add(InventoryMovement.outbound(date, wip.getIntermediateBatchNo(),
                         "半成品发出 " + nvlStr(wip.getProductTypeId()) + " " + nvlStr(wip.getIntermediateBatchNo()),
-                        itemKey, consumed, unitCost, consumed.multiply(unitCost)));
+                        itemKey, consumed, unitCost, consumed.multiply(unitCost), wip.getProductTypeId()));
             }
         }
 
@@ -1027,7 +1058,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 BigDecimal amount = unitCost == null ? null : produced.multiply(unitCost);
                 movements.add(InventoryMovement.inbound(date, batch.getBatchNumber(),
                         "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()) + "（单位：" + batch.getUnit() + "）",
-                        itemKey, produced, unitCost, amount));
+                        itemKey, produced, unitCost, amount, batch.getProductTypeId()));
             }
         }
 
@@ -1057,7 +1088,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             movements.add(InventoryMovement.outbound(shipDate,
                     firstNonBlank(deliveryNumber, batchNumber),
                     "成品发出 " + firstNonBlank(productName, productTypeId) + "（单位：" + nativeUnit + "）",
-                    itemKey, shippedQty, unitCost, amount));
+                    itemKey, shippedQty, unitCost, amount, productTypeId));
         }
         return movements;
     }
@@ -1988,6 +2019,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         }
     }
 
+    /** {@code productTypeId}: 半成品 / 成品流水的产品 (原料流水为 null), 工艺保密按它遮蔽成本列。 */
     private record InventoryMovement(
             LocalDate date,
             String voucherNo,
@@ -1998,18 +2030,31 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             BigDecimal inAmount,
             BigDecimal outQuantity,
             BigDecimal outUnitPrice,
-            BigDecimal outAmount) {
+            BigDecimal outAmount,
+            String productTypeId) {
 
         private static InventoryMovement inbound(LocalDate date, String voucherNo, String summary, String itemKey,
                                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
+            return inbound(date, voucherNo, summary, itemKey, quantity, unitPrice, amount, null);
+        }
+
+        private static InventoryMovement inbound(LocalDate date, String voucherNo, String summary, String itemKey,
+                                                 BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount,
+                                                 String productTypeId) {
             return new InventoryMovement(date, voucherNo, summary, itemKey,
-                    quantity, unitPrice, amount, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+                    quantity, unitPrice, amount, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, productTypeId);
         }
 
         private static InventoryMovement outbound(LocalDate date, String voucherNo, String summary, String itemKey,
                                                   BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
+            return outbound(date, voucherNo, summary, itemKey, quantity, unitPrice, amount, null);
+        }
+
+        private static InventoryMovement outbound(LocalDate date, String voucherNo, String summary, String itemKey,
+                                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount,
+                                                  String productTypeId) {
             return new InventoryMovement(date, voucherNo, summary, itemKey,
-                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, quantity, unitPrice, amount);
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, quantity, unitPrice, amount, productTypeId);
         }
     }
 }

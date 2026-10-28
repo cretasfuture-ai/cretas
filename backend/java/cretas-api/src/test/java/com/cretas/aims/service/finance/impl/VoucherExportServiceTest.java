@@ -296,6 +296,43 @@ class VoucherExportServiceTest {
     }
 
     @Test
+    @DisplayName("工艺保密: 无权看的保密成品, 单价/金额/结存金额写「已保密」, 数量照给; 普通成品照常")
+    void exportQuantityAmountLedger_processSecretProductCostsAreMasked() throws Exception {
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(
+                        finishedGoodsWithCost("FG-001", "FG20260505001", "P-SECRET", "2026-05-05", "10.000", "30.00", "18.00"),
+                        finishedGoodsWithCost("FG-002", "FG20260506001", "P-PLAIN", "2026-05-06", "5.000", "20.00", "12.00"))));
+        when(salesDeliveryItemRepo.findShippedMovementsForLedger(eq(FACTORY_ID), any(), any()))
+                .thenReturn(java.util.Collections.singletonList(shipmentRow("2026-05-20", "4.000", "18.00",
+                        "P-SECRET", "FG20260505001", "DLV-20260520-001")));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        com.cretas.aims.service.processsecret.ProcessSecretCostMask mask =
+                org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretCostMask.class);
+        when(mask.hiddenFor(eq(FACTORY_ID), any(), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        service.setCostMask(mask);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+        List<List<String>> rows = readXlsx(out.toByteArray());
+        String all = rows.toString();
+        org.junit.jupiter.api.Assertions.assertFalse(all.contains("180"), "保密成品的金额 10×18 不得出现: " + all);
+        org.junit.jupiter.api.Assertions.assertFalse(all.contains("72"), "保密成品的发出金额 4×18 不得出现");
+
+        List<String> secretIn = rows.stream().filter(r -> r.size() > 2 && r.get(2).contains("P-SECRET")
+                && r.get(2).startsWith("成品入库")).findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("10.000").compareTo(decimalAt(secretIn, 3)), "数量照给");
+        assertEquals("已保密", secretIn.get(4));
+        assertEquals("已保密", secretIn.get(5));
+        assertEquals("已保密", secretIn.get(11));
+        // 阴性对照: 同一份导出里的普通成品照常计价
+        List<String> plainIn = rows.stream().filter(r -> r.size() > 2 && r.get(2).contains("P-PLAIN"))
+                .findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("60.00").compareTo(decimalAt(plainIn, 5)), "普通成品金额 5×12");
+    }
+
+    @Test
     @DisplayName("Bug 7: 成品收发存按成本(unitCost)计价、发出按逐笔发货真实日期 — 非售价/非累计盖生产日期")
     void exportQuantityAmountLedger_finishedGoods_costBasisAndPerShipmentDate() throws Exception {
         // 生产 05-05 产 10 (成本 18, 售价 30 应被忽略); 发货 05-20 发 4 (成本 18)。

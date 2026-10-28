@@ -4,6 +4,13 @@ import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.write.metadata.style.WriteCellStyle;
 import com.alibaba.excel.write.style.HorizontalCellStyleStrategy;
 import com.cretas.aims.entity.datacenter.ExportRule;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.service.processsecret.ProcessSecretCostMask;
+import com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber;
+import com.cretas.aims.service.processsecret.ProcessSecretReadTracker;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -43,6 +50,7 @@ public class ExportExecutor {
     private EntityManager em;
 
     private final ObjectMapper objectMapper;
+    private final ProcessSecretPayloadScrubber processSecretScrubber;
 
     private static final ExpressionParser SPEL = new SpelExpressionParser();
 
@@ -68,7 +76,12 @@ public class ExportExecutor {
      */
     public Result run(ExportRule rule, Map<String, Object> runtimeParams, File targetFile)
             throws Exception {
-        List<Map<String, Object>> rows = queryAndFilter(rule, runtimeParams);
+        List<Map<String, Object>> rows;
+        // 规则可以导出任意实体 (含批次成本、配方用量): 和 JSON 出口走同一个工艺保密裁剪,
+        // 读取记录在本次查询的作用域里收集
+        try (ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
+            rows = maskProcessSecret(rule, queryAndFilter(rule, runtimeParams));
+        }
         List<Map<String, Object>> columns = rule.getColumns();
         List<List<String>> head = buildHead(columns);
         List<List<Object>> data = buildData(rows, columns);
@@ -99,6 +112,32 @@ public class ExportExecutor {
                 return new Result(rows.size(), bytes.length, bytes);
             }
         }
+    }
+
+    /**
+     * 工艺保密: 受保护产品的配比、单位用量、标准出成率, 以及成本合计 (Steve 2026-10-28 选 A) 对无授权账号
+     * 置为「已保密」; 平台 / 他厂 / 识别不出调用者 (定时导出) 连数量也不给。规则和审计与 HTTP 响应相同。
+     */
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> maskProcessSecret(ExportRule rule, List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) return rows;
+        ArrayNode tree = objectMapper.valueToTree(rows);
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(null);
+        boolean changed = processSecretScrubber.scrub(tree, actor, rule.getFactoryId(),
+                ProcessSecretReadTracker.reads(), "EXPORT rule " + rule.getId(), false);
+        if (!changed) return rows;
+        List<Map<String, Object>> masked = new ArrayList<>(rows.size());
+        for (JsonNode node : tree) {
+            ObjectNode row = (ObjectNode) node;
+            JsonNode marker = row.remove(ProcessSecretPayloadScrubber.MARKER);
+            if (marker != null) {
+                for (JsonNode hidden : marker.path("hiddenFields")) {
+                    row.put(hidden.asText(), ProcessSecretCostMask.LABEL);
+                }
+            }
+            masked.add(objectMapper.convertValue(row, Map.class));
+        }
+        return masked;
     }
 
     /** 仅做 entity query + SpEL filter, 返 Map list. 单独抽出便于 unit test. */
