@@ -26,6 +26,7 @@ public class SchedulerRunController {
     public record ResolveRequest(String resolution, String note) { }
 
     @GetMapping("/{taskCode}/runs")
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Operation(summary = "某个定时任务的运行历史")
     public ApiResponse<PageResponse<RunView>> history(@PathVariable String factoryId,
             @PathVariable String taskCode,
@@ -34,12 +35,14 @@ public class SchedulerRunController {
     }
 
     @GetMapping("/{taskCode}/runs/latest")
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Operation(summary = "某个定时任务最近一次运行结果（含数据快照）；没有运行记录时 data 为空")
     public ApiResponse<RunView> latest(@PathVariable String factoryId, @PathVariable String taskCode) {
         return ApiResponse.success(service.latest(factoryId, taskCode).orElse(null));
     }
 
     @GetMapping("/runs/{runId}")
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Operation(summary = "一次运行的完整结果")
     public ApiResponse<RunView> detail(@PathVariable String factoryId, @PathVariable String runId) {
         return ApiResponse.success(service.detail(factoryId, runId));

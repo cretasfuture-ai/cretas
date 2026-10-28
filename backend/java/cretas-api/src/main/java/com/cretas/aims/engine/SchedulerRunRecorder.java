@@ -29,13 +29,17 @@ public class SchedulerRunRecorder {
 
     private final SchedulerRunResultRepository repository;
 
-    /** The recorded status for a runner status: only a definite success is SUCCESS. */
+    /**
+     * The recorded status for a runner status. The runner's status set is open, so only statuses known
+     * to mean "it did not happen" are FAILED; anything unrecognised is UNKNOWN, never success or failure by default.
+     */
     static String normalize(String rawStatus) {
         if (rawStatus == null) return SchedulerRunResult.UNKNOWN;
         return switch (rawStatus) {
             case "SUCCESS" -> SchedulerRunResult.SUCCESS;
-            case "OUTCOME_UNKNOWN", "TIMEOUT" -> SchedulerRunResult.UNKNOWN;
-            default -> SchedulerRunResult.FAILED;
+            case "FAILED", "GATEWAY_DENIED", "GRANT_DENIED", "WRITE_DENIED", "CONFIG_INVALID",
+                 "TOOL_NOT_FOUND", "RUN_AS_MISSING" -> SchedulerRunResult.FAILED;
+            default -> SchedulerRunResult.UNKNOWN;
         };
     }
 

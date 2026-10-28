@@ -121,6 +121,15 @@ class SchedulerRunRecordingTest {
     }
 
     @Test
+    @DisplayName("运行器状态集合是开放的：不认识的状态记 UNKNOWN，不默认成失败也不成功")
+    void unrecognisedRawStatusIsUnknown() throws Exception {
+        when(runner.run(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AutonomousToolRunner.Outcome("SOMETHING_NEW", "x", null));
+        fire(config(7L, "F001"));
+        assertEquals("UNKNOWN", recorded().getStatus());
+    }
+
+    @Test
     @DisplayName("明确失败记 FAILED；业务失败（success=false）也是 FAILED")
     void definiteFailureIsFailed() throws Exception {
         when(runner.run(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(

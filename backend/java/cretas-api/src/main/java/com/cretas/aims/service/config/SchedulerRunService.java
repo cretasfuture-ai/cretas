@@ -72,7 +72,7 @@ public class SchedulerRunService {
      */
     @Transactional
     public RunView resolve(String factoryId, String runId, String resolution, String note,
-            Long actorId, String actorName) {
+            Long actorId, String actorRole) {
         if (!SchedulerRunResult.SUCCESS.equals(resolution) && !SchedulerRunResult.FAILED.equals(resolution)) {
             throw new BusinessException(400, "裁定结果只能是成功(SUCCESS)或失败(FAILED)");
         }
@@ -100,7 +100,7 @@ public class SchedulerRunService {
         resolutions.save(SchedulerRunResolution.builder()
                 .runId(runId).factoryId(factoryId)
                 .fromStatus(SchedulerRunResult.UNKNOWN).toStatus(resolution)
-                .note(trimmed).resolvedBy(actorId).resolvedByName(actorName).resolvedAt(now)
+                .note(trimmed).resolvedBy(actorId).resolvedByRole(actorRole).resolvedAt(now)
                 .build());
         return view(run, false);
     }

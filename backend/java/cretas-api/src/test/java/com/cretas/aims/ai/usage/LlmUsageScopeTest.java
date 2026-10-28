@@ -50,6 +50,27 @@ class LlmUsageScopeTest {
     }
 
     @Test
+    @DisplayName("流式只给 total：total 已知，输入/输出拆分保持 null，不是 0")
+    void streamStyleTotalOnlyLeavesSplitNull() {
+        try (LlmUsageScope s = LlmUsageScope.open()) {
+            LlmUsageScope.report(null, null, 99);
+            LlmUsageScope.Usage u = s.usage();
+            assertEquals(99, u.totalTokens());
+            assertNull(u.promptTokens());
+            assertNull(u.completionTokens());
+        }
+    }
+
+    @Test
+    @DisplayName("没有 total 又凑不出（缺输入或输出）：该次调用成本未知，整体 UNKNOWN")
+    void partialSplitWithoutTotalIsUnknown() {
+        try (LlmUsageScope s = LlmUsageScope.open()) {
+            LlmUsageScope.report(10, null, null);
+            assertEquals(LlmUsageScope.State.UNKNOWN, s.usage().state());
+        }
+    }
+
+    @Test
     @DisplayName("只有 total 的 usage 也算已知")
     void totalOnlyIsKnown() {
         try (LlmUsageScope s = LlmUsageScope.open()) {

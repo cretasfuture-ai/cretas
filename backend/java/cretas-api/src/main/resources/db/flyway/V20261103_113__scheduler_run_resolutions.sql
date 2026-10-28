@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS scheduler_run_resolutions (
     to_status        VARCHAR(10)  NOT NULL,
     note             TEXT         NOT NULL,
     resolved_by      BIGINT,
-    resolved_by_name VARCHAR(100),
+    resolved_by_role VARCHAR(100),
     resolved_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_scheduler_run_resolutions_run UNIQUE (run_id),
     CONSTRAINT ck_scheduler_run_resolutions_to CHECK (to_status IN ('SUCCESS', 'FAILED')),

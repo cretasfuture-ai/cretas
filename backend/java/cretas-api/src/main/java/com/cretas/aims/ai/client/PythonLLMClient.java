@@ -177,8 +177,11 @@ public class PythonLLMClient {
                             }
                         } else if ("usage".equals(type)) {
                             // Python call_chain_stream yields {"type":"usage","tokens":N}
-                            streamTotalTokens = node.path("tokens").asInt(0);
-                            streamUsageSeen = true;
+                            // Only a numeric count is usage; a malformed event stays "unknown", not a known 0.
+                            if (node.path("tokens").isNumber()) {
+                                streamTotalTokens = node.path("tokens").asInt();
+                                streamUsageSeen = true;
+                            }
                         } else if ("done".equals(type) || "finish".equals(type)) {
                             finishReason = node.path("finish_reason").asText("stop");
                         } else if ("error".equals(type)) {

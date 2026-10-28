@@ -20,7 +20,9 @@ public final class LlmUsageScope implements AutoCloseable {
 
     private final LlmUsageScope parent;
     private int calls;
-    private int missing;
+    private int totalUnknown;
+    private int promptUnknown;
+    private int completionUnknown;
     private long prompt;
     private long completion;
     private long total;
@@ -35,7 +37,7 @@ public final class LlmUsageScope implements AutoCloseable {
         return scope;
     }
 
-    /** Called by the LLM client for every response; a null usage (or all-null counters) is "no usage". */
+    /** Called by the LLM client for every response; a null counter means the provider did not say. */
     public static void report(Integer promptTokens, Integer completionTokens, Integer totalTokens) {
         LlmUsageScope scope = CURRENT.get();
         if (scope == null) return;
@@ -44,21 +46,23 @@ public final class LlmUsageScope implements AutoCloseable {
 
     private synchronized void record(Integer promptTokens, Integer completionTokens, Integer totalTokens) {
         calls++;
-        if (promptTokens == null && completionTokens == null && totalTokens == null) {
-            missing++;
-            return;
+        if (promptTokens == null) promptUnknown++; else prompt += promptTokens;
+        if (completionTokens == null) completionUnknown++; else completion += completionTokens;
+        if (totalTokens != null) {
+            total += totalTokens;
+        } else if (promptTokens != null && completionTokens != null) {
+            total += (long) promptTokens + completionTokens;
+        } else {
+            totalUnknown++; // no total and no way to compute it: this call's cost is unknown
         }
-        int p = promptTokens == null ? 0 : promptTokens;
-        int c = completionTokens == null ? 0 : completionTokens;
-        prompt += p;
-        completion += c;
-        total += totalTokens != null ? totalTokens : (long) p + c;
     }
 
     public synchronized Usage usage() {
         if (calls == 0) return Usage.none();
-        if (missing > 0) return new Usage(State.UNKNOWN, calls, null, null, null);
-        return new Usage(State.KNOWN, calls, clamp(prompt), clamp(completion), clamp(total));
+        if (totalUnknown > 0) return new Usage(State.UNKNOWN, calls, null, null, null);
+        // A split the provider did not give (e.g. streaming reports only a total) stays null, never 0.
+        return new Usage(State.KNOWN, calls, promptUnknown == 0 ? clamp(prompt) : null,
+                completionUnknown == 0 ? clamp(completion) : null, clamp(total));
     }
 
     private static int clamp(long v) { return v > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) v; }

@@ -17,6 +17,6 @@ public class SchedulerRunResolution {
     @Column(name = "to_status", length = 10, nullable = false, updatable = false) private String toStatus;
     @Column(name = "note", columnDefinition = "TEXT", nullable = false, updatable = false) private String note;
     @Column(name = "resolved_by", updatable = false) private Long resolvedBy;
-    @Column(name = "resolved_by_name", length = 100, updatable = false) private String resolvedByName;
+    @Column(name = "resolved_by_role", length = 100, updatable = false) private String resolvedByRole;
     @Column(name = "resolved_at", nullable = false, updatable = false) private LocalDateTime resolvedAt;
 }
