@@ -52,6 +52,10 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "发票金额必须大于 0");
         }
+        // 开票方必须说出来: 不传就默认成订单的供应商, 「来票供应商与订单不符」就永远查不出来
+        if (supplierId == null || supplierId.isBlank()) {
+            throw new BusinessException(400, "发票供应商不能为空");
+        }
 
         // 幂等性检查：同一工厂内发票号唯一
         if (invoiceNumber != null && !invoiceNumber.isBlank()) {

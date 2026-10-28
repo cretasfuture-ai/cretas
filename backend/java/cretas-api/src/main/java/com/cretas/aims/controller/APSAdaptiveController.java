@@ -5,6 +5,8 @@ import com.cretas.aims.dto.aps.GlobalDashboard;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.scheduling.*;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.aps.APSAdaptiveSchedulingService;
 import com.cretas.aims.service.aps.DashboardAggregationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -14,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -62,6 +65,7 @@ public class APSAdaptiveController {
         log.info("更新任务进度: factoryId={}, taskId={}, completedQty={}, actualEfficiency={}",
                 factoryId, taskId, request.getCompletedQty(), request.getActualEfficiency());
 
+        requireOwnTask(factoryId, taskId);
         APSAdaptiveSchedulingService.ProgressUpdateResult result =
                 adaptiveService.updateTaskProgress(taskId, request.getCompletedQty(), request.getActualEfficiency());
 
@@ -95,7 +99,7 @@ public class APSAdaptiveController {
             @PathVariable String factoryId) {
         log.info("获取自适应排产仪表盘(旧版): factoryId={}", factoryId);
 
-        APSAdaptiveSchedulingService.GlobalDashboard dashboard = adaptiveService.getGlobalDashboard();
+        APSAdaptiveSchedulingService.GlobalDashboard dashboard = adaptiveService.getGlobalDashboard(factoryId);
         AdaptiveDashboardDTO dto = convertToDashboardDTO(dashboard);
         return ApiResponse.success("获取成功", dto);
     }
@@ -114,6 +118,7 @@ public class APSAdaptiveController {
             @PathVariable String taskId) {
         log.info("获取任务预测: factoryId={}, taskId={}", factoryId, taskId);
 
+        requireOwnTask(factoryId, taskId);
         double probability = adaptiveService.predictCompletionProbability(taskId);
         APSAdaptiveSchedulingService.TaskRealTimeStatus status = adaptiveService.getTaskRealTimeStatus(taskId);
 
@@ -140,7 +145,7 @@ public class APSAdaptiveController {
         log.info("检查是否需要重排: factoryId={}", factoryId);
 
         APSAdaptiveSchedulingService.RescheduleRecommendation recommendation =
-                adaptiveService.checkRescheduleNeed();
+                adaptiveService.checkRescheduleNeed(factoryId);
         RescheduleRecommendationDTO dto = convertToRecommendationDTO(recommendation);
         return ApiResponse.success("检查完成", dto);
     }
@@ -160,26 +165,28 @@ public class APSAdaptiveController {
         log.info("触发自适应重排: factoryId={}, mode={}, affectedTaskIds={}",
                 factoryId, request.getMode(), request.getAffectedTaskIds());
 
-        // 根据模式确定要重排的任务
-        List<String> taskIds = "full".equals(request.getMode()) ?
-                null : request.getAffectedTaskIds();
+        // full = 本厂全部进行中的任务 (服务层按本厂取, ⛔ 不再把 null 传下去); affected_only = 指定任务, 必须都属于本厂
+        boolean full = "full".equals(request.getMode());
+        List<String> taskIds = full ? List.of() : request.getAffectedTaskIds();
+        if (!full && (taskIds == null || taskIds.isEmpty())) {
+            throw new BusinessException(400, "affected_only 模式要给出受影响的任务");
+        }
 
-        // 模拟重排前状态
         APSAdaptiveSchedulingService.RescheduleSimulation simulation =
-                adaptiveService.simulateReschedule(taskIds);
+                adaptiveService.simulateReschedule(factoryId, taskIds);
+        APSAdaptiveSchedulingService.SchedulingResult result =
+                adaptiveService.adaptiveReschedule(factoryId, taskIds);
 
-        // 执行重排
-        adaptiveService.adaptiveReschedule(taskIds);
-
-        // 构建响应
         AdaptiveRescheduleResponse response = new AdaptiveRescheduleResponse();
         response.setScheduleBatchNo("SCH-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
-        response.setRescheduledTasks(taskIds != null ? taskIds.size() : 0);
-        response.setBeforeOnTimeRate(simulation.getBeforeOnTimeRate());
-        response.setAfterOnTimeRate(simulation.getAfterOnTimeRate());
-        response.setImprovementPercent((simulation.getAfterOnTimeRate() - simulation.getBeforeOnTimeRate()) * 100);
+        response.setRescheduledTasks(result.getScheduledTasks());
+        double before = simulation.getBeforeOnTimeRate();
+        response.setBeforeOnTimeRate(Double.isNaN(before) ? null : before);
+        response.setAfterOnTimeRate(null);
+        response.setImprovementPercent(null);
+        response.setNote(result.getMessage());
 
-        return ApiResponse.success("重排完成", response);
+        return ApiResponse.success("已登记调整标记, 排程时间未改动", response);
     }
 
     // ==================== 6. 手动调整策略权重 ====================
@@ -192,8 +199,14 @@ public class APSAdaptiveController {
     @Operation(summary = "手动触发策略权重调整", description = "根据历史效果数据自动调整各排产策略的权重")
     public ApiResponse<WeightAdjustmentResponse> adjustWeights(
             @Parameter(description = "工厂ID", example = "F001")
-            @PathVariable String factoryId) {
+            @PathVariable String factoryId,
+            HttpServletRequest http) {
         log.info("手动调整策略权重: factoryId={}", factoryId);
+        // 这组策略权重是全平台共用的 (DEFAULT), 改了影响每一家工厂 ⇒ 只给能跨厂的平台角色
+        boolean platform = AuthenticatedActor.current(http).map(AuthenticatedActor::hasFactoryBypass).orElse(false);
+        if (!platform) {
+            throw new BusinessException(403, "排产策略权重是全平台共用的, 只有平台管理员可以调整");
+        }
 
         // 获取调整前权重
         Map<String, APSAdaptiveSchedulingService.StrategyEffectiveness> before =
@@ -232,6 +245,9 @@ public class APSAdaptiveController {
             @PathVariable String lineId) {
         log.info("获取产线状态: factoryId={}, lineId={}", factoryId, lineId);
 
+        if (!adaptiveService.lineBelongsToFactory(factoryId, lineId)) {
+            throw new BusinessException(404, "产线不存在或不属于本厂");
+        }
         return ApiResponse.success("获取成功", adaptiveService.getLineRealTimeStatus(lineId));
     }
 
@@ -249,6 +265,7 @@ public class APSAdaptiveController {
             @PathVariable String taskId) {
         log.info("获取任务状态: factoryId={}, taskId={}", factoryId, taskId);
 
+        requireOwnTask(factoryId, taskId);
         return ApiResponse.success("获取成功", adaptiveService.getTaskRealTimeStatus(taskId));
     }
 
@@ -283,7 +300,7 @@ public class APSAdaptiveController {
         log.info("获取高风险任务(旧版): factoryId={}, threshold={}", factoryId, threshold);
 
         List<APSAdaptiveSchedulingService.TaskRiskInfo> risks =
-                adaptiveService.getLowProbabilityTasks(threshold);
+                adaptiveService.getLowProbabilityTasks(factoryId, threshold);
         List<TaskRiskDTO> dtos = risks.stream()
                 .map(this::convertToTaskRiskDTO)
                 .collect(Collectors.toList());
@@ -305,6 +322,13 @@ public class APSAdaptiveController {
         log.info("获取权重调整历史: factoryId={}, days={}", factoryId, days);
 
         return ApiResponse.success("获取成功", adaptiveService.getWeightAdjustmentHistory(days));
+    }
+
+    /** 按 id 的任务接口先确认任务属于路径上这家厂; 不属于和不存在一样 404 (⛔ 不透露别厂有这个任务)。 */
+    private void requireOwnTask(String factoryId, String taskId) {
+        if (!adaptiveService.taskBelongsToFactory(factoryId, taskId)) {
+            throw new BusinessException(404, "任务不存在或不属于本厂");
+        }
     }
 
     // ==================== 私有转换方法 ====================
