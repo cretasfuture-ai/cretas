@@ -7,6 +7,7 @@
 
 ## 在飞任务
 
+
 - `SC29-COMMERCE-PG` — `claimed` — Root/capacity_executor；Base `166e3f3d7faf803da32a892c6db706ccc00cd7e7`；scope仅test_commerce_joint_postgres.py；接管已冻结SQL的实际PG/RLS反例与schema shadow/缺列/MASTER/所有权/状态/定义异常验证，独立schema，禁改产品/台账；目标真实PG lane无skip。
 
 
