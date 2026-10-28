@@ -149,5 +149,6 @@ def test_ascii_names_match_case_insensitively():
     from smartbi.services.process_secret_names import mentions_any
 
     assert mentions_any({"SecretX"}, "secretx 今天产量")
+    assert mentions_any({"secretx"}, "SECRETX 库存")      # 两边都要折叠, 只折叠名字测不出来
     assert mentions_any({SECRET}, SECRET + "库存")
     assert not mentions_any({"SecretX"}, "SecretY 今天产量")
