@@ -187,6 +187,21 @@ public class DisposalRecord extends BaseEntity {
     private String evidenceImages;
 
     /**
+     * 客户确认人 (客户自有货必填): 退还客户 = 签收人, 报废/销毁 = 同意报废的客户联系人。
+     * 公司自有货不填。V20261103_93。
+     */
+    @Column(name = "customer_confirmed_by", length = 100)
+    private String customerConfirmedBy;
+
+    /** 客户确认日期 (签收日 / 同意日), 客户自有货必填。 */
+    @Column(name = "customer_confirmed_at")
+    private java.time.LocalDate customerConfirmedAt;
+
+    /** 客户确认凭证 URL (签收单 / 同意函照片, 逗号分隔), 客户自有货必填。 */
+    @Column(name = "customer_confirmation_evidence", columnDefinition = "TEXT")
+    private String customerConfirmationEvidence;
+
+    /**
      * 备注
      */
     @Column(name = "notes", columnDefinition = "TEXT")

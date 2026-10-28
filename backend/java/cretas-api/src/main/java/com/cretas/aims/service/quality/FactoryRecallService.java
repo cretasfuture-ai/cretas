@@ -690,6 +690,9 @@ public class FactoryRecallService {
                 && returnedQuantityProven(returnedBatch, returnedQuantity, factoryId);
     }
 
+    /** 退回成品的处置证据: 报废/销毁 (SCRAP), 以及客户自有货退还客户 (RETURN_TO_CUSTOMER)。 */
+    private static final Set<String> DISPOSAL_ADJUSTMENT_TYPES = Set.of("SCRAP", "RETURN_TO_CUSTOMER");
+
     private BigDecimal scrappedReturnQuantity(String factoryId, String batchId,
                                               BigDecimal currentProduced) {
         if (isBlank(factoryId) || isBlank(batchId) || finishedGoodsAdjustmentLogRepository == null
@@ -706,7 +709,7 @@ public class FactoryRecallService {
                 .filter(entry -> entry != null
                         && Objects.equals(factoryId, entry.getFactoryId())
                         && Objects.equals(batchId, entry.getBatchId())
-                        && "SCRAP".equals(entry.getReferenceType()))
+                        && DISPOSAL_ADJUSTMENT_TYPES.contains(entry.getReferenceType()))
                 .sorted((left, right) -> {
                     LocalDateTime l = left.getCreatedAt();
                     LocalDateTime r = right.getCreatedAt();
@@ -764,7 +767,10 @@ public class FactoryRecallService {
                 && Objects.equals(factoryId, disposal.getFactoryId())
                 && Objects.equals(batchId, disposal.getFinishedGoodsBatchId())
                 && disposal.getDisposalQuantity() != null
-                && disposal.getDisposalQuantity().compareTo(entry.getAdjustmentQuantity().abs()) == 0;
+                && disposal.getDisposalQuantity().compareTo(entry.getAdjustmentQuantity().abs()) == 0
+                // 退还客户的扣减只能由退还客户单证明, 报废扣减只能由报废/销毁单证明
+                && Objects.equals("RETURN_TO_CUSTOMER".equals(entry.getReferenceType()),
+                        "RETURN_TO_CUSTOMER".equals(disposal.getDisposalType()));
     }
 
     private Long parseDisposalId(String reason) {

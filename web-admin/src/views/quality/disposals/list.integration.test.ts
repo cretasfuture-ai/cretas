@@ -11,7 +11,9 @@ type DisposalVm = {
   disposalForm: {
     targetType: 'MATERIAL' | 'FINISHED'; batchId: string; disposalType: string; reasonCategory: string;
     quantity: number; reason: string; evidenceImages: string;
+    customerConfirmedBy: string; customerConfirmedAt: string; customerConfirmationEvidence: string;
   };
+  selectedCustomerOwned: boolean;
   currentBatches: { id: string }[];
   selectedBatchMax: number | null;
   createDisabled: boolean;
@@ -83,6 +85,54 @@ describe('disposal finished-goods selector wiring', () => {
       disposalReason: '【损坏】破损'
     }));
     expect(post.mock.calls[0][1]).not.toHaveProperty('materialBatchId');
+  });
+
+  it('customer-owned returned goods need customer confirmation and may be handed back', async () => {
+    get.mockImplementation(async (url: string) => url.endsWith('eligible-finished-goods')
+      ? { success: true, data: [
+          { id: 'TOLL-RTN', batchNumber: 'RTN-RT-1-1', productName: '卤牛肉', unit: '盒', availableQuantity: 16, customerOwned: true },
+          { id: 'PARTIAL', batchNumber: 'FG-PARTIAL', availableQuantity: 30, customerOwned: false }
+        ] }
+      : { success: true, data: [] });
+    const wrapper = shallowMount(DisposalList, { global: {
+      stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } },
+      directives: { loading: () => {} }
+    } });
+    const vm = wrapper.vm as unknown as DisposalVm;
+    await flushPromises();
+    vm.handleCreate();
+    vm.disposalForm.targetType = 'FINISHED';
+    vm.handleTargetTypeChange();
+    await flushPromises();
+    vm.disposalForm.batchId = 'TOLL-RTN';
+    expect(vm.selectedCustomerOwned).toBe(true);
+    vm.disposalForm.disposalType = 'RETURN_TO_CUSTOMER';
+    vm.disposalForm.reasonCategory = '质量问题';
+    vm.disposalForm.quantity = 16;
+    vm.disposalForm.reason = '召回退回';
+    vm.disposalForm.evidenceImages = 'https://example.test/goods.jpg';
+    await vm.submitDisposal();
+    expect(post).not.toHaveBeenCalled();
+
+    vm.disposalForm.customerConfirmedBy = '客户王经理';
+    vm.disposalForm.customerConfirmedAt = '2026-10-28';
+    vm.disposalForm.customerConfirmationEvidence = 'https://example.test/signed.jpg';
+    await vm.submitDisposal();
+    expect(post).toHaveBeenCalledWith('/F006/disposal-records', expect.objectContaining({
+      finishedGoodsBatchId: 'TOLL-RTN', disposalType: 'RETURN_TO_CUSTOMER',
+      customerConfirmedBy: '客户王经理', customerConfirmedAt: '2026-10-28',
+      customerConfirmationEvidence: 'https://example.test/signed.jpg'
+    }));
+
+    // 换回公司货: 退还客户不再可选, 自动回到报废, 也不再带客户确认
+    post.mockClear();
+    vm.disposalForm.batchId = 'PARTIAL';
+    await flushPromises();
+    expect(vm.selectedCustomerOwned).toBe(false);
+    expect(vm.disposalForm.disposalType).toBe('SCRAP');
+    vm.disposalForm.quantity = 1;
+    await vm.submitDisposal();
+    expect(post.mock.calls[0][1]).not.toHaveProperty('customerConfirmedBy');
   });
 
   it('passes status, keyword and exact finished-goods context without overloading type', async () => {
