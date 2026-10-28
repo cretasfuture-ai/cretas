@@ -11,6 +11,7 @@ import com.cretas.aims.service.FactoryAssemblyConversationService.ConversationAc
 
 import com.cretas.aims.blueprint.interview.FactoryBuildApplyService;
 import com.cretas.aims.blueprint.interview.FactoryBuildInterviewService;
+import com.cretas.aims.blueprint.interview.FactoryConfirmedFactService;
 import com.cretas.aims.blueprint.interview.FactoryBuildPlanService;
 import com.cretas.aims.blueprint.interview.FactoryAssemblyDraftIntent;
 import com.cretas.aims.blueprint.interview.FactoryDecisionPacket;
@@ -267,6 +268,12 @@ public class PlatformAssemblyInterviewController {
          * {@code LEGACY_UNATTRIBUTED}，不得伪造来源或时间。</p>
          */
         private List<FactEvidenceItem> factEvidence = new ArrayList<>();
+
+        /** 本会话直接沿用的已确认事实 (字段 -> 值)，不再重复询问；差异项仍照常提问。 */
+        private Map<String, String> reusedFacts = new LinkedHashMap<>();
+
+        /** 新答案与已确认事实不同、等管理员逐条选择来源的项目；选定前不改写已确认事实。 */
+        private List<FactoryConfirmedFactService.Conflict> factConflicts = new ArrayList<>();
 
         /**
          * 从 {@link #collected} 实时派生的只读路线编译预览。
