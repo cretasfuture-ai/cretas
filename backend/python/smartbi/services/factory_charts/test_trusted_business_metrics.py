@@ -4,6 +4,7 @@ import pandas as pd
 
 from smartbi.api.financial_dashboard import FactoryRecommendationRequest
 from smartbi.services.factory_charts.engine import Dataset, build
+from smartbi.services.factory_charts import details
 from smartbi.services.factory_charts import trusted_business_metrics as metrics
 
 
@@ -59,7 +60,7 @@ def test_engine_builds_one_named_trusted_candidate_per_qualified_source_with_evi
         assert metadata["source"] == candidate["source"]
         assert metadata["fact"] and metadata["detail"] and metadata["role"]
         assert metadata["period"]
-        assert metadata["unit"] in {"元", "数量"}
+        assert metadata["unit"] == candidate["unit"]
         assert candidate["tableData"]
         assert candidate["kpis"]
         assert candidate["source"].startswith(prefix + " · ")
@@ -71,6 +72,141 @@ def test_engine_builds_one_named_trusted_candidate_per_qualified_source_with_evi
     assert by_prefix["purchase-batch-lineage"]["tableData"][0]["value"] == 20.0
     assert by_prefix["purchase-batch-lineage"]["tableData"][0]["label"] == "原料A（kg）"
     assert by_prefix["finished-goods-inventory"]["tableData"][0]["value"] == 7.0
+
+
+def test_trusted_quantity_candidates_split_units_and_preserve_same_unit_kpis():
+    purchase = trusted_datasets()[1]
+    purchase.frame = pd.concat([
+        purchase.frame,
+        pd.DataFrame([{
+            "日期": "2026-10-02", "收货单ID": "r-2", "收货行ID": 2,
+            "收货状态": "CONFIRMED", "收货数量": Decimal("3"), "收货单位": "袋",
+            "物料ID": "mat-2", "批次物料ID": "mat-2", "批次工厂ID": "F006",
+            "批次来源类型": "PURCHASE_RECEIVE", "批次来源单据ID": "r-2",
+            "批次数量单位": "袋", "批次入库数量": Decimal("3"),
+            "包装单位快照": "袋", "包装换算因子快照": Decimal("1"),
+            "库存数量快照": Decimal("3"), "库存基础单位快照": "袋",
+            "数量": Decimal("3"), "数量单位": "袋", "物料（单位）": "原料B（袋）",
+            "事实限定": "已确认收货 + 收货行物料批次双向来源校验",
+        }]),
+    ], ignore_index=True)
+    shipment = trusted_datasets()[2]
+    shipment.frame = pd.concat([
+        shipment.frame,
+        pd.DataFrame([{
+            "日期": "2026-10-02", "发货行ID": "di-2", "发货单ID": "d-2",
+            "成品批次ID": "fg-2", "产品ID": "sku-2", "发货数量": Decimal("4"),
+            "发货单位": "袋", "申报发货数量": Decimal("4"), "申报发货单位": "袋",
+            "批次工厂ID": "F006", "批次产品ID": "sku-2", "批次单位": "袋",
+            "发货状态": "DELIVERED", "数量": Decimal("4"), "数量单位": "袋",
+            "产品（单位）": "sku-2（袋）", "关系来源": "DELIVERY_ITEM_FK",
+            "事实限定": "已记录发货行/批次关系",
+        }]),
+    ], ignore_index=True)
+
+    for dataset, expected in ((purchase, {"kg": "20", "袋": "3"}),
+                              (shipment, {"kg": "3", "袋": "4"})):
+        candidates, gaps = build([dataset], request(period_type="all"), True)
+        assert gaps == []
+        by_unit = {candidate["unit"]: candidate for candidate in candidates}
+        assert set(by_unit) == set(expected)
+        assert {unit: item["kpis"][0]["value"] for unit, item in by_unit.items()} == expected
+        assert len({item["id"] for item in by_unit.values()}) == len(by_unit)
+        assert all("@" in item["id"] for item in by_unit.values())
+
+
+def test_trusted_quantity_unit_whitespace_normalization_keeps_one_candidate_and_details():
+    shipment = trusted_datasets()[2]
+    shipment.frame = pd.concat([
+        shipment.frame,
+        pd.DataFrame([{
+            "日期": "2026-10-02", "发货行ID": "di-2", "发货单ID": "d-2",
+            "成品批次ID": "fg-2", "产品ID": "sku-2", "发货数量": Decimal("5"),
+            "发货单位": "kg", "申报发货数量": Decimal("5"), "申报发货单位": "kg",
+            "批次工厂ID": "F006", "批次产品ID": "sku-2", "批次单位": "kg",
+            "发货状态": "DELIVERED", "数量": Decimal("5"), "数量单位": " kg ",
+            "产品（单位）": "sku-2（kg）", "关系来源": "DELIVERY_ITEM_FK",
+            "事实限定": "已记录发货行/批次关系",
+        }]),
+    ], ignore_index=True)
+
+    candidates, gaps = build([shipment], request(period_type="all"), True)
+    assert gaps == []
+    assert len(candidates) == 1
+    assert candidates[0]["unit"] == "kg"
+    assert candidates[0]["kpis"][0]["value"] == "8"
+
+    owner = ("F006", 12, "factory_super_admin")
+    details.clear_cache()
+    try:
+        registered = details.register(candidates, [shipment], request(period_type="all"), owner, True)
+        result = details.page(
+            {"context_id": registered[0]["detailContext"]["id"], "page": 1, "page_size": 20},
+            owner,
+            True,
+            True,
+        )
+        assert result["data"]["total"] == 2
+        assert {str(row["数量单位"]).strip() for row in result["data"]["rows"]} == {"kg"}
+    finally:
+        details.clear_cache()
+
+
+def test_finished_goods_mixed_units_split_kpi_ranking_and_detail_rows():
+    source = "finished-goods-inventory · 混单位当前快照"
+    rows = [
+        {"日期": "2026-10-28", "成品批次ID": "fg-box-1", "工厂ID": "F006", "产品ID": "shared",
+         "单位": "盒", "已生产数量": Decimal("226"), "已发货数量": Decimal("0"),
+         "已预留数量": Decimal("0"), "可用数量": Decimal("226"), "状态": "AVAILABLE",
+         "数量": Decimal("226"), "数量单位": "盒", "产品（单位）": "QA卤牛肉（盒）",
+         "事实限定": "当前AVAILABLE成品批次余额；非历史倒推"},
+        {"日期": "2026-10-28", "成品批次ID": "fg-box-2", "工厂ID": "F006", "产品ID": "box-2",
+         "单位": "盒", "已生产数量": Decimal("2"), "已发货数量": Decimal("0"),
+         "已预留数量": Decimal("0"), "可用数量": Decimal("2"), "状态": "AVAILABLE",
+         "数量": Decimal("2"), "数量单位": "盒", "产品（单位）": "盒装小样（盒）",
+         "事实限定": "当前AVAILABLE成品批次余额；非历史倒推"},
+        {"日期": "2026-10-28", "成品批次ID": "fg-bag-1", "工厂ID": "F006", "产品ID": "shared",
+         "单位": "袋", "已生产数量": Decimal("30"), "已发货数量": Decimal("0"),
+         "已预留数量": Decimal("0"), "可用数量": Decimal("30"), "状态": "AVAILABLE",
+         "数量": Decimal("30"), "数量单位": "袋", "产品（单位）": "汤（袋）",
+         "事实限定": "当前AVAILABLE成品批次余额；非历史倒推"},
+        {"日期": "2026-10-28", "成品批次ID": "fg-bag-2", "工厂ID": "F006", "产品ID": "bag-2",
+         "单位": "袋", "已生产数量": Decimal("40"), "已发货数量": Decimal("0"),
+         "已预留数量": Decimal("0"), "可用数量": Decimal("40"), "状态": "AVAILABLE",
+         "数量": Decimal("40"), "数量单位": "袋", "产品（单位）": "骨髓酱（袋）",
+         "事实限定": "当前AVAILABLE成品批次余额；非历史倒推"},
+        {"日期": "2026-10-28", "成品批次ID": "fg-each-1", "工厂ID": "F006", "产品ID": "product7",
+         "单位": "个", "已生产数量": Decimal("7"), "已发货数量": Decimal("0"),
+         "已预留数量": Decimal("0"), "可用数量": Decimal("7"), "状态": "AVAILABLE",
+         "数量": Decimal("7"), "数量单位": "个", "产品（单位）": "product7（个）",
+         "事实限定": "当前AVAILABLE成品批次余额；非历史倒推"},
+    ]
+    dataset = Dataset(pd.DataFrame(rows), source)
+    candidates, gaps = build([dataset], request(period_type="all"), True)
+
+    assert gaps == []
+    by_unit = {candidate["unit"]: candidate for candidate in candidates}
+    assert set(by_unit) == {"盒", "袋", "个"}
+    assert {unit: item["kpis"][0]["value"] for unit, item in by_unit.items()} == {
+        "盒": "228", "袋": "70", "个": "7",
+    }
+    assert by_unit["盒"]["chart"]["echartsOption"]["series"][0]["data"] == [226.0, 2.0]
+    assert by_unit["袋"]["chart"]["echartsOption"]["series"][0]["data"] == [40.0, 30.0]
+    assert all(item["engine"].get("detailUnitPolicy") is None for item in by_unit.values())
+
+    owner = ("F006", 12, "factory_super_admin")
+    details.clear_cache()
+    try:
+        registered = details.register(candidates, [dataset], request(period_type="all"), owner, True)
+        totals = {}
+        for item in registered:
+            context = item["detailContext"]["id"]
+            result = details.page({"context_id": context, "page": 1, "page_size": 20}, owner, True, True)
+            totals[item["unit"]] = result["data"]["total"]
+            assert {row["单位"] for row in result["data"]["rows"]} == {item["unit"]}
+        assert totals == {"盒": 2, "袋": 2, "个": 1}
+    finally:
+        details.clear_cache()
 
 
 def test_trusted_sources_never_fall_back_to_generic_numeric_id_metrics():

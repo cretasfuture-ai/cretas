@@ -1,0 +1,461 @@
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const PATH = '/smart-bi/analysis-hub?tab=factory';
+const RECOMMENDATIONS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations';
+const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
+const EXPORTS = [
+  { key: 'excel', label: 'Excel', button: '导出当前显示图表 Excel', path: '/smartbi-api/api/smartbi/financial-dashboard/export-excel', extension: 'xlsx' },
+  { key: 'pdf', label: 'PDF', button: '导出当前显示图表 PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
+  { key: 'ppt', label: 'PPT', button: '导出当前显示图表 PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
+];
+const MAX_FAMILIES = 4;
+const MAX_OPTION_FAMILIES = 60;
+const STEP_TIMEOUT_MS = 30_000;
+const TOTAL_TIMEOUT_MS = 10 * 60_000;
+
+function testId(page, id) { return page.locator(`[data-testid="${String(id).replace(/"/gu, '\\"')}"]`); }
+
+function endpointPath(url) {
+  try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
+}
+
+function normalizedPath(url) { return endpointPath(url).replace(/\/$/u, ''); }
+
+function isRecommendationsResponse(response) {
+  return response.request().method() === 'POST' && normalizedPath(response.url()) === RECOMMENDATIONS_PATH;
+}
+
+function isDetailsResponse(response) {
+  return response.request().method() === 'POST' && normalizedPath(response.url()) === DETAILS_PATH;
+}
+
+function isExportResponse(response, format) {
+  const item = typeof format === 'string' ? EXPORTS.find((entry) => entry.key === format) : format;
+  return response.request().method() === 'POST' && Boolean(item)
+    && normalizedPath(response.url()) === item.path;
+}
+
+function requestBody(response) {
+  try { return response.request().postDataJSON() || {}; } catch { return {}; }
+}
+
+async function responseBody(response) {
+  return response ? response.json().catch(() => ({})) : {};
+}
+
+function familyOf(candidate) {
+  return String(candidate?.analysis?.familyId || candidate?.familyId || candidate?.id || '').trim() || null;
+}
+
+function familyLabelOf(candidate) {
+  return String(candidate?.analysis?.familyLabel || candidate?.title || familyOf(candidate) || '').trim() || null;
+}
+
+function isRestaurantOnly(candidate) {
+  const domain = String(candidate?.domain || candidate?.analysis?.domain || '').toLowerCase();
+  const family = String(candidate?.analysis?.familyId || candidate?.familyId || '').toLowerCase();
+  const sourceKey = String(candidate?.sourceKey || candidate?.analysis?.sourceKey || '').toLowerCase();
+  return domain === 'restaurant' || domain === '餐饮' || family.startsWith('restaurant.')
+    || family.startsWith('餐饮.') || sourceKey === 'restaurant' || sourceKey.startsWith('restaurant.');
+}
+
+function validateCatalogFamilies(value) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) throw new Error('factoryCatalogFamilies must be an array of family IDs');
+  if (value.length > MAX_OPTION_FAMILIES) throw new Error(`factoryCatalogFamilies must contain at most ${MAX_OPTION_FAMILIES} IDs`);
+  const result = value.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('factoryCatalogFamilies contains an empty family ID');
+    return entry.trim();
+  });
+  if (new Set(result).size !== result.length) throw new Error('factoryCatalogFamilies contains duplicate family IDs');
+  return result;
+}
+
+function groupCandidates(candidates) {
+  const groups = new Map();
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const id = familyOf(candidate);
+    if (!id) continue;
+    if (!groups.has(id)) groups.set(id, {
+      familyId: id,
+      familyLabel: familyLabelOf(candidate) || id,
+      candidates: [],
+    });
+    groups.get(id).candidates.push(candidate);
+  }
+  return [...groups.values()];
+}
+
+function candidateIsQualified(candidate) {
+  return Boolean(candidate?.id && candidate?.source && candidate?.chart
+    && typeof candidate.chart === 'object' && candidate?.analysis?.familyId
+    && candidate?.detailStatus?.state !== 'unavailable' && candidate?.detailStatus?.state !== 'capacity');
+}
+
+function candidateUnitsAligned(candidate) {
+  const unit = String(candidate?.unit || '').trim();
+  if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
+  const factUnits = (Array.isArray(candidate?.kpis) ? candidate.kpis : [])
+    .map((fact) => String(fact?.unit || '').trim()).filter(Boolean);
+  return factUnits.every((factUnit) => factUnit === unit);
+}
+
+function selectCatalogCandidates(data, requestedFamilies) {
+  const candidates = Array.isArray(data?.recommendations) ? data.recommendations : [];
+  const groups = groupCandidates(candidates);
+  const available = new Set(groups.map((group) => group.familyId));
+  const requested = requestedFamilies || groups.map((group) => group.familyId);
+  const requestedUnknown = requested.filter((family) => !available.has(family));
+  const excluded = [];
+  const blocked = [];
+  const eligibleGroups = groups.filter((group) => requested.includes(group.familyId)).map((group) => {
+    const sorted = [...group.candidates];
+    const restaurantOnly = sorted.filter(isRestaurantOnly);
+    if (restaurantOnly.length) excluded.push(...restaurantOnly.map((candidate) => ({
+      familyId: group.familyId,
+      familyLabel: group.familyLabel,
+      candidateId: candidate.id,
+      reason: 'restaurant-only',
+    })));
+    const candidate = sorted.find((item) => !isRestaurantOnly(item) && candidateIsQualified(item));
+    if (!candidate) {
+      const blockedCandidate = sorted.find((item) => !isRestaurantOnly(item));
+      blocked.push({
+        familyId: group.familyId,
+        familyLabel: group.familyLabel,
+        candidateId: blockedCandidate?.id || null,
+        reason: blockedCandidate?.detailStatus?.state || 'candidate-not-qualified',
+      });
+      return null;
+    }
+    return { familyId: group.familyId, familyLabel: group.familyLabel, candidate };
+  }).filter(Boolean);
+  // Families are covered in batches of four by inspectCatalog. Keep the
+  // explicit 60-family run bound, but never hide the remainder from the
+  // assessment.
+  const selected = eligibleGroups.slice(0, MAX_OPTION_FAMILIES);
+  const deferred = eligibleGroups.slice(MAX_OPTION_FAMILIES).map((item) => ({
+    familyId: item.familyId, familyLabel: item.familyLabel, candidateId: item.candidate.id, reason: 'family-limit-60',
+  }));
+  return { selected, deferred, blocked, excluded, requestedUnknown };
+}
+
+function detailPeriod(data) {
+  return data?.period?.label || null;
+}
+
+function summarizeExportIds(body) {
+  const ids = [];
+  for (const chart of Array.isArray(body?.charts) ? body.charts : []) {
+    const id = chart?.id || chart?.candidate_id;
+    if (id) ids.push(String(id));
+  }
+  for (const id of Array.isArray(body?.selected_ids) ? body.selected_ids : []) if (id) ids.push(String(id));
+  return [...new Set(ids)];
+}
+
+function compactDetail(response, body, candidate, expectedPeriod) {
+  const data = body?.data;
+  return {
+    attempted: Boolean(response),
+    httpStatus: response ? response.status() : null,
+    success: Boolean(response && response.status() === 200 && body?.success === true),
+    candidateId: data?.candidateId || null,
+    factoryId: data?.factoryId || null,
+    source: data?.source || null,
+    period: data?.period || null,
+    rowTotal: Number.isFinite(data?.total) ? data.total : null,
+    rowsPresent: Array.isArray(data?.rows),
+    scopeMatches: Boolean(data?.candidateId === candidate.id && data?.source === candidate.source
+      && data?.period === expectedPeriod && Array.isArray(data?.rows)),
+  };
+}
+
+function checkFailures(checks) {
+  return Object.entries(checks).filter(([, value]) => value !== true).map(([key]) => key);
+}
+
+function assessCatalog({ families, requestedUnknown, deferred, excluded, eligibilityGaps = [], sourceErrors = [], remainingFamilyCount = 0, ui }) {
+  const familyPass = families.length > 0 && families.every((item) => item.status === 'PASS');
+  const result = familyPass && requestedUnknown.length === 0 && sourceErrors.length === 0
+    && deferred.length === 0 && remainingFamilyCount === 0 ? 'PASS' : 'UNVERIFIED';
+  const rootCauseClass = result === 'PASS' ? 'none'
+    : ui?.missing ? 'frontend'
+      : ui?.httpFailure ? 'backend'
+        : 'data';
+  return {
+    result,
+    rootCauseClass,
+    fullPass: result === 'PASS',
+    selectedFamilyCount: families.length,
+    familyCount: families.length,
+    coveredFamilyCount: families.filter((item) => item.status === 'PASS').length,
+    failedFamilyCount: families.filter((item) => item.status !== 'PASS').length,
+    remainingFamilyCount,
+    requestedUnknown,
+    deferredFamilies: deferred,
+    excludedFamilies: excluded,
+    eligibilityGaps,
+    sourceErrors,
+    checkFailures: [
+      ...families.flatMap((item) => item.checkFailures.map((key) => `${item.familyId}.${key}`)),
+      ...deferred.map((item) => `deferred.${item.familyId}`),
+      ...sourceErrors.map((item) => `source.${item.source || 'unknown'}`),
+    ],
+  };
+}
+
+function remainingTimeout(deadline) {
+  return Math.max(1, Math.min(STEP_TIMEOUT_MS, deadline - Date.now()));
+}
+
+async function waitResponse(page, predicate, deadline) {
+  return page.waitForResponse(predicate, { timeout: remainingTimeout(deadline) });
+}
+
+async function captureExport(page, format, inspectCtx, deadline) {
+  const result = { format: format.key, buttonFound: false, downloadStarted: false, httpStatus: null, filename: null, saved: false, candidateIds: [], success: false };
+  const button = page.locator('button:visible').filter({ hasText: format.button }).first();
+  result.buttonFound = await button.count() > 0;
+  if (!result.buttonFound) return result;
+  try {
+    const responsePromise = waitResponse(page, (response) => isExportResponse(response, format), deadline).catch(() => null);
+    const downloadPromise = page.waitForEvent('download', { timeout: remainingTimeout(deadline) }).catch(() => null);
+    await button.click();
+    const [response, download] = await Promise.all([responsePromise, downloadPromise]);
+    result.httpStatus = response ? response.status() : null;
+    result.candidateIds = summarizeExportIds(response ? requestBody(response) : {});
+    result.downloadStarted = Boolean(download);
+    result.filename = download ? download.suggestedFilename() : null;
+    if (download && inspectCtx.evidenceDir && result.filename) {
+      try {
+        await download.saveAs(`${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/${result.filename}`);
+        result.saved = true;
+      } catch {}
+    }
+    result.success = result.downloadStarted && result.httpStatus === 200
+      && (!inspectCtx.evidenceDir || result.saved);
+  } catch {}
+  return result;
+}
+
+async function chooseBrowseMode(page, deadline) {
+  const mode = testId(page, 'factory-chart-mode');
+  if (!await mode.count()) return false;
+  const browse = mode.locator('button, label').filter({ hasText: '按分类浏览' }).first();
+  if (!await browse.count()) return false;
+  await browse.click();
+  await testId(page, 'factory-chart-selection').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  return true;
+}
+
+async function clearBrowseSelection(page) {
+  const rows = testId(page, 'factory-chart-family');
+  const count = await rows.count();
+  for (let index = 0; index < count; index += 1) {
+    const checkbox = rows.nth(index).locator('input[type="checkbox"]').first();
+    if (await checkbox.count() && await checkbox.isChecked().catch(() => false)) {
+      await checkbox.click().catch(() => {});
+    }
+  }
+}
+
+async function selectFamilyInBrowse(page, familyId, candidate, deadline) {
+  const escapedFamilyId = String(familyId).replace(/"/gu, '\\"');
+  const rows = page.locator(`[data-testid="factory-chart-family"][data-family-id="${escapedFamilyId}"]`);
+  // The family id is the server identity. The label is presentation-only and
+  // may be duplicated across domains or sources.
+  if (!await rows.count()) return false;
+  const row = rows.first();
+  const checkbox = row.locator('input[type="checkbox"]').first();
+  if (await checkbox.count() && !(await checkbox.isChecked().catch(() => false))) await checkbox.check().catch(() => {});
+  const variant = row.locator('.el-select').first();
+  if (await variant.count()) {
+    await variant.click().catch(() => {});
+    const option = page.locator('.el-select-dropdown__item:visible').filter({ hasText: String(candidate.unit) }).first();
+    if (await option.count()) await option.click().catch(() => {});
+  }
+  await page.waitForTimeout(50);
+  return true;
+}
+
+async function inspectCatalog(page, _body, inspectCtx) {
+  if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory catalog acceptance is limited to F006');
+  const startedAt = Date.now();
+  const deadline = startedAt + TOTAL_TIMEOUT_MS;
+  const optionValue = inspectCtx.factoryCatalogFamilies || inspectCtx.options?.factoryCatalogFamilies;
+  const requestedFamilies = validateCatalogFamilies(optionValue);
+  const ui = { browseVisible: false, missing: false, httpFailure: false };
+
+  await testId(page, 'factory-chart-guide').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) }).catch(() => {});
+  const refresh = testId(page, 'factory-chart-refresh');
+  let recommendationResponse = null;
+  if (await refresh.count()) {
+    const pending = waitResponse(page, isRecommendationsResponse, deadline).catch(() => null);
+    await refresh.click().catch(() => {});
+    recommendationResponse = await pending;
+  }
+  if (!recommendationResponse) ui.httpFailure = true;
+  const body = await responseBody(recommendationResponse);
+  const data = body?.data || {};
+  const selected = selectCatalogCandidates(data, requestedFamilies);
+  const browse = await chooseBrowseMode(page, deadline).catch(() => false);
+  ui.browseVisible = browse;
+  if (!browse) ui.missing = true;
+
+  const families = selected.blocked.map((item) => ({
+    familyId: item.familyId,
+    family: item.familyLabel,
+    candidateId: item.candidateId,
+    unit: null,
+    source: null,
+    period: detailPeriod(data),
+    facts: [],
+    rowTotal: null,
+    filenames: [],
+    exportCoverage: [],
+    http: { recommendation: recommendationResponse?.status() || null, detail: null, exports: {} },
+    checks: { familySelected: false, cardRendered: false, chartRendered: false, factsPresent: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
+    checkFailures: ['candidateQualified'],
+    status: 'UNVERIFIED',
+    blockedReason: item.reason,
+  }));
+  const exports = [];
+  const processedFamilyIds = new Set();
+  const batches = [];
+  for (let index = 0; index < selected.selected.length; index += MAX_FAMILIES) {
+    batches.push(selected.selected.slice(index, index + MAX_FAMILIES));
+  }
+  let batchNumber = 0;
+  for (const batch of batches) {
+    if (Date.now() >= deadline) break;
+    batchNumber += 1;
+    await clearBrowseSelection(page);
+    const batchFamilies = [];
+    for (const item of batch) {
+      if (Date.now() >= deadline) break;
+      const candidate = item.candidate;
+      const summary = {
+        familyId: item.familyId,
+        family: item.familyLabel,
+        candidateId: candidate.id,
+        unit: candidate.unit || null,
+        source: candidate.source || null,
+        period: detailPeriod(data),
+        facts: Array.isArray(candidate.kpis) ? candidate.kpis.slice(0, 20).map((fact) => ({ label: fact?.label || null, value: fact?.value ?? null, unit: fact?.unit || null })) : [],
+        rowTotal: null,
+        filenames: [],
+        exportCoverage: [],
+        http: { recommendation: recommendationResponse?.status() || null, detail: null, exports: {} },
+        checks: { familySelected: false, cardRendered: false, chartRendered: false, unitAligned: false, factsPresent: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
+        checkFailures: [],
+        status: 'UNVERIFIED',
+        batch: batchNumber,
+      };
+      summary.checks.unitAligned = candidateUnitsAligned(candidate);
+      summary.checks.factsPresent = summary.facts.length > 0;
+      summary.checks.familySelected = await selectFamilyInBrowse(page, item.familyId, candidate, deadline).catch(() => false);
+      const card = testId(page, `factory-chart-card-${candidate.id}`).first();
+      summary.checks.cardRendered = await card.count() > 0 && await card.isVisible().catch(() => false);
+      if (!summary.checks.cardRendered) {
+        await testId(page, 'factory-chart-guide-generate').click().catch(() => {});
+        summary.checks.cardRendered = await card.isVisible().catch(() => false);
+      }
+      summary.checks.chartRendered = summary.checks.cardRendered && await card.locator('.factory-chart-canvas canvas').count() > 0;
+
+      if (summary.checks.cardRendered) {
+    const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true }).first();
+        if (await detailsButton.count()) {
+          const recommendationRefresh = candidate.detailContext
+            ? Promise.resolve(null)
+            : waitResponse(page, isRecommendationsResponse, deadline).catch(() => null);
+          const detailsResponsePromise = waitResponse(page, isDetailsResponse, deadline).catch(() => null);
+          await detailsButton.click().catch(() => {});
+          const refreshed = await recommendationRefresh;
+          const detailsResponse = await detailsResponsePromise;
+          const detailBody = await responseBody(detailsResponse);
+          const detail = compactDetail(detailsResponse, detailBody, candidate, detailPeriod(data));
+          summary.http.detail = detail.httpStatus;
+          summary.rowTotal = detail.rowTotal;
+          summary.checks.detailHttp = detail.success;
+          summary.checks.detailScope = detail.scopeMatches;
+          summary.checks.detailRows = detail.rowsPresent && detail.rowTotal > 0;
+          if (refreshed && refreshed.status() !== 200) ui.httpFailure = true;
+        }
+        if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
+      }
+      batchFamilies.push(summary);
+    }
+    if (batchFamilies.length && Date.now() < deadline) {
+      const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline);
+      exports.push({ batch: batchNumber, ...result });
+      for (const family of batchFamilies) {
+        if (result.success && result.candidateIds.includes(family.candidateId)) {
+          family.exportCoverage.push(result.format);
+          family.filenames.push(result.filename);
+        }
+        family.http.exports[result.format] = result.httpStatus;
+      }
+    }
+    for (const family of batchFamilies) {
+      family.checks.exportAtLeastOne = family.exportCoverage.length > 0;
+      family.checkFailures = checkFailures(family.checks);
+      family.status = family.checkFailures.length ? 'UNVERIFIED' : 'PASS';
+      families.push(family);
+      processedFamilyIds.add(family.familyId);
+    }
+  }
+  const eligibilityGaps = Array.isArray(data.unavailable) ? data.unavailable.map((item) => ({
+    id: item?.id || null,
+    title: item?.title || null,
+    missing: Array.isArray(item?.missing) ? item.missing.slice(0, 12) : [],
+  })) : [];
+  const sourceErrors = Array.isArray(data.sourceErrors) ? data.sourceErrors.map((item) => ({
+    source: item?.source || null,
+    message: item?.message || null,
+  })) : [];
+  const remainingFamilyCount = selected.selected.filter((item) => !processedFamilyIds.has(item.familyId)).length;
+  const assessment = assessCatalog({ families, requestedUnknown: selected.requestedUnknown, deferred: selected.deferred, excluded: selected.excluded, eligibilityGaps, sourceErrors, remainingFamilyCount, ui });
+  return {
+    assessment,
+    ...assessment,
+    families,
+    exports,
+    eligibilityGaps,
+    sourceErrors,
+    ui,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
+async function run(ctx) {
+  return runReadOnlyPageScenario(ctx, {
+    id: 'smartbi-catalog-matrix-readonly',
+    path: PATH,
+    landmarks: ['工厂分析', '按分类浏览'],
+    timeoutMs: 60_000,
+    appMountTimeoutMs: 90_000,
+    inspect: inspectCatalog,
+  });
+}
+
+module.exports = {
+  id: 'smartbi-catalog-matrix-readonly',
+  defaultEnabled: false,
+  run,
+  inspectCatalog,
+  assessCatalog,
+  candidateIsQualified,
+  candidateUnitsAligned,
+  familyOf,
+  groupCandidates,
+  isRestaurantOnly,
+  selectCatalogCandidates,
+  summarizeExportIds,
+  validateCatalogFamilies,
+  isRecommendationsResponse,
+  isDetailsResponse,
+  isExportResponse,
+};

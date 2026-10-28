@@ -11,6 +11,7 @@ import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
 import com.cretas.aims.repository.ProductWorkProcessRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -57,6 +58,9 @@ class ProductWorkProcessServiceImplTest {
 
     @Mock
     private ProductWorkProcessAssigneeRepository assigneeRepository;
+
+    @Mock
+    private ProcessSecretRecipeGuard processSecretGuard;
 
     @InjectMocks
     private ProductWorkProcessServiceImpl service;

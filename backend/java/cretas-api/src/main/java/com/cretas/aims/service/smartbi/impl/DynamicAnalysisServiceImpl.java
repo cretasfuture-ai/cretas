@@ -2,6 +2,7 @@ package com.cretas.aims.service.smartbi.impl;
 
 import com.cretas.aims.dto.smartbi.BackfillResult;
 import com.cretas.aims.dto.smartbi.BatchBackfillResult;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiDynamicData;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiPgExcelUpload;
 import com.cretas.aims.entity.smartbi.postgres.SmartBiPgFieldDefinition;
@@ -69,6 +70,11 @@ public class DynamicAnalysisServiceImpl implements DynamicAnalysisService {
             log.warn("Upload not found: {}", uploadId);
             return response;
         }
+        if (!Objects.equals(factoryId, upload.getFactoryId())) {
+            log.warn("拒绝跨工厂动态分析: requestedFactory={}, uploadFactory={}, uploadId={}",
+                    factoryId, upload.getFactoryId(), uploadId);
+            throw new BusinessException(403, "上传数据不属于当前工厂");
+        }
         response.setTableType(upload.getDetectedTableType());
 
         // Get field definitions
@@ -81,17 +87,30 @@ public class DynamicAnalysisServiceImpl implements DynamicAnalysisService {
         // cols would need ~2GB heap). KPI/chart math runs at SQL level. 1K ≈
         // 30-50MB materialized even for wide POS tables.
         final int SAMPLE_CAP = 1000;
-        List<SmartBiDynamicData> dataRows = dynamicDataRepository
+        Page<SmartBiDynamicData> dataPage = dynamicDataRepository
                 .findByFactoryIdAndUploadIdOrderByRowIndex(factoryId, uploadId,
-                        org.springframework.data.domain.PageRequest.of(0, SAMPLE_CAP))
-                .getContent();
+                        org.springframework.data.domain.PageRequest.of(0, SAMPLE_CAP));
+        List<SmartBiDynamicData> dataRows = dataPage.getContent();
         if (dataRows.isEmpty()) {
             log.warn("No data found for uploadId={}", uploadId);
-            return response;
+            throw new BusinessException(422, "上传数据暂无可分析数据");
         }
         if (dataRows.size() == SAMPLE_CAP) {
             log.info("Dynamic analysis sampled {} rows (cap) for uploadId={}", SAMPLE_CAP, uploadId);
         }
+
+        // Preserve semantic facts lost by chart aggregation.  The upload flow
+        // must not infer a unit from the first row: for large uploads we mark
+        // coverage incomplete and the egress guard refuses unit-sensitive
+        // claims rather than guessing.
+        long realRowCount = dataPage.getTotalElements();
+        if (upload.getRowCount() != null && upload.getRowCount() != realRowCount) {
+            log.warn("上传元数据行数与分页总数不一致: uploadId={}, metadata={}, pageTotal={}",
+                    uploadId, upload.getRowCount(), realRowCount);
+        }
+        boolean completeCoverage = !dataPage.hasNext()
+                && realRowCount <= SAMPLE_CAP;
+        response.setAnalysisFacts(buildAnalysisFacts(dataRows, fields, realRowCount, completeCoverage));
 
         // Find measure and dimension fields
         List<SmartBiPgFieldDefinition> measures = fields.stream()
@@ -116,7 +135,6 @@ public class DynamicAnalysisServiceImpl implements DynamicAnalysisService {
         // together triple the response time. On 200K POS data this pushes
         // total > 3 min. Users can get richer insight via AI 问答 which has
         // its own parallel LLM pipeline.
-        long realRowCount = upload.getRowCount() != null ? upload.getRowCount() : dataRows.size();
         if (realRowCount <= 30000) {
             long tIns = System.currentTimeMillis();
             response.setInsights(generateInsights(factoryId, uploadId, upload.getDetectedTableType(),
@@ -128,6 +146,149 @@ public class DynamicAnalysisServiceImpl implements DynamicAnalysisService {
         }
 
         return response;
+    }
+
+    private Map<String, Object> buildAnalysisFacts(List<SmartBiDynamicData> rows,
+                                                     List<SmartBiPgFieldDefinition> fields,
+                                                     long realRowCount,
+                                                     boolean completeCoverage) {
+        Map<String, Object> facts = new LinkedHashMap<>();
+        Set<String> unitFields = fields.stream()
+                .filter(f -> containsUnitToken(f.getOriginalName()) || containsUnitToken(f.getStandardName()))
+                .map(SmartBiPgFieldDefinition::getOriginalName)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> units = new LinkedHashSet<>();
+        Set<Double> explicitWasteAmounts = new LinkedHashSet<>();
+        Set<String> explicitWasteCurrencies = new LinkedHashSet<>();
+        boolean wasteCurrencyProof = true;
+        boolean hasExplicitWasteAmount = false;
+        for (SmartBiDynamicData row : rows) {
+            Map<String, Object> values = row.getRowData();
+            if (values == null) continue;
+            for (String field : unitFields) {
+                Object value = values.get(field);
+                if (value != null && !value.toString().isBlank()) units.add(value.toString().trim());
+            }
+            for (String key : values.keySet()) {
+                if (isExplicitWasteAmountField(key)) {
+                    Double numeric = meaningfulNumber(values.get(key));
+                    if (numeric != null) {
+                        hasExplicitWasteAmount = true;
+                        if (completeCoverage) {
+                            explicitWasteAmounts.add(numeric);
+                            String currency = currencyForWasteField(key, values, fields);
+                            if (currency == null) {
+                                wasteCurrencyProof = false;
+                            } else {
+                                explicitWasteCurrencies.add(currency);
+                            }
+                        } else {
+                            wasteCurrencyProof = false;
+                        }
+                    }
+                }
+            }
+        }
+        facts.put("unitValues", new ArrayList<>(units));
+        facts.put("unitComplete", completeCoverage);
+        facts.put("explicitWasteAmounts", new ArrayList<>(explicitWasteAmounts));
+        if (completeCoverage && hasExplicitWasteAmount && wasteCurrencyProof
+                && explicitWasteCurrencies.size() == 1) {
+            facts.put("explicitWasteCurrency", explicitWasteCurrencies.iterator().next());
+        }
+        // No benchmark is present in the uploaded workbook contract. A
+        // configured/history benchmark must be added explicitly by a caller.
+        facts.put("benchmarkValues", Collections.emptyList());
+        facts.put("sourceRows", realRowCount);
+        return facts;
+    }
+
+    private boolean isExplicitWasteAmountField(String key) {
+        String lower = key == null ? "" : key.toLowerCase(Locale.ROOT);
+        return (lower.contains("损耗") || lower.contains("报损")
+                || lower.contains("waste") || lower.contains("scrap"))
+                && (lower.contains("成本") || lower.contains("金额")
+                || lower.contains("cost") || lower.contains("amount"))
+                && !lower.contains("单价") && !lower.contains("unit_price")
+                && !lower.contains("price");
+    }
+
+    private String currencyForWasteField(String amountField,
+                                         Map<String, Object> values,
+                                         List<SmartBiPgFieldDefinition> fields) {
+        String fromHeader = normalizeCurrency(amountField);
+        if (fromHeader != null) return fromHeader;
+        for (Map.Entry<String, Object> entry : values.entrySet()) {
+            String key = entry.getKey();
+            if (isCurrencyField(key)) {
+                String fromRow = normalizeCurrency(entry.getValue());
+                if (fromRow != null) return fromRow;
+            }
+        }
+        if (fields != null) {
+            for (SmartBiPgFieldDefinition field : fields) {
+                if (field != null && amountField != null
+                        && amountField.equals(field.getOriginalName())) {
+                    String fromOriginalHeader = normalizeCurrency(field.getOriginalName());
+                    if (fromOriginalHeader != null) return fromOriginalHeader;
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isCurrencyField(String key) {
+        if (key == null) return false;
+        String lower = key.toLowerCase(Locale.ROOT).replace("-", "_");
+        return lower.equals("币种") || lower.equals("货币")
+                || lower.equals("currency") || lower.equals("currency_code")
+                || lower.equals("currencycode");
+    }
+
+    private String normalizeCurrency(Object raw) {
+        if (raw == null) return null;
+        String value = raw.toString().trim().toUpperCase(Locale.ROOT);
+        // Reject other currencies before the generic Chinese "元" check:
+        // 欧元/日元 must never be silently normalized to CNY.
+        if (value.contains("EUR") || value.contains("JPY")
+                || value.contains("欧元") || value.contains("日元")) {
+            return null;
+        }
+        if (value.equals("USD") || value.equals("美元") || value.equals("$")
+                || value.contains("USD") || value.contains("DOLLAR")
+                || value.contains("美元") || value.contains("$")) {
+            return "USD";
+        }
+        if (value.equals("CNY") || value.equals("RMB") || value.equals("人民币")
+                || value.equals("元") || value.equals("¥") || value.equals("￥")
+                || value.contains("CNY") || value.contains("RMB")
+                || value.contains("人民币")
+                || value.matches(".*[（(]元[）)].*")) {
+            return "CNY";
+        }
+        return null;
+    }
+
+    private Double meaningfulNumber(Object value) {
+        if (value instanceof Number) {
+            double numeric = ((Number) value).doubleValue();
+            return Double.isFinite(numeric) && numeric >= 0 ? numeric : null;
+        }
+        if (value == null) return null;
+        try {
+            double parsed = Double.parseDouble(value.toString().replace(",", "").trim());
+            return Double.isFinite(parsed) && parsed >= 0 ? parsed : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private boolean containsUnitToken(String value) {
+        if (value == null) return false;
+        String lower = value.toLowerCase(Locale.ROOT).trim();
+        return lower.equals("unit") || lower.equals("product_unit")
+                || value.trim().equals("单位") || value.trim().equals("计量单位");
     }
 
     /**

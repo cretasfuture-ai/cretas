@@ -524,7 +524,7 @@ async function sendQuestion(
           ...(requestJointUploads ? { inspection_upload_id: requestJointUploads.inspectionUploadId, cost_upload_id: requestJointUploads.costUploadId } : {}),
           year: data.period.year, period_type: data.period.periodType,
           start_month: data.period.startMonth, end_month: data.period.endMonth,
-          analysis_subject: acceptedSubject, include_optional: true, use_ai: false,
+          analysis_subject: acceptedSubject, guided: true, include_optional: true, use_ai: false,
         },
       },
     };

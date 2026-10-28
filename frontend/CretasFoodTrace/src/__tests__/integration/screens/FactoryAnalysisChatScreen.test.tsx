@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import FactoryAnalysisChatScreen from '../../../screens/smartbi/FactoryAnalysisChatScreen';
 import { askFactoryAnalysis, FactoryAnalysisApiError } from '../../../services/api/smartbiFactoryAnalysis';
-import { exportFactoryCharts, saveFactoryChartFile, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
+import { exportFactoryCharts, getFactoryRecommendations, saveFactoryChartFile, shareFactoryChartFile } from '../../../services/api/smartbiFactoryCharts';
 
 const navigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({ useNavigation: () => ({ navigate }) }));
@@ -14,6 +14,7 @@ jest.mock('../../../services/api/smartbiFactoryAnalysis', () => ({
 }));
 jest.mock('../../../services/api/smartbiFactoryCharts', () => ({
   exportFactoryCharts: jest.fn(),
+  getFactoryRecommendations: jest.fn(),
   saveFactoryChartFile: jest.fn(),
   shareFactoryChartFile: jest.fn(),
 }));
@@ -65,6 +66,22 @@ describe('FactoryAnalysisChatScreen', () => {
     (exportFactoryCharts as jest.Mock).mockResolvedValue({ uri: 'file:///cache/result.pdf', name: 'result.pdf', mimeType: 'application/pdf', size: 1000, factoryId: 'F006', userId: '1309', role: 'factory_super_admin' });
     (shareFactoryChartFile as jest.Mock).mockResolvedValue(undefined);
     (saveFactoryChartFile as jest.Mock).mockResolvedValue({ uri: 'content://saved/result.pdf' });
+  });
+
+  it('refreshes expired joint details in the original guided product scope without AI ranking', async () => {
+    const expired = { ...chart, id: 'production.inspection_fused@sku-1@kg', detailSnapshotKey: 'snapshot-original', detailContext: { id: 'expired', expiresAt: '2000-01-01T00:00:00Z' } };
+    const next = { ...expired, detailContext: { id: 'renewed', expiresAt: '2099-01-01T00:00:00Z' } };
+    const data = answered({ source: 'upload', uploadId: 42, jointUploads: { inspectionUploadId: 43, costUploadId: 44 }, analysisSubject: 'sku-1', recommendations: [expired] });
+    (askFactoryAnalysis as jest.Mock).mockResolvedValueOnce(data);
+    (getFactoryRecommendations as jest.Mock).mockResolvedValueOnce({ success: true, data: { ...data, recommendations: [next] } });
+    const screen = renderScreen({ initialQuestion: '关联生产检验成本', source: 'upload', uploadId: 42, inspectionUploadId: 43, costUploadId: 44 });
+    await waitFor(() => expect(screen.getByText('查看原始明细')).toBeTruthy());
+    fireEvent.press(screen.getByText('查看原始明细'));
+    await waitFor(() => expect(getFactoryRecommendations).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'upload', upload_id: 42, inspection_upload_id: 43, cost_upload_id: 44,
+      guided: true, use_ai: false, analysis_subject: 'sku-1', detail_candidate_ids: [expired.id],
+    })));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('FactoryChartDetails', expect.objectContaining({ recommendation: expect.objectContaining({ detailContext: next.detailContext }) })));
   });
 
   it('sends all three upload IDs on the mounted first question and context only on follow-up', async () => {
