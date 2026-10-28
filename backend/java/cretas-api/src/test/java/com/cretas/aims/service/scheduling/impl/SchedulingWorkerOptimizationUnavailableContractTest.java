@@ -111,17 +111,20 @@ class SchedulingWorkerOptimizationUnavailableContractTest {
     }
 
     @Test
-    void generationFailsClosedBeforeReadingOrWritingSchedulingResources() {
+    void generationDelegatesToDagEngineAndNeverDispatchesWorkers() {
+        // APS v1 (2026-10-28): 自动排程 = 按工艺图 + 预计工时排时间; 人员优化仍不可用, 生成路径不得派工。
+        com.cretas.aims.service.scheduling.dag.DagScheduleGenerator generator =
+                mock(com.cretas.aims.service.scheduling.dag.DagScheduleGenerator.class);
+        ReflectionTestUtils.setField(optimizer, "dagScheduleGenerator", generator);
         GenerateScheduleRequest request = new GenerateScheduleRequest();
         request.setPlanDate(java.time.LocalDate.of(2026, 10, 19));
+        com.cretas.aims.dto.scheduling.SchedulingPlanDTO produced = new com.cretas.aims.dto.scheduling.SchedulingPlanDTO();
+        when(generator.generate(FACTORY, request, user.getId())).thenReturn(produced);
 
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> optimizer.generateSchedule(FACTORY, request, user.getId()));
+        assertThat(optimizer.generateSchedule(FACTORY, request, user.getId())).isSameAs(produced);
 
-        assertThat(error.getMessage()).contains("AI自动排程暂不可用");
-        verifyNoInteractions(planRepository, scheduleRepository, assignmentRepository, lineRepository,
-                alertRepository, predictionRepository, userRepository, batchRepository,
-                productionPlanRepository, droolsRuleRepository, planCrudService, workerAssignmentService);
+        verify(generator).generate(FACTORY, request, user.getId());
+        verifyNoInteractions(assignmentRepository, workerAssignmentService);
     }
 
     @ParameterizedTest

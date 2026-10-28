@@ -18,6 +18,11 @@ public class LineScheduleDTO {
     private String productionLineName;
     private Long batchId;
     private String batchNumber;
+    /** APS 自动排程对应的生产计划 id / 编号; 手工排程为空。 */
+    private String productionPlanId;
+    private String planNumber;
+    /** APS 自动排程: 每道工序 {taskName, processOrder, workProcessId, start, end, status}; 手工排程为空。 */
+    private List<java.util.Map<String, Object>> taskTimeline;
     private Integer sequenceOrder;
     private LocalDateTime plannedStartTime;
     private LocalDateTime plannedEndTime;
@@ -48,6 +53,8 @@ public class LineScheduleDTO {
         dto.setPlanId(entity.getPlanId());
         dto.setProductionLineId(entity.getProductionLineId());
         dto.setBatchId(entity.getBatchId());
+        dto.setProductionPlanId(entity.getProductionPlanId());
+        dto.setTaskTimeline(entity.getTaskTimeline());
         dto.setSequenceOrder(entity.getSequenceOrder());
         dto.setPlannedStartTime(entity.getPlannedStartTime());
         dto.setPlannedEndTime(entity.getPlannedEndTime());

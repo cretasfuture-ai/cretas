@@ -22,6 +22,16 @@ test('capability acceptance requires the actual matching contract and mounted UI
   assert.equal(assessCapability('aiGeneration', available, ui).result, 'PARTIAL_DEFECT');
 });
 
+test('APS v1: aiGeneration is AVAILABLE/DAG_DURATION and its button must be enabled', () => {
+  const expected = { status: 'AVAILABLE', mode: 'DAG_DURATION' };
+  const live = structuredClone(payload);
+  live.data.aiGeneration = { status: 'AVAILABLE', mode: 'DAG_DURATION', reason: '按工艺图排' };
+  const enabled = { ...ui, automationDisabled: false };
+  assert.equal(assessCapability('aiGeneration', live, enabled, expected).result, 'PASS');
+  assert.equal(assessCapability('aiGeneration', live, ui, expected).result, 'PARTIAL_DEFECT');
+  assert.equal(assessCapability('aiGeneration', payload, enabled, expected).rootCauseClass, 'backend');
+});
+
 test('new live scenarios are explicit opt-ins and do not broaden default campaigns', () => {
   assert.equal(create.defaultEnabled, false);
   assert.equal(workers.defaultEnabled, false);

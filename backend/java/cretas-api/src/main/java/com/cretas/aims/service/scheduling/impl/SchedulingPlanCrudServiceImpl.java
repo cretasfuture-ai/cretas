@@ -62,9 +62,88 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Transactional
     public SchedulingPlanDTO createPlan(String factoryId, CreateSchedulingPlanRequest request, Long userId) {
         validateExplicitSchedules(factoryId, request);
+        List<LineSchedule> schedules = new ArrayList<>();
+        if (request.getSchedules() != null) {
+            for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
+                LineSchedule schedule = new LineSchedule();
+                schedule.setProductionLineId(item.getProductionLineId());
+                schedule.setBatchId(item.getBatchId());
+                schedule.setSequenceOrder(item.getSequenceOrder() != null ? item.getSequenceOrder() : 0);
+                schedule.setPlannedStartTime(item.getPlannedStartTime());
+                schedule.setPlannedEndTime(item.getPlannedEndTime());
+                schedule.setPlannedQuantity(item.getPlannedQuantity());
+                schedules.add(schedule);
+                // Worker identities are persisted only by the existing manual assignment service.
+                // Counting IDs here would falsely report that workers were assigned.
+            }
+        }
+        return persistPlan(factoryId, request.getPlanDate(), request.getPlanName(), request.getNotes(),
+                schedules, userId);
+    }
+
+    /**
+     * 自动排程 (APS) 的落库入口: 计划级, 允许没有批次, 但每条必须带生产计划。
+     * 同日已有调度计划 → 409, 与手工创建同一口径 (共用 {@link #persistPlan})。
+     * 手工创建的 {@link #validateExplicitSchedules} 不放松。
+     */
+    @Override
+    @Transactional
+    public SchedulingPlanDTO createAutoSchedulePlan(String factoryId, LocalDate planDate, String planName,
+                                                   String notes, List<AutoScheduleItem> items, Long userId) {
+        if (planDate == null) {
+            throw new BusinessException("计划日期不能为空");
+        }
+        if (items == null || items.isEmpty()) {
+            throw new BusinessException("自动排程没有可落库的排程");
+        }
+        List<LineSchedule> schedules = new ArrayList<>();
+        for (AutoScheduleItem item : items) {
+            if (item == null) {
+                throw new BusinessException("排程明细不能为空");
+            }
+            if (item.productionPlanId() == null || item.productionPlanId().isBlank()) {
+                throw new BusinessException("自动排程每条必须关联生产计划");
+            }
+            if (item.productionLineId() == null || item.productionLineId().isBlank()) {
+                throw new BusinessException("每条排程必须提供产线");
+            }
+            if (item.plannedStartTime() == null || item.plannedEndTime() == null
+                    || !item.plannedEndTime().isAfter(item.plannedStartTime())) {
+                throw new BusinessException("每条排程必须提供有效的起止时间，结束时间必须晚于开始时间");
+            }
+            if (item.plannedQuantity() == null || item.plannedQuantity() <= 0) {
+                throw new BusinessException("每条排程数量必须大于0");
+            }
+            ProductionLine line = lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(item.productionLineId(), factoryId)
+                    .orElseThrow(() -> new BusinessException("产线不存在或不属于当前工厂: " + item.productionLineId()));
+            if (line.getStatus() != ProductionLine.LineStatus.active) {
+                throw new BusinessException("产线当前不可排程: " + item.productionLineId());
+            }
+            productionPlanRepository.findByIdAndFactoryId(item.productionPlanId(), factoryId)
+                    .orElseThrow(() -> new BusinessException("生产计划不存在或不属于当前工厂: " + item.productionPlanId()));
+            if (item.batchId() != null) {
+                batchRepository.findByIdAndFactoryId(item.batchId(), factoryId)
+                        .orElseThrow(() -> new BusinessException("批次不存在或不属于当前工厂: " + item.batchId()));
+            }
+            LineSchedule schedule = new LineSchedule();
+            schedule.setProductionLineId(item.productionLineId());
+            schedule.setProductionPlanId(item.productionPlanId());
+            schedule.setBatchId(item.batchId());
+            schedule.setSequenceOrder(item.sequenceOrder());
+            schedule.setPlannedStartTime(item.plannedStartTime());
+            schedule.setPlannedEndTime(item.plannedEndTime());
+            schedule.setPlannedQuantity(item.plannedQuantity());
+            schedule.setTaskTimeline(item.taskTimeline());
+            schedules.add(schedule);
+        }
+        return persistPlan(factoryId, planDate, planName, notes, schedules, userId);
+    }
+
+    private SchedulingPlanDTO persistPlan(String factoryId, LocalDate planDate, String planName, String notes,
+                                          List<LineSchedule> schedules, Long userId) {
         // 检查是否已存在同日计划
         Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
-            factoryId, request.getPlanDate());
+            factoryId, planDate);
         if (existing.isPresent()) {
             throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
                     .withHint("如需查看请打开该日期已有的调度计划")
@@ -73,37 +152,23 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
 
         SchedulingPlan plan = new SchedulingPlan();
         plan.setFactoryId(factoryId);
-        plan.setPlanDate(request.getPlanDate());
-        plan.setPlanName(request.getPlanName() != null ? request.getPlanName()
-            : request.getPlanDate().toString() + " 生产计划");
-        plan.setNotes(request.getNotes());
+        plan.setPlanDate(planDate);
+        plan.setPlanName(planName != null ? planName : planDate.toString() + " 生产计划");
+        plan.setNotes(notes);
         plan.setCreatedBy(userId);
         plan.setStatus(SchedulingPlan.PlanStatus.draft);
 
         plan = planRepository.save(plan);
 
         // 创建排程
-        if (request.getSchedules() != null && !request.getSchedules().isEmpty()) {
-            List<LineSchedule> schedules = new ArrayList<>();
-            int totalWorkers = 0;
-            for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
-                LineSchedule schedule = new LineSchedule();
+        if (!schedules.isEmpty()) {
+            for (LineSchedule schedule : schedules) {
                 schedule.setPlan(plan);
-                schedule.setProductionLineId(item.getProductionLineId());
-                schedule.setBatchId(item.getBatchId());
-                schedule.setSequenceOrder(item.getSequenceOrder() != null ? item.getSequenceOrder() : 0);
-                schedule.setPlannedStartTime(item.getPlannedStartTime());
-                schedule.setPlannedEndTime(item.getPlannedEndTime());
-                schedule.setPlannedQuantity(item.getPlannedQuantity());
                 schedule.setStatus(LineSchedule.ScheduleStatus.pending);
-                schedules.add(schedule);
-
-                // Worker identities are persisted only by the existing manual assignment service.
-                // Counting IDs here would falsely report that workers were assigned.
             }
             scheduleRepository.saveAll(schedules);
             plan.setTotalBatches(schedules.size());
-            plan.setTotalWorkers(totalWorkers);
+            plan.setTotalWorkers(0);
             planRepository.save(plan);
         }
 
@@ -662,6 +727,16 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 batchRepository.findAllById(batchIds).stream()
                         .collect(Collectors.toMap(ProductionBatch::getId, Function.identity()));
 
+        Set<String> productionPlanIds = schedules.stream()
+                .map(LineSchedule::getProductionPlanId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<String, String> planNumbers = new HashMap<>();
+        if (!productionPlanIds.isEmpty()) {
+            productionPlanRepository.findAllById(productionPlanIds)
+                    .forEach(pp -> planNumbers.put(pp.getId(), pp.getPlanNumber()));
+        }
+
         List<WorkerAssignment> allAssignments = scheduleIds.isEmpty() ? Collections.emptyList() :
                 assignmentRepository.findByScheduleIdIn(scheduleIds);
 
@@ -690,6 +765,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 if (batch != null) {
                     dto.setBatchNumber(batch.getBatchNumber());
                 }
+            }
+            if (entity.getProductionPlanId() != null) {
+                dto.setPlanNumber(planNumbers.get(entity.getProductionPlanId()));
             }
 
             List<WorkerAssignment> assignments = assignmentsBySchedule.getOrDefault(entity.getId(), Collections.emptyList());

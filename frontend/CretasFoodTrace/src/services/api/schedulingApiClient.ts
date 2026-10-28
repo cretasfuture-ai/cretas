@@ -571,6 +571,8 @@ class SchedulingApiClient {
     const requestData = {
       planDate: data.planDate || data.startDate || formatDate(new Date()),
       shiftType: data.shiftType,
+      // 后端 GenerateScheduleRequest 读的是 planIds (APS v1, 2026-10-28); productionPlanIds 旧字段后端从未读过
+      planIds: data.planIds || data.productionPlanIds,
       productionPlanIds: data.productionPlanIds || data.planIds,
       batchIds: data.batchIds,
       optimizeFor: data.optimizeFor,

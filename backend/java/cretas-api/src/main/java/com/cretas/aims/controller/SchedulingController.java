@@ -43,7 +43,8 @@ public class SchedulingController {
     // ==================== 调度计划 CRUD ====================
 
     /**
-     * Returns the server capability contract. Automation is unavailable until a verified engine is wired.
+     * Returns the server capability contract. aiGeneration = APS v1 (按工艺图 + 预计工时排工序时间);
+     * workerOptimization stays unavailable until a verified engine is wired.
      */
     @RequirePermission({"scheduling:read", "production:read"})
     @RequireModule("scheduling")
@@ -51,9 +52,10 @@ public class SchedulingController {
     @Operation(summary = "获取调度能力", description = "返回当前可用的调度能力及明确的不可用原因")
     public ApiResponse<SchedulingCapabilitiesDTO> getCapabilities(
             @PathVariable String factoryId) {
-        SchedulingCapabilitiesDTO.Capability unavailableAi = SchedulingCapabilitiesDTO.Capability.builder()
-                .status("UNAVAILABLE").mode("UNAVAILABLE")
-                .reason("AI自动排程暂不可用；本次不创建或调整排程，请使用手动创建并明确产线和起止时间。")
+        SchedulingCapabilitiesDTO.Capability dagAi = SchedulingCapabilitiesDTO.Capability.builder()
+                .status("AVAILABLE").mode("DAG_DURATION")
+                .reason("按工艺图的先后关系和每道工序的预计工时排出开始/结束时间；"
+                        + "缺预计工时的工序不排（该计划整体不排，请到「工序管理」填预计分钟）；不自动派工。")
                 .build();
         SchedulingCapabilitiesDTO.Capability unavailableWorkers = SchedulingCapabilitiesDTO.Capability.builder()
                 .status("UNAVAILABLE").mode("UNAVAILABLE")
@@ -61,7 +63,7 @@ public class SchedulingController {
                 .build();
         SchedulingCapabilitiesDTO capabilities = SchedulingCapabilitiesDTO.builder()
                 .contractVersion("scheduling-capabilities/v1")
-                .aiGeneration(unavailableAi)
+                .aiGeneration(dagAi)
                 .workerOptimization(unavailableWorkers)
                 .reschedule(SchedulingCapabilitiesDTO.Capability.builder()
                         .status("AVAILABLE").mode("RECORD_REASON_ONLY")
@@ -441,7 +443,7 @@ public class SchedulingController {
     @RequirePermission({"scheduling:read_write", "production:read_write"})
     @RequireModule("scheduling")
     @PostMapping("/generate")
-    @Operation(summary = "AI生成调度计划", description = "使用AI算法自动生成最优调度计划，考虑产能、人员、设备等因素")
+    @Operation(summary = "按工艺图自动排程", description = "选生产计划, 按工艺图先后关系和每道工序预计工时排出开始/结束时间; 缺工时的计划不排; 不自动派工")
     public ApiResponse<SchedulingPlanDTO> generateSchedule(
             @Parameter(description = "工厂ID", example = "F001")
             @PathVariable String factoryId,

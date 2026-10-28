@@ -22,6 +22,18 @@ export interface SchedulingPlan {
   confirmedBy?: number;
   confirmedAt?: string;
   notes?: string | null;
+  /** 自动排程的提示 (缺工时 / 没有工艺图 / 开工时刻默认 08:00 等); 只在生成那次返回。 */
+  warnings?: string[];
+}
+
+/** 自动排程 (按工艺图) 每道工序的排程时间; start / end 为本地时间 ISO 字符串。 */
+export interface ScheduleTaskTimelineEntry {
+  taskName: string;
+  processOrder: number;
+  workProcessId?: string | null;
+  start: string | null;
+  end: string | null;
+  status: 'SCHEDULED' | 'DONE' | 'MISSING_DURATION' | 'BLOCKED_BY_MISSING' | string;
 }
 
 export interface LineSchedule {
@@ -45,6 +57,10 @@ export interface LineSchedule {
   workerAssignments: WorkerAssignment[];
   completionRate?: number;
   isDelayed?: boolean;
+  /** 自动排程: 对应的生产计划; 手工排程为空。 */
+  productionPlanId?: string | null;
+  planNumber?: string | null;
+  taskTimeline?: ScheduleTaskTimelineEntry[] | null;
 }
 
 export interface WorkerAssignment {
@@ -166,6 +182,9 @@ interface SchedulingWireLineSchedule {
   workerAssignments?: SchedulingWireWorkerAssignment[];
   completionRate?: number;
   isDelayed?: boolean;
+  productionPlanId?: string | null;
+  planNumber?: string | null;
+  taskTimeline?: ScheduleTaskTimelineEntry[] | null;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -206,6 +225,9 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     workerAssignments: (wire.workerAssignments || []).map(mapWorkerAssignment),
     completionRate: wire.completionRate,
     isDelayed: wire.isDelayed,
+    productionPlanId: wire.productionPlanId ?? null,
+    planNumber: wire.planNumber ?? null,
+    taskTimeline: wire.taskTimeline ?? null,
   };
 }
 
@@ -582,21 +604,39 @@ export function cancelSchedulingPlan(factoryId: string, planId: string, reason: 
   });
 }
 
+export interface GenerateScheduleRequest {
+  planDate: string;
+  /** 要排的生产计划 id, 按顺序先到先排 (同一工位同一时刻只做一个)。 */
+  planIds: string[];
+  /** 可选: 产线; 工厂只有 1 条可用产线时可不传。 */
+  productionLineId?: string;
+  /** 可选: 开工时刻 HH:mm; 不传按计划日期 08:00。 */
+  startTime?: string;
+}
+
 /**
- * AI生成调度建议
+ * 按工艺图自动排程: 按工艺图先后关系 + 每道工序预计工时排出开始/结束时间。
+ * 缺预计工时的计划不排 (返回 warnings 列出工序名); 不自动派工。
  */
-export function generateSchedule(
-  factoryId: string,
-  data: {
-    planDate: string;
-    batchIds: number[];
-    optimizationGoal?: 'minimize_cost' | 'maximize_efficiency' | 'balanced';
-    considerTemporaryWorkers?: boolean;
-    minCompletionProbability?: number;
-  }
-) {
+export function generateSchedule(factoryId: string, data: GenerateScheduleRequest) {
   return post<SchedulingWirePlan>(`/${factoryId}/scheduling/generate`, data)
     .then(response => ({ ...response, data: mapSchedulingPlan(response.data) }));
+}
+
+/** 待排产的生产计划 (后端 pending-batches 返回的是生产计划列表)。 */
+export interface PendingProductionPlan {
+  id: string;
+  planNumber: string;
+  productTypeId?: string;
+  productTypeName?: string | null;
+  plannedQuantity?: number | null;
+  expectedCompletionDate?: string | null;
+  status?: string;
+  isUrgent?: boolean;
+}
+
+export function getPendingProductionPlans(factoryId: string) {
+  return get<PendingProductionPlan[]>(`/${factoryId}/scheduling/pending-batches`);
 }
 
 /**
