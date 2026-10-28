@@ -21,6 +21,7 @@ from . import data_summarizer as ds
 from . import scenario_context as sc
 from . import prompt_builder as pb
 from . import llm_client as llm
+from common.llm_client import EgressRedactionError, egress_refusal_message
 from .statistical import generate_statistical_insights
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,9 @@ class InsightGenerator:
 
             return result
 
+        except EgressRedactionError as e:
+            logger.warning("Insight generation refused at LLM egress: %s", e)
+            return {"success": False, "error": egress_refusal_message(e), "insights": []}
         except Exception as e:
             logger.error("Insight generation failed: %s", e, exc_info=True)
             return {"success": False, "error": str(e), "insights": []}
@@ -289,6 +293,13 @@ class InsightGenerator:
                 "data": json.dumps(done_result, ensure_ascii=False, default=str),
             }
 
+        except EgressRedactionError as e:
+            logger.warning("Streaming insight refused at LLM egress: %s", e)
+            yield {
+                "event": "done",
+                "data": json.dumps({"success": False, "error": egress_refusal_message(e)},
+                                   ensure_ascii=False),
+            }
         except Exception as e:
             logger.error("Streaming insight generation failed: %s", e, exc_info=True)
             yield {
@@ -416,6 +427,9 @@ class InsightGenerator:
                 (metrics or []) + overall_ratio_facts(df) + overall_factory_facts(df),
             )
 
+        except EgressRedactionError:
+            # 外发被拦: 不拿统计兜底冒充 AI 洞察 (还会被当成 method=llm 写进缓存), 抛给入口报错 (复审 H3)
+            raise
         except Exception as e:
             logger.error("LLM insight generation failed: %s", e, exc_info=True)
             return stat_insights

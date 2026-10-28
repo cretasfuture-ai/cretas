@@ -88,6 +88,12 @@ PUBLIC_PREFIXES = (
     "/api/ota/",
 )
 
+# 公开前缀里「内容不是某一家工厂的数据」的接口 (操作手册问答): 没有工厂上下文时外发按所有工厂的保密产品名
+# 脱敏, 不拒绝 (common.llm_client._egress_all_factories, Steve 2026-10-29 复审 H3)。
+ALL_FACTORIES_EGRESS_PREFIXES = (
+    "/api/food-kb/manual-chat",
+)
+
 # Exact internal-only routes that need stricter service-auth semantics than the
 # ordinary authenticated API surface. Keep this list exact so sibling routes
 # cannot accidentally inherit the internal-service bypass.
@@ -326,7 +332,7 @@ class JWTAuthMiddleware:
 
         # Skip public prefixes (no JWT required, no internal-secret either)
         if any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
-            await self.app(scope, receive, send)
+            await self._run_public(scope, receive, send, headers, path)
             return
 
         # Extract Bearer token
@@ -439,6 +445,55 @@ class JWTAuthMiddleware:
                 except Exception:
                     pass
         return
+
+    async def _run_public(self, scope: Scope, receive: Receive, send: Send,
+                          headers: dict, path: str) -> None:
+        """公开前缀: 不要求登录 (没带 / 验不过的 Bearer 照旧放行, 不新增 401)。
+
+        2026-10-29 (复审 H3): 以前公开前缀完全不看 Bearer, 登录了的工厂用户调 /api/insight/*、
+        /api/food-kb/manual-chat* 时外发脱敏拿不到工厂 —— 现在没有工厂就拒绝外发, 这些请求会被拒。
+        带了能验过的 Bearer: 按 token 的工厂设外发脱敏工厂 (_llm_factory) 和 RLS 租户 (PLATFORM 不算工厂)。
+        操作手册问答 (ALL_FACTORIES_EGRESS_PREFIXES) 的内容是产品手册、不是某一家工厂的数据: 没有工厂时按
+        所有工厂的保密产品名脱敏, 不拒绝。只影响外发脱敏和 RLS, 不改 scope["state"] 里的身份。"""
+        factory_id = None
+        auth_header = headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            claims = self._verify_token(auth_header[7:])
+            if claims:
+                raw = claims.get("factoryId")
+                if raw and str(raw).strip() and str(raw).strip().upper() != "PLATFORM":
+                    factory_id = str(raw)
+        llm_token = all_token = tenant_token = None
+        try:
+            from common.llm_metrics import _llm_factory
+            from common.llm_client import _egress_all_factories
+            if factory_id:
+                llm_token = _llm_factory.set(factory_id)
+            if any(path.startswith(p) for p in ALL_FACTORIES_EGRESS_PREFIXES):
+                all_token = _egress_all_factories.set(True)
+        except Exception:
+            pass
+        if factory_id:
+            try:
+                from smartbi.tenant_ctx import set_factory_id
+                tenant_token = set_factory_id(factory_id)
+            except Exception:
+                tenant_token = None
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            try:
+                if llm_token is not None:
+                    from common.llm_metrics import _llm_factory
+                    _llm_factory.reset(llm_token)
+                if all_token is not None:
+                    from common.llm_client import _egress_all_factories
+                    _egress_all_factories.reset(all_token)
+                if tenant_token is not None:
+                    from smartbi.tenant_ctx import reset_factory_id
+                    reset_factory_id(tenant_token)
+            except Exception:
+                pass
 
     def _verify_token(self, token: str) -> Optional[dict]:
         """Verify JWT token and return claims, or None if invalid."""

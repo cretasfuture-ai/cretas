@@ -23,6 +23,7 @@ import httpx
 
 from config import get_settings  # noqa: F401  -- kept for _get_active_model legacy callers
 from common.llm_router import call_chain, call_chain_stream, SLOT
+from common.llm_client import EgressRedactionError
 from common.llm_metrics import llm_caller_context
 from common.utils.llm_limiter import llm_rate_limit, get_semaphore
 from .prompt_builder import get_scenario_system_role
@@ -152,6 +153,10 @@ async def call_llm(
                 .get("content", "")
             )
 
+        except EgressRedactionError:
+            # 外发被拦 (没有工厂 / 脱敏失败) 不是供应商故障: ⛔ 不重试、不返回空串, 原样抛给调用方报错
+            # (Steve 2026-10-29 复审 H3)
+            raise
         except RuntimeError as e:
             # All-providers-exhausted from call_chain
             logger.warning(
@@ -236,6 +241,10 @@ async def call_llm_stream(
                     yield text
             # Ignore "usage" events here — caller of this function
             # only expects text chunks.
+    except EgressRedactionError:
+        # 外发被拦 (没有工厂 / 脱敏失败) 不是供应商故障: ⛔ 不重试、不返回空串, 原样抛给调用方报错
+        # (Steve 2026-10-29 复审 H3)
+        raise
     except RuntimeError as e:
         # All providers exhausted before any delta — log + return empty stream
         logger.error("LLM streaming call all providers exhausted: %s", e)
@@ -314,6 +323,10 @@ async def call_llm_stream_text(
                 text = event.get("text") or ""
                 if text:
                     yield text
+    except EgressRedactionError:
+        # 外发被拦 (没有工厂 / 脱敏失败) 不是供应商故障: ⛔ 不重试、不返回空串, 原样抛给调用方报错
+        # (Steve 2026-10-29 复审 H3)
+        raise
     except RuntimeError as e:
         logger.error("LLM text streaming all providers exhausted: %s", e)
     except Exception as e:
@@ -365,6 +378,10 @@ async def generate_text_analysis(
             with llm_caller_context("insight_text_analysis"):
                 result = await call_chain(SLOT.INSIGHTS, payload, timeout=LLM_TIMEOUT_BASE)
         return result["choices"][0]["message"]["content"]
+    except EgressRedactionError:
+        # 外发被拦 (没有工厂 / 脱敏失败) 不是供应商故障: ⛔ 不重试、不返回空串, 原样抛给调用方报错
+        # (Steve 2026-10-29 复审 H3)
+        raise
     except RuntimeError as e:
         logger.error("Text analysis all providers exhausted: %s", e)
         return ""

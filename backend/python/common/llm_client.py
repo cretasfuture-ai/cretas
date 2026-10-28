@@ -31,6 +31,14 @@ class EgressRedactionError(RuntimeError):
     """
 
 
+def egress_refusal_message(err: BaseException) -> str:
+    """给用户看的拒绝说明 (不含原文、不含工厂): 外发被拦时调用方必须把它报出来, ⛔ 不许当成供应商故障重试,
+    也不许返回空串 / 统计兜底冒充 AI 结果 (Steve 2026-10-29 复审 H3)。"""
+    if "NoEgressFactoryError" in str(err) or isinstance(err, NoEgressFactoryError):
+        return "AI 分析没有发出：无法确定这份数据属于哪家工厂，请登录后重试"
+    return "AI 分析没有发出：发给模型前的脱敏没有完成，请稍后重试"
+
+
 class _RedactingLLMClient:
     """P0 数据主权 — 共享 httpx 客户端的脱敏包装层。
 

@@ -1792,6 +1792,13 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         )
                     return response
                 except Exception as e:
+                    from common.llm_client import EgressRedactionError, egress_refusal_message
+                    if isinstance(e, EgressRedactionError):
+                        # 外发被拦 (没有工厂 / 脱敏失败): 明说没发出, 不落到「暂无可分析的数据」(复审 H3)
+                        msg = egress_refusal_message(e)
+                        return GeneralAnalysisResponse(
+                            success=False, error=msg, answer=msg, insights=[], charts=[],
+                            processing_time_ms=int((time.time() - start_time) * 1000))
                     logger.warning(f"Direct LLM analysis failed: {e}")
                     # Fall through to no-data response
 
@@ -3464,6 +3471,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             )
                         return
                     except Exception as e:
+                        from common.llm_client import EgressRedactionError, egress_refusal_message
+                        if isinstance(e, EgressRedactionError):
+                            # 外发被拦: 明说没发出 (复审 H3)
+                            msg = egress_refusal_message(e)
+                            yield _sse_event("done", {"success": False, "error": msg, "answer": msg,
+                                                       "charts": []})
+                            return
                         logger.warning(f"[stream] Direct LLM failed: {e}")
 
                 yield _sse_event("done", {
