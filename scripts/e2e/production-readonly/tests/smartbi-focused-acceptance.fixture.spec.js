@@ -46,7 +46,7 @@ function html() {
     </section>
     <script>
       document.querySelector('[data-testid="factory-analysis-submit"]').onclick = async () => {
-        const response=await fetch('/api/mobile/F006/smart-bi/factory-analysis', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({factoryId:'F006', source:'business', question:document.querySelector('[data-testid="factory-analysis-input"]').value})});
+        const response=await fetch('/api/mobile/F006/smart-bi/factory-analysis', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({source:'business', question:document.querySelector('[data-testid="factory-analysis-input"]').value})});
         const body=await response.json(); document.querySelector('[data-testid="factory-analysis-facts"]').innerText=body.data.facts.map(f=>f.label+' '+f.value+' '+f.unit).join(' | ');
       };
       document.querySelectorAll('[data-testid^="factory-chart-card-"] button').forEach((button, index) => button.onclick = async () => {

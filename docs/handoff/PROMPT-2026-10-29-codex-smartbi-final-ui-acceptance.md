@@ -2,7 +2,7 @@
 
 用户授权继续完成、验证后合并部署；线上只用 F006。目录采用问答引导＋分类浏览，需要项首批、可选项满足真实条件才推荐、餐饮专属排除。不得把接口、编译或本地测试通过写成网页/原生 App 已验收。
 
-## 当前结果与版本
+## 已核对的发布基线与后续修复
 
 - Web PR1292 已合并部署：main `d75971a8f747056859e35e7dcc7e1cc36da13731`，四方 index SHA256 `3efb574c24c0cdd91d2072d6e6fdec4b2646e872edebde257ce3c90698b94e1d`。千位金额不再被 parseFloat/动画截成 2、1；全图明细不再发送不支持的点钻参数。
 - Python PR1294 已合并部署：main `ce7841117f5df336d2cbe130d8721ad997872389`，9 文件哈希和运行进程时间核对通过，健康通过，148 个既有迁移校验一致、新迁移 0。Java 本批未部署。
@@ -11,6 +11,8 @@
 - 当前源码的容量验证完成：真实 PG 256 admitted / 44 capacity；32 MiB 总量、8 MiB 单帧、复用、300s 到期、60s 复用余量、租户/用户/角色隔离及不可变快照通过。容量不是目录图表数量上限；目录按需加载明细。本轮未提高这些保护值，未做生产压力测试。
 - F006 真实服务 API 四项通过：双 commerce 关系得到 3/3/7 个与 30 元；同上下文追问；UI 新上传三表得到 200kg/96%/95%/2500元、2个日期行；未验证的生产—库存关系拒绝且零事实。它们不是 Web/App UI PASS。
 - Android 已实际应用 OTA `b405f712-f332-6f8c-d171-ccb4cad58267`，runtime 1.0.5、production；本批无新 RN 源码或 OTA。设备 `f79c50d6`，App `com.cretas.foodtrace`，当前登录已失效。
+
+后续 PR1296 在上述基线上补齐“质检/QC”显式检验关系别名，并包含短批验收工具。该增量本地冻结套件为454通过/1既有skip、窄终审通过；线上原句失败保留在 `sc29-qc-wording-before.json`。最终合并 SHA、Python 部署及同句复验读 Git 和私有 `scenarios.json.sc29LatestRollout`，不要把本文基线 SHA 当成最新运行 HEAD，也不要回退到旧版本。
 
 ## 当前阻塞和工作区
 
@@ -21,7 +23,7 @@
 - 当前协调线程：`01a172c1-620c-7c43-9120-9b24f64e958a`。未创建后续线程，也未转移写 Owner；新线程接管前按 AGENTS 维护 worktree handoff 登记，确认唯一写 Owner。
 - Source/UI/验收工具 WT：`C:/Users/Steve/cretas-factory-ai-dialogue-20261027`，分支 `codex/smartbi-focused-acceptance-20261029`。验收工具代码快照 `015f40598fe5e2c71cfc6e1e4f57a37d1358c0cd`；后续仅文档回执可能推进 HEAD，接管时读取实际 Git/PR。工具已通过 85 个相关 Node 测试、5 个本地异步 DOM fixture；没有生产 UI 通过声明。
 - Python feature WT：`C:/Users/Steve/cretas-smartbi-planner-20261029`，PR1294 已合并，保留测试证据，不继续改旧已 squash 分支。
-- Release WT：`C:/Users/Steve/cretas-smartbi-final-release-20261029`，clean detached `ce7841117f5df336d2cbe130d8721ad997872389`。独占旧 Java target 已归档到其 ignored test-output，勿删除证据。没有在跑的部署/迁移/事务。
+- Release WT：`C:/Users/Steve/cretas-smartbi-final-release-20261029`，仅用于 clean exact main 发布，接管时读取实际 detached HEAD。独占旧 Java target 已归档到其 ignored test-output，勿删除证据。
 - 唯一允许的生产 MCP filename：`C:/Users/Steve/my-prototype-logistics/.claude/worktrees/codex-factory-ai-mcp-20261027/scripts/e2e/production-readonly/mcp-entry.js`，当前 sparse HEAD 为 `015f40598fe5e2c71cfc6e1e4f57a37d1358c0cd`。
 
 ## 继续执行
