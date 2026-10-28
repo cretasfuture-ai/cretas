@@ -121,7 +121,9 @@ class ProcessSecretDataLayerContractTest {
             "totalWastageCost", "trainingCompletionRate", "transferReceiveOverToleranceRate", "turnoverRate",
             "urgentOnTimeRate", "urgentTaskRatio", "usageHours", "usagePercentage", "usageRate",
             "utilizationPercent", "utilizationRate", "variancePct", "varianceRate", "varianceThresholdPct",
-            "waterUsage", "weightLoadRate", "weightPerUnit", "yieldRawDenominator", "yoyRate");
+            "waterUsage", "weightLoadRate", "weightPerUnit", "yieldRawDenominator", "yoyRate",
+            // 核价单比价基准: 物料档案的采购税率 (增值税百分比), 与配方用量 / 配比无关
+            "referenceTaxRate");
 
     /** 被数据层打标的实体: 读到即记录 (见 ProcessSecretReadTracker.readsOf)。 */
     static final List<Class<?>> TRACKED_ENTITIES = List.of(

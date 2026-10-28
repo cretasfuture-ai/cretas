@@ -5,27 +5,38 @@
  * 三阶段操作:
  *   1. DRAFT → INQUIRING: 提交询价 (submit button)
  *   2. INQUIRING/QUOTED: 添加供应商报价 (loops; UPDATE if same supplier)
- *   3. QUOTED → CONVERTED: 选定中标供应商 + 生成 PO (idempotent)
+ *   3. QUOTED → CONVERTED: 选定中标供应商 → 回填发起比价的采购草稿, 或生成采购单 (idempotent)
+ *
+ * L3 报价可比 (S5-01 / S5-02 / S5-04):
+ *   - 报价表来自后端比价接口: 只有同币种 / 同单位 / 同规格 / 税率已知且一致的报价有名次;
+ *     不可比的报价逐条显示原因, 不参与排序, 不能选定。
+ *   - 过期 / 未生效 / 低于起订量 / 供应关系缺失的报价不能选定 (单选框禁用 + 原因)。
+ *   - 税率不填 = 未知, ⛔ 不当 0%。
+ *   - 每条报价可查看「价格变化对 BOM 的影响」估算 (只读)。
  *
  * 防呆 R2: 所有 toast 含 inquiryNumber + supplierName context.
- * 防呆 R4: select-and-convert 已转化拒绝重复 — 后端 409 携带 PO 号, 前端 catch 跳转.
+ * 防呆 R4: select-and-convert 已转化拒绝重复 — 后端 409 原文由全局 toast 展示.
  */
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { buildSupplierPricePayload } from './quotePayload';
+import { buildSupplierPricePayload, type SupplierPriceForm } from './quotePayload';
 import { Refresh } from '@element-plus/icons-vue';
 import {
   getInquiry,
   submitInquiry,
   cancelInquiry,
   addSupplierPrice,
-  listSupplierPrices,
+  getQuoteComparison,
+  getQuotePriceImpact,
   selectAndConvert,
   type InquiryQuote,
-  type InquiryQuoteSupplierPrice,
+  type QuoteComparison,
+  type QuoteComparisonRow,
+  type QuotePriceImpact,
 } from '@/api/inquiryQuote';
+import { listActiveSuppliers, type SupplierRecord } from '@/api/supplierManagement';
 
 const route = useRoute();
 const router = useRouter();
@@ -36,15 +47,37 @@ const factoryId = computed(() => authStore.factoryId);
 
 const loading = ref(false);
 const quote = ref<InquiryQuote | null>(null);
-const prices = ref<InquiryQuoteSupplierPrice[]>([]);
+const comparison = ref<QuoteComparison | null>(null);
+const rows = computed<QuoteComparisonRow[]>(() => comparison.value?.rows ?? []);
+const suppliers = ref<SupplierRecord[]>([]);
 
-// Add price form
-const addPriceForm = ref({ supplierId: '', unitPrice: 0, taxRate: 0, deliveryDays: 0, remark: '' });
+function emptyPriceForm(): SupplierPriceForm {
+  return {
+    supplierId: '',
+    unitPrice: 0,
+    taxRate: null,
+    currency: 'CNY',
+    quotedUnit: quote.value?.unit ?? '',
+    specification: quote.value?.specification ?? '',
+    minOrderQuantity: null,
+    priceEffectiveDate: '',
+    validUntil: '',
+    deliveryDays: null,
+    remark: '',
+  };
+}
+
+const addPriceForm = ref<SupplierPriceForm>(emptyPriceForm());
 const addPriceSubmitting = ref(false);
 
 // Select & convert
 const selectedSupplierId = ref<string>('');
 const convertSubmitting = ref(false);
+
+// BOM impact
+const impactVisible = ref(false);
+const impactLoading = ref(false);
+const impact = ref<QuotePriceImpact | null>(null);
 
 const isEditable = computed(() => {
   if (!quote.value) return false;
@@ -55,11 +88,15 @@ const canConvert = computed(() => {
   if (!quote.value) return false;
   return (
     (quote.value.status === 'QUOTED' || quote.value.status === 'SELECTED') &&
-    prices.value.length > 0
+    rows.value.length > 0
   );
 });
 
 const isConverted = computed(() => quote.value?.status === 'CONVERTED');
+const fillsExistingDraft = computed(() => Boolean(quote.value?.sourcePurchaseOrderId));
+const selectedRow = computed(() =>
+  rows.value.find((r) => r.supplierId === selectedSupplierId.value) ?? null,
+);
 
 async function load() {
   if (!factoryId.value || !inquiryId.value) return;
@@ -69,13 +106,21 @@ async function load() {
     if (qRes.success && qRes.data) {
       quote.value = qRes.data;
     }
-    const pRes = await listSupplierPrices(factoryId.value, inquiryId.value);
-    if (pRes.success && pRes.data) {
-      prices.value = pRes.data;
+    const cRes = await getQuoteComparison(factoryId.value, inquiryId.value);
+    if (cRes.success && cRes.data) {
+      comparison.value = cRes.data;
+      if (selectedRow.value && !selectedRow.value.selectable) {
+        selectedSupplierId.value = '';
+      }
     }
   } finally {
     loading.value = false;
   }
+}
+
+async function loadSuppliers() {
+  if (!factoryId.value) return;
+  suppliers.value = await listActiveSuppliers(factoryId.value);
 }
 
 async function doSubmit() {
@@ -114,14 +159,18 @@ async function doCancel() {
   }
 }
 
+function openAddPrice() {
+  addPriceForm.value = emptyPriceForm();
+}
+
 async function submitAddPrice() {
   if (!factoryId.value || !quote.value) return;
   if (!addPriceForm.value.supplierId) {
-    ElMessage.warning('请填写供应商 ID');
+    ElMessage.warning('请选择供应商');
     return;
   }
   if (!addPriceForm.value.unitPrice || addPriceForm.value.unitPrice <= 0) {
-    ElMessage.warning('报价必须 > 0');
+    ElMessage.warning('未税单价必须 > 0');
     return;
   }
   addPriceSubmitting.value = true;
@@ -133,7 +182,7 @@ async function submitAddPrice() {
     );
     if (res.success) {
       ElMessage.success(res.message || '报价提交成功');
-      addPriceForm.value = { supplierId: '', unitPrice: 0, taxRate: 0, deliveryDays: 0, remark: '' };
+      openAddPrice();
       load();
     }
   } finally {
@@ -143,19 +192,21 @@ async function submitAddPrice() {
 
 async function doSelectAndConvert() {
   if (!factoryId.value || !quote.value) return;
-  if (!selectedSupplierId.value) {
-    ElMessage.warning('请先勾选中标供应商');
+  const selected = selectedRow.value;
+  if (!selected) {
+    ElMessage.warning('请先勾选一条可选定的报价');
     return;
   }
-  const selected = prices.value.find((p) => p.supplierId === selectedSupplierId.value);
-  if (!selected) return;
-
+  const target = fillsExistingDraft.value
+    ? '回填发起比价的采购草稿 (不新建采购单)'
+    : '生成采购单';
   try {
     await ElMessageBox.confirm(
-      `确认选定供应商 "${selected.supplierName || selected.supplierId}" (单价 ¥${selected.unitPrice}) ` +
-        `生成采购单? 此操作幂等, 重复点击会被服务端拒绝.`,
-      '选定中标供应商 + 生成采购单',
-      { type: 'warning', confirmButtonText: '确认生成' },
+      `核价单 ${quote.value.inquiryNumber}: 选定「${selected.supplierName || selected.supplierId}」` +
+        ` 未税单价 ${formatPrice(selected.unitPrice)}/${selected.quotedUnit}、税率 ${selected.taxRate}%，` +
+        `${target}? 重复点击会被服务端拒绝。`,
+      '选定报价',
+      { type: 'warning', confirmButtonText: '确认' },
     );
   } catch {
     return;
@@ -164,35 +215,35 @@ async function doSelectAndConvert() {
   convertSubmitting.value = true;
   try {
     const res = await selectAndConvert(factoryId.value, inquiryId.value, {
-      selectedSupplierId: selectedSupplierId.value,
+      selectedSupplierId: selected.supplierId,
     });
     if (res.success && res.data) {
-      ElMessage.success(res.message || `已生成采购单 ${res.data.orderNumber}`);
-      load();
-    }
-  } catch (err: unknown) {
-    // 防呆 R4: 后端 409 携带已生成 PO 号, 提示用户跳转
-    const e = err as { response?: { status?: number; data?: { message?: string } } };
-    if (e.response?.status === 409 && e.response.data?.message) {
-      try {
-        await ElMessageBox.confirm(
-          e.response.data.message + ' 是否跳转查看?',
-          '已生成采购单',
-          { type: 'info', confirmButtonText: '查看采购单', cancelButtonText: '取消' },
-        );
-        load();
-      } catch {
-        /* user dismissed */
-      }
+      ElMessage.success(res.message || `已写入采购单 ${res.data.orderNumber}`);
     }
   } finally {
     convertSubmitting.value = false;
+    load();
   }
 }
 
-function goPurchaseOrder() {
-  if (!quote.value?.purchaseOrderId) return;
-  router.push({ name: 'ProcurementOrderDetail', params: { id: quote.value.purchaseOrderId } });
+async function openImpact(row: QuoteComparisonRow) {
+  if (!factoryId.value) return;
+  impactVisible.value = true;
+  impactLoading.value = true;
+  impact.value = null;
+  try {
+    const res = await getQuotePriceImpact(factoryId.value, inquiryId.value, row.priceId);
+    if (res.success && res.data) {
+      impact.value = res.data;
+    }
+  } finally {
+    impactLoading.value = false;
+  }
+}
+
+function goPurchaseOrder(id?: string | null) {
+  if (!id) return;
+  router.push({ name: 'ProcurementOrderDetail', params: { id } });
 }
 
 function formatPrice(v: number | null | undefined): string {
@@ -200,7 +251,17 @@ function formatPrice(v: number | null | undefined): string {
   return `¥${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 }
 
-onMounted(load);
+function sourceLabel(source: string | null | undefined): string {
+  if (source === 'QUOTE') return '报价';
+  if (source === 'SUPPLIER_MATERIAL') return '供应关系';
+  return '';
+}
+
+onMounted(async () => {
+  await load();
+  openAddPrice();
+  loadSuppliers();
+});
 </script>
 
 <template>
@@ -235,7 +296,7 @@ onMounted(load);
         <el-button
           v-if="isConverted && quote?.purchaseOrderId"
           type="success"
-          @click="goPurchaseOrder"
+          @click="goPurchaseOrder(quote?.purchaseOrderId)"
         >
           查看采购单 {{ quote.purchaseOrderNumber }}
         </el-button>
@@ -250,6 +311,15 @@ onMounted(load);
         <el-descriptions-item label="数量">{{ quote.quantity }} {{ quote.unit }}</el-descriptions-item>
         <el-descriptions-item label="询价日期">{{ quote.inquiryDate }}</el-descriptions-item>
         <el-descriptions-item label="期望到货">{{ quote.requiredDate || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="采购草稿" :span="2">
+          <template v-if="quote.sourcePurchaseOrderId">
+            <el-link type="primary" @click="goPurchaseOrder(quote.sourcePurchaseOrderId)">
+              查看发起比价的草稿
+            </el-link>
+            <span class="hint">（选定报价会回填这张草稿，不另建采购单）</span>
+          </template>
+          <template v-else>未挂采购草稿（选定报价会生成新的采购单）</template>
+        </el-descriptions-item>
         <el-descriptions-item label="中标供应商" :span="2">
           {{ quote.selectedSupplierName || quote.selectedSupplierId || '尚未选定' }}
         </el-descriptions-item>
@@ -260,40 +330,114 @@ onMounted(load);
     <el-card class="prices-card" shadow="never">
       <template #header>
         <div class="card-header">
-          <span>供应商报价 ({{ prices.length }})</span>
-          <span class="hint">按价格升序, 第一行为最低报价</span>
+          <span>
+            供应商报价 ({{ rows.length }}) · 可比 {{ comparison?.comparableCount ?? 0 }} · 可选定
+            {{ comparison?.selectableCount ?? 0 }}
+          </span>
         </div>
       </template>
 
-      <el-table :data="prices" stripe empty-text="尚无报价">
+      <el-alert v-if="comparison" type="info" :closable="false" show-icon class="basis">
+        <template #title>
+          比较基准：{{ comparison.referenceCurrency }} · 计价单位「{{ comparison.referenceUnit }}」
+          <template v-if="comparison.referenceSpecification">
+            · 规格「{{ comparison.referenceSpecification }}」
+          </template>
+          · 税率
+          {{ comparison.referenceTaxRate != null ? `${comparison.referenceTaxRate}%` : '未定' }}
+          （{{ comparison.referenceTaxRateSource }}）
+        </template>
+        {{ comparison.rankingBasis }}
+      </el-alert>
+
+      <el-table :data="rows" stripe empty-text="尚无报价" row-key="priceId">
         <el-table-column v-if="canConvert" label="选定" width="60" align="center">
           <template #default="{ row }">
-            <el-radio v-model="selectedSupplierId" :value="row.supplierId" />
+            <el-radio
+              v-model="selectedSupplierId"
+              :value="row.supplierId"
+              :disabled="!row.selectable"
+            />
           </template>
         </el-table-column>
-        <el-table-column prop="supplierName" label="供应商" min-width="180">
+        <el-table-column label="可比 / 名次" min-width="230">
+          <template #default="{ row }">
+            <el-tag v-if="row.rank" type="success" effect="light">第 {{ row.rank }} 低</el-tag>
+            <el-tag v-else-if="!row.comparable" type="danger" effect="light">不可比</el-tag>
+            <el-tag v-else type="info" effect="light">不排序</el-tag>
+            <ul v-if="row.blockingReasons.length" class="issues blocking">
+              <li v-for="issue in row.blockingReasons" :key="issue.code">{{ issue.message }}</li>
+            </ul>
+            <ul v-if="row.warnings.length" class="issues warning">
+              <li v-for="issue in row.warnings" :key="issue.code">{{ issue.message }}</li>
+            </ul>
+          </template>
+        </el-table-column>
+        <el-table-column label="供应商" min-width="150">
           <template #default="{ row }">{{ row.supplierName || row.supplierId }}</template>
         </el-table-column>
-        <el-table-column prop="unitPrice" label="单价" min-width="140" align="right">
-          <template #default="{ row }">{{ formatPrice(row.unitPrice) }}</template>
+        <el-table-column label="未税单价" min-width="120" align="right">
+          <template #default="{ row }">
+            {{ formatPrice(row.unitPrice) }}<span v-if="row.quotedUnit">/{{ row.quotedUnit }}</span>
+          </template>
         </el-table-column>
-        <el-table-column prop="taxRate" label="税率(%)" min-width="100" align="right">
-          <template #default="{ row }">{{ row.taxRate ?? 0 }}</template>
+        <el-table-column label="税率" min-width="80" align="right">
+          <template #default="{ row }">
+            <span v-if="row.taxRate != null">{{ row.taxRate }}%</span>
+            <el-tag v-else type="warning" size="small">未知</el-tag>
+          </template>
         </el-table-column>
-        <el-table-column prop="validUntil" label="报价有效期" min-width="120">
-          <template #default="{ row }">{{ row.validUntil || '-' }}</template>
+        <el-table-column label="含税单价" min-width="110" align="right">
+          <template #default="{ row }">{{ formatPrice(row.taxInclusiveUnitPrice) }}</template>
         </el-table-column>
-        <el-table-column prop="deliveryDays" label="交货天数" min-width="100" align="right">
-          <template #default="{ row }">{{ row.deliveryDays ?? '-' }}</template>
+        <el-table-column label="币种 / 规格" min-width="120">
+          <template #default="{ row }">
+            {{ row.currency || '币种未注明' }} · {{ row.specification || '规格未注明' }}
+          </template>
         </el-table-column>
-        <el-table-column prop="quotedAt" label="报价时间" min-width="180" />
+        <el-table-column label="起订量" min-width="120">
+          <template #default="{ row }">
+            <template v-if="row.minOrderQuantity != null">
+              {{ row.minOrderQuantity }} {{ row.minOrderQuantityUnit || '' }}
+              <span class="hint">({{ sourceLabel(row.minOrderQuantitySource) }})</span>
+            </template>
+            <template v-else>-</template>
+          </template>
+        </el-table-column>
+        <el-table-column label="交期" min-width="140">
+          <template #default="{ row }">
+            <template v-if="row.leadTimeDays != null">
+              {{ row.leadTimeDays }} 天 <span class="hint">({{ sourceLabel(row.leadTimeSource) }})</span>
+              <div class="hint">预计 {{ row.expectedArrivalDate }} 到</div>
+            </template>
+            <template v-else>-</template>
+          </template>
+        </el-table-column>
+        <el-table-column label="有效期 / 生效日" min-width="140">
+          <template #default="{ row }">
+            <div>至 {{ row.validUntil || '未注明' }}</div>
+            <div class="hint">{{ row.priceEffectiveDate ? `${row.priceEffectiveDate} 起生效` : '生效日未注明' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openImpact(row)">BOM 影响</el-button>
+          </template>
+        </el-table-column>
       </el-table>
 
       <div v-if="canConvert" class="convert-bar">
-        <el-button type="primary" :loading="convertSubmitting" @click="doSelectAndConvert">
-          选定中标供应商 + 生成采购单
+        <el-button
+          type="primary"
+          :loading="convertSubmitting"
+          :disabled="!selectedRow || !selectedRow.selectable"
+          @click="doSelectAndConvert"
+        >
+          {{ fillsExistingDraft ? '选定并回填采购草稿' : '选定并生成采购单' }}
         </el-button>
-        <span class="hint">幂等操作: 重复提交不会创建多个采购单</span>
+        <span class="hint">
+          只有「可选定」的报价能勾选；重复提交不会写出第二张采购单
+        </span>
       </div>
     </el-card>
 
@@ -301,30 +445,114 @@ onMounted(load);
       <template #header>
         <span>添加 / 更新供应商报价</span>
       </template>
-      <el-form :model="addPriceForm" inline>
-        <el-form-item label="供应商 ID" required>
-          <el-input v-model="addPriceForm.supplierId" maxlength="191" style="width: 280px" />
+      <el-form :model="addPriceForm" label-width="96px" class="price-form">
+        <el-form-item label="供应商" required>
+          <el-select
+            v-model="addPriceForm.supplierId"
+            filterable
+            placeholder="选择供应商"
+            style="width: 280px"
+          >
+            <el-option
+              v-for="s in suppliers"
+              :key="s.id"
+              :label="s.displayName || s.name"
+              :value="s.id"
+            />
+          </el-select>
         </el-form-item>
-        <el-form-item label="单价" required>
+        <el-form-item label="未税单价" required>
           <el-input-number v-model="addPriceForm.unitPrice" :min="0" :precision="4" />
+          <el-input v-model="addPriceForm.currency" maxlength="8" style="width: 90px; margin-left: 8px">
+            <template #prepend>币种</template>
+          </el-input>
+          <el-input v-model="addPriceForm.quotedUnit" maxlength="20" style="width: 140px; margin-left: 8px">
+            <template #prepend>每</template>
+          </el-input>
         </el-form-item>
         <el-form-item label="税率(%)">
-          <el-input-number v-model="addPriceForm.taxRate" :min="0" :max="100" :precision="2" />
+          <el-input-number
+            v-model="addPriceForm.taxRate"
+            :min="0"
+            :max="100"
+            :precision="2"
+            :value-on-clear="null"
+            placeholder="不知道就留空"
+          />
+          <span class="hint">留空 = 税率未知，这条报价会标为「不可比」，不会按 0% 算</span>
+        </el-form-item>
+        <el-form-item label="规格">
+          <el-input v-model="addPriceForm.specification" maxlength="200" style="width: 280px" />
+        </el-form-item>
+        <el-form-item label="起订量">
+          <el-input-number v-model="addPriceForm.minOrderQuantity" :min="0" :value-on-clear="null" />
+          <span class="hint">按上面的计价单位；不填则读供应关系里维护的起订量</span>
         </el-form-item>
         <el-form-item label="交货天数">
-          <el-input-number v-model="addPriceForm.deliveryDays" :min="0" />
+          <el-input-number v-model="addPriceForm.deliveryDays" :min="0" :value-on-clear="null" />
+        </el-form-item>
+        <el-form-item label="价格生效日">
+          <el-date-picker v-model="addPriceForm.priceEffectiveDate" type="date" value-format="YYYY-MM-DD" />
+        </el-form-item>
+        <el-form-item label="报价有效期至">
+          <el-date-picker v-model="addPriceForm.validUntil" type="date" value-format="YYYY-MM-DD" />
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="addPriceForm.remark" maxlength="500" style="width: 240px" />
+          <el-input v-model="addPriceForm.remark" maxlength="500" style="width: 280px" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="addPriceSubmitting" @click="submitAddPrice">
             提交报价
           </el-button>
+          <span class="hint">同供应商已报价则更新</span>
         </el-form-item>
       </el-form>
-      <p class="hint">同供应商已报价则 UPDATE; 否则 INSERT (幂等)</p>
     </el-card>
+
+    <el-dialog
+      v-model="impactVisible"
+      :title="impact ? `价格变化对 BOM 的影响 — ${impact.materialName || ''} (${impact.supplierName || ''})` : '价格变化对 BOM 的影响'"
+      width="860px"
+    >
+      <div v-loading="impactLoading">
+        <template v-if="impact">
+          <el-alert type="warning" :closable="false" show-icon class="basis">
+            <template #title>
+              估算：未税单价 {{ formatPrice(impact.quotedUnitPrice) }}/{{ impact.quotedUnit }}，
+              {{ impact.priceEffectiveDate }} 起生效
+            </template>
+            {{ impact.note }}
+            <span v-if="impact.hiddenRecipeCount">另有 {{ impact.hiddenRecipeCount }} 个配方因工艺保密未显示。</span>
+          </el-alert>
+          <el-table :data="impact.rows" stripe empty-text="没有 BOM 用到这个物料">
+            <el-table-column label="配方" min-width="180">
+              <template #default="{ row }">
+                {{ row.productName || row.recipeCode }}
+                <span class="hint">v{{ row.recipeVersion }} · {{ row.recipeStatus }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="用量" min-width="90" align="right">
+              <template #default="{ row }">{{ row.standardQuantity ?? '-' }} {{ row.priceUnit || '' }}</template>
+            </el-table-column>
+            <el-table-column label="现行单价" min-width="100" align="right">
+              <template #default="{ row }">{{ formatPrice(row.currentUnitPrice) }}</template>
+            </el-table-column>
+            <el-table-column label="现行行成本" min-width="100" align="right">
+              <template #default="{ row }">{{ formatPrice(row.currentItemCost) }}</template>
+            </el-table-column>
+            <el-table-column label="估算行成本" min-width="100" align="right">
+              <template #default="{ row }">
+                <template v-if="row.computable">{{ formatPrice(row.estimatedItemCost) }}</template>
+                <span v-else class="hint">{{ row.notComputableReason }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="变化" min-width="90" align="right">
+              <template #default="{ row }">{{ formatPrice(row.deltaItemCost) }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -358,9 +586,25 @@ onMounted(load);
   justify-content: space-between;
   align-items: baseline;
 }
+.basis {
+  margin-bottom: 12px;
+}
 .hint {
   font-size: 12px;
   color: #909399;
+  margin-left: 6px;
+}
+.issues {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.issues.blocking {
+  color: #c45656;
+}
+.issues.warning {
+  color: #b88230;
 }
 .convert-bar {
   margin-top: 16px;

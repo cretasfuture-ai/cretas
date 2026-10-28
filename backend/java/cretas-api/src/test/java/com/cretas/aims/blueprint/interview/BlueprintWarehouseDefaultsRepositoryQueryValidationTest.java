@@ -82,6 +82,9 @@ class BlueprintWarehouseDefaultsRepositoryQueryValidationTest {
     @Autowired ProductionPlanRepository productionPlanRepository;
     @Autowired SalesDeliveryRecordRepository deliveryRepository;
     @Autowired SupplierMaterialRepository supplierMaterialRepository;
+    @Autowired com.cretas.aims.repository.UserRepository userRepository;
+    @Autowired com.cretas.aims.repository.material.MaterialPackagingSpecRepository materialPackagingSpecRepository;
+    @Autowired com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository supplierPurchaseSpecRepository;
 
     private WarehouseResolver resolver;
     private FactoryBuildApplyService apply;
@@ -101,7 +104,9 @@ class BlueprintWarehouseDefaultsRepositoryQueryValidationTest {
                 new BlueprintWarehouseDefaultsWriter(warehouseRepository, defaultRepository, resolver));
         reader = new FactoryBusinessReadinessReader(resolver, warehouseRepository, supplierRepository,
                 customerRepository, rawMaterialRepository, purchaseOrderRepository, productionPlanRepository,
-                deliveryRepository, supplierMaterialRepository);
+                deliveryRepository, supplierMaterialRepository,
+                userRepository, materialPackagingSpecRepository, supplierPurchaseSpecRepository,
+                org.mockito.Mockito.mock(com.cretas.aims.service.unit.UnitContractService.class));
         Factory factory = new Factory();
         factory.setId(F);
         factory.setName("blueprint warehouses");

@@ -55,6 +55,11 @@ public interface InquiryQuoteRepository extends JpaRepository<InquiryQuote, Stri
     /** 防呆 R4: 给定 inquiry, 是否已存在生成的 PO (idempotent guard) */
     List<InquiryQuote> findByFactoryIdAndPurchaseOrderIdIsNotNull(String factoryId);
 
+    /** 同一采购草稿同一物料上仍在进行的核价单 (防两张核价单回填同一草稿行)。 */
+    List<InquiryQuote> findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
+            String factoryId, String sourcePurchaseOrderId, String materialTypeId,
+            java.util.Collection<InquiryQuoteStatus> statuses);
+
     /** 生成 inquiry_number: 查找当天最大序号 */
     @Query("SELECT MAX(iq.inquiryNumber) FROM InquiryQuote iq " +
             "WHERE iq.factoryId = :factoryId AND iq.inquiryNumber LIKE :prefix")

@@ -159,6 +159,14 @@ public class ProcessSheetRowRequest {
     private List<com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService.Reading> ccpReadings;
 
     /**
+     * S3-16 锅次: 按锅生产的工序随行提交每一锅 (锅号 / 下锅出锅时间 / 出锅量 / 工艺参数 / 用料)。
+     * WRITE_ONLY: 只收不回写, 不进 row_payload (锅次的权威记录在 production_pots)。
+     * 与报工同一事务落库, 见 {@link com.cretas.aims.service.pot.ProcessSheetPotHook}。
+     */
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    private List<com.cretas.aims.service.pot.ProcessSheetPotEntry> pots;
+
+    /**
      * 缺口 06 汇合配比: 客户端只填 reason/note (超差时必填); 其余由 BlendRatioCheck 在正式提交时计算并覆盖,
      * 随 row_payload 落库留痕。草稿不校验。
      */

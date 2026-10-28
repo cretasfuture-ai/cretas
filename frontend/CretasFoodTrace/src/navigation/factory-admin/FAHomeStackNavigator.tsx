@@ -13,6 +13,7 @@ import TodayProductionScreen from "../../screens/factory-admin/home/TodayProduct
 import TodayBatchesScreen from "../../screens/factory-admin/home/TodayBatchesScreen";
 import MaterialBatchScreen from "../../screens/factory-admin/home/MaterialBatchScreen";
 import AIAlertsScreen from "../../screens/factory-admin/home/AIAlertsScreen";
+import FactoryReadinessScreen from "../../screens/factory-admin/home/FactoryReadinessScreen";
 import ProductionPlanManagementScreen from "../../screens/processing/ProductionPlanManagementScreen";
 
 // 复用现有详情页
@@ -70,6 +71,13 @@ export function FAHomeStackNavigator() {
         name="AIAlerts"
         component={AIAlertsScreen}
         options={{ title: "AI预警" }}
+      />
+
+      {/* 建厂就绪（本厂只读）：采购/生产/发货是否具备开展条件，满足后跳首笔业务 */}
+      <Stack.Screen
+        name="FactoryReadiness"
+        component={FactoryReadinessScreen}
+        options={{ title: "建厂就绪" }}
       />
 
       {/* 首页生产工作台入口必须落在当前 FA Home stack 内，否则导航动作无人处理。 */}

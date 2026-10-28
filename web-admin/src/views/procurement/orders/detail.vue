@@ -24,6 +24,7 @@ import {
 } from '@/utils/enumDisplay';
 import { canonicalUnitCode, formatPriceUnit, formatUnitPrice, pricingAmountPreview } from '@/utils/unitPricing';
 import { canDownloadSupplyOrder } from './purchaseOrderActionIa';
+import { buildDraftInquiryQuery } from '../inquiry-quotes/draftInquiryPrefill';
 import { purchaseTaxIncludedUnitPrice } from './purchaseOrderTaxInclusivePricing';
 // M-10 (2026-08-20 手动测试台账): 只借用类型做完全映射防漂移检查 (Record 要求覆盖
 // PurchaseOrderStatus 全部 11 个值), 详情页本身仍显示精确状态、不做归类, 所以不引入
@@ -214,6 +215,22 @@ function purchaseLineAmount(row: TableRow) {
 
 function goEditDraft() {
   router.push({ path: '/procurement/orders', query: { edit: orderId.value } });
+}
+
+/** L3 报价可比: 从草稿物料行发起比价; 选定报价后回填这张草稿 */
+function goCompareQuotes(row: TableRow) {
+  router.push({
+    name: 'InquiryQuoteList',
+    query: buildDraftInquiryQuery({
+      orderId: orderId.value,
+      orderNumber: String(order.value?.orderNumber || ''),
+      materialTypeId: String(row.materialTypeId || ''),
+      materialName: row.materialName ? String(row.materialName) : null,
+      specification: row.specification ? String(row.specification) : null,
+      quantity: Number(row.quantity),
+      unit: String(row.unit || ''),
+    }),
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -615,6 +632,12 @@ async function handleDownloadSupplyOrderPdf() {
             <template #default="{ row }">
               <span v-if="purchaseLineAmount(row).amount != null">{{ formatAmount(purchaseLineAmount(row).amount) }}</span>
               <span v-else class="text-secondary">{{ purchaseLineAmount(row).message }}</span>
+            </template>
+          </el-table-column>
+          <!-- L3 报价可比: 草稿行发起比价, 选定报价回填这张草稿 (不另建采购单) -->
+          <el-table-column v-if="order.status === 'DRAFT'" label="比价" width="90" align="center">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="goCompareQuotes(row)">发起比价</el-button>
             </template>
           </el-table-column>
         </el-table>

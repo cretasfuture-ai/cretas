@@ -44,7 +44,8 @@ class ProcessSecretRouteLedgerContractTest {
     static final List<Class<?>> CONTROLLERS = List.of(BomRecipeController.class, BomController.class,
             ProductProcessWorkflowController.class, BomWorkflowRevisionController.class,
             BomVersionController.class, BomReverseQueryController.class, BomBatchOperationController.class,
-            ProductProcessWorkflowRuntimeController.class);
+            ProductProcessWorkflowRuntimeController.class,
+            com.cretas.aims.controller.ProductionPotController.class);
 
     /** 判定在服务层 (ProcessSecretRecipeGuard), 因为同一服务还被 ECN 审批等非 HTTP 入口调用。 */
     static final Set<String> CHECKED_IN_SERVICE = Set.of(
@@ -56,7 +57,18 @@ class ProcessSecretRouteLedgerContractTest {
             "BomBatchOperationController#batchReplace",
             "BomBatchOperationController#batchDelete",
             "BomBatchOperationController#batchAdd",
-            "BomController#recalculateApply");
+            "BomController#recalculateApply",
+            // S3-16 锅次: 一次返回多个批次 (列表 / 按锅追溯跨批次), 路径注解解析不了;
+            // 服务层 PotProcessSecretRedactor 按批次产品 VIEW_FULL 去掉工序名 / 代码 / 工艺参数 / 备注
+            "ProductionPotController#listForBatch",
+            "ProductionPotController#listForBatches",
+            "ProductionPotController#record",
+            "ProductionPotController#correct",
+            "ProductionPotController#confirm",
+            "ProductionPotController#voidPot",
+            "ProductionPotController#consumers",
+            "ProductionPotController#producers",
+            "ProductionPotController#forward");
 
     /** 打印控制器端点很多, 只钉住「payload 里带锁定 BOM / 调味 / 工序」的这几个必须带 Guard。 */
     static final Set<String> PRINT_ENDPOINTS_WITH_BOM = Set.of(
@@ -126,7 +138,10 @@ class ProcessSecretRouteLedgerContractTest {
         for (String[] spec : new String[][]{
                 {"service/bom/impl/BomVersionServiceImpl.java", "processSecretGuard.requireRecipe(", "5"},
                 {"service/bom/impl/BomBatchOperationServiceImpl.java", "processSecretGuard.partitionForEdit(", "2"},
-                {"service/bom/impl/BomBatchOperationServiceImpl.java", "guardedScope(req.getFactoryId()", "3"}}) {
+                {"service/bom/impl/BomBatchOperationServiceImpl.java", "guardedScope(req.getFactoryId()", "3"},
+                // 锅次: 视图唯一出口 toViews + 更正时拒改看不见的工艺参数; 按锅追溯的锅摘要一处
+                {"service/pot/ProductionPotService.java", "secretRedactor.restrictedBatches(", "2"},
+                {"service/pot/PotTraceService.java", "secretRedactor.restrictedBatches(", "1"}}) {
             String text = Files.readString(Path.of("src/main/java/com/cretas/aims/" + spec[0]), StandardCharsets.UTF_8);
             int count = text.split(java.util.regex.Pattern.quote(spec[1]), -1).length - 1;
             assertThat(count).as(spec[0] + " " + spec[1]).isEqualTo(Integer.parseInt(spec[2]));

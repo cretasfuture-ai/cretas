@@ -96,6 +96,21 @@ public interface PurchaseService {
     PurchaseOrder updateDraftOrder(String factoryId, String orderId, UpdatePurchaseOrderRequest request);
 
     /**
+     * 把选定报价回填到<b>已有</b>采购草稿的对应物料行 (L3 报价可比, S5-01)。
+     *
+     * <p>只改这一行的单价 / 计价单位 / 税率 / 供应关系快照, 以及单头供应商与合计;
+     * 其它行原样不动, ⛔ 不新建采购单。草稿不是 DRAFT、物料行不是恰好一行、
+     * 草稿已指定别的供应商且还有其它物料行时一律 409。
+     *
+     * <p>{@code expectedUnit} / {@code expectedQuantity} 是发起比价时草稿行的单位与数量;
+     * 草稿行此后被改过 (与之不一致) 同样 409, 报价是按旧口径比出来的, 不能直接套到新行上。
+     */
+    PurchaseOrder applyQuoteToDraftLine(String factoryId, String orderId, String materialTypeId,
+                                        String expectedUnit, java.math.BigDecimal expectedQuantity,
+                                        String supplierId, java.math.BigDecimal unitPrice, String priceUnit,
+                                        java.math.BigDecimal taxRate, String purchasePackagingSpecId);
+
+    /**
      * 复制采购订单 — 基于现有订单创建新草稿 (#860 follow-up).
      *
      * <p>复制内容: 供应商/采购类型/预期到货日期/备注/sales_order_id/inquiry_quote_id/items

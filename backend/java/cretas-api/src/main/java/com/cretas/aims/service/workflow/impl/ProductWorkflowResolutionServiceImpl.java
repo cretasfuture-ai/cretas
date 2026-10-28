@@ -149,6 +149,26 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<WorkflowOutputResolutionDTO.Candidate> findPinnedCandidate(
+            String factoryId, Long workflowId, Integer definitionVersion) {
+        if (workflowId == null || definitionVersion == null) return Optional.empty();
+        ProductProcessWorkflow workflow = workflowRepository.findByIdAndFactoryId(workflowId, factoryId)
+                .filter(row -> row.getStatus() != ProductProcessWorkflow.Status.DRAFT)
+                .filter(row -> java.util.Objects.equals(row.getDefinitionVersion(), definitionVersion))
+                .orElse(null);
+        if (workflow == null) return Optional.empty();
+        WorkflowTopology topology = parseTopology(workflow);
+        if (topology.type() == WorkflowTopology.Type.INVALID) return Optional.empty();
+        ResolvedWorkflow resolved = new ResolvedWorkflow(
+                workflow, new LinkedHashSet<>(topology.terminalOutputSkuIds()), topology);
+        ProductType owner = productTypeRepository
+                .findByIdAndFactoryId(workflow.getProductTypeId(), factoryId).orElse(null);
+        return Optional.of(buildCandidate(
+                factoryId, owner, resolved, new HashSet<>(topology.terminalOutputSkuIds())));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public void assertPinnedWorkflowCoversOutputs(
             String factoryId, Long workflowId, Integer definitionVersion,
             List<String> targetFinishedGoodIds) {

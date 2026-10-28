@@ -87,6 +87,12 @@ public class ProcessSheetController {
             @RequestAttribute("userId") Long userId,
             @Valid @RequestBody ProcessSheetRowRequest req) {
         requirePlanScope(factoryId, planId);
+        if (req.getPots() != null && !req.getPots().isEmpty()) {
+            // S3-16: 锅次只随正式报工落库; 草稿静默丢掉锅次会让人以为已经记了
+            throw new com.cretas.aims.exception.BusinessException(400, "草稿不保存锅次")
+                    .withCode("POT_NOT_IN_DRAFT")
+                    .withHint("请在正式报工时一起提交锅次, 或报工后在生产批次详情里补录");
+        }
         return ApiResponse.success("草稿保存成功", service.saveDraft(factoryId, planId, req, userId));
     }
 

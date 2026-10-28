@@ -4,34 +4,64 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreatePurchaseOrderRequest;
 import com.cretas.aims.dto.purchase.AddSupplierPriceRequest;
 import com.cretas.aims.dto.purchase.CreateInquiryQuoteRequest;
+import com.cretas.aims.dto.purchase.InquiryQuoteComparisonDTO;
+import com.cretas.aims.dto.purchase.InquiryQuotePriceImpactDTO;
 import com.cretas.aims.dto.purchase.SelectAndConvertRequest;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.Supplier;
+import com.cretas.aims.entity.SupplierMaterial;
+import com.cretas.aims.entity.SupplierMaterialPurchaseSpec;
+import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.entity.enums.InquiryQuoteStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseType;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
+import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.purchase.InquiryQuote;
 import com.cretas.aims.entity.purchase.InquiryQuoteSupplierPrice;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
+import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteSupplierPriceRepository;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
+import com.cretas.aims.service.purchase.InquiryQuoteComparator;
+import com.cretas.aims.service.shared.CostRollupUtil;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.purchase.InquiryQuoteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 核价单服务实现 (P-NUCLEAR-1, 28-Backlog #30).
@@ -51,18 +81,51 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     private final SupplierRepository supplierRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseService purchaseService;
+    private final RawMaterialTypeRepository materialTypeRepository;
+    private final SupplierMaterialRepository supplierMaterialRepository;
+    private final SupplierMaterialPurchaseSpecRepository purchaseSpecRepository;
+    private final BomRecipeItemRepository bomRecipeItemRepository;
+    private final BomRecipeRepository bomRecipeRepository;
+    private final UnitContractService unitContractService;
+
+    /** 工艺保密: BOM 影响估算只列当前用户有权看的配方。 */
+    @Autowired(required = false)
+    private ProcessSecretRecipeGuard processSecretGuard;
+
+    /** 进行中的核价单状态 (同一草稿行同时只允许一张)。 */
+    private static final EnumSet<InquiryQuoteStatus> OPEN_STATUSES = EnumSet.of(
+            InquiryQuoteStatus.DRAFT, InquiryQuoteStatus.INQUIRING,
+            InquiryQuoteStatus.QUOTED, InquiryQuoteStatus.SELECTED);
+
+    /** V20261103_122 的部分唯一索引名 (同一草稿行只允许一张进行中核价单)。 */
+    static final String OPEN_DRAFT_LINE_CONSTRAINT = "uk_iq_open_source_draft_line";
+
+    /** 后端全线东八区: 有效期 / 生效日按工厂所在时区的「今天」判断。 */
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
     @Autowired
     public InquiryQuoteServiceImpl(InquiryQuoteRepository inquiryQuoteRepository,
                                    InquiryQuoteSupplierPriceRepository supplierPriceRepository,
                                    SupplierRepository supplierRepository,
                                    PurchaseOrderRepository purchaseOrderRepository,
-                                   PurchaseService purchaseService) {
+                                   PurchaseService purchaseService,
+                                   RawMaterialTypeRepository materialTypeRepository,
+                                   SupplierMaterialRepository supplierMaterialRepository,
+                                   SupplierMaterialPurchaseSpecRepository purchaseSpecRepository,
+                                   BomRecipeItemRepository bomRecipeItemRepository,
+                                   BomRecipeRepository bomRecipeRepository,
+                                   UnitContractService unitContractService) {
         this.inquiryQuoteRepository = inquiryQuoteRepository;
         this.supplierPriceRepository = supplierPriceRepository;
         this.supplierRepository = supplierRepository;
         this.purchaseOrderRepository = purchaseOrderRepository;
         this.purchaseService = purchaseService;
+        this.materialTypeRepository = materialTypeRepository;
+        this.supplierMaterialRepository = supplierMaterialRepository;
+        this.purchaseSpecRepository = purchaseSpecRepository;
+        this.bomRecipeItemRepository = bomRecipeItemRepository;
+        this.bomRecipeRepository = bomRecipeRepository;
+        this.unitContractService = unitContractService;
     }
 
     // ==================== 核价单 ====================
@@ -85,6 +148,11 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
             }
         }
 
+        String sourcePurchaseOrderId = blankToNull(request.getSourcePurchaseOrderId());
+        if (sourcePurchaseOrderId != null) {
+            requireSourceDraftLine(factoryId, sourcePurchaseOrderId, request);
+        }
+
         String inquiryNumber = generateInquiryNumber(factoryId);
 
         InquiryQuote q = new InquiryQuote();
@@ -101,8 +169,24 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         q.setStatus(InquiryQuoteStatus.DRAFT);
         q.setCreatedBy(userId);
         q.setRemark(request.getRemark());
+        q.setSourcePurchaseOrderId(sourcePurchaseOrderId);
 
-        q = inquiryQuoteRepository.save(q);
+        if (sourcePurchaseOrderId != null) {
+            // 先查后插挡不住并发: 由部分唯一索引 uk_iq_open_source_draft_line 兜底, 撞上转 409
+            try {
+                q = inquiryQuoteRepository.saveAndFlush(q);
+            } catch (DataIntegrityViolationException e) {
+                if (!String.valueOf(e.getMostSpecificCause().getMessage()).contains(OPEN_DRAFT_LINE_CONSTRAINT)) {
+                    throw e;
+                }
+                throw new BusinessException(409,
+                        "这张采购草稿的本物料行刚刚已有人发起核价单, 请勿重复发起")
+                        .withCode("INQUIRY_FOR_DRAFT_LINE_EXISTS")
+                        .withHint("请刷新核价单列表, 在已有核价单中继续比价");
+            }
+        } else {
+            q = inquiryQuoteRepository.save(q);
+        }
         log.info("创建核价单: factoryId={}, inquiryNumber={}, materialName={}",
                 factoryId, inquiryNumber, q.getMaterialName());
         return q;
@@ -189,7 +273,20 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         price.setInquiryQuoteId(inquiryId);
         price.setSupplierId(request.getSupplierId());
         price.setUnitPrice(request.getUnitPrice());
-        price.setTaxRate(request.getTaxRate() != null ? request.getTaxRate() : java.math.BigDecimal.ZERO);
+        // 未知税率 ≠ 0%: 没填就存 NULL, 比价时标为不可比
+        price.setTaxRate(request.getTaxRate());
+        String currency = blankToNull(request.getCurrency());
+        price.setCurrency(currency != null ? currency.toUpperCase(Locale.ROOT) : null);
+        price.setQuotedUnit(blankToNull(request.getQuotedUnit()));
+        price.setSpecification(blankToNull(request.getSpecification()));
+        price.setMinOrderQuantity(request.getMinOrderQuantity());
+        if (request.getPriceEffectiveDate() != null && request.getValidUntil() != null
+                && request.getPriceEffectiveDate().isAfter(request.getValidUntil())) {
+            throw new BusinessException(400, String.format(
+                    "价格生效日 %s 晚于报价有效期 %s", request.getPriceEffectiveDate(), request.getValidUntil()))
+                    .withHintTarget("priceEffectiveDate");
+        }
+        price.setPriceEffectiveDate(request.getPriceEffectiveDate());
         price.setValidUntil(request.getValidUntil());
         price.setDeliveryDays(request.getDeliveryDays());
         price.setRemark(request.getRemark());
@@ -259,7 +356,58 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                     .withHintTarget("selectedSupplierId");
         }
 
-        // 调用 PurchaseService 创建采购单
+        // 与比价页同一套规则: 不可比 / 过期 / 未生效 / 低于起订量 / 供应关系缺失 → 不能选定
+        List<InquiryQuoteSupplierPrice> allPrices =
+                supplierPriceRepository.findByInquiryQuoteIdOrderByUnitPriceAsc(inquiryId);
+        InquiryQuoteComparisonDTO.Row verdict = InquiryQuoteComparator.evaluateOne(
+                q, allPrices, selectedPrice, comparisonFacts(factoryId, q, allPrices));
+        if (!verdict.isSelectable()) {
+            throw new BusinessException(409, String.format(
+                    "供应商 %s 的报价不能选定: %s", selectedSupplier.getName(),
+                    verdict.getBlockingReasons().stream()
+                            .map(InquiryQuoteComparisonDTO.Issue::getMessage)
+                            .collect(Collectors.joining("; "))))
+                    .withCode("QUOTE_NOT_SELECTABLE")
+                    .withHint("请在比价表里选一条标为「可选定」的报价, 或让供应商按缺的依据重新报价")
+                    .withHintTarget("selectedSupplierId");
+        }
+
+        PurchaseOrder po;
+        if (q.getSourcePurchaseOrderId() != null) {
+            // 回填发起比价的那张采购草稿, ⛔ 不另建采购单
+            po = purchaseService.applyQuoteToDraftLine(factoryId, q.getSourcePurchaseOrderId(),
+                    q.getMaterialTypeId(), q.getUnit(), q.getQuantity(),
+                    selectedSupplier.getId(), selectedPrice.getUnitPrice(),
+                    selectedPrice.getQuotedUnit(), selectedPrice.getTaxRate(),
+                    verdict.getPurchasePackagingSpecId());
+        } else {
+            po = purchaseService.createPurchaseOrder(factoryId,
+                    newPurchaseOrderRequest(q, request, selectedSupplier, selectedPrice, verdict), userId);
+        }
+
+        // 回写 PO 的 inquiryQuoteId (back-link)
+        po.setInquiryQuoteId(q.getId());
+        po = purchaseOrderRepository.save(po);
+
+        // 更新 inquiry 状态
+        q.setSelectedSupplierId(selectedSupplier.getId());
+        q.setSelectedUnitPrice(selectedPrice.getUnitPrice());
+        q.setPurchaseOrderId(po.getId());
+        q.setPurchaseOrderNumber(po.getOrderNumber());
+        q.setStatus(InquiryQuoteStatus.CONVERTED);
+        inquiryQuoteRepository.save(q);
+
+        log.info("核价单 → 采购单: factoryId={}, inquiryNumber={}, supplier={}, " +
+                        "unitPrice={}, poNumber={}, filledExistingDraft={}",
+                factoryId, q.getInquiryNumber(), selectedSupplier.getName(),
+                selectedPrice.getUnitPrice(), po.getOrderNumber(), q.getSourcePurchaseOrderId() != null);
+        return po;
+    }
+
+    private CreatePurchaseOrderRequest newPurchaseOrderRequest(InquiryQuote q, SelectAndConvertRequest request,
+                                                              Supplier selectedSupplier,
+                                                              InquiryQuoteSupplierPrice selectedPrice,
+                                                              InquiryQuoteComparisonDTO.Row verdict) {
         CreatePurchaseOrderRequest poRequest = new CreatePurchaseOrderRequest();
         poRequest.setSupplierId(selectedSupplier.getId());
         poRequest.setPurchaseType(PurchaseType.DIRECT.name());
@@ -277,33 +425,253 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         item.setMaterialName(q.getMaterialName());
         item.setQuantity(q.getQuantity());
         item.setUnit(q.getUnit());
+        item.setQuantityUnit(q.getUnit());
         item.setUnitPrice(selectedPrice.getUnitPrice());
+        item.setPriceUnit(selectedPrice.getQuotedUnit());
         item.setTaxRate(selectedPrice.getTaxRate());
+        item.setPurchasePackagingSpecId(verdict.getPurchasePackagingSpecId());
         item.setSpecification(q.getSpecification());
         poRequest.setItems(List.of(item));
+        return poRequest;
+    }
 
-        PurchaseOrder po = purchaseService.createPurchaseOrder(factoryId, poRequest, userId);
+    // ==================== 比价 (L3, S5-01 / S5-02) ====================
 
-        // 回写 PO 的 inquiryQuoteId (back-link)
-        po.setInquiryQuoteId(q.getId());
-        po = purchaseOrderRepository.save(po);
+    @Override
+    public InquiryQuoteComparisonDTO compare(String factoryId, String inquiryId) {
+        InquiryQuote q = loadOwned(factoryId, inquiryId);
+        List<InquiryQuoteSupplierPrice> prices =
+                supplierPriceRepository.findByInquiryQuoteIdOrderByUnitPriceAsc(inquiryId);
+        return InquiryQuoteComparator.compare(q, prices, comparisonFacts(factoryId, q, prices));
+    }
 
-        // 更新 inquiry 状态
-        q.setSelectedSupplierId(selectedSupplier.getId());
-        q.setSelectedUnitPrice(selectedPrice.getUnitPrice());
-        q.setPurchaseOrderId(po.getId());
-        q.setPurchaseOrderNumber(po.getOrderNumber());
-        q.setStatus(InquiryQuoteStatus.CONVERTED);
-        inquiryQuoteRepository.save(q);
+    private InquiryQuoteComparator.Facts comparisonFacts(String factoryId, InquiryQuote q,
+                                                         List<InquiryQuoteSupplierPrice> prices) {
+        BigDecimal referenceTaxRate = null;
+        String referenceTaxSource;
+        RawMaterialType material = materialTypeRepository.findById(q.getMaterialTypeId())
+                .filter(m -> factoryId.equals(m.getFactoryId()))
+                .orElse(null);
+        if (material == null) {
+            referenceTaxSource = "物料档案不存在, 各报价税率必须彼此一致";
+        } else if (material.getTaxTreatment() == TaxTreatment.EXEMPT) {
+            referenceTaxRate = BigDecimal.ZERO;
+            referenceTaxSource = "物料档案: 免税";
+        } else if (material.getTaxRate() != null) {
+            referenceTaxRate = material.getTaxRate().getRate().multiply(new BigDecimal("100"));
+            referenceTaxSource = "物料档案税率";
+        } else {
+            referenceTaxSource = "物料档案未配置税率, 各报价税率必须彼此一致";
+        }
 
-        log.info("核价单 → 采购单: factoryId={}, inquiryNumber={}, supplier={}, " +
-                        "unitPrice={}, poNumber={}",
-                factoryId, q.getInquiryNumber(), selectedSupplier.getName(),
-                selectedPrice.getUnitPrice(), po.getOrderNumber());
-        return po;
+        Map<String, Supplier> suppliers = new HashMap<>();
+        Map<String, SupplierMaterial> relations = new HashMap<>();
+        Map<String, List<SupplierMaterialPurchaseSpec>> specs = new HashMap<>();
+        for (InquiryQuoteSupplierPrice price : prices) {
+            String supplierId = price.getSupplierId();
+            supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
+                    .ifPresent(s -> suppliers.put(supplierId, s));
+            supplierMaterialRepository.findByFactoryIdAndSupplierIdAndMaterialTypeId(
+                    factoryId, supplierId, q.getMaterialTypeId())
+                    .ifPresent(relation -> {
+                        relations.put(supplierId, relation);
+                        specs.put(relation.getId(), purchaseSpecRepository
+                                .findByFactoryIdAndSupplierMaterialIdAndActiveTrue(factoryId, relation.getId()));
+                    });
+        }
+        return new InquiryQuoteComparator.Facts(referenceTaxRate, referenceTaxSource,
+                LocalDate.now(BUSINESS_ZONE), suppliers, relations, specs,
+                (left, right) -> sameUnit(factoryId, left, right));
+    }
+
+    // ==================== 价格影响 (L3, S5-04) ====================
+
+    @Override
+    public InquiryQuotePriceImpactDTO priceImpact(String factoryId, String inquiryId, String priceId) {
+        InquiryQuote q = loadOwned(factoryId, inquiryId);
+        InquiryQuoteSupplierPrice price = supplierPriceRepository.findById(priceId)
+                .filter(p -> inquiryId.equals(p.getInquiryQuoteId()))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        String.format("报价不存在或不属于核价单 %s: %s", q.getInquiryNumber(), priceId)));
+        if (price.getPriceEffectiveDate() == null) {
+            throw new BusinessException(422, "报价没有价格生效日, 不能估算对 BOM 的影响")
+                    .withCode("PRICE_EFFECTIVE_DATE_REQUIRED")
+                    .withHint("请先在报价里填写价格生效日")
+                    .withHintTarget("priceEffectiveDate");
+        }
+        String currency = blankToNull(price.getCurrency());
+        if (currency == null || !InquiryQuoteComparator.PURCHASE_CURRENCY.equalsIgnoreCase(currency)) {
+            throw new BusinessException(422, String.format(
+                    "报价币种为%s, BOM 按 %s 计价, 没有汇率依据不能估算",
+                    currency == null ? "未知" : " " + currency, InquiryQuoteComparator.PURCHASE_CURRENCY))
+                    .withCode("PRICE_CURRENCY_NOT_COMPARABLE");
+        }
+        String quotedUnit = blankToNull(price.getQuotedUnit());
+
+        List<BomRecipeItem> items = bomRecipeItemRepository
+                .findByFactoryIdAndMaterialTypeId(factoryId, q.getMaterialTypeId());
+        Map<String, BomRecipe> recipes = new LinkedHashMap<>();
+        bomRecipeRepository.findAllById(items.stream().map(BomRecipeItem::getRecipeId)
+                        .filter(Objects::nonNull).distinct().collect(Collectors.toList()))
+                .stream()
+                .filter(r -> factoryId.equals(r.getFactoryId()))
+                .forEach(r -> recipes.put(r.getId(), r));
+
+        int hidden = 0;
+        Map<String, Boolean> visible = new HashMap<>();
+        for (BomRecipe recipe : recipes.values()) {
+            boolean ok = processSecretGuard == null || processSecretGuard.permitsFullContent(
+                    factoryId, recipe.getId(), "inquiry-quote price-impact " + priceId);
+            visible.put(recipe.getId(), ok);
+            if (!ok) {
+                hidden++;
+            }
+        }
+
+        List<InquiryQuotePriceImpactDTO.Row> rows = new ArrayList<>();
+        for (BomRecipeItem item : items) {
+            BomRecipe recipe = recipes.get(item.getRecipeId());
+            if (recipe == null || !visible.getOrDefault(recipe.getId(), false)
+                    || recipe.getStatus() == BomRecipe.Status.ARCHIVED) {
+                continue;
+            }
+            String itemPriceUnit = blankToNull(item.getPriceUnit()) != null ? item.getPriceUnit() : item.getUnit();
+            String reason = null;
+            if (quotedUnit == null) {
+                reason = "报价未注明计价单位";
+            } else if (!sameUnit(factoryId, quotedUnit, itemPriceUnit)) {
+                reason = String.format("BOM 计价单位「%s」与报价单位「%s」不同, 不做换算",
+                        itemPriceUnit, quotedUnit);
+            } else if (item.getStandardQuantity() == null) {
+                reason = "BOM 行没有参考用量, 成本由实际报工归集";
+            }
+            BigDecimal currentCost = item.computeItemCost();
+            BigDecimal estimated = null;
+            BigDecimal delta = null;
+            if (reason == null) {
+                BigDecimal factor = item.getQuantityToPriceFactor() != null
+                        ? item.getQuantityToPriceFactor() : BigDecimal.ONE;
+                estimated = CostRollupUtil.calcItemCost(
+                        item.calculateActualQuantity().multiply(factor), price.getUnitPrice());
+                if (currentCost != null && estimated != null) {
+                    delta = estimated.subtract(currentCost).setScale(4, RoundingMode.HALF_UP);
+                }
+            }
+            rows.add(InquiryQuotePriceImpactDTO.Row.builder()
+                    .recipeId(recipe.getId())
+                    .recipeCode(recipe.getRecipeCode())
+                    .productTypeId(recipe.getProductTypeId())
+                    .productName(recipe.getProductName())
+                    .recipeVersion(recipe.getVersion())
+                    .recipeStatus(recipe.getStatus() != null ? recipe.getStatus().name() : null)
+                    .isCurrent(recipe.getIsCurrent())
+                    .recipeItemId(item.getId())
+                    .standardQuantity(item.getStandardQuantity())
+                    .priceUnit(itemPriceUnit)
+                    .currentUnitPrice(item.getUnitPrice())
+                    .currentItemCost(currentCost)
+                    .estimatedItemCost(estimated)
+                    .deltaItemCost(delta)
+                    .computable(reason == null)
+                    .notComputableReason(reason)
+                    .build());
+        }
+
+        Supplier supplier = supplierRepository.findByIdAndFactoryId(price.getSupplierId(), factoryId).orElse(null);
+        return InquiryQuotePriceImpactDTO.builder()
+                .inquiryId(q.getId())
+                .inquiryNumber(q.getInquiryNumber())
+                .priceId(price.getId())
+                .supplierId(price.getSupplierId())
+                .supplierName(supplier != null ? supplier.getName() : null)
+                .materialTypeId(q.getMaterialTypeId())
+                .materialName(q.getMaterialName())
+                .quotedUnitPrice(price.getUnitPrice())
+                .quotedUnit(quotedUnit)
+                .priceEffectiveDate(price.getPriceEffectiveDate())
+                .evaluatedOn(LocalDate.now(BUSINESS_ZONE))
+                .nature("ESTIMATE")
+                .historicalCostsModified(false)
+                .note("估算按报价未税单价重算 BOM 行成本, 不回写 BOM; 已投产批次成本取自批次实际记录, 保持不变。"
+                        + "BOM 价格的正式变更请走 BOM 调价建议审批。")
+                .affectedRecipeCount((int) rows.stream().map(InquiryQuotePriceImpactDTO.Row::getRecipeId)
+                        .distinct().count())
+                .computableRowCount((int) rows.stream().filter(InquiryQuotePriceImpactDTO.Row::isComputable).count())
+                .hiddenRecipeCount(hidden)
+                .rows(rows)
+                .build();
     }
 
     // ==================== 内部 ====================
+
+    /**
+     * 发起比价的采购草稿必须: 本厂、DRAFT、恰好一行是本物料、单位一致,
+     * 且这行上没有另一张进行中的核价单。
+     */
+    private void requireSourceDraftLine(String factoryId, String sourcePurchaseOrderId,
+                                        CreateInquiryQuoteRequest request) {
+        PurchaseOrder draft = purchaseService.getPurchaseOrderById(factoryId, sourcePurchaseOrderId);
+        if (draft.getStatus() != PurchaseOrderStatus.DRAFT) {
+            throw new BusinessException(409, String.format(
+                    "采购单 %s 当前状态为 %s, 只有草稿可以发起比价回填",
+                    draft.getOrderNumber(), draft.getStatus().getDisplayName()))
+                    .withCode("PURCHASE_DRAFT_NOT_EDITABLE")
+                    .withHint("请新建采购草稿后再从草稿行发起比价, 或不挂草稿直接新建核价单");
+        }
+        List<PurchaseOrderItem> lines = draft.getItems() == null ? List.of() : draft.getItems().stream()
+                .filter(i -> request.getMaterialTypeId().equals(i.getMaterialTypeId()))
+                .collect(Collectors.toList());
+        if (lines.size() != 1) {
+            throw new BusinessException(409, String.format(
+                    "采购草稿 %s 中本物料有 %d 行, 需要恰好 1 行才能比价回填",
+                    draft.getOrderNumber(), lines.size()))
+                    .withCode("PURCHASE_DRAFT_LINE_AMBIGUOUS")
+                    .withHint("请先编辑采购草稿, 把本物料合并成一行后再发起比价");
+        }
+        String lineUnit = lines.get(0).getUnit();
+        if (!sameUnit(factoryId, lineUnit, request.getUnit())) {
+            throw new BusinessException(400, String.format(
+                    "询价单位「%s」与采购草稿 %s 该行单位「%s」不同",
+                    request.getUnit(), draft.getOrderNumber(), lineUnit))
+                    .withHintTarget("unit");
+        }
+        BigDecimal lineQuantity = lines.get(0).getQuantity();
+        if (lineQuantity == null || lineQuantity.compareTo(request.getQuantity()) != 0) {
+            throw new BusinessException(400, String.format(
+                    "询价数量 %s 与采购草稿 %s 该行数量 %s 不同; 比价回填只改单价, 数量以草稿为准",
+                    request.getQuantity().stripTrailingZeros().toPlainString(), draft.getOrderNumber(),
+                    lineQuantity == null ? "(空)" : lineQuantity.stripTrailingZeros().toPlainString()))
+                    .withHintTarget("quantity");
+        }
+        List<InquiryQuote> open = inquiryQuoteRepository
+                .findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
+                        factoryId, sourcePurchaseOrderId, request.getMaterialTypeId(), OPEN_STATUSES);
+        if (!open.isEmpty()) {
+            InquiryQuote existing = open.get(0);
+            throw new BusinessException(409, String.format(
+                    "采购草稿 %s 的这行物料已有进行中的核价单 %s",
+                    draft.getOrderNumber(), existing.getInquiryNumber()))
+                    .withCode("INQUIRY_FOR_DRAFT_LINE_EXISTS")
+                    .withHint("请在已有核价单 " + existing.getInquiryNumber() + " 中继续比价")
+                    .withHintTarget(existing.getId());
+        }
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** 单位同一性问单位契约 (kg / 公斤 / KG 是同一个); 任一侧为空或未登记 → 不相同。 */
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (blankToNull(left) == null || blankToNull(right) == null) {
+            return false;
+        }
+        return unitContractService.areEquivalent(factoryId, left.trim(), right.trim());
+    }
 
     private InquiryQuote loadOwned(String factoryId, String inquiryId) {
         InquiryQuote q = inquiryQuoteRepository.findById(inquiryId)

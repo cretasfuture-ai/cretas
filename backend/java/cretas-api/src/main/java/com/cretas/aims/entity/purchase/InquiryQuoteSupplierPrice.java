@@ -80,10 +80,34 @@ public class InquiryQuoteSupplierPrice extends BaseEntity {
     @Column(name = "unit_price", nullable = false, precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
-    /** 税率 (百分比, e.g. 13 表示 13%) */
+    /**
+     * 税率 (百分比, e.g. 13 表示 13%)。
+     *
+     * <p>NULL = 税率未知。⛔ 不默认 0: 未知税率 ≠ 0%, 比价时这条报价标为不可比。
+     */
     @PriceSensitive
     @Column(name = "tax_rate", precision = 5, scale = 2)
-    private BigDecimal taxRate = BigDecimal.ZERO;
+    private BigDecimal taxRate;
+
+    /** 报价币种 (e.g. CNY)。NULL = 未注明, 比价时不可比。 */
+    @Column(name = "currency", length = 8)
+    private String currency;
+
+    /** 报价的计价单位。NULL = 未注明; 与询价单位不同则不可比 (不做计数↔重量换算)。 */
+    @Column(name = "quoted_unit", length = 20)
+    private String quotedUnit;
+
+    /** 报价对应的规格。询价单写了规格时, 报价规格必须一致才可比。 */
+    @Column(name = "specification", length = 200)
+    private String specification;
+
+    /** 本次报价的起订量 (计价单位下)。NULL 时比价回落到供应关系上维护的起订量。 */
+    @Column(name = "min_order_quantity", precision = 18, scale = 6)
+    private BigDecimal minOrderQuantity;
+
+    /** 价格生效日。生效日之前不能选定; BOM 影响估算以它为准。 */
+    @Column(name = "price_effective_date")
+    private LocalDate priceEffectiveDate;
 
     /** 报价有效期截止 */
     @Column(name = "valid_until")
