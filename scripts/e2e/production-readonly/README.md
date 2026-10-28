@@ -63,6 +63,7 @@ expectedUsername  default f006_admin
 expectedFactoryId default F006
 evidenceDir       absolute path under a gitignored evidence directory
 scenarios         array of scenario IDs
+factoryAnalysisSubjectId optional exact product ID from the authorized clarification response; unknown IDs fail closed
 dryRun            true loads/describes only; no navigation or login
 ```
 

@@ -63,6 +63,13 @@ function isFusedCandidate(candidate) {
   return familyId(candidate) === 'production.inspection_fused';
 }
 
+function selectAuthorizedSubject(subjects, requestedId) {
+  if (!requestedId) return subjects[0];
+  const subject = subjects.find((item) => String(item?.id) === String(requestedId));
+  if (!subject) throw new Error('Requested joint-analysis subject is absent from the authorized response');
+  return subject;
+}
+
 function hasThreeAxis(candidate) {
   const option = candidate?.chart?.echartsOption;
   return Array.isArray(option?.yAxis) && option.yAxis.length >= 3
@@ -433,6 +440,8 @@ async function run(ctx) {
       let jointSelectedBody = {};
       let jointDetails = { attempted: false, success: false };
       let jointExport = { attempted: false, success: false, formats: {} };
+      let jointScreenshot = null;
+      let jointSubjectId = null;
       const newAnalysisButton = page.getByRole('button', { name: '新分析', exact: true });
       if (await newAnalysisButton.count()) {
         const jointInitialResponse = await waitForResponse(
@@ -452,7 +461,8 @@ async function run(ctx) {
 
         const subjects = Array.isArray(jointInitialBody?.data?.subjects) ? jointInitialBody.data.subjects : [];
         if (jointInitial.summary.clarification && subjects.length > 0) {
-          const subject = subjects[0];
+          const subject = selectAuthorizedSubject(subjects, inspectCtx.factoryAnalysisSubjectId);
+          jointSubjectId = subject.id;
           if (typeof subject?.label !== 'string' || !subject.label.trim()) throw new Error('Factory AI clarification returned an unusable subject label');
           const subjectControl = page.getByTestId('factory-analysis-subject');
           await subjectControl.click();
@@ -474,6 +484,8 @@ async function run(ctx) {
             const fusedId = jointSelectedBody?.data?.recommendations?.find(isFusedCandidate)?.id;
             const fusedCard = fusedId ? page.getByTestId(`factory-chart-card-${fusedId}`) : null;
             if (fusedCard) {
+              await fusedCard.waitFor({ state: 'visible', timeout: 30_000 });
+              jointScreenshot = await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-joint');
               const detailsButton = fusedCard.getByRole('button', { name: '查看原始明细', exact: true });
               if (await detailsButton.count()) {
                 jointDetails.attempted = true;
@@ -520,14 +532,18 @@ async function run(ctx) {
         exportSucceeded: exportAttempt.success,
         exportFormats: exportAttempt.formats,
         joint: assessment.joint,
+        jointSubjectId,
+        jointTables: (jointSelectedBody?.data?.recommendations || []).filter(isFusedCandidate)
+          .map((item) => ({ unit: item.unit, headers: item.tableData?.headers, rows: item.tableData?.rows })),
         jointExportFormats: jointExport.formats,
-        screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : [])],
+        screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : []), ...(jointScreenshot ? [jointScreenshot] : [])],
       };
     },
   });
 }
 
 module.exports = {
+  selectAuthorizedSubject,
   id: 'smartbi-factory-analysis-readonly',
   defaultEnabled: false,
   run,
