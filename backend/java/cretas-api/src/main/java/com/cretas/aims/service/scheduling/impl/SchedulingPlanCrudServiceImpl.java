@@ -545,13 +545,18 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
 
     // ==================== 待排产批次与阈值 ====================
 
+    /** 待排产列表不传起始日期时的下限: 足够早, 逾期多久的待处理计划都列出来。 */
+    static final LocalDate OVERDUE_FLOOR = LocalDate.of(2000, 1, 1);
+
     @Override
     public List<ProductionPlanDTO> getPendingBatches(String factoryId, LocalDate startDate, LocalDate endDate) {
+        // 不传起始日期时**含已逾期**的待处理计划: 原来下限是今天, 逾期没排的计划 (最需要排的那些)
+        // 在排程页里一个都看不到 —— 2026-10-28 F006 三个 PENDING 计划到期 10-26/10-27, 列表为空。
         List<ProductionPlan> plans = productionPlanRepository
             .findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
                 factoryId,
                 ProductionPlanStatus.PENDING,
-                startDate != null ? startDate : LocalDate.now(),
+                startDate != null ? startDate : OVERDUE_FLOOR,
                 endDate != null ? endDate : LocalDate.now().plusMonths(1)
             );
 

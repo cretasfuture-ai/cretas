@@ -105,6 +105,19 @@ class DagScheduleEngineTest {
     }
 
     @Test
+    void everyStepMissingMinutesIsNamedNotOnlyTheFirstInTheChain() {
+        // 1(A 30) -> 2(B 缺) -> 3(C 缺) -> 4(D 10): B 和 C 都要报, D 只是被卡住
+        JobOut job = DagScheduleEngine.schedule(List.of(new JobIn("P1", List.of(
+                task(1, "A", 1, 30),
+                task(2, "B", 2, null, 1L),
+                task(3, "C", 3, null, 2L),
+                task(4, "D", 4, 10, 3L)))), T0).get(0);
+        assertThat(job.missingDurationNames()).containsExactly("工序2", "工序3");
+        assertThat(find(job, 3).status()).isEqualTo(Status.MISSING_DURATION);
+        assertThat(find(job, 4).status()).isEqualTo(Status.BLOCKED_BY_MISSING);
+    }
+
+    @Test
     void zeroMinutesCountsAsMissingNotAsInstant() {
         JobOut job = DagScheduleEngine.schedule(List.of(new JobIn("P1", List.of(
                 task(1, "A", 1, 0)))), T0).get(0);
