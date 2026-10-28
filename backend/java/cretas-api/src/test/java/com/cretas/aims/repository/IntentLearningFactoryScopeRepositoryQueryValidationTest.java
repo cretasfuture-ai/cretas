@@ -73,6 +73,24 @@ class IntentLearningFactoryScopeRepositoryQueryValidationTest {
         assertThat(suggestions.rejectSuggestion(s.getId(), FB, "x")).isEqualTo(1);
     }
 
+    /**
+     * 复审 Low 4: IntentAnalysisController 直接调这两个 @Modifying 查询, 外面没有事务 ——
+     * 这里关掉测试自带的事务模拟同样的调用环境, 查询要能自己开事务执行 (否则 TransactionRequiredException)。
+     */
+    @Test
+    @org.springframework.transaction.annotation.Transactional(
+            propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void suggestionUpdatesRunWithoutACallerTransaction() {
+        IntentOptimizationSuggestion s = suggestions.save(IntentOptimizationSuggestion
+                .createPromotionSuggestion(FB + "-TX", "PRODUCTION_QUERY", "产量", "原因", "u"));
+        try {
+            assertThat(suggestions.rejectSuggestion(s.getId(), FB + "-TX", "x")).isEqualTo(1);
+            assertThat(suggestions.applySuggestion(s.getId(), FB + "-TX", LocalDateTime.now(), 7L)).isEqualTo(1);
+        } finally {
+            suggestions.deleteById(s.getId());
+        }
+    }
+
     @Test
     void annotationCompletionOnlyTouchesTheUrlFactory() {
         AnnotationQueue q = AnnotationQueue.builder().factoryId(FB).userInput("今天产量").build();

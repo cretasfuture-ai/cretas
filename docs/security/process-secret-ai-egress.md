@@ -53,7 +53,7 @@ Python 侧以前：内部分支从不设 `_llm_factory`，Java 带了 `X-Factory
 
 公开前缀（`/api/insight/`、`/api/chart/`、`/api/food-kb/manual-chat` 等，`auth_middleware.PUBLIC_PREFIXES`）不要求登录；以前完全不看 Bearer，登录了的工厂用户在这些页面上的 AI 分析也拿不到工厂（复审 H3 的回归）。现在带了能验过的 Bearer 就按 token 的工厂设外发工厂和 RLS 租户（`PLATFORM` 不算工厂）；没带 / 验不过照旧放行（不新增 401），外发按「没有工厂」处理。洞察客户端（`smartbi/services/insights/llm_client.py`）收到 `EgressRedactionError` 不再当供应商故障重试、也不返回空串，洞察 / 对话入口返回 `success=false` 和上面那句说明。
 
-**平台账号**用其它按工厂取数的 SmartBI 接口（对话、分析、洞察等）时外发被拒，这是设计如此：平台账号不属于任何一家工厂，要分析某家的数据须经该厂的路径 / 内部调用带上工厂。
+**平台账号**（token 里是 `PLATFORM`）用其它按工厂取数的 SmartBI 接口（对话、分析、洞察 `/api/insight/*` 等）时外发被拒，这是设计如此：平台读取工厂数据受「平台读取留痕」规则约束，不能经这些接口直接把工厂数据发给模型；拒绝说明是「AI 分析没有发出：平台账号不能直接对工厂数据做 AI 分析」（未登录的说明是「……无法确定这份数据属于哪家工厂，请登录后重试」）。洞察 `/generate`、`/analyze-metrics` 的 `error` 和 `message` 都带这句说明；对话流式接口失败时给出同一句（其它失败仍是「AI对话处理失败，请稍后重试」）。
 
 Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / 原话模式）：
 - 平台账号 JWT（factoryId 为 `PLATFORM` 或空）直接调 Python 里会走大模型的接口（SmartBI 对话 / 分析、Food KB 问答、餐饮 Agent 等）；
@@ -74,7 +74,10 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 | Java `ActiveLearningServiceImpl.promoteKnowledgeToGlobal` | 跨厂共享关闭时不执行；恢复后内容提到任何一家工厂保密产品名的不晋升 |
 | Java `IntentAnalysisController.approvePromotion` / `getPendingPromotions`（工厂意图 → 平台级） | 只给平台账号（工厂账号 403，`system:read_write` 不够）；意图的名称 / 关键词 / 示例 / 描述等文字提到任何一家工厂的保密产品名 → 409 不晋升；查不了 → 503；审批回执只回意图代码，不回整条意图 |
 | Java `AIIntentConfigController` 新建 / 修改 / 启停 / 删除 / 回滚 / 批量回滚 / 版本历史（`IntentConfigWriteGuard.loadOwned` / `resolveTarget`） | 工厂取路径，请求体里的 `factoryId` / `id` 不认；其余操作按（路径工厂, 意图代码）取本厂的行（服务签名带工厂，不再有不分工厂的版本）；批量回滚只回滚本厂自己的行；平台级行（路径 `PLATFORM`）只给平台账号，写入和回滚出来的旧版本都不许提到任何一家工厂的保密产品名（409 / 查不了 503）；权限查询用按工厂的重载 |
-| Java 参数提取规则删除 / 清理、意图优化建议采纳 / 拒绝、标注任务完成 | 按（ID, 路径工厂）改（`@Modifying` 查询带 `factory_id`），别厂的 404；采纳的操作人取登录身份，不信请求参数 |
+| Java 参数提取规则删除 / 清理、意图优化建议采纳 / 拒绝、标注任务完成 | 按（ID, 路径工厂）改（`@Modifying` 查询带 `factory_id`；建议的采纳 / 拒绝查询自带事务），别厂的 404 |
+| Java 标注任务分配 | 只返回这次分到的、本厂的那几条（以前按标注人名字返回其名下所有已分配的，不分工厂） |
+| Java 审批人 / 应用人 / 标注人 / 操作人 / 晋升申请人（`ActiveLearningController`、`IntentAnalysisController`） | 一律取登录身份，请求参数里的同名字段不再采用 |
+| Java 跨厂知识打分（`recordKnowledgeFeedback`，目前停用） | 只有采用了这条知识的工厂能打分 |
 | Java `LlmIntentFallbackClientImpl.tryCreateIntentSuggestion`（新意图建议 / 工厂级自动建意图） | 原话过本厂学习规则才建 / 累加示例 |
 | Java `UpdateIntentTool`（AI 对话改意图） | 只改调用方本厂的行；`getIntentByCode` 退回来的平台级行不改 |
 | Java `ActiveLearningController` 审批 / 驳回 / 应用学习建议 | 按（建议 ID, 路径工厂）取，别厂的建议 404 |
@@ -84,6 +87,8 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 | Python `ai/learning/keyword_learner.py` | 本厂规则；按（工厂, 意图）分组；每次现读本厂那一行的关键词（不用启动时不分工厂的快照）；遵守本厂自动学习开关（`factory_ai_learning_config.auto_learn_enabled`，没有配置行 = 开）；`UPDATE … WHERE factory_id = $3`，本厂没有这一行就不写 |
 
 保密产品名比对：字母不分大小写（学习会把原话转小写），汉字照原样（Java `ProcessSecretSampleFilter.mentionsAny`，Python `process_secret_names.mentions_any`）。
+
+回滚的检查顺序（复审 2026-10-29）：平台级行的回滚（单个、指定版本、批量）先在副本上恢复并检查保密产品名，通过后才改受管的那一行；批量回滚里被拒的行原样不动，结果里单独列出（`refusedCount` / `refused`）。以前是先改受管行再检查，批量回滚是同类内自调用、不经事务代理，循环的 catch 吞掉 409 之后改过的行仍会在提交时写进库。
 
 ## 3. 读已学内容
 

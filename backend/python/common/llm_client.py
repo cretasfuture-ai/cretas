@@ -33,10 +33,22 @@ class EgressRedactionError(RuntimeError):
 
 def egress_refusal_message(err: BaseException) -> str:
     """给用户看的拒绝说明 (不含原文、不含工厂): 外发被拦时调用方必须把它报出来, ⛔ 不许当成供应商故障重试,
-    也不许返回空串 / 统计兜底冒充 AI 结果 (Steve 2026-10-29 复审 H3)。"""
+    也不许返回空串 / 统计兜底冒充 AI 结果 (Steve 2026-10-29 复审 H3)。
+
+    平台账号 (token 里是 PLATFORM) 没有工厂: 有意拒绝 —— 平台读工厂数据走平台读取留痕的规则, 不经这里直接
+    把工厂数据发给模型 (复审 M2)。"""
     if "NoEgressFactoryError" in str(err) or isinstance(err, NoEgressFactoryError):
+        if _egress_platform_caller.get():
+            return "AI 分析没有发出：平台账号不能直接对工厂数据做 AI 分析"
         return "AI 分析没有发出：无法确定这份数据属于哪家工厂，请登录后重试"
     return "AI 分析没有发出：发给模型前的脱敏没有完成，请稍后重试"
+
+
+import contextvars as _contextvars  # noqa: E402
+
+# 本次请求是平台账号 (token 的 factoryId 为 PLATFORM): 只用来给出准确的拒绝说明, 不放行任何外发 (复审 M2)
+_egress_platform_caller: _contextvars.ContextVar[bool] = _contextvars.ContextVar(
+    "llm_egress_platform_caller", default=False)
 
 
 class _RedactingLLMClient:

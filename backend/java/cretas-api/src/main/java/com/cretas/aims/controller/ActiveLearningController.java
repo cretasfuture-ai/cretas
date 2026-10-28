@@ -71,11 +71,11 @@ public class ActiveLearningController {
     public ResponseEntity<Map<String, Object>> approveSuggestion(
             @PathVariable String factoryId,
             @PathVariable Long suggestionId,
-            @RequestParam String reviewer,
+            @RequestParam(required = false) String reviewer,
             @RequestParam(required = false) String notes) {
 
         // 按 (建议 ID, 路径工厂) 取, 别厂的建议 404 (复审 M-B, 2026-10-29)
-        activeLearningService.approveSuggestion(factoryId, suggestionId, reviewer, notes);
+        activeLearningService.approveSuggestion(factoryId, suggestionId, currentOperatorName(), notes);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
@@ -92,10 +92,10 @@ public class ActiveLearningController {
     public ResponseEntity<Map<String, Object>> rejectSuggestion(
             @PathVariable String factoryId,
             @PathVariable Long suggestionId,
-            @RequestParam String reviewer,
+            @RequestParam(required = false) String reviewer,
             @RequestParam String reason) {
 
-        activeLearningService.rejectSuggestion(factoryId, suggestionId, reviewer, reason);
+        activeLearningService.rejectSuggestion(factoryId, suggestionId, currentOperatorName(), reason);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
@@ -112,9 +112,9 @@ public class ActiveLearningController {
     public ResponseEntity<Map<String, Object>> applySuggestion(
             @PathVariable String factoryId,
             @PathVariable Long suggestionId,
-            @RequestParam String applier) {
+            @RequestParam(required = false) String applier) {
 
-        activeLearningService.applySuggestion(factoryId, suggestionId, applier);
+        activeLearningService.applySuggestion(factoryId, suggestionId, currentOperatorName());
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
@@ -226,6 +226,19 @@ public class ActiveLearningController {
         return ResponseEntity.ok(response);
     }
 
+    /**
+     * 审批人 / 应用人 / 标注人 / 申请人一律取登录身份 (用户名; 没有用户名时 user:<id>), 不信请求参数
+     * (复审 Low 1, Steve 2026-10-29)。
+     */
+    public static String currentOperatorName() {
+        String name = com.cretas.aims.utils.SecurityUtils.currentUsername();
+        if (name != null && !name.isBlank()) {
+            return name;
+        }
+        Long id = com.cretas.aims.utils.SecurityUtils.currentUserId();
+        return id == null ? "unknown" : "user:" + id;
+    }
+
     // ==================== Annotation Queue ====================
 
     /**
@@ -235,11 +248,11 @@ public class ActiveLearningController {
     @PostMapping("/annotations/assign")
     public ResponseEntity<Map<String, Object>> assignAnnotations(
             @PathVariable String factoryId,
-            @RequestParam String annotator,
+            @RequestParam(required = false) String annotator,
             @RequestParam(defaultValue = "10") int count) {
 
         List<AnnotationQueue> assigned = activeLearningService
-                .assignAnnotations(factoryId, annotator, count);
+                .assignAnnotations(factoryId, currentOperatorName(), count);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
@@ -258,10 +271,10 @@ public class ActiveLearningController {
             @PathVariable String factoryId,
             @PathVariable Long annotationId,
             @RequestParam String intentCode,
-            @RequestParam String annotator,
+            @RequestParam(required = false) String annotator,
             @RequestParam(required = false) String notes) {
 
-        activeLearningService.completeAnnotation(factoryId, annotationId, intentCode, annotator, notes);
+        activeLearningService.completeAnnotation(factoryId, annotationId, intentCode, currentOperatorName(), notes);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);

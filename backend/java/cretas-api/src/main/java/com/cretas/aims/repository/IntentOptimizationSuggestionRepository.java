@@ -153,6 +153,8 @@ public interface IntentOptimizationSuggestionRepository extends JpaRepository<In
     /**
      * 应用建议
      */
+    // 控制器直接调, 外面没有事务: @Modifying 需要自己的事务 (复审 Low 4, 2026-10-29)
+    @org.springframework.transaction.annotation.Transactional
     @Modifying
     @Query("UPDATE IntentOptimizationSuggestion s SET s.status = 'APPLIED', " +
            "s.appliedAt = :appliedAt, s.appliedBy = :appliedBy WHERE s.id = :id AND s.factoryId = :factoryId")
@@ -165,6 +167,8 @@ public interface IntentOptimizationSuggestionRepository extends JpaRepository<In
     /**
      * 拒绝建议
      */
+    // 控制器直接调, 外面没有事务: @Modifying 需要自己的事务 (复审 Low 4, 2026-10-29)
+    @org.springframework.transaction.annotation.Transactional
     @Modifying
     @Query("UPDATE IntentOptimizationSuggestion s SET s.status = 'REJECTED', " +
            "s.rejectReason = :reason WHERE s.id = :id AND s.factoryId = :factoryId")

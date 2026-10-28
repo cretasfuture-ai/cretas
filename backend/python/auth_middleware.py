@@ -424,6 +424,13 @@ class JWTAuthMiddleware:
             llm_token = _llm_factory.set(factory_id)
         except Exception:
             llm_token = None
+        platform_token = None
+        if factory_id and str(factory_id).strip().upper() == "PLATFORM":
+            try:
+                from common.llm_client import _egress_platform_caller
+                platform_token = _egress_platform_caller.set(True)  # 只影响拒绝说明 (复审 M2)
+            except Exception:
+                platform_token = None
         try:
             from smartbi.tenant_ctx import set_factory_id, reset_factory_id
             tenant_token = set_factory_id(factory_id)
@@ -436,6 +443,12 @@ class JWTAuthMiddleware:
                 try:
                     from common.llm_metrics import _llm_factory
                     _llm_factory.reset(llm_token)
+                except Exception:
+                    pass
+            if platform_token is not None:
+                try:
+                    from common.llm_client import _egress_platform_caller
+                    _egress_platform_caller.reset(platform_token)
                 except Exception:
                     pass
             if tenant_token is not None:
@@ -456,6 +469,7 @@ class JWTAuthMiddleware:
         操作手册问答 (ALL_FACTORIES_EGRESS_PREFIXES) 的内容是产品手册、不是某一家工厂的数据: 没有工厂时按
         所有工厂的保密产品名脱敏, 不拒绝。只影响外发脱敏和 RLS, 不改 scope["state"] 里的身份。"""
         factory_id = None
+        platform_caller = False
         auth_header = headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             claims = self._verify_token(auth_header[7:])
@@ -463,10 +477,15 @@ class JWTAuthMiddleware:
                 raw = claims.get("factoryId")
                 if raw and str(raw).strip() and str(raw).strip().upper() != "PLATFORM":
                     factory_id = str(raw)
-        llm_token = all_token = tenant_token = None
+                elif raw and str(raw).strip().upper() == "PLATFORM":
+                    platform_caller = True
+        llm_token = all_token = tenant_token = platform_token = None
         try:
             from common.llm_metrics import _llm_factory
-            from common.llm_client import _egress_all_factories
+            from common.llm_client import _egress_all_factories, _egress_platform_caller
+            if platform_caller:
+                # 平台账号: 外发照样按「没有工厂」拒绝, 只是拒绝说明讲清楚是平台账号 (复审 M2)
+                platform_token = _egress_platform_caller.set(True)
             if factory_id:
                 llm_token = _llm_factory.set(factory_id)
             if any(path.startswith(p) for p in ALL_FACTORIES_EGRESS_PREFIXES):
@@ -489,6 +508,9 @@ class JWTAuthMiddleware:
                 if all_token is not None:
                     from common.llm_client import _egress_all_factories
                     _egress_all_factories.reset(all_token)
+                if platform_token is not None:
+                    from common.llm_client import _egress_platform_caller
+                    _egress_platform_caller.reset(platform_token)
                 if tenant_token is not None:
                     from smartbi.tenant_ctx import reset_factory_id
                     reset_factory_id(tenant_token)

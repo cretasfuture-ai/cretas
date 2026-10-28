@@ -191,3 +191,39 @@ def test_manual_chat_prefix_masks_every_factorys_names_without_login(upstream):
     assert asyncio.run(go()).status_code == 200
     assert seen == {"factory": None, "names": [SECRET]}
     assert upstream.lookups == ["ALL"]
+
+
+def test_platform_token_on_insight_is_refused_with_a_platform_message(upstream, monkeypatch):
+    """复审 M2: 平台账号直接对工厂数据做 AI 分析 → 拒绝 (平台读工厂数据走平台读取留痕的规则), 说明讲清楚是平台账号。"""
+    resp = _post(_insight_app(monkeypatch), "/api/insight/generate", PAYLOAD,
+                 {"Authorization": "Bearer " + _token("PLATFORM")})
+    body = resp.json()
+    assert body["success"] is False
+    assert "平台账号不能直接对工厂数据做 AI 分析" in body["error"]
+    assert body["message"] == body["error"]                # /generate 的 message 也带说明 (复审 Low 3)
+    assert upstream.bodies == []
+    # 阴性对照: 未登录的拒绝说明不提平台账号
+    anon = _post(_insight_app(monkeypatch), "/api/insight/generate", PAYLOAD).json()
+    assert "请登录" in anon["error"] and "平台账号" not in anon["error"]
+
+
+def test_analyze_metrics_keeps_the_refusal_message(upstream, monkeypatch):
+    """复审 Low 3: /analyze-metrics 以前把生成器给的 error 丢掉, 前端只看到空结果。"""
+    from smartbi.api import insight
+    asgi = _insight_app(monkeypatch)
+    refusal = lc.egress_refusal_message(lc.EgressRedactionError("NoEgressFactoryError"))
+
+    async def refused(**kw):
+        return {"success": False, "error": refusal, "insights": []}
+
+    monkeypatch.setattr(insight.insight_generator, "generate_insights", refused)
+    resp = _post(asgi, "/api/insight/analyze-metrics", [{"metric": "销量", "value": 10}])
+    body = resp.json()
+    assert body["success"] is False
+    assert "没有发出" in (body.get("error") or "") and "没有发出" in (body.get("message") or "")
+
+
+def test_chat_stream_failure_message_names_the_egress_refusal():
+    from smartbi.api.chat import _stream_failure_message
+    assert "没有发出" in _stream_failure_message(lc.EgressRedactionError("NoEgressFactoryError"))
+    assert _stream_failure_message(RuntimeError("boom")) == "AI对话处理失败，请稍后重试"

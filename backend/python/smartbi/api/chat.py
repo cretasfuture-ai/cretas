@@ -61,6 +61,17 @@ from smartbi.services.llm_guard import (
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat"])
 
+
+def _stream_failure_message(err: BaseException) -> str:
+    """流式对话失败时给用户的话: 外发被拦 (没有工厂 / 平台账号 / 脱敏失败) 讲清楚没发出, 其余照旧
+    (复审 Low 3, Steve 2026-10-29)。"""
+    from common.llm_client import EgressRedactionError, egress_refusal_message
+    if isinstance(err, EgressRedactionError):
+        return egress_refusal_message(err)
+    return "AI对话处理失败，请稍后重试"
+
+
+
 _CHAT_PENDING_BG_TASKS: set[asyncio.Task] = set()
 
 
@@ -4237,7 +4248,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
         except Exception as e:
             logger.error(f"[stream] General analysis stream failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4431,7 +4442,7 @@ async def drill_down_stream(request: DrillDownRequest, http_request: Request):
 
         except Exception as e:
             logger.error(f"[drill-down-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4562,7 +4573,7 @@ KPI统计: {stats_text}
 
         except Exception as e:
             logger.error(f"[root-cause-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4664,7 +4675,7 @@ async def benchmark_stream(request: BenchmarkRequest, http_request: Request):
 
         except Exception as e:
             logger.error(f"[benchmark-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),
@@ -4774,7 +4785,7 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
 
         except Exception as e:
             logger.error(f"[multi-dimension-stream] Failed: {e}", exc_info=True)
-            yield _sse_event("error", "AI对话处理失败，请稍后重试")
+            yield _sse_event("error", _stream_failure_message(e))
 
     return StreamingResponse(
         event_stream(),

@@ -561,7 +561,8 @@ public class IntentAnalysisController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> approveCreateIntent(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @Parameter(description = "建议ID", example = "sug-001") @PathVariable String suggestionId,
-            @Parameter(description = "操作人ID", example = "22") @RequestParam Long operatorId,
+            @Parameter(description = "已废弃: 操作人取登录身份, 不再信任请求参数", example = "22")
+            @RequestParam(required = false) Long operatorId,
             @Parameter(description = "自定义意图代码 (可选，默认使用建议值)")
             @RequestParam(required = false) String customIntentCode,
             @Parameter(description = "自定义意图名称 (可选，默认使用建议值)")
@@ -618,12 +619,14 @@ public class IntentAnalysisController {
             AIIntentConfig savedIntent = intentConfigRepository.save(newIntent);
 
             // 5. 更新建议状态
-            suggestion.apply(operatorId);
+            // 操作人取登录身份, 不信请求参数 (复审 Low 1, 2026-10-29)
+            Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
+            suggestion.apply(operator);
             suggestion.setCreatedIntentId(savedIntent.getId());
             suggestionRepository.save(suggestion);
 
             log.info("创建新意图成功: factoryId={}, intentCode={}, suggestionId={}, operatorId={}",
-                    factoryId, finalIntentCode, suggestionId, operatorId);
+                    factoryId, finalIntentCode, suggestionId, operator);
 
             // 6. 返回结果
             Map<String, Object> result = new HashMap<>();
@@ -836,7 +839,8 @@ public class IntentAnalysisController {
                     intentCode,
                     intent.getIntentName(),
                     request.getReason(),
-                    request.getRequestedBy()
+                    // 申请人取登录身份, 不信请求体 (复审 Low 1)
+                    ActiveLearningController.currentOperatorName()
             );
             suggestionRepository.save(suggestion);
 

@@ -423,6 +423,13 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     @Override
     @Transactional
     public void recordKnowledgeFeedback(Long knowledgeId, String factoryId, boolean isPositive) {
+        // 只有采用了这条知识的工厂才能给它打分 (复审 Low 2, 2026-10-29): 以前任何工厂按 ID 都能改全局知识的评分
+        Optional<CrossFactoryKnowledgeAdoption> adoption = factoryId == null ? Optional.empty()
+                : adoptionRepository.findByKnowledgeIdAndFactoryId(knowledgeId, factoryId);
+        if (adoption.isEmpty()) {
+            log.warn("Knowledge feedback ignored: factory {} has not adopted knowledge {}", factoryId, knowledgeId);
+            return;
+        }
         // Update global knowledge
         CrossFactoryKnowledge knowledge = knowledgeRepository.findById(knowledgeId).orElse(null);
         if (knowledge == null) {
@@ -437,18 +444,13 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         knowledgeRepository.save(knowledge);
 
         // Update factory-level adoption
-        Optional<CrossFactoryKnowledgeAdoption> adoption = adoptionRepository
-                .findByKnowledgeIdAndFactoryId(knowledgeId, factoryId);
-
-        if (adoption.isPresent()) {
-            CrossFactoryKnowledgeAdoption record = adoption.get();
-            if (isPositive) {
-                record.recordPositiveFeedback();
-            } else {
-                record.recordNegativeFeedback();
-            }
-            adoptionRepository.save(record);
+        CrossFactoryKnowledgeAdoption record = adoption.get();
+        if (isPositive) {
+            record.recordPositiveFeedback();
+        } else {
+            record.recordNegativeFeedback();
         }
+        adoptionRepository.save(record);
     }
 
     @Override
@@ -901,10 +903,18 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         List<Long> ids = pending.stream().map(AnnotationQueue::getId).collect(Collectors.toList());
         LocalDateTime dueDate = LocalDateTime.now().plusDays(3);
 
-        annotationRepository.assignToAnnotator(ids, annotator, LocalDateTime.now(), dueDate);
+        LocalDateTime assignedAt = LocalDateTime.now();
+        annotationRepository.assignToAnnotator(ids, annotator, assignedAt, dueDate);
 
-        return annotationRepository.findByAssignedToAndAnnotationStatus(
-                annotator, AnnotationQueue.AnnotationStatus.ASSIGNED);
+        // 只回这次分到的、本厂的那几条 (复审 M1, 2026-10-29): 以前按标注人名字回「他名下所有已分配的」,
+        // 不分工厂 —— 别厂同名标注人的原话也会回来。批量 UPDATE 不刷新受管实体, 这里把同样的值写回再返回。
+        for (AnnotationQueue a : pending) {
+            a.setAssignedTo(annotator);
+            a.setAssignedAt(assignedAt);
+            a.setDueAt(dueDate);
+            a.setAnnotationStatus(AnnotationQueue.AnnotationStatus.ASSIGNED);
+        }
+        return pending;
     }
 
     @Override
