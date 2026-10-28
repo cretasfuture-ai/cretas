@@ -345,10 +345,14 @@ class AIEnterpriseServiceProcessSecretPromptTest {
         AIEnterpriseService service = service(protectedScope());
         when(processing.getTimeRangeBatchesCostAnalysis(anyString(), any(), any())).thenReturn(enhancedRows());
 
-        timeRangeAs(service, FACTORY, owner());
+        // 两边都是无权调用者 (档位哈希相同), 两个工厂都有保密产品: 只能靠缓存键里的工厂分开
+        MobileDTO.AICostAnalysisResponse here = timeRangeAs(service, FACTORY, sameFactoryUser());
         MobileDTO.AICostAnalysisResponse elsewhere = timeRangeAs(service, OTHER_FACTORY, otherFactoryUser());
+        MobileDTO.AICostAnalysisResponse hereAgain = timeRangeAs(service, FACTORY, platform());   // 阳性: 同厂同档确实复用
 
+        assertThat(here.getCacheHit()).isFalse();
         assertThat(elsewhere.getCacheHit()).isFalse();
+        assertThat(hereAgain.getCacheHit()).isTrue();
         verify(python).analyzeGeneral(eq(OTHER_FACTORY), nullable(String.class), any());
     }
 

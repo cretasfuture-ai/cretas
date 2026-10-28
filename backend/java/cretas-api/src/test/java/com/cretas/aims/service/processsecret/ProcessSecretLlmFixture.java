@@ -107,11 +107,13 @@ public final class ProcessSecretLlmFixture {
 
     public static ProcessSecretAccessService access(Set<String> protectedIds) {
         ProcessSecretPolicyRepository policies = lenientMock(ProcessSecretPolicyRepository.class);
-        List<ProcessSecretPolicy> list = protectedIds.stream().sorted().map(ProcessSecretLlmFixture::policy).toList();
-        when(policies.findByFactoryIdOrderByProductTypeIdAsc(eq(FACTORY))).thenReturn(list);
-        when(policies.findByFactoryIdAndProductTypeId(eq(FACTORY), anyString())).thenAnswer(inv ->
+        // 每个工厂都有同 id 的保密产品 (负责人都是 OWNER@FACTORY): 跨厂缓存隔离的用例要靠它 ——
+        // 两个工厂里的无权调用者档位哈希相同, 只能靠缓存键里的工厂分开
+        when(policies.findByFactoryIdOrderByProductTypeIdAsc(anyString())).thenAnswer(inv -> protectedIds.stream()
+                .sorted().map(id -> policy(inv.getArgument(0), id)).toList());
+        when(policies.findByFactoryIdAndProductTypeId(anyString(), anyString())).thenAnswer(inv ->
                 protectedIds.contains(inv.<String>getArgument(1))
-                        ? Optional.of(policy(inv.getArgument(1))) : Optional.empty());
+                        ? Optional.of(policy(inv.getArgument(0), inv.getArgument(1))) : Optional.empty());
         ProcessSecretGrantRepository grants = lenientMock(ProcessSecretGrantRepository.class);
         when(grants.findActive(eq(FACTORY), anyString(), eq(ProcessSecretGranteeType.FACTORY_USER), eq(GRANTEE), any()))
                 .thenAnswer(inv -> List.of(ProcessSecretGrant.builder().factoryId(FACTORY)
@@ -129,8 +131,8 @@ public final class ProcessSecretLlmFixture {
         return new ProcessSecretAggregateExclusions(access, planRepository, recipes);
     }
 
-    private static ProcessSecretPolicy policy(String productTypeId) {
-        return ProcessSecretPolicy.builder().id(1L).factoryId(FACTORY).productTypeId(productTypeId)
+    private static ProcessSecretPolicy policy(String factoryId, String productTypeId) {
+        return ProcessSecretPolicy.builder().id(1L).factoryId(factoryId).productTypeId(productTypeId)
                 .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
     }
 
