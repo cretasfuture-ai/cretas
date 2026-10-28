@@ -979,7 +979,8 @@ public class AIIntentConfigController {
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             // 意图代码全库唯一 (含已删除的行): 不透露占用方 (复审 L3)
             throw new com.cretas.aims.exception.BusinessException(409,
-                    com.cretas.aims.service.intent.IntentConfigWriteGuard.CODE_TAKEN_MESSAGE);
+                    com.cretas.aims.service.intent.IntentConfigWriteGuard.CODE_TAKEN_MESSAGE)
+                    .withHint(com.cretas.aims.service.intent.IntentConfigWriteGuard.CODE_TAKEN_HINT);
         }
         log.info("Created AI intent: {} for factory context: {}", safe.getIntentCode(), factoryId);
         return ResponseEntity.ok(ApiResponse.success("意图配置创建成功", created));

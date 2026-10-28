@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
  * 第三轮复审 (2026-10-29): 意图配置写入 / 平台晋升 / AI 改意图 / 学习建议 / 字段映射 / 意图名兜底 都只认
  * 服务端认定的工厂; 平台级内容只给平台账号且不许提到任何一家工厂的工艺保密产品名。每组带阴性对照。
  */
-class ProcessSecretCrossFactoryRound3Test {
+class ProcessSecretCrossFactoryRound3ContractTest {
 
     static final String FA = "FA";
     static final String FB = "FB";

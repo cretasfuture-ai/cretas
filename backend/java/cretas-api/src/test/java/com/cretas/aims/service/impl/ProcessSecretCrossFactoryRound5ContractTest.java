@@ -47,7 +47,7 @@ import static org.mockito.Mockito.when;
  * 第五轮复审 (2026-10-29): 平台级行回滚先在副本上查保密产品名 (受管行不被改); 标注分配只回本厂这次分到的;
  * 审批人 / 应用人 / 标注人取登录身份; 跨厂知识打分要先采用。每组带阴性对照。
  */
-class ProcessSecretCrossFactoryRound5Test {
+class ProcessSecretCrossFactoryRound5ContractTest {
 
     static final String FA = "FA";
     static final String SECRET = "秘制酱牛肉";

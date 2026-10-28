@@ -62,7 +62,7 @@ import static org.mockito.Mockito.when;
  * 复审 (2026-10-29) 找到的跨工厂路径: 工艺保密产品名不许经由学习 / 全局 / 外发出现在别的工厂。
  * 每组都有阴性对照 (不提保密产品 / 本厂行 / 显式工厂 → 照常)。保密名单走真实的 {@link ProcessSecretSampleFilter}。
  */
-class ProcessSecretCrossFactoryReviewTest {
+class ProcessSecretCrossFactoryReviewContractTest {
 
     static final String FA = "FA";
     static final String FB = "FB";
@@ -346,7 +346,7 @@ class ProcessSecretCrossFactoryReviewTest {
                     mock(com.cretas.aims.service.SemanticRouterService.class), filter);
             when(suggestions.findById("s1")).thenReturn(Optional.of(IntentOptimizationSuggestion
                     .createPromotionSuggestion(FA, "PRODUCTION_QUERY", "产量", "通用", "admin")));
-            // 审批只给平台账号 (复审 H-B); 工厂账号被拒见 ProcessSecretCrossFactoryRound3Test
+            // 审批只给平台账号 (复审 H-B); 工厂账号被拒见 ProcessSecretCrossFactoryRound3ContractTest
             bindPlatformAdmin();
         }
 

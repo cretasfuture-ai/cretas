@@ -52,7 +52,7 @@ public class IntentConfigWriteGuard {
         }
         // ai_intent_configs 的意图代码全库唯一: 别处 (别厂 / 平台级) 已占用就 409, 不说是谁占的 (复审 L3)
         if (intentRepository.findByIntentCode(body.getIntentCode()).isPresent()) {
-            throw new BusinessException(409, CODE_TAKEN_MESSAGE);
+            throw new BusinessException(409, CODE_TAKEN_MESSAGE).withHint(CODE_TAKEN_HINT);
         }
         AIIntentConfig row = new AIIntentConfig();
         BeanUtils.copyProperties(body, row, PROTECTED_FIELDS);
@@ -93,6 +93,12 @@ public class IntentConfigWriteGuard {
     /** 新建时代码已被占用 (全库唯一; 不透露占用方)。 */
     public static final String CODE_TAKEN_MESSAGE = "这个意图代码已被占用，请换一个代码";
 
+    /** 代码被占用时的下一步 (409 必须带 hint)。 */
+    public static final String CODE_TAKEN_HINT = "请换一个意图代码（例如在前面加上本厂的前缀）后再保存";
+
+    /** 平台级行提到保密产品名时的下一步 (409 必须带 hint)。 */
+    public static final String PROTECTED_NAME_HINT = "请把关键词、示例和描述里的工艺保密产品名去掉后再保存";
+
     /** 本厂没有这一行时给用户的话 (平台级 / 别厂的同代码行一律不提, 复审 L3)。 */
     public static final String NOT_OWNED_MESSAGE = "本厂没有这个意图配置";
 
@@ -126,7 +132,8 @@ public class IntentConfigWriteGuard {
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未保存, 请稍后重试");
         }
         if (mentions) {
-            throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存");
+            throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存")
+                    .withHint(PROTECTED_NAME_HINT);
         }
     }
 
@@ -146,7 +153,8 @@ public class IntentConfigWriteGuard {
     /** 用预先取好的全厂名单检查 (不查库): 提到 → 409。 */
     public static void requireNoProtectedNames(AIIntentConfig intent, java.util.Set<String> allFactoryNames) {
         if (ProcessSecretSampleFilter.mentionsAny(allFactoryNames, textFields(intent))) {
-            throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存");
+            throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存")
+                    .withHint(PROTECTED_NAME_HINT);
         }
     }
 

@@ -110,7 +110,7 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 - **字段映射字典**：`LLMFieldMappingServiceImpl.saveUserMapping`（人工确认的映射）在工厂为空时仍写全局字典，未加保密产品检查；自动分析的映射已不写全局。`ExcelDynamicParserServiceImpl.parseExcel` 用请求对象里的工厂，当前 `src/main` 没有调用方，新接调用方时必须填服务端认定的工厂。
 - **入口绑定之外的深层调用**：7 个仍传 `null` 的出口若被新入口直接调用，工厂用户按登录身份，平台账号会被拒绝外发（fail-closed，功能上表现为退回规则 / 不抽参），需要在新入口补 `analysing(factoryId)` 或显式传工厂。
 - **改平台级意图的提示**：工厂账号改 / 启停 / 删除 / 回滚一个只有平台级行的意图代码，现在返回 404「本厂没有这个意图配置」（以前会改到平台级行）；新建一个已被别处占用的代码返回 409「这个意图代码已被占用，请换一个代码」（`ai_intent_configs.intent_code` 全库唯一，提示不透露占用方）。前端如要区分「平台已有」需另行设计。
-- **`@PreAuthorize` 不生效**：工程没有开启方法安全（无 `@EnableMethodSecurity`），`AIIntentConfigController` 上的 `hasAnyRole('FACTORY_SUPER_ADMIN','FACTORY_ADMIN')` 不拦任何人，平台账号能走到 `PLATFORM` 写路径，由 `IntentConfigWriteGuard` 判平台账号；角色限制实际靠 `@RequirePermission`。若将来开启方法安全，这些注解会挡住平台账号（`ProcessSecretCrossFactoryRound4Test` 会红）。
+- **`@PreAuthorize` 不生效**：工程没有开启方法安全（无 `@EnableMethodSecurity`），`AIIntentConfigController` 上的 `hasAnyRole('FACTORY_SUPER_ADMIN','FACTORY_ADMIN')` 不拦任何人，平台账号能走到 `PLATFORM` 写路径，由 `IntentConfigWriteGuard` 判平台账号；角色限制实际靠 `@RequirePermission`。若将来开启方法安全，这些注解会挡住平台账号（`ProcessSecretCrossFactoryRound4ContractTest` 会红）。
 - **Python 没有工厂会被拒绝的调用**未逐个线上实测（见上方对照表下的清单）。
 - **Python 自动学习开关**只接到关键词学习；说法学习（`expression_learner`）与 Java 意图管线一样按全局配置，不看本厂开关。
 

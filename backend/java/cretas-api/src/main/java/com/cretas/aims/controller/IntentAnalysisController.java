@@ -1003,7 +1003,8 @@ public class IntentAnalysisController {
         }
         if (mentions) {
             log.warn("意图 [{}] 的文字提到工艺保密产品, 不晋升为平台级", intent.getIntentCode());
-            throw new BusinessException(409, "该意图的关键词或示例提到工艺保密产品, 不能晋升为平台级");
+            throw new BusinessException(409, "该意图的关键词或示例提到工艺保密产品, 不能晋升为平台级")
+                    .withHint("请退回给申请工厂，让其把关键词和示例里的工艺保密产品名去掉后重新申请晋升");
         }
     }
 

@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
  * 第四轮复审 (2026-10-29): 意图启停 / 删除 / 回滚 / 版本历史 / 规则 / 建议 / 标注都只认路径工厂的行;
  * 平台级行只给平台账号且回滚出来的旧版本同样查保密产品名; 自动建意图过本厂学习规则。每组带阴性对照。
  */
-class ProcessSecretCrossFactoryRound4Test {
+class ProcessSecretCrossFactoryRound4ContractTest {
 
     static final String FA = "FA";
     static final String FB = "FB";
