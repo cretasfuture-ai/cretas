@@ -428,16 +428,14 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
-    void costTotalsThatIncludeAutomaticLinesAreHiddenFromUnauthorizedAccounts() throws Exception {
-        // Steve 2026-10-28 选 A: 调料小计 − 0 = 自动行金额, ÷ 单价 ÷ 投入 = 配比; 总成本 − 可见各项同理
+    void costTotalsOfAProtectedProductAreHiddenFromUnauthorizedAccounts() throws Exception {
+        // Steve 2026-10-28 选 A: 调料小计 = 自动行金额, ÷ 单价 ÷ 投入 = 配比; 总成本 − 可见各项同理
         securedPlan("plan-12");
         String body = "{'orderId':'o1','seasoningCost':12.5,'rawMaterialCost':800,'laborCost':60,'totalCost':872.5,"
                 + "'perBoxCost':8.725,'grossProfit':128,'grossMargin':12.8,'totalAmount':1000,'boxCount':100,"
-                + "'missingCostItemCount':0,"
+                + "'missingCostItemCount':0,'outputQuantity':100,"
                 + "'rawMaterialDetails':[{'materialName':'牛肉','quantity':115,'unitPrice':7,'amount':805,'automatic':false},"
-                + "{'materialName':'盐','quantity':0.1725,'unitPrice':2,'amount':0.345,'automatic':true}],"
-                + "'laborDetails':[{'processName':'卤制','amount':60,'laborCost':60}],"
-                + "'packagingCost':{'total':3}}";
+                + "{'materialName':'盐','quantity':0.1725,'unitPrice':2,'amount':0.345,'automatic':true}]}";
 
         ObjectNode operator = tree(body);
         scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-12"),
@@ -447,41 +445,47 @@ class ProcessSecretPayloadScrubberTest {
             assertThat(operator.path(field).isNull()).as(field).isTrue();
         }
         assertThat(operator.path("totalAmount").asInt()).as("销售额与配比无关").isEqualTo(1000);
+        assertThat(operator.path("outputQuantity").asInt()).as("本单总量档").isEqualTo(100);
         assertThat(operator.path("boxCount").asInt()).isEqualTo(100);
         assertThat(operator.path("missingCostItemCount").asInt()).as("计数不是金额").isZero();
         assertThat(operator.at("/rawMaterialDetails/0/amount").asInt()).as("人工行金额是实际值").isEqualTo(805);
         assertThat(operator.at("/rawMaterialDetails/1/amount").isNull()).isTrue();
-        // 阴性对照: 不含自动行的下层对象, 金额照给
-        assertThat(operator.at("/laborDetails/0/laborCost").asInt()).isEqualTo(60);
         assertThat(operator.path("processSecret").path("hiddenFields").toString()).contains("totalCost");
+        assertThat(operator.path("processSecret").path("message").asText()).contains("成本合计");
+        verify(recorder).record(eq(F), eq(SECRET), eq(user(5)), eq(ProcessSecretAction.VIEW_FULL), eq("DENY"),
+                contains("totalCost"), eq("GET /production/orders/o1/cost-breakdown"));
 
         ObjectNode owner = tree(body);
         scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-12"),
                 "GET /production/orders/o1/cost-breakdown", false);
         assertThat(owner.path("totalCost").decimalValue()).isEqualByComparingTo("872.5");
         assertThat(owner.path("seasoningCost").decimalValue()).isEqualByComparingTo("12.5");
-
-        // 阴性对照: 全是人工投料的单子, 合计照给
-        ObjectNode manualOnly = tree("{'totalCost':805,'rawMaterialDetails':[{'amount':805,'automatic':false}]}");
-        scrubber.scrub(manualOnly, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-12"),
-                "GET /production/orders/o2/cost-breakdown", false);
-        assertThat(manualOnly.path("totalCost").asInt()).isEqualTo(805);
     }
 
     @Test
-    void anExitCanDeclareThatATotalWithoutLinesIncludesAutomaticCost() throws Exception {
-        securedPlan("plan-13");
-        String body = "[{'batchNumber':'B1','materialCost':812,'automaticCostIncluded':true},"
-                + "{'batchNumber':'B2','materialCost':805,'automaticCostIncluded':false}]";
+    void persistedBatchAndInventoryCostsOfAProtectedProductAreHiddenButPlainProductsKeepTheirs() throws Exception {
+        // 批次 / 半成品 / 成品的单位成本是报工时把调料、包材的配方金额滚进去的, 出口不带明细行
+        String body = "[{'productTypeId':'P17','batchNumber':'B1','materialCost':812,'totalCost':900,'unitCost':9,"
+                + "'quantity':100,'costUnitPrice':9},"
+                + "{'productTypeId':'PLAIN','batchNumber':'B2','materialCost':805,'totalCost':880,'unitCost':8.8}]";
         JsonNode operator = json.readTree(body.replace('\'', '"'));
-        scrubber.scrub(operator, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCTION_PLAN, "plan-13"),
-                "GET /processing/batches", false);
-        assertThat(operator.at("/0/materialCost").isNull()).isTrue();
+        scrubber.scrub(operator, user(5), F, Set.of(), "GET /processing/batches", false);
+        for (String field : List.of("materialCost", "totalCost", "unitCost", "costUnitPrice")) {
+            assertThat(operator.at("/0/" + field).isNull()).as(field).isTrue();
+        }
+        assertThat(operator.at("/0/quantity").asInt()).as("本单总量档").isEqualTo(100);
+        // 阴性对照: 不受保护的产品, 成本照给
         assertThat(operator.at("/1/materialCost").asInt()).isEqualTo(805);
+        assertThat(operator.at("/1/unitCost").decimalValue()).isEqualByComparingTo("8.8");
+
+        JsonNode platformView = json.readTree(body.replace('\'', '"'));
+        scrubber.scrub(platformView, platform(), F, Set.of(), "GET /processing/batches", false);
+        assertThat(platformView.at("/0/totalCost").isNull()).isTrue();
+        assertThat(platformView.at("/0/quantity").isNull()).as("平台连总量也不给").isTrue();
     }
 
     @Test
-    void bomAchievementTotalsAndOverallRateAreHiddenWhenAnItemIsAutomatic() throws Exception {
+    void bomAchievementTotalsAndOverallRateAreHidden() throws Exception {
         // 计划量 × 单价可见, 总达成率 = 实际总成本 ÷ 计划总成本 → 一乘就是含自动行的实际总成本
         securedPlan("plan-14");
         String body = "{'items':[{'materialTypeName':'牛肉','plannedQty':115,'actualQty':115,'unitPrice':7,'cost':805,"
@@ -494,8 +498,51 @@ class ProcessSecretPayloadScrubberTest {
         assertThat(operator.path("totalPlannedCost").isNull()).isTrue();
         assertThat(operator.path("totalActualCost").isNull()).isTrue();
         assertThat(operator.path("overallAchievementRate").isNull()).isTrue();
-        assertThat(operator.at("/items/0/cost").asInt()).as("人工行").isEqualTo(805);
         assertThat(operator.at("/items/0/plannedQty").asInt()).as("本单总量档").isEqualTo(115);
+        assertThat(operator.at("/items/0/actualQty").asInt()).isEqualTo(115);
+        assertThat(operator.at("/items/1/actualQty").isNull()).isTrue();
+    }
+
+    @Test
+    void anOrderTotalCoveringAProtectedProductLineHidesItsCostsButNotItsRevenue() throws Exception {
+        // 销售单: 整单实际成本 − 其他行可见的成本 = 保密产品那一行的成本
+        String body = "{'orderNumber':'SO-1','totalAmount':3000,'actualCost':1700,'actualProfit':1300,"
+                + "'profitMarginActual':43.3,'lines':[{'productId':'P17','lineAmount':1000,'actualLineCost':900,"
+                + "'quantity':100},{'productId':'PLAIN','lineAmount':2000,'actualLineCost':800}]}";
+        ObjectNode operator = tree(body);
+        scrubber.scrub(operator, user(5), F, Set.of(), "GET /sales/orders/SO-1/cost-breakdown", false);
+        for (String field : List.of("actualCost", "actualProfit", "profitMarginActual")) {
+            assertThat(operator.path(field).isNull()).as(field).isTrue();
+        }
+        assertThat(operator.path("totalAmount").asInt()).as("销售额照给").isEqualTo(3000);
+        assertThat(operator.at("/lines/0/actualLineCost").isNull()).as("productId 命中保密产品即归属").isTrue();
+        assertThat(operator.at("/lines/0/quantity").asInt()).isEqualTo(100);
+        assertThat(operator.at("/lines/1/actualLineCost").asInt()).as("不受保护的行照给").isEqualTo(800);
+        verify(recorder).record(eq(F), eq(SECRET), eq(user(5)), eq(ProcessSecretAction.VIEW_FULL), eq("DENY"),
+                contains("actualCost"), eq("GET /sales/orders/SO-1/cost-breakdown"));
+
+        // 负责人: 全部照给
+        ObjectNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, Set.of(), "GET /sales/orders/SO-1/cost-breakdown", false);
+        assertThat(owner.path("actualCost").asInt()).isEqualTo(1700);
+        assertThat(owner.at("/lines/0/actualLineCost").asInt()).isEqualTo(900);
+
+        // 阴性对照: 整单都是不受保护的产品 (productId 不是保护产品时不当归属, 也不连带上层)
+        ObjectNode plain = tree("{'actualCost':800,'lines':[{'productId':'PLAIN','actualLineCost':800}]}");
+        scrubber.scrub(plain, user(5), F, Set.of(), "GET /sales/orders/SO-2/cost-breakdown", false);
+        assertThat(plain.path("actualCost").asInt()).isEqualTo(800);
+    }
+
+    @Test
+    void costFieldNamesAreRecognisedButPricesRevenueAndCountsAreNot() {
+        for (String name : List.of("totalCost", "unitCost", "costUnitPrice", "seasoningCost", "grossProfit",
+                "grossMarginPct", "marginRate", "overallAchievementRate", "varianceAbsolute", "rowTotalCost")) {
+            assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isTrue();
+        }
+        for (String name : List.of("unitPrice", "totalAmount", "salePrice", "missingCostItemCount", "costVersion",
+                "quantity")) {
+            assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isFalse();
+        }
     }
 
     @Test

@@ -45,13 +45,10 @@ import java.util.Set;
 public class ProcessSecretPayloadScrubber {
 
     public static final String MARKER = "processSecret";
-    public static final String TOTALS_ONLY_MESSAGE = "该产品工艺已设为保密：可以看物料和本单总量，配比、单位用量和标准出成率已隐藏";
+    public static final String TOTALS_ONLY_MESSAGE = "该产品工艺已设为保密：可以看物料和本单总量，配比、单位用量、标准出成率和成本合计已隐藏";
     public static final String RESTRICTED_MESSAGE = "该产品工艺已设为保密，需要保密负责人授权才能查看";
 
     public enum Level { FULL, TOTALS_ONLY, NONE }
-
-    /** 出口显式声明「这个对象的成本合计含按配比算出的金额」(下层不带明细行时用)。 */
-    public static final String AUTOMATIC_COST_FLAG = "automaticCostIncluded";
 
     /**
      * 配比 / 单位用量 / 转换率 / 标准出成率: 受限 (含「本单总量」档) 一律去掉。
@@ -414,36 +411,45 @@ public class ProcessSecretPayloadScrubber {
                 Optional<Key> viaRecipe = recipeKey(factory, recipeId);
                 if (viaRecipe.isPresent()) return viaRecipe.get();
             }
+            // 销售行 / 报表行用 productId 指产品: 它在别处也指商城商品等, 所以只在命中本厂受保护产品时才认作归属
+            // (只会让归属更严, 不会把原本按受限处理的对象归到不受保护的产品上)
+            String productId = text(node, "productId");
+            if (productId != null && protectedIn(factory).contains(productId)) return new Key(factory, productId);
             return null;
         }
 
-        /** @return 这一层 (含下层) 是否有按配比算出的行 */
-        boolean collectAttributions(JsonNode node, Key inherited) {
+        /** @return 这一层 (含下层) 里对当前调用者受限的受保护产品; 没有为 null */
+        Key collectAttributions(JsonNode node, Key inherited) {
             if (node instanceof ObjectNode object) {
                 Key own = ownKey(object, inherited);
                 Key effective = own != null ? own : inherited;
                 if (own != null) attributed.add(own);
-                boolean below = false;
+                Key below = own != null && own.productTypeId() != null && isProtected(own) && level(own) != Level.FULL
+                        ? own : null;
                 List<JsonNode> children = new ArrayList<>();
                 object.elements().forEachRemaining(children::add);
-                for (JsonNode child : children) below |= collectAttributions(child, effective);
-                if (below || object.path(AUTOMATIC_COST_FLAG).asBoolean(false)) costIncludesAutomatic.add(object);
-                return below || isRecipeDerived(object) || isReworkDeduction(object);
+                for (JsonNode child : children) {
+                    Key found = collectAttributions(child, effective);
+                    if (below == null) below = found;
+                }
+                if (below != null) restrictedBelow.put(object, below);
+                return below;
             } else if (node instanceof ArrayNode array) {
-                boolean below = false;
-                for (JsonNode child : array) below |= collectAttributions(child, inherited);
+                Key below = null;
+                for (JsonNode child : array) {
+                    Key found = collectAttributions(child, inherited);
+                    if (below == null) below = found;
+                }
                 return below;
             }
-            return false;
+            return null;
         }
 
         /**
-         * 下层含按配比算出的行 (或出口显式标了 {@value #AUTOMATIC_COST_FLAG}) 的对象: 它的成本合计
-         * (调料 / 包材 / 原料小计、总成本、单位成本) 和由它算出的利润 / 毛利, 减去可见的人工行就是
-         * 自动行的金额, 再 ÷ 单价 ÷ 投入就是配比 (Steve 2026-10-28 选 A: 无授权账号一律「已保密」)。
+         * 下层有受限的受保护产品行的对象 (订单下的销售行、报表里的产品行): 它的成本合计减去可见的其他行,
+         * 就是保密产品的成本 (Steve 2026-10-28 选 A)。按身份记, 不改 JSON。
          */
-        final Set<ObjectNode> costIncludesAutomatic =
-                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        final Map<ObjectNode, Key> restrictedBelow = new java.util.IdentityHashMap<>();
 
         void decideFallback() {
             if (restrictedReads.isEmpty()) return;
@@ -542,6 +548,7 @@ public class ProcessSecretPayloadScrubber {
             List<String> quantityFields = new ArrayList<>();
             // 无权档 (平台 / 他厂) 连总量也不给: 词表列不全 (独立审查 #6), 所以除了标识类数字一律去掉
             List<String> otherNumbers = new ArrayList<>();
+            List<String> costFields = new ArrayList<>();
             // 按配比算出来的对象 (及其下层): 非标识数字一律按配比处理; 人工录入的实际投料 (automatic=false) 照常给
             boolean derivedFromRecipe = derived || isRecipeDerived(object);
             boolean reworkDeduction = isReworkDeduction(object);
@@ -556,8 +563,12 @@ public class ProcessSecretPayloadScrubber {
                         && !DERIVED_LINE_ACTUAL_FIELDS.contains(name)) ratioFields.add(name);
                 else if (reworkDeduction && REWORK_DERIVED_FIELDS.contains(name)) ratioFields.add(name);
                 else if (SHARE_FIELDS.contains(name) && sharesWithAutomaticSiblings.contains(object)) ratioFields.add(name);
-                else if (value.isNumber() && isCostTotalField(name) && costIncludesAutomatic.contains(object)) {
+                // 成本合计 (Steve 2026-10-28 选 A): 调料 / 包材 / 原料小计、总成本、单位成本里含按配比算出的金额,
+                // 减去可见的人工行就是自动行金额, 再 ÷ 单价 ÷ 投入就是配比; 落库的批次 / 半成品 / 成品单位成本
+                // 也是这样滚出来的。受保护产品的这类字段对无授权账号一律隐藏, 不看本次输出有没有带出自动行
+                else if (value.isNumber() && isCostTotalField(name)) {
                     ratioFields.add(name);
+                    costFields.add(name);
                 }
                 // 操作记录摘要是文字: 本单总量也写在里面, 无权档整段不给
                 else if ("diffSummary".equals(name) && value.isTextual()) quantityFields.add(name);
@@ -576,7 +587,10 @@ public class ProcessSecretPayloadScrubber {
                 level = fallback;
                 auditKey = null;
             } else if (key != null && !distrustAttribution) {
-                if (!isProtected(key)) return;
+                if (!isProtected(key)) {
+                    hideCostsAboveRestricted(object, costFields);
+                    return;
+                }
                 level = level(key);
                 auditKey = key;
                 if (level == Level.FULL) {
@@ -591,10 +605,16 @@ public class ProcessSecretPayloadScrubber {
                             levels.put(key, level);
                         }
                     }
-                    if (level == Level.FULL) return;
+                    if (level == Level.FULL) {
+                        hideCostsAboveRestricted(object, costFields);
+                        return;
+                    }
                 }
             } else {
-                if (fallback == null) return;
+                if (fallback == null) {
+                    hideCostsAboveRestricted(object, costFields);
+                    return;
+                }
                 level = fallback;
                 auditKey = null;
             }
@@ -605,7 +625,18 @@ public class ProcessSecretPayloadScrubber {
                 hidden.addAll(quantityFields);
                 hidden.addAll(otherNumbers);
             }
-            if (hidden.isEmpty()) return;
+            hide(object, hidden, level, auditKey);
+        }
+
+        /** 自身不受限、但下层有受限保密产品行的对象: 只隐藏它的成本合计, 审计记到下层那个产品上。 */
+        void hideCostsAboveRestricted(ObjectNode object, List<String> costFields) {
+            Key below = restrictedBelow.get(object);
+            if (below == null || costFields.isEmpty()) return;
+            hide(object, costFields, level(below), below);
+        }
+
+        void hide(ObjectNode object, List<String> hidden, Level level, Key auditKey) {
+            if (hidden.isEmpty() || level == Level.FULL) return;
             for (String name : hidden) object.putNull(name);
             // 已有标记 (V1 摘要) 时并入, 不覆盖它的 RESTRICTED
             ObjectNode marker = object.get(MARKER) instanceof ObjectNode existing ? existing : object.putObject(MARKER);

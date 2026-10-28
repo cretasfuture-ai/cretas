@@ -34,6 +34,15 @@ export function isProcessSecretHidden(row: unknown, field: string): boolean {
   return marker.hiddenFields ? marker.hiddenFields.includes(field) : true;
 }
 
+/**
+ * 金额 / 数值单元格: 被工艺保密隐藏时显示「已保密」, 否则按 render 格式化。
+ * 保密产品的成本合计对无授权账号是 null, ⛔ 不能和「没价格权限 / 没采集」的「—」混成一个样子。
+ */
+export function secretAwareCell(row: unknown, field: string, render: (value: unknown) => string): string {
+  if (isProcessSecretHidden(row, field)) return PROCESS_SECRET_LABEL;
+  return render((row as Record<string, unknown> | null | undefined)?.[field]);
+}
+
 /** 给 tooltip 用的说明; 没有标记时为空串。 */
 export function processSecretMessage(row: unknown): string {
   return markerOf(row)?.message ?? '';

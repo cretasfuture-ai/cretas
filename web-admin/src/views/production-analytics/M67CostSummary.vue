@@ -27,16 +27,16 @@
       <el-table-column label="整批出成率" width="110" align="right">
         <template #default="{ row }"><span :class="yieldClass(row.overallYieldRate)">{{ row.overallYieldRate == null ? '—' : (row.overallYieldRate * 100).toFixed(1) + '%' }}</span></template>
       </el-table-column>
-      <el-table-column label="原料" width="100" align="right"><template #default="{ row }">{{ money(row.rawMaterialCost) }}</template></el-table-column>
-      <el-table-column label="人工" width="100" align="right"><template #default="{ row }">{{ money(row.laborCost) }}</template></el-table-column>
-      <el-table-column label="调料" width="100" align="right"><template #default="{ row }">{{ money(row.seasoningCost) }}</template></el-table-column>
-      <el-table-column label="包装" width="100" align="right"><template #default="{ row }">{{ money(row.packagingCost) }}</template></el-table-column>
+      <el-table-column label="原料" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'rawMaterialCost', moneyOf) }}</template></el-table-column>
+      <el-table-column label="人工" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'laborCost', moneyOf) }}</template></el-table-column>
+      <el-table-column label="调料" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'seasoningCost', moneyOf) }}</template></el-table-column>
+      <el-table-column label="包装" width="100" align="right"><template #default="{ row }">{{ secretAwareCell(row, 'packagingCost', moneyOf) }}</template></el-table-column>
       <!-- 成本项没采集齐时 totalCost 依约为 null (不伪造完整成本), 但仍把「已填的都算进去」的
            已知合计显示出来, 并挂上"待补"标记说明差什么 —— 否则一个光秃秃的数会被当成完整成本。 -->
       <el-table-column prop="totalCost" label="总成本" width="150" align="right">
         <template #default="{ row }">
-          <b>{{ money(row.totalCost ?? row.knownCostSubtotal) }}</b>
-          <el-tooltip v-if="row.totalCost == null && row.knownCostSubtotal != null" placement="top">
+          <b>{{ totalCostCell(row) }}</b>
+          <el-tooltip v-if="!isProcessSecretHidden(row, 'totalCost') && row.totalCost == null && row.knownCostSubtotal != null" placement="top">
             <template #content>
               <div>此金额只含已录入的成本项，尚未包含：</div>
               <div v-for="label in missingCostLabels(row)" :key="label">· {{ label }}</div>
@@ -80,6 +80,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { canonicalUnitCode, displayUnit } from '@/utils/unitPricing';
 import { toDateString } from '@/utils/dateFormat';
+import { PROCESS_SECRET_LABEL, isProcessSecretHidden, secretAwareCell } from '@/utils/processSecretField';
+import { costSummaryTotal } from './costSummaryTotal';
 
 interface Row {
   orderId: string; orderNumber?: string; orderDate?: string; productTypeId?: string; productName?: string; skuCode?: string;
@@ -107,6 +109,10 @@ const range = ref<[string, string]>(defaultRange());
 const empties = computed(() => masked.value ? '无价格查看权限或区间内无订单' : '该区间无含生产批次的订单');
 
 const money = (v?: number | null) => (v == null ? '—' : '¥' + Number(v).toFixed(2));
+const moneyOf = (v: unknown) => money(typeof v === 'number' ? v : null);
+// 工艺保密: 保密产品的成本合计对无授权账号是 null, 显示「已保密」而不是「—」
+const totalCostCell = (row: Row) => (isProcessSecretHidden(row, 'totalCost')
+  ? PROCESS_SECRET_LABEL : money(row.totalCost ?? row.knownCostSubtotal));
 const skuUnit = (row: Row) => canonicalUnitCode(row.skuUnit) || (row.boxCount != null ? 'box' : '');
 const skuOutput = (row: Row) => {
   const unit = skuUnit(row);
@@ -116,6 +122,7 @@ const skuOutput = (row: Row) => {
 // 🔴 `perKg` 已随「元/kg」列一起删除 (2026-08-19) —— 它读的 costPerKg / perKgCost
 // 后端从未产出, 结构上只能返回「—」。装回来的前提见 template 里那段注释。
 const perSkuUnit = (row: Row) => {
+  if (isProcessSecretHidden(row, 'perBoxCost')) return PROCESS_SECRET_LABEL;
   const unit = skuUnit(row);
   // 与「总成本」同口径: 完整值优先, 没有就用已知合计的单位成本 (行上已有"待补"标记说明不完整)。
   const value = row.costPerSkuUnit ?? row.perSkuUnitCost ?? row.perBoxCost ?? row.knownPerBoxCost;
@@ -144,11 +151,7 @@ function summary({ columns, data }: { columns: Array<{ property?: string }>; dat
     if (index === 0) return '合计';
     // 与行内口径一致: 行显示已知合计, 合计就不能只加 totalCost (否则行有数、合计 ¥0.00 自相矛盾)。
     // 只要有任一行不完整, 合计也标"含待补"。
-    if (column.property === 'totalCost') {
-      const total = data.reduce((sum, row) => sum + (row.totalCost ?? row.knownCostSubtotal ?? 0), 0);
-      const anyPartial = data.some((row) => row.totalCost == null && row.knownCostSubtotal != null);
-      return anyPartial ? `${money(total)}（含待补）` : money(total);
-    }
+    if (column.property === 'totalCost') return costSummaryTotal(data, money);
     return '';
   });
 }
