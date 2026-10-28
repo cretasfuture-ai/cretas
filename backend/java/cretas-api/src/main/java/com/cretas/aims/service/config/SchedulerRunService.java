@@ -86,10 +86,12 @@ public class SchedulerRunService {
         SchedulerRunResult run = results.findForUpdate(runId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "找不到这次运行记录"));
         if (!SchedulerRunResult.UNKNOWN.equals(run.getStatus())) {
-            throw new BusinessException(409, "这次运行的结果是明确的（" + run.getStatus() + "），只有结果未知的运行才需要裁定");
+            throw new BusinessException(409, "这次运行的结果是明确的（" + run.getStatus() + "），只有结果未知的运行才需要裁定")
+                    .withHint("结果已明确的运行不能改判；请在运行记录里找状态为“结果未知”的那条");
         }
         if (run.getResolution() != null) {
-            throw new BusinessException(409, "这次运行已经裁定为 " + run.getResolution() + "，不能重复裁定");
+            throw new BusinessException(409, "这次运行已经裁定为 " + run.getResolution() + "，不能重复裁定")
+                    .withHint("裁定只能做一次；如需更正请联系管理员并保留审计记录");
         }
         LocalDateTime now = LocalDateTime.now();
         run.setResolution(resolution);
