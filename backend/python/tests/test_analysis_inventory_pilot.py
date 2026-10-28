@@ -54,6 +54,22 @@ from smartbi_compat.auth import JWT_ALGORITHM  # noqa: E402
 pytestmark = [pytest.mark.api_endpoint("analysis_inventory")]
 
 
+class _FullCostResolver:
+    """Caller allowed to see every product's costs (工艺保密 FULL).
+
+    The Java-parity arithmetic tests below lock numbers for an authorized
+    caller; process-secret scoping itself is covered in
+    tests/test_process_secret_cost_exits.py.
+    """
+
+    async def scope_for(self, product_ids):
+        from smartbi.services.factory_charts import cost_scope
+        return cost_scope.CostScope(cost_scope.FULL, frozenset())
+
+
+_FULL_COST = _FullCostResolver()
+
+
 # ============================================================
 # Fixtures — JWT, TestClient, mock row helpers
 # ============================================================
@@ -289,7 +305,7 @@ async def test_get_turnover_analysis_returns_four_metrics(monkeypatch):
     monkeypatch.setattr(mod, "_query_material_consumptions_in_range", fake_consumptions)
 
     result = await _get_turnover_analysis(
-        "F001", date(2026, 5, 1), date(2026, 5, 31)
+        "F001", date(2026, 5, 1), date(2026, 5, 31), cost_resolver=_FULL_COST
     )
 
     assert len(result) == 4
@@ -340,7 +356,7 @@ async def test_get_turnover_analysis_zero_decimal_consumption_not_falsy(monkeypa
     monkeypatch.setattr(mod, "_query_material_consumptions_in_range", fake_consumptions)
 
     metrics = await _get_turnover_analysis(
-        "F001", date(2026, 1, 1), date(2026, 1, 31)
+        "F001", date(2026, 1, 1), date(2026, 1, 31), cost_resolver=_FULL_COST
     )
     assert len(metrics) == 4
 
@@ -368,7 +384,7 @@ async def test_get_turnover_analysis_none_total_cost_is_skipped(monkeypatch):
     monkeypatch.setattr(mod, "_query_material_consumptions_in_range", fake_consumptions)
 
     metrics = await _get_turnover_analysis(
-        "F001", date(2026, 1, 1), date(2026, 1, 31)
+        "F001", date(2026, 1, 1), date(2026, 1, 31), cost_resolver=_FULL_COST
     )
     consumption_metric = next(m for m in metrics if m["metricCode"] == "CONSUMPTION_AMOUNT")
     assert consumption_metric["value"] == 50
@@ -395,7 +411,7 @@ async def test_get_turnover_analysis_empty_consumptions_returns_metrics_with_zer
     monkeypatch.setattr(mod, "_query_material_consumptions_in_range", fake_consumptions)
 
     metrics = await _get_turnover_analysis(
-        "F001", date(2026, 1, 1), date(2026, 1, 31)
+        "F001", date(2026, 1, 1), date(2026, 1, 31), cost_resolver=_FULL_COST
     )
     assert len(metrics) == 4
 
@@ -587,7 +603,7 @@ def test_endpoint_dispatches_to_turnover_mode(client, monkeypatch):
         "startDate":  "2026-05-01",
     }
 
-    async def fake_turnover_mode(factory_id, start_date, end_date):
+    async def fake_turnover_mode(factory_id, start_date, end_date, **_kw):
         return sentinel
 
     monkeypatch.setattr(mod, "_get_turnover_mode", fake_turnover_mode)
@@ -756,7 +772,7 @@ def test_endpoint_no_factory_id_privileged_role_succeeds(client, monkeypatch):
     auth-only branch (auth.py L59-64 else-path).
     """
 
-    async def _fake_default_mode(factory_id, start_date, end_date):
+    async def _fake_default_mode(factory_id, start_date, end_date, **_kw):
         return {
             "overview": {},
             "endDate": end_date.isoformat(),
