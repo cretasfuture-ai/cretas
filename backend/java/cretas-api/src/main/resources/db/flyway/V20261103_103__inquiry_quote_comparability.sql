@@ -41,6 +41,11 @@ ALTER TABLE inquiry_quote_supplier_prices
 ALTER TABLE inquiry_quotes
     ADD COLUMN IF NOT EXISTS source_purchase_order_id VARCHAR(191);
 
-CREATE INDEX IF NOT EXISTS idx_iq_source_po
-    ON inquiry_quotes(factory_id, source_purchase_order_id)
-    WHERE source_purchase_order_id IS NOT NULL;
+-- 同一草稿的同一物料行同时只允许一张进行中的核价单。
+-- 服务层先查后插挡不住两个并发创建, 由这个部分唯一索引兜底; 撞上时服务层转成 409。
+-- (已转采购 / 已取消 / 已软删的核价单不占位, 可以对同一行再发起比价。)
+CREATE UNIQUE INDEX IF NOT EXISTS uk_iq_open_source_draft_line
+    ON inquiry_quotes(factory_id, source_purchase_order_id, material_type_id)
+    WHERE source_purchase_order_id IS NOT NULL
+      AND deleted_at IS NULL
+      AND status IN ('DRAFT', 'INQUIRING', 'QUOTED', 'SELECTED');

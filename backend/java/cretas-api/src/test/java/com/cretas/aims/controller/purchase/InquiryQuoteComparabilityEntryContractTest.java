@@ -241,7 +241,7 @@ class InquiryQuoteComparabilityEntryContractTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message", containsString("过期")));
         verify(purchaseService, never()).createPurchaseOrder(anyString(), any(), anyLong());
-        verify(purchaseService, never()).applyQuoteToDraftLine(anyString(), anyString(), anyString(), anyString(),
+        verify(purchaseService, never()).applyQuoteToDraftLine(anyString(), anyString(), anyString(), any(), any(), anyString(),
                 any(), any(), any(), any());
     }
 
@@ -317,7 +317,7 @@ class InquiryQuoteComparabilityEntryContractTest {
         draft.setOrderNumber("PO-20261028-0001");
         draft.setFactoryId(F);
         draft.setStatus(PurchaseOrderStatus.DRAFT);
-        when(purchaseService.applyQuoteToDraftLine(eq(F), eq("PO-DRAFT"), eq(MAT), eq("S-OK"),
+        when(purchaseService.applyQuoteToDraftLine(eq(F), eq("PO-DRAFT"), eq(MAT), eq("kg"), eq(new BigDecimal("100")), eq("S-OK"),
                 any(), eq("kg"), any(), isNull())).thenReturn(draft);
 
         mvc.perform(post(BASE + "/select-and-convert")
@@ -328,7 +328,7 @@ class InquiryQuoteComparabilityEntryContractTest {
                 .andExpect(jsonPath("$.data.id").value("PO-DRAFT"))
                 .andExpect(jsonPath("$.data.inquiryQuoteId").value(INQ));
 
-        verify(purchaseService).applyQuoteToDraftLine(eq(F), eq("PO-DRAFT"), eq(MAT), eq("S-OK"),
+        verify(purchaseService).applyQuoteToDraftLine(eq(F), eq("PO-DRAFT"), eq(MAT), eq("kg"), eq(new BigDecimal("100")), eq("S-OK"),
                 eq(new BigDecimal("10")), eq("kg"), eq(new BigDecimal("13")), isNull());
         verify(purchaseService, never()).createPurchaseOrder(anyString(), any(), anyLong());
     }
@@ -336,6 +336,46 @@ class InquiryQuoteComparabilityEntryContractTest {
     @Test
     @DisplayName("创建核价单挂草稿: 同一草稿行已有进行中的核价单 → 409")
     void secondOpenInquiryOnSameDraftLineIsRejected() throws Exception {
+        stubDraftWithLine("100");
+        when(inquiryRepo.findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
+                eq(F), eq("PO-DRAFT"), eq(MAT), any())).thenReturn(List.of(inquiry));
+
+        mvc.perform(createFromDraft("100"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message", containsString("INQ-20261028-0001")));
+        verify(inquiryRepo, never()).save(any(InquiryQuote.class));
+        verify(inquiryRepo, never()).saveAndFlush(any(InquiryQuote.class));
+    }
+
+    @Test
+    @DisplayName("并发创建挂同一草稿行: 先查都过了, 唯一索引兜底 → 干净的 409, 不是 500")
+    void concurrentCreateOnSameDraftLineLoserGetsConflict() throws Exception {
+        stubDraftWithLine("100");
+        when(inquiryRepo.findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
+                eq(F), eq("PO-DRAFT"), eq(MAT), any())).thenReturn(List.of());
+        when(inquiryRepo.findMaxInquiryNumberByPrefix(eq(F), any())).thenReturn(Optional.empty());
+        when(inquiryRepo.saveAndFlush(any(InquiryQuote.class))).thenThrow(
+                new org.springframework.dao.DataIntegrityViolationException("insert failed",
+                        new RuntimeException("ERROR: duplicate key value violates unique constraint "
+                                + "\"uk_iq_open_source_draft_line\"")));
+
+        mvc.perform(createFromDraft("100"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message", containsString("请勿重复发起")));
+    }
+
+    @Test
+    @DisplayName("挂草稿创建: 询价数量与草稿行不同 → 400 (回填只改单价, 数量以草稿为准)")
+    void createFromDraftRequiresTheDraftLineQuantity() throws Exception {
+        stubDraftWithLine("80");
+
+        mvc.perform(createFromDraft("100"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("数量以草稿为准")));
+        verify(inquiryRepo, never()).saveAndFlush(any(InquiryQuote.class));
+    }
+
+    private void stubDraftWithLine(String lineQuantity) {
         PurchaseOrder draft = new PurchaseOrder();
         draft.setId("PO-DRAFT");
         draft.setOrderNumber("PO-20261028-0001");
@@ -344,20 +384,18 @@ class InquiryQuoteComparabilityEntryContractTest {
         PurchaseOrderItem line = new PurchaseOrderItem();
         line.setMaterialTypeId(MAT);
         line.setUnit("kg");
+        line.setQuantity(new BigDecimal(lineQuantity));
         draft.setItems(List.of(line));
         when(purchaseService.getPurchaseOrderById(F, "PO-DRAFT")).thenReturn(draft);
         when(inquiryRepo.findRecentDuplicates(any(), any(), any(), any(), any())).thenReturn(List.of());
-        when(inquiryRepo.findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
-                eq(F), eq("PO-DRAFT"), eq(MAT), any())).thenReturn(List.of(inquiry));
+    }
 
-        mvc.perform(post("/api/mobile/" + F + "/purchase/inquiry-quotes")
-                        .header("Authorization", "Bearer t")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"materialTypeId\":\"" + MAT + "\",\"quantity\":100,\"unit\":\"kg\","
-                                + "\"inquiryDate\":\"" + LocalDate.now() + "\",\"sourcePurchaseOrderId\":\"PO-DRAFT\"}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message", containsString("INQ-20261028-0001")));
-        verify(inquiryRepo, never()).save(any(InquiryQuote.class));
+    private static org.springframework.test.web.servlet.RequestBuilder createFromDraft(String quantity) {
+        return post("/api/mobile/" + F + "/purchase/inquiry-quotes")
+                .header("Authorization", "Bearer t")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"materialTypeId\":\"" + MAT + "\",\"quantity\":" + quantity + ",\"unit\":\"kg\","
+                        + "\"inquiryDate\":\"" + LocalDate.now() + "\",\"sourcePurchaseOrderId\":\"PO-DRAFT\"}");
     }
 
     // ==================== BOM 影响 (S5-04) ====================

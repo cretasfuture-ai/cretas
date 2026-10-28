@@ -93,7 +93,7 @@ class PurchaseDraftQuoteFillContractTest {
 
     @Test
     void fillsOnlyTheQuotedLineOfTheExistingDraft() {
-        PurchaseOrder result = service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1",
+        PurchaseOrder result = service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
                 "supplier-1", new BigDecimal("8"), "kg", new BigDecimal("9"), null);
 
         assertThat(result.getId()).isEqualTo("PO-DRAFT");
@@ -117,7 +117,7 @@ class PurchaseDraftQuoteFillContractTest {
     void singleLineDraftMayChangeSupplier() {
         when(itemRepository.findByPurchaseOrderId("PO-DRAFT")).thenReturn(new ArrayList<>(List.of(quotedLine)));
 
-        PurchaseOrder result = service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1",
+        PurchaseOrder result = service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
                 "supplier-2", new BigDecimal("8"), "kg", new BigDecimal("13"), null);
 
         assertThat(result.getSupplierId()).isEqualTo("supplier-2");
@@ -126,7 +126,7 @@ class PurchaseDraftQuoteFillContractTest {
 
     @Test
     void otherSupplierOnMultiLineDraftIsRejected() {
-        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1",
+        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
                 "supplier-2", new BigDecimal("8"), "kg", new BigDecimal("13"), null))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo("PURCHASE_DRAFT_SUPPLIER_CONFLICT");
@@ -138,7 +138,7 @@ class PurchaseDraftQuoteFillContractTest {
     void submittedOrderIsNotFilled() {
         draft.setStatus(PurchaseOrderStatus.SUBMITTED);
 
-        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1",
+        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
                 "supplier-1", new BigDecimal("8"), "kg", new BigDecimal("13"), null))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo("PURCHASE_DRAFT_NOT_EDITABLE");
@@ -149,10 +149,34 @@ class PurchaseDraftQuoteFillContractTest {
     void otherFactoryDraftIsRejected() {
         draft.setFactoryId("F999");
 
-        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1",
+        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
                 "supplier-1", new BigDecimal("8"), "kg", new BigDecimal("13"), null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("无权访问");
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
+    }
+
+    @Test
+    void draftLineChangedSinceTheInquiryIsRejected() {
+        // 发起比价时是 5 kg, 之后草稿行被改成 8 kg: 报价按旧口径比出来, 不能直接套
+        quotedLine.setQuantity(new BigDecimal("8"));
+
+        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
+                "supplier-1", new BigDecimal("8"), "kg", new BigDecimal("13"), null))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo("PURCHASE_DRAFT_LINE_CHANGED");
+        assertThat(quotedLine.getUnitPrice()).isEqualByComparingTo("10");
+        verify(orderRepository, never()).save(any(PurchaseOrder.class));
+    }
+
+    @Test
+    void draftLineUnitChangedSinceTheInquiryIsRejected() {
+        quotedLine.setUnit("箱");
+
+        assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
+                "supplier-1", new BigDecimal("8"), "kg", new BigDecimal("13"), null))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo("PURCHASE_DRAFT_LINE_CHANGED");
         verify(orderRepository, never()).save(any(PurchaseOrder.class));
     }
 

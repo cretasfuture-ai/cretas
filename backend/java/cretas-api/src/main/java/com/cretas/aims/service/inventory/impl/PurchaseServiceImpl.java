@@ -1770,6 +1770,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     @Override
     @Transactional
     public PurchaseOrder applyQuoteToDraftLine(String factoryId, String orderId, String materialTypeId,
+                                               String expectedUnit, BigDecimal expectedQuantity,
                                                String supplierId, BigDecimal unitPrice, String priceUnit,
                                                BigDecimal taxRate, String purchasePackagingSpecId) {
         PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
@@ -1799,6 +1800,21 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withHint("请把本物料拆到单独的草稿再比价, 或选择草稿原供应商的报价");
         }
         PurchaseOrderItem target = targets.get(0);
+        boolean unitChanged = target.getUnit() == null || expectedUnit == null
+                || !target.getUnit().trim().equalsIgnoreCase(expectedUnit.trim());
+        boolean quantityChanged = target.getQuantity() == null || expectedQuantity == null
+                || target.getQuantity().compareTo(expectedQuantity) != 0;
+        if (unitChanged || quantityChanged) {
+            throw new BusinessException(409, String.format(
+                    "采购草稿 %s 的本物料行已改为 %s %s, 与发起比价时的 %s %s 不同",
+                    order.getOrderNumber(),
+                    target.getQuantity() == null ? "(空)" : target.getQuantity().stripTrailingZeros().toPlainString(),
+                    target.getUnit(),
+                    expectedQuantity == null ? "(空)" : expectedQuantity.stripTrailingZeros().toPlainString(),
+                    expectedUnit))
+                    .withCode("PURCHASE_DRAFT_LINE_CHANGED")
+                    .withHint("请刷新采购草稿, 按当前数量和单位重新发起比价");
+        }
         CreatePurchaseOrderRequest.PurchaseOrderItemDTO dto = new CreatePurchaseOrderRequest.PurchaseOrderItemDTO();
         dto.setMaterialTypeId(target.getMaterialTypeId());
         dto.setMaterialName(target.getMaterialName());

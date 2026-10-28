@@ -39,6 +39,7 @@ import com.cretas.aims.service.shared.CostRollupUtil;
 import com.cretas.aims.service.purchase.InquiryQuoteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -92,6 +94,12 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     private static final EnumSet<InquiryQuoteStatus> OPEN_STATUSES = EnumSet.of(
             InquiryQuoteStatus.DRAFT, InquiryQuoteStatus.INQUIRING,
             InquiryQuoteStatus.QUOTED, InquiryQuoteStatus.SELECTED);
+
+    /** V20261103_103 的部分唯一索引名 (同一草稿行只允许一张进行中核价单)。 */
+    static final String OPEN_DRAFT_LINE_CONSTRAINT = "uk_iq_open_source_draft_line";
+
+    /** 后端全线东八区: 有效期 / 生效日按工厂所在时区的「今天」判断。 */
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
     @Autowired
     public InquiryQuoteServiceImpl(InquiryQuoteRepository inquiryQuoteRepository,
@@ -159,7 +167,22 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         q.setRemark(request.getRemark());
         q.setSourcePurchaseOrderId(sourcePurchaseOrderId);
 
-        q = inquiryQuoteRepository.save(q);
+        if (sourcePurchaseOrderId != null) {
+            // 先查后插挡不住并发: 由部分唯一索引 uk_iq_open_source_draft_line 兜底, 撞上转 409
+            try {
+                q = inquiryQuoteRepository.saveAndFlush(q);
+            } catch (DataIntegrityViolationException e) {
+                if (!String.valueOf(e.getMostSpecificCause().getMessage()).contains(OPEN_DRAFT_LINE_CONSTRAINT)) {
+                    throw e;
+                }
+                throw new BusinessException(409,
+                        "这张采购草稿的本物料行刚刚已有人发起核价单, 请勿重复发起")
+                        .withCode("INQUIRY_FOR_DRAFT_LINE_EXISTS")
+                        .withHint("请刷新核价单列表, 在已有核价单中继续比价");
+            }
+        } else {
+            q = inquiryQuoteRepository.save(q);
+        }
         log.info("创建核价单: factoryId={}, inquiryNumber={}, materialName={}",
                 factoryId, inquiryNumber, q.getMaterialName());
         return q;
@@ -348,7 +371,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         if (q.getSourcePurchaseOrderId() != null) {
             // 回填发起比价的那张采购草稿, ⛔ 不另建采购单
             po = purchaseService.applyQuoteToDraftLine(factoryId, q.getSourcePurchaseOrderId(),
-                    q.getMaterialTypeId(), selectedSupplier.getId(), selectedPrice.getUnitPrice(),
+                    q.getMaterialTypeId(), q.getUnit(), q.getQuantity(),
+                    selectedSupplier.getId(), selectedPrice.getUnitPrice(),
                     selectedPrice.getQuotedUnit(), selectedPrice.getTaxRate(),
                     verdict.getPurchasePackagingSpecId());
         } else {
@@ -451,7 +475,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                     });
         }
         return new InquiryQuoteComparator.Facts(referenceTaxRate, referenceTaxSource,
-                LocalDate.now(), suppliers, relations, specs);
+                LocalDate.now(BUSINESS_ZONE), suppliers, relations, specs);
     }
 
     // ==================== 价格影响 (L3, S5-04) ====================
@@ -559,7 +583,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                 .quotedUnitPrice(price.getUnitPrice())
                 .quotedUnit(quotedUnit)
                 .priceEffectiveDate(price.getPriceEffectiveDate())
-                .evaluatedOn(LocalDate.now())
+                .evaluatedOn(LocalDate.now(BUSINESS_ZONE))
                 .nature("ESTIMATE")
                 .historicalCostsModified(false)
                 .note("估算按报价未税单价重算 BOM 行成本, 不回写 BOM; 已投产批次成本取自批次实际记录, 保持不变。"
@@ -602,6 +626,14 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                     "询价单位「%s」与采购草稿 %s 该行单位「%s」不同",
                     request.getUnit(), draft.getOrderNumber(), lineUnit))
                     .withHintTarget("unit");
+        }
+        BigDecimal lineQuantity = lines.get(0).getQuantity();
+        if (lineQuantity == null || lineQuantity.compareTo(request.getQuantity()) != 0) {
+            throw new BusinessException(400, String.format(
+                    "询价数量 %s 与采购草稿 %s 该行数量 %s 不同; 比价回填只改单价, 数量以草稿为准",
+                    request.getQuantity().stripTrailingZeros().toPlainString(), draft.getOrderNumber(),
+                    lineQuantity == null ? "(空)" : lineQuantity.stripTrailingZeros().toPlainString()))
+                    .withHintTarget("quantity");
         }
         List<InquiryQuote> open = inquiryQuoteRepository
                 .findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
