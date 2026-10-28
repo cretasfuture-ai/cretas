@@ -596,7 +596,9 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                                         scope: Optional[dict[str, Any]] = None):
     catalog = conversation.semantic_catalog(recommendation_data.get('recommendations') or [])
     effective_scope = scope or context.scope
-    if conversation.is_joint_intent(request.question) and not effective_scope.get('analysis_subject'):
+    required_joint_families = (conversation.joint_family_requirements(request.question)
+                               if conversation.is_joint_intent(request.question) else set())
+    if any(family.startswith('production.') for family in required_joint_families) and not effective_scope.get('analysis_subject'):
         conversation.touch_context(context, request.question, [], unresolved_product=True,
                                     unresolved_period=False, period_error=None, scope=effective_scope)
         return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
@@ -655,9 +657,21 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
         guided=True, analysis_subject=effective_scope.get('analysis_subject'),
         detail_candidate_ids=selected_ids,
     )
-    selected_data = _recommendation_body(
-        await factory_recommendations(selected_request, http_request)
-    )['data']
+    try:
+        selected_data = _recommendation_body(
+            await factory_recommendations(selected_request, http_request)
+        )['data']
+    except HTTPException as exc:
+        if exc.status_code != 422 or exc.detail != '详情图表不在当前授权目录中':
+            raise
+        conversation.touch_context(context, request.question, [], scope=scope)
+        return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
+                                  question=request.question, status='unavailable',
+                                  answer='当前授权数据已变化，AI选择的图表无法重新验证。',
+                                  selected_ids=[], recommendations=[], catalog=catalog, facts=[],
+                                  limitations=['所选图表已不在当前授权目录中，请重新提问'],
+                                  context_id=context.context_id, subjects=subjects,
+                                  follow_up_questions=['请重新提问'])
     if selected_data.get('period') != recommendation_data.get('period') \
             or selected_data.get('source') != recommendation_data.get('source'):
         conversation.touch_context(context, request.question, [], scope=scope)
@@ -687,35 +701,37 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
     by_id = fresh_by_id
     selected = [by_id[item_id] for item_id in selected_ids]
     if conversation.is_joint_intent(request.question):
-        required_family = conversation.joint_family_requirement(request.question)
+        required_families = required_joint_families
         fused_ids = {str(item.get('id')) for item in catalog
-                     if str(item.get('familyId', '')) == required_family}
-        if not fused_ids:
+                     if str(item.get('familyId', '')) in required_families}
+        available_families = {str(item.get('familyId', '')) for item in catalog}
+        if not required_families or not required_families.issubset(available_families):
             conversation.touch_context(context, request.question, [], unresolved_product=False,
                                        unresolved_period=False, period_error=None, scope=scope)
             return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                       question=request.question, status='unavailable',
-                                      answer='当前授权数据没有可验证的生产-质量-成本联合图表，未将独立图表冒充联合分析。',
+                                      answer='当前授权数据缺少本问题所需的已验证联合图表，未将独立图表冒充联合分析。',
                                       selected_ids=[], recommendations=[], catalog=catalog, facts=[],
-                                      limitations=[f'缺少满足同厂、同产品、同单位且真实对齐的 {required_family} 联合关系'],
+                                      limitations=[f'缺少满足同厂、同产品、同单位且真实对齐的 {", ".join(sorted(required_families - available_families))} 联合关系'],
                                       context_id=context.context_id, subjects=subjects,
                                       follow_up_questions=['请稍后重试或改为单一维度分析'])
-        if not any(item_id in fused_ids for item_id in selected_ids):
+        selected_families = {conversation._canonical_family(item) for item in selected}
+        if not required_families.issubset(selected_families) or not all(item_id in fused_ids for item_id in selected_ids):
             conversation.touch_context(context, request.question, [], unresolved_product=False,
                                        unresolved_period=False, period_error=None, scope=scope)
             return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,
                                       question=request.question, status='unavailable',
                                       answer='当前规划未选择已验证的联合图表，未将独立图表冒充联合分析。',
                                       selected_ids=[], recommendations=[], catalog=catalog, facts=[],
-                                      limitations=[f'联合分析必须由 {required_family} 真实候选支撑'],
+                                      limitations=[f'联合分析必须由 {", ".join(sorted(required_families))} 真实候选共同支撑'],
                                       context_id=context.context_id, subjects=subjects,
-                                      follow_up_questions=['请重新提问联合生产、质量与成本'])
+                                      follow_up_questions=['请重新提问所需的联合关系'])
     facts = conversation.facts_for(selected)
     limitations = conversation.limitations_for(selected, catalog, request.question)
     if conversation.is_joint_intent(request.question):
-        required_family = conversation.joint_family_requirement(request.question)
+        required_families = required_joint_families
         for gap in recommendation_data.get('unavailable') or []:
-            if isinstance(gap, dict) and str(gap.get('id')) == required_family:
+            if isinstance(gap, dict) and str(gap.get('id')) in required_families:
                 missing = gap.get('missing') if isinstance(gap.get('missing'), list) else []
                 limitations.extend(str(item) for item in missing[:8] if item)
         limitations = list(dict.fromkeys(limitations))[:16]
