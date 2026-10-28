@@ -58,6 +58,12 @@ class PurchaseInvoiceServiceTest {
     @Mock
     private PurchaseInvoiceChaseLogRepository chaseLogRepository;
 
+    @Mock
+    private com.cretas.aims.repository.inventory.PurchaseInvoiceLineRepository lineRepository;
+
+    @Mock
+    private com.cretas.aims.service.inventory.impl.PurchaseInvoiceThreeWayMatcher threeWayMatcher;
+
     @InjectMocks
     private PurchaseInvoiceServiceImpl purchaseInvoiceService;
 
@@ -211,8 +217,8 @@ class PurchaseInvoiceServiceTest {
         }
 
         @Test
-        @DisplayName("upload amount matches PO: invoice auto reconciles and PO closes loop")
-        void upload_amountMatchesPo_autoReconcilesAndClosesLoop() {
+        @DisplayName("S5-05: 表头金额等于订单但没有行级资料 → 不自动相符, 留待人工核对")
+        void upload_amountMatchesPoWithoutLines_staysPending() {
             PurchaseOrder po = new PurchaseOrder();
             po.setId(PO_ID);
             po.setFactoryId(FACTORY_ID);
@@ -228,10 +234,9 @@ class PurchaseInvoiceServiceTest {
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-009",
                     BigDecimal.valueOf(3000), null, 9L);
 
-            assertEquals("MATCHED", result.getReconcileStatus());
-            assertEquals(9L, result.getReconciledBy());
-            assertNotNull(result.getReconciledAt());
-            assertEquals(PurchaseInvoiceStatus.RECONCILED, po.getInvoiceStatus());
+            assertEquals("PENDING", result.getReconcileStatus());
+            assertNull(result.getReconciledBy());
+            assertTrue(result.getReconcileNote().contains("缺行级资料"));
             verify(purchaseOrderRepository).save(po);
             verify(chaseLogRepository).closeOpenChases(
                     eq(FACTORY_ID), eq(PO_ID), any(java.time.LocalDateTime.class));

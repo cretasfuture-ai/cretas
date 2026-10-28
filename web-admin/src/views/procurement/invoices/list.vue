@@ -97,7 +97,7 @@
             <el-option label="全部" value="" />
             <el-option label="待核对" value="PENDING" />
             <el-option label="已核对" value="MATCHED" />
-            <el-option label="金额不符" value="MISMATCHED" />
+            <el-option label="不符" value="MISMATCHED" />
           </el-select>
         </el-col>
         <el-col :span="6">
@@ -154,6 +154,15 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="逐行三单" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="!row.lines || row.lines.length === 0" type="info" size="small">无行级资料</el-tag>
+            <el-tag v-else-if="lineDifferenceCount(row) > 0" type="danger" size="small">
+              {{ lineDifferenceCount(row) }} 行有差异
+            </el-tag>
+            <el-tag v-else type="success" size="small">{{ row.lines.length }} 行一致</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="核对备注" prop="reconcileNote" min-width="120">
           <template #default="{ row }">
             {{ row.reconcileNote || '—' }}
@@ -199,8 +208,8 @@
     <!-- 上传发票 Dialog (Rule 2: 上传前需填采购单 ID，提供上下文) -->
     <el-dialog
       v-model="uploadDialogVisible"
-      title="上传采购发票"
-      width="540px"
+      :title="uploadMatch ? `上传采购发票 — ${uploadMatch.purchaseOrderNumber || uploadMatch.purchaseOrderId}` : '上传采购发票'"
+      width="900px"
       :close-on-click-modal="false"
     >
       <el-form
@@ -210,10 +219,14 @@
         label-width="100px"
       >
         <el-form-item label="采购单号" prop="purchaseOrderId">
-          <el-input
-            v-model="uploadForm.purchaseOrderId"
-            placeholder="请填写采购单 ID"
-          />
+          <div class="po-input-row">
+            <el-input
+              v-model="uploadForm.purchaseOrderId"
+              placeholder="请填写采购单 ID"
+              @change="loadUploadLines"
+            />
+            <el-button :loading="uploadLinesLoading" @click="loadUploadLines">读取采购单行</el-button>
+          </div>
         </el-form-item>
         <el-form-item label="供应商 ID" prop="supplierId">
           <el-input
@@ -236,6 +249,104 @@
             placeholder="发票金额"
           />
         </el-form-item>
+        <el-form-item label="逐行登记">
+          <div class="upload-lines">
+            <el-alert
+              v-if="uploadLinesError"
+              type="error"
+              :closable="false"
+              :title="uploadLinesError"
+              show-icon
+            />
+            <el-alert
+              v-else-if="!uploadMatch"
+              type="info"
+              :closable="false"
+              title="先读取采购单行：按发票逐行填数量和金额才能自动三单相符；不填行只登记表头，需人工核对"
+              show-icon
+            />
+            <template v-else>
+              <el-table :data="uploadDrafts" size="small" border row-key="purchaseOrderItemId">
+                <el-table-column label="采购单行物料" min-width="120">
+                  <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
+                </el-table-column>
+                <el-table-column label="收货 / 退货 / 已开" min-width="150">
+                  <template #default="{ row }">
+                    <span v-if="row.blocker" class="line-blocker">{{ row.blocker }}</span>
+                    <span v-else>
+                      {{ fmtQty(row.receivedQuantity) }} / {{ fmtQty(row.returnedQuantity) }} / {{ fmtQty(row.invoicedQuantity) }} {{ row.unit }}
+                    </span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="还可开" width="100">
+                  <template #default="{ row }">
+                    <strong v-if="row.remainingQuantity !== null">{{ fmtQty(row.remainingQuantity) }} {{ row.unit }}</strong>
+                    <span v-else>—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="收货行（可选）" min-width="140">
+                  <template #default="{ row }">
+                    <el-select v-model="row.receiveItemId" clearable placeholder="不指定" size="small" style="width: 100%">
+                      <el-option
+                        v-for="r in row.receipts"
+                        :key="r.receiveItemId"
+                        :label="`${r.receiveNumber || r.receiveItemId} 剩 ${fmtQty(r.remainingQuantity)}`"
+                        :value="r.receiveItemId"
+                        :disabled="r.remainingQuantity <= 0"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="发票所列物料" min-width="130">
+                  <template #default="{ row }">
+                    <el-select v-model="row.invoiceMaterialTypeId" size="small" filterable allow-create style="width: 100%">
+                      <el-option
+                        v-for="m in uploadMaterialOptions"
+                        :key="m.value"
+                        :label="m.label"
+                        :value="m.value"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="本次数量" width="130">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="row.quantity"
+                      :min="0"
+                      :max="lineMax(row)"
+                      :precision="2"
+                      :disabled="row.remainingQuantity === null || row.remainingQuantity <= 0"
+                      size="small"
+                      controls-position="right"
+                      style="width: 100%"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="发票行金额（含税）" width="150">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="row.amount"
+                      :min="0"
+                      :precision="2"
+                      :disabled="!row.quantity"
+                      size="small"
+                      controls-position="right"
+                      style="width: 100%"
+                    />
+                    <div v-if="row.quantity && row.expectedUnitAmount !== null" class="line-expected">
+                      按采购价应开 ¥{{ formatAmount(round2(row.quantity * row.expectedUnitAmount)) }}
+                    </div>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <div class="line-total" :class="{ 'line-total--diff': lineTotalDiffers }">
+                已填 {{ selectedUploadLines.length }} 行，行合计 ¥{{ formatAmount(uploadLineTotal) }}
+                <span v-if="lineTotalDiffers">，与发票金额不一致（不会自动相符）</span>
+              </div>
+            </template>
+          </div>
+        </el-form-item>
         <el-form-item label="OCR识别结果" prop="ocrRawResult">
           <el-input
             v-model="uploadForm.ocrRawResult"
@@ -247,7 +358,7 @@
       </el-form>
       <template #footer>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="doUpload">上传</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="uploadLinesInvalid" @click="doUpload">上传</el-button>
       </template>
     </el-dialog>
 
@@ -267,6 +378,22 @@
             {{ currentRow.amount !== null && currentRow.amount !== undefined ? `¥${formatAmount(currentRow.amount)}` : '—' }}
           </el-descriptions-item>
         </el-descriptions>
+        <el-alert
+          v-if="!currentRow.lines || currentRow.lines.length === 0"
+          type="warning"
+          :closable="false"
+          title="这张票没有行级资料，系统没法逐行核对采购单行和收货，请对照原票人工判断"
+          show-icon
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-for="line in differenceLines(currentRow)"
+          :key="line.id"
+          type="error"
+          :closable="false"
+          :title="`${lineStatusLabel(line.matchStatus)}：${line.matchNote || ''}`"
+          style="margin-bottom: 8px"
+        />
       </div>
 
       <el-form
@@ -278,8 +405,12 @@
         <!-- Rule 3: dropdown 而非自由文本 -->
         <el-form-item label="核对结果" prop="reconcileStatus">
           <el-select v-model="reconcileForm.reconcileStatus" placeholder="请选择核对结果" style="width: 100%">
-            <el-option label="金额相符 — 可结账" value="MATCHED" />
-            <el-option label="金额不符 — 需复查" value="MISMATCHED" />
+            <el-option
+              :label="currentRow && lineDifferenceCount(currentRow) > 0 ? '相符 — 不可选：存在行级差异' : '三单相符 — 可结账'"
+              value="MATCHED"
+              :disabled="!!currentRow && lineDifferenceCount(currentRow) > 0"
+            />
+            <el-option label="不符 — 需复查" value="MISMATCHED" />
           </el-select>
         </el-form-item>
         <el-form-item
@@ -322,7 +453,7 @@
     <el-dialog
       v-model="detailDialogVisible"
       :title="`发票详情 — ${currentRow?.invoiceNumber || ''}`"
-      width="560px"
+      width="860px"
     >
       <div v-if="currentRow">
         <el-descriptions :column="2" border>
@@ -347,6 +478,63 @@
             <span v-else>—</span>
           </el-descriptions-item>
         </el-descriptions>
+
+        <h4 class="section-title">本票发票行</h4>
+        <el-table v-if="currentRow.lines && currentRow.lines.length" :data="currentRow.lines" size="small" border>
+          <el-table-column label="采购单行" width="90" prop="purchaseOrderItemId" />
+          <el-table-column label="发票物料" min-width="110">
+            <template #default="{ row }">{{ row.materialTypeId || '（同采购单行）' }}</template>
+          </el-table-column>
+          <el-table-column label="数量" width="100">
+            <template #default="{ row }">{{ fmtQty(row.quantity) }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="金额 / 应开" width="170">
+            <template #default="{ row }">
+              ¥{{ formatAmount(row.amount) }} / {{ row.expectedAmount === null ? '—' : `¥${formatAmount(row.expectedAmount)}` }}
+            </template>
+          </el-table-column>
+          <el-table-column label="逐行核对" min-width="200">
+            <template #default="{ row }">
+              <el-tag :type="lineStatusTag(row.matchStatus)" size="small">{{ lineStatusLabel(row.matchStatus) }}</el-tag>
+              <span v-if="row.matchNote" class="line-note">{{ row.matchNote }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else description="这张票登记时没有逐行资料" :image-size="48" />
+
+        <h4 class="section-title">
+          采购单逐行开票进度
+          <el-tag v-if="detailMatch" :type="detailMatch.fullyMatched ? 'success' : 'warning'" size="small">
+            {{ detailMatch.fullyMatched ? '已全部核对' : '有未开 / 部分开票的行' }}
+          </el-tag>
+        </h4>
+        <el-alert v-if="detailMatchError" type="error" :closable="false" :title="detailMatchError" show-icon />
+        <el-table v-else v-loading="detailMatchLoading" :data="detailMatch?.lines || []" size="small" border>
+          <el-table-column label="物料" min-width="110">
+            <template #default="{ row }">{{ row.materialName || row.materialTypeId }}</template>
+          </el-table-column>
+          <el-table-column label="订购" width="90">
+            <template #default="{ row }">{{ fmtQty(row.orderedQuantity) }} {{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="有效收货" width="90">
+            <template #default="{ row }">{{ fmtQty(row.receivedQuantity) }}</template>
+          </el-table-column>
+          <el-table-column label="退货" width="80">
+            <template #default="{ row }">{{ fmtQty(row.returnedQuantity) }}</template>
+          </el-table-column>
+          <el-table-column label="已开（核对中+已核对）" width="150">
+            <template #default="{ row }">{{ fmtQty(row.invoicedQuantity) }}（已核对 {{ fmtQty(row.matchedQuantity) }}）</template>
+          </el-table-column>
+          <el-table-column label="还可开" width="90">
+            <template #default="{ row }">{{ fmtQty(row.remainingQuantity) }}</template>
+          </el-table-column>
+          <el-table-column label="状态" min-width="120">
+            <template #default="{ row }">
+              <el-tag :type="poLineStatusTag(row.status)" size="small">{{ poLineStatusLabel(row.status) }}</el-tag>
+              <div v-if="row.blocker" class="line-blocker">{{ row.blocker }}</div>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
       <template #footer>
         <el-button @click="detailDialogVisible = false">关闭</el-button>
@@ -379,6 +567,66 @@ interface InvoiceRow {
   ocrRawResult: string | null
   createdAt: string | null
   updatedAt: string | null
+  lines?: InvoiceLineView[]
+}
+
+type LineMatchStatus = 'MATCHED' | 'MATERIAL_MISMATCH' | 'PRICE_MISMATCH' | 'PRICE_UNKNOWN'
+
+interface InvoiceLineView {
+  id: number
+  purchaseOrderItemId: number
+  receiveItemId: number | null
+  materialTypeId: string | null
+  quantity: number
+  unit: string
+  unitPrice: number | null
+  amount: number | null          // @PriceSensitive
+  expectedAmount: number | null  // @PriceSensitive
+  matchStatus: LineMatchStatus
+  matchNote: string | null
+}
+
+type PoLineStatus = 'NOT_RECEIVED' | 'UNINVOICED' | 'PARTIAL' | 'INVOICED' | 'BLOCKED'
+
+interface MatchReceipt {
+  receiveItemId: number
+  receiveRecordId: string
+  receiveNumber: string | null
+  receivedQuantity: number
+  invoicedQuantity: number
+  remainingQuantity: number
+}
+
+interface MatchLine {
+  purchaseOrderItemId: number
+  materialTypeId: string
+  materialName: string | null
+  unit: string
+  orderedQuantity: number | null
+  receivedQuantity: number | null
+  returnedQuantity: number | null
+  invoiceableQuantity: number | null
+  invoicedQuantity: number
+  matchedQuantity: number
+  remainingQuantity: number | null
+  expectedUnitAmount: number | null  // @PriceSensitive
+  status: PoLineStatus
+  blocker: string | null
+  receipts: MatchReceipt[]
+}
+
+interface MatchStatus {
+  purchaseOrderId: string
+  purchaseOrderNumber: string | null
+  fullyMatched: boolean
+  lines: MatchLine[]
+}
+
+interface UploadLineDraft extends MatchLine {
+  receiveItemId: number | null
+  invoiceMaterialTypeId: string
+  quantity: number | null
+  amount: number | null
 }
 
 interface PendingInvoiceOrder {
@@ -458,12 +706,143 @@ const reconcileRules: FormRules = {
   reconcileStatus: [{ required: true, message: '请选择核对结果', trigger: 'change' }]
 }
 
+// 逐行三单（上传）
+const uploadMatch = ref<MatchStatus | null>(null)
+const uploadDrafts = ref<UploadLineDraft[]>([])
+const uploadLinesLoading = ref(false)
+const uploadLinesError = ref('')
+
+// 逐行三单（详情）
+const detailMatch = ref<MatchStatus | null>(null)
+const detailMatchLoading = ref(false)
+const detailMatchError = ref('')
+
+const uploadMaterialOptions = computed(() =>
+  uploadDrafts.value.map((d) => ({ value: d.materialTypeId, label: d.materialName || d.materialTypeId })),
+)
+const selectedUploadLines = computed(() =>
+  uploadDrafts.value.filter((d) => d.quantity !== null && d.quantity > 0),
+)
+const uploadLineTotal = computed(() =>
+  round2(selectedUploadLines.value.reduce((sum, d) => sum + (d.amount ?? 0), 0)),
+)
+const lineTotalDiffers = computed(() =>
+  selectedUploadLines.value.length > 0
+  && uploadForm.value.amount !== null
+  && Math.abs(uploadLineTotal.value - uploadForm.value.amount) > 0.005,
+)
+// 防呆 Rule 1: 超出可开量或填了数量没填金额 → 不让提交（后端仍以 409 兜底）
+const uploadLinesInvalid = computed(() =>
+  selectedUploadLines.value.some((d) =>
+    d.amount === null
+    || d.remainingQuantity === null
+    || (d.quantity ?? 0) > lineMax(d) + 1e-9),
+)
+
+function lineMax(d: UploadLineDraft): number {
+  const lineLeft = d.remainingQuantity ?? 0
+  if (d.receiveItemId === null) return Math.max(lineLeft, 0)
+  const receipt = d.receipts.find((r) => r.receiveItemId === d.receiveItemId)
+  return Math.max(Math.min(lineLeft, receipt ? receipt.remainingQuantity : 0), 0)
+}
+
+function round2(v: number): number {
+  return Math.round(v * 100) / 100
+}
+
+function fmtQty(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '—'
+  return Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 4 })
+}
+
+function isDifference(line: InvoiceLineView): boolean {
+  return line.matchStatus === 'MATERIAL_MISMATCH' || line.matchStatus === 'PRICE_MISMATCH'
+}
+
+function differenceLines(row: InvoiceRow): InvoiceLineView[] {
+  return (row.lines ?? []).filter(isDifference)
+}
+
+function lineDifferenceCount(row: InvoiceRow): number {
+  return differenceLines(row).length
+}
+
+function lineStatusLabel(s: LineMatchStatus): string {
+  const map: Record<LineMatchStatus, string> = {
+    MATCHED: '一致',
+    MATERIAL_MISMATCH: '物料不符',
+    PRICE_MISMATCH: '金额不符',
+    PRICE_UNKNOWN: '采购单无单价',
+  }
+  return map[s] ?? s
+}
+
+function lineStatusTag(s: LineMatchStatus): 'success' | 'warning' | 'danger' | 'info' {
+  if (s === 'MATCHED') return 'success'
+  if (s === 'PRICE_UNKNOWN') return 'warning'
+  return 'danger'
+}
+
+function poLineStatusLabel(s: PoLineStatus): string {
+  const map: Record<PoLineStatus, string> = {
+    NOT_RECEIVED: '未收货',
+    UNINVOICED: '未开票',
+    PARTIAL: '部分开票',
+    INVOICED: '已开满',
+    BLOCKED: '量不出来',
+  }
+  return map[s] ?? s
+}
+
+function poLineStatusTag(s: PoLineStatus): 'success' | 'warning' | 'danger' | 'info' {
+  if (s === 'INVOICED') return 'success'
+  if (s === 'PARTIAL' || s === 'UNINVOICED') return 'warning'
+  if (s === 'BLOCKED') return 'danger'
+  return 'info'
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  const e = err as { message?: string; actionHint?: string | null; response?: { data?: { message?: string } } }
+  const message = e?.response?.data?.message || e?.message || fallback
+  return e?.actionHint ? `${message}（${e.actionHint}）` : message
+}
+
+async function fetchMatchStatus(poId: string): Promise<MatchStatus> {
+  const res = await get(`/${factoryId.value}/invoices/match-status`, { params: { poId } })
+  if (!res.success || !res.data) throw new Error(res.message || '逐行三单状态加载失败')
+  return res.data as MatchStatus
+}
+
+async function loadUploadLines() {
+  const poId = uploadForm.value.purchaseOrderId?.trim()
+  uploadMatch.value = null
+  uploadDrafts.value = []
+  uploadLinesError.value = ''
+  if (!poId || !factoryId.value) return
+  uploadLinesLoading.value = true
+  try {
+    const status = await fetchMatchStatus(poId)
+    uploadMatch.value = status
+    uploadDrafts.value = status.lines.map((line) => ({
+      ...line,
+      receiveItemId: null,
+      invoiceMaterialTypeId: line.materialTypeId,
+      quantity: null,
+      amount: null,
+    }))
+  } catch (err: unknown) {
+    uploadLinesError.value = errorMessage(err, '采购单行加载失败')
+  } finally {
+    uploadLinesLoading.value = false
+  }
+}
+
 // ─── 标签映射 ────────────────────────────────────────────────
 function statusLabel(s: string): string {
   const map: Record<string, string> = {
     PENDING: '待核对',
     MATCHED: '已核对',
-    MISMATCHED: '金额不符'
+    MISMATCHED: '不符'
   }
   return map[s] ?? s
 }
@@ -581,6 +960,7 @@ function openUploadDialog(todo?: PendingInvoiceOrder) {
     ocrRawResult: ''
   }
   uploadDialogVisible.value = true
+  void loadUploadLines()
 }
 
 async function doUpload() {
@@ -594,10 +974,22 @@ async function doUpload() {
         supplierId: uploadForm.value.supplierId,
         invoiceNumber: uploadForm.value.invoiceNumber,
         amount: uploadForm.value.amount,
-        ocrRawResult: uploadForm.value.ocrRawResult || null
+        ocrRawResult: uploadForm.value.ocrRawResult || null,
+        lines: selectedUploadLines.value.map((d) => ({
+          purchaseOrderItemId: d.purchaseOrderItemId,
+          receiveItemId: d.receiveItemId,
+          materialTypeId: d.invoiceMaterialTypeId,
+          quantity: d.quantity,
+          amount: d.amount,
+        })),
       })
       if (res.success) {
-        ElMessage({ message: '发票上传成功', type: 'success', duration: 3000 })
+        const status = (res.data as { reconcileStatus?: string } | null)?.reconcileStatus
+        ElMessage({
+          message: status === 'MATCHED' ? '发票已登记，逐行三单相符' : '发票已登记，待人工核对',
+          type: 'success',
+          duration: 3000,
+        })
         uploadDialogVisible.value = false
         fetchData()
         fetchReminders()
@@ -606,8 +998,18 @@ async function doUpload() {
         ElMessage({ message: res.message || '上传失败', type: 'error', duration: 0, showClose: true })
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || '上传失败，请检查网络'
-      ElMessage({ message: msg, type: 'error', duration: 0, showClose: true })
+      // 超开 409 的原因和剩余量留在弹窗里，紧挨着要改的行
+      uploadLinesError.value = errorMessage(err, '上传失败，请检查网络')
+      if (uploadMatch.value) {
+        const keep = uploadDrafts.value
+        await loadUploadLines()
+        uploadLinesError.value = errorMessage(err, '上传失败，请检查网络')
+        uploadDrafts.value = uploadDrafts.value.map((d) => {
+          const prev = keep.find((k) => k.purchaseOrderItemId === d.purchaseOrderItemId)
+          return prev ? { ...d, receiveItemId: prev.receiveItemId, invoiceMaterialTypeId: prev.invoiceMaterialTypeId,
+            quantity: prev.quantity, amount: prev.amount } : d
+        })
+      }
     } finally {
       submitting.value = false
     }
@@ -652,9 +1054,20 @@ async function doReconcile() {
 }
 
 // ─── 详情 ────────────────────────────────────────────────────
-function openDetailDialog(row: InvoiceRow) {
+async function openDetailDialog(row: InvoiceRow) {
   currentRow.value = row
   detailDialogVisible.value = true
+  detailMatch.value = null
+  detailMatchError.value = ''
+  if (!factoryId.value) return
+  detailMatchLoading.value = true
+  try {
+    detailMatch.value = await fetchMatchStatus(row.purchaseOrderId)
+  } catch (err: unknown) {
+    detailMatchError.value = errorMessage(err, '采购单逐行状态加载失败')
+  } finally {
+    detailMatchLoading.value = false
+  }
 }
 
 // ─── 生命周期 ────────────────────────────────────────────────
@@ -725,4 +1138,13 @@ onMounted(() => {
 .dialog-context {
   margin-bottom: 4px;
 }
+
+.po-input-row { display: flex; gap: 8px; width: 100%; }
+.upload-lines { width: 100%; }
+.line-total { margin-top: 8px; font-size: 13px; color: #606266; }
+.line-total--diff { color: #E6A23C; }
+.line-expected { font-size: 12px; color: #909399; margin-top: 2px; }
+.line-blocker { color: #F56C6C; font-size: 12px; }
+.line-note { margin-left: 6px; font-size: 12px; color: #606266; }
+.section-title { margin: 16px 0 8px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
 </style>
