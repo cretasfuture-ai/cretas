@@ -39,6 +39,19 @@ public class ToolRuntimeRegistry {
         this.policyResolver = new ToolDescriptorPolicyResolver(descriptorRegistry);
     }
 
+    /**
+     * Whether an approved runtime policy exists for this tool. Callers that may run a tool either
+     * through this gateway or on a legacy path use it to pick the gateway whenever one exists; the
+     * gateway still decides the call (source, principal, permissions, confirmation).
+     */
+    public boolean isGoverned(String toolName) {
+        try {
+            return toolName != null && descriptorRegistry.findApproved(toolName).isPresent();
+        } catch (RuntimeException unavailableRuntimeTruth) {
+            return false;
+        }
+    }
+
     public Optional<ResolvedTool> resolve(
             ToolExecutionCommand command,
             ExecutionPrincipal trustedCurrentPrincipal) {

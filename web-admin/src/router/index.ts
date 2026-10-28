@@ -2543,6 +2543,13 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
         },
       },
       {
+        // S6-01 saved views: any signed-in factory account; the server decides per entity / field.
+        path: 'saved-views',
+        name: 'SavedViews',
+        component: () => import('@/views/saved-views/index.vue'),
+        meta: { title: '业务视图', icon: 'Document', requiresAuth: true, showInMenu: true },
+      },
+      {
         // The factory's own read-only readiness. Not an assemblyFeature route: that guard admits
         // platform super admins only, and the backend endpoint already follows the assembly switch.
         path: 'factory-readiness',

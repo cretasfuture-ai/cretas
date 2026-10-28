@@ -185,6 +185,60 @@ describe('scheduling detail real wire mount', () => {
     }
   });
 
+  it('shows which plan is made on which day and how much (daily-capacity schedules)', async () => {
+    const baseGet = get.getMockImplementation()!;
+    const daily = (unit: string, cap: number, label: string, source: string, days: Array<[string, number, number]>) => ({
+      unit, capacityPerDay: cap, capacitySource: source, capacitySourceLabel: label,
+      plannedQuantity: 500, reportedQuantity: 200, remainingQuantity: 300,
+      days: days.map(([date, quantity, shareOfDay]) => ({ date, quantity, shareOfDay })),
+    });
+    get.mockImplementation(async (url: string) => {
+      const result = await baseGet(url);
+      if (!url.endsWith('/PLAN-1')) return result;
+      const base = { planId: 'PLAN-1', productionLineId: 'LINE-1', productionLineName: '一号线', batchId: null,
+        batchNumber: null, assignedWorkers: 0, completedQuantity: 0, status: 'pending', workerAssignments: [] };
+      return { ...result, data: { ...result.data, lineSchedules: [
+        { ...base, id: 'S-A', productionPlanId: 'PP-A', planNumber: 'PLAN-A', sequenceOrder: 0, plannedQuantity: 40,
+          plannedStartTime: '2026-10-19T00:00:00', plannedEndTime: '2026-10-19T23:59:00',
+          dailyAllocations: daily('袋', 100, '人工填写', 'MANUAL', [['2026-10-19', 40, 0.4]]) },
+        { ...base, id: 'S-B', productionPlanId: 'PP-B', planNumber: 'PLAN-B', sequenceOrder: 1, plannedQuantity: 300,
+          plannedStartTime: '2026-10-19T00:00:00', plannedEndTime: '2026-10-20T23:59:00',
+          dailyAllocations: daily('kg', 200, '按历史估算', 'EXPERIENCE', [['2026-10-19', 120, 0.6], ['2026-10-20', 180, 0.9]]) },
+      ] } };
+    });
+    window.history.replaceState(null, '');
+    const box = { template: '<div><slot name="header"/><slot/></div>' };
+    const wrapper = mount(Detail, { global: {
+      directives: { loading: () => undefined },
+      stubs: { ElCard: box, ElTable, ElTableColumn, ElProgress: box, ElTag: box, ElButton: box,
+        ElDialog: box, ElForm: box, ElFormItem: box, ElInputNumber: box, ElEmpty: box, ElIcon: box,
+        SchedulingDiagnosticsPanel: true },
+    } });
+    try {
+      await flushPromises();
+      const card = wrapper.get('[data-testid="daily-allocations"]');
+      expect(card.get('[data-testid="daily-capacity-S-A"]').text()).toContain('100 袋/天');
+      expect(card.get('[data-testid="daily-capacity-S-A"]').text()).toContain('人工填写');
+      expect(card.get('[data-testid="daily-capacity-S-B"]').text()).toContain('按历史估算');
+      expect(card.get('[data-testid="daily-capacity-S-B"]').text()).toContain('已入库 200');
+      const rows = card.findAll('.el-table__body tr').map(r => r.text().replace(/\s+/g, ' '));
+      // 按日期 → 排程顺序: 10-19 先 A 后 B, 10-20 只有 B
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toContain('2026-10-19');
+      expect(rows[0]).toContain('计划 PLAN-A');
+      expect(rows[0]).toContain('40 袋');
+      expect(rows[0]).toContain('40%');
+      expect(rows[1]).toContain('计划 PLAN-B');
+      expect(rows[1]).toContain('120 kg');
+      expect(rows[1]).toContain('60%');
+      expect(rows[2]).toContain('2026-10-20');
+      expect(rows[2]).toContain('180 kg');
+      expect(wrapper.find('[data-testid="task-timeline"]').exists()).toBe(false); // v2 没有工序时间线
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
   it('shows no warning block when the page is opened directly (warnings are not persisted)', async () => {
     window.history.replaceState(null, '');
     const box = { template: '<div><slot name="header"/><slot/></div>' };

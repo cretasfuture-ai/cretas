@@ -44,7 +44,7 @@ public class AgentOpsCreateEvalSetRequest {
     public static class EvalCase {
         @NotBlank @Size(max = 128)
         private String caseId;
-        @NotBlank @Pattern(regexp = "GROSS_MARGIN_DECLINE_ATTRIBUTION")
+        @NotBlank @Pattern(regexp = "[A-Z][A-Z0-9_]{2,95}") // domain legality (restaurant route vs factory intents) is enforced upstream
         private String expectedRoute;
         @Size(max = 10)
         private List<@NotBlank @Size(max = 128) String> requiredTools;

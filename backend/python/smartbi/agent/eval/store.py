@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol, Sequence
 
 from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord, utc_iso
+from .factory_trace import build_factory_trace_response
 from .runtime_shadow import numeric_truth_ref_key
 from .validation import (
     canonical_digest,
@@ -18,6 +19,7 @@ from .validation import (
     validate_cases,
     validate_config_snapshot,
     validate_evaluator,
+    validate_factory_trace,
     validate_name,
     validate_request_id,
     validate_runtime_shadow_cases,
@@ -55,6 +57,7 @@ class AgentOpsStore(Protocol):
     async def load_runtime_corpus(
         self, context: AgentOpsContext, *, limit: int
     ) -> tuple[Mapping[str, Any], ...]: ...
+    async def record_factory_trace(self, context: AgentOpsContext, trace: Mapping[str, Any]) -> Mapping[str, Any]: ...
     async def load_trace(
         self, context: AgentOpsContext, run_id: str, *, after_sequence: int, limit: int
     ) -> Mapping[str, Any]: ...
@@ -138,6 +141,7 @@ class InMemoryAgentOpsStore:
         self._traces: dict[str, Mapping[str, Any]] = {}
         self._runtime_corpus: dict[str, tuple[Mapping[str, Any], ...]] = {}
         self._lock = asyncio.Lock()
+        self._factory_traces: dict[str, dict[str, Any]] = {}
 
     def seed_trace(self, factory_id: str, run_id: str, trace: Mapping[str, Any]) -> None:
         self._traces[run_id] = {**dict(trace), "factoryId": factory_id}
@@ -254,10 +258,35 @@ class InMemoryAgentOpsStore:
                 for case in self._runtime_corpus.get(context.factory_id, ())[:limit]
             )
 
+    async def record_factory_trace(self, context, trace):
+        _require_admin_context(context)
+        _require_factory_context(context)
+        safe = validate_factory_trace(trace)
+        async with self._lock:
+            existing = self._factory_traces.get(safe["runId"])
+            if existing is not None:
+                if existing["trace"] != safe or existing["factoryId"] != context.factory_id:
+                    raise AgentOpsConflictError("IDEMPOTENCY_KEY_REUSED")
+                return existing["trace"]
+            self._factory_traces[safe["runId"]] = {
+                "factoryId": context.factory_id, "trace": safe, "createdAt": utc_iso(),
+            }
+            return safe
+
     async def load_trace(self, context, run_id, *, after_sequence, limit):
         _require_admin_context(context)
         _require_after_sequence(after_sequence)
         _require_limit(limit)
+        if context.business_type == "FACTORY":
+            async with self._lock:
+                item = self._factory_traces.get(run_id)
+                if item is None or item["factoryId"] != context.factory_id:
+                    raise AgentOpsAccessError("run not found")
+                trace = item["trace"]
+                return build_factory_trace_response(
+                    {**trace, "createdAt": item["createdAt"]},
+                    trace["steps"], after_sequence=after_sequence, limit=limit,
+                )
         async with self._lock:
             item = self._traces.get(run_id)
             if item is None or item.get("factoryId") != context.factory_id:
@@ -486,10 +515,69 @@ class PostgresAgentOpsStore:
                 break
         return validate_runtime_shadow_cases(cases) if cases else ()
 
+    async def record_factory_trace(self, context, trace):
+        _require_admin_context(context)
+        _require_factory_context(context)
+        safe = validate_factory_trace(trace)
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                await self._bind(connection, context)
+                await connection.execute(
+                    """INSERT INTO smart_bi_factory_agent_trace
+                       (run_id,factory_id,intent_code,outcome,latency_ms,steps,recorded_by)
+                       VALUES ($1::uuid,$2,$3,$4,$5,$6::jsonb,$7)
+                       ON CONFLICT (run_id) DO NOTHING""",
+                    safe["runId"], context.factory_id, safe["intentCode"],
+                    safe["outcome"], safe["latencyMs"], self._json(safe["steps"]),
+                    context.user_id,
+                )
+                stored = await connection.fetchrow(
+                    """SELECT factory_id,intent_code,outcome,latency_ms,steps
+                       FROM smart_bi_factory_agent_trace WHERE run_id=$1::uuid""",
+                    safe["runId"],
+                )
+        # RLS hides other tenants' rows, so a foreign run_id yields None here.
+        if stored is None or stored["factory_id"] != context.factory_id:
+            raise AgentOpsConflictError("IDEMPOTENCY_KEY_REUSED")
+        same = (
+            stored["intent_code"] == safe["intentCode"]
+            and stored["outcome"] == safe["outcome"]
+            and stored["latency_ms"] == safe["latencyMs"]
+            and self._value(stored["steps"]) == safe["steps"]
+        )
+        if not same:
+            raise AgentOpsConflictError("IDEMPOTENCY_KEY_REUSED")
+        return safe
+
+    async def _load_factory_trace(self, context, run_id, *, after_sequence, limit):
+        async with self._pool.acquire() as connection:
+            async with connection.transaction(readonly=True):
+                await self._bind(connection, context)
+                row = await connection.fetchrow(
+                    """SELECT run_id,intent_code,outcome,latency_ms,steps,created_at
+                       FROM smart_bi_factory_agent_trace
+                       WHERE run_id=$1::uuid AND factory_id=$2""",
+                    run_id, context.factory_id,
+                )
+        if row is None:
+            raise AgentOpsAccessError("run not found")
+        return build_factory_trace_response(
+            {
+                "runId": str(row["run_id"]), "intentCode": row["intent_code"],
+                "outcome": row["outcome"], "latencyMs": row["latency_ms"],
+                "createdAt": row["created_at"].isoformat(),
+            },
+            self._value(row["steps"]), after_sequence=after_sequence, limit=limit,
+        )
+
     async def load_trace(self, context, run_id, *, after_sequence, limit):
         _require_admin_context(context)
         _require_after_sequence(after_sequence)
         _require_limit(limit)
+        if context.business_type == "FACTORY":
+            return await self._load_factory_trace(
+                context, run_id, after_sequence=after_sequence, limit=limit
+            )
         async with self._pool.acquire() as connection:
             async with connection.transaction(readonly=True):
                 await self._bind_trace(connection, context)
@@ -741,6 +829,11 @@ def _require_admin_context(context: AgentOpsContext) -> None:
     _require_context(context)
     if context.role not in _ADMIN_ROLES:
         raise AgentOpsAccessError("agent ops admin context required")
+
+
+def _require_factory_context(context: AgentOpsContext) -> None:
+    if context.business_type != "FACTORY":
+        raise AgentOpsAccessError("factory context required")
 
 
 def _require_after_sequence(after_sequence: int) -> None:

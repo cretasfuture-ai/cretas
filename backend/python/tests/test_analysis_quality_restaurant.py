@@ -969,6 +969,9 @@ async def test_factory_msg_does_not_misroute_to_chat_b1(monkeypatch):
 
     result = await get_quality_analysis(
         factory_id="F001",
+        # 工艺保密 cost resolver input; no HTTP request here → costs fail closed
+        # (irrelevant to the routing assertion below).
+        request=None,
         startDate=date(2026, 5, 1),
         endDate=date(2026, 5, 31),
         analysisType="fpy",

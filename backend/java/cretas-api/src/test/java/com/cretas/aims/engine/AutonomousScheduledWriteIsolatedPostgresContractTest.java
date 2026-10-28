@@ -76,7 +76,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         ToolRegistry.class, UserDisableTool.class, UserServiceImpl.class, UserMapper.class, ExcelUtil.class,
         PermissionServiceImpl.class, PreviewTokenServiceImpl.class, AutonomousToolRunner.class,
         AutonomousGrantService.class, AutonomousGrantIssuer.class, DynamicSchedulerService.class,
-        AutonomousScheduledWriteIsolatedPostgresContractTest.Config.class})
+        AutonomousWriteSwitch.class, AutonomousScheduledWriteIsolatedPostgresContractTest.Config.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AutonomousScheduledWriteIsolatedPostgresContractTest {
 
@@ -117,6 +117,9 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired jakarta.persistence.EntityManager entityManager;
     @Autowired TransactionTemplate tx;
+    @Autowired AutonomousWriteSwitch writeSwitch;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired javax.sql.DataSource dataSource;
 
     private DynamicSchedulerService instanceB;
     private Long operator;
@@ -125,7 +128,13 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
     private Long bystander;
     private Long configId;
 
-    @BeforeEach void fixtures() {
+    @BeforeEach void fixtures() throws Exception {
+        jdbc.execute("DROP TABLE IF EXISTS autonomous_write_switches");
+        try (var connection = dataSource.getConnection()) {
+            org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
+                    new org.springframework.core.io.ClassPathResource(
+                            "db/flyway/V20261103_110__autonomous_write_switches.sql"));
+        }
         tx.executeWithoutResult(status -> {
             for (String table : List.of("autonomous_tool_grant_runs", "autonomous_tool_grants",
                     "tool_execution_idempotency", "tool_execution_audit_events", "intent_preview_tokens",
@@ -526,6 +535,36 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(runFired(fired, fireBinding, "slot:2026-10-24T04:02:00Z")).isEqualTo("SUCCESS");
         assertThat(count("autonomous_tool_grant_runs")).isEqualTo(1);
         assertThat(active(target)).isFalse();
+    }
+
+    @Test void theFactoryKillSwitchStopsTheNextDelegatedWriteBeforeAnyGrantIsSpent() throws Exception {
+        FactorySchedulerConfig fired = scheduleSoon();
+        String grantId = grant(fired, 3);
+        var fireBinding = SchedulerGrantBinding.of(fired, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(),
+                objectMapper);
+        writeSwitch.set("F-ISO", false, "盘点期间暂停自动写入", grantor, LocalDateTime.now());
+
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-25T04:00:00Z"))
+                .isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 0 AND id = '" + grantId + "'")).isEqualTo(1);
+        assertThat(count("autonomous_tool_grant_runs")).isZero();
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(active(target)).isTrue();
+        // Another factory's switch does not stop this one, and switching back on lets the same grant run.
+        writeSwitch.set("F-OTHER", false, null, grantor, LocalDateTime.now());
+        writeSwitch.set("F-ISO", true, null, grantor, LocalDateTime.now());
+        assertThat(runFired(fired, fireBinding, "slot:2026-10-25T04:01:00Z")).isEqualTo("SUCCESS");
+        assertThat(count("autonomous_tool_grant_runs")).isEqualTo(1);
+        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED' AND principal_id = '"
+                + operator + "'")).isEqualTo(1);
+        assertThat(active(target)).isFalse();
+        // The audit keeps who granted it, who it ran as, the tool, the parameters' binding and the result.
+        assertThat(text("SELECT g.granted_by || '|' || g.run_as_user_id || '|' || g.tool_name || '|' || r.outcome"
+                + " FROM autonomous_tool_grant_runs r JOIN autonomous_tool_grants g ON g.id = r.grant_id"
+                + " JOIN tool_execution_audit_events e ON e.id = r.audit_event_id"))
+                .isEqualTo(grantor + "|" + operator + "|" + TOOL + "|SUCCEEDED");
+        assertThat(text("SELECT parameters_digest FROM autonomous_tool_grants")).isEqualTo(
+                fireBinding.parametersDigest());
     }
 
     @Test void runAsUserWhosePermissionWasRevokedIsDeniedByTheGatewayAndAudited() throws Exception {

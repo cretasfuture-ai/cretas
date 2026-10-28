@@ -30,6 +30,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from smartbi.services.factory_charts import cost_scope as process_secret
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,85 @@ def _apply_rbac(data: Any, role: Optional[str]) -> Any:
     strip_price_for_role(data, role)
     _strip_cost_fields(data)
     return data
+
+
+# ── Process-secret (工艺保密) cost scope ──────────────────────────────────────
+#
+# Java decides which products' manufacturing costs this caller may see
+# (smartbi/services/factory_charts/cost_scope.py).  Per-product cost fields of
+# a protected product the caller may not see are hidden; factory-wide rollups
+# are rebuilt by SUMMING ONLY the allowed products' per-product Gold rows.
+# ⛔ Never "rollup − secret rows": two published numbers would let anyone back
+# out the secret part.  production_batches.product_type_id is NOT NULL, so the
+# all-product rollup is exactly the sum of the per-product rows (ETL
+# _AGG_PRODUCT_DAILY_SQL / _AGG_ALL_DAILY_SQL read the same fact rows).
+
+_PRODUCT_COST_FIELDS: tuple[str, ...] = (
+    "totalMaterialCost", "totalLaborCost", "totalEquipmentCost", "totalOtherCost",
+    "totalCost", "costPerUnit",
+)
+_ROLLUP_COST_COLUMNS: dict[str, str] = {
+    "totalMaterialCost":  "total_material_cost",
+    "totalLaborCost":     "total_labor_cost",
+    "totalEquipmentCost": "total_equipment_cost",
+    "totalOtherCost":     "total_other_cost",
+    "totalCost":          "total_cost",
+}
+_PROCESS_COST_FIELDS: tuple[str, ...] = ("laborCost", "materialCost")
+
+
+def _hide_fields(item: dict, fields, scope) -> None:
+    for name in fields:
+        item[name] = None
+    item[process_secret.MARKER] = process_secret.hidden_marker(fields, scope)
+
+
+async def _scope_rollup_costs(
+    request: Request,
+    factory_id: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    items: List[dict],
+    fields: tuple[str, ...],
+) -> Optional[dict]:
+    """Make the factory-rollup cost fields of ``items`` safe for this caller.
+
+    Returns the ``costScope`` annotation (``None`` when nothing was left out).
+    FULL callers keep the Gold rollup values unchanged; SCOPED callers get each
+    day's value rebuilt from the allowed products' rows only; when the
+    authority (or the per-product read) is unavailable every cost is hidden.
+    """
+    product_rows, err = await _query_gold(factory_id, start_date, end_date)
+    if err or product_rows is None:
+        scope = process_secret.unavailable()
+        product_rows = []
+    else:
+        scope = await process_secret.resolve_cost_scope(
+            request, factory_id, [r["product_type_id"] for r in product_rows])
+    if scope.is_full:
+        return None
+    if scope.is_unavailable:
+        for item in items:
+            for name in fields:
+                item[name] = None
+        return process_secret.rollup_annotation(scope, 0)
+    excluded = scope.excluded_product_ids(r["product_type_id"] for r in product_rows)
+    if not excluded:
+        return None
+    allowed_by_day: dict[Optional[str], list] = {}
+    for row in product_rows:
+        if not scope.allows(row["product_type_id"]):
+            continue
+        day = row["stat_date"].isoformat() if row["stat_date"] else None
+        allowed_by_day.setdefault(day, []).append(row)
+    for item in items:
+        day_rows = allowed_by_day.get(item.get("statDate"), [])
+        for name in fields:
+            column = _ROLLUP_COST_COLUMNS[name]
+            values = [float(r[column]) for r in day_rows if r[column] is not None]
+            # Honest null: a day without any allowed costed row stays null.
+            item[name] = round(sum(values), 2) if values else None
+    return process_secret.rollup_annotation(scope, len(excluded))
 
 
 async def _query_gold(
@@ -211,6 +291,12 @@ async def cost_structure(
         return {"success": True, "data": {"rows": [], "summary": {}}, "message": "暂无生产数据"}
 
     items = [_row_to_dict(r) for r in rows]
+    cost_scope = None
+    if _can_view_cost(role):
+        # Rebuild per-day costs BEFORE the summary so the summary is the sum of
+        # the caller's visible (allowed-products-only) days.
+        cost_scope = await _scope_rollup_costs(
+            request, factory_id, startDate, endDate, items, tuple(_ROLLUP_COST_COLUMNS))
 
     # Summary aggregation (honest null: only sum non-null slices)
     def _sum_field(key: str) -> Optional[float]:
@@ -228,6 +314,8 @@ async def cost_structure(
     }
 
     data = {"rows": items, "summary": summary}
+    if cost_scope is not None:
+        data["costScope"] = cost_scope
     _apply_rbac(data, role)
     return {"success": True, "data": data, "message": ""}
 
@@ -274,6 +362,18 @@ async def yield_trend(
     ]
 
     data = {"trend": trend, "productTypeId": productTypeId}
+    if _can_view_cost(role):
+        if productTypeId:
+            scope = await process_secret.resolve_cost_scope(request, factory_id, [productTypeId])
+            if not scope.allows(productTypeId):
+                for point in trend:
+                    point["totalCost"] = None
+                data[process_secret.MARKER] = process_secret.hidden_marker(("totalCost",), scope)
+        else:
+            cost_scope = await _scope_rollup_costs(
+                request, factory_id, startDate, endDate, trend, ("totalCost",))
+            if cost_scope is not None:
+                data["costScope"] = cost_scope
     _apply_rbac(data, role)
     return {"success": True, "data": data, "message": ""}
 
@@ -383,8 +483,26 @@ async def product_cost_compare(
             "costPerUnit":       cost_per_unit,
         })
 
-    # Sort by totalCost DESC (nulls last)
+    hidden: List[dict] = []
+    if _can_view_cost(role):
+        scope = await process_secret.resolve_cost_scope(
+            request, factory_id, [p["productTypeId"] for p in products])
+        if not scope.is_full:
+            visible = []
+            for product in products:
+                if scope.allows(product["productTypeId"]):
+                    visible.append(product)
+                else:
+                    _hide_fields(product, _PRODUCT_COST_FIELDS, scope)
+                    hidden.append(product)
+            products = visible
+
+    # Sort by totalCost DESC (nulls last).  Hidden products go after every
+    # visible one in a cost-independent order, so their position does not
+    # reveal how their (hidden) cost ranks.
     products.sort(key=lambda p: p["totalCost"] if p["totalCost"] is not None else -1, reverse=True)
+    hidden.sort(key=lambda p: str(p["productTypeId"]))
+    products = products + hidden
 
     data = {"products": products}
     _apply_rbac(data, role)
@@ -441,27 +559,27 @@ async def process_cost(
     if pool is None:
         return {"success": False, "data": None, "message": "db pool unavailable"}
 
-    conditions = ["factory_id = $1"]
+    conditions = ["r.factory_id = $1"]
     params: list = [factory_id]
     idx = 2
 
     if batchId is not None:
-        conditions.append(f"batch_id = ${idx}")
+        conditions.append(f"r.batch_id = ${idx}")
         params.append(batchId)
         idx += 1
 
     if startDate is not None:
-        conditions.append(f"report_date >= ${idx}")
+        conditions.append(f"r.report_date >= ${idx}")
         params.append(startDate)
         idx += 1
 
     if endDate is not None:
-        conditions.append(f"report_date <= ${idx}")
+        conditions.append(f"r.report_date <= ${idx}")
         params.append(endDate)
         idx += 1
 
     if costOnly:
-        conditions.append("cost_source = 'reported'")
+        conditions.append("r.cost_source = 'reported'")
 
     where_clause = " AND ".join(conditions)
 
@@ -474,14 +592,17 @@ async def process_cost(
                 rows = await conn.fetch(
                     f"""
                     SELECT
-                        source_pk, batch_id, process_order, process_category,
-                        report_date, report_kind,
-                        input_qty, output_qty, good_qty, yield_rate,
-                        total_work_minutes, total_workers,
-                        labor_cost, material_cost, cost_source
-                    FROM fact_production_report
+                        r.source_pk, r.batch_id, r.process_order, r.process_category,
+                        r.report_date, r.report_kind,
+                        r.input_qty, r.output_qty, r.good_qty, r.yield_rate,
+                        r.total_work_minutes, r.total_workers,
+                        r.labor_cost, r.material_cost, r.cost_source,
+                        b.product_type_id AS product_type_id
+                    FROM fact_production_report r
+                    LEFT JOIN fact_production_batch b
+                      ON b.factory_id = r.factory_id AND b.source_pk = r.batch_id
                     WHERE {where_clause}
-                    ORDER BY report_date, batch_id NULLS LAST, process_order NULLS LAST
+                    ORDER BY r.report_date, r.batch_id NULLS LAST, r.process_order NULLS LAST
                     """,
                     *params,
                 )
@@ -516,18 +637,43 @@ async def process_cost(
             "costSource":        r["cost_source"],
         })
 
-    total = len(reports)
-    with_cost = sum(1 for rep in reports if rep["costSource"] == "reported")
-    coverage = round(with_cost / total * 100, 2) if total > 0 else None
+    hidden_count = 0
+    cost_scope = None
+    if _can_view_cost(role):
+        product_ids = [r["product_type_id"] for r in rows]
+        scope = await process_secret.resolve_cost_scope(request, factory_id, product_ids)
+        if not scope.is_full:
+            for row, report in zip(rows, reports):
+                # A report whose batch is not in fact_production_batch (e.g. not
+                # completed yet) has no provable product: fail closed, its cost
+                # could belong to a protected product.
+                pid = row["product_type_id"]
+                if pid is None or not scope.allows(pid):
+                    _hide_fields(report, ("laborCost", "materialCost", "costSource"), scope)
+                    hidden_count += 1
+            excluded = scope.excluded_product_ids(product_ids)
+            cost_scope = process_secret.rollup_annotation(scope, len(excluded))
+            if cost_scope is None and hidden_count:
+                cost_scope = {"status": "ALLOWED_PRODUCTS_ONLY", "excludedProtectedProductCount": 0,
+                              "note": f"{hidden_count} 条报工无法确认所属产品，成本已隐藏"}
 
-    data = {
-        "reports": reports,
-        "meta": {
-            "totalReports":      total,
-            "reportsWithCost":   with_cost,
-            "costCoverageRate":  coverage,
-        },
+    total = len(reports)
+    # Coverage is computed over the reports whose cost this caller can see, so
+    # hidden (protected-product) reports neither count nor dilute the rate.
+    visible_total = total - hidden_count
+    with_cost = sum(1 for rep in reports if rep["costSource"] == "reported")
+    coverage = round(with_cost / visible_total * 100, 2) if visible_total > 0 else None
+
+    meta = {
+        "totalReports":      total,
+        "reportsWithCost":   with_cost,
+        "costCoverageRate":  coverage,
     }
+    if hidden_count:
+        meta["hiddenCostReports"] = hidden_count
+    data = {"reports": reports, "meta": meta}
+    if cost_scope is not None:
+        data["costScope"] = cost_scope
     _apply_rbac(data, role)
     return {"success": True, "data": data, "message": ""}
 

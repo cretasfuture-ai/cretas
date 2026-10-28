@@ -1,0 +1,125 @@
+{
+  "fx-001": {
+    "numericTruthRefs": {},
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_BATCH_QUERY",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_batch_query"
+    ]
+  },
+  "fx-002": {
+    "numericTruthRefs": {
+      "expiring:count": "4"
+    },
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_EXPIRING_ALERT",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_expiring_alert"
+    ]
+  },
+  "fx-003": {
+    "numericTruthRefs": {
+      "expired:count": "2"
+    },
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_EXPIRED_QUERY",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_expired_query"
+    ]
+  },
+  "fx-004": {
+    "numericTruthRefs": {},
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_FIFO_RECOMMEND",
+    "toolCallsUsed": 2,
+    "tools": [
+      "material_batch_query",
+      "material_fifo_recommend"
+    ]
+  },
+  "fx-005": {
+    "numericTruthRefs": {
+      "wip:qty": "120.5"
+    },
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_BATCH_WIP_QUERY",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_batch_wip_query"
+    ]
+  },
+  "fx-006": {
+    "numericTruthRefs": {},
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_BATCH_CREATE",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_batch_create"
+    ]
+  },
+  "fx-007": {
+    "numericTruthRefs": {
+      "reserve:qty": "35"
+    },
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_BATCH_RESERVE",
+    "toolCallsUsed": 2,
+    "tools": [
+      "material_batch_query",
+      "material_batch_reserve"
+    ]
+  },
+  "fx-008": {
+    "numericTruthRefs": {},
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_BATCH_RELEASE",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_batch_release"
+    ]
+  },
+  "fx-009": {
+    "numericTruthRefs": {
+      "consume:qty": "18.25"
+    },
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_BATCH_CONSUME",
+    "toolCallsUsed": 2,
+    "tools": [
+      "material_fifo_recommend",
+      "material_batch_consume"
+    ]
+  },
+  "fx-010": {
+    "numericTruthRefs": {
+      "adjust:delta": "-3"
+    },
+    "roundsUsed": 1,
+    "routeCode": "MATERIAL_ADJUST_QUANTITY",
+    "toolCallsUsed": 1,
+    "tools": [
+      "material_adjust_quantity"
+    ]
+  },
+  "fx-011": {
+    "numericTruthRefs": {
+      "consumption:total": "260.75"
+    },
+    "roundsUsed": 1,
+    "routeCode": "BATCH_CONSUMPTION_QUERY",
+    "toolCallsUsed": 1,
+    "tools": [
+      "batch_consumption_query"
+    ]
+  },
+  "fx-012": {
+    "numericTruthRefs": {},
+    "roundsUsed": 0,
+    "routeCode": "GENERAL_CHAT",
+    "toolCallsUsed": 0,
+    "tools": []
+  }
+}

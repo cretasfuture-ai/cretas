@@ -133,7 +133,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             schedule.setPlannedStartTime(item.plannedStartTime());
             schedule.setPlannedEndTime(item.plannedEndTime());
             schedule.setPlannedQuantity(item.plannedQuantity());
-            schedule.setTaskTimeline(item.taskTimeline());
+            schedule.setDailyAllocations(item.dailyAllocations());
             schedules.add(schedule);
         }
         return persistPlan(factoryId, planDate, planName, notes, schedules, userId);

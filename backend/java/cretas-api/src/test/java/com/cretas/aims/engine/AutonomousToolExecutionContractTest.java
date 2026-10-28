@@ -361,11 +361,11 @@ class AutonomousToolExecutionContractTest {
     }
 
     /**
-     * Event trigger chains keep the accepted batch-1 behaviour in this replay: read-only tools
-     * only, run directly by the chain executor. Running chains as a run-as user through the
-     * gateway is a separate, frozen slice.
+     * Event trigger chains: read-only tools only, no identity parameters, and every step goes
+     * through the tool gateway as the chain's run-as user with source TRIGGER (S6-02). The chain
+     * executor never calls a tool itself.
      */
-    @Nested class TriggerChainsStayReadOnly {
+    @Nested class TriggerChainsRunThroughTheGateway {
         @BeforeEach void chainTools() throws Exception {
             when(registry.getExecutor("stock_summary")).thenReturn(Optional.of(readTool));
             when(registry.getExecutor("dictionary_add")).thenReturn(Optional.of(writeTool));
@@ -387,7 +387,12 @@ class AutonomousToolExecutionContractTest {
 
             runChain(executor, chain);
 
-            verify(readTool, times(1)).execute(any(), any());
+            ArgumentCaptor<ToolExecutionCommand> command = ArgumentCaptor.forClass(ToolExecutionCommand.class);
+            verify(gateway, times(1)).execute(command.capture());
+            assertThat(command.getValue().source()).isEqualTo(ToolExecutionSource.TRIGGER);
+            assertThat(command.getValue().principal().principalId()).isEqualTo("42");
+            assertThat(command.getValue().toolName()).isEqualTo("stock_summary");
+            verify(readTool, never()).execute(any(), any());
             verify(writeTool, never()).execute(any(), any());
             ArgumentCaptor<String> status = ArgumentCaptor.forClass(String.class);
             ArgumentCaptor<String> error = ArgumentCaptor.forClass(String.class);
@@ -402,7 +407,7 @@ class AutonomousToolExecutionContractTest {
             setSelf(executor, self);
             FactoryTriggerChain chain = chain("STOP", List.of(step(1, "dictionary_add", Map.of()), step(2, "stock_summary", Map.of())));
             runChain(executor, chain);
-            verify(readTool, never()).execute(any(), any());
+            verify(gateway, never()).execute(any());
             verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"), contains("dictionary_add"));
         }
 
@@ -422,7 +427,8 @@ class AutonomousToolExecutionContractTest {
             verify(self).persistExecutionMetadata(eq(blank), any(LocalDateTime.class), eq("FAILED"), contains("step has no tool"));
             verify(self).persistExecutionMetadata(eq(missing), any(LocalDateTime.class), eq("FAILED"), contains("step has no tool"));
             verify(self).persistExecutionMetadata(eq(mixed), any(LocalDateTime.class), eq("PARTIAL"), contains("no_such_tool"));
-            verify(readTool, times(1)).execute(any(), any());
+            verify(gateway, times(1)).execute(any());
+            verify(readTool, never()).execute(any(), any());
         }
 
         @Test void stopHaltsAtAnUnregisteredToolWhileContinueRunsTheNextStep() throws Exception {
@@ -432,12 +438,12 @@ class AutonomousToolExecutionContractTest {
             List<Map<String, Object>> steps = List.of(step(1, "no_such_tool", Map.of()), step(2, "stock_summary", Map.of()));
             FactoryTriggerChain stop = chain("STOP", steps);
             runChain(executor, stop);
-            verify(readTool, never()).execute(any(), any());
+            verify(gateway, never()).execute(any());
             verify(self).persistExecutionMetadata(eq(stop), any(LocalDateTime.class), eq("FAILED"), contains("no_such_tool"));
 
             FactoryTriggerChain proceed = chain("CONTINUE", steps);
             runChain(executor, proceed);
-            verify(readTool, times(1)).execute(any(), any());
+            verify(gateway, times(1)).execute(any());
         }
 
         @Test void toolDisabledForTheFactoryIsReportedNotRunAndNotSuccess() throws Exception {
@@ -447,7 +453,7 @@ class AutonomousToolExecutionContractTest {
             setSelf(executor, self);
             FactoryTriggerChain chain = chain("CONTINUE", List.of(step(1, "stock_summary", Map.of())));
             runChain(executor, chain);
-            verify(readTool, never()).execute(any(), any());
+            verify(gateway, never()).execute(any());
             verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"),
                     contains("tool disabled for this factory: stock_summary"));
         }
@@ -463,7 +469,7 @@ class AutonomousToolExecutionContractTest {
                     Map.of("order", 4, "tool", "stock_summary", "condition", 7),
                     step(5, "stock_summary", Map.of())));
             runChain(executor, chain);
-            verify(readTool, times(1)).execute(any(), any());
+            verify(gateway, times(1)).execute(any());
             ArgumentCaptor<String> error = ArgumentCaptor.forClass(String.class);
             verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("PARTIAL"), error.capture());
             assertThat(error.getValue()).contains("step enabled must be true or false", "step order must be a number",
@@ -478,12 +484,43 @@ class AutonomousToolExecutionContractTest {
                     Map.of("order", 1, "tool", "stock_summary", "enabled", false),
                     Map.of("order", 2, "tool", "no_such_tool", "enabled", false)));
             runChain(executor, chain);
-            verify(readTool, never()).execute(any(), any());
+            verify(gateway, never()).execute(any());
             verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("SKIPPED"), isNull());
         }
 
+        @Test void chainWithoutRunAsUserNeverReachesTheGatewayAndIsAFailure() throws Exception {
+            TriggerChainExecutor executor = chainExecutor();
+            TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+            setSelf(executor, self);
+            FactoryTriggerChain chain = chain("CONTINUE", List.of(step(1, "stock_summary", Map.of())));
+            chain.setRunAsUserId(null);
+            runChain(executor, chain);
+            verifyNoInteractions(gateway);
+            verify(readTool, never()).execute(any(), any());
+            verify(self).persistExecutionMetadata(eq(chain), any(LocalDateTime.class), eq("FAILED"),
+                    contains("RUN_AS_MISSING"));
+        }
+
+        @Test void gatewayDeniedOrUnknownStepIsAFailureWithTheAuditIdNeverASuccess() throws Exception {
+            TriggerChainExecutor executor = chainExecutor();
+            TriggerChainExecutor self = mock(TriggerChainExecutor.class);
+            setSelf(executor, self);
+            doAnswer(call -> result(call.getArgument(0), ToolExecutionStatus.DENIED)).when(gateway).execute(any());
+            FactoryTriggerChain denied = chain("CONTINUE", List.of(step(1, "stock_summary", Map.of())));
+            runChain(executor, denied);
+            verify(self).persistExecutionMetadata(eq(denied), any(LocalDateTime.class), eq("FAILED"),
+                    contains("GATEWAY_DENIED"));
+
+            doAnswer(call -> result(call.getArgument(0), ToolExecutionStatus.OUTCOME_UNKNOWN)).when(gateway).execute(any());
+            FactoryTriggerChain unknown = chain("CONTINUE", List.of(step(1, "stock_summary", Map.of())));
+            runChain(executor, unknown);
+            verify(self).persistExecutionMetadata(eq(unknown), any(LocalDateTime.class), eq("FAILED"),
+                    contains("OUTCOME_UNKNOWN"));
+            verify(readTool, never()).execute(any(), any());
+        }
+
         private TriggerChainExecutor chainExecutor() {
-            return new TriggerChainExecutor(mock(FactoryTriggerChainRepository.class), registry, new ObjectMapper());
+            return new TriggerChainExecutor(mock(FactoryTriggerChainRepository.class), registry, new ObjectMapper(), runner);
         }
 
         private static void setSelf(TriggerChainExecutor executor, TriggerChainExecutor self) throws Exception {
@@ -507,6 +544,7 @@ class AutonomousToolExecutionContractTest {
             chain.setErrorStrategy(strategy);
             chain.setEnabled(true);
             chain.setSteps(steps);
+            chain.setRunAsUserId(42L);
             return chain;
         }
     }

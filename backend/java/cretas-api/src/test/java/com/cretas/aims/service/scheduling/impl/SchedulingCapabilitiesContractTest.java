@@ -65,19 +65,22 @@ class SchedulingCapabilitiesContractTest {
     }
 
     @Test
-    void authorizedCapabilityReadReturnsDagGenerationUnavailableWorkersAndManualMode() throws Exception {
+    void authorizedCapabilityReadReturnsDailyCapacityGenerationUnavailableWorkersAndManualMode() throws Exception {
         mvc.perform(get("/api/mobile/" + FACTORY + "/scheduling/capabilities").requestAttr("userId", user.getId()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.contractVersion").value("scheduling-capabilities/v1"))
-                // APS v1: 按工艺图 + 预计工时排; reason 必须把「缺工时不排」「不自动派工」说给用户
+                // APS v2: 按产品日产能按天排; reason 必须把「人工优先 / 历史估算 / 当场填」「不自动派工」说给用户,
+                // 且不再要求预计工时 (Steve 2026-10-28: 工时不填就不能排是绝对不允许的)
                 .andExpect(jsonPath("$.data.aiGeneration.status").value("AVAILABLE"))
-                .andExpect(jsonPath("$.data.aiGeneration.mode").value("DAG_DURATION"))
+                .andExpect(jsonPath("$.data.aiGeneration.mode").value("DAILY_CAPACITY"))
                 .andExpect(jsonPath("$.data.aiGeneration.reason").value(
                         org.hamcrest.Matchers.allOf(
-                                org.hamcrest.Matchers.containsString("预计工时"),
-                                org.hamcrest.Matchers.containsString("不排"),
-                                org.hamcrest.Matchers.containsString("不自动派工"))))
+                                org.hamcrest.Matchers.containsString("一天能做多少"),
+                                org.hamcrest.Matchers.containsString("按历史估算"),
+                                org.hamcrest.Matchers.containsString("当场填"),
+                                org.hamcrest.Matchers.containsString("不自动派工"),
+                                org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("预计工时")))))
                 .andExpect(jsonPath("$.data.workerOptimization.status").value("UNAVAILABLE"))
                 .andExpect(jsonPath("$.data.workerOptimization.mode").value("UNAVAILABLE"))
                 .andExpect(jsonPath("$.data.reschedule.mode").value("RECORD_REASON_ONLY"))
