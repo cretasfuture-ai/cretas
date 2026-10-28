@@ -55,6 +55,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     private WorkerAssignmentService workerAssignmentService;
     @Lazy @Autowired
     private SchedulingAIService schedulingAIService;
+    /** 待排产计划列表的产品显示名 (联产计划显示原料名); required=false 保持既有单测构造方式。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
 
     // ==================== 调度计划 CRUD ====================
 
@@ -133,7 +136,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             schedule.setPlannedStartTime(item.plannedStartTime());
             schedule.setPlannedEndTime(item.plannedEndTime());
             schedule.setPlannedQuantity(item.plannedQuantity());
-            schedule.setTaskTimeline(item.taskTimeline());
+            schedule.setDailyAllocations(item.dailyAllocations());
             schedules.add(schedule);
         }
         return persistPlan(factoryId, planDate, planName, notes, schedules, userId);
@@ -612,7 +615,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         dto.setCreatedAt(plan.getCreatedAt());
         dto.setUpdatedAt(plan.getUpdatedAt());
         if (plan.getProductType() != null) {
-            dto.setProductTypeName(plan.getProductType().getName());
+            // 联产计划的主产品是原料归属产品 (__RAW_WORKFLOW_OWNER__…): 显示原料名, 与补日产能面板同一份规则
+            dto.setProductTypeName(com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(
+                    rawMaterialTypeRepository, plan.getFactoryId(), plan.getProductType()));
         }
         return dto;
     }

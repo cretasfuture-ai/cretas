@@ -297,6 +297,24 @@ describe('schedulingApiClient', () => {
       const body = JSON.parse(mock.history.post[mock.history.post.length - 1].data);
       expect(body.planIds).toEqual(['PP-A', 'PP-B']);
       expect(body.planDate).toBe('2026-10-29');
+      expect(body).not.toHaveProperty('dailyCapacityOverrides');
+    });
+
+    it('passes on-the-spot daily capacities (APS v2) and returns the capacity-required outcome untouched', async () => {
+      mock.onPost(`${BASE}/generate`).reply(200, { success: true, message: 'ok', data: {
+        id: null, outcome: 'CAPACITY_REQUIRED', lineSchedules: [],
+        capacityRequired: [{ productTypeId: 'PT-NEW', productName: '新品', unit: '袋', jointPlan: false, question: '「新品」一天能做多少 袋？', reason: 'MISSING', planNumbers: ['PLAN-NEW'] }],
+      } });
+
+      const result = await schedulingApiClient.generateSchedule({
+        planDate: '2026-10-29', planIds: ['PP-NEW'],
+        dailyCapacityOverrides: [{ productTypeId: 'PT-OLD', quantityPerDay: 200, unit: '袋' }],
+      });
+
+      const body = JSON.parse(mock.history.post[mock.history.post.length - 1].data);
+      expect(body.dailyCapacityOverrides).toEqual([{ productTypeId: 'PT-OLD', quantityPerDay: 200, unit: '袋' }]);
+      expect(result.data.outcome).toBe('CAPACITY_REQUIRED');
+      expect(result.data.capacityRequired?.[0].productTypeId).toBe('PT-NEW');
     });
   });
 

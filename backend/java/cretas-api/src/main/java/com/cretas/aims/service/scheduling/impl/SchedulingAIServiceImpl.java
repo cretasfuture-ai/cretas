@@ -61,7 +61,7 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
     @Lazy @Autowired
     private WorkerAssignmentService workerAssignmentService;
     @Lazy @Autowired
-    private com.cretas.aims.service.scheduling.dag.DagScheduleGenerator dagScheduleGenerator;
+    private com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator dailyCapacityScheduleGenerator;
 
     @Value("${cretas.ai.service.url:http://localhost:8083}")
     private String aiServiceUrl;
@@ -85,8 +85,8 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
     @Override
     @Transactional
     public SchedulingPlanDTO generateSchedule(String factoryId, GenerateScheduleRequest request, Long userId) {
-        // APS v1 (Steve 2026-10-28): 按工艺图 + 预计工时排工序时间; 缺工时的不排、不拿默认值猜; 不自动派工。
-        return dagScheduleGenerator.generate(factoryId, request, userId);
+        // APS v2 (Steve 2026-10-28): 按产品日产能按天排; 人工优先、经验参考, 两样都没有时返回需补清单让人当场填; 不自动派工。
+        return dailyCapacityScheduleGenerator.generate(factoryId, request, userId);
     }
 
     @Override

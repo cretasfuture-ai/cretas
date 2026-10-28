@@ -73,7 +73,7 @@ public interface APSAdaptiveSchedulingService {
      *
      * @return 全局状态
      */
-    GlobalDashboard getGlobalDashboard();
+    GlobalDashboard getGlobalDashboard(String factoryId);
 
     // ==================== 效率动态计算 ====================
 
@@ -201,7 +201,7 @@ public interface APSAdaptiveSchedulingService {
      * @param threshold 概率阈值
      * @return 低概率任务列表
      */
-    List<TaskRiskInfo> getLowProbabilityTasks(double threshold);
+    List<TaskRiskInfo> getLowProbabilityTasks(String factoryId, double threshold);
 
     /**
      * 确定风险等级
@@ -258,7 +258,7 @@ public interface APSAdaptiveSchedulingService {
      *
      * @return 重排建议
      */
-    RescheduleRecommendation checkRescheduleNeed();
+    RescheduleRecommendation checkRescheduleNeed(String factoryId);
 
     /**
      * 执行自适应重排
@@ -267,7 +267,7 @@ public interface APSAdaptiveSchedulingService {
      * @param affectedTaskIds 受影响的任务ID列表
      * @return 重排结果
      */
-    SchedulingResult adaptiveReschedule(List<String> affectedTaskIds);
+    SchedulingResult adaptiveReschedule(String factoryId, List<String> affectedTaskIds);
 
     /**
      * 模拟重排效果(不实际执行)
@@ -275,7 +275,13 @@ public interface APSAdaptiveSchedulingService {
      * @param affectedTaskIds 受影响的任务ID列表
      * @return 模拟结果
      */
-    RescheduleSimulation simulateReschedule(List<String> affectedTaskIds);
+    RescheduleSimulation simulateReschedule(String factoryId, List<String> affectedTaskIds);
+
+    /** 任务是否属于这家工厂 (按 id 的接口先过这一关, 不属于一律当不存在)。 */
+    boolean taskBelongsToFactory(String factoryId, String taskId);
+
+    /** 产线是否属于这家工厂。 */
+    boolean lineBelongsToFactory(String factoryId, String lineId);
 
     // ==================== 内部类定义 ====================
 

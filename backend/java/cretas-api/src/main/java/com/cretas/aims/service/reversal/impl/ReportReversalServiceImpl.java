@@ -190,6 +190,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired
     private ReversalConsumptionCleanupService reversalConsumptionCleanupService;
 
+    /** 在制物料批的下游投料 (别的生产批的 material_consumptions 指向它); field-inject 同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.MaterialConsumptionRepository materialConsumptionRepository;
+
     /**
      * SP12 快速撤回时间窗口 (分钟)。
      * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
@@ -209,7 +213,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         Set<Long> currentReportIds = reportIds(currentReports);
         String batchRef = String.valueOf(batchId);
         if (txnRepo.existsDownstreamConsumed(factoryId, batchRef)
-                || hasExternalDownstreamConsumption(factoryId, batchId, currentReportIds)) {
+                || hasExternalDownstreamConsumption(factoryId, batchId, currentReportIds)
+                || clerkWipStockTouched(factoryId, batchId, false)) {
             throw new BusinessException(409, String.format(
                     "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
                     .withCode("DOWNSTREAM_CONSUMED")
@@ -436,10 +441,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         reportIds = lockedReportIds;
         inSfiIds = lockedSnapshotInSfiIds;
         validateReportWipTransactions(factoryId, batchId, reports, reportTxns);
-        if (hasExternalDownstreamConsumption(factoryId, batchId, reportIds)) {
+        if (hasExternalDownstreamConsumption(factoryId, batchId, reportIds)
+                || clerkWipStockTouched(factoryId, batchId, true)) {
             throw new BusinessException(409, String.format(
                     "批次 %d 的半成品已被下道工序领用，无法整单撤回", batchId))
-                    .withCode("DOWNSTREAM_CONSUMED");
+                    .withCode("DOWNSTREAM_CONSUMED")
+                    .withHint("请先处理下游领用记录后再申请撤回");
         }
         List<SemiFinishedInventory> lockedWips =
                 wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull(factoryId, batchId);
@@ -529,6 +536,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         // ①.1 软删除逐道录入物化行。取消计划的兜底门禁会读取这些行，必须与 YIELD 报工同进退。
         softDeleteProcessSheetRows(factoryId, batchId, log_.getPlanId(), now);
+
+        // ①.2 作废这一批物化出来的在制物料批 (WIP-CLK-*): 行和报工都没了, 它们留着就是一批
+        //     能被选去投料的「不存在的料」(2026-10-28 F006 撤回 #22 实测残留 40kg)。
+        voidClerkWipStock(factoryId, batchId, now);
 
         // Remove stale unposted raw-consumption rows owned by this reversed batch.
         // Posted rows and quantities are never changed.
@@ -1498,7 +1509,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     /**
      * 还回正式报工时扣掉的回料 (手工选的 / 按配比自动追加的都长一样: {@code semiFinished && stockConsumedAtSubmit})。
      *
-     * <p>行的选择与 {@link #softDeleteProcessSheetRows} 完全相同 (整单撤回按计划), 必须在软删之前读。
+     * <p>行的选择与 {@link #softDeleteProcessSheetRows} 完全相同 (同一个 {@link #rowsOfReversedStep}), 必须在软删之前读。
      * 每条引用经 {@link WipInventoryService#restoreClerkSemiStrict} 还回 —— 与扣减 {@code consumeClerkSemiStrict}
      * <b>成对</b>, 计数单位 (盒/个) 的折算在那一边只写一次 (终审 #527 ①)。REVERSE 流水 {@code reportId=null},
      * 血缘由 {@code sourceRef=reversal-log:<id>} 承担 (终审 #527 ②: 挂报工会让本批此后每次 executeReversal 撞
@@ -1510,11 +1521,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (processSheetRowRepository == null || batchId == null) {
             return;
         }
-        String planId = log_.getPlanId();
-        List<ProcessSheetRow> rows = planId != null && !planId.isBlank()
-                ? processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId)
-                : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batchId);
-        if (rows == null || rows.isEmpty()) {
+        List<ProcessSheetRow> rows = rowsOfReversedStep(factoryId, batchId, log_.getPlanId());
+        if (rows.isEmpty()) {
             return;
         }
         com.fasterxml.jackson.databind.ObjectMapper mapper = payloadMapper();
@@ -1572,7 +1580,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         }
         if (restoredRefs > 0) {
             log.info("[SP2] 撤回还回提交时扣的回料: factoryId={} planId={} batchId={} refs={} feedKg={}",
-                    factoryId, planId, batchId, restoredRefs, restoredKg.stripTrailingZeros().toPlainString());
+                    factoryId, log_.getPlanId(), batchId, restoredRefs, restoredKg.stripTrailingZeros().toPlainString());
         }
     }
 
@@ -1588,12 +1596,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (processSheetRowRepository == null || batchId == null) {
             return;
         }
-        // WHOLE_ORDER reversal is plan-scoped. A clerk workflow materializes one output batch per
-        // step, so deleting only the selected final batch would leave every upstream row active.
-        List<ProcessSheetRow> rows = planId != null && !planId.isBlank()
-                ? processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId)
-                : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batchId);
-        if (rows == null || rows.isEmpty()) {
+        List<ProcessSheetRow> rows = rowsOfReversedStep(factoryId, batchId, planId);
+        if (rows.isEmpty()) {
             return;
         }
         for (ProcessSheetRow row : rows) {
@@ -1602,6 +1606,101 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         processSheetRowRepository.saveAll(rows);
         log.info("[SP2] 撤回软删逐道录入行: factoryId={} planId={} batchId={} rows={}",
                 factoryId, planId, batchId, rows.size());
+    }
+
+    /**
+     * 撤回某个批次时要动的逐道录入行: <b>只是这一道</b> (Steve 2026-10-28 裁定「只撤这一道」)。
+     *
+     * <p>🔴 原来按整个计划取行: 撤回第 2 道的批次 11005 时, 第 1 道 10-24 的行一起被软删,
+     * 而第 1 道的报工和 74kg 在制品都还在 —— 工序表显示「修油 待报工」, 账对不上 (F006 #22 实测)。
+     *
+     * <p>选法: 本批次物化出来的行 ({@code batchId} 相同), 加上与它们同一次录入的无批次行
+     * (直接入半成品库的 SAVED_SFI 行: 同工序顺序、clientRowId 去掉 {@code #n} 后缀相同)。
+     * 其他工序的行一律不动。
+     */
+    private List<ProcessSheetRow> rowsOfReversedStep(String factoryId, Long batchId, String planId) {
+        List<ProcessSheetRow> candidates = planId != null && !planId.isBlank()
+                ? processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId)
+                : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batchId);
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        Set<String> entryKeys = new java.util.HashSet<>();
+        List<ProcessSheetRow> selected = new ArrayList<>();
+        for (ProcessSheetRow row : candidates) {
+            if (row != null && batchId.equals(row.getBatchId())) {
+                selected.add(row);
+                entryKeys.add(entryKey(row));
+            }
+        }
+        for (ProcessSheetRow row : candidates) {
+            if (row != null && row.getBatchId() == null && entryKeys.contains(entryKey(row))) {
+                selected.add(row);
+            }
+        }
+        return selected;
+    }
+
+    private static String entryKey(ProcessSheetRow row) {
+        String client = row.getClientRowId() == null ? "" : row.getClientRowId();
+        int hash = client.indexOf('#');
+        return row.getProcessOrder() + "|" + (hash >= 0 ? client.substring(0, hash) : client);
+    }
+
+    /**
+     * 这一批物化出来的在制物料批 (sourceDocType=PRODUCTION_BATCH) 有没有被动过:
+     * 已用 / 已占用, 或者别的生产批有活的投料记录指向它。动过就不能撤 (撤了会让下游投了一批不存在的料)。
+     *
+     * @param lock 执行阶段加行锁读 (与 CCP 扣留同一个锁顺序); 提交阶段只读
+     */
+    private boolean clerkWipStockTouched(String factoryId, Long batchId, boolean lock) {
+        if (materialBatchRepository == null || batchId == null) {
+            return false;
+        }
+        List<com.cretas.aims.entity.MaterialBatch> wips = lock
+                ? materialBatchRepository.lockWipBatchesForDeviationHold(factoryId, List.of(String.valueOf(batchId)))
+                : materialBatchRepository.findWipBatchesByFactoryIdAndSourceDocIdIn(
+                        factoryId, List.of(String.valueOf(batchId)));
+        for (com.cretas.aims.entity.MaterialBatch wip : wips == null ? List.<com.cretas.aims.entity.MaterialBatch>of() : wips) {
+            if (wip == null || wip.getDeletedAt() != null) {
+                continue;
+            }
+            if (positive(wip.getUsedQuantity()) || positive(wip.getReservedQuantity())) {
+                return true;
+            }
+            if (materialConsumptionRepository == null) {
+                return true; // 量不到下游投料 ⇒ 不放行 (fail closed)
+            }
+            boolean drawnElsewhere = materialConsumptionRepository.findByFactoryIdAndBatchId(factoryId, wip.getId())
+                    .stream()
+                    .anyMatch(c -> c.getProductionBatchId() == null || !batchId.equals(c.getProductionBatchId()));
+            if (drawnElsewhere) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 撤回时作废这一批物化出来的、没被动过的在制物料批 (调用前 {@link #clerkWipStockTouched} 已在锁内判过)。 */
+    private void voidClerkWipStock(String factoryId, Long batchId, LocalDateTime deletedAt) {
+        if (materialBatchRepository == null || batchId == null) {
+            return;
+        }
+        List<com.cretas.aims.entity.MaterialBatch> wips =
+                materialBatchRepository.lockWipBatchesForDeviationHold(factoryId, List.of(String.valueOf(batchId)));
+        if (wips == null || wips.isEmpty()) {
+            return;
+        }
+        for (com.cretas.aims.entity.MaterialBatch wip : wips) {
+            wip.setDeletedAt(deletedAt);
+        }
+        materialBatchRepository.saveAll(wips);
+        log.info("[SP2] 撤回作废在制物料批: factoryId={} batchId={} batches={}",
+                factoryId, batchId, wips.stream().map(com.cretas.aims.entity.MaterialBatch::getBatchNumber).toList());
+    }
+
+    private static boolean positive(BigDecimal v) {
+        return v != null && v.signum() > 0;
     }
 
     // ==================== 审批操作 ====================

@@ -17,6 +17,8 @@ class AgentOpsContext:
     user_id: str
     role: str
     correlation_id: str
+    # RESTAURANT stays the default so pre-existing callers keep their behaviour.
+    business_type: str = "RESTAURANT"
 
 
 @dataclass(frozen=True)

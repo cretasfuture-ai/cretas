@@ -1,7 +1,6 @@
 package com.cretas.aims.dto.scheduling;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -10,7 +9,7 @@ import java.util.Map;
  *
  * @param productionPlanId 必填: 这条排程对应的生产计划
  * @param batchId          可空: 已开工时为首个未完工批次
- * @param taskTimeline     每道工序 {taskName, processOrder, workProcessId, start, end, status}
+ * @param dailyAllocations APS v2 按天分配 {unit, capacityPerDay, capacitySource, ..., days: [{date, quantity, shareOfDay}]}
  */
 public record AutoScheduleItem(
         String productionLineId,
@@ -20,5 +19,5 @@ public record AutoScheduleItem(
         LocalDateTime plannedStartTime,
         LocalDateTime plannedEndTime,
         Integer plannedQuantity,
-        List<Map<String, Object>> taskTimeline) {
+        Map<String, Object> dailyAllocations) {
 }

@@ -615,4 +615,32 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("productTypeId") String productTypeId,
             @Param("unit") String unit,
             @Param("rdWarehouseCode") String rdWarehouseCode);
+
+    /**
+     * APS v2 经验日产能的取数: 某产品在 [from, to] 里每天、每个单位的<b>生产</b>成品入库量。
+     * 生产 = 挂了生产计划 (production_plan_id 非空); 排除退货入库 (return_order_item_id) 与已撤回 (REVERSED)。
+     * 调拨入库 / 手工入库不挂计划, 自然不计。返回 [productionDate, unit, SUM(producedQuantity)]。
+     */
+    @Query("SELECT b.productionDate, b.unit, SUM(b.producedQuantity) FROM FinishedGoodsBatch b " +
+            "WHERE b.factoryId = :factoryId AND b.productTypeId = :productTypeId " +
+            "AND b.productionPlanId IS NOT NULL AND b.returnOrderItemId IS NULL " +
+            "AND b.status <> 'REVERSED' AND b.productionDate >= :fromDate AND b.productionDate <= :toDate " +
+            "GROUP BY b.productionDate, b.unit")
+    List<Object[]> sumProductionOutputByDayAndUnit(
+            @Param("factoryId") String factoryId,
+            @Param("productTypeId") String productTypeId,
+            @Param("fromDate") java.time.LocalDate fromDate,
+            @Param("toDate") java.time.LocalDate toDate);
+
+    /**
+     * APS v2 已报产出: 某生产计划已经入库的成品, 按产品与单位汇总 (口径同上)。
+     * 返回 [productTypeId, unit, SUM(producedQuantity)]。
+     */
+    @Query("SELECT b.productTypeId, b.unit, SUM(b.producedQuantity) FROM FinishedGoodsBatch b " +
+            "WHERE b.factoryId = :factoryId AND b.productionPlanId = :planId " +
+            "AND b.returnOrderItemId IS NULL AND b.status <> 'REVERSED' " +
+            "GROUP BY b.productTypeId, b.unit")
+    List<Object[]> sumProductionOutputByPlan(
+            @Param("factoryId") String factoryId,
+            @Param("planId") String planId);
 }

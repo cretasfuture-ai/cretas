@@ -19,6 +19,7 @@ from .validation import (
 )
 
 EVALUATOR_VERSION = "restaurant-offline-v1"
+FACTORY_EVALUATOR_VERSION = "factory-offline-v1"
 
 
 def compute_evaluator_build(
@@ -137,6 +138,13 @@ class OfflineBatchRunner:
         }
 
 
+class FactoryOfflineBatchRunner(OfflineBatchRunner):
+    """Same data-only semantics, separate identity so factory results are never
+    mistaken for (or compared against) restaurant ones."""
+
+    evaluator_version = FACTORY_EVALUATOR_VERSION
+
+
 class EvaluatorRegistry:
     """Resolve an evaluator by immutable identity; reruns never fall forward."""
 
@@ -163,6 +171,12 @@ class EvaluatorRegistry:
 
     def current(self) -> OfflineBatchRunner:
         return self._runners[self._current]
+
+    def current_for(self, version: str) -> OfflineBatchRunner:
+        for (known_version, _build), runner in self._runners.items():
+            if known_version == version:
+                return runner
+        raise EvaluatorBuildUnavailableError()
 
     def resolve(self, version: str, build: str) -> OfflineBatchRunner:
         try:

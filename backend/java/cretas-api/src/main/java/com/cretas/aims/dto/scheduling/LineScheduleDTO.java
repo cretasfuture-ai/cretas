@@ -23,6 +23,8 @@ public class LineScheduleDTO {
     private String planNumber;
     /** APS 自动排程: 每道工序 {taskName, processOrder, workProcessId, start, end, status}; 手工排程为空。 */
     private List<java.util.Map<String, Object>> taskTimeline;
+    /** APS v2: 按天分配 {unit, capacityPerDay, capacitySource, ..., days: [{date, quantity, shareOfDay}]}; 其余为空。 */
+    private java.util.Map<String, Object> dailyAllocations;
     private Integer sequenceOrder;
     private LocalDateTime plannedStartTime;
     private LocalDateTime plannedEndTime;
@@ -55,6 +57,7 @@ public class LineScheduleDTO {
         dto.setBatchId(entity.getBatchId());
         dto.setProductionPlanId(entity.getProductionPlanId());
         dto.setTaskTimeline(entity.getTaskTimeline());
+        dto.setDailyAllocations(entity.getDailyAllocations());
         dto.setSequenceOrder(entity.getSequenceOrder());
         dto.setPlannedStartTime(entity.getPlannedStartTime());
         dto.setPlannedEndTime(entity.getPlannedEndTime());

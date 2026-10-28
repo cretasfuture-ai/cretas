@@ -150,12 +150,24 @@ async def test_factory_dispatch_returns_envelope_for_every_analysis_type(
 def test_factory_dispatch_signature_stable():
     """4-arg async signature — Phase 2D MUST preserve."""
     sig = inspect.signature(_factory_quality_dispatch)
-    assert list(sig.parameters.keys()) == [
+    positional = [
+        name for name, p in sig.parameters.items()
+        if p.kind is not inspect.Parameter.KEYWORD_ONLY
+    ]
+    assert positional == [
         "factory_id",
         "start_date",
         "end_date",
         "analysis_type",
     ]
+    # 工艺保密: the only addition is a keyword-only, optional cost resolver
+    # (None = internal call → costs fail closed), so 4-arg callers keep working.
+    keyword_only = {
+        name: p for name, p in sig.parameters.items()
+        if p.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+    assert list(keyword_only) == ["cost_resolver"]
+    assert keyword_only["cost_resolver"].default is None
     assert inspect.iscoroutinefunction(_factory_quality_dispatch)
 
 
