@@ -698,7 +698,7 @@ onActivated(() => {
                 <div v-for="stock in followUp.stock" :key="`${stock.finishedGoodsBatchId}-${stock.origin}`" class="follow-up-row">
                   <div>
                     <strong>{{ stock.batchNumber }}</strong>
-                    <span class="follow-up-muted"> · {{ stockOriginText(stock.origin) }} · 剩余 {{ stock.remainingQuantity }} {{ stock.unit }} · 已审批报废 {{ stock.disposalQuantity }} {{ stock.unit }}</span>
+                    <span class="follow-up-muted"> · {{ stockOriginText(stock.origin) }} · 剩余 {{ stock.remainingQuantity }} {{ stock.unit }} · 已审批处置 {{ stock.disposalQuantity }} {{ stock.unit }}</span>
                     <div class="follow-up-muted">数量核对：{{ stock.evidenceComplete ? '已核对' : '待核对' }}</div>
                   </div>
                   <div class="follow-up-actions">
