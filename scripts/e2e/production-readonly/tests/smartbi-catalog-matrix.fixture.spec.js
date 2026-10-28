@@ -30,7 +30,9 @@ function recommendationBody(withContext = false, selectedId = null) {
       period: { label: '全部历史', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 },
       ranking: { mode: 'rule', reason: 'fixture' },
       defaultSelection: candidates.slice(0, 4).map((item) => item.id),
-      recommendations: listed.map((item) => withContext ? { ...item, detailContext: { id: `detail-${item.id}`, expiresAt: '2099-01-01T00:00:00.000Z' } } : item),
+      recommendations: listed.map((item) => withContext
+        ? { ...item, detailContext: { id: `detail-${item.id}`, expiresAt: '2099-01-01T00:00:00.000Z' } }
+        : { ...item, detailSnapshotKey: `snapshot-${item.id}`, detailStatus: { state: 'unavailable', message: '点击查看时加载详情' } }),
       unavailable: [],
       sourceErrors: [],
     },

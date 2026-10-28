@@ -3472,9 +3472,12 @@ function groupCandidates(candidates) {
 }
 
 function candidateIsQualified(candidate) {
+  const lazyDetails = typeof candidate?.detailSnapshotKey === 'string'
+    && candidate.detailSnapshotKey.trim().length > 0;
   return Boolean(candidate?.id && candidate?.source && candidate?.chart
     && typeof candidate.chart === 'object' && candidate?.analysis?.familyId
-    && candidate?.detailStatus?.state !== 'unavailable' && candidate?.detailStatus?.state !== 'capacity');
+    && (candidate?.detailStatus?.state !== 'unavailable' || lazyDetails)
+    && candidate?.detailStatus?.state !== 'capacity');
 }
 
 function candidateUnitsAligned(candidate) {
@@ -3817,7 +3820,9 @@ async function run(ctx) {
   return runReadOnlyPageScenario(ctx, {
     id: 'smartbi-catalog-matrix-readonly',
     path: PATH,
-    landmarks: ['工厂分析', '按分类浏览'],
+    // The browse control appears after asynchronous catalogue discovery;
+    // inspectCatalog waits for it and proves selection/details/exports.
+    landmarks: ['工厂分析'],
     timeoutMs: 60_000,
     appMountTimeoutMs: 90_000,
     inspect: inspectCatalog,

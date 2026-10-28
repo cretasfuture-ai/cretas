@@ -70,6 +70,19 @@ test('quantity-family facts cannot silently drift to another unit', () => {
   assert.equal(catalog.candidateUnitsAligned(candidate('financial-mixed', 'finance.margin', { unit: '', kpis: [{ label: '金额', value: 1, unit: '元' }, { label: '比率', value: 2, unit: '%' }] })), true);
 });
 
+test('stateless discovery snapshot can load details lazily without admitting unavailable or full contexts', () => {
+  const lazy = candidate('lazy', 'production.output', {
+    detailSnapshotKey: 'opaque-snapshot',
+    detailStatus: { state: 'unavailable', message: '点击查看时加载详情' },
+  });
+  assert.equal(catalog.candidateIsQualified(lazy), true);
+  assert.equal(catalog.candidateIsQualified({ ...lazy, detailSnapshotKey: ' ' }), false);
+  assert.equal(catalog.candidateIsQualified({ ...lazy, detailSnapshotKey: null }), false);
+  assert.equal(catalog.candidateIsQualified({ ...lazy, detailStatus: { state: 'capacity' } }), false);
+  assert.equal(catalog.candidateIsQualified({ ...lazy, chart: null }), false);
+  assert.equal(catalog.selectCatalogCandidates({ recommendations: [lazy] }, null).selected.length, 1);
+});
+
 test('export coverage is based on actual payload candidate IDs', () => {
   assert.deepEqual(catalog.summarizeExportIds({ charts: [{ id: 'one' }, { candidate_id: 'two' }], selected_ids: ['two', 'three'] }), ['one', 'two', 'three']);
   assert.deepEqual(catalog.summarizeExportIds({ charts: [] }), []);

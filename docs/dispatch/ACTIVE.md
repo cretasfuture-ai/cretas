@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `SC29-CATALOG-LAZY-QA` — `in-progress` — Root；Base `46b9ed6aee74abaefc153c6ea7a553da19589d8f`；scope仅catalog场景/单测/fixture及生成mcp-entry；修正把有快照键的按需明细误判不可用，保留实际明细/导出断言；验收Node闸、浏览器fixture及F006目录矩阵。
+
 - `SC29-SMARTBI-RELEASE-WINDOW` — `claimed` — Root；Base `0ae7cb91d8f602bd49b5cbee7eeaa46afb5f1782`；待当前候选构建退出后发布Java/Web/Python并做F006关键复验；短窗口暂缓其他Java/Web主线合并/切流，已有构建继续；服务回执及关键Web复验完成即归档释放，不等待手机登录。
 
 - `SMARTBI-F006-QA-20261028` — `in-progress` — Root；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；PR1267已部署；34场景与QA修复见archive/2026-10-28-smartbi-acceptance-fixes.md；F006 only。
