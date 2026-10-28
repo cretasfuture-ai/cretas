@@ -259,16 +259,6 @@ def test_e_ai_proxy():
     q, reason = quality_check(resp)
     results.append(("E AI代理", "E1 意图分类", t, resp, q, reason))
 
-    # E2: Intent clarify
-    resp, t = timed("post", f"{BASE_PY}/api/ai/intent/clarify",
-                     {"Content-Type": "application/json"}, json={
-                         "text": "查看数据",
-                         "current_intent": "QUERY_BATCH",
-                         "ambiguous_intents": ["QUERY_BATCH", "QUERY_INVENTORY", "QUERY_REPORT"],
-                     })
-    q, reason = quality_check(resp)
-    results.append(("E AI代理", "E2 意图澄清", t, resp, q, reason))
-
     # E3: Rule parse
     resp, t = timed("post", f"{BASE_PY}/api/ai/rule/parse",
                      {"Content-Type": "application/json"}, json={

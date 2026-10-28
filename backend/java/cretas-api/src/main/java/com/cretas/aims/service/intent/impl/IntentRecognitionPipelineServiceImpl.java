@@ -2560,7 +2560,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
         // 生成澄清问题（如果需要）
         String clarificationQuestion = requiresConfirmation ?
-                generateClarificationQuestion(userInput, factoryId, candidates) : null;
+                generateTemplateClarificationQuestion(candidates) : null;
 
         IntentMatchResult result = IntentMatchResult.builder()
                 .bestMatch(bestEntry.config)
@@ -4646,35 +4646,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
     }
 
     /**
-     * 生成澄清问题
-     *
-     * @param userInput 用户输入（用于 LLM 上下文）
-     * @param factoryId 工厂ID（用于 LLM 上下文）
-     * @param candidates 候选意图列表
-     * @return 澄清问题文本
-     */
-    private String generateClarificationQuestion(String userInput, String factoryId,
-                                                   List<CandidateIntent> candidates) {
-        // 尝试使用 LLM 生成更自然的澄清问题
-        if (matchingConfig.isLlmClarificationEnabled() && candidates.size() >= 2) {
-            try {
-                String llmQuestion = llmFallbackClient.generateClarificationQuestion(
-                        userInput, candidates, factoryId);
-                if (llmQuestion != null && !llmQuestion.isEmpty()) {
-                    log.debug("LLM generated clarification question: {}", llmQuestion);
-                    return llmQuestion;
-                }
-            } catch (Exception e) {
-                log.warn("LLM clarification question generation failed, using template: {}", e.getMessage());
-            }
-        }
-
-        // 回退到模板生成
-        return generateTemplateClarificationQuestion(candidates);
-    }
-
-    /**
-     * 使用模板生成澄清问题（作为 LLM 的备用方案）
+     * 使用模板生成澄清问题
      */
     private String generateTemplateClarificationQuestion(List<CandidateIntent> candidates) {
         if (candidates.isEmpty()) {

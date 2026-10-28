@@ -492,3 +492,17 @@ def test_ai_proxy_other_routes_keep_full_redaction(upstream, monkeypatch):
 
     sent = upstream.sent_text()
     assert upstream.bodies and "华东冷链商贸有限公司" not in sent and "赵铁柱" not in sent and "[单位A]" in sent
+
+
+def test_ai_proxy_intent_clarify_route_is_deleted_and_sends_nothing(upstream, monkeypatch):
+    """意图澄清出口已删除 (Java 那边的调用在语义优先架构下走不到, Steve 2026-10-28 选择删除)。
+    用 Java 原来发的 user_input / candidate_intents 打一次: 路由不存在, 也没有任何内容发往模型。"""
+    resp = _ai_proxy_client(monkeypatch).post("/api/ai/intent/clarify", json={
+        "user_input": "查一下华东冷链商贸有限公司",
+        "factory_id": "F006",
+        "candidate_intents": [{"intent_code": "SUPPLIER_QUERY", "intent_name": "查供应商",
+                               "description": "查供应商", "confidence": 0.4}],
+    })
+
+    assert resp.status_code == 404
+    assert not upstream.bodies
