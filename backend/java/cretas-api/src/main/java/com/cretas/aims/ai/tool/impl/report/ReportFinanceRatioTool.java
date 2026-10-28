@@ -107,6 +107,18 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
         double currentLiabilities = extractDouble(finance, "currentLiabilities", 1);
         double totalLiabilities = extractDouble(finance, "totalLiabilities", 1);
         double netProfit = totalRevenue - totalCost;
+        // 工艺保密: 财务报表的成本只算了调用者能看的计划而营收是全厂的, 报表已把利润置空 ——
+        // 这里不能再拿两者相减造一个利润出来, 依赖利润的比率一律不给并说明原因
+        Object profitUnavailable = finance == null ? null
+                : finance.get("profitUnavailableReason") != null ? finance.get("profitUnavailableReason")
+                : finance.get("processSecretNote");
+        if (profitUnavailable != null && java.util.Set.of("ROA", "ROE", "DUPONT").contains(ratioType)) {
+            result.put("netProfit", null);
+            result.put("unavailableReason", profitUnavailable.toString());
+            result.put("ratioName", ratioType);
+            result.put("message", "利润不可计算（" + profitUnavailable + "），" + ratioType + " 不提供");
+            return result;
+        }
 
         String ratioName;
 

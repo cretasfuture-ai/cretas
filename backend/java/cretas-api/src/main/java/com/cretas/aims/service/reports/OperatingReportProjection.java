@@ -16,6 +16,12 @@ public class OperatingReportProjection {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope secretScope=
             com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+    /**
+     * 待 Steve 裁定 (复审 M3): 「产品毛利与成本覆盖」汇总 (全厂收入 / 已回填成本 / 毛利 / 毛利率) 对无权读者是否也遮。
+     * 现状不遮 (会计口径之外的这一组合计含保密产品的成本, 理论上可以拿它减其他产品的毛利反推)。
+     * 裁定为「遮」时只改这一处为 true, 见 {@link #maskMarginSummary}。
+     */
+    static final boolean MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED = false;
     /** 逐产品排行段: 指标 id 形如 {@code <段>.<productTypeId>.<profit|rate>}。 */
     static final java.util.Set<String> PRODUCT_RANK_SECTIONS=java.util.Set.of("marginHigh","marginLow","profitHigh","profitLow");
     public OperatingReportProjection(OperatingReportCodec codec){this.codec=codec;}
@@ -46,18 +52,29 @@ public class OperatingReportProjection {
     OperatingReportSnapshot maskForCaller(OperatingReportSnapshot snapshot,String factoryId){
         if(snapshot.sections()==null||snapshot.sections().isEmpty())return snapshot;
         java.util.Set<String> hidden;
-        try{hidden=secretScope.forCurrentCaller(factoryId).withheldProducts();}
-        catch(RuntimeException unknown){hidden=null;}
+        java.util.Set<String> hiddenProtected;
+        try{
+            var excluded=secretScope.forCurrentCaller(factoryId);
+            hidden=excluded.withheldProducts();
+            hiddenProtected=excluded.protectedProductTypeIds();
+        }
+        catch(RuntimeException unknown){hidden=null;hiddenProtected=null;}
         if(hidden!=null&&hidden.isEmpty())return snapshot;
         java.util.List<OperatingReportSnapshot.Section> sections=new java.util.ArrayList<>();
         for(OperatingReportSnapshot.Section section:snapshot.sections()){
+            if(MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED&&"margin".equals(section.id())){sections.add(maskMarginSummary(section));continue;}
             if(!PRODUCT_RANK_SECTIONS.contains(section.id())){sections.add(section);continue;}
             java.util.List<OperatingReportSnapshot.Metric> metrics=new java.util.ArrayList<>();
             java.util.List<OperatingReportSnapshot.Metric> masked=new java.util.ArrayList<>();
             for(OperatingReportSnapshot.Metric metric:section.metrics()){
                 String product=productOf(section.id(),metric.id());
-                if(hidden==null||product==null||hidden.contains(product))
-                    masked.add(new OperatingReportSnapshot.Metric(metric.id(),metric.label(),null,metric.unit(),OperatingReportCodec.PROCESS_SECRET_MASK,null,metric.sourcePath()));
+                // 保密产品本身 →「已保密」; 与它同计划联产的普通产品 (及计划锚点) → 中性的「不可单独计算」,
+                // 不打「保密」标签 (否则泄露「它和保密产品共用计划」)
+                if(hidden==null||product==null||hidden.contains(product)){
+                    String reason=hidden==null||product==null||hiddenProtected.contains(product)
+                            ?OperatingReportCodec.PROCESS_SECRET_MASK:OperatingReportCodec.CO_PRODUCT_MASK;
+                    masked.add(new OperatingReportSnapshot.Metric(metric.id(),metric.label(),null,metric.unit(),reason,null,metric.sourcePath()));
+                }
                 else metrics.add(metric);
             }
             metrics.addAll(masked);
@@ -65,6 +82,17 @@ public class OperatingReportProjection {
         }
         return new OperatingReportSnapshot(snapshot.schema(),snapshot.status(),snapshot.reportType(),snapshot.periodStart(),snapshot.periodEnd(),
                 snapshot.fetchedAt(),snapshot.sources(),sections,snapshot.insights(),snapshot.failure(),snapshot.audit());
+    }
+    /** M3 裁定为「遮」时用: 汇总里由逐产品成本算出的已回填成本 / 毛利 / 毛利率换成「已保密」, 收入照常。 */
+    static OperatingReportSnapshot.Section maskMarginSummary(OperatingReportSnapshot.Section section){
+        java.util.Set<String> costDerived=java.util.Set.of("margin.cost","margin.profit","margin.rate");
+        java.util.List<OperatingReportSnapshot.Metric> metrics=new java.util.ArrayList<>();
+        for(OperatingReportSnapshot.Metric metric:section.metrics()){
+            metrics.add(costDerived.contains(metric.id())
+                    ?new OperatingReportSnapshot.Metric(metric.id(),metric.label(),null,metric.unit(),OperatingReportCodec.PROCESS_SECRET_MASK,null,metric.sourcePath())
+                    :metric);
+        }
+        return new OperatingReportSnapshot.Section(section.id(),section.title(),section.priceSensitive(),section.basis(),metrics);
     }
     private static String productOf(String sectionId,String metricId){
         if(metricId==null||!metricId.startsWith(sectionId+".")||metricId.lastIndexOf('.')<=sectionId.length())return null;

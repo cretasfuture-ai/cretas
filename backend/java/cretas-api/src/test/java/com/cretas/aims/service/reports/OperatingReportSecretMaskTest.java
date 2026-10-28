@@ -175,6 +175,10 @@ class OperatingReportSecretMaskTest {
                 .filter(s -> s.id().equals("marginHigh")).findFirst().orElseThrow().metrics();
         assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL2 + "."))
                 .isNotEmpty()
+                // 联产的普通产品: 遮, 但用中性措辞, 不打「保密」标签 (否则泄露它与保密产品共用计划)
+                .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.CO_PRODUCT_MASK));
+        assertThat(high).filteredOn(m -> m.id().contains("." + SECRET + "."))
+                .isNotEmpty()
                 .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.PROCESS_SECRET_MASK));
         assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL + "."))
                 .allSatisfy(m -> assertThat(m.value()).isNotNull());
@@ -190,8 +194,40 @@ class OperatingReportSecretMaskTest {
         List<OperatingReportSnapshot.Metric> high = masked.sections().stream()
                 .filter(s -> s.id().equals("marginHigh")).findFirst().orElseThrow().metrics();
         assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL2 + "."))
-                .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.PROCESS_SECRET_MASK));
+                .isNotEmpty()
+                .allSatisfy(m -> assertThat(m.missingReason()).isEqualTo(OperatingReportCodec.CO_PRODUCT_MASK));
         assertThat(high).filteredOn(m -> m.id().contains("." + NORMAL + "."))
                 .allSatisfy(m -> assertThat(m.value()).isNotNull());
+    }
+
+    @Test
+    void theNeutralCoProductLabelIsWhatTheReaderSees() {
+        com.cretas.aims.entity.ProductionPlan coPlan = plan("PL-CO", "RAW-ANCHOR", null);
+        coPlan.setTargetFinishedGoodIds(List.of(SECRET, NORMAL2));
+        OperatingReportProjection projection = new OperatingReportProjection(codec);
+        ReflectionTestUtils.setField(projection, "secretScope", scope(java.util.Set.of(SECRET), List.of(coPlan)));
+        String text;
+        try (var ignored = as(sameFactoryUser())) {
+            text = projection.detail(storedReport(), true).getReportAnalysis();
+        }
+        assertThat(text).contains("普通乙 毛利：" + OperatingReportCodec.CO_PRODUCT_MASK)
+                .doesNotContain("普通乙 毛利：" + OperatingReportCodec.PROCESS_SECRET_MASK)
+                .contains(SECRET_NAME + " 毛利：" + OperatingReportCodec.PROCESS_SECRET_MASK);
+    }
+
+    @Test
+    void theMarginSummaryIsLeftAsIsUntilTheOwnerRulesButTheSwitchMasksExactlyTheCostDerivedTotals() {
+        // 现状: 汇总不遮 (待 Steve 裁定 M3); 开关是一处常量, 打开时只遮由成本算出的三项
+        assertThat(OperatingReportProjection.MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED).isFalse();
+        OperatingReportSnapshot snapshot = codec.decode(storedReport().getAnalysisText()).orElseThrow();
+        OperatingReportSnapshot.Section margin = snapshot.sections().stream()
+                .filter(s -> s.id().equals("margin")).findFirst().orElseThrow();
+
+        OperatingReportSnapshot.Section masked = OperatingReportProjection.maskMarginSummary(margin);
+
+        assertThat(masked.metrics()).filteredOn(m -> java.util.Set.of("margin.cost", "margin.profit", "margin.rate").contains(m.id()))
+                .hasSize(3).allSatisfy(m -> assertThat(m.value()).isNull());
+        assertThat(masked.metrics()).filteredOn(m -> m.id().equals("margin.revenue"))
+                .singleElement().satisfies(m -> assertThat(m.value()).isNotNull());
     }
 }

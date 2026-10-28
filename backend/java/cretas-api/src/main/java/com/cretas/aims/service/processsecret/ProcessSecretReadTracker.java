@@ -66,19 +66,47 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
 
     private static final ThreadLocal<Set<Read>> EXPLICIT = new ThreadLocal<>();
     private static final ThreadLocal<int[]> UNTRACKED = ThreadLocal.withInitial(() -> new int[1]);
+    /** 不打标段里新载入 (触发了 PostLoad) 的实体及其会话: 段结束时从持久化上下文里移出。 */
+    private static final ThreadLocal<java.util.List<Object[]>> LOADED_UNTRACKED = new ThreadLocal<>();
 
     /**
      * 不打标地执行一段读取: 只给「自己已经按调用者裁剪了结果」的代码用 —— 判定保密范围要读全厂计划,
      * 只算调用者能看的计划成本也要先读全厂计划; 这些读数若记进作用域, 出口会以为这次输出牵涉了保密计划,
      * 连已经裁剪过的合计一起藏掉。其他读取照常打标。
+     *
+     * <p>段里<b>新载入</b>的实体在段结束时移出持久化上下文 (open-in-view 下它们会一直缓存在本请求的会话里,
+     * 之后普通查询再取到同一行就不再触发 PostLoad, 打标网就漏了)。只移出这一段新载入的 (PostLoad 只对它们触发),
+     * 段开始前已托管的实体原样留着 —— 它们当初载入时已经打过标, 也可能正被当前事务修改。
+     * 因此段里对实体的读取 (含懒加载) 要在段内做完, 段外只用算好的结果。</p>
      */
     public static <T> T untracked(java.util.function.Supplier<T> read) {
         int[] depth = UNTRACKED.get();
+        boolean outermost = depth[0] == 0;
+        java.util.List<Object[]> loaded = null;
+        if (outermost) {
+            loaded = new java.util.ArrayList<>();
+            LOADED_UNTRACKED.set(loaded);
+        }
         depth[0]++;
         try {
             return read.get();
         } finally {
             depth[0]--;
+            if (outermost) {
+                LOADED_UNTRACKED.remove();
+                evict(loaded);
+            }
+        }
+    }
+
+    private static void evict(java.util.List<Object[]> loaded) {
+        for (Object[] pair : loaded) {
+            if (!(pair[0] instanceof org.hibernate.Session session)) continue;
+            try {
+                if (session.isOpen() && session.contains(pair[1])) session.evict(pair[1]);
+            } catch (RuntimeException e) {
+                // 移不出 (会话状态异常): 只是之后同一行少打一次标, 不影响读数本身
+            }
         }
     }
 
@@ -110,6 +138,11 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
 
     @Override
     public void onPostLoad(PostLoadEvent event) {
+        if (UNTRACKED.get()[0] > 0) {
+            java.util.List<Object[]> loaded = LOADED_UNTRACKED.get();
+            if (loaded != null) loaded.add(new Object[]{event.getSession(), event.getEntity()});
+            return;
+        }
         record(event.getEntity());
     }
 

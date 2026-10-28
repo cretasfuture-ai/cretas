@@ -83,8 +83,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forCurrentCaller(factoryId);
         if (excluded.isEmpty()) return null;
         // 读全厂计划不打标: 结果已按调用者只算他能看的计划
-        return com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(excluded, com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> productionPlanRepository.findByFactoryId(factoryId)),
-                from, to, perDayBounds);
+        return com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(excluded,
+                productionPlanRepository.findByFactoryId(factoryId), from, to, perDayBounds));
     }
 
     /** 区间总成本: 能看全 → 原查询; 否则可见计划逐行累加, 并在返回给调用方 (页面 / AI 工具) 的数据上注明。 */
@@ -1000,6 +1000,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     @Override
     public Map<String, Object> getTrendAnalysisReport(String factoryId, String type, Integer period) {
         log.info("获取趋势分析报表: factoryId={}, type={}, period={}", factoryId, type, period);
+        // 天数没给 / 非正数: 按 30 天 (与生产周报对比工具的默认一致), 不再空指针
+        if (period == null || period <= 0) period = 30;
         Map<String, Object> report = new HashMap<>();
         List<Map<String, Object>> trendData = new ArrayList<>();
         // 工艺保密: 成本趋势按调用者只算他能看的计划 (一次取全区间, 按天分)

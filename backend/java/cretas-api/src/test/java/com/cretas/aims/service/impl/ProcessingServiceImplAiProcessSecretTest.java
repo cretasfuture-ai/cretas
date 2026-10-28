@@ -214,6 +214,50 @@ class ProcessingServiceImplAiProcessSecretTest {
         assertThat((BigDecimal) ownerKpi.get("unitCost")).isEqualByComparingTo("33.33");
     }
 
+    @SuppressWarnings("unchecked")
+    private static BigDecimal todaysCost(Map<String, Object> trends) {
+        List<Map<String, Object>> cost = (List<Map<String, Object>>) trends.get("costTrend");
+        Map<String, Object> today = cost.get(cost.size() - 1);
+        assertThat(today.get("date")).isEqualTo(java.time.LocalDate.now().toString());
+        return (BigDecimal) today.get("totalCost");
+    }
+
+    @Test
+    void trendAnalysisDailyCostIsTheVisibleSumForAnUnauthorizedCallerAndTheFullQueryForTheOwner() {
+        ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
+        stubMonthBatches();
+        // 原按天查询 (含保密批次的全厂数): 只有完整查看权的人才走它
+        when(productionBatchRepository.calculateDailyCost(eq(FACTORY), any(), any()))
+                .thenReturn(SECRET_COST.add(NORMAL_COST).add(NORMAL2_COST));
+
+        Map<String, Object> colleague;
+        try (var ignored = as(sameFactoryUser())) {
+            colleague = service.getTrendAnalysis(FACTORY, "cost", 7);
+        }
+        verify(productionBatchRepository, never()).calculateDailyCost(anyString(), any(), any());
+        Map<String, Object> owner;
+        try (var ignored = as(owner())) {
+            owner = service.getTrendAnalysis(FACTORY, "cost", 7);
+        }
+
+        assertThat(todaysCost(colleague)).isEqualByComparingTo(NORMAL_COST.add(NORMAL2_COST));
+        assertThat((String) colleague.get("processSecretNote")).contains("不含 1 个保密产品");
+        assertThat(colleague.toString()).doesNotContain(SECRET_COST.toPlainString())
+                .doesNotContain(SECRET_COST.add(NORMAL_COST).add(NORMAL2_COST).toPlainString());
+        assertThat(todaysCost(owner)).isEqualByComparingTo(SECRET_COST.add(NORMAL_COST).add(NORMAL2_COST));
+        assertThat(owner).doesNotContainKey("processSecretNote");
+    }
+
+    @Test
+    void trendAnalysisWithoutDaysDefaultsToThirtyDaysInsteadOfThrowing() {
+        ReflectionTestUtils.setField(service, "llmCostScope", unprotectedScope());
+
+        Map<String, Object> trends = service.getTrendAnalysis(FACTORY, "cost", null);
+
+        assertThat((List<?>) trends.get("costTrend")).hasSize(31);
+        assertThat(trends.get("period")).isEqualTo(30);
+    }
+
     private static Map<String, Object> aiOk() {
         Map<String, Object> ai = new HashMap<>();
         ai.put("success", true);

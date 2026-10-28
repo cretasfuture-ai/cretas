@@ -236,6 +236,18 @@ class ProductionReportProcessSecretPromptTest {
     }
 
     @Test
+    void trendReportWithoutAPeriodDefaultsToThirtyDaysInsteadOfThrowing() throws Exception {
+        ProductionReportServiceImpl service = service(Set.of(SECRET));
+
+        Map<String, Object> colleague = callAs(sameFactoryUser(), () -> service.getTrendAnalysisReport(FACTORY, "cost", null));
+        Map<String, Object> owner = callAs(owner(), () -> service.getTrendAnalysisReport(FACTORY, "production", null));
+
+        assertThat((List<?>) colleague.get("trendData")).hasSize(30);
+        assertThat(colleague.get("period")).isEqualTo(30);
+        assertThat((List<?>) owner.get("trendData")).hasSize(30);
+    }
+
+    @Test
     void anomalyDataContextCarriesTheVisibleTotalForTheTool() throws Exception {
         ProductionReportServiceImpl service = service(Set.of(SECRET));
         Map<String, Object> report = callAs(sameFactoryUser(),

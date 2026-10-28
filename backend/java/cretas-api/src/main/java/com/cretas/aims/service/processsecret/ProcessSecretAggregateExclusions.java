@@ -88,10 +88,16 @@ public class ProcessSecretAggregateExclusions {
     /** {@code planProducts}: 牵涉隐藏产品的计划上的全部产品 (锚点、目标成品、联产的普通产品)。 */
     private Scope expand(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan,
                          Set<String> planProducts) {
+        // 判定范围要读全厂计划和它们钉住的配方: 整段不打标 (否则出口会以为这次输出牵涉了所有计划 / 配方产品,
+        // 把已经按调用者裁剪的合计一起藏掉); 段内新载入的实体在段结束时移出持久化上下文
+        return ProcessSecretReadTracker.untracked(() -> expandTracked(factoryId, hidden, hiddenByPlan, planProducts));
+    }
+
+    private Scope expandTracked(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan,
+                                Set<String> planProducts) {
         TreeSet<String> products = new TreeSet<>(hidden);
         TreeSet<String> plans = new TreeSet<>();
-        // 判定范围要读全厂计划: 不打标, 否则出口会以为这次输出牵涉了所有计划
-        List<ProductionPlan> factoryPlans = ProcessSecretReadTracker.untracked(() -> planRepository.findByFactoryId(factoryId));
+        List<ProductionPlan> factoryPlans = planRepository.findByFactoryId(factoryId);
         Map<String, String> productOfRecipe = productsOfPinnedRecipes(factoryId, factoryPlans);
         for (ProductionPlan plan : factoryPlans) {
             // 与裁剪器、配比提示同一口径: 锚点、目标成品、按产品钉的配方键, 以及钉住的配方所属产品

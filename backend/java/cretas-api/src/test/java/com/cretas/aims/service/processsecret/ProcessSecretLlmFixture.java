@@ -101,8 +101,14 @@ public final class ProcessSecretLlmFixture {
     }
 
     public static ProcessSecretLlmCostScope scope(Set<String> protectedIds, List<ProductionPlan> plans) {
+        return scope(protectedIds, plans, List.of());
+    }
+
+    /** {@code pinnedRecipes}: 计划钉住的配方 (判定范围时按 id 批量读回, 同样模拟 PostLoad 走打标入口)。 */
+    public static ProcessSecretLlmCostScope scope(Set<String> protectedIds, List<ProductionPlan> plans,
+                                                  List<com.cretas.aims.entity.bom.BomRecipe> pinnedRecipes) {
         ProcessSecretAccessService access = access(protectedIds);
-        return new ProcessSecretLlmCostScope(exclusions(access, plans), access);
+        return new ProcessSecretLlmCostScope(exclusions(access, plans, pinnedRecipes), access);
     }
 
     public static ProcessSecretAccessService access(Set<String> protectedIds) {
@@ -123,7 +129,8 @@ public final class ProcessSecretLlmFixture {
         return new ProcessSecretAccessService(policies, grants, lenientMock(ProcessSecretAuditRecorder.class));
     }
 
-    private static ProcessSecretAggregateExclusions exclusions(ProcessSecretAccessService access, List<ProductionPlan> plans) {
+    private static ProcessSecretAggregateExclusions exclusions(ProcessSecretAccessService access, List<ProductionPlan> plans,
+                                                               List<com.cretas.aims.entity.bom.BomRecipe> pinnedRecipes) {
         ProductionPlanRepository planRepository = lenientMock(ProductionPlanRepository.class);
         // 模拟 Hibernate PostLoad: 仓库返回的每个计划都经过数据层打标入口 (作用域外不记)
         when(planRepository.findByFactoryId(anyString())).thenAnswer(inv -> {
@@ -131,7 +138,10 @@ public final class ProcessSecretLlmFixture {
             return plans;
         });
         BomRecipeRepository recipes = lenientMock(BomRecipeRepository.class);
-        when(recipes.findAllById(any())).thenReturn(List.of());
+        when(recipes.findAllById(any())).thenAnswer(inv -> {
+            pinnedRecipes.forEach(ProcessSecretReadTracker::record);
+            return pinnedRecipes;
+        });
         return new ProcessSecretAggregateExclusions(access, planRepository, recipes);
     }
 

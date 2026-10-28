@@ -226,6 +226,49 @@ class ProcessSecretToolTextTest {
         assertThat(message).contains("实际总成本 ¥5555.56", "不含 1 个保密产品");
     }
 
+    // ---------------- ReportFinanceRatioTool ----------------
+
+    private Map<String, Object> financeRatio(String ratioType, Map<String, Object> finance) throws Exception {
+        ReportService reports = mock(ReportService.class);
+        when(reports.getFinanceReport(eq(FACTORY), any(), any())).thenReturn(finance);
+        ReportFinanceRatioTool tool = new ReportFinanceRatioTool();
+        ReflectionTestUtils.setField(tool, "reportService", reports);
+        return tool.doExecute(FACTORY, new HashMap<>(Map.of("ratioType", ratioType)), Map.of());
+    }
+
+    private static Map<String, Object> finance(String reasonKey) {
+        Map<String, Object> finance = new HashMap<>();
+        finance.put("totalRevenue", new BigDecimal("150000.00"));
+        finance.put("totalCost", new BigDecimal("5555.56"));   // 只算了调用者能看的计划
+        finance.put("totalAssets", new BigDecimal("1000000"));
+        finance.put("totalEquity", new BigDecimal("500000"));
+        if (reasonKey != null) finance.put(reasonKey, ProcessSecretLlmCostScope.note(1));
+        return finance;
+    }
+
+    @Test
+    void financeRatioDoesNotSynthesiseAProfitFromATrimmedCostAndAFullRevenue() throws Exception {
+        for (String reasonKey : List.of("profitUnavailableReason", "processSecretNote")) {
+            for (String ratio : List.of("ROA", "ROE", "DUPONT")) {
+                Map<String, Object> result = financeRatio(ratio, finance(reasonKey));
+                assertThat(result).as("%s / %s", reasonKey, ratio).containsEntry("netProfit", null)
+                        .doesNotContainKeys("roa", "roe")
+                        .containsKey("unavailableReason");
+                assertThat((String) result.get("message")).contains("不提供", "不含 1 个保密产品");
+                assertThat(result.toString()).doesNotContain("144444");   // 150000 − 5555.56 的假利润
+            }
+        }
+    }
+
+    @Test
+    void financeRatioNegativeControlComputesWhenTheReportIsComplete() throws Exception {
+        Map<String, Object> roa = financeRatio("ROA", finance(null));
+        assertThat((Double) roa.get("netProfit")).isEqualTo(150000.00 - 5555.56);
+        assertThat(roa).containsKey("roa").doesNotContainKey("unavailableReason");
+        // 不依赖利润的比率在说明存在时照常给
+        assertThat(financeRatio("SOLVENCY", finance("processSecretNote"))).containsKey("debtRatio");
+    }
+
     @SuppressWarnings("unchecked")
     private List<String> skuOrder(ProcessSecretLlmCostScope scope) throws Exception {
         // 保密产品毛利率 90% (按毛利排本该第一), 普通产品 58.85%

@@ -2939,8 +2939,15 @@ public class ProcessingServiceImpl implements ProcessingService {
         // Old shape {metric, period, data:[]} left FE with undefined on every
         // chart (empty skeleton page for 100% of users).
         Map<String, Object> analysis = new HashMap<>();
+        if (days == null || days <= 0) days = 30;   // 天数没给: 按 30 天, 不再空指针
         LocalDate endDate = LocalDate.now();
         LocalDate startDate = endDate.minusDays(days);
+        // 工艺保密: 调用者对本厂某个保密产品无权时, 每日成本只算他能看的批次 (一次取全区间, 按天分, 带说明)
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = secretScope().forCurrentCaller(factoryId);
+        com.cretas.aims.service.processsecret.ProcessSecretBatchCosts visibleCosts = hidden.isEmpty() ? null : com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> com.cretas.aims.service.processsecret.ProcessSecretBatchCosts.of(hidden,
+                productionBatchRepository.findByFactoryIdAndCreatedAtAfter(factoryId, startDate.atStartOfDay().minusSeconds(1)),
+                startDate.atStartOfDay(), endDate.atTime(23, 59, 59)));
+        if (visibleCosts != null && visibleCosts.partial()) analysis.put("processSecretNote", visibleCosts.note());
         List<Map<String, Object>> productionTrend = new ArrayList<>();
         List<Map<String, Object>> qualityTrend = new ArrayList<>();
         List<Map<String, Object>> costTrend = new ArrayList<>();
@@ -2951,8 +2958,8 @@ public class ProcessingServiceImpl implements ProcessingService {
                     factoryId, dayStart, dayEnd);
             BigDecimal dayYieldRate = productionBatchRepository.calculateDailyYieldRate(
                     factoryId, dayStart, dayEnd);
-            BigDecimal dayCost = productionBatchRepository.calculateDailyCost(
-                    factoryId, dayStart, dayEnd);
+            BigDecimal dayCost = visibleCosts != null ? visibleCosts.costByDay().get(date)
+                    : productionBatchRepository.calculateDailyCost(factoryId, dayStart, dayEnd);
             productionTrend.add(Map.of(
                     "date", date.toString(),
                     "value", dayOutput != null ? dayOutput : BigDecimal.ZERO,
@@ -3048,9 +3055,8 @@ public class ProcessingServiceImpl implements ProcessingService {
     private com.cretas.aims.service.processsecret.ProcessSecretBatchCosts visibleBatchCosts(String factoryId, java.time.LocalDateTime from) {
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = secretScope().forCurrentCaller(factoryId);
         if (hidden.isEmpty()) return null;
-        List<ProductionBatch> batches = com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(
-                () -> productionBatchRepository.findByFactoryIdAndCreatedAtAfter(factoryId, from.minusSeconds(1)));
-        return com.cretas.aims.service.processsecret.ProcessSecretBatchCosts.of(hidden, batches, from);
+        return com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> com.cretas.aims.service.processsecret.ProcessSecretBatchCosts.of(hidden,
+                productionBatchRepository.findByFactoryIdAndCreatedAtAfter(factoryId, from.minusSeconds(1)), from));
     }
 
     // ========== AI智能成本分析（新版本） ==========

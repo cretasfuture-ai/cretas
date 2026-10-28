@@ -190,6 +190,24 @@ class ProcessSecretLlmCostScopeTest {
     }
 
     @Test
+    void readingThePinnedRecipesWhileComputingTheScopeIsNotRecordedEither() {
+        // 只钉了单个配方的多产出计划: 产品只能从配方查到, 判定范围要批量读回这些配方
+        ProductionPlan pinned = plan("PL-PIN", "RAW-ANCHOR", null);
+        pinned.setSelectedBomRecipeId("R-PIN");
+        com.cretas.aims.entity.bom.BomRecipe recipe = new com.cretas.aims.entity.bom.BomRecipe();
+        recipe.setId("R-PIN");
+        recipe.setFactoryId(FACTORY);
+        recipe.setProductTypeId(SECRET);
+        ProcessSecretLlmCostScope scope = scope(Set.of(SECRET), List.of(pinned), List.of(recipe));
+
+        try (var ignored = ProcessSecretReadTracker.open()) {
+            ProcessSecretLlmCostScope.Excluded excluded = scope.forCurrentCaller(FACTORY);
+            assertThat(excluded.planIds()).contains("PL-PIN");     // 一定发生: 配方确实读回并据此认出了计划
+            assertThat(ProcessSecretReadTracker.reads()).isEmpty();
+        }
+    }
+
+    @Test
     void harnessInstructionOnlyInFactoriesWithProtectedProducts() {
         assertThat(protectedScope().harnessFor(FACTORY)).isEqualTo(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
         assertThat(unprotectedScope().harnessFor(FACTORY)).isEmpty();

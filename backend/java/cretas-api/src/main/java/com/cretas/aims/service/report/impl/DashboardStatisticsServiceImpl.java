@@ -248,12 +248,14 @@ public class DashboardStatisticsServiceImpl implements DashboardStatisticsServic
         // 年度收入和成本
         // 工艺保密: 调用者对本厂某个保密产品无权时, 成本只在他能看的计划上逐行累加 (有权 / 没有保密产品 → 原查询)
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = llmCostScope.forCurrentCaller(factoryId);
-        List<com.cretas.aims.entity.ProductionPlan> plans = hidden.isEmpty() ? null
-                : com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> productionPlanRepository.findByFactoryId(factoryId));
-        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts yearVisible = plans == null ? null
-                : com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(hidden, plans, yearStart.atStartOfDay(), today.atTime(23, 59, 59), false);
-        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts monthVisible = plans == null ? null
-                : com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(hidden, plans, monthStart.atStartOfDay(), today.atTime(23, 59, 59), false);
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts[] visible = hidden.isEmpty() ? null : com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> {
+            List<com.cretas.aims.entity.ProductionPlan> plans = productionPlanRepository.findByFactoryId(factoryId);
+            return new com.cretas.aims.service.processsecret.ProcessSecretPlanCosts[]{
+                    com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(hidden, plans, yearStart.atStartOfDay(), today.atTime(23, 59, 59), false),
+                    com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(hidden, plans, monthStart.atStartOfDay(), today.atTime(23, 59, 59), false)};
+        });
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts yearVisible = visible == null ? null : visible[0];
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts monthVisible = visible == null ? null : visible[1];
         BigDecimal totalRevenue = shipmentRecordRepository.calculateTotalRevenue(factoryId, yearStart, today);
         BigDecimal totalCost = yearVisible != null ? yearVisible.total() : productionPlanRepository.calculateTotalCostBetweenDates(
                 factoryId, yearStart.atStartOfDay(), today.atTime(23, 59, 59));

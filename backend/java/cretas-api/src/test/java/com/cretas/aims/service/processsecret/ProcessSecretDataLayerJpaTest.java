@@ -194,6 +194,33 @@ class ProcessSecretDataLayerJpaTest {
         assertThat(ProcessSecretReadTracker.reads()).isEmpty();
     }
 
+    @Test
+    void anEntityFirstLoadedInsideAnUntrackedSectionIsRecordedWhenANormalQueryLoadsItAgain() {
+        entityManager.clear();
+        try (ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
+            BomRecipe untracked = ProcessSecretReadTracker.untracked(() -> recipes.findById("BOM-PS-SECRET").orElseThrow());
+            assertThat(ProcessSecretReadTracker.reads()).isEmpty();
+            // open-in-view 下若留在持久化上下文里, 下面的普通查询拿到的是缓存实例, 不触发 PostLoad, 打标网就漏了
+            assertThat(entityManager.contains(untracked)).isFalse();
+
+            recipes.findById("BOM-PS-SECRET").orElseThrow();
+
+            assertThat(ProcessSecretReadTracker.reads()).containsExactly(
+                    new ProcessSecretReadTracker.Read(ProcessSecretReadTracker.Kind.PRODUCT, F, SECRET));
+        }
+    }
+
+    @Test
+    void anEntityAlreadyManagedBeforeTheUntrackedSectionStaysManaged() {
+        entityManager.clear();
+        BomRecipe managed = recipes.findById("BOM-PS-SECRET").orElseThrow();   // 段外载入 (可能正被当前事务修改)
+
+        BomRecipe again = ProcessSecretReadTracker.untracked(() -> recipes.findById("BOM-PS-SECRET").orElseThrow());
+
+        assertThat(again).isSameAs(managed);
+        assertThat(entityManager.contains(managed)).isTrue();
+    }
+
     // ------------------------------------------------------------ 复制类出口
 
     @Test
