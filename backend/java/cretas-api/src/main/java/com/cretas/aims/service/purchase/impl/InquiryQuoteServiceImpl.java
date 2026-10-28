@@ -364,6 +364,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                             .map(InquiryQuoteComparisonDTO.Issue::getMessage)
                             .collect(Collectors.joining("; "))))
                     .withCode("QUOTE_NOT_SELECTABLE")
+                    .withHint("请在比价表里选一条标为「可选定」的报价, 或让供应商按缺的依据重新报价")
                     .withHintTarget("selectedSupplierId");
         }
 
@@ -609,7 +610,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
             throw new BusinessException(409, String.format(
                     "采购单 %s 当前状态为 %s, 只有草稿可以发起比价回填",
                     draft.getOrderNumber(), draft.getStatus().getDisplayName()))
-                    .withCode("PURCHASE_DRAFT_NOT_EDITABLE");
+                    .withCode("PURCHASE_DRAFT_NOT_EDITABLE")
+                    .withHint("请新建采购草稿后再从草稿行发起比价, 或不挂草稿直接新建核价单");
         }
         List<PurchaseOrderItem> lines = draft.getItems() == null ? List.of() : draft.getItems().stream()
                 .filter(i -> request.getMaterialTypeId().equals(i.getMaterialTypeId()))
@@ -618,7 +620,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
             throw new BusinessException(409, String.format(
                     "采购草稿 %s 中本物料有 %d 行, 需要恰好 1 行才能比价回填",
                     draft.getOrderNumber(), lines.size()))
-                    .withCode("PURCHASE_DRAFT_LINE_AMBIGUOUS");
+                    .withCode("PURCHASE_DRAFT_LINE_AMBIGUOUS")
+                    .withHint("请先编辑采购草稿, 把本物料合并成一行后再发起比价");
         }
         String lineUnit = lines.get(0).getUnit();
         if (lineUnit == null || !lineUnit.trim().equalsIgnoreCase(request.getUnit().trim())) {

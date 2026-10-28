@@ -1789,7 +1789,8 @@ public class PurchaseServiceImpl implements PurchaseService {
             throw new BusinessException(409, String.format(
                     "采购草稿 %s 中本物料有 %d 行, 需要恰好 1 行才能回填报价",
                     order.getOrderNumber(), targets.size()))
-                    .withCode("PURCHASE_DRAFT_LINE_AMBIGUOUS");
+                    .withCode("PURCHASE_DRAFT_LINE_AMBIGUOUS")
+                    .withHint("请先编辑采购草稿, 把本物料合并成一行后再选定报价");
         }
         requireActiveSupplier(factoryId, supplierId);
         if (order.getSupplierId() != null && !order.getSupplierId().equals(supplierId) && items.size() > 1) {
