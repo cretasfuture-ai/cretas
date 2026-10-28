@@ -4872,7 +4872,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 ? BigDecimal.ZERO : new BigDecimal(req.getSampleRetainQuantity());
         BigDecimal in = toKgIfMass(input, inputUnit);
         BigDecimal used = toKgIfMass(output.add(byproducts).add(sample), outputUnit);
-        boolean comparable = isMassUnit(inputUnit) && isMassUnit(outputUnit) || inputUnit.equals(outputUnit);
+        boolean comparable = reportingUnitsComparable(inputUnit, outputUnit);
         if (!comparable) {
             return out;
         }
@@ -4898,6 +4898,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return true;
         }
         return req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty();
+    }
+
+    /**
+     * 已归一化的报工单位能不能直接比数量: 都是质量单位 (kg/g, 换算后比) 或同一个计数单位。
+     * yieldRate 与物料平衡提示共用这一处判定 (BareUnitEqualityRatchet 基线里的那 1 处就是它)。
+     */
+    private static boolean reportingUnitsComparable(String inputUnit, String outputUnit) {
+        return isMassUnit(inputUnit) && isMassUnit(outputUnit) || inputUnit.equals(outputUnit);
     }
 
     private static boolean isMassUnit(String unit) {
@@ -5374,7 +5382,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (inputMass && outputMass) {
             if ("g".equals(inputUnit)) input = input.movePointLeft(3);
             if ("g".equals(outputUnit)) output = output.movePointLeft(3);
-        } else if (!inputUnit.equals(outputUnit)) {
+        } else if (!reportingUnitsComparable(inputUnit, outputUnit)) {
             return null;
         }
         return output.divide(input, 4, RoundingMode.HALF_UP)
