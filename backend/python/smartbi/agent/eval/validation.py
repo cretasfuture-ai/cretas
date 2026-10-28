@@ -73,17 +73,62 @@ def validate_request_id(value: str) -> str:
         raise AgentOpsValidationError("INVALID_REQUEST_ID") from exc
 
 
-def validate_cases(cases: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
+RESTAURANT_DOMAIN = "RESTAURANT"
+FACTORY_DOMAIN = "FACTORY"
+_FACTORY_INTENT = re.compile(r"^[A-Z][A-Z0-9_]{2,95}$")
+
+
+def validate_domain(domain: str) -> str:
+    if domain not in (RESTAURANT_DOMAIN, FACTORY_DOMAIN):
+        raise AgentOpsValidationError("UNSUPPORTED_BUSINESS_DOMAIN")
+    return domain
+
+
+def _validate_expected_route(route: Any, domain: str) -> None:
+    """Routes never cross domains: a restaurant pass says nothing about factory."""
+
+    restaurant_route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value
+    if domain == RESTAURANT_DOMAIN:
+        if route != restaurant_route:
+            raise AgentOpsValidationError("UNSUPPORTED_EXPECTED_ROUTE")
+        return
+    if (
+        not isinstance(route, str)
+        or route == restaurant_route
+        or not _FACTORY_INTENT.fullmatch(route)
+    ):
+        raise AgentOpsValidationError("UNSUPPORTED_EXPECTED_ROUTE")
+
+
+def infer_case_domain(cases: Sequence[Mapping[str, Any]]) -> str:
+    """Stored sets carry no domain column; the routes in the cases decide it."""
+
+    restaurant_route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value
+    if cases and all(
+        isinstance(case, Mapping) and case.get("expectedRoute") == restaurant_route
+        for case in cases
+    ):
+        return RESTAURANT_DOMAIN
+    return FACTORY_DOMAIN
+
+
+def validate_cases(
+    cases: Sequence[Mapping[str, Any]], domain: str | None = None
+) -> tuple[dict[str, Any], ...]:
+    domain = infer_case_domain(cases) if domain is None else domain
+    validate_domain(domain)
     if not 1 <= len(cases) <= MAX_CASES:
         raise AgentOpsValidationError("EVAL_CASE_COUNT_OUT_OF_BOUNDS")
-    normalized = tuple(validate_case(case) for case in cases)
+    normalized = tuple(validate_case(case, domain) for case in cases)
     ids = [case["caseId"] for case in normalized]
     if len(ids) != len(set(ids)):
         raise AgentOpsValidationError("DUPLICATE_CASE_ID")
     return normalized
 
 
-def validate_case(case: Mapping[str, Any]) -> dict[str, Any]:
+def validate_case(
+    case: Mapping[str, Any], domain: str = RESTAURANT_DOMAIN
+) -> dict[str, Any]:
     expected_keys = {
         "caseId", "expectedRoute", "requiredTools", "numericTruthRefs",
         "maxRounds", "maxToolCalls",
@@ -94,8 +139,10 @@ def validate_case(case: Mapping[str, Any]) -> dict[str, Any]:
     ):
         raise AgentOpsValidationError("INVALID_EVAL_CASE_SCHEMA")
     case_id = _identifier(case["caseId"], "INVALID_CASE_ID")
-    if case["expectedRoute"] != RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value:
-        raise AgentOpsValidationError("UNSUPPORTED_EXPECTED_ROUTE")
+    _validate_expected_route(case["expectedRoute"], domain)
+    if domain == FACTORY_DOMAIN and _RUNTIME_CASE_EXTRA_KEYS & set(case):
+        # Runtime-shadow corpora are restaurant-only; never smuggle them in.
+        raise AgentOpsValidationError("INVALID_EVAL_CASE_SCHEMA")
     tools = _tools(case["requiredTools"])
     refs = _numeric_refs(case["numericTruthRefs"])
     max_rounds = _bounded_int(case["maxRounds"], 1, 2, "INVALID_MAX_ROUNDS")
@@ -325,3 +372,51 @@ def _bounded_json(value: Any, maximum: int, code: str) -> None:
         raise AgentOpsValidationError(code) from exc
     if len(encoded) > maximum:
         raise AgentOpsValidationError(code)
+
+
+_TRACE_OUTCOMES = frozenset({"SUCCESS", "FAILED", "BLOCKED", "UNKNOWN"})
+MAX_TRACE_STEPS = 20
+
+
+def validate_factory_trace(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate one factory run trace: steps, tools, latency, outcome.
+
+    Unknown outcomes are rejected rather than defaulted: an unmeasured run must
+    say UNKNOWN explicitly, it is never silently counted as success.
+    """
+
+    keys = {"runId", "intentCode", "outcome", "latencyMs", "steps"}
+    if not isinstance(value, Mapping) or set(value) != keys:
+        raise AgentOpsValidationError("INVALID_FACTORY_TRACE_SCHEMA")
+    _reject_forbidden(value)
+    intent = value["intentCode"]
+    if not isinstance(intent, str) or not _FACTORY_INTENT.fullmatch(intent):
+        raise AgentOpsValidationError("INVALID_FACTORY_INTENT")
+    if value["outcome"] not in _TRACE_OUTCOMES:
+        raise AgentOpsValidationError("INVALID_TRACE_OUTCOME")
+    steps = value["steps"]
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_TRACE_STEPS:
+        raise AgentOpsValidationError("INVALID_TRACE_STEPS")
+    normalized_steps = []
+    for index, step in enumerate(steps, start=1):
+        step_keys = {"toolName", "latencyMs", "outcome", "sourceRef"}
+        if not isinstance(step, Mapping) or set(step) != step_keys:
+            raise AgentOpsValidationError("INVALID_TRACE_STEP_SCHEMA")
+        if step["outcome"] not in _TRACE_OUTCOMES:
+            raise AgentOpsValidationError("INVALID_TRACE_OUTCOME")
+        normalized_steps.append({
+            "sequence": index,
+            "toolName": _identifier(step["toolName"], "INVALID_TOOL_NAME"),
+            "latencyMs": _bounded_int(step["latencyMs"], 0, 3_600_000, "INVALID_LATENCY"),
+            "outcome": step["outcome"],
+            "sourceRef": _identifier(step["sourceRef"], "INVALID_SOURCE_REF"),
+        })
+    normalized = {
+        "runId": validate_request_id(value["runId"]),
+        "intentCode": intent,
+        "outcome": value["outcome"],
+        "latencyMs": _bounded_int(value["latencyMs"], 0, 3_600_000, "INVALID_LATENCY"),
+        "steps": normalized_steps,
+    }
+    _bounded_json(normalized, MAX_CASE_BYTES, "FACTORY_TRACE_TOO_LARGE")
+    return normalized

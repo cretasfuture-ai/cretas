@@ -67,11 +67,20 @@ class AgentOpsServiceTest {
     }
 
     @Test
-    void nonAdminAndNonRestaurantFailBeforeNetwork() {
+    void factoryDomainIsAcceptedAndForwardedAsFactory() throws Exception {
+        when(domains.resolveBusinessDomain("F006")).thenReturn("FACTORY");
+        when(client.listEvalSets(any())).thenReturn(new ObjectMapper().readTree("{\"items\":[]}"));
+        service.listEvalSets("F006", "42", "factory_super_admin", "corr-f");
+        verify(client).listEvalSets(
+                new AgentOpsClient.TrustedContext("F006", "42", "factory_super_admin", "corr-f", "FACTORY"));
+    }
+
+    @Test
+    void nonAdminAndUnsupportedDomainFailBeforeNetwork() {
         assertThatThrownBy(() -> service.listEvalSets("R001", "42", "operator", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(403));
-        when(domains.resolveBusinessDomain("R001")).thenReturn("FACTORY");
+        when(domains.resolveBusinessDomain("R001")).thenReturn("UNKNOWN_DOMAIN");
         assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(403));

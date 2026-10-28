@@ -41,6 +41,13 @@ public class ProductTypeDTO {
     private Integer shelfLifeDays;
     /** 单锅产能 (配料单按锅配料): 1 锅产出数量, 与计划产量同单位。配料单算锅数据此。 */
     private BigDecimal singlePotCapacity;
+    /**
+     * APS v2 人工日产能 (只读回显): 一天能做多少 + 单位。
+     * 写入走 {@code PUT /product-types/{id}/daily-capacity}, 产品更新接口不改它 (不在通用更新里夹带)。
+     */
+    private BigDecimal dailyCapacity;
+    private String dailyCapacityUnit;
+    private java.time.LocalDateTime dailyCapacityUpdatedAt;
     private String packageSpec;
 
     @Schema(description = "产品大类: FINISHED_PRODUCT, RAW_MATERIAL, PACKAGING, SEASONING, CUSTOMER_MATERIAL")

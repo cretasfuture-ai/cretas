@@ -4,6 +4,7 @@ from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord
 from .runner import (
     EvaluatorBuildUnavailableError,
     EvaluatorRegistry,
+    FactoryOfflineBatchRunner,
     OfflineBatchRunner,
     RunnerBounds,
     compute_evaluator_build,
@@ -20,6 +21,7 @@ __all__ = [
     "EvaluatorRegistry",
     "ExperimentRecord",
     "InMemoryAgentOpsStore",
+    "FactoryOfflineBatchRunner",
     "OfflineBatchRunner",
     "PostgresAgentOpsStore",
     "RunnerBounds",

@@ -31,13 +31,15 @@ _ADMIN_ROLES = frozenset({
     "factory_super_admin", "platform_admin", "permission_admin",
     "restaurant_manager", "restaurant_owner",
 })
+_SUPPORTED_DOMAINS = frozenset({"RESTAURANT", "FACTORY"})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class EvalCaseBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     case_id: str = Field(alias="caseId", min_length=1, max_length=128)
-    expected_route: Literal["GROSS_MARGIN_DECLINE_ATTRIBUTION"] = Field(alias="expectedRoute")
+    # Route legality is domain-specific and enforced in validation (restaurant route vs factory intents).
+    expected_route: str = Field(alias="expectedRoute", min_length=3, max_length=96)
     required_tools: list[str] = Field(alias="requiredTools", max_length=10)
     numeric_truth_refs: dict[str, str] = Field(alias="numericTruthRefs", max_length=100)
     max_rounds: int = Field(default=2, alias="maxRounds", ge=1, le=2)
@@ -115,6 +117,23 @@ class RunRuntimeShadowBody(BaseModel):
         return self
 
 
+class FactoryTraceStepBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool_name: str = Field(alias="toolName", min_length=1, max_length=128)
+    latency_ms: int = Field(alias="latencyMs", ge=0, le=3_600_000)
+    outcome: Literal["SUCCESS", "FAILED", "BLOCKED", "UNKNOWN"]
+    source_ref: str = Field(alias="sourceRef", min_length=1, max_length=128)
+
+
+class FactoryTraceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID = Field(alias="runId")
+    intent_code: str = Field(alias="intentCode", min_length=3, max_length=96)
+    outcome: Literal["SUCCESS", "FAILED", "BLOCKED", "UNKNOWN"]
+    latency_ms: int = Field(alias="latencyMs", ge=0, le=3_600_000)
+    steps: list[FactoryTraceStepBody] = Field(min_length=1, max_length=20)
+
+
 class RerunExperimentBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["1.0"] = Field(alias="schemaVersion")
@@ -140,6 +159,9 @@ def require_runtime_shadow_context(request: Request) -> AgentOpsContext:
     """Apply trusted identity validation and canary policy before service wiring."""
 
     context = require_agent_ops_context(request)
+    if context.business_type != "RESTAURANT":
+        # Runtime shadow replays the restaurant runtime only.
+        raise HTTPException(status_code=403, detail="RUNTIME_SHADOW_RESTAURANT_ONLY")
     policy = RuntimeShadowRolloutPolicy.from_environ()
     if not policy.master_enabled:
         raise HTTPException(status_code=503, detail="AGENT_OPS_RUNTIME_SHADOW_DISABLED")
@@ -163,8 +185,9 @@ def require_agent_ops_context(request: Request) -> AgentOpsContext:
         raise HTTPException(status_code=403, detail="TRUSTED_TENANT_REQUIRED")
     if not isinstance(user_id, str) or not _SAFE_ID.fullmatch(user_id):
         raise HTTPException(status_code=403, detail="TRUSTED_ACTOR_REQUIRED")
-    if business_type != "RESTAURANT":
-        raise HTTPException(status_code=403, detail="RESTAURANT_BUSINESS_REQUIRED")
+    # Restaurant is abandoned but kept; FACTORY is the live domain. Nothing else is admitted.
+    if business_type not in _SUPPORTED_DOMAINS:
+        raise HTTPException(status_code=403, detail="AGENT_OPS_BUSINESS_UNSUPPORTED")
     if not isinstance(role, str) or role.lower() not in _ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="AGENT_OPS_ADMIN_REQUIRED")
     correlation_id = get_correlation_id()
@@ -172,7 +195,9 @@ def require_agent_ops_context(request: Request) -> AgentOpsContext:
         correlation_id = str(uuid.uuid4())
     if not _SAFE_ID.fullmatch(correlation_id):
         raise HTTPException(status_code=422, detail="INVALID_CORRELATION_ID")
-    return AgentOpsContext(factory_id, user_id, role.lower(), correlation_id)
+    return AgentOpsContext(
+        factory_id, user_id, role.lower(), correlation_id, business_type
+    )
 
 
 async def get_runtime_shadow_agent_ops_service(
@@ -390,6 +415,25 @@ async def rerun_experiment(
         raise HTTPException(
             status_code=409, detail="EVALUATOR_BUILD_UNAVAILABLE"
         ) from exc
+    except AgentOpsValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/traces/factory", status_code=201)
+async def record_factory_trace(
+    body: FactoryTraceBody,
+    context: AgentOpsContext = Depends(require_agent_ops_context),
+    service: AgentOpsService = Depends(get_agent_ops_service),
+):
+    if context.business_type != "FACTORY":
+        raise HTTPException(status_code=403, detail="FACTORY_BUSINESS_REQUIRED")
+    try:
+        stored = await service.record_factory_trace(
+            context, body.model_dump(by_alias=True, mode="json")
+        )
+        return _bounded_response(dict(stored))
+    except AgentOpsConflictError as exc:
+        raise HTTPException(status_code=409, detail=_conflict_code(exc)) from exc
     except AgentOpsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

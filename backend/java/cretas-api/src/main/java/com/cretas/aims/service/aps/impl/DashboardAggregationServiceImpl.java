@@ -265,7 +265,7 @@ public class DashboardAggregationServiceImpl implements DashboardAggregationServ
 
         // 使用现有的 checkRescheduleNeed 方法
         APSAdaptiveSchedulingService.RescheduleRecommendation serviceRecommendation =
-                adaptiveService.checkRescheduleNeed();
+                adaptiveService.checkRescheduleNeed(factoryId);
 
         recommendation.setNeedReschedule(serviceRecommendation.isNeedReschedule());
         recommendation.setUrgencyLevel(serviceRecommendation.getUrgencyLevel());
