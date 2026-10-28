@@ -219,9 +219,11 @@ LIMIT 10001
 """
 
 # This relation is audit-supporting evidence, not a sales allocation.  Both
-# paths are selected because deployed data may use either the direct item FK or
-# the explicit allocation table.  The Python qualifier rejects duplicate or
-# cross-unit relationships rather than summing them.
+# paths are supported, but active allocations are authoritative. Java's
+# recordDeductedBatch also keeps the first allocated batch on the item for
+# traceability; that pointer is not a second shipment. An invalid allocation
+# must not reactivate the legacy pointer. The qualifier still rejects duplicate
+# or cross-unit relationships rather than summing them.
 FINISHED_GOODS_SHIPMENT_SQL = """
 SELECT sdi.id::text AS "发货行ID", sdi.sales_order_item_id AS "销售订单行ID", sdr.id AS "发货单ID", sdr.sales_order_id AS "订单ID",
        sdr.customer_id AS "客户ID", sdr.delivery_date AS "发货日期", sdr.status AS "发货状态",
@@ -240,6 +242,12 @@ WHERE sdr.factory_id = $1 AND sdi.deleted_at IS NULL
   AND sdr.status IN ('SHIPPED', 'DELIVERED')
   AND COALESCE(sdr.record_role, 'LEGACY') <> 'MASTER'
   AND sdi.finished_goods_batch_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM sales_delivery_item_batch_allocations active_allocation
+      WHERE active_allocation.factory_id = sdr.factory_id
+        AND active_allocation.delivery_item_id = sdi.id::text
+        AND active_allocation.deleted_at IS NULL
+  )
   AND ($2::date IS NULL OR sdr.delivery_date >= $2::date)
   AND ($3::date IS NULL OR sdr.delivery_date < ($3::date + INTERVAL '1 day'))
 UNION ALL

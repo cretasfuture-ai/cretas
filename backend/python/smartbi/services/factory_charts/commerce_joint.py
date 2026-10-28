@@ -323,6 +323,7 @@ def build(frame: pd.DataFrame, request: Any, can_price: bool) -> tuple[list[dict
     if missing:
         return [], [_gap("commerce.relationship", "联合明细缺少" + ",".join(missing))]
     limitations = ["不同SKU或单位不合并；同一订单总额不按产品行重复累计",
+                   "仅统计订单与发货关联校验通过的订单行；缺少关系或单位不一致的行不计入，不代表全部销售",
                    "发货必须通过sales_order_item_id精确关联；当前库存仅为AVAILABLE快照，不倒推历史"]
     candidates: list[dict[str, Any]] = []
     gaps: list[dict[str, Any]] = []

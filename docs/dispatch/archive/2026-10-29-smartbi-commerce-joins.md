@@ -12,8 +12,12 @@ Frozen validation before main integration:
 
 - Independent risk review: original blockers retained, final source review PASS including the last null-identity defect.
 - Related Python target tests: 47 passed.
-- Actual disposable PostgreSQL/RLS target: 7 passed, zero skipped. Covers missing/shadow channel columns and definitions, MASTER, tenant/ownership/deletion, split deliveries and moneyless column privileges.
-- Factory suite: 430 passed, one unchanged independent-schema case skipped with its prior proof retained; source hashes unchanged. All seven new PostgreSQL tests ran in this lane.
-- Actual deployed PostgreSQL schema: six candidate source SQL statements ran in an F006 read-only transaction as restricted `cretas_user` (not superuser/bypass); base/channel each six rows, shipment twelve and inventory seventeen. Zero business/schema writes. This validates source SQL, not deployment or UI acceptance of this candidate.
+- Actual disposable PostgreSQL/RLS target: 9 passed, zero skipped. Covers missing/shadow channel columns and definitions, MASTER, tenant/ownership/deletion, split deliveries, moneyless column privileges and allocation precedence.
+- Final factory suite after main integration and allocation fix: 432 passed, one unchanged independent-schema case skipped with its prior proof retained; source hashes unchanged. All nine new PostgreSQL tests ran in this lane.
+- Actual deployed PostgreSQL schema: six candidate source SQL statements ran in an F006 read-only transaction as restricted `cretas_user` (not superuser/bypass); base/channel each six rows, shipment six and inventory seventeen. Zero business/schema writes. This validates source SQL, not deployment or UI acceptance of this candidate.
 
-The skipped case, earlier failed fixture/tool runs and prior failed review snapshots remain in private evidence. Main's shared test bootstrap changed independently, so an integrated final gate is required after merging that version. Java/Entity/Repository, migrations, permissions and native source are outside this change.
+Live preflight exposed a normal-storage defect: Java records the first deducted batch on the delivery item for traceability while retaining complete allocations. The source now prefers active same-factory allocations, using direct pointers only when none exist; invalid active allocations never reactivate the pointer. Raw duplicate-path rejection remains unchanged. Real PG proves mirror/direct-only/invalid/soft-deleted/cross-factory/multi-batch cases. Independent review of this final delta passed.
+
+The same F006 rows now yield three unit-separated sales-stock candidates and one explicit-channel amount candidate in the frozen local builder. Three legacy box-versus-inner-unit relations and five missing channels remain explicit gaps. Candidates state that validated rows do not represent all sales. No business data was repaired or seeded to obtain these results; live deployment/UI acceptance remains separate.
+
+The skipped case, earlier failed fixture/tool runs and prior failed review snapshots remain in private evidence. Java/Entity/Repository, migrations, permissions and native source are outside this change.

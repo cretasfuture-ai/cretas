@@ -348,6 +348,105 @@ async def test_commerce_joint_real_pg_same_batch_two_order_lines_inventory_once(
 
 
 @pytest.mark.asyncio
+async def test_commerce_joint_real_pg_allocation_mirror_direct_and_invalid_precedence():
+    dsn, _ = _dsn()
+    fixture = await _fixture(dsn)
+    try:
+        await _admin(fixture, """
+            INSERT INTO product_types VALUES ('p2','F006','SKU2',NULL);
+            INSERT INTO finished_goods_batches VALUES
+              ('b_bad','F006','BAD','p2','SKU2','kg',5,0,0,'AVAILABLE','OWNED','c6',NULL,NULL,NULL);
+            INSERT INTO sales_orders VALUES
+              ('o8','F006','2026-10-03','c6',20,'SHIPPED',NULL,'直营'),
+              ('o9','F006','2026-10-03','c6',20,'SHIPPED',NULL,'直营');
+            INSERT INTO sales_order_items VALUES
+              (608,'o8','p1','SKU1','kg',2,10,0,NULL),
+              (609,'o9','p1','SKU1','kg',2,10,0,NULL);
+            INSERT INTO sales_delivery_records VALUES
+              ('d8','F006','o8','c6','2026-10-03','SHIPPED',NULL,'LEGACY'),
+              ('d9','F006','o9','c6','2026-10-03','SHIPPED',NULL,'LEGACY');
+            INSERT INTO sales_delivery_items VALUES
+              (6080,'d8',608,'b6','p1',2,'kg',NULL),
+              (6090,'d9',609,'b6','p1',2,'kg',NULL);
+            INSERT INTO sales_delivery_item_batch_allocations VALUES
+              ('a606','F006','606','b6',1,'kg',NULL),
+              ('a609','F006','6090','b_bad',2,'kg',NULL);
+        """)
+        facts = await _facts(fixture)
+        line601 = [row for row in facts.shipments if str(row["销售订单行ID"]) == "601"]
+        line608 = [row for row in facts.shipments if str(row["销售订单行ID"]) == "608"]
+        line609 = [row for row in facts.shipments if str(row["销售订单行ID"]) == "609"]
+        assert len(line601) == 1 and line601[0]["关系来源"] == "BATCH_ALLOCATION"
+        assert line601[0]["发货数量"] == 1
+        assert len(line608) == 1 and line608[0]["关系来源"] == "DELIVERY_ITEM_FK"
+        assert line608[0]["发货数量"] == 2
+        assert len(line609) == 1 and line609[0]["关系来源"] == "BATCH_ALLOCATION"
+        assert not any(row["关系来源"] == "DELIVERY_ITEM_FK" for row in line609)
+        frame, gaps = commerce_joint.prepare(
+            facts.sales, facts.shipments, facts.inventory, "F006", _request(), False)
+        assert frame is not None
+        assert {"601", "608"}.issubset(_fact_ids(frame, "ORDER_LINE"))
+        assert "609" not in _fact_ids(frame, "ORDER_LINE")
+        assert "allocation" in _gap_text(gaps)
+    finally:
+        await _close(fixture)
+
+
+@pytest.mark.asyncio
+async def test_commerce_joint_real_pg_allocation_softdelete_crossfactory_and_multibatch_conservation():
+    dsn, _ = _dsn()
+    fixture = await _fixture(dsn)
+    try:
+        await _admin(fixture, """
+            INSERT INTO finished_goods_batches VALUES
+              ('b9','F006','B9','p1','SKU1','kg',5,0,0,'AVAILABLE','OWNED','c6',NULL,NULL,NULL);
+            INSERT INTO sales_orders VALUES
+              ('o8','F006','2026-10-03','c6',20,'SHIPPED',NULL,'直营'),
+              ('o9','F006','2026-10-03','c6',20,'SHIPPED',NULL,'直营'),
+              ('o10','F006','2026-10-03','c6',30,'SHIPPED',NULL,'直营');
+            INSERT INTO sales_order_items VALUES
+              (608,'o8','p1','SKU1','kg',2,10,0,NULL),
+              (609,'o9','p1','SKU1','kg',2,10,0,NULL),
+              (610,'o10','p1','SKU1','kg',3,10,0,NULL);
+            INSERT INTO sales_delivery_records VALUES
+              ('d8','F006','o8','c6','2026-10-03','SHIPPED',NULL,'LEGACY'),
+              ('d9','F006','o9','c6','2026-10-03','SHIPPED',NULL,'LEGACY'),
+              ('d10','F006','o10','c6','2026-10-03','SHIPPED',NULL,'LEGACY');
+            INSERT INTO sales_delivery_items VALUES
+              (6080,'d8',608,'b6','p1',2,'kg',NULL),
+              (6090,'d9',609,'b6','p1',2,'kg',NULL),
+              (6100,'d10',610,'b6','p1',3,'kg',NULL);
+            INSERT INTO sales_delivery_item_batch_allocations VALUES
+              ('a608','F006','6080','b6',2,'kg','2026-10-04'),
+              ('a609','F007','6090','b6',2,'kg',NULL),
+              ('a610a','F006','6100','b6',1,'kg',NULL),
+              ('a610b','F006','6100','b9',2,'kg',NULL);
+        """)
+        facts = await _facts(fixture)
+        line608 = [row for row in facts.shipments if str(row["销售订单行ID"]) == "608"]
+        line609 = [row for row in facts.shipments if str(row["销售订单行ID"]) == "609"]
+        line610 = [row for row in facts.shipments if str(row["销售订单行ID"]) == "610"]
+        assert len(line608) == 1 and line608[0]["关系来源"] == "DELIVERY_ITEM_FK"
+        assert len(line609) == 1 and line609[0]["关系来源"] == "DELIVERY_ITEM_FK"
+        assert len(line610) == 2 and all(row["关系来源"] == "BATCH_ALLOCATION" for row in line610)
+        assert sum(row["发货数量"] for row in line610) == 3
+        frame, gaps = commerce_joint.prepare(
+            facts.sales, facts.shipments, facts.inventory, "F006", _request(), False)
+        assert frame is not None and not gaps
+        assert {"608", "609", "610"}.issubset(_fact_ids(frame, "ORDER_LINE"))
+        order610 = _fact_rows(frame, "ORDER_LINE")
+        order610 = order610[order610["订单行ID"].astype(str).eq("610")]
+        assert len(order610) == 1 and float(order610.iloc[0]["已核对发货数量"]) == 3.0
+        relation610 = _fact_rows(frame, "SHIPMENT_RELATION")
+        relation610 = relation610[relation610["订单行ID"].astype(str).eq("610")]
+        assert len(relation610) == 2 and float(relation610["发货数量"].sum()) == 3.0
+        inventory_ids = set(_fact_rows(frame, "INVENTORY_BATCH")["库存事实批次ID"])
+        assert {"b6", "b9"}.issubset(inventory_ids)
+    finally:
+        await _close(fixture)
+
+
+@pytest.mark.asyncio
 async def test_commerce_joint_real_pg_missing_line_id_and_overdelivery_fail_closed():
     dsn, _ = _dsn()
     fixture = await _fixture(dsn)
