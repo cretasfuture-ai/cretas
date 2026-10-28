@@ -25,6 +25,7 @@ public class AgentOpsService {
     private static final Set<String> ADMIN_ROLES = Set.of(
             "factory_super_admin", "platform_admin", "permission_admin",
             "restaurant_manager", "restaurant_owner");
+    private static final Set<String> SUPPORTED_DOMAINS = Set.of("RESTAURANT", "FACTORY");
     private static final Set<String> SAFE_CONFLICT_CODES = Set.of(
             "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE");
 
@@ -109,15 +110,16 @@ public class AgentOpsService {
         try {
             domain = intentConfigManagementService.resolveBusinessDomain(factoryId);
         } catch (RuntimeException ex) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "RESTAURANT_BUSINESS_LOOKUP_FAILED", ex);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "AGENT_OPS_BUSINESS_LOOKUP_FAILED", ex);
         }
-        if (!"RESTAURANT".equals(domain)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "RESTAURANT_BUSINESS_REQUIRED");
+        // Restaurant is abandoned but its code stays; FACTORY is the live domain.
+        if (!SUPPORTED_DOMAINS.contains(domain)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "AGENT_OPS_BUSINESS_UNSUPPORTED");
         }
         if (!client.isConfigured()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "AGENT_OPS_SECRET_MISSING");
         }
-        TrustedContext context = new TrustedContext(factoryId, userId, normalizedRole, correlationId);
+        TrustedContext context = new TrustedContext(factoryId, userId, normalizedRole, correlationId, domain);
         try {
             context.validate();
         } catch (SecurityException ex) {

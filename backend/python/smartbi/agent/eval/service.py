@@ -5,11 +5,18 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord
-from .runner import EvaluatorRegistry, OfflineBatchRunner, RunnerBounds
+from .runner import (
+    FACTORY_EVALUATOR_VERSION,
+    EvaluatorRegistry,
+    FactoryOfflineBatchRunner,
+    OfflineBatchRunner,
+    RunnerBounds,
+)
 from .runtime_shadow import RuntimeShadowBatchRunner, RuntimeShadowBounds
 from .store import AgentOpsStore, new_eval_set_record, new_experiment_record
 from .validation import (
     AgentOpsValidationError,
+    FACTORY_DOMAIN,
     canonical_digest,
     validate_cases,
     validate_config_snapshot,
@@ -32,7 +39,9 @@ class AgentOpsService:
         if runner is not None and registry is not None:
             raise ValueError("provide runner or registry, not both")
         self._store = store
-        self._registry = registry or EvaluatorRegistry((runner or OfflineBatchRunner(),))
+        self._registry = registry or EvaluatorRegistry(
+            (runner or OfflineBatchRunner(), FactoryOfflineBatchRunner())
+        )
         self._runtime_shadow_runner = runtime_shadow_runner
 
     async def import_runtime_corpus(
@@ -47,6 +56,8 @@ class AgentOpsService:
     ) -> EvalSetRecord:
         if isinstance(max_cases, bool) or not 1 <= max_cases <= 20:
             raise AgentOpsValidationError("RUNTIME_CORPUS_LIMIT_OUT_OF_BOUNDS")
+        if context.business_type != "RESTAURANT":
+            raise AgentOpsValidationError("RUNTIME_SHADOW_RESTAURANT_ONLY")
         cases = await self._store.load_runtime_corpus(context, limit=max_cases)
         if not cases:
             raise AgentOpsValidationError("TRUSTED_RUNTIME_CORPUS_EMPTY")
@@ -70,7 +81,7 @@ class AgentOpsService:
         description: str,
         cases: Sequence[Mapping[str, Any]],
     ) -> EvalSetRecord:
-        normalized = validate_cases(cases)
+        normalized = validate_cases(cases, context.business_type)
         safe_name = validate_name(name)
         safe_request_id = validate_request_id(request_id)
         safe_description = description.strip()[:500]
@@ -111,6 +122,7 @@ class AgentOpsService:
         bounds: RunnerBounds,
     ) -> ExperimentRecord:
         eval_set = await self._store.get_eval_set(context, eval_set_id)
+        validate_cases(eval_set.cases, context.business_type)
         config = validate_config_snapshot(config_snapshot)
         if set(actual_by_case) != {case["caseId"] for case in eval_set.cases}:
             raise AgentOpsValidationError("ACTUAL_CASE_SET_MISMATCH")
@@ -132,7 +144,7 @@ class AgentOpsService:
             return existing
         return await self._run_with(
             context,
-            runner=self._registry.current(),
+            runner=self._runner_for(context),
             eval_set=eval_set,
             config=config,
             normalized_actual=normalized_actual,
@@ -144,6 +156,11 @@ class AgentOpsService:
             source_experiment_id=None,
         )
 
+    def _runner_for(self, context: AgentOpsContext):
+        if context.business_type == FACTORY_DOMAIN:
+            return self._registry.current_for(FACTORY_EVALUATOR_VERSION)
+        return self._registry.current()
+
     async def run_runtime_shadow(
         self,
         context: AgentOpsContext,
@@ -153,6 +170,8 @@ class AgentOpsService:
         config_snapshot: Mapping[str, Any],
         bounds: RuntimeShadowBounds,
     ) -> ExperimentRecord:
+        if context.business_type != "RESTAURANT":
+            raise AgentOpsValidationError("RUNTIME_SHADOW_RESTAURANT_ONLY")
         if self._runtime_shadow_runner is None:
             raise AgentOpsValidationError("RUNTIME_SHADOW_RUNNER_UNAVAILABLE")
         eval_set = await self._store.get_eval_set(context, eval_set_id)
@@ -353,6 +372,9 @@ class AgentOpsService:
                 current, baseline, "toolSnapshotDigest"
             ),
         }
+
+    async def record_factory_trace(self, context, trace):
+        return await self._store.record_factory_trace(context, trace)
 
     async def trace(self, context, run_id, *, after_sequence, limit):
         return await self._store.load_trace(
