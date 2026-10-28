@@ -645,11 +645,12 @@ class ProcessSecretPayloadScrubberTest {
     void costFieldNamesAreRecognisedButPricesRevenueAndCountsAreNot() {
         for (String name : List.of("totalCost", "unitCost", "costUnitPrice", "seasoningCost", "grossProfit",
                 "grossMarginPct", "marginRate", "overallAchievementRate", "varianceAbsolute", "rowTotalCost",
-                "subtotal", "stageSubtotal", "contributionPerBox", "batchShare")) {
+                "subtotal", "stageSubtotal", "contributionPerBox", "batchShare", "costPerQuantity", "unitCostQty")) {
             assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isTrue();
         }
         for (String name : List.of("unitPrice", "totalAmount", "salePrice", "missingCostItemCount", "costVersion",
-                "quantity")) {
+                "quantity", "costDenominatorQuantity", "varianceQuantity", "warehouseVarianceQuantity",
+                "stocktakeProfitQty", "switchCostMinutes")) {
             assertThat(ProcessSecretPayloadScrubber.isCostTotalField(name)).as(name).isFalse();
         }
     }
