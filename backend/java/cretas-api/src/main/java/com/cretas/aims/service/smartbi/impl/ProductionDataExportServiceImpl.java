@@ -19,6 +19,10 @@ import java.util.stream.Collectors;
  * 生产数据导出服务实现
  * 使用原生SQL聚合查询从 production_batches 表提取多维度生产统计数据
  *
+ * <p>⚠️ 工艺保密 (2026-10-29): 本类目前没有接入任何入口。接入前必须先按调用者裁剪成本 ——
+ * 无权的保密产品 (及牵涉它们的计划所产批次) 不出成本, 合计只在可见行上逐行累加并注明「不含 N 个保密产品」
+ * (见 ProcessSecretBatchCosts / ProcessSecretPlanCosts); 原生 SQL 读数也不经过数据层打标。</p>
+ *
  * @author Cretas Team
  * @version 1.0.0
  * @since 2026-02-09

@@ -42,8 +42,13 @@ public class DashboardStatisticsServiceImpl implements DashboardStatisticsServic
     private final QualityInspectionRepository qualityInspectionRepository;
     private final ShipmentRecordRepository shipmentRecordRepository;
 
+    /** 工艺保密: 财务合计按调用者只算他能看的计划 (Steve 10-29); 字段注入, 单测按构造器装配时用「没有保密产品」的默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
     @Override
-    @Cacheable(value = "dashboardStats", key = "#factoryId", unless = "#result == null")
+    // 工艺保密: 财务合计按调用者裁剪 ⇒ 共享缓存键带调用者保密档位 (本厂没有保密产品时档位为空串)
+    @Cacheable(value = "dashboardStats", key = "#factoryId + '_' + @processSecretLlmCostScope.accessTier(#factoryId)", unless = "#result == null")
     public DashboardStatisticsDTO getDashboardStatistics(String factoryId) {
         log.info("获取仪表盘统计数据（实时计算）: factoryId={}", factoryId);
         long startTime = System.currentTimeMillis();
@@ -241,24 +246,45 @@ public class DashboardStatisticsServiceImpl implements DashboardStatisticsServic
         LocalDate yearStart = LocalDate.of(today.getYear(), 1, 1);
         LocalDate monthStart = today.withDayOfMonth(1);
         // 年度收入和成本
+        // 工艺保密: 调用者对本厂某个保密产品无权时, 成本只在他能看的计划上逐行累加 (有权 / 没有保密产品 → 原查询)
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = llmCostScope.forCurrentCaller(factoryId);
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts[] visible = hidden.isEmpty() ? null : com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> {
+            List<com.cretas.aims.entity.ProductionPlan> plans = productionPlanRepository.findByFactoryId(factoryId);
+            return new com.cretas.aims.service.processsecret.ProcessSecretPlanCosts[]{
+                    com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(hidden, plans, yearStart.atStartOfDay(), today.atTime(23, 59, 59), false),
+                    com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(hidden, plans, monthStart.atStartOfDay(), today.atTime(23, 59, 59), false)};
+        });
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts yearVisible = visible == null ? null : visible[0];
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts monthVisible = visible == null ? null : visible[1];
         BigDecimal totalRevenue = shipmentRecordRepository.calculateTotalRevenue(factoryId, yearStart, today);
-        BigDecimal totalCost = productionPlanRepository.calculateTotalCostBetweenDates(
+        BigDecimal totalCost = yearVisible != null ? yearVisible.total() : productionPlanRepository.calculateTotalCostBetweenDates(
                 factoryId, yearStart.atStartOfDay(), today.atTime(23, 59, 59));
         if (totalRevenue == null) totalRevenue = BigDecimal.ZERO;
         if (totalCost == null) totalCost = BigDecimal.ZERO;
         BigDecimal totalProfit = totalRevenue.subtract(totalCost);
         // 月度收入和成本
         BigDecimal monthlyRevenue = shipmentRecordRepository.calculateTotalRevenue(factoryId, monthStart, today);
-        BigDecimal monthlyCost = productionPlanRepository.calculateTotalCostBetweenDates(
+        BigDecimal monthlyCost = monthVisible != null ? monthVisible.total() : productionPlanRepository.calculateTotalCostBetweenDates(
                 factoryId, monthStart.atStartOfDay(), today.atTime(23, 59, 59));
         if (monthlyRevenue == null) monthlyRevenue = BigDecimal.ZERO;
         if (monthlyCost == null) monthlyCost = BigDecimal.ZERO;
         BigDecimal monthlyProfit = monthlyRevenue.subtract(monthlyCost);
         // 利润率
-        double profitMargin = 0.0;
+        Double profitMargin = 0.0;
         if (totalRevenue.compareTo(BigDecimal.ZERO) > 0) {
             profitMargin = totalProfit.divide(totalRevenue, 4, RoundingMode.HALF_UP)
                     .multiply(BigDecimal.valueOf(100)).doubleValue();
+        }
+        // 工艺保密: 营收含保密产品而成本不含, 相减不是利润 —— 不给 (与生产 / 财务报表同一规则)
+        String processSecretNote = null;
+        if (yearVisible != null && yearVisible.partial()) {
+            totalProfit = null;
+            profitMargin = null;
+            processSecretNote = yearVisible.note();
+        }
+        if (monthVisible != null && monthVisible.partial()) {
+            monthlyProfit = null;
+            if (processSecretNote == null) processSecretNote = monthVisible.note();
         }
         // 应收应付
         BigDecimal accountsReceivable = customerRepository.calculateTotalOutstandingBalance(factoryId);
@@ -273,6 +299,7 @@ public class DashboardStatisticsServiceImpl implements DashboardStatisticsServic
                 .profitMargin(profitMargin)
                 .accountsReceivable(accountsReceivable != null ? accountsReceivable : BigDecimal.ZERO)
                 .accountsPayable(accountsPayable != null ? accountsPayable : BigDecimal.ZERO)
+                .processSecretNote(processSecretNote)
                 .build();
     }
 

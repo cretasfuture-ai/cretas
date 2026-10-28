@@ -138,7 +138,9 @@ class ProcessSecretDataLayerContractTest {
             com.cretas.aims.entity.ProductionBatch.class,
             // 落库的消耗记录 / 报工行操作记录: 自动带出行的数量 = 配比 × 投入 (独立审查 V2.1 M4)
             com.cretas.aims.entity.MaterialConsumption.class,
-            com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog.class);
+            com.cretas.aims.entity.processentry.ProcessSheetRowChangeLog.class,
+            // 计划上挂着实际成本 (材料 / 人工 / 设备 / 其他): 纵深防御 (统计接口已按调用者只算能看的计划)
+            com.cretas.aims.entity.ProductionPlan.class);
 
     /** 带配比类字段但不打标的实体, 写明理由。 */
     static final Map<String, String> UNTRACKED_ENTITY_LEDGER = Map.of(
@@ -364,6 +366,9 @@ class ProcessSecretDataLayerContractTest {
             if (hasField(type, e.getKey()) && ReflectionTestUtils.getField(entity, e.getKey()) == null) {
                 ReflectionTestUtils.setField(entity, e.getKey(), e.getValue());
             }
+        }
+        if (entity instanceof com.cretas.aims.entity.ProductionPlan plan) {
+            plan.setId("pl");   // 计划按自己的 id 记
         }
         if (entity instanceof FactoryMaterialRequisitionItem item) {
             item.setRequisition((FactoryMaterialRequisition) populated(FactoryMaterialRequisition.class));

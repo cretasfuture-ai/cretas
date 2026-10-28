@@ -80,6 +80,15 @@ public class AIAnalysisService {
     @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
+    /** 工艺保密: 发给模型的成本数据不带当前账号无权查看的保密产品 (Steve 10-29); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
+    /** 单批分析时按 batchId 认产品 (中央兜底); 单测没装时只按数据里的产品/计划判定。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+
     static final String COST_EGRESS_SITE = "cost-analysis";
     static final String EMPLOYEE_EGRESS_SITE = "employee-analysis";
     static final String EGRESS_REFUSED_MESSAGE = "数据里有无法脱敏的内容，未发给 AI 分析";
@@ -139,6 +148,16 @@ public class AIAnalysisService {
                                            String customMessage,
                                            Boolean enableThinking,
                                            Integer thinkingBudget) {
+        // 工艺保密 (中央兜底, 全部成本分析调用点都汇合在这里): 单批是当前账号无权查看的保密产品, 或数据里还夹着
+        // 这类产品的行 (调用方该过滤没过滤) —— 整次不发给模型。负责人 / 有效授权照常发。判定本身出错也不发 (fail-closed)。
+        if (involvesProcessSecret(factoryId, batchId, costData)) {
+            Map<String, Object> withheld = new HashMap<>();
+            withheld.put("success", false);
+            withheld.put("processSecret", true);
+            withheld.put("error", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON);
+            return withheld;
+        }
+
         // 喂给模型的正文只拼一次: 两条通道原来各拼一份 (逐字相同), 而数字出处闸要拿
         // 「模型实际看到的那一份」当源 —— 两份就会漂, 闸就会拿错的源去比。
         String llmInput;
@@ -215,7 +234,36 @@ public class AIAnalysisService {
     }
 
     static final String COST_PROVENANCE_SITE = "cost-analysis";
+
+    private String withHarness(String factoryId, String message) {
+        String harness = llmCostScope.harnessFor(factoryId);
+        return harness.isEmpty() ? message : harness + "\n\n" + message;
+    }
     static final String EMPLOYEE_PROVENANCE_SITE = "employee-analysis";
+
+    /**
+     * 本次成本分析是否牵涉工艺保密产品: 数据里任何一层出现保密产品 / 牵涉保密产品的计划,
+     * 或 batchId 指向的批次属于保密范围。判定不了 (范围取不到) 按牵涉处理。
+     */
+    private boolean involvesProcessSecret(String factoryId, String batchId, Map<String, Object> costData) {
+        try {
+            var excluded = llmCostScope.forCurrentCaller(factoryId);
+            if (excluded.isEmpty()) return false;
+            if (llmCostScope.containsProtected(factoryId, costData)) return true;
+            if (batchId != null && productionBatchRepository != null && batchId.chars().allMatch(Character::isDigit)
+                    && !batchId.isEmpty()) {
+                var batch = productionBatchRepository.findByIdAndFactoryId(Long.parseLong(batchId), factoryId);
+                if (batch.isPresent()
+                        && excluded.coversBatch(batch.get().getProductTypeId(), batch.get().getProductionPlanId())) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (RuntimeException e) {
+            log.warn("[process-secret] 成本分析保密范围判定失败, 不发给 AI: factoryId={}", factoryId);
+            return true;
+        }
+    }
 
     /** 成本分析喂给模型的正文: 自定义问题或格式化成本数据, 前面接预计算上下文。 */
     private String buildCostLlmInput(String factoryId, String batchId,
@@ -241,7 +289,8 @@ public class AIAnalysisService {
                                                    Boolean enableThinking,
                                                    Integer thinkingBudget) {
         // 2. 构建系统提示词
-        String systemPrompt = buildCostAnalysisSystemPrompt();
+        // 工艺保密系统约束放进 system (有保密产品的工厂)
+        String systemPrompt = buildCostAnalysisSystemPrompt() + llmCostScope.harnessFor(factoryId);
 
         // 3. 调用 DashScope
         boolean useThinking = enableThinking != null ? enableThinking : true;
@@ -367,7 +416,7 @@ public class AIAnalysisService {
             // 3. 获取生产上下文（最近30天的数据）
             LocalDate endDate = LocalDate.now();
             LocalDate startDate = endDate.minusDays(30);
-            ProductionAIContext productionContext = aiContextService.buildProductionContext(
+            ProductionAIContext productionContext = aiContextService.buildProductionContextForAi(
                     factoryId, startDate, endDate);
 
             if (productionContext != null) {
@@ -441,7 +490,7 @@ public class AIAnalysisService {
             LocalDate endDate = LocalDate.now();
             LocalDate startDate = endDate.minusDays(days != null ? days : 30);
 
-            ProductionAIContext context = aiContextService.buildProductionContext(factoryId, startDate, endDate);
+            ProductionAIContext context = aiContextService.buildProductionContextForAi(factoryId, startDate, endDate);
             if (context == null) {
                 return originalPrompt;
             }
@@ -543,7 +592,9 @@ public class AIAnalysisService {
                                                       Integer thinkingBudget) {
         try {
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
-                    .message(message)
+                    // 工艺保密系统约束: Java → Python 通用分析的合同没有 system 字段 (Python 自己拼 system),
+                    // 只能放在正文最前面; 有保密产品的工厂才带
+                    .message(withHarness(factoryId, message))
                     .sessionId(sessionId != null && !sessionId.isBlank() ? sessionId : null)
                     .enableThinking(enableThinking != null ? enableThinking : true)
                     .thinkingBudget(thinkingBudget != null ? thinkingBudget : 50)

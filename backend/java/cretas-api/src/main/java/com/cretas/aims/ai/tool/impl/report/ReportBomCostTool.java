@@ -40,6 +40,10 @@ public class ReportBomCostTool extends AbstractBusinessTool {
     @Autowired
     private AIContextService aiContextService;
 
+    /** 工艺保密: 本工具的结果整体给模型看; 当前账号无权查看的保密产品成本不带, 负责人 / 有效授权照常带 (Steve 10-29)。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
     @Override
     public String getToolName() {
         return "report_bom_cost";
@@ -136,6 +140,17 @@ public class ReportBomCostTool extends AbstractBusinessTool {
         // 获取预计算的成本上下文
         CostAIContext costContext = aiContextService.buildCostContext(factoryId, productTypeId, 10);
 
+        // 工艺保密产品, 或累加的批次属于牵涉保密产品的计划: 不给任何成本数 (结构化字段和预格式化文本都不带)
+        if (llmCostScope.forCurrentCaller(factoryId)
+                .coversProductOrAnyPlan(productTypeId, costContext.getCostSourcePlanIds())) {
+            result.put("analysisType", "product_detail");
+            result.put("productTypeId", productTypeId);
+            result.put("costWithheld", true);
+            result.put("message", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON);
+            result.put("preformattedPrompt", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON);
+            return result;
+        }
+
         result.put("analysisType", "product_detail");
         result.put("productTypeId", productTypeId);
         result.put("productName", costContext.getProductName());
@@ -206,8 +221,8 @@ public class ReportBomCostTool extends AbstractBusinessTool {
         result.put("startDate", startDate.format(DateTimeFormatter.ISO_DATE));
         result.put("endDate", endDate.format(DateTimeFormatter.ISO_DATE));
 
-        // 获取预计算的生产上下文
-        ProductionAIContext productionContext = aiContextService.buildProductionContext(
+        // 获取预计算的生产上下文 (给 AI 的版本: 保密产品成本已去掉, 合计只在非保密产品上累加)
+        ProductionAIContext productionContext = aiContextService.buildProductionContextForAi(
                 factoryId, startDate, endDate);
 
         // 汇总数据
@@ -218,6 +233,11 @@ public class ReportBomCostTool extends AbstractBusinessTool {
         summary.put("totalCost", productionContext.getTotalCost());
         summary.put("avgUnitCost", productionContext.getAvgUnitCost());
         summary.put("costBreakdown", productionContext.getCostBreakdown());
+        Integer excludedProtected = productionContext.getExcludedProtectedProductCount();
+        if (excludedProtected != null && excludedProtected > 0) {
+            summary.put("excludedProtectedProductCount", excludedProtected);
+            summary.put("note", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(excludedProtected));
+        }
         result.put("summary", summary);
 
         // 排名信息
@@ -250,6 +270,9 @@ public class ReportBomCostTool extends AbstractBusinessTool {
                 prodData.put("costVarianceRate", prod.getCostVarianceRate());
                 prodData.put("totalCost", prod.getTotalCost());
                 prodData.put("batchCount", prod.getBatchCount());
+                if (Boolean.TRUE.equals(prod.getCostWithheld())) {
+                    prodData.put("costWithheld", true);
+                }
 
                 productDetails.add(prodData);
             }

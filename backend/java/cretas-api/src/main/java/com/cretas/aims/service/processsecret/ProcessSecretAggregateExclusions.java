@@ -62,6 +62,39 @@ public class ProcessSecretAggregateExclusions {
         hidden.removeAll(accessService.filterPermitted(AuthenticatedActor.fromCurrentExecution().orElse(null),
                 factoryId, all, ProcessSecretAction.VIEW_FULL, false, resourceRef));
         if (hidden.isEmpty()) return Scope.EMPTY;
+        return expand(factoryId, hidden);
+    }
+
+    /**
+     * 给「发给大模型的数据」用: 已经判定好的隐藏产品 (对当前调用者无完整查看权的保密产品), 连同牵涉它们的计划和锚点,
+     * 以及每个被排除计划背后是哪几个隐藏产品 (给「不含 N 个保密产品」计数, 锚点 / 同计划普通产品不算)。
+     * 判定由调用方做 (ProcessSecretLlmCostScope), 这里不判权限、不记审计。
+     */
+    public record ProtectedScope(Scope scope, Set<String> protectedProductTypeIds,
+                                 Map<String, Set<String>> protectedProductsByPlan, Set<String> planProductTypeIds) {
+    }
+
+    public ProtectedScope forHidden(String factoryId, Set<String> hidden) {
+        Map<String, Set<String>> byPlan = new HashMap<>();
+        Set<String> planProducts = new TreeSet<>();
+        Scope scope = expand(factoryId, new HashSet<>(hidden), byPlan, planProducts);
+        return new ProtectedScope(scope, Set.copyOf(hidden), Map.copyOf(byPlan), Set.copyOf(planProducts));
+    }
+
+    private Scope expand(String factoryId, Set<String> hidden) {
+        return expand(factoryId, hidden, null, null);
+    }
+
+    /** {@code planProducts}: 牵涉隐藏产品的计划上的全部产品 (锚点、目标成品、联产的普通产品)。 */
+    private Scope expand(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan,
+                         Set<String> planProducts) {
+        // 判定范围要读全厂计划和它们钉住的配方: 整段不打标 (否则出口会以为这次输出牵涉了所有计划 / 配方产品,
+        // 把已经按调用者裁剪的合计一起藏掉); 段内新载入的实体在段结束时移出持久化上下文
+        return ProcessSecretReadTracker.untracked(() -> expandTracked(factoryId, hidden, hiddenByPlan, planProducts));
+    }
+
+    private Scope expandTracked(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan,
+                                Set<String> planProducts) {
         TreeSet<String> products = new TreeSet<>(hidden);
         TreeSet<String> plans = new TreeSet<>();
         List<ProductionPlan> factoryPlans = planRepository.findByFactoryId(factoryId);
@@ -69,11 +102,17 @@ public class ProcessSecretAggregateExclusions {
         for (ProductionPlan plan : factoryPlans) {
             // 与裁剪器、配比提示同一口径: 锚点、目标成品、按产品钉的配方键, 以及钉住的配方所属产品
             // (只钉了单个配方的多产出计划, 产品只能从配方查到; 独立审查第四轮 M2)
-            if (ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId)))
-                    .stream().noneMatch(hidden::contains)) {
+            Set<String> allOfPlan = ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId)));
+            Set<String> involved = new TreeSet<>(allOfPlan);
+            involved.retainAll(hidden);
+            if (involved.isEmpty()) {
                 continue;
             }
-            if (plan.getId() != null && !plan.getId().isBlank()) plans.add(plan.getId());
+            if (planProducts != null) planProducts.addAll(allOfPlan);
+            if (plan.getId() != null && !plan.getId().isBlank()) {
+                plans.add(plan.getId());
+                if (hiddenByPlan != null) hiddenByPlan.put(plan.getId(), Set.copyOf(involved));
+            }
             if (plan.getProductTypeId() != null && !plan.getProductTypeId().isBlank()) {
                 products.add(plan.getProductTypeId());
             }

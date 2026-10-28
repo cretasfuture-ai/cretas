@@ -31,6 +31,12 @@ public interface AIContextService {
     ProductionAIContext buildProductionContext(String factoryId, LocalDate startDate, LocalDate endDate);
 
     /**
+     * 给大模型的生产统计上下文 (按当前调用者): 他无权查看的保密产品成本去掉 (数量保留), 成本合计只在他能看的产品上累加。
+     * {@link #formatProductionContextForPrompt} 只接受这个版本。
+     */
+    ProductionAIContext buildProductionContextForAi(String factoryId, LocalDate startDate, LocalDate endDate);
+
+    /**
      * 构建产品成本 AI 上下文
      *
      * @param factoryId 工厂ID
@@ -39,6 +45,12 @@ public interface AIContextService {
      * @return 成本 AI 上下文
      */
     CostAIContext buildCostContext(String factoryId, String productTypeId, Integer recentBatchCount);
+
+    /**
+     * 对外输出版: 当前调用者无权完整查看该产品 (或它的成本来自牵涉保密产品的计划) 时, 只给产品与数量, 成本全空并带说明;
+     * 有权调用者与 {@link #buildCostContext} 相同。
+     */
+    CostAIContext buildCostContextForCaller(String factoryId, String productTypeId, Integer recentBatchCount);
 
     /**
      * 获取成本差异汇总

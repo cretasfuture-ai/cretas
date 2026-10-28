@@ -65,6 +65,86 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
     }
 
     private static final ThreadLocal<Set<Read>> EXPLICIT = new ThreadLocal<>();
+    private static final ThreadLocal<int[]> UNTRACKED = ThreadLocal.withInitial(() -> new int[1]);
+    /** 不打标段里新载入 (触发了 PostLoad) 的实体及其会话: 段结束时从持久化上下文里移出。 */
+    private static final ThreadLocal<java.util.List<Object[]>> LOADED_UNTRACKED = new ThreadLocal<>();
+
+    /**
+     * 不打标地执行一段读取: 只给「自己已经按调用者裁剪了结果」的代码用 —— 判定保密范围要读全厂计划,
+     * 只算调用者能看的计划成本也要先读全厂计划; 这些读数若记进作用域, 出口会以为这次输出牵涉了保密计划,
+     * 连已经裁剪过的合计一起藏掉。其他读取照常打标。
+     *
+     * <p>段里<b>新载入</b>的实体在段结束时移出持久化上下文 (open-in-view 下它们会一直缓存在本请求的会话里,
+     * 之后普通查询再取到同一行就不再触发 PostLoad, 打标网就漏了)。只移出这一段新载入的 (PostLoad 只对它们触发),
+     * 段开始前已托管的实体原样留着 —— 它们当初载入时已经打过标, 也可能正被当前事务修改。
+     * 因此段里对实体的读取 (含懒加载) 要在段内做完, 段外只用算好的结果。</p>
+     *
+     * <p>两种情况不移出, 改为在段结束后补打一次标 (宁可多藏, 不漏): 一是段开始前会话里已有这一行的代理
+     * (外层通过懒加载关联拿着它, 例如 {@code MaterialConsumption.productionPlan}; 移出会让代理脱管, 经它的写入丢失,
+     * 再取得到第二个实例); 二是会话有未刷新的改动 (移出可能连带脱管外层正在改的对象)。
+     * 移出走 {@code evict}, 会沿 {@code CascadeType.ALL} 关联级联到<b>已初始化</b>的集合; 段内代码不初始化集合。</p>
+     */
+    public static <T> T untracked(java.util.function.Supplier<T> read) {
+        int[] depth = UNTRACKED.get();
+        boolean outermost = depth[0] == 0;
+        java.util.List<Object[]> loaded = null;
+        if (outermost) {
+            loaded = new java.util.ArrayList<>();
+            LOADED_UNTRACKED.set(loaded);
+        }
+        depth[0]++;
+        try {
+            return read.get();
+        } finally {
+            depth[0]--;
+            if (outermost) {
+                LOADED_UNTRACKED.remove();
+                release(loaded);
+            }
+        }
+    }
+
+    /** 段结束 (已回到打标状态): 能安全移出的移出; 不能移出的补打标。 */
+    private static void release(java.util.List<Object[]> loaded) {
+        java.util.Map<Object, Boolean> dirtyBySession = new java.util.IdentityHashMap<>();
+        for (Object[] loadedEntity : loaded) {
+            Object entity = loadedEntity[1];
+            boolean referencedBefore = Boolean.TRUE.equals(loadedEntity[2]);
+            if (!(loadedEntity[0] instanceof org.hibernate.Session session) || !session.isOpen()) continue;
+            boolean dirty = dirtyBySession.computeIfAbsent(session, ProcessSecretReadTracker::dirtyOrUnknown);
+            boolean evicted = false;
+            if (!referencedBefore && !dirty) {
+                try {
+                    if (session.contains(entity)) {
+                        session.evict(entity);
+                        evicted = true;
+                    }
+                } catch (RuntimeException e) {
+                    evicted = false;   // 移不出: 下面补打标
+                }
+            }
+            if (!evicted) record(entity);
+        }
+    }
+
+    private static boolean dirtyOrUnknown(Object session) {
+        try {
+            return ((org.hibernate.Session) session).isDirty();
+        } catch (RuntimeException e) {
+            return true;   // 判断不了就当有改动: 不移出
+        }
+    }
+
+    /** PostLoad 时会话里已有这一行的代理 = 段开始前外层已经通过懒加载关联引用了它。判断不了按「有」处理。 */
+    private static boolean referencedByAProxy(PostLoadEvent event) {
+        try {
+            org.hibernate.engine.spi.PersistenceContext context = event.getSession().getPersistenceContextInternal();
+            org.hibernate.engine.spi.EntityEntry entry = context.getEntry(event.getEntity());
+            return entry == null || context.getProxy(entry.getEntityKey()) != null;
+        } catch (RuntimeException e) {
+            return true;
+        }
+    }
 
     /** 打开一个显式作用域 (AI 工具执行)。嵌套时沿用外层, 关闭内层不清外层。 */
     public static Scope open() {
@@ -94,12 +174,18 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
 
     @Override
     public void onPostLoad(PostLoadEvent event) {
+        if (UNTRACKED.get()[0] > 0) {
+            java.util.List<Object[]> loaded = LOADED_UNTRACKED.get();
+            if (loaded != null) loaded.add(new Object[]{event.getSession(), event.getEntity(), referencedByAProxy(event)});
+            return;
+        }
         record(event.getEntity());
     }
 
     /** 包内可见, 供测试和不经过 Hibernate 的读取 (如 JSON 快照) 直接调用。 */
     static void record(Object entity) {
         if (entity == null) return;
+        if (UNTRACKED.get()[0] > 0) return;
         // 先看有没有人在记: 没有就不算 (工艺图要解析 JSON, 不能让每次加载都付这个钱; 独立审查 V2.1 复核)
         Set<Read> sink = sink(true);
         if (sink == null) return;
@@ -145,6 +231,12 @@ public final class ProcessSecretReadTracker implements PostLoadEventListener {
                 found.add(new Read(Kind.PRODUCTION_PLAN, row.getFactoryId(), row.getPlanId(), member));
             }
             return found;
+        }
+        if (entity instanceof com.cretas.aims.entity.ProductionPlan plan) {
+            // 计划上挂着实际成本 (材料 / 人工 / 设备 / 其他): 按计划记, 出口经计划解析它牵涉的全部产品
+            // (纵深防御: 统计接口已按调用者只算能看的计划)
+            if (plan.getId() == null || plan.getId().isBlank()) return List.of();
+            return List.of(new Read(Kind.PRODUCTION_PLAN, plan.getFactoryId(), plan.getId()));
         }
         if (entity instanceof ProductionBatch b) {
             List<Read> found = new java.util.ArrayList<>(product(b.getFactoryId(), b.getProductTypeId()));

@@ -149,6 +149,16 @@ public class CostAIContext {
     private String calculatedAt;
 
     /**
+     * 工艺保密: 实际成本累加了哪些计划的批次。不对外输出 (JSON 忽略), 只给「发给 AI 前」判定用 ——
+     * 任一计划牵涉保密产品, 这份产品成本整份不进提示词 (与生产统计上下文同口径)。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private List<String> costSourcePlanIds;
+
+    /** 工艺保密: 成本对当前调用者不提供时的说明; 其余为 null。 */
+    private String processSecretNote;
+
+    /**
      * 成本差异明细
      */
     @Data

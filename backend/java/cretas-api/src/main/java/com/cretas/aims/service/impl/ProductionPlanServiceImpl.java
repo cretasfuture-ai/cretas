@@ -91,6 +91,10 @@ import java.util.stream.Collectors;
  */
 @Service
 public class ProductionPlanServiceImpl implements ProductionPlanService {
+
+    /** 工艺保密: 计划统计的成本按调用者只算他能看的计划 (Steve 10-29); 单测直接构造时用「没有保密产品」的默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
     private static final Logger log = LoggerFactory.getLogger(ProductionPlanServiceImpl.class);
     private static final ObjectMapper PROCESS_SHEET_ROW_MAPPER = new ObjectMapper().findAndRegisterModules();
 
@@ -9239,8 +9243,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (startDate == null || endDate == null) return cb.conjunction();
             return cb.between(root.get("plannedDate"), startDate, endDate);
         };
-        List<ProductionPlan> plans = productionPlanRepository.findAll(
-                planScope(factoryId, visiblePlanCreators(factoryId)).and(date));
+        // 读计划不打标: 下面的成本合计已按调用者裁剪 (只算他能看的计划), 打标会让出口把裁剪后的合计一起藏掉
+        List<ProductionPlan> plans = com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> productionPlanRepository.findAll(
+                planScope(factoryId, visiblePlanCreators(factoryId)).and(date)));
 
         Map<String, Object> statistics = new HashMap<>();
         statistics.put("totalPlans", plans.size());
@@ -9261,6 +9266,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        // 工艺保密: 调用者对本厂某个保密产品无权时, 成本只在他能看的已完成计划上逐行累加 (带说明)
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = llmCostScope.forCurrentCaller(factoryId);
+        if (!hidden.isEmpty()) {
+            com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visible = com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.ofRows(hidden, plans.stream()
+                    .filter(p -> p.getStatus() == ProductionPlanStatus.COMPLETED).collect(Collectors.toList()));
+            totalCost = visible.total() != null ? visible.total() : BigDecimal.ZERO;
+            if (visible.partial()) statistics.put("processSecretNote", visible.note());
+        }
         statistics.put("totalCost", totalCost);
 
         return statistics;

@@ -48,6 +48,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     private ThreePriceComparisonService catalogService;
     @Autowired
     private ProductTypeRepository productTypeRepository;
+    /**
+     * 工艺保密: 文案 (message) 直接进模型上下文, 当前账号无权查看的保密产品的成本 / 毛利 / 毛利率不写进文案,
+     * 负责人 / 有效授权照常写 (Steve 10-29)。结构化字段仍由 ProcessSecretToolOutputAspect 按调用者裁剪。
+     */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
     @Override
     public String getToolName() {
@@ -147,10 +153,23 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
                 .comparing((Map<String, Object> i) -> rateOf(i, "realized"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
                 .thenComparing(i -> rateOf(i, "catalog"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
                 .thenComparing(i -> String.valueOf(i.get("productName"))));
+        // 工艺保密: 当前调用者无权看的产品不按毛利排 (排名本身泄露毛利高低) —— 挪到最后, 按名称排
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret = llmCostScope.forCurrentCaller(factoryId);
+        if (!secret.isEmpty()) {
+            List<Map<String, Object>> visible = new ArrayList<>();
+            List<Map<String, Object>> masked = new ArrayList<>();
+            for (Map<String, Object> item : items) {
+                Object id = item.get("productTypeId");
+                (id == null || secret.coversProduct(id.toString()) ? masked : visible).add(item);
+            }
+            masked.sort(Comparator.comparing(i -> String.valueOf(i.get("productName"))));
+            items = new ArrayList<>(visible);
+            items.addAll(masked);
+        }
         int total = items.size();
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
-        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod),
+        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret),
                 resultData(shown, total, start, end, defaultPeriod));
     }
 
@@ -302,7 +321,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     // ==================== 文案 ====================
 
     private String buildMessage(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
-                                boolean defaultPeriod) {
+                                boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
         StringBuilder sb = new StringBuilder();
         sb.append("SKU 毛利率共 ").append(total).append(" 个产品，两种口径分开给，不要混着看。")
           .append("「实际销售毛利」统计期间 ").append(start).append(" 至 ").append(end)
@@ -314,6 +333,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
                 break;
             }
             sb.append(n).append(". ").append(item.get("productName")).append("\n");
+            Object productTypeId = item.get("productTypeId");
+            if (!secret.isEmpty() && (productTypeId == null || secret.coversProduct(productTypeId.toString()))) {
+                // 保密产品 (或本厂有保密产品而认不出是哪个产品): 成本与毛利一个数都不写
+                sb.append("   ").append(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON).append("\n");
+                continue;
+            }
             sb.append("   实际销售毛利：").append(realizedText(castMap(item.get("realized")))).append("\n");
             sb.append("   目录价理论毛利：").append(catalogText(castMap(item.get("catalog")))).append("\n");
         }

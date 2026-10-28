@@ -218,6 +218,70 @@ public class CacheService {
     /**
      * 构建AI分析缓存Key
      */
+    private static final String SECRECY_TIER_PREFIX = "ai:ps-tier:";
+
+    /**
+     * 工艺保密分档的共享 AI 分析缓存索引: (工厂, 缓存键, 调用者保密档位) → 分析结果 id。
+     * 档位见 ProcessSecretLlmCostScope.accessTier; 没有档位记录的旧结果在有保密产品的工厂里一律不命中。
+     */
+    public Long getSecrecyTierIndex(String factoryId, String cacheKey, String tier) {
+        try {
+            String key = SECRECY_TIER_PREFIX + factoryId + ":" + cacheKey + ":" + tier;
+            Object value = isUsingMemoryCache() ? memoryCache.get(key) : redisTemplate.opsForValue().get(key);
+            return value == null ? null : Long.valueOf(value.toString());
+        } catch (Exception e) {
+            log.warn("读取保密分档缓存索引失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    public void putSecrecyTierIndex(String factoryId, String cacheKey, String tier, Long reportId,
+                                    java.time.Duration ttl) {
+        if (reportId == null || ttl == null || ttl.isNegative() || ttl.isZero()) return;
+        try {
+            String key = SECRECY_TIER_PREFIX + factoryId + ":" + cacheKey + ":" + tier;
+            if (isUsingMemoryCache()) {
+                memoryCache.put(key, reportId.toString());
+            } else {
+                redisTemplate.opsForValue().set(key, reportId.toString(), ttl.toMinutes() + 1, TimeUnit.MINUTES);
+            }
+        } catch (Exception e) {
+            log.warn("写入保密分档缓存索引失败: {}", e.getMessage());
+        }
+    }
+
+    private static final String SECRECY_ROW_PREFIX = "ai:ps-row:";
+
+    /**
+     * 共享 AI 分析条目 (ai_analysis_results 一行) 生成时的保密戳: 当时的保密产品集合 + 生成者可完整查看的集合。
+     * 报告列表 / 详情据此判断读者能不能看; 取不到 (旧条目 / 缓存丢失) = 只给能看全的读者 (fail-closed)。
+     */
+    public String getRowSecrecyStamp(String factoryId, Long rowId) {
+        if (rowId == null) return null;
+        try {
+            String key = SECRECY_ROW_PREFIX + factoryId + ":" + rowId;
+            Object value = isUsingMemoryCache() ? memoryCache.get(key) : redisTemplate.opsForValue().get(key);
+            return value == null ? null : value.toString();
+        } catch (Exception e) {
+            log.warn("读取分析条目保密戳失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    public void putRowSecrecyStamp(String factoryId, Long rowId, String stamp, java.time.Duration ttl) {
+        if (rowId == null || stamp == null || ttl == null || ttl.isNegative() || ttl.isZero()) return;
+        try {
+            String key = SECRECY_ROW_PREFIX + factoryId + ":" + rowId;
+            if (isUsingMemoryCache()) {
+                memoryCache.put(key, stamp);
+            } else {
+                redisTemplate.opsForValue().set(key, stamp, ttl.toMinutes() + 1, TimeUnit.MINUTES);
+            }
+        } catch (Exception e) {
+            log.warn("写入分析条目保密戳失败: {}", e.getMessage());
+        }
+    }
+
     private String buildAIAnalysisKey(String factoryId, String batchId) {
         return AI_ANALYSIS_PREFIX + factoryId + ":" + batchId;
     }

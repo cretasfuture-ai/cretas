@@ -181,6 +181,14 @@ public class IntentExecutionOrchestrator {
 
     static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply";
 
+    /**
+     * 工艺保密: 存档的日 / 周 / 月报是全厂共享的产物 (经营报告快照含保密产品的毛利 / 成本; 旧文本也留 90 天),
+     * 当前账号对本厂某个保密产品无完整查看权时不拼进咨询提示词; 负责人 / 有效授权照常带 (Steve 10-29)。
+     * 单测直接 new 本类时用「没有保密产品」的默认实例。
+     */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
     // R16 tiered-first 反转开关: 关掉即完全回到 Java-first + gate 摆渡的旧行为。
     @Value("${cretas.restaurant.tiered-first.enabled:true}")
     private boolean tieredFirstEnabled;
@@ -2581,7 +2589,7 @@ public class IntentExecutionOrchestrator {
                     %s
                     ---
                     请基于数据提供针对性建议，不超过500字，使用中文。
-                    """.formatted(factoryAnalysisContext);
+                    """.formatted(factoryAnalysisContext) + llmCostScope.harnessFor(factoryId);
             } else {
                 systemPrompt = "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。";
             }
@@ -4796,6 +4804,15 @@ public class IntentExecutionOrchestrator {
 
     private String getPrecomputedAnalysisContext(String factoryId) {
         if (factoryId == null || factoryId.isEmpty()) return null;
+        try {
+            if (!llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
+                log.info("[process-secret] 当前账号无权查看本厂部分保密产品, 存档报告不拼进咨询提示词: factoryId={}", factoryId);
+                return null;
+            }
+        } catch (RuntimeException e) {
+            log.warn("[process-secret] 保密范围判定失败, 存档报告不拼进咨询提示词: factoryId={}", factoryId);
+            return null;
+        }
         try {
             LocalDateTime now = LocalDateTime.now();
             StringBuilder context = new StringBuilder();

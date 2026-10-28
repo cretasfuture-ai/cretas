@@ -69,6 +69,45 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final ProductionLineRepository productionLineRepository;
     private final FactorySettingsRepository factorySettingsRepository;
 
+    /** 工艺保密: 发给 AI 的成本合计不含当前账号无权查看的保密产品 (Steve 10-29); 字段注入, 单测按构造器装配时用「没有保密产品」的默认实例。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
+    /**
+     * 当前调用者能看的计划成本 (Steve 10-29: 无权的人看到的合计只算他能看的行, 不做「总数 − 保密」)。
+     * 口径与 calculate*CostBetweenDates 一致: 结束时间在区间内; 分项为 SUM 语义 (无行 / 全空为 null),
+     * 合计为 SUM(COALESCE(四项, 0)) 语义 (无行为 null)。{@code perDayBounds}: 与按天查询一致, 每天只算到 23:59:59。
+     */
+    /** 调用者对本厂保密产品都有完整查看权 (或本厂没有保密产品) 时返回 null —— 调用方沿用原查询, 行为不变。 */
+    com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visiblePlanCosts(String factoryId, LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forCurrentCaller(factoryId);
+        if (excluded.isEmpty()) return null;
+        // 读全厂计划不打标: 结果已按调用者只算他能看的计划
+        return com.cretas.aims.service.processsecret.ProcessSecretReadTracker.untracked(() -> com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(excluded,
+                productionPlanRepository.findByFactoryId(factoryId), from, to, perDayBounds));
+    }
+
+    /** 区间总成本: 能看全 → 原查询; 否则可见计划逐行累加, 并在返回给调用方 (页面 / AI 工具) 的数据上注明。 */
+    private BigDecimal totalCostFor(String factoryId, LocalDateTime from, LocalDateTime to, Map<String, Object> report) {
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visible = visiblePlanCosts(factoryId, from, to, false);
+        if (visible == null) return productionPlanRepository.calculateTotalCostBetweenDates(factoryId, from, to);
+        markPartial(report, visible);
+        return visible.total();
+    }
+
+    /** 「不含 N 个保密产品」写进返回数据 (多个区间取最大 N)。 */
+    private static void markPartial(Map<String, Object> report, com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visible) {
+        if (report == null || visible == null || !visible.partial()) return;
+        int n = Math.max(visible.excludedProducts(),
+                report.get("excludedProtectedProductCount") instanceof Integer prior ? prior : 0);
+        report.put("excludedProtectedProductCount", n);
+        report.put("processSecretNote", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(n));
+    }
+
+    private static BigDecimal nz(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
     // ==================== 基础报表 ====================
 
     @Override
@@ -79,7 +118,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalOutput = productionPlanRepository.calculateOutputBetweenDates(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
         report.put("totalOutput", totalOutput != null ? totalOutput : BigDecimal.ZERO);
         // 成本统计
-        BigDecimal totalCost = productionPlanRepository.calculateTotalCostBetweenDates(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        BigDecimal totalCost = totalCostFor(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), report);
         report.put("totalCost", totalCost != null ? totalCost : BigDecimal.ZERO);
         // 日产量趋势
         List<Map<String, Object>> dailyOutput = new ArrayList<>();
@@ -173,13 +212,16 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         if (totalRevenue == null) totalRevenue = BigDecimal.ZERO;
         report.put("totalRevenue", totalRevenue);
         // 成本统计
-        BigDecimal materialCost = productionPlanRepository.calculateMaterialCostBetweenDates(
+        // 工艺保密: 无权调用者的成本只算他能看的计划 (生产成本口径, 不是已过账会计合计)
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = visiblePlanCosts(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
+        markPartial(report, visibleCosts);
+        BigDecimal materialCost = visibleCosts != null ? visibleCosts.material() : productionPlanRepository.calculateMaterialCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal laborCost = productionPlanRepository.calculateLaborCostBetweenDates(
+        BigDecimal laborCost = visibleCosts != null ? visibleCosts.labor() : productionPlanRepository.calculateLaborCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal equipmentCost = productionPlanRepository.calculateEquipmentCostBetweenDates(
+        BigDecimal equipmentCost = visibleCosts != null ? visibleCosts.equipment() : productionPlanRepository.calculateEquipmentCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal otherCost = productionPlanRepository.calculateOtherCostBetweenDates(
+        BigDecimal otherCost = visibleCosts != null ? visibleCosts.other() : productionPlanRepository.calculateOtherCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
         BigDecimal totalCost = Stream.of(materialCost, laborCost, equipmentCost, otherCost)
                 .filter(Objects::nonNull)
@@ -214,6 +256,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                         .multiply(BigDecimal.valueOf(100)).doubleValue()
                 : null;
         report.put("profitMargin", profitMargin);
+        // 工艺保密: 营收含保密产品而成本不含, 两者相减不是利润 —— 不给, 说明原因 (不编)
+        if (visibleCosts != null && visibleCosts.partial()) {
+            report.put("totalProfit", null);
+            report.put("profitMargin", null);
+            report.put("profitUnavailableReason", "营收含工艺保密产品而成本不含，利润不可计算");
+        }
         // 应收应付 (R42 BUG-13: 仅正余额; 客户预付分开统计)
         BigDecimal accountsReceivable = customerRepository.calculateTotalOutstandingBalance(factoryId);
         BigDecimal accountsPayable = supplierRepository.calculateTotalOutstandingBalance(factoryId);
@@ -421,13 +469,16 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     public Map<String, Object> getCostAnalysisReport(String factoryId, LocalDate startDate, LocalDate endDate) {
         log.info("获取成本分析报表: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
         Map<String, Object> report = new HashMap<>();
-        BigDecimal materialCost = productionPlanRepository.calculateMaterialCostBetweenDates(
+        // 工艺保密: 无权调用者的成本只算他能看的计划 (生产成本口径, 不是已过账会计合计)
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = visiblePlanCosts(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
+        markPartial(report, visibleCosts);
+        BigDecimal materialCost = visibleCosts != null ? visibleCosts.material() : productionPlanRepository.calculateMaterialCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal laborCost = productionPlanRepository.calculateLaborCostBetweenDates(
+        BigDecimal laborCost = visibleCosts != null ? visibleCosts.labor() : productionPlanRepository.calculateLaborCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal equipmentCost = productionPlanRepository.calculateEquipmentCostBetweenDates(
+        BigDecimal equipmentCost = visibleCosts != null ? visibleCosts.equipment() : productionPlanRepository.calculateEquipmentCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal otherCost = productionPlanRepository.calculateOtherCostBetweenDates(
+        BigDecimal otherCost = visibleCosts != null ? visibleCosts.other() : productionPlanRepository.calculateOtherCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
         BigDecimal totalCost = Stream.of(materialCost, laborCost, equipmentCost, otherCost)
                 .filter(Objects::nonNull)
@@ -632,6 +683,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         try {
             CostVarianceReportDTO costReport = getCostVarianceReport(factoryId, startDate, endDate);
             BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
+            // 工艺保密: 成本只算了调用者能看的批次而产出是全厂的 —— 两者相除不是单位成本, 不给 (说明见成本差异报表)
+            if (costReport != null && costReport.getProcessSecretNote() != null) totalActualCost = null;
             if (totalActualCost != null && output.compareTo(BigDecimal.ZERO) > 0) {
                 unitCost = totalActualCost.divide(output, 2, RoundingMode.HALF_UP);
             }
@@ -697,26 +750,24 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         Map<String, Object> period1 = new HashMap<>();
         BigDecimal output1 = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59));
-        BigDecimal cost1 = productionPlanRepository.calculateTotalCostBetweenDates(
-                factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59));
+        BigDecimal cost1 = totalCostFor(factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59), analysis);
         period1.put("output", output1 != null ? output1 : BigDecimal.ZERO);
         period1.put("cost", cost1 != null ? cost1 : BigDecimal.ZERO);
         analysis.put("period1", period1);
         Map<String, Object> period2 = new HashMap<>();
         BigDecimal output2 = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59));
-        BigDecimal cost2 = productionPlanRepository.calculateTotalCostBetweenDates(
-                factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59));
+        BigDecimal cost2 = totalCostFor(factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59), analysis);
         period2.put("output", output2 != null ? output2 : BigDecimal.ZERO);
         period2.put("cost", cost2 != null ? cost2 : BigDecimal.ZERO);
         analysis.put("period2", period2);
         Map<String, Double> changeRate = new HashMap<>();
-        if (output1 != null && output1.compareTo(BigDecimal.ZERO) > 0) {
+        if (output1 != null && output1.compareTo(BigDecimal.ZERO) > 0 && output2 != null) {
             changeRate.put("outputChange",
                     output2.subtract(output1).divide(output1, 4, RoundingMode.HALF_UP)
                             .multiply(BigDecimal.valueOf(100)).doubleValue());
         }
-        if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0) {
+        if (cost1 != null && cost1.compareTo(BigDecimal.ZERO) > 0 && cost2 != null) {
             changeRate.put("costChange",
                     cost2.subtract(cost1).divide(cost1, 4, RoundingMode.HALF_UP)
                             .multiply(BigDecimal.valueOf(100)).doubleValue());
@@ -750,8 +801,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal expectedRevenue = avgDailyRevenue.multiply(BigDecimal.valueOf(forecastDays));
         forecast.put("expectedRevenue", expectedRevenue);
         forecast.put("avgDailyRevenue", avgDailyRevenue);
-        BigDecimal historyCost = productionPlanRepository.calculateTotalCostBetweenDates(
-                factoryId, historyStart.atStartOfDay(), today.atStartOfDay());
+        BigDecimal historyCost = totalCostFor(factoryId, historyStart.atStartOfDay(), today.atStartOfDay(), forecast);
         BigDecimal avgDailyCost = BigDecimal.ZERO;
         if (historyCost != null && historyCost.compareTo(BigDecimal.ZERO) > 0) {
             avgDailyCost = historyCost.divide(BigDecimal.valueOf(historyDaysCount), 2, RoundingMode.HALF_UP);
@@ -767,6 +817,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                     .multiply(BigDecimal.valueOf(100)).doubleValue();
         }
         forecast.put("profitMargin", profitMargin);
+        // 工艺保密: 营收含保密产品而成本不含, 预期利润 / 利润率不给 (不编)
+        if (forecast.containsKey("processSecretNote")) {
+            forecast.put("expectedProfit", null);
+            forecast.put("profitMargin", null);
+        }
         LocalDate prevStart = historyStart.minusDays(30);
         BigDecimal prevOutput = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, prevStart.atStartOfDay(), historyStart.atStartOfDay());
@@ -793,8 +848,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
 
         BigDecimal totalOutput = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
-        BigDecimal totalCost = productionPlanRepository.calculateTotalCostBetweenDates(
-                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        BigDecimal totalCost = totalCostFor(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), dataContext);
         dataContext.put("totalOutput", totalOutput != null ? totalOutput : BigDecimal.ZERO);
         dataContext.put("totalCost", totalCost != null ? totalCost : BigDecimal.ZERO);
 
@@ -842,11 +896,18 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         }
 
         try {
+            // 工艺保密: dataContext 的总成本已按调用者只算他能看的计划, 发给 AI 的就是这一份
+            BigDecimal aiTotalCost = (BigDecimal) dataContext.get("totalCost");
+            String secretNote = dataContext.get("processSecretNote") instanceof String note ? note + "\n" : "";
+            Map<String, Object> aiData = new HashMap<>(dataContext);
+            // 说明文字只放正文: 留在结构化数据里会被脱敏器当成自由文本认出来, 连带正文里的同一句一起换成代号
+            aiData.remove("processSecretNote");
+            aiData.put("totalCost", aiTotalCost);
             String aiMessage = String.format(
                 "分析以下工厂数据，识别潜在的异常和风险：\n" +
                 "- 期间：%s 至 %s\n" +
                 "- 总产量：%.2f\n" +
-                "- 总成本：%.2f\n" +
+                "- 总成本：%.2f\n%s" +
                 "- 即将过期批次：%d个\n" +
                 "- 已过期批次：%d个\n" +
                 "- 低库存项目：%d个\n" +
@@ -854,14 +915,15 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 "请识别异常模式，分析潜在风险，并提供预警建议。",
                 startDate, endDate,
                 dataContext.get("totalOutput"),
-                dataContext.get("totalCost"),
+                aiTotalCost,
+                secretNote,
                 expiringBatches.size(),
                 expiredBatches.size(),
                 lowStockItems.size(),
                 needsMaintenance.size()
             );
             Map<String, Object> aiResult = aiAnalysisService.analyzeCost(
-                factoryId, "anomaly_detection", dataContext, null, aiMessage
+                factoryId, "anomaly_detection", aiData, null, aiMessage
             );
             if (Boolean.TRUE.equals(aiResult.get("success"))) {
                 report.put("aiAnalysis", aiResult.get("aiAnalysis"));
@@ -935,11 +997,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         return report;
     }
 
+    /** 趋势报表最多回看的天数 (每天一次查询)。 */
+    static final int MAX_TREND_DAYS = 366;
+
     @Override
     public Map<String, Object> getTrendAnalysisReport(String factoryId, String type, Integer period) {
         log.info("获取趋势分析报表: factoryId={}, type={}, period={}", factoryId, type, period);
+        // 天数没给 / 非正数: 按 30 天 (与生产周报对比工具的默认一致), 不再空指针
+        if (period == null || period <= 0) period = 30;
+        period = Math.min(period, MAX_TREND_DAYS);    // 逐日查询: 上限一年
+        // 类型没给: 按产量 (与工具 schema 的默认一致); 不认识的类型照旧给 0 值序列
+        if (type == null || type.isBlank()) type = "production";
         Map<String, Object> report = new HashMap<>();
         List<Map<String, Object>> trendData = new ArrayList<>();
+        // 工艺保密: 成本趋势按调用者只算他能看的计划 (一次取全区间, 按天分)
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = "cost".equals(type) ? visiblePlanCosts(factoryId,
+                LocalDate.now().minusDays(period - 1).atStartOfDay(), LocalDate.now().atTime(23, 59, 59), true) : null;
+        markPartial(report, visibleCosts);
         for (int i = period - 1; i >= 0; i--) {
             LocalDate date = LocalDate.now().minusDays(i);
             Map<String, Object> dataPoint = new HashMap<>();
@@ -951,8 +1025,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                     dataPoint.put("value", output != null ? output : BigDecimal.ZERO);
                     break;
                 case "cost":
-                    BigDecimal cost = productionPlanRepository.calculateTotalCostBetweenDates(
-                            factoryId, date.atStartOfDay(), date.atTime(23, 59, 59));
+                    BigDecimal cost = visibleCosts != null ? visibleCosts.totalByDay().get(date)
+                            : productionPlanRepository.calculateTotalCostBetweenDates(
+                                    factoryId, date.atStartOfDay(), date.atTime(23, 59, 59));
                     dataPoint.put("value", cost != null ? cost : BigDecimal.ZERO);
                     break;
                 default:
@@ -974,16 +1049,14 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         Map<String, Object> report = new HashMap<>();
         BigDecimal output1 = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59));
-        BigDecimal cost1 = productionPlanRepository.calculateTotalCostBetweenDates(
-                factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59));
+        BigDecimal cost1 = totalCostFor(factoryId, period1Start.atStartOfDay(), period1End.atTime(23, 59, 59), report);
         Map<String, Object> period1Data = new HashMap<>();
         period1Data.put("output", output1);
         period1Data.put("cost", cost1);
         report.put("period1", period1Data);
         BigDecimal output2 = productionPlanRepository.calculateOutputBetweenDates(
                 factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59));
-        BigDecimal cost2 = productionPlanRepository.calculateTotalCostBetweenDates(
-                factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59));
+        BigDecimal cost2 = totalCostFor(factoryId, period2Start.atStartOfDay(), period2End.atTime(23, 59, 59), report);
         Map<String, Object> period2Data = new HashMap<>();
         period2Data.put("output", output2);
         period2Data.put("cost", cost2);
@@ -1016,6 +1089,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         int historicalDays = 30;
         List<Map<String, Object>> historicalData = new ArrayList<>();
         BigDecimal totalHistorical = BigDecimal.ZERO;
+        // 工艺保密: 成本历史按调用者只算他能看的计划 (一次取全区间, 按天分); 返回给页面 / 工具 / AI 的都是这一份
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = "cost".equals(type) ? visiblePlanCosts(factoryId,
+                today.minusDays(historicalDays - 1).atStartOfDay(), today.atTime(23, 59, 59), true) : null;
+        markPartial(report, visibleCosts);
 
         for (int i = historicalDays - 1; i >= 0; i--) {
             LocalDate date = today.minusDays(i);
@@ -1024,8 +1101,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 value = productionPlanRepository.calculateOutputBetweenDates(
                         factoryId, date.atStartOfDay(), date.atTime(23, 59, 59));
             } else if ("cost".equals(type)) {
-                value = productionPlanRepository.calculateTotalCostBetweenDates(
-                        factoryId, date.atStartOfDay(), date.atTime(23, 59, 59));
+                value = visibleCosts != null ? visibleCosts.totalByDay().get(date)
+                        : productionPlanRepository.calculateTotalCostBetweenDates(
+                                factoryId, date.atStartOfDay(), date.atTime(23, 59, 59));
             }
             if (value == null) value = BigDecimal.ZERO;
             totalHistorical = totalHistorical.add(value);
@@ -1038,21 +1116,26 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal dailyAverage = totalHistorical.divide(BigDecimal.valueOf(historicalDays), 2, RoundingMode.HALF_UP);
 
         try {
+            // 工艺保密: 历史值已按调用者只算他能看的计划, 发给 AI 的就是这一份
+            List<Map<String, Object>> aiHistorical = historicalData;
+            BigDecimal aiTotal = totalHistorical;
+            BigDecimal aiAverage = dailyAverage;
+            String secretNote = report.get("processSecretNote") instanceof String note ? note + "\n" : "";
             Map<String, Object> aiContext = new HashMap<>();
             aiContext.put("factoryId", factoryId);
             aiContext.put("forecastType", type);
             aiContext.put("forecastDays", days);
-            aiContext.put("historicalData", historicalData);
-            aiContext.put("dailyAverage", dailyAverage);
-            aiContext.put("totalHistorical", totalHistorical);
+            aiContext.put("historicalData", aiHistorical);
+            aiContext.put("dailyAverage", aiAverage);
+            aiContext.put("totalHistorical", aiTotal);
 
             String aiMessage = String.format(
                 "基于以下%d天的历史数据进行%s预测分析，预测未来%d天的趋势：\n" +
                 "- 历史数据总计：%.2f\n" +
-                "- 日均值：%.2f\n" +
+                "- 日均值：%.2f\n%s" +
                 "请分析数据趋势，识别周期性规律，并给出预测建议。",
                 historicalDays, "production".equals(type) ? "产量" : "成本", days,
-                totalHistorical.doubleValue(), dailyAverage.doubleValue()
+                aiTotal.doubleValue(), aiAverage.doubleValue(), secretNote
             );
             Map<String, Object> aiResult = aiAnalysisService.analyzeCost(
                 factoryId, "forecast_" + type, aiContext, null, aiMessage
@@ -1299,7 +1382,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     }
 
     @Override
-    @Cacheable(value = "costVarianceReport", key = "#factoryId + '_' + #startDate + '_' + #endDate", unless = "#result == null")
+    // 工艺保密: 结果按调用者裁剪 ⇒ 共享缓存键带调用者保密档位 (本厂没有保密产品时档位为空串)
+    @Cacheable(value = "costVarianceReport", key = "#factoryId + '_' + #startDate + '_' + #endDate + '_' + @processSecretLlmCostScope.accessTier(#factoryId)", unless = "#result == null")
     public CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate) {
         log.info("获取成本差异报表: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
 
@@ -1311,11 +1395,21 @@ public class ProductionReportServiceImpl implements ProductionReportService {
 
         BigDecimal totalActualCost = BigDecimal.ZERO;
         int batchCount = batches.size();
+        // 工艺保密: 无权调用者的实际成本只算他能看的批次 (数量照常), 保密产品的单位成本不给
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded hidden = llmCostScope.forCurrentCaller(factoryId);
+        Set<String> hiddenProducts = new LinkedHashSet<>();
+        int hiddenBatches = 0;
 
         Map<String, List<ProductionBatch>> productBatches = new HashMap<>();
         for (ProductionBatch batch : batches) {
             String productId = batch.getProductTypeId() != null ? batch.getProductTypeId() : "UNKNOWN";
             productBatches.computeIfAbsent(productId, k -> new ArrayList<>()).add(batch);
+            if (hidden.coversBatch(batch.getProductTypeId(), batch.getProductionPlanId())) {
+                hiddenBatches++;
+                hiddenProducts.addAll(hidden.protectedBehind(batch.getProductTypeId(),
+                        batch.getProductionPlanId() == null ? List.of() : List.of(batch.getProductionPlanId())));
+                continue;
+            }
             if (batch.getTotalCost() != null) {
                 totalActualCost = totalActualCost.add(batch.getTotalCost());
             }
@@ -1346,13 +1440,20 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 BigDecimal prodQuantity = productBatchList.stream()
                         .map(b -> b.getActualQuantity() != null ? b.getActualQuantity() : BigDecimal.ZERO)
                         .reduce(BigDecimal.ZERO, BigDecimal::add);
-                BigDecimal prodActualCost = productBatchList.stream()
+                // 工艺保密: 单位成本只用调用者能看的批次; 一个都看不到就不给 (数量照常)
+                List<ProductionBatch> visibleBatchList = productBatchList.stream()
+                        .filter(b -> !hidden.coversBatch(b.getProductTypeId(), b.getProductionPlanId()))
+                        .collect(Collectors.toList());
+                BigDecimal visibleQuantity = visibleBatchList.stream()
+                        .map(b -> b.getActualQuantity() != null ? b.getActualQuantity() : BigDecimal.ZERO)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                BigDecimal prodActualCost = visibleBatchList.stream()
                         .map(b -> b.getTotalCost() != null ? b.getTotalCost() : BigDecimal.ZERO)
                         .reduce(BigDecimal.ZERO, BigDecimal::add);
 
                 // 实际单位成本是真实读数; 没有产量时算不出来 —— ⛔ 不是 0。
-                BigDecimal unitActualCost = prodQuantity.compareTo(BigDecimal.ZERO) > 0 ?
-                        prodActualCost.divide(prodQuantity, 4, RoundingMode.HALF_UP) : null;
+                BigDecimal unitActualCost = visibleQuantity.compareTo(BigDecimal.ZERO) > 0 ?
+                        prodActualCost.divide(visibleQuantity, 4, RoundingMode.HALF_UP) : null;
 
                 productVariances.add(CostVarianceReportDTO.ProductCostVariance.builder()
                         .productTypeId(entry.getKey())
@@ -1399,11 +1500,13 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .overheadCostRatio(null)
                 .productVariances(productVariances)
                 .anomalyProducts(anomalyProducts)
+                .processSecretNote(hiddenBatches > 0 ? com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(hiddenProducts.size()) : null)
                 .build();
     }
 
     @Override
-    @Cacheable(value = "kpiMetrics", key = "#factoryId + '_' + #date", unless = "#result == null")
+    // 工艺保密: 内含按调用者裁剪的成本合计 ⇒ 缓存键带调用者保密档位
+    @Cacheable(value = "kpiMetrics", key = "#factoryId + '_' + #date + '_' + @processSecretLlmCostScope.accessTier(#factoryId)", unless = "#result == null")
     public KpiMetricsDTO getKpiMetricsDTO(String factoryId, LocalDate date) {
         log.info("获取完整KPI指标: factoryId={}, date={}", factoryId, date);
 
@@ -1467,6 +1570,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal totalActualCost = costReport != null ? costReport.getTotalActualCost() : null;
         BigDecimal unitCost = (totalActualCost != null && safeOutput.compareTo(BigDecimal.ZERO) > 0) ?
                 totalActualCost.divide(safeOutput, 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+        // 工艺保密: 成本只算了调用者能看的批次而产出是全厂的, 相除不是单位成本 —— 不给
+        if (costReport != null && costReport.getProcessSecretNote() != null) unitCost = null;
 
         BigDecimal equipmentAvailability = equipments.size() > 0 ?
                 new BigDecimal(runningEquipment).divide(new BigDecimal(equipments.size()), 4, RoundingMode.HALF_UP)

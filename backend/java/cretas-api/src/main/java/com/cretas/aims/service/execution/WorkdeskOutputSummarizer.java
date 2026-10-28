@@ -55,6 +55,11 @@ public class WorkdeskOutputSummarizer {
      * 数字出处闸。非 final + 默认实例: 既有单测用两参构造器 new 出本类, 它们照样走闸
      * (而不是因为字段为 null 静默跳过); Spring 下由容器注入同一个带计数器的 bean。
      */
+    /** 工艺保密系统约束; 单测直接 new 本类时用「没有保密产品」的默认实例。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
     @Autowired(required = false)
     private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
 
@@ -516,7 +521,8 @@ public class WorkdeskOutputSummarizer {
 
             String intentName = response.getIntentName() != null
                     ? response.getIntentName() : "工作台";
-            String systemPrompt = buildSystemPrompt(intentName);
+            // 工艺保密系统约束 (有保密产品的工厂): 保密产品的数据只用于回答当前用户, 不写进可共享 / 复用的内容
+            String systemPrompt = buildSystemPrompt(intentName) + (factoryId == null ? "" : llmCostScope.harnessFor(factoryId));
             String userInput = "以下是 " + intentName + " 编排执行的工具返回数据 (JSON), 请按 system 提示输出摘要:\n\n"
                     + payloadJson;
 

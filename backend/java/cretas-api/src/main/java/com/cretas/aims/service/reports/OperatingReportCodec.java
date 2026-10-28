@@ -62,6 +62,11 @@ public class OperatingReportCodec {
         } catch (Exception exception) { throw new IllegalArgumentException("Invalid operating report insight selection"); }
     }
 
+    /** 工艺保密遮挡标记 (与其他页面「已保密」一致): 值为 null 且缺失原因是它, 正文显示「已保密」而不是「数据缺失」。 */
+    public static final String PROCESS_SECRET_MASK = "已保密";
+    /** 与保密产品同计划联产的普通产品: 成本与保密产品分摊, 单独给会泄露 —— 中性措辞, 不打「保密」标签。 */
+    public static final String CO_PRODUCT_MASK = "不可单独计算";
+
     public String render(OperatingReportSnapshot snapshot, boolean canViewPrices) {
         if (snapshot.status() == OperatingReportSnapshot.Status.FAILED) {
             return "生成失败：" + failure(snapshot).reason();
@@ -75,7 +80,9 @@ public class OperatingReportCodec {
                     .append(label(section.basis())).append("\n\n");
             for (OperatingReportSnapshot.Metric metric : section.metrics()) {
                 text.append("- ").append(label(metric.label())).append("：");
-                if (metric.value() == null) text.append("数据缺失（").append(label(metric.missingReason())).append("）");
+                if (metric.value() == null && PROCESS_SECRET_MASK.equals(metric.missingReason())) text.append(PROCESS_SECRET_MASK);
+                else if (metric.value() == null && CO_PRODUCT_MASK.equals(metric.missingReason())) text.append(CO_PRODUCT_MASK);
+                else if (metric.value() == null) text.append("数据缺失（").append(label(metric.missingReason())).append("）");
                 else text.append(metric.value().stripTrailingZeros().toPlainString()).append(label(metric.unit()));
                 if (metric.coverage() != null) text.append("；覆盖率 ")
                         .append(metric.coverage().multiply(java.math.BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()).append('%');
