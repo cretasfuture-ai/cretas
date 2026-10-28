@@ -11,6 +11,7 @@ from smartbi.services.factory_charts import conversation
 from smartbi.services.factory_charts import conversation_store
 from smartbi.services.factory_charts.business_metrics import build as build_business_metrics
 from smartbi.services.factory_charts import cross_table as joined, engine
+from common.llm_router import LLMChainExhausted
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +79,160 @@ async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
         {'id': 'two', 'familyId': 'production.output', 'chartType': 'bar', 'domain': '生产', 'metric': '产量', 'unit': 'kg'},
     ])
     assert selected == [] and mode['mode'] == 'unavailable'
+
+
+def _planner_catalog():
+    return [
+        {'id': 'one', 'familyId': 'production.output', 'chartType': 'line',
+         'domain': '生产', 'metric': '产量', 'unit': 'kg'},
+        {'id': 'two', 'familyId': 'quality.pass_rate', 'chartType': 'bar',
+         'domain': '质量', 'metric': '合格率', 'unit': '%'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_family_chain_failure_gets_one_fixed_feedback_retry(monkeypatch):
+    calls = []
+
+    async def call(_slot, payload, **_kwargs):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise LLMChainExhausted(
+                'chart', ['provider/model: invalid_planner selected duplicate chart family'])
+        alias = json.loads(payload['messages'][1]['content'])['catalog'][0]['id']
+        assert '固定校验反馈' in payload['messages'][-1]['content']
+        assert 'invalid_planner' not in payload['messages'][-1]['content']
+        return {'choices': [{'message': {'content': json.dumps(
+            {'selected_ids': [alias]})}}]}
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
+
+    assert selected == ['one'] and mode['mode'] == 'ai'
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_mixed_duplicate_family_and_quota_chain_gets_one_retry(monkeypatch):
+    calls = []
+
+    async def call(_slot, payload, **_kwargs):
+        calls.append(payload)
+        if len(calls) == 1:
+            raise LLMChainExhausted('chart', [
+                'primary/model: invalid_planner selected duplicate chart family',
+                'backup/model: quota 429',
+            ])
+        alias = json.loads(payload['messages'][1]['content'])['catalog'][0]['id']
+        return {'choices': [{'message': {'content': json.dumps(
+            {'selected_ids': [alias]})}}]}
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
+
+    assert selected == ['one'] and mode['mode'] == 'ai'
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_duplicate_family_second_failure_is_unavailable_without_third_call(monkeypatch):
+    calls = 0
+
+    async def call(_slot, _payload, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise LLMChainExhausted(
+            'chart', ['provider/model: invalid_planner selected duplicate chart family'])
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
+
+    assert selected == [] and mode['mode'] == 'unavailable'
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_quota_timeout_and_other_invalid_do_not_trigger_replan(monkeypatch):
+    cases = [
+        ['provider/model: quota 429'],
+        ['provider/model: timeout'],
+        ['provider/model: invalid_planner envelope contains unknown fields'],
+    ]
+    for errors in cases:
+        calls = 0
+
+        async def call(_slot, _payload, _errors=errors, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise LLMChainExhausted('chart', _errors)
+
+        monkeypatch.setattr('common.llm_router.call_chain', call)
+        selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
+        assert selected == [] and mode['mode'] == 'unavailable'
+        assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_non_router_exception_with_errors_attribute_does_not_replan(monkeypatch):
+    calls = 0
+
+    class MisleadingError(RuntimeError):
+        errors = ['provider/model: invalid_planner selected duplicate chart family']
+
+    async def call(_slot, _payload, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise MisleadingError('not an llm router chain failure')
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
+
+    assert selected == [] and mode['mode'] == 'unavailable'
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_family_does_not_replan_after_shared_deadline(monkeypatch):
+    clock = iter([0.0, 0.0, 12.1])
+    monkeypatch.setattr(conversation, '_planner_monotonic', lambda: next(clock))
+    calls = 0
+
+    async def call(_slot, _payload, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise LLMChainExhausted(
+            'chart', ['provider/model: invalid_planner selected duplicate chart family'])
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
+
+    assert selected == [] and mode['mode'] == 'unavailable'
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(monkeypatch):
+    calls = []
+    oversized_metric = 'x' * 49200
+
+    async def call(_slot, payload, **_kwargs):
+        calls.append(payload)
+        if len(calls) > 1:
+            raise AssertionError('retry payload must be rejected before provider call')
+        payload_size = len(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+        assert 49000 <= payload_size < 50000
+        raise LLMChainExhausted(
+            'chart', ['provider/model: invalid_planner selected duplicate chart family'])
+
+    monkeypatch.setattr('common.llm_router.call_chain', call)
+    selected, mode = await conversation.plan('看生产', [{
+        'id': 'large', 'familyId': 'production.output', 'chartType': 'line',
+        'domain': '生产', 'metric': oversized_metric, 'unit': 'kg',
+    }])
+
+    assert selected == [] and mode['mode'] == 'unavailable'
+    assert '超过安全上限' in mode['reason']
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio

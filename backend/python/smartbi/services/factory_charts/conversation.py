@@ -29,6 +29,7 @@ MAX_CONTEXTS = 128
 MAX_HISTORY = 8
 MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
+_planner_monotonic = time.monotonic
 
 
 @dataclass
@@ -215,7 +216,7 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                 "role": "system",
                 "content": (
                     "你是工厂经营分析图表规划器。只能从给定目录选择真实id，不能新增、改写或猜测id，"
-                    "最多选择4个不同familyId。只返回JSON对象："
+                    "最多选择4个不同familyId，selected_ids中每一项的familyId必须互异。只返回JSON对象："
                     '{"selected_ids":["目录中的id"],"reason":"简短规划理由"}。'
                     "不要计算数值，不要输出事实、SQL、表名或因果结论。"
                 ),
@@ -272,7 +273,7 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                         for child in value: collect_chart_strings(child)
                 collect_chart_strings(chart)
             return {key: list(dict.fromkeys(items)) for key, items in values.items() if items}
-        from common.llm_router import call_chain, SLOT
+        from common.llm_router import call_chain, SLOT, LLMChainExhausted
         provider_lookup = {alias: item for item, alias in ((item, aliases[str(item["id"])]) for item in semantic)}
         def content_validator(content: str) -> Optional[str]:
             try:
@@ -289,10 +290,52 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                 return None
             except Exception as exc:
                 return str(exc)
+        def _duplicate_family_failure(exc: Exception) -> bool:
+            if not isinstance(exc, LLMChainExhausted):
+                return False
+            errors = getattr(exc, "errors", None)
+            if not isinstance(errors, list) or not errors:
+                return False
+            return any(str(error).endswith(
+                ": invalid_planner selected duplicate chart family") for error in errors)
+
         with redaction_scope() as scope, llm_caller_context("factory_chart_conversation", factory_id=factory_id):
             scope.register_values(_sensitive_values())
-            response = await asyncio.wait_for(call_chain(SLOT.CHART, payload, timeout=6,
-                                                         total_timeout=10, content_validator=content_validator), timeout=12)
+            deadline = _planner_monotonic() + 12.0
+
+            async def _call(request: Mapping[str, Any]) -> Mapping[str, Any]:
+                remaining = deadline - _planner_monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                return await asyncio.wait_for(
+                    call_chain(
+                        SLOT.CHART,
+                        request,
+                        timeout=min(6.0, remaining),
+                        total_timeout=min(10.0, remaining),
+                        content_validator=content_validator,
+                    ),
+                    timeout=remaining,
+                )
+
+            try:
+                response = await _call(payload)
+            except Exception as first_error:
+                # Duplicate-family evidence plus fixed feedback permits one
+                # correction. Other errors alone never trigger a second request.
+                if not _duplicate_family_failure(first_error):
+                    raise
+                retry_payload = copy.deepcopy(payload)
+                retry_payload["messages"].append({
+                    "role": "user",
+                    "content": (
+                        "固定校验反馈：上次选择包含重复familyId。请仅从目录重新选择，"
+                        "selected_ids每项familyId必须互异，最多4项；仍只返回原JSON格式。"
+                    ),
+                })
+                if len(json.dumps(retry_payload, ensure_ascii=False).encode("utf-8")) > 50000:
+                    return [], {"mode": "unavailable", "reason": "图表规划纠正请求超过安全上限"}
+                response = await _call(retry_payload)
         choices = response.get("choices") if isinstance(response, Mapping) else None
         content = choices[0].get("message", {}).get("content") if choices else None
         parsed = _parse_llm_json(content)
