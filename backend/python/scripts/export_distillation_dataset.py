@@ -56,6 +56,7 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 
 from smartbi.services.process_secret_names import (  # noqa: E402
     all_protected_product_names,
+    any_factory_names,
     mentions_any,
 )
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
@@ -237,12 +238,18 @@ def passes_training_rule(row: Dict[str, Any],
     """A real row may be exported only if it was captured under the 2026-10-24
     rule and still has no blocked content (re-checked here, defense in depth),
     and it does not name one of its factory's process-secret products (privacy
-    clause 6; rows captured before the product was protected are caught here)."""
+    clause 6; rows captured before the product was protected are caught here).
+    A row with no factory must not name a process-secret product of ANY factory."""
     if RULE_KEY not in _metadata(row):
         return False
     if qa_has_blocked_content(row.get("input_text"), row.get("teacher_output")):
         return False
-    names = (protected_names or {}).get(row.get("factory_id") or "", ())
+    factory_id = row.get("factory_id")
+    if factory_id:
+        names = (protected_names or {}).get(factory_id, ())
+    else:
+        # no factory: we cannot tell whose product it names -> any factory's
+        names = any_factory_names(protected_names or {})
     return not mentions_any(names, row.get("input_text"), row.get("teacher_output"))
 
 

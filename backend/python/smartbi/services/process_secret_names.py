@@ -67,5 +67,13 @@ async def all_protected_product_names(pool=None) -> Mapping[str, FrozenSet[str]]
     return {f: usable_names(n) for f, n in by_factory.items()}
 
 
+def any_factory_names(by_factory: Mapping[str, Iterable[str]]) -> FrozenSet[str]:
+    """Union of every factory's protected names.
+
+    For samples with no factory: we cannot tell whose product they name, so a
+    sample naming a process-secret product of ANY factory is not used."""
+    return frozenset(n for names in (by_factory or {}).values() for n in (names or ()))
+
+
 def clear_cache() -> None:
     _cache.clear()

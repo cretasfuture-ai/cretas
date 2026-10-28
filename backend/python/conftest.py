@@ -40,6 +40,7 @@ def _no_process_secret_products_by_default():
 
     restore = []
     targets = (("smartbi.services.distillation_capture", "protected_product_names", _none),
+               ("smartbi.services.distillation_capture", "all_protected_product_names", _none_map),
                ("scripts.export_distillation_dataset", "all_protected_product_names", _none_map))
     for module_name, attr, stub in targets:
         try:
