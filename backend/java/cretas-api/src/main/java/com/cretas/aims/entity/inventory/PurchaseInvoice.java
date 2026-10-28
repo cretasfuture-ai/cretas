@@ -103,6 +103,13 @@ public class PurchaseInvoice extends BaseEntity {
     @Column(name = "reconciled_at")
     private LocalDateTime reconciledAt;
 
+    /**
+     * S5-05 切换标记：TRUE = 逐行三单之后登记的发票（必须带发票行）；
+     * FALSE = 切换前的历史发票，所在采购单若全是历史发票才沿用旧的人工核对闭环口径。
+     */
+    @Column(name = "line_match_required", nullable = false)
+    private Boolean lineMatchRequired = Boolean.FALSE;
+
     // ─── OCR 自动识别字段 ──────────────────────────────────────────────────
     /** OSS key of the uploaded invoice image/PDF */
     @Column(name = "attachment_key", length = 500)

@@ -42,11 +42,12 @@ class PurchaseInvoiceGrossAmountContractTest {
     PurchaseInvoice upload(String amount) {
         return service.upload("TEST-A", "PO-1", "SUP-1", "TEST-INVOICE", new BigDecimal(amount), null, 8L);
     }
-    @Test void headerGrossEqualWithoutLinesNoLongerAutoMatches() {
+    @Test void headerGrossEqualWithoutLinesIsRejectedNotMatched() {
         var order = order("146.01", "18.99");
-        var invoice = upload("165.00");
-        assertThat(invoice.getReconcileStatus()).isEqualTo("PENDING");
-        assertThat(invoice.getReconciledBy()).isNull();
+        assertThatThrownBy(() -> upload("165.00"))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessageContaining("逐行登记");
+        verify(invoices, never()).save(any());
         assertThat(order.getInvoiceStatus()).isNotEqualTo(PurchaseInvoiceStatus.RECONCILED);
     }
     @Test void lineExpectedAmountIsTaxInclusive() {
@@ -57,9 +58,13 @@ class PurchaseInvoiceGrossAmountContractTest {
         // 10 × 14.601 = 146.01 未税, ×1.13 = 164.99 含税 —— 不能按未税 146.01 判
         assertThat(PurchaseInvoiceThreeWayMatcher.expectedAmount(item, new BigDecimal("10")))
                 .isEqualByComparingTo("164.99");
-        item.setTaxRate(null);
+        item.setTaxRate(BigDecimal.ZERO);
         assertThat(PurchaseInvoiceThreeWayMatcher.expectedAmount(item, new BigDecimal("10")))
                 .isEqualByComparingTo("146.01");
+        // 税率未知 ≠ 0%: 按未税额核会把未税票错判相符 → 量不出来就是 null (PRICE_UNKNOWN)
+        item.setTaxRate(null);
+        assertThat(PurchaseInvoiceThreeWayMatcher.expectedAmount(item, new BigDecimal("10"))).isNull();
+        item.setTaxRate(new BigDecimal("13"));
         item.setUnitPrice(null);
         assertThat(PurchaseInvoiceThreeWayMatcher.expectedAmount(item, new BigDecimal("10"))).isNull();
     }

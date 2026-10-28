@@ -99,9 +99,19 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         invoice.setOcrRawResult(ocrRawResult);
         invoice.setUploadedBy(uploadedBy);
         invoice.setReconcileStatus("PENDING");
+        invoice.setLineMatchRequired(Boolean.TRUE);
+
+        // S5-05: 新登记的发票必须逐行对应采购单行。只登表头 = 不占任何量,
+        // 再被人工核成相符就绕过了三单匹配; 旧口径只留给切换前的历史发票。
+        if (lines == null || lines.isEmpty()) {
+            throw new BusinessException(400, "发票必须逐行登记（每行对应采购单行和数量），不能只登记表头金额")
+                    .withCode("PURCHASE_INVOICE_LINES_REQUIRED")
+                    .withHint("请先读取采购单行，按票面逐行填写数量和金额")
+                    .withHintTarget("lines");
+        }
 
         // 行先校验再落发票: 超开 409 时不能留下一张孤立的表头发票。
-        List<PurchaseInvoiceLineRequest> requested = lines == null ? List.of() : lines;
+        List<PurchaseInvoiceLineRequest> requested = lines;
         PurchaseInvoiceThreeWayMatcher.Ledger ledger = threeWayMatcher.load(factoryId, po);
         List<PurchaseInvoiceLine> builtLines = threeWayMatcher.buildLines(factoryId, ledger, null, requested);
 
@@ -119,9 +129,7 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
         for (PurchaseInvoiceLine line : builtLines) {
             line.setInvoiceId(saved.getId());
         }
-        if (!builtLines.isEmpty()) {
-            lineRepository.saveAll(builtLines);
-        }
+        lineRepository.saveAll(builtLines);
         refreshOrderInvoiceStatus(factoryId, po);
         purchaseOrderRepository.save(po);
         chaseLogRepository.closeOpenChases(factoryId, poId, LocalDateTime.now());
@@ -179,13 +187,10 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
     }
 
     /**
-     * 自动判相符的唯一条件: 有行级资料、每行物料/金额都与采购单行一致、行合计 = 发票总额。
+     * 自动判相符的唯一条件: 每行物料/金额都与采购单行一致、行合计 = 发票总额（行不能为空, 上游已拦）。
      * 返回 null 表示可自动相符, 否则返回留给核对员看的原因。
      */
     private String autoMatchBlocker(List<PurchaseInvoiceLine> lines, BigDecimal invoiceAmount) {
-        if (lines.isEmpty()) {
-            return "缺行级资料（未逐行对应采购单行/收货行），不能自动判三单相符，需人工核对";
-        }
         List<String> problems = new java.util.ArrayList<>();
         for (PurchaseInvoiceLine line : lines) {
             if (!PurchaseInvoiceLine.MATCHED.equals(line.getMatchStatus())) {
@@ -203,16 +208,15 @@ public class PurchaseInvoiceServiceImpl implements PurchaseInvoiceService {
 
     /**
      * 采购单收票状态: 只有每条可开票行都被「已核对」发票开满、且没有待核对发票才算 RECONCILED。
-     * 没有任何行级发票的历史单沿用旧口径（有一张人工核对相符的发票即视为已核对）。
+     * 只有切换前的历史发票（line_match_required = FALSE）的采购单沿用旧口径
+     * （有一张人工核对相符的发票即视为已核对）。判据是显式切换标记, 不是「有没有发票行」。
      */
     private void refreshOrderInvoiceStatus(String factoryId, PurchaseOrder po) {
         List<PurchaseInvoice> invoices = Optional.ofNullable(
                 invoiceRepository.findByFactoryIdAndPurchaseOrderId(factoryId, po.getId())).orElse(List.of());
-        boolean hasLineLevel = !Optional.ofNullable(
-                        lineRepository.findByFactoryIdAndPurchaseOrderIdOrderByIdAsc(factoryId, po.getId()))
-                .orElse(List.of()).isEmpty();
+        boolean lineMatchRequired = invoices.stream().anyMatch(i -> Boolean.TRUE.equals(i.getLineMatchRequired()));
         boolean reconciled;
-        if (hasLineLevel) {
+        if (lineMatchRequired) {
             reconciled = threeWayMatcher.fullyMatched(threeWayMatcher.load(factoryId, po))
                     && invoices.stream().noneMatch(i -> "PENDING".equals(i.getReconcileStatus()));
         } else {

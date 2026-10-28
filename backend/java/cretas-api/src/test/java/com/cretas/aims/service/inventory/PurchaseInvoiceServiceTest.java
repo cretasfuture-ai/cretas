@@ -70,6 +70,9 @@ class PurchaseInvoiceServiceTest {
     private static final String FACTORY_ID = "F006";
     private static final String PO_ID = "PO-001";
     private static final String INVOICE_ID = "INV-001";
+    private static final List<com.cretas.aims.dto.inventory.PurchaseInvoiceLineRequest> LINES = List.of(
+            new com.cretas.aims.dto.inventory.PurchaseInvoiceLineRequest(1L, null, "MAT-A",
+                    BigDecimal.ONE, null, BigDecimal.ONE));
 
     @BeforeEach
     void setup() {
@@ -109,9 +112,9 @@ class PurchaseInvoiceServiceTest {
         @DisplayName("金额为空或非正数时拒绝登记")
         void upload_rejectsMissingOrNonPositiveAmount() {
             assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
-                    FACTORY_ID, PO_ID, "SUP-001", "FP-ZERO", BigDecimal.ZERO, null, 1L));
+                    FACTORY_ID, PO_ID, "SUP-001", "FP-ZERO", BigDecimal.ZERO, null, 1L, LINES));
             assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
-                    FACTORY_ID, PO_ID, "SUP-001", "FP-NULL", null, null, 1L));
+                    FACTORY_ID, PO_ID, "SUP-001", "FP-NULL", null, null, 1L, LINES));
             verify(invoiceRepository, never()).save(any());
         }
 
@@ -123,7 +126,7 @@ class PurchaseInvoiceServiceTest {
 
             assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-OTHER", "FP-WRONG-SUP",
-                    BigDecimal.ONE, null, 1L));
+                    BigDecimal.ONE, null, 1L, LINES));
             verify(invoiceRepository, never()).save(any());
         }
 
@@ -135,7 +138,7 @@ class PurchaseInvoiceServiceTest {
 
             PurchaseInvoice result = purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
-                    BigDecimal.valueOf(3000), null, 1L);
+                    BigDecimal.valueOf(3000), null, 1L, LINES);
 
             assertEquals(FACTORY_ID, result.getFactoryId());
             verify(purchaseOrderRepository).findByIdAndFactoryIdForUpdate(PO_ID, FACTORY_ID);
@@ -149,7 +152,7 @@ class PurchaseInvoiceServiceTest {
 
             PurchaseInvoice result = purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
-                    BigDecimal.valueOf(3000), null, 1L);
+                    BigDecimal.valueOf(3000), null, 1L, LINES);
 
             assertEquals(PO_ID, result.getPurchaseOrderId());
         }
@@ -162,7 +165,7 @@ class PurchaseInvoiceServiceTest {
 
             PurchaseInvoice result = purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
-                    BigDecimal.valueOf(3000), null, 1L);
+                    BigDecimal.valueOf(3000), null, 1L, LINES);
 
             assertEquals("PENDING", result.getReconcileStatus());
         }
@@ -176,7 +179,7 @@ class PurchaseInvoiceServiceTest {
             BigDecimal amount = BigDecimal.valueOf(6666.66);
             PurchaseInvoice result = purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
-                    amount, null, 1L);
+                    amount, null, 1L, LINES);
 
             assertEquals(0, amount.compareTo(result.getAmount()));
         }
@@ -193,7 +196,7 @@ class PurchaseInvoiceServiceTest {
             assertThrows(BusinessException.class, () ->
                     purchaseInvoiceService.upload(
                             FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
-                            BigDecimal.valueOf(3000), null, 1L));
+                            BigDecimal.valueOf(3000), null, 1L, LINES));
 
             verify(invoiceRepository).findByFactoryIdAndInvoiceNumberForUpdate(FACTORY_ID, "FP-2026-001");
             verify(invoiceRepository, never()).save(any());
@@ -211,14 +214,14 @@ class PurchaseInvoiceServiceTest {
             // Call with OCR result via uploadedBy param; we expose ocrRawResult via setOcrRawResult
             PurchaseInvoice result = purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-001",
-                    BigDecimal.valueOf(3000), ocrRaw, 1L);
+                    BigDecimal.valueOf(3000), ocrRaw, 1L, LINES);
 
             assertEquals(ocrRaw, result.getOcrRawResult());
         }
 
         @Test
-        @DisplayName("S5-05: 表头金额等于订单但没有行级资料 → 不自动相符, 留待人工核对")
-        void upload_amountMatchesPoWithoutLines_staysPending() {
+        @DisplayName("S5-05: 表头金额等于订单但没有行级资料 → 400, 什么都不落")
+        void upload_amountMatchesPoWithoutLines_isRejected() {
             PurchaseOrder po = new PurchaseOrder();
             po.setId(PO_ID);
             po.setFactoryId(FACTORY_ID);
@@ -230,16 +233,14 @@ class PurchaseInvoiceServiceTest {
             when(purchaseOrderRepository.findByIdAndFactoryId(PO_ID, FACTORY_ID))
                     .thenReturn(Optional.of(po));
 
-            PurchaseInvoice result = purchaseInvoiceService.upload(
+            BusinessException e = assertThrows(BusinessException.class, () -> purchaseInvoiceService.upload(
                     FACTORY_ID, PO_ID, "SUP-001", "FP-2026-009",
-                    BigDecimal.valueOf(3000), null, 9L);
+                    BigDecimal.valueOf(3000), null, 9L));
 
-            assertEquals("PENDING", result.getReconcileStatus());
-            assertNull(result.getReconciledBy());
-            assertTrue(result.getReconcileNote().contains("缺行级资料"));
-            verify(purchaseOrderRepository).save(po);
-            verify(chaseLogRepository).closeOpenChases(
-                    eq(FACTORY_ID), eq(PO_ID), any(java.time.LocalDateTime.class));
+            assertEquals(400, e.getCode());
+            assertEquals("PURCHASE_INVOICE_LINES_REQUIRED", e.getErrorCode());
+            verify(invoiceRepository, never()).save(any());
+            verify(purchaseOrderRepository, never()).save(any());
         }
     }
 

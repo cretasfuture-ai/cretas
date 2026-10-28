@@ -37,6 +37,7 @@ public class PurchaseInvoiceLine extends BaseEntity {
     public static final String MATERIAL_MISMATCH = "MATERIAL_MISMATCH";
     public static final String PRICE_MISMATCH = "PRICE_MISMATCH";
     public static final String PRICE_UNKNOWN = "PRICE_UNKNOWN";
+    public static final String MATERIAL_UNKNOWN = "MATERIAL_UNKNOWN";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

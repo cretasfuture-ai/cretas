@@ -116,18 +116,88 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
     }
 
     @Test
-    void s5_05_headerTotalEqualButNoLineData_staysPending() throws Exception {
+    void s5_05_newUploadWithoutLines_isRejectedAndSavesNothing() throws Exception {
         PurchaseOrder po = order();
         PurchaseOrderItem a = line(po, MAT_A, "100", "10", "13");
         receipt(po, a, "100");
 
-        JsonNode inv = upload(po, "1130.00", List.of(), 200);
+        JsonNode refused = upload(po, "1130.00", List.of(), 400);
 
+        assertThat(refused.at("/errorCode").asText()).isEqualTo("PURCHASE_INVOICE_LINES_REQUIRED");
+        assertThat(countInvoices(po)).isZero();
+        em.clear();
+        assertThat(em.find(PurchaseOrder.class, po.getId()).getInvoiceStatus())
+                .isEqualTo(PurchaseInvoiceStatus.NOT_RECEIVED);
+    }
+
+    @Test
+    void manualMatchOfPartialNewInvoice_doesNotReconcileOrder_butLegacyInvoiceKeepsOldRule() throws Exception {
+        // 新票: 只开 50 / 100，发票没写物料 → 不自动相符；人工核成相符也只算 50，采购单不闭环
+        PurchaseOrder po = order();
+        PurchaseOrderItem a = line(po, MAT_A, "100", "10", "0");
+        receipt(po, a, "100");
+        JsonNode inv = upload(po, "500.00", List.of(lineReq(a, null, null, "50", "500.00")), 200);
         assertThat(inv.at("/data/reconcileStatus").asText()).isEqualTo("PENDING");
-        assertThat(inv.at("/data/reconcileNote").asText()).contains("缺行级资料");
+        assertThat(inv.at("/data/reconcileNote").asText()).contains("未写物料");
+        reconcile(inv.at("/data/id").asText(), "MATCHED", 200);
         em.flush(); em.clear();
         assertThat(em.find(PurchaseOrder.class, po.getId()).getInvoiceStatus())
                 .isEqualTo(PurchaseInvoiceStatus.RECEIVED);
+        assertThat(matchStatus(po).at("/data/lines/0/remainingQuantity").decimalValue()).isEqualByComparingTo("50");
+
+        // 切换前的历史票 (line_match_required = FALSE): 人工核对相符仍按旧口径闭环
+        PurchaseOrder legacyPo = order();
+        PurchaseOrderItem b = line(legacyPo, MAT_A, "100", "10", "0");
+        receipt(legacyPo, b, "100");
+        PurchaseInvoice legacy = new PurchaseInvoice();
+        legacy.setFactoryId(F);
+        legacy.setPurchaseOrderId(legacyPo.getId());
+        legacy.setSupplierId(legacyPo.getSupplierId());
+        legacy.setInvoiceNumber("FP-LEGACY-" + (++seq));
+        legacy.setAmount(new BigDecimal("1000.00"));
+        legacy.setReconcileStatus("PENDING");
+        legacy.setUploadedBy(7L);
+        em.persist(legacy);
+        em.flush();
+        assertThat(legacy.getLineMatchRequired()).isFalse();
+        reconcile(legacy.getId(), "MATCHED", 200);
+        em.flush(); em.clear();
+        assertThat(em.find(PurchaseOrder.class, legacyPo.getId()).getInvoiceStatus())
+                .isEqualTo(PurchaseInvoiceStatus.RECONCILED);
+    }
+
+    @Test
+    void overReceiptBeyondOrderedQuantity_isNotInvoiceable() throws Exception {
+        PurchaseOrder po = order();
+        PurchaseOrderItem a = line(po, MAT_A, "100", "10", "0");
+        receipt(po, a, "110");   // 超收 10
+
+        JsonNode refused = upload(po, "1050.00", List.of(lineReq(a, null, MAT_A, "105", "1050.00")), 409);
+        assertThat(refused.at("/message").asText()).contains("最多还可开 100");
+    }
+
+    @Test
+    void unknownTaxRate_isPriceUnknownNotAutoMatched() throws Exception {
+        PurchaseOrder po = order();
+        PurchaseOrderItem a = line(po, MAT_A, "100", "10", "0");
+        a.setTaxRate(null);
+        receipt(po, a, "100");
+
+        JsonNode inv = upload(po, "1000.00", List.of(lineReq(a, null, MAT_A, "100", "1000.00")), 200);
+
+        assertThat(inv.at("/data/reconcileStatus").asText()).isEqualTo("PENDING");
+        assertThat(inv.at("/data/reconcileNote").asText()).contains("税率未知");
+    }
+
+    @Test
+    void overInvoiceMessageUsesChineseUnitName() throws Exception {
+        PurchaseOrder po = order();
+        PurchaseOrderItem a = line(po, MAT_A, "10", "10", "0");
+        a.setUnit("box");
+        receipt(po, a, "3");
+
+        JsonNode refused = upload(po, "40.00", List.of(lineReq(a, null, MAT_A, "4", "40.00")), 409);
+        assertThat(refused.at("/message").asText()).doesNotContain("box");
     }
 
     // ─── S5-06 ────────────────────────────────────────────────────────────────
@@ -257,6 +327,12 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
         return body(result, expectStatus);
     }
 
+    private JsonNode reconcile(String invoiceId, String status, int expectStatus) throws Exception {
+        return body(mvc.perform(put("/api/mobile/" + F + "/invoices/" + invoiceId + "/reconcile")
+                .header("Authorization", "Bearer t").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reconcileStatus\":\"" + status + "\"}")).andReturn(), expectStatus);
+    }
+
     private JsonNode matchStatus(PurchaseOrder po) throws Exception {
         em.flush();
         return body(mvc.perform(get("/api/mobile/" + F + "/invoices/match-status").param("poId", po.getId()))
@@ -334,7 +410,7 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
         ri.setPurchaseOrderItemId(item.getId());
         ri.setMaterialTypeId(item.getMaterialTypeId());
         ri.setReceivedQuantity(new BigDecimal(qty));
-        ri.setUnit("kg");
+        ri.setUnit(item.getUnit());
         ri.setPriceUnit("kg");
         em.persist(ri);
         // 同一张单上一条未确认的草稿收货 —— 不算有效收货
@@ -352,7 +428,7 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
         draftItem.setPurchaseOrderItemId(item.getId());
         draftItem.setMaterialTypeId(item.getMaterialTypeId());
         draftItem.setReceivedQuantity(new BigDecimal("1000"));
-        draftItem.setUnit("kg");
+        draftItem.setUnit(item.getUnit());
         draftItem.setPriceUnit("kg");
         em.persist(draftItem);
         return ri;

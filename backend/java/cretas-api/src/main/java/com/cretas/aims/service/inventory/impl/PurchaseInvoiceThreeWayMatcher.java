@@ -20,6 +20,7 @@ import com.cretas.aims.repository.inventory.PurchaseInvoiceRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -77,7 +78,9 @@ public class PurchaseInvoiceThreeWayMatcher {
 
         BigDecimal invoiceable() {
             if (blocker != null || received == null || returned == null) return null;
-            return received.subtract(returned).max(BigDecimal.ZERO);
+            BigDecimal net = received.subtract(returned).max(BigDecimal.ZERO);
+            // 超收部分不开票: 发票只认订购量以内
+            return item.getQuantity() == null ? net : net.min(item.getQuantity());
         }
 
         BigDecimal remaining() {
@@ -112,7 +115,7 @@ public class PurchaseInvoiceThreeWayMatcher {
                 receiptRecordByItem.put(ri.getId(), recordById.get(ri.getReceiveRecordId()));
                 l.receipts.put(ri.getId(), ri);
                 if (!sameUnit(ri.getUnit(), l.item.getUnit())) {
-                    l.blocker = "收货单位「" + ri.getUnit() + "」与采购单位「" + l.item.getUnit()
+                    l.blocker = "收货单位「" + UnitDisplayNames.display(ri.getUnit()) + "」与采购单位「" + UnitDisplayNames.display(l.item.getUnit())
                             + "」不同，无法核验可开票量";
                     continue;
                 }
@@ -173,7 +176,7 @@ public class PurchaseInvoiceThreeWayMatcher {
             LineLedger l = targets.get(0);
             BigDecimal converted = baseToOrderUnit(factoryId, l.item, e.getValue());
             if (converted == null) {
-                l.blocker = "退货数量无法换算到采购单位「" + l.item.getUnit() + "」，无法核验可开票量";
+                l.blocker = "退货数量无法换算到采购单位「" + UnitDisplayNames.display(l.item.getUnit()) + "」，无法核验可开票量";
             } else {
                 l.returned = converted;
             }
@@ -257,12 +260,13 @@ public class PurchaseInvoiceThreeWayMatcher {
             }
             BigDecimal remaining = l.remaining();
             if (e.getValue().compareTo(remaining) > 0) {
-                throw new BusinessException(409, name + " 超开：本次 " + plain(e.getValue()) + l.item.getUnit()
-                        + "，最多还可开 " + plain(remaining.max(BigDecimal.ZERO)) + l.item.getUnit())
+                throw new BusinessException(409, name + " 超开：本次 " + plain(e.getValue()) + UnitDisplayNames.display(l.item.getUnit())
+                        + "，最多还可开 " + plain(remaining.max(BigDecimal.ZERO)) + UnitDisplayNames.display(l.item.getUnit()))
                         .withCode("PURCHASE_INVOICE_OVER_INVOICED")
                         .withHint("有效收货 " + plain(l.received) + " − 退货 " + plain(l.returned)
+                                + "（不超过订购 " + plain(l.item.getQuantity()) + "）"
                                 + " − 已开票 " + plain(l.invoiced) + " = 剩余 " + plain(remaining.max(BigDecimal.ZERO))
-                                + l.item.getUnit() + "；请按实收拆票或先补收货")
+                                + UnitDisplayNames.display(l.item.getUnit()) + "；请按实收拆票或先补收货")
                         .withHintTarget("quantity");
             }
         }
@@ -277,7 +281,7 @@ public class PurchaseInvoiceThreeWayMatcher {
                 PurchaseReceiveRecord record = ledger.receiptRecords().get(e.getKey());
                 throw new BusinessException(409, "收货行（" + (record != null ? record.getReceiveNumber() : e.getKey())
                         + " / " + materialLabel(l.item) + "）已被开票 " + plain(used) + "，本次 " + plain(e.getValue())
-                        + " 超过剩余 " + plain(left.max(BigDecimal.ZERO)) + l.item.getUnit())
+                        + " 超过剩余 " + plain(left.max(BigDecimal.ZERO)) + UnitDisplayNames.display(l.item.getUnit()))
                         .withCode("PURCHASE_INVOICE_RECEIPT_OVER_INVOICED")
                         .withHint("同一收货行不能被多张发票重复开满，请改指其它收货行或减少数量")
                         .withHintTarget("receiveItemId");
@@ -289,7 +293,11 @@ public class PurchaseInvoiceThreeWayMatcher {
     private void classify(PurchaseInvoiceLine line, PurchaseOrderItem item) {
         List<String> notes = new ArrayList<>();
         String status = PurchaseInvoiceLine.MATCHED;
-        if (line.getMaterialTypeId() != null && !Objects.equals(line.getMaterialTypeId(), item.getMaterialTypeId())) {
+        if (line.getMaterialTypeId() == null) {
+            // 发票没写物料 ≠ 物料一致: 不能自动相符, 留人工对票面
+            status = PurchaseInvoiceLine.MATERIAL_UNKNOWN;
+            notes.add("发票行未写物料，无法核对是否与采购单行一致");
+        } else if (!Objects.equals(line.getMaterialTypeId(), item.getMaterialTypeId())) {
             status = PurchaseInvoiceLine.MATERIAL_MISMATCH;
             notes.add("发票物料 " + line.getMaterialTypeId() + " ≠ 采购单行物料 " + item.getMaterialTypeId());
         }
@@ -297,7 +305,7 @@ public class PurchaseInvoiceThreeWayMatcher {
         line.setExpectedAmount(expected);
         if (expected == null) {
             if (PurchaseInvoiceLine.MATCHED.equals(status)) status = PurchaseInvoiceLine.PRICE_UNKNOWN;
-            notes.add("采购单行无单价，无法核对金额");
+            notes.add(item.getUnitPrice() == null ? "采购单行无单价，无法核对金额" : "采购单行税率未知，无法核对含税金额");
         } else if (line.getAmount().subtract(expected).abs().compareTo(AMOUNT_TOLERANCE) > 0) {
             if (PurchaseInvoiceLine.MATCHED.equals(status)) status = PurchaseInvoiceLine.PRICE_MISMATCH;
             notes.add("发票行金额 " + plain(line.getAmount()) + " ≠ 应开 " + plain(expected));
@@ -306,12 +314,15 @@ public class PurchaseInvoiceThreeWayMatcher {
         line.setMatchNote(notes.isEmpty() ? null : String.join("；", notes));
     }
 
-    /** 与 {@link PurchaseOrderItem#getLineAmountWithTax()} 同一口径，只把数量换成本次开票量。 */
+    /**
+     * 与 {@link PurchaseOrderItem#getLineAmountWithTax()} 同一口径，只把数量换成本次开票量。
+     * 税率为空 = 未知（不是 0%）→ 返回 null，按含税金额核不了。
+     */
     public static BigDecimal expectedAmount(PurchaseOrderItem item, BigDecimal quantity) {
-        if (item.getUnitPrice() == null || quantity == null) return null;
+        if (item.getUnitPrice() == null || item.getTaxRate() == null || quantity == null) return null;
         BigDecimal factor = item.getQuantityToPriceFactor() != null ? item.getQuantityToPriceFactor() : BigDecimal.ONE;
         BigDecimal untaxed = quantity.multiply(factor).multiply(item.getUnitPrice()).setScale(2, RoundingMode.HALF_UP);
-        if (item.getTaxRate() == null || item.getTaxRate().signum() == 0) return untaxed;
+        if (item.getTaxRate().signum() == 0) return untaxed;
         BigDecimal multiplier = BigDecimal.ONE.add(item.getTaxRate().divide(HUNDRED, 6, RoundingMode.HALF_UP));
         return untaxed.multiply(multiplier).setScale(2, RoundingMode.HALF_UP);
     }

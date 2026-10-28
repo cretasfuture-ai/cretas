@@ -6,7 +6,11 @@
 -- 服务层据此拒绝超开 (409) 并逐行判定物料/金额差异。
 --
 -- quantity 的单位 = 采购单行的 unit (与采购单行 quantity 同一口径)。
--- match_status: MATCHED / MATERIAL_MISMATCH / PRICE_MISMATCH / PRICE_UNKNOWN
+-- match_status: MATCHED / MATERIAL_MISMATCH / MATERIAL_UNKNOWN / PRICE_MISMATCH / PRICE_UNKNOWN
+--
+-- 切换标记 purchase_invoices.line_match_required: 本迁移之后登记的发票一律 TRUE (必须逐行),
+-- 之前的历史发票是 FALSE —— 只有全是历史发票的采购单才沿用「人工核对相符即闭环」的旧口径。
+-- 用显式标记而不是「这张票有没有行」来区分, 否则新登记一张不带行的票就能绕过三单匹配。
 
 CREATE TABLE IF NOT EXISTS purchase_invoice_lines (
     id                      BIGSERIAL      PRIMARY KEY,
@@ -31,8 +35,11 @@ CREATE TABLE IF NOT EXISTS purchase_invoice_lines (
     CONSTRAINT ck_pil_quantity_positive CHECK (quantity > 0),
     CONSTRAINT ck_pil_amount_non_negative CHECK (amount >= 0),
     CONSTRAINT ck_pil_match_status CHECK (match_status IN
-        ('MATCHED', 'MATERIAL_MISMATCH', 'PRICE_MISMATCH', 'PRICE_UNKNOWN'))
+        ('MATCHED', 'MATERIAL_MISMATCH', 'MATERIAL_UNKNOWN', 'PRICE_MISMATCH', 'PRICE_UNKNOWN'))
 );
+
+ALTER TABLE purchase_invoices
+    ADD COLUMN IF NOT EXISTS line_match_required BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_pil_invoice ON purchase_invoice_lines (invoice_id);
 CREATE INDEX IF NOT EXISTS idx_pil_factory_po ON purchase_invoice_lines (factory_id, purchase_order_id);

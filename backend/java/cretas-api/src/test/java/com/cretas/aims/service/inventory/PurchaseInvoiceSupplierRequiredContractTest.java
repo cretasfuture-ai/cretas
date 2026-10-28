@@ -64,7 +64,9 @@ class PurchaseInvoiceSupplierRequiredContractTest {
     @Test
     void theOrdersOwnSupplierIsAccepted() {
         order();
-        var invoice = service.upload("TEST-A", "PO-1", "SUP-1", "INV-3", new BigDecimal("100"), null, 8L);
+        var invoice = service.upload("TEST-A", "PO-1", "SUP-1", "INV-3", new BigDecimal("100"), null, 8L,
+                java.util.List.of(new com.cretas.aims.dto.inventory.PurchaseInvoiceLineRequest(
+                        1L, null, "MAT-A", BigDecimal.ONE, null, new BigDecimal("100"))));
         assertThat(invoice.getSupplierId()).isEqualTo("SUP-1");
     }
 }

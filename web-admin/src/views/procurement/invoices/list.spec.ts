@@ -76,6 +76,8 @@ describe('procurement invoice list array contract', () => {
     expect(getMock).toHaveBeenCalledWith('/F006/invoices/match-status', { params: { poId: 'PO-1' } })
     expect(wrapper.vm.uploadDrafts).toHaveLength(2)
     const [a] = wrapper.vm.uploadDrafts
+    // 一行都没填 → 不能只登记表头
+    expect(wrapper.vm.uploadLinesInvalid).toBe(true)
     // 防呆 Rule 1: 采购单行还剩 40，选了只剩 10 的收货行后上限变成 10
     expect(wrapper.vm.lineMax(a)).toBe(40)
     a.receiveItemId = 7

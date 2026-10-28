@@ -262,7 +262,7 @@
               v-else-if="!uploadMatch"
               type="info"
               :closable="false"
-              title="先读取采购单行：按发票逐行填数量和金额才能自动三单相符；不填行只登记表头，需人工核对"
+              title="发票必须逐行登记：先读取采购单行，按票面逐行填数量和金额（至少一行）"
               show-icon
             />
             <template v-else>
@@ -570,7 +570,7 @@ interface InvoiceRow {
   lines?: InvoiceLineView[]
 }
 
-type LineMatchStatus = 'MATCHED' | 'MATERIAL_MISMATCH' | 'PRICE_MISMATCH' | 'PRICE_UNKNOWN'
+type LineMatchStatus = 'MATCHED' | 'MATERIAL_MISMATCH' | 'PRICE_MISMATCH' | 'PRICE_UNKNOWN' | 'MATERIAL_UNKNOWN'
 
 interface InvoiceLineView {
   id: number
@@ -731,9 +731,10 @@ const lineTotalDiffers = computed(() =>
   && uploadForm.value.amount !== null
   && Math.abs(uploadLineTotal.value - uploadForm.value.amount) > 0.005,
 )
-// 防呆 Rule 1: 超出可开量或填了数量没填金额 → 不让提交（后端仍以 409 兜底）
+// 防呆 Rule 1: 没填任何行、超出可开量或填了数量没填金额 → 不让提交（后端仍以 400/409 兜底）
 const uploadLinesInvalid = computed(() =>
-  selectedUploadLines.value.some((d) =>
+  selectedUploadLines.value.length === 0
+  || selectedUploadLines.value.some((d) =>
     d.amount === null
     || d.remainingQuantity === null
     || (d.quantity ?? 0) > lineMax(d) + 1e-9),
@@ -772,14 +773,15 @@ function lineStatusLabel(s: LineMatchStatus): string {
     MATCHED: '一致',
     MATERIAL_MISMATCH: '物料不符',
     PRICE_MISMATCH: '金额不符',
-    PRICE_UNKNOWN: '采购单无单价',
+    PRICE_UNKNOWN: '单价/税率未知',
+    MATERIAL_UNKNOWN: '发票未写物料',
   }
   return map[s] ?? s
 }
 
 function lineStatusTag(s: LineMatchStatus): 'success' | 'warning' | 'danger' | 'info' {
   if (s === 'MATCHED') return 'success'
-  if (s === 'PRICE_UNKNOWN') return 'warning'
+  if (s === 'PRICE_UNKNOWN' || s === 'MATERIAL_UNKNOWN') return 'warning'
   return 'danger'
 }
 
