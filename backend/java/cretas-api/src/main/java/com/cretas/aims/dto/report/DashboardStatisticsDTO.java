@@ -80,6 +80,8 @@ public class DashboardStatisticsDTO {
         private Double profitMargin;
         private BigDecimal accountsReceivable;
         private BigDecimal accountsPayable;
+        /** 工艺保密: 当前调用者无权查看部分保密产品时, 成本只算他能看的计划 (「不含 N 个保密产品」); 能看全时为 null。 */
+        private String processSecretNote;
     }
 
     @Data

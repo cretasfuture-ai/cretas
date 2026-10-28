@@ -78,67 +78,28 @@ public class ProductionReportServiceImpl implements ProductionReportService {
      * 口径与 calculate*CostBetweenDates 一致: 结束时间在区间内; 分项为 SUM 语义 (无行 / 全空为 null),
      * 合计为 SUM(COALESCE(四项, 0)) 语义 (无行为 null)。{@code perDayBounds}: 与按天查询一致, 每天只算到 23:59:59。
      */
-    record PlanCosts(BigDecimal material, BigDecimal labor, BigDecimal equipment, BigDecimal other,
-                     BigDecimal total, Map<LocalDate, BigDecimal> totalByDay, int excludedPlans, int excludedProducts) {
-        boolean partial() {
-            return excludedPlans > 0;
-        }
-
-        String note() {
-            return partial() ? com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(excludedProducts) : null;
-        }
-    }
-
     /** 调用者对本厂保密产品都有完整查看权 (或本厂没有保密产品) 时返回 null —— 调用方沿用原查询, 行为不变。 */
-    PlanCosts visiblePlanCosts(String factoryId, LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
+    com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visiblePlanCosts(String factoryId, LocalDateTime from, LocalDateTime to, boolean perDayBounds) {
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded excluded = llmCostScope.forCurrentCaller(factoryId);
         if (excluded.isEmpty()) return null;
-        Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
-        BigDecimal material = null, labor = null, equipment = null, other = null, total = null;
-        Set<String> excludedProducts = new LinkedHashSet<>();
-        int excludedPlans = 0;
-        for (com.cretas.aims.entity.ProductionPlan plan : productionPlanRepository.findByFactoryId(factoryId)) {
-            LocalDateTime end = plan.getEndTime();
-            if (end == null || end.isBefore(from) || end.isAfter(to)) continue;
-            if (perDayBounds && end.isAfter(end.toLocalDate().atTime(23, 59, 59))) continue;
-            if (excluded.coversPlan(plan.getId()) || excluded.coversProduct(plan.getProductTypeId())) {
-                excludedPlans++;
-                // N 只数真正受保护的产品 (计划锚点 / 同计划普通产品不算)
-                excludedProducts.addAll(excluded.protectedBehind(plan.getProductTypeId(),
-                        plan.getId() == null ? List.of() : List.of(plan.getId())));
-                continue;
-            }
-            material = sumNullable(material, plan.getActualMaterialCost());
-            labor = sumNullable(labor, plan.getActualLaborCost());
-            equipment = sumNullable(equipment, plan.getActualEquipmentCost());
-            other = sumNullable(other, plan.getActualOtherCost());
-            BigDecimal cost = nz(plan.getActualMaterialCost()).add(nz(plan.getActualLaborCost()))
-                    .add(nz(plan.getActualEquipmentCost())).add(nz(plan.getActualOtherCost()));
-            total = total == null ? cost : total.add(cost);
-            byDay.merge(end.toLocalDate(), cost, BigDecimal::add);
-        }
-        return new PlanCosts(material, labor, equipment, other, total, byDay, excludedPlans, excludedProducts.size());
+        return com.cretas.aims.service.processsecret.ProcessSecretPlanCosts.of(excluded, productionPlanRepository.findByFactoryId(factoryId), from, to, perDayBounds);
     }
 
     /** 区间总成本: 能看全 → 原查询; 否则可见计划逐行累加, 并在返回给调用方 (页面 / AI 工具) 的数据上注明。 */
     private BigDecimal totalCostFor(String factoryId, LocalDateTime from, LocalDateTime to, Map<String, Object> report) {
-        PlanCosts visible = visiblePlanCosts(factoryId, from, to, false);
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visible = visiblePlanCosts(factoryId, from, to, false);
         if (visible == null) return productionPlanRepository.calculateTotalCostBetweenDates(factoryId, from, to);
         markPartial(report, visible);
         return visible.total();
     }
 
     /** 「不含 N 个保密产品」写进返回数据 (多个区间取最大 N)。 */
-    private static void markPartial(Map<String, Object> report, PlanCosts visible) {
+    private static void markPartial(Map<String, Object> report, com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visible) {
         if (report == null || visible == null || !visible.partial()) return;
         int n = Math.max(visible.excludedProducts(),
                 report.get("excludedProtectedProductCount") instanceof Integer prior ? prior : 0);
         report.put("excludedProtectedProductCount", n);
         report.put("processSecretNote", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(n));
-    }
-
-    private static BigDecimal sumNullable(BigDecimal acc, BigDecimal value) {
-        return value == null ? acc : acc == null ? value : acc.add(value);
     }
 
     private static BigDecimal nz(BigDecimal value) {
@@ -250,7 +211,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("totalRevenue", totalRevenue);
         // 成本统计
         // 工艺保密: 无权调用者的成本只算他能看的计划 (生产成本口径, 不是已过账会计合计)
-        PlanCosts visibleCosts = visiblePlanCosts(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = visiblePlanCosts(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
         markPartial(report, visibleCosts);
         BigDecimal materialCost = visibleCosts != null ? visibleCosts.material() : productionPlanRepository.calculateMaterialCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
@@ -507,7 +468,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         log.info("获取成本分析报表: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
         Map<String, Object> report = new HashMap<>();
         // 工艺保密: 无权调用者的成本只算他能看的计划 (生产成本口径, 不是已过账会计合计)
-        PlanCosts visibleCosts = visiblePlanCosts(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = visiblePlanCosts(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
         markPartial(report, visibleCosts);
         BigDecimal materialCost = visibleCosts != null ? visibleCosts.material() : productionPlanRepository.calculateMaterialCostBetweenDates(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
@@ -1038,7 +999,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         Map<String, Object> report = new HashMap<>();
         List<Map<String, Object>> trendData = new ArrayList<>();
         // 工艺保密: 成本趋势按调用者只算他能看的计划 (一次取全区间, 按天分)
-        PlanCosts visibleCosts = "cost".equals(type) ? visiblePlanCosts(factoryId,
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = "cost".equals(type) ? visiblePlanCosts(factoryId,
                 LocalDate.now().minusDays(period - 1).atStartOfDay(), LocalDate.now().atTime(23, 59, 59), true) : null;
         markPartial(report, visibleCosts);
         for (int i = period - 1; i >= 0; i--) {
@@ -1117,7 +1078,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         List<Map<String, Object>> historicalData = new ArrayList<>();
         BigDecimal totalHistorical = BigDecimal.ZERO;
         // 工艺保密: 成本历史按调用者只算他能看的计划 (一次取全区间, 按天分); 返回给页面 / 工具 / AI 的都是这一份
-        PlanCosts visibleCosts = "cost".equals(type) ? visiblePlanCosts(factoryId,
+        com.cretas.aims.service.processsecret.ProcessSecretPlanCosts visibleCosts = "cost".equals(type) ? visiblePlanCosts(factoryId,
                 today.minusDays(historicalDays - 1).atStartOfDay(), today.atTime(23, 59, 59), true) : null;
         markPartial(report, visibleCosts);
 
