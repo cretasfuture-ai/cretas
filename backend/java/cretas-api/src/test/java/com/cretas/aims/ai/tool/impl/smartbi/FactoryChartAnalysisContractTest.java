@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import jakarta.validation.Validation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -59,6 +60,29 @@ class FactoryChartAnalysisContractTest {
                     .isInstanceOf(JsonMappingException.class)
                     .hasMessageContaining(field);
         }
+    }
+
+    @Test
+    void requestDtoAcceptsCompleteJointSelectionAndRejectsMissingDuplicateOrBusinessIds() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        FactoryChartAnalysisRequest valid = mapper.readValue(
+                "{\"question\":\"联合分析\",\"source\":\"upload\",\"uploadId\":101,\"inspectionUploadId\":202,\"costUploadId\":303}",
+                FactoryChartAnalysisRequest.class);
+        assertThat(valid.isUploadedJointSelectionValid()).isTrue();
+        assertThat(mapper.writeValueAsString(valid)).doesNotContain("uploadedJointSelectionValid");
+        for (String json : new String[] {
+                "{\"question\":\"x\",\"source\":\"upload\",\"uploadId\":101,\"inspectionUploadId\":202}",
+                "{\"question\":\"x\",\"source\":\"upload\",\"uploadId\":101,\"inspectionUploadId\":101,\"costUploadId\":303}",
+                "{\"question\":\"x\",\"source\":\"business\",\"uploadId\":101,\"inspectionUploadId\":202,\"costUploadId\":303}"
+        }) {
+            FactoryChartAnalysisRequest candidate = mapper.readValue(json, FactoryChartAnalysisRequest.class);
+            assertThat(candidate.isUploadedJointSelectionValid()).isFalse();
+        }
+        var validator = Validation.buildDefaultValidatorFactory().getValidator();
+        FactoryChartAnalysisRequest nonPositive = mapper.readValue(
+                "{\"question\":\"x\",\"source\":\"upload\",\"uploadId\":0,\"inspectionUploadId\":-2,\"costUploadId\":3}",
+                FactoryChartAnalysisRequest.class);
+        assertThat(validator.validate(nonPositive)).isNotEmpty();
     }
 
     private static String read(String relative) throws IOException {

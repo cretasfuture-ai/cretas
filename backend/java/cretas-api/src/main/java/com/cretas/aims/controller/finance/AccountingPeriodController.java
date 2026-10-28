@@ -4,6 +4,9 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.service.finance.AccountingPeriodService;
+import com.cretas.aims.service.inventory.InventoryLedgerSnapshotService;
+import com.cretas.aims.exception.BusinessException;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -39,6 +42,7 @@ import java.util.Map;
 public class AccountingPeriodController {
 
     private final AccountingPeriodService periodService;
+    private final InventoryLedgerSnapshotService inventoryLedgerSnapshotService;
 
     /**
      * 列出 factory 内全部期间, 按年月 DESC. admin UI grid 用.
@@ -152,6 +156,47 @@ public class AccountingPeriodController {
             @RequestAttribute(value = "userId", required = false) Long userId) {
         AccountingPeriod p = periodService.forceLockAndClose(factoryId, req.year(), req.month(), userId);
         return ResponseEntity.ok(ApiResponse.success("期间已锁定并结转损益", p));
+    }
+
+    /**
+     * Repair a CLOSED period whose inventory ledger snapshots were not created.
+     * This endpoint is deliberately narrower than the normal period APIs:
+     * only an authenticated factory super admin may invoke it.
+     */
+    @PostMapping("/{periodId}/repair-missing-inventory-snapshots")
+    @RequirePermission("finance:read_write")
+    public ResponseEntity<ApiResponse<InventoryLedgerSnapshotService.RepairResult>>
+    repairMissingInventorySnapshots(
+            @PathVariable String factoryId,
+            @PathVariable String periodId,
+            HttpServletRequest request) {
+        String authenticatedFactory = attribute(request, "factoryId");
+        String authenticatedUser = attribute(request, "userId");
+        String authenticatedRole = attribute(request, "role");
+        if (authenticatedFactory == null || authenticatedUser == null || authenticatedRole == null) {
+            throw new BusinessException(401, "Trusted authentication context is required");
+        }
+        if (!factoryId.equals(authenticatedFactory)
+                || !"factory_super_admin".equals(authenticatedRole.toLowerCase(java.util.Locale.ROOT))) {
+            throw new BusinessException(403, "Only the authenticated factory super admin may repair snapshots");
+        }
+        try {
+            if (Long.parseLong(authenticatedUser) <= 0) {
+                throw new NumberFormatException("userId must be positive");
+            }
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(403, "Authenticated identity is invalid");
+        }
+        InventoryLedgerSnapshotService.RepairResult result =
+                inventoryLedgerSnapshotService.repairMissingInventorySnapshots(factoryId, periodId);
+        return ResponseEntity.ok(ApiResponse.success("库存期末快照修复完成", result));
+    }
+
+    private static String attribute(HttpServletRequest request, String name) {
+        Object value = request.getAttribute(name);
+        if (value == null) return null;
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
     }
 
     // ==================== DTO records ====================
