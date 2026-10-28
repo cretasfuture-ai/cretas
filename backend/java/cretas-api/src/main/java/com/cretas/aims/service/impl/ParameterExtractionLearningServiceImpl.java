@@ -254,15 +254,23 @@ public class ParameterExtractionLearningServiceImpl implements ParameterExtracti
 
     @Override
     @Transactional
-    public void deleteRule(String ruleId) {
-        ruleRepository.softDelete(ruleId, LocalDateTime.now());
+    public void deleteRule(String factoryId, String ruleId) {
+        // 只删这一家的规则 (以前按 ID 删任何工厂的, 复审 M2)
+        if (factoryId == null || factoryId.isBlank()
+                || ruleRepository.softDelete(ruleId, factoryId, LocalDateTime.now()) == 0) {
+            throw new com.cretas.aims.exception.BusinessException(404, "本厂没有这条规则");
+        }
         log.info("删除规则: id={}", ruleId);
     }
 
     @Override
     @Transactional
-    public int cleanupLowSuccessRules(int minHitCount, double maxSuccessRate) {
-        int count = ruleRepository.deactivateLowSuccessRules(minHitCount, maxSuccessRate);
+    public int cleanupLowSuccessRules(String factoryId, int minHitCount, double maxSuccessRate) {
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new com.cretas.aims.exception.BusinessException(400, "缺少工厂");
+        }
+        // 只清这一家的规则 (以前一次停用所有工厂的低成功率规则, 复审 M2)
+        int count = ruleRepository.deactivateLowSuccessRules(factoryId, minHitCount, maxSuccessRate);
         log.info("清理低成功率规则: 停用 {} 条", count);
         return count;
     }

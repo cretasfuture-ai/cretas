@@ -329,7 +329,7 @@ public interface ActiveLearningService {
      * @param annotator Annotator username
      * @param notes Notes
      */
-    void completeAnnotation(Long annotationId, String intentCode, String annotator, String notes);
+    void completeAnnotation(String factoryId, Long annotationId, String intentCode, String annotator, String notes);
 
     // ==================== Cleanup Tasks ====================
 

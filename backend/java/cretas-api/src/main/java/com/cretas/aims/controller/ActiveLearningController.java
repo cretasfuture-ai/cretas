@@ -261,7 +261,7 @@ public class ActiveLearningController {
             @RequestParam String annotator,
             @RequestParam(required = false) String notes) {
 
-        activeLearningService.completeAnnotation(annotationId, intentCode, annotator, notes);
+        activeLearningService.completeAnnotation(factoryId, annotationId, intentCode, annotator, notes);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);

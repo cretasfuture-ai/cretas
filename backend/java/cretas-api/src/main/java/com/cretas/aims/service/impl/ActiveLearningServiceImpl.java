@@ -909,9 +909,14 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
 
     @Override
     @Transactional
-    public void completeAnnotation(Long annotationId, String intentCode, String annotator, String notes) {
-        annotationRepository.completeAnnotation(
-                annotationId, intentCode, annotator, LocalDateTime.now(), notes);
+    public void completeAnnotation(String factoryId, Long annotationId, String intentCode,
+                                   String annotator, String notes) {
+        // 按 (标注 ID, 路径工厂) 改, 别厂的标注 404 (复审 M4, 2026-10-29)
+        int updated = factoryId == null || factoryId.isBlank() ? 0 : annotationRepository.completeAnnotation(
+                annotationId, factoryId, intentCode, annotator, LocalDateTime.now(), notes);
+        if (updated == 0) {
+            throw new com.cretas.aims.exception.BusinessException(404, "标注任务不存在");
+        }
         log.info("Annotation {} completed by {}: intent={}", annotationId, annotator, intentCode);
     }
 

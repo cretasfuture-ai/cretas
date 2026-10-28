@@ -731,13 +731,13 @@ public class AIIntentServiceImpl implements AIIntentService {
     }
 
     @Override
-    public void deleteIntent(String intentCode) {
-        configService.deleteIntent(intentCode);
+    public void deleteIntent(String factoryId, String intentCode) {
+        configService.deleteIntent(factoryId, intentCode);
     }
 
     @Override
-    public void setIntentActive(String intentCode, boolean active) {
-        configService.setIntentActive(intentCode, active);
+    public void setIntentActive(String factoryId, String intentCode, boolean active) {
+        configService.setIntentActive(factoryId, intentCode, active);
     }
 
     // ==================== Cache Management ====================

@@ -197,8 +197,9 @@ public interface ParameterExtractionRuleRepository extends JpaRepository<Paramet
     @Query("UPDATE ParameterExtractionRule r SET r.isActive = false, " +
            "r.updatedAt = CURRENT_TIMESTAMP WHERE r.hitCount >= :minHitCount " +
            "AND (r.successCount * 1.0 / r.hitCount) < :maxSuccessRate " +
-           "AND r.isActive = true")
+           "AND r.isActive = true AND r.factoryId = :factoryId")
     int deactivateLowSuccessRules(
+            @Param("factoryId") String factoryId,
             @Param("minHitCount") int minHitCount,
             @Param("maxSuccessRate") double maxSuccessRate);
 
@@ -242,8 +243,9 @@ public interface ParameterExtractionRuleRepository extends JpaRepository<Paramet
      */
     @Modifying
     @Query("UPDATE ParameterExtractionRule r SET r.deletedAt = :deleteTime, " +
-           "r.updatedAt = :deleteTime WHERE r.id = :id")
-    int softDelete(@Param("id") String id, @Param("deleteTime") LocalDateTime deleteTime);
+           "r.updatedAt = :deleteTime WHERE r.id = :id AND r.factoryId = :factoryId")
+    int softDelete(@Param("id") String id, @Param("factoryId") String factoryId,
+                   @Param("deleteTime") LocalDateTime deleteTime);
 
     /**
      * 按模式类型查找规则

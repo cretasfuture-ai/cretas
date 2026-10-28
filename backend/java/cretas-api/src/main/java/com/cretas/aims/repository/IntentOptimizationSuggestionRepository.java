@@ -155,9 +155,10 @@ public interface IntentOptimizationSuggestionRepository extends JpaRepository<In
      */
     @Modifying
     @Query("UPDATE IntentOptimizationSuggestion s SET s.status = 'APPLIED', " +
-           "s.appliedAt = :appliedAt, s.appliedBy = :appliedBy WHERE s.id = :id")
+           "s.appliedAt = :appliedAt, s.appliedBy = :appliedBy WHERE s.id = :id AND s.factoryId = :factoryId")
     int applySuggestion(
             @Param("id") String id,
+            @Param("factoryId") String factoryId,
             @Param("appliedAt") LocalDateTime appliedAt,
             @Param("appliedBy") Long appliedBy);
 
@@ -166,9 +167,10 @@ public interface IntentOptimizationSuggestionRepository extends JpaRepository<In
      */
     @Modifying
     @Query("UPDATE IntentOptimizationSuggestion s SET s.status = 'REJECTED', " +
-           "s.rejectReason = :reason WHERE s.id = :id")
+           "s.rejectReason = :reason WHERE s.id = :id AND s.factoryId = :factoryId")
     int rejectSuggestion(
             @Param("id") String id,
+            @Param("factoryId") String factoryId,
             @Param("reason") String reason);
 
     /**

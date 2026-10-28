@@ -41,6 +41,10 @@ public class IntentConfigRollbackService {
     private final AIIntentConfigHistoryRepository historyRepo;
     private final ObjectMapper objectMapper;
 
+    /** 平台级行回滚前的保密产品检查 (复审 H2); 字段注入, 不改构造参数。缺失时平台级行回滚 fail-closed。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.intent.IntentConfigWriteGuard intentConfigWriteGuard;
+
     // ==================== 快照保存 ====================
 
     /**
@@ -238,7 +242,13 @@ public class IntentConfigRollbackService {
                                                               String reason) {
         log.info("Starting factory rollback: factoryId={}, by={}", factoryId, rollbackByName);
 
-        List<AIIntentConfig> configs = configRepo.findByFactoryIdOrPlatformLevel(factoryId);
+        // 只回滚这一家自己的行 (复审 H2, 2026-10-29: 以前把平台级行一起回滚了 —— 平台级行所有工厂共用);
+        // factoryId 为空 = 平台级, 只由平台账号经 PLATFORM 路径调用 (控制器用 IntentConfigWriteGuard 判定)
+        List<AIIntentConfig> configs = factoryId == null
+                ? configRepo.findGlobalIntents()
+                : configRepo.findByFactoryIdOrPlatformLevel(factoryId).stream()
+                        .filter(c -> factoryId.equals(c.getFactoryId()))
+                        .collect(java.util.stream.Collectors.toList());
 
         int success = 0;
         int skipped = 0;
@@ -446,6 +456,15 @@ public class IntentConfigRollbackService {
             }
             if (data.containsKey("semanticObject")) {
                 config.setSemanticObject((String) data.get("semanticObject"));
+            }
+
+            // 平台级行所有工厂可见: 恢复出来的旧版本提到任何一家工厂的保密产品名就不保存 (409 / 查不了 503)
+            // (复审 H2, 2026-10-29 —— 以前回滚绕过了写入时的检查)
+            if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(config.getFactoryId())) {
+                if (intentConfigWriteGuard == null) {
+                    throw new com.cretas.aims.exception.BusinessException(503, "暂时无法核对工艺保密产品, 未回滚");
+                }
+                intentConfigWriteGuard.requireNoProtectedNames(config);
             }
 
         } catch (JsonProcessingException e) {

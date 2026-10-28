@@ -135,9 +135,10 @@ public interface AnnotationQueueRepository extends JpaRepository<AnnotationQueue
            "    a.annotatedAt = :annotatedAt, " +
            "    a.annotationNotes = :notes, " +
            "    a.annotationStatus = 'COMPLETED' " +
-           "WHERE a.id = :id")
+           "WHERE a.id = :id AND a.factoryId = :factoryId")
     int completeAnnotation(
             @Param("id") Long id,
+            @Param("factoryId") String factoryId,
             @Param("intentCode") String intentCode,
             @Param("annotator") String annotator,
             @Param("annotatedAt") LocalDateTime annotatedAt,

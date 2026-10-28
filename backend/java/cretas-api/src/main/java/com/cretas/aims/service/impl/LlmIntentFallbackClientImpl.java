@@ -162,6 +162,13 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
 
     static final String EGRESS_SITE = "intent-llm-fallback";
 
+    /** 新意图建议 / 自动建意图前的学习规则 (复审 L4); 缺失时一律不建 (fail-closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
+
+    @Autowired(required = false)
+    private com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
+
     /**
      * 意图分类 / 重排: 提示词与原话脱敏后发, 回答里的代号换回 (JSON 安全)。
      * 脱敏不了抛 {@link IllegalStateException}, 由各调用点原有的异常降级接住 —— 不发。
@@ -2420,6 +2427,15 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                                               double confidence) {
         if (suggestionRepository == null) {
             log.debug("Suggestion repository not available, skipping CREATE_INTENT suggestion");
+            return;
+        }
+
+        // 新意图的关键词 / 示例直接取自用户原话 (自动建意图写进本厂意图配置; 待审建议和累加的示例给审核人看):
+        // 原话不过本厂学习规则 (训练授权、本厂保密产品名、配方参数 / 客户 / 人名) 就不建、不累加 (复审 L4, 2026-10-29)
+        if (!com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(
+                trainingConsentService, processSecretSampleFilter, factoryId, userInput)) {
+            log.info("CREATE_INTENT skipped: utterance fails factory learning rules (factory={}, code={})",
+                    factoryId, suggestedCode);
             return;
         }
 

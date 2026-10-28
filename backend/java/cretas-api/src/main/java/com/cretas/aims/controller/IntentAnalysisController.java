@@ -392,12 +392,15 @@ public class IntentAnalysisController {
     public ResponseEntity<ApiResponse<Void>> applySuggestion(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @Parameter(description = "建议ID", example = "sug-001") @PathVariable String suggestionId,
-            @Parameter(description = "操作人ID", example = "22") @RequestParam Long operatorId) {
+            @Parameter(description = "已废弃: 操作人取登录身份, 不再信任请求参数", example = "22")
+            @RequestParam(required = false) Long operatorId) {
 
         try {
-            int updated = suggestionRepository.applySuggestion(suggestionId, LocalDateTime.now(), operatorId);
+            // 按 (建议 ID, 路径工厂) 改; 操作人取登录身份 (复审 M3, 2026-10-29)
+            Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
+            int updated = suggestionRepository.applySuggestion(suggestionId, factoryId, LocalDateTime.now(), operator);
             if (updated > 0) {
-                log.info("建议已采纳: suggestionId={}, operatorId={}", suggestionId, operatorId);
+                log.info("建议已采纳: suggestionId={}, operatorId={}", suggestionId, operator);
                 return ResponseEntity.ok(ApiResponse.successMessage("建议已采纳"));
             } else {
                 throw new BusinessException(404, "建议不存在或状态已变更");
@@ -422,7 +425,8 @@ public class IntentAnalysisController {
             @Parameter(description = "拒绝原因", example = "业务场景已变更") @RequestParam String reason) {
 
         try {
-            int updated = suggestionRepository.rejectSuggestion(suggestionId, reason);
+            // 按 (建议 ID, 路径工厂) 改 (复审 M3)
+            int updated = suggestionRepository.rejectSuggestion(suggestionId, factoryId, reason);
             if (updated > 0) {
                 log.info("建议已拒绝: suggestionId={}, reason={}", suggestionId, reason);
                 return ResponseEntity.ok(ApiResponse.successMessage("建议已拒绝"));
