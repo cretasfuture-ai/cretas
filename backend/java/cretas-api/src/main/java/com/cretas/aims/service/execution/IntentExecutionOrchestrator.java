@@ -181,6 +181,13 @@ public class IntentExecutionOrchestrator {
 
     static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply";
 
+    /**
+     * 工艺保密: 存档的日 / 周 / 月报 (经营报告快照含保密产品的毛利 / 成本; 修复前的旧文本也留 90 天)
+     * 在有保密产品的工厂不拼进咨询提示词 (Steve 10-28: 对 AI 一律不带)。单测直接 new 本类时用「没有保密产品」的默认实例。
+     */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
+
     // R16 tiered-first 反转开关: 关掉即完全回到 Java-first + gate 摆渡的旧行为。
     @Value("${cretas.restaurant.tiered-first.enabled:true}")
     private boolean tieredFirstEnabled;
@@ -4796,6 +4803,15 @@ public class IntentExecutionOrchestrator {
 
     private String getPrecomputedAnalysisContext(String factoryId) {
         if (factoryId == null || factoryId.isEmpty()) return null;
+        try {
+            if (llmCostScope.factoryHasProtected(factoryId)) {
+                log.info("[process-secret] 本厂有工艺保密产品, 存档报告不拼进咨询提示词: factoryId={}", factoryId);
+                return null;
+            }
+        } catch (RuntimeException e) {
+            log.warn("[process-secret] 保密范围判定失败, 存档报告不拼进咨询提示词: factoryId={}", factoryId);
+            return null;
+        }
         try {
             LocalDateTime now = LocalDateTime.now();
             StringBuilder context = new StringBuilder();

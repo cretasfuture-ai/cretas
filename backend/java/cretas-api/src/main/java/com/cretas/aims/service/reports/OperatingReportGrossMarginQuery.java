@@ -91,10 +91,11 @@ public class OperatingReportGrossMarginQuery {
     }
     /**
      * 给大模型的版本: 去掉保密产品的行 (本厂有保密产品而行认不出产品时同样去掉), 汇总在剩下的行上重算。
-     * {@code excludedProtectedProductCount} = 去掉了几个产品。
+     * {@code excludedRowCount} = 去掉了几行; {@code excludedProtectedProductCount} = 其中真正受保护的产品个数
+     * (只数 {@code protectedIds} 里的, 计划锚点 / 同计划普通产品不算)。
      */
     @SuppressWarnings("unchecked")
-    public static Map<String,Object> withoutProducts(Map<String,Object> payload,Set<String> excluded,boolean ascending){
+    public static Map<String,Object> withoutProducts(Map<String,Object> payload,Set<String> excluded,Set<String> protectedIds,boolean ascending){
         List<Map<String,Object>> rank=payload.get("rank") instanceof List<?> list?(List<Map<String,Object>>)list:List.of();
         List<Map<String,Object>> kept=new ArrayList<>();
         Set<String> dropped=new LinkedHashSet<>();
@@ -104,6 +105,8 @@ public class OperatingReportGrossMarginQuery {
             kept.add(row);
         }
         Map<String,Object> result=new LinkedHashMap<>(summarize(kept,ascending));
+        result.put("excludedRowCount",dropped.size());
+        dropped.retainAll(protectedIds);
         result.put("excludedProtectedProductCount",dropped.size());
         return result;
     }

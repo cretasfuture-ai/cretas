@@ -71,12 +71,31 @@ public class ProcessSecretAggregateExclusions {
      * 所以不判权限、不记审计。
      */
     public Scope allProtected(String factoryId) {
+        return allProtectedDetailed(factoryId).scope();
+    }
+
+    /**
+     * {@link #allProtected} 加两样给「不含 N 个保密产品」计数用的东西: 真正受保护的产品 id
+     * (不含计划锚点 / 同计划的普通产品), 以及每个被排除的计划背后是哪几个受保护产品。
+     */
+    public record ProtectedScope(Scope scope, Set<String> protectedProductTypeIds,
+                                 Map<String, Set<String>> protectedProductsByPlan) {
+        public static final ProtectedScope EMPTY = new ProtectedScope(Scope.EMPTY, Set.of(), Map.of());
+    }
+
+    public ProtectedScope allProtectedDetailed(String factoryId) {
         Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
-        if (protectedIds.isEmpty()) return Scope.EMPTY;
-        return expand(factoryId, new HashSet<>(protectedIds));
+        if (protectedIds.isEmpty()) return ProtectedScope.EMPTY;
+        Map<String, Set<String>> byPlan = new HashMap<>();
+        Scope scope = expand(factoryId, new HashSet<>(protectedIds), byPlan);
+        return new ProtectedScope(scope, Set.copyOf(protectedIds), Map.copyOf(byPlan));
     }
 
     private Scope expand(String factoryId, Set<String> hidden) {
+        return expand(factoryId, hidden, null);
+    }
+
+    private Scope expand(String factoryId, Set<String> hidden, Map<String, Set<String>> hiddenByPlan) {
         TreeSet<String> products = new TreeSet<>(hidden);
         TreeSet<String> plans = new TreeSet<>();
         List<ProductionPlan> factoryPlans = planRepository.findByFactoryId(factoryId);
@@ -84,11 +103,16 @@ public class ProcessSecretAggregateExclusions {
         for (ProductionPlan plan : factoryPlans) {
             // 与裁剪器、配比提示同一口径: 锚点、目标成品、按产品钉的配方键, 以及钉住的配方所属产品
             // (只钉了单个配方的多产出计划, 产品只能从配方查到; 独立审查第四轮 M2)
-            if (ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId)))
-                    .stream().noneMatch(hidden::contains)) {
+            Set<String> involved = new TreeSet<>(
+                    ProcessSecretPlanProducts.of(plan, recipeId -> Optional.ofNullable(productOfRecipe.get(recipeId))));
+            involved.retainAll(hidden);
+            if (involved.isEmpty()) {
                 continue;
             }
-            if (plan.getId() != null && !plan.getId().isBlank()) plans.add(plan.getId());
+            if (plan.getId() != null && !plan.getId().isBlank()) {
+                plans.add(plan.getId());
+                if (hiddenByPlan != null) hiddenByPlan.put(plan.getId(), Set.copyOf(involved));
+            }
             if (plan.getProductTypeId() != null && !plan.getProductTypeId().isBlank()) {
                 products.add(plan.getProductTypeId());
             }

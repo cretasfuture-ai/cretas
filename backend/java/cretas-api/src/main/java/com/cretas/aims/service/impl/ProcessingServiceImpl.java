@@ -114,9 +114,11 @@ public class ProcessingServiceImpl implements ProcessingService {
     // optional/fail-open: 未配置 bean 时不阻塞 (与 YieldReportServiceImpl 同款)。
     @Autowired(required = false)
     private com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
-    // 工艺保密: 发给大模型的成本数据不带保密产品 (Steve 10-28)。字段注入, 不打断按构造器装配的既有测试。
+    // 工艺保密: 发给大模型的成本数据不带保密产品 (Steve 10-28)。字段注入, 不打断按构造器装配的既有测试;
+    // 生产由 Spring 注入真实实例 (取不到范围时抛出 = 不发), 单测直接 new / 构造器装配时用「没有保密产品」的默认实例。
     @Autowired
-    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope;
+    private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
+            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
     /**
      * Canvas-Thresholds resolver (Phase A P0-3) — overlays FALLBACK_* with per-factory config.

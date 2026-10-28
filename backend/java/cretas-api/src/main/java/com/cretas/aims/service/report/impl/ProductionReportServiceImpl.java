@@ -74,7 +74,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
     /** 发给 AI 的计划成本: 只在非保密计划上逐行累加 (按结束日期分天), 以及去掉了几个保密产品。 */
-    record AiPlanCosts(Map<LocalDate, BigDecimal> byDay, BigDecimal total, int excludedProducts) { }
+    record AiPlanCosts(Map<LocalDate, BigDecimal> byDay, BigDecimal total, int excludedPlans, int excludedProducts) { }
 
     /**
      * 与 {@code calculateTotalCostBetweenDates} 同口径 (结束时间在区间内, 四项实际成本缺失按 0),
@@ -86,12 +86,16 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         Map<LocalDate, BigDecimal> byDay = new TreeMap<>();
         BigDecimal total = BigDecimal.ZERO;
         Set<String> excludedProducts = new LinkedHashSet<>();
+        int excludedPlans = 0;
         for (com.cretas.aims.entity.ProductionPlan plan : productionPlanRepository.findByFactoryId(factoryId)) {
             LocalDateTime end = plan.getEndTime();
             if (end == null || end.isBefore(from) || end.isAfter(to)) continue;
             if (perDayBounds && end.isAfter(end.toLocalDate().atTime(23, 59, 59))) continue;
             if (excluded.coversPlan(plan.getId()) || excluded.coversProduct(plan.getProductTypeId())) {
-                excludedProducts.add(String.valueOf(plan.getProductTypeId()));
+                excludedPlans++;
+                // N 只数真正受保护的产品 (计划锚点 / 同计划普通产品不算)
+                excludedProducts.addAll(excluded.protectedBehind(plan.getProductTypeId(),
+                        plan.getId() == null ? List.of() : List.of(plan.getId())));
                 continue;
             }
             BigDecimal cost = nz(plan.getActualMaterialCost()).add(nz(plan.getActualLaborCost()))
@@ -99,7 +103,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             total = total.add(cost);
             byDay.merge(end.toLocalDate(), cost, BigDecimal::add);
         }
-        return new AiPlanCosts(byDay, total, excludedProducts.size());
+        return new AiPlanCosts(byDay, total, excludedPlans, excludedProducts.size());
     }
 
     private static BigDecimal nz(BigDecimal value) {
@@ -885,7 +889,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             if (llmCostScope.factoryHasProtected(factoryId)) {
                 AiPlanCosts aiCosts = planCostsForAi(factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59), false);
                 aiTotalCost = aiCosts.total();
-                if (aiCosts.excludedProducts() > 0) {
+                if (aiCosts.excludedPlans() > 0) {
                     secretNote = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(aiCosts.excludedProducts()) + "\n";
                 }
             }
@@ -1106,7 +1110,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 }
                 aiTotal = aiCosts.total();
                 aiAverage = aiTotal.divide(BigDecimal.valueOf(historicalDays), 2, RoundingMode.HALF_UP);
-                if (aiCosts.excludedProducts() > 0) {
+                if (aiCosts.excludedPlans() > 0) {
                     secretNote = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(aiCosts.excludedProducts()) + "\n";
                 }
             }

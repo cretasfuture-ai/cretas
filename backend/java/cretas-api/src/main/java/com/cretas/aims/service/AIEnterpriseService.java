@@ -959,6 +959,14 @@ public class AIEnterpriseService {
                     emitter.complete();
                     return;
                 }
+                // 兜底 (流式不经过 AIAnalysisService.analyzeCost 的中央闸): 要发的数据里还夹着保密行就整次不发、不扣配额
+                if (llmCostScope.containsProtected(factoryId, batchesData)) {
+                    log.warn("[process-secret] 流式时间范围分析的数据里仍有保密产品, 不发给 AI: factoryId={}", factoryId);
+                    emitter.send(SseEmitter.event().name("error").data(Map.of(
+                            "type", "error", "message", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON)));
+                    emitter.complete();
+                    return;
+                }
 
                 emitter.send(SseEmitter.event()
                         .name("progress")

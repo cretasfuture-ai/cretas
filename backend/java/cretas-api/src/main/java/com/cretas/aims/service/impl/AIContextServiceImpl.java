@@ -111,7 +111,8 @@ public class AIContextServiceImpl implements AIContextService {
         BigDecimal totalCost = BigDecimal.ZERO;
         // 给 AI 的版本: 单位成本的分母只算有成本的 (非保密) 产品的产量
         BigDecimal costedOutput = BigDecimal.ZERO;
-        int withheldCount = 0;
+        // 「不含 N 个保密产品」的 N: 只数真正受保护的产品, 锚点 / 同计划普通产品不算
+        Set<String> withheldProtected = new LinkedHashSet<>();
 
         for (ProductionByProductDTO stat : productionStats) {
             String productTypeId = stat.getProductTypeId();
@@ -123,7 +124,8 @@ public class AIContextServiceImpl implements AIContextService {
                     && (productTypeId == null || excluded.coversProduct(productTypeId)
                         || productBatches.stream().anyMatch(b -> excluded.coversPlan(b.getProductionPlanId())));
             if (withheld) {
-                withheldCount++;
+                withheldProtected.addAll(excluded.protectedBehind(productTypeId, productBatches.stream()
+                        .map(ProductionBatch::getProductionPlanId).filter(Objects::nonNull).toList()));
                 productionWithCost.add(ProductionAIContext.ProductionWithCostDTO.builder()
                         .productTypeId(productTypeId)
                         .productName(stat.getProductName())
@@ -286,7 +288,7 @@ public class AIContextServiceImpl implements AIContextService {
                 .topProductsByOutput(topByOutput)
                 .topProductsByCost(topByCost)
                 .topProductsByCostVariance(topByVariance)
-                .excludedProtectedProductCount(excluded != null ? withheldCount : null)
+                .excludedProtectedProductCount(excluded != null ? withheldProtected.size() : null)
                 .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
                 .build();
     }
@@ -472,6 +474,8 @@ public class AIContextServiceImpl implements AIContextService {
                 .varianceStatus(varianceStatus)
                 .varianceDetails(varianceDetails)
                 .recentBatchTrends(trends)
+                .costSourcePlanIds(productBatches.stream().map(ProductionBatch::getProductionPlanId)
+                        .filter(Objects::nonNull).distinct().toList())
                 .isCostIncreasing(isCostIncreasing)
                 .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
                 .build();
@@ -519,7 +523,9 @@ public class AIContextServiceImpl implements AIContextService {
         sb.append("- 日均产量: ").append(context.getAvgDailyOutput()).append("\n");
         sb.append("- 总成本: ¥").append(context.getTotalCost()).append("\n");
         sb.append("- 平均单位成本: ¥").append(context.getAvgUnitCost()).append("\n");
-        if (context.getExcludedProtectedProductCount() > 0) {
+        boolean anyWithheld = context.getProductionByProduct() != null && context.getProductionByProduct().stream()
+                .anyMatch(p -> Boolean.TRUE.equals(p.getCostWithheld()));
+        if (anyWithheld) {
             sb.append("- ").append(ProcessSecretLlmCostScope.note(context.getExcludedProtectedProductCount())).append("\n");
         }
         sb.append("\n");
@@ -559,8 +565,10 @@ public class AIContextServiceImpl implements AIContextService {
     public String formatCostContextForPrompt(CostAIContext context) {
         StringBuilder sb = new StringBuilder();
         sb.append("## 产品成本分析: ").append(context.getProductName()).append("\n\n");
-        // 工艺保密产品: 成本一个数都不进提示词 (取不到保密范围时抛出, 调用方不发)
-        if (llmCostScope.forFactory(context.getFactoryId()).coversProduct(context.getProductTypeId())) {
+        // 工艺保密产品, 或累加的批次属于牵涉保密产品的计划: 成本一个数都不进提示词
+        // (与生产统计上下文同口径; 取不到保密范围时抛出, 调用方不发)
+        if (llmCostScope.forFactory(context.getFactoryId())
+                .coversProductOrAnyPlan(context.getProductTypeId(), context.getCostSourcePlanIds())) {
             sb.append(ProcessSecretLlmCostScope.WITHHELD_REASON).append("。\n");
             return sb.toString();
         }

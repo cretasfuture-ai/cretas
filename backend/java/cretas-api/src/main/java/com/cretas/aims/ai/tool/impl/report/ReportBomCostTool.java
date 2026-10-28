@@ -137,8 +137,12 @@ public class ReportBomCostTool extends AbstractBusinessTool {
     private Map<String, Object> executeProductCostAnalysis(String factoryId, String productTypeId) {
         Map<String, Object> result = new HashMap<>();
 
-        // 工艺保密产品: 不算、不给任何成本数 (结构化字段和预格式化文本都不带)
-        if (llmCostScope.forFactory(factoryId).coversProduct(productTypeId)) {
+        // 获取预计算的成本上下文
+        CostAIContext costContext = aiContextService.buildCostContext(factoryId, productTypeId, 10);
+
+        // 工艺保密产品, 或累加的批次属于牵涉保密产品的计划: 不给任何成本数 (结构化字段和预格式化文本都不带)
+        if (llmCostScope.forFactory(factoryId)
+                .coversProductOrAnyPlan(productTypeId, costContext.getCostSourcePlanIds())) {
             result.put("analysisType", "product_detail");
             result.put("productTypeId", productTypeId);
             result.put("costWithheld", true);
@@ -146,9 +150,6 @@ public class ReportBomCostTool extends AbstractBusinessTool {
             result.put("preformattedPrompt", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON);
             return result;
         }
-
-        // 获取预计算的成本上下文
-        CostAIContext costContext = aiContextService.buildCostContext(factoryId, productTypeId, 10);
 
         result.put("analysisType", "product_detail");
         result.put("productTypeId", productTypeId);

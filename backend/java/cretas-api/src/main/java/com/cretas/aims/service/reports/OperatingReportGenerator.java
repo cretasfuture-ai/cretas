@@ -68,9 +68,10 @@ public class OperatingReportGenerator {
             OperatingReportSnapshot snapshot=assembler.assemble(input);
             // 工艺保密: 给模型的是另一份快照 —— 产品毛利榜去掉保密产品, 毛利汇总只在剩下的产品上重算;
             // 保存/展示的快照不变。取不到保密范围就按取数失败记 (不发)。
-            Set<String> excluded=llmCostScope.forFactory(context.factoryId()).productTypeIds();
-            Map<String,Object> promptHigh=OperatingReportGrossMarginQuery.withoutProducts(input.marginHigh(),excluded,false);
-            Map<String,Object> promptLow=OperatingReportGrossMarginQuery.withoutProducts(input.marginLow(),excluded,true);
+            var secret=llmCostScope.forFactory(context.factoryId());
+            Map<String,Object> promptHigh=OperatingReportGrossMarginQuery.withoutProducts(input.marginHigh(),secret.productTypeIds(),secret.protectedProductTypeIds(),false);
+            Map<String,Object> promptLow=OperatingReportGrossMarginQuery.withoutProducts(input.marginLow(),secret.productTypeIds(),secret.protectedProductTypeIds(),true);
+            int excludedRows=((Number)promptHigh.get("excludedRowCount")).intValue();
             int excludedProducts=((Number)promptHigh.get("excludedProtectedProductCount")).intValue();
             OperatingReportSnapshot promptSnapshot=assembler.assemble(new OperatingReportAssembler.Input(input.type(),input.start(),input.end(),
                     input.fetchedAt(),input.receipts(),input.sales(),input.previous(),input.lastYear(),input.region(),promptHigh,promptLow,
@@ -81,7 +82,7 @@ public class OperatingReportGenerator {
             var config=prompts.findFirstByFactoryIdAndReportTypeAndIsActiveTrueOrderByPriorityDesc(context.factoryId(),type)
                     .orElseGet(()->prompts.findFirstByFactoryIdIsNullAndReportTypeAndIsActiveTrueOrderByPriorityDesc(type).orElse(null));
             if(config!=null)prompt+="工厂关注方向（不改变上述输出合同）："+config.getPromptTemplate()+"\n";
-            if(excludedProducts>0)prompt+="产品毛利与毛利汇总"+com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(excludedProducts)+"\n";
+            if(excludedRows>0)prompt+="产品毛利与毛利汇总"+com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(excludedProducts)+"\n";
             prompt+="经营指标快照：\n"+codec.encode(promptSnapshot);
             // 快照里的指标标签 / 工厂关注方向可能带客户、人名、保密产品名: 换代号再发, 脱敏不了按模型不可用记失败
             var redacted=llmEgressGuard.textsWithRecord(EGRESS_SITE,context.factoryId(),promptSnapshot,java.util.Map.of(),java.util.List.of(system,prompt));
