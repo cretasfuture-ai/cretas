@@ -86,6 +86,31 @@ class VoucherServiceManualTest {
         assertThrows(RuntimeException.class, () -> service.createManual("F006", VoucherType.PL_CLOSING,
                 LocalDate.of(2026, 5, 31), entries, "PL_CLOSING", "x", "d", 1L));
     }
+    /** S5-11: 当月无期间行、其后已结账 → 凭证入口经生产 assertOpen 拒绝；最后结账之后的月份照常入账。 */
+    @Test void voucherDatedIntoMonthWithoutPeriodRowBeforeAClosedMonthIsRejected() {
+        var periodRepo = mock(com.cretas.aims.repository.finance.AccountingPeriodRepository.class);
+        var closedSeptember = com.cretas.aims.entity.finance.AccountingPeriod.builder().factoryId("F006")
+                .year(2026).month(9).status(com.cretas.aims.entity.finance.AccountingPeriod.Status.CLOSED).build();
+        when(periodRepo.findByFactoryIdAndYearAndMonthAndDeletedAtIsNull(eq("F006"), any(), any()))
+                .thenReturn(java.util.Optional.empty());
+        when(periodRepo.findByFactoryIdAndStatusAndDeletedAtIsNull("F006",
+                com.cretas.aims.entity.finance.AccountingPeriod.Status.CLOSED)).thenReturn(List.of(closedSeptember));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "accountingPeriodService",
+                new com.cretas.aims.service.finance.impl.AccountingPeriodServiceImpl(periodRepo));
+        lenient().when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv -> inv.getArgument(0));
+        List<VoucherEntrySpec> entries = List.of(new VoucherEntrySpec("6601", "费用", BigDecimal.TEN, null, null),
+                new VoucherEntrySpec("1002", "银行存款", null, BigDecimal.TEN, null));
+
+        var e = assertThrows(com.cretas.aims.exception.BusinessException.class, () -> service.createManual("F006",
+                VoucherType.EXPENSE, LocalDate.of(2026, 3, 15), entries, "WASTAGE", "s1", "倒签", 2L));
+        assertEquals("PERIOD_MISSING_BEFORE_CLOSED", e.getErrorCode());
+        verify(voucherRepo, never()).save(any());
+
+        assertDoesNotThrow(() -> service.createManual("F006", VoucherType.EXPENSE, LocalDate.of(2026, 10, 15),
+                entries, "WASTAGE", "s2", "当月", 2L));
+        verify(voucherRepo).save(any());
+    }
+
     @Test void ordinaryBusinessCannotBypassClosedPeriodButSystemClosingCan() {
         lenient().when(voucherRepo.save(any(Voucher.class))).thenAnswer(inv->inv.getArgument(0));
         lenient().doThrow(new com.cretas.aims.exception.PeriodClosedException("F006",2026,10))

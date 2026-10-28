@@ -4,6 +4,8 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.inventory.PurchaseInvoice;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceLineRequest;
+import com.cretas.aims.dto.inventory.PurchaseInvoiceMatchStatusDTO;
 import com.cretas.aims.dto.inventory.PurchaseInvoiceTodoDTO;
 import com.cretas.aims.dto.inventory.PurchaseInvoiceViewDTO;
 import com.cretas.aims.service.MobileService;
@@ -51,11 +53,24 @@ public class PurchaseInvoiceController {
         String invoiceNumber = getString(body, "invoiceNumber");
         BigDecimal amount = getBigDecimal(body, "amount");
         String ocrRawResult = getString(body, "ocrRawResult");
+        List<PurchaseInvoiceLineRequest> lines = getLines(body);
 
-        log.info("[SP6] 上传发票: factoryId={}, poId={}, invoiceNumber={}", factoryId, poId, invoiceNumber);
+        log.info("[SP6] 上传发票: factoryId={}, poId={}, invoiceNumber={}, lines={}",
+                factoryId, poId, invoiceNumber, lines.size());
         PurchaseInvoice invoice = purchaseInvoiceService.upload(
-                factoryId, poId, supplierId, invoiceNumber, amount, ocrRawResult, userId);
+                factoryId, poId, supplierId, invoiceNumber, amount, ocrRawResult, userId, lines);
         return ApiResponse.success("发票上传成功", invoice);
+    }
+
+    // ─── 逐行三单状态 ─────────────────────────────────────────────────────────
+
+    @GetMapping("/match-status")
+    @Operation(summary = "采购单逐行三单状态", description = "每条采购单行的有效收货、退货抵减、已开票与剩余可开票量")
+    @RequirePermission({"finance:read_write", "finance:read", "procurement:read_write", "procurement:read"})
+    public ApiResponse<PurchaseInvoiceMatchStatusDTO> matchStatus(
+            @PathVariable("factoryId") @NotBlank String factoryId,
+            @RequestParam("poId") String poId) {
+        return ApiResponse.success("查询成功", purchaseInvoiceService.matchStatus(factoryId, poId));
     }
 
     // ─── 对账 ─────────────────────────────────────────────────────────────────
@@ -134,6 +149,41 @@ public class PurchaseInvoiceController {
     private String getString(Map<String, Object> body, String key) {
         Object v = body.get(key);
         return v != null ? v.toString() : null;
+    }
+
+    private List<PurchaseInvoiceLineRequest> getLines(Map<String, Object> body) {
+        Object raw = body.get("lines");
+        if (raw == null) return List.of();
+        if (!(raw instanceof List<?> list)) {
+            throw new com.cretas.aims.exception.BusinessException(400, "lines 必须是数组");
+        }
+        List<PurchaseInvoiceLineRequest> lines = new java.util.ArrayList<>();
+        for (Object element : list) {
+            if (!(element instanceof Map<?, ?> m)) {
+                throw new com.cretas.aims.exception.BusinessException(400, "lines 的每一项必须是对象");
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> line = (Map<String, Object>) m;
+            lines.add(new PurchaseInvoiceLineRequest(
+                    getLong(line, "purchaseOrderItemId"),
+                    getLong(line, "receiveItemId"),
+                    getString(line, "materialTypeId"),
+                    getBigDecimal(line, "quantity"),
+                    getBigDecimal(line, "unitPrice"),
+                    getBigDecimal(line, "amount")));
+        }
+        return lines;
+    }
+
+    private Long getLong(Map<String, Object> body, String key) {
+        Object v = body.get(key);
+        if (v == null || v.toString().isBlank()) return null;
+        if (v instanceof Number n) return n.longValue();
+        try {
+            return Long.valueOf(v.toString().trim());
+        } catch (NumberFormatException e) {
+            throw new com.cretas.aims.exception.BusinessException(400, key + " 不是有效编号: " + v);
+        }
     }
 
     private BigDecimal getBigDecimal(Map<String, Object> body, String key) {
