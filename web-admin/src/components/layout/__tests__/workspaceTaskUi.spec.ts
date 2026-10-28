@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { menuConfig } from '../menuConfig';
-import { countActionableSalesOrders } from '@/store/modules/taskBadges';
 import {
   useWorkspaceStore,
   workspaceRouteKey,
@@ -54,11 +53,5 @@ describe('multi-task workspace and menu badges', () => {
     expect(items.find((item) => item.path === '/warehouse/materials')?.badgeKey).toBe('warehouseReceiving');
     expect(items.find((item) => item.path === '/warehouse/unordered-inbound-applications')?.badgeKey)
       .toBe('unorderedInbound');
-  });
-
-  it('excludes terminal sales orders from the actionable red count', () => {
-    expect(countActionableSalesOrders([
-      { status: 'DRAFT' }, { status: 'PROCESSING' }, { status: 'COMPLETED' }, { status: 'CLOSED' },
-    ])).toBe(2);
   });
 });

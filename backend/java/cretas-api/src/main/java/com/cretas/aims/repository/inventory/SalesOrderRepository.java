@@ -24,6 +24,22 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
 
     Page<SalesOrder> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
+    /** Task badge (S6-09): orders still needing action = not in a terminal status; a real COUNT, never a page. */
+    @Query("SELECT COUNT(o) FROM SalesOrder o WHERE o.factoryId = :factoryId AND o.status NOT IN :terminal")
+    long countActionable(@Param("factoryId") String factoryId,
+                         @Param("terminal") Collection<SalesOrderStatus> terminal);
+
+    @Query("SELECT COUNT(o) FROM SalesOrder o WHERE o.factoryId = :factoryId AND o.createdBy = :createdBy "
+            + "AND o.status NOT IN :terminal")
+    long countActionableCreatedBy(@Param("factoryId") String factoryId, @Param("createdBy") Long createdBy,
+                                  @Param("terminal") Collection<SalesOrderStatus> terminal);
+
+    @Query("SELECT COUNT(o) FROM SalesOrder o WHERE o.factoryId = :factoryId AND o.createdBy IN :createdByList "
+            + "AND o.status NOT IN :terminal")
+    long countActionableCreatedByIn(@Param("factoryId") String factoryId,
+                                    @Param("createdByList") Collection<Long> createdByList,
+                                    @Param("terminal") Collection<SalesOrderStatus> terminal);
+
     /**
      * Sprint 5 Track G (RBAC DataScope SELF) — 仅查当前用户创建的销售单.
      * Used by {@link com.cretas.aims.service.inventory.SalesService#getSalesOrders} when

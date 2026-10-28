@@ -261,7 +261,8 @@ function titleForItem(item: MenuItem): string {
   return item.title;
 }
 
-function badgeForItem(item: MenuItem): number | null {
+function badgeForItem(item: MenuItem): number | 'unknown' | null {
+  if (taskBadges.isUnknown(item.badgeKey)) return 'unknown';
   return taskBadges.badge(item.badgeKey);
 }
 
