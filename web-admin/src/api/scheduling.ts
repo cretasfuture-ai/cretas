@@ -1035,3 +1035,60 @@ export function updateSchedulingSettings(factoryId: string, settings: Partial<Sc
   }
   return put<SchedulingSettings>(`/${factoryId}/scheduling/settings`, settings);
 }
+
+// ==================== S4 产线产能与产品所需设备 ====================
+
+/** 产能单位: 件 / 千克 / 批。插单只认与订单同单位的配置, 不换算。 */
+export type CapacityUnit = 'PIECE' | 'KG' | 'BATCH';
+
+export interface LineCapacityConfig {
+  id: number;
+  productionLineId: string;
+  /** 为空 = 该线通用 */
+  productTypeId: string | null;
+  capacityPerHour: number;
+  capacityUnit: CapacityUnit;
+  source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
+  /** 谁配的: 工厂用户或平台管理员 (对话建厂) */
+  actorType: 'FACTORY_USER' | 'PLATFORM_ADMIN';
+  /** 只在工厂用户配置时有值 */
+  configuredBy: number | null;
+  effectiveFrom: string;
+}
+
+export interface ProductEquipmentRequirement {
+  id: number;
+  productTypeId: string;
+  equipmentId: number;
+  source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
+  /** 只在工厂用户配置时有值 */
+  configuredBy: number | null;
+}
+
+export function getLineCapacityConfigs(factoryId: string) {
+  return get<LineCapacityConfig[]>(`/${factoryId}/scheduling/line-capacity/capacity`);
+}
+
+export function setLineCapacity(factoryId: string, data: {
+  productionLineId: string;
+  productTypeId?: string | null;
+  capacityPerHour: number;
+  capacityUnit: CapacityUnit;
+}) {
+  return put<LineCapacityConfig>(`/${factoryId}/scheduling/line-capacity/capacity`, data);
+}
+
+export function deleteLineCapacity(factoryId: string, configId: number) {
+  return del<void>(`/${factoryId}/scheduling/line-capacity/capacity/${configId}`);
+}
+
+export function getProductEquipmentRequirements(factoryId: string) {
+  return get<ProductEquipmentRequirement[]>(`/${factoryId}/scheduling/line-capacity/equipment`);
+}
+
+export function setProductEquipment(factoryId: string, productTypeId: string, equipmentIds: number[]) {
+  return put<ProductEquipmentRequirement[]>(
+    `/${factoryId}/scheduling/line-capacity/equipment/${encodeURIComponent(productTypeId)}`,
+    { equipmentIds },
+  );
+}
