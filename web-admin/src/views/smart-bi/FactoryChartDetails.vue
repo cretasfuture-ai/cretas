@@ -31,7 +31,8 @@ async function load(targetPage = 1, reset = true) {
   loading.value = true; error.value = '';
   try {
     const filters = Object.entries(filterInputs).filter(([, value]) => value.trim()).map(([field, value]) => ({ field, value: value.trim() }));
-    const result = await getFactoryChartDetails({ context_id: context.id, page: targetPage, page_size: FACTORY_DETAIL_PAGE_SIZE, filters, point: point.value });
+    const detailPoint = context.drilldown === false ? undefined : point.value;
+    const result = await getFactoryChartDetails({ context_id: context.id, page: targetPage, page_size: FACTORY_DETAIL_PAGE_SIZE, filters, point: detailPoint });
     if (version !== requestVersion.value) return;
     if (!result.success || !result.data) { error.value = apiError(result, '原始明细加载失败'); return; }
     if (result.data.candidateId !== activeCandidate.value?.id || result.data.source !== activeCandidate.value?.source
@@ -79,7 +80,8 @@ function display(value: unknown) { return value === null || value === undefined 
   <el-drawer :model-value="modelValue" direction="rtl" size="min(960px, 96vw)" :title="candidate ? `原始明细 · ${candidate.title}` : '原始明细'" @close="close">
     <div class="details-scope" v-if="candidate">
       <div class="details-meta">{{ data?.source || candidate.source }} · {{ data?.period || '当前期间' }} · 共 {{ data?.total ?? 0 }} 行</div>
-      <div v-if="point" class="point-context">当前点位：{{ point.name }}<span v-if="point.seriesName"> · {{ point.seriesName }}</span></div>
+      <div v-if="point && activeCandidate?.detailContext?.drilldown !== false" class="point-context">当前点位：{{ point.name }}<span v-if="point.seriesName"> · {{ point.seriesName }}</span></div>
+      <div v-else-if="point" class="point-context">显示当前图表的全部明细</div>
       <div class="details-controls"><el-radio-group v-model="mode" size="small"><el-radio-button label="continuous" value="continuous">连续加载</el-radio-button><el-radio-button label="paged" value="paged">分页</el-radio-button></el-radio-group><el-button v-if="data?.appliedFilters?.length" size="small" @click="clearFilters">清除筛选</el-button></div>
       <div v-if="filterList.length" class="details-filters"><span v-for="filter in filterList" :key="filter.field" class="filter-control"><label>{{ filter.label }}</label><el-input v-model="filterInputs[filter.field]" size="small" :placeholder="filter.kind" @keyup.enter="applyFilters" /></span><el-button size="small" type="primary" @click="applyFilters">应用筛选</el-button></div>
       <div v-if="data?.appliedFilters?.length" class="applied-filters">已应用：<el-tag v-for="filter in data.appliedFilters" :key="filter.field" size="small">{{ filter.field }}={{ filter.value }}</el-tag></div>

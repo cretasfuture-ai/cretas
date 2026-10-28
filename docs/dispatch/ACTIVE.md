@@ -7,11 +7,11 @@
 
 ## 在飞任务
 
-- `SC29-KPI-THOUSANDS` — `claimed` — Root/ai_analysis_foundation；Base `2830c3bb34a06186094b5add17eb2a70857733eb`；scope KPICard.vue及其组件回归测试；真实UI把2500/1600显示2/1，定位动画parseFloat截断千分位；修custom展示/严格数值处理并验金额、百分比、空值与progress，禁其他页面重构。
+- `SC29-COMMERCE-PG` — `claimed` — Root/capacity_executor；Base `166e3f3d7faf803da32a892c6db706ccc00cd7e7`；scope仅test_commerce_joint_postgres.py；接管已冻结SQL的实际PG/RLS反例与schema shadow/缺列/MASTER/所有权/状态/定义异常验证，独立schema，禁改产品/台账；目标真实PG lane无skip。
 
-- `SC29-COMMERCE-JOINT` — `claimed` — Root/capability_impl；Base `166e3f3d7faf803da32a892c6db706ccc00cd7e7`；scope factory_charts新增commerce_joint/ratio_detail_units测试，engine.py/advanced.py/trusted_business_sources.py；补受控销售联合及比例图sourceQuantityUnit明细，禁猜键/金额分摊/迁移；验收目标pytest及真实PG。
 
-- `SC29-CATALOG-LAZY-QA` — `in-progress` — Root；Base `46b9ed6aee74abaefc153c6ea7a553da19589d8f`；scope仅catalog场景/单测/fixture及生成mcp-entry；修正把有快照键的按需明细误判不可用，保留实际明细/导出断言；验收Node闸、浏览器fixture及F006目录矩阵。
+- `SC29-COMMERCE-JOINT` — `in-progress` — Root；Base `166e3f3d7faf803da32a892c6db706ccc00cd7e7`；scope factory_charts commerce_joint/ratio_detail_units/trusted_business_sources及测试，engine/advanced/details/detail_store.py；规范事实粒度、比例单位及禁点钻，禁猜键/分摊/迁移；目标pytest/真实PG/终审。
+
 
 - `SMARTBI-F006-QA-20261028` — `in-progress` — Root；Base `96bf2707b860bb5892ee0735fc01e4faa1f11f68`；PR1267已部署；34场景与QA修复见archive/2026-10-28-smartbi-acceptance-fixes.md；F006 only。
 

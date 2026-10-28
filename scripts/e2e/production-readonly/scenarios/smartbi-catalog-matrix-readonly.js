@@ -383,7 +383,14 @@ async function inspectCatalog(page, _body, inspectCtx) {
         await testId(page, 'factory-chart-guide-generate').click().catch(() => {});
         summary.checks.cardRendered = await card.isVisible().catch(() => false);
       }
-      summary.checks.chartRendered = summary.checks.cardRendered && await card.locator('.factory-chart-canvas canvas').count() > 0;
+      if (summary.checks.cardRendered) {
+        // Chart mounting is viewport-driven; DOM visibility alone does not
+        // mean the observer has initialized ECharts below the fold.
+        await card.scrollIntoViewIfNeeded({ timeout: remainingTimeout(deadline) });
+        summary.checks.chartRendered = await card.locator('.factory-chart-canvas canvas, .factory-chart-canvas svg')
+          .first().waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) })
+          .then(() => true).catch(() => false);
+      }
 
       if (summary.checks.cardRendered) {
     const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true }).first();
