@@ -273,6 +273,13 @@ class ProcessSecretDataLayerExitsSecurityTest {
     }
 
     @Test
+    void platformStaffStillGetNeitherCostTotalsNorTheCostDenominatorQuantity() throws Exception {
+        JsonNode body = call(costTotals(), get("/api/mobile/F-A/production/orders/o2/cost-breakdown"), platform());
+        assertThat(body.get("totalCost").isNull()).isTrue();
+        assertThat(body.get("costDenominatorQuantity").isNull()).as("平台连本单总量也不给").isTrue();
+    }
+
+    @Test
     void orderCostTotalsStayForTheOwner() throws Exception {
         JsonNode body = call(costTotals(), get("/api/mobile/F-A/production/orders/o2/cost-breakdown"), user(OWNER));
         assertThat(body.get("seasoningCost").decimalValue()).isEqualByComparingTo("12.5");

@@ -753,7 +753,10 @@ public class ProcessSecretPayloadScrubber {
         if (EXACT_COST_FIELDS.contains(name)) return true;
         if (isIdentifierLike(name)) return false;
         String lower = name.toLowerCase(Locale.ROOT);
-        if (NON_MONEY_SUFFIXES.stream().anyMatch(lower::endsWith)) return false;
+        // 「每数量 / 每分钟多少钱」(costPerQuantity、unitCostQty) 仍是金额, 不豁免
+        boolean moneyPerUnit = lower.contains("per") || lower.contains("price") || lower.contains("amount")
+                || lower.contains("unit");
+        if (!moneyPerUnit && NON_MONEY_SUFFIXES.stream().anyMatch(lower::endsWith)) return false;
         return COST_TOTAL_PARTS.stream().anyMatch(lower::contains);
     }
 
