@@ -914,27 +914,29 @@ prod_already_runs_local_artifact() {
     # ▎四个判据没有一个在问「**跑着的东西**是不是这个制品」。
     # ▎本仓硬约束 2 原话: DEPLOY_EXIT=0 不是判据, 「进程启动时间晚于制品」才是。
     #
-    # /proc/<pid> 目录的 mtime 就是进程启动时间, 直接与 jar mtime 比, 不必解析 ps 的日期格式。
-    # ⚠️ 取不到就 return 1 走正常部署(多重启一次是小事), ⛔ 不默认放行 ——
-    #    「读不到」和「确认一致」不是一回事。
-    local proc_started jar_touched active_pid
+    # 判据: 进程**手里打开的** jar 字节就是本地这份 —— 逐个读 /proc/<pid>/fd 里指向运行 jar
+    # 的句柄, 每个都必须没被删除且 MD5 等于本地。
+    # 🔴 2026-10-28: 之前比的是「/proc/<pid> 目录 mtime ≥ jar mtime」。那个 mtime 是 /proc
+    #    条目第一次被读的时间, 不是进程启动时间 —— 有人 ls 过 /proc/<pid>/fd 之后它就是「刚才」。
+    #    实测: 盘上 jar 14:40 换成新的, 13:10 起的进程仍握着已删除的旧 jar, /proc 条目 14:43
+    #    才首次被读 ⇒ 判成 no-op, RELEASE_JAVA_OUTCOME=no-op 而新代码根本没跑。
+    # ⚠️ 读不到句柄 / 一个都没有 / 任一句柄已删除或字节不符 ⇒ return 1 走正常部署
+    #    (多重启一次是小事), ⛔ 不默认放行 ——「读不到」和「确认一致」不是一回事。
+    local active_pid open_jars open_count
     active_pid=$(ssh -o ConnectTimeout=5 "$SERVER" \
         "systemctl show -p MainPID --value '$active_service' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
-    [ -n "$active_pid" ] && [ "$active_pid" != "0" ] || return 1
-    proc_started=$(ssh -o ConnectTimeout=5 "$SERVER" \
-        "stat -c %Y '/proc/$active_pid' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
-    jar_touched=$(ssh -o ConnectTimeout=5 "$SERVER" \
-        "stat -c %Y '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME' 2>/dev/null" 2>/dev/null | tr -d '\r\n')
-    # ⚠️ 两个值必须**各自**校验。
-    # 🔴 第一版写成 case "${proc_started}${jar_touched}" —— 拼起来之后, 一个为空会被
-    #    另一个掩盖(""+"2000" = "2000", 全数字, 闸直接放行), 然后 [ "" -lt 2000 ] 报
-    #    "integer expression expected"。这个 bug 是被新加的那条测试用例抓出来的。
-    case "$proc_started" in ''|*[!0-9]*) return 1 ;; esac
-    case "$jar_touched"  in ''|*[!0-9]*) return 1 ;; esac
-    if [ "$proc_started" -lt "$jar_touched" ]; then
-        echo "   ⚠️  盘上 JAR 与本地一致, 但**运行中的进程比它旧** —— 不能算已部署。" >&2
-        echo "      进程启动: $(date -d "@$proc_started" '+%F %T' 2>/dev/null || echo "$proc_started")" >&2
-        echo "      JAR mtime: $(date -d "@$jar_touched" '+%F %T' 2>/dev/null || echo "$jar_touched")" >&2
+    case "$active_pid" in ''|0|*[!0-9]*) return 1 ;; esac
+    open_jars=$(ssh -o ConnectTimeout=5 "$SERVER" \
+        "for fd in /proc/$active_pid/fd/*; do t=\$(readlink \"\$fd\" 2>/dev/null) || continue; case \"\$t\" in '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME') s=live ;; '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME (deleted)') s=deleted ;; *) continue ;; esac; printf '%s %s\\n' \"\$(md5sum < \"\$fd\" | awk '{print \$1}')\" \"\$s\"; done" \
+        2>/dev/null | tr -d '\r') || return 1
+    open_count=$(printf '%s\n' "$open_jars" | grep -c .)
+    if [ "$open_count" -eq 0 ]; then
+        echo "   ⚠️  读不到运行进程 (pid $active_pid) 打开的 JAR —— 不能算已部署, 继续走正常部署流程。" >&2
+        return 1
+    fi
+    if printf '%s\n' "$open_jars" | grep . | grep -qvx "$local_md5 live"; then
+        echo "   ⚠️  盘上 JAR 与本地一致, 但**运行中的进程打开的不是这份字节** —— 不能算已部署。" >&2
+        printf '%s\n' "$open_jars" | grep . | sed 's/^/      进程句柄: /' >&2
         echo "      (典型成因: 上次部署装了 jar 但切流/重启失败) => 继续走正常部署流程。" >&2
         return 1
     fi

@@ -120,22 +120,33 @@ MOCK_UPSTREAM_PORT=10020
 MOCK_SERVICE_STATE=active
 MOCK_HTTP_STATUS=200
 MOCK_MAIN_PID=4242
-# 进程启动时间 / JAR mtime (epoch)。默认「进程比 JAR 新」= 正常已部署态。
-MOCK_PROC_STARTED=2000
-MOCK_JAR_MTIME=1000
+# 运行进程打开的运行 jar 句柄: 「<md5> live|deleted」每行一个。默认 = 正常已部署态。
+OLD_MD5=fedcba9876543210fedcba9876543210
+MOCK_OPEN_JARS="$LOCAL_MD5 live"
+MOCK_REMOTE_FD_DIR=
 ssh() {
     case "$*" in
+        # ⚠️ 句柄这条也跑 md5sum, 必须排在 *md5sum* 之前, 否则被那条吃掉。
+        *"/proc/$MOCK_MAIN_PID/fd/"*)
+            [[ "$*" == *"$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME (deleted)"* ]] \
+                || fail "open-JAR check does not recognise deleted runtime JAR handles"
+            if [ -n "$MOCK_REMOTE_FD_DIR" ]; then
+                # 远端那段命令原样在本机跑, 只把 /proc/<pid>/fd 换成假目录。
+                local remote_cmd="${*: -1}"
+                bash -c "${remote_cmd//\/proc\/$MOCK_MAIN_PID\/fd/$MOCK_REMOTE_FD_DIR}"
+            else
+                [ -z "$MOCK_OPEN_JARS" ] || printf '%s\n' "$MOCK_OPEN_JARS"
+            fi
+            ;;
         *md5sum*)
             [[ "$*" == *"$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME"* ]] \
                 || fail "production no-op checked the upload artifact instead of the runtime JAR"
-            printf '%s\n' "$LOCAL_MD5"
+            printf '%s\n' "${MOCK_DISK_MD5:-$LOCAL_MD5}"
             ;;
         *"cat '$NGINX_UPSTREAM_FILE'"*) printf 'upstream x { server 47.100.235.168:%s; }\n' "$MOCK_UPSTREAM_PORT" ;;
         # ⚠️ MainPID 这条必须排在通用 *systemctl* 之前 —— 否则会被那条吃掉,
         #    返回 "active\n200" 当成 pid, 测试会以错误的理由通过/失败。
         *"MainPID"*) printf '%s\n' "$MOCK_MAIN_PID" ;;
-        *"/proc/$MOCK_MAIN_PID"*) printf '%s\n' "$MOCK_PROC_STARTED" ;;
-        *"stat -c %Y '$REMOTE_JAR_DIR/$RUNTIME_JAR_NAME'"*) printf '%s\n' "$MOCK_JAR_MTIME" ;;
         *systemctl*) printf '%s\n%s' "$MOCK_SERVICE_STATE" "$MOCK_HTTP_STATUS" ;;
         *) return 1 ;;
     esac
@@ -149,30 +160,75 @@ if FORCE_REDEPLOY=1 prod_already_runs_local_artifact "$LOCAL_MD5"; then
 fi
 
 # 🔴 2026-08-20 事故用例: jar MD5 一致 + upstream 对 + systemd active + health 200
-# **四条全绿, 而运行中的进程比 JAR 旧** —— 上次部署装了 jar 但切流失败没重启。
-# 旧实现在这里会报 no-op / DEPLOY_EXIT=0, 实测 jar 15:34:58 vs 进程 15:05:39 差 29 分钟。
-MOCK_PROC_STARTED=1000
-MOCK_JAR_MTIME=2000
+# 四条全绿, 而 JVM 仍跑着旧字节码 (上次部署装了 jar 但切流失败没重启)。
+# 🔴 2026-10-28 同形复发: 当时靠「/proc/<pid> mtime >= jar mtime」拦, 但那个 mtime 是条目首次
+# 被读的时间 —— 盘上 jar 14:40 是新的, 13:10 的进程握着已删除的旧 jar, 仍判成 no-op。
+# 现在逐个读进程打开的 jar 句柄。实测当时的句柄形状: 两个已删除的旧 jar + 一个新 jar。
+MOCK_OPEN_JARS=$(printf '%s deleted\n%s deleted\n%s live' "$OLD_MD5" "$OLD_MD5" "$LOCAL_MD5")
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
-    fail "running process older than the JAR was accepted as an already-deployed no-op"
+    fail "process still holding the deleted old JAR (new JAR on disk) was accepted as an already-deployed no-op"
+fi
+MOCK_OPEN_JARS="$OLD_MD5 deleted"
+if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+    fail "process running only a deleted old JAR was accepted as an already-deployed no-op"
+fi
+# 已删除但字节恰好相同也不放行: 判据是「进程打开的就是盘上这一份」。
+MOCK_OPEN_JARS="$LOCAL_MD5 deleted"
+if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+    fail "deleted JAR handle was accepted as an already-deployed no-op"
+fi
+MOCK_OPEN_JARS="$OLD_MD5 live"
+if prod_already_runs_local_artifact "$LOCAL_MD5"; then
+    fail "process holding different JAR bytes was accepted as an already-deployed no-op"
 fi
 
-# 取不到时间要走正常部署, ⛔ 不能默认放行(「读不到」不等于「确认一致」)。
-MOCK_PROC_STARTED=
-MOCK_JAR_MTIME=2000
+# 读不到句柄要走正常部署, ⛔ 不能默认放行(「读不到」不等于「确认一致」)。
+MOCK_OPEN_JARS=
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
-    fail "unreadable process start time was treated as an already-deployed no-op"
+    fail "unreadable open-JAR handles were treated as an already-deployed no-op"
 fi
+MOCK_OPEN_JARS="$LOCAL_MD5 live"
+
+# 句柄判定在远端执行, 上面的 mock 直接给成品行, 测不到「(deleted) 认成 deleted」和「按句柄读字节」。
+# 这里把远端命令原样跑在假的 fd 目录上 (符号链接, 与 /proc/<pid>/fd 同形)。
+# 已删除句柄的字节故意与新 jar 相同 —— 只有「它是 deleted」这一条能把它拦下来。
+FAKE_ROOT=$(mktemp -d)
+mkdir -p "$FAKE_ROOT/jar" "$FAKE_ROOT/fd"
+printf 'new-jar-bytes' > "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME"
+printf 'new-jar-bytes' > "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME (deleted)"
+ln -s /dev/null "$FAKE_ROOT/fd/0"
+ln -s "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME (deleted)" "$FAKE_ROOT/fd/4"
+ln -s "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME" "$FAKE_ROOT/fd/25"
+[ "$(readlink "$FAKE_ROOT/fd/4")" = "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME (deleted)" ] \
+    || fail "test setup: this shell cannot create real symlinks (on Git Bash set MSYS=winsymlinks:nativestrict)"
+SAVED_REMOTE_JAR_DIR=$REMOTE_JAR_DIR
+REMOTE_JAR_DIR="$FAKE_ROOT/jar"
+MOCK_REMOTE_FD_DIR="$FAKE_ROOT/fd"
+NEW_MD5=$(printf 'new-jar-bytes' | md5sum | awk '{print $1}')
+MOCK_DISK_MD5=$NEW_MD5
+if prod_already_runs_local_artifact "$NEW_MD5"; then
+    fail "real handle scan: a deleted runtime JAR handle next to the new one was accepted as an already-deployed no-op"
+fi
+rm "$FAKE_ROOT/fd/4"
+prod_already_runs_local_artifact "$NEW_MD5" \
+    || fail "real handle scan positive control: only the live new JAR is open, should be a no-op"
+printf 'old-jar-bytes' > "$FAKE_ROOT/jar/$RUNTIME_JAR_NAME"
+if prod_already_runs_local_artifact "$NEW_MD5"; then
+    fail "real handle scan: open JAR bytes differ from the local JAR but were accepted as a no-op"
+fi
+REMOTE_JAR_DIR=$SAVED_REMOTE_JAR_DIR
+MOCK_REMOTE_FD_DIR=
+MOCK_DISK_MD5=
+rm -rf "$FAKE_ROOT"
+
 MOCK_MAIN_PID=0
-MOCK_PROC_STARTED=3000
 if prod_already_runs_local_artifact "$LOCAL_MD5"; then
     fail "MainPID=0 (service not running) was treated as an already-deployed no-op"
 fi
 
 # 复位, 并确认阳性对照仍然成立 —— ⛔ 否则上面几条「不通过」可能只是因为我把 mock 弄坏了。
 MOCK_MAIN_PID=4242
-MOCK_PROC_STARTED=2000
-MOCK_JAR_MTIME=1000
+MOCK_OPEN_JARS="$LOCAL_MD5 live"
 prod_already_runs_local_artifact "$LOCAL_MD5" \
     || fail "positive control broken: healthy identical artifact should still be a no-op"
 MOCK_UPSTREAM_PORT=10030
