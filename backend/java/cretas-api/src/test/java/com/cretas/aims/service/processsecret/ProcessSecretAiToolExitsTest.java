@@ -130,7 +130,7 @@ class ProcessSecretAiToolExitsTest {
         }
         JsonNode item = json.readTree(raw).at("/data/items/0");
         assertThat(item.get("inputShareRatio").isNull()).isTrue();
-        // AI 的回答分不清是单据还是跨批汇总, 按汇总视图处理 (Steve 第三问 A): 总量也不给, 页面上照常看本单总量
+        // 不在单据类工具名单里的工具按汇总视图处理 (Steve 第三问 A, 10-29 改为按工具分): 总量也不给
         assertThat(item.get("requiredQty").isNull()).isTrue();
         assertThat(item.get("materialName").asText()).isEqualTo("秘方香料");
         assertThat(item.get("processSecret").get("visibility").asText()).isEqualTo("TOTALS_ONLY");
@@ -147,6 +147,56 @@ class ProcessSecretAiToolExitsTest {
             raw = tool.execute(ToolCall.of("1", "requisition_like", "{}"), context(OWNER));
         }
         assertThat(json.readTree(raw).at("/data/items/0/inputShareRatio").asDouble()).isEqualTo(0.35);
+    }
+
+    /** 与 RequisitionLikeTool 同样的输出, 只是工具名可换: 用来区分单据类工具与跨批统计工具。 */
+    static class NamedTool extends RequisitionLikeTool {
+        private final String name;
+        NamedTool(String name) { this.name = name; }
+        @Override public String getToolName() { return name; }
+    }
+
+    JsonNode itemAs(String toolName, AuthenticatedActor actor) throws Exception {
+        String raw;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor)) {
+            raw = proxied(new NamedTool(toolName)).execute(ToolCall.of("1", toolName, "{}"), context(OPERATOR));
+        }
+        return json.readTree(raw).at("/data/items/0");
+    }
+
+    @Test
+    void theReviewedDocumentToolListIsExactlyTheSingleDocumentTools() {
+        // 名单变动必须同时改这里: 每个名字都要能说出「它只看一张单据」
+        assertThat(ProcessSecretToolOutputAspect.DOCUMENT_VIEW_TOOLS).containsExactlyInAnyOrder(
+                "processing_batch_detail", "processing_batch_timeline", "process_task_summary");
+    }
+
+    @Test
+    void aDocumentToolKeepsThisOrdersTotalForASameFactoryColleagueButStillHidesTheRatio() throws Exception {
+        JsonNode item = itemAs("processing_batch_detail", actor(OPERATOR));
+
+        assertThat(item.get("requiredQty").asInt()).isEqualTo(42);          // 本单总量: 与批次详情页同档
+        assertThat(item.get("inputShareRatio").isNull()).isTrue();          // 配比仍隐藏
+    }
+
+    @Test
+    void aStatisticsToolStillHidesThisOrdersTotalForTheSameColleague() throws Exception {
+        JsonNode item = itemAs("workreport_progress", actor(OPERATOR));
+
+        assertThat(item.get("requiredQty").isNull()).isTrue();
+        assertThat(item.get("inputShareRatio").isNull()).isTrue();
+    }
+
+    @Test
+    void aDocumentToolStillGivesNoQuantitiesToPlatformOrAnotherFactory() throws Exception {
+        AuthenticatedActor platform = new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 900L, null, "platform_admin");
+        AuthenticatedActor otherFactory = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 77L, "F-OTHER", "operator");
+
+        for (AuthenticatedActor actor : List.of(platform, otherFactory)) {
+            JsonNode item = itemAs("processing_batch_detail", actor);
+            assertThat(item.get("requiredQty").isNull()).as("caller %s", actor).isTrue();
+            assertThat(item.get("inputShareRatio").isNull()).as("caller %s", actor).isTrue();
+        }
     }
 
     @Test

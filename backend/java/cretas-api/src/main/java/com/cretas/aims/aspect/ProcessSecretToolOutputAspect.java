@@ -28,6 +28,19 @@ import java.util.Map;
 @Component
 public class ProcessSecretToolOutputAspect {
 
+    /**
+     * 单据类 AI 工具 (Steve 10-29: 按工具分): 只看一张单据 (一个批次 / 一个工序任务), 与对应页面同档 ——
+     * 同厂无授权账号看本单总量和单批实测, 配比 / 成本仍按裁剪器隐藏; 平台 / 他厂照旧连数量都不给。
+     * 显式、经审核的名单; 名单外 (含跨批统计、列表、新加的工具) 一律按汇总视图 (fail-closed)。
+     * <ul>
+     *   <li>{@code processing_batch_detail}: 单个生产批次详情 (含本批生产数据与本单成本), 必填 batchId</li>
+     *   <li>{@code processing_batch_timeline}: 单个生产批次的操作时间线, 必填 batchId</li>
+     *   <li>{@code process_task_summary}: 单个工序任务的摘要、参与人员与报工记录, 必填 taskId</li>
+     * </ul>
+     */
+    public static final java.util.Set<String> DOCUMENT_VIEW_TOOLS = java.util.Set.of(
+            "processing_batch_detail", "processing_batch_timeline", "process_task_summary");
+
     private final ProcessSecretPayloadScrubber scrubber;
     private final ObjectMapper objectMapper;
 
@@ -56,9 +69,10 @@ public class ProcessSecretToolOutputAspect {
         String factoryId = factoryOf(pjp.getArgs());
         String toolName = pjp.getTarget() instanceof ToolExecutor tool ? tool.getToolName() : "unknown";
         AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(null);
-        // AI 的回答按汇总视图处理: 单批实测出成也不给无权的人 (Steve 第三问 A: 汇总不给)
+        // 单据类工具 (显式名单) 按单据视图; 其余 AI 回答按汇总视图: 单批实测出成也不给无权的人 (Steve 第三问 A: 汇总不给)
+        boolean aggregateView = !DOCUMENT_VIEW_TOOLS.contains(toolName);
         boolean changed = scrubber.scrub(tree, actor, factoryId, ProcessSecretReadTracker.reads(),
-                "AI tool " + toolName, true);
+                "AI tool " + toolName, aggregateView);
         if (!changed) return raw;
         try {
             return objectMapper.writeValueAsString(tree);
