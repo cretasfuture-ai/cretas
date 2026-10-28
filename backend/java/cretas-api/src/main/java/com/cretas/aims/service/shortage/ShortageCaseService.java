@@ -230,6 +230,9 @@ public class ShortageCaseService {
         if (to == Stage.DETECTED && from == Stage.PARTIALLY_RESOLVED && now.compareTo(before) <= 0) {
             to = from; // 只是在途变了、缺口没变大: 已经部分解决的不退回「待处理」
         }
+        if (to == Stage.DETECTED && (from == Stage.PLANNED || from == Stage.EXECUTING)) {
+            to = from; // 已经有人在处理 (定了方案 / 草稿已生成): 事实没进展时不退回「待处理」
+        }
         LocalDateTime at = LocalDateTime.now();
         c.setStage(to);
         c.setOwnerRole(ownerFor(to, facts));
