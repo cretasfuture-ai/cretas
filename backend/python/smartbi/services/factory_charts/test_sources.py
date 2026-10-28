@@ -26,7 +26,8 @@ class FakeConnection:
         yield self
 
     async def fetch(self, sql, *params):
-        source = next((name for name, marker, _rows in self.rows_by_source if marker in sql), 'unknown')
+        source = ('process' if 'FROM fact_production_report r' in sql else
+                  next((name for name, marker, _rows in self.rows_by_source if marker in sql), 'unknown'))
         self.calls.append(('fetch', source, sql, params))
         return next(rows for name, marker, rows in self.rows_by_source if name == source)
 
@@ -101,7 +102,8 @@ async def test_load_distinguishes_source_failure_from_successful_empty_source_an
 
     class MixedConnection(FakeConnection):
         async def fetch(self, sql, *params):
-            source = next((name for name, marker, _rows in rows_by_source if marker in sql), 'unknown')
+            source = ('process' if 'FROM fact_production_report r' in sql else
+                      next((name for name, marker, _rows in rows_by_source if marker in sql), 'unknown'))
             calls.append(('fetch', source, sql, params))
             value = next(rows for name, marker, rows in rows_by_source if name == source)
             if isinstance(value, Exception):

@@ -16,6 +16,7 @@ from smartbi.services.financial.export_conclusions import conclusion_rows as _co
 from smartbi.services.factory_charts.export_guard import ExportGuardRoute, validate_export
 from smartbi.services.factory_charts.details import canonical_period_label
 from smartbi.services.factory_charts import conversation
+from smartbi.services.factory_charts.cost_authorization import is_manufacturing_cost_column, row_product_ids
 
 logger = logging.getLogger(__name__)
 router = APIRouter(route_class=ExportGuardRoute)
@@ -177,14 +178,20 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
             raise HTTPException(403, '当前身份没有成本查看权限，不能读取联合成本上传')
         try:
             load_request = FinancialDashboardRequest(upload_id=request.upload_id)
-            frame = await _load_data(load_request, factory_id)
+            if request.inspection_upload_id is None:
+                frame = await _load_data(load_request, factory_id, http_request)
+            else:
+                frame = await _load_data(load_request, factory_id, http_request,
+                                         require_cost_authorization=True)
             if request.inspection_upload_id is not None:
                 from smartbi.services.factory_charts.uploaded_joint import parse_selection, prepare_uploaded_join, dataset_for_join
                 selection = parse_selection({'uploadId': request.upload_id,
                                              'inspectionUploadId': request.inspection_upload_id,
                                              'costUploadId': request.cost_upload_id})
-                inspection = await _load_data(FinancialDashboardRequest(upload_id=selection.inspection_upload_id), factory_id)
-                cost = await _load_data(FinancialDashboardRequest(upload_id=selection.cost_upload_id), factory_id)
+                inspection = await _load_data(FinancialDashboardRequest(upload_id=selection.inspection_upload_id), factory_id,
+                                               http_request, require_cost_authorization=True)
+                cost = await _load_data(FinancialDashboardRequest(upload_id=selection.cost_upload_id), factory_id, http_request,
+                                        require_cost_authorization=True)
                 if len(frame) > 20000 or len(inspection) > 20000 or len(cost) > 20000:
                     raise HTTPException(422, '联合上传任一报表超过两万行安全上限，请拆分报表后重试')
                 joined, join_gaps = prepare_uploaded_join(
@@ -203,7 +210,7 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
         if len(frame) > 20000:
             raise HTTPException(422, '报表超过两万行安全上限，请拆分报表后重试')
     else:
-        datasets, errors, extra_gaps = await sources.load(factory_id, request, can_price)
+        datasets, errors, extra_gaps = await sources.load(factory_id, request, can_price, auth_request=http_request)
         from smartbi.services.factory_charts.finance_auth import full_factory_finance_access
         finance_allowed = can_price and await full_factory_finance_access(http_request, factory_id)
         extra_data, extra_errors, more_gaps = await finance_sources.load(factory_id, request, finance_allowed)
@@ -792,7 +799,18 @@ def _resolve_factory_id(http_request: Request, requested: Optional[str]) -> str:
     raise DataSourceError(400, "无法确定当前工厂，请重新登录")
 
 
-async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[str]) -> pd.DataFrame:
+# Resolve aliases from jsonb_object_keys so bracketed/parenthesized engine
+# labels (for example 产品ID（单位）) use the same canonical identity as the
+# in-memory engine.  Only keys whose normalized name is a stable ID are read;
+# cost values are never enumerated as metadata.
+_UPLOAD_ID_KEY_NORM = "lower(regexp_replace(k.key_name, '[（(][^（）()]*[）)]', '', 'g'))"
+_UPLOAD_ID_NAMES_SQL = "'产品id','产品编号','产品编码','sku','sku编码','product_id','productid','product_type_id','producttypeid','产品类型id'"
+_UPLOAD_ID_EXPR = "(SELECT NULLIF(BTRIM(d.row_data->>k.key_name),'') FROM jsonb_object_keys(d.row_data) AS k(key_name) WHERE {_norm} IN ({_names}) ORDER BY k.key_name LIMIT 1)".format(_norm=_UPLOAD_ID_KEY_NORM, _names=_UPLOAD_ID_NAMES_SQL)
+_UPLOAD_ID_CONFLICT_EXPR = "(SELECT COUNT(DISTINCT BTRIM(d.row_data->>k.key_name)) FROM jsonb_object_keys(d.row_data) AS k(key_name) WHERE {_norm} IN ({_names}) AND BTRIM(d.row_data->>k.key_name) <> '') > 1".format(_norm=_UPLOAD_ID_KEY_NORM, _names=_UPLOAD_ID_NAMES_SQL)
+
+
+async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[str], auth_request=None,
+                     require_cost_authorization: bool = False) -> pd.DataFrame:
     """Load data from raw_data, or from the uploaded rows of upload_id (one row_data per Excel row).
 
     upload_id 时把库里的工作表名写回 request.sheet_name (工作表名用于推断无科目表的口径)。
@@ -810,18 +828,102 @@ async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[st
         if pool is None:
             raise DataSourceError(503, "SmartBI 数据库未配置，无法读取上传数据")
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT d.row_data, d.sheet_name
-                FROM smart_bi_dynamic_data d
-                JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
-                WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
-                  AND u.upload_status = 'COMPLETED'
-                ORDER BY d.row_index
-                """,
-                request.upload_id,
-                factory_id,
-            )
+            params = [request.upload_id, factory_id]
+            product_ids = []
+            cost_keys = []
+            hidden_cost_keys = []
+            rows_preloaded = False
+            low_cost_role = False
+            authorized_product_ids = set()
+            unscoped_authorized = False
+            # Metadata-only pass for every stored upload.  It reads only stable
+            # product IDs and JSON key names; row values are fetched below.
+            id_rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT {_id_expr} AS product_id,
+                        {_conflict} AS id_conflict,
+                        d.row_data->>'productId' AS "productId", d.row_data->>'产品ID' AS "产品ID",
+                        d.row_data->>'产品编号' AS "产品编号", d.row_data->>'产品编码' AS "产品编码",
+                        d.row_data->>'product_id' AS "product_id", d.row_data->>'productTypeId' AS "productTypeId",
+                        d.row_data->>'product_type_id' AS "product_type_id", d.row_data->>'产品类型id' AS "产品类型id",
+                        d.row_data->>'SKU' AS "SKU", d.row_data->>'sku' AS "sku", d.row_data->>'sku编码' AS "sku编码",
+                        key_name
+                    FROM smart_bi_dynamic_data d
+                    JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                    LEFT JOIN LATERAL jsonb_object_keys(d.row_data) AS keys(key_name) ON TRUE
+                    WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                      AND u.upload_status = 'COMPLETED'
+                    """.format(_id_expr=_UPLOAD_ID_EXPR, _conflict=_UPLOAD_ID_CONFLICT_EXPR), request.upload_id, factory_id)
+            product_ids = sorted({value for row in id_rows for value in row_product_ids(dict(row))[0]})
+            has_unidentified_cost_rows = any(not row_product_ids(dict(row))[0] or bool(row.get('id_conflict')) for row in id_rows
+                                             if is_manufacturing_cost_column(row.get('key_name')))
+            cost_keys = sorted({str(row['key_name']) for row in id_rows
+                                if is_manufacturing_cost_column(row.get('key_name'))})
+            if cost_keys:
+                if auth_request is None:
+                    raise DataSourceError(403, '无法验证上传制造成本授权')
+                from smartbi.api.factory_production_gold import _can_view_cost
+                role = getattr(getattr(auth_request, 'state', None), 'role', None)
+                if not _can_view_cost(role):
+                    low_cost_role = True
+                    hidden_cost_keys = list(cost_keys)
+                    rows = await conn.fetch(
+                        """
+                        SELECT CASE WHEN FALSE THEN d.row_data ELSE d.row_data - $3::text[] END AS row_data, d.sheet_name
+                        FROM smart_bi_dynamic_data d
+                        JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                        WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                          AND u.upload_status = 'COMPLETED'
+                        ORDER BY d.row_index
+                        """, request.upload_id, factory_id, cost_keys)
+                    cost_keys = []
+                    rows_preloaded = True
+            if cost_keys:
+                from smartbi.services.factory_charts.cost_authorization import authorize_batches as authorize, CostAuthorizationError
+                try:
+                    authority = await authorize(auth_request, factory_id, product_ids,
+                                                unscoped=(not product_ids or has_unidentified_cost_rows))
+                except CostAuthorizationError:
+                    raise DataSourceError(403, '当前授权不能读取上传制造成本')
+                allowed = sorted(authority.allowed_product_ids)
+                authorized_product_ids = set(allowed)
+                unscoped_authorized = authority.unscoped_cost_allowed
+                if not product_ids and authority.unscoped_cost_allowed:
+                    rows = await conn.fetch(
+                        """
+                        SELECT d.row_data, d.sheet_name
+                        FROM smart_bi_dynamic_data d
+                        JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                        WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                          AND u.upload_status = 'COMPLETED'
+                        ORDER BY d.row_index
+                        """, request.upload_id, factory_id)
+                else:
+                    rows = await conn.fetch(
+                    """
+                    SELECT CASE WHEN NOT {_conflict} AND ({_id_expr} = ANY($3::text[])
+                                OR ({_id_expr} IS NULL AND $5::boolean))
+                                THEN d.row_data ELSE d.row_data - $4::text[] END AS row_data, d.sheet_name
+                    FROM smart_bi_dynamic_data d
+                    JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                    WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                      AND u.upload_status = 'COMPLETED'
+                    ORDER BY d.row_index
+                        """.format(_conflict=_UPLOAD_ID_CONFLICT_EXPR, _id_expr=_UPLOAD_ID_EXPR),
+                        request.upload_id, factory_id, allowed, cost_keys, authority.unscoped_cost_allowed)
+            else:
+                if rows_preloaded:
+                    pass
+                else:
+                    rows = await conn.fetch(
+                    """
+                    SELECT d.row_data, d.sheet_name
+                    FROM smart_bi_dynamic_data d
+                    JOIN smart_bi_pg_excel_uploads u ON u.id = d.upload_id
+                    WHERE d.upload_id = $1 AND u.factory_id = $2 AND d.factory_id = $2
+                      AND u.upload_status = 'COMPLETED'
+                    ORDER BY d.row_index
+                    """, request.upload_id, factory_id)
     except DataSourceError:
         raise
     except Exception as e:
@@ -836,7 +938,20 @@ async def _load_data(request: FinancialDashboardRequest, factory_id: Optional[st
     sheet_names = {r["sheet_name"] for r in rows if r["sheet_name"]}
     if len(sheet_names) == 1:
         request.sheet_name = sheet_names.pop()
-    return pd.DataFrame(records)
+    frame = pd.DataFrame(records)
+    if low_cost_role:
+        frame = frame.drop(columns=[column for column in frame.columns
+                                    if column in hidden_cost_keys or is_manufacturing_cost_column(column)], errors='ignore')
+    elif cost_keys and authorized_product_ids is not None:
+        for index, record in enumerate(records):
+            ids, conflict = row_product_ids(dict(record))
+            permitted = (not conflict and bool(ids) and ids <= authorized_product_ids) or (
+                not conflict and not ids and unscoped_authorized)
+            if not permitted:
+                for column in cost_keys:
+                    if column in frame.columns:
+                        frame.loc[index, column] = None
+    return frame
 
 
 def _apply_filters(df: pd.DataFrame, filters: Optional[Dict[str, List[str]]]) -> pd.DataFrame:
@@ -882,7 +997,7 @@ async def generate_chart(request: FinancialDashboardRequest, http_request: Reque
     """Generate a single financial chart or all charts."""
     try:
         factory_id = _resolve_factory_id(http_request, request.factory_id)
-        df = await _load_data(request, factory_id)
+        df = await _load_data(request, factory_id, http_request)
         df = _apply_filters(df, request.filters)  # Fix 72
         result = dashboard_service.generate_chart(
             chart_type=request.chart_type,
@@ -910,7 +1025,7 @@ async def batch_generate(request: FinancialDashboardRequest, http_request: Reque
     try:
         request.chart_type = "all"
         factory_id = _resolve_factory_id(http_request, request.factory_id)
-        df = await _load_data(request, factory_id)
+        df = await _load_data(request, factory_id, http_request)
         # Fix 72: Extract dimensions before filtering
         dimensions = _extract_dimensions(df)
         # Fix 72: Apply slicer filters

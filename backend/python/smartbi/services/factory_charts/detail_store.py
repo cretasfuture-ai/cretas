@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
@@ -16,6 +17,7 @@ from typing import Any, Mapping, Sequence
 from smartbi import config
 from . import details
 from .newstock_buckets import CONTRACT_KEY, prepare_rows as prepare_stock_rows
+from . import cost_authorization
 
 
 CONTEXT_TTL_SECONDS = 300
@@ -40,6 +42,14 @@ def _iso(value: Any) -> str:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    return True
 
 
 async def _pool_or_error():
@@ -72,6 +82,19 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
             if exact != source:
                 continue
             rows, columns = details._canonical_rows(raw, request)
+            # A quantity-only/fully denied merge may retain the original cost
+            # field names with every value null.  Do not turn that into a
+            # legacy cost-sensitive snapshot; remove empty cost columns before
+            # classification and persist only the non-price facts.
+            empty_cost_columns = {
+                column for column in columns
+                if cost_authorization.is_manufacturing_cost_column(column)
+                and not any(_has_value(row.get(column)) for row in rows)
+            }
+            if empty_cost_columns:
+                columns = tuple(column for column in columns if column not in empty_cost_columns)
+                rows = tuple({key: value for key, value in row.items() if key not in empty_cost_columns}
+                             for row in rows)
             prices, dimensions = details._classify(columns)
             unit_col = next((c for c in columns if details._base_name(c) in details._UNIT_NAMES), None)
             units = {str(row.get(unit_col, "")).strip() for row in rows} if unit_col else set()
@@ -149,6 +172,18 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
             ("year", None), ("period_type", "periodType"), ("start_month", "startMonth"),
             ("end_month", "endMonth"), ("analysis_subject", "analysisSubject"))}
         dimension_contract = {"fields": list(dimensions), "pointDimension": point_dimension}
+        product_columns = [c for c in columns if str(c).strip() in cost_authorization.PRODUCT_ID_ALIASES]
+        manufacturing_columns = [c for c in columns if cost_authorization.is_manufacturing_cost_column(c)]
+        cost_rows = [row for row in rows if any(_has_value(row.get(column)) for column in manufacturing_columns)]
+        cost_product_ids = sorted({value for row in cost_rows for value in cost_authorization.row_product_ids(row)[0]})
+        conflict_rows = [row for row in cost_rows if cost_authorization.row_product_ids(row)[1]]
+        manufacturing_cost = bool(cost_rows)
+        if manufacturing_cost:
+            dimension_contract["costGuard"] = {
+                "productIds": cost_product_ids,
+                "unscoped": (not bool(cost_product_ids)
+                              or any(not cost_authorization.row_product_ids(row)[0] for row in cost_rows)),
+            }
         payload = {"source": source, "period": details._period_label(request), "unit": unit,
                    "rows": rows, "columns": columns, "scope": scope, "dimensions": dimension_contract}
         size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -302,7 +337,7 @@ async def register_shared(candidates: Sequence[Mapping[str, Any]], datasets: Seq
         raise details.DetailError(503, "详情共享存储暂不可用") from exc
 
 
-async def _load_impl(context_id: Any, owner: Any):
+async def _load_impl(context_id: Any, owner: Any, auth_request: Any = None):
     if not isinstance(context_id, str) or not context_id:
         raise details.DetailError(400, "详情上下文无效")
     trusted = _owner(owner)
@@ -311,8 +346,8 @@ async def _load_impl(context_id: Any, owner: Any):
         async with conn.transaction():
             await _bind(conn, trusted)
             row = await conn.fetchrow(
-                """SELECT c.context_id,c.user_id,c.role,c.candidate_id,c.title,c.expires_at,s.source,s.period_label,s.rows,s.columns,
-                   s.dimensions,s.price_columns,s.financial,s.size_bytes,s.unit
+                """SELECT c.context_id,c.user_id,c.role,c.candidate_id,c.title,c.expires_at,s.source,s.period_label,
+                   s.columns,s.dimensions,s.price_columns,s.financial,s.size_bytes,s.unit
                    FROM smart_bi_factory_chart_detail_contexts c
                    JOIN smart_bi_factory_chart_detail_snapshots s ON s.snapshot_id=c.snapshot_id
                    WHERE c.context_id=$1 AND c.factory_id=$2""",
@@ -329,36 +364,112 @@ async def _load_impl(context_id: Any, owner: Any):
     # candidate point dimension without a schema or permission change.
     dimension_fields = dimensions.get("fields", []) if isinstance(dimensions, Mapping) else dimensions
     point_dimension = dimensions.get("pointDimension") if isinstance(dimensions, Mapping) else None
+    cost_guard = dimensions.get("costGuard") if isinstance(dimensions, Mapping) else None
+    if cost_guard is not None and not isinstance(cost_guard, Mapping):
+        raise details.DetailError(503, "详情成本授权证明无效，请重新分析")
     if point_dimension is not None and point_dimension not in dimension_fields:
         raise details.DetailError(503, "详情快照维度无效，请重新分析")
+    prices = frozenset(_json_load(row["price_columns"]))
+    column_values = _json_load(row.get("columns")) if hasattr(row, "get") else None
+    if not column_values:
+        column_values = list(prices)
+    manufacturing_price = any(cost_authorization.is_manufacturing_cost_column(c) for c in column_values)
+    if manufacturing_price and cost_guard is None:
+        raise details.DetailError(403, "旧详情快照缺少成本授权证明，请重新分析")
+    if cost_guard is not None:
+        if auth_request is None:
+            raise details.DetailError(403, "当前请求缺少成本授权")
+        guard_ids = cost_guard.get("productIds", [])
+        if not isinstance(guard_ids, list) or any(not isinstance(v, str) for v in guard_ids):
+            raise details.DetailError(503, "详情成本授权证明无效，请重新分析")
+        if not isinstance(cost_guard.get("unscoped"), bool) or (not guard_ids and not cost_guard["unscoped"]):
+            raise details.DetailError(503, "详情成本授权证明无效，请重新分析")
+        try:
+            authority = await cost_authorization.authorize_batches(auth_request, trusted[0], guard_ids,
+                                                          unscoped=bool(cost_guard.get("unscoped")))
+        except cost_authorization.CostAuthorizationError as exc:
+            raise details.DetailError(403, "当前授权不能读取该制造成本详情") from exc
+        if not set(guard_ids) <= authority.allowed_product_ids:
+            raise details.DetailError(403, "当前授权不能读取该制造成本详情")
+        if cost_guard.get("unscoped") is True and not authority.unscoped_cost_allowed:
+            raise details.DetailError(403, "当前授权不能读取缺少产品标识的制造成本详情")
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await _bind(conn, trusted)
+                values = await conn.fetchrow(
+                    """SELECT s.rows,s.columns FROM smart_bi_factory_chart_detail_snapshots s
+                       JOIN smart_bi_factory_chart_detail_contexts c ON c.snapshot_id=s.snapshot_id
+                       WHERE c.context_id=$1 AND c.factory_id=$2""", context_id, trusted[0])
+        if values is None:
+            raise details.DetailError(410, "详情上下文已过期或不可用")
+        rows_value, columns_value = values["rows"], values["columns"]
+    else:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await _bind(conn, trusted)
+                values = await conn.fetchrow(
+                    """SELECT s.rows,s.columns FROM smart_bi_factory_chart_detail_snapshots s
+                       JOIN smart_bi_factory_chart_detail_contexts c ON c.snapshot_id=s.snapshot_id
+                       WHERE c.context_id=$1 AND c.factory_id=$2""", context_id, trusted[0])
+        if values is None:
+            raise details.DetailError(410, "详情上下文已过期或不可用")
+        rows_value, columns_value = values["rows"], values["columns"]
     frame = details._Frame(
         context_id=context_id, owner=details._Owner.from_value(trusted),
         candidate_id=str(row["candidate_id"]), title=str(row["title"]), source=str(row["source"]),
-        period=str(row["period_label"]), rows=tuple(_json_load(row["rows"])),
-        columns=tuple(_json_load(row["columns"])), dimensions=tuple(dimension_fields),
-        point_dimension=point_dimension, price_columns=frozenset(_json_load(row["price_columns"])),
+        period=str(row["period_label"]), rows=tuple(_json_load(rows_value)),
+        columns=tuple(_json_load(columns_value)), dimensions=tuple(dimension_fields),
+        point_dimension=point_dimension, price_columns=prices,
         financial=bool(row["financial"]), unit_filter=str(row["unit"] or "") or None,
         storage_key=str(row["context_id"]), expires_at=expires.timestamp(), size_bytes=int(row["size_bytes"] or 0))
+    if cost_guard is not None:
+        frame._cost_guard = dict(cost_guard)
     return frame
 
 
-async def _load(context_id: Any, owner: Any):
+async def _load(context_id: Any, owner: Any, auth_request: Any = None):
     try:
-        return await _load_impl(context_id, owner)
+        return await _load_impl(context_id, owner, auth_request)
     except details.DetailError:
         raise
     except Exception as exc:
         raise details.DetailError(503, "详情共享存储暂不可用") from exc
 
 
-async def requires_finance_shared(context_id: str, owner: Any) -> bool:
-    return (await _load(context_id, owner)).financial
+async def requires_finance_shared(context_id: str, owner: Any, auth_request: Any = None) -> bool:
+    if not isinstance(context_id, str) or not context_id:
+        raise details.DetailError(400, "详情上下文无效")
+    trusted = _owner(owner)
+    pool = await _pool_or_error()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await _bind(conn, trusted)
+            row = await conn.fetchrow(
+                """SELECT c.user_id,c.role,c.expires_at,s.financial,s.columns,s.dimensions,s.price_columns
+                   FROM smart_bi_factory_chart_detail_contexts c
+                   JOIN smart_bi_factory_chart_detail_snapshots s ON s.snapshot_id=c.snapshot_id
+                   WHERE c.context_id=$1 AND c.factory_id=$2""", context_id, trusted[0])
+    if row is None:
+        raise details.DetailError(410, "详情上下文已过期或不可用")
+    if str(row["user_id"]) != str(trusted[1]) or str(row["role"]) != trusted[2]:
+        raise details.DetailError(403, "无权访问该详情上下文")
+    if row["expires_at"] <= datetime.now(timezone.utc):
+        raise details.DetailError(410, "详情上下文已过期或不可用")
+    dimensions = _json_load(row["dimensions"])
+    guard = dimensions.get("costGuard") if isinstance(dimensions, Mapping) else None
+    prices = frozenset(_json_load(row["price_columns"]))
+    column_values = _json_load(row.get("columns")) if hasattr(row, "get") else None
+    if not column_values:
+        column_values = list(prices)
+    if any(cost_authorization.is_manufacturing_cost_column(c) for c in column_values) and guard is None:
+        raise details.DetailError(403, "旧详情快照缺少成本授权证明，请重新分析")
+    return bool(row["financial"])
 
 
-async def page_shared(payload: Mapping[str, Any], owner: Any, can_price: bool, finance_allowed: bool) -> dict[str, Any]:
+async def page_shared(payload: Mapping[str, Any], owner: Any, can_price: bool, finance_allowed: bool, auth_request: Any = None) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise details.DetailError(400, "详情请求无效")
-    frame = await _load(payload.get("context_id", payload.get("contextId")), owner)
+    frame = await _load(payload.get("context_id", payload.get("contextId")), owner, auth_request)
     return details._page_frame(payload, frame, can_price, finance_allowed)
 
 

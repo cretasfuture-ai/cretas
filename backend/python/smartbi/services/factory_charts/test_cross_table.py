@@ -129,6 +129,17 @@ def test_mixed_units_stay_separate_and_unscoped_or_price_denied_cannot_construct
 @pytest.mark.asyncio
 async def test_loader_bounds_join_to_authorized_product_and_preserves_later_inspection_date(monkeypatch):
     production, quality = raw_datasets()
+    production.frame['材料成本'] = production.frame['总成本']
+    for column in ('人工成本', '设备成本', '其他成本'):
+        production.frame[column] = 0
+    from . import cost_authorization
+    auth_request = SimpleNamespace(state=SimpleNamespace(factory_id='F006', user_id=42,
+                                                        role='factory_super_admin'),
+                                   headers={'authorization': 'Bearer fixture-token'})
+    async def authorize(http_request, factory_id, product_ids, **_kwargs):
+        assert http_request is auth_request and factory_id == 'F006'
+        return cost_authorization.CostAuthorization(factory_id, 42, frozenset(product_ids), False)
+    monkeypatch.setattr(cost_authorization, 'authorize_batches', authorize)
     calls = []
     rows = [('settled', 'production_settlement_output_lines', []),
             ('production', 'fact_production_batch', production.frame.to_dict('records')),
@@ -138,7 +149,7 @@ async def test_loader_bounds_join_to_authorized_product_and_preserves_later_insp
     pool = await fake_loader(rows, calls)
     monkeypatch.setattr(sources.config, 'get_pg_pool', pool)
     monkeypatch.setattr(sources.config, 'get_cretas_pool', pool)
-    datasets, errors, _ = await sources.load('F006', request(), True)
+    datasets, errors, _ = await sources.load('F006', request(), True, auth_request=auth_request)
     assert not errors
     join_calls = [c for c in calls if c[0] == 'fetch' and c[1] == 'join']
     assert len(join_calls) == 1 and join_calls[0][3] == ('F006', ['101'])

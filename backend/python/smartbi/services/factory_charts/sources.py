@@ -11,6 +11,8 @@ import pandas as pd
 import smartbi.config as config
 from .engine import Dataset
 from . import settled_sources
+from . import cost_authorization
+from .metrics import complete_manufacturing_cost
 
 PRODUCTION_SQL = """
 SELECT stat_date AS "日期", source_pk AS "来源主键", batch_number AS "批次", product_type_id AS "产品ID",
@@ -18,6 +20,16 @@ SELECT stat_date AS "日期", source_pk AS "来源主键", batch_number AS "批�
        unit AS "单位", planned_qty AS "计划产量", actual_qty AS "产量", good_qty AS "良品数",
        defect_qty AS "不良数", material_cost AS "材料成本", labor_cost AS "人工成本",
        equipment_cost AS "设备成本", other_cost AS "其他成本", total_cost AS "总成本", updated_at AS "数据同步时间"
+FROM fact_production_batch
+WHERE factory_id = $1 AND status = 'COMPLETED'
+  AND ($2::date IS NULL OR stat_date >= $2) AND ($3::date IS NULL OR stat_date <= $3)
+ORDER BY stat_date, source_pk LIMIT 10001
+"""
+PRODUCTION_ID_SQL = """
+SELECT stat_date AS "日期", source_pk AS "来源主键", batch_number AS "批次", product_type_id AS "产品ID",
+       COALESCE(product_name, product_type_id, '未关联产品') AS "产品",
+       unit AS "单位", planned_qty AS "计划产量", actual_qty AS "产量", good_qty AS "良品数",
+       defect_qty AS "不良数", updated_at AS "数据同步时间"
 FROM fact_production_batch
 WHERE factory_id = $1 AND status = 'COMPLETED'
   AND ($2::date IS NULL OR stat_date >= $2) AND ($3::date IS NULL OR stat_date <= $3)
@@ -75,12 +87,22 @@ WHERE qi.factory_id=$1 AND qi.deleted_at IS NULL
 ORDER BY qi.inspection_date, qi.id LIMIT 10001
 """
 PROCESS_SQL = """
-SELECT report_date AS "日期", COALESCE(process_category, '未登记工序') AS "工序",
-       material_cost AS "材料成本", labor_cost AS "人工成本", updated_at AS "数据同步时间"
-FROM fact_production_report
-WHERE factory_id=$1 AND cost_source='reported'
+SELECT report_date AS "日期", r.source_pk AS "来源主键", b.product_type_id AS "产品ID", COALESCE(process_category, '未登记工序') AS "工序",
+       r.material_cost AS "材料成本", r.labor_cost AS "人工成本", r.updated_at AS "数据同步时间"
+FROM fact_production_report r
+LEFT JOIN fact_production_batch b ON b.factory_id=r.factory_id AND b.source_pk=r.batch_id
+WHERE r.factory_id=$1 AND cost_source='reported'
  AND ($2::date IS NULL OR report_date >= $2) AND ($3::date IS NULL OR report_date <= $3)
-ORDER BY report_date, source_pk LIMIT 10001
+ORDER BY report_date, r.source_pk LIMIT 10001
+"""
+PROCESS_ID_SQL = """
+SELECT report_date AS "日期", r.source_pk AS "来源主键", b.product_type_id AS "产品ID", COALESCE(process_category, '未登记工序') AS "工序",
+       r.updated_at AS "数据同步时间"
+FROM fact_production_report r
+LEFT JOIN fact_production_batch b ON b.factory_id=r.factory_id AND b.source_pk=r.batch_id
+WHERE r.factory_id=$1 AND cost_source='reported'
+ AND ($2::date IS NULL OR report_date >= $2) AND ($3::date IS NULL OR report_date <= $3)
+ORDER BY report_date, r.source_pk LIMIT 10001
 """
 
 
@@ -91,7 +113,7 @@ def dates(request):
             calendar.monthrange(request.year, request.end_month)[1])
 
 
-async def load(factory_id, request, can_price):
+async def load(factory_id, request, can_price, auth_request=None):
     start, end = dates(request)
     sources = [
         ('production', '已完成生产批次 · 保留批次单位快照', config.get_pg_pool, PRODUCTION_SQL),
@@ -106,7 +128,7 @@ async def load(factory_id, request, can_price):
     else:
         gaps.append({'id': 'stock.snapshot', 'title': '历史库存', 'missing': ['所选期间库存余额快照；当前余额不能倒推历史库存']})
 
-    async def read(name, title, get_pool, sql, override_params=None):
+    async def read(name, title, get_pool, sql, override_params=None, product_ids=None):
         try:
             pool = await get_pool()
             if pool is None:
@@ -131,10 +153,90 @@ async def load(factory_id, request, can_price):
             # Do not expose connection details/SQL/schema; do not pretend failures are empty data.
             return None, {'source': name, 'message': '来源读取失败，请重试或联系管理员核对数据服务'}
 
+    def merge_scoped(base, scoped):
+        if base is None or scoped is None or base.frame.empty or scoped.frame.empty:
+            return base
+        key = '来源主键' if '来源主键' in base.frame and '来源主键' in scoped.frame else '产品ID'
+        if key not in base.frame or key not in scoped.frame:
+            return base
+        cost_cols = [c for c in scoped.frame.columns if any(k in c for k in ('金额', '成本'))]
+        if not cost_cols:
+            return base
+        priced = scoped.frame.copy()
+        if scoped.source.split(' · ', 1)[0] == 'production':
+            invalid = ~priced.apply(complete_manufacturing_cost, axis=1)
+            if invalid.any():
+                priced.loc[invalid, cost_cols] = None
+                gaps.append({'id': 'production.cost-reconciliation', 'source': 'production',
+                             'missing': [f'{int(invalid.sum())}行成本分项缺失、非有限、负数或不守恒；成本剔除，数量保留，未补零']})
+        values = priced[[key, *cost_cols]].drop_duplicates(key).set_index(key)
+        result = base.frame.copy()
+        for column in cost_cols:
+            result[column] = result[key].map(values[column])
+        base.frame = result
+        return base
+
     # Read production first so the fixed cross-table query can be bounded by
     # already-authorized, tenant-scoped stable batch keys.
-    production_result = await read(*sources[0])
-    remaining = await asyncio.gather(*(read(*source) for source in sources[1:]))
+    production_source = sources[0]
+    ids = None
+    id_error = None
+    def cost_gap(source, message):
+        gaps.append({'id': source + '.cost-authorization', 'source': source,
+                     'missing': [message]})
+
+    if auth_request is not None and can_price:
+        try:
+            # Phase 1 contains identifiers and quantity facts only.
+            ids, id_error = await read('production', production_source[1], production_source[2], PRODUCTION_ID_SQL)
+            if ids is not None:
+                ids.frame = ids.frame.drop(columns=[c for c in ids.frame if any(k in c for k in ('金额', '成本'))], errors='ignore')
+            product_ids = sorted({str(v).strip() for v in (ids.frame.get('产品ID', []) if ids else []) if str(v).strip()})
+            authority = await cost_authorization.authorize_batches(auth_request, factory_id, product_ids)
+            if not authority.allowed_product_ids:
+                cost_gap('production', '当前授权未覆盖生产成本产品，成本事实未读取；数量事实保留')
+                production_result = (ids, id_error)
+            else:
+                scoped, scoped_error = await read('production', production_source[1], production_source[2], PRODUCTION_SQL.replace('\nORDER BY stat_date', '\n  AND product_type_id = ANY($4::text[])\nORDER BY stat_date'), [factory_id, start, end, sorted(authority.allowed_product_ids)])
+                production_result = (merge_scoped(ids, scoped), scoped_error)
+                if set(product_ids) - authority.allowed_product_ids:
+                    cost_gap('production', '部分产品未获成本授权；其数量事实保留，成本未读取')
+        except cost_authorization.CostAuthorizationError:
+            cost_gap('production', '生产成本授权失败，成本事实未读取；数量事实保留')
+            production_result = (ids, id_error)
+    else:
+        production_result = await read('production', production_source[1], production_source[2], PRODUCTION_ID_SQL)
+        if can_price:
+            cost_gap('production', '成本授权未执行，成本事实未读取；数量事实保留')
+    async def read_process_authorized():
+        source = sources[4]
+        if auth_request is None or not can_price:
+            result = await read('process', source[1], source[2], PROCESS_ID_SQL)
+            if can_price:
+                cost_gap('process', '成本授权未执行，成本事实未读取')
+            return result
+        ids = None
+        id_error = None
+        try:
+            ids, id_error = await read('process', source[1], source[2], PROCESS_ID_SQL)
+            if ids is not None:
+                ids.frame = ids.frame.drop(columns=[c for c in ids.frame if any(k in c for k in ('金额', '成本'))], errors='ignore')
+            product_ids = sorted({str(v).strip() for v in (ids.frame.get('产品ID', []) if ids else []) if str(v).strip()})
+            authority = await cost_authorization.authorize_batches(auth_request, factory_id, product_ids)
+            if not authority.allowed_product_ids:
+                cost_gap('process', '当前授权未覆盖工序成本产品，成本事实未读取')
+                return ids, id_error
+            scoped, scoped_error = await read('process', source[1], source[2], PROCESS_SQL.replace('\nORDER BY report_date', '\n  AND product_type_id = ANY($4::text[])\nORDER BY report_date'),
+                                              [factory_id, start, end, sorted(authority.allowed_product_ids)])
+            if set(product_ids) - authority.allowed_product_ids:
+                cost_gap('process', '部分产品未获工序成本授权；成本事实未读取')
+            return merge_scoped(ids, scoped), scoped_error
+        except cost_authorization.CostAuthorizationError:
+            cost_gap('process', '工序成本授权失败，成本事实未读取；数量事实保留')
+            return ids, id_error
+
+    remaining = await asyncio.gather(*(read(*source) for source in sources[1:4]), read_process_authorized(),
+                                      *(read(*source) for source in sources[5:]))
     results = [production_result, *remaining]
     datasets = [dataset for dataset, _ in results if dataset is not None]
     errors = [error for _, error in results if error]
@@ -143,9 +245,11 @@ async def load(factory_id, request, can_price):
     # may legitimately have an IN_PROGRESS production_batches row.  Load this
     # read-only source before the optional quality join so its stable batch keys
     # are included in the same bounded relationship query.
-    settled_datasets, settled_errors, settled_gaps = await settled_sources.load(
-        factory_id, request, can_price
-    )
+    if auth_request is None:
+        settled_datasets, settled_errors, settled_gaps = await settled_sources.load(factory_id, request, can_price)
+    else:
+        settled_datasets, settled_errors, settled_gaps = await settled_sources.load(
+            factory_id, request, can_price, auth_request=auth_request)
     # The legacy completed-batch fact remains authoritative for keys it owns.
     # Do not double-count a row that happens to be visible through both paths;
     # retain an explicit gap instead of selecting an arbitrary representation.

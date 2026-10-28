@@ -38,8 +38,13 @@ def uploaded(monkeypatch):
     # A locatable but invalid production fact must remain in the coverage denominator.
     frames[1] = pd.concat([frames[1], pd.DataFrame([{**p.frame.iloc[0].to_dict(), '来源主键': 'bad', '产量': -1}])], ignore_index=True)
     calls = []
-    async def load(request, factory_id):
+    async def load(request, factory_id, auth_request=None, require_cost_authorization=False):
         assert factory_id == 'F006'
+        assert auth_request is not None
+        assert auth_request.state.factory_id == factory_id
+        assert auth_request.state.user_id == 1309
+        if require_cost_authorization:
+            assert auth_request.state.role == 'factory_super_admin'
         calls.append(request.upload_id)
         return frames[request.upload_id].copy(deep=True)
     monkeypatch.setattr(api, '_load_data', load)

@@ -67,7 +67,10 @@ def test_multiple_rows_for_one_plan_are_quarantined_as_a_whole_plan():
 
 def test_no_price_role_does_not_qualify_or_read_cost_columns():
     qualified, gaps = settled_sources.qualify_settled_rows([row()], can_price=False)
-    assert qualified == []
+    assert len(qualified) == 1
+    assert qualified[0]['产量'] == 10
+    assert qualified[0]['单位'] == '盒'
+    assert all(column not in qualified[0] for column in ('材料成本', '人工成本', '设备成本', '其他成本', '总成本'))
     assert any('无成本权限' in item for item in gaps[0]['missing'])
     assert 'material_cost' not in settled_sources.SETTLED_SOURCE_NO_PRICE_SQL
     assert 'total_cost' not in settled_sources.SETTLED_SOURCE_NO_PRICE_SQL
@@ -162,7 +165,8 @@ async def test_load_sets_factory_config_and_returns_gap_when_no_price(monkeypatc
     request = type('Request', (), {'period_type': 'month_range', 'year': 2026,
                                    'start_month': 10, 'end_month': 10})()
     datasets, errors, gaps = await settled_sources.load('F006', request, False)
-    assert datasets == [] and errors == []
+    assert len(datasets) == 1 and errors == []
+    assert list(datasets[0].frame['产量']) == [10]
     assert any('无成本权限' in item for item in gaps[0]['missing'])
     assert calls[0][2] == ('F006',)
     assert calls[1][2] == ('F006', date(2026, 10, 1), date(2026, 10, 31))

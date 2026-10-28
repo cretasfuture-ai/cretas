@@ -12,11 +12,11 @@ from decimal import Decimal
 @pytest.mark.asyncio
 @pytest.mark.parametrize('qualified', [True, False])
 async def test_business_route_reconciles_trusted_positive_capture_only(monkeypatch, qualified):
-    async def empty(*args): return [], [], []
-    async def finance(*args):
+    async def empty(*args, **kwargs): return [], [], []
+    async def finance(*args, **kwargs):
         return [], [], [{'id': i, 'title': i, 'missing': ['capture required']} for i in
                         ('sales.channel', 'finance.unit-source', 'production.oee-source')]
-    async def captured(*args):
+    async def captured(*args, **kwargs):
         if not qualified: return [], [], []
         return [
                 Dataset(pd.DataFrame([{'日期':'2026-10-01','渠道':'QA直营','订单ID':'qa1','实际（元）':100},
@@ -71,7 +71,7 @@ async def test_route_loads_canonical_sales_sku_and_detail_preserves_line_provena
     }
     async def get_pool():
         return FakePool(rows, [])
-    async def empty(*args): return [], [], []
+    async def empty(*args, **kwargs): return [], [], []
     monkeypatch.setattr(operational_sources.config, 'get_cretas_pool', get_pool)
     monkeypatch.setattr(sources, 'load', empty)
     monkeypatch.setattr(finance_sources, 'load', empty)
@@ -94,8 +94,8 @@ async def test_route_loads_canonical_sales_sku_and_detail_preserves_line_provena
 
 @pytest.mark.asyncio
 async def test_route_loads_named_trusted_customer_source_candidate_without_channel_alias(monkeypatch):
-    async def empty(*args): return [], [], []
-    async def trusted(*args):
+    async def empty(*args, **kwargs): return [], [], []
+    async def trusted(*args, **kwargs):
         return [Dataset(pd.DataFrame([
             {'日期': '2026-10-01', '订单ID': 'so-source-1', '订单行ID': 'line-source-1',
              '客户来源': 'REFERRAL', '订单行小计': Decimal('20'), '单位': 'kg',
@@ -124,8 +124,8 @@ async def test_route_loads_named_trusted_customer_source_candidate_without_chann
 
 @pytest.mark.asyncio
 async def test_route_loads_sheet_oee_and_details_keep_electronic_row_provenance(monkeypatch):
-    async def empty(*args): return [], [], []
-    async def captured(*args):
+    async def empty(*args, **kwargs): return [], [], []
+    async def captured(*args, **kwargs):
         return [Dataset(pd.DataFrame([{
             '计划运行分钟': 20, '实际运行分钟': 15, '理想周期秒': 60,
             '总数': 10, '良品数': 0, '单位': 'kg', '日期': '2026-10-01',

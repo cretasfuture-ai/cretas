@@ -12,6 +12,8 @@ from decimal import Decimal, InvalidOperation
 
 import smartbi.config as config
 from .engine import Dataset
+from .metrics import complete_manufacturing_cost
+from . import cost_authorization
 
 
 # ``process_sheet_rows`` is the authoritative submission/stamp pair for the
@@ -198,19 +200,14 @@ def _number(value):
     if value is None or pd.isna(value):
         return None
     try:
-        return Decimal(str(value))
+        parsed = Decimal(str(value))
+        return parsed if parsed.is_finite() else None
     except (InvalidOperation, TypeError, ValueError):
         return None
 
 
 def _valid_cost(row):
-    if row.get("成本不完整") is not False:
-        return False
-    parts = [_number(row.get(column)) for column in
-             ("材料成本", "人工成本", "设备成本", "其他成本")]
-    total = _number(row.get("总成本"))
-    return (all(value is not None and value >= 0 for value in parts)
-            and total is not None and total >= 0 and sum(parts, Decimal("0")) == total)
+    return row.get("成本不完整") is False and complete_manufacturing_cost(row)
 
 
 def qualify_settled_rows(rows, *, can_price=True):
@@ -235,6 +232,10 @@ def qualify_settled_rows(rows, *, can_price=True):
                 or len(finished_batches) != 1):
             invalid_plans.add(plan)
     qualified, gaps = [], []
+    cost_reason_prefixes = {
+        "无成本权限，成本事实未读取",
+        "成本分项或总成本不完整，未补零",
+    }
     for row in rows:
         key = _text(row.get("来源主键"))
         reasons = []
@@ -284,7 +285,29 @@ def qualify_settled_rows(rows, *, can_price=True):
             reasons.append("无成本权限，成本事实未读取")
         elif not _valid_cost(row):
             reasons.append("成本分项或总成本不完整，未补零")
+            # A row that still contains monetary values but fails the settled
+            # cost invariant is not a trustworthy quantity row.  Partial
+            # authorization is different: the phase-1 merge has no monetary
+            # values at all and may safely retain its independently-qualified
+            # output facts with a cost gap.
+            if any(row.get(column) is not None for column in
+                   ("材料成本", "人工成本", "设备成本", "其他成本", "总成本")):
+                reasons.append("成本事实不满足结算不变量")
+        non_cost_reasons = [reason for reason in reasons if reason not in cost_reason_prefixes]
+        if non_cost_reasons:
+            gaps.append({"id": "settled.production", "source": "settled-production",
+                         "key": key, "missing": reasons})
+            continue
         if reasons:
+            # Cost permission/quality is orthogonal to the already-proven
+            # production, output, lineage, date, and unit facts.  Keep this
+            # row as a quantity fact and make the price gap explicit.  Never
+            # synthesize zeros for the unavailable cost fields.
+            sanitized = dict(row)
+            for column in ("材料成本", "人工成本", "设备成本", "其他成本", "总成本",
+                           "成本不完整", "成本更新时间"):
+                sanitized.pop(column, None)
+            qualified.append(sanitized)
             gaps.append({"id": "settled.production", "source": "settled-production",
                          "key": key, "missing": reasons})
             continue
@@ -292,12 +315,16 @@ def qualify_settled_rows(rows, *, can_price=True):
     return qualified, gaps
 
 
-async def load(factory_id, request, can_price):
+async def load(factory_id, request, can_price, auth_request=None):
     """Read settled production facts through the existing tenant-scoped pool."""
     from .sources import dates
 
     start, end = dates(request)
+    # Manufacturing costs are never read before the Java authority call.
+    if auth_request is None:
+        can_price = False
     sql = SETTLED_SOURCE_SQL if can_price else SETTLED_SOURCE_NO_PRICE_SQL
+    phase1_rows = []
     try:
         pool = await config.get_cretas_pool()
         if pool is None:
@@ -305,7 +332,31 @@ async def load(factory_id, request, can_price):
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("SELECT set_config('app.factory_id', $1, true)", factory_id)
-                rows = await conn.fetch(sql, factory_id, start, end)
+                if auth_request is not None and can_price:
+                    # First pass proves stable product IDs without selecting any cost column.
+                    id_rows = await conn.fetch(SETTLED_SOURCE_NO_PRICE_SQL, factory_id, start, end)
+                    phase1_rows = id_rows
+                    product_ids = sorted({_text(row.get('产品ID')) for row in id_rows if _text(row.get('产品ID'))})
+                    authority = await cost_authorization.authorize_batches(auth_request, factory_id, product_ids)
+                    if not authority.allowed_product_ids:
+                        rows = id_rows
+                        can_price = False
+                        sql = SETTLED_SOURCE_NO_PRICE_SQL
+                    else:
+                        scoped_sql = sql.replace("\nORDER BY fgb.production_date", "\n  AND pb.product_type_id = ANY($4::text[])\nORDER BY fgb.production_date")
+                        scoped_rows = await conn.fetch(scoped_sql,
+                                                       factory_id, start, end, sorted(authority.allowed_product_ids))
+                        costs = {str(item.get("来源主键")): item for item in scoped_rows}
+                        cost_keys = ("材料成本", "人工成本", "设备成本", "其他成本", "总成本", "成本不完整", "成本更新时间")
+                        rows = []
+                        for base in id_rows:
+                            merged = dict(base)
+                            extra = costs.get(str(base.get("来源主键")))
+                            if extra is not None:
+                                merged.update({key: extra.get(key) for key in cost_keys})
+                            rows.append(merged)
+                else:
+                    rows = await conn.fetch(sql, factory_id, start, end)
         if len(rows) > 10000:
             return [], [{"source": "settled-production", "message": "明细超过安全上限，请缩小期间后重试"}], []
         qualified, gaps = qualify_settled_rows(rows, can_price=can_price)
@@ -316,6 +367,16 @@ async def load(factory_id, request, can_price):
         frame = frame.drop(columns=money, errors="ignore")
         return [Dataset(frame, "settled-production · 已停产安全库存小结事实（单批次明确血缘；已报产出快照，非当前库存余额；成本为当前归集修订值，非结算时点快照）",
                          currency="CNY")], [], gaps
+    except cost_authorization.CostAuthorizationError:
+        # The phase-1 facts are still useful and are never replaced by an
+        # empty result when the authority is unavailable.
+        if len(phase1_rows) > 10000:
+            return [], [{"source": "settled-production", "message": "明细超过安全上限，请缩小期间后重试"}], []
+        qualified, gaps = qualify_settled_rows(phase1_rows, can_price=False)
+        gaps.append({"id": "settled.production", "source": "settled-production",
+                     "missing": ["生产成本授权失败，成本事实未读取；合格数量事实保留"]})
+        datasets = ([Dataset(pd.DataFrame(qualified), "settled-production · 无价生产事实（成本授权失败）", currency="CNY")]
+                    if qualified else [])
+        return datasets, [], gaps
     except Exception:
         return [], [{"source": "settled-production", "message": "来源读取失败，请重试或联系管理员核对数据服务"}], []
-
