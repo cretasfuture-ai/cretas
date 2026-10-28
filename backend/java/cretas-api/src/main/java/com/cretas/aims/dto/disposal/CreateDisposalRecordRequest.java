@@ -48,7 +48,7 @@ public class CreateDisposalRecordRequest {
     @DecimalMin(value = "0.01", message = "报废数量必须大于0")
     private BigDecimal disposalQuantity;
 
-    @Schema(description = "报废类型 (SCRAP/RECYCLE/RETURN/DONATE/DESTROY)", example = "SCRAP", required = true)
+    @Schema(description = "处置方式 (SCRAP 报废 / DESTROY 销毁 / RETURN_TO_CUSTOMER 退还客户, 后者仅限客户自有货)", example = "SCRAP", required = true)
     @NotBlank(message = "报废类型不能为空")
     @Size(max = 30, message = "报废类型长度不能超过30个字符")
     private String disposalType;
@@ -90,6 +90,16 @@ public class CreateDisposalRecordRequest {
 
     @Schema(description = "证据图片 URL 列表（逗号分隔）", example = "https://cdn.example.com/a.jpg,https://cdn.example.com/b.jpg")
     private String evidenceImages;
+
+    @Schema(description = "客户确认人（客户自有货必填：退还客户=签收人，报废/销毁=同意人）")
+    @Size(max = 100, message = "客户确认人长度不能超过100个字符")
+    private String customerConfirmedBy;
+
+    @Schema(description = "客户确认日期（客户自有货必填）", example = "2026-10-28")
+    private java.time.LocalDate customerConfirmedAt;
+
+    @Schema(description = "客户确认凭证 URL（签收单/同意函照片，逗号分隔；客户自有货必填）")
+    private String customerConfirmationEvidence;
 
     @Schema(description = "备注")
     private String notes;

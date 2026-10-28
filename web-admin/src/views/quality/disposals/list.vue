@@ -46,6 +46,10 @@ const disposalForm = ref({
   reasonCategory: '',
   quantity: 0,
   reason: '',
+  // 客户自有货 (代加工) 必填: 退还客户 = 签收人/日期/签收单, 报废销毁 = 同意人/日期/同意凭证。
+  customerConfirmedBy: '',
+  customerConfirmedAt: '',
+  customerConfirmationEvidence: '',
   evidenceImages: '',  // Gap-3: 证据照片 URL (逗号分隔), 独立列 evidence_images (V20261024_15)
   notes: ''
 });
@@ -58,6 +62,7 @@ const contextError = ref('');
 const validatedRecall = ref<FactoryRecallDetail | null>(null);
 const contextRequestSequence = ref(0);
 const evidenceInput = ref<HTMLInputElement | null>(null);
+const confirmationInput = ref<HTMLInputElement | null>(null);
 const evidenceUploading = ref(false);
 const evidenceProgress = ref(0);
 
@@ -90,6 +95,15 @@ const selectedBatchMax = computed<number | null>(() => {
     ? disposalAvailableQuantity(b)
     : ((b.currentQuantity ?? b.remainingQuantity ?? b.receiptQuantity) as number | undefined);
   return typeof avail === 'number' ? avail : null;
+});
+
+// 客户自有成品 (代加工, 只在退回/不良/过期/冻结时出现在可选列表里): 处置方式换成
+// 退还客户 / 经客户同意报废, 并要求客户确认 (Steve 2026-10-28)。
+const selectedCustomerOwned = computed(() => disposalForm.value.targetType === 'FINISHED'
+  && currentBatches.value.some((x) => x.id === disposalForm.value.batchId && x.customerOwned === true));
+const returningToCustomer = computed(() => disposalForm.value.disposalType === 'RETURN_TO_CUSTOMER');
+watch(selectedCustomerOwned, (owned) => {
+  if (!owned && returningToCustomer.value) disposalForm.value.disposalType = 'SCRAP';
 });
 
 // R12: 切换报损对象时清空已选批次, 避免跨数据源残留无效 batchId。
@@ -301,6 +315,9 @@ function handleCreate() {
     reasonCategory: '',
     quantity: 0,
     reason: '',
+    customerConfirmedBy: '',
+    customerConfirmedAt: '',
+    customerConfirmationEvidence: '',
     evidenceImages: '',
     notes: ''
   };
@@ -340,6 +357,21 @@ async function submitDisposal() {
     ElMessage.warning('请上传/粘贴至少一张证据照片');
     return;
   }
+  if (selectedCustomerOwned.value) {
+    const who = returningToCustomer.value ? '客户签收人' : '客户同意人';
+    if (!disposalForm.value.customerConfirmedBy.trim()) {
+      ElMessage.warning(`客户自有货请填写${who}`);
+      return;
+    }
+    if (!disposalForm.value.customerConfirmedAt) {
+      ElMessage.warning(`客户自有货请选择${returningToCustomer.value ? '签收' : '同意'}日期`);
+      return;
+    }
+    if (!disposalForm.value.customerConfirmationEvidence.trim()) {
+      ElMessage.warning(returningToCustomer.value ? '请上传客户签收单照片' : '请上传客户同意报废的凭证');
+      return;
+    }
+  }
   // F-FP-2 防呆: 报废数量不得超过批次可用量。
   if (selectedBatchMax.value != null && disposalForm.value.quantity > selectedBatchMax.value) {
     ElMessage.warning(`报废数量不能超过批次可用量 ${selectedBatchMax.value}`);
@@ -359,6 +391,11 @@ async function submitDisposal() {
     evidenceImages: disposalForm.value.evidenceImages.trim() || undefined,
     notes: disposalForm.value.notes.trim() || undefined
   };
+  if (selectedCustomerOwned.value) {
+    payload.customerConfirmedBy = disposalForm.value.customerConfirmedBy.trim();
+    payload.customerConfirmedAt = disposalForm.value.customerConfirmedAt;
+    payload.customerConfirmationEvidence = disposalForm.value.customerConfirmationEvidence.trim();
+  }
   if (disposalForm.value.targetType === 'FINISHED') {
     payload.finishedGoodsBatchId = disposalForm.value.batchId;
   } else {
@@ -535,7 +572,19 @@ function chooseEvidencePhoto() {
   evidenceInput.value?.click();
 }
 
-async function handleEvidencePhotoChange(event: Event) {
+function chooseConfirmationPhoto() {
+  confirmationInput.value?.click();
+}
+
+function handleEvidencePhotoChange(event: Event) {
+  return uploadPhotoInto(event, 'evidenceImages');
+}
+
+function handleConfirmationPhotoChange(event: Event) {
+  return uploadPhotoInto(event, 'customerConfirmationEvidence');
+}
+
+async function uploadPhotoInto(event: Event, field: 'evidenceImages' | 'customerConfirmationEvidence') {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = '';
@@ -551,9 +600,9 @@ async function handleEvidencePhotoChange(event: Event) {
     await putFileWithProgress(response.data.uploadUrl, file, (progress) => {
       evidenceProgress.value = progress;
     });
-    const urls = disposalForm.value.evidenceImages.split(',').map((url) => url.trim()).filter(Boolean);
+    const urls = disposalForm.value[field].split(',').map((url) => url.trim()).filter(Boolean);
     if (!urls.includes(response.data.fileUrl)) urls.push(response.data.fileUrl);
-    disposalForm.value.evidenceImages = urls.join(',');
+    disposalForm.value[field] = urls.join(',');
     ElMessage.success('证据照片上传成功');
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '证据照片上传失败');
@@ -569,6 +618,7 @@ function getTypeText(type: string) {
     QUALITY_ISSUE: '质量问题',
     SCRAP: '报废',
     DESTROY: '销毁',
+    RETURN_TO_CUSTOMER: '退还客户',
     MATERIAL: '原料',
     OTHER: '其他'
   };
@@ -726,6 +776,10 @@ function getDisposalReason(row: TableRow): string {
         </el-descriptions-item>
         <el-descriptions-item label="审批人">{{ viewRecord.approverName || viewRecord.approvedByName || '-' }}</el-descriptions-item>
         <el-descriptions-item label="审批时间">{{ formatDateTimeCell(null, null, viewRecord.approvedAt || viewRecord.approvalDate) }}</el-descriptions-item>
+        <el-descriptions-item v-if="viewRecord.customerConfirmedBy" label="客户确认">
+          {{ viewRecord.customerConfirmedBy }} · {{ viewRecord.customerConfirmedAt || '-' }}
+          <div style="word-break:break-all;font-size:12px;color:#909399">{{ viewRecord.customerConfirmationEvidence }}</div>
+        </el-descriptions-item>
         <el-descriptions-item label="证据图片">
           <template v-if="viewRecord.evidenceImages">
             <div style="word-break:break-all">{{ viewRecord.evidenceImages }}</div>
@@ -761,18 +815,36 @@ function getDisposalReason(row: TableRow): string {
               v-for="item in currentBatches"
               :key="item.id"
               :label="disposalForm.targetType === 'FINISHED'
-                ? `${item.batchNumber} - ${item.productName || '成品'} (可报损余量 ${item.availableQuantity} ${item.unit || ''})`
+                ? `${item.batchNumber} - ${item.productName || '成品'} (可报损余量 ${item.availableQuantity} ${item.unit || ''})${item.customerOwned ? '【客户自有】' : ''}`
                 : `${item.batchNumber} - ${item.materialName || item.materialTypeName || '物料'}`"
               :value="item.id"
             />
           </el-select>
         </el-form-item>
+        <el-alert v-if="selectedCustomerOwned" type="warning" :closable="false" show-icon style="margin-bottom:12px"
+          title="客户自有货（代加工）：只能退还客户，或经客户同意后报废/销毁；不计本厂损失，须登记客户确认" />
         <el-form-item label="处置方式" required>
           <el-select v-model="disposalForm.disposalType" placeholder="选择处置方式" style="width: 100%">
-            <el-option label="报废" value="SCRAP" />
-            <el-option label="销毁" value="DESTROY" />
+            <el-option v-if="selectedCustomerOwned" label="退还客户" value="RETURN_TO_CUSTOMER" />
+            <el-option :label="selectedCustomerOwned ? '报废（客户同意）' : '报废'" value="SCRAP" />
+            <el-option :label="selectedCustomerOwned ? '销毁（客户同意）' : '销毁'" value="DESTROY" />
           </el-select>
         </el-form-item>
+        <template v-if="selectedCustomerOwned">
+          <el-form-item :label="returningToCustomer ? '客户签收人' : '客户同意人'" required>
+            <el-input v-model="disposalForm.customerConfirmedBy" maxlength="100" placeholder="客户方联系人姓名" />
+          </el-form-item>
+          <el-form-item :label="returningToCustomer ? '签收日期' : '同意日期'" required>
+            <el-date-picker v-model="disposalForm.customerConfirmedAt" type="date" value-format="YYYY-MM-DD"
+              placeholder="选择日期" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="returningToCustomer ? '签收单' : '同意凭证'" required>
+            <input ref="confirmationInput" type="file" accept="image/*" hidden @change="handleConfirmationPhotoChange" />
+            <el-button type="primary" plain :loading="evidenceUploading" @click="chooseConfirmationPhoto">上传照片</el-button>
+            <el-input v-model="disposalForm.customerConfirmationEvidence" type="textarea" :rows="2"
+              placeholder="可粘贴照片 URL（多张用逗号分隔）" />
+          </el-form-item>
+        </template>
         <el-form-item label="原因类别" required>
           <el-select v-model="disposalForm.reasonCategory" placeholder="选择原因类别" style="width: 100%">
             <el-option label="过期" value="过期" />

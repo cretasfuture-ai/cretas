@@ -224,7 +224,10 @@ public class FactoryRecallFollowUpService {
             if (!evidenceComplete) {
                 issues.add(issue("RETURN_STOCK_UNRESOLVED", "退回成品库存数量与已完成退货数量不守恒"));
             } else if (!resolved) {
-                issues.add(issue("INVENTORY_DISPOSAL_PENDING", "退回成品仍有隔离库存待完成报废"));
+                issues.add(issue("INVENTORY_DISPOSAL_PENDING",
+                        returned.getOwnership() == com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED
+                                ? "退回的客户自有成品待处置（退还客户或经客户同意报废）"
+                                : "退回成品仍有隔离库存待完成报废"));
             }
             BigDecimal reportedDisposal = direct ? BigDecimal.ZERO : disposed;
             StockEvidence evidence = new StockEvidence(current, reportedDisposal, evidenceComplete, resolved);

@@ -142,14 +142,84 @@ class DisposalFinishedGoodsBalanceTest {
         verify(records, never()).save(any());
     }
 
-    @Test
-    void customerOwnedFinishedGoodsCannotEnterGeneralDisposal() {
+    // ===== 客户自有成品 (Steve 2026-10-28: 退还客户 或 经客户同意报废, 都要客户确认) =====
+
+    private static FinishedGoodsBatch returnedCustomerBatch() {
         FinishedGoodsBatch batch = batch("F006", "10", "0", "0");
         batch.setOwnership(InventoryOwnership.CUSTOMER_OWNED);
+        batch.setOwnerCustomerId("CUST-1");
+        batch.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
+        return batch;
+    }
+
+    private static DisposalRecord confirmed(DisposalRecord record) {
+        record.setCustomerConfirmedBy("客户王经理");
+        record.setCustomerConfirmedAt(java.time.LocalDate.of(2026, 10, 28));
+        record.setCustomerConfirmationEvidence("https://example.test/signed.jpg");
+        return record;
+    }
+
+    @Test
+    void customerOwnedDisposalWithoutCustomerConfirmationIsRejected() {
+        when(batches.findById("FG-1")).thenReturn(Optional.of(returnedCustomerBatch()));
+        for (String type : new String[]{"SCRAP", "DESTROY", "RETURN_TO_CUSTOMER"}) {
+            DisposalRecord record = request("1");
+            record.setDisposalType(type);
+            assertThatThrownBy(() -> service.createDisposalRecord(record))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(400));
+            DisposalRecord partial = confirmed(request("1"));
+            partial.setDisposalType(type);
+            partial.setCustomerConfirmationEvidence(" ");
+            assertThatThrownBy(() -> service.createDisposalRecord(partial))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(400));
+        }
+        verify(records, never()).save(any());
+    }
+
+    @Test
+    void returnedCustomerGoodsCanBeReturnedOrScrappedOnceCustomerConfirms() {
+        FinishedGoodsBatch batch = returnedCustomerBatch();
         when(batches.findById("FG-1")).thenReturn(Optional.of(batch));
-        assertThatThrownBy(() -> service.createDisposalRecord(request("1")))
+        when(records.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(batches.findAllById(List.of("FG-1"))).thenReturn(List.of(batch));
+
+        DisposalRecord giveBack = confirmed(request("4"));
+        giveBack.setDisposalType("RETURN_TO_CUSTOMER");
+        assertThat(service.createDisposalRecord(giveBack).getDisposalType()).isEqualTo("RETURN_TO_CUSTOMER");
+        DisposalRecord scrap = confirmed(request("6"));
+        assertThat(service.createDisposalRecord(scrap).getDisposalType()).isEqualTo("SCRAP");
+    }
+
+    @Test
+    void sellableCustomerGoodsMustLeaveThroughTollDelivery() {
+        FinishedGoodsBatch batch = returnedCustomerBatch();
+        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        when(batches.findById("FG-1")).thenReturn(Optional.of(batch));
+        DisposalRecord record = confirmed(request("1"));
+        record.setDisposalType("RETURN_TO_CUSTOMER");
+        assertThatThrownBy(() -> service.createDisposalRecord(record))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(409));
+        verify(records, never()).save(any());
+    }
+
+    @Test
+    void companyGoodsCannotBeReturnedToCustomer() {
+        when(batches.findById("FG-1")).thenReturn(Optional.of(batch("F006", "10", "0", "0")));
+        DisposalRecord record = confirmed(request("1"));
+        record.setDisposalType("RETURN_TO_CUSTOMER");
+        assertThatThrownBy(() -> service.createDisposalRecord(record))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(400));
+        DisposalRecord material = confirmed(request("1"));
+        material.setFinishedGoodsBatchId(null);
+        material.setMaterialBatchId("MB-1");
+        material.setDisposalType("RETURN_TO_CUSTOMER");
+        assertThatThrownBy(() -> service.createDisposalRecord(material))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(400));
         verify(records, never()).save(any());
     }
 }
