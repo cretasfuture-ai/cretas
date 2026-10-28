@@ -1,10 +1,12 @@
 package com.cretas.aims.service.pot;
 
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
@@ -18,14 +20,15 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * S3-16 锅次: 一个生产批次的批次级投入 / 产出节点 (取自 batch_lineage_edges, 按工厂过滤),
- * 以及节点的展示批号。锅次分摊只能落在这些节点上。
+ * S3-16 锅次: 一个生产批次的批次级投入 / 产出节点 (batch_lineage_edges ∪ 事务内的投料 / 在制批记录,
+ * 全部按工厂过滤), 以及节点的展示批号。锅次分摊只能落在这些节点上。
  */
 @Component
 @RequiredArgsConstructor
@@ -35,6 +38,9 @@ public class PotNodeIndex {
     private final MaterialBatchRepository materialBatchRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final ProductionBatchRepository productionBatchRepository;
+    private final MaterialConsumptionRepository consumptionRepository;
+
+    static final String SOURCE_DOC_PRODUCTION_BATCH = "PRODUCTION_BATCH";
 
     /** 节点键 "TYPE#id"。 */
     public static String key(String type, String id) {
@@ -51,21 +57,67 @@ public class PotNodeIndex {
         }
     }
 
-    /** 进入该生产批次的节点 (key → 节点)。 */
+    /**
+     * 进入该生产批次的节点 (key → 节点)。
+     *
+     * <p>🔴 血缘边在业务事务<b>提交之后</b>才写 (LineageEdgeRecorder afterCommit, fail-soft), 报工同一事务里
+     * 还读不到; 所以同时读事务内就有的权威记录 —— 投料 {@code material_consumptions} (血缘边本身就是从它派生的,
+     * 同一批次两边都有时以投料为准, 不重复计)。
+     */
     public Map<String, BatchNode> inputsOf(String factoryId, Long productionBatchId) {
-        return aggregate(edgeRepository.findByFactoryIdAndTargetIdAndTargetType(
+        Map<String, BatchNode> out = aggregate(edgeRepository.findByFactoryIdAndTargetIdAndTargetType(
                 factoryId, String.valueOf(productionBatchId), LineageEdgeRecorder.NODE_PRODUCTION_BATCH), true);
+        Map<String, List<MaterialConsumption>> byBatch = new LinkedHashMap<>();
+        for (MaterialConsumption c : consumptionRepository.findByProductionBatchIdAndFactoryId(productionBatchId, factoryId)) {
+            if (c.getBatchId() != null && c.getQuantity() != null) {
+                byBatch.computeIfAbsent(c.getBatchId(), k -> new ArrayList<>()).add(c);
+            }
+        }
+        if (!byBatch.isEmpty()) {
+            Map<String, String> units = new HashMap<>();
+            for (MaterialBatch mb : materialBatchRepository.findAllById(byBatch.keySet())) {
+                if (factoryId.equals(mb.getFactoryId())) {
+                    units.put(mb.getId(), mb.getQuantityUnit());
+                }
+            }
+            byBatch.forEach((batchId, rows) -> {
+                BigDecimal sum = rows.stream().map(MaterialConsumption::getQuantity).reduce(BigDecimal.ZERO, BigDecimal::add);
+                String k = key(LineageEdgeRecorder.NODE_MATERIAL_BATCH, batchId);
+                out.put(k, new BatchNode(LineageEdgeRecorder.NODE_MATERIAL_BATCH, batchId, sum, units.get(batchId)));
+            });
+        }
+        return out;
     }
 
-    /** 该生产批次产出的节点 (key → 节点)。 */
+    /**
+     * 该生产批次产出的节点 (key → 节点)。同上, 血缘边之外再读事务内就有的在制库存批
+     * ({@code material_batches.source_doc_type = PRODUCTION_BATCH}); 它的产出量取生产批次产量
+     * (在制批的 receiptQuantity 会随下游消耗减少, 不能当产出量)。
+     */
     public Map<String, BatchNode> outputsOf(String factoryId, Long productionBatchId) {
-        return aggregate(edgeRepository.findByFactoryIdAndSourceIdAndSourceType(
+        Map<String, BatchNode> out = aggregate(edgeRepository.findByFactoryIdAndSourceIdAndSourceType(
                 factoryId, String.valueOf(productionBatchId), LineageEdgeRecorder.NODE_PRODUCTION_BATCH), false);
+        materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                        factoryId, SOURCE_DOC_PRODUCTION_BATCH, String.valueOf(productionBatchId))
+                .ifPresent(wip -> {
+                    String k = key(LineageEdgeRecorder.NODE_MATERIAL_BATCH, wip.getId());
+                    if (!out.containsKey(k)) {
+                        ProductionBatch pb = productionBatchRepository.findByIdAndFactoryId(productionBatchId, factoryId)
+                                .orElse(null);
+                        // 文员逐道录入只写 quantity (= 本道产出; 只有产出 > 0 才物化在制批, 所以这里不会是
+                        // 无产出时的占位 1), actualQuantity 由其它报工入口写; 两者都没有 ⇒ 未知, 不收窄
+                        BigDecimal qty = pb == null ? null
+                                : pb.getActualQuantity() != null ? pb.getActualQuantity() : pb.getQuantity();
+                        String unit = pb != null && pb.getUnit() != null ? pb.getUnit() : wip.getQuantityUnit();
+                        out.put(k, new BatchNode(LineageEdgeRecorder.NODE_MATERIAL_BATCH, wip.getId(), qty, unit));
+                    }
+                });
+        return out;
     }
 
-    /** 某节点作为投入进入了哪些生产批次。 */
+    /** 某节点作为投入进入了哪些生产批次 (血缘边 ∪ 投料记录)。 */
     public Set<Long> productionBatchesConsuming(String factoryId, String type, String id) {
-        Set<Long> out = new HashSet<>();
+        Set<Long> out = new LinkedHashSet<>();
         for (BatchLineageEdge e : edgeRepository.findByFactoryIdAndSourceIdAndSourceType(factoryId, id, type)) {
             if (LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(e.getTargetType())) {
                 Long pb = parseLong(e.getTargetId());
@@ -74,12 +126,19 @@ public class PotNodeIndex {
                 }
             }
         }
+        if (LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(type)) {
+            for (MaterialConsumption c : consumptionRepository.findByFactoryIdAndBatchId(factoryId, id)) {
+                if (c.getProductionBatchId() != null) {
+                    out.add(c.getProductionBatchId());
+                }
+            }
+        }
         return out;
     }
 
-    /** 哪些生产批次产出了这个节点 (直接边)。 */
+    /** 哪些生产批次产出了这个节点 (血缘边 ∪ 在制批的来源单据)。 */
     public Set<Long> productionBatchesProducing(String factoryId, String type, String id) {
-        Set<Long> out = new HashSet<>();
+        Set<Long> out = new LinkedHashSet<>();
         for (BatchLineageEdge e : edgeRepository.findByFactoryIdAndTargetIdAndTargetType(factoryId, id, type)) {
             if (LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(e.getSourceType())) {
                 Long pb = parseLong(e.getSourceId());
@@ -87,6 +146,12 @@ public class PotNodeIndex {
                     out.add(pb);
                 }
             }
+        }
+        if (LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(type)) {
+            materialBatchRepository.findByIdAndFactoryId(id, factoryId)
+                    .filter(mb -> SOURCE_DOC_PRODUCTION_BATCH.equals(mb.getSourceDocType()))
+                    .map(mb -> parseLong(mb.getSourceDocId()))
+                    .ifPresent(out::add);
         }
         return out;
     }

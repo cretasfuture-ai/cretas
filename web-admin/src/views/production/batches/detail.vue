@@ -16,6 +16,7 @@ import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
 import type { TableRow } from '@/types/api';
 import SupplementalCostsDialog from './SupplementalCostsDialog.vue';
+import ProductionPotsPanel from '@/components/pot/ProductionPotsPanel.vue';
 import {
   assignTasksWithReadback,
   taskAssignmentDisabledReason,
@@ -1070,6 +1071,15 @@ function goToReversalList() {
             <el-descriptions-item v-if="batch.notes" label="备注" :span="2">{{ batch.notes }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
+
+        <!-- S3-16 锅次 -->
+        <ProductionPotsPanel
+          v-if="factoryId && Number.isSafeInteger(Number(batch.id))"
+          :factory-id="factoryId"
+          :production-batch-id="Number(batch.id)"
+          :batch-number="String(batch.batchNumber ?? '')"
+          :can-write="canWrite"
+        />
 
         <!-- Quantity & Quality -->
         <el-card shadow="never" class="detail-card">
