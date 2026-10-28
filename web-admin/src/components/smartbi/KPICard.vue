@@ -127,6 +127,15 @@ const trendColors: Record<TrendDirection, string> = {
   flat: '#909399'
 };
 
+function parseStrictNumber(value: number | string | null | undefined): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // Format value based on format type
 const formattedValue = computed(() => {
   // Null/undefined guard — display placeholder
@@ -136,14 +145,15 @@ const formattedValue = computed(() => {
   if (typeof props.value === 'string') {
     const trimmed = props.value.trim();
     if (trimmed === '') return '\u2014';
+    if (props.format === 'custom') return `${props.prefix}${trimmed}${props.suffix}`;
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) return trimmed;
   }
 
-  const val = typeof props.value === 'number' ? props.value : parseFloat(String(props.value));
+  const val = parseStrictNumber(props.value);
 
   // NaN guard after parsing
-  if (!Number.isFinite(val)) return '\u2014';
+  if (val === null) return '\u2014';
 
   let formatted: string;
 
@@ -169,8 +179,8 @@ const formattedValue = computed(() => {
 const progressPercent = computed(() => {
   if (props.targetValue == null || props.targetValue === 0) return 0;
   if (props.value == null) return 0;
-  const val = typeof props.value === 'number' ? props.value : parseFloat(String(props.value));
-  if (!Number.isFinite(val)) return 0;
+  const val = props.format === 'custom' ? null : parseStrictNumber(props.value);
+  if (val === null) return 0;
   return Math.min((val / props.targetValue) * 100, 100);
 });
 
@@ -243,9 +253,8 @@ const displayProgressColor = computed(() => {
 
 // CountUp animation for numeric values (first-load only to avoid SSE flicker)
 const numericValue = computed(() => {
-  if (props.value == null) return null;
-  const val = typeof props.value === 'number' ? props.value : parseFloat(String(props.value));
-  return Number.isFinite(val) ? val : null;
+  if (props.format === 'custom') return null;
+  return parseStrictNumber(props.value);
 });
 
 const countUp = useCountUp(() => numericValue.value ?? 0);

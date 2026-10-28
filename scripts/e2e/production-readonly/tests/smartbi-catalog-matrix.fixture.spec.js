@@ -10,6 +10,7 @@ const candidates = Array.from({ length: 8 }, (_, index) => {
     id: `${familyId}@P${index + 1}@kg`,
     title: index === 0 || index === 4 ? '重复标签' : `生产族 ${index + 1}`,
     source: 'business',
+    domain: '生产',
     unit: 'kg',
     analysis: { familyId, familyLabel: index === 0 || index === 4 ? '重复标签' : `生产族 ${index + 1}` },
     chart: { chartType: 'bar', echartsOption: { series: [{ data: [500 + index] }] } },
@@ -30,7 +31,9 @@ function recommendationBody(withContext = false, selectedId = null) {
       period: { label: '全部历史', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 },
       ranking: { mode: 'rule', reason: 'fixture' },
       defaultSelection: candidates.slice(0, 4).map((item) => item.id),
-      recommendations: listed.map((item) => withContext ? { ...item, detailContext: { id: `detail-${item.id}`, expiresAt: '2099-01-01T00:00:00.000Z' } } : item),
+      recommendations: listed.map((item) => withContext
+        ? { ...item, detailContext: { id: `detail-${item.id}`, expiresAt: '2099-01-01T00:00:00.000Z' } }
+        : { ...item, detailSnapshotKey: `snapshot-${item.id}`, detailStatus: { state: 'unavailable', message: '点击查看时加载详情' } }),
       unavailable: [],
       sourceErrors: [],
     },
@@ -38,13 +41,16 @@ function recommendationBody(withContext = false, selectedId = null) {
 }
 
 function pageHtml() {
-  const familyRows = candidates.map((item, index) => `<div data-testid="factory-chart-family" data-family-id="${item.analysis.familyId}">${item.analysis.familyLabel} <input type="checkbox"${index < 4 ? ' checked' : ''}><div class="el-select">${item.unit}</div></div>`).join('');
+  const familyRows = candidates.map((item, index) => `<div data-testid="factory-chart-family" data-family-id="${item.domain}:${item.analysis.familyId}"><label class="el-checkbox">${item.analysis.familyLabel}<input type="checkbox" style="position:absolute;width:0;height:0;opacity:0"${index < 4 ? ' checked' : ''}></label><div class="el-select">${item.unit}</div></div>`).join('');
   const cards = candidates.map((item) => `<div data-testid="factory-chart-card-${item.id}" data-candidate-id="${item.id}"><div class="factory-chart-canvas"><canvas></canvas></div><button>查看原始明细</button></div>`).join('');
   return `<!doctype html><html><body>
     <main><h2>工厂分析</h2><p>按分类浏览</p>
       <button data-testid="factory-chart-refresh">刷新</button>
       <section data-testid="factory-chart-guide">
         <div data-testid="factory-chart-mode"><button>问答引导</button><button>按分类浏览</button></div>
+        <div data-testid="factory-chart-guide-domain"><label><input type="radio" value="生产" checked>生产完成情况怎样？</label></div>
+        <div data-testid="factory-chart-guide-topic">选择主题</div>
+        <div id="topic-options" style="display:none"><div class="el-select-dropdown__item">全部主题</div>${candidates.map(item => `<div class="el-select-dropdown__item">${item.analysis.familyLabel}</div>`).join('')}</div>
         <div data-testid="factory-chart-selection" style="display:block">
           ${familyRows}
         </div>
@@ -61,6 +67,18 @@ function pageHtml() {
       const detailPath = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
       const exportPaths = {'导出当前显示图表 Excel':'/smartbi-api/api/smartbi/financial-dashboard/export-excel','导出当前显示图表 PDF':'/smartbi-api/api/smartbi/financial-dashboard/export-pdf','导出当前显示图表 PPT':'/smartbi-api/api/smartbi/financial-dashboard/export-ppt'};
       document.querySelector('[data-testid="factory-chart-refresh"]').onclick = () => fetch(recPath, {method:'POST',headers:jsonHeaders,body:'{}'});
+      let chosenFamily = null;
+      document.querySelector('[data-testid="factory-chart-guide-topic"]').onclick = () => { setTimeout(() => { document.querySelector('#topic-options').style.display = 'block'; }, 50); };
+      [...document.querySelectorAll('#topic-options .el-select-dropdown__item')].forEach((option, index) => option.onclick = () => {
+        chosenFamily = index ? allCandidates[index - 1].analysis.familyId : null;
+        document.querySelector('#topic-options').style.display = 'none';
+      });
+      document.querySelector('[data-testid="factory-chart-guide-generate"]').onclick = () => {
+        for (const input of document.querySelectorAll('[data-testid="factory-chart-family"] input')) {
+          input.checked = input.closest('[data-family-id]').dataset.familyId === '生产:' + chosenFamily;
+        }
+      };
+      for (const input of document.querySelectorAll('[data-testid="factory-chart-family"] input')) input.onchange = () => fetch('/smartbi-api/api/smartbi/financial-dashboard/factory-selection', {method:'PUT', headers:jsonHeaders, body:'{}'});
       for (const card of document.querySelectorAll('[data-testid^="factory-chart-card-"]')) card.querySelector('button').onclick = async () => {
         const candidateId = card.dataset.candidateId;
         const recommendation = await fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({detail_candidate_ids:[candidateId]})});
@@ -74,7 +92,7 @@ function pageHtml() {
         if (!exportPaths[button.textContent]) continue;
         button.onclick = async () => {
           const familyIds = [...document.querySelectorAll('[data-testid="factory-chart-family"] input:checked')].map(input => input.closest('[data-family-id]').dataset.familyId);
-          const ids = allCandidates.filter(item => familyIds.includes(item.analysis.familyId)).map(item => item.id);
+          const ids = allCandidates.filter(item => familyIds.includes(item.domain + ':' + item.analysis.familyId)).map(item => item.id);
           const response = await fetch(exportPaths[button.textContent], {method:'POST',headers:jsonHeaders,body:JSON.stringify({charts:ids.map(id => ({id})), selected_ids:ids})});
           const blob = await response.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = button.textContent.includes('Excel') ? 'factory.xlsx' : button.textContent.includes('PDF') ? 'factory.pdf' : 'factory.pptx'; link.click();
         };
@@ -121,10 +139,12 @@ test('catalog matrix fixture uses the real browse, detail, and export endpoint s
     expect(result.failedFamilyCount).toBe(0);
     expect(result.remainingFamilyCount).toBe(0);
     expect(result.families.every((item) => item.rowTotal === 1 && item.exportCoverage.includes('excel'))).toBe(true);
+    expect(result.exports[0].filename).toBe('factory-catalog-batch-1-excel.xlsx');
+    expect(result.exports[1].filename).toBe('factory-catalog-batch-2-excel.xlsx');
     const exports = requests.filter(item => item.path.endsWith('/export-excel'));
-    expect(exports).toHaveLength(2);
-    expect(exports[0].body.selected_ids).toEqual(candidates.slice(0, 4).map((item) => item.id));
-    expect(exports[1].body.selected_ids).toEqual(candidates.slice(4, 8).map((item) => item.id));
+    expect(exports).toHaveLength(8);
+    expect(exports.map(item => item.body.selected_ids)).toEqual(candidates.map(item => [item.id]));
+    expect(requests.filter(item => item.path.endsWith('/factory-selection'))).toHaveLength(0);
   } finally {
     server.closeAllConnections?.();
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
