@@ -62,6 +62,9 @@ def build(frame, cols, request, can_price, source):
                 gauge['series'][0]['detail']['formatter'] = '{value}%'
                 rate_series = Series(f'production.plan-rate@{unit}', '累计计划达成率', '生产', '%', [('累计', rate)], source, 'ratio', achieved, target)
                 c = candidate(rate_series, 'gauge', gauge)
+                # The chart displays %, while detail rows must be filtered by
+                # the unit of the actual/planned denominator.
+                c.setdefault('engine', {})['sourceQuantityUnit'] = str(unit).strip()
                 c['priority'] = 'optional'
                 charts.append(c)
     else:

@@ -66,6 +66,7 @@ _GUIDED_SPECIALIZED_PREFIXES = ('cost.dual', 'cost.distribution', 'cost.scatter'
 _TRUSTED_SOURCE_PREFIXES = frozenset({
     'customer-source-sales', 'purchase-batch-lineage',
     'finished-goods-shipment', 'finished-goods-inventory',
+    'commerce-joint',
 })
 _FAMILY_LABELS = {
     'production.output': '产量趋势', 'production.products': '产品产量',
@@ -92,7 +93,13 @@ _PRODUCT_ID_NAMES = {
 
 def _product_columns(frame):
     """Return product name and identity columns without treating names as IDs."""
-    product_name = columns(frame).get('product')
+    # Trusted relationship frames may carry both the raw product label and a
+    # display-safe ``产品（单位）`` dimension.  Prefer the exact raw label so
+    # the catalogue remains subject-selectable instead of treating the
+    # normalized aliases as an ambiguous duplicate.
+    product_name = (next((column for column in frame.columns if str(column).strip() == '产品'), None)
+                    if frame.attrs.get('commerce_trusted') is True else None)
+    product_name = product_name or columns(frame).get('product')
     identity = None
     for column in frame.columns:
         normalized = re.sub(r'[（(].*?[）)]', '', str(column)).strip().lower()
@@ -503,7 +510,13 @@ def factory_candidates(dataset, request, can_price):
                 if points:
                     s = Series(f'{key}@{u}', f'{title}（{u}口径）', '质量' if key.startswith('quality') else '生产', '%', points, dataset.source,
                                'ratio', M.total(group[cols[value_key]].map(number)), M.total(group[cols[denominator_key]].map(number)))
-                    eligible.append(series_candidate(s, 'bar'))
+                    candidate = series_candidate(s, 'bar')
+                    # Ratio display units are percentages, but their detail
+                    # rows still carry the quantity unit used as denominator.
+                    # Bind that source unit before metadata/digest generation
+                    # so mixed kg/box/case rows cannot share a detail snapshot.
+                    candidate.setdefault('engine', {})['sourceQuantityUnit'] = str(u).strip()
+                    eligible.append(candidate)
                 else:
                     gaps.append({'id': key, 'title': title, 'missing': ['完整的分子分母，分母需大于零且数量关系有效']})
         else:
@@ -655,6 +668,9 @@ def build(datasets, request, can_price):
             charts, gaps = [], []
         elif dataset.source.startswith('historical-inventory ·'):
             charts, gaps = historical_inventory(dataset)
+        elif dataset.source.startswith('commerce-joint ·'):
+            from .commerce_joint import build as build_commerce_joint
+            charts, gaps = build_commerce_joint(dataset.frame, request, can_price)
         elif trusted_source:
             from .trusted_business_metrics import build as trusted_business_metrics
             charts, gaps = trusted_business_metrics(

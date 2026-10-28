@@ -837,3 +837,84 @@ def test_context_source_and_upload_are_immutable_metadata():
         if 'business' != context.source or 99 != context.upload_id:
             raise ValueError('context source/upload switch rejected')
     assert 'switch rejected' in str(exc.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', [None, 'provider_omits', 'fresh_source_missing', 'permission_denied'])
+async def test_commerce_joint_asgi_uses_every_real_relationship_without_production_subject(monkeypatch, failure):
+    from . import test_commerce_joint as fixture
+    from .trusted_business_sources import COMMERCE_JOINT_SOURCE
+    frame, gaps = fixture.prepared([fixture.sale('l1', 'o1')],
+                                   [fixture.shipment('l1', 'o1', 'b1')],
+                                   [fixture.inventory('b1', available='7')])
+    assert frame is not None and not gaps
+    candidates, _ = engine.build([engine.Dataset(frame, COMMERCE_JOINT_SOURCE, financial=True, currency='CNY')],
+                                 fixture.request(guided=True), True)
+    expected = {'commerce-joint.sales.stock', 'commerce-joint.customer.channel'}
+    assert {item['analysis']['familyId'] for item in candidates} == expected
+
+    original_recommendations = api.factory_recommendations
+    if failure in {'fresh_source_missing', 'permission_denied'}:
+        from . import sources, finance_sources, finance_auth, operational_sources, captured_sources, trusted_business_sources, ranking
+
+        async def empty_source(*args, **kwargs):
+            return [], [], []
+
+        async def no_finance(*args, **kwargs):
+            return False
+
+        async def no_rank(rows, *args, **kwargs):
+            return rows, {'mode': 'rules'}
+
+        for source in (sources, finance_sources, operational_sources, captured_sources, trusted_business_sources):
+            monkeypatch.setattr(source, 'load', empty_source)
+        monkeypatch.setattr(finance_auth, 'full_factory_finance_access', no_finance)
+        monkeypatch.setattr(ranking, 'rank', no_rank)
+        monkeypatch.setattr(engine, 'build', lambda *_args, **_kwargs: (candidates[:1], []))
+
+    async def recommendations(request, _http):
+        if request.detail_candidate_ids and failure in {'fresh_source_missing', 'permission_denied'}:
+            if failure == 'permission_denied':
+                _http.state.role = 'unsupported_test_role'
+            # Exercise the real route, including role and requested-detail-ID
+            # validation. It raises 422 when the selected source disappeared.
+            return await original_recommendations(request, _http)
+        return {'success': True, 'data': {
+            'factoryId': 'F006', 'source': 'business', 'sourceLabel': '本厂业务系统',
+            'period': {'label': '全部历史'}, 'analysisSubject': None, 'subjects': [],
+            'recommendations': candidates, 'sourceErrors': [],
+        }}
+
+    async def provider(_slot, payload, **kwargs):
+        catalog = json.loads(payload['messages'][1]['content'])['catalog']
+        assert {item['familyId'] for item in catalog} == expected
+        ids = [item['id'] for item in catalog]
+        content = json.dumps({'selected_ids': ids[:1] if failure == 'provider_omits' else ids})
+        assert (kwargs['content_validator'](content) is not None) == (failure == 'provider_omits')
+        return {'choices': [{'message': {'content': content}}]}
+
+    monkeypatch.setattr(api, 'factory_recommendations', recommendations)
+    monkeypatch.setattr('common.llm_router.call_chain', provider)
+    app = FastAPI()
+
+    @app.middleware('http')
+    async def identity(request, call_next):
+        request.state.factory_id, request.state.user_id, request.state.role = 'F006', 1309, 'factory_super_admin'
+        return await call_next(request)
+
+    app.include_router(api.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        result = await client.post('/factory-analysis', json={'question': '联合看客户渠道销售、发货和库存'})
+    if failure == 'permission_denied':
+        assert result.status_code == 403
+        return
+    assert result.status_code == 200
+    data = result.json()['data']
+    if failure:
+        assert data['status'] == 'unavailable' and not data['facts'] and not data['recommendations']
+    else:
+        assert data['status'] == 'answered'
+        assert {item['analysis']['familyId'] for item in data['recommendations']} == expected
+        assert any(fact['value'] == 7 for fact in data['facts'])
+        assert any('分别核验' in text for text in data['limitations'])
+        assert not any('没有已验证的生产' in text for text in data['limitations'])

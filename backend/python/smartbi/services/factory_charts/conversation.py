@@ -196,6 +196,7 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
     # The full public catalogue is retained, but an oversized provider payload
     # is a provider-unavailable condition, never a silent keyword fallback.
     semantic = list(catalog)
+    required_families: set[str] = set()
     if len(semantic) > MAX_PLANNER_CATALOG:
         return [], {"mode": "unavailable", "reason": "合格图表目录超过AI规划安全上限"}
     # The public catalog stays complete. For an explicit joint question, the
@@ -203,10 +204,12 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
     # that question. Separate charts cannot satisfy a real joint relation.
     # No candidate is invented or appended when that relationship is absent.
     if is_joint_intent(question):
-        required_family = joint_family_requirement(question)
-        joint_catalog = [item for item in semantic if item.get("familyId") == required_family]
-        if joint_catalog:
-            semantic = joint_catalog
+        required_families = joint_family_requirements(question)
+        if not required_families:
+            return [], {"mode": "unavailable", "reason": "当前问题包含尚未验证的跨域关系，请分别选择已有联合分析"}
+        if not required_families.issubset({item.get("familyId") for item in semantic}):
+            return [], {"mode": "unavailable", "reason": "当前授权目录缺少本问题所需的已验证联合关系"}
+        semantic = [item for item in semantic if item.get("familyId") in required_families]
     aliases = {str(item.get("id")): "chart_" + hashlib.sha256(str(item.get("id")).encode("utf-8")).hexdigest()[:16]
                for item in semantic if item.get("id")}
     provider_semantic = [{**item, "id": aliases[str(item["id"])]} for item in semantic]
@@ -287,6 +290,8 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                     return "planner alias outside eligible catalogue"
                 if len({str(provider_lookup[value].get("familyId") or value) for value in selected_aliases}) != len(selected_aliases):
                     return "planner selected duplicate chart family"
+                if not required_families.issubset({provider_lookup[value].get("familyId") for value in selected_aliases}):
+                    return "planner omitted requested joint relationship"
                 return None
             except Exception as exc:
                 return str(exc)
@@ -355,6 +360,8 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         families = {str(lookup[value].get("familyId") or value) for value in selected}
         if len(families) > MAX_SELECTED_CHARTS or len(families) != len(selected):
             raise ValueError("planner selected too many chart families")
+        if not required_families.issubset(families):
+            raise ValueError("planner omitted requested joint relationship")
         return selected, {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表"}
     except Exception as exc:
         logger.info("Factory conversation planner unavailable (%s)", type(exc).__name__)
@@ -402,11 +409,14 @@ def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Map
     # combined view.  A stock-only question must not receive an unrelated
     # production/quality/cost warning.
     joint_requested = is_joint_intent(question)
-    has_fused = any(family.endswith(".fused") or family.endswith("fused") for family in families)
-    fused_available = any(str(family).endswith(".fused") or str(family).endswith("fused") for family in available)
-    if joint_requested and not has_fused:
-        limitations.append("当前选择未包含已验证的生产-质量-成本联合关系；分开的图表不能冒充已关联分析" if fused_available
-                           else "当前授权目录没有已验证的生产-质量-成本联合关系，相关维度将分别披露")
+    required_families = joint_family_requirements(question) if joint_requested else set()
+    for required_family in sorted(required_families - families):
+        relationship = {"commerce-joint.sales.stock": "销售-发货-库存",
+                        "commerce-joint.customer.channel": "客户-显式渠道-产品"}.get(required_family, "生产-质量-成本")
+        limitations.append(f"当前选择未包含已验证的{relationship}联合关系；分开的图表不能冒充已关联分析" if required_family in available
+                           else f"当前授权目录没有已验证的{relationship}联合关系，相关维度将分别披露")
+    if len(required_families) > 1:
+        limitations.append("各类联合关系分别核验，并不代表已合成一张跨域明细表")
     return list(dict.fromkeys(limitations))[:16]
 
 
@@ -434,17 +444,47 @@ def render_answer(question: str, selected: Sequence[Mapping[str, Any]], facts: S
     return "\n".join(lines)
 
 
+def _joint_axes(question: str) -> set[str]:
+    patterns = {"production": r"生产|产量|\b(?:production|outputs?)\b",
+                "quality": r"质量|质检|检验|良品|\b(?:quality|good|yields?|inspections?)\b",
+                "cost": r"成本|\bcosts?\b", "sales": r"销售|发货|\b(?:sales|shipments?)\b",
+                "inventory": r"库存|\b(?:stocks?|inventory)\b", "customer": r"客户|\bcustomers?\b",
+                "channel": r"渠道|\bchannels?\b"}
+    return {axis for axis, pattern in patterns.items() if re.search(pattern, question, re.I)}
+
+
 def is_joint_intent(question: str) -> bool:
     """Recognize a requested multi-axis relationship, not merely a chart word."""
+    if re.search(r"不要(?:关联|联合)|不做(?:关联|联合)|分别(?:看|查看|分析)|do not (?:join|combine)|separately", question, re.I):
+        return False
     return bool(re.search(r"关联|联合|综合|多维度|放一起|一起看|同时|compare|together|combined|multi[- ]?dimensional", question, re.I)
-                and re.search(r"生产|产量|质量|良品|成本|production|output|quality|good|yield|cost", question, re.I))
+                and len(_joint_axes(question)) >= 2)
+
+
+def joint_family_requirements(question: str) -> set[str]:
+    """Return every proven relationship requested; an empty set is unsupported."""
+    families: set[str] = set()
+    axes = _joint_axes(question)
+    covered: set[str] = set()
+    if {"customer", "channel"}.issubset(axes):
+        families.add("commerce-joint.customer.channel")
+        covered.update({"customer", "channel", "sales"})
+    if {"sales", "inventory"}.issubset(axes):
+        families.add("commerce-joint.sales.stock")
+        covered.update({"sales", "inventory"})
+    if len(axes & {"production", "quality", "cost"}) >= 2:
+        if re.search(r"多表|跨表|跨数据|检验|inspection|cross[- ]?table|multiple tables|across tables|across sources", question, re.I):
+            families.add("production.inspection_fused")
+        else:
+            families.add("production.fused")
+        covered.update({"production", "quality", "cost"})
+    return families if axes.issubset(covered) else set()
 
 
 def joint_family_requirement(question: str) -> str:
-    """Return the family required for a same-fact or explicitly cross-table joint view."""
-    if re.search(r"多表|跨表|跨数据|检验|inspection|cross[- ]?table|multiple tables|across tables|across sources", question, re.I):
-        return "production.inspection_fused"
-    return "production.fused"
+    """Compatibility for callers that only handle one relationship."""
+    families = joint_family_requirements(question)
+    return next(iter(families)) if len(families) == 1 else ""
 
 
 def resolve_subject(question: str, subjects: Sequence[Mapping[str, Any]], explicit: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
@@ -661,6 +701,6 @@ __all__ = [
     "ConversationContext", "CONTEXT_TTL_SECONDS", "MAX_CONTEXTS", "clear_contexts",
     "_new_context", "_context_for", "semantic_catalog", "plan", "facts_for",
     "limitations_for", "render_answer", "resolve_subject", "resolve_period",
-    "scope_for_context", "apply_explicit_period", "public_catalog", "is_cancel", "touch_context", "is_joint_intent", "joint_family_requirement",
+    "scope_for_context", "apply_explicit_period", "public_catalog", "is_cancel", "touch_context", "is_joint_intent", "joint_family_requirement", "joint_family_requirements",
     "create_shared_context", "claim_shared_context", "save_shared_context", "release_shared_context",
 ]

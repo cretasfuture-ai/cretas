@@ -254,10 +254,7 @@ async def _register_shared_impl(candidates: Sequence[Mapping[str, Any]], dataset
                 if reusable is not None:
                     context_id = str(reusable["context_id"])
                     expires = reusable["expires_at"]
-                    chart_type = str(item.get("chart", {}).get("chartType", "")).lower()
-                    drilldown = bool(item.get("chart", {}).get("echartsOption")) and chart_type not in {
-                        "gauge", "kpi", "kpi_scorecard", "multi_axis", "dual_axis",
-                    }
+                    drilldown = details.point_drilldown_enabled(item)
                     item["detailContext"] = {"id": context_id, "expiresAt": _iso(expires),
                                               "drilldown": drilldown}
                     output.append(item)
@@ -290,10 +287,7 @@ async def _register_shared_impl(candidates: Sequence[Mapping[str, Any]], dataset
                     str(item.get("title", item.get("metric", ""))), expires)
                 active = int(active or 0) + 1
                 used = int(used or 0) + added
-                chart_type = str(item.get("chart", {}).get("chartType", "")).lower()
-                drilldown = bool(item.get("chart", {}).get("echartsOption")) and chart_type not in {
-                    "gauge", "kpi", "kpi_scorecard", "multi_axis", "dual_axis",
-                }
+                drilldown = details.point_drilldown_enabled(item)
                 item["detailContext"] = {"id": context_id, "expiresAt": expires.isoformat(),
                                           "drilldown": drilldown}
                 output.append(item)
