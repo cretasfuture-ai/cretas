@@ -1,0 +1,173 @@
+package com.cretas.aims.ai.tool.impl.report;
+
+import com.cretas.aims.dto.report.CostVarianceReportDTO;
+import com.cretas.aims.dto.report.ProductionByProductDTO;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.service.BomService;
+import com.cretas.aims.service.ReportService;
+import com.cretas.aims.service.impl.AIContextServiceImpl;
+import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
+import com.cretas.aims.service.reports.OperatingReportGrossMarginQuery;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import static com.cretas.aims.service.processsecret.ProcessSecretLlmFixture.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+
+/**
+ * 出口 5: AI 工具结果里直接进模型上下文的文本 (preformattedPrompt / message) 不写保密产品的成本、毛利。
+ * 跑在工具的 doExecute 上 (同包可见), 断言打在工具返回的文本字段上。
+ */
+class ProcessSecretToolTextTest {
+
+    private final List<ProductionBatch> batches = List.of(
+            batch(1L, SECRET, SECRET_PLAN, SECRET_COST, new BigDecimal("100")),
+            batch(2L, NORMAL, NORMAL_PLAN, NORMAL_COST, new BigDecimal("100")),
+            batch(3L, NORMAL2, null, NORMAL2_COST, new BigDecimal("200")));
+
+    // ---------------- ReportBomCostTool ----------------
+
+    private ReportBomCostTool bomTool(ProcessSecretLlmCostScope scope) {
+        ReportService reports = mock(ReportService.class);
+        when(reports.getProductionByProduct(eq(FACTORY), any(LocalDate.class), any(LocalDate.class))).thenReturn(List.of(
+                stat(SECRET, SECRET_NAME, "100"), stat(NORMAL, "普通2", "100"), stat(NORMAL2, "普通3", "200")));
+        BomService bom = mock(BomService.class);
+        when(bom.getProductTypesWithBom(FACTORY)).thenReturn(List.of());
+        ProductionBatchRepository batchRepository = mock(ProductionBatchRepository.class);
+        when(batchRepository.findByFactoryIdAndCreatedAtBetween(eq(FACTORY), any(), any())).thenReturn(batches);
+        when(batchRepository.findByFactoryIdAndCreatedAtAfter(eq(FACTORY), any())).thenReturn(batches);
+        ProductTypeRepository productTypes = mock(ProductTypeRepository.class);
+        AIContextServiceImpl contexts = new AIContextServiceImpl(bom, reports, batchRepository, productTypes, scope);
+        ReportBomCostTool tool = new ReportBomCostTool();
+        ReflectionTestUtils.setField(tool, "bomService", bom);
+        ReflectionTestUtils.setField(tool, "aiContextService", contexts);
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        return tool;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void bomCostFactoryAnalysisTextAndTotalsLeaveOutTheProtectedProduct() throws Exception {
+        Map<String, Object> result = bomTool(protectedScope()).doExecute(FACTORY,
+                new HashMap<>(Map.of("analysisType", "detail", "includeZeroCost", true)), Map.of());
+
+        BigDecimal expected = BigDecimal.ZERO;
+        for (ProductionBatch b : batches) {
+            if (!SECRET.equals(b.getProductTypeId())) expected = expected.add(b.getTotalCost());
+        }
+        String text = (String) result.get("preformattedPrompt");
+        assertThat(text).contains("- 总成本: ¥" + expected.toPlainString(), "不含 1 个保密产品", "¥12.3456")
+                .doesNotContain(SECRET_COST.toPlainString(), "77.7777");
+        Map<String, Object> summary = (Map<String, Object>) result.get("summary");
+        assertThat((BigDecimal) summary.get("totalCost")).isEqualByComparingTo(expected);
+        assertThat((String) summary.get("note")).contains("不含 1 个保密产品");
+        Map<String, Object> rankings = (Map<String, Object>) result.get("rankings");
+        assertThat((List<String>) rankings.get("topByCost")).doesNotContain(SECRET_NAME);
+        List<Map<String, Object>> details = (List<Map<String, Object>>) result.get("productDetails");
+        Map<String, Object> secretRow = details.stream().filter(d -> SECRET.equals(d.get("productTypeId"))).findFirst().orElseThrow();
+        assertThat(secretRow.get("costWithheld")).isEqualTo(true);
+        assertThat(secretRow.get("avgActualUnitCost")).isNull();
+        assertThat(secretRow.get("totalCost")).isNull();
+    }
+
+    @Test
+    void bomCostNegativeControlShowsTheProductCostWhenNothingIsProtected() throws Exception {
+        Map<String, Object> result = bomTool(unprotectedScope()).doExecute(FACTORY,
+                new HashMap<>(Map.of("analysisType", "detail", "includeZeroCost", true)), Map.of());
+
+        assertThat((String) result.get("preformattedPrompt")).contains("¥77.7777", "¥13333.33");
+    }
+
+    @Test
+    void bomCostSingleProtectedProductReturnsNoCostAtAll() throws Exception {
+        ReportBomCostTool tool = bomTool(protectedScope());
+
+        Map<String, Object> secret = tool.doExecute(FACTORY, new HashMap<>(Map.of("productTypeId", SECRET)), Map.of());
+        Map<String, Object> normal = tool.doExecute(FACTORY, new HashMap<>(Map.of("productTypeId", NORMAL)), Map.of());
+
+        assertThat(secret.get("costWithheld")).isEqualTo(true);
+        assertThat(secret).doesNotContainKeys("actualCost", "bomCost", "trend");
+        assertThat(secret.toString()).doesNotContain("77.7777", SECRET_COST.toPlainString());
+        assertThat((String) normal.get("preformattedPrompt")).contains("¥12.3456");
+    }
+
+    // ---------------- SkuGrossMarginTool ----------------
+
+    private Map<String, Object> skuRow(String id, String name, String revenue, BigDecimal cost) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("product_type_id", id);
+        row.put("product_name", name);
+        row.put("revenue", new BigDecimal(revenue));
+        row.put("costed_revenue", new BigDecimal(revenue));
+        row.put("cost", cost);
+        row.put("costed_line_count", 2);
+        row.put("line_count", 2);
+        row.put("missing_price_line_count", 0);
+        row.put("zero_cost_line_count", 0);
+        return row;
+    }
+
+    private String skuMessage(ProcessSecretLlmCostScope scope) throws Exception {
+        List<Map<String, Object>> rows = List.of(skuRow(SECRET, SECRET_NAME, "9999.99", SECRET_COST),
+                skuRow(NORMAL, "普通甲", "3000.00", NORMAL_COST));
+        OperatingReportGrossMarginQuery query = mock(OperatingReportGrossMarginQuery.class);
+        when(query.fetch(eq(FACTORY), any(), any())).thenReturn(OperatingReportGrossMarginQuery.payload(rows, false));
+        ProductTypeRepository types = mock(ProductTypeRepository.class);
+        when(types.findByFactoryIdAndIsActiveTrue(FACTORY)).thenReturn(List.of());
+        SkuGrossMarginTool tool = new SkuGrossMarginTool();
+        ReflectionTestUtils.setField(tool, "realizedQuery", query);
+        ReflectionTestUtils.setField(tool, "productTypeRepository", types);
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        return (String) tool.doExecute(FACTORY, new HashMap<>(), Map.of()).get("message");
+    }
+
+    @Test
+    void skuMarginMessageDoesNotStateTheProtectedProductsCostOrMargin() throws Exception {
+        String message = skuMessage(protectedScope());
+
+        // 保密产品: 毛利 2222.22 / 毛利率 22.22% / 成本 7777.77 都不写; 普通产品照常 (阴性对照)
+        assertThat(message).contains(SECRET_NAME, ProcessSecretLlmCostScope.WITHHELD_REASON)
+                .doesNotContain(SECRET_COST.toPlainString(), "22.22%")
+                .contains("成本 ¥" + NORMAL_COST.toPlainString(), "58.85%");
+    }
+
+    @Test
+    void skuMarginNegativeControlStatesItWhenNothingIsProtected() throws Exception {
+        assertThat(skuMessage(unprotectedScope())).contains("成本 ¥" + SECRET_COST.toPlainString(), "22.22%");
+    }
+
+    // ---------------- ReportCostVarianceTool ----------------
+
+    private String varianceMessage(ProcessSecretLlmCostScope scope) throws Exception {
+        ReportService reports = mock(ReportService.class);
+        when(reports.getCostVarianceReport(eq(FACTORY), any(), any())).thenReturn(CostVarianceReportDTO.builder()
+                .comparable(false).totalActualCost(new BigDecimal("13333.33")).batchCount(3).build());
+        ReportCostVarianceTool tool = new ReportCostVarianceTool();
+        ReflectionTestUtils.setField(tool, "reportService", reports);
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        return (String) tool.doExecute(FACTORY, new HashMap<>(), Map.of()).get("message");
+    }
+
+    @Test
+    void costVarianceMessageLeavesOutTheFactoryTotalThatIncludesProtectedProducts() throws Exception {
+        assertThat(varianceMessage(protectedScope())).doesNotContain("13333.33").contains("批次数 3", "工艺保密");
+        assertThat(varianceMessage(unprotectedScope())).contains("实际总成本 ¥13333.33");
+    }
+
+    private static ProductionByProductDTO stat(String productTypeId, String name, String quantity) {
+        return ProductionByProductDTO.builder().productTypeId(productTypeId).productName(name)
+                .totalQuantity(new BigDecimal(quantity)).unit("kg").build();
+    }
+}
