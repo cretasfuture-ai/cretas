@@ -13,6 +13,7 @@ const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
   require('../scenarios/smartbi-factory-analysis-readonly'),
+  require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
@@ -136,6 +137,7 @@ async function runSuiteWithPage(page, options = {}) {
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
+        factoryCatalogFamilies: options.factoryCatalogFamilies,
         scenarioRef,
         mutationGuard,
         network,

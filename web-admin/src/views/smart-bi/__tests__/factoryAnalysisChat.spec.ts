@@ -41,7 +41,7 @@ vi.mock('../FactoryChartCanvas.vue', () => ({
   }),
 }));
 vi.mock('../FactoryChartDetails.vue', () => ({
-  default: defineComponent({ name: 'FactoryChartDetailsStub', template: '<div />' }),
+  default: defineComponent({ name: 'FactoryChartDetailsStub', props: ['refreshScope'], template: '<div />' }),
 }));
 vi.mock('@/components/smartbi/PeriodSelector.vue', () => ({
   default: defineComponent({ name: 'PeriodSelectorStub', template: '<div data-testid="period-selector-stub" />' }),
@@ -326,6 +326,17 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     expect(page!.text()).not.toContain('已核对产品甲的生产与质检来源。');
     expect(page!.findAll('[data-testid="rendered-factory-chart"]')).toHaveLength(0);
     expect(page!.findAll('button').some(button => button.text() === '按当前产品重试')).toBe(false);
+  });
+
+  it('keeps product-guided mode in the original detail refresh request', async () => {
+    const page = await mountChat();
+    h.post.mockResolvedValueOnce(response({ analysisSubject: 'sku-1' }));
+    await page!.get('[data-testid="factory-analysis-input"]').setValue('关联生产检验成本');
+    await page!.get('form.composer').trigger('submit');
+    await flushPromises();
+    await page!.find('.answer-chart .el-button').trigger('click');
+    const scope = page!.findComponent({ name: 'FactoryChartDetailsStub' }).props('refreshScope');
+    expect(scope.request).toMatchObject({ guided: true, use_ai: false, factory_id: 'F006', analysis_subject: 'sku-1' });
   });
 
   it('drops stale upload results after an identity epoch switch and unmounts raw details', async () => {

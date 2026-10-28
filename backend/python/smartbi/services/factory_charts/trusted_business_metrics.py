@@ -72,6 +72,62 @@ def _gap(source: str, key: str, title: str, missing: list[str]) -> dict[str, Any
     return {"id": key, "title": title, "missing": missing, "source": source}
 
 
+def _quantity_candidates(
+    frame: pd.DataFrame,
+    source: str,
+    request: Any,
+    key: str,
+    title: str,
+    domain: str,
+    value_column: str,
+    point_dimension: str,
+    *,
+    fact: str,
+    detail: str,
+    role: str,
+    limitations: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Build quantity candidates independently for each recorded unit.
+
+    The dataset remains the full trusted snapshot for detail registration, but
+    each candidate is keyed to one exact source unit.  That lets the existing
+    detail layer filter the snapshot by ``candidate.unit`` instead of treating
+    a mixed-unit quantity candidate as one comparable series.
+    """
+    if frame["数量单位"].isna().any() or frame["数量单位"].astype(str).str.strip().eq("").any():
+        return [], ["每个数量行必须有有效数量单位"]
+
+    candidates: list[dict[str, Any]] = []
+    normalized_units = frame["数量单位"].map(lambda value: str(value).strip())
+    normalized_frame = frame.assign(_normalized_quantity_unit=normalized_units)
+    for unit, unit_frame in normalized_frame.groupby("_normalized_quantity_unit", sort=True):
+        unit_frame = unit_frame.drop(columns=["_normalized_quantity_unit"])
+        points = [
+            (str(point), float(group[value_column].sum()))
+            for point, group in unit_frame.groupby(point_dimension, dropna=False)
+        ]
+        if not points:
+            continue
+        candidates.append(
+            _candidate(
+                unit_frame,
+                source,
+                request,
+                f"{key}@{unit}",
+                title,
+                domain,
+                unit,
+                points,
+                fact=fact,
+                detail=detail,
+                role=role,
+                limitations=limitations,
+                point_dimension=point_dimension,
+            )
+        )
+    return candidates, []
+
+
 def _numeric(frame: pd.DataFrame, column: str) -> pd.Series | None:
     if column not in frame:
         return None
@@ -165,18 +221,16 @@ def _purchase_lineage(frame: pd.DataFrame, source: str, request: Any, can_price:
     if not valid.all():
         return [], [_gap(source, "purchase.material_batch.receipt", title,
                           ["每行必须满足收货数量×已记录换算因子=库存快照=批次入库数量，且单位一致"])]
-    work = frame.copy()
-    points = [(str(material_unit), float(group["数量"].sum()))
-              for material_unit, group in work.groupby("物料（单位）", dropna=False)]
-    candidate = _candidate(
-        work, source, request, "purchase.material_batch.receipt", title, "采购", "数量", points,
+    candidates, unit_gaps = _quantity_candidates(
+        frame, source, request, "purchase.material_batch.receipt", title, "采购", "数量",
+        "物料（单位）",
         fact="purchase_receive_items.material_batch_id ↔ material_batches.source_doc_type/source_doc_id",
         detail="收货行与单个物料批次数量快照；不分摊采购金额或跨单位求和",
         role="quantity-read", limitations=["仅确认收货；数量快照守恒，未知换算不补推"],
-        point_dimension="物料（单位）",
-        detail_unit_policy="trusted_quantity_rows",
     )
-    return [candidate], []
+    if unit_gaps:
+        return [], [_gap(source, "purchase.material_batch.receipt", title, unit_gaps)]
+    return candidates, []
 
 
 def _shipment(frame: pd.DataFrame, source: str, request: Any, can_price: bool,
@@ -199,18 +253,16 @@ def _shipment(frame: pd.DataFrame, source: str, request: Any, can_price: bool,
     delivered = _numeric(frame, "发货数量")
     if quantity is None or delivered is None or quantity.le(0).any() or quantity.ne(delivered).any():
         return [], [_gap(source, "finished_goods.shipment", title, ["正发货数量"])]
-    work = frame.copy()
-    points = [(str(product_unit), float(group["数量"].sum()))
-              for product_unit, group in work.groupby("产品（单位）", dropna=False)]
-    candidate = _candidate(
-        work, source, request, "finished_goods.shipment", title, "库存", "数量", points,
+    candidates, unit_gaps = _quantity_candidates(
+        frame, source, request, "finished_goods.shipment", title, "库存", "数量",
+        "产品（单位）",
         fact="sales_delivery_items.finished_goods_batch_id OR sales_delivery_item_batch_allocations.finished_goods_batch_id",
         detail="按已记录发货关系；allocation先按发货行守恒，不作为销售金额分摊",
         role="quantity-read", limitations=["allocation合计必须等于申报发货数量；不做单位换算"],
-        point_dimension="产品（单位）",
-        detail_unit_policy="trusted_quantity_rows",
     )
-    return [candidate], []
+    if unit_gaps:
+        return [], [_gap(source, "finished_goods.shipment", title, unit_gaps)]
+    return candidates, []
 
 
 def _finished_goods(frame: pd.DataFrame, source: str, request: Any, can_price: bool,
@@ -235,18 +287,16 @@ def _finished_goods(frame: pd.DataFrame, source: str, request: Any, can_price: b
     if not valid.all() or frame["成品批次ID"].duplicated().any():
         return [], [_gap(source, "finished_goods.inventory.current", title,
                           ["每个当前批次必须满足生产−发货−预留=正可用余额且批次唯一"])]
-    work = frame.copy()
-    points = [(str(product_unit), float(group["数量"].sum()))
-              for product_unit, group in work.groupby("产品（单位）", dropna=False)]
-    candidate = _candidate(
-        work, source, request, "finished_goods.inventory.current", title, "库存", "数量", points,
+    candidates, unit_gaps = _quantity_candidates(
+        frame, source, request, "finished_goods.inventory.current", title, "库存", "数量",
+        "产品（单位）",
         fact="finished_goods_batches.produced_quantity − shipped_quantity − reserved_quantity",
         detail="仅当前AVAILABLE批次余额；不使用source_sales_order_id作外键、不重建历史余额",
         role="quantity-read", limitations=["当前快照，不代表历史期间库存；不同单位不相加"],
-        point_dimension="产品（单位）",
-        detail_unit_policy="trusted_quantity_rows",
     )
-    return [candidate], []
+    if unit_gaps:
+        return [], [_gap(source, "finished_goods.inventory.current", title, unit_gaps)]
+    return candidates, []
 
 
 def build(frame: pd.DataFrame, cols: dict[str, Any], request: Any, can_price: bool,

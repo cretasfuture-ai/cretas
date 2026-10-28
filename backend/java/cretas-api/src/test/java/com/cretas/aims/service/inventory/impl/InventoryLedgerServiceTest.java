@@ -2,6 +2,7 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.entity.enums.SnapshotType;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.InventoryLedgerSnapshot;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.stubbing.OngoingStubbing;
 
@@ -236,6 +238,32 @@ class InventoryLedgerServiceTest {
         // 期末 = 30 + 10 - 0 = 40
         assertEquals(0, new BigDecimal("40.000000").compareTo(line.getClosingQty()),
                 "期末 = 期初兜底30 + 入库10 = 40");
+    }
+
+    @Test
+    @DisplayName("入库聚合 JPQL 只允许 CONFIRMED 收货单")
+    void inboundQueriesRequireConfirmedReceiptStatus() {
+        when(materialTypeRepo.findByFactoryId(FACTORY_ID))
+                .thenReturn(List.of(buildMaterial(MAT_ID, "猪蹄", "kg")));
+        when(snapshotRepo.findLatestBeforePeriod(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(Collections.emptyList());
+
+        Query q = mock(Query.class);
+        when(q.setParameter(anyString(), any())).thenReturn(q);
+        when(q.getResultList()).thenReturn(List.of(BigDecimal.ZERO));
+        when(em.createQuery(anyString())).thenReturn(q);
+
+        service.getLedger(FACTORY_ID, START, END, MAT_ID);
+
+        ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(em, atLeastOnce()).createQuery(queryCaptor.capture());
+        List<String> inboundQueries = queryCaptor.getAllValues().stream()
+                .filter(query -> query.contains("FROM PurchaseReceiveItem i JOIN i.receiveRecord r"))
+                .toList();
+        assertEquals(2, inboundQueries.size(), "数量与金额聚合各一条入库 JPQL");
+        assertTrue(inboundQueries.stream().allMatch(query -> query.contains("r.status = :receiveStatus")),
+                "数量与金额都必须按收货单状态过滤");
+        verify(q, times(2)).setParameter("receiveStatus", PurchaseReceiveStatus.CONFIRMED);
     }
 
     @Test

@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -52,6 +53,8 @@ public class SmartBIDashboardController {
     // FIX-13 (Apr 16 2026): cache dashboard payload in smart_bi_pg_analysis_results
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.smartbi.postgres.SmartBiPgAnalysisResultRepository analysisResultRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.smartbi.postgres.SmartBiPgExcelUploadRepository pgUploadRepository;
 
     // Phase 9 Apr 24: SSE relay to Python /insights/custom/stream
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -471,6 +474,14 @@ public class SmartBIDashboardController {
 
         String cacheType = "dashboard_" + analysisType;  // 'dashboard_auto'
 
+        // Authorize the upload before touching the cache. A cache row keyed
+        // only by uploadId could otherwise disclose another factory's result.
+        if (!belongsToFactory(factoryId, uploadId)) {
+            log.warn("拒绝跨工厂动态分析: factoryId={}, uploadId={}", factoryId, uploadId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(ApiResponse.error("上传数据不属于当前工厂"));
+        }
+
         // Cache lookup — serve from DB cache indefinitely; upload data is
         // immutable (each upload_id is an append-only snapshot) so the
         // analysis result for a given (uploadId, analysisType) never goes
@@ -479,7 +490,8 @@ public class SmartBIDashboardController {
         final long CACHE_TTL_SECONDS = 7L * 24 * 60 * 60;
         if (!forceRefresh && analysisResultRepository != null) {
             try {
-                var cached = analysisResultRepository.findByUploadIdAndAnalysisType(uploadId, cacheType);
+                var cached = analysisResultRepository.findByFactoryIdAndUploadIdAndAnalysisType(
+                        factoryId, uploadId, cacheType);
                 if (cached.isPresent()) {
                     var row = cached.get();
                     long ageSec = java.time.Duration.between(row.getCreatedAt(), java.time.LocalDateTime.now()).getSeconds();
@@ -509,7 +521,8 @@ public class SmartBIDashboardController {
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.Map<String, Object> resultMap = cacheObjectMapper.convertValue(result, java.util.Map.class);
-                    var existing = analysisResultRepository.findByUploadIdAndAnalysisType(uploadId, cacheType);
+                    var existing = analysisResultRepository.findByFactoryIdAndUploadIdAndAnalysisType(
+                            factoryId, uploadId, cacheType);
                     var entity = existing.orElseGet(() ->
                             com.cretas.aims.entity.smartbi.postgres.SmartBiPgAnalysisResult.builder()
                                     .uploadId(uploadId).factoryId(factoryId).analysisType(cacheType).build());
@@ -530,6 +543,13 @@ public class SmartBIDashboardController {
     }
 
     // ==================== Helper Methods ====================
+
+    private boolean belongsToFactory(String factoryId, Long uploadId) {
+        return factoryId != null && uploadId != null && pgUploadRepository != null
+                && pgUploadRepository.findById(uploadId)
+                .map(upload -> factoryId.equals(upload.getFactoryId()))
+                .orElse(false);
+    }
 
     /**
      * Enrich unified dashboard with additional dimension data.

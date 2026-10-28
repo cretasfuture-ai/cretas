@@ -1,11 +1,19 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
+import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.FactoryType;
+import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.entity.enums.SnapshotType;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.InventoryLedgerSnapshot;
+import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
+import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.finance.AccountingPeriodRepository;
 import com.cretas.aims.repository.inventory.InventoryLedgerSnapshotRepository;
 import com.cretas.aims.service.inventory.InventoryLedgerService;
@@ -31,6 +39,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -171,6 +182,176 @@ class InventoryLedgerRepairTransactionContractTest {
             executor.shutdownNow();
             if (emf != null) factory.destroy();
             jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
+        }
+    }
+
+    @Test
+    void actualInboundAggregationIncludesOnlyConfirmedTenantDateAndLiveRows() throws Exception {
+        String url = System.getenv("SC28_REPAIR_PG_JDBC_URL");
+        assumeTrue(url != null && !url.isBlank(), "owned local PostgreSQL fixture required");
+        assertThat(url).matches("jdbc:postgresql://(?:localhost|127\\.0\\.0\\.1):55439/cretas_sc28_disposable_test");
+        String schema = "sc28_inbound_" + UUID.randomUUID().toString().replace("-", "");
+        DriverManagerDataSource source = new DriverManagerDataSource(url, "postgres", "");
+        JdbcTemplate jdbc = new JdbcTemplate(source);
+        jdbc.execute("CREATE SCHEMA " + schema);
+        LocalContainerEntityManagerFactoryBean factory = new LocalContainerEntityManagerFactoryBean();
+        EntityManagerFactory emf = null;
+        try {
+            factory.setDataSource(source);
+            factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+            factory.setPackagesToScan("com.cretas.aims.entity");
+            HashMap<String,Object> properties = new HashMap<>();
+            properties.put("hibernate.hbm2ddl.auto", "create-drop");
+            properties.put("hibernate.default_schema", schema);
+            properties.put("hibernate.show_sql", "false");
+            factory.setJpaPropertyMap(properties);
+            factory.afterPropertiesSet();
+            emf = factory.getObject();
+            assertThat(emf).isNotNull();
+            var em = SharedEntityManagerCreator.createSharedEntityManager(emf);
+            JpaTransactionManager transactions = new JpaTransactionManager(emf);
+            transactions.setDataSource(source);
+            TransactionTemplate tx = new TransactionTemplate(transactions);
+            seedInboundRows(tx, em);
+
+            var service = new InventoryLedgerServiceImpl(
+                    mock(InventoryLedgerSnapshotRepository.class),
+                    mock(RawMaterialTypeRepository.class),
+                    mock(AccountingPeriodRepository.class),
+                    mock(MaterialBatchRepository.class));
+            var entityManagerField = InventoryLedgerServiceImpl.class.getDeclaredField("em");
+            entityManagerField.setAccessible(true);
+            entityManagerField.set(service, em);
+
+            BigDecimal qty = tx.execute(status -> invokeInbound(service, "aggregateInboundQty"));
+            BigDecimal amount = tx.execute(status -> invokeInbound(service, "aggregateInboundAmount"));
+            assertThat(qty).isEqualByComparingTo("1");
+            assertThat(amount).isEqualByComparingTo("10.00");
+        } finally {
+            if (emf != null) factory.destroy();
+            jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
+        }
+    }
+
+    private static void seedInboundRows(TransactionTemplate tx, jakarta.persistence.EntityManager em) {
+        tx.executeWithoutResult(status -> {
+            Factory f006 = factory("F006", "Inbound F006");
+            Factory f007 = factory("F007", "Inbound F007");
+            em.persist(f006);
+            em.persist(f007);
+            User u006 = user("inbound-f006", "F006");
+            User u007 = user("inbound-f007", "F007");
+            em.persist(u006);
+            em.persist(u007);
+            em.flush();
+            em.persist(supplier("SUP-F006", "F006", u006.getId()));
+            em.persist(supplier("SUP-F007", "F007", u007.getId()));
+            RawMaterialType material = new RawMaterialType();
+            material.setId("RMT-INBOUND");
+            material.setFactoryId("F006");
+            material.setCode("RMT-INBOUND");
+            material.setName("inbound test salt");
+            material.setUnit("kg");
+            em.persist(material);
+            em.flush();
+
+            persistReceipt(em, "confirmed", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.CONFIRMED, LocalDate.of(2026, 10, 10),
+                    BigDecimal.ONE, new BigDecimal("10"), null);
+            persistReceipt(em, "draft", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.DRAFT, LocalDate.of(2026, 10, 10),
+                    new BigDecimal("5"), new BigDecimal("20"), null);
+            persistReceipt(em, "pending", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.PENDING_QC, LocalDate.of(2026, 10, 10),
+                    new BigDecimal("6"), new BigDecimal("30"), null);
+            persistReceipt(em, "rejected", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.REJECTED, LocalDate.of(2026, 10, 10),
+                    new BigDecimal("7"), new BigDecimal("40"), null);
+            persistReceipt(em, "cancelled", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.CANCELLED, LocalDate.of(2026, 10, 10),
+                    new BigDecimal("8"), new BigDecimal("50"), null);
+            persistReceipt(em, "other-factory", "F007", "SUP-F007", u007.getId(),
+                    PurchaseReceiveStatus.CONFIRMED, LocalDate.of(2026, 10, 10),
+                    new BigDecimal("9"), new BigDecimal("60"), null);
+            persistReceipt(em, "out-of-range", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.CONFIRMED, LocalDate.of(2026, 9, 30),
+                    new BigDecimal("10"), new BigDecimal("70"), null);
+            persistReceipt(em, "soft-deleted", "F006", "SUP-F006", u006.getId(),
+                    PurchaseReceiveStatus.CONFIRMED, LocalDate.of(2026, 10, 10),
+                    new BigDecimal("11"), new BigDecimal("80"), LocalDateTime.now());
+        });
+    }
+
+    private static Factory factory(String id, String name) {
+        Factory factory = new Factory();
+        factory.setId(id);
+        factory.setName(name);
+        factory.setType(FactoryType.FACTORY);
+        factory.setLevel(0);
+        factory.setIsActive(true);
+        factory.setManuallyVerified(false);
+        factory.setAiWeeklyQuota(20);
+        return factory;
+    }
+
+    private static User user(String username, String factoryId) {
+        User user = new User();
+        user.setFactoryId(factoryId);
+        user.setUsername(username);
+        user.setPasswordHash("test-hash");
+        user.setIsActive(true);
+        return user;
+    }
+
+    private static Supplier supplier(String id, String factoryId, Long createdBy) {
+        Supplier supplier = new Supplier();
+        supplier.setId(id);
+        supplier.setFactoryId(factoryId);
+        supplier.setCode(id);
+        supplier.setSupplierCode(id);
+        supplier.setName(id);
+        supplier.setCreatedBy(createdBy);
+        supplier.setVersion(0L);
+        supplier.setIsActive(true);
+        return supplier;
+    }
+
+    private static void persistReceipt(jakarta.persistence.EntityManager em, String id, String factoryId,
+                                       String supplierId, Long receivedBy, PurchaseReceiveStatus status,
+                                       LocalDate date, BigDecimal quantity, BigDecimal unitPrice,
+                                       LocalDateTime deletedAt) {
+        PurchaseReceiveRecord record = new PurchaseReceiveRecord();
+        record.setId("receipt-" + id);
+        record.setFactoryId(factoryId);
+        record.setReceiveNumber("RN-" + id);
+        record.setSupplierId(supplierId);
+        record.setReceiveDate(date);
+        record.setStatus(status);
+        record.setReceivedBy(receivedBy);
+        record.setDeletedAt(deletedAt);
+        record.setTotalAmount(quantity.multiply(unitPrice));
+        em.persist(record);
+        PurchaseReceiveItem item = new PurchaseReceiveItem();
+        item.setReceiveRecordId(record.getId());
+        item.setMaterialTypeId("RMT-INBOUND");
+        item.setReceivedQuantity(quantity);
+        item.setUnit("kg");
+        item.setPriceUnit("kg");
+        item.setUnitPrice(unitPrice);
+        em.persist(item);
+    }
+
+    private static BigDecimal invokeInbound(InventoryLedgerServiceImpl service, String methodName) {
+        try {
+            Method method = InventoryLedgerServiceImpl.class.getDeclaredMethod(
+                    methodName, String.class, String.class, LocalDate.class, LocalDate.class);
+            method.setAccessible(true);
+            return (BigDecimal) method.invoke(service, "F006", "RMT-INBOUND",
+                    LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException(e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
         }
     }
 

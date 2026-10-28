@@ -66,6 +66,43 @@ test('uploaded-joint assessment requires exact IDs, one candidate, five rows, KP
   assert.equal(overall.fullPass, false);
 });
 
+test('uploaded-joint export is an independent opt-in gate and requires all three formats', () => {
+  const expected = scenario.validateUploadedJointOptions({ uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, subjectId: 'QA-SC28-SKU-001' });
+  const period = { year: 2026, periodType: 'all', startMonth: 1, endMonth: 12, label: '全部历史' };
+  const body = {
+    data: {
+      source: 'upload', uploadId: 5278, jointUploads: { inspectionUploadId: 5277, costUploadId: 5279 },
+      analysisSubject: 'QA-SC28-SKU-001', contextId: 'ctx-upload', period,
+      recommendations: [{ analysis: { familyId: 'production.inspection_fused' }, kpis: [{ value: 500 }, { value: '96%' }, { value: '95%' }, { value: '6,250' }], tableData: { rows: [1, 2, 3, 4, 5] } }],
+    },
+  };
+  const base = {
+    initial: { body: { data: { subjects: Array.from({ length: 100 }, (_, i) => ({ id: `s-${i}` })), period } }, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279 } },
+    selected: { body, request: { source: 'upload', uploadId: 5278, inspectionUploadId: 5277, costUploadId: 5279, analysisSubject: 'QA-SC28-SKU-001' } },
+    followup: { body, request: { question: '再看质量', contextId: 'ctx-upload' } },
+    details: { attempted: true, success: true, total: 5 }, expected,
+  };
+  const formats = ['excel', 'pdf', 'ppt'].map((format) => ({ format, attempted: true, buttonFound: true, downloadStarted: true, httpStatus: 200, saved: true, success: true, fileName: `uploaded-${format}` }));
+  const fullExport = scenario.summarizeExportResults(formats);
+  const pass = scenario.assessUploadedJoint({ ...base, exportAttempt: fullExport });
+  assert.equal(pass.result, 'PASS');
+  assert.equal(pass.checks.uploadedJointExportAttempted, true);
+  assert.equal(pass.checks.uploadedJointExportSucceeded, true);
+  assert.equal(pass.uploadedJointExport.formats.excel.httpStatus, 200);
+
+  const missing = scenario.assessUploadedJoint({ ...base, exportAttempt: { attempted: false, success: false, formats: {} } });
+  assert.equal(missing.result, 'PARTIAL_DEFECT');
+  assert.equal(missing.checks.uploadedJointExportAttempted, false);
+  assert.equal(missing.uploadedJointExportSucceeded, false);
+
+  const failed = scenario.assessUploadedJoint({ ...base, exportAttempt: scenario.summarizeExportResults([
+    formats[0], { ...formats[1], httpStatus: 422, success: false }, formats[2],
+  ]) });
+  assert.equal(failed.result, 'PARTIAL_DEFECT');
+  assert.equal(failed.checks.uploadedJointExportSucceeded, false);
+  assert.equal(failed.uploadedJointExport.formats.pdf.httpStatus, 422);
+});
+
 function response(status, data, request) {
   return {
     summary: scenario.summaryFromResponse(status, { success: true, data }, request),

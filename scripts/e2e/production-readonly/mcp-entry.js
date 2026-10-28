@@ -829,8 +829,15 @@ function installNetworkRecorder(context, options = {}) {
   const pending = new Set();
   const extractors = options.responseExtractors || [];
 
+  const observedApi = (url) => {
+    try {
+      const path = splitUrl(url).pathname;
+      return path.startsWith('/api/mobile/') || path.startsWith('/smartbi-api/');
+    } catch { return false; }
+  };
+
   const onRequest = (request) => {
-    if (!request.url().includes('/api/mobile/')) return;
+    if (!observedApi(request.url())) return;
     started.set(request, {
       at: Date.now(),
       payload: summarizePayload(parsePostData(request)),
@@ -839,7 +846,7 @@ function installNetworkRecorder(context, options = {}) {
 
   const onResponse = (response) => {
     const request = response.request();
-    if (!request.url().includes('/api/mobile/')) return;
+    if (!observedApi(request.url())) return;
     const task = (async () => {
       const start = started.get(request);
       let body = null;
@@ -866,7 +873,7 @@ function installNetworkRecorder(context, options = {}) {
   };
 
   const onRequestFailed = (request) => {
-    if (!request.url().includes('/api/mobile/')) return;
+    if (!observedApi(request.url())) return;
     const errorText = request.failure()?.errorText || 'request failed';
     // Requests aborted by the mutation guard are represented in the guard's
     // blockedMutationAttempts collection, not duplicated as HTTP failures.
@@ -983,6 +990,7 @@ const { pathnameOf } = require('./url-utils');
 
 const SCENARIOS = [
   require('../scenarios/smartbi-factory-analysis-readonly'),
+  require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
@@ -1106,6 +1114,7 @@ async function runSuiteWithPage(page, options = {}) {
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
+        factoryCatalogFamilies: options.factoryCatalogFamilies,
         scenarioRef,
         mutationGuard,
         network,
@@ -3371,6 +3380,470 @@ module.exports = {
 };
 
 },
+    "scenarios/smartbi-catalog-matrix-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const PATH = '/smart-bi/analysis-hub?tab=factory';
+const RECOMMENDATIONS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations';
+const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
+const EXPORTS = [
+  { key: 'excel', label: 'Excel', button: '导出当前显示图表 Excel', path: '/smartbi-api/api/smartbi/financial-dashboard/export-excel', extension: 'xlsx' },
+  { key: 'pdf', label: 'PDF', button: '导出当前显示图表 PDF', path: '/smartbi-api/api/smartbi/financial-dashboard/export-pdf', extension: 'pdf' },
+  { key: 'ppt', label: 'PPT', button: '导出当前显示图表 PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
+];
+const MAX_FAMILIES = 4;
+const MAX_OPTION_FAMILIES = 60;
+const STEP_TIMEOUT_MS = 30_000;
+const TOTAL_TIMEOUT_MS = 10 * 60_000;
+
+function testId(page, id) { return page.locator(`[data-testid="${String(id).replace(/"/gu, '\\"')}"]`); }
+
+function endpointPath(url) {
+  try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
+}
+
+function normalizedPath(url) { return endpointPath(url).replace(/\/$/u, ''); }
+
+function isRecommendationsResponse(response) {
+  return response.request().method() === 'POST' && normalizedPath(response.url()) === RECOMMENDATIONS_PATH;
+}
+
+function isDetailsResponse(response) {
+  return response.request().method() === 'POST' && normalizedPath(response.url()) === DETAILS_PATH;
+}
+
+function isExportResponse(response, format) {
+  const item = typeof format === 'string' ? EXPORTS.find((entry) => entry.key === format) : format;
+  return response.request().method() === 'POST' && Boolean(item)
+    && normalizedPath(response.url()) === item.path;
+}
+
+function requestBody(response) {
+  try { return response.request().postDataJSON() || {}; } catch { return {}; }
+}
+
+async function responseBody(response) {
+  return response ? response.json().catch(() => ({})) : {};
+}
+
+function familyOf(candidate) {
+  return String(candidate?.analysis?.familyId || candidate?.familyId || candidate?.id || '').trim() || null;
+}
+
+function familyLabelOf(candidate) {
+  return String(candidate?.analysis?.familyLabel || candidate?.title || familyOf(candidate) || '').trim() || null;
+}
+
+function isRestaurantOnly(candidate) {
+  const domain = String(candidate?.domain || candidate?.analysis?.domain || '').toLowerCase();
+  const family = String(candidate?.analysis?.familyId || candidate?.familyId || '').toLowerCase();
+  const sourceKey = String(candidate?.sourceKey || candidate?.analysis?.sourceKey || '').toLowerCase();
+  return domain === 'restaurant' || domain === '餐饮' || family.startsWith('restaurant.')
+    || family.startsWith('餐饮.') || sourceKey === 'restaurant' || sourceKey.startsWith('restaurant.');
+}
+
+function validateCatalogFamilies(value) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) throw new Error('factoryCatalogFamilies must be an array of family IDs');
+  if (value.length > MAX_OPTION_FAMILIES) throw new Error(`factoryCatalogFamilies must contain at most ${MAX_OPTION_FAMILIES} IDs`);
+  const result = value.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('factoryCatalogFamilies contains an empty family ID');
+    return entry.trim();
+  });
+  if (new Set(result).size !== result.length) throw new Error('factoryCatalogFamilies contains duplicate family IDs');
+  return result;
+}
+
+function groupCandidates(candidates) {
+  const groups = new Map();
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const id = familyOf(candidate);
+    if (!id) continue;
+    if (!groups.has(id)) groups.set(id, {
+      familyId: id,
+      familyLabel: familyLabelOf(candidate) || id,
+      candidates: [],
+    });
+    groups.get(id).candidates.push(candidate);
+  }
+  return [...groups.values()];
+}
+
+function candidateIsQualified(candidate) {
+  return Boolean(candidate?.id && candidate?.source && candidate?.chart
+    && typeof candidate.chart === 'object' && candidate?.analysis?.familyId
+    && candidate?.detailStatus?.state !== 'unavailable' && candidate?.detailStatus?.state !== 'capacity');
+}
+
+function candidateUnitsAligned(candidate) {
+  const unit = String(candidate?.unit || '').trim();
+  if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
+  const factUnits = (Array.isArray(candidate?.kpis) ? candidate.kpis : [])
+    .map((fact) => String(fact?.unit || '').trim()).filter(Boolean);
+  return factUnits.every((factUnit) => factUnit === unit);
+}
+
+function selectCatalogCandidates(data, requestedFamilies) {
+  const candidates = Array.isArray(data?.recommendations) ? data.recommendations : [];
+  const groups = groupCandidates(candidates);
+  const available = new Set(groups.map((group) => group.familyId));
+  const requested = requestedFamilies || groups.map((group) => group.familyId);
+  const requestedUnknown = requested.filter((family) => !available.has(family));
+  const excluded = [];
+  const blocked = [];
+  const eligibleGroups = groups.filter((group) => requested.includes(group.familyId)).map((group) => {
+    const sorted = [...group.candidates];
+    const restaurantOnly = sorted.filter(isRestaurantOnly);
+    if (restaurantOnly.length) excluded.push(...restaurantOnly.map((candidate) => ({
+      familyId: group.familyId,
+      familyLabel: group.familyLabel,
+      candidateId: candidate.id,
+      reason: 'restaurant-only',
+    })));
+    const candidate = sorted.find((item) => !isRestaurantOnly(item) && candidateIsQualified(item));
+    if (!candidate) {
+      const blockedCandidate = sorted.find((item) => !isRestaurantOnly(item));
+      blocked.push({
+        familyId: group.familyId,
+        familyLabel: group.familyLabel,
+        candidateId: blockedCandidate?.id || null,
+        reason: blockedCandidate?.detailStatus?.state || 'candidate-not-qualified',
+      });
+      return null;
+    }
+    return { familyId: group.familyId, familyLabel: group.familyLabel, candidate };
+  }).filter(Boolean);
+  // Families are covered in batches of four by inspectCatalog. Keep the
+  // explicit 60-family run bound, but never hide the remainder from the
+  // assessment.
+  const selected = eligibleGroups.slice(0, MAX_OPTION_FAMILIES);
+  const deferred = eligibleGroups.slice(MAX_OPTION_FAMILIES).map((item) => ({
+    familyId: item.familyId, familyLabel: item.familyLabel, candidateId: item.candidate.id, reason: 'family-limit-60',
+  }));
+  return { selected, deferred, blocked, excluded, requestedUnknown };
+}
+
+function detailPeriod(data) {
+  return data?.period?.label || null;
+}
+
+function summarizeExportIds(body) {
+  const ids = [];
+  for (const chart of Array.isArray(body?.charts) ? body.charts : []) {
+    const id = chart?.id || chart?.candidate_id;
+    if (id) ids.push(String(id));
+  }
+  for (const id of Array.isArray(body?.selected_ids) ? body.selected_ids : []) if (id) ids.push(String(id));
+  return [...new Set(ids)];
+}
+
+function compactDetail(response, body, candidate, expectedPeriod) {
+  const data = body?.data;
+  return {
+    attempted: Boolean(response),
+    httpStatus: response ? response.status() : null,
+    success: Boolean(response && response.status() === 200 && body?.success === true),
+    candidateId: data?.candidateId || null,
+    factoryId: data?.factoryId || null,
+    source: data?.source || null,
+    period: data?.period || null,
+    rowTotal: Number.isFinite(data?.total) ? data.total : null,
+    rowsPresent: Array.isArray(data?.rows),
+    scopeMatches: Boolean(data?.candidateId === candidate.id && data?.source === candidate.source
+      && data?.period === expectedPeriod && Array.isArray(data?.rows)),
+  };
+}
+
+function checkFailures(checks) {
+  return Object.entries(checks).filter(([, value]) => value !== true).map(([key]) => key);
+}
+
+function assessCatalog({ families, requestedUnknown, deferred, excluded, eligibilityGaps = [], sourceErrors = [], remainingFamilyCount = 0, ui }) {
+  const familyPass = families.length > 0 && families.every((item) => item.status === 'PASS');
+  const result = familyPass && requestedUnknown.length === 0 && sourceErrors.length === 0
+    && deferred.length === 0 && remainingFamilyCount === 0 ? 'PASS' : 'UNVERIFIED';
+  const rootCauseClass = result === 'PASS' ? 'none'
+    : ui?.missing ? 'frontend'
+      : ui?.httpFailure ? 'backend'
+        : 'data';
+  return {
+    result,
+    rootCauseClass,
+    fullPass: result === 'PASS',
+    selectedFamilyCount: families.length,
+    familyCount: families.length,
+    coveredFamilyCount: families.filter((item) => item.status === 'PASS').length,
+    failedFamilyCount: families.filter((item) => item.status !== 'PASS').length,
+    remainingFamilyCount,
+    requestedUnknown,
+    deferredFamilies: deferred,
+    excludedFamilies: excluded,
+    eligibilityGaps,
+    sourceErrors,
+    checkFailures: [
+      ...families.flatMap((item) => item.checkFailures.map((key) => `${item.familyId}.${key}`)),
+      ...deferred.map((item) => `deferred.${item.familyId}`),
+      ...sourceErrors.map((item) => `source.${item.source || 'unknown'}`),
+    ],
+  };
+}
+
+function remainingTimeout(deadline) {
+  return Math.max(1, Math.min(STEP_TIMEOUT_MS, deadline - Date.now()));
+}
+
+async function waitResponse(page, predicate, deadline) {
+  return page.waitForResponse(predicate, { timeout: remainingTimeout(deadline) });
+}
+
+async function captureExport(page, format, inspectCtx, deadline) {
+  const result = { format: format.key, buttonFound: false, downloadStarted: false, httpStatus: null, filename: null, saved: false, candidateIds: [], success: false };
+  const button = page.locator('button:visible').filter({ hasText: format.button }).first();
+  result.buttonFound = await button.count() > 0;
+  if (!result.buttonFound) return result;
+  try {
+    const responsePromise = waitResponse(page, (response) => isExportResponse(response, format), deadline).catch(() => null);
+    const downloadPromise = page.waitForEvent('download', { timeout: remainingTimeout(deadline) }).catch(() => null);
+    await button.click();
+    const [response, download] = await Promise.all([responsePromise, downloadPromise]);
+    result.httpStatus = response ? response.status() : null;
+    result.candidateIds = summarizeExportIds(response ? requestBody(response) : {});
+    result.downloadStarted = Boolean(download);
+    result.filename = download ? download.suggestedFilename() : null;
+    if (download && inspectCtx.evidenceDir && result.filename) {
+      try {
+        await download.saveAs(`${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/${result.filename}`);
+        result.saved = true;
+      } catch {}
+    }
+    result.success = result.downloadStarted && result.httpStatus === 200
+      && (!inspectCtx.evidenceDir || result.saved);
+  } catch {}
+  return result;
+}
+
+async function chooseBrowseMode(page, deadline) {
+  const mode = testId(page, 'factory-chart-mode');
+  if (!await mode.count()) return false;
+  const browse = mode.locator('button, label').filter({ hasText: '按分类浏览' }).first();
+  if (!await browse.count()) return false;
+  await browse.click();
+  await testId(page, 'factory-chart-selection').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  return true;
+}
+
+async function clearBrowseSelection(page) {
+  const rows = testId(page, 'factory-chart-family');
+  const count = await rows.count();
+  for (let index = 0; index < count; index += 1) {
+    const checkbox = rows.nth(index).locator('input[type="checkbox"]').first();
+    if (await checkbox.count() && await checkbox.isChecked().catch(() => false)) {
+      await checkbox.click().catch(() => {});
+    }
+  }
+}
+
+async function selectFamilyInBrowse(page, familyId, candidate, deadline) {
+  const escapedFamilyId = String(familyId).replace(/"/gu, '\\"');
+  const rows = page.locator(`[data-testid="factory-chart-family"][data-family-id="${escapedFamilyId}"]`);
+  // The family id is the server identity. The label is presentation-only and
+  // may be duplicated across domains or sources.
+  if (!await rows.count()) return false;
+  const row = rows.first();
+  const checkbox = row.locator('input[type="checkbox"]').first();
+  if (await checkbox.count() && !(await checkbox.isChecked().catch(() => false))) await checkbox.check().catch(() => {});
+  const variant = row.locator('.el-select').first();
+  if (await variant.count()) {
+    await variant.click().catch(() => {});
+    const option = page.locator('.el-select-dropdown__item:visible').filter({ hasText: String(candidate.unit) }).first();
+    if (await option.count()) await option.click().catch(() => {});
+  }
+  await page.waitForTimeout(50);
+  return true;
+}
+
+async function inspectCatalog(page, _body, inspectCtx) {
+  if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory catalog acceptance is limited to F006');
+  const startedAt = Date.now();
+  const deadline = startedAt + TOTAL_TIMEOUT_MS;
+  const optionValue = inspectCtx.factoryCatalogFamilies || inspectCtx.options?.factoryCatalogFamilies;
+  const requestedFamilies = validateCatalogFamilies(optionValue);
+  const ui = { browseVisible: false, missing: false, httpFailure: false };
+
+  await testId(page, 'factory-chart-guide').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) }).catch(() => {});
+  const refresh = testId(page, 'factory-chart-refresh');
+  let recommendationResponse = null;
+  if (await refresh.count()) {
+    const pending = waitResponse(page, isRecommendationsResponse, deadline).catch(() => null);
+    await refresh.click().catch(() => {});
+    recommendationResponse = await pending;
+  }
+  if (!recommendationResponse) ui.httpFailure = true;
+  const body = await responseBody(recommendationResponse);
+  const data = body?.data || {};
+  const selected = selectCatalogCandidates(data, requestedFamilies);
+  const browse = await chooseBrowseMode(page, deadline).catch(() => false);
+  ui.browseVisible = browse;
+  if (!browse) ui.missing = true;
+
+  const families = selected.blocked.map((item) => ({
+    familyId: item.familyId,
+    family: item.familyLabel,
+    candidateId: item.candidateId,
+    unit: null,
+    source: null,
+    period: detailPeriod(data),
+    facts: [],
+    rowTotal: null,
+    filenames: [],
+    exportCoverage: [],
+    http: { recommendation: recommendationResponse?.status() || null, detail: null, exports: {} },
+    checks: { familySelected: false, cardRendered: false, chartRendered: false, factsPresent: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
+    checkFailures: ['candidateQualified'],
+    status: 'UNVERIFIED',
+    blockedReason: item.reason,
+  }));
+  const exports = [];
+  const processedFamilyIds = new Set();
+  const batches = [];
+  for (let index = 0; index < selected.selected.length; index += MAX_FAMILIES) {
+    batches.push(selected.selected.slice(index, index + MAX_FAMILIES));
+  }
+  let batchNumber = 0;
+  for (const batch of batches) {
+    if (Date.now() >= deadline) break;
+    batchNumber += 1;
+    await clearBrowseSelection(page);
+    const batchFamilies = [];
+    for (const item of batch) {
+      if (Date.now() >= deadline) break;
+      const candidate = item.candidate;
+      const summary = {
+        familyId: item.familyId,
+        family: item.familyLabel,
+        candidateId: candidate.id,
+        unit: candidate.unit || null,
+        source: candidate.source || null,
+        period: detailPeriod(data),
+        facts: Array.isArray(candidate.kpis) ? candidate.kpis.slice(0, 20).map((fact) => ({ label: fact?.label || null, value: fact?.value ?? null, unit: fact?.unit || null })) : [],
+        rowTotal: null,
+        filenames: [],
+        exportCoverage: [],
+        http: { recommendation: recommendationResponse?.status() || null, detail: null, exports: {} },
+        checks: { familySelected: false, cardRendered: false, chartRendered: false, unitAligned: false, factsPresent: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
+        checkFailures: [],
+        status: 'UNVERIFIED',
+        batch: batchNumber,
+      };
+      summary.checks.unitAligned = candidateUnitsAligned(candidate);
+      summary.checks.factsPresent = summary.facts.length > 0;
+      summary.checks.familySelected = await selectFamilyInBrowse(page, item.familyId, candidate, deadline).catch(() => false);
+      const card = testId(page, `factory-chart-card-${candidate.id}`).first();
+      summary.checks.cardRendered = await card.count() > 0 && await card.isVisible().catch(() => false);
+      if (!summary.checks.cardRendered) {
+        await testId(page, 'factory-chart-guide-generate').click().catch(() => {});
+        summary.checks.cardRendered = await card.isVisible().catch(() => false);
+      }
+      summary.checks.chartRendered = summary.checks.cardRendered && await card.locator('.factory-chart-canvas canvas').count() > 0;
+
+      if (summary.checks.cardRendered) {
+    const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true }).first();
+        if (await detailsButton.count()) {
+          const recommendationRefresh = candidate.detailContext
+            ? Promise.resolve(null)
+            : waitResponse(page, isRecommendationsResponse, deadline).catch(() => null);
+          const detailsResponsePromise = waitResponse(page, isDetailsResponse, deadline).catch(() => null);
+          await detailsButton.click().catch(() => {});
+          const refreshed = await recommendationRefresh;
+          const detailsResponse = await detailsResponsePromise;
+          const detailBody = await responseBody(detailsResponse);
+          const detail = compactDetail(detailsResponse, detailBody, candidate, detailPeriod(data));
+          summary.http.detail = detail.httpStatus;
+          summary.rowTotal = detail.rowTotal;
+          summary.checks.detailHttp = detail.success;
+          summary.checks.detailScope = detail.scopeMatches;
+          summary.checks.detailRows = detail.rowsPresent && detail.rowTotal > 0;
+          if (refreshed && refreshed.status() !== 200) ui.httpFailure = true;
+        }
+        if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
+      }
+      batchFamilies.push(summary);
+    }
+    if (batchFamilies.length && Date.now() < deadline) {
+      const result = await captureExport(page, EXPORTS[0], inspectCtx, deadline);
+      exports.push({ batch: batchNumber, ...result });
+      for (const family of batchFamilies) {
+        if (result.success && result.candidateIds.includes(family.candidateId)) {
+          family.exportCoverage.push(result.format);
+          family.filenames.push(result.filename);
+        }
+        family.http.exports[result.format] = result.httpStatus;
+      }
+    }
+    for (const family of batchFamilies) {
+      family.checks.exportAtLeastOne = family.exportCoverage.length > 0;
+      family.checkFailures = checkFailures(family.checks);
+      family.status = family.checkFailures.length ? 'UNVERIFIED' : 'PASS';
+      families.push(family);
+      processedFamilyIds.add(family.familyId);
+    }
+  }
+  const eligibilityGaps = Array.isArray(data.unavailable) ? data.unavailable.map((item) => ({
+    id: item?.id || null,
+    title: item?.title || null,
+    missing: Array.isArray(item?.missing) ? item.missing.slice(0, 12) : [],
+  })) : [];
+  const sourceErrors = Array.isArray(data.sourceErrors) ? data.sourceErrors.map((item) => ({
+    source: item?.source || null,
+    message: item?.message || null,
+  })) : [];
+  const remainingFamilyCount = selected.selected.filter((item) => !processedFamilyIds.has(item.familyId)).length;
+  const assessment = assessCatalog({ families, requestedUnknown: selected.requestedUnknown, deferred: selected.deferred, excluded: selected.excluded, eligibilityGaps, sourceErrors, remainingFamilyCount, ui });
+  return {
+    assessment,
+    ...assessment,
+    families,
+    exports,
+    eligibilityGaps,
+    sourceErrors,
+    ui,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
+async function run(ctx) {
+  return runReadOnlyPageScenario(ctx, {
+    id: 'smartbi-catalog-matrix-readonly',
+    path: PATH,
+    landmarks: ['工厂分析', '按分类浏览'],
+    timeoutMs: 60_000,
+    appMountTimeoutMs: 90_000,
+    inspect: inspectCatalog,
+  });
+}
+
+module.exports = {
+  id: 'smartbi-catalog-matrix-readonly',
+  defaultEnabled: false,
+  run,
+  inspectCatalog,
+  assessCatalog,
+  candidateIsQualified,
+  candidateUnitsAligned,
+  familyOf,
+  groupCandidates,
+  isRestaurantOnly,
+  selectCatalogCandidates,
+  summarizeExportIds,
+  validateCatalogFamilies,
+  isRecommendationsResponse,
+  isDetailsResponse,
+  isExportResponse,
+};
+
+},
     "scenarios/smartbi-factory-analysis-lifecycle.js": function(module, exports, require) {
 'use strict';
 
@@ -3668,22 +4141,24 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
       });
     }
     if (expiry.state === 'expired') {
-      const card = page.getByTestId(`factory-chart-card-${initialCandidate.id}`).first();
-      const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true });
-      const detailsControl = await detailsButton.count()
-        ? detailsButton
-        : card.locator('button').filter({ hasText: '查看原始明细' }).first();
-      const detailsFallback = await detailsControl.count() ? detailsControl : card.locator('button').first();
-      if (await detailsFallback.count()) {
+      let refreshVisible = false;
+      let recommendationRefreshObserved = false;
+      let phaseReason = 'expired-card-not-found';
+      let recovery = { pass: false, reason: 'missing-expired-detail-button', checks: {} };
+      try {
+        const card = page.getByTestId(`factory-chart-card-${initialCandidate.id}`).first();
+        const detailsButton = card.locator('button:visible').filter({ hasText: '查看原始明细' }).first();
+        const detailsFallback = await detailsButton.count()
+          ? detailsButton
+          : card.getByTestId('factory-analysis-detail-button');
+        if (!await detailsFallback.count()) throw new Error('expired-card-not-visible');
         await detailsFallback.click();
         // Expiry is fail-closed in the UI before a request is sent; wait for
         // the visible recovery action rather than a nonexistent detail call.
-        const refreshButton = page.getByRole('button', { name: '重新获取原始明细', exact: true });
-        const refreshControl = await refreshButton.count()
-          ? refreshButton
-          : page.locator('button').filter({ hasText: '重新获取原始明细' }).first();
-        const refreshFallback = await refreshControl.count() ? refreshControl : page.locator('.el-drawer:visible button').first();
-        let refreshVisible = false;
+        const refreshControl = page.locator('button:visible').filter({ hasText: '重新获取原始明细' }).first();
+        const refreshFallback = await refreshControl.count()
+          ? refreshControl
+          : page.locator('[data-testid="factory-analysis-refresh-button"]:visible').first();
         try {
           await refreshFallback.waitFor({ state: 'visible', timeout: 30_000 });
           refreshVisible = true;
@@ -3698,33 +4173,27 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
           const detailResponsePromise = page.waitForResponse(isDetailsResponse, { timeout: 30_000 }).catch(() => null);
           await refreshFallback.click();
           const recommendationResponse = await recommendationResponsePromise;
+          recommendationRefreshObserved = true;
           refreshed = await responseBody(recommendationResponse);
           const detailResponseAfterRefresh = await detailResponsePromise;
           refreshedDetail = detailResponseAfterRefresh ? await responseBody(detailResponseAfterRefresh) : null;
         }
-        const recovery = validateRefresh({
+        recovery = validateRefresh({
           original: initialCandidate,
           refreshed: refreshed || { success: false, data: {} },
           detail: refreshedDetail,
           baseline,
           originalDetail: initialDetail,
         });
-        expiry = { ...expiry, refreshVisible, recovery, oldDetail: initialDetail?.data || null };
+        phaseReason = recovery.pass ? 'expiry-refresh-recovered' : recovery.dataChanged ? 'expiry-refresh-data-changed' : 'expiry-refresh-check-failed';
         if (recovery.pass && await page.locator('.el-drawer:visible').count()) {
           screenshots.push(await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-lifecycle-recovered'));
         }
         if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
-      } else {
-        const fallbackDetailsButton = page.locator('button').filter({ hasText: '查看原始明细' }).first();
-        if (await fallbackDetailsButton.count()) {
-          await fallbackDetailsButton.click();
-          const refreshButton = page.getByRole('button', { name: '重新获取原始明细', exact: true });
-          try { await refreshButton.waitFor({ state: 'visible', timeout: 30_000 }); } catch {}
-          expiry = { ...expiry, refreshVisible: await refreshButton.count() > 0, recovery: { pass: false, reason: 'expired-card-identity-not-found' } };
-        } else {
-          expiry = { ...expiry, refreshVisible: false, recovery: { pass: false, reason: 'missing-expired-detail-button' } };
-        }
+      } catch (error) {
+        phaseReason = error?.message === 'expired-card-not-visible' ? 'expired-card-not-visible' : 'expiry-refresh-click-or-request-failed';
       }
+      expiry = { ...expiry, refreshVisible, recommendationRefreshObserved, phaseReason, recovery, oldDetail: initialDetail?.data || null };
     }
   }
 
@@ -3732,6 +4201,10 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
   const roundsPass = rounds.length === FOLLOWUP_ROUNDS && rounds.every((round) => round.pass);
   const recoveryPass = !waitForNaturalExpiry || (expiry?.state === 'expired' && expiry.recovery?.pass === true);
   const naturalChange = expiry?.recovery?.dataChanged === true;
+  const checkFailKeys = [
+    ...rounds.flatMap((round) => Object.entries(round.checks || {}).filter(([, value]) => value !== true).map(([key]) => `round${round.round}.${key}`)),
+    ...Object.entries(expiry?.recovery?.checks || {}).filter(([, value]) => value !== true).map(([key]) => `expiry.${key}`),
+  ];
   return {
     enabled: true,
     result: roundsPass && recoveryPass ? 'PASS' : naturalChange ? 'UNVERIFIED_DATA_CHANGED' : 'UNVERIFIED',
@@ -3745,6 +4218,10 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
     lifecycleExpiryRecovered: recoveryPass,
     lifecycleContextIds: [currentContextId, ...rounds.flatMap((round) => [round.requestContextId, round.responseContextId])].filter(Boolean),
     idsCreatedCount: new Set([currentContextId, ...rounds.flatMap((round) => [round.requestContextId, round.responseContextId])].filter(Boolean)).size,
+    refreshVisible: expiry?.refreshVisible === true,
+    recommendationRefreshObserved: expiry?.recommendationRefreshObserved === true,
+    phaseReason: expiry?.phaseReason || (waitForNaturalExpiry ? expiry?.reason || 'expiry-not-run' : 'expiry-disabled'),
+    checkFailKeys,
     durationMs: Date.now() - startedAt,
   };
 }
@@ -3814,7 +4291,7 @@ function candidateHasExpectedKpis(candidate, expectedKpis) {
   return Object.values(expectedKpis).every((value, index) => values[index] === parse(value));
 }
 
-function assessUploadedJoint({ initial, selected, followup, details, expected }) {
+function assessUploadedJoint({ initial, selected, followup, details, expected, exportAttempt }) {
   const selectedData = selected?.body?.data || {};
   const candidate = (selectedData.recommendations || [])[0];
   const rows = candidate?.tableData?.rows;
@@ -3844,6 +4321,13 @@ function assessUploadedJoint({ initial, selected, followup, details, expected })
       && Object.keys(followupRequest).sort().join(',') === 'contextId,question',
     followupResponseExactIds: exactJointUploads(followup?.body?.data, expected),
   };
+  // The uploaded-joint export gate is opt-in so legacy callers and fixtures
+  // retain their prior contract. When supplied, it is independent from the
+  // business-joint export and is required for an uploaded-joint PASS.
+  if (exportAttempt !== undefined) {
+    checks.uploadedJointExportAttempted = exportAttempt?.attempted === true;
+    checks.uploadedJointExportSucceeded = exportAttempt?.success === true;
+  }
   const pass = Object.values(checks).every(Boolean);
   return {
     result: pass ? 'PASS' : 'PARTIAL_DEFECT',
@@ -3855,6 +4339,14 @@ function assessUploadedJoint({ initial, selected, followup, details, expected })
     period: selectedData.period || null,
     candidateCount: Array.isArray(selectedData.recommendations) ? selectedData.recommendations.length : 0,
     rowCount: Array.isArray(rows) ? rows.length : 0,
+    uploadedJointExportAttempted: exportAttempt === undefined ? null : exportAttempt?.attempted === true,
+    uploadedJointExportSucceeded: exportAttempt === undefined ? null : exportAttempt?.success === true,
+    uploadedJointExportFormats: exportAttempt === undefined ? null : exportAttempt?.formats || {},
+    uploadedJointExport: exportAttempt === undefined ? null : {
+      attempted: exportAttempt?.attempted === true,
+      success: exportAttempt?.success === true,
+      formats: exportAttempt?.formats || {},
+    },
     note: pass ? 'Explicit three-upload UI selection, metadata, subject, bounded candidate, original details, KPI, and context-only follow-up passed.' : 'Optional explicit three-upload acceptance was attempted but one or more grounded UI/API checks failed.',
   };
 }
@@ -4307,6 +4799,7 @@ async function run(ctx) {
       }
 
       let uploadedJointAssessment = null;
+      let uploadedJointExport = { attempted: false, success: false, formats: {} };
       if (uploadedJoint) {
         const uploadedPath = `${inspectCtx.baseUrl}${PATH}&source=upload&upload_id=${uploadedJoint.uploadId}&inspection_upload_id=${uploadedJoint.inspectionUploadId}&cost_upload_id=${uploadedJoint.costUploadId}`;
         await page.goto(uploadedPath, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -4360,9 +4853,19 @@ async function run(ctx) {
               if (uploadedDetails.success) await page.keyboard.press('Escape').catch(() => {});
             }
           }
+          const positiveFused = uploadedSelected.body?.data?.recommendations?.filter(isFusedCandidate) || [];
+          const uploadedSubjectMatches = uploadedSelected.body?.data?.analysisSubject === uploadedJoint.subjectId;
+          if (positiveFused.length === 1 && uploadedSubjectMatches) {
+            const uploadedAnswer = page.locator('.turn.turn--assistant:visible').last();
+            uploadedJointExport = await downloadExportFormats(
+              page,
+              uploadedAnswer,
+              inspectCtx.evidenceDir,
+              'smartbi-factory-analysis-uploaded-joint',
+            );
+          }
           if (inspectCtx.factoryAnalysisLifecycle || inspectCtx.options?.factoryAnalysisLifecycle) {
-            const positiveFused = uploadedSelected.body?.data?.recommendations?.filter(isFusedCandidate) || [];
-            if (positiveFused.length === 1 && uploadedSelected.body?.data?.analysisSubject === uploadedJoint.subjectId) {
+            if (positiveFused.length === 1 && uploadedSubjectMatches) {
               lifecycle = await runFactoryAnalysisLifecycle(
                 page,
                 inspectCtx,
@@ -4392,9 +4895,9 @@ async function run(ctx) {
             }
           });
           uploadedFollowup = { attempted: true, body: await responseBody(followupResponse), request: requestBody(followupResponse) };
-          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint });
+          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint, exportAttempt: uploadedJointExport });
         } else {
-          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint });
+          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint, exportAttempt: uploadedJointExport });
         }
       }
       const assessment = assess({
@@ -4436,11 +4939,19 @@ async function run(ctx) {
           .map((item) => ({ unit: item.unit, headers: item.tableData?.headers, rows: item.tableData?.rows })),
         jointExportFormats: jointExport.formats,
         uploadedJoint: uploadedJointAssessment,
+        uploadedJointExport,
+        uploadedJointExportAttempted: uploadedJointAssessment?.uploadedJointExportAttempted ?? null,
+        uploadedJointExportSucceeded: uploadedJointAssessment?.uploadedJointExportSucceeded ?? null,
+        uploadedJointExportFormats: uploadedJointAssessment?.uploadedJointExportFormats || {},
         lifecycle,
         lifecycleRoundsPassed: lifecycle.lifecycleRoundsPassed ?? null,
         lifecycleExpiryRecovered: lifecycle.lifecycleExpiryRecovered ?? null,
         lifecycleContextIds: lifecycle.lifecycleContextIds || [],
         idsCreatedCount: lifecycle.idsCreatedCount ?? null,
+        refreshVisible: lifecycle.refreshVisible ?? null,
+        recommendationRefreshObserved: lifecycle.recommendationRefreshObserved ?? null,
+        phaseReason: lifecycle.phaseReason || null,
+        checkFailKeys: lifecycle.checkFailKeys || [],
         screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : []), ...(jointScreenshot ? [jointScreenshot] : []), ...(lifecycle.screenshots || [])],
       };
     },

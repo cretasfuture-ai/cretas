@@ -29,9 +29,10 @@ function answer(contextId = 'ctx-initial', detail = candidate) {
 function pageHtml() {
   return `<!doctype html><html><body>
     <article class="turn turn--assistant"><div class="followups"><button class="el-button">再看质量</button></div>
-      <div data-testid="factory-chart-card-${candidate.id}"><button>查看原始明细</button></div>
+      <div data-testid="factory-chart-card-${candidate.id}"><button data-testid="factory-analysis-detail-button">查看原始明细</button></div>
     </article>
-    <div class="el-drawer" style="display:none"><button>重新获取原始明细</button><div class="details-table-wrap">旧行</div></div>
+    <div class="el-drawer old-turn" style="display:none"><button data-testid="factory-analysis-refresh-button">重新获取原始明细</button><div class="details-table-wrap">旧旧行</div></div>
+    <div class="el-drawer" style="display:none"><button data-testid="factory-analysis-refresh-button">重新获取原始明细</button><div class="details-table-wrap">旧行</div></div>
     <script>
       let contextId = 'ctx-initial'; let round = 0;
       const button = document.querySelector('.followups button');
@@ -98,6 +99,10 @@ test('lifecycle fixture follows the real recommendation refresh endpoint and res
     expect(result.result).toBe('PASS');
     expect(result.lifecycleRoundsPassed).toBe(true);
     expect(result.lifecycleExpiryRecovered).toBe(true);
+    expect(result.refreshVisible).toBe(true);
+    expect(result.recommendationRefreshObserved).toBe(true);
+    expect(result.phaseReason).toBe('expiry-refresh-recovered');
+    expect(result.checkFailKeys).toEqual([]);
     expect(result.screenshots).toHaveLength(2);
     expect(result.idsCreatedCount).toBeGreaterThanOrEqual(2);
     const refresh = requests.find((item) => item.path === '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations');

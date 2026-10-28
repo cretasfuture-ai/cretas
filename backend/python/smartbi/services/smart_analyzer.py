@@ -266,8 +266,15 @@ class FieldMapper:
             "role": "measure",
             "data_type": "numeric"
         },
+        # Unit is a categorical semantic field, not a monetary unit price.
+        # Keep the exact Chinese alias ahead of fuzzy substring matching.
+        "product_unit": {
+            "candidates": ["单位", "计量单位", "product_unit", "unit"],
+            "role": "dimension",
+            "data_type": "text"
+        },
         "price": {
-            "candidates": ["单价", "价格", "price", "unit price"],
+            "candidates": ["单价", "价格", "price", "unit price", "unit_price", "price_per_unit", "unit cost"],
             "role": "measure",
             "data_type": "numeric"
         },
@@ -356,9 +363,26 @@ class FieldMapper:
 
             # 遍历标准字段寻找匹配 (排除已多次使用的字段)
             if not best_match:
+                # Exact aliases must win over the legacy bidirectional
+                # substring matcher (e.g. 单位 must never become unit_price).
+                exact_alias = next(
+                    (name for name, definition in self.STANDARD_FIELDS.items()
+                     if any(candidate.lower() == col_name_lower
+                            for candidate in definition["candidates"])),
+                    None,
+                )
+                if exact_alias is not None:
+                    best_match = exact_alias
+                    best_confidence = 0.95
+
+            if not best_match:
                 for std_name, std_def in self.STANDARD_FIELDS.items():
                     # 跳过已使用的单次字段
                     if std_name in used_standards and std_name not in multi_allowed:
+                        continue
+                    # Unit is valid only as an exact alias. Fuzzy matching
+                    # would turn unit_price/units_sold into a unit dimension.
+                    if std_name == "product_unit":
                         continue
 
                     for candidate in std_def["candidates"]:

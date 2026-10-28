@@ -5,6 +5,7 @@ import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.write.metadata.WriteSheet;
 import com.cretas.aims.dto.inventory.InventoryLedgerLineDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.entity.enums.SnapshotType;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.InventoryLedgerSnapshot;
@@ -601,11 +602,13 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 "FROM PurchaseReceiveItem i JOIN i.receiveRecord r " +
                 "WHERE r.factoryId = :fid AND i.materialTypeId = :mid " +
                 "  AND r.receiveDate BETWEEN :start AND :end " +
+                "  AND r.status = :receiveStatus " +
                 "  AND r.deletedAt IS NULL AND i.deletedAt IS NULL")
                 .setParameter("fid", factoryId)
                 .setParameter("mid", materialTypeId)
                 .setParameter("start", start)
                 .setParameter("end", end)
+                .setParameter("receiveStatus", PurchaseReceiveStatus.CONFIRMED)
                 .getResultList();
         return result.isEmpty() ? ZERO : toBD(result.get(0));
     }
@@ -618,12 +621,14 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 "FROM PurchaseReceiveItem i JOIN i.receiveRecord r " +
                 "WHERE r.factoryId = :fid AND i.materialTypeId = :mid " +
                 "  AND r.receiveDate BETWEEN :start AND :end " +
+                "  AND r.status = :receiveStatus " +
                 "  AND r.deletedAt IS NULL AND i.deletedAt IS NULL " +
                 "  AND i.unitPrice IS NOT NULL")
                 .setParameter("fid", factoryId)
                 .setParameter("mid", materialTypeId)
                 .setParameter("start", start)
                 .setParameter("end", end)
+                .setParameter("receiveStatus", PurchaseReceiveStatus.CONFIRMED)
                 .getResultList();
         Object val = result.isEmpty() ? null : result.get(0);
         return val == null ? null : toBD(val).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);

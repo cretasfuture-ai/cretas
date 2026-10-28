@@ -227,10 +227,14 @@ Please answer concisely and professionally, within 200 words.
     // ==================== 系统提示词 ====================
 
     private static final String SYSTEM_PROMPT_ZH = "你是一个专业的数据分析师。请根据提供的数据生成简洁、专业、有洞察力的分析结论。" +
-            "分析应结合数据特点，提供具体的数字和百分比，避免泛泛而谈。使用中文回答。";
+            "分析应结合数据特点，提供具体的数字和百分比，避免泛泛而谈。使用中文回答。" +
+            "严格遵守数据事实：只能使用 analysisFacts 或输入数据明确给出的单位；不得把 kg/g 等单位改写成件。" +
+            "没有损耗单价或显式损耗金额时，不得估算损耗金额；没有历史、预算或明确行业基准时，不得判定结构失衡或提出百分比目标。" +
+            "可能原因必须写成待核查假设，并列出需要补充的证据。";
 
     private static final String SYSTEM_PROMPT_EN = "You are a professional data analyst. Please generate concise, professional, and insightful analysis based on the provided data. " +
-            "The analysis should include specific numbers and percentages, avoiding vague statements. Answer in English.";
+            "The analysis should include specific numbers and percentages, avoiding vague statements. Answer in English. " +
+            "Use only units explicitly present in the data; do not convert kg/g to pieces. Do not estimate loss cost without an explicit loss amount or unit price. Do not assert an unhealthy structure or target percentage without a supplied historical, budget, or industry benchmark. Label possible causes as hypotheses requiring verification.";
 
     // ==================== 字段检测关键词 ====================
 

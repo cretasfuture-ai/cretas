@@ -111,22 +111,24 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
       });
     }
     if (expiry.state === 'expired') {
-      const card = page.getByTestId(`factory-chart-card-${initialCandidate.id}`).first();
-      const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true });
-      const detailsControl = await detailsButton.count()
-        ? detailsButton
-        : card.locator('button').filter({ hasText: '查看原始明细' }).first();
-      const detailsFallback = await detailsControl.count() ? detailsControl : card.locator('button').first();
-      if (await detailsFallback.count()) {
+      let refreshVisible = false;
+      let recommendationRefreshObserved = false;
+      let phaseReason = 'expired-card-not-found';
+      let recovery = { pass: false, reason: 'missing-expired-detail-button', checks: {} };
+      try {
+        const card = page.getByTestId(`factory-chart-card-${initialCandidate.id}`).first();
+        const detailsButton = card.locator('button:visible').filter({ hasText: '查看原始明细' }).first();
+        const detailsFallback = await detailsButton.count()
+          ? detailsButton
+          : card.getByTestId('factory-analysis-detail-button');
+        if (!await detailsFallback.count()) throw new Error('expired-card-not-visible');
         await detailsFallback.click();
         // Expiry is fail-closed in the UI before a request is sent; wait for
         // the visible recovery action rather than a nonexistent detail call.
-        const refreshButton = page.getByRole('button', { name: '重新获取原始明细', exact: true });
-        const refreshControl = await refreshButton.count()
-          ? refreshButton
-          : page.locator('button').filter({ hasText: '重新获取原始明细' }).first();
-        const refreshFallback = await refreshControl.count() ? refreshControl : page.locator('.el-drawer:visible button').first();
-        let refreshVisible = false;
+        const refreshControl = page.locator('button:visible').filter({ hasText: '重新获取原始明细' }).first();
+        const refreshFallback = await refreshControl.count()
+          ? refreshControl
+          : page.locator('[data-testid="factory-analysis-refresh-button"]:visible').first();
         try {
           await refreshFallback.waitFor({ state: 'visible', timeout: 30_000 });
           refreshVisible = true;
@@ -141,33 +143,27 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
           const detailResponsePromise = page.waitForResponse(isDetailsResponse, { timeout: 30_000 }).catch(() => null);
           await refreshFallback.click();
           const recommendationResponse = await recommendationResponsePromise;
+          recommendationRefreshObserved = true;
           refreshed = await responseBody(recommendationResponse);
           const detailResponseAfterRefresh = await detailResponsePromise;
           refreshedDetail = detailResponseAfterRefresh ? await responseBody(detailResponseAfterRefresh) : null;
         }
-        const recovery = validateRefresh({
+        recovery = validateRefresh({
           original: initialCandidate,
           refreshed: refreshed || { success: false, data: {} },
           detail: refreshedDetail,
           baseline,
           originalDetail: initialDetail,
         });
-        expiry = { ...expiry, refreshVisible, recovery, oldDetail: initialDetail?.data || null };
+        phaseReason = recovery.pass ? 'expiry-refresh-recovered' : recovery.dataChanged ? 'expiry-refresh-data-changed' : 'expiry-refresh-check-failed';
         if (recovery.pass && await page.locator('.el-drawer:visible').count()) {
           screenshots.push(await screenshotRedacted(inspectCtx, page, 'smartbi-factory-analysis-lifecycle-recovered'));
         }
         if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
-      } else {
-        const fallbackDetailsButton = page.locator('button').filter({ hasText: '查看原始明细' }).first();
-        if (await fallbackDetailsButton.count()) {
-          await fallbackDetailsButton.click();
-          const refreshButton = page.getByRole('button', { name: '重新获取原始明细', exact: true });
-          try { await refreshButton.waitFor({ state: 'visible', timeout: 30_000 }); } catch {}
-          expiry = { ...expiry, refreshVisible: await refreshButton.count() > 0, recovery: { pass: false, reason: 'expired-card-identity-not-found' } };
-        } else {
-          expiry = { ...expiry, refreshVisible: false, recovery: { pass: false, reason: 'missing-expired-detail-button' } };
-        }
+      } catch (error) {
+        phaseReason = error?.message === 'expired-card-not-visible' ? 'expired-card-not-visible' : 'expiry-refresh-click-or-request-failed';
       }
+      expiry = { ...expiry, refreshVisible, recommendationRefreshObserved, phaseReason, recovery, oldDetail: initialDetail?.data || null };
     }
   }
 
@@ -175,6 +171,10 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
   const roundsPass = rounds.length === FOLLOWUP_ROUNDS && rounds.every((round) => round.pass);
   const recoveryPass = !waitForNaturalExpiry || (expiry?.state === 'expired' && expiry.recovery?.pass === true);
   const naturalChange = expiry?.recovery?.dataChanged === true;
+  const checkFailKeys = [
+    ...rounds.flatMap((round) => Object.entries(round.checks || {}).filter(([, value]) => value !== true).map(([key]) => `round${round.round}.${key}`)),
+    ...Object.entries(expiry?.recovery?.checks || {}).filter(([, value]) => value !== true).map(([key]) => `expiry.${key}`),
+  ];
   return {
     enabled: true,
     result: roundsPass && recoveryPass ? 'PASS' : naturalChange ? 'UNVERIFIED_DATA_CHANGED' : 'UNVERIFIED',
@@ -188,6 +188,10 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
     lifecycleExpiryRecovered: recoveryPass,
     lifecycleContextIds: [currentContextId, ...rounds.flatMap((round) => [round.requestContextId, round.responseContextId])].filter(Boolean),
     idsCreatedCount: new Set([currentContextId, ...rounds.flatMap((round) => [round.requestContextId, round.responseContextId])].filter(Boolean)).size,
+    refreshVisible: expiry?.refreshVisible === true,
+    recommendationRefreshObserved: expiry?.recommendationRefreshObserved === true,
+    phaseReason: expiry?.phaseReason || (waitForNaturalExpiry ? expiry?.reason || 'expiry-not-run' : 'expiry-disabled'),
+    checkFailKeys,
     durationMs: Date.now() - startedAt,
   };
 }
@@ -257,7 +261,7 @@ function candidateHasExpectedKpis(candidate, expectedKpis) {
   return Object.values(expectedKpis).every((value, index) => values[index] === parse(value));
 }
 
-function assessUploadedJoint({ initial, selected, followup, details, expected }) {
+function assessUploadedJoint({ initial, selected, followup, details, expected, exportAttempt }) {
   const selectedData = selected?.body?.data || {};
   const candidate = (selectedData.recommendations || [])[0];
   const rows = candidate?.tableData?.rows;
@@ -287,6 +291,13 @@ function assessUploadedJoint({ initial, selected, followup, details, expected })
       && Object.keys(followupRequest).sort().join(',') === 'contextId,question',
     followupResponseExactIds: exactJointUploads(followup?.body?.data, expected),
   };
+  // The uploaded-joint export gate is opt-in so legacy callers and fixtures
+  // retain their prior contract. When supplied, it is independent from the
+  // business-joint export and is required for an uploaded-joint PASS.
+  if (exportAttempt !== undefined) {
+    checks.uploadedJointExportAttempted = exportAttempt?.attempted === true;
+    checks.uploadedJointExportSucceeded = exportAttempt?.success === true;
+  }
   const pass = Object.values(checks).every(Boolean);
   return {
     result: pass ? 'PASS' : 'PARTIAL_DEFECT',
@@ -298,6 +309,14 @@ function assessUploadedJoint({ initial, selected, followup, details, expected })
     period: selectedData.period || null,
     candidateCount: Array.isArray(selectedData.recommendations) ? selectedData.recommendations.length : 0,
     rowCount: Array.isArray(rows) ? rows.length : 0,
+    uploadedJointExportAttempted: exportAttempt === undefined ? null : exportAttempt?.attempted === true,
+    uploadedJointExportSucceeded: exportAttempt === undefined ? null : exportAttempt?.success === true,
+    uploadedJointExportFormats: exportAttempt === undefined ? null : exportAttempt?.formats || {},
+    uploadedJointExport: exportAttempt === undefined ? null : {
+      attempted: exportAttempt?.attempted === true,
+      success: exportAttempt?.success === true,
+      formats: exportAttempt?.formats || {},
+    },
     note: pass ? 'Explicit three-upload UI selection, metadata, subject, bounded candidate, original details, KPI, and context-only follow-up passed.' : 'Optional explicit three-upload acceptance was attempted but one or more grounded UI/API checks failed.',
   };
 }
@@ -750,6 +769,7 @@ async function run(ctx) {
       }
 
       let uploadedJointAssessment = null;
+      let uploadedJointExport = { attempted: false, success: false, formats: {} };
       if (uploadedJoint) {
         const uploadedPath = `${inspectCtx.baseUrl}${PATH}&source=upload&upload_id=${uploadedJoint.uploadId}&inspection_upload_id=${uploadedJoint.inspectionUploadId}&cost_upload_id=${uploadedJoint.costUploadId}`;
         await page.goto(uploadedPath, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -803,9 +823,19 @@ async function run(ctx) {
               if (uploadedDetails.success) await page.keyboard.press('Escape').catch(() => {});
             }
           }
+          const positiveFused = uploadedSelected.body?.data?.recommendations?.filter(isFusedCandidate) || [];
+          const uploadedSubjectMatches = uploadedSelected.body?.data?.analysisSubject === uploadedJoint.subjectId;
+          if (positiveFused.length === 1 && uploadedSubjectMatches) {
+            const uploadedAnswer = page.locator('.turn.turn--assistant:visible').last();
+            uploadedJointExport = await downloadExportFormats(
+              page,
+              uploadedAnswer,
+              inspectCtx.evidenceDir,
+              'smartbi-factory-analysis-uploaded-joint',
+            );
+          }
           if (inspectCtx.factoryAnalysisLifecycle || inspectCtx.options?.factoryAnalysisLifecycle) {
-            const positiveFused = uploadedSelected.body?.data?.recommendations?.filter(isFusedCandidate) || [];
-            if (positiveFused.length === 1 && uploadedSelected.body?.data?.analysisSubject === uploadedJoint.subjectId) {
+            if (positiveFused.length === 1 && uploadedSubjectMatches) {
               lifecycle = await runFactoryAnalysisLifecycle(
                 page,
                 inspectCtx,
@@ -835,9 +865,9 @@ async function run(ctx) {
             }
           });
           uploadedFollowup = { attempted: true, body: await responseBody(followupResponse), request: requestBody(followupResponse) };
-          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint });
+          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint, exportAttempt: uploadedJointExport });
         } else {
-          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint });
+          uploadedJointAssessment = assessUploadedJoint({ initial: uploadedInitial, selected: uploadedSelected, followup: uploadedFollowup, details: uploadedDetails, expected: uploadedJoint, exportAttempt: uploadedJointExport });
         }
       }
       const assessment = assess({
@@ -879,11 +909,19 @@ async function run(ctx) {
           .map((item) => ({ unit: item.unit, headers: item.tableData?.headers, rows: item.tableData?.rows })),
         jointExportFormats: jointExport.formats,
         uploadedJoint: uploadedJointAssessment,
+        uploadedJointExport,
+        uploadedJointExportAttempted: uploadedJointAssessment?.uploadedJointExportAttempted ?? null,
+        uploadedJointExportSucceeded: uploadedJointAssessment?.uploadedJointExportSucceeded ?? null,
+        uploadedJointExportFormats: uploadedJointAssessment?.uploadedJointExportFormats || {},
         lifecycle,
         lifecycleRoundsPassed: lifecycle.lifecycleRoundsPassed ?? null,
         lifecycleExpiryRecovered: lifecycle.lifecycleExpiryRecovered ?? null,
         lifecycleContextIds: lifecycle.lifecycleContextIds || [],
         idsCreatedCount: lifecycle.idsCreatedCount ?? null,
+        refreshVisible: lifecycle.refreshVisible ?? null,
+        recommendationRefreshObserved: lifecycle.recommendationRefreshObserved ?? null,
+        phaseReason: lifecycle.phaseReason || null,
+        checkFailKeys: lifecycle.checkFailKeys || [],
         screenshots: [screenshotBeforeInteraction, ...(screenshotAfterDetails ? [screenshotAfterDetails] : []), ...(jointScreenshot ? [jointScreenshot] : []), ...(lifecycle.screenshots || [])],
       };
     },

@@ -99,7 +99,7 @@ function variant(group: AnalysisFamily, id: string) { emit('selection', replaceF
     </template>
     <div v-else class="selection-panel" data-testid="factory-chart-selection">
       <el-input v-model="search" clearable placeholder="搜索分析主题" aria-label="搜索分析主题" class="family-search" />
-      <div v-for="group in searchedFamilies" :key="group.id" class="family-row" data-testid="factory-chart-family">
+      <div v-for="group in searchedFamilies" :key="group.id" :data-family-id="group.id" class="family-row" data-testid="factory-chart-family">
         <el-checkbox :model-value="selected(group)" @update:model-value="toggle(group, $event)">{{ group.label }}</el-checkbox>
         <span class="family-domain">{{ group.domain }}</span>
         <el-select :model-value="chosen(group)" :aria-label="`${group.label}的画法与单位`" size="small" @update:model-value="variant(group, $event)">

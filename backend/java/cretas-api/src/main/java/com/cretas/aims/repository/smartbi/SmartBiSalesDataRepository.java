@@ -129,6 +129,9 @@ public interface SmartBiSalesDataRepository extends JpaRepository<SmartBiSalesDa
      */
     List<SmartBiSalesData> findByUploadId(Long uploadId);
 
+    /** Query one upload without allowing a colliding upload ID from another factory. */
+    List<SmartBiSalesData> findByFactoryIdAndUploadId(String factoryId, Long uploadId);
+
     /**
      * 删除指定上传ID关联的销售数据
      *

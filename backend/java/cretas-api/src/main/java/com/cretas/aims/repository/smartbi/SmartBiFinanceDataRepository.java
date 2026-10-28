@@ -87,6 +87,9 @@ public interface SmartBiFinanceDataRepository extends JpaRepository<SmartBiFinan
      */
     List<SmartBiFinanceData> findByUploadId(Long uploadId);
 
+    /** Query one upload without allowing a colliding upload ID from another factory. */
+    List<SmartBiFinanceData> findByFactoryIdAndUploadId(String factoryId, Long uploadId);
+
     /**
      * 删除指定上传ID关联的财务数据
      *

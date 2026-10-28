@@ -450,7 +450,7 @@ export default function FactoryAnalysisChatScreen({ route }: Props) {
     };
     setDetailLoadingId(item.id);
     setDetailError(null);
-    void getFactoryRecommendations(buildRecommendationRequest(data.source, periodSnapshot, true, true, uploadId, false, analysisSubject, [item.id], expectedInspectionUploadId, expectedCostUploadId)).then(response => {
+    void getFactoryRecommendations(buildRecommendationRequest(data.source, periodSnapshot, true, false, uploadId, true, analysisSubject, [item.id], expectedInspectionUploadId, expectedCostUploadId)).then(response => {
       if (!mounted.current || requestToken !== detailRequestToken.current || requestScope !== scopeKeyRef.current || currentAuth !== authEpoch()) return;
       if (!response.success || !response.data) throw new Error(response.message || '原始明细暂不可用');
       const refreshed = response.data.recommendations.find(candidate => candidate.id === item.id);

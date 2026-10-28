@@ -34,8 +34,15 @@ function installNetworkRecorder(context, options = {}) {
   const pending = new Set();
   const extractors = options.responseExtractors || [];
 
+  const observedApi = (url) => {
+    try {
+      const path = splitUrl(url).pathname;
+      return path.startsWith('/api/mobile/') || path.startsWith('/smartbi-api/');
+    } catch { return false; }
+  };
+
   const onRequest = (request) => {
-    if (!request.url().includes('/api/mobile/')) return;
+    if (!observedApi(request.url())) return;
     started.set(request, {
       at: Date.now(),
       payload: summarizePayload(parsePostData(request)),
@@ -44,7 +51,7 @@ function installNetworkRecorder(context, options = {}) {
 
   const onResponse = (response) => {
     const request = response.request();
-    if (!request.url().includes('/api/mobile/')) return;
+    if (!observedApi(request.url())) return;
     const task = (async () => {
       const start = started.get(request);
       let body = null;
@@ -71,7 +78,7 @@ function installNetworkRecorder(context, options = {}) {
   };
 
   const onRequestFailed = (request) => {
-    if (!request.url().includes('/api/mobile/')) return;
+    if (!observedApi(request.url())) return;
     const errorText = request.failure()?.errorText || 'request failed';
     // Requests aborted by the mutation guard are represented in the guard's
     // blockedMutationAttempts collection, not duplicated as HTTP failures.
