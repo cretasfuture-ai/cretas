@@ -161,9 +161,12 @@ public class UpdateIntentTool extends AbstractTool {
             String factoryId = getFactoryId(context);
 
             // 2. 查找现有意图配置
-            Optional<AIIntentConfig> existingIntentOpt = aiIntentService.getIntentByCode(factoryId, intentCode);
+            // getIntentByCode 本厂没有时会退回平台级行; 只许改本厂自己的行 —— 平台级行对所有工厂可见,
+            // 工厂的 AI 对话改了它就是改了别家的识别 (复审 M-A, Steve 2026-10-29)
+            Optional<AIIntentConfig> existingIntentOpt = aiIntentService.getIntentByCode(factoryId, intentCode)
+                    .filter(row -> ownFactoryRow(factoryId, row));
             if (!existingIntentOpt.isPresent()) {
-                return buildErrorResult("意图配置不存在: " + intentCode);
+                return buildErrorResult("本厂没有这个意图配置: " + intentCode);
             }
 
             AIIntentConfig intent = existingIntentOpt.get();
@@ -321,6 +324,11 @@ public class UpdateIntentTool extends AbstractTool {
     /**
      * 解析关键词JSON字符串为列表
      */
+    /** 只认调用方本厂的行 (平台级 / 别厂行不改)。 */
+    static boolean ownFactoryRow(String factoryId, AIIntentConfig row) {
+        return factoryId != null && !factoryId.isBlank() && row != null && factoryId.equals(row.getFactoryId());
+    }
+
     private List<String> parseKeywords(String keywordsJson) {
         if (keywordsJson == null || keywordsJson.trim().isEmpty()) {
             return new ArrayList<>();

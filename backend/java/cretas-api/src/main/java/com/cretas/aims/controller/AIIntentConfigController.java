@@ -74,6 +74,10 @@ public class AIIntentConfigController {
     // 只能靠 factories.type 解析出的业态认出来, isRestaurantFactoryId 需要这个能力。
     private final IntentConfigManagementService intentConfigManagementService;
 
+    /** 意图配置写入只按路径工厂落行 (复审 H-A, 2026-10-29); 字段注入, 不改既有构造参数。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.intent.IntentConfigWriteGuard intentConfigWriteGuard;
+
     /**
      * Sprint 11.5 P0 fix (2026-05-23): Extract JWT token from request supporting BOTH
      * Bearer header (mobile clients) AND HttpOnly cookie (web admin clients).
@@ -965,8 +969,11 @@ public class AIIntentConfigController {
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
             @RequestBody AIIntentConfig intentConfig) {
 
-        AIIntentConfig created = aiIntentService.createIntent(intentConfig);
-        log.info("Created AI intent: {} for factory context: {}", intentConfig.getIntentCode(), factoryId);
+        // 工厂取路径, 体里的 id / factoryId 不认; 平台级只给平台账号且不许提保密产品 (Steve 2026-10-29)
+        AIIntentConfig safe = intentConfigWriteGuard.prepareCreate(factoryId, intentConfig,
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
+        AIIntentConfig created = aiIntentService.createIntent(safe);
+        log.info("Created AI intent: {} for factory context: {}", safe.getIntentCode(), factoryId);
         return ResponseEntity.ok(ApiResponse.success("意图配置创建成功", created));
     }
 
@@ -979,8 +986,10 @@ public class AIIntentConfigController {
             @Parameter(description = "意图代码") @PathVariable String intentCode,
             @RequestBody AIIntentConfig intentConfig) {
 
-        intentConfig.setIntentCode(intentCode);
-        AIIntentConfig updated = aiIntentService.updateIntent(intentConfig);
+        // 按 (路径工厂, 意图代码) 取本厂的行, 只拷业务字段; 平台级只给平台账号 (Steve 2026-10-29)
+        AIIntentConfig safe = intentConfigWriteGuard.prepareUpdate(factoryId, intentCode, intentConfig,
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest());
+        AIIntentConfig updated = aiIntentService.updateIntent(safe);
         log.info("Updated AI intent: {}", intentCode);
         return ResponseEntity.ok(ApiResponse.success("意图配置更新成功", updated));
     }

@@ -862,6 +862,8 @@ public class IntentAnalysisController {
             @Parameter(description = "工厂ID (用于路由，平台管理员可传PLATFORM)", example = "PLATFORM")
             @PathVariable String factoryId) {
 
+        // 列的是所有工厂的待审批晋升 (含意图名): 只给平台账号 (复审 H-B, 2026-10-29)
+        requirePlatformActor();
         try {
             List<IntentOptimizationSuggestion> pendingPromotions = suggestionRepository
                     .findBySuggestionTypeAndStatus(
@@ -893,6 +895,8 @@ public class IntentAnalysisController {
                     content = @Content(schema = @Schema(implementation = ApprovalRequest.class)))
             @RequestBody ApprovalRequest request) {
 
+        // 审批会把一家工厂的意图改成平台级: 只给平台账号; system:read_write 工厂超管也有, 不够 (复审 H-B)
+        requirePlatformActor();
         try {
             // 1. 查找建议
             Optional<IntentOptimizationSuggestion> suggestionOpt = suggestionRepository.findById(suggestionId);
@@ -939,7 +943,8 @@ public class IntentAnalysisController {
                 suggestionRepository.save(suggestion);
 
                 result.put("status", "APPROVED");
-                result.put("intent", intent);
+                // 不回整条意图 (关键词 / 示例 / 描述): 只回代码 (复审 H-B)
+                result.put("intentCode", intent.getIntentCode());
                 result.put("message", "意图已晋升为平台级");
 
                 log.info("意图 [{}] 从工厂 [{}] 晋升为平台级", suggestion.getIntentCode(), originalFactoryId);
@@ -963,6 +968,15 @@ public class IntentAnalysisController {
         } catch (Exception e) {
             log.error("审批晋升请求失败: suggestionId={}", suggestionId, e);
             throw new BusinessException(500, "审批失败: " + ErrorSanitizer.sanitize(e), e);
+        }
+    }
+
+    /** 平台级晋升的列表 / 审批: 只给平台账号 (工厂账号 403)。 */
+    static void requirePlatformActor() {
+        boolean platform = com.cretas.aims.security.AuthenticatedActor.fromCurrentRequest()
+                .map(com.cretas.aims.security.AuthenticatedActor::isPlatformAdmin).orElse(false);
+        if (!platform) {
+            throw new BusinessException(403, "只有平台账号可以查看或审批平台级晋升");
         }
     }
 

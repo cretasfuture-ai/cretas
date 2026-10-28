@@ -110,7 +110,8 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         Map<String, Map<String, CachedIntentEmbedding>> nextIntentCache = new ConcurrentHashMap<>();
         for (int i = 0; i < candidates.size(); i++) {
             AIIntentConfig intent = candidates.get(i);
-            String factoryId = intent.getFactoryId() == null ? "*" : intent.getFactoryId();
+            String factoryId = com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(
+                    intent.getFactoryId()) ? "*" : intent.getFactoryId();
             nextIntentCache.computeIfAbsent(factoryId, ignored -> new ConcurrentHashMap<>())
                     .put(intent.getIntentCode(), new CachedIntentEmbedding(intent, vectors.get(i)));
         }
@@ -132,7 +133,9 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
             if (learnedGlobalExpression(expression)) {
                 continue;
             }
-            String factoryId = expression.getFactoryId() == null ? "*" : expression.getFactoryId();
+            // 空 / 空白 / "*" 都是全局 (复审 L3, 2026-10-29: 以前只把 null 归到 "*", 空白工厂的行落在 "" 键下)
+            String factoryId = com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(
+                    expression.getFactoryId()) ? "*" : expression.getFactoryId();
             next.computeIfAbsent(factoryId, ignored -> new ConcurrentHashMap<>())
                     .put(expression.getId(), new CachedExpressionEmbedding(
                             expression.getId(), expression.getIntentCode(), expression.getExpression(),
@@ -427,8 +430,8 @@ public class IntentEmbeddingCacheServiceImpl implements IntentEmbeddingCacheServ
         }
 
         String factoryId = intent.getFactoryId();
-        if (factoryId == null) {
-            factoryId = "*"; // 全局意图
+        if (com.cretas.aims.service.consent.LearningContentRules.isGlobalFactory(factoryId)) {
+            factoryId = "*"; // 全局意图 (空 / 空白 / "*")
         }
 
         // 构建关键词文本

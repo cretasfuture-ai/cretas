@@ -346,6 +346,8 @@ class ProcessSecretCrossFactoryReviewTest {
                     mock(com.cretas.aims.service.SemanticRouterService.class), filter);
             when(suggestions.findById("s1")).thenReturn(Optional.of(IntentOptimizationSuggestion
                     .createPromotionSuggestion(FA, "PRODUCTION_QUERY", "产量", "通用", "admin")));
+            // 审批只给平台账号 (复审 H-B); 工厂账号被拒见 ProcessSecretCrossFactoryRound3Test
+            bindPlatformAdmin();
         }
 
         IntentAnalysisController.ApprovalRequest approve() {

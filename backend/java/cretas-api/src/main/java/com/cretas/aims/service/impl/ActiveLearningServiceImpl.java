@@ -577,6 +577,37 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
 
     @Override
     @Transactional
+    public void approveSuggestion(String factoryId, Long suggestionId, String reviewer, String notes) {
+        requireOwnSuggestion(factoryId, suggestionId);
+        approveSuggestion(suggestionId, reviewer, notes);
+    }
+
+    @Override
+    @Transactional
+    public void rejectSuggestion(String factoryId, Long suggestionId, String reviewer, String notes) {
+        requireOwnSuggestion(factoryId, suggestionId);
+        rejectSuggestion(suggestionId, reviewer, notes);
+    }
+
+    @Override
+    @Transactional
+    public void applySuggestion(String factoryId, Long suggestionId, String applier) {
+        requireOwnSuggestion(factoryId, suggestionId);
+        applySuggestion(suggestionId, applier);
+    }
+
+    /** 建议必须属于路径上的工厂; 别厂 / 不存在 / 没有工厂的建议一律 404 (复审 M-B)。 */
+    void requireOwnSuggestion(String factoryId, Long suggestionId) {
+        boolean own = factoryId != null && !factoryId.isBlank() && suggestionId != null
+                && suggestionRepository.findById(suggestionId)
+                        .map(s -> factoryId.equals(s.getFactoryId())).orElse(false);
+        if (!own) {
+            throw new com.cretas.aims.exception.BusinessException(404, "学习建议不存在");
+        }
+    }
+
+    @Override
+    @Transactional
     public void approveSuggestion(Long suggestionId, String reviewer, String notes) {
         suggestionRepository.approveSuggestion(
                 suggestionId, reviewer, LocalDateTime.now(), notes);

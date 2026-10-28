@@ -74,7 +74,8 @@ public class ActiveLearningController {
             @RequestParam String reviewer,
             @RequestParam(required = false) String notes) {
 
-        activeLearningService.approveSuggestion(suggestionId, reviewer, notes);
+        // 按 (建议 ID, 路径工厂) 取, 别厂的建议 404 (复审 M-B, 2026-10-29)
+        activeLearningService.approveSuggestion(factoryId, suggestionId, reviewer, notes);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
@@ -94,7 +95,7 @@ public class ActiveLearningController {
             @RequestParam String reviewer,
             @RequestParam String reason) {
 
-        activeLearningService.rejectSuggestion(suggestionId, reviewer, reason);
+        activeLearningService.rejectSuggestion(factoryId, suggestionId, reviewer, reason);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
@@ -113,7 +114,7 @@ public class ActiveLearningController {
             @PathVariable Long suggestionId,
             @RequestParam String applier) {
 
-        activeLearningService.applySuggestion(suggestionId, applier);
+        activeLearningService.applySuggestion(factoryId, suggestionId, applier);
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);

@@ -916,6 +916,13 @@ public class LLMFieldMappingServiceImpl implements LLMFieldMappingService {
      * 保存映射结果到数据库
      */
     private void saveToDatabase(FieldMappingWithChartRole mapping, String factoryId) {
+        // 没有工厂的「自动学到」的映射会写成全局字典行 (所有工厂的列名识别都用): 列名可能就是某家的保密产品名,
+        // 不写 (复审 L1, Steve 2026-10-29)。全局字典只由人工维护。
+        if (factoryId == null || factoryId.isBlank()) {
+            log.warn("[LLM Field Mapping] 没有工厂, 不把自动分析的映射写进全局字典: field={}",
+                    mapping.getStandardField());
+            return;
+        }
         if (dictionaryRepository == null) {
             log.debug("[LLM Field Mapping] 数据库不可用，跳过保存");
             return;

@@ -448,8 +448,10 @@ public class RAGRetrievalServiceImpl implements RAGRetrievalService {
             return config.get().getDescription();
         }
 
-        // 再尝试全局意图
-        config = intentConfigRepository.findByIntentCode(intentCode);
+        // 再尝试平台级意图 (factory_id 为空的行) —— 以前按代码不分工厂取, 会拿到别厂同代码意图的描述
+        // (复审 L2, 2026-10-29)
+        config = intentConfigRepository.findByFactoryIdAndIntentCode(null, intentCode)
+                .filter(c -> c.getFactoryId() == null);
         if (config.isPresent()) {
             return config.get().getDescription();
         }

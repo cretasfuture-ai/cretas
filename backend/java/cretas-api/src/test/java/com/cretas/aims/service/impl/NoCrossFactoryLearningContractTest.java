@@ -88,6 +88,9 @@ class NoCrossFactoryLearningContractTest {
         when(intents.findAllEnabled()).thenReturn(List.of());
         when(repo.findByIsActiveTrue()).thenReturn(List.of(
                 expression("manual", "*", LearnedExpression.SourceType.MANUAL),
+                // 复审 L3: 空白工厂字段同样是全局 (以前落在 " " 键下, 既不全局也不属于任何工厂)
+                expression("manual-blank", " ", LearnedExpression.SourceType.MANUAL),
+                expression("learned-blank", "", LearnedExpression.SourceType.SEMANTIC_HIGH),
                 expression("learned-star", "*", LearnedExpression.SourceType.LLM_FALLBACK),
                 expression("learned-null", null, LearnedExpression.SourceType.USER_FEEDBACK),
                 expression("own", "F006", LearnedExpression.SourceType.LLM_FALLBACK)));
@@ -101,8 +104,9 @@ class NoCrossFactoryLearningContractTest {
 
         Map<String, Map<String, ?>> cache = (Map<String, Map<String, ?>>) ReflectionTestUtils.invokeMethod(
                 service, "expressionCache");
-        assertThat(cache.get("*")).containsOnlyKeys("manual");
+        assertThat(cache.get("*")).containsOnlyKeys("manual", "manual-blank");
         assertThat(cache.get("F006")).containsOnlyKeys("own");
+        assertThat(cache).containsOnlyKeys("*", "F006");
     }
 
     // ---------- 工艺保密 (Steve 2026-10-29): 保密产品名不许经由全局内容出现在别的工厂 ----------
