@@ -31,6 +31,8 @@ class ProcessSecretCostMaskTest {
 
     ProcessSecretAuditRecorder recorder;
     ProcessSecretCostMask mask;
+    com.cretas.aims.repository.ProductionPlanRepository plans;
+    com.cretas.aims.repository.ProductionBatchRepository batches;
 
     @BeforeEach
     void setUp() {
@@ -42,7 +44,10 @@ class ProcessSecretCostMaskTest {
                 .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
         when(policies.findByFactoryIdAndProductTypeId(F, SECRET)).thenReturn(Optional.of(policy));
         when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
-        mask = new ProcessSecretCostMask(new ProcessSecretAccessService(policies, grants, recorder));
+        plans = mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+        batches = mock(com.cretas.aims.repository.ProductionBatchRepository.class);
+        mask = new ProcessSecretCostMask(new ProcessSecretAccessService(policies, grants, recorder), plans, batches,
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class));
     }
 
     static AuthenticatedActor user(long id) {
@@ -70,5 +75,44 @@ class ProcessSecretCostMaskTest {
     void unprotectedProductsAreNeverHiddenAndWriteNoAudit() {
         assertThat(mask.hiddenFor(user(5), F, List.of("PLAIN", "OTHER"), "EXPORT x")).isEmpty();
         verify(recorder, never()).record(any(), any(), any(), any(), any(), any(), any());
+    }
+    @Test
+    void aConsumptionCountsTheProductsOfItsPlanAndOfItsBatch() {
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("PLAN-1");
+        plan.setFactoryId(F);
+        plan.setProductTypeId(SECRET);
+        plan.setTargetFinishedGoodIds(List.of("BYPRODUCT"));
+        when(plans.findByIdAndFactoryId("PLAN-1", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.ProductionBatch batch = new com.cretas.aims.entity.ProductionBatch();
+        batch.setProductTypeId("WIP-SKU");
+        batch.setProductionPlanId("PLAN-1");
+        when(batches.findByIdAndFactoryId(7L, F)).thenReturn(Optional.of(batch));
+        java.util.Map<String, java.util.Set<String>> cache = new java.util.HashMap<>();
+        assertThat(mask.productsOf(F, "PLAN-1", null, cache)).containsExactlyInAnyOrder(SECRET, "BYPRODUCT");
+        assertThat(mask.productsOf(F, null, 7L, cache)).containsExactlyInAnyOrder("WIP-SKU", SECRET, "BYPRODUCT");
+        assertThat(mask.productsOf(F, null, null, cache)).isEmpty();
+    }
+
+    @Test
+    void anyHiddenTellsWhetherTheFactoryHasAProtectedProductTheCallerCannotSee() {
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            assertThat(mask.anyHidden(F, "EXPORT x")).isTrue();
+        }
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(OWNER))) {
+            assertThat(mask.anyHidden(F, "EXPORT x")).isFalse();
+        }
+    }
+
+    @Test
+    void onlyPlatformOtherFactoryAndUnknownCallersLoseQuantities() {
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            assertThat(mask.quantitiesHidden(F)).isFalse();
+        }
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "super_admin"))) {
+            assertThat(mask.quantitiesHidden(F)).isTrue();
+        }
+        assertThat(mask.quantitiesHidden(F)).as("识别不出调用者").isTrue();
     }
 }

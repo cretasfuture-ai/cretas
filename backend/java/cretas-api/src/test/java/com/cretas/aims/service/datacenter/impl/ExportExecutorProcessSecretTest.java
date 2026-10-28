@@ -3,6 +3,7 @@ package com.cretas.aims.service.datacenter.impl;
 import com.cretas.aims.entity.datacenter.ExportRule;
 import com.cretas.aims.entity.processsecret.ProcessSecretPolicy;
 import com.cretas.aims.entity.processsecret.ProcessSecretStorageMode;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository;
@@ -12,8 +13,11 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder;
+import com.cretas.aims.service.processsecret.ProcessSecretCostMask;
 import com.cretas.aims.service.processsecret.ProcessSecretTestHooks;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -28,7 +32,10 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/** 规则导出 (任意实体) 走与 JSON 出口相同的工艺保密裁剪 (Steve 2026-10-28 选 A: 成本合计也隐藏)。 */
+/**
+ * 规则导出 (任意实体) 走与 JSON 出口相同的工艺保密裁剪 (Steve 2026-10-28 选 A: 成本合计也隐藏;
+ * 整表导出按跨批汇总处理), 没有产品归属的成本行也遮, 筛选条件只能看到遮过的值。
+ */
 class ExportExecutorProcessSecretTest {
 
     static final String F = "F-A";
@@ -49,28 +56,28 @@ class ExportExecutorProcessSecretTest {
         when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
         ProcessSecretAccessService access = new ProcessSecretAccessService(policies, grants,
                 mock(ProcessSecretAuditRecorder.class));
-        executor = new ExportExecutor(new ObjectMapper(), ProcessSecretTestHooks.scrubber(access,
-                mock(BomRecipeRepository.class), mock(ProductionWorkflowInstanceRepository.class),
-                mock(ProductionPlanRepository.class)));
+        executor = new ExportExecutor(new ObjectMapper(),
+                ProcessSecretTestHooks.scrubber(access, mock(BomRecipeRepository.class),
+                        mock(ProductionWorkflowInstanceRepository.class), mock(ProductionPlanRepository.class)),
+                new ProcessSecretCostMask(access, mock(ProductionPlanRepository.class),
+                        mock(ProductionBatchRepository.class), mock(BomRecipeRepository.class)));
         rule = new ExportRule();
         rule.setId(7L);
         rule.setFactoryId(F);
+        rule.setTargetEntity("ProductionBatch");
+    }
+
+    static Map<String, Object> row(Object... keyValues) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        for (int i = 0; i < keyValues.length; i += 2) row.put((String) keyValues[i], keyValues[i + 1]);
+        return row;
     }
 
     static List<Map<String, Object>> batches() {
-        Map<String, Object> secret = new LinkedHashMap<>();
-        secret.put("productTypeId", SECRET);
-        secret.put("batchNumber", "B1");
-        secret.put("quantity", 100);
-        secret.put("materialCost", 812);
-        secret.put("totalCost", 900);
-        secret.put("unitCost", 9);
-        Map<String, Object> plain = new LinkedHashMap<>();
-        plain.put("productTypeId", "PLAIN");
-        plain.put("batchNumber", "B2");
-        plain.put("quantity", 50);
-        plain.put("totalCost", 800);
-        return List.of(secret, plain);
+        return List.of(
+                row("productTypeId", SECRET, "batchNumber", "B1", "quantity", 100, "materialCost", 812,
+                        "totalCost", 900, "unitCost", 9),
+                row("productTypeId", "PLAIN", "batchNumber", "B2", "quantity", 50, "totalCost", 800));
     }
 
     static AuthenticatedActor user(long id) {
@@ -78,16 +85,17 @@ class ExportExecutorProcessSecretTest {
     }
 
     @Test
-    void protectedBatchCostsAreWrittenAsSecretForAnAccountWithoutAGrant() {
+    void protectedBatchCostsAndCrossBatchQuantitiesAreWrittenAsSecretForAnAccountWithoutAGrant() {
         List<Map<String, Object>> rows;
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
             rows = executor.maskProcessSecret(rule, batches());
         }
         assertThat(rows.get(0)).containsEntry("totalCost", "已保密").containsEntry("materialCost", "已保密")
-                .containsEntry("unitCost", "已保密").containsEntry("quantity", 100)
-                .doesNotContainKey("processSecret");
+                .containsEntry("unitCost", "已保密").doesNotContainKey("processSecret");
+        // 整表导出 = 跨批汇总 (单批可看、汇总不给): 保密产品各批数量也不给
+        assertThat(rows.get(0)).containsEntry("quantity", "已保密");
         // 阴性对照: 同一份导出里的普通产品照常
-        assertThat(rows.get(1)).containsEntry("totalCost", 800);
+        assertThat(rows.get(1)).containsEntry("totalCost", 800).containsEntry("quantity", 50);
     }
 
     @Test
@@ -96,7 +104,8 @@ class ExportExecutorProcessSecretTest {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(OWNER))) {
             rows = executor.maskProcessSecret(rule, batches());
         }
-        assertThat(rows.get(0)).containsEntry("totalCost", 900).containsEntry("unitCost", 9);
+        assertThat(rows.get(0)).containsEntry("totalCost", 900).containsEntry("unitCost", 9)
+                .containsEntry("quantity", 100);
     }
 
     @Test
@@ -104,5 +113,70 @@ class ExportExecutorProcessSecretTest {
         List<Map<String, Object>> rows = executor.maskProcessSecret(rule, batches());
         assertThat(rows.get(0)).containsEntry("totalCost", "已保密").containsEntry("quantity", "已保密");
         assertThat(rows.get(1)).containsEntry("totalCost", 800);
+    }
+
+    @Test
+    void costRowsWithoutAProductAreMaskedWhileTheFactoryHasAProtectedProductTheCallerCannotSee() {
+        // 半成品流水 / 返工记录这类实体没有产品字段, 认不出属于谁: 宁可多遮
+        List<Map<String, Object>> txns = List.of(row("semiFinishedId", 3, "quantity", 5, "unitCostAtTxn", 16.2,
+                "balanceCostAfter", 81));
+        List<Map<String, Object>> operator;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            operator = executor.maskProcessSecret(rule, txns);
+        }
+        assertThat(operator.get(0)).containsEntry("unitCostAtTxn", "已保密").containsEntry("balanceCostAfter", "已保密")
+                .containsEntry("quantity", 5).containsEntry("semiFinishedId", 3);
+        // 阴性对照: 负责人照常
+        List<Map<String, Object>> owner;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(OWNER))) {
+            owner = executor.maskProcessSecret(rule, txns);
+        }
+        assertThat(owner.get(0)).containsEntry("unitCostAtTxn", 16.2);
+    }
+
+    @Test
+    void theRuleFilterOnlySeesMaskedValuesSoItCannotProbeAHiddenCost() throws Exception {
+        EntityManager em = mock(EntityManager.class);
+        Query query = mock(Query.class);
+        when(em.createQuery(anyString())).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.getResultList()).thenReturn(batches());
+        java.lang.reflect.Field field = ExportExecutor.class.getDeclaredField("em");
+        field.setAccessible(true);
+        field.set(executor, em);
+        rule.setFilterExpression("#row['unitCost'] > 1");
+
+        List<Map<String, Object>> probe;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(5))) {
+            probe = executor.queryAndFilter(rule, Map.of());
+        }
+        // 真实 unitCost = 9 > 1, 但筛选只能看到「已保密」: 保密行不会因为成本大于阈值被选中
+        assertThat(probe).isEmpty();
+
+        List<Map<String, Object>> ownerRows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(OWNER))) {
+            ownerRows = executor.queryAndFilter(rule, Map.of());
+        }
+        assertThat(ownerRows).hasSize(1).first().satisfies(r -> assertThat(r).containsEntry("batchNumber", "B1"));
+    }
+
+    @Test
+    void recipeDerivedConsumptionRowsAreMarkedAutomatic() throws Exception {
+        EntityManager em = mock(EntityManager.class);
+        Query query = mock(Query.class);
+        when(em.createQuery(anyString())).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.getResultList()).thenReturn(List.of(
+                row("productTypeId", SECRET, "sourceType", "SEASONING", "quantity", 0.1725),
+                row("productTypeId", SECRET, "sourceType", "RAW_MATERIAL", "quantity", 115)));
+        java.lang.reflect.Field field = ExportExecutor.class.getDeclaredField("em");
+        field.setAccessible(true);
+        field.set(executor, em);
+        List<Map<String, Object>> rows;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(user(OWNER))) {
+            rows = executor.queryAndFilter(rule, Map.of());
+        }
+        assertThat(rows.get(0)).containsEntry("automatic", true);
+        assertThat(rows.get(1)).doesNotContainKey("automatic");
     }
 }

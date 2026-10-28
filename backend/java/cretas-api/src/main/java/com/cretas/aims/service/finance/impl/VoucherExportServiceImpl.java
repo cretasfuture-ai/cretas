@@ -1,6 +1,7 @@
 package com.cretas.aims.service.finance.impl;
 
 import com.cretas.aims.service.processsecret.ProcessSecretCostMask;
+import com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.write.metadata.WriteSheet;
@@ -811,8 +812,14 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         // 工艺保密: 半成品 / 成品的单位成本是按配方把调料、包材金额滚进去的; 无完整查看权的保密产品
         // 单价、金额、结存金额一律「已保密」, 数量照给 (Steve 2026-10-28 选 A)
         Set<String> secretProducts = costMask == null ? Set.of() : costMask.hiddenFor(factoryId,
-                movements.stream().map(InventoryMovement::productTypeId).filter(Objects::nonNull).toList(),
+                movements.stream().flatMap(m -> m.productTypeIds().stream()).filter(Objects::nonNull)
+                        .distinct().toList(),
                 "EXPORT /finance/quantity-amount-ledger");
+        // 平台 / 他厂 / 识别不出的调用者: 受保护产品的数量也不给
+        boolean quantitiesHidden = !secretProducts.isEmpty() && costMask.quantitiesHidden(factoryId);
+        // 同一品项一旦有一行被遮, 之后的结存也遮: 前后两次结存一减就是被遮的那一行
+        Set<String> amountTainted = new HashSet<>();
+        Set<String> quantityTainted = new HashSet<>();
         Map<String, RunningInventoryBalance> runningByItem = new HashMap<>();
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("日期", "凭证字号", "摘要", "收入数量", "收入单价", "收入金额",
@@ -832,20 +839,26 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             } else {
                 running.amount = running.amount.add(nvl(movement.inAmount())).subtract(nvl(movement.outAmount()));
             }
-            if (movement.productTypeId() != null && secretProducts.contains(movement.productTypeId())) {
+            boolean maskAmount = movement.productTypeIds().stream().anyMatch(secretProducts::contains);
+            boolean maskQuantity = maskAmount && (movement.recipeDerived() || quantitiesHidden);
+            if (maskAmount) amountTainted.add(movement.itemKey());
+            if (maskQuantity) quantityTainted.add(movement.itemKey());
+            if (maskAmount || amountTainted.contains(movement.itemKey())) {
+                String secret = ProcessSecretCostMask.LABEL;
+                boolean balanceQuantityHidden = quantityTainted.contains(movement.itemKey());
                 rows.add(List.of(
                         movement.date() == null ? "" : movement.date().toString(),
                         nvlStr(movement.voucherNo()),
                         nvlStr(movement.summary()),
-                        quantityText(movement.inQuantity()),
-                        ProcessSecretCostMask.LABEL,
-                        ProcessSecretCostMask.LABEL,
-                        quantityText(movement.outQuantity()),
-                        ProcessSecretCostMask.LABEL,
-                        ProcessSecretCostMask.LABEL,
-                        quantityText(running.quantity),
-                        ProcessSecretCostMask.LABEL,
-                        ProcessSecretCostMask.LABEL
+                        maskQuantity ? secret : quantityText(movement.inQuantity()),
+                        maskAmount ? secret : amountTextNullable(movement.inUnitPrice()),
+                        maskAmount ? secret : amountTextNullable(movement.inAmount()),
+                        maskQuantity ? secret : quantityText(movement.outQuantity()),
+                        maskAmount ? secret : amountTextNullable(movement.outUnitPrice()),
+                        maskAmount ? secret : amountTextNullable(movement.outAmount()),
+                        balanceQuantityHidden ? secret : quantityText(running.quantity),
+                        secret,
+                        secret
                 ));
                 continue;
             }
@@ -961,6 +974,8 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         //
         // ⚠️ 判据只有一份: VoucherConsumptionSourcePolicy。⛔ 不要在这里写 if 列举来源。
         // ⚠️ 未知来源**不静默**: 既不计入(会凭空造成本), 也不假装没发生 —— 计数并打日志。
+        // 工艺保密: 每条流水牵涉的产品, 一次导出里复用计划 / 批次的查询
+        Map<String, Set<String>> productCache = new HashMap<>();
         int excludedKnown = 0;
         java.util.Map<String, Integer> excludedUnknown = new java.util.TreeMap<>();
         List<MaterialConsumption> consumptions = restricted
@@ -988,7 +1003,10 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                     "RAW:" + firstNonBlank(consumption.getMaterialTypeId(), consumption.getBatchId()),
                     quantity,
                     unitPrice,
-                    amount
+                    amount,
+                    productsOf(factoryId, consumption.getProductionPlanId(), consumption.getProductionBatchId(),
+                            productCache),
+                    ProcessSecretRecipeDerived.isAutomaticConsumption(sourceType)
             ));
         }
 
@@ -1023,13 +1041,14 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             if (produced.compareTo(BigDecimal.ZERO) > 0) {
                 movements.add(InventoryMovement.inbound(date, wip.getIntermediateBatchNo(),
                         "半成品入库 " + nvlStr(wip.getProductTypeId()) + " " + nvlStr(wip.getIntermediateBatchNo()),
-                        itemKey, produced, unitCost, produced.multiply(unitCost), wip.getProductTypeId()));
+                        itemKey, produced, unitCost, produced.multiply(unitCost), wipProducts(factoryId, wip, productCache)));
             }
             BigDecimal consumed = nvl(wip.getConsumedQuantity());
             if (consumed.compareTo(BigDecimal.ZERO) > 0) {
                 movements.add(InventoryMovement.outbound(date, wip.getIntermediateBatchNo(),
                         "半成品发出 " + nvlStr(wip.getProductTypeId()) + " " + nvlStr(wip.getIntermediateBatchNo()),
-                        itemKey, consumed, unitCost, consumed.multiply(unitCost), wip.getProductTypeId()));
+                        itemKey, consumed, unitCost, consumed.multiply(unitCost), wipProducts(factoryId, wip, productCache),
+                        false));
             }
         }
 
@@ -1058,7 +1077,7 @@ public class VoucherExportServiceImpl implements VoucherExportService {
                 BigDecimal amount = unitCost == null ? null : produced.multiply(unitCost);
                 movements.add(InventoryMovement.inbound(date, batch.getBatchNumber(),
                         "成品入库 " + firstNonBlank(batch.getProductName(), batch.getProductTypeId()) + "（单位：" + batch.getUnit() + "）",
-                        itemKey, produced, unitCost, amount, batch.getProductTypeId()));
+                        itemKey, produced, unitCost, amount, ownProduct(batch.getProductTypeId())));
             }
         }
 
@@ -1088,9 +1107,26 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             movements.add(InventoryMovement.outbound(shipDate,
                     firstNonBlank(deliveryNumber, batchNumber),
                     "成品发出 " + firstNonBlank(productName, productTypeId) + "（单位：" + nativeUnit + "）",
-                    itemKey, shippedQty, unitCost, amount, productTypeId));
+                    itemKey, shippedQty, unitCost, amount, ownProduct(productTypeId), false));
         }
         return movements;
+    }
+
+    private static Set<String> ownProduct(String productTypeId) {
+        return productTypeId == null || productTypeId.isBlank() ? Set.of() : Set.of(productTypeId);
+    }
+
+    private Set<String> productsOf(String factoryId, String planId, Long productionBatchId,
+                                   Map<String, Set<String>> cache) {
+        if (costMask == null) return Set.of();
+        return costMask.productsOf(factoryId, planId, productionBatchId, cache);
+    }
+
+    /** 半成品自身的产品 + 它所属生产批次的产品与计划 (受限计划的中间品同样受限)。 */
+    private Set<String> wipProducts(String factoryId, SemiFinishedInventory wip, Map<String, Set<String>> cache) {
+        Set<String> products = new HashSet<>(ownProduct(wip.getProductTypeId()));
+        products.addAll(productsOf(factoryId, null, wip.getBatchId(), cache));
+        return products;
     }
 
     private boolean within(LocalDate date, LocalDate start, LocalDate end) {
@@ -2019,7 +2055,11 @@ public class VoucherExportServiceImpl implements VoucherExportService {
         }
     }
 
-    /** {@code productTypeId}: 半成品 / 成品流水的产品 (原料流水为 null), 工艺保密按它遮蔽成本列。 */
+    /**
+     * {@code productTypeIds}: 这条流水牵涉的产品 (成品 / 半成品自身, 生产领用所属计划的全部产品; 原料入库为空),
+     * 工艺保密按它遮蔽成本列。{@code recipeDerived}: 按配方自动带出的领用 (调料 / 包材 / BOM 自动扣料),
+     * 数量 = 配比 × 投入, 无权时连数量也遮。
+     */
     private record InventoryMovement(
             LocalDate date,
             String voucherNo,
@@ -2031,30 +2071,28 @@ public class VoucherExportServiceImpl implements VoucherExportService {
             BigDecimal outQuantity,
             BigDecimal outUnitPrice,
             BigDecimal outAmount,
-            String productTypeId) {
+            Set<String> productTypeIds,
+            boolean recipeDerived) {
 
         private static InventoryMovement inbound(LocalDate date, String voucherNo, String summary, String itemKey,
                                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
-            return inbound(date, voucherNo, summary, itemKey, quantity, unitPrice, amount, null);
+            return inbound(date, voucherNo, summary, itemKey, quantity, unitPrice, amount, Set.of());
         }
 
         private static InventoryMovement inbound(LocalDate date, String voucherNo, String summary, String itemKey,
                                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount,
-                                                 String productTypeId) {
+                                                 Set<String> productTypeIds) {
             return new InventoryMovement(date, voucherNo, summary, itemKey,
-                    quantity, unitPrice, amount, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, productTypeId);
-        }
-
-        private static InventoryMovement outbound(LocalDate date, String voucherNo, String summary, String itemKey,
-                                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount) {
-            return outbound(date, voucherNo, summary, itemKey, quantity, unitPrice, amount, null);
+                    quantity, unitPrice, amount, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, productTypeIds,
+                    false);
         }
 
         private static InventoryMovement outbound(LocalDate date, String voucherNo, String summary, String itemKey,
                                                   BigDecimal quantity, BigDecimal unitPrice, BigDecimal amount,
-                                                  String productTypeId) {
+                                                  Set<String> productTypeIds, boolean recipeDerived) {
             return new InventoryMovement(date, voucherNo, summary, itemKey,
-                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, quantity, unitPrice, amount, productTypeId);
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, quantity, unitPrice, amount, productTypeIds,
+                    recipeDerived);
         }
     }
 }

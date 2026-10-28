@@ -8,6 +8,7 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.processsecret.ProcessSecretCostMask;
 import com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber;
 import com.cretas.aims.service.processsecret.ProcessSecretReadTracker;
+import com.cretas.aims.service.processsecret.ProcessSecretRecipeDerived;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -51,6 +52,7 @@ public class ExportExecutor {
 
     private final ObjectMapper objectMapper;
     private final ProcessSecretPayloadScrubber processSecretScrubber;
+    private final ProcessSecretCostMask processSecretCostMask;
 
     private static final ExpressionParser SPEL = new SpelExpressionParser();
 
@@ -80,7 +82,7 @@ public class ExportExecutor {
         // 规则可以导出任意实体 (含批次成本、配方用量): 和 JSON 出口走同一个工艺保密裁剪,
         // 读取记录在本次查询的作用域里收集
         try (ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
-            rows = maskProcessSecret(rule, queryAndFilter(rule, runtimeParams));
+            rows = queryAndFilter(rule, runtimeParams);
         }
         List<Map<String, Object>> columns = rule.getColumns();
         List<List<String>> head = buildHead(columns);
@@ -123,9 +125,14 @@ public class ExportExecutor {
         if (rows.isEmpty()) return rows;
         ArrayNode tree = objectMapper.valueToTree(rows);
         AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(null);
+        String resourceRef = "EXPORT rule " + rule.getId();
+        // 整表导出就是跨批汇总 (Steve 2026-10-26 第三问: 单批可看、汇总不给)
         boolean changed = processSecretScrubber.scrub(tree, actor, rule.getFactoryId(),
-                ProcessSecretReadTracker.reads(), "EXPORT rule " + rule.getId(), false);
-        if (!changed) return rows;
+                ProcessSecretReadTracker.reads(), resourceRef, true);
+        // 没有产品归属的行 (半成品流水、返工记录、工序配方等): 本厂有调用者看不到的保密产品时,
+        // 成本合计一律不给 —— 规则可以导出任意实体, 这里认不出它属于哪个产品, 宁可多遮
+        boolean anyHidden = processSecretCostMask.anyHidden(rule.getFactoryId(), resourceRef);
+        if (!changed && !anyHidden) return rows;
         List<Map<String, Object>> masked = new ArrayList<>(rows.size());
         for (JsonNode node : tree) {
             ObjectNode row = (ObjectNode) node;
@@ -134,6 +141,15 @@ public class ExportExecutor {
                 for (JsonNode hidden : marker.path("hiddenFields")) {
                     row.put(hidden.asText(), ProcessSecretCostMask.LABEL);
                 }
+            }
+            if (anyHidden && !row.hasNonNull("productTypeId")) {
+                List<String> costFields = new ArrayList<>();
+                row.fields().forEachRemaining(e -> {
+                    if (e.getValue().isNumber() && ProcessSecretPayloadScrubber.isCostTotalField(e.getKey())) {
+                        costFields.add(e.getKey());
+                    }
+                });
+                costFields.forEach(name -> row.put(name, ProcessSecretCostMask.LABEL));
             }
             masked.add(objectMapper.convertValue(row, Map.class));
         }
@@ -167,9 +183,19 @@ public class ExportExecutor {
             }
         }
 
+        List<Map<String, Object>> converted = new ArrayList<>(entities.size());
         for (Object e : entities) {
             @SuppressWarnings("unchecked")
             Map<String, Object> row = objectMapper.convertValue(e, Map.class);
+            // 消耗记录里按配方自动带出的行 (调料 / 包材 / BOM 自动扣料): 与 JSON 出口同口径标 automatic
+            if (row.get("sourceType") instanceof String sourceType
+                    && ProcessSecretRecipeDerived.isAutomaticConsumption(sourceType)) {
+                row.put("automatic", true);
+            }
+            converted.add(row);
+        }
+        // 先遮后筛: 规则的筛选条件只能看到遮过的值, 不能拿它对隐藏的成本二分试探
+        for (Map<String, Object> row : maskProcessSecret(rule, converted)) {
             if (filter != null && !evalFilter(filter, row, runtimeParams)) continue;
             result.add(row);
         }

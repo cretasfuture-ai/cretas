@@ -333,6 +333,79 @@ class VoucherExportServiceTest {
     }
 
     @Test
+    @DisplayName("工艺保密: 平台 / 他厂调用者连保密成品的数量也看不到")
+    void exportQuantityAmountLedger_platformCallerLosesQuantitiesOfProtectedProducts() throws Exception {
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any())).thenReturn(new PageImpl<>(List.of()));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of(
+                        finishedGoodsWithCost("FG-001", "FG20260505001", "P-SECRET", "2026-05-05", "10.000", "30.00", "18.00"))));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        com.cretas.aims.service.processsecret.ProcessSecretCostMask mask =
+                org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretCostMask.class);
+        when(mask.hiddenFor(eq(FACTORY_ID), any(), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        when(mask.quantitiesHidden(FACTORY_ID)).thenReturn(true);
+        service.setCostMask(mask);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+        List<String> secretIn = readXlsx(out.toByteArray()).stream()
+                .filter(r -> r.size() > 2 && r.get(2).startsWith("成品入库")).findFirst().orElseThrow();
+        assertEquals("已保密", secretIn.get(3), "收入数量");
+        assertEquals("已保密", secretIn.get(9), "结存数量");
+    }
+
+    @Test
+    @DisplayName("工艺保密: 受保护计划的领用 — 调料自动行连数量也遮, 人工投料只遮金额, 之后同品项的结存也遮")
+    void exportQuantityAmountLedger_protectedPlanConsumptionIsMasked() throws Exception {
+        MaterialBatch salt = materialBatch("MB-001", "RAW-SALT", "MB20260501001", "2026-05-01", "100.000", "2.00");
+        when(materialBatchRepo.findByFactoryId(eq(FACTORY_ID), any())).thenReturn(new PageImpl<>(List.of(salt)));
+        MaterialConsumption seasoning = consumption("MB-001", "RAW-SALT", "2026-05-03T10:00:00", "0.500", "2.00", "1.00");
+        seasoning.setSourceType("SEASONING");
+        seasoning.setProductionPlanId("PLAN-S");
+        MaterialConsumption beef = consumption("MB-002", "RAW-BEEF", "2026-05-03T11:00:00", "115.000", "7.00", "805.00");
+        beef.setProductionPlanId("PLAN-S");
+        MaterialConsumption plainSalt = consumption("MB-001", "RAW-SALT", "2026-05-04T10:00:00", "10.000", "2.00", "20.00");
+        plainSalt.setProductionPlanId("PLAN-P");
+        when(materialConsumptionRepo.findByTimeRange(eq(FACTORY_ID), any(), any()))
+                .thenReturn(List.of(seasoning, beef, plainSalt));
+        when(finishedGoodsBatchRepo.findByFactoryIdOrderByCreatedAtDesc(eq(FACTORY_ID), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        when(exportRecordRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        com.cretas.aims.service.processsecret.ProcessSecretCostMask mask =
+                org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretCostMask.class);
+        when(mask.productsOf(eq(FACTORY_ID), eq("PLAN-S"), any(), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        when(mask.productsOf(eq(FACTORY_ID), eq("PLAN-P"), any(), any())).thenReturn(java.util.Set.of("P-PLAIN"));
+        when(mask.hiddenFor(eq(FACTORY_ID), any(), any())).thenReturn(java.util.Set.of("P-SECRET"));
+        service.setCostMask(mask);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        service.exportQuantityAmountLedger(FACTORY_ID, buildReq(), USER_ID, out);
+        List<List<String>> rows = readXlsx(out.toByteArray());
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<java.util.Collection<String>> asked =
+                org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        org.mockito.Mockito.verify(mask).hiddenFor(eq(FACTORY_ID), asked.capture(), any());
+        org.assertj.core.api.Assertions.assertThat(asked.getValue()).contains("P-SECRET", "P-PLAIN");
+
+        java.util.function.BiFunction<String, String, List<String>> row = (date, item) -> rows.stream()
+                .filter(r -> r.size() > 2 && date.equals(r.get(0)) && r.get(2).startsWith("原料发出 " + item))
+                .findFirst().orElseThrow();
+        List<String> seasoningRow = row.apply("2026-05-03", "RAW-SALT");
+        assertEquals(List.of("已保密", "已保密", "已保密", "已保密", "已保密", "已保密"),
+                List.of(seasoningRow.get(6), seasoningRow.get(7), seasoningRow.get(8), seasoningRow.get(9),
+                        seasoningRow.get(10), seasoningRow.get(11)), "调料自动行: 数量 = 配比 × 投入, 连数量也遮");
+        List<String> beefRow = row.apply("2026-05-03", "RAW-BEEF");
+        assertEquals(0, new BigDecimal("115.000").compareTo(decimalAt(beefRow, 6)), "人工投料数量是本单总量, 照给");
+        assertEquals("已保密", beefRow.get(8));
+        List<String> plainSaltRow = row.apply("2026-05-04", "RAW-SALT");
+        assertEquals(0, new BigDecimal("10.000").compareTo(decimalAt(plainSaltRow, 6)), "普通计划的领用照给");
+        assertEquals(0, new BigDecimal("20.00").compareTo(decimalAt(plainSaltRow, 8)));
+        assertEquals("已保密", plainSaltRow.get(9), "同一品项被遮过一行后, 结存数量一减就露出被遮的那一行");
+        assertEquals("已保密", plainSaltRow.get(11));
+    }
+
+    @Test
     @DisplayName("Bug 7: 成品收发存按成本(unitCost)计价、发出按逐笔发货真实日期 — 非售价/非累计盖生产日期")
     void exportQuantityAmountLedger_finishedGoods_costBasisAndPerShipmentDate() throws Exception {
         // 生产 05-05 产 10 (成本 18, 售价 30 应被忽略); 发货 05-20 发 4 (成本 18)。
