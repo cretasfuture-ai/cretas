@@ -137,7 +137,7 @@ public class AgentOpsClient {
                 .header("X-Factory-Id", context.factoryId())
                 .header("X-User-Id", context.userId())
                 .header("X-User-Role", context.role())
-                .header("X-Business-Type", "RESTAURANT")
+                .header("X-Business-Type", context.businessType())
                 .header("X-Correlation-ID", context.correlationId())
                 .header("Accept", "application/json")
                 .build();
@@ -221,9 +221,16 @@ public class AgentOpsClient {
         return parsed.newBuilder().encodedPath(INTERNAL_PATH + "/").build();
     }
 
-    public record TrustedContext(String factoryId, String userId, String role, String correlationId) {
+    public record TrustedContext(String factoryId, String userId, String role, String correlationId,
+                                 String businessType) {
+        /** Restaurant stays the default so existing callers keep their behaviour. */
+        public TrustedContext(String factoryId, String userId, String role, String correlationId) {
+            this(factoryId, userId, role, correlationId, "RESTAURANT");
+        }
+
         public void validate() {
-            if (!safe(factoryId) || !safe(userId) || !safe(role) || !safe(correlationId)) {
+            if (!safe(factoryId) || !safe(userId) || !safe(role) || !safe(correlationId)
+                    || !("RESTAURANT".equals(businessType) || "FACTORY".equals(businessType))) {
                 throw new SecurityException("Invalid trusted AgentOps context");
             }
         }

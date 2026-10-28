@@ -1,0 +1,83 @@
+name: Factory AgentOps Gate
+
+# 工厂域 AgentOps 离线回归闸 (S6-07/S6-08)。
+# 用已录制的工厂意图/工具快照重放评测集, 与仓内基线比对; 不调任何 LLM / 网络 / 数据库。
+# 退出码: 0 无回退 / 1 回退 / 2 没量到 (缺 fixture、评测集缩水、阴性对照没红…)。
+# ⛔ 非 0 即红, 没量到不会变绿。闸本身用「注入回退 → 必须 rc=1」「缺文件 → 必须 rc=2」
+#    在同一个 job 里自证, 这样闸坏了(永远返回 0)也会被抓到。
+
+on:
+  pull_request:
+    paths:
+      - 'backend/python/smartbi/agent/eval/**'
+      - 'backend/python/smartbi/agent/runtime/evaluation.py'
+      - 'backend/python/tests/fixtures/factory_agentops/**'
+      - 'scripts/ci/factory_agentops_gate.py'
+      - '.github/workflows/factory-agentops-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/python/smartbi/agent/eval/**'
+      - 'backend/python/smartbi/agent/runtime/evaluation.py'
+      - 'backend/python/tests/fixtures/factory_agentops/**'
+      - 'scripts/ci/factory_agentops_gate.py'
+      - '.github/workflows/factory-agentops-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  factory-agentops-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Gate on the committed fixtures (must be rc=0)
+        run: |
+          set +e
+          python scripts/ci/factory_agentops_gate.py > "$RUNNER_TEMP/gate.log" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/gate.log"
+          echo "gate rc=$rc"
+          [ "$rc" -eq 0 ] || exit 1
+          [ "$(grep -c 'FACTORY_AGENTOPS_GATE rc=0' "$RUNNER_TEMP/gate.log")" -eq 1 ] || exit 1
+
+      - name: Self-test, injected regression must give rc=1
+        run: |
+          set +e
+          FX="$RUNNER_TEMP/fx-regress"
+          cp -r backend/python/tests/fixtures/factory_agentops "$FX"
+          python - "$FX/recorded_actuals.json" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          d = json.load(open(p, encoding="utf-8"))
+          d["fx-003"]["routeCode"] = "GENERAL_CHAT"
+          json.dump(d, open(p, "w", encoding="utf-8"))
+          PY
+          python scripts/ci/factory_agentops_gate.py --eval-set "$FX/eval_set.json" \
+            --actuals "$FX/recorded_actuals.json" --baseline "$FX/baseline.json"
+          rc=$?
+          echo "regression rc=$rc"
+          [ "$rc" -eq 1 ]
+
+      - name: Self-test, missing fixture must give rc=2 (never green)
+        run: |
+          set +e
+          FX="$RUNNER_TEMP/fx-missing"
+          cp -r backend/python/tests/fixtures/factory_agentops "$FX"
+          rm "$FX/recorded_actuals.json"
+          python scripts/ci/factory_agentops_gate.py --eval-set "$FX/eval_set.json" \
+            --actuals "$FX/recorded_actuals.json" --baseline "$FX/baseline.json"
+          rc=$?
+          echo "unmeasured rc=$rc"
+          [ "$rc" -eq 2 ]

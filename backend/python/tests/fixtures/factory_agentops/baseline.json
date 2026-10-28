@@ -1,0 +1,21 @@
+{
+  "caseCount": 12,
+  "evalSetDigest": "ef38f5c66bb55239e3c5926b9b577744236c2221fcdaff85c982460b7f251639",
+  "numericTruthPassCount": 12,
+  "passRate": "0.916667",
+  "passingCaseIds": [
+    "fx-001",
+    "fx-002",
+    "fx-003",
+    "fx-004",
+    "fx-005",
+    "fx-006",
+    "fx-007",
+    "fx-008",
+    "fx-009",
+    "fx-010",
+    "fx-011"
+  ],
+  "routePassCount": 11,
+  "trajectoryPassCount": 11
+}
