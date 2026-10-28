@@ -66,6 +66,7 @@ class InquiryQuoteServiceImplTest {
     @Mock private SupplierMaterialPurchaseSpecRepository purchaseSpecRepository;
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private BomRecipeRepository bomRecipeRepository;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     private InquiryQuoteServiceImpl service;
 
@@ -77,6 +78,8 @@ class InquiryQuoteServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(unitContractService.areEquivalent(any(), any(), any())).thenAnswer(i ->
+                i.getArgument(1) != null && ((String) i.getArgument(1)).equalsIgnoreCase(i.getArgument(2)));
         service = new InquiryQuoteServiceImpl(
                 inquiryQuoteRepository,
                 supplierPriceRepository,
@@ -87,7 +90,8 @@ class InquiryQuoteServiceImplTest {
                 supplierMaterialRepository,
                 purchaseSpecRepository,
                 bomRecipeItemRepository,
-                bomRecipeRepository);
+                bomRecipeRepository,
+                unitContractService);
     }
 
     // ==================== create ====================

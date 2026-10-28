@@ -36,6 +36,7 @@ import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.purchase.InquiryQuoteComparator;
 import com.cretas.aims.service.shared.CostRollupUtil;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.purchase.InquiryQuoteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -85,6 +86,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     private final SupplierMaterialPurchaseSpecRepository purchaseSpecRepository;
     private final BomRecipeItemRepository bomRecipeItemRepository;
     private final BomRecipeRepository bomRecipeRepository;
+    private final UnitContractService unitContractService;
 
     /** 工艺保密: BOM 影响估算只列当前用户有权看的配方。 */
     @Autowired(required = false)
@@ -111,7 +113,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                                    SupplierMaterialRepository supplierMaterialRepository,
                                    SupplierMaterialPurchaseSpecRepository purchaseSpecRepository,
                                    BomRecipeItemRepository bomRecipeItemRepository,
-                                   BomRecipeRepository bomRecipeRepository) {
+                                   BomRecipeRepository bomRecipeRepository,
+                                   UnitContractService unitContractService) {
         this.inquiryQuoteRepository = inquiryQuoteRepository;
         this.supplierPriceRepository = supplierPriceRepository;
         this.supplierRepository = supplierRepository;
@@ -122,6 +125,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         this.purchaseSpecRepository = purchaseSpecRepository;
         this.bomRecipeItemRepository = bomRecipeItemRepository;
         this.bomRecipeRepository = bomRecipeRepository;
+        this.unitContractService = unitContractService;
     }
 
     // ==================== 核价单 ====================
@@ -476,7 +480,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                     });
         }
         return new InquiryQuoteComparator.Facts(referenceTaxRate, referenceTaxSource,
-                LocalDate.now(BUSINESS_ZONE), suppliers, relations, specs);
+                LocalDate.now(BUSINESS_ZONE), suppliers, relations, specs,
+                (left, right) -> sameUnit(factoryId, left, right));
     }
 
     // ==================== 价格影响 (L3, S5-04) ====================
@@ -534,7 +539,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
             String reason = null;
             if (quotedUnit == null) {
                 reason = "报价未注明计价单位";
-            } else if (itemPriceUnit == null || !quotedUnit.equalsIgnoreCase(itemPriceUnit.trim())) {
+            } else if (!sameUnit(factoryId, quotedUnit, itemPriceUnit)) {
                 reason = String.format("BOM 计价单位「%s」与报价单位「%s」不同, 不做换算",
                         itemPriceUnit, quotedUnit);
             } else if (item.getStandardQuantity() == null) {
@@ -624,7 +629,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                     .withHint("请先编辑采购草稿, 把本物料合并成一行后再发起比价");
         }
         String lineUnit = lines.get(0).getUnit();
-        if (lineUnit == null || !lineUnit.trim().equalsIgnoreCase(request.getUnit().trim())) {
+        if (!sameUnit(factoryId, lineUnit, request.getUnit())) {
             throw new BusinessException(400, String.format(
                     "询价单位「%s」与采购草稿 %s 该行单位「%s」不同",
                     request.getUnit(), draft.getOrderNumber(), lineUnit))
@@ -658,6 +663,14 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** 单位同一性问单位契约 (kg / 公斤 / KG 是同一个); 任一侧为空或未登记 → 不相同。 */
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (blankToNull(left) == null || blankToNull(right) == null) {
+            return false;
+        }
+        return unitContractService.areEquivalent(factoryId, left.trim(), right.trim());
     }
 
     private InquiryQuote loadOwned(String factoryId, String inquiryId) {

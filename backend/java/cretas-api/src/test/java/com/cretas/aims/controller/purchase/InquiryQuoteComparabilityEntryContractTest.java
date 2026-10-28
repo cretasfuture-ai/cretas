@@ -91,6 +91,8 @@ class InquiryQuoteComparabilityEntryContractTest {
     private final SupplierMaterialPurchaseSpecRepository specRepo = mock(SupplierMaterialPurchaseSpecRepository.class);
     private final BomRecipeItemRepository bomItemRepo = mock(BomRecipeItemRepository.class);
     private final BomRecipeRepository bomRecipeRepo = mock(BomRecipeRepository.class);
+    private final com.cretas.aims.service.unit.UnitContractService unitContract =
+            mock(com.cretas.aims.service.unit.UnitContractService.class);
     private final MobileService mobileService = mock(MobileService.class);
 
     private MockMvc mvc;
@@ -100,7 +102,7 @@ class InquiryQuoteComparabilityEntryContractTest {
     @BeforeEach
     void setUp() {
         InquiryQuoteServiceImpl service = new InquiryQuoteServiceImpl(inquiryRepo, priceRepo, supplierRepo, poRepo,
-                purchaseService, materialRepo, relationRepo, specRepo, bomItemRepo, bomRecipeRepo);
+                purchaseService, materialRepo, relationRepo, specRepo, bomItemRepo, bomRecipeRepo, unitContract);
         mvc = MockMvcBuilders.standaloneSetup(new InquiryQuoteController(service, mobileService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -136,6 +138,11 @@ class InquiryQuoteComparabilityEntryContractTest {
         when(priceRepo.save(any(InquiryQuoteSupplierPrice.class))).thenAnswer(i -> i.getArgument(0));
         when(specRepo.findByFactoryIdAndSupplierMaterialIdAndActiveTrue(eq(F), anyString())).thenReturn(List.of());
         when(poRepo.save(any(PurchaseOrder.class))).thenAnswer(i -> i.getArgument(0));
+
+        // 单位契约桩: 只认 kg 族 (kg / KG / 公斤) 与 箱, 其余未登记 → 不相同
+        when(unitContract.areEquivalent(eq(F), anyString(), anyString())).thenAnswer(i ->
+                unitCode(i.getArgument(1)) != null
+                        && unitCode(i.getArgument(1)).equals(unitCode(i.getArgument(2))));
 
         UserDTO user = new UserDTO();
         user.setId(7L);
@@ -448,7 +455,25 @@ class InquiryQuoteComparabilityEntryContractTest {
         org.assertj.core.api.Assertions.assertThat(sameUnit.getUnitPrice()).isEqualByComparingTo("10");
     }
 
+    @Test
+    @DisplayName("单位走单位契约: 报价写「公斤」与询价「kg」是同一单位, 可比")
+    void unitIdentityGoesThroughTheUnitContract() throws Exception {
+        supplier("S-OK", true, relation("S-OK", null, null));
+        prices.add(price("P-JIN", "S-OK", "10", "13", "CNY", "公斤", "特级"));
+
+        mvc.perform(get(BASE + "/comparison"))
+                .andExpect(jsonPath("$.data.rows[0].comparable").value(true))
+                .andExpect(jsonPath("$.data.rows[0].rank").value(1));
+    }
+
     // ==================== fixtures ====================
+
+    private static String unitCode(String raw) {
+        String v = raw == null ? "" : raw.trim().toLowerCase();
+        if (v.equals("kg") || v.equals("公斤")) return "kg";
+        if (v.equals("箱")) return "case";
+        return null;
+    }
 
     private void supplier(String id, boolean active, SupplierMaterial relation) {
         Supplier s = new Supplier();

@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 
 /**
@@ -53,7 +54,9 @@ public final class InquiryQuoteComparator {
             LocalDate today,
             Map<String, Supplier> suppliersById,
             Map<String, SupplierMaterial> relationsBySupplierId,
-            Map<String, List<SupplierMaterialPurchaseSpec>> activeSpecsByRelationId) {
+            Map<String, List<SupplierMaterialPurchaseSpec>> activeSpecsByRelationId,
+            // 单位同一性走单位契约 (kg / 公斤 / KG 是同一个), ⛔ 不比字符串
+            BiPredicate<String, String> sameUnit) {
     }
 
     public static InquiryQuoteComparisonDTO compare(InquiryQuote inquiry,
@@ -160,7 +163,7 @@ public final class InquiryQuoteComparator {
         String unit = blankToNull(price.getQuotedUnit());
         if (unit == null) {
             notComparable.add(new Issue("UNIT_UNKNOWN", "报价未注明计价单位"));
-        } else if (!sameText(unit, inquiry.getUnit())) {
+        } else if (!facts.sameUnit().test(unit, inquiry.getUnit())) {
             notComparable.add(new Issue("UNIT_MISMATCH", String.format(
                     "报价计价单位「%s」与询价单位「%s」不同, 不做数量与重量换算", unit, inquiry.getUnit())));
         }
@@ -244,7 +247,7 @@ public final class InquiryQuoteComparator {
             row.setMinOrderQuantityUnit(relation.getPurchaseUnit());
         }
         if (row.getMinOrderQuantity() != null) {
-            if (row.getMinOrderQuantityUnit() != null && sameText(row.getMinOrderQuantityUnit(), inquiry.getUnit())) {
+            if (row.getMinOrderQuantityUnit() != null && facts.sameUnit().test(row.getMinOrderQuantityUnit(), inquiry.getUnit())) {
                 if (inquiry.getQuantity() != null && inquiry.getQuantity().compareTo(row.getMinOrderQuantity()) < 0) {
                     blocking.add(new Issue("BELOW_MOQ", String.format(
                             "询价数量 %s %s 低于起订量 %s %s",
@@ -284,7 +287,7 @@ public final class InquiryQuoteComparator {
                     facts.activeSpecsByRelationId().getOrDefault(relation.getId(), List.of());
             if (!specs.isEmpty()) {
                 List<SupplierMaterialPurchaseSpec> matching = specs.stream()
-                        .filter(s -> sameText(s.getPurchasePackageUnit(), unit))
+                        .filter(s -> facts.sameUnit().test(s.getPurchasePackageUnit(), unit))
                         .collect(Collectors.toList());
                 if (matching.size() == 1) {
                     row.setPurchasePackagingSpecId(matching.get(0).getId());

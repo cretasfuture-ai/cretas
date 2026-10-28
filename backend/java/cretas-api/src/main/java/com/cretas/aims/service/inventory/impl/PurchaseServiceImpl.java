@@ -1801,8 +1801,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withHint("请把本物料拆到单独的草稿再比价, 或选择草稿原供应商的报价");
         }
         PurchaseOrderItem target = targets.get(0);
-        boolean unitChanged = target.getUnit() == null || expectedUnit == null
-                || !target.getUnit().trim().equalsIgnoreCase(expectedUnit.trim());
+        boolean unitChanged = !sameDraftLineUnit(factoryId, target.getUnit(), expectedUnit);
         boolean quantityChanged = target.getQuantity() == null || expectedQuantity == null
                 || target.getQuantity().compareTo(expectedQuantity) != 0;
         if (unitChanged || quantityChanged) {
@@ -1852,6 +1851,16 @@ public class PurchaseServiceImpl implements PurchaseService {
         log.info("报价回填采购草稿: orderId={}, orderNumber={}, materialTypeId={}, supplierId={}",
                 orderId, order.getOrderNumber(), materialTypeId, supplierId);
         return order;
+    }
+
+    /** 草稿行单位是否仍是发起比价时的单位: 问单位契约, ⛔ 不比字符串 (kg / 公斤 是同一个)。 */
+    private boolean sameDraftLineUnit(String factoryId, String current, String expected) {
+        if (current == null || current.isBlank() || expected == null || expected.isBlank()) {
+            return false;
+        }
+        String currentCode = canonicalUnitOrRaw(factoryId, current);
+        String expectedCode = canonicalUnitOrRaw(factoryId, expected);
+        return currentCode != null && currentCode.equals(expectedCode);
     }
 
     /**
