@@ -61,6 +61,8 @@ class ProcessingServiceImplAiProcessSecretTest {
         ReflectionTestUtils.setField(service, "llmCostScope", protectedScope());
         when(productionBatchRepository.findByIdAndFactoryId(1L, FACTORY))
                 .thenReturn(Optional.of(batch(1L, SECRET, SECRET_PLAN, SECRET_COST, BigDecimal.TEN)));
+        // 若判定被绕过, 让流程能一路走到缓存和模型 (由下面的断言判红, 而不是半路空指针)
+        stubAnalysisPath(1L);
 
         Map<String, Object> result = service.analyzeWithAI(FACTORY, "1", null, null);
 
@@ -100,14 +102,27 @@ class ProcessingServiceImplAiProcessSecretTest {
     private void stubNormalBatch() {
         when(productionBatchRepository.findByIdAndFactoryId(2L, FACTORY))
                 .thenReturn(Optional.of(batch(2L, NORMAL, NORMAL_PLAN, NORMAL_COST, BigDecimal.TEN)));
+        stubAnalysisPath(2L);
+        when(aiAnalysisService.analyzeCost(eq(FACTORY), eq("2"), anyMap(), isNull(), isNull())).thenReturn(aiOk());
+    }
+
+    /** getEnhancedBatchCostAnalysis 一路要读的仓库 (lenient: 判定拦下时它们不会被用到)。 */
+    private void stubAnalysisPath(long batchId) {
         lenient().when(equipmentRepository.findByIdIn(any())).thenReturn(java.util.List.of());
-        lenient().when(batchWorkSessionRepository.findByBatchId(2L)).thenReturn(java.util.List.of());
-        lenient().when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(2L), any()))
+        lenient().when(batchWorkSessionRepository.findByBatchId(batchId)).thenReturn(java.util.List.of());
+        lenient().when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(eq(FACTORY), eq(batchId), any()))
                 .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of()));
-        lenient().when(processingStageRecordService.getByBatchIdWithComparison(FACTORY, 2L)).thenReturn(java.util.List.of());
+        lenient().when(qualityInspectionRepository.findByFactoryId(eq(FACTORY), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of()));
+        lenient().when(processingStageRecordService.getByBatchIdWithComparison(FACTORY, batchId)).thenReturn(java.util.List.of());
+        lenient().when(aiAnalysisService.analyzeCost(eq(FACTORY), eq(String.valueOf(batchId)), anyMap(), isNull(), isNull()))
+                .thenReturn(aiOk());
+    }
+
+    private static Map<String, Object> aiOk() {
         Map<String, Object> ai = new HashMap<>();
         ai.put("success", true);
         ai.put("aiAnalysis", "新分析");
-        when(aiAnalysisService.analyzeCost(eq(FACTORY), eq("2"), anyMap(), isNull(), isNull())).thenReturn(ai);
+        return ai;
     }
 }
