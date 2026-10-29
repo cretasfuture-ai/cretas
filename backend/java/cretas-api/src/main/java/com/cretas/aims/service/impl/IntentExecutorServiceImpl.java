@@ -12,8 +12,10 @@ import com.cretas.aims.service.execution.SseStreamingService;
 import com.cretas.aims.service.execution.DemoConversationScope;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.agentops.FactoryAgentTraceRecorder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -43,12 +45,28 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     private final MultiIntentExecutionService multiIntentExecutionService;
     private final ConversationMemoryService conversationMemoryService;
 
+    /** Optional so partial contexts / unit constructions keep working; null means "do not trace". */
+    @Autowired(required = false)
+    private FactoryAgentTraceRecorder factoryTraceRecorder;
+
     @Override
     public IntentExecuteResponse execute(String factoryId, IntentExecuteRequest request,
                                          Long userId, String userRole) {
+        long startedNanos = System.nanoTime();
         IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
         populateConversationRound(factoryId, userId, request, response);
+        recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
         return response;
+    }
+
+    /** S6-07: every real factory run leaves a trace; failures never change the answer. */
+    private void recordFactoryTrace(String factoryId, Long userId, String userRole,
+                                    IntentExecuteResponse response, long startedNanos) {
+        if (factoryTraceRecorder == null) {
+            return;
+        }
+        factoryTraceRecorder.record(factoryId, userId, userRole, response,
+                (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
     @Override
@@ -117,7 +135,10 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     @Override
     public IntentExecuteResponse confirm(String factoryId, ConfirmationProof confirmationProof,
                                           Long userId, String userRole) {
-        return orchestrator.confirm(factoryId, confirmationProof, userId, userRole);
+        long startedNanos = System.nanoTime();
+        IntentExecuteResponse response = orchestrator.confirm(factoryId, confirmationProof, userId, userRole);
+        recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
+        return response;
     }
 
     @Override

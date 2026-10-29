@@ -137,6 +137,9 @@ public class AgentOpsService {
                         ? new ResponseStatusException(HttpStatus.FORBIDDEN, ex.getDetailCode())
                         : new ResponseStatusException(HttpStatus.BAD_GATEWAY, "AGENT_OPS_BAD_UPSTREAM");
                 case 409 -> new ResponseStatusException(HttpStatus.CONFLICT, conflictCode(ex));
+                // Controlled rejections stay 4xx with a readable Chinese reason; they are not outages.
+                case 404 -> clientError(HttpStatus.NOT_FOUND, ex, "未找到请求的记录");
+                case 400, 422 -> clientError(HttpStatus.UNPROCESSABLE_ENTITY, ex, "请求内容不符合要求");
                 case 503 -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                         "AGENT_OPS_RUNTIME_SHADOW_DISABLED".equals(ex.getDetailCode())
                                 ? ex.getDetailCode() : "AGENT_OPS_STORE_UNAVAILABLE");
@@ -147,6 +150,13 @@ public class AgentOpsService {
         } catch (IOException ex) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "AGENT_OPS_UNREACHABLE", ex);
         }
+    }
+
+    private ResponseStatusException clientError(HttpStatus status, UpstreamException ex, String fallback) {
+        String code = ex.getDetailCode();
+        String message = code == null ? null : AgentOpsClient.CLIENT_ERROR_MESSAGES.get(code);
+        return new ResponseStatusException(status,
+                message == null ? fallback : message + "（" + code + "）");
     }
 
     private String conflictCode(UpstreamException ex) {

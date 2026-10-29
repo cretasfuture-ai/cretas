@@ -51,8 +51,8 @@ const opsRoutes: RouteRecordRaw[] = [
       icon: 'DataAnalysis',
       module: 'analytics',
       roles: agentOpsAdminRoles,
-      hideForFactoryTypes: ['FACTORY'],
-      businessDomain: 'RESTAURANT',
+      // 工厂管理员只看自己工厂（后端以登录身份定租户）；餐饮保留但已弃用。
+      businessDomain: ['FACTORY', 'RESTAURANT'],
     },
     children: [
       {

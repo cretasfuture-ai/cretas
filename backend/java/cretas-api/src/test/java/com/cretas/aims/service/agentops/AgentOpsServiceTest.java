@@ -136,12 +136,11 @@ class AgentOpsServiceTest {
 
 
     @Test
-    void upstream503IsPreservedAndOtherUnexpectedErrorsRemain502() throws Exception {
+    void upstream503IsPreservedAndUnexpectedServerErrorsRemain502() throws Exception {
         when(client.listEvalSets(any()))
                 .thenThrow(new AgentOpsClient.UpstreamException(503))
-                .thenThrow(new AgentOpsClient.UpstreamException(404))
-                .thenThrow(new AgentOpsClient.UpstreamException(422))
-                .thenThrow(new AgentOpsClient.UpstreamException(500));
+                .thenThrow(new AgentOpsClient.UpstreamException(500))
+                .thenThrow(new AgentOpsClient.UpstreamException(502));
         assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> {
@@ -149,7 +148,8 @@ class AgentOpsServiceTest {
                     assertThat(status.getStatusCode().value()).isEqualTo(503);
                     assertThat(status.getReason()).isEqualTo("AGENT_OPS_STORE_UNAVAILABLE");
                 });
-        for (int upstream : new int[]{404, 422, 500}) {
+        // 404/422 are controlled rejections and stay 4xx (see upstreamValidationAndNotFound...)
+        for (int upstream : new int[]{500, 502}) {
             assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
                     .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                         assertThat(status.getStatusCode().value()).as("upstream %s", upstream).isEqualTo(502);
@@ -176,5 +176,46 @@ class AgentOpsServiceTest {
                     assertThat(status.getStatusCode().value()).isEqualTo(502);
                     assertThat(status.getReason()).isEqualTo("AGENT_OPS_BAD_UPSTREAM");
                 });
+    }
+
+    @Test
+    void upstreamValidationAndNotFoundStayClientErrorsWithChineseReason() throws Exception {
+        when(client.listEvalSets(any()))
+                .thenThrow(new AgentOpsClient.UpstreamException(422, "UNSUPPORTED_EXPECTED_ROUTE"))
+                .thenThrow(new AgentOpsClient.UpstreamException(404, "RUN_NOT_FOUND"))
+                .thenThrow(new AgentOpsClient.UpstreamException(422, null));
+        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+                    assertThat(status.getStatusCode().value()).isEqualTo(422);
+                    assertThat(status.getReason()).contains("期望路由").contains("UNSUPPORTED_EXPECTED_ROUTE");
+                });
+        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+                    assertThat(status.getStatusCode().value()).isEqualTo(404);
+                    assertThat(status.getReason()).contains("未找到");
+                });
+        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
+                    assertThat(status.getStatusCode().value()).isEqualTo(422);
+                    assertThat(status.getReason()).isEqualTo("请求内容不符合要求");
+                });
+    }
+
+    @Test
+    void realUpstreamOutageStillMapsTo502() throws Exception {
+        when(client.listEvalSets(any())).thenThrow(new AgentOpsClient.UpstreamException(500));
+        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        status -> assertThat(status.getStatusCode().value()).isEqualTo(502));
+    }
+
+    @Test
+    void factoryAdminIsAllowedAndOperatorIsNot() throws Exception {
+        when(domains.resolveBusinessDomain("F006")).thenReturn("FACTORY");
+        when(client.listEvalSets(any())).thenReturn(new ObjectMapper().readTree("{\"items\":[]}"));
+        service.listEvalSets("F006", "42", "factory_super_admin", "corr");
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "operator", "corr"))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        status -> assertThat(status.getStatusCode().value()).isEqualTo(403));
     }
 }

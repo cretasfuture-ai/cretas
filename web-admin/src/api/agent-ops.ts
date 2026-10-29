@@ -3,7 +3,7 @@ import type { ApiResponse } from '@/types/api';
 
 export interface EvalCase {
   caseId: string;
-  expectedRoute: 'GROSS_MARGIN_DECLINE_ATTRIBUTION';
+  expectedRoute: string;
   requiredTools: string[];
   numericTruthRefs: Record<string, string>;
   maxRounds: number;

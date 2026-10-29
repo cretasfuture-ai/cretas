@@ -3,8 +3,9 @@ import { computed } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 
 const auth = useAuthStore();
-const hasRestaurantTenant = computed(() => (
-  Boolean(auth.factoryId) && auth.businessDomain === 'RESTAURANT'
+// 工厂是现行业态；餐饮保留（已弃用）。其他业态一律不放行。
+const hasSupportedTenant = computed(() => (
+  Boolean(auth.factoryId) && ['FACTORY', 'RESTAURANT'].includes(auth.businessDomain as string)
 ));
 </script>
 
@@ -12,7 +13,7 @@ const hasRestaurantTenant = computed(() => (
   <section class="agent-ops-shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">RESTAURANT AGENTOPS</p>
+        <p class="eyebrow">AGENTOPS</p>
         <h1>让每次回答都能复现、比较和解释</h1>
         <p class="subtitle">离线评测不调用生产 Tool；运行轨迹直接读取现有事件账本。</p>
       </div>
@@ -20,8 +21,8 @@ const hasRestaurantTenant = computed(() => (
     </header>
 
     <el-alert
-      v-if="!hasRestaurantTenant"
-      title="当前账号未绑定餐饮租户，无法读取 AgentOps 数据"
+      v-if="!hasSupportedTenant"
+      title="当前账号未绑定工厂或餐饮租户，无法读取 AgentOps 数据"
       type="warning"
       :closable="false"
       show-icon
@@ -33,7 +34,7 @@ const hasRestaurantTenant = computed(() => (
       <router-link to="/ops/agent-ops/experiments">Experiments</router-link>
       <router-link to="/ops/agent-ops/run-trace">Run Trace</router-link>
     </nav>
-    <router-view v-if="hasRestaurantTenant" />
+    <router-view v-if="hasSupportedTenant" />
   </section>
 </template>
 

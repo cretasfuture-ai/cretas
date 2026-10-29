@@ -47,9 +47,9 @@ public class AgentOpsCreateEvalSetRequest {
         @NotBlank @Pattern(regexp = "[A-Z][A-Z0-9_]{2,95}") // domain legality (restaurant route vs factory intents) is enforced upstream
         private String expectedRoute;
         @Size(max = 10)
-        private List<@NotBlank @Size(max = 128) String> requiredTools;
+        private List<@NotBlank @Size(max = 128) String> requiredTools = new java.util.ArrayList<>();
         @Size(max = 100)
-        private Map<@NotBlank @Size(max = 128) String, @NotBlank @Size(max = 96) String> numericTruthRefs;
+        private Map<@NotBlank @Size(max = 128) String, @NotBlank @Size(max = 96) String> numericTruthRefs = new java.util.LinkedHashMap<>();
         @Min(1) @Max(2)
         private int maxRounds = 2;
         @Min(1) @Max(10)
