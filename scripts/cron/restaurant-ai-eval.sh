@@ -26,13 +26,19 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
   # shellcheck disable=SC1091
   source /www/wwwroot/cretas/.env.prod 2>/dev/null
   set +a
-  PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.restaurant_ai_eval \
-    --base https://admin.cretaceousfuture.com
-  rc=$?
-  echo "=== done (rc=$rc) ==="
-  if [ "$rc" -ne 0 ]; then
-    echo "RESTAURANT AI EVAL FAILED rc=$rc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
-  fi
+  # ── 餐饮电池 (MOCK_REST): 已停 ──
+  # 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 餐饮模拟租户 MOCK_REST 撤回训练授权,
+  # 其 AI 副本已清理; 这段每天以 MOCK_REST 打 AI 接口会再写 AI 数据, 故停掉。
+  # 下面的工厂读/写电池 (DEMO_FACTORY2) 照常跑。
+  echo "=== $(date '+%F %T') restaurant AI eval: 已停 (2026-10-29 MOCK_REST AI writes stopped, owner-approved) ==="
+  rc=0
+  # PYTHONIOENCODING=utf-8 python -X utf8 -m smartbi.scripts.restaurant_ai_eval \
+  #   --base https://admin.cretaceousfuture.com
+  # rc=$?
+  # echo "=== done (rc=$rc) ==="
+  # if [ "$rc" -ne 0 ]; then
+  #   echo "RESTAURANT AI EVAL FAILED rc=$rc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+  # fi
 
   # ── 工厂读电池 (2026-07-24 验收轮建立) ──
   echo "=== $(date '+%F %T') factory READ eval ==="
@@ -56,36 +62,39 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
     rc=$((rc || wrc))
   fi
 
-  # ── 飞轮日报 (best-effort, 不影响 rc) ──
-  if [ -f "$CODEDIR/scripts/restaurant-intent-promote.py" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    source /www/wwwroot/cretas/.env.prod 2>/dev/null
-    set +a
-    export POSTGRES_HOST=localhost POSTGRES_PORT=5432 \
-           POSTGRES_DB=smartbi_prod_db POSTGRES_USER=smartbi_user \
-           POSTGRES_PASSWORD="${SMARTBI_DB_PASSWORD:-}"
-    echo "=== $(date '+%F %T') 飞轮日报: 晋升候选 ==="
-    LIST_OUT=$(cd "$CODEDIR" && PYTHONIOENCODING=utf-8 python -X utf8 \
-      scripts/restaurant-intent-promote.py --list 2>&1) || true
-    echo "$LIST_OUT"
-    N_PROMOTE=$(printf '%s\n' "$LIST_OUT" | grep -oE '[0-9]+ 条达标推荐晋升' | grep -oE '^[0-9]+' | head -1 || true)
-    if [ "${N_PROMOTE:-0}" -gt 0 ] 2>/dev/null; then
-      echo "FLYWHEEL: ${N_PROMOTE} 条晋升候选待人审 $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
-    fi
-    echo "=== $(date '+%F %T') 飞轮日报: miss 复盘 ==="
-    MISS_OUT=$(cd "$CODEDIR" && PYTHONIOENCODING=utf-8 python -X utf8 \
-      scripts/restaurant-intent-promote.py --misses 2>&1) || true
-    echo "$MISS_OUT"
-    N_MISS=$(printf '%s\n' "$MISS_OUT" | grep -c '^共 .* 组 miss' || true)
-    if [ "${N_MISS:-0}" -gt 0 ]; then
-      MISS_LINE=$(printf '%s\n' "$MISS_OUT" | grep '^共 .* 组 miss' | head -1)
-      echo "FLYWHEEL: ${MISS_LINE} 待复盘 $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
-    fi
-    unset POSTGRES_PASSWORD SMARTBI_DB_PASSWORD DB_PASSWORD JWT_SECRET
-  else
-    echo "飞轮日报跳过: $CODEDIR/scripts/restaurant-intent-promote.py 不存在 (需 scp 同步)"
-  fi
+  # ── 飞轮日报 (餐饮, restaurant-intent-promote.py --factory 默认 MOCK_REST): 已停 ──
+  # 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 这段只读 MOCK_REST 的餐饮飞轮,
+  # 租户已停用 AI 数据, 不再跑。
+  echo "=== $(date '+%F %T') 飞轮日报: 已停 (2026-10-29 MOCK_REST AI writes stopped, owner-approved) ==="
+  # if [ -f "$CODEDIR/scripts/restaurant-intent-promote.py" ]; then
+  #   set -a
+  #   # shellcheck disable=SC1091
+  #   source /www/wwwroot/cretas/.env.prod 2>/dev/null
+  #   set +a
+  #   export POSTGRES_HOST=localhost POSTGRES_PORT=5432 \
+  #          POSTGRES_DB=smartbi_prod_db POSTGRES_USER=smartbi_user \
+  #          POSTGRES_PASSWORD="${SMARTBI_DB_PASSWORD:-}"
+  #   echo "=== $(date '+%F %T') 飞轮日报: 晋升候选 ==="
+  #   LIST_OUT=$(cd "$CODEDIR" && PYTHONIOENCODING=utf-8 python -X utf8 \
+  #     scripts/restaurant-intent-promote.py --list 2>&1) || true
+  #   echo "$LIST_OUT"
+  #   N_PROMOTE=$(printf '%s\n' "$LIST_OUT" | grep -oE '[0-9]+ 条达标推荐晋升' | grep -oE '^[0-9]+' | head -1 || true)
+  #   if [ "${N_PROMOTE:-0}" -gt 0 ] 2>/dev/null; then
+  #     echo "FLYWHEEL: ${N_PROMOTE} 条晋升候选待人审 $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+  #   fi
+  #   echo "=== $(date '+%F %T') 飞轮日报: miss 复盘 ==="
+  #   MISS_OUT=$(cd "$CODEDIR" && PYTHONIOENCODING=utf-8 python -X utf8 \
+  #     scripts/restaurant-intent-promote.py --misses 2>&1) || true
+  #   echo "$MISS_OUT"
+  #   N_MISS=$(printf '%s\n' "$MISS_OUT" | grep -c '^共 .* 组 miss' || true)
+  #   if [ "${N_MISS:-0}" -gt 0 ]; then
+  #     MISS_LINE=$(printf '%s\n' "$MISS_OUT" | grep '^共 .* 组 miss' | head -1)
+  #     echo "FLYWHEEL: ${MISS_LINE} 待复盘 $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+  #   fi
+  #   unset POSTGRES_PASSWORD SMARTBI_DB_PASSWORD DB_PASSWORD JWT_SECRET
+  # else
+  #   echo "飞轮日报跳过: $CODEDIR/scripts/restaurant-intent-promote.py 不存在 (需 scp 同步)"
+  # fi
 
   exit "$rc"
 } >> "$LOG" 2>&1
