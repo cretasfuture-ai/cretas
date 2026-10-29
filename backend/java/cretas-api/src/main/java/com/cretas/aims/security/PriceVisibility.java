@@ -32,7 +32,7 @@ public class PriceVisibility {
     static final java.util.Set<String> PROCUREMENT_FALLBACK_ROLES = java.util.Set.of("procurement_manager");
 
     /** 同上, finance:read 未配置时只有财务岗。 */
-    static final java.util.Set<String> FINANCE_FALLBACK_ROLES = java.util.Set.of("finance_manager", "cashier");
+    static final java.util.Set<String> FINANCE_FALLBACK_ROLES = java.util.Set.of("finance_manager");
 
     /** 采购 / 财务读走「只看配置」的判定, 其它权限码照常 hasPermission。 */
     private boolean check(User user, String code) {

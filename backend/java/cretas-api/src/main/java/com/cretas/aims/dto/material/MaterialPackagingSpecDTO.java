@@ -27,6 +27,7 @@ public record MaterialPackagingSpecDTO(
         Boolean active,
         Integer sortOrder,
         Long version,
+        @com.cretas.aims.security.PriceSensitive(permission = com.cretas.aims.security.PriceSensitive.PURCHASE)
         BigDecimal derivedPrice,
         String derivedPriceUnit,
         String derivedPriceSource) {

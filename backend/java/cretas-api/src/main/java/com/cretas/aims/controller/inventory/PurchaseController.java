@@ -205,11 +205,16 @@ public class PurchaseController {
             purchase = com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE)
     public ApiResponse<PurchaseOrder> getOrderForApproval(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String orderId) {
-        if (approvalInstanceRepository == null || approvalInstanceRepository
+            @PathVariable @NotBlank String orderId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // 只给这张单的审批人: 当前节点轮到他 (待办) 或他在这个实例上操作过 (已办) —— 与 OA 列表 B6 同一判据。
+        // 其余一律 404: 采购单 id 在待收票等处随处可见, 不能拿审批速览绕开采购读。
+        User caller = requestUser(httpRequest);
+        ApprovalWorkflowInstance instance = approvalInstanceRepository == null ? null : approvalInstanceRepository
                 .findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(
-                        factoryId, "PURCHASE_ORDER", orderId).isEmpty()) {
-            throw new BusinessException(404, "该采购单没有 OA 审批记录");
+                        factoryId, "PURCHASE_ORDER", orderId).orElse(null);
+        if (caller == null || instance == null || !isApproverOf(instance, caller)) {
+            throw new BusinessException(404, "没有这张采购单的审批任务");
         }
         return ApiResponse.success("查询成功", purchaseService.getPurchaseOrderById(factoryId, orderId));
     }
@@ -784,6 +789,17 @@ public class PurchaseController {
 
     private boolean canViewPurchasePrices(jakarta.servlet.http.HttpServletRequest request) {
         return priceVisibility().canView(requestUser(request), com.cretas.aims.security.PriceSensitive.PURCHASE);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ApprovalHistoryRepository approvalHistoryRepository;
+
+    /** 待办 (当前节点可操作) 或已办 (在该实例上有操作记录); 组件缺失一律不算 (fail closed)。 */
+    private boolean isApproverOf(ApprovalWorkflowInstance instance, User caller) {
+        boolean pending = workflowEngine != null && workflowEngine.canTransition(instance, caller);
+        boolean acted = approvalHistoryRepository != null && approvalHistoryRepository
+                .existsByFactoryIdAndInstanceIdAndActorId(instance.getFactoryId(), instance.getId(), caller.getId());
+        return pending || acted;
     }
 
     /** 只返回价格的入口: 看不到采购价就整个 403, 不返回一堆 null。 */

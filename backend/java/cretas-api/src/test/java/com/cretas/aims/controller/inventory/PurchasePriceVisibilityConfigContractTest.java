@@ -28,6 +28,18 @@ import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.security.PriceSensitiveSerializerModifier;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.controller.MaterialPackagingHierarchyController;
+import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.dto.material.MaterialPackagingHierarchyDTO;
+import com.cretas.aims.dto.user.UserDTO;
+import com.cretas.aims.repository.workflow.ApprovalHistoryRepository;
+import com.cretas.aims.security.PriceMaskResolver;
+import com.cretas.aims.security.PriceSensitive;
+import com.cretas.aims.security.PriceVisibility;
+import com.cretas.aims.service.MaterialPackagingHierarchyService;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 import com.cretas.aims.service.inventory.ReturnOrderService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.service.inventory.PurchaseInvoiceService;
@@ -78,7 +90,8 @@ class PurchasePriceVisibilityConfigContractTest {
 
     private static final String F = "S512-F";
     private static final String NO_CFG = "S512-NOCFG";
-    private static final long PROCUREMENT = 1L, FINANCE = 2L, SALES = 3L, PRODUCTION = 4L, WAREHOUSE = 5L;
+    private static final long PROCUREMENT = 1L, FINANCE = 2L, SALES = 3L, PRODUCTION = 4L, WAREHOUSE = 5L,
+            FINANCE_OTHER = 6L, N_CASHIER = 18L;
     private static final long N_PROCUREMENT = 11L, N_FINANCE = 12L, N_WAREHOUSE = 15L, N_DISPATCHER = 16L,
             N_PRODUCTION = 17L;
 
@@ -91,6 +104,10 @@ class PurchasePriceVisibilityConfigContractTest {
     private final ListSummaryService listSummaryService = mock(ListSummaryService.class);
     private final ReturnOrderService returnOrderService = mock(ReturnOrderService.class);
     private final ApprovalWorkflowInstanceRepository approvals = mock(ApprovalWorkflowInstanceRepository.class);
+    private final WorkflowEngineService workflowEngine = mock(WorkflowEngineService.class);
+    private final ApprovalHistoryRepository approvalHistory = mock(ApprovalHistoryRepository.class);
+    private final MaterialPackagingHierarchyService packagingService = mock(MaterialPackagingHierarchyService.class);
+    private final MobileService mobileForExport = mock(MobileService.class);
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule())
             .registerModule(new SimpleModule("PriceSensitiveModule")
                     .setSerializerModifier(new PriceSensitiveSerializerModifier()));
@@ -123,6 +140,8 @@ class PurchasePriceVisibilityConfigContractTest {
         when(l2.findByFactoryIdAndConfigVersion(NO_CFG, 1)).thenReturn(List.of());
         user(PROCUREMENT, F, "procurement_manager");
         user(FINANCE, F, "finance_manager");
+        user(FINANCE_OTHER, F, "finance_manager");   // 同角色, 但不是这张单的审批人
+        user(N_CASHIER, NO_CFG, "cashier");
         user(SALES, F, "sales_manager");
         user(PRODUCTION, F, "production_manager");
         user(WAREHOUSE, F, "warehouse_manager");
@@ -157,7 +176,16 @@ class PurchasePriceVisibilityConfigContractTest {
             when(returnOrderService.getReturnOrderDetail(fid, "RO-S")).thenAnswer(inv -> returnOrder(ReturnType.SALES_RETURN));
         }
         when(approvals.findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(anyString(), eq("PURCHASE_ORDER"), eq("PO-1")))
-                .thenReturn(Optional.of(new ApprovalWorkflowInstance()));
+                .thenAnswer(inv -> {
+                    ApprovalWorkflowInstance oa = new ApprovalWorkflowInstance();
+                    oa.setId("OA-1");
+                    oa.setFactoryId(inv.getArgument(0));
+                    return Optional.of(oa);
+                });
+        // 审批人: F 的 FINANCE 当前节点轮到他 (待办); NO_CFG 的 N_FINANCE 在实例上操作过 (已办)
+        when(workflowEngine.canTransition(any(ApprovalWorkflowInstance.class), any(User.class)))
+                .thenAnswer(inv -> ((User) inv.getArgument(1)).getId() == FINANCE);
+        when(approvalHistory.existsByFactoryIdAndInstanceIdAndActorId(NO_CFG, "OA-1", N_FINANCE)).thenReturn(true);
         when(approvals.findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(anyString(), eq("PURCHASE_ORDER"), eq("PO-NO-OA")))
                 .thenReturn(Optional.empty());
         when(invoiceService.listViews(F, "PO-1")).thenAnswer(inv -> List.of(PurchaseInvoiceViewDTO.builder()
@@ -181,12 +209,22 @@ class PurchasePriceVisibilityConfigContractTest {
         MobileService mobile = mock(MobileService.class);
         PurchaseController purchaseController = new PurchaseController(purchaseService, null, mobile, permissions, users, null, null);
         ReflectionTestUtils.setField(purchaseController, "approvalInstanceRepository", approvals);
+        ReflectionTestUtils.setField(purchaseController, "workflowEngine", workflowEngine);
+        ReflectionTestUtils.setField(purchaseController, "approvalHistoryRepository", approvalHistory);
+        MaterialPackagingHierarchyController packagingController =
+                new MaterialPackagingHierarchyController(packagingService, mobile);
+        ReflectionTestUtils.setField(packagingController, "priceVisibility", new PriceVisibility(permissions));
+        ReflectionTestUtils.setField(packagingController, "userRepository", users);
+        when(packagingService.getByMaterialTypeId(anyString(), anyString(), any()))
+                .thenReturn(Optional.of(new MaterialPackagingHierarchyDTO()));
         mvc = MockMvcBuilders.standaloneSetup(
                         purchaseController,
                         new SupplierMaterialController(supplierMaterialService, mock(SupplierMaterialPurchaseSpecService.class)),
                         new PurchaseInvoiceController(invoiceService, mobile),
                         new ListSummaryController(listSummaryService, permissions, users),
-                        new ReturnOrderController(returnOrderService, mobile, null))
+                        new ReturnOrderController(returnOrderService, mobile, null),
+                        packagingController,
+                        new BatchCostProbeController())
                 .addFilters(new PriceSensitiveContextFilter())
                 .addInterceptors(new PermissionInterceptor(permissions, users, json))
                 .setControllerAdvice(advice, new GlobalExceptionHandler())
@@ -325,6 +363,72 @@ class PurchasePriceVisibilityConfigContractTest {
         // 采购经理看采购退货
         JsonNode procurementView = body(PROCUREMENT, "/api/mobile/" + F + "/return-orders/RO-P", 200);
         assertThat(procurementView.at("/data/items/0/lineAmount").decimalValue()).isEqualByComparingTo("30.00");
+    }
+
+    // ─── 审批速览只给这张单的审批人 ──────────────────────────────────────────────
+
+    @Test
+    void approvalViewIsOnlyForApproversOfThatInstance() throws Exception {
+        String url = "/api/mobile/" + F + "/purchase/orders/PO-1/approval-view";
+        assertThat(body(FINANCE, url, 200).at("/data/totalAmount").decimalValue()).isEqualByComparingTo("150.00");
+        // 同是财务经理, 不是这个实例的审批人 (没有待办、没操作过) → 404, 不是拿 PO id 就能读金额
+        assertThat(call(FINANCE_OTHER, get(url)).getResponse().getStatus()).isEqualTo(404);
+        // 采购经理不是审批人也走不了这条; 他有自己的详情入口
+        assertThat(call(PROCUREMENT, get(url)).getResponse().getStatus()).isEqualTo(404);
+        // 已办的人 (操作过) 照样能看
+        assertThat(body(N_FINANCE, "/api/mobile/" + NO_CFG + "/purchase/orders/PO-1/approval-view", 200)
+                .at("/data/totalAmount").decimalValue()).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    void financeFallbackIsFinanceManagerOnly_notCashier() {
+        PriceVisibility pv = new PriceVisibility(permissions);
+        assertThat(pv.canView(users.findById(N_FINANCE).orElseThrow(), PriceSensitive.PURCHASE_OR_FINANCE)).isTrue();
+        assertThat(pv.canView(users.findById(N_CASHIER).orElseThrow(), PriceSensitive.PURCHASE_OR_FINANCE)).isFalse();
+    }
+
+    // ─── 包装换算推导的供应商价 / 批次采购成本 ─────────────────────────────────────
+
+    @Test
+    void packagingDerivedSupplierPriceIsOnlyDerivedForPurchaseReaders() throws Exception {
+        String url = "/api/mobile/" + F + "/material-packaging/by-material/MAT-A?supplierMaterialId=SM-1";
+        body(SALES, url, 200);
+        org.mockito.Mockito.verify(packagingService).getByMaterialTypeId(F, "MAT-A", null);
+        body(PROCUREMENT, url, 200);
+        org.mockito.Mockito.verify(packagingService).getByMaterialTypeId(F, "MAT-A", "SM-1");
+    }
+
+    @Test
+    void batchPurchaseCostFollowsProcurementOrFinanceRead_jsonAndExport() throws Exception {
+        String url = "/api/mobile/" + F + "/s512-probe/batch";
+        JsonNode sales = body(SALES, url, 200);
+        assertThat(sales.at("/data/unitPrice").isNull()).isTrue();
+        assertThat(sales.at("/data/totalValue").isNull()).isTrue();
+        assertThat(sales.at("/data/totalPrice").isNull()).isTrue();
+        assertThat(body(FINANCE, url, 200).at("/data/unitPrice").decimalValue()).isEqualByComparingTo("12.50");
+        assertThat(body(PROCUREMENT, url, 200).at("/data/totalValue").decimalValue()).isEqualByComparingTo("125.00");
+
+        // Excel 导出同一口径
+        PriceMaskResolver resolver = new PriceMaskResolver(mobileForExport, users, permissions);
+        for (long id : new long[] {SALES, FINANCE, PROCUREMENT}) {
+            UserDTO dto = new UserDTO();
+            dto.setId(id);
+            when(mobileForExport.getUserFromToken("t" + id)).thenReturn(dto);
+        }
+        assertThat(resolver.shouldMaskPrice("Bearer t" + SALES, PriceSensitive.PURCHASE_OR_FINANCE)).isTrue();
+        assertThat(resolver.shouldMaskPrice("Bearer t" + FINANCE, PriceSensitive.PURCHASE_OR_FINANCE)).isFalse();
+        assertThat(resolver.shouldMaskPrice("Bearer t" + PROCUREMENT, PriceSensitive.PURCHASE_OR_FINANCE)).isFalse();
+    }
+
+    /** 只为把 MaterialBatchDTO 过一遍真实的 advice + Jackson; 批次控制器依赖太多, 字段口径才是被测对象。 */
+    @RestController
+    static class BatchCostProbeController {
+        @GetMapping("/api/mobile/{factoryId}/s512-probe/batch")
+        public com.cretas.aims.dto.common.ApiResponse<MaterialBatchDTO> batch() {
+            return com.cretas.aims.dto.common.ApiResponse.success(MaterialBatchDTO.builder()
+                    .unitPrice(new BigDecimal("12.50")).totalValue(new BigDecimal("125.00"))
+                    .totalPrice(new BigDecimal("125.00")).build());
+        }
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────────

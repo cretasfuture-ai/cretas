@@ -385,11 +385,14 @@ async function loadPriceComparison() {
   if (priceLoading.value || !factoryId.value || !orderId.value) return;
   priceLoading.value = true;
   try {
-    const res = await get(`/${factoryId.value}/purchase/orders/${orderId.value}/price-comparison`);
+    // 三价对比只给有采购写 / 财务写的人, 且没有采购读时后端直接 403 (S5-12) ——
+    // 只读角色打开详情页不该弹一条报错, 静默请求、拿不到就不显示这一块。
+    const res = await get(`/${factoryId.value}/purchase/orders/${orderId.value}/price-comparison`,
+      { _silent: true } as never);
     if (res.success) {
       priceComparisons.value = Array.isArray(res.data) ? res.data : [];
     }
-  } catch { /* axios interceptor already displayed error toast */ }
+  } catch { priceComparisons.value = []; }
   finally { priceLoading.value = false; }
 }
 
