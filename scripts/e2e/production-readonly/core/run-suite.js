@@ -218,13 +218,22 @@ async function runSuiteWithPage(page, options = {}) {
       priorities: options.priorities || { P0: [], P1: [], P2: [] },
       safetyPassed: guardReport.actualBusinessWrites === 0 && guardReport.blockedMutationAttempts.length === 0,
     };
-    const actorProof = await page.evaluate((expected) => {
+    let actorProof = { factoryId: '', actorId: '', matchesExpectedUsername: false, matchesExpectedActorId: false };
+    if (loginEvidence) try {
+      actorProof = await page.evaluate((expected) => {
       const value = JSON.parse(localStorage.getItem('cretas_user') || '{}');
       const actorId = String(value.userId ?? value.id ?? '');
       return { factoryId: String(value.factoryUser?.factoryId || value.factoryId || ''), actorId,
         matchesExpectedUsername: String(value.username || value.factoryUser?.username || '') === expected.username,
         matchesExpectedActorId: !expected.actorId || actorId === String(expected.actorId) };
-    }, { username: expectedUsername, actorId: options.expectedActorId || null });
+      }, { username: expectedUsername, actorId: options.expectedActorId || null });
+    } catch {
+      const failure = createScenarioResult('actor-proof-read', page.url());
+      failure.result = 'TOOL_ERROR';
+      failure.rootCauseClass = 'tool';
+      failure.pageEvidence.push({ reason: 'Authenticated actor identity could not be read' });
+      results.push(assertScenarioResult(failure));
+    }
     report.actorProof = actorProof;
     const safeReport = sanitizeValue(report);
     const files = await writeEvidence(safeReport, evidenceDir, { productionReadonly: true, page });
