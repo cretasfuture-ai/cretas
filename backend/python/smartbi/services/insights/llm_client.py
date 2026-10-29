@@ -17,6 +17,7 @@ Slot routing (per A-inventory.md):
 """
 import asyncio
 import logging
+from common.process_secret_harness import with_process_secret_harness
 from typing import Optional, AsyncGenerator
 
 import httpx
@@ -115,7 +116,7 @@ async def call_llm(
                 "content": [
                     {
                         "type": "text",
-                        "text": system_content,
+                        "text": with_process_secret_harness(system_content),
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -210,7 +211,7 @@ async def call_llm_stream(
                 "content": [
                     {
                         "type": "text",
-                        "text": system_content,
+                        "text": with_process_secret_harness(system_content),
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -299,7 +300,7 @@ async def call_llm_stream_text(
                 "content": [
                     {
                         "type": "text",
-                        "text": system_role,
+                        "text": with_process_secret_harness(system_role),
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
@@ -362,7 +363,7 @@ async def generate_text_analysis(
                 "content": [
                     {
                         "type": "text",
-                        "text": system_role,
+                        "text": with_process_secret_harness(system_role),
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],

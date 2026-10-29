@@ -70,6 +70,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import re
 import time
 from dataclasses import dataclass, field
@@ -3628,7 +3629,7 @@ class ComprehensiveSynthesisEngine:
         system = SYSTEM_PROMPT + HONEST_LABEL_CLAUSE
         payload = {
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": with_process_secret_harness(system)},
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.3,
