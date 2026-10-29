@@ -1259,39 +1259,6 @@ async def export_excel(request: ExcelExportRequest):
                 if max_lines > 1:
                     ws.row_dimensions[row[0].row].height = 15 * max_lines
 
-        def configure_print_layout(ws):
-            """Keep each sheet readable in print preview without dropping columns."""
-            ws.sheet_view.showGridLines = False
-            ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True, autoPageBreaks=False)
-            ws.page_setup.orientation = 'landscape'
-            ws.page_setup.paperSize = ws.PAPERSIZE_A4
-            ws.page_setup.fitToWidth = 1
-            ws.page_setup.fitToHeight = 0
-            ws.page_margins.left = 0.25
-            ws.page_margins.right = 0.25
-            ws.page_margins.top = 0.45
-            ws.page_margins.bottom = 0.45
-            ws.print_options.horizontalCentered = False
-            if ws.max_row and ws.max_column:
-                ws.print_area = f'A1:{ws.cell(ws.max_row, ws.max_column).coordinate}'
-                ws.print_title_rows = '1:1'
-
-        def wrap_sheet_text(ws):
-            """Wrap long source/fact cells and give print engines a deterministic row height."""
-            for row in ws.iter_rows():
-                max_lines = 1
-                for cell in row:
-                    if isinstance(cell.value, str):
-                        cell.alignment = Alignment(
-                            horizontal=cell.alignment.horizontal or 'left',
-                            vertical='top',
-                            wrap_text=True,
-                        )
-                        width = ws.column_dimensions[cell.column_letter].width or 10
-                        max_lines = max(max_lines, min(16, (len(cell.value) + int(width * 1.1) - 1) // int(width * 1.1)))
-                if max_lines > 1:
-                    ws.row_dimensions[row[0].row].height = min(240, 15 * max_lines)
-
         # Header styles
         header_font = Font(bold=True, color="FFFFFF", size=11)
         header_fill = PatternFill(start_color="1B65A8", end_color="1B65A8", fill_type="solid")

@@ -57,6 +57,13 @@ def test_semantic_catalog_drops_technical_family_label_fallbacks():
     assert candidate['metric'] in catalog[0]['metric']
 
 
+def test_semantic_catalog_keeps_human_label_matching_metric():
+    candidate = _candidate('quality.pass:bar', 'quality.pass', 'bar')
+    candidate['metric'] = '检验合格率'
+    candidate['analysis']['familyLabel'] = '检验合格率'
+    assert conversation.semantic_catalog([candidate])[0]['familyLabel'] == '检验合格率'
+
+
 def test_engine_known_trusted_families_have_generic_labels_before_source_prefix():
     expected = {
         'stock.age': '库存账龄',

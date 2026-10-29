@@ -133,7 +133,7 @@ def _public_family_label(value: Any, family_id: str, metric: str) -> Optional[st
     if not isinstance(value, str):
         return None
     label = value.strip()
-    if not label or label in {family_id, metric}:
+    if not label or label == family_id:
         return None
     # Unknown engine families currently fall back to an id-shaped metric or
     # the final technical segment.  Keep those out of both UI and planner.
