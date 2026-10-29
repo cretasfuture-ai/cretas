@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Round 4 Fix P0-6: added @PreAuthorize on mutating endpoints to restrict Canvas V3
+ * Round 4 Fix P0-6: added @RequireRole on mutating endpoints to restrict Canvas V3
  * dynamic field writes to FACTORY_SUPER_ADMIN / PERMISSION_ADMIN only.
  * Previously every factory user could add/modify fields.
  *

@@ -14,7 +14,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
@@ -32,7 +31,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @PostMapping
     @Operation(summary = "创建工序")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkProcessDTO> create(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestBody @Valid WorkProcessDTO dto) {
@@ -77,7 +75,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @PutMapping("/{id}")
     @Operation(summary = "更新工序")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkProcessDTO> update(
             @PathVariable String factoryId,
             @PathVariable String id,
@@ -92,7 +89,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @PatchMapping("/{id}/output-kind")
     @Operation(summary = "快捷修改工序主产出类型")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkProcessDTO> updateOutputMaterialKind(
             @PathVariable String factoryId,
             @PathVariable String id,
@@ -105,7 +101,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @DeleteMapping("/{id}")
     @Operation(summary = "删除工序")
-    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
             @PathVariable String id) {
@@ -117,7 +112,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @PutMapping("/{id}/toggle-status")
     @Operation(summary = "切换工序启用/禁用状态")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkProcessDTO> toggleStatus(
             @PathVariable String factoryId,
             @PathVariable String id) {
@@ -127,7 +121,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @PutMapping("/sort-order")
     @Operation(summary = "批量更新排序")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Void> updateSortOrder(
             @PathVariable String factoryId,
             @RequestBody @Valid List<WorkProcessDTO.SortOrderUpdate> updates) {
@@ -150,7 +143,6 @@ public class WorkProcessController {
     @RequirePermission({"production:read_write"})
     @PostMapping("/duplicates/govern")
     @Operation(summary = "治理重复工序（仅影响未来选择，不迁移已有引用）")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkProcessDTO.GovernanceResult> governDuplicates(
             @PathVariable String factoryId,
             @RequestBody @Valid WorkProcessDTO.GovernanceRequest request) {

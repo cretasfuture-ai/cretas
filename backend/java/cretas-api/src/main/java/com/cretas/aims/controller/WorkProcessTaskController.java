@@ -18,7 +18,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -59,7 +58,6 @@ public class WorkProcessTaskController {
     @PostMapping("/api/mobile/{factoryId}/production/batches/{batchId}/spawn-tasks")
     @Operation(summary = "为生产批次 spawn 工序任务实例")
     @RequirePermission({"production:read_write"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<List<WorkProcessTaskDTO>> spawnTasks(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "生产批次ID") Long batchId,
@@ -157,7 +155,6 @@ public class WorkProcessTaskController {
     @PutMapping("/api/mobile/{factoryId}/work-process-tasks/{id}/skip")
     @Operation(summary = "跳过工序 (任意非终态 → SKIPPED, 必填 notes)")
     @RequirePermission({"production:read_write"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkProcessTaskDTO> skip(
             @PathVariable String factoryId,
             @PathVariable Long id,
@@ -185,7 +182,6 @@ public class WorkProcessTaskController {
     @DeleteMapping("/api/mobile/{factoryId}/work-process-tasks/{id}")
     @Operation(summary = "软删工序任务")
     @RequirePermission({"production:read_write"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
             @PathVariable Long id) {

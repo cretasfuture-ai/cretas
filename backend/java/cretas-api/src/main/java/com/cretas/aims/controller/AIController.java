@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.AIRequestDTO;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.AIResponseDTO;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.dto.ai.AIBusinessDataRequest;
@@ -29,7 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -269,8 +269,10 @@ public class AIController {
      * 更新AI配额（仅供平台管理员使用）
      */
     @RequirePermission({"analytics:read_write"})
+    // 配额是平台给工厂定的上限。analytics:read_write 调度 / 财务主管 / 工厂总监都有,
+    // 只靠它 = 工厂账号给自己工厂加配额; 角色闸只放平台管理员 (RequireRoleInterceptor 的平台角色放行)。
+    @RequireRole({"platform_admin"})
     @PutMapping("/quota")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(summary = "更新AI配额",
                description = "平台管理员更新工厂的AI配额（仅限平台超级管理员）")
     public ApiResponse<Void> updateQuota(
