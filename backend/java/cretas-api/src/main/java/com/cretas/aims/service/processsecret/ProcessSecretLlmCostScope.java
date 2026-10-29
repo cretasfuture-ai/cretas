@@ -49,15 +49,15 @@ public class ProcessSecretLlmCostScope {
         public static final ReaderView NO_PROTECTED = new ReaderView(false, "", Set.of(), true);
 
         /** 没有保密产品 = 空串 (沿用原缓存); 否则 = 本厂保密产品集合 + 可完整查看集合 的稳定哈希。 */
+        public String tier() {
+            return factoryHasProtected ? "ps-" + sha256(protectedHash + "|" + String.join(",", fullView)).substring(0, 16) : "";
+        }
+
         /** 审计里给人看的档位: 本厂没有保密产品 / 全部能看 / 部分能看 / 都不能看。 */
         public String auditLabel() {
             if (!factoryHasProtected) return "NO_PROTECTED";
             if (fullForAll) return "FULL";
             return fullView.isEmpty() ? "NONE" : "PARTIAL";
-        }
-
-        public String tier() {
-            return factoryHasProtected ? "ps-" + sha256(protectedHash + "|" + String.join(",", fullView)).substring(0, 16) : "";
         }
 
         /** 新生成条目的戳; 没有保密产品时为 null (不需要)。 */

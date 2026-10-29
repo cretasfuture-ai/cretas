@@ -212,6 +212,42 @@ class ProcessSecretAiAccessAuditContractTest {
         });
     }
 
+    private static ServletRequestAttributes requestOf(AuthenticatedActor actor) {
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        http.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, actor);
+        return new ServletRequestAttributes(http);
+    }
+
+    @Test
+    void anInactiveRequestInheritedByAPooledThreadFallsBackToTheOffRequestRecord() throws Exception {
+        ServletRequestAttributes stale = requestOf(owner());
+        stale.requestCompleted();   // 请求早已结束, 属性还挂在线程上 (线程池继承来的); 读写请求属性会抛 IllegalStateException
+        RequestContextHolder.setRequestAttributes(stale);
+
+        Map<String, Object> result = service().analyzeCost(FACTORY, OWNER, "1", new HashMap<>(), null, "分析", true, 50);
+
+        assertThat(result.get("success")).isEqualTo(true);   // AI 请求照常
+        assertThat(aiRows()).singleElement().satisfies(row -> {   // 入口结束时就写了一条 (不等请求结束)
+            assertThat(row.decision()).isEqualTo("PROTECTED");
+            assertThat(row.actor().id()).isEqualTo(OWNER);
+        });
+    }
+
+    @Test
+    void aRequestWhoseRecordWasAlreadyWrittenStartsAFreshOne() throws Exception {
+        ServletRequestAttributes request = requestOf(owner());
+        RequestContextHolder.setRequestAttributes(request);
+        ProcessSecretAiAccessAudit.Pending alreadyWritten = new ProcessSecretAiAccessAudit.Pending();
+        alreadyWritten.written = true;   // 异步派发: 请求上那一条在第一次分派结束时已经写过
+        request.setAttribute(ProcessSecretAiAccessAudit.REQUEST_ATTRIBUTE, alreadyWritten,
+                org.springframework.web.context.request.RequestAttributes.SCOPE_REQUEST);
+
+        service().analyzeCost(FACTORY, OWNER, "1", new HashMap<>(), null, "分析", true, 50);
+        request.requestCompleted();
+
+        assertThat(aiRows()).singleElement().satisfies(row -> assertThat(row.decision()).isEqualTo("PROTECTED"));
+    }
+
     @Test
     void nestedEntriesOffTheRequestThreadShareTheOutermostRecord() throws Exception {
         AIAnalysisService service = service();

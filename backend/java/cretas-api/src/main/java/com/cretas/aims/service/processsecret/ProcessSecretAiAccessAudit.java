@@ -53,7 +53,9 @@ public class ProcessSecretAiAccessAudit {
         /** {@code IntentExecutionOrchestrator.execute / executeWithExplicitIntent}: AI 对话的意图执行。 */
         INTENT_EXECUTION("intent-execution"),
         /** {@code AIContextServiceImpl.buildProductionContextForAi / buildCostContextForCaller}: 给 Python AI 的上下文接口。 */
-        AI_CONTEXT("ai-context");
+        AI_CONTEXT("ai-context"),
+        /** {@code AIEnterpriseService.generateDailyReport / generateWeeklyReport / generateMonthlyReport}: 定时与手动的日周月报告。 */
+        REPORT_GENERATION("report-generation");
 
         private final String ref;
 
@@ -92,20 +94,36 @@ public class ProcessSecretAiAccessAudit {
     /** 进入一个 AI 入口。嵌套 / 同一请求里的后续入口并进同一条记录。 */
     public Access begin(String factoryId, Entry entry) {
         if (accessService == null) return new Access(null, false);
-        RequestAttributes request = RequestContextHolder.getRequestAttributes();
-        if (request != null) {
-            Object existing = request.getAttribute(REQUEST_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
-            if (existing instanceof Pending pending) return new Access(pending, false);
-            Pending pending = open(factoryId, entry);
-            request.setAttribute(REQUEST_ATTRIBUTE, pending, RequestAttributes.SCOPE_REQUEST);
-            request.registerDestructionCallback(REQUEST_ATTRIBUTE, () -> write(pending), RequestAttributes.SCOPE_REQUEST);
-            return new Access(pending, false);
-        }
+        Access attached = attachToRequest(factoryId, entry);
+        if (attached != null) return attached;
         Pending current = OFF_REQUEST.get();
         if (current != null) return new Access(current, false);
         Pending pending = open(factoryId, entry);
         OFF_REQUEST.set(pending);
         return new Access(pending, true);
+    }
+
+    /**
+     * 挂到当前 HTTP 请求上 (请求结束时写)。返回 null = 没有可用的请求, 调用方走请求外模式 (最外层入口结束时写):
+     * <ul>
+     *   <li>线程上没有请求属性;</li>
+     *   <li>请求属性已不活跃 (线程池继承来的、请求早已结束 —— 读写属性 / 登记回调会抛 IllegalStateException);</li>
+     * </ul>
+     * 请求上那一条已经写过 (异步派发在请求结束后又进来) 时另开一条, 不往写过的那条上记。
+     */
+    private Access attachToRequest(String factoryId, Entry entry) {
+        RequestAttributes request = RequestContextHolder.getRequestAttributes();
+        if (request == null) return null;
+        try {
+            Object existing = request.getAttribute(REQUEST_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
+            if (existing instanceof Pending pending && !pending.written) return new Access(pending, false);
+            Pending pending = open(factoryId, entry);
+            request.registerDestructionCallback(REQUEST_ATTRIBUTE, () -> write(pending), RequestAttributes.SCOPE_REQUEST);
+            request.setAttribute(REQUEST_ATTRIBUTE, pending, RequestAttributes.SCOPE_REQUEST);
+            return new Access(pending, false);
+        } catch (IllegalStateException inactive) {
+            return null;
+        }
     }
 
     private Pending open(String factoryId, Entry entry) {
@@ -151,11 +169,18 @@ public class ProcessSecretAiAccessAudit {
 
     /** 当前线程上正在记录的那一条 (测试与诊断用)。 */
     static Optional<Pending> current() {
+        Pending offRequest = OFF_REQUEST.get();
+        if (offRequest != null) return Optional.of(offRequest);
         RequestAttributes request = RequestContextHolder.getRequestAttributes();
-        if (request != null && request.getAttribute(REQUEST_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST) instanceof Pending p) {
-            return Optional.of(p);
+        try {
+            if (request != null && request.getAttribute(REQUEST_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST) instanceof Pending p
+                    && !p.written) {
+                return Optional.of(p);
+            }
+        } catch (IllegalStateException inactive) {
+            // 请求已不活跃: 没有挂在请求上的那一条
         }
-        return Optional.ofNullable(OFF_REQUEST.get());
+        return Optional.empty();
     }
 
     static final class Pending {

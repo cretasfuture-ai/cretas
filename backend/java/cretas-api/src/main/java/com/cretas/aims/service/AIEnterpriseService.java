@@ -219,20 +219,32 @@ public class AIEnterpriseService {
                                                          HttpServletRequest httpRequest) {
         try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
             MobileDTO.AICostAnalysisResponse response = analyzeCostUnaudited(factoryId, userId, request, httpRequest);
-            auditWithheld(ai, response);
-            // 缓存命中不经过成本分析汇合点: 单批是否保密在这里补判 (与调用者无关)
-            if (response != null && Boolean.TRUE.equals(response.getCacheHit()) && request.getBatchId() != null) {
-                try {
-                    var all = llmCostScope.allProtected(factoryId);
-                    if (!all.isEmpty()) {
-                        com.cretas.aims.entity.ProductionBatch batch = processingService.getBatchById(factoryId, request.getBatchId());
-                        ai.involvesProtected(all.coversBatch(batch.getProductTypeId(), batch.getProductionPlanId()));
-                    }
-                } catch (RuntimeException e) {
-                    ai.involvementUnknown();
-                }
-            }
+            auditAnalyzeCostOutcome(ai, factoryId, request.getBatchId(), response);
             return response;
+        }
+    }
+
+    /**
+     * 单批分析入口结果的审计: 因保密整次未发; 缓存命中 (不经过成本分析汇合点) —— 没有单批 (历史 / 追问) 时与时间范围、
+     * 对比同一口径 (有保密产品的工厂按牵涉记), 有单批时按这一批是否保密补判 (与调用者无关)。
+     */
+    void auditAnalyzeCostOutcome(com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai, String factoryId, String batchId,
+                                 MobileDTO.AICostAnalysisResponse response) {
+        auditWithheld(ai, response);
+        if (batchId == null) {
+            auditCacheHit(ai, factoryId, response);
+            return;
+        }
+        if (response != null && Boolean.TRUE.equals(response.getCacheHit())) {
+            try {
+                var all = llmCostScope.allProtected(factoryId);
+                if (!all.isEmpty()) {
+                    com.cretas.aims.entity.ProductionBatch batch = processingService.getBatchById(factoryId, batchId);
+                    ai.involvesProtected(all.coversBatch(batch.getProductTypeId(), batch.getProductionPlanId()));
+                }
+            } catch (RuntimeException e) {
+                ai.involvementUnknown();
+            }
         }
     }
 
@@ -389,6 +401,29 @@ public class AIEnterpriseService {
      */
     @Transactional
     public void generateWeeklyReport(String factoryId, LocalDate weekStart, LocalDate weekEnd) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = beginReportAudit(factoryId)) {
+            generateWeeklyReportUnaudited(factoryId, weekStart, weekEnd);
+        }
+    }
+
+    /**
+     * 定时 / 手动生成的日、周、月报告: 一次生成一条 AI 访问记录 (定时任务没有调用者, 记为 UNKNOWN)。
+     * 报告正文里保密产品的批次由 {@code withoutProtectedBatches} 排除 —— 排除时会把这一条标为「牵涉」;
+     * 经营报告 (工厂) 分支的提示词在 OperatingReportGenerator 里按调用者裁剪, 这里看不到逐行, 有保密产品的工厂按牵涉记。
+     */
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access beginReportAudit(String factoryId) {
+        com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.REPORT_GENERATION);
+        try {
+            if (operatingReports != null && operatingReports.isFactory(factoryId)) {
+                ai.involvesProtected(llmCostScope.factoryHasProtected(factoryId));
+            }
+        } catch (RuntimeException e) {
+            ai.involvementUnknown();
+        }
+        return ai;
+    }
+
+    private void generateWeeklyReportUnaudited(String factoryId, LocalDate weekStart, LocalDate weekEnd) {
         if (operatingReports.isFactory(factoryId)) {
             operatingReports.scheduled(factoryId, "weekly", weekStart, weekEnd);
             return;
@@ -430,6 +465,12 @@ public class AIEnterpriseService {
      */
     @Transactional
     public void generateMonthlyReport(String factoryId, LocalDate monthStart, LocalDate monthEnd) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = beginReportAudit(factoryId)) {
+            generateMonthlyReportUnaudited(factoryId, monthStart, monthEnd);
+        }
+    }
+
+    private void generateMonthlyReportUnaudited(String factoryId, LocalDate monthStart, LocalDate monthEnd) {
         if (operatingReports.isFactory(factoryId)) {
             operatingReports.scheduled(factoryId, "monthly", monthStart, monthEnd);
             return;
@@ -492,6 +533,12 @@ public class AIEnterpriseService {
      */
     @Transactional
     public void generateDailyReport(String factoryId, LocalDate reportDate) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = beginReportAudit(factoryId)) {
+            generateDailyReportUnaudited(factoryId, reportDate);
+        }
+    }
+
+    private void generateDailyReportUnaudited(String factoryId, LocalDate reportDate) {
         if (operatingReports.isFactory(factoryId)) {
             operatingReports.scheduled(factoryId, "daily", reportDate, reportDate);
             return;
