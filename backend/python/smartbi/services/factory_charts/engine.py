@@ -655,7 +655,6 @@ def wip_plan_flow_candidates(dataset, request):
             'tableData': {'headers': ['过账日期', '来源批次', '目标批次', '数量', '单位', 'MC凭证'], 'rows': table_rows},
             'chart': {'chartType': 'sankey', 'echartsOption': option},
             'engine': {'pointDimension': None, 'pointDrilldown': False,
-                       'detailUnitPolicy': 'trusted_quantity_rows',
                        'detail': '原始MC凭证、来源/目标生产批次、过账日期与数量；日期为过账日期，不含价格'},
         }
         charts.append(_analysis_metadata(candidate))
@@ -726,6 +725,17 @@ def build(datasets, request, can_price):
             charts, gaps = build_commerce_joint(dataset.frame, request, can_price)
         elif dataset.source.startswith('wip-plan-flow ·'):
             charts, gaps = wip_plan_flow_candidates(dataset, request)
+        elif (dataset.source.startswith('purchase-batch-lineage ·')
+              and {"批次已用数量", "批次预留数量", "批次入库数量", "批次数量单位"}
+              .issubset({str(column) for column in dataset.frame.columns})):
+            from .trusted_business_metrics import build as trusted_business_metrics
+            from .purchase_inventory import build as build_purchase_inventory
+            charts, gaps = trusted_business_metrics(
+                dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
+            )
+            optional, optional_gaps = build_purchase_inventory(dataset.frame, request, can_price, dataset.source)
+            charts.extend(optional)
+            gaps.extend(optional_gaps)
         elif trusted_source:
             from .trusted_business_metrics import build as trusted_business_metrics
             charts, gaps = trusted_business_metrics(

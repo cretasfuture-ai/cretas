@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
-from . import engine
+from . import detail_store, details, engine
 from . import detail_store
 from .wip_plan_flow import WIP_PLAN_FLOW_SQL, assemble_wip_plan_flows
 
@@ -103,6 +103,77 @@ def test_engine_full_build_keeps_wip_plan_flow_as_business_source_without_financ
     candidates, gaps = engine.build([dataset], request, False)
     assert any(item['id'].startswith('wip-plan-flow.plan-flow') for item in candidates)
     assert not any('finance' in str(gap.get('id')) for gap in gaps)
+
+
+def test_mixed_units_full_engine_local_and_shared_detail_are_isolated_without_prices():
+    """The exact WIP family keeps MC/plan/batch evidence while scoping units."""
+    import asyncio
+    import asyncpg
+
+    source_name = 'wip-plan-flow · 普通Web在制过账流'
+    frame = pd.DataFrame([
+        {**row(), '单位': 'kg', '流量': Decimal('1'), '来源节点': 'CLK-KG-S', '去向节点': 'CLK-KG-T',
+         'MC凭证': 'MC:3986', '来源库存批次ID': '1409914', '目标生产批次ID': 11009,
+         '计划ID': 'plan-kg', '来源批次号': 'CLK-KG-S', '目标批次号': 'CLK-KG-T'},
+        {**row(MC凭证ID=4986), '单位': '箱', '流量': Decimal('2'), '来源节点': 'CLK-BOX-S', '去向节点': 'CLK-BOX-T',
+         'MC凭证': 'MC:4986', '来源库存批次ID': '2409914', '目标生产批次ID': 21009,
+         '计划ID': 'plan-box', '来源批次号': 'CLK-BOX-S', '目标批次号': 'CLK-BOX-T',
+         '来源库存单位': '箱', '来源批次单位': '箱', '目标批次单位': '箱'},
+    ])
+    request = type('R', (), {'period_type': 'all', 'year': 2026, 'start_month': 1,
+                             'end_month': 12, 'include_optional': True, 'guided': False,
+                             'analysis_subject': None})()
+    dataset = engine.Dataset(frame, source_name)
+    candidates, gaps = engine.build([dataset], request, False)
+    wip_candidates = [c for c in candidates if c.get('analysis', {}).get('familyId') == 'wip-plan-flow.plan-flow']
+    assert not gaps and {c['unit'] for c in wip_candidates} == {'kg', '箱'}
+    owner = ('F006', 9981, 'factory_super_admin')
+    for candidate in details.register(wip_candidates, [dataset], request, owner, False):
+        page = details.page({'context_id': candidate['detailContext']['id'], 'page': 1, 'page_size': 20},
+                            owner, False, True)
+        rows = page['data']['rows']
+        assert {str(item.get('单位')) for item in rows} == {candidate['unit']}
+        assert any(item.get('MC凭证') in {'MC:3986', 'MC:4986'} for item in rows)
+        assert any(item.get('来源节点') and item.get('去向节点') for item in rows)
+        assert not any(any(token in key for token in ('金额', '价格', '成本')) for item in rows for key in item)
+
+    async def shared_check():
+        dsn = _pg_dsn()
+        schema = 'wip_units_' + uuid.uuid4().hex[:12]
+        conn = await asyncpg.connect(dsn)
+        try:
+            await conn.execute(f'CREATE SCHEMA {schema}; SET search_path TO {schema},public')
+            migration_path = Path(__file__).resolve().parents[3] / 'smartbi' / 'database' / 'migrations' / 'V20261101_18__factory_chart_detail_contexts.sql'
+            await conn.execute(migration_path.read_text(encoding='utf-8'))
+            await conn.execute("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='smartbi_user') THEN CREATE ROLE smartbi_user NOLOGIN; END IF; END $$")
+            await conn.execute(f'GRANT USAGE ON SCHEMA {schema} TO smartbi_user')
+            async def setup(pool_conn):
+                await pool_conn.execute('SET ROLE smartbi_user')
+                await pool_conn.execute(f'SET search_path TO {schema},public')
+            pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1,
+                                              server_settings={'search_path': f'{schema},public'}, setup=setup)
+            old_pool = detail_store.config.get_pg_pool
+            detail_store.config.get_pg_pool = lambda: pool
+            try:
+                registered = await detail_store.register_shared(wip_candidates, [dataset], request, owner, False)
+                assert len(registered) == 2
+                for candidate in registered:
+                    page = await detail_store.page_shared(
+                        {'context_id': candidate['detailContext']['id'], 'page': 1, 'page_size': 20},
+                        owner, False, True)
+                    rows = page['data']['rows']
+                    assert {str(item.get('单位')) for item in rows} == {candidate['unit']}
+                    assert any(item.get('MC凭证') for item in rows)
+                    assert any(item.get('来源节点') and item.get('去向节点') for item in rows)
+                    assert not any(any(token in key for token in ('金额', '价格', '成本')) for item in rows for key in item)
+            finally:
+                detail_store.config.get_pg_pool = old_pool
+                await pool.close()
+        finally:
+            await conn.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            await conn.close()
+
+    asyncio.run(shared_check())
 
 
 def _pg_dsn():
