@@ -61,6 +61,27 @@ public class BomWorkflowRevisionService {
     private final WorkflowRevisionSnapshotService revisionSnapshotService;
     private final ObjectMapper objectMapper;
 
+    /**
+     * The BOM recipe version that was pinned to the revisions of one Workflow row, i.e. the recipe a
+     * historical Workflow version was actually built with. Empty when nothing was ever pinned to it:
+     * callers must say so instead of falling back to today's recipe (a traceability view must never
+     * show the current recipe as history). The newest such recipe version wins.
+     */
+    @Transactional(readOnly = true)
+    public Optional<BomRecipe> findRecipePinnedToWorkflow(String factoryId, String productTypeId, Long workflowId) {
+        if (workflowId == null || workflowRepository.findByIdAndFactoryId(workflowId, factoryId).isEmpty()) {
+            return Optional.empty();
+        }
+        List<Long> revisionIds = revisionRepository.findByFactoryIdAndWorkflowId(factoryId, workflowId).stream()
+                .map(ProductProcessWorkflowRevision::getId).toList();
+        if (revisionIds.isEmpty()) return Optional.empty();
+        Optional<BomRecipe> recipe = recipeRepository
+                .findByFactoryIdAndProductTypeIdAndWorkflowRevisionIdInOrderByVersionDesc(
+                        factoryId, productTypeId, revisionIds).stream().findFirst();
+        recipe.ifPresent(found -> found.getItems().size());
+        return recipe;
+    }
+
     @Transactional(readOnly = true)
     public List<WorkflowRevisionCandidateDTO> listCompatible(String factoryId, String recipeId) {
         BomRecipe recipe = requireRecipe(factoryId, recipeId);

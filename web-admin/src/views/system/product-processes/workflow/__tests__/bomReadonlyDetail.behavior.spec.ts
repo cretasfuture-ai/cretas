@@ -49,6 +49,8 @@ const apiMocks = vi.hoisted(() => ({
   publishProductProcessWorkflow: vi.fn(),
   publishAndActivateProductProcessWorkflow: vi.fn(),
   saveProductProcessWorkflowDraft: vi.fn(),
+  getProductProcessWorkflowVersion: vi.fn(),
+  getRecipePinnedToWorkflow: vi.fn(),
 }));
 
 vi.mock('@/api/request', () => ({
@@ -80,6 +82,8 @@ vi.mock('../workflowApi', () => ({
   publishProductProcessWorkflow: apiMocks.publishProductProcessWorkflow,
   publishAndActivateProductProcessWorkflow: apiMocks.publishAndActivateProductProcessWorkflow,
   saveProductProcessWorkflowDraft: apiMocks.saveProductProcessWorkflowDraft,
+  getProductProcessWorkflowVersion: apiMocks.getProductProcessWorkflowVersion,
+  getRecipePinnedToWorkflow: apiMocks.getRecipePinnedToWorkflow,
 }));
 
 /**
@@ -196,6 +200,10 @@ interface OverlayEditorVm {
   skuOptions: unknown[];
   workProcessOptions: unknown[];
   dirty: boolean;
+  previewVersion: (version: { definitionVersion: number }) => Promise<void>;
+  exitVersionPreview: () => Promise<void>;
+  previewingVersion: number | null;
+  bomHistoryNotice: string;
 }
 
 const SKU_OPTIONS = [
@@ -879,6 +887,105 @@ describe('只读用户点 BOM 行: 到只读明细, 不到写编辑器', () => {
 
     expect(wrapper.find('[data-testid="bom-detail-panel"]').exists()).toBe(true);
     expect(vm.auxDialogVisible).toBe(false);
+  });
+});
+
+describe('D-S2-11: 历史工艺版本只读预览读钉在该版本上的配方, 绝不显示当前配方', () => {
+  /** 当前图 (含原料/工序/成品) 去掉浮层节点后, 当作 v1 的历史定义返回。 */
+  function historicalDefinition(vm: OverlayEditorVm): Record<string, unknown> {
+    const real = vm.flowNodes.filter((node) => !node.id.startsWith(BOM_OVERLAY_PREFIX));
+    return {
+      id: 5, productTypeId: 'PT-PIG-400', schemaVersion: 1, status: 'PUBLISHED', version: 1, lockVersion: 0,
+      nodes: real.map((node) => ({ id: node.id, kind: node.data.kind, position: node.position ?? { x: 0, y: 0 }, data: node.data })),
+      edges: vm.flowEdges.filter((edge) => !edge.source.startsWith(BOM_OVERLAY_PREFIX) && !edge.target.startsWith(BOM_OVERLAY_PREFIX))
+        .map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+      viewport: { x: 0, y: 0, zoom: 1 },
+    };
+  }
+
+  /** 退出预览会重载「当前定义」—— 夹具默认只回一个原料节点, 这里让它回当前完整的图。 */
+  function keepCurrentGraphForExit(vm: OverlayEditorVm): void {
+    apiMocks.getProductProcessWorkflow.mockResolvedValue({ success: true, data: {
+      ...historicalDefinition(vm), id: 1, status: 'DRAFT', version: 2, revisionId: 71, revisionHash: 'revision-current',
+    } });
+  }
+
+  const overlayText = (vm: OverlayEditorVm) =>
+    JSON.stringify([vm.bomOverlayPackagingByOutput, vm.bomOverlayAuxiliaryByProcess]);
+
+  beforeEach(() => {
+    // 工作台只对「当前配方」(RECIPE-DRAFT-1) 有辅料八角; v1 当时的配方 (RECIPE-V1) 没有辅料。
+    bomApiMocks.getWorkspace.mockImplementation((_factory: string, recipeId: string) => Promise.resolve({ success: true, data: {
+      recipeId, productTypeId: 'PT-PIG-400', productName: '五香去骨猪蹄 400g', status: 'ACTIVE', editable: false,
+      seasoningRevision: 1, materialSummaries: [], anomalies: [],
+      processes: recipeId === 'RECIPE-DRAFT-1' ? [{ workflowProcessNodeId: bomFixture.processNodeId, workProcessId: 'WP-PACK',
+        processOrder: 1, processName: '装盒', standardUsageSupported: true, bindings: [{
+          id: 'AUX-ROW-1', workflowProcessNodeId: bomFixture.processNodeId, materialTypeId: 'AUX-STAR', name: '八角',
+          dosagePerKgG: 2, subsequentPotRatio: null, countInSeasoning: true,
+        }] }] : [],
+    } }));
+  });
+
+  it('v2 之后预览 v1: 格子是 v1 的配方 (纸盒, 无八角), 不是当前的 (塑料桶 + 八角); 退出预览换回当前', async () => {
+    const { vm } = await readonlyEditorWithBomRows();
+    expect(overlayText(vm)).toContain('塑料桶').toContain('八角');
+    keepCurrentGraphForExit(vm);
+    apiMocks.getProductProcessWorkflowVersion.mockResolvedValue({ success: true, data: historicalDefinition(vm) });
+    apiMocks.getRecipePinnedToWorkflow.mockResolvedValue({ success: true, data: {
+      id: 'RECIPE-V1', factoryId: 'F006', recipeCode: 'BOM-1', productTypeId: 'PT-PIG-400', productName: '五香去骨猪蹄 400g',
+      version: 1, isCurrent: false, status: 'ARCHIVED',
+      items: [{ id: 'PACK-V1', recipeId: 'RECIPE-V1', factoryId: 'F006', materialTypeId: 'PACK-BOX',
+        materialName: '纸盒(v1)', materialCategory: 'PACKAGING', standardQuantity: 1, unit: '个', naturalQuantity: null }],
+    } });
+
+    await vm.previewVersion({ definitionVersion: 1 });
+    await flushPromises();
+
+    expect(vm.previewingVersion).toBe(1);
+    expect(apiMocks.getRecipePinnedToWorkflow).toHaveBeenCalledWith('F006', 'PT-PIG-400', 5);
+    const history = overlayText(vm);
+    expect(history).toContain('纸盒(v1)');
+    expect(history).not.toContain('塑料桶');
+    expect(history).not.toContain('八角');
+    expect(vm.bomHistoryNotice).toBe('');
+
+    await vm.exitVersionPreview();
+    await flushPromises();
+    expect(overlayText(vm)).toContain('塑料桶');
+    expect(overlayText(vm)).not.toContain('纸盒(v1)');
+  });
+
+  it('那个版本从没钉过配方: 不画任何配方格子, 并明说「历史版本不含配方快照」, 不拿当前配方顶替', async () => {
+    const { wrapper, vm } = await readonlyEditorWithBomRows();
+    keepCurrentGraphForExit(vm);
+    apiMocks.getProductProcessWorkflowVersion.mockResolvedValue({ success: true, data: historicalDefinition(vm) });
+    apiMocks.getRecipePinnedToWorkflow.mockResolvedValue({ success: true, data: null });
+
+    await vm.previewVersion({ definitionVersion: 1 });
+    await flushPromises();
+
+    const history = overlayText(vm);
+    expect(history).not.toContain('塑料桶');
+    expect(history).not.toContain('八角');
+    expect(vm.bomHistoryNotice).toBe('历史版本不含配方快照');
+    expect(wrapper.find('[data-testid="bom-history-notice"]').text()).toBe('历史版本不含配方快照');
+    // 阳性对照: 同一个编辑器不在预览时, 当前配方照常显示 (仪器没坏)
+    await vm.exitVersionPreview();
+    await flushPromises();
+    expect(overlayText(vm)).toContain('塑料桶');
+    expect(wrapper.find('[data-testid="bom-history-notice"]').exists()).toBe(false);
+  });
+
+  it('读历史配方失败: 同样不显示当前配方, 并说明是读取失败', async () => {
+    const { vm } = await readonlyEditorWithBomRows();
+    apiMocks.getProductProcessWorkflowVersion.mockResolvedValue({ success: true, data: historicalDefinition(vm) });
+    apiMocks.getRecipePinnedToWorkflow.mockRejectedValue(new Error('network'));
+
+    await vm.previewVersion({ definitionVersion: 1 });
+    await flushPromises();
+
+    expect(overlayText(vm)).not.toContain('塑料桶');
+    expect(vm.bomHistoryNotice).toBe('历史版本的配方读取失败，未显示配方');
   });
 });
 
