@@ -83,7 +83,7 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
 const { goCreate } = useCreateAndReturn();
 
-const canViewPrice = computed(() => permissionStore.canViewPrice);
+const canViewPrice = computed(() => permissionStore.canViewPurchasePrice); // S5-12: 采购价按配置的采购读权限
 const PROCUREMENT_DEFAULT_COLUMNS = ['purchaseType', 'orderDate', 'totalAmount', 'attachments'];
 const {
   columns: procurementColumnOptions,

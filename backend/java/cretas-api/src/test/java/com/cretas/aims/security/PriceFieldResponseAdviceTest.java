@@ -106,6 +106,12 @@ class PriceFieldResponseAdviceTest {
      * (finance:read_write gate — sales_manager has only finance:read, NOT rw).
      */
     private void asUser(Long userId, boolean canViewPrice, boolean canViewFinance) {
+        // 采购价口径 (S5-12) 默认与旧名单一致, 只有专门测「配置 ≠ 名单」的用例才分开设
+        asUser(userId, canViewPrice, canViewFinance, canViewPrice);
+    }
+
+    /** S5-12: 第四维 = 工厂配置的 procurement 读权限 (采购价唯一依据)。 */
+    private void asUser(Long userId, boolean canViewPrice, boolean canViewFinance, boolean canReadProcurement) {
         httpRequest.setAttribute("userId", userId);
         User user = new User();
         user.setId(userId);
@@ -114,6 +120,8 @@ class PriceFieldResponseAdviceTest {
                 eq(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION))).thenReturn(canViewPrice);
         lenient().when(permissionService.hasPermission(eq(user),
                 eq(PriceFieldResponseAdvice.FINANCE_READ_PERMISSION))).thenReturn(canViewFinance);
+        lenient().when(permissionService.hasPermission(eq(user),
+                eq(com.cretas.aims.security.PriceSensitive.PURCHASE))).thenReturn(canReadProcurement);
     }
 
     private Object run(Object body) {
@@ -219,10 +227,15 @@ class PriceFieldResponseAdviceTest {
     }
 
     @Test
-    @DisplayName("finance role: PurchaseOrder.totalAmount + item.unitPrice unchanged")
-    void financeManager_purchaseOrder_pricesUnchanged() {
-        asUser(20L, true);
+    @DisplayName("S5-12 finance role: 在旧名单里但配置没给采购读 → 采购单价格剥掉; 配置给了才看得到")
+    void financeManager_purchaseOrder_pricesFollowConfiguredProcurementRead() {
+        asUser(20L, true, true, false);
+        PurchaseOrder hidden = samplePurchaseOrder();
+        run(hidden);
+        assertNull(hidden.getTotalAmount());
+        assertNull(hidden.getItems().get(0).getUnitPrice());
 
+        asUser(21L, true, true, true);
         PurchaseOrder order = samplePurchaseOrder();
         run(order);
 
@@ -963,7 +976,9 @@ class PriceFieldResponseAdviceTest {
     @DisplayName("#615A: sales_manager (price:view=T, finance=r→rw-gate=F) — @PriceSensitive fields NOT stripped (sees procurement prices)")
     void pr615a_salesManager_priceSensitiveFields_notStripped() {
         // sales_manager: procurement:price:view=T, finance:read_write=F (has only finance:read)
-        asUser(50L, true, false);
+        // S5-12: 采购价只看配置的 procurement 读权限 —— 这里配置给了 r 才看得到;
+        // 配置为「-」的情形见 PurchasePriceVisibilityConfigContractTest。
+        asUser(50L, true, false, true);
 
         PurchaseOrder order = samplePurchaseOrder();
         run(order);

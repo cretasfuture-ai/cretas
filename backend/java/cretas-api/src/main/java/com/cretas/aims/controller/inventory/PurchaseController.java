@@ -63,6 +63,7 @@ import com.cretas.aims.config.RequireRole;
 @RequiredArgsConstructor
 @org.springframework.validation.annotation.Validated  // Issue #816: enable @Min(1) on @RequestParam page/size
 @Tag(name = "采购管理", description = "采购订单与入库管理（工厂/餐饮通用）")
+@com.cretas.aims.security.PriceScope(com.cretas.aims.security.PriceSensitive.PURCHASE)
 public class PurchaseController {
 
     private final PurchaseService purchaseService;

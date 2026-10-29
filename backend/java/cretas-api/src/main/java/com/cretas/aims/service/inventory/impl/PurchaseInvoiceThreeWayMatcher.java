@@ -308,7 +308,7 @@ public class PurchaseInvoiceThreeWayMatcher {
             notes.add(item.getUnitPrice() == null ? "采购单行无单价，无法核对金额" : "采购单行税率未知，无法核对含税金额");
         } else if (line.getAmount().subtract(expected).abs().compareTo(AMOUNT_TOLERANCE) > 0) {
             if (PurchaseInvoiceLine.MATCHED.equals(status)) status = PurchaseInvoiceLine.PRICE_MISMATCH;
-            notes.add("发票行金额 " + plain(line.getAmount()) + " ≠ 应开 " + plain(expected));
+            notes.add("发票行金额与采购单含税金额不符"); // 不写应开数: 备注对没有采购读权限的财务也可见 (S5-12)
         }
         line.setMatchStatus(status);
         line.setMatchNote(notes.isEmpty() ? null : String.join("；", notes));

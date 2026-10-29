@@ -69,6 +69,20 @@ public final class PriceSensitiveContext {
         };
     }
 
+    /**
+     * 只隐藏列出的口径的工具调用作用域 (S5-12)。结束时还原两个 ThreadLocal, 嵌套调用安全。
+     */
+    public static Scope scopedSpecs(java.util.Set<String> hiddenSpecs) {
+        Boolean previousAll = HIDE_PRICES.get();
+        java.util.Set<String> previousSpecs = HIDDEN_SPECS.get();
+        HIDE_PRICES.set(Boolean.FALSE);
+        HIDDEN_SPECS.set(java.util.Set.copyOf(hiddenSpecs));
+        return () -> {
+            if (previousAll == null) HIDE_PRICES.remove(); else HIDE_PRICES.set(previousAll);
+            if (previousSpecs == null) HIDDEN_SPECS.remove(); else HIDDEN_SPECS.set(previousSpecs);
+        };
+    }
+
     @FunctionalInterface
     public interface Scope extends AutoCloseable {
         @Override
@@ -80,15 +94,23 @@ public final class PriceSensitiveContext {
      * should be hidden in the current serialization. The Jackson modifier
      * uses this to short-circuit getter invocation.
      *
-     * <p>Currently all {@code @PriceSensitive} permissions resolve to the
-     * single hide-or-show flag (the default {@code procurement:price:view}).
-     * The {@code permission} parameter is reserved for future per-permission
-     * granular hiding without breaking the call site.
+     * <p>{@link #hide()} / {@code scoped(true)} 隐藏全部口径; {@link #hideOnly} 只隐藏列出的口径
+     * (S5-12: 采购价按配置的 procurement 读权限判, 与默认口径分开)。
      */
     public static boolean shouldHide(String permission) {
-        Boolean flag = HIDE_PRICES.get();
-        return Boolean.TRUE.equals(flag);
+        if (Boolean.TRUE.equals(HIDE_PRICES.get())) {
+            return true;
+        }
+        java.util.Set<String> hidden = HIDDEN_SPECS.get();
+        return hidden != null && hidden.contains(permission);
     }
+
+    /** 只隐藏这些口径 ({@link PriceSensitive#permission()} 的取值)。与 {@link #hide()} 一样须在 finally 里 {@link #clear()}。 */
+    public static void hideOnly(java.util.Set<String> hiddenSpecs) {
+        HIDDEN_SPECS.set(java.util.Set.copyOf(hiddenSpecs));
+    }
+
+    private static final ThreadLocal<java.util.Set<String>> HIDDEN_SPECS = new ThreadLocal<>();
 
     /**
      * Clear the ThreadLocal. <b>MUST</b> be called in a {@code finally}
@@ -96,5 +118,6 @@ public final class PriceSensitiveContext {
      */
     public static void clear() {
         HIDE_PRICES.remove();
+        HIDDEN_SPECS.remove();
     }
 }

@@ -373,8 +373,7 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
         ToolExecutor executor = resolved.executor();
         try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
-                PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
-                        !canViewPrices(current))) {
+                PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenPriceSpecs(current))) {
             String rawResponse = executor.execute(
                     toolCall, trustedExecutionContext(command, current, resolved));
             return objectMapper.readTree(rawResponse);
@@ -407,8 +406,7 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                     command.requestId(), command.toolName(), arguments);
             ToolExecutor executor = resolved.executor();
             try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
-                    PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scoped(
-                            !canViewPrices(current))) {
+                    PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenPriceSpecs(current))) {
                 String rawResponse = executor.preview(
                         toolCall, trustedExecutionContext(command, current, resolved));
                 payload = objectMapper.readTree(rawResponse);
@@ -460,6 +458,19 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             }
         }
         return SecurityUtils.trustedUserIdScope(null);
+    }
+
+    /** 本次工具调用要隐藏的价格口径 (S5-12: 默认名单口径 / 采购 / 采购或财务 分开判)。 */
+    private static java.util.Set<String> hiddenPriceSpecs(RehydratedPrincipal current) {
+        java.util.Set<String> hidden = new java.util.HashSet<>();
+        if (!canViewPrices(current)) hidden.add(com.cretas.aims.security.PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION);
+        if (!Boolean.TRUE.equals(current.executionContext().get("canViewPurchasePrices"))) {
+            hidden.add(com.cretas.aims.security.PriceSensitive.PURCHASE);
+        }
+        if (!Boolean.TRUE.equals(current.executionContext().get("canViewPurchaseOrFinancePrices"))) {
+            hidden.add(com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE);
+        }
+        return hidden;
     }
 
     private static boolean canViewPrices(RehydratedPrincipal current) {

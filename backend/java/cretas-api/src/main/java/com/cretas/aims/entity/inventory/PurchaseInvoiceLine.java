@@ -70,17 +70,17 @@ public class PurchaseInvoiceLine extends BaseEntity {
     @Column(name = "unit", nullable = false, length = 20)
     private String unit;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
     /** 发票行含税金额 */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "amount", nullable = false, precision = 12, scale = 2)
     private BigDecimal amount;
 
     /** 按采购单行含税单价 × 本行数量算出的应开金额；采购单行无价格时为空 */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "expected_amount", precision = 12, scale = 2)
     private BigDecimal expectedAmount;
 

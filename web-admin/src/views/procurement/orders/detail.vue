@@ -38,7 +38,7 @@ const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
-const canViewPrice = computed(() => permissionStore.canViewPrice);
+const canViewPrice = computed(() => permissionStore.canViewPurchasePrice); // S5-12: 采购价按配置的采购读权限
 
 // ─────────────────────────────────────────────────────────────────────────
 // 缺陷 9 (2026-09-01, LIUSHANMEN 生产走查): 这一页有 3 个跨模块入口, 其中 2 个
