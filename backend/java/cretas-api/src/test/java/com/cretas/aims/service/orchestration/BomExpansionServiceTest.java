@@ -196,11 +196,17 @@ class BomExpansionServiceTest {
      */
     @Test
     void stockReceivedIntoTheRawWarehouseReducesTheGap() {
-        when(warehouseResolver.productionPickingWarehouseIds("F006")).thenReturn(List.of("WH-WKS", "WH-LOG", "WH-RAW"));
+        when(warehouseResolver.productionPickingWarehouseIds("F006"))
+                .thenReturn(List.of("WH-WKS", "WH-LOG", "WH-RAW", "WH-LINE"));
+        // 扣料口径也打桩: 若只读检查退回扣料口径, 照常跑完, 由下面的数量断言抓出 (而不是 NPE)
+        org.mockito.Mockito.lenient().when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
+        org.mockito.Mockito.lenient().when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-WKS")).thenReturn(List.of());
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-LOG")).thenReturn(List.of());
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-RAW"))
                 .thenReturn(List.of(stockBatch("MB-RAW", "3", null)));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-LINE"))
+                .thenReturn(List.of(stockBatch("MB-LINE", "2", null)));
 
         MaterialRequirement req = new MaterialRequirement();
         req.setMaterialTypeId("MAT-BONE");
@@ -211,8 +217,9 @@ class BomExpansionServiceTest {
         com.cretas.aims.dto.orchestration.MaterialShortfall sf =
                 service.checkPickableAvailability("F006", List.of(req)).getShortfalls().get(0);
 
-        assertEquals(0, new BigDecimal("3").compareTo(sf.getAvailableQuantity()));
-        assertEquals(0, new BigDecimal("12").compareTo(sf.getShortfallQuantity()));
+        // 原料仓 3 + 线边仓 2 都算可用 ⇒ 15 − 5 = 10
+        assertEquals(0, new BigDecimal("5").compareTo(sf.getAvailableQuantity()));
+        assertEquals(0, new BigDecimal("10").compareTo(sf.getShortfallQuantity()));
     }
 
     /**

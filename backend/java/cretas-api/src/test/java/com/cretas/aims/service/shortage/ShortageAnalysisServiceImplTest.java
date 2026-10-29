@@ -111,6 +111,26 @@ class ShortageAnalysisServiceImplTest {
     }
 
     @Test
+    @DisplayName("缺料分析按可领料口径 (含原料仓) 判断, 不用扣料口径")
+    void analyze_readsThePickableScopeNotTheConsumptionScope() {
+        LineItemMatch shortFg = lineItem("PROD-A", "Product A", new BigDecimal("100"), new BigDecimal("30"));
+        when(inventoryMatchingService.checkAvailability(FACTORY, SALES_ORDER))
+                .thenReturn(stockCheck(false, List.of(shortFg)));
+        when(bomExpansionService.expandBOM(eq(FACTORY), eq("PROD-A"), eq(new BigDecimal("70"))))
+                .thenReturn(List.of(requirement("M1", "面粉", new BigDecimal("50"))));
+        when(bomExpansionService.checkPickableAvailability(eq(FACTORY), anyList()))
+                .thenReturn(materialCheck(true, Collections.emptyList()));
+        // 扣料口径也打桩: 若缺料分析误调它, 照常跑完, 由 verify 抓出 (而不是 NPE)
+        org.mockito.Mockito.lenient().when(bomExpansionService.checkMaterialAvailability(eq(FACTORY), anyList()))
+                .thenReturn(materialCheck(true, Collections.emptyList()));
+
+        service.analyzeForSalesOrder(FACTORY, SALES_ORDER);
+
+        verify(bomExpansionService).checkPickableAvailability(eq(FACTORY), anyList());
+        verify(bomExpansionService, never()).checkMaterialAvailability(anyString(), anyList());
+    }
+
+    @Test
     @DisplayName("多 SKU 共用原料 → 聚合后 checkMaterialAvailability 仅传一条 M1, 生成同时 procurement + production")
     void analyze_whenMultiSkuShareMaterial_aggregatesBeforeBomCheck() {
         LineItemMatch shortA = lineItem("PROD-A", "Product A", new BigDecimal("60"), new BigDecimal("10"));

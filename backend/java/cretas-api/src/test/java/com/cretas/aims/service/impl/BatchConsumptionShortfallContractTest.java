@@ -134,6 +134,9 @@ class BatchConsumptionShortfallContractTest {
         check.setShortfalls(List.of(shortfall));
         when(bomExpansionService.checkMaterialAvailability(eq(FACTORY), any()))
                 .thenReturn(check);
+        // 只读口径也给同一个结果: 若扣料误调它, 流程照常跑完, 由 verify(never()) 抓出, 而不是 NPE
+        org.mockito.Mockito.lenient().when(bomExpansionService.checkPickableAvailability(eq(FACTORY), any()))
+                .thenReturn(check);
 
         MaterialBatch mb = new MaterialBatch();
         mb.setId(REAL_BATCH);
