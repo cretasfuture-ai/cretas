@@ -9662,17 +9662,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
+    requiresPermission: true
+    requiredPermissions: ["procurement:read"]
     version: "1.0.0"
     domainTags: ["purchase"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: false
+      requiresPermission: true
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

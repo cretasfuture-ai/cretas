@@ -80,7 +80,7 @@ public class PurchaseInvoiceLine extends BaseEntity {
     private BigDecimal amount;
 
     /** 按采购单行含税单价 × 本行数量算出的应开金额；采购单行无价格时为空 */
-    @PriceSensitive(permission = PriceSensitive.PURCHASE)
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "expected_amount", precision = 12, scale = 2)
     private BigDecimal expectedAmount;
 

@@ -165,10 +165,10 @@ class PurchaseGrantTimerPostgresLifecycleContractTest {
         var http = new MockHttpServletRequest(); http.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, actor); RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(http));
         var principal = new ExecutionPrincipal(FACTORY, "FACTORY", Long.toString(USER), PrincipalType.USER, Set.of("purchaser"), Set.of("procurement:read_write"), Set.of());
         when(principalFactory.create(FACTORY, USER, "purchaser")).thenReturn(principal);
-        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(principal, Map.of("canViewPrices", true))));
+        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(principal, Map.of("canViewPurchasePrices", true))));
         var otherPrincipal = new ExecutionPrincipal(FACTORY, "FACTORY", Long.toString(OTHER_USER), PrincipalType.USER, Set.of("purchaser"), Set.of("procurement:read_write"), Set.of());
         when(principalFactory.create(FACTORY, OTHER_USER, "purchaser")).thenReturn(otherPrincipal);
-        when(policy.rehydrate(otherPrincipal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(otherPrincipal, Map.of("canViewPrices", true))));
+        when(policy.rehydrate(otherPrincipal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(otherPrincipal, Map.of("canViewPurchasePrices", true))));
         when(toolRegistry.isToolEnabledForFactory(FACTORY, "purchase_order_create")).thenReturn(true);
         when(toolRegistry.isToolEnabledForFactory(FACTORY, "purchase_grant_execute")).thenReturn(true);
         when(toolRegistry.getExecutor("purchase_grant_execute")).thenReturn(Optional.of(callerTool));

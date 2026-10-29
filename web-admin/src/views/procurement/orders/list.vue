@@ -1469,6 +1469,7 @@ function handleAiFill(params: TableRow) {
       </el-table>
 
       <TableFooter
+        price-gate="purchase"
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"

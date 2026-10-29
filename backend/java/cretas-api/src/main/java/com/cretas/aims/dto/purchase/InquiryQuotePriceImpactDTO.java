@@ -33,7 +33,7 @@ public class InquiryQuotePriceImpactDTO {
     private String materialName;
 
     /** 估算来源: 报价未税单价 + 计价单位 + 生效日。 */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     private BigDecimal quotedUnitPrice;
     private String quotedUnit;
     private LocalDate priceEffectiveDate;
@@ -71,13 +71,13 @@ public class InquiryQuotePriceImpactDTO {
         private BigDecimal standardQuantity;
         private String priceUnit;
 
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal currentUnitPrice;
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal currentItemCost;
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal estimatedItemCost;
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal deltaItemCost;
 
         private boolean computable;

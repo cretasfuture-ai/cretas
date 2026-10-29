@@ -240,11 +240,11 @@ public class WorkflowInstanceController {
             WorkflowInstancePendingDTO dto = partial.get(inst.getId());
 
             // businessSummary
-            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById));
+            dto.setBusinessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById, true));
 
             // M-12: 除了那句拼好的摘要, 再把单号/金额/往来单位**分开**下发。
             // 前端要拆成三列(金额得能右对齐+排序), ⛔ 不许它从 businessSummary 正则反解。
-            fillStructuredBusinessFields(dto, inst, poById, soById, stocktakeById, warehouseNameById);
+            fillStructuredBusinessFields(dto, inst, poById, soById, stocktakeById, warehouseNameById, true);
             fillReportCorrectionDetails(dto, inst, factoryId);
 
             // currentNodeId + label
@@ -486,7 +486,7 @@ public class WorkflowInstanceController {
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findCreatedBy(
                 factoryId, user.getId(), pageable);
 
-        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
+        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent(), user);
 
         PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
                 dtos, page, size, instances.getTotalElements());
@@ -526,7 +526,7 @@ public class WorkflowInstanceController {
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findParticipatedBy(
                 factoryId, user.getId(), pageable);
 
-        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
+        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent(), user);
 
         PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
                 dtos, page, size, instances.getTotalElements());
@@ -549,7 +549,7 @@ public class WorkflowInstanceController {
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findActedBy(
                 factoryId, user.getId(), pageable);
         return ApiResponse.success(PageResponse.of(
-                hydrateInstances(factoryId, instances.getContent()),
+                hydrateInstances(factoryId, instances.getContent(), true),
                 page, size, instances.getTotalElements()));
     }
 
@@ -573,7 +573,7 @@ public class WorkflowInstanceController {
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findCopiedTo(
                 factoryId, user.getId(), role, pageable);
         return ApiResponse.success(PageResponse.of(
-                hydrateInstances(factoryId, instances.getContent()),
+                hydrateInstances(factoryId, instances.getContent(), user),
                 page, size, instances.getTotalElements()));
     }
 
@@ -620,7 +620,7 @@ public class WorkflowInstanceController {
         Page<ApprovalWorkflowInstance> instances = workflowEngine.listAllRunning(
                 factoryId, pageable);
 
-        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent());
+        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent(), user);
 
         PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
                 dtos, page, size, instances.getTotalElements());
@@ -659,7 +659,7 @@ public class WorkflowInstanceController {
                 factoryId, instanceId, user.getId(), request.getReason());
         log.warn("按当前审批流重开: factoryId={}, previousInstanceId={}, newInstanceId={}, operator={}",
                 factoryId, instanceId, restarted.getId(), user.getUsername());
-        List<WorkflowInstancePendingDTO> hydrated = hydrateInstances(factoryId, List.of(restarted));
+        List<WorkflowInstancePendingDTO> hydrated = hydrateInstances(factoryId, List.of(restarted), user);
         return ApiResponse.success("已按当前审批流重新发起，请通知审批人重新处理",
                 hydrated.isEmpty() ? null : hydrated.get(0));
     }
@@ -670,8 +670,22 @@ public class WorkflowInstanceController {
      * 批量 hydrate instance → DTO. 抽取自 {@link #getPendingForUser} 给 Sprint 5
      * Track A personal view endpoints 复用 (DRY — 避免 PO/user/node label 重复加载逻辑).
      */
+    /**
+     * S5-12: 采购单金额 (摘要里的 含税¥ / 未税¥) 只给审批人原样看 (待办、已办);
+     * 发起、参与、抄送、管理员视图里按价格可见性判 —— 抄送人不因被抄送就看到采购价。
+     */
     private List<WorkflowInstancePendingDTO> hydrateInstances(
-            String factoryId, List<ApprovalWorkflowInstance> instances) {
+            String factoryId, List<ApprovalWorkflowInstance> instances, User viewer) {
+        return hydrateInstances(factoryId, instances, viewer != null && priceVisibility != null
+                && priceVisibility.canView(viewer, com.cretas.aims.security.PriceSensitive.PURCHASE));
+    }
+
+    /** 没有这个 bean 时一律不给采购金额 (fail closed)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.PriceVisibility priceVisibility;
+
+    private List<WorkflowInstancePendingDTO> hydrateInstances(
+            String factoryId, List<ApprovalWorkflowInstance> instances, boolean showPurchaseAmounts) {
         if (instances.isEmpty()) return List.of();
 
         // 1. 收 PO ids + initiator ids
@@ -727,7 +741,7 @@ public class WorkflowInstanceController {
                     .moduleCode(inst.getModuleCode())
                     .businessEntityId(inst.getBusinessEntityId())
                     .initiatedAt(inst.getInitiatedAt())
-                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById))
+                    .businessSummary(buildBusinessSummary(inst, poById, soById, warehouseNameById, stocktakeById, showPurchaseAmounts))
                     .status(inst.getStatus().name())
                     .completedAt(inst.getCompletedAt())
                     .build();
@@ -831,13 +845,18 @@ public class WorkflowInstanceController {
                                               Map<String, PurchaseOrder> poById,
                                               Map<String, SalesOrder> soById,
                                               Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById,
-                                              Map<String, String> warehouseNameById) {
+                                              Map<String, String> warehouseNameById,
+                                              boolean showPurchaseAmounts) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PURCHASE_ORDER".equals(moduleCode)) {
             PurchaseOrder po = poById.get(bizId);
             if (po != null) {
                 dto.setBusinessCode(po.getOrderNumber());
+                dto.setCounterpartyName(po.getSupplierName());
+                if (!showPurchaseAmounts) {
+                    return;   // 金额保持 null, 前端显示「—」(⛔ 不是 0)
+                }
                 dto.setBusinessAmount(po.getTotalAmount());
                 // 缺陷 30 续: 下发税额, 前端才拼得出含税总额(owner 裁定的口径: 含税领先)。
                 // ⛔ 不在这里做加法算含税 —— "未税 + 税额" 这个算法只写一处, 交给前端复用
@@ -877,7 +896,8 @@ public class WorkflowInstanceController {
                                         Map<String, PurchaseOrder> poById,
                                         Map<String, SalesOrder> soById,
                                         Map<String, String> warehouseNameById,
-                                        Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById) {
+                                        Map<String, com.cretas.aims.entity.factory.FactoryStocktake> stocktakeById,
+                                        boolean showPurchaseAmounts) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PRODUCTION_REPORT_CORRECTION".equals(moduleCode)
@@ -912,7 +932,7 @@ public class WorkflowInstanceController {
                 // 口径都要标」, 没有解决「谁在前面」; 这里补上顺序。
                 // ⚠️ 有税额才拆两段; 税额为 0 或缺失时只写一个数并标「未税」——
                 //    ⛔ 不在税额未知时凭空算一个「含税」出来 (那就是编数字)。
-                if (po.getTotalAmount() != null
+                if (showPurchaseAmounts && po.getTotalAmount() != null
                         && po.getTotalAmount().compareTo(BigDecimal.ZERO) > 0) {
                     BigDecimal untaxed = po.getTotalAmount();
                     BigDecimal tax = po.getTaxAmount();

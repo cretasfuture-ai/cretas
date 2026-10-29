@@ -126,7 +126,7 @@ class AiPurchaseTaskGrantServiceContractTest {
             assertThat(purchaseOrderRepository.count()).isEqualTo(before+1);
             var current = new com.cretas.aims.ai.tool.gateway.ExecutionPrincipal("F-1","FACTORY","42",
                     com.cretas.aims.ai.tool.gateway.PrincipalType.USER,java.util.Set.of("purchaser"),java.util.Set.of(),java.util.Set.of());
-            when(principalPolicy.rehydrate(any())).thenReturn(Optional.of(new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(current,java.util.Map.of("canViewPrices",false))));
+            when(principalPolicy.rehydrate(any())).thenReturn(Optional.of(new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(current,java.util.Map.of("canViewPurchasePrices",false))));
             var read = controlled.status("F-1", first.grantId());
             assertThat(read.state()).isEqualTo("DRAFT"); assertThat(read.purchaseOrderId()).isEqualTo(first.purchaseOrderId());
             assertThat(read.grossAmount()).isNull();
@@ -206,7 +206,7 @@ class AiPurchaseTaskGrantServiceContractTest {
         var principal = new com.cretas.aims.ai.tool.gateway.ExecutionPrincipal("F-1","FACTORY","42",
                 com.cretas.aims.ai.tool.gateway.PrincipalType.USER,java.util.Set.of("purchaser"),java.util.Set.of("procurement:read_write"),java.util.Set.of());
         when(principalFactory.create("F-1",42L,"purchaser")).thenReturn(principal);
-        when(principalPolicy.rehydrate(principal)).thenReturn(Optional.of(new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(principal,java.util.Map.of("canViewPrices",true))));
+        when(principalPolicy.rehydrate(principal)).thenReturn(Optional.of(new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(principal,java.util.Map.of("canViewPurchasePrices",true))));
         when(toolRegistry.isToolEnabledForFactory("F-1","purchase_order_create")).thenReturn(true);
         doAnswer(invocation -> Optional.of(entityManager.getEntityManager().find(Supplier.class,"SUP-1"))).when(controlledSuppliers).findByIdAndFactoryId("SUP-1","F-1");
         doAnswer(invocation -> Optional.of(entityManager.getEntityManager().find(RawMaterialType.class,"MAT-1"))).when(controlledMaterials).findByIdAndFactoryId("MAT-1","F-1");

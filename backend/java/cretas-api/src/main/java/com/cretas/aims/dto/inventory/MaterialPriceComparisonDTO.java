@@ -39,6 +39,7 @@ public class MaterialPriceComparisonDTO {
      * 如果该原料出现在多个产品BOM中，取平均值
      * null 表示该原料未配置BOM
      */
+    @com.cretas.aims.security.PriceSensitive(permission = com.cretas.aims.security.PriceSensitive.PURCHASE)
     private BigDecimal bomStandardPrice;
 
     /**
@@ -46,6 +47,7 @@ public class MaterialPriceComparisonDTO {
      * 根据历次入库自动计算的加权平均价
      * null 表示尚无入库记录
      */
+    @com.cretas.aims.security.PriceSensitive(permission = com.cretas.aims.security.PriceSensitive.PURCHASE)
     private BigDecimal movingAvgPrice;
 
     /**
@@ -53,6 +55,7 @@ public class MaterialPriceComparisonDTO {
      * 本次采购订单中的报价
      * null 表示未填写单价
      */
+    @com.cretas.aims.security.PriceSensitive(permission = com.cretas.aims.security.PriceSensitive.PURCHASE)
     private BigDecimal currentPrice;
 
     // ==================== 偏差分析 ====================
@@ -62,6 +65,7 @@ public class MaterialPriceComparisonDTO {
      * 正数表示当前价高于BOM价，负数表示低于
      * null 表示无法计算（缺少BOM价或当前价）
      */
+    @com.cretas.aims.security.PriceSensitive(permission = com.cretas.aims.security.PriceSensitive.PURCHASE)
     private BigDecimal varianceFromBom;
 
     /**
@@ -69,6 +73,7 @@ public class MaterialPriceComparisonDTO {
      * 正数表示当前价高于均价，负数表示低于
      * null 表示无法计算（缺少均价或当前价）
      */
+    @com.cretas.aims.security.PriceSensitive(permission = com.cretas.aims.security.PriceSensitive.PURCHASE)
     private BigDecimal varianceFromAvg;
 
     /**

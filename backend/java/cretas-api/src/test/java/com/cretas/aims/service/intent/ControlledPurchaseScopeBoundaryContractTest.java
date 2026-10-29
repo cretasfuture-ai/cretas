@@ -139,7 +139,7 @@ class ControlledPurchaseScopeBoundaryContractTest {
                 Set.of(ROLE), Set.of("procurement:read_write"), Set.of());
         when(principalFactory.create(FACTORY, USER, ROLE)).thenReturn(principal);
         when(principalPolicy.rehydrate(principal)).thenReturn(Optional.of(
-                new ToolPrincipalPolicy.RehydratedPrincipal(principal, Map.of("canViewPrices", true))));
+                new ToolPrincipalPolicy.RehydratedPrincipal(principal, Map.of("canViewPurchasePrices", true))));
         when(registry.isToolEnabledForFactory(FACTORY, "purchase_order_create")).thenReturn(true);
         when(suppliers.findByIdAndFactoryId(anyString(), eq(FACTORY))).thenAnswer(call ->
                 Optional.ofNullable(entityManager.getEntityManager().find(Supplier.class, call.getArgument(0))));

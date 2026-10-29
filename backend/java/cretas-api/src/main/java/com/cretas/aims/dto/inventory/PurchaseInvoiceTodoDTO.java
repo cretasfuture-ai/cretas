@@ -16,7 +16,7 @@ public class PurchaseInvoiceTodoDTO {
     String purchaseOrderNumber;
     String supplierId;
     String supplierName;
-    @PriceSensitive(permission = PriceSensitive.PURCHASE)
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal orderAmount;
     LocalDate orderDate;
     PurchaseInvoiceStatus invoiceStatus;

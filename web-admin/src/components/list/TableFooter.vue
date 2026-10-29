@@ -17,6 +17,11 @@ interface Props {
   emptyText?: string
   showAi?: boolean
   showExport?: boolean
+  /**
+   * 金额统计按哪种价格权限显示 (S5-12): default = 原价格权限; purchase = 配置的采购读;
+   * both = 两者都要 (退货合计不分采购 / 销售退货)。
+   */
+  priceGate?: 'default' | 'purchase' | 'both'
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -24,6 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
   emptyText: '暂无数据',
   showAi: true,
   showExport: true,
+  priceGate: 'default',
 })
 
 const emit = defineEmits<{
@@ -34,7 +40,11 @@ const emit = defineEmits<{
 }>()
 
 const permissionStore = usePermissionStore()
-const canViewPrice = computed(() => permissionStore.canViewPrice)
+const canViewPrice = computed(() => {
+  if (props.priceGate === 'purchase') return permissionStore.canViewPurchasePrice
+  if (props.priceGate === 'both') return permissionStore.canViewPrice && permissionStore.canViewPurchasePrice
+  return permissionStore.canViewPrice
+})
 
 const visibleStats = computed(() =>
   props.stats.filter((s) => !s.canViewPrice || canViewPrice.value),

@@ -120,8 +120,9 @@ class PriceFieldResponseAdviceTest {
                 eq(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION))).thenReturn(canViewPrice);
         lenient().when(permissionService.hasPermission(eq(user),
                 eq(PriceFieldResponseAdvice.FINANCE_READ_PERMISSION))).thenReturn(canViewFinance);
-        lenient().when(permissionService.hasPermission(eq(user),
-                eq(com.cretas.aims.security.PriceSensitive.PURCHASE))).thenReturn(canReadProcurement);
+        lenient().when(permissionService.hasConfiguredPermission(eq(user),
+                eq(com.cretas.aims.security.PriceSensitive.PURCHASE), any()))
+                .thenReturn(canReadProcurement);
     }
 
     private Object run(Object body) {

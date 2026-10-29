@@ -21,7 +21,7 @@ public class PurchaseInvoiceLineViewDTO {
     BigDecimal unitPrice;
     @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal amount;
-    @PriceSensitive(permission = PriceSensitive.PURCHASE)
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal expectedAmount;
     String matchStatus;
     String matchNote;

@@ -248,6 +248,7 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
       </el-table>
 
       <TableFooter
+        price-gate="both"
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"

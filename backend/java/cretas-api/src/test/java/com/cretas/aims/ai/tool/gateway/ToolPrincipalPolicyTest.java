@@ -178,4 +178,35 @@ class ToolPrincipalPolicyTest {
         return new ExecutionPrincipal(
                 tenant, businessType, "42", PrincipalType.USER, roles, permissions, Set.of());
     }
+
+    /** S5-12: 工具通道的采购价口径与 HTTP 一致 —— 在旧名单里 (price:view) 不等于能看采购价。 */
+    @Test
+    void purchasePriceVisibilityFollowsConfiguredProcurementReadNotTheRoleList() {
+        user.setRoleCode("sales_manager");
+        when(userRepository.findById(42L)).thenReturn(Optional.of(user));
+        when(factoryRepository.findById("F-REST")).thenReturn(Optional.of(factory));
+        org.mockito.Mockito.lenient().when(permissionService.resolveModuleLevelsForAuthorization(user))
+                .thenReturn(Map.of("sales", "rw"));
+        org.mockito.Mockito.lenient().when(permissionService.hasPermission(user, "procurement:price:view"))
+                .thenReturn(true);
+        org.mockito.Mockito.lenient().when(permissionService.hasConfiguredPermission(
+                org.mockito.ArgumentMatchers.eq(user), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(false);
+
+        ToolPrincipalPolicy.RehydratedPrincipal current = policy.rehydrate(
+                principal("F-REST", "restaurant", Set.of("sales_manager"), Set.of())).orElseThrow();
+        assertThat(current.executionContext())
+                .containsEntry("canViewPrices", true)
+                .containsEntry("canViewPurchasePrices", false)
+                .containsEntry("canViewPurchaseOrFinancePrices", false);
+
+        // 配置给了采购读 → 同一个人重新 rehydrate 就能看
+        org.mockito.Mockito.lenient().when(permissionService.hasConfiguredPermission(
+                org.mockito.ArgumentMatchers.eq(user), org.mockito.ArgumentMatchers.eq("procurement:read"),
+                org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        assertThat(policy.rehydrate(principal("F-REST", "restaurant", Set.of("sales_manager"), Set.of()))
+                .orElseThrow().executionContext())
+                .containsEntry("canViewPurchasePrices", true)
+                .containsEntry("canViewPurchaseOrFinancePrices", true);
+    }
 }
