@@ -200,10 +200,14 @@ public class BomExpansionService {
     }
 
     /**
-     * 检查原辅料库存是否满足BOM需求。
+     * 检查原辅料库存是否满足BOM需求 —— <b>扣料口径</b>: 只看车间仓 + 物流仓。
      *
      * <p>对每种原辅料，按FEFO策略（先到期先出）检查可用库存。
      * 库存充足时，生成批次分配方案；不足时，记录短缺信息。</p>
+     *
+     * <p>⛔ 批次完工自动扣料 ({@code BatchConsumptionServiceImpl.autoConsumeForBatch}) 直接按这里返回的批次分配扣减,
+     * 所以范围不能放宽: 放宽后完工会从原料仓直接扣, 没有领料单 / 调拨记录。只读的「够不够」判断
+     * (缺料、插单影响、就绪复检、AI 展开) 用 {@link #checkPickableAvailability}。
      *
      * @param factoryId    工厂ID
      * @param requirements BOM展开后的原辅料需求清单
@@ -212,19 +216,34 @@ public class BomExpansionService {
     @Transactional(readOnly = true)
     public MaterialCheckResult checkMaterialAvailability(String factoryId,
                                                          List<MaterialRequirement> requirements) {
+        return check(factoryId, requirements, List.of(
+                warehouseResolver.resolveWorkshopId(factoryId), warehouseResolver.resolveLogisticsId(factoryId)));
+    }
+
+    /**
+     * 同 {@link #checkMaterialAvailability}, 但按<b>生产能领到料的全部仓</b>算可用量
+     * ({@link WarehouseResolver#productionPickingWarehouseIds}) —— 只读判断用。采购默认收进原料仓的工厂,
+     * 只数车间仓 + 物流仓会让到货永远不抵缺口 (2026-10-29 验收 D-S3S4-01)。
+     * ⛔ 返回的批次分配只能用来展示, 不能拿去扣料。
+     */
+    @Transactional(readOnly = true)
+    public MaterialCheckResult checkPickableAvailability(String factoryId,
+                                                         List<MaterialRequirement> requirements) {
+        return check(factoryId, requirements, warehouseResolver.productionPickingWarehouseIds(factoryId));
+    }
+
+    private MaterialCheckResult check(String factoryId, List<MaterialRequirement> requirements,
+                                      List<String> warehouseIds) {
         boolean allSatisfied = true;
         List<MaterialShortfall> shortfalls = new ArrayList<>();
         List<MaterialAllocation> allocations = new ArrayList<>();
 
-        // D1: warehouse strategy per PR #310 §5 — 车间仓余料优先, 再按生产能领料的其余仓.
-        // 范围 = 生产领料口径 (WarehouseResolver#productionPickingWarehouseIds): 采购默认收进原料仓的工厂,
-        // 只数 车间仓 + 物流仓 会让到货永远不抵缺口 (2026-10-29 验收 D-S3S4-01). 在循环外解析避免重复 lookup.
-        List<String> pickingWarehouseIds = warehouseResolver.productionPickingWarehouseIds(factoryId);
+        // D1: warehouse strategy per PR #310 §5 — 按调用方给的仓顺序 (车间仓在前, 先用车间余料), 逐仓 FEFO.
         LocalDate expiryToday = InventoryExpiry.today();
 
         for (MaterialRequirement req : requirements) {
             List<MaterialBatch> batches = new ArrayList<>();
-            for (String warehouseId : pickingWarehouseIds) {
+            for (String warehouseId : warehouseIds) {
                 batches.addAll(materialBatchRepository
                         .findAvailableBatchesFEFOByWarehouse(factoryId, req.getMaterialTypeId(), warehouseId));
             }
@@ -360,7 +379,7 @@ public class BomExpansionService {
                     plan.getProductTypeId(),
                     plan.getPlannedQuantity()
             );
-            MaterialCheckResult result = checkMaterialAvailability(plan.getFactoryId(), requirements);
+            MaterialCheckResult result = checkPickableAvailability(plan.getFactoryId(), requirements);
             log.info("生产计划复检: planId={}, allSatisfied={}", plan.getId(), result.isAllSatisfied());
             return result.isAllSatisfied();
         } catch (BusinessException e) {

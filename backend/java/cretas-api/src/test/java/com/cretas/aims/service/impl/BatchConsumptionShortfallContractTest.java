@@ -194,4 +194,13 @@ class BatchConsumptionShortfallContractTest {
         assertEquals(0, new BigDecimal("15.00").compareTo(batch.getMaterialCost()),
                 "materialCost 应只含实际扣减的部分, 实得: " + batch.getMaterialCost());
     }
+
+    @Test
+    @DisplayName("完工自动扣料只按扣料口径 (车间仓 + 物流仓) 取批次, 不走只读的可领料口径 —— 否则会从原料仓直接扣, 没有领料 / 调拨记录")
+    void autoConsumeUsesTheConsumptionScopeNotThePickableScope() {
+        service.autoConsumeForBatch(batch);
+
+        verify(bomExpansionService, atLeastOnce()).checkMaterialAvailability(eq(FACTORY), any());
+        verify(bomExpansionService, never()).checkPickableAvailability(any(), any());
+    }
 }

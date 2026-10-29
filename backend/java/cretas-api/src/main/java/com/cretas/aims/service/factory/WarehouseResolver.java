@@ -13,8 +13,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -164,25 +167,48 @@ public class WarehouseResolver {
     }
 
     /**
-     * 生产能领到料的仓 — 缺料核对 / BOM 分配算「可用库存」的范围, 车间仓排第一 (先用车间余料)。
+     * 不论怎么配置都不算生产领料来源的仓类型: 质检仓 / 退货仓 / 报废仓 / 成品仓 / 研发仓。
+     * 默认仓配置可以指向任何仓 (比如把采购入库默认仓配成待检仓), 这几类里的货不能拿去开工。
+     */
+    private static final Set<FactoryWarehouse.WarehouseType> NEVER_PICKABLE = EnumSet.of(
+            FactoryWarehouse.WarehouseType.QC, FactoryWarehouse.WarehouseType.RETURNS,
+            FactoryWarehouse.WarehouseType.SCRAP, FactoryWarehouse.WarehouseType.FINISHED,
+            FactoryWarehouse.WarehouseType.RD);
+
+    /**
+     * 生产能领到料的仓 — 缺料核对 / 插单影响 / 就绪复检 / AI 展开算「可用库存」的范围 (只读口径),
+     * 车间仓排第一 (先用车间余料)。⛔ 不用于扣料: 完工自动扣料仍只看车间仓 + 物流仓
+     * ({@code BomExpansionService#checkMaterialAvailability})。
      *
-     * <p>口径与生产领料同一个权威, ⛔ 不另列一份仓库类型清单: 车间默认仓、生产领料默认仓、采购入库默认仓
-     * (领料单的来源仓就是它, 见 {@code FactoryMaterialRequisitionServiceImpl}), 再加上本厂所有被
-     * {@link #isRawOrLogisticsWarehouse} / {@link #isWorkshopWarehouse} 认作可报工取料的仓。
+     * <p>口径与生产领料同一个权威, ⛔ 不另列一份「可领料」类型清单: 车间默认仓、生产领料默认仓、采购入库默认仓
+     * (领料单的来源仓就是它, 见 {@code FactoryMaterialRequisitionServiceImpl}), 本厂所有被
+     * {@link #isRawOrLogisticsWarehouse} / {@link #isWorkshopWarehouse} 认作可报工取料的仓, 以及线边仓。
+     * 停用的仓、以及 {@link #NEVER_PICKABLE} 类型的仓 (即使被配成默认仓) 一律不算。
      * 采购默认收进原料仓 (WH-RAW) 的工厂, 到货因此直接抵缺口, 不必先调拨到物流仓。
      */
     public List<String> productionPickingWarehouseIds(String factoryId) {
+        Map<String, FactoryWarehouse> live = new LinkedHashMap<>();
+        for (FactoryWarehouse wh : factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId)) {
+            live.put(wh.getId(), wh);
+        }
         Set<String> ids = new LinkedHashSet<>();
         ids.add(resolveWorkshopId(factoryId));
         ids.add(resolveProductionRawWh(factoryId));
         ids.add(resolvePurchaseInboundWh(factoryId));
-        for (FactoryWarehouse wh : factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId)) {
-            if (isRawOrLogisticsWarehouse(factoryId, wh.getId()) || isWorkshopWarehouse(factoryId, wh.getId())) {
+        for (FactoryWarehouse wh : live.values()) {
+            if (wh.getType() == FactoryWarehouse.WarehouseType.LINESIDE
+                    || isRawOrLogisticsWarehouse(factoryId, wh.getId()) || isWorkshopWarehouse(factoryId, wh.getId())) {
                 ids.add(wh.getId());
             }
         }
-        ids.remove(null);
-        return new ArrayList<>(ids);
+        List<String> out = new ArrayList<>();
+        for (String id : ids) {
+            FactoryWarehouse wh = id == null ? null : live.get(id);
+            if (wh != null && !Boolean.FALSE.equals(wh.getIsActive()) && !NEVER_PICKABLE.contains(wh.getType())) {
+                out.add(id);
+            }
+        }
+        return out;
     }
 
     /**

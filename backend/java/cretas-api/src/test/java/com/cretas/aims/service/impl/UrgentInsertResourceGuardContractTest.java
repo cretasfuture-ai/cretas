@@ -123,7 +123,7 @@ class UrgentInsertResourceGuardContractTest {
     private void stockIsZero() {
         when(bom.expandBOM(F, "PT-1", new BigDecimal("50"))).thenReturn(List.of(req()));
         MaterialShortfall sf = new MaterialShortfall("RM-1", "带鱼", new BigDecimal("60"), BigDecimal.ZERO, new BigDecimal("60"));
-        when(bom.checkMaterialAvailability(eq(F), anyList()))
+        when(bom.checkPickableAvailability(eq(F), anyList()))
                 .thenReturn(new MaterialCheckResult(false, List.of(sf), List.of()));
     }
 
@@ -184,7 +184,7 @@ class UrgentInsertResourceGuardContractTest {
     @Test
     void sufficientStockIsVerifiedAvailable() {
         when(bom.expandBOM(F, "PT-1", new BigDecimal("50"))).thenReturn(List.of(req()));
-        when(bom.checkMaterialAvailability(eq(F), anyList()))
+        when(bom.checkPickableAvailability(eq(F), anyList()))
                 .thenReturn(new MaterialCheckResult(true, List.of(), List.of()));
 
         ResourceCheckResult r = impact.checkMaterialAvailability(F, "PT-1", new BigDecimal("50"));

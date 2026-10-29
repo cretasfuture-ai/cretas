@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,19 +76,29 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
     }
 
     @Test
+    void theScanSeesSpacedAndQualifiedConstructions() {
+        assertThat(CONSTRUCTION.matcher("x = new MaterialBatchReleasedEvent (this, f, m, b);").find()).isTrue();
+        assertThat(CONSTRUCTION.matcher("new com.cretas.aims.event.MaterialBatchReleasedEvent\n        (this, f, m, b)").find()).isTrue();
+        assertThat(CONSTRUCTION.matcher("MaterialBatchReleasedEvent.publishIfBecameAvailable(p, this, b, s)").find()).isFalse();
+    }
+
+    @Test
     void theReleaseEventIsOnlyConstructedThroughTheSharedMethod() throws IOException {
         Path root = Path.of("src/main/java");
         List<String> offenders;
         try (Stream<Path> files = Files.walk(root)) {
             offenders = files.filter(p -> p.toString().endsWith(".java"))
                     .filter(p -> !p.getFileName().toString().equals("MaterialBatchReleasedEvent.java"))
-                    .filter(p -> read(p).contains("new com.cretas.aims.event.MaterialBatchReleasedEvent(")
-                            || read(p).contains("new MaterialBatchReleasedEvent("))
+                    .filter(p -> CONSTRUCTION.matcher(read(p)).find())
                     .map(Path::toString)
                     .toList();
         }
         assertThat(offenders).as("这些地方自己 new 了放行事件, 应改走 publishIfBecameAvailable").isEmpty();
     }
+
+    /** {@code new [com.cretas.aims.event.]MaterialBatchReleasedEvent (} —— 关键字、包名与括号之间的空白 / 换行都算。 */
+    private static final Pattern CONSTRUCTION = Pattern.compile(
+            "\\bnew\\s+(?:com\\s*\\.\\s*cretas\\s*\\.\\s*aims\\s*\\.\\s*event\\s*\\.\\s*)?MaterialBatchReleasedEvent\\s*\\(");
 
     private static String read(Path p) {
         try {

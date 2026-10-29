@@ -74,7 +74,7 @@ class ShortageAnalysisServiceImplTest {
         assertEquals(1, report.getFinishedGoodsLineItems().size());
 
         verify(bomExpansionService, never()).expandBOM(anyString(), anyString(), any(BigDecimal.class));
-        verify(bomExpansionService, never()).checkMaterialAvailability(anyString(), anyList());
+        verify(bomExpansionService, never()).checkPickableAvailability(anyString(), anyList());
 
         assertTrue(service.suggestProcurement(FACTORY, report).isEmpty());
         assertTrue(service.suggestProduction(FACTORY, report).isEmpty());
@@ -91,7 +91,7 @@ class ShortageAnalysisServiceImplTest {
         when(bomExpansionService.expandBOM(eq(FACTORY), eq("PROD-A"), eq(new BigDecimal("70"))))
                 .thenReturn(List.of(need));
 
-        when(bomExpansionService.checkMaterialAvailability(eq(FACTORY), anyList()))
+        when(bomExpansionService.checkPickableAvailability(eq(FACTORY), anyList()))
                 .thenReturn(materialCheck(true, Collections.emptyList()));
 
         ShortageReport report = service.analyzeForSalesOrder(FACTORY, SALES_ORDER);
@@ -127,7 +127,7 @@ class ShortageAnalysisServiceImplTest {
         // 聚合后传入应只有 1 条 M1, requiredQty=50
         MaterialShortfall sf = new MaterialShortfall("M1", "面粉",
                 new BigDecimal("50"), new BigDecimal("15"), new BigDecimal("35"));
-        when(bomExpansionService.checkMaterialAvailability(eq(FACTORY), anyList()))
+        when(bomExpansionService.checkPickableAvailability(eq(FACTORY), anyList()))
                 .thenReturn(materialCheck(false, List.of(sf)));
 
         ShortageReport report = service.analyzeForSalesOrder(FACTORY, SALES_ORDER);
@@ -144,7 +144,7 @@ class ShortageAnalysisServiceImplTest {
         assertEquals(2, prod.size(), "两个 FG 短缺 SKU 各一条生产建议");
 
         verify(bomExpansionService, times(2)).expandBOM(anyString(), anyString(), any(BigDecimal.class));
-        verify(bomExpansionService, times(1)).checkMaterialAvailability(anyString(), anyList());
+        verify(bomExpansionService, times(1)).checkPickableAvailability(anyString(), anyList());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────

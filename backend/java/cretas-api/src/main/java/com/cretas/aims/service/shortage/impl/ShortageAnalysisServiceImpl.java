@@ -128,7 +128,7 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
         // ③ 原料库存检查
         MaterialCheckResult materialResult = aggregatedRequirements.isEmpty()
                 ? emptyMaterialCheckResult()
-                : bomExpansionService.checkMaterialAvailability(factoryId, aggregatedRequirements);
+                : bomExpansionService.checkPickableAvailability(factoryId, aggregatedRequirements);
 
         List<MaterialShortfall> shortages = materialResult.getShortfalls() != null
                 ? materialResult.getShortfalls()

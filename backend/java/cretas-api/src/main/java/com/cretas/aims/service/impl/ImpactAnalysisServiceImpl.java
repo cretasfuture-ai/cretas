@@ -451,7 +451,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
                 throw new BusinessException(409, "该产品配方没有可核对的原料投入行")
                         .withHint("先在该产品的 BOM 配方里补上原料投入行并绑定物料，再回来做插单分析");
             }
-            return bomExpansionService.checkMaterialAvailability(factoryId, requirements);
+            return bomExpansionService.checkPickableAvailability(factoryId, requirements);
         });
     }
 
