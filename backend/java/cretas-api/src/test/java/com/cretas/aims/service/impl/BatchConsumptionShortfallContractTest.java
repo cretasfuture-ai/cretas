@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -72,6 +73,7 @@ class BatchConsumptionShortfallContractTest {
 
     private BatchConsumptionServiceImpl service;
     private ProductionBatch batch;
+    private List<MaterialConsumption> persistedConsumptions;
 
     @BeforeEach
     void setUp() {
@@ -87,6 +89,7 @@ class BatchConsumptionShortfallContractTest {
                 bomExpansionService, materialBatchService, materialBatchRepository,
                 consumptionRepository, productionBatchRepository, rawMaterialTypeRepository,
                 warehouseResolver);
+        persistedConsumptions = new ArrayList<>();
 
         batch = new ProductionBatch();
         batch.setId(BATCH_ID);
@@ -144,7 +147,15 @@ class BatchConsumptionShortfallContractTest {
         when(materialBatchRepository.findById(REAL_BATCH)).thenReturn(Optional.of(mb));
         when(rawMaterialTypeRepository.findById(anyString())).thenReturn(Optional.empty());
         when(consumptionRepository.save(any(MaterialConsumption.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
+                .thenAnswer(inv -> {
+                    MaterialConsumption saved = inv.getArgument(0);
+                    persistedConsumptions.add(saved);
+                    return saved;
+                });
+        // The production query must read the rows just saved, rather than
+        // letting Mockito's default empty list hide a missing canonical read.
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(BATCH_ID, FACTORY))
+                .thenAnswer(inv -> persistedConsumptions);
     }
 
     @Test

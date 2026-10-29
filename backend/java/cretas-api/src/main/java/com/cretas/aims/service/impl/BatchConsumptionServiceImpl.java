@@ -104,7 +104,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                 .collect(Collectors.toMap(MaterialRequirement::getMaterialTypeId, r -> r));
 
         BigDecimal totalMaterialCost = BigDecimal.ZERO;
-        List<MaterialConsumption> persistedThisInvocation = new ArrayList<>();
+        boolean wroteConsumption = false;
 
         // 3. 按分配方案逐批次消耗
         // 按materialTypeId分组allocations
@@ -145,8 +145,8 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     consumption.setSourceType(SOURCE_AUTO_BOM);
                     consumption.setNotes("BOM自动扣料");
 
-                    MaterialConsumption persisted = consumptionRepository.save(consumption);
-                    persistedThisInvocation.add(persisted != null ? persisted : consumption);
+                    consumptionRepository.save(consumption);
+                    wroteConsumption = true;
                     recordRawLineage(factoryId, alloc.getMaterialBatchId(), batch.getId(),
                             alloc.getAllocatedQuantity(), SOURCE_AUTO_BOM, recordedBy, consumption.getId());
                     totalMaterialCost = totalMaterialCost.add(cost);
@@ -196,13 +196,11 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         // 使 AUTO_BOM 不覆盖手工领料或既有调整成本。
         List<MaterialConsumption> persistedConsumptions = consumptionRepository
                 .findByProductionBatchIdAndFactoryId(batch.getId(), factoryId);
-        // A repository read normally sees the just-saved rows after the query
-        // flushes. Keep the saved signed rows as a narrow read-after-save
-        // fallback for persistence seams that expose no rows until commit;
-        // existing persisted rows always take precedence.
-        BigDecimal canonicalCost = MaterialConsumptionCostTotals.sum(
-                persistedConsumptions.isEmpty() ? persistedThisInvocation : persistedConsumptions);
-        batch.setMaterialCost(canonicalCost);
+        if (wroteConsumption && (persistedConsumptions == null || persistedConsumptions.isEmpty())) {
+            throw new BusinessException(500,
+                    "自动扣料已写入但无法读取本批次已持久化成本，拒绝伪造物料成本");
+        }
+        batch.setMaterialCost(MaterialConsumptionCostTotals.sum(persistedConsumptions));
         batch.calculateMetrics();
         productionBatchRepository.save(batch);
 

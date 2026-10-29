@@ -213,6 +213,59 @@ class ProductionBatchMaterialCostAccumulationContractTest {
         verify(consumptionRepository).findByProductionBatchIdAndFactoryId(BATCH_ID, FACTORY);
     }
 
+    @Test
+    @DisplayName("写入后 canonical read 为空时不得用内存成本或零值伪造批次成本")
+    void autoBomFailsClosedWhenPersistedReadIsEmptyAfterWrite() {
+        BomExpansionService bom = mock(BomExpansionService.class);
+        MaterialBatchService materialBatchService = mock(MaterialBatchService.class);
+        MaterialBatchRepository materialBatchRepository = mock(MaterialBatchRepository.class);
+        MaterialConsumptionRepository consumptionRepository = mock(MaterialConsumptionRepository.class);
+        ProductionBatchRepository productionBatchRepository = mock(ProductionBatchRepository.class);
+        RawMaterialTypeRepository rawMaterialTypeRepository = mock(RawMaterialTypeRepository.class);
+        WarehouseResolver warehouseResolver = mock(WarehouseResolver.class);
+        BatchConsumptionServiceImpl service = new BatchConsumptionServiceImpl(
+                bom, materialBatchService, materialBatchRepository, consumptionRepository,
+                productionBatchRepository, rawMaterialTypeRepository, warehouseResolver);
+
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(BATCH_ID);
+        batch.setFactoryId(FACTORY);
+        batch.setProductTypeId("PT-1");
+        batch.setActualQuantity(BigDecimal.ONE);
+        batch.setSupervisorId(1L);
+
+        MaterialRequirement requirement = new MaterialRequirement();
+        requirement.setMaterialTypeId("MAT-PACK");
+        requirement.setRequiredQuantity(new BigDecimal("0.30"));
+        MaterialAllocation allocation = new MaterialAllocation();
+        allocation.setMaterialTypeId("MAT-PACK");
+        allocation.setMaterialBatchId("MB-PACK");
+        allocation.setAllocatedQuantity(BigDecimal.ONE);
+        MaterialCheckResult check = new MaterialCheckResult();
+        check.setAllocations(List.of(allocation));
+        check.setShortfalls(List.of());
+
+        MaterialBatch materialBatch = new MaterialBatch();
+        materialBatch.setUnitPrice(new BigDecimal("0.30"));
+        when(consumptionRepository.findByProductionBatchIdAndSourceType(BATCH_ID, "AUTO_BOM"))
+                .thenReturn(List.of());
+        when(bom.expandBOM(eq(FACTORY), eq("PT-1"), any(BigDecimal.class)))
+                .thenReturn(List.of(requirement));
+        when(bom.checkMaterialAvailability(eq(FACTORY), any())).thenReturn(check);
+        when(materialBatchRepository.findById("MB-PACK"))
+                .thenReturn(java.util.Optional.of(materialBatch));
+        when(consumptionRepository.save(any(MaterialConsumption.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(BATCH_ID, FACTORY))
+                .thenReturn(List.of());
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.autoConsumeForBatch(batch));
+
+        assertEquals(500, error.getCode());
+        verify(productionBatchRepository, never()).save(any(ProductionBatch.class));
+    }
+
     private static List<MaterialConsumption> rows(String... costs) {
         return java.util.Arrays.stream(costs).map(cost -> {
             MaterialConsumption row = new MaterialConsumption();
