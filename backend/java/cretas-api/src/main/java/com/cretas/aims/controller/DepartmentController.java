@@ -13,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
@@ -49,7 +48,6 @@ public class DepartmentController {
     @RequireModule("hr_employee")
     @PostMapping
     @Operation(summary = "创建部门", description = "创建新的部门，需要管理员权限。部门编码必须唯一，可设置上级部门形成层级结构")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<DepartmentDTO> createDepartment(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable String factoryId,
@@ -126,7 +124,6 @@ public class DepartmentController {
     @RequireModule("hr_employee")
     @PutMapping("/{id}")
     @Operation(summary = "更新部门", description = "更新部门信息，需要管理员权限。可修改名称、编码、上级部门、排序等属性")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<DepartmentDTO> updateDepartment(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable String factoryId,
@@ -146,7 +143,6 @@ public class DepartmentController {
     @RequireModule("hr_employee")
     @DeleteMapping("/{id}")
     @Operation(summary = "删除部门", description = "删除指定部门，需要管理员权限。如果部门下有员工或子部门，删除将失败")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Void> deleteDepartment(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable String factoryId,
@@ -220,7 +216,6 @@ public class DepartmentController {
     @RequireModule("hr_employee")
     @PostMapping("/initialize")
     @Operation(summary = "初始化默认部门", description = "为新工厂初始化默认的部门结构，包含生产、质检、仓储等基础部门。需要管理员权限")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Void> initializeDefaultDepartments(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable String factoryId) {
@@ -236,7 +231,6 @@ public class DepartmentController {
     @RequireModule("hr_employee")
     @PutMapping("/batch-status")
     @Operation(summary = "批量更新部门状态", description = "批量启用或禁用多个部门，需要管理员权限。请求体需包含 ids (部门ID数组) 和 isActive (目标状态)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Void> updateDepartmentsStatus(
             @Parameter(description = "工厂ID", example = "F001", required = true)
             @PathVariable String factoryId,

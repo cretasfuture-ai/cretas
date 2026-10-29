@@ -13,6 +13,8 @@ import {
   describeCapacity,
   describeDateRange,
   describeDays,
+  describeSampleDays,
+  initialCapacityInputs,
 } from '../../../screens/dispatcher/ai/dailyCapacityPrompt';
 
 const mockGenerate = jest.fn();
@@ -90,6 +92,18 @@ describe('dailyCapacityPrompt', () => {
     expect(() => buildCapacityOverrides([beef], {})).toThrow('酱牛肉');
   });
 
+  it('prefills the suggestion only where nothing was typed and describes the 1-2 days of history', () => {
+    const chicken = { ...beef, productTypeId: 'RAW-CHICKEN', productName: '西装鸡', unit: 'kg', jointPlan: true, suggestedPerDay: 200 };
+    expect(initialCapacityInputs([beef, chicken], {})).toEqual({ [capacityKey(beef)]: undefined, [capacityKey(chicken)]: '200' });
+    expect(initialCapacityInputs([chicken], { [capacityKey(chicken)]: '150' })).toEqual({ [capacityKey(chicken)]: '150' });
+    expect(initialCapacityInputs([{ ...chicken, suggestedPerDay: 0 }], {})).toEqual({ [capacityKey(chicken)]: undefined });
+    expect(describeSampleDays({ ...beef, unit: '盒', historyBasis: 'FINISHED_OUTPUT', historyWindowDays: 90,
+      sampleDays: [{ date: '2026-10-27', quantity: 40, unit: '盒' }] })).toBe('近 90 天只有 1 天有记录：10-27 入库 40 盒');
+    expect(describeSampleDays({ ...chicken, historyBasis: 'RAW_INPUT', historyWindowDays: 90,
+      sampleDays: [{ date: '2026-10-25', quantity: 80, unit: 'kg' }] })).toBe('近 90 天只有 1 天有记录：10-25 投入 80 kg');
+    expect(describeSampleDays({ ...beef, sampleDays: [] })).toBeNull();
+  });
+
   it('describes the days, the date range and where the capacity came from', () => {
     const alloc = scheduled.data.lineSchedules[0].dailyAllocations;
     expect(describeDays(alloc)).toBe('10-29 300袋 · 10-30 300袋 · 10-31 100袋');
@@ -137,5 +151,45 @@ describe('AIScheduleGenerateScreen daily capacity flow', () => {
     expect(screen.getByTestId('daily-days-S-1').props.children).toBe('10-29 300袋 · 10-30 300袋 · 10-31 100袋');
     expect(screen.getByTestId('daily-capacity-S-1').props.children).toBe('日产能 300袋/天（人工填写）');
     expect(screen.getByText('10-29 ~ 10-31')).toBeTruthy();
+  });
+  it('prefills the joint plan suggestion (editable) and shows the one day of history for an ordinary product', async () => {
+    const beefOneDay = {
+      ...beef, unit: '盒', question: '「酱牛肉」一天能做多少 盒？',
+      experienceNote: '近 90 天只有 1 天有成品入库，不足 3 天，算不出历史日产能', historyBasis: 'FINISHED_OUTPUT', historyWindowDays: 90,
+      sampleDays: [{ date: '2026-10-27', quantity: 40, unit: '盒' }],
+    };
+    const chicken = {
+      productTypeId: 'RAW-CHICKEN', productName: '西装鸡', unit: 'kg', jointPlan: true,
+      question: '这个联产计划（西装鸡）一天能做多少 kg？', reason: 'MISSING', planNumbers: ['PLAN-J'],
+      suggestedPerDay: 200, experienceNote: '按近 90 天里 3 天实际投入西装鸡的中位数', historyBasis: 'RAW_INPUT',
+      historyWindowDays: 90, sampleDays: [],
+    };
+    mockGenerate
+      .mockResolvedValueOnce({ success: true, data: { id: null, outcome: 'CAPACITY_REQUIRED', lineSchedules: [], capacityRequired: [beefOneDay, chicken] } })
+      .mockResolvedValueOnce(scheduled);
+    const screen = render(<AIScheduleGenerateScreen />);
+    await waitFor(() => expect(screen.getByText('全选')).toBeTruthy());
+    fireEvent.press(screen.getByText('全选'));
+    fireEvent.press(screen.getByText('生成排程 (1 个计划)'));
+
+    await waitFor(() => expect(screen.getByTestId('capacity-required-modal')).toBeTruthy());
+    expect(screen.getByTestId('capacity-input-RAW-CHICKEN').props.value).toBe('200');
+    expect(screen.getByTestId('capacity-suggestion-RAW-CHICKEN').props.children).toContain('200 kg/天');
+    expect(screen.queryByTestId('capacity-samples-RAW-CHICKEN')).toBeNull();
+    expect(screen.getByTestId('capacity-samples-PT-BEEF').props.children).toBe('近 90 天只有 1 天有记录：10-27 入库 40 盒');
+    expect(screen.getByTestId('capacity-input-PT-BEEF').props.value).toBe('');
+    expect(screen.queryByTestId('capacity-suggestion-PT-BEEF')).toBeNull();
+
+    fireEvent.changeText(screen.getByTestId('capacity-input-PT-BEEF'), '40');
+    fireEvent.changeText(screen.getByTestId('capacity-input-RAW-CHICKEN'), '180');
+    fireEvent.press(screen.getByTestId('capacity-submit'));
+
+    await waitFor(() => expect(mockGenerate).toHaveBeenCalledTimes(2));
+    expect(mockGenerate.mock.calls[1][0]).toMatchObject({
+      dailyCapacityOverrides: [
+        { productTypeId: 'PT-BEEF', quantityPerDay: 40, unit: '盒' },
+        { productTypeId: 'RAW-CHICKEN', quantityPerDay: 180, unit: 'kg' },
+      ],
+    });
   });
 });

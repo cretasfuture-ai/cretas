@@ -13,7 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.validation.Valid;
@@ -38,7 +37,6 @@ public class WorkTypeController {
     @RequirePermission({"hr:read_write"})
     @PostMapping
     @Operation(summary = "创建工作类型", description = "创建新的工作类型，包含名称、编码、颜色、计件规则等配置信息")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkTypeDTO> createWorkType(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestBody @Valid WorkTypeDTO dto) {
@@ -89,7 +87,6 @@ public class WorkTypeController {
     @RequirePermission({"hr:read_write"})
     @PutMapping("/{id}")
     @Operation(summary = "更新工作类型", description = "更新工作类型的配置信息，包括名称、编码、颜色、计件规则等")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkTypeDTO> updateWorkType(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "工作类型ID", example = "WT001") String id,
@@ -102,7 +99,6 @@ public class WorkTypeController {
     @RequirePermission({"hr:read_write"})
     @DeleteMapping("/{id}")
     @Operation(summary = "删除工作类型", description = "删除指定的工作类型，仅管理员可操作")
-    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<Void> deleteWorkType(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "工作类型ID", example = "WT001") String id) {
@@ -114,7 +110,6 @@ public class WorkTypeController {
     @RequirePermission({"hr:read_write"})
     @PutMapping("/{id}/toggle-status")
     @Operation(summary = "切换工作类型状态", description = "切换工作类型的启用/禁用状态")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<WorkTypeDTO> toggleWorkTypeStatus(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "工作类型ID", example = "WT001") String id) {
@@ -126,7 +121,6 @@ public class WorkTypeController {
     @RequirePermission({"hr:read_write"})
     @PostMapping("/initialize-defaults")
     @Operation(summary = "初始化默认工作类型", description = "为工厂初始化一套默认的工作类型配置，仅管理员可操作")
-    @PreAuthorize("hasRole('ADMIN')")
     public ApiResponse<Void> initializeDefaultWorkTypes(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId) {
         log.info("Initializing default work types for factory: {}", factoryId);
@@ -146,7 +140,6 @@ public class WorkTypeController {
     @RequirePermission({"hr:read_write"})
     @PutMapping("/display-order")
     @Operation(summary = "更新显示顺序", description = "批量更新工作类型的显示顺序")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Void> updateDisplayOrder(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @RequestBody @Valid List<WorkTypeDTO.DisplayOrderUpdate> updates) {

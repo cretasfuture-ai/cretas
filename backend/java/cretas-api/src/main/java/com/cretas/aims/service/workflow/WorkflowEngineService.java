@@ -293,7 +293,7 @@ public interface WorkflowEngineService {
      * </ul>
      *
      * <p>注意: 此方法 <b>不做 role-based 过滤</b> — 调用方 controller 必须用
-     * {@code @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")}
+     * {@code @RequireRole({"factory_super_admin", "platform_admin"})}
      * 守门, 否则普通 user 可看全部 instances 违反 RBAC.
      *
      * @param factoryId 工厂 id

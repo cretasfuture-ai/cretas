@@ -131,7 +131,18 @@ export interface DailyCapacityRequired {
   reason: 'MISSING' | 'UNIT_MISMATCH' | string;
   currentQuantityPerDay?: number | null;
   currentUnit?: string | null;
+  /** 历史口径说明 (有建议值时说明怎么算的, 没有时是原因)。 */
   experienceNote?: string | null;
+  /**
+   * 建议值 (联产计划: 近 90 天实际投入计划主原料的中位数, 计划单位/天)。只作建议: 预填到输入框,
+   * 人可改, 点「保存并排程」才保存为人工值; 后端不会自动拿它排。
+   */
+  suggestedPerDay?: number | null;
+  /** FINISHED_OUTPUT = 成品入库; RAW_INPUT = 原料投入 (联产计划)。 */
+  historyBasis?: 'FINISHED_OUTPUT' | 'RAW_INPUT' | string | null;
+  historyWindowDays?: number | null;
+  /** 有记录的日子不足 3 天时那几天的实际量 (计划单位, 日期升序; 0 天为空)。 */
+  sampleDays?: Array<{ date: string; quantity: number; unit: string }> | null;
   planNumbers: string[];
 }
 

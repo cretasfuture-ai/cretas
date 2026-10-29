@@ -39,7 +39,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -588,7 +587,7 @@ public class WorkflowInstanceController {
      *
      * <p>差异 vs {@code /pending} (按 role 过滤) / {@code /my-created} (按 initiator
      * 过滤) / {@code /my-participated} (按 actor 过滤): 此 endpoint <b>无过滤</b>,
-     * 返 factory 下全部 RUNNING. 因此必须用 {@code @PreAuthorize} 守门.
+     * 返 factory 下全部 RUNNING. 因此必须用 {@code @RequireRole} 守门.
      *
      * <p>RBAC: 仅 {@code factory_super_admin} 和 {@code platform_admin} 可访问.
      * 普通审批角色 (finance_manager / quality_manager / ...) 应去 {@code /pending}.
@@ -601,9 +600,7 @@ public class WorkflowInstanceController {
      * @since 2026-05-19 (Sprint 6 W1-B)
      */
     @GetMapping("/admin-running")
-    // @PreAuthorize 在本项目是 NO-OP (Spring Security method security 未启用) → 用 @RequireRole 真正守门。
     @RequireRole({"factory_super_admin", "platform_admin"})
-    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")
     @Operation(summary = "工作流处理 admin 全局视图 — Sprint 6 W1-B (super-admin only)")
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getAdminRunning(
             @PathVariable @NotBlank String factoryId,
@@ -611,7 +608,7 @@ public class WorkflowInstanceController {
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 
-        // resolve user 仅用于审计日志, 不做过滤 (RBAC 在 @PreAuthorize 拦了非 admin)
+        // resolve user 仅用于审计日志, 不做过滤 (RBAC 在 @RequireRole 拦了非 admin)
         User user = resolveCurrentUser(authorization);
         if (user == null) {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
@@ -647,9 +644,7 @@ public class WorkflowInstanceController {
      * @since 2026-09-01 (缺陷 27)
      */
     @PostMapping("/{instanceId}/restart-binding")
-    // @PreAuthorize 在本项目是 NO-OP (Spring Security method security 未启用) → 用 @RequireRole 真正守门。
     @RequireRole({"factory_super_admin", "platform_admin"})
-    @PreAuthorize("hasAnyRole('FACTORY_SUPER_ADMIN', 'PLATFORM_ADMIN')")
     @Operation(summary = "按当前审批流重新发起 — 恢复因定义变更卡死的在途实例 (super-admin only)")
     public ApiResponse<WorkflowInstancePendingDTO> restartBinding(
             @PathVariable @NotBlank String factoryId,

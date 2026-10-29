@@ -16,7 +16,6 @@ import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -43,7 +42,6 @@ public class ProcessCheckinController {
 
     @RequirePermission({"production:read_write"})
     @PostMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ApiResponse<Map<String, Object>> checkIn(
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body,
@@ -103,7 +101,6 @@ public class ProcessCheckinController {
 
     @RequirePermission({"production:read_write"})
     @PostMapping("/checkout/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @Transactional
     public ApiResponse<Map<String, Object>> checkOut(
             @PathVariable String factoryId,

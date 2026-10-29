@@ -6,6 +6,8 @@ import com.cretas.aims.dto.scheduling.GenerateScheduleRequest;
 import com.cretas.aims.dto.scheduling.LineScheduleDTO;
 import com.cretas.aims.dto.scheduling.SchedulingPlanDTO;
 import com.cretas.aims.entity.LineSchedule;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
@@ -17,6 +19,8 @@ import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.LineScheduleRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -95,6 +99,8 @@ class DailyCapacityScheduleGeneratorJpaTest {
     @Autowired private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Autowired private SchedulingPlanRepository schedulingPlanRepository;
     @Autowired private LineScheduleRepository lineScheduleRepository;
+    @Autowired private MaterialBatchRepository materialBatchRepository;
+    @Autowired private MaterialConsumptionRepository materialConsumptionRepository;
 
     private String lineId;
     private int fgSeq;
@@ -220,6 +226,8 @@ class DailyCapacityScheduleGeneratorJpaTest {
         assertThat(need.getPlanNumbers()).containsExactly("PLAN-NEW");
         assertThat(need.getExperienceNote()).contains("不足 3 天");
         assertThat(need.getQuestion()).contains("新品卤蛋").contains("一天能做多少").contains("袋");
+        // 不足 3 天: 把那两天的实际量带出来 (日期升序)
+        assertThat(samples(need)).containsExactly(TODAY.minusDays(2) + "=60袋", TODAY.minusDays(1) + "=50袋");
         // 什么都没落: 同一天补完再提交不会撞 409
         assertThat(schedulingPlanRepository.count()).isZero();
         assertThat(lineScheduleRepository.count()).isZero();
@@ -402,6 +410,115 @@ class DailyCapacityScheduleGeneratorJpaTest {
                 .isEqualByComparingTo("200");
     }
 
+    // ==================== 联产计划: 按原料投入给建议值, 只作建议 (Steve 2026-10-29) ====================
+
+    @Test
+    void jointPlanWithEnoughInputHistoryStillAsksAndSuggestsTheMedianOfDailyInput() {
+        jointChickenPlan("PP-J", "PLAN-J", "600");
+        String chickenKg = materialBatch(F, "RAW-CHICKEN", "kg");
+        String chickenJin = materialBatch(F, "RAW-CHICKEN", "斤");
+        Long pb = batch(F, "HIST-PLAN", "B-HIST", ProductionBatchStatus.COMPLETED).getId();
+        // 昨天 100 kg; 前天 300 − 100 (差异调整退回) = 200 kg; 3 天前 480 斤 = 240 kg → 中位 200
+        consume(F, chickenKg, pb, "100", TODAY.minusDays(1), false);
+        consume(F, chickenKg, pb, "300", TODAY.minusDays(2), false);
+        consume(F, chickenKg, pb, "-100", TODAY.minusDays(2), false);
+        consume(F, chickenJin, pb, "480", TODAY.minusDays(3), false);
+        // 阴性: 别的原料 / 不挂生产批 (调拨、领料出库) / 撤回软删 / 今天 / 别的厂 —— 哪条算进来中位数都会变
+        rawMaterial(F, "RAW-DUCK", "鸭");
+        consume(F, materialBatch(F, "RAW-DUCK", "kg"), pb, "9999", TODAY.minusDays(1), false);
+        consume(F, chickenKg, null, "9999", TODAY.minusDays(1), false);
+        consume(F, chickenKg, pb, "9999", TODAY.minusDays(5), true);
+        consume(F, chickenKg, pb, "9999", TODAY, false);
+        Long otherPb = batch(OTHER, "OTHER-PLAN", "B-OTHER", ProductionBatchStatus.COMPLETED).getId();
+        consume(OTHER, materialBatch(OTHER, "RAW-CHICKEN", "kg"), otherPb, "9999", TODAY.minusDays(6), false);
+
+        SchedulingPlanDTO dto = generator.generate(F, request("PP-J"), 7L);
+
+        System.out.println("APS_V3_JOINT_SUGGEST outcome=" + dto.getOutcome() + " list=" + dto.getCapacityRequired());
+        // ⛔ 不自动用: 仍然问, 什么都不落
+        assertThat(dto.getOutcome()).isEqualTo(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED);
+        assertThat(dto.getId()).isNull();
+        assertThat(schedulingPlanRepository.count()).isZero();
+        assertThat(lineScheduleRepository.count()).isZero();
+        DailyCapacityRequiredDTO need = dto.getCapacityRequired().get(0);
+        assertThat(need.getProductTypeId()).isEqualTo("RAW-CHICKEN");
+        assertThat(need.isJointPlan()).isTrue();
+        assertThat(need.getUnit()).isEqualTo("kg");
+        assertThat(need.getSuggestedPerDay()).isEqualByComparingTo("200");
+        assertThat(need.getExperienceNote()).contains("实际投入西装鸡").contains("中位数").contains("3 天");
+        assertThat(need.getHistoryBasis()).isEqualTo("RAW_INPUT");
+        assertThat(need.getHistoryWindowDays()).isEqualTo(90);
+        assertThat(need.getSampleDays()).isEmpty();
+        assertThat(dto.getWarnings()).noneSatisfy(w -> assertThat(w).contains("按历史估算"));
+        em.flush();
+        em.clear();
+        assertThat(productTypeRepository.findByIdAndFactoryId("RAW-CHICKEN", F).orElseThrow().getDailyCapacity())
+                .isNull();
+
+        // 人把预填的 200 改成 180 再提交: 按 180 排, 并保存为人工值
+        GenerateScheduleRequest req = request("PP-J");
+        req.setDailyCapacityOverrides(List.of(new DailyCapacityOverride("RAW-CHICKEN", new BigDecimal("180"), "kg")));
+        SchedulingPlanDTO scheduled = generator.generate(F, req, 7L);
+
+        assertThat(scheduled.getOutcome()).isEqualTo(SchedulingPlanDTO.OUTCOME_SCHEDULED);
+        Map<String, Object> alloc = scheduled.getLineSchedules().get(0).getDailyAllocations();
+        assertThat(alloc.get("capacitySource")).isEqualTo("MANUAL");
+        assertThat(dec(alloc.get("capacityPerDay"))).isEqualByComparingTo("180");
+        assertThat(days(alloc)).containsExactly(
+                DAY + "=180", DAY.plusDays(1) + "=180", DAY.plusDays(2) + "=180", DAY.plusDays(3) + "=60");
+        em.flush();
+        em.clear();
+        ProductType saved = productTypeRepository.findByIdAndFactoryId("RAW-CHICKEN", F).orElseThrow();
+        assertThat(saved.getDailyCapacity()).isEqualByComparingTo("180");
+        assertThat(saved.getDailyCapacityUnit()).isEqualTo("kg");
+    }
+
+    @Test
+    void jointPlanWithFewerThanThreeInputDaysHasNoSuggestionButShowsThoseDays() {
+        jointChickenPlan("PP-J", "PLAN-J", "300");
+        Long pb = batch(F, "HIST-PLAN", "B-HIST", ProductionBatchStatus.COMPLETED).getId();
+        consume(F, materialBatch(F, "RAW-CHICKEN", "斤"), pb, "160", TODAY.minusDays(2), false); // 80 kg
+
+        SchedulingPlanDTO dto = generator.generate(F, request("PP-J"), 7L);
+
+        DailyCapacityRequiredDTO need = dto.getCapacityRequired().get(0);
+        System.out.println("APS_V3_JOINT_SAMPLES " + need.getSampleDays() + " note=" + need.getExperienceNote());
+        assertThat(dto.getOutcome()).isEqualTo(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED);
+        assertThat(need.getSuggestedPerDay()).isNull();
+        assertThat(need.getExperienceNote()).contains("只有 1 天").contains("西装鸡");
+        assertThat(samples(need)).containsExactly(TODAY.minusDays(2) + "=80kg");
+    }
+
+    @Test
+    void ordinaryProductWithOneDayOfHistoryIsAskedAndShowsThatDay() {
+        product(F, "PT-NEW", "新品卤蛋", null, null);
+        fg(F, "PT-NEW", "盒", "40", TODAY.minusDays(2), "HIST-PLAN");
+        plan(F, "PP-NEW", "PLAN-NEW", "PT-NEW", "100", "盒");
+
+        SchedulingPlanDTO dto = generator.generate(F, request("PP-NEW"), 7L);
+
+        DailyCapacityRequiredDTO need = dto.getCapacityRequired().get(0);
+        System.out.println("APS_V3_SAMPLES " + need.getSampleDays());
+        assertThat(dto.getOutcome()).isEqualTo(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED);
+        assertThat(dto.getId()).isNull();
+        assertThat(need.isJointPlan()).isFalse();
+        assertThat(need.getSuggestedPerDay()).isNull(); // 普通产品不给建议值: 够 3 天就自动用了
+        assertThat(need.getHistoryBasis()).isEqualTo("FINISHED_OUTPUT");
+        assertThat(need.getExperienceNote()).contains("只有 1 天");
+        assertThat(samples(need)).containsExactly(TODAY.minusDays(2) + "=40盒");
+    }
+
+    @Test
+    void ordinaryProductWithNoHistoryHasAnEmptySampleList() {
+        product(F, "PT-NEW", "新品卤蛋", null, null);
+        plan(F, "PP-NEW", "PLAN-NEW", "PT-NEW", "100", "盒");
+
+        DailyCapacityRequiredDTO need = generator.generate(F, request("PP-NEW"), 7L).getCapacityRequired().get(0);
+
+        assertThat(need.getSampleDays()).isNotNull().isEmpty();
+        assertThat(need.getExperienceNote()).contains("只有 0 天");
+    }
+
     // ==================== 租户 / 入参 (沿用 v1) ====================
 
     @Test
@@ -493,6 +610,59 @@ class DailyCapacityScheduleGeneratorJpaTest {
             out.add(d.get("date") + "=" + dec(d.get("quantity")).stripTrailingZeros().toPlainString());
         }
         return out;
+    }
+
+    private static List<String> samples(DailyCapacityRequiredDTO need) {
+        return need.getSampleDays().stream()
+                .map(s -> s.getDate() + "=" + s.getQuantity().stripTrailingZeros().toPlainString() + s.getUnit())
+                .toList();
+    }
+
+    /** 联产计划: 主产品是原料「西装鸡」的归属锚点, 出鸡胸、鸡翅两个成品, 计划单位 kg。 */
+    private void jointChickenPlan(String id, String number, String quantity) {
+        ProductType anchor = product(F, "RAW-CHICKEN", "__RAW_WORKFLOW_OWNER__RAW-CHICKEN", null, null);
+        anchor.setCategory("RAW_MATERIAL");
+        productTypeRepository.saveAndFlush(anchor);
+        rawMaterial(F, "RAW-CHICKEN", "西装鸡");
+        product(F, "FG-BREAST", "鸡胸", null, null);
+        product(F, "FG-WING", "鸡翅", null, null);
+        ProductionPlan p = plan(F, id, number, "RAW-CHICKEN", quantity, "kg");
+        p.setTargetFinishedGoodIds(new ArrayList<>(List.of("FG-BREAST", "FG-WING")));
+        planRepository.saveAndFlush(p);
+    }
+
+    /** 一个原料批次, 库存单位 unit。 */
+    private String materialBatch(String factoryId, String materialTypeId, String unit) {
+        MaterialBatch b = new MaterialBatch();
+        b.setId(java.util.UUID.randomUUID().toString());
+        b.setFactoryId(factoryId);
+        b.setBatchNumber("MB-" + (++fgSeq));
+        b.setMaterialTypeId(materialTypeId);
+        b.setReceiptDate(TODAY.minusDays(30));
+        b.setWarehouseId("WH-RAW");
+        b.setReceiptQuantity(new BigDecimal("100000"));
+        b.setQuantityUnit(unit);
+        b.setCreatedBy(7L);
+        return materialBatchRepository.saveAndFlush(b).getId();
+    }
+
+    /** 一笔原料消耗 (单位 = 来源批次的库存单位), 当天 10 点。 */
+    private void consume(String factoryId, String materialBatchId, Long productionBatchId, String qty, LocalDate day,
+                         boolean softDeleted) {
+        MaterialConsumption c = new MaterialConsumption();
+        c.setFactoryId(factoryId);
+        c.setBatchId(materialBatchId);
+        c.setProductionBatchId(productionBatchId);
+        c.setQuantity(new BigDecimal(qty));
+        c.setUnitPrice(BigDecimal.ONE);
+        c.setTotalCost(new BigDecimal(qty));
+        c.setConsumptionTime(day.atTime(10, 0));
+        c.setRecordedBy(7L);
+        c.setSourceType("PRODUCTION_ISSUE");
+        if (softDeleted) {
+            c.setDeletedAt(java.time.LocalDateTime.now());
+        }
+        materialConsumptionRepository.saveAndFlush(c);
     }
 
     private ProductType product(String factoryId, String id, String name, String capacity, String unit) {

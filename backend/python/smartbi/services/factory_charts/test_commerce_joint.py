@@ -393,3 +393,59 @@ def test_amount_candidates_for_distinct_quantity_units_have_unique_ids_and_exact
         assert not details.register([fake], [fake_dataset], request(), owner, True)[0].get("detailContext")
     finally:
         details.clear_cache()
+
+
+def test_long_customer_and_product_labels_are_bounded_only_on_axis_and_keep_full_data():
+    customer = "客户-华东冷链餐饮集团-2026长期合作渠道"
+    products = [
+        ("P1", "低温熟成去骨鸡腿排超长商品名一号", "3"),
+        ("P2", "低温熟成去骨鸡腿排超长商品名二号", "3"),
+        ("P3", "低温熟成去骨鸡腿排超长商品名三号", "7"),
+    ]
+    sales = []
+    shipments = []
+    inventory_rows = []
+    for index, (product_id, product_name, available) in enumerate(products, start=1):
+        line_id = f"long-label-line-{index}"
+        order_id = f"long-label-order-{index}"
+        row = sale(line_id, order_id, product=product_id, customer=customer,
+                   quantity="1", total="10", channel="直营长渠道")
+        row["产品"] = product_name
+        sales.append(row)
+        shipments.append(shipment(line_id, order_id, f"long-label-batch-{index}",
+                                  product=product_id, quantity="1", relation=f"long-label-delivery-{index}",
+                                  customer=customer))
+        inventory_rows.append(inventory(f"long-label-batch-{index}", product=product_id,
+                                        available=available))
+
+    frame, gaps = prepared(sales, shipments, inventory_rows)
+    assert frame is not None and not gaps
+    candidates, build_gaps = commerce_joint.build(frame, request(), True)
+    assert not build_gaps
+
+    stock = next(item for item in candidates if item["id"].startswith("sales.stock@"))
+    channel = next(item for item in candidates if item["id"].startswith("customer.channel@"))
+    expected_products = [f"{name}（kg）" for _, name, _ in products]
+    expected_channels = [f"{customer} / 直营长渠道 / {name}（kg）" for _, name, _ in products]
+
+    assert stock["chart"]["echartsOption"]["xAxis"]["data"] == expected_products
+    assert [row[0] for row in stock["tableData"]["rows"]] == expected_products
+    assert stock["chart"]["echartsOption"]["series"][2]["data"] == [3.0, 3.0, 7.0]
+    assert stock["kpis"][2]["value"] == 13.0
+    assert stock["chart"]["echartsOption"]["tooltip"]["trigger"] == "axis"
+
+    assert channel["chart"]["echartsOption"]["xAxis"]["data"] == expected_channels
+    assert [row[0] for row in channel["tableData"]["rows"]] == expected_channels
+    assert channel["chart"]["echartsOption"]["series"][0]["data"] == [10.0, 10.0, 10.0]
+    assert channel["kpis"][0]["value"] == 30.0
+    assert channel["unit"] == "元"
+    assert channel["engine"]["sourceQuantityUnit"] == "kg"
+
+    for item, expected_rotate in ((stock, 35), (channel, 0)):
+        option = item["chart"]["echartsOption"]
+        axis_label = option["xAxis"]["axisLabel"]
+        assert option["grid"]["containLabel"] is True
+        assert axis_label["rotate"] == expected_rotate
+        assert 0 < axis_label["width"] <= 120
+        assert axis_label["overflow"] == "truncate"
+        assert axis_label["ellipsis"] == "..."

@@ -19,7 +19,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClientException;
@@ -67,7 +66,6 @@ public class AIRuleController {
     @RequirePermission({"system:read_write"})
     @PostMapping("/parse-rule")
     @Operation(summary = "AI解析规则", description = "将自然语言描述转换为 Drools DRL 规则")
-    @PreAuthorize("hasAuthority('factory_super_admin')")
     public ApiResponse<AIRuleParseResponse> parseRule(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @RequestBody @Valid AIRuleParseRequest request
@@ -135,7 +133,6 @@ public class AIRuleController {
     @RequirePermission({"system:read_write"})
     @PostMapping("/parse-and-save-rule")
     @Operation(summary = "AI解析并保存规则", description = "将自然语言转换为 DRL 规则并保存到数据库")
-    @PreAuthorize("hasAuthority('factory_super_admin')")
     public ApiResponse<DroolsRule> parseAndSaveRule(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @RequestBody @Valid AIRuleParseRequest request,
@@ -204,7 +201,6 @@ public class AIRuleController {
     @RequirePermission({"system:read_write"})
     @PostMapping("/parse-state-machine")
     @Operation(summary = "AI解析状态机", description = "将自然语言描述转换为状态机配置")
-    @PreAuthorize("hasAuthority('factory_super_admin')")
     public ApiResponse<AIStateMachineParseResponse> parseStateMachine(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @RequestBody @Valid AIStateMachineParseRequest request
@@ -302,7 +298,6 @@ public class AIRuleController {
     @RequirePermission({"system:read_write"})
     @PostMapping("/parse-and-save-state-machine")
     @Operation(summary = "AI解析并保存状态机", description = "将自然语言转换为状态机配置并保存")
-    @PreAuthorize("hasAuthority('factory_super_admin')")
     public ApiResponse<StateMachineConfig> parseAndSaveStateMachine(
             @Parameter(description = "工厂ID", example = "F001") @PathVariable String factoryId,
             @RequestBody @Valid AIStateMachineParseRequest request,

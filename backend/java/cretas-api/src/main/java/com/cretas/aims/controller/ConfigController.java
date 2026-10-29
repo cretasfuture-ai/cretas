@@ -22,7 +22,7 @@ import java.util.Optional;
 
 /**
  * Canvas Configuration API.
- * Round 4 Fix P0-6: class-level @PreAuthorize restricts writes to factory_super_admin and
+ * Round 4 Fix P0-6: method-level @RequireRole restricts writes to factory_super_admin and
  * permission_admin. Read endpoints (effective config, modules, versions, current-version)
  * remain accessible to any authenticated factory user via the method-level annotations.
  */

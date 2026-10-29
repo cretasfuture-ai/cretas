@@ -1035,7 +1035,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
             String factoryId, Pageable pageable) {
         Objects.requireNonNull(factoryId, "factoryId must not be null");
         Objects.requireNonNull(pageable, "pageable must not be null");
-        // RBAC: 调用方 controller 必须用 @PreAuthorize 守门 — 此方法本身不做 role 过滤.
+        // RBAC: 调用方 controller 必须用 @RequireRole 守门 — 此方法本身不做 role 过滤.
         return instanceRepository.findByFactoryIdAndStatusOrderByInitiatedAtDesc(
                 factoryId, InstanceStatus.RUNNING, pageable);
     }

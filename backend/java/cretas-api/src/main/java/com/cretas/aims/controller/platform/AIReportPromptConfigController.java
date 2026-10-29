@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.security.access.prepost.PreAuthorize;
+import com.cretas.aims.config.RequireRole;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -36,6 +36,8 @@ import com.cretas.aims.util.ErrorSanitizer;
 @RestController
 @RequestMapping("/api/platform/report-prompts")
 @RequiredArgsConstructor
+// 平台路径闸 (JwtAuthInterceptor) 之外再加角色闸, 不依赖 URL 前缀守门
+@RequireRole({"super_admin", "platform_admin"})
 @Validated
 @Tag(name = "AI报告提示词配置", description = "平台管理员AI报告提示词配置管理API")
 public class AIReportPromptConfigController {
@@ -50,7 +52,6 @@ public class AIReportPromptConfigController {
      */
     @GetMapping
     @Operation(summary = "获取所有配置列表", description = "分页获取所有AI报告提示词配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<Page<AIReportPromptConfigDTO>> getAllConfigs(
             @Parameter(description = "页码（从0开始）") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "每页数量") @RequestParam(defaultValue = "20") int size) {
@@ -68,7 +69,6 @@ public class AIReportPromptConfigController {
      */
     @GetMapping("/{id}")
     @Operation(summary = "获取单个配置", description = "根据ID获取AI报告提示词配置详情（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIReportPromptConfigDTO> getConfigById(
             @Parameter(description = "配置ID") @PathVariable String id) {
 
@@ -83,7 +83,6 @@ public class AIReportPromptConfigController {
      */
     @GetMapping("/by-type/{reportType}")
     @Operation(summary = "按报告类型获取配置", description = "根据报告类型获取所有配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<List<AIReportPromptConfigDTO>> getConfigsByReportType(
             @Parameter(description = "报告类型: daily/weekly/monthly/quarterly/yearly")
             @PathVariable String reportType) {
@@ -101,7 +100,6 @@ public class AIReportPromptConfigController {
      */
     @PostMapping
     @Operation(summary = "创建新配置", description = "创建新的AI报告提示词配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIReportPromptConfigDTO> createConfig(
             @Valid @RequestBody AIReportPromptConfigDTO dto,
             @RequestHeader("Authorization") String authorization) {
@@ -119,7 +117,6 @@ public class AIReportPromptConfigController {
      */
     @PutMapping("/{id}")
     @Operation(summary = "更新配置", description = "更新指定ID的AI报告提示词配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIReportPromptConfigDTO> updateConfig(
             @Parameter(description = "配置ID") @PathVariable String id,
             @Valid @RequestBody AIReportPromptConfigDTO dto,
@@ -139,7 +136,6 @@ public class AIReportPromptConfigController {
      */
     @DeleteMapping("/{id}")
     @Operation(summary = "删除配置", description = "删除指定ID的AI报告提示词配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<String> deleteConfig(
             @Parameter(description = "配置ID") @PathVariable String id) {
 
@@ -156,7 +152,6 @@ public class AIReportPromptConfigController {
      */
     @PostMapping("/{id}/activate")
     @Operation(summary = "激活配置", description = "激活指定ID的AI报告提示词配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIReportPromptConfigDTO> activateConfig(
             @Parameter(description = "配置ID") @PathVariable String id,
             @RequestHeader("Authorization") String authorization) {
@@ -173,7 +168,6 @@ public class AIReportPromptConfigController {
      */
     @PostMapping("/{id}/deactivate")
     @Operation(summary = "停用配置", description = "停用指定ID的AI报告提示词配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIReportPromptConfigDTO> deactivateConfig(
             @Parameter(description = "配置ID") @PathVariable String id,
             @RequestHeader("Authorization") String authorization) {

@@ -167,7 +167,7 @@ public interface ApprovalWorkflowInstanceRepository
      * <p>列出当前 factory 下所有指定 status (通常 RUNNING) workflow 实例, 跨 module
      * 跨 initiator. 给 super-admin / platform_admin 看全局视角, 排查卡住的流程.
      *
-     * <p><b>调用方必须</b> 通过 controller 层 {@code @PreAuthorize} 守门. 此方法
+     * <p><b>调用方必须</b> 通过 controller 层 {@code @RequireRole} 守门. 此方法
      * 本身不做 RBAC 过滤.
      *
      * <p>命中索引 {@code idx_aw_instances_recovery (factory_id, status)} (partial index).
