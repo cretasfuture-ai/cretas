@@ -200,9 +200,10 @@ class SkillRouteGuardTest {
         // 必发生: 同一个 Skill 里开放给他的那个工具照常跑了 (证明 Skill 确实执行了)
         assertThat(f.executedTools()).containsExactly("team_board_query");
         assertThat(f.tool("staff_overview_query").calls).isEmpty();
-        // 拒绝的说法与 executeWithTool 的旧角色串拒绝同一套措辞
+        // S6 (2026-10-29): the permission preflight leaves the tool out before anything runs and names it,
+        // instead of running the Skill into a per-tool refusal.
         assertThat(String.valueOf(run.result().getResultData()))
-                .contains(ToolPermissionChain.legacyRoleDeniedMessage(OPERATOR, "staff_overview_query"));
+                .contains("_omittedForPermission=[staff_overview_query]");
     }
 
     @Test
