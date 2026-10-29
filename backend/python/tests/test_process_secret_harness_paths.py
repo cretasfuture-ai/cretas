@@ -11,6 +11,12 @@ Java 侧同义常量是 ``ProcessSecretLlmCostScope.HARNESS_INSTRUCTION``。
 
 扫描面之外 (不在 ``smartbi/`` 下, 也不带经营数据): 意图识别 (``ai/matcher``、``ai/router``)、``llm/``、
 ``food_kb``、``factory_assembly`` 等。
+
+扫描的盲区 (只认字面量 ``{"role": "system", ...}`` 字典, 下面这些写法看不见, 新代码别这么写系统消息):
+- ``dict(role="system", content=...)``、或 ``role`` 不是字面量 (``{"role": some_role, ...}``、循环里拼角色);
+- 自己封装的 ``system_prompt=`` / ``system=`` 参数一路传到别的模块才组装成消息
+  (例如 ``smartbi/api/ai_proxy.py`` 的 ``_call_llm(system_prompt=...)``: 扫到的是组装处, 不是每个调用方);
+- 消息列表从别处读进来 (配置 / 数据库模板) 或用 ``messages.append(...)`` 逐条拼时, role 以变量出现。
 """
 
 from __future__ import annotations
@@ -34,6 +40,10 @@ HARNESSED_PATHS = {
     "smartbi/api/financial_dashboard.py": 2,
     "smartbi/services/unified_analyzer.py": 1,
     "smartbi/services/cross_sheet_aggregator.py": 1,
+    # 上传表格的样本值进模型, 返回给人看的 insights / reason / reasoning (数据是上传者自己的, 外发仍按名单脱敏)
+    "smartbi/services/llm_structure_analyzer.py": 1,
+    "smartbi/services/chart_recommender.py": 1,
+    "smartbi/services/scenario_detector.py": 1,
 }
 
 # 写了系统消息但有意不接约束的模块 → 理由 (不给经营数据做解读 / 已废弃 / 离线脚本)
@@ -41,13 +51,10 @@ EXCLUDED_PATHS = {
     "smartbi/api/ai_proxy.py": "规则 / 状态机 / 表单 / 工厂初始化配置的解析, 不解读经营数据",
     "smartbi/services/factory_charts/conversation.py": "图表规划器: 只给目录 id, 不给经营数据",
     "smartbi/services/factory_charts/ranking.py": "图表排序: 只给候选 id 与指标名, 输出理由代码",
-    "smartbi/services/chart_recommender.py": "按数据特征推荐图表类型, 输出 JSON",
     "smartbi/services/data_cleaner.py": "数据清洗规则, 输出 JSON",
     "smartbi/services/field_detector_llm.py": "字段识别, 输出 JSON 映射",
     "smartbi/services/llm_mapper.py": "字段映射, 输出 JSON 映射",
-    "smartbi/services/llm_structure_analyzer.py": "表结构分析, 输出 JSON",
     "smartbi/services/structure/llm_analyzer.py": "表结构分析, 输出 JSON",
-    "smartbi/services/scenario_detector.py": "按表头 / 样本判断业务场景, 输出 JSON",
     "smartbi/services/sql_generator.py": "按表结构生成 SQL, 不解读数据",
     "smartbi/agent/orchestrator.py": "餐饮连锁分析 (餐饮线已废弃, Steve 10-08)",
     "smartbi/gold/restaurant/answer_addresses_query.py": "餐饮 (已废弃)",

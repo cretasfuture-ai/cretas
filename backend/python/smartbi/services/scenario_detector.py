@@ -14,6 +14,7 @@ Features:
 import asyncio
 import hashlib
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -403,7 +404,7 @@ class LLMScenarioDetector:
 
         payload = {
             "messages": [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": with_process_secret_harness(self.SYSTEM_PROMPT)},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,

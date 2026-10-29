@@ -12,6 +12,7 @@ Features:
 """
 import hashlib
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import json
 import re
 import time
@@ -819,7 +820,7 @@ class ChartRecommender:
 
         payload = {
             "messages": [
-                {"role": "system", "content": (
+                {"role": "system", "content": with_process_secret_harness(
                     "你是专业的数据可视化分析师，擅长根据数据特征推荐最佳图表类型。"
                     "你的推荐应该基于数据的实际特征，而不是固定规则。"
                     "请用 JSON 格式回复，确保字段名和值都正确。"
