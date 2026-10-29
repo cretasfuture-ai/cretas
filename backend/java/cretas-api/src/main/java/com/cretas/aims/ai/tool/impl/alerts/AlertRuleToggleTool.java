@@ -184,8 +184,8 @@ public class AlertRuleToggleTool extends AbstractBusinessTool {
         AlertRule rule = ruleRepository.findById(ruleUuid)
                 .orElseThrow(() -> new IllegalArgumentException("告警规则不存在: id=" + ruleIdStr));
         if (!rule.getFactoryId().equals(factoryId)) {
-            throw new IllegalArgumentException(
-                    "告警规则不属于工厂 " + factoryId + " (实际工厂=" + rule.getFactoryId() + ")");
+            // Same answer as a missing rule: never reveal that the id exists in another factory.
+            throw new IllegalArgumentException("告警规则不存在: id=" + ruleIdStr);
         }
         return rule;
     }

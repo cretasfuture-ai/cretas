@@ -48,6 +48,8 @@ public class SavedSkillService {
     private final SkillExecutor skillExecutor;
     private final ObjectMapper objectMapper;
     private final SkillRouterService skillRouter;
+    private final com.cretas.aims.service.skill.SkillRegistry skillRegistry;
+    private final com.cretas.aims.ai.tool.ToolRbacGuard rbacGuard;
 
     public record SaveRequest(String runId, String name, String displayName, JsonNode parameterContract,
             Map<String, Object> defaults) {
@@ -64,6 +66,19 @@ public class SavedSkillService {
             Map<String, Object> params, String userQuery, String sessionId) {
         if (skillName == null || skillName.isBlank()) {
             throw bad("skillName 必须填写");
+        }
+        SkillDefinition definition = skillRegistry.getSkill(skillName)
+                .orElseThrow(() -> new BusinessException(404, "没有找到这个 Skill：" + skillName));
+        // The Skill's own permission (any-of, same codes as intents), checked against current DB truth
+        // before anything runs; each tool is then checked again by the gateway / permission chain.
+        String required = definition.getRequiredPermission();
+        if (required != null && !required.isBlank()) {
+            String[] codes = com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(required)
+                    .toArray(String[]::new);
+            if (codes.length == 0 || !rbacGuard.hasAnyPermission(Map.of("userId", userId), codes)) {
+                throw new BusinessException(403, "运行这个 Skill 需要权限：" + required)
+                        .withHint("请联系管理员开通该权限");
+            }
         }
         Map<String, Object> callerParams = params == null ? new LinkedHashMap<>() : new LinkedHashMap<>(params);
         for (String key : callerParams.keySet()) {

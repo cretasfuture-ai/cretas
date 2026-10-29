@@ -6,6 +6,8 @@ import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
+import com.cretas.aims.ai.tool.gateway.GatewayResultCode;
+import com.cretas.aims.ai.tool.gateway.PrincipalType;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
@@ -54,11 +56,15 @@ public class AutonomousToolRunner {
     private final AutonomousGrantIssuer issuer;
 
     /**
-     * S6-04 kill switch (deployment / factory). Field-injected so focused tests that construct the
-     * runner directly keep working; the application context always provides it.
+     * S6-04 kill switch (deployment / factory). Field-injected; when it is absent a delegated write is
+     * suspended, never let through.
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AutonomousWriteSwitch writeSwitch;
+
+    /** Gateway audit ledger for refused writes; field-injected for focused tests (absent → reason says so). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.ai.tool.gateway.ToolExecutionLedgerService ledger;
 
     /** Persisted status when the deployment or the factory switched delegated writes off (VARCHAR(20)). */
     public static final String WRITES_SUSPENDED = "WRITES_SUSPENDED";
@@ -107,19 +113,32 @@ public class AutonomousToolRunner {
         // step's rollback would undo an audited write) and has no durable event id to key replays on.
         if (write && (source != ToolExecutionSource.SCHEDULER
                 || !boundToThisRun(grantBinding, factoryId, runAsUserId, toolName, tool.get(), safeParams))) {
-            return new Outcome(AutonomousToolPolicy.WRITE_DENIED, refusal, null);
+            return refused(AutonomousToolPolicy.WRITE_DENIED, refusal, factoryId, runAsUserId, tool.get(),
+                    safeParams, source, correlationId, GatewayResultCode.AUTONOMOUS_WRITE_DENIED);
+        }
+        // A scheduled write must state its outcome (e.g. alert_rule_toggle needs an explicit enabled):
+        // a run that only flips the current state would alternate between fires.
+        String unstated = write ? AutonomousToolPolicy.scheduledWriteRefusal(toolName, safeParams) : null;
+        if (unstated != null) {
+            return refused(AutonomousToolPolicy.WRITE_DENIED, unstated, factoryId, runAsUserId, tool.get(),
+                    safeParams, source, correlationId, GatewayResultCode.AUTONOMOUS_WRITE_DENIED);
         }
         // Only an immutable planned fire identity keys a write: never the actual start time, which
         // two instances (or one late fire) would turn into different keys for the same planned run.
         if (write && (runKey == null || !runKey.startsWith(PLANNED_FIRE_PREFIX))) {
-            return new Outcome(AutonomousToolPolicy.WRITE_DENIED,
-                    "no planned fire identity for this write run; refused rather than keyed by its start time", null);
+            return refused(AutonomousToolPolicy.WRITE_DENIED,
+                    "no planned fire identity for this write run; refused rather than keyed by its start time",
+                    factoryId, runAsUserId, tool.get(), safeParams, source, correlationId,
+                    GatewayResultCode.AUTONOMOUS_WRITE_DENIED);
         }
-        if (write && writeSwitch != null) {
+        if (write) {
             // Before consumption: a suspended write spends no grant run and reaches no gateway.
-            Optional<String> suspended = writeSwitch.suspension(factoryId);
+            Optional<String> suspended = writeSwitch == null
+                    ? Optional.of("the write switch is unavailable; write not attempted")
+                    : writeSwitch.suspension(factoryId);
             if (suspended.isPresent()) {
-                return new Outcome(WRITES_SUSPENDED, suspended.get(), null);
+                return refused(WRITES_SUSPENDED, suspended.get(), factoryId, runAsUserId, tool.get(), safeParams,
+                        source, correlationId, GatewayResultCode.WRITES_SUSPENDED);
             }
         }
         if (runAsUserId == null) {
@@ -141,11 +160,12 @@ public class AutonomousToolRunner {
             Optional<AutonomousGrantService.Consumption> consumed =
                     issuer.consumeForScheduledFire(grantBinding, runKey, LocalDateTime.now());
             if (consumed.isEmpty()) {
-                return new Outcome(GRANT_DENIED, "no usable grant for " + toolName + " (scheduler config "
+                return refused(GRANT_DENIED, "no usable grant for " + toolName + " (scheduler config "
                         + grantBinding.sourceRef() + "): missing, revoked, expired, exhausted, or issued for another"
                         + " config revision, tool version, user or parameters, its grantor is no longer this"
                         + " factory's super admin, or the config was disabled or changed after this fire read it",
-                        null);
+                        factoryId, runAsUserId, tool.get(), safeParams, source, correlationId,
+                        GatewayResultCode.GRANT_DENIED);
             }
             if (consumed.get().replay()) {
                 // The same slot again (second instance, duplicate fire): never execute a second time,
@@ -186,6 +206,38 @@ public class AutonomousToolRunner {
                     result.auditEventId(), LocalDateTime.now());
         }
         return outcome(result);
+    }
+
+    /**
+     * A refused delegated write leaves a durable DENIED row in the gateway's audit table
+     * ({@code tool_execution_audit_events}, own transaction) before the refusal is returned, so a
+     * write that was not made is as traceable as one that was. The audit id is in the reason. The
+     * actor is the run-as user when it can be resolved, otherwise the scheduler itself (SYSTEM).
+     * If even the audit cannot be written the write stays refused and the reason says so.
+     */
+    private Outcome refused(String status, String reason, String factoryId, Long runAsUserId, ToolExecutor tool,
+            Map<String, Object> params, ToolExecutionSource source, String correlationId, GatewayResultCode code) {
+        String auditId;
+        try {
+            ExecutionPrincipal actor;
+            try {
+                actor = principals.create(factoryId, runAsUserId, ASSERTED_ROLE);
+            } catch (SecurityException noUser) {
+                actor = new ExecutionPrincipal(factoryId, "UNRESOLVED", "scheduler", PrincipalType.SYSTEM,
+                        java.util.Set.of(), java.util.Set.of(), java.util.Set.of("scheduler"));
+            }
+            String id = source.name().toLowerCase() + "-" + UUID.randomUUID();
+            ToolExecutionCommand command = new ToolExecutionCommand(id, correlationId == null ? id : correlationId, id,
+                    tool.getToolName(), tool.getVersion(), objectMapper.valueToTree(params), actor, source,
+                    ToolExecutionMode.EXECUTE, Optional.empty(), Optional.empty(), Optional.empty(),
+                    Instant.now().plus(DEADLINE));
+            auditId = ledger.beginAudit(command, actor);
+            ledger.completeAudit(auditId, ToolExecutionStatus.DENIED, code);
+        } catch (RuntimeException auditUnavailable) {
+            return new Outcome(status, reason + " (refusal audit could not be written: "
+                    + auditUnavailable.getClass().getSimpleName() + ")", null);
+        }
+        return new Outcome(status, reason + " (audit " + auditId + ")", null);
     }
 
     /** What a consumed run's record keeps of the gateway's answer. */

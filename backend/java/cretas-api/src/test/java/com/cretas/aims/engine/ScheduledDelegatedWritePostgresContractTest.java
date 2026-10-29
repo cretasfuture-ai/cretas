@@ -62,7 +62,9 @@ import static org.mockito.Mockito.when;
  * opens to SCHEDULER), issues a delegated grant, and the real scheduler runs it through the real
  * grant consumption, preview-token confirmation, gateway (principal re-read, audit, idempotency) and
  * tool, whose effect is the alert rule row. The factory kill switch, set from an empty table, stops
- * the next run before any grant is spent; revoking the grant stops it too.
+ * the next run before any grant is spent; revoking the grant stops it too. The switch fails closed:
+ * with no row a factory's delegated writes do not run, and only an explicit PUT turns them on.
+ * Every refused write leaves a DENIED row in the gateway audit table, and the run result is FAILED.
  * Disposable loopback PostgreSQL only (CRETAS_WORKFLOW_PG_URL).
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_URL", matches = ".+")
@@ -76,6 +78,7 @@ import static org.mockito.Mockito.when;
         AuthenticatedToolPrincipalFactory.class, ToolRegistry.class, AlertRuleToggleTool.class,
         PreviewTokenServiceImpl.class, AutonomousToolRunner.class, AutonomousGrantService.class,
         AutonomousGrantIssuer.class, DynamicSchedulerService.class, AutonomousWriteSwitch.class,
+        com.cretas.aims.controller.AutonomousWriteSwitchController.class, SchedulerRunRecorder.class,
         ScheduledDelegatedWritePostgresContractTest.Json.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ScheduledDelegatedWritePostgresContractTest {
@@ -109,6 +112,7 @@ class ScheduledDelegatedWritePostgresContractTest {
     @Autowired FactorySchedulerConfigRepository schedules;
     @Autowired AutonomousGrantIssuer issuer;
     @Autowired AutonomousWriteSwitch writeSwitch;
+    @Autowired com.cretas.aims.controller.AutonomousWriteSwitchController switchController;
     @Autowired ToolRegistry toolRegistry;
     @Autowired jakarta.persistence.EntityManager entityManager;
     @Autowired TransactionTemplate tx;
@@ -118,6 +122,7 @@ class ScheduledDelegatedWritePostgresContractTest {
     private Long operator;
     private java.util.UUID ruleId;
     private java.util.UUID otherRuleId;
+    private java.util.UUID foreignRuleId;
 
     @BeforeEach void fixtures() throws Exception {
         try (var connection = dataSource.getConnection()) {
@@ -131,25 +136,33 @@ class ScheduledDelegatedWritePostgresContractTest {
         tx.executeWithoutResult(status -> {
             for (String table : List.of("autonomous_tool_grant_runs", "autonomous_tool_grants",
                     "tool_execution_idempotency", "tool_execution_audit_events", "intent_preview_tokens",
-                    "factory_scheduler_configs", "alert_rules", "users")) {
+                    "scheduler_run_results", "factory_scheduler_configs", "alert_rules", "users")) {
                 entityManager.createNativeQuery("DELETE FROM " + table).executeUpdate();
             }
-            entityManager.createNativeQuery("DELETE FROM factories WHERE id = 'F-SW'").executeUpdate();
-            Factory factory = new Factory();
-            factory.setId("F-SW");
-            factory.setName("scheduled write");
-            factory.setType(FactoryType.FACTORY);
-            factory.setLevel(0);
-            factory.setIsActive(true);
-            factory.setManuallyVerified(false);
-            factory.setAiWeeklyQuota(20);
-            entityManager.persist(factory);
+            entityManager.createNativeQuery("DELETE FROM factories WHERE id IN ('F-SW', 'F-SW-OTHER')").executeUpdate();
+            for (String id : List.of("F-SW", "F-SW-OTHER")) {
+                Factory factory = new Factory();
+                factory.setId(id);
+                factory.setName("scheduled write " + id);
+                factory.setType(FactoryType.FACTORY);
+                factory.setLevel(0);
+                factory.setIsActive(true);
+                factory.setManuallyVerified(false);
+                factory.setAiWeeklyQuota(20);
+                entityManager.persist(factory);
+            }
             admin = user("sw-admin", "factory_super_admin");
             operator = user("sw-operator", "operator");
-            ruleId = rule("夜间温度告警");
-            otherRuleId = rule("其他规则");
+            ruleId = rule("F-SW", "夜间温度告警");
+            otherRuleId = rule("F-SW", "其他规则");
+            foreignRuleId = rule("F-SW-OTHER", "别厂的规则");
         });
         when(permissionService.resolveModuleLevelsForAuthorization(any())).thenReturn(Map.of());
+        actingAs(admin);
+    }
+
+    @org.junit.jupiter.api.AfterEach void clearActor() {
+        org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
     }
 
     @Test void theShippedPolicyOpensAlertRuleToggleToSchedulesOnly() {
@@ -158,15 +171,28 @@ class ScheduledDelegatedWritePostgresContractTest {
                 .isInstanceOf(BusinessException.class);
     }
 
-    @Test void aGrantedScheduledWriteRunsOnceThroughTheGatewayAndTheKillSwitchAndRevokeStopTheNext()
-            throws Exception {
+    @Test void aGrantedScheduledWriteRunsOnlyAfterTheSwitchIsTurnedOnAndEveryRefusalIsAudited() throws Exception {
         FactorySchedulerConfig config = schedule(admin, Map.of("ruleId", ruleId.toString(), "enabled", false));
-        String grantId = tx.execute(status -> issuer.issue("F-SW", admin, config.getId(), TOOL,
-                toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(), 5, LocalDateTime.now().plusDays(1),
-                LocalDateTime.now()).getId());
+        String grantId = issue(config, admin);
 
+        // Fail closed: no switch row => the GET says off and the granted fire is suspended, with an audit row.
+        assertThat(count("autonomous_write_switches")).isZero();
+        assertThat(switchController.get("F-SW").getData().writesEnabled()).isFalse();
         fire(config.getId(), "slot:2026-10-29T22:00:00Z");
+        assertThat(status(config.getId())).isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
+        assertThat(enabled(ruleId)).isTrue();
+        assertThat(count("autonomous_tool_grants WHERE used_runs = 0")).isEqualTo(1);
+        assertThat(deniedAudits("WRITES_SUSPENDED")).isEqualTo(1);
+        assertThat(lastRunResult()).isEqualTo("FAILED");
 
+        // The controller PUT from an empty table (the prod 500): persisted, and the GET reads it back.
+        var turnedOn = switchController.set("F-SW",
+                new com.cretas.aims.controller.AutonomousWriteSwitchController.SwitchRequest(true, "试点开启"));
+        assertThat(turnedOn.getData().writesEnabled()).isTrue();
+        assertThat(count("autonomous_write_switches WHERE writes_enabled = true AND changed_by = " + admin)).isEqualTo(1);
+        assertThat(switchController.get("F-SW").getData().writesEnabled()).isTrue();
+
+        fire(config.getId(), "slot:2026-10-30T22:00:00Z");
         assertThat(status(config.getId())).isEqualTo("SUCCESS");
         assertThat(enabled(ruleId)).isFalse();
         assertThat(enabled(otherRuleId)).isTrue();
@@ -178,44 +204,99 @@ class ScheduledDelegatedWritePostgresContractTest {
         assertThat(text("SELECT status FROM intent_preview_tokens")).isEqualTo("CONFIRMED");
         assertThat(count("autonomous_tool_grants WHERE used_runs = 1")).isEqualTo(1);
 
-        // Kill switch from an empty table: persisted, and the next fire stops before the grant is spent.
-        assertThat(count("autonomous_write_switches")).isZero();
-        writeSwitch.set("F-SW", false, "盘点期间暂停", admin, LocalDateTime.now());
-        assertThat(count("autonomous_write_switches WHERE writes_enabled = false")).isEqualTo(1);
+        // Switched off again: the next fire stops before the grant is spent, audited.
+        switchController.set("F-SW",
+                new com.cretas.aims.controller.AutonomousWriteSwitchController.SwitchRequest(false, "盘点期间暂停"));
         setEnabled(ruleId, true);
-        fire(config.getId(), "slot:2026-10-30T22:00:00Z");
+        fire(config.getId(), "slot:2026-10-31T22:00:00Z");
         assertThat(status(config.getId())).isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
         assertThat(enabled(ruleId)).isTrue();
         assertThat(count("autonomous_tool_grants WHERE used_runs = 1")).isEqualTo(1);
-        assertThat(count("tool_execution_audit_events")).isEqualTo(1);
+        assertThat(deniedAudits("WRITES_SUSPENDED")).isEqualTo(2);
 
-        // Switched back on: the same grant runs the next slot.
+        // Revoked: refused, nothing written, and the refusal is audited as GRANT_DENIED.
         writeSwitch.set("F-SW", true, null, admin, LocalDateTime.now());
-        fire(config.getId(), "slot:2026-10-31T22:00:00Z");
-        assertThat(status(config.getId())).isEqualTo("SUCCESS");
-        assertThat(enabled(ruleId)).isFalse();
-
-        // Revoked: the next fire is refused and writes nothing.
         tx.executeWithoutResult(status -> issuer.revoke("F-SW", admin, grantId, LocalDateTime.now()));
-        setEnabled(ruleId, true);
         fire(config.getId(), "slot:2026-11-01T22:00:00Z");
         assertThat(status(config.getId())).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
         assertThat(enabled(ruleId)).isTrue();
-        assertThat(count("autonomous_tool_grant_runs")).isEqualTo(2);
+        assertThat(count("autonomous_tool_grant_runs")).isEqualTo(1);
+        assertThat(deniedAudits("GRANT_DENIED")).isEqualTo(1);
+        assertThat(lastRunResult()).isEqualTo("FAILED");
+        assertThat(text("SELECT principal_id FROM tool_execution_audit_events WHERE result_code = 'GRANT_DENIED'"))
+                .isEqualTo(String.valueOf(admin));
     }
 
-    @Test void onlyAFactorySuperAdminCanGrantAndAWriteWithoutAGrantNeverRuns() throws Exception {
+    @Test void onlyAFactorySuperAdminCanGrantAndAWriteWithoutAGrantIsRefusedAndAudited() throws Exception {
         FactorySchedulerConfig byOperator = schedule(operator, Map.of("ruleId", ruleId.toString(), "enabled", false));
-        assertThatThrownBy(() -> tx.executeWithoutResult(status -> issuer.issue("F-SW", operator, byOperator.getId(),
-                TOOL, toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(), 5,
-                LocalDateTime.now().plusDays(1), LocalDateTime.now())))
-                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> issue(byOperator, operator)).isInstanceOf(BusinessException.class);
 
+        writeSwitch.set("F-SW", true, null, admin, LocalDateTime.now());
         FactorySchedulerConfig ungranted = schedule(admin, Map.of("ruleId", otherRuleId.toString(), "enabled", false));
         fire(ungranted.getId(), "slot:2026-10-29T23:00:00Z");
         assertThat(status(ungranted.getId())).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
         assertThat(enabled(otherRuleId)).isTrue();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isZero();
+        assertThat(deniedAudits("GRANT_DENIED")).isEqualTo(1);
+        assertThat(lastRunResult()).isEqualTo("FAILED");
+    }
+
+    @Test void aScheduleWithoutAnExplicitEnabledIsNeverGrantedAndNeverRuns() throws Exception {
+        writeSwitch.set("F-SW", true, null, admin, LocalDateTime.now());
+        FactorySchedulerConfig flip = schedule(admin, Map.of("ruleId", ruleId.toString()));
+        assertThatThrownBy(() -> issue(flip, admin)).isInstanceOf(BusinessException.class)
+                .hasMessageContaining("enabled");
+        assertThat(count("autonomous_tool_grants")).isZero();
+
+        fire(flip.getId(), "slot:2026-10-29T21:00:00Z");
+        assertThat(status(flip.getId())).isEqualTo(AutonomousToolPolicy.WRITE_DENIED);
+        assertThat(enabled(ruleId)).isTrue();
+        assertThat(deniedAudits("AUTONOMOUS_WRITE_DENIED")).isEqualTo(1);
+    }
+
+    @Test void aGrantedScheduleNamingAnotherFactorysRuleChangesNothingThere() throws Exception {
+        writeSwitch.set("F-SW", true, null, admin, LocalDateTime.now());
+        FactorySchedulerConfig foreign = schedule(admin,
+                Map.of("ruleId", foreignRuleId.toString(), "enabled", false));
+        issue(foreign, admin);
+
+        fire(foreign.getId(), "slot:2026-10-29T20:00:00Z");
+
+        assertThat(status(foreign.getId())).isNotEqualTo("SUCCESS");
+        assertThat(enabled(foreignRuleId)).isTrue();
+        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isZero();
+    }
+
+    @Test void refusedScheduledWritesAreRecordedAsFailedNotUnknown() {
+        assertThat(SchedulerRunRecorder.normalize(AutonomousToolRunner.WRITES_SUSPENDED)).isEqualTo("FAILED");
+        assertThat(SchedulerRunRecorder.normalize(AutonomousToolRunner.GRANT_DENIED)).isEqualTo("FAILED");
+        assertThat(SchedulerRunRecorder.normalize(AutonomousToolPolicy.WRITE_DENIED)).isEqualTo("FAILED");
+    }
+
+    private String issue(FactorySchedulerConfig config, Long actor) {
+        return tx.execute(status -> issuer.issue("F-SW", actor, config.getId(), TOOL,
+                toolRegistry.getExecutor(TOOL).orElseThrow().getVersion(), 5, LocalDateTime.now().plusDays(1),
+                LocalDateTime.now()).getId());
+    }
+
+    private long deniedAudits(String resultCode) {
+        return count("tool_execution_audit_events WHERE outcome_status = 'DENIED' AND source = 'SCHEDULER'"
+                + " AND tool_name = '" + TOOL + "' AND result_code = '" + resultCode + "'");
+    }
+
+    private String lastRunResult() {
+        return text("SELECT status FROM scheduler_run_results ORDER BY started_at DESC, id DESC LIMIT 1");
+    }
+
+    private void actingAs(Long userId) {
+        org.springframework.mock.web.MockHttpServletRequest request =
+                new org.springframework.mock.web.MockHttpServletRequest();
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, "F-SW",
+                        "factory_super_admin"));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
     }
 
     private void fire(Long configId, String plannedFireKey) throws Exception {
@@ -232,8 +313,8 @@ class ScheduledDelegatedWritePostgresContractTest {
                 .toolOrMethod(TOOL).params(params).runAsUserId(runAs).build()));
     }
 
-    private java.util.UUID rule(String name) {
-        AlertRule rule = AlertRule.builder().factoryId("F-SW").alertType(AlertType.INVENTORY_LOW)
+    private java.util.UUID rule(String factoryId, String name) {
+        AlertRule rule = AlertRule.builder().factoryId(factoryId).alertType(AlertType.INVENTORY_LOW)
                 .ruleName(name).enabled(true).build();
         entityManager.persist(rule);
         entityManager.flush();

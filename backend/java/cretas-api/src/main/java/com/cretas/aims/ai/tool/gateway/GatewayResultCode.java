@@ -20,5 +20,11 @@ public enum GatewayResultCode {
     CONFIRMATION_RESOLUTION_UNCERTAIN,
     PERSISTENCE_FINALIZATION_UNCERTAIN,
     TOOL_PREVIEW_SUCCEEDED,
-    TOOL_PREVIEW_FAILED
+    TOOL_PREVIEW_FAILED,
+    /** S6-04: a delegated scheduled write refused before the gateway (no usable grant). */
+    GRANT_DENIED,
+    /** S6-04: a write refused by the autonomous policy (not a schedule, unbound or unstated outcome). */
+    AUTONOMOUS_WRITE_DENIED,
+    /** S6-04: delegated writes switched off (deployment, factory never switched on, or switched off). */
+    WRITES_SUSPENDED
 }

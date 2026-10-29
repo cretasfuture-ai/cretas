@@ -1703,6 +1703,23 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
                     roles: ['factory_super_admin', 'permission_admin'] }
           },
           {
+            // S6-02: 本厂可复用 Skill (试运行 → 保存 → 复跑)。后端 SavedSkillController 只认本厂账号,
+            // Skill 列表接口只允许 factory_super_admin / permission_admin。
+            path: 'reusable-skills',
+            name: 'SystemReusableSkills',
+            component: () => import('@/views/system/reusable-skills/index.vue'),
+            meta: { requiresAuth: true, title: '可复用 Skill', module: 'system',
+                    roles: ['factory_super_admin', 'permission_admin'] }
+          },
+          {
+            // S6-04: 定时任务写入 (总开关默认关闭 / 委托授权 / 最近写入运行)。后端只允许本厂 factory_super_admin。
+            path: 'autonomous-writes',
+            name: 'SystemAutonomousWrites',
+            component: () => import('@/views/system/autonomous-writes/index.vue'),
+            meta: { requiresAuth: true, title: '定时任务写入', module: 'system',
+                    roles: ['factory_super_admin'] }
+          },
+          {
             // 按工厂备份套餐: 平台开通 / 修改 / 查看全部工厂 (口径 Q6: 只有平台能改)。
             // 后端 PlatformTenantBackupController 只允许平台 super_admin。
             path: 'tenant-backups',

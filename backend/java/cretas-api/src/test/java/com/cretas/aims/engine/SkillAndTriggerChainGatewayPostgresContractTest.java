@@ -101,7 +101,8 @@ import static org.mockito.Mockito.when;
         ToolRegistry.class, MaterialExpiredQueryTool.class, AutonomousToolRunner.class, AutonomousGrantService.class,
         AutonomousGrantIssuer.class, TriggerChainExecutor.class, SkillExecutorImpl.class,
         SkillParameterContractValidator.class, FactoryScopedReferenceChecker.class, SkillRunStore.class,
-        SavedSkillService.class, SkillAndTriggerChainGatewayPostgresContractTest.Config.class})
+        SavedSkillService.class, com.cretas.aims.ai.tool.ToolRbacGuard.class,
+        SkillAndTriggerChainGatewayPostgresContractTest.Config.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class SkillAndTriggerChainGatewayPostgresContractTest {
 
@@ -141,6 +142,7 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
     @MockBean WriteGuardService writeGuardService;
     @MockBean ToolPermissionChain toolPermissionChain;
     @MockBean com.cretas.aims.service.skill.SkillRouterService skillRouter;
+    @MockBean com.cretas.aims.service.skill.SkillRegistry skillRegistry;
 
     @Autowired SkillExecutorImpl skills;
     @Autowired SavedSkillService savedSkills;
@@ -286,6 +288,7 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
     }
 
     @Test void theRegisteredSkillEntryRunsAsTheCallerAndLeavesASavableReceipt() {
+        when(skillRegistry.getSkill("expired-materials")).thenReturn(java.util.Optional.of(skill()));
         when(skillRouter.executeSkill(org.mockito.ArgumentMatchers.eq("expired-materials"), any()))
                 .thenAnswer(call -> skills.execute(skill(), call.getArgument(1)));
 
@@ -304,6 +307,32 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         assertThatThrownBy(() -> savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager",
                 "expired-materials", Map.of("factoryId", "F-SK-OTHER"), null, "entry-2"))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("factoryId");
+    }
+
+    @Test void theRegisteredSkillEntryEnforcesTheSkillsOwnRequiredPermission() {
+        SkillDefinition guarded = SkillDefinition.builder().name("guarded-materials").displayName("受限原料")
+                .tools(List.of(TOOL)).enabled(true).requiredPermission("inventory:read, warehouse:read").build();
+        when(skillRegistry.getSkill("guarded-materials")).thenReturn(java.util.Optional.of(guarded));
+        when(skillRouter.executeSkill(org.mockito.ArgumentMatchers.eq("guarded-materials"), any()))
+                .thenAnswer(call -> skills.execute(guarded, call.getArgument(1)));
+        when(permissionService.hasAnyPermission(any(User.class), any(String[].class))).thenAnswer(call -> {
+            User user = call.getArgument(0);
+            return user.getId().equals(warehouseUser);
+        });
+
+        assertThatThrownBy(() -> savedSkills.runRegistered("F-SK", salesUser, "sales_manager",
+                "guarded-materials", Map.of(), null, "guard-1"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("inventory:read");
+        assertThat(seenAsUser).isEmpty();
+        assertThat(count("tool_execution_audit_events")).isZero();
+
+        // Positive control: the permitted user runs it.
+        assertThat(savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager", "guarded-materials",
+                Map.of(), null, "guard-2").isSuccess()).isTrue();
+        assertThat(seenAsUser).containsExactly(warehouseUser);
+        assertThatThrownBy(() -> savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager",
+                "no-such-skill", Map.of(), null, "guard-3"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("没有找到");
     }
 
     @Test void triggerChainStepRunsThroughTheRealGatewayAsTheRunAsUser() throws Exception {

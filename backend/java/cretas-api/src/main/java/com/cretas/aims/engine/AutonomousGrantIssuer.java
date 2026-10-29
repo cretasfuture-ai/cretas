@@ -65,6 +65,13 @@ public class AutonomousGrantIssuer {
         if (!toolName.equals(config.getToolOrMethod())) {
             throw new BusinessException(400, "授权的工具与该任务配置的工具不一致：" + config.getToolOrMethod());
         }
+        if (AutonomousToolPolicy.scheduledWriteRefusal(toolName, config.getParams()) != null) {
+            String required = AutonomousToolPolicy.SCHEDULED_WRITE_REQUIRED_BOOLEAN.get(toolName);
+            throw new BusinessException(400, "定时执行「" + toolName + "」必须在参数里写明 " + required
+                    + "（true 或 false），否则每次触发都会把当前状态翻转一次")
+                    .withCode("AUTONOMOUS_WRITE_OUTCOME_UNSTATED")
+                    .withHint("编辑该定时任务的参数，加上 \"" + required + "\": true 或 false，再签发授权");
+        }
         if (!Objects.equals(grantor.getId(), config.getRunAsUserId())) {
             throw new BusinessException(409, "只能为你自己启用（执行人是你）的任务签发授权")
                     .withHint("先以你的账号启用该定时任务，再签发授权");
