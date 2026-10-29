@@ -17,9 +17,9 @@ public class OperatingReportProjection {
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope secretScope=
             com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
     /**
-     * 待 Steve 裁定 (复审 M3): 「产品毛利与成本覆盖」汇总 (全厂收入 / 已回填成本 / 毛利 / 毛利率) 对无权读者是否也遮。
-     * 现状不遮 (会计口径之外的这一组合计含保密产品的成本, 理论上可以拿它减其他产品的毛利反推)。
-     * 裁定为「遮」时只改这一处为 true, 见 {@link #maskMarginSummary}。
+     * Steve 2026-10-29 裁定 (复审 M3, 选 B): 经营报告毛利汇总照常完整显示, 本开关保持 false。
+     * 已知风险: 无权的人可用汇总减去其他产品的毛利倒推出保密产品的毛利 (登记在
+     * docs/security/process-secret-ai-egress.md「已知风险」)。将来改判为「遮」时只改这一处为 true, 见 {@link #maskMarginSummary}。
      */
     static final boolean MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED = false;
     /** 逐产品排行段: 指标 id 形如 {@code <段>.<productTypeId>.<profit|rate>}。 */

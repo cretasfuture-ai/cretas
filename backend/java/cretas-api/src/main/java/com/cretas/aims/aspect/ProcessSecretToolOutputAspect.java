@@ -43,6 +43,10 @@ public class ProcessSecretToolOutputAspect {
 
     private final ProcessSecretPayloadScrubber scrubber;
     private final ObjectMapper objectMapper;
+    /** AI 数据访问审计: 工具调用并进本请求那一条 (一个请求一条, 不是每次工具调用一条)。单测直接 new 时不记录。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit aiAccessAudit =
+            com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.disabled();
 
     public ProcessSecretToolOutputAspect(ProcessSecretPayloadScrubber scrubber, ObjectMapper objectMapper) {
         this.scrubber = scrubber;
@@ -52,8 +56,11 @@ public class ProcessSecretToolOutputAspect {
     @Around("execution(String com.cretas.aims.ai.tool.ToolExecutor+.execute(..)) "
             + "|| execution(String com.cretas.aims.ai.tool.ToolExecutor+.preview(..))")
     public Object guardToolOutput(ProceedingJoinPoint pjp) throws Throwable {
-        try (ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, 
+                     factoryOf(pjp.getArgs()), com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_TOOL);
+             ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
             Object out = pjp.proceed();
+            ai.involvesReads(ProcessSecretReadTracker.reads());
             if (!(out instanceof String raw) || raw.isBlank()) return out;
             return scrub(raw, pjp);
         }

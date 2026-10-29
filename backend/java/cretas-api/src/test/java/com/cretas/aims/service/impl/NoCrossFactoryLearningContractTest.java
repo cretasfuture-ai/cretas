@@ -33,6 +33,62 @@ import static org.mockito.Mockito.when;
  */
 class NoCrossFactoryLearningContractTest {
 
+    // ---------------------------------------------------------------- 关键词学习写哪一行
+
+    private static com.cretas.aims.entity.config.AIIntentConfig intentRow(String factoryId, String keywordsJson) {
+        com.cretas.aims.entity.config.AIIntentConfig row = new com.cretas.aims.entity.config.AIIntentConfig();
+        row.setIntentCode("PRODUCTION_QUERY");
+        row.setFactoryId(factoryId);
+        row.setKeywords(keywordsJson);
+        row.setIsActive(true);
+        return row;
+    }
+
+    /** 关键词学习服务: 平台级行 (factory_id 为空) 与本厂行都在库里; 仓库按意图代码取会先取到平台级行 (旧写法)。 */
+    private static KeywordLearningServiceImpl keywordLearning(AIIntentConfigRepository intents) {
+        com.cretas.aims.service.FactoryConfigService factoryConfig = mock(com.cretas.aims.service.FactoryConfigService.class);
+        when(factoryConfig.getMaxKeywordsPerIntent(anyString())).thenReturn(50);
+        when(factoryConfig.getLlmNewKeywordWeight(anyString())).thenReturn(BigDecimal.ONE);
+        com.cretas.aims.service.consent.TrainingConsentService consent = mock(com.cretas.aims.service.consent.TrainingConsentService.class);
+        when(consent.status(anyString())).thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.AUTHORIZED);
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(filter.mentionsProtectedProduct(anyString(), anyString())).thenReturn(false);
+        return new KeywordLearningServiceImpl(intents, mock(KeywordEffectivenessService.class), factoryConfig,
+                new com.fasterxml.jackson.databind.ObjectMapper(), consent, filter);
+    }
+
+    @Test
+    void aLearnedKeywordGoesIntoTheFactorysOwnIntentRowAndNeverOntoThePlatformRow() {
+        AIIntentConfigRepository intents = mock(AIIntentConfigRepository.class);
+        com.cretas.aims.entity.config.AIIntentConfig platform = intentRow(null, "[\"产量\"]");
+        com.cretas.aims.entity.config.AIIntentConfig own = intentRow("F001", "[\"产量\"]");
+        when(intents.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull("PRODUCTION_QUERY")).thenReturn(java.util.Optional.of(platform));
+        when(intents.findByFactoryIdAndIntentCode("F001", "PRODUCTION_QUERY")).thenReturn(java.util.Optional.of(own));
+
+        int added = keywordLearning(intents).addKeywordsToIntent("F001", "PRODUCTION_QUERY", List.of("今天出货情况"));
+
+        assertThat(added).isEqualTo(1);                                    // 一定发生: 真的写了
+        assertThat(own.getKeywords()).contains("今天出货情况");
+        // 实体 equals 只比基类时间戳 (两行都为空时相等): 按同一实例判
+        verify(intents).save(org.mockito.ArgumentMatchers.<com.cretas.aims.entity.config.AIIntentConfig>argThat(r -> r == own));
+        assertThat(platform.getKeywords()).isEqualTo("[\"产量\"]");          // 平台级行一个字没动
+        verify(intents, never()).save(org.mockito.ArgumentMatchers.<com.cretas.aims.entity.config.AIIntentConfig>argThat(r -> r == platform));
+    }
+
+    @Test
+    void withOnlyAPlatformRowTheKeywordIsNotAppendedAnywhere() {
+        AIIntentConfigRepository intents = mock(AIIntentConfigRepository.class);
+        com.cretas.aims.entity.config.AIIntentConfig platform = intentRow(null, "[\"产量\"]");
+        when(intents.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull("PRODUCTION_QUERY")).thenReturn(java.util.Optional.of(platform));
+        when(intents.findByFactoryIdAndIntentCode("F001", "PRODUCTION_QUERY")).thenReturn(java.util.Optional.empty());
+
+        assertThat(keywordLearning(intents).addKeywordsToIntent("F001", "PRODUCTION_QUERY", List.of("今天出货情况"))).isZero();
+
+        assertThat(platform.getKeywords()).isEqualTo("[\"产量\"]");
+        verify(intents, never()).save(any());
+    }
+
     @Test
     void keywordPromotionNeverWritesAGlobalKeyword() {
         KeywordFactoryAdoptionRepository adoptions = mock(KeywordFactoryAdoptionRepository.class);

@@ -52,7 +52,7 @@ class FlywheelTieringV2Test {
     void setUp() {
         repo = mock(LearnedExpressionRepository.class);
         // 训练授权 / 保密产品判断 (2026-10-29 起 learnExpression 先过这道闸, 未注入就不学):
-        // 这里给「已授权、不提保密产品」, 让分层 / 重提议逻辑照常被测; 闸本身见 ExpressionLearningProcessSecretTest
+        // 这里给「已授权、不提保密产品」, 让分层 / 重提议逻辑照常被测; 闸本身见 ExpressionLearningProcessSecretContractTest
         com.cretas.aims.service.consent.TrainingConsentService consent =
                 mock(com.cretas.aims.service.consent.TrainingConsentService.class);
         when(consent.status(anyString()))

@@ -44,6 +44,9 @@ public class AIContextServiceImpl implements AIContextService {
     private final ProductionBatchRepository productionBatchRepository;
     private final ProductTypeRepository productTypeRepository;
     private final ProcessSecretLlmCostScope llmCostScope;
+    /** AI 数据访问审计 (给 Python AI 的上下文接口, 每个请求一条)。单测直接构造时不记录。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit aiAccessAudit = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.disabled();
 
     public AIContextServiceImpl(BomService bomService,
                                 @Lazy ReportService reportService,
@@ -71,7 +74,20 @@ public class AIContextServiceImpl implements AIContextService {
     @Override
     @Transactional(readOnly = true)
     public ProductionAIContext buildProductionContextForAi(String factoryId, LocalDate startDate, LocalDate endDate) {
-        return buildProductionContext(factoryId, startDate, endDate, llmCostScope.forCurrentCaller(factoryId));
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_CONTEXT)) {
+            ProductionAIContext context = buildProductionContext(factoryId, startDate, endDate, llmCostScope.forCurrentCaller(factoryId));
+            try {
+                ProcessSecretLlmCostScope.Excluded all = llmCostScope.allProtected(factoryId);
+                boolean involves = context.getExcludedProtectedProductCount() != null && context.getExcludedProtectedProductCount() > 0;
+                if (!involves && !all.isEmpty() && context.getProductionByProduct() != null) {
+                    involves = context.getProductionByProduct().stream().anyMatch(p -> all.coversProduct(p.getProductTypeId()));
+                }
+                ai.involvesProtected(involves);
+            } catch (RuntimeException e) {
+                ai.involvementUnknown();
+            }
+            return context;
+        }
     }
 
     private ProductionAIContext buildProductionContext(String factoryId, LocalDate startDate, LocalDate endDate,
@@ -484,7 +500,18 @@ public class AIContextServiceImpl implements AIContextService {
     @Override
     @Transactional(readOnly = true)
     public CostAIContext buildCostContextForCaller(String factoryId, String productTypeId, Integer recentBatchCount) {
-        CostAIContext full = buildCostContext(factoryId, productTypeId, recentBatchCount);
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_CONTEXT)) {
+            CostAIContext full = buildCostContext(factoryId, productTypeId, recentBatchCount);
+            try {
+                ai.involvesProtected(llmCostScope.allProtected(factoryId).coversProductOrAnyPlan(productTypeId, full.getCostSourcePlanIds()));
+            } catch (RuntimeException e) {
+                ai.involvementUnknown();
+            }
+            return costContextForCaller(factoryId, productTypeId, full);
+        }
+    }
+
+    private CostAIContext costContextForCaller(String factoryId, String productTypeId, CostAIContext full) {
         if (!llmCostScope.forCurrentCaller(factoryId).coversProductOrAnyPlan(productTypeId, full.getCostSourcePlanIds())) {
             return full;
         }

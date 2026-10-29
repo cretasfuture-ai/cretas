@@ -12,6 +12,7 @@ All modules now use LLM + cache pattern for maximum flexibility.
 """
 import asyncio
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -1670,7 +1671,7 @@ class UnifiedAnalyzer:
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是专业的商业数据分析师。请用JSON格式回复。"
+                    "content": with_process_secret_harness("你是专业的商业数据分析师。请用JSON格式回复。")
                 },
                 {
                     "role": "user",

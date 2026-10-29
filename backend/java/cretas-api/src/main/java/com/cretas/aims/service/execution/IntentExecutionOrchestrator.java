@@ -80,6 +80,13 @@ public class IntentExecutionOrchestrator {
     private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
     private FactoryFollowUpService factoryFollowUpService;
+    /**
+     * AI 数据访问审计: 一次意图执行一条; 期间的工具调用 / 成本分析并进这一条 (同一线程, 请求外也合并)。
+     * 单测直接构造时不记录。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit aiAccessAudit =
+            com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.disabled();
 
     private static final Pattern COMMAND_DIGEST_PATTERN = Pattern.compile("^[0-9a-f]{64}$");
 
@@ -352,7 +359,9 @@ public class IntentExecutionOrchestrator {
                                           Long userId, String userRole) {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
-        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
+             var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
+                     com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             return executeInScope(factoryId, request, userId, userRole);
         }
     }
@@ -1057,7 +1066,9 @@ public class IntentExecutionOrchestrator {
                                                              Long userId, String userRole) {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
-        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
+             var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
+                     com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             return executeWithExplicitIntentInScope(factoryId, request, userId, userRole);
         }
     }

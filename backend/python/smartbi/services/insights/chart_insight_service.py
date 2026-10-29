@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import os
 import re
 from dataclasses import dataclass, field
@@ -1156,7 +1157,7 @@ class ChartInsightService:
             "messages": [
                 {
                     "role": "system",
-                    "content": _SYSTEM_PROMPT,
+                    "content": with_process_secret_harness(_SYSTEM_PROMPT),
                 },
                 {"role": "user", "content": prompt},
             ],

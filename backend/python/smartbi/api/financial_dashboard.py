@@ -1,5 +1,6 @@
 """Financial Dashboard API — Chart generation, batch, analysis, PPT/PDF/Excel export."""
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import json
 import copy
 from datetime import date
@@ -1080,7 +1081,7 @@ async def analyze_chart(request: AnalyzeRequest):
         if request.follow_up_question and request.previous_analysis:
             # Follow-up: multi-turn conversation with history
             messages = [
-                {"role": "system", "content": system_msg},
+                {"role": "system", "content": with_process_secret_harness(system_msg)},
                 {"role": "user", "content": (
                     f"请对以下财务数据进行分析：\n"
                     f"图表类型：{request.chart_type}\n"
@@ -1102,7 +1103,7 @@ async def analyze_chart(request: AnalyzeRequest):
                 f"要求：结合食品加工行业特点，数据驱动，具体可操作。"
             )
             messages = [
-                {"role": "system", "content": system_msg + "请用要点列表格式。"},
+                {"role": "system", "content": with_process_secret_harness(system_msg + "请用要点列表格式。")},
                 {"role": "user", "content": prompt},
             ]
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from common.process_secret_harness import with_process_secret_harness
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -260,7 +261,8 @@ class LLMStructureAnalyzer:
             "messages": [
                 {
                     "role": "system",
-                    "content": "你是一个专业的数据分析师，擅长分析Excel数据结构。请用JSON格式回复，确保JSON格式正确。"
+                    "content": with_process_secret_harness(
+                        "你是一个专业的数据分析师，擅长分析Excel数据结构。请用JSON格式回复，确保JSON格式正确。")
                 },
                 {
                     "role": "user",
