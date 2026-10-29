@@ -211,7 +211,7 @@ public class ControlledPurchaseTaskExecutionService {
 
     boolean canViewTimerSnapshot(String factoryId) {
         var current=identity(factoryId);
-        return current.principal()!=null && Boolean.TRUE.equals(current.principal().executionContext().get("canViewPrices"));
+        return current.principal()!=null && Boolean.TRUE.equals(current.principal().executionContext().get("canViewPurchasePrices"));
     }
 
     @Transactional
@@ -352,7 +352,7 @@ public class ControlledPurchaseTaskExecutionService {
         var principal = current.principal();
         if (principal == null) throw denied("当前授权不可用");
         if (!principal.principal().permissions().contains("procurement:read_write")
-                || !Boolean.TRUE.equals(principal.executionContext().get("canViewPrices"))) throw denied("缺少当前采购写入或价格权限");
+                || !Boolean.TRUE.equals(principal.executionContext().get("canViewPurchasePrices"))) throw denied("缺少当前采购写入或价格权限");
         if (!tools.getObject().isToolEnabledForFactory(factoryId, PurchaseTaskGrantService.CANONICAL_TOOL)) throw denied("采购工具已停用");
         String role = principal.principal().roles().iterator().next();
         if (FrontlineAiWriteGrantService.isFrontline(role)
@@ -434,7 +434,7 @@ public class ControlledPurchaseTaskExecutionService {
         return new Outcome(g.getId(), state, g.getResultPurchaseOrderId(), g.getResultAmount(), g.getResultQuantity(), g.getVersion(), g.isConsumed());
     }
     private static Outcome visible(Outcome result, Authorized current) {
-        if (current.principal() != null && Boolean.TRUE.equals(current.principal().executionContext().get("canViewPrices"))) return result;
+        if (current.principal() != null && Boolean.TRUE.equals(current.principal().executionContext().get("canViewPurchasePrices"))) return result;
         return new Outcome(result.grantId(), result.state(), result.purchaseOrderId(), null, result.quantity(), result.version(), result.replay());
     }
     private record Authorized(AuthenticatedActor actor, ToolPrincipalPolicy.RehydratedPrincipal principal) { }

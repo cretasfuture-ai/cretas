@@ -33,6 +33,7 @@ public class FactoryConfirmedFactController {
 
     private final FactoryConfirmedFactService service;
     private final CanonicalBlueprintActorAuthority authority;
+    private final FactoryBuildInterviewService interview;
 
     public record HistoryRow(String id, String field, String label, String value, String status, int version,
             String sourceKind, String sourceRef, String supersedesId, String decidedBy, LocalDateTime decidedAt,
@@ -61,8 +62,14 @@ public class FactoryConfirmedFactController {
         if (body == null || body.field() == null || body.field().isBlank()) {
             throw new BusinessException(400, "缺少要选择来源的事项").withCode("FACT_CONFLICT_FIELD_REQUIRED");
         }
-        return ApiResponse.success(toRow(service.resolve(
-                factoryId, body.field(), body.choice(), actor.type() + ":" + actor.id())));
+        // 先记下被挑战的那条回答来自哪次访谈, 选完后让还在进行的访谈与结果一致。
+        String answeredIn = service.openConflicts(factoryId).stream()
+                .filter(conflict -> conflict.field().equals(body.field()))
+                .map(FactoryConfirmedFactService.Conflict::newSource).findFirst().orElse(null);
+        FactoryConfirmedFact resolved = service.resolve(
+                factoryId, body.field(), body.choice(), actor.type() + ":" + actor.id());
+        interview.syncSessionToConfirmedFact(factoryId, answeredIn, body.field());
+        return ApiResponse.success(toRow(resolved));
     }
 
     private static HistoryRow toRow(FactoryConfirmedFact row) {

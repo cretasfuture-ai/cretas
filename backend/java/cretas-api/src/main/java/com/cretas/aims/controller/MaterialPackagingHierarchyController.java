@@ -48,11 +48,31 @@ public class MaterialPackagingHierarchyController {
     public ApiResponse<MaterialPackagingHierarchyDTO> getByMaterial(
             @PathVariable String factoryId,
             @PathVariable String materialTypeId,
-            @RequestParam(required = false) String supplierMaterialId) {
+            @RequestParam(required = false) String supplierMaterialId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
         // supplierMaterialId 可选: 带上就顺便把每条规格对应的供应商采购价推导出来
         // (采购单表单在供应商没配采购规格时会回落到这条路径, 见 PurchasePriceDerivation)。
+        // S5-12: 推导出来的是供应商采购价 —— 看不到采购价的人连推导都不做 (与没传 supplierMaterialId 一样)。
+        String priceSource = supplierMaterialId != null && canViewPurchasePrices(httpRequest) ? supplierMaterialId : null;
         return ApiResponse.success(
-                service.getByMaterialTypeId(factoryId, materialTypeId, supplierMaterialId).orElse(null));
+                service.getByMaterialTypeId(factoryId, materialTypeId, priceSource).orElse(null));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.PriceVisibility priceVisibility;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.UserRepository userRepository;
+
+    /** 配置的采购读 (PriceVisibility); 组件缺失或认不出调用人一律按看不到 (fail closed)。 */
+    private boolean canViewPurchasePrices(jakarta.servlet.http.HttpServletRequest request) {
+        Object raw = request.getAttribute("userId");
+        Long id = raw instanceof Long l ? l : raw instanceof Integer i ? i.longValue()
+                : raw instanceof String str && !str.isBlank() ? Long.valueOf(str) : null;
+        if (id == null || priceVisibility == null || userRepository == null) return false;
+        return userRepository.findById(id)
+                .map(u -> priceVisibility.canView(u, com.cretas.aims.security.PriceSensitive.PURCHASE))
+                .orElse(false);
     }
 
     // 缺陷 46 (2026-09-02): 与 RawMaterialTypeController 同一批 —— 加 warehouse:read_write,

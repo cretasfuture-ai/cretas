@@ -121,6 +121,48 @@ class SseFactoryTraceContractTest {
                 .containsEntry("outcome", "FAILED");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamedNoMatchWriteAttemptIsTracedAsUnresolvedUnknown() throws Exception {
+        // 「把所有员工账号停用」: result is NEED_CLARIFICATION text, complete is NO_MATCH, no intent resolved
+        var noMatch = IntentExecuteResponse.builder().intentRecognized(false).status("NEED_CLARIFICATION")
+                .message("我没有理解您的意图").build();
+        var h = harness("FACTORY", noMatch);
+        doAnswer(call -> {
+            SseEmitter emitter = call.getArgument(0);
+            h.service().sendSseEvent(emitter, "result", noMatch);
+            h.service().sendSseEvent(emitter, "complete", Map.of("status", "NO_MATCH"));
+            return null;
+        }).when(h.service()).executeStreamAsync(any(), any(), any(), any(), any(), any());
+
+        h.service().executeStream("F006", new IntentExecuteRequest(), 42L, "sales_mgr");
+
+        assertThat(awaitTrace(h)).isTrue();
+        ArgumentCaptor<Map<String, Object>> trace = ArgumentCaptor.forClass(Map.class);
+        verify(h.client()).recordFactoryTrace(trace.capture(), any());
+        assertThat(trace.getValue()).containsEntry("intentCode", "UNRESOLVED_INTENT")
+                .containsEntry("outcome", "UNKNOWN");
+    }
+
+    @Test
+    void streamedGenuineClarificationStillWritesNothing() throws Exception {
+        var ask = IntentExecuteResponse.builder().intentRecognized(false).status("NEED_CLARIFICATION")
+                .message("您是想查哪一类？").build();
+        var h = harness("FACTORY", ask);
+        doAnswer(call -> {
+            SseEmitter emitter = call.getArgument(0);
+            h.service().sendSseEvent(emitter, "result", ask);
+            h.service().sendSseEvent(emitter, "complete", Map.of("status", "NEED_CLARIFICATION"));
+            return null;
+        }).when(h.service()).executeStreamAsync(any(), any(), any(), any(), any(), any());
+
+        h.service().executeStream("F006", new IntentExecuteRequest(), 42L, "operator");
+
+        Thread.sleep(300);
+        assertThat(h.recorder().awaitIdle(2_000)).isTrue();
+        verify(h.client(), never()).recordFactoryTrace(any(), any());
+    }
+
     private boolean awaitTrace(Harness h) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 5_000;
         while (System.currentTimeMillis() < deadline) {

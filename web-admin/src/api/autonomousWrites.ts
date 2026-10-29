@@ -10,6 +10,10 @@ export interface WriteSwitchView {
   reason: string | null;
   changedBy: number | null;
   changedAt: string | null;
+  /** 部署级总开关（运维配置）；关闭时所有工厂的定时写入都暂停，本厂开关不起作用 */
+  deploymentEnabled: boolean;
+  /** 下一次触发真正是否会写入：部署级与本厂开关都打开 */
+  writesAllowed: boolean;
 }
 
 export type GrantState = 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'EXHAUSTED';

@@ -70,8 +70,21 @@ import java.lang.annotation.Target;
 public @interface PriceSensitive {
 
     /**
-     * Optional permission code required to view this field/method.
-     * Default is {@code procurement:price:view}.
+     * 采购价 / 采购金额 (S5-12, Steve 裁定「按权限配置，不按固定角色名单」):
+     * 只看工厂配置的 procurement 模块读权限 (L2 → L1 → 兜底, 与登录响应 modulePermissions 同一条链),
+     * 不看 {@code procurement:price:view} 的固定角色名单。
+     */
+    String PURCHASE = "procurement:read";
+
+    /**
+     * 采购发票金额: 采购读 <b>或</b> 财务读任一即可见 (财务在收票/三单核对页要看票面金额)。
+     * 由采购单价推出来的数 (应开金额、采购单价) 仍标 {@link #PURCHASE}。
+     */
+    String PURCHASE_OR_FINANCE = "procurement:read|finance:read";
+
+    /**
+     * Permission spec required to view this field/method. Default is {@code procurement:price:view}
+     * (固定角色名单, 现只管非采购金额). {@code |} 分隔表示任一即可; 由 {@link PriceVisibility} 统一解析。
      */
     String permission() default "procurement:price:view";
 }

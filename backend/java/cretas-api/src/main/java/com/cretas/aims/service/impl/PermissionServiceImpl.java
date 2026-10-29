@@ -561,6 +561,39 @@ public class PermissionServiceImpl implements PermissionService {
         return result;
     }
 
+    @Override
+    public boolean hasConfiguredPermission(User user, String permissionCode,
+                                           java.util.Set<String> fallbackRoleCodes) {
+        if (user == null || permissionCode == null) {
+            return false;
+        }
+        FactoryUserRole role = user.getRoleEnum();
+        if (role == null || role == FactoryUserRole.unactivated) {
+            return false;
+        }
+        if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
+            return true;
+        }
+        String[] parts = permissionCode.split(":");
+        if (parts.length != 2) {
+            return false;
+        }
+        // 与 hasPermission 同一条 L2 → L1 链, 只是去掉第三层硬编码兜底:
+        // 兜底矩阵给了 warehouse_manager / dispatcher / production_manager 等采购读,
+        // 而 PR #415 有意不让他们看采购价 —— 「没配置」不能被翻译成「兜底说可以」。
+        String level = null;
+        if (user.getFactoryId() != null) {
+            level = resolveLayer2(user.getFactoryId(), role.name(), parts[0], true);
+        }
+        if (level == null) {
+            level = resolveLayer1(role.name(), parts[0], true);
+        }
+        if (level == null) {
+            return fallbackRoleCodes != null && fallbackRoleCodes.contains(role.name());
+        }
+        return checkAction(level, parts[1]);
+    }
+
     /**
      * L2 查询: factory_module_configs.role_module_override JSONB.
      * 返回 normalized level (rw/r/w/-) 或 null (未配置).

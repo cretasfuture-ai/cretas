@@ -180,8 +180,11 @@ public class FactoryBuildInterviewService {
         if (reused.isEmpty()) return;
         List<FactoryAssemblyConversationSession.ReplyFieldReceipt> fields = new ArrayList<>();
         StringJoiner message = new StringJoiner("；");
+        Map<String, String> reusedLabels = new LinkedHashMap<>();
+        session.getRequiredParameters().forEach(rp -> reusedLabels.put(rp.getName(), rp.getLabel()));
         for (Map.Entry<String, String> entry : reused.entrySet()) {
-            message.add(entry.getKey() + "：" + entry.getValue());
+            String reusedLabel = reusedLabels.get(entry.getKey());
+            message.add((isBlank(reusedLabel) ? "其他事项" : reusedLabel) + "：" + entry.getValue());
             fields.add(FactoryAssemblyConversationSession.ReplyFieldReceipt.builder()
                     .field(entry.getKey())
                     .resolution("ACCEPTED")
@@ -210,6 +213,28 @@ public class FactoryBuildInterviewService {
         }
         sessionRepository.save(session);
         log.info("对话建厂沿用已确认事实 {} 项: factoryId={}, sessionId={}", reused.size(), factoryId, session.getSessionId());
+    }
+
+    /** 空闲过期的访谈版本, 在这个窗口内仍可由本人恢复 (不改会话自己的 10 分钟空闲上限)。 */
+    static final int RESUME_WINDOW_HOURS = 24;
+
+    /**
+     * 管理员在事实页选完来源后, 让还在进行的那次访谈里的值与已确认事实一致 (保留已确认值 → 会话退回原值;
+     * 改用新回答 → 会话本来就是新值, 无需改)。只动仍在进行的会话, 且只动被选的那一项。
+     */
+    @Transactional
+    public void syncSessionToConfirmedFact(String factoryId, String sourceRef, String field) {
+        if (isBlank(sourceRef) || !sourceRef.startsWith("conversation:") || isBlank(field)) return;
+        String sessionId = sourceRef.substring("conversation:".length());
+        FactoryAssemblyConversationSession session = sessionRepository
+                .findBySessionIdAndFactoryId(sessionId, factoryId).orElse(null);
+        if (session == null || session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE) return;
+        String target = confirmedFacts.confirmedValue(factoryId, field).orElse(null);
+        if (target == null || target.equals(session.getCollectedParameters().get(field))) return;
+        session.addCollectedParameter(field, target);
+        FactoryInterviewExpansion.expandIfReady(session);
+        FactoryInterviewExpansion.expandProductsIfReady(session);
+        sessionRepository.save(session);
     }
 
     public List<InterviewDefaults.Section> interviewDefaults(String factoryId) {
@@ -243,27 +268,56 @@ public class FactoryBuildInterviewService {
 
     /**
      * Latest ACTIVE or COMPLETED factory interview that can be resumed or generated.
-     * This is read-only and never creates, cancels or restarts a conversation.
+     * It never creates, cancels or restarts a conversation. The one write it may do is to resume the
+     * caller's own newest in-progress version that merely went idle (see {@link #resumableIdleVersion}),
+     * so that stepping away to another page does not silently drop the version being worked on.
      */
     public Optional<FactoryBuildProgress> recoverableProgress(
             String factoryId, ConversationActor actor) {
-        List<FactoryAssemblyConversationSession> eligible = sessionRepository
+        List<FactoryAssemblyConversationSession> all = sessionRepository
                 .findRecentByActor(factoryId, actor.userId(), actor.type()).stream()
                 .filter(session -> session.getSessionMode()
                         == FactoryAssemblyConversationSession.SessionMode.PARAMETER_COLLECTION)
                 .filter(session -> FACTORY_BUILD_PARAMS_INTENT.equals(session.getKnownIntentCode()))
-                .filter(session -> session.getStatus() == FactoryAssemblyConversationSession.SessionStatus.COMPLETED
-                        || (session.getStatus() == FactoryAssemblyConversationSession.SessionStatus.ACTIVE
-                            && !session.isExpired()))
                 .toList();
-        Optional<FactoryAssemblyConversationSession> active = eligible.stream()
-                .filter(session -> session.getStatus() == FactoryAssemblyConversationSession.SessionStatus.ACTIVE)
+        Optional<FactoryAssemblyConversationSession> active = all.stream()
+                .filter(session -> session.getStatus() == FactoryAssemblyConversationSession.SessionStatus.ACTIVE
+                        && !session.isExpired())
                 .findFirst();
-        return active.or(() -> eligible.stream()
-                        .filter(session -> session.getStatus()
-                                == FactoryAssemblyConversationSession.SessionStatus.COMPLETED)
-                        .findFirst())
+        if (active.isPresent()) return active.map(session -> buildProgress(factoryId, session));
+        Optional<FactoryAssemblyConversationSession> resumed = resumableIdleVersion(all);
+        if (resumed.isPresent()) {
+            FactoryAssemblyConversationSession session = resumed.get();
+            session.setStatus(FactoryAssemblyConversationSession.SessionStatus.ACTIVE);
+            session.setCompletedAt(null);
+            session.setLastActiveAt(java.time.LocalDateTime.now());
+            sessionRepository.save(session);
+            return Optional.of(buildProgress(factoryId, session));
+        }
+        return all.stream()
+                .filter(session -> session.getStatus() == FactoryAssemblyConversationSession.SessionStatus.COMPLETED)
+                .findFirst()
                 .map(session -> buildProgress(factoryId, session));
+    }
+
+    /**
+     * The caller's newest interview version, if it is still in progress but idle-expired (ACTIVE past its
+     * idle limit, or TIMEOUT) and was last touched within {@link #RESUME_WINDOW_HOURS}. Only the newest
+     * version of this factory + user + actor type + intent qualifies: if the newest one was cancelled
+     * (restart/abandon) or completed, nothing older is resurrected. The session keeps its own idle limit;
+     * resuming only restarts its clock.
+     */
+    private Optional<FactoryAssemblyConversationSession> resumableIdleVersion(
+            List<FactoryAssemblyConversationSession> newestFirst) {
+        if (newestFirst.isEmpty()) return Optional.empty();
+        FactoryAssemblyConversationSession newest = newestFirst.get(0);
+        boolean inProgress = newest.getStatus() == FactoryAssemblyConversationSession.SessionStatus.ACTIVE
+                || newest.getStatus() == FactoryAssemblyConversationSession.SessionStatus.TIMEOUT;
+        java.time.LocalDateTime touched = newest.getLastActiveAt() != null
+                ? newest.getLastActiveAt() : newest.getCreatedAt();
+        boolean withinWindow = touched != null
+                && touched.isAfter(java.time.LocalDateTime.now().minusHours(RESUME_WINDOW_HOURS));
+        return inProgress && withinWindow ? Optional.of(newest) : Optional.empty();
     }
 
     private FactoryBuildProgress buildProgress(String factoryId, FactoryAssemblyConversationSession session) {

@@ -727,6 +727,12 @@ export const usePermissionStore = defineStore('permission', () => {
    */
   const canViewPrice = computed((): boolean => PRICE_VIEW_ROLES.has(currentRole.value));
 
+  /**
+   * 采购价 / 采购金额 (S5-12): 只看配置的 procurement 模块读权限 (后端有效模块权限快照 L2→L1→兜底,
+   * 与后端 PriceSensitive.PURCHASE 同一口径), 不看上面的固定角色名单。
+   */
+  const canViewPurchasePrice = computed((): boolean => canAccess('procurement'));
+
   function addLoadedRoute(routeName: string) {
     if (!loadedRoutes.value.includes(routeName)) {
       loadedRoutes.value.push(routeName);
@@ -761,6 +767,7 @@ export const usePermissionStore = defineStore('permission', () => {
     canWriteSmartBI,
     hasAnyWriteAccess,
     canViewPrice,
+    canViewPurchasePrice,
     addLoadedRoute,
     clearLoadedRoutes
   };

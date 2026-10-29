@@ -14,6 +14,7 @@ import {
   setSavedSkillEnabled,
   type SkillRun, type SavedSkill, type SkillParamSpec, type SkillRunResult
 } from '@/api/reusableSkills';
+import { paramTypeLabel, runStatus, toolsText } from './labels';
 
 const props = defineProps<{ skills: SkillInfo[] }>();
 
@@ -205,11 +206,11 @@ async function toggleSaved(skill: SavedSkill, enabled: boolean) {
 }
 
 function statusType(status: string) {
-  return status === 'SUCCEEDED' ? 'success' : status === 'OUTCOME_UNKNOWN' ? 'warning' : 'danger';
+  return runStatus(status).type;
 }
 
 function statusLabel(status: string) {
-  return ({ SUCCEEDED: '成功', FAILED: '失败', DENIED: '被拒绝', OUTCOME_UNKNOWN: '结果未知' } as Record<string, string>)[status] ?? status;
+  return runStatus(status).label;
 }
 
 onMounted(reload);
@@ -242,7 +243,7 @@ onMounted(reload);
         </el-form-item>
       </el-form>
       <el-alert v-if="trialResult" type="success" :closable="false"
-        :title="`运行成功：${trialResult.executedTools.join('、')}，回执 ${trialResult.runId ?? '（未记录）'}`" />
+        :title="`运行成功：${toolsText(trialResult.executedTools.map(tool => tool.replace(/ \(.*\)$/, '')))}，回执 ${trialResult.runId ?? '（未记录）'}`" />
     </el-card>
 
     <el-card shadow="never" class="block">
@@ -250,7 +251,7 @@ onMounted(reload);
       <el-table :data="runs" stripe empty-text="还没有运行记录">
         <el-table-column prop="skillName" label="Skill" min-width="160" />
         <el-table-column label="工具" min-width="200">
-          <template #default="{ row }">{{ row.steps.map((step: { tool: string }) => step.tool).join('、') }}</template>
+          <template #default="{ row }">{{ toolsText(row.steps.map((step: { tool: string }) => step.tool)) }}</template>
         </el-table-column>
         <el-table-column label="结果" width="100" align="center">
           <template #default="{ row }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template>
@@ -299,7 +300,9 @@ onMounted(reload);
           <div class="hint">只能调整原运行里有的参数；复跑时超出范围的值会在执行前被拒绝。</div>
           <el-table :data="saveSpecs" size="small" empty-text="原运行没有可调整的参数">
             <el-table-column prop="name" label="参数" width="130" />
-            <el-table-column prop="type" label="类型" width="90" />
+            <el-table-column label="类型" width="90">
+              <template #default="{ row }">{{ paramTypeLabel(row.type) }}</template>
+            </el-table-column>
             <el-table-column label="必填" width="70">
               <template #default="{ row }"><el-checkbox v-model="row.required" /></template>
             </el-table-column>

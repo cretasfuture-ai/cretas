@@ -1482,11 +1482,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
             return value;
         }
         if (!param.isMultiSelect()) {
-            String normalized = normalizeChoiceToken(value);
-            return options.stream()
-                    .filter(option -> normalizeChoiceToken(option).equals(normalized))
-                    .findFirst()
-                    .orElse(null);
+            return mapToOption(options, value);
         }
         List<String> selected = Arrays.stream(value.split("[、,，;；]"))
                 .map(String::trim).filter(part -> !part.isEmpty()).toList();
@@ -1495,10 +1491,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
         }
         List<String> canonical = new ArrayList<>();
         for (String token : selected) {
-            String normalized = normalizeChoiceToken(token);
-            String option = options.stream()
-                    .filter(candidate -> normalizeChoiceToken(candidate).equals(normalized))
-                    .findFirst().orElse(null);
+            String option = mapToOption(options, token);
             if (option == null) {
                 return null;
             }
@@ -1507,6 +1500,54 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
             }
         }
         return String.join("、", canonical);
+    }
+
+    /** Words that can flip the meaning of what follows; a non-exact match containing one is never mapped. */
+    private static final List<String> NEGATIONS =
+            List.of("不", "没", "无", "非", "未", "别", "勿", "去掉", "删掉", "删除", "取消", "排除");
+
+    /**
+     * Maps what the user said onto exactly one valid option, or null (the caller then asks again).
+     * Order: exact (case/space/bracket-insensitive), then punctuation-insensitive (「有部分」= 「有(部分)」),
+     * and only for a longer sentence a UNIQUE containment: exactly one option is named inside the value,
+     * or the value is a fragment of exactly one option. Never guessed:
+     * two or more options named inside the value, a negation word in a non-exact value, or any
+     * ambiguity returns null. Applies to first-time answers and corrections alike.
+     */
+    private String mapToOption(List<String> options, String value) {
+        String normalized = normalizeChoiceToken(value);
+        for (String option : options) {
+            if (normalizeChoiceToken(option).equals(normalized)) return option;
+        }
+        String loose = looseChoiceKey(value);
+        if (loose.isEmpty()) return null;
+        for (String option : options) {
+            if (looseChoiceKey(option).equals(loose)) return option;
+        }
+        for (String negation : NEGATIONS) {
+            if (value.contains(negation)) return null;
+        }
+        String inside = null;
+        for (String option : options) {
+            String key = looseChoiceKey(option);
+            if (key.length() < 2 || !loose.contains(key)) continue;
+            if (inside != null) return null;
+            inside = option;
+        }
+        if (inside != null) return inside;
+        if (loose.length() < 2) return null;
+        String onlyContaining = null;
+        for (String option : options) {
+            if (looseChoiceKey(option).contains(loose)) {
+                if (onlyContaining != null) return null;
+                onlyContaining = option;
+            }
+        }
+        return onlyContaining;
+    }
+
+    private String looseChoiceKey(String value) {
+        return value == null ? "" : value.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT);
     }
 
     private String normalizeChoiceToken(String value) {

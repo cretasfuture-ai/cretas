@@ -206,8 +206,8 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(54);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
         // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
-        // 2026-10-29 S6 gated-data rule: 107 tools declare the codes / role gate of the direct API serving their data.
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(71);
+        // 2026-10-29 S6 gated-data rule: 107 tools declare the codes / role gate of the direct API serving their data; S5-12 adds purchase_statistics requiresPermission.
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(72);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(53);
         assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(113);
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(13);

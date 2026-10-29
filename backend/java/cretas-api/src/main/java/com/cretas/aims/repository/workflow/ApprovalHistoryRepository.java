@@ -21,6 +21,9 @@ import java.util.List;
 @Repository
 public interface ApprovalHistoryRepository extends JpaRepository<ApprovalHistory, Long> {
 
+    /** 该用户是否在这个审批实例上操作过 (与「已处理」列表同一判据, S5-12 审批速览用)。 */
+    boolean existsByFactoryIdAndInstanceIdAndActorId(String factoryId, String instanceId, Long actorId);
+
     /**
      * 时间线 UI — 单 instance 按 createdAt 升序.
      *

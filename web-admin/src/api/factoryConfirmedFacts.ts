@@ -14,7 +14,7 @@ export interface FactConflict {
   pendingId: string
 }
 
-export type FactStatus = 'CONFIRMED' | 'CONFLICT_PENDING' | 'SUPERSEDED' | 'REJECTED'
+export type FactStatus = 'CONFIRMED' | 'CONFLICT_PENDING' | 'PENDING_CONFIRM' | 'SUPERSEDED' | 'REJECTED'
 
 export interface FactHistoryRow {
   id: string
@@ -57,6 +57,7 @@ export async function resolveFactConflict(factoryId: string, field: string, choi
 export const FACT_STATUS_LABEL: Record<FactStatus, string> = {
   CONFIRMED: '当前生效',
   CONFLICT_PENDING: '待选择来源',
+  PENDING_CONFIRM: '待确认',
   SUPERSEDED: '已被取代',
   REJECTED: '已否决',
 }

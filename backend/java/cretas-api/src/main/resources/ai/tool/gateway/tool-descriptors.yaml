@@ -9663,15 +9663,15 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["procurement:read", "procurement:read_write", "report:read"]
+    requiresPermission: true
+    requiredPermissions: ["procurement:read"]
     version: "1.0.0"
     domainTags: ["purchase"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: false
+      requiresPermission: true
       hasPermission: false
       requiredPermissions: true
       version: false

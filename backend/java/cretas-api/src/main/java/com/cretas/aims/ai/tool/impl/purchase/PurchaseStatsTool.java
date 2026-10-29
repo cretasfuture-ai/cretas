@@ -40,10 +40,25 @@ public class PurchaseStatsTool extends AbstractBusinessTool {
         return Collections.emptyList();
     }
 
+    /** S5-12: 采购统计含采购金额, 至少要采购读; 原来 requiredPermissions 为空, 任何能聊天的人都能问到。 */
+    @Override
+    public boolean requiresPermission() {
+        return true;
+    }
+
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("procurement:read");
+    }
+
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         Map<String, Object> stats = purchaseService.getPurchaseStatistics(factoryId);
         Map<String, Object> result = new HashMap<>(stats);
+        // 金额按网关算好的采购价口径 (配置的采购读, 未配置只认采购岗) 判; 没有这个判定就不给 (fail closed)
+        if (context == null || !Boolean.TRUE.equals(context.get("canViewPurchasePrices"))) {
+            result.put("monthlyPurchaseAmount", null);
+        }
         result.put("message", "采购统计查询成功");
         return result;
     }
@@ -52,14 +67,5 @@ public class PurchaseStatsTool extends AbstractBusinessTool {
     @Override
     public AccessMode getAccessMode() {
         return AccessMode.READ;
-    }
-
-    /**
-     * S6 gated-data rule (2026-10-29): the AI / Skill path admits exactly who the direct API admits
-     * for the same data; pinned by GatedDataToolAiPathPermissionTest.
-     */
-    @Override
-    public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("procurement:read", "procurement:read_write", "report:read");
     }
 }

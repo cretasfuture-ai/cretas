@@ -74,7 +74,7 @@ public class InquiryQuoteSupplierPrice extends BaseEntity {
     @Formula("(SELECT s.name FROM suppliers s WHERE s.id = supplier_id)")
     private String supplierName;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @NotNull(message = "报价不能为空")
     @Positive(message = "报价必须 > 0")
     @Column(name = "unit_price", nullable = false, precision = 15, scale = 4)
@@ -85,7 +85,7 @@ public class InquiryQuoteSupplierPrice extends BaseEntity {
      *
      * <p>NULL = 税率未知。⛔ 不默认 0: 未知税率 ≠ 0%, 比价时这条报价标为不可比。
      */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "tax_rate", precision = 5, scale = 2)
     private BigDecimal taxRate;
 

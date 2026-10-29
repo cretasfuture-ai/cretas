@@ -13,12 +13,12 @@ public class SupplierMaterialPurchaseSpecDTO {
     private String purchasePackageUnit;
     private String inventoryBaseUnit;
     private BigDecimal factor;
-    @PriceSensitive private BigDecimal quotedPrice;
+    @PriceSensitive(permission = PriceSensitive.PURCHASE) private BigDecimal quotedPrice;
     /**
      * 含税报价 —— 编辑态回填输入框用的就是它。
      * 🔴 本字段为空而 quotedPrice 有值 = 存量基准未知, ⛔ 不许反推。
      */
-    @PriceSensitive private BigDecimal taxIncludedQuotedPrice;
+    @PriceSensitive(permission = PriceSensitive.PURCHASE) private BigDecimal taxIncludedQuotedPrice;
     private String quotedPriceUnit;
     /**
      * 该规格没有自己的报价时, 由**供应关系上配的采购价**推导出来的、按本规格包装单位计价的参考价。
@@ -31,7 +31,7 @@ public class SupplierMaterialPurchaseSpecDTO {
      * 单位猜 (跨不过去就留 null, 与「不伪造 0」同一条口径)。有 {@code quotedPrice} 时不推导 ——
      * 免得界面上出现两个都自称是价的数。
      */
-    @PriceSensitive private BigDecimal derivedPrice;
+    @PriceSensitive(permission = PriceSensitive.PURCHASE) private BigDecimal derivedPrice;
     private String derivedPriceUnit;
     /** {@code SUPPLIER_RELATION_SAME_UNIT} / {@code SUPPLIER_RELATION_CONVERTED}; 未推导时为 null。 */
     private String derivedPriceSource;

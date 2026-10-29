@@ -40,7 +40,14 @@ import org.hibernate.annotations.Where;
         }
 )
 @Where(clause = "deleted_at IS NULL")
-public class ReturnOrder extends BaseEntity {
+public class ReturnOrder extends BaseEntity implements com.cretas.aims.security.PriceSpecOverride {
+
+    /** S5-12: 采购退货的金额是采购金额, 按配置的采购读权限判; 销售退货沿用默认口径。 */
+    @Override
+    public String priceSpecOverride() {
+        return returnType == com.cretas.aims.entity.enums.ReturnType.PURCHASE_RETURN
+                ? com.cretas.aims.security.PriceSensitive.PURCHASE : null;
+    }
 
     /** Sprint3-E F-VFLAG-1: 凭证生成状态. UNCREATED → PENDING → CREATED / FAILED. */
     @Enumerated(EnumType.STRING)

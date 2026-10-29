@@ -96,8 +96,8 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
-        // 2026-10-29 S6 gated-data rule: 13 role-gated tools now require a permission check.
-        assertThat(statistics.requiresPermission()).isEqualTo(63);
+        // 2026-10-29 S6 gated-data rule: 13 role-gated tools now require a permission check; S5-12 adds purchase_statistics.
+        assertThat(statistics.requiresPermission()).isEqualTo(64);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(

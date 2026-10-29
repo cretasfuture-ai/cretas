@@ -223,6 +223,13 @@ public class FactoryConfirmedFactService {
         return true;
     }
 
+    /** The value currently confirmed for one item, if any. */
+    @Transactional(readOnly = true)
+    public Optional<String> confirmedValue(String factoryId, String field) {
+        return facts.findByFactoryIdAndFieldKeyAndStatus(factoryId, field, FactoryConfirmedFact.CONFIRMED)
+                .map(FactoryConfirmedFact::getValueText);
+    }
+
     /** Administrator picks the source for one conflicting item. */
     @Transactional
     public FactoryConfirmedFact resolve(String factoryId, String field, String choice, String actor) {

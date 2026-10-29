@@ -43,6 +43,11 @@ public class AutonomousWriteSwitch {
             LocalDateTime changedAt) {
     }
 
+    /** False when the deployment property has switched every factory's delegated writes off. */
+    public boolean deploymentEnabled() {
+        return deploymentEnabled;
+    }
+
     /** @return the reason writes are stopped for this factory, or empty when they may run */
     public Optional<String> suspension(String factoryId) {
         if (!deploymentEnabled) {

@@ -33,6 +33,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 @Tag(name = "采购发票管理", description = "SP6 发票上传、对账与逾期提醒")
 @RequirePermission({"finance:read_write", "procurement:read_write"})
+@com.cretas.aims.security.PriceScope(com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE)
 public class PurchaseInvoiceController {
 
     private final PurchaseInvoiceService purchaseInvoiceService;

@@ -83,7 +83,9 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
 const { goCreate } = useCreateAndReturn();
 
-const canViewPrice = computed(() => permissionStore.canViewPrice);
+// S5-12: 采购价按配置的采购读权限 —— 而能进采购单页本身就要采购读, 前端再判一次恒为真 (分支可达性闸会判空转);
+// 价格是否下发由后端 PriceVisibility 决定, 被剥的金额是 null, formatAmount 显示「-」。
+const canViewPrice = computed(() => true);
 const PROCUREMENT_DEFAULT_COLUMNS = ['purchaseType', 'orderDate', 'totalAmount', 'attachments'];
 const {
   columns: procurementColumnOptions,
@@ -1469,6 +1471,7 @@ function handleAiFill(params: TableRow) {
       </el-table>
 
       <TableFooter
+        price-gate="purchase"
         :stats="footerSummary?.stats ?? []"
         :loading="footerLoading"
         :show-export="false"

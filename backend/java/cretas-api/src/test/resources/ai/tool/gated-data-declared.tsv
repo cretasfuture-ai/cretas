@@ -63,7 +63,7 @@ permission_audit	CODES	system:audit
 pricing_strategy_list	ROLES	factory_super_admin,finance_manager,permission_admin,sales_manager
 purchase_order_detail	CODES	finance:read,procurement:read,procurement:read_write,warehouse:read,warehouse:read_write
 purchase_order_list	CODES	procurement:read,procurement:read_write
-purchase_statistics	CODES	procurement:read,procurement:read_write,report:read
+purchase_statistics	CODES	procurement:read
 quality_defect_query	CODES	quality:read,quality:read_write
 quality_return_query	CODES	quality:read,quality:read_write
 query_employee_profile	CODES	hr:read,hr:read_write

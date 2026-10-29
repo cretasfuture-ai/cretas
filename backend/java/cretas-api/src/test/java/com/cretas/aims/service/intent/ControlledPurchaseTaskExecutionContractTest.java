@@ -50,7 +50,7 @@ class ControlledPurchaseTaskExecutionContractTest {
         when(em.find(User.class, 42L)).thenReturn(activeUser);
         when(em.find(Factory.class, "F-1")).thenReturn(activeFactory);
         when(factory.create("F-1",42L,"purchaser")).thenReturn(principal);
-        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(principal, Map.of("canViewPrices",true))));
+        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(principal, Map.of("canViewPurchasePrices",true))));
         RawMaterialType activeMaterial = new RawMaterialType(); activeMaterial.setIsActive(true); activeMaterial.setFactoryId("F-1");
         Supplier activeSupplier = new Supplier(); activeSupplier.setIsActive(true); activeSupplier.setFactoryId("F-1");
         when(materials.findByIdAndFactoryId("MAT-1","F-1")).thenReturn(Optional.of(activeMaterial));
@@ -91,7 +91,7 @@ class ControlledPurchaseTaskExecutionContractTest {
     @Test void currentPermissionRemovalAndPriceDenialFailClosed() {
         when(policy.rehydrate(principal)).thenReturn(Optional.empty());
         assertThatThrownBy(()->service.previewParameters("F-1",input())).hasMessageContaining("授权不可用");
-        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(principal,Map.of("canViewPrices",false))));
+        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(principal,Map.of("canViewPurchasePrices",false))));
         assertThatThrownBy(()->service.previewParameters("F-1",input())).hasMessageContaining("价格权限");
     }
     @Test void unsupportedScopeAndInsufficientGrossBudgetRejectBeforeIssuance() {
@@ -115,7 +115,7 @@ class ControlledPurchaseTaskExecutionContractTest {
         assertThatThrownBy(()->service.previewParameters("F-1",input())).hasMessageContaining("已停用");
         when(toolRegistry.isToolEnabledForFactory("F-1","purchase_order_create")).thenReturn(true);
         var changed = new ExecutionPrincipal("F-1","FACTORY","42",PrincipalType.USER,Set.of("operator"),Set.of("procurement:read_write"),Set.of());
-        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(changed,Map.of("canViewPrices",true))));
+        when(policy.rehydrate(principal)).thenReturn(Optional.of(new ToolPrincipalPolicy.RehydratedPrincipal(changed,Map.of("canViewPurchasePrices",true))));
         assertThatThrownBy(()->service.previewParameters("F-1",input())).hasMessageContaining("一线角色");
         verify(frontline).findByFactoryIdAndRevokedAtIsNull("F-1");
     }

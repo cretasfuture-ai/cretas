@@ -41,7 +41,7 @@ public class PurchaseInvoiceMatchStatusDTO {
         /** 已核对发票行开票量 */
         BigDecimal matchedQuantity;
         BigDecimal remainingQuantity;
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
         BigDecimal expectedUnitAmount;
         /** NOT_RECEIVED / UNINVOICED / PARTIAL / INVOICED / BLOCKED */
         String status;

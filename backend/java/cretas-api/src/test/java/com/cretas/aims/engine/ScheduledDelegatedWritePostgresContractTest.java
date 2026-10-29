@@ -264,7 +264,35 @@ class ScheduledDelegatedWritePostgresContractTest {
 
         assertThat(status(foreign.getId())).isNotEqualTo("SUCCESS");
         assertThat(enabled(foreignRuleId)).isTrue();
+        // The refusal never tells this factory that the id exists elsewhere, or which factory has it.
+        assertThat(String.valueOf(text("SELECT last_execution_error FROM factory_scheduler_configs WHERE id = "
+                + foreign.getId()))).doesNotContain("F-SW-OTHER");
+        assertThat(String.valueOf(text("SELECT string_agg(coalesce(error_msg, ''), '|') FROM scheduler_run_results")))
+                .doesNotContain("F-SW-OTHER");
         assertThat(count("tool_execution_audit_events WHERE outcome_status = 'SUCCEEDED'")).isZero();
+    }
+
+    @Test void aDeploymentLevelStopSuspendsEvenAFactoryThatSwitchedWritesOn() throws Exception {
+        FactorySchedulerConfig config = schedule(admin, Map.of("ruleId", ruleId.toString(), "enabled", false));
+        issue(config, admin);
+        switchController.set("F-SW",
+                new com.cretas.aims.controller.AutonomousWriteSwitchController.SwitchRequest(true, "试点开启"));
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                (Object) org.springframework.test.util.AopTestUtils.getTargetObject(writeSwitch), "deploymentEnabled", false);
+        try {
+            var view = switchController.get("F-SW").getData();
+            assertThat(view.writesEnabled()).isTrue();
+            assertThat(view.deploymentEnabled()).isFalse();
+            assertThat(view.writesAllowed()).isFalse();
+            fire(config.getId(), "slot:2026-10-29T19:00:00Z");
+            assertThat(status(config.getId())).isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
+            assertThat(enabled(ruleId)).isTrue();
+            assertThat(deniedAudits("WRITES_SUSPENDED")).isEqualTo(1);
+        } finally {
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    (Object) org.springframework.test.util.AopTestUtils.getTargetObject(writeSwitch), "deploymentEnabled", true);
+        }
+        assertThat(switchController.get("F-SW").getData().writesAllowed()).isTrue();
     }
 
     @Test void refusedScheduledWritesAreRecordedAsFailedNotUnknown() {

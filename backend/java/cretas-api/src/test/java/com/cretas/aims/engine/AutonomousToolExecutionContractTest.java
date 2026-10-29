@@ -209,6 +209,34 @@ class AutonomousToolExecutionContractTest {
         verify(grants, never()).consume(any(), any(), any(), any());
     }
 
+    @Test void aRefusedWriteIsAuditedEvenWhenThePrincipalLookupFailsUnexpectedly() throws Exception {
+        com.cretas.aims.ai.tool.gateway.ToolExecutionLedgerService ledger =
+                mock(com.cretas.aims.ai.tool.gateway.ToolExecutionLedgerService.class);
+        when(ledger.beginAudit(any(), any())).thenReturn("audit-refusal");
+        Field ledgerField = AutonomousToolRunner.class.getDeclaredField("ledger");
+        ledgerField.setAccessible(true);
+        ledgerField.set(runner, ledger);
+        when(principals.create(eq("F001"), any(), any())).thenThrow(new IllegalStateException("factory lookup failed"));
+        AutonomousWriteSwitch off = mock(AutonomousWriteSwitch.class);
+        when(off.suspension("F001")).thenReturn(Optional.of("not switched on"));
+        Field switchField = AutonomousToolRunner.class.getDeclaredField("writeSwitch");
+        switchField.setAccessible(true);
+        switchField.set(runner, off);
+        FactorySchedulerConfig config = schedule(83L, "dictionary_add", Map.of(), 42L);
+        when(schedulerRepo.findById(83L)).thenReturn(Optional.of(config));
+
+        runScheduled(config, PLANNED);
+
+        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
+        assertThat(config.getLastExecutionError()).contains("audit-refusal");
+        ArgumentCaptor<ExecutionPrincipal> actor = ArgumentCaptor.forClass(ExecutionPrincipal.class);
+        verify(ledger).beginAudit(any(), actor.capture());
+        assertThat(actor.getValue().principalType()).isEqualTo(PrincipalType.SYSTEM);
+        verify(ledger).completeAudit("audit-refusal", ToolExecutionStatus.DENIED,
+                com.cretas.aims.ai.tool.gateway.GatewayResultCode.WRITES_SUSPENDED);
+        verifyNoInteractions(gateway);
+    }
+
     @Test void aWriteWithoutAPlannedFireIdentityIsRefusedRatherThanKeyedByItsStartTime() throws Exception {
         FactorySchedulerConfig write = schedule(84L, "dictionary_add", Map.of(), 42L);
         when(schedulerRepo.findById(84L)).thenReturn(Optional.of(write));

@@ -99,7 +99,7 @@ public class PurchaseReceiveRecord extends BaseEntity {
     @Column(name = "received_by", nullable = false)
     private Long receivedBy;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "total_amount", precision = 15, scale = 2)
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
