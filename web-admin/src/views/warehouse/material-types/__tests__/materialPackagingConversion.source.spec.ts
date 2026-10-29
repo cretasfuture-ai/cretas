@@ -32,10 +32,17 @@ describe('raw material purchase packaging conversion', () => {
     expect(source).not.toContain('label="三级换算"');
   });
 
-  it('fails closed until every visible conversion rule is complete', () => {
-    expect(source).toContain('return !hasUnit || !hasFactor');
-    expect(source).toContain("return ElMessage.warning('请完整填写每条包装规则的包装单位和换算数')");
+  // D-S2-12 (2026-10-29): 全空的新行忽略 (行为见 packagingRuleDraft.spec.ts);
+  // 填一半的行仍然拦下, 但必须行内写原因 + 不自动消失的提示, ⛔ 不能 3 秒就消失。
+  it('blocks partially filled rules with a row-level reason and a sticky message', () => {
+    expect(source).toContain('const packagingSplit = splitPackagingRules(packagingRules.value)');
+    expect(source).toContain('const submittedPackagingRules = packagingSplit.complete');
+    expect(source).toContain('message: packagingProblemSummary(packagingSplit.problems)');
+    expect(source).toContain('duration: 0');
+    expect(source).toContain('class="spec-rule-error" role="alert"');
+    // 不得再按「只要有单位」去过滤 —— 那会把只填了换算数的半行静默丢掉
     expect(source).not.toContain('.filter((rule) => rule.packageUnit?.trim()');
+    expect(source).not.toContain("return ElMessage.warning('请完整填写每条包装规则的包装单位和换算数')");
   });
 
   /**

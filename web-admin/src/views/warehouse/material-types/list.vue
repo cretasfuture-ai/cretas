@@ -44,6 +44,7 @@ import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
+import { packagingProblemSummary, splitPackagingRules } from './packagingRuleDraft';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
 import {
@@ -320,6 +321,8 @@ function blankPackagingRule(index = 0): MaterialPackagingRule {
 }
 
 const packagingRules = ref<MaterialPackagingRule[]>([blankPackagingRule()]);
+/** 保存时发现的不完整行: 下标 → 原因, 显示在那一行下面 (D-S2-12) */
+const packagingRuleErrors = ref<Record<number, string>>({});
 
 function addPackagingRule(): void {
   packagingRules.value.push(blankPackagingRule(packagingRules.value.length));
@@ -803,6 +806,8 @@ watch(() => form.value.shelfLifeDays, () => {
 });
 watch(packagingRules, () => {
   if (!cascadeWriting.value) packagingManuallyEdited.value = true;
+  // 用户一改就清掉上次保存的行内报错, 下次保存重新判
+  if (Object.keys(packagingRuleErrors.value).length) packagingRuleErrors.value = {};
 }, { deep: true, flush: 'sync' });
 
 function resetManuallyEditedFlags() {
@@ -963,6 +968,7 @@ watch(
  */
 function resetPackaging() {
   packagingRules.value = [];
+  packagingRuleErrors.value = {};
 }
 
 function openCreate() {
@@ -1162,14 +1168,23 @@ async function handleSave() {
   // 后端本来就允许空列表(ProductPackagingSpecServiceImpl#replace 接受 []),
   // 收货侧也会优雅回落到「采购单规格」(PendingPurchaseReceivingPanel 的
   // orderOption), 所以「不配包装换算」是完全支持的 —— 只是前端不让填而已。
-  const incompleteRule = packagingRules.value.some((rule) => {
-    const hasUnit = Boolean(rule.packageUnit?.trim());
-    const hasFactor = Number(rule.conversionFactor) > 0;
-    return !hasUnit || !hasFactor;
-  });
-  if (incompleteRule) return ElMessage.warning('请完整填写每条包装规则的包装单位和换算数');
+  //
+  // D-S2-12 (2026-10-29 验收): 默认那条空白行留空就点保存, 以前整张表单被一条 3 秒就消失的
+  // toast 拦住, 验收读到的是「没有任何提示也没有请求」。现在: 全空的新行忽略; 填一半的行
+  // 拦下, 在那一行下面写清缺什么, 再弹一条不自动消失的提示 —— ⛔ 不静默失败。
+  const packagingSplit = splitPackagingRules(packagingRules.value);
+  packagingRuleErrors.value = packagingSplit.problems;
+  if (Object.keys(packagingSplit.problems).length) {
+    ElMessage({
+      type: 'warning',
+      message: packagingProblemSummary(packagingSplit.problems),
+      duration: 0,
+      showClose: true,
+    });
+    return;
+  }
 
-  const submittedPackagingRules = packagingRules.value
+  const submittedPackagingRules = packagingSplit.complete
     .map((rule, index) => ({
       id: rule.id,
       name: index === 0 ? '默认包装' : `包装规格 ${index + 1}`,
@@ -1784,6 +1799,9 @@ function handleSizeChange(size: number) {
                   删除
                 </el-button>
               </div>
+              <div v-if="packagingRuleErrors[index]" class="spec-rule-error" role="alert">
+                {{ packagingRuleErrors[index] }}
+              </div>
               <div
                 v-if="rule.packageUnit && sameUnit(rule.packageUnit, form.unit)"
                 class="spec-same-warn"
@@ -2310,7 +2328,8 @@ function handleSizeChange(size: number) {
   padding: 0 2px;
 }
 .spec-echo,
-.spec-same-warn {
+.spec-same-warn,
+.spec-rule-error {
   margin-top: 6px;
   padding-left: 54px;
   font-size: 12px;
@@ -2320,6 +2339,9 @@ function handleSizeChange(size: number) {
 }
 .spec-same-warn {
   color: #e6a23c;
+}
+.spec-rule-error {
+  color: var(--el-color-danger);
 }
 .add-packaging-rule-button {
   width: 100%;
@@ -2335,7 +2357,8 @@ function handleSizeChange(size: number) {
     grid-column: span 2;
   }
   .spec-echo,
-  .spec-same-warn {
+  .spec-same-warn,
+  .spec-rule-error {
     padding-left: 0;
   }
 }
