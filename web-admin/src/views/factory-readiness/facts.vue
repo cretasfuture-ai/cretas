@@ -49,7 +49,7 @@ onMounted(load)
       <template #header><strong>需要你选择来源的项目（{{ data.conflicts.length }}）</strong></template>
       <el-empty v-if="!data.conflicts.length" description="没有待选择的冲突" data-testid="facts-no-conflicts" />
       <div v-for="item in data.conflicts" :key="item.pendingId" class="conflict" :data-testid="`conflict-${item.field}`">
-        <div class="title">{{ item.label || item.field }}</div>
+        <div class="title">{{ item.label || '其他事项' }}</div>
         <div class="pair">
           <div><span class="tag">已确认</span> {{ item.confirmedValue }}
             <small>{{ describeFactSource('USER_ANSWER', item.confirmedSource) }}</small></div>
@@ -65,7 +65,7 @@ onMounted(load)
     <el-card v-if="data" shadow="never">
       <template #header><strong>版本历史</strong></template>
       <el-table :data="data.history" data-testid="facts-history" empty-text="还没有已确认资料">
-        <el-table-column label="事项" min-width="140"><template #default="{ row }">{{ row.label || row.field }}</template></el-table-column>
+        <el-table-column label="事项" min-width="140"><template #default="{ row }">{{ row.label || '其他事项' }}</template></el-table-column>
         <el-table-column label="内容" prop="value" min-width="160" />
         <el-table-column label="版本" width="70"><template #default="{ row }">第{{ row.version }}版</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }">{{ FACT_STATUS_LABEL[row.status as keyof typeof FACT_STATUS_LABEL] }}</template></el-table-column>

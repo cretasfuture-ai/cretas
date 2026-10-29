@@ -180,8 +180,10 @@ public class FactoryBuildInterviewService {
         if (reused.isEmpty()) return;
         List<FactoryAssemblyConversationSession.ReplyFieldReceipt> fields = new ArrayList<>();
         StringJoiner message = new StringJoiner("；");
+        Map<String, String> reusedLabels = new LinkedHashMap<>();
+        session.getRequiredParameters().forEach(rp -> reusedLabels.put(rp.getName(), rp.getLabel()));
         for (Map.Entry<String, String> entry : reused.entrySet()) {
-            message.add(entry.getKey() + "：" + entry.getValue());
+            message.add(reusedLabels.getOrDefault(entry.getKey(), "其他事项") + "：" + entry.getValue());
             fields.add(FactoryAssemblyConversationSession.ReplyFieldReceipt.builder()
                     .field(entry.getKey())
                     .resolution("ACCEPTED")

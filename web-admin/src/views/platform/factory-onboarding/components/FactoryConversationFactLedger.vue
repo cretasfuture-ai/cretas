@@ -4,7 +4,7 @@
       <div>
         <span>Factory evidence ledger</span>
         <h3 id="fact-ledger-title">已确认事实与来源</h3>
-        <p>这里只列已进入会话真值的答案；参考建议未确认前不会出现。</p>
+        <p>这里只列已进入会话真值的答案；参考建议未确认前不会出现。要修改某一项，点「改这一项」，或在对话里说「某项改成…」。</p>
       </div>
       <el-tag :type="legacyCount ? 'warning' : 'success'" effect="plain">
         {{ confirmedCount }} 项有逐字段证据<span v-if="legacyCount"> · {{ legacyCount }} 项旧会话待核</span>
@@ -23,6 +23,7 @@
             与参考一致 · 已由用户确认
           </el-tag>
           <small>{{ evidenceLabel(fact) }}</small>
+          <el-button link type="primary" size="small" data-testid="edit-fact" @click="emit('edit', fact)">改这一项</el-button>
         </div>
       </article>
     </div>
@@ -34,6 +35,7 @@ import { computed } from 'vue'
 import type { FactoryFactEvidenceItem } from '@/api/factoryOnboardingApi'
 
 const props = defineProps<{ facts: FactoryFactEvidenceItem[] }>()
+const emit = defineEmits<{ (event: 'edit', fact: FactoryFactEvidenceItem): void }>()
 
 const confirmedCount = computed(() => props.facts.filter(fact => fact.evidenceStatus === 'CONFIRMED').length)
 const legacyCount = computed(() => props.facts.length - confirmedCount.value)

@@ -578,7 +578,7 @@
           </el-alert>
 
           <!-- 已答事实与来源逐条来自服务端 typed receipts；pending/skipped 继续留在清单。 -->
-          <FactoryConversationFactLedger :facts="progress.factEvidence ?? []" />
+          <FactoryConversationFactLedger :facts="progress.factEvidence ?? []" @edit="startEditingFact" />
           <div class="checklist">
             <div v-for="it in (progress.pendingItems ?? [])" :key="it.name" class="ck">
               <el-icon class="pending"><Clock /></el-icon>
@@ -2867,6 +2867,11 @@ async function publishBlueprint() {
   } finally {
     blueprintOperation.value = ''
   }
+}
+
+// 已回答的项要改, 必须说成「更正」(含「改成」)服务端才会把它当候选; 这里替用户把这句开头写好。
+function startEditingFact(fact: { label: string }) {
+  draft.value = `把「${fact.label}」改成`
 }
 
 async function confirmCarried(fields?: string[]) {
