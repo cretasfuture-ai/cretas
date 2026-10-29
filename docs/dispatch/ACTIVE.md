@@ -19,7 +19,8 @@
 
 
 
-- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；用户恢复真机角色与F006模拟数据验收，原22项15通过；4月月结20元、SC49成本10.30元回读已过。SC60修复及新11018原生质检续验，阿里云按用户要求不处理；见archive/2026-10-29-sc43-native-closeout-scope.md。
+
+- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；用户恢复真机角色与F006模拟数据验收，原22项17通过；4月月结20元、SC49成本10.30元回读已过。SC60修复及新11018原生质检续验，阿里云按用户要求不处理；见archive/2026-10-29-sc43-native-closeout-scope.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
