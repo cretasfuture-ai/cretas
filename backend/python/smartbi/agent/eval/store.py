@@ -259,7 +259,7 @@ class InMemoryAgentOpsStore:
             )
 
     async def record_factory_trace(self, context, trace):
-        _require_admin_context(context)
+        _require_context(context)
         _require_factory_context(context)
         safe = validate_factory_trace(trace)
         async with self._lock:
@@ -516,7 +516,7 @@ class PostgresAgentOpsStore:
         return validate_runtime_shadow_cases(cases) if cases else ()
 
     async def record_factory_trace(self, context, trace):
-        _require_admin_context(context)
+        _require_context(context)
         _require_factory_context(context)
         safe = validate_factory_trace(trace)
         async with self._pool.acquire() as connection:

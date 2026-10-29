@@ -267,7 +267,7 @@ async def test_factory_trace_rejects_silent_success_and_changed_replay():
 
 # ------------------------------------------------------------------- HTTP gate
 
-def app_for(business_type):
+def app_for(business_type, role="factory_super_admin"):
     app = FastAPI()
     store = InMemoryAgentOpsStore()
 
@@ -276,7 +276,7 @@ def app_for(business_type):
         request.state.auth_method = "internal"
         request.state.factory_id = "F006"
         request.state.user_id = "42"
-        request.state.role = "factory_super_admin"
+        request.state.role = role
         request.state.business_type = business_type
         return await call_next(request)
 
@@ -315,3 +315,15 @@ def test_factory_trace_migration_is_tenant_isolated_and_append_only():
     assert "smart_bi_agentops_append_only" in sql
     assert "GRANT SELECT, INSERT ON smart_bi_factory_agent_trace" in sql
     assert "UPDATE" not in sql.split("GRANT", 1)[1].split("\n", 1)[0]
+
+
+def test_operator_run_can_be_recorded_but_not_read_back():
+    """Ingest is for any factory user's run; reading traces stays admin-only."""
+
+    run = "00000000-0000-4000-8000-0000000000bb"
+    operator = TestClient(app_for("FACTORY", role="operator"))
+    posted = operator.post("/api/internal/smartbi/agent/runs/ops/traces/factory",
+                           json=trace_payload(run))
+    assert posted.status_code == 201
+    assert operator.get(
+        "/api/internal/smartbi/agent/runs/ops/traces/" + run).status_code == 403
