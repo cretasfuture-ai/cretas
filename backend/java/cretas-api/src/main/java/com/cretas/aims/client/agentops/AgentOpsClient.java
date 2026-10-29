@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -39,10 +40,36 @@ public class AgentOpsClient {
             Pattern.CASE_INSENSITIVE);
     private static final Set<String> SAFE_DIGEST_KEYS = Set.of(
             "promptSnapshotDigest", "modelSnapshotDigest", "toolSnapshotDigest");
-    private static final Set<String> SAFE_ERROR_CODES = Set.of(
-            "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE",
-            "AGENT_OPS_RUNTIME_SHADOW_DISABLED", "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED",
-            "RUNTIME_SHADOW_CASE_TIMEOUT");
+    /**
+     * Controlled upstream 4xx rejections that are safe to show callers, with the Chinese text we show.
+     * Anything not listed stays an opaque upstream error (arbitrary upstream text never leaks).
+     */
+    public static final Map<String, String> CLIENT_ERROR_MESSAGES = Map.ofEntries(
+            Map.entry("UNSUPPORTED_EXPECTED_ROUTE", "评测用例的期望路由与当前业态不匹配（工厂只能用工厂意图，餐饮只能用餐饮路由）"),
+            Map.entry("UNSUPPORTED_BUSINESS_DOMAIN", "当前业态不支持 AgentOps"),
+            Map.entry("RUNTIME_SHADOW_RESTAURANT_ONLY", "运行时影子评测只支持餐饮租户"),
+            Map.entry("INVALID_EVAL_CASE_SCHEMA", "评测用例字段不符合要求"),
+            Map.entry("DUPLICATE_CASE_ID", "评测用例编号重复"),
+            Map.entry("EVAL_CASE_COUNT_OUT_OF_BOUNDS", "评测用例数量超出限制（1 至 100 条）"),
+            Map.entry("INVALID_TOOL_NAME", "工具名称格式不正确"),
+            Map.entry("INVALID_NUMERIC_TRUTH_REFS", "数值真值引用格式不正确"),
+            Map.entry("ACTUAL_CASE_SET_MISMATCH", "实际结果的用例集合与评测集不一致"),
+            Map.entry("REQUIRED_SNAPSHOT_DIGEST_MISSING", "缺少必需的配置快照摘要"),
+            Map.entry("INVALID_FACTORY_INTENT", "工厂意图编码格式不正确"),
+            Map.entry("INVALID_TRACE_OUTCOME", "轨迹结果状态不在允许范围内"),
+            Map.entry("INVALID_TRACE_STEPS", "轨迹步骤数量或格式不正确"),
+            Map.entry("EVAL_SET_NOT_FOUND", "未找到该评测集"),
+            Map.entry("EXPERIMENT_NOT_FOUND", "未找到该评测实验"),
+            Map.entry("RUN_NOT_FOUND", "未找到该运行轨迹"));
+    private static final Set<String> SAFE_ERROR_CODES;
+    static {
+        Set<String> codes = new java.util.HashSet<>(Set.of(
+                "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE",
+                "AGENT_OPS_RUNTIME_SHADOW_DISABLED", "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED",
+                "RUNTIME_SHADOW_CASE_TIMEOUT"));
+        codes.addAll(CLIENT_ERROR_MESSAGES.keySet());
+        SAFE_ERROR_CODES = java.util.Collections.unmodifiableSet(codes);
+    }
 
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
@@ -107,6 +134,11 @@ public class AgentOpsClient {
         HttpUrl target = url("experiments", id.toString(), "compare").newBuilder()
                 .addQueryParameter("baselineId", baselineId.toString()).build();
         return get(target, context);
+    }
+
+    /** Records one factory-domain agent run trace; returns the stored (validated) trace. */
+    public JsonNode recordFactoryTrace(Map<String, Object> trace, TrustedContext context) throws IOException {
+        return post(url("traces", "factory"), trace, context);
     }
 
     public JsonNode getTrace(UUID runId, long afterSequence, int limit, TrustedContext context) throws IOException {

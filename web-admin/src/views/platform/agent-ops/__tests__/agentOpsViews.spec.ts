@@ -68,14 +68,15 @@ describe('AgentOps views', () => {
   it('shows a permission-safe tenant warning instead of rendering child data', () => {
     state.factoryId = '';
     const wrapper = mount(AgentOpsShell, { global: { stubs } });
-    expect(wrapper.text()).toContain('当前账号未绑定餐饮租户');
+    expect(wrapper.text()).toContain('当前账号未绑定工厂或餐饮租户');
     expect(wrapper.find('.router-view').exists()).toBe(false);
   });
 
-  it('requires the positive RESTAURANT business domain even when a tenant exists', () => {
+  it('renders for a FACTORY tenant (factory admin) but still refuses other domains', () => {
     state.businessDomain = 'FACTORY';
-    const wrapper = mount(AgentOpsShell, { global: { stubs } });
-    expect(wrapper.find('.router-view').exists()).toBe(false);
+    expect(mount(AgentOpsShell, { global: { stubs } }).find('.router-view').exists()).toBe(true);
+    state.businessDomain = 'LOGISTICS';
+    expect(mount(AgentOpsShell, { global: { stubs } }).find('.router-view').exists()).toBe(false);
   });
 
   it('renders Eval Set empty state and explicit load error without fake rows', async () => {
