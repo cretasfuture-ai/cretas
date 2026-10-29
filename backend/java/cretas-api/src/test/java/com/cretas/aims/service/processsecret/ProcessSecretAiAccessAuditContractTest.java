@@ -249,6 +249,40 @@ class ProcessSecretAiAccessAuditContractTest {
     }
 
     @Test
+    void aServiceBuiltWithoutSpringInjectionStillAnalysesWithTheAuditAsANoOp() throws Exception {
+        AIAnalysisService service = service();
+        // 单测直接构造 / 部分 mock 时字段初始值不执行: 审计 bean 为 null (PR #1309 的 fast-contracts NPE)
+        ReflectionTestUtils.setField(service, "aiAccessAudit", null);
+
+        Map<String, Object> result;
+        try (var ignored = as(owner())) {
+            result = service.analyzeCost(FACTORY, OWNER, "1", new HashMap<>(), null, "分析", true, 50);
+        }
+
+        assertThat(result.get("success")).isEqualTo(true);
+        verify(python).analyzeGeneral(eq(FACTORY), nullable(String.class), any());
+        // 成本分析入口没记 (它的审计 bean 为空); 嵌套的上下文接口仍有自己的审计 bean, 照常记它那条
+        assertThat(aiRows()).noneSatisfy(row -> assertThat(row.ref()).isEqualTo("ai:cost-analysis"));
+    }
+
+    @Test
+    void anUnexpectedFailureWhileStartingTheRecordNeverBlocksTheAiRequestAndIsSurfaced() throws Exception {
+        org.springframework.web.context.request.RequestAttributes broken =
+                mock(org.springframework.web.context.request.RequestAttributes.class);
+        when(broken.getAttribute(anyString(), anyInt())).thenThrow(new UnsupportedOperationException("broken scope"));
+        RequestContextHolder.setRequestAttributes(broken);
+
+        // 这种请求属性不是 Servlet 的, 调用者认不出 (按无权): 用普通批次, 让业务照常发给模型
+        Map<String, Object> result = service().analyzeCost(FACTORY, OWNER, "2", new HashMap<>(), null, "分析", true, 50);
+
+        assertThat(result.get("success")).isEqualTo(true);
+        verify(python).analyzeGeneral(eq(FACTORY), nullable(String.class), any());
+        assertThat(audit.writeFailures()).isPositive();
+        assertThat(logs.list).filteredOn(e -> e.getLevel() == Level.ERROR)
+                .anySatisfy(e -> assertThat(e.getFormattedMessage()).contains("AI access audit could not start"));
+    }
+
+    @Test
     void nestedEntriesOffTheRequestThreadShareTheOutermostRecord() throws Exception {
         AIAnalysisService service = service();
         try (var ignored = as(owner());

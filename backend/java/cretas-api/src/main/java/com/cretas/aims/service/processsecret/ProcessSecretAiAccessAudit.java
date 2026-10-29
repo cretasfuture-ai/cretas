@@ -94,13 +94,31 @@ public class ProcessSecretAiAccessAudit {
     /** 进入一个 AI 入口。嵌套 / 同一请求里的后续入口并进同一条记录。 */
     public Access begin(String factoryId, Entry entry) {
         if (accessService == null) return new Access(null, false);
-        Access attached = attachToRequest(factoryId, entry);
-        if (attached != null) return attached;
-        Pending current = OFF_REQUEST.get();
-        if (current != null) return new Access(current, false);
-        Pending pending = open(factoryId, entry);
-        OFF_REQUEST.set(pending);
-        return new Access(pending, true);
+        try {
+            Access attached = attachToRequest(factoryId, entry);
+            if (attached != null) return attached;
+            Pending current = OFF_REQUEST.get();
+            if (current != null) return new Access(current, false);
+            Pending pending = open(factoryId, entry);
+            OFF_REQUEST.set(pending);
+            return new Access(pending, true);
+        } catch (RuntimeException e) {
+            // 审计绝不能打断业务: 开不了就这一次不记, 但不静默
+            writeFailures.incrementAndGet();
+            log.error("[process-secret] AI access audit could not start (request was not blocked): entry={}, factory={}, error={}",
+                    entry == null ? null : entry.ref(), factoryId, e.getClass().getSimpleName());
+            return new Access(null, false);
+        }
+    }
+
+    private static final ProcessSecretAiAccessAudit NO_OP = disabled();
+
+    /**
+     * 各入口一律走这里: 服务没经 Spring 注入 (单测直接构造 / 部分 mock 时字段初始值不执行, 审计 bean 为 null)
+     * 时返回不记录的句柄, 业务照常 —— 审计绝不能打断业务路径。
+     */
+    public static Access beginOrNoop(ProcessSecretAiAccessAudit audit, String factoryId, Entry entry) {
+        return (audit == null ? NO_OP : audit).begin(factoryId, entry);
     }
 
     /**

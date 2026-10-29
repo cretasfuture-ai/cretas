@@ -74,7 +74,7 @@ public class AIContextServiceImpl implements AIContextService {
     @Override
     @Transactional(readOnly = true)
     public ProductionAIContext buildProductionContextForAi(String factoryId, LocalDate startDate, LocalDate endDate) {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_CONTEXT)) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_CONTEXT)) {
             ProductionAIContext context = buildProductionContext(factoryId, startDate, endDate, llmCostScope.forCurrentCaller(factoryId));
             try {
                 ProcessSecretLlmCostScope.Excluded all = llmCostScope.allProtected(factoryId);
@@ -500,7 +500,7 @@ public class AIContextServiceImpl implements AIContextService {
     @Override
     @Transactional(readOnly = true)
     public CostAIContext buildCostContextForCaller(String factoryId, String productTypeId, Integer recentBatchCount) {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_CONTEXT)) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_CONTEXT)) {
             CostAIContext full = buildCostContext(factoryId, productTypeId, recentBatchCount);
             try {
                 ai.involvesProtected(llmCostScope.allProtected(factoryId).coversProductOrAnyPlan(productTypeId, full.getCostSourcePlanIds()));

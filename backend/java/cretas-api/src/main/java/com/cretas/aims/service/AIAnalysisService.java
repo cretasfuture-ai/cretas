@@ -153,7 +153,7 @@ public class AIAnalysisService {
                                            String customMessage,
                                            Boolean enableThinking,
                                            Integer thinkingBudget) {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId,
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                 com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.COST_ANALYSIS)) {
             return analyzeCostAudited(factoryId, userId, batchId, costData, sessionId, customMessage,
                     enableThinking, thinkingBudget, ai);

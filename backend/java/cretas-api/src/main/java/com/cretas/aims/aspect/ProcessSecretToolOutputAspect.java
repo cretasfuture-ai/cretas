@@ -56,7 +56,7 @@ public class ProcessSecretToolOutputAspect {
     @Around("execution(String com.cretas.aims.ai.tool.ToolExecutor+.execute(..)) "
             + "|| execution(String com.cretas.aims.ai.tool.ToolExecutor+.preview(..))")
     public Object guardToolOutput(ProceedingJoinPoint pjp) throws Throwable {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, 
                      factoryOf(pjp.getArgs()), com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.AI_TOOL);
              ProcessSecretReadTracker.Scope ignored = ProcessSecretReadTracker.open()) {
             Object out = pjp.proceed();

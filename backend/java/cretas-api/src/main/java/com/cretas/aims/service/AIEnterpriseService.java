@@ -217,7 +217,7 @@ public class AIEnterpriseService {
     public MobileDTO.AICostAnalysisResponse analyzeCost(String factoryId, Long userId,
                                                          MobileDTO.AICostAnalysisRequest request,
                                                          HttpServletRequest httpRequest) {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
             MobileDTO.AICostAnalysisResponse response = analyzeCostUnaudited(factoryId, userId, request, httpRequest);
             auditAnalyzeCostOutcome(ai, factoryId, request.getBatchId(), response);
             return response;
@@ -417,7 +417,7 @@ public class AIEnterpriseService {
 
     /** {@code operatingReport}: 调用方已知走经营报告 (手动生成) —— 不再问 isFactory, 直接按经营报告口径判牵涉。 */
     private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access beginReportAudit(String factoryId, boolean operatingReport) {
-        com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.REPORT_GENERATION);
+        com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.REPORT_GENERATION);
         try {
             if (operatingReport || (operatingReports != null && operatingReports.isFactory(factoryId))) {
                 ai.involvesProtected(llmCostScope.factoryHasProtected(factoryId));
@@ -907,7 +907,7 @@ public class AIEnterpriseService {
             LocalDateTime startDate, LocalDateTime endDate,
             String dimension, String question,
             HttpServletRequest httpRequest) {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
             MobileDTO.AICostAnalysisResponse response = analyzeTimeRangeCostUnaudited(factoryId, userId, startDate, endDate,
                     dimension, question, httpRequest);
             auditWithheld(ai, response);
@@ -1105,7 +1105,7 @@ public class AIEnterpriseService {
           try (com.cretas.aims.security.AuthenticatedActor.ActorScope callerScope =
                        com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(streamCaller);
                // 流式在执行线程上跑, 不在请求里: 这一次流式分析结束时写一条 (调用者已带进来)
-               com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.STREAM_ANALYSIS)) {
+               com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.STREAM_ANALYSIS)) {
             try {
                 // 1. 发送开始事件
                 emitter.send(SseEmitter.event()
@@ -1714,7 +1714,7 @@ public class AIEnterpriseService {
     public MobileDTO.AICostAnalysisResponse compareBatchCosts(
             String factoryId, Long userId, List<String> batchIds,
             String question, HttpServletRequest httpRequest) {
-        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
             MobileDTO.AICostAnalysisResponse response = compareBatchCostsUnaudited(factoryId, userId, batchIds, question, httpRequest);
             auditWithheld(ai, response);
             auditCacheHit(ai, factoryId, response);

@@ -360,7 +360,7 @@ public class IntentExecutionOrchestrator {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
-             var aiAccess = aiAccessAudit.begin(factoryId,
+             var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             return executeInScope(factoryId, request, userId, userRole);
         }
@@ -1067,7 +1067,7 @@ public class IntentExecutionOrchestrator {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
-             var aiAccess = aiAccessAudit.begin(factoryId,
+             var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             return executeWithExplicitIntentInScope(factoryId, request, userId, userRole);
         }
