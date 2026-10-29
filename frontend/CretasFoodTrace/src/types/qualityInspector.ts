@@ -215,13 +215,15 @@ export interface QualityStatisticsResponse {
   totalInspections: number;
   averagePassRate?: number | string;
   passedBatches?: number;
-  /** 注意: 后端这个键的语义是"非 PASS", 含待检与 CONDITIONAL, 别当成 FAIL 用 */
+  /** 后端真实 FAIL 数量；PENDING/CONDITIONAL 分别在对应字段中返回 */
   failedBatches?: number;
   breakdown?: {
     pass: number;
     fail: number;
     conditional: number;
     pending: number;
+    unknown?: number;
+    empty?: number;
   };
 }
 
@@ -416,7 +418,7 @@ export function calculateGrade(totalScore: number): QualityGrade {
  * 判断是否通过
  */
 export function isPassed(grade: QualityGrade): boolean {
-  return grade !== 'D';
+  return grade === 'A' || grade === 'B' || grade === 'C';
 }
 
 /**

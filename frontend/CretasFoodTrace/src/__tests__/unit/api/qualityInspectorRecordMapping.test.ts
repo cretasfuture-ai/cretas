@@ -1,6 +1,7 @@
 import MockAdapter from 'axios-mock-adapter';
 
 import { qualityInspectorApi } from '../../../services/api/qualityInspectorApi';
+import { isPassed } from '../../../types/qualityInspector';
 import { createApiMock, resetApiMock } from '../../utils/mockApiClient';
 
 describe('qualityInspectorApi record detail mapping', () => {
@@ -127,6 +128,12 @@ describe('qualityInspectorApi record detail mapping', () => {
 
     expect(records.content[0]).toMatchObject({ result: 'PENDING', grade: 'UNKNOWN', passed: false });
     expect(records.content[1]).toMatchObject({ result: 'UNKNOWN', grade: 'UNKNOWN', passed: false });
-    expect(mock.history.get[0].params).toMatchObject({ result: 'FAIL' });
+    expect(mock.history.get[0]!.params).toMatchObject({ result: 'FAIL' });
+  });
+
+  it('does not treat UNKNOWN as passed when evaluating a grade', () => {
+    expect(isPassed('A')).toBe(true);
+    expect(isPassed('D')).toBe(false);
+    expect(isPassed('UNKNOWN')).toBe(false);
   });
 });

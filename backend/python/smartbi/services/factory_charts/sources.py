@@ -74,6 +74,8 @@ FROM quality_inspections qi
 LEFT JOIN production_batches pb ON pb.id=qi.production_batch_id AND pb.factory_id=qi.factory_id AND pb.deleted_at IS NULL
 LEFT JOIN product_types pt ON pt.id=pb.product_type_id AND pt.factory_id=pb.factory_id AND pt.deleted_at IS NULL
 WHERE qi.factory_id=$1 AND qi.deleted_at IS NULL
+ AND UPPER(TRIM(COALESCE(qi.result, ''))) IN
+     ('PASS', 'PASSED', 'QUALIFIED', 'FAIL', 'FAILED', 'CONDITIONAL', 'PARTIAL_PASS')
  AND ($2::date IS NULL OR qi.inspection_date >= $2) AND ($3::date IS NULL OR qi.inspection_date <= $3)
 ORDER BY qi.inspection_date, qi.id LIMIT 10001
 """
@@ -83,6 +85,8 @@ SELECT qi.inspection_date AS "日期", qi.production_batch_id AS "生产批次ID
 FROM quality_inspections qi
 JOIN production_batches pb ON pb.id=qi.production_batch_id AND pb.factory_id=qi.factory_id AND pb.deleted_at IS NULL
 WHERE qi.factory_id=$1 AND qi.deleted_at IS NULL
+ AND UPPER(TRIM(COALESCE(qi.result, ''))) IN
+     ('PASS', 'PASSED', 'QUALIFIED', 'FAIL', 'FAILED', 'CONDITIONAL', 'PARTIAL_PASS')
  AND qi.production_batch_id::text = ANY($2::text[])
 ORDER BY qi.inspection_date, qi.id LIMIT 10001
 """

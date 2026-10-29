@@ -97,14 +97,18 @@ class ProcessingServiceImplQualityStatisticsContractTest {
                 .containsEntry("UNKNOWN", 1L)
                 .containsEntry("EMPTY", 1L);
 
-        // Legacy failedBatches remains non-PASS for existing consumers.
-        assertThat(response).containsEntry("passedBatches", 1L).containsEntry("failedBatches", 5L);
+        assertThat(response).containsEntry("passedBatches", 1L)
+                .containsEntry("failedBatches", 1L)
+                .containsEntry("conditionalBatches", 1L)
+                .containsEntry("pendingBatches", 1L);
         @SuppressWarnings("unchecked")
         Map<String, Long> breakdown = (Map<String, Long>) response.get("breakdown");
         assertThat(breakdown).containsEntry("pass", 1L)
                 .containsEntry("fail", 1L)
                 .containsEntry("conditional", 1L)
-                .containsEntry("pending", 2L);
+                .containsEntry("pending", 1L)
+                .containsEntry("unknown", 1L)
+                .containsEntry("empty", 1L);
     }
 
     @Test
@@ -137,6 +141,34 @@ class ProcessingServiceImplQualityStatisticsContractTest {
     }
 
     @Test
+    @DisplayName("旧式终态别名归入真实桶，不把未知值伪造成失败")
+    void legacyTerminalAliasesUseTheirRealBuckets() {
+        LocalDate date = LocalDate.of(2026, 10, 4);
+        when(qualityInspectionRepository.findByFactoryIdAndDateRange(FACTORY, date, date))
+                .thenReturn(List.of(inspection("PASSED", BigDecimal.ONE, BigDecimal.ONE,
+                                BigDecimal.ZERO, BigDecimal.valueOf(100)),
+                        inspection("FAILED", BigDecimal.ONE, BigDecimal.ZERO,
+                                BigDecimal.ONE, BigDecimal.ZERO),
+                        inspection("PARTIAL_PASS", BigDecimal.ONE, BigDecimal.ONE,
+                                BigDecimal.ZERO, BigDecimal.valueOf(80)),
+                        inspection("UNKNOWN", BigDecimal.ONE, BigDecimal.ZERO,
+                                BigDecimal.ZERO, BigDecimal.ZERO)));
+
+        Map<String, Object> response = service.getQualityStatistics(FACTORY, date, date);
+
+        assertThat(response).containsEntry("passedBatches", 1L)
+                .containsEntry("failedBatches", 1L)
+                .containsEntry("conditionalBatches", 1L)
+                .containsEntry("pendingBatches", 0L);
+        @SuppressWarnings("unchecked")
+        Map<String, Long> breakdown = (Map<String, Long>) response.get("breakdown");
+        assertThat(breakdown).containsEntry("pass", 1L)
+                .containsEntry("fail", 1L)
+                .containsEntry("conditional", 1L)
+                .containsEntry("unknown", 1L);
+    }
+
+    @Test
     @DisplayName("统计查询使用完整工厂周期，不依赖分页样本")
     void statisticsUsesRequestedPeriod() {
         LocalDate start = LocalDate.of(2026, 9, 28);
@@ -162,20 +194,17 @@ class ProcessingServiceImplQualityStatisticsContractTest {
         batch.setId(10806L);
         batch.setFactoryId(FACTORY);
         batch.setStatus(ProductionBatchStatus.COMPLETED);
-        when(qualityInspectionRepository.findByFactoryIdAndResultIn(eq(FACTORY), eq(List.of("PENDING")), any()))
+        when(qualityInspectionRepository.findEffectivePendingByFactoryId(eq(FACTORY), any()))
                 .thenReturn(new PageImpl<>(List.of(pending), PageRequest.of(0, 20), 1));
         when(productionBatchRepository.findByIdAndFactoryId(10806L, FACTORY)).thenReturn(java.util.Optional.of(batch));
-        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(FACTORY, 10806L))
-                .thenReturn(List.of(pending));
-
         assertThat(service.getQualityPendingBatches(FACTORY, pageRequest(1, 20))
                 .getContent()).hasSize(1);
 
         QualityInspection pass = inspection("PASS", BigDecimal.ONE, BigDecimal.ONE,
                 BigDecimal.ZERO, BigDecimal.valueOf(100));
         pass.setProductionBatchId(10806L);
-        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId(FACTORY, 10806L))
-                .thenReturn(List.of(pending, pass));
+        when(qualityInspectionRepository.findEffectivePendingByFactoryId(eq(FACTORY), any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
         assertThat(service.getQualityPendingBatches(FACTORY, pageRequest(1, 20)).getContent()).isEmpty();
     }
 

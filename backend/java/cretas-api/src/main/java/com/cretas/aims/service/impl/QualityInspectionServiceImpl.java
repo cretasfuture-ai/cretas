@@ -127,14 +127,21 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         QualityInspection target = inspection;
         if (inspection.getProductionBatchId() != null
                 && inspection.getResult() != null
-                && !"PENDING".equalsIgnoreCase(inspection.getResult())) {
+                && !isPendingResult(inspection.getResult())) {
             java.util.List<QualityInspection> existing = qualityInspectionRepository
-                    .findByFactoryIdAndProductionBatchId(factoryId, inspection.getProductionBatchId());
-            QualityInspection pending = existing == null ? null : existing.stream()
-                    .filter(row -> row != null && "PENDING".equalsIgnoreCase(row.getResult()))
-                    .max(java.util.Comparator.comparing(QualityInspection::getInspectionDate,
-                            java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
-                    .orElse(null);
+                    .findByFactoryIdAndProductionBatchIdForUpdate(factoryId, inspection.getProductionBatchId());
+            java.util.List<QualityInspection> pendingRows = existing == null ? java.util.List.of() : existing.stream()
+                    .filter(row -> row != null && isPendingResult(row.getResult()))
+                    .toList();
+            if (pendingRows.size() > 1) {
+                throw new com.cretas.aims.exception.BusinessException(409,
+                        "同一生产批次存在多个待检质检任务，已停止提交，请先由质量管理员核对任务")
+                        .withCode("QUALITY_PENDING_AMBIGUOUS");
+            }
+            boolean hasCompletedObservation = existing != null && existing.stream()
+                    .anyMatch(row -> row != null && isTerminalInspectionResult(row.getResult()));
+            QualityInspection pending = !hasCompletedObservation && !pendingRows.isEmpty()
+                    ? pendingRows.get(0) : null;
             if (pending != null) {
                 target = pending;
                 target.setFactoryId(factoryId);
@@ -271,7 +278,10 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
             "result", inspection.getResult() != null ? inspection.getResult() : ""));
         log.info("更新质量检验记录: factoryId={}, inspectionId={}", factoryId, inspectionId);
 
-        QualityInspection existing = getInspectionById(factoryId, inspectionId);
+        QualityInspection existing = qualityInspectionRepository
+                .findByIdAndFactoryIdForUpdate(factoryId, inspectionId)
+                .orElseThrow(() -> new EntityNotFoundException("QualityInspection", inspectionId));
+        String previousResult = existing.getResult();
 
         boolean dynamicSnapshot = existing.getCustomFields() != null
                 && "DYNAMIC_PRODUCT_BINDING".equals(existing.getCustomFields().get("standardBasis"));
@@ -336,11 +346,31 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
 
         log.info("质量检验记录更新成功: inspectionId={}", updated.getId());
 
+        // An AI/legacy caller may complete the exact PENDING task through the
+        // update path.  It must have the same batch-status propagation as the
+        // normal create/complete path; otherwise the row says PASS/FAIL while
+        // the production batch and FAIL isolation remain stale.
+        if (isPendingResult(previousResult) && isTerminalInspectionResult(updated.getResult())) {
+            propagateToProductionBatch(updated);
+        }
+
         if ("FAIL".equalsIgnoreCase(updated.getResult())) {
             createQualityFailAlert(updated);
         }
 
         return updated;
+    }
+
+    private boolean isPendingResult(String result) {
+        return result != null && "PENDING".equalsIgnoreCase(result.trim());
+    }
+
+    private boolean isTerminalInspectionResult(String result) {
+        if (result == null) return false;
+        return switch (result.trim().toUpperCase(java.util.Locale.ROOT)) {
+            case "PASS", "PASSED", "QUALIFIED", "FAIL", "FAILED", "CONDITIONAL", "PARTIAL_PASS" -> true;
+            default -> false;
+        };
     }
 
     /**

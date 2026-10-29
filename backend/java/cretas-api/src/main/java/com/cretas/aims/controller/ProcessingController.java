@@ -233,6 +233,7 @@ public class ProcessingController {
      * Quality inspector task queue.  Unlike the general COMPLETED batch history,
      * this source is paged by persisted PENDING inspection observations.
      */
+    @RequirePermission({"quality:read_write"})
     @GetMapping("/batches/quality-pending")
     @Operation(summary = "获取待质检批次", description = "按待检质检任务分页获取已完成生产批次")
     public ApiResponse<PageResponse<ProductionBatch>> getQualityPendingBatches(

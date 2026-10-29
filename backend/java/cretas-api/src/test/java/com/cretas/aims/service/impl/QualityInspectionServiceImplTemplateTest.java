@@ -32,6 +32,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Round 10 Task 4 — verifies Canvas Integration Template wiring in
@@ -130,7 +131,7 @@ class QualityInspectionServiceImplTemplateTest {
         completion.setFailCount(BigDecimal.ZERO);
         completion.setPassRate(BigDecimal.valueOf(100));
         completion.setInspectionDate(java.time.LocalDate.of(2026, 10, 29));
-        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId("F001", 45L))
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchIdForUpdate("F001", 45L))
                 .thenReturn(List.of(pending));
         when(qualityInspectionRepository.save(any(QualityInspection.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -147,6 +148,35 @@ class QualityInspectionServiceImplTemplateTest {
     }
 
     @Test
+    void createInspection_doesNotOverwritePendingWhenCompletedHistoryAlreadyExists() {
+        QualityInspection pending = new QualityInspection();
+        pending.setId("qi-legacy-pending");
+        pending.setFactoryId("F001");
+        pending.setProductionBatchId(49L);
+        pending.setResult("PENDING");
+        QualityInspection pass = new QualityInspection();
+        pass.setId("qi-existing-pass");
+        pass.setFactoryId("F001");
+        pass.setProductionBatchId(49L);
+        pass.setResult("PASS");
+        QualityInspection reinspection = new QualityInspection();
+        reinspection.setId("qi-reinspection");
+        reinspection.setProductionBatchId(49L);
+        reinspection.setResult("PASS");
+        reinspection.setPassRate(BigDecimal.valueOf(100));
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchIdForUpdate("F001", 49L))
+                .thenReturn(List.of(pending, pass));
+        when(qualityInspectionRepository.save(any(QualityInspection.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        QualityInspection saved = service.createInspection("F001", reinspection);
+
+        assertEquals("qi-reinspection", saved.getId());
+        verify(qualityInspectionRepository, times(1)).save(reinspection);
+        verify(qualityInspectionRepository, never()).save(pending);
+    }
+
+    @Test
     void createInspection_completesPendingTaskAsFailAndKeepsFailAlertPath() {
         QualityInspection pending = new QualityInspection();
         pending.setId("qi-pending-fail");
@@ -160,7 +190,7 @@ class QualityInspectionServiceImplTemplateTest {
         completion.setPassCount(BigDecimal.ZERO);
         completion.setFailCount(BigDecimal.ONE);
         completion.setPassRate(BigDecimal.ZERO);
-        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId("F001", 46L))
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchIdForUpdate("F001", 46L))
                 .thenReturn(List.of(pending));
         when(qualityInspectionRepository.save(any(QualityInspection.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -170,6 +200,55 @@ class QualityInspectionServiceImplTemplateTest {
         assertEquals("qi-pending-fail", saved.getId());
         assertEquals("FAIL", saved.getResult());
         verify(qualityInspectionRepository, times(1)).save(pending);
+        verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
+        verify(productionAlertRepository, times(1)).save(any(ProductionAlert.class));
+    }
+
+    @Test
+    void createInspection_failsClosedWhenMultiplePendingTasksExist() {
+        QualityInspection first = new QualityInspection();
+        first.setId("qi-pending-1");
+        first.setFactoryId("F001");
+        first.setProductionBatchId(47L);
+        first.setResult("PENDING");
+        QualityInspection second = new QualityInspection();
+        second.setId("qi-pending-2");
+        second.setFactoryId("F001");
+        second.setProductionBatchId(47L);
+        second.setResult("PENDING");
+        QualityInspection completion = new QualityInspection();
+        completion.setProductionBatchId(47L);
+        completion.setResult("PASS");
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchIdForUpdate("F001", 47L))
+                .thenReturn(List.of(first, second));
+
+        assertThrows(com.cretas.aims.exception.BusinessException.class,
+                () -> service.createInspection("F001", completion));
+        verify(qualityInspectionRepository, never()).save(any(QualityInspection.class));
+        verify(productionBatchRepository, never()).save(any(ProductionBatch.class));
+    }
+
+    @Test
+    void updateInspection_completesPendingTaskWithBatchPropagationAndFailIsolation() {
+        QualityInspection existing = new QualityInspection();
+        existing.setId("qi-update-pending");
+        existing.setFactoryId("F001");
+        existing.setProductionBatchId(48L);
+        existing.setResult("PENDING");
+        when(qualityInspectionRepository.findByIdAndFactoryIdForUpdate("F001", "qi-update-pending"))
+                .thenReturn(java.util.Optional.of(existing));
+        when(qualityInspectionRepository.save(any(QualityInspection.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        QualityInspection incoming = new QualityInspection();
+        incoming.setResult("FAIL");
+        incoming.setSampleSize(BigDecimal.ONE);
+        incoming.setPassCount(BigDecimal.ZERO);
+        incoming.setFailCount(BigDecimal.ONE);
+        incoming.setPassRate(BigDecimal.ZERO);
+
+        QualityInspection updated = service.updateInspection("F001", "qi-update-pending", incoming);
+
+        assertEquals("FAIL", updated.getResult());
         verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
         verify(productionAlertRepository, times(1)).save(any(ProductionAlert.class));
     }
@@ -188,7 +267,8 @@ class QualityInspectionServiceImplTemplateTest {
                 "items", java.util.List.of(Map.of("itemId", "item-old")))));
         QualityInspection incoming = new QualityInspection();
         incoming.setCustomFields(new HashMap<>(Map.of("standardRevision", "rev-client", "operatorNote", "ok")));
-        when(qualityInspectionRepository.findById("qi-snapshot")).thenReturn(java.util.Optional.of(existing));
+        when(qualityInspectionRepository.findByIdAndFactoryIdForUpdate("F001", "qi-snapshot"))
+                .thenReturn(java.util.Optional.of(existing));
         when(qualityInspectionRepository.save(any(QualityInspection.class))).thenAnswer(inv -> inv.getArgument(0));
 
         QualityInspection saved = service.updateInspection("F001", "qi-snapshot", incoming);
@@ -211,7 +291,8 @@ class QualityInspectionServiceImplTemplateTest {
         existing.setFailCount(BigDecimal.ONE);
         existing.setPassRate(BigDecimal.ZERO);
         existing.setCustomFields(new HashMap<>(Map.of("standardBasis", "DYNAMIC_PRODUCT_BINDING", "items", java.util.List.of())));
-        when(qualityInspectionRepository.findById("qi-immutable")).thenReturn(java.util.Optional.of(existing));
+        when(qualityInspectionRepository.findByIdAndFactoryIdForUpdate("F001", "qi-immutable"))
+                .thenReturn(java.util.Optional.of(existing));
         QualityInspection decision = new QualityInspection();
         decision.setResult("PASS");
         decision.setSampleSize(BigDecimal.TEN);

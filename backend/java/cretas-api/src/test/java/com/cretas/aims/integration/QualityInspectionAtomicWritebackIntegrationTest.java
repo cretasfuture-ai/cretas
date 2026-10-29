@@ -178,6 +178,7 @@ class QualityInspectionAtomicWritebackIntegrationTest {
         boolean failSecondGoodsUpdate;
         Store(JdbcTemplate jdbc) { this.jdbc = jdbc; }
         QualityInspectionRepository inspections() { return adapter(QualityInspectionRepository.class, (method, args) -> {
+            if (method.equals("findByFactoryIdAndProductionBatchIdForUpdate")) return java.util.List.of();
             if (!method.equals("save")) throw new UnsupportedOperationException(method);
             QualityInspection qi = (QualityInspection) args[0];
             jdbc.update("INSERT INTO inspections VALUES (?,?,?,?)", qi.getId(), qi.getFactoryId(), qi.getProductionBatchId(), qi.getResult());
