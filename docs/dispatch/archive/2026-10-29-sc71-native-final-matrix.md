@@ -27,4 +27,12 @@ production.anomaly, requires an explicit product rather than mixing per-SKU
 charts into the full-factory directory. Existing F006 product
 SOP-20260817-01-黄油鸡-成品800g has 11 eligible batches; the scoped service
 foundation is proven separately. Its actual App question/product selection,
-chart and detail proof remain required; service metadata alone is not PASS.
+chart and detail proof were then completed; service metadata alone was not counted as PASS.
+
+## Final physical result
+
+- Status: merged and archived with this evidence closeout; private matrix scope released. Root resumed the device only after agent55 explicitly released it. Both owned simulators remain off.
+- 35 full-factory families plus production.anomaly under the explicit eligible product, 36 unique default-family variants: actual chart/source/unit/nonempty original-detail first screen and independent visual PASS. This is not exhaustive coverage of every alternative unit/drawing variant or all detail rows.
+- b10r1 resolved FG inventory, AR aging and both commerce-joint detail entrances after normal refresh. b11r1/b11r2 verified four financial families; overall unit remains — where the aggregate declares no uniform unit, while each KPI keeps its own unit. b12r1 proves the selected product chip, the 11-batch anomaly graph in 盒 and 7/11 visible original rows.
+- Root accepted the normal App update, returned to the full-factory scope, refreshed and ran b13r1 after SC77 Python deployment. WIP now paints 16 short-number nodes and 11 edges, 1090 kg, with 9/11 original rows visible. Independent review replaced only the current WIP entry with PASS and retained the full old FAIL under priorResults; aggregate has 36 unique / 36 PASS / 0 FAIL.
+- Private evidence: sc43-native/sc73-final-matrix-receipt.json, sc70-visual-audit.json, sc81-final-delivery-receipt.json and all original b01-b13 screenshots/attempts. Original formatter, clipping and tool failures are retained.
