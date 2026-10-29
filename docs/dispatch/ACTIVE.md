@@ -7,7 +7,8 @@
 
 ## 在飞任务
 
-- `SC74-SANKEY-RUNTIME-20261030` — `review` — Root；Base `98ae3682196ba0ae0f6dbe82fcb6667387bed385`；Web/RN通用桑基formatter及目标测试已冻结，Jest8/Vitest2和双端类型通过；待PR/官方Web与Android OTA及实际图复验。禁数据/后端/权限/发布脚本；scope及OOM原记录见当日SC74归档。
+- `SC77-WIP-LABELS-20261030` — `review` — Root；Base `9fb7482b8909d2eb73cc55a7eaea5d52a1652de6`；仅engine.py WIP图形及test_wip_plan_flow.py；15目标通过/2本机PG前置跳过，真实16节点在360/440宽与240/320高离线图清晰。待PR/Python部署/Web小米实际复验；禁SQL/数量/身份/权限/迁移，见当日归档。
+
 
 - `SC71-NATIVE-MATRIX-20261029` — `in-progress` — Root协调/sc55_native_catalogue唯一手机操作者；Base `98ae3682196ba0ae0f6dbe82fcb6667387bed385`；仅已连接小米的F006只读分类/图表/原始明细及私有sc67/sc70证据；冻结产品源码、禁模拟器/保存偏好/业务写入。验收36类矩阵及独立图像复核；见archive/2026-10-29-sc71-native-final-matrix.md。
 
@@ -24,7 +25,7 @@
 
 
 
-- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；用户恢复真机角色与F006模拟数据验收，原22项17通过；4月月结20元、SC49成本10.30元回读已过。SC60修复及新11018原生质检续验，阿里云按用户要求不处理；见archive/2026-10-29-sc43-native-closeout-scope.md。
+- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；原22项18通过/1目录图FAIL/2缺其他实体机未测/1网页角色不适用；11018原生质检及实际导出已过；SC71目录补验、SC77桑基标签修复中。阿里云按用户要求不处理，模拟器关闭；见archive/2026-10-30-smartbi-f006-final-acceptance.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
