@@ -7,9 +7,6 @@
 
 ## 在飞任务
 
-- `SC31-WIP-MC-20261029` — `in-progress` — Root/wip_mc_executor；Base `b8b9d81d7b9a622abc56e53c39d4d1a9a23a4fe1`；scope operational_sources.py、engine.py、新wip_plan_flow.py/test_wip_plan_flow*、test_operational_sources.py；已过账普通WIP消耗→守恒图/明细，非SFI事件；真实PG租户/单位/软删/结算回归＋风险终审；禁迁移/Java/成本字段。
-- `SC32-QI-READONLY-20261029` — `in-progress` — Root；Base `b8b9d81d7b9a622abc56e53c39d4d1a9a23a4fe1`；scope canonical quality-standard-readonly.js、对应fixture、core/run-suite.js、生成mcp-entry.js；F006/11003打开动态标准并取消，验证标题与0–4°C；禁提交/权限变更。
-
 
 
 
