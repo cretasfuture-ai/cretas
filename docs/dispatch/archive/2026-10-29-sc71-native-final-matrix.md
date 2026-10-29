@@ -19,3 +19,12 @@
 - Required receipt: per-family actual candidate/unit/source/detail rows, command
   and exit, screenshots/JSON, real failures and remaining limits. Final business
   acceptance is recorded only after Root reconciles those proofs and image review.
+
+## Qualification clarification
+
+Current guided full-factory requests correctly offer 35 families. The 36th,
+production.anomaly, requires an explicit product rather than mixing per-SKU
+charts into the full-factory directory. Existing F006 product
+SOP-20260817-01-黄油鸡-成品800g has 11 eligible batches; the scoped service
+foundation is proven separately. Its actual App question/product selection,
+chart and detail proof remain required; service metadata alone is not PASS.

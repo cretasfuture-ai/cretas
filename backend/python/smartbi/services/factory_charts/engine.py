@@ -641,6 +641,52 @@ def wip_plan_flow_candidates(dataset, request):
             continue
         work = grouped.rename(columns={'来源节点': 'source', '去向节点': 'target', '流量': 'value'})
         option = get_strategy('sankey').build(work, 'source', ['value'], 'target')
+        # WIP batch numbers are often long and share the same prefix. Keep the
+        # canonical node names for links/tooltips, but use a bounded unique
+        # alias for the label painted inside a narrow card.
+        series = option.get('series', [{}])[0]
+        nodes = series.get('data', []) if isinstance(series, dict) else []
+        canonical_names = {str(node.get('name', '')) for node in nodes if isinstance(node, dict)}
+        used_aliases = set(canonical_names)
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get('name', ''))
+            if len(name) <= 16:
+                continue
+            tail = re.split(r'[-_/]', name)[-1].strip() or name[-6:]
+            base = f'#{tail[-6:]}'
+            alias = base[:10]
+            ordinal = 2
+            while alias in used_aliases:
+                suffix = f'-{ordinal}'
+                alias = f'#{tail[-(9 - len(suffix)):]}{suffix}'
+                ordinal += 1
+            used_aliases.add(alias)
+            node['label'] = {
+                'formatter': alias, 'width': 66, 'overflow': 'truncate',
+                'position': 'inside', 'align': 'center', 'verticalAlign': 'middle',
+                'fontSize': 10, 'color': '#172b4d',
+                'textBorderColor': '#fff', 'textBorderWidth': 2,
+            }
+        if isinstance(series, dict):
+            series.update({
+                'nodeWidth': 14,
+                'nodeGap': 14,
+                'left': 36,
+                'right': 36,
+                'top': 20,
+                'bottom': 20,
+                'layoutIterations': 32,
+            })
+            series.setdefault('label', {}).update({
+                'fontSize': 10, 'color': '#172b4d',
+                'width': 88,
+                'overflow': 'truncate',
+                'lineHeight': 12, 'position': 'inside', 'align': 'center',
+                'verticalAlign': 'middle', 'textBorderColor': '#fff', 'textBorderWidth': 2,
+            })
+        has_short_aliases = any(isinstance(node, dict) and 'label' in node for node in nodes)
         option['animation'] = False
         option.setdefault('tooltip', {})['renderMode'] = 'richText'
         total = rows['流量'].sum()
@@ -653,7 +699,8 @@ def wip_plan_flow_candidates(dataset, request):
             'source': dataset.source, 'unit': unit,
             'priority': 'optional',
             'findings': {'good': [f'已过账跨工序流转量 {display(total)} {unit}'],
-                         'attention': ['该累计口径仅代表已核对的跨工序流转，不是原料投入总量，也不是当前库存余额'],
+                         'attention': (['该累计口径仅代表已核对的跨工序流转，不是原料投入总量，也不是当前库存余额']
+                                       + (['图内 # 为批次短号，完整批次号见提示或原始明细'] if has_short_aliases else [])),
                          'suggestions': []},
             'kpis': [
                 {'label': '已过账跨工序流转量', 'value': display(total), 'unit': unit},
@@ -662,7 +709,7 @@ def wip_plan_flow_candidates(dataset, request):
             'tableData': {'headers': ['过账日期', '来源批次', '目标批次', '数量', '单位', 'MC凭证'], 'rows': table_rows},
             'chart': {'chartType': 'sankey', 'echartsOption': option},
             'engine': {'pointDimension': None, 'pointDrilldown': False,
-                       'detail': '原始MC凭证、来源/目标生产批次、过账日期与数量；日期为过账日期，不含价格'},
+                       'detail': '原始MC凭证、来源/目标生产批次、过账日期与数量；日期为过账日期，不含价格；图中长批次号使用唯一#短号，完整批次号请查看节点/连线提示或原始明细'},
         }
         charts.append(_analysis_metadata(candidate))
     return charts, gaps

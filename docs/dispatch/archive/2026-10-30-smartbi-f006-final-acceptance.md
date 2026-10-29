@@ -11,15 +11,22 @@
 | 图表分类、导出和质检 PR1325 | 63615ec58bfa8880df2409ec885039dde3796dc7 | Java/Python/Web 已发布，Android OTA 已发布 |
 | 原生待检文案 PR1326 | 8fc2c2623630fd3cefbe3ee5716b9010741918e1 | Android OTA1793286607974 已发布，真机列表/详情复验通过 |
 | 实际 PPT 中文孤行 PR1327 | 98ae3682196ba0ae0f6dbe82fcb6667387bed385 | 仅 Python 重发，真机重新导出 PPT 及 Office 复验通过 |
+| 桑基图通用格式 PR1328 | 9fb7482b8909d2eb73cc55a7eaea5d52a1652de6 | Web及Android OTA已发布，Web流程断言通过；图像标签另由SC77修复，真机图待补验 |
 
 Java/Web 官方回执 `cretas-1793284906-41926.json`：DEPLOY_EXIT=0，恰好一次
 RELEASE_FINAL_STATUS=deployed；候选制品均复用，Java green10020 健康，Web 四方
 index 哈希一致。JAR SHA256：
 `ea63cc6538e3e8ce7e78fd355b69054694ebb80a18cf9a3bba560620fe0d3e0d`。
 
-最终 Android runtime1.0.5，OTA1793286607974，bundle SHA256：
+质检收尾时 Android runtime1.0.5，OTA1793286607974，bundle SHA256：
 `76baac2ebd6e07239ccd83f4ff1b0d9fc9c0ce5afaa6007140cb2dc8db191745`。
 只更改文档不会再发布相同产品制品。
+
+SC74 后续 Web 官方回执 cretas-1793294762-551.json 完整成功，四方 index 哈希
+`936f9b8c5750f26f2b33b72af97e4df253c31efa01c618094698a048defb64d6`。
+Android 最新 OTA1793294763837、runtime1.0.5，SHA256
+`00769b5e4d031682334f190b9e670555173355c100b81dabbc6f18dfc0a42464`；
+本地/更新清单/CDN一致。前一版本的质检与文件证据保留，未冒称新版本已完成真机图验收。
 
 ## 必要验证
 
@@ -48,7 +55,8 @@ index 哈希一致。JAR SHA256：
 - 原生目录矩阵：SC71 正在逐类验证。资格核查36类不是图表或明细通过；只有实际
   图表、单位/来源、非空原始明细断言及独立图像复核完成的分类才计通过。
 - 本回执仍为进行中的交付检查点。真机发现 WIP 桑基图格式化标记缺失，SC74 已完成
-  双端兼容修复和目标测试，等待合并、Web/Android 发布及实际图复验；没有将有数据但
+  双端兼容修复、CI、合并和Web/Android发布；Web流程断言通过但独立图像复核发现标签重叠，
+  SC77 正修复标签并等待双端实际复验。没有将有数据但
   未绘制图形的旧截图计为通过。其余明细入口正用正常界面刷新后的快照重试。
 
 ## 容量与未覆盖边界
