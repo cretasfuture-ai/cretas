@@ -27,7 +27,8 @@ test('parallel harness runs two fresh contexts and closes each context', async (
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://fixture');
     if (url.pathname === '/login') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end(loginHtml()); return; }
-    if (url.pathname === '/home' || url.pathname.startsWith('/smart-bi/analysis')) { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end(pageHtml()); return; }
+    if (url.pathname === '/home' || (url.pathname === '/smart-bi/analysis' && url.searchParams.get('tab') === 'query' && url.searchParams.get('mode') === 'factory')) { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end(pageHtml()); return; }
+    if (url.pathname === '/smart-bi/analysis') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end('<div id="app">F006 智能数据分析：上传报表页，没有工厂问答输入框。</div>'); return; }
     if (url.pathname.endsWith('/unified-login')) {
       let raw = ''; request.on('data', chunk => { raw += chunk; }); request.on('end', () => {
         const username = JSON.parse(raw || '{}').username || 'unknown'; response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ success: true, data: { username, factoryUser: { username, id: username, factoryId: 'F006' }, factoryId: 'F006', factoryName: 'Cretas F006', role: 'admin' } }));

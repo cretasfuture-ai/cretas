@@ -45,5 +45,5 @@ async function inspect(page, _body, ctx) {
 }
 
 module.exports = { id: 'smartbi-parallel-recovery-readonly', defaultEnabled: false,
-  run: ctx => runReadOnlyPageScenario(ctx, { id: 'smartbi-parallel-recovery-readonly', path: '/smart-bi/analysis?tab=analysis',
+  run: ctx => runReadOnlyPageScenario(ctx, { id: 'smartbi-parallel-recovery-readonly', path: '/smart-bi/analysis?tab=query&mode=factory',
     landmarks: ['智能数据分析'], timeoutMs: 60_000, appMountTimeoutMs: 90_000, inspect }) };
