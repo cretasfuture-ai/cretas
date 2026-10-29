@@ -70,6 +70,14 @@ class FactoryConfirmedFactReuseTest {
                 .thenAnswer(call -> sessions.stream()
                         .filter(session -> session.getSessionId().equals(call.getArgument(0))).findFirst());
         when(sessionRepo.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(sessionRepo.findBySessionIdAndFactoryId(anyString(), anyString())).thenAnswer(call -> sessions.stream()
+                .filter(session -> session.getSessionId().equals(call.getArgument(0))
+                        && session.getFactoryId().equals(call.getArgument(1))).findFirst());
+        when(sessionRepo.findRecentByActor(anyString(), any(), any())).thenAnswer(call -> {
+            List<FactoryAssemblyConversationSession> newestFirst = new ArrayList<>(sessions);
+            java.util.Collections.reverse(newestFirst);
+            return newestFirst;
+        });
         when(sessionRepo.findTop20ByFactoryIdAndKnownIntentCodeOrderByCreatedAtDesc(anyString(), anyString())).thenAnswer(call -> {
             List<FactoryAssemblyConversationSession> newestFirst = new ArrayList<>(sessions.stream()
                     .filter(session -> call.getArgument(0).equals(session.getFactoryId())).toList());
@@ -337,6 +345,91 @@ class FactoryConfirmedFactReuseTest {
             assertThat(conflict.newValue()).isEqualTo("4");
         });
         assertThat(effective("stepCount")).as("已确认事实在选来源之前不被改写").isEqualTo("3");
+    }
+
+    private com.cretas.aims.service.impl.FactoryAssemblyConversationServiceImpl replier(
+            FactoryAssemblyConversationSession session, String extractedJson) {
+        com.cretas.aims.ai.client.DashScopeClient llm = mock(com.cretas.aims.ai.client.DashScopeClient.class);
+        when(llm.isAvailable()).thenReturn(true);
+        com.cretas.aims.ai.dto.ChatCompletionResponse completion = mock(com.cretas.aims.ai.dto.ChatCompletionResponse.class);
+        when(completion.hasError()).thenReturn(false);
+        when(completion.getContent()).thenReturn("{\"outcome\":\"SUCCESS\",\"extracted\":" + extractedJson + "}");
+        when(llm.chatCompletion(any())).thenReturn(completion);
+        FactoryAssemblyConversationSessionRepository replyRepo = mock(FactoryAssemblyConversationSessionRepository.class);
+        when(replyRepo.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(replyRepo.findReplyTargetForUpdate(anyString(), anyString(), any(), any()))
+                .thenReturn(Optional.of(session));
+        com.cretas.aims.service.impl.FactoryAssemblyConversationServiceImpl replies =
+                new com.cretas.aims.service.impl.FactoryAssemblyConversationServiceImpl(replyRepo, null, null, llm);
+        ReflectionTestUtils.setField(replies, "confirmedFacts", facts);
+        return replies;
+    }
+
+    private FactoryAssemblyConversationSession sessionOf(String id) {
+        return sessions.stream().filter(s -> s.getSessionId().equals(id)).findFirst().orElseThrow();
+    }
+
+    /** D-S2-06: 去别的页面 (如事实页选来源) 超过 10 分钟再回来, 进行中的新版本不能被已完成的旧访谈顶掉。 */
+    @Test
+    void anInterviewVersionLeftIdleForHoursIsStillTheRecoverableOne() {
+        String completed = startSession();
+        ReflectionTestUtils.setField(sessionOf(completed), "status",
+                FactoryAssemblyConversationSession.SessionStatus.COMPLETED);
+        String active = startSession();
+        ReflectionTestUtils.setField(sessionOf(active), "lastActiveAt",
+                java.time.LocalDateTime.now().minusHours(2));
+
+        FactoryBuildProgress recovered = interview.recoverableProgress(F, ACTOR).orElseThrow();
+
+        assertThat(recovered.getSessionId()).as("进行中的新版本仍是当前版本, 不退回已完成的旧访谈").isEqualTo(active);
+        assertThat(sessionOf(active).getTimeoutMinutes()).isEqualTo(FactoryBuildInterviewService.INTERVIEW_IDLE_MINUTES);
+    }
+
+    /** 选完来源后, 还在进行的访谈要和已确认事实一致 (保留已确认值 → 会话退回原值; 改用新回答 → 保持新值)。 */
+    @Test
+    void resolvingAConflictBringsTheLiveInterviewInLineWithTheChosenSource() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("stepCount", "3"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+        var replies = replier(live, "{\"stepCount\":\"4\"}");
+
+        replies.continueConversation(F, ACTOR, second, "工序道数改成4道", "r1");
+        assertThat(live.getCollectedParameters()).containsEntry("stepCount", "4");
+        String answeredIn = facts.openConflicts(F).get(0).newSource();
+
+        facts.resolve(F, "stepCount", FactoryConfirmedFactService.CHOICE_KEEP_CONFIRMED, "FACTORY_USER:7");
+        interview.syncSessionToConfirmedFact(F, answeredIn, "stepCount");
+        assertThat(live.getCollectedParameters()).as("保留已确认值: 进行中的访谈退回 3").containsEntry("stepCount", "3");
+
+        replier(live, "{\"stepCount\":\"5\"}").continueConversation(F, ACTOR, second, "工序道数改成5道", "r3");
+        String answeredIn2 = facts.openConflicts(F).get(0).newSource();
+        facts.resolve(F, "stepCount", FactoryConfirmedFactService.CHOICE_USE_NEW, "FACTORY_USER:7");
+        interview.syncSessionToConfirmedFact(F, answeredIn2, "stepCount");
+        assertThat(effective("stepCount")).as("改用新回答: 已确认事实变成新值").isEqualTo("5");
+        assertThat(live.getCollectedParameters()).containsEntry("stepCount", "5");
+        assertThat(facts.history(F)).filteredOn(row -> "stepCount".equals(row.getFieldKey()))
+                .extracting(FactoryConfirmedFact::getStatus)
+                .containsExactlyInAnyOrder(FactoryConfirmedFact.SUPERSEDED, FactoryConfirmedFact.REJECTED,
+                        FactoryConfirmedFact.CONFIRMED);
+    }
+
+    /** 选择题 (行业归类): 说成「改成…」且是合法选项 → 产生冲突; 不是选项里的值 → 被拒, 不产生冲突。 */
+    @Test
+    void aChoiceItemCorrectionConflictsOnlyWhenTheNewValueIsOneOfItsOptions() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("industryHint", "卤味熟食"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+
+        replier(live, "{\"industryHint\":\"烧烤\"}").continueConversation(F, ACTOR, second, "行业归类改成烧烤", "r1");
+        assertThat(facts.openConflicts(F)).as("烧烤不在候选项里: 被拒, 不是漏检").isEmpty();
+
+        replier(live, "{\"industryHint\":\"预制菜\"}").continueConversation(F, ACTOR, second, "行业归类改成预制菜", "r2");
+        assertThat(facts.openConflicts(F)).singleElement().satisfies(conflict -> {
+            assertThat(conflict.field()).isEqualTo("industryHint");
+            assertThat(conflict.newValue()).isEqualTo("预制菜");
+        });
     }
 
     @Test

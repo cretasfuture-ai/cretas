@@ -109,7 +109,12 @@ public class FactoryBuildInterviewService {
         if (started != null && started.getSessionId() != null) {
             sessionRepository.findBySessionIdAndFactoryIdAndUserIdAndActorType(
                             started.getSessionId(), factoryId, actor.userId(), actor.type())
-                    .ifPresent(session -> reuseConfirmedFacts(factoryId, session));
+                    .ifPresent(session -> {
+                        // 访谈不是 10 分钟的闲聊: 中途去别的页面 (如事实页选来源) 再回来必须还在。
+                        session.setTimeoutMinutes(INTERVIEW_IDLE_MINUTES);
+                        reuseConfirmedFacts(factoryId, session);
+                        sessionRepository.save(session);
+                    });
         }
         return started;
     }
@@ -212,6 +217,28 @@ public class FactoryBuildInterviewService {
         }
         sessionRepository.save(session);
         log.info("对话建厂沿用已确认事实 {} 项: factoryId={}, sessionId={}", reused.size(), factoryId, session.getSessionId());
+    }
+
+    /** 对话建厂会话的空闲上限: 24 小时 (通用对话默认 10 分钟, 过期后页面会退回已完成的旧访谈, 且没有输入框)。 */
+    static final int INTERVIEW_IDLE_MINUTES = 24 * 60;
+
+    /**
+     * 管理员在事实页选完来源后, 让还在进行的那次访谈里的值与已确认事实一致 (保留已确认值 → 会话退回原值;
+     * 改用新回答 → 会话本来就是新值, 无需改)。只动仍在进行的会话, 且只动被选的那一项。
+     */
+    @Transactional
+    public void syncSessionToConfirmedFact(String factoryId, String sourceRef, String field) {
+        if (isBlank(sourceRef) || !sourceRef.startsWith("conversation:") || isBlank(field)) return;
+        String sessionId = sourceRef.substring("conversation:".length());
+        FactoryAssemblyConversationSession session = sessionRepository
+                .findBySessionIdAndFactoryId(sessionId, factoryId).orElse(null);
+        if (session == null || session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE) return;
+        String target = confirmedFacts.confirmedValue(factoryId, field).orElse(null);
+        if (target == null || target.equals(session.getCollectedParameters().get(field))) return;
+        session.addCollectedParameter(field, target);
+        FactoryInterviewExpansion.expandIfReady(session);
+        FactoryInterviewExpansion.expandProductsIfReady(session);
+        sessionRepository.save(session);
     }
 
     public List<InterviewDefaults.Section> interviewDefaults(String factoryId) {
