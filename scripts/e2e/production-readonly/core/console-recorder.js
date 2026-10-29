@@ -1,6 +1,6 @@
 'use strict';
 
-const { redactText } = require('./sanitizer');
+const { redactText, sanitizeUrl } = require('./sanitizer');
 
 const DEFAULT_NOISE_RULES = [
   { id: 'favicon', pattern: /favicon\.ico/i },
@@ -24,6 +24,7 @@ function installConsoleRecorder(context, options = {}) {
   const raw = [];
   const accepted = [];
   const listeners = new Map();
+  let pendingOfflineConsole = null;
 
   function record(type, text, location = '') {
     const safeText = redactText(text, 500);
@@ -37,6 +38,12 @@ function installConsoleRecorder(context, options = {}) {
       filtered: Boolean(matched),
       filterRule: matched?.id || null,
     };
+    if (pendingOfflineConsole && Date.now() <= pendingOfflineConsole.expiresAt && type === 'error'
+      && sanitizeUrl(safeLocation) === pendingOfflineConsole.url
+      && /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(safeText)) {
+      item.expectedFault = 'controlled-client-offline';
+      pendingOfflineConsole = null;
+    }
     raw.push(item);
     if (!matched) accepted.push(item);
   }
@@ -76,12 +83,24 @@ function installConsoleRecorder(context, options = {}) {
   context.on('page', attach);
 
   return {
+    expectClientOfflineResourceError(request) {
+      const url = sanitizeUrl(request.url());
+      if (request.method() !== 'POST' || !/\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(url)
+        || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))) throw new Error('Unverified offline console exception');
+      const matched = accepted.filter(item => item.type === 'error' && sanitizeUrl(item.location) === url
+        && /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(item.text));
+      if (matched.length > 1) throw new Error('Unexpected duplicate offline console errors');
+      for (const item of matched) item.expectedFault = 'controlled-client-offline';
+      if (!matched.length) pendingOfflineConsole = { url, expiresAt: Date.now() + 2_000 };
+      return matched.length;
+    },
     snapshot() {
       return {
         rawCount: raw.length,
         filteredCount: raw.length - accepted.length,
-        retainedCount: accepted.length,
-        consoleErrors: accepted.filter((item) => item.type === 'error'),
+        retainedCount: accepted.filter(item => !item.expectedFault).length,
+        consoleErrors: accepted.filter((item) => item.type === 'error' && !item.expectedFault),
+        expectedConsoleErrors: accepted.filter(item => item.expectedFault).map(item => ({ ...item })),
         consoleWarnings: accepted.filter((item) => item.type === 'warning'),
         pageErrors: accepted.filter((item) => item.type === 'pageerror'),
         filteredNoise: raw.filter((item) => item.filtered),

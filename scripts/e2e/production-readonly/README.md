@@ -70,6 +70,33 @@ dryRun            true loads/describes only; no navigation or login
 The MCP entry consumes the page supplied by Codex Playwright MCP. It does not
 launch a second browser and does not close the shared MCP session.
 
+### Bounded parallel F006 acceptance
+
+When the task explicitly authorizes parallel UI acceptance, set `parallelRuns`
+to two or three run-option objects. Each needs its own `username`, `password`,
+`expectedUsername`, positive numeric `expectedActorId`, unique safe `runId` and
+`evidenceDir`. Credentials still use the secure injection path above. Each lane
+gets a fresh context, UI login and finally cleanup within the existing browser;
+no storageState or authenticated session is shared. The parent page stays open.
+
+Use `smartbi-commerce-joint-readonly` for normal joint analysis and
+`smartbi-parallel-recovery-readonly` for controlled client-offline recovery.
+Both require `smartbiCommerceJoint` with independently checked family/KPI
+expectations. Recovery uses the factory question tab, checks an explicit error
+without fabricated charts/facts, restores connectivity and repeats the strict
+business/detail/Excel assertions. It does not interrupt any production server.
+
+Only one exact F006 analysis POST failing with `ERR_INTERNET_DISCONNECTED` may
+be classified as the controlled fault in each context. It remains recorded in
+`expectedTransportFailures` and, where emitted, `expectedConsoleErrors`.
+Additional network, HTTP, console or page errors still fail acceptance.
+
+The outer result is PASS only if all business scenarios pass, all contexts
+close, authenticated actor IDs match and differ, and successful analysis HTTP
+intervals actually overlap across actors. Read-only business writes and blocked
+mutation attempts must both remain zero. This bounded check is separate from
+production load testing or native App acceptance.
+
 After changing any bundled module, regenerate the entry:
 
 ```powershell
