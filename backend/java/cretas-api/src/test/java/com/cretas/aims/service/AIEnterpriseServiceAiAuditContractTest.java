@@ -141,4 +141,88 @@ class AIEnterpriseServiceAiAuditContractTest {
         // 有保密产品的工厂: 缓存条目的数据看不到, 按牵涉记; 没有保密产品的工厂 (阴性对照): 不牵涉
         assertThat(aiRows()).extracting(Row::decision).containsExactly("PROTECTED", "NONE");
     }
+
+    // ---------------------------------------------------------------- 经营报告 (工厂租户, 如 F006)
+
+    /** 工厂租户: 日周月报告走经营报告分支, 手动生成走 generateOperatingReport (POST /reports/generate)。 */
+    private AIEnterpriseService operatingTenant(ProcessSecretLlmCostScope tenantScope) {
+        AIEnterpriseService service = reports(List.of());
+        OperatingReportGenerator operating = mock(OperatingReportGenerator.class);
+        when(operating.isFactory(FACTORY)).thenReturn(true);
+        com.cretas.aims.service.reports.OperatingReportCodec codec = new com.cretas.aims.service.reports.OperatingReportCodec(
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+        String snapshot = codec.encode(new com.cretas.aims.service.reports.OperatingReportSnapshot(
+                com.cretas.aims.service.reports.OperatingReportSnapshot.SCHEMA,
+                com.cretas.aims.service.reports.OperatingReportSnapshot.Status.SUCCESS, "daily", "2026-10-20", "2026-10-20",
+                "2026-10-20T20:00:00Z", List.of(), List.of(), List.of(), null));
+        when(operating.manual(eq(FACTORY), any(), anyString(), any(), any())).thenReturn(
+                com.cretas.aims.entity.AIAnalysisResult.builder().id(9L).factoryId(FACTORY).reportType("daily").analysisText(snapshot).build());
+        com.cretas.aims.service.reports.OperatingReportProjection projection = mock(com.cretas.aims.service.reports.OperatingReportProjection.class);
+        when(projection.detail(any(), anyBoolean())).thenReturn(MobileDTO.AICostAnalysisResponse.builder().success(true).build());
+        com.cretas.aims.repository.AIQuotaUsageRepository usage = mock(com.cretas.aims.repository.AIQuotaUsageRepository.class);
+        when(usage.findByFactoryIdAndWeekStart(eq(FACTORY), any())).thenReturn(java.util.Optional.of(
+                com.cretas.aims.entity.AIQuotaUsage.builder().factoryId(FACTORY).usedCount(0).quotaLimit(100).build()));
+        com.cretas.aims.repository.config.AIQuotaConfigRepository quotaConfig = mock(com.cretas.aims.repository.config.AIQuotaConfigRepository.class);
+        when(quotaConfig.findByFactoryIdAndQuestionType(eq(FACTORY), anyString()))
+                .thenReturn(List.of(com.cretas.aims.entity.config.AIQuotaConfig.builder().quotaCost(1).build()));
+        ReflectionTestUtils.setField(service, "operatingReports", operating);
+        ReflectionTestUtils.setField(service, "operatingCodec", codec);
+        ReflectionTestUtils.setField(service, "operatingProjection", projection);
+        ReflectionTestUtils.setField(service, "quotaUsageRepository", usage);
+        ReflectionTestUtils.setField(service, "quotaConfigRepository", quotaConfig);
+        ReflectionTestUtils.setField(service, "llmCostScope", tenantScope);
+        return service;
+    }
+
+    private static com.cretas.aims.dto.AIRequestDTO.ReportGenerationRequest dailyRequest() {
+        com.cretas.aims.dto.AIRequestDTO.ReportGenerationRequest request = new com.cretas.aims.dto.AIRequestDTO.ReportGenerationRequest();
+        request.setReportType("daily");
+        return request;
+    }
+
+    @Test
+    void aManualOperatingReportIsRecordedWithTheCallersTierAndAsProtectedInAProtectedFactory() {
+        AIEnterpriseService service = operatingTenant(scope);
+        try (var ignored = as(sameFactoryUser())) {
+            service.generateOperatingReport(FACTORY, null, dailyRequest());
+        }
+        try (var ignored = as(owner())) {
+            service.generateOperatingReport(FACTORY, null, dailyRequest());
+        }
+
+        OperatingReportGenerator operating = (OperatingReportGenerator) ReflectionTestUtils.getField(service, "operatingReports");
+        verify(operating, times(2)).manual(eq(FACTORY), any(), eq("daily"), any(), any());   // 一定发生: 两次都真的生成了
+        List<Row> rows = aiRows();
+        assertThat(rows).hasSize(2).allSatisfy(row -> {
+            assertThat(row.decision()).isEqualTo("PROTECTED");
+            assertThat(row.ref()).isEqualTo("ai:report-generation");
+        });
+        assertThat(rows.get(0).actor().id()).isEqualTo(sameFactoryUser().id());
+        assertThat(rows.get(0).reason()).startsWith("tier=NONE(ps-");
+        assertThat(rows.get(1).actor().id()).isEqualTo(OWNER);
+        assertThat(rows.get(1).reason()).startsWith("tier=FULL(ps-");
+    }
+
+    @Test
+    void negativeControlAManualOperatingReportInAFactoryWithoutProtectedProductsIsNotProtected() {
+        AIEnterpriseService service = operatingTenant(unprotectedScope());
+        try (var ignored = as(owner())) {
+            service.generateOperatingReport(FACTORY, null, dailyRequest());
+        }
+
+        assertThat(aiRows()).singleElement().satisfies(row -> assertThat(row.decision()).isEqualTo("NONE"));
+    }
+
+    @Test
+    void theScheduledOperatingReportBranchIsRecordedAsProtectedInAProtectedFactoryOnly() {
+        AIEnterpriseService protectedTenant = operatingTenant(scope);
+        protectedTenant.generateDailyReport(FACTORY, LocalDate.of(2026, 10, 20));
+        AIEnterpriseService plainTenant = operatingTenant(unprotectedScope());
+        plainTenant.generateDailyReport(FACTORY, LocalDate.of(2026, 10, 20));
+
+        verify((OperatingReportGenerator) ReflectionTestUtils.getField(protectedTenant, "operatingReports"))
+                .scheduled(FACTORY, "daily", LocalDate.of(2026, 10, 20), LocalDate.of(2026, 10, 20));
+        verifyNoInteractions(basic);   // 工厂分支不走旧的批次报告
+        assertThat(aiRows()).extracting(Row::decision).containsExactly("PROTECTED", "NONE");
+    }
 }

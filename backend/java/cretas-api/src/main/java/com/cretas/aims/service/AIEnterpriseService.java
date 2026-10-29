@@ -407,14 +407,19 @@ public class AIEnterpriseService {
     }
 
     /**
-     * 定时 / 手动生成的日、周、月报告: 一次生成一条 AI 访问记录 (定时任务没有调用者, 记为 UNKNOWN)。
+     * 定时生成的日、周、月报告与手动生成的经营报告: 一次生成一条 AI 访问记录 (定时任务没有调用者, 记为 UNKNOWN)。
      * 报告正文里保密产品的批次由 {@code withoutProtectedBatches} 排除 —— 排除时会把这一条标为「牵涉」;
-     * 经营报告 (工厂) 分支的提示词在 OperatingReportGenerator 里按调用者裁剪, 这里看不到逐行, 有保密产品的工厂按牵涉记。
+     * 经营报告 (工厂) 的提示词在 OperatingReportGenerator 里按调用者裁剪, 这里看不到逐行, 有保密产品的工厂按牵涉记。
      */
     private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access beginReportAudit(String factoryId) {
+        return beginReportAudit(factoryId, false);
+    }
+
+    /** {@code operatingReport}: 调用方已知走经营报告 (手动生成) —— 不再问 isFactory, 直接按经营报告口径判牵涉。 */
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access beginReportAudit(String factoryId, boolean operatingReport) {
         com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.REPORT_GENERATION);
         try {
-            if (operatingReports != null && operatingReports.isFactory(factoryId)) {
+            if (operatingReport || (operatingReports != null && operatingReports.isFactory(factoryId))) {
                 ai.involvesProtected(llmCostScope.factoryHasProtected(factoryId));
             }
         } catch (RuntimeException e) {
@@ -757,6 +762,14 @@ public class AIEnterpriseService {
 
     public MobileDTO.AICostAnalysisResponse generateOperatingReport(String factoryId, com.cretas.aims.entity.User actor,
                                                                     AIRequestDTO.ReportGenerationRequest request) {
+        // 手动生成经营报告 (POST /reports/generate, 工厂租户): 在请求线程上, 记录挂在请求上、带调用者
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = beginReportAudit(factoryId, true)) {
+            return generateOperatingReportUnaudited(factoryId, actor, request);
+        }
+    }
+
+    private MobileDTO.AICostAnalysisResponse generateOperatingReportUnaudited(String factoryId, com.cretas.aims.entity.User actor,
+                                                                             AIRequestDTO.ReportGenerationRequest request) {
         LocalDate start = request.getStartDate();
         LocalDate end = request.getEndDate();
         if ("daily".equals(request.getReportType())) {
