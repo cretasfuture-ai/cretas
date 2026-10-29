@@ -95,8 +95,12 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             return null;
         }
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);
-        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本
-        if (!status.storable() || processSecretSampleFilter.mentionsProtectedProduct(factoryId, userInput, normalizedInput)) {
+        if (!status.storable()) {
+            return null;
+        }
+        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本。名单查不出来 (UNVERIFIED) 也不存, 不抛
+        if (processSecretSampleFilter.checkTrainingSample("active_learning", factoryId, userInput, normalizedInput)
+                != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
             return null;
         }
         if (status != TrainingConsentService.Status.AUTHORIZED) {
