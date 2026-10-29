@@ -55,7 +55,7 @@ test('parallel harness runs two fresh contexts and closes each context', async (
         { username: 'f006_admin_1551', password: '1551', expectedUsername: 'f006_admin_1551', expectedActorId: '1551', expectedFactoryId: 'F006', runId: 'fixture-2', smartbiCommerceJoint: { expectedFamilies: ['commerce-joint.sales.stock', 'commerce-joint.customer.channel'], expectedKpisByUnit: { 个: { orders: 3, shipments: 3, stock: 7 } }, expectedChannelAmount: 30 } },
       ],
     });
-    fs.writeFileSync('test-output/sc40/root-fixture-report.json',JSON.stringify(result,null,2));
+    fs.writeFileSync(test.info().outputPath('parallel-report.json'), JSON.stringify(result, null, 2));
     expect(result.result).toBe('PASS');
     expect(result.allBusinessScenariosPassed).toBe(true);
     expect(result.distinctActors).toBe(true);
