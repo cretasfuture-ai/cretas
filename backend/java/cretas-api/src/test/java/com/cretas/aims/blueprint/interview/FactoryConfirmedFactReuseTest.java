@@ -70,7 +70,7 @@ class FactoryConfirmedFactReuseTest {
                 .thenAnswer(call -> sessions.stream()
                         .filter(session -> session.getSessionId().equals(call.getArgument(0))).findFirst());
         when(sessionRepo.save(any())).thenAnswer(call -> call.getArgument(0));
-        when(sessionRepo.findTop20ByFactoryIdOrderByCreatedAtDesc(anyString())).thenAnswer(call -> {
+        when(sessionRepo.findTop20ByFactoryIdAndKnownIntentCodeOrderByCreatedAtDesc(anyString(), anyString())).thenAnswer(call -> {
             List<FactoryAssemblyConversationSession> newestFirst = new ArrayList<>(sessions.stream()
                     .filter(session -> call.getArgument(0).equals(session.getFactoryId())).toList());
             java.util.Collections.reverse(newestFirst);
@@ -130,7 +130,7 @@ class FactoryConfirmedFactReuseTest {
         if (withReceipts) {
             List<FactoryAssemblyConversationSession.ReplyFieldReceipt> fields = new ArrayList<>();
             answers.forEach((field, value) -> fields.add(FactoryAssemblyConversationSession.ReplyFieldReceipt.builder()
-                    .field(field).resolution("ACCEPTED").canonicalValue(value).reasonCode("EXTRACTED").build()));
+                    .field(field).resolution("ACCEPTED").canonicalValue(value).reasonCode("VALIDATED").build()));
             FactoryAssemblyConversationSession.Message message = FactoryAssemblyConversationSession.Message.user("答复");
             message.setReplyReceipt(FactoryAssemblyConversationSession.ReplyReceipt.builder()
                     .extractionOutcome("SUCCESS").fieldReceipts(fields).build());
@@ -140,26 +140,135 @@ class FactoryConfirmedFactReuseTest {
     }
 
     @Test
-    void newVersionStartsFromThePreviousVersionsConfirmedFactsEvenWhenTheyWereAnsweredInFreeText() {
+    void freeTextValuesCarryOverAsPendingConfirmationNeverAsConfirmedFacts() {
         conversationalVersion(Map.of("businessType", "卤猪蹄", "industryHint", "卤味熟食"), true);
-        assertThat(store).as("自由文本路径没有写历史表 —— 这正是 D-S2-03 的现场").isEmpty();
 
         String next = startSession();
         FactoryBuildProgress progress = interview.progress(F, next, ACTOR);
 
-        assertThat(progress.getReusedFacts())
-                .containsEntry("businessType", "卤猪蹄").containsEntry("industryHint", "卤味熟食");
-        assertThat(progress.getPending()).doesNotContain("businessType", "industryHint");
-        assertThat(store).as("沿用同时把上一版事实记入历史, 来源指向原会话")
-                .extracting(FactoryConfirmedFact::getFieldKey).containsExactlyInAnyOrder("businessType", "industryHint");
-        assertThat(store).allSatisfy(row -> {
-            assertThat(row.getStatus()).isEqualTo(FactoryConfirmedFact.CONFIRMED);
-            assertThat(row.getSourceRef()).startsWith("conversation:");
-        });
+        assertThat(progress.getReusedFacts()).as("AI 提取的值不是用户确认的, 不能当已确认事实沿用").isEmpty();
+        assertThat(progress.getPending()).as("也不算已回答").contains("businessType", "industryHint");
+        assertThat(progress.getCarriedFacts()).extracting(FactoryConfirmedFactService.PendingItem::field)
+                .containsExactlyInAnyOrder("businessType", "industryHint");
+        assertThat(progress.getCarriedFacts()).allSatisfy(item -> assertThat(item.label()).isNotBlank());
+        assertThat(store).extracting(FactoryConfirmedFact::getStatus)
+                .containsOnly(FactoryConfirmedFact.PENDING_CONFIRM);
     }
 
     @Test
-    void valuesWithoutAReceiptOrChangedAfterTheirReceiptAreNotTreatedAsConfirmed() {
+    void confirmingTheCarriedValuesTurnsThemIntoConfirmedFactsAndAnsweredQuestions() {
+        conversationalVersion(Map.of("businessType", "卤猪蹄", "industryHint", "卤味熟食"), true);
+        String next = startSession();
+
+        FactoryBuildProgress progress = interview.confirmCarriedFacts(F, next, ACTOR, null);
+
+        assertThat(progress.getAnswered()).contains("businessType", "industryHint");
+        assertThat(progress.getCarriedFacts()).isEmpty();
+        assertThat(store).extracting(FactoryConfirmedFact::getStatus).containsOnly(FactoryConfirmedFact.CONFIRMED);
+        assertThat(store).hasSize(2);
+        assertThat(store).allSatisfy(row -> assertThat(row.getDecidedBy()).startsWith("FACTORY_USER:"));
+    }
+
+    @Test
+    void confirmingOneItemLeavesTheOthersWaitingAndAChangedValueSupersedesTheCarriedOne() {
+        conversationalVersion(Map.of("businessType", "卤猪蹄", "industryHint", "卤味熟食"), true);
+        String next = startSession();
+
+        FactoryBuildProgress progress = interview.confirmCarriedFacts(F, next, ACTOR, List.of("industryHint"));
+        assertThat(progress.getAnswered()).contains("industryHint").doesNotContain("businessType");
+        assertThat(progress.getCarriedFacts()).extracting(FactoryConfirmedFactService.PendingItem::field)
+                .containsExactly("businessType");
+
+        interview.submitStructuredAnswers(F, next, ACTOR, Map.of("businessType", "卤鸭掌"));
+        assertThat(store).filteredOn(row -> "businessType".equals(row.getFieldKey()))
+                .extracting(FactoryConfirmedFact::getStatus)
+                .containsExactlyInAnyOrder(FactoryConfirmedFact.SUPERSEDED, FactoryConfirmedFact.CONFIRMED);
+        assertThat(effective("businessType")).isEqualTo("卤鸭掌");
+    }
+
+    @Test
+    void repeatedRestartsNeverDuplicateOrLoseTheCarryOver() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("industryHint", "卤味熟食"));
+        conversationalVersion(Map.of("businessType", "卤猪蹄"), true);
+
+        for (int i = 0; i < 3; i++) {
+            FactoryBuildProgress progress = interview.progress(F, startSession(), ACTOR);
+            assertThat(progress.getReusedFacts()).containsEntry("industryHint", "卤味熟食");
+            assertThat(progress.getCarriedFacts()).extracting(FactoryConfirmedFactService.PendingItem::field)
+                    .contains("businessType");
+        }
+        assertThat(store).filteredOn(row -> "businessType".equals(row.getFieldKey())).hasSize(1);
+        assertThat(store).filteredOn(row -> "industryHint".equals(row.getFieldKey())).hasSize(1);
+    }
+
+    @Test
+    void aConcurrentRestartThatInsertedTheSameItemFirstOnlyCostsThatItem() {
+        FactoryConfirmedFactRepository repo = mock(FactoryConfirmedFactRepository.class);
+        when(repo.findFirstByFactoryIdAndFieldKeyOrderByVersionNoDescCreatedAtDesc(anyString(), anyString()))
+                .thenReturn(Optional.empty());
+        when(repo.saveAndFlush(any())).thenAnswer(call -> {
+            FactoryConfirmedFact row = call.getArgument(0);
+            if ("raced".equals(row.getFieldKey())) {
+                throw new org.springframework.dao.DataIntegrityViolationException("uq_fcf_one_pending_confirm_per_field");
+            }
+            return row;
+        });
+        FactoryConfirmedFactService service = new FactoryConfirmedFactService(repo);
+
+        int adopted = service.adoptPriorFacts(F, List.of(
+                new FactoryConfirmedFactService.PriorFact("raced", "x", "1", "s1", false),
+                new FactoryConfirmedFactService.PriorFact("other", "y", "2", "s1", false)));
+
+        assertThat(adopted).as("撞唯一索引的那一项跳过, 其余照常带入").isEqualTo(1);
+    }
+
+    @Test
+    void theNewestVersionWinsAndAnOlderValueIsOnlyUsedWhenTheNewestDidNotTouchTheItem() {
+        String older = startSession();
+        interview.submitStructuredAnswers(F, older, ACTOR, Map.of("businessType", "卤猪蹄", "industryHint", "卤味熟食"));
+        String newest = startSession();
+        // 最新一版改了 businessType (未确认, 没有回执) ⇒ 不能退回更早的「卤猪蹄」
+        sessions.stream().filter(session -> session.getSessionId().equals(newest)).findFirst().orElseThrow()
+                .addCollectedParameter("businessType", "卤鸭掌");
+        store.clear();
+
+        String probeId = startSession();
+        FactoryAssemblyConversationSession probe = sessions.stream()
+                .filter(session -> session.getSessionId().equals(probeId)).findFirst().orElseThrow();
+        List<FactoryConfirmedFactService.PriorFact> found = interview.priorSessionFacts(F, probe);
+
+        assertThat(found).extracting(FactoryConfirmedFactService.PriorFact::field).doesNotContain("businessType");
+        assertThat(found).filteredOn(fact -> "industryHint".equals(fact.field())).singleElement()
+                .satisfies(fact -> assertThat(fact.userDecided()).isTrue());
+    }
+
+    @Test
+    void theRealFreeTextReplyPathRecordsExtractedValuesAsPendingAndExactOptionsAsConfirmed() {
+        com.cretas.aims.service.impl.FactoryAssemblyConversationServiceImpl replies =
+                new com.cretas.aims.service.impl.FactoryAssemblyConversationServiceImpl(
+                        mock(FactoryAssemblyConversationSessionRepository.class), null, null, null);
+        ReflectionTestUtils.setField(replies, "confirmedFacts", facts);
+        String id = startSession();
+        FactoryAssemblyConversationSession session = sessions.stream()
+                .filter(s -> s.getSessionId().equals(id)).findFirst().orElseThrow();
+
+        ReflectionTestUtils.invokeMethod(replies, "recordConfirmedFacts", session,
+                Map.of("businessType", "卤猪蹄"), false);
+        assertThat(store).singleElement().satisfies(row -> {
+            assertThat(row.getStatus()).isEqualTo(FactoryConfirmedFact.PENDING_CONFIRM);
+            assertThat(row.getFieldLabel()).isNotBlank();
+        });
+
+        ReflectionTestUtils.invokeMethod(replies, "recordConfirmedFacts", session,
+                Map.of("industryHint", "卤味熟食"), true);
+        assertThat(effective("industryHint")).isEqualTo("卤味熟食");
+        assertThat(store).filteredOn(row -> "businessType".equals(row.getFieldKey()))
+                .extracting(FactoryConfirmedFact::getStatus).containsOnly(FactoryConfirmedFact.PENDING_CONFIRM);
+    }
+
+    @Test
+    void valuesWithoutAReceiptOrChangedAfterTheirReceiptAreNeverCarried() {
         conversationalVersion(Map.of("businessType", "卤猪蹄"), false);
         String second = conversationalVersion(Map.of("industryHint", "卤味熟食"), true);
         sessions.stream().filter(s -> s.getSessionId().equals(second)).findFirst().orElseThrow()
@@ -167,7 +276,8 @@ class FactoryConfirmedFactReuseTest {
 
         FactoryBuildProgress progress = interview.progress(F, startSession(), ACTOR);
 
-        assertThat(progress.getReusedFacts()).as("无回执的提取值不采信, 回执后被改过的也不采信").isEmpty();
+        assertThat(progress.getReusedFacts()).isEmpty();
+        assertThat(progress.getCarriedFacts()).as("无回执的提取值、回执后被改过的都不带入").isEmpty();
         assertThat(store).isEmpty();
     }
 

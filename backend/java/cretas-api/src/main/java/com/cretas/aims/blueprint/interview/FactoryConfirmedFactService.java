@@ -11,7 +11,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,12 +26,13 @@ import org.springframework.transaction.annotation.Transactional;
  * replaces a confirmed fact: it becomes a pending conflict the administrator settles item by item,
  * with the whole history kept (S2-02).
  *
- * <p>Every read and write is scoped by factory id. Nothing here is guessed: only answers the user
- * actually gave (accepted structured answers) are recorded, never extraction candidates.</p>
+ * <p>Every read and write is scoped by factory id. Nothing here is guessed: only a user decision
+ * (structured answer, exact option, explicit confirmation) creates a CONFIRMED fact. A value the AI
+ * extracted from free text, or carried over from an earlier version, is only PENDING_CONFIRM until
+ * the user confirms it, and is never reused as if it were confirmed.</p>
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class FactoryConfirmedFactService {
     public static final String SOURCE_USER_ANSWER = "USER_ANSWER";
     public static final String CHOICE_KEEP_CONFIRMED = "KEEP_CONFIRMED";
@@ -35,18 +40,43 @@ public class FactoryConfirmedFactService {
     public static final String REUSE_REASON_CODE = "REUSED_CONFIRMED_FACT";
 
     private final FactoryConfirmedFactRepository facts;
+    /** One new transaction per carried-over item, so a duplicate insert only loses that item. Null in unit tests. */
+    private final TransactionTemplate perItem;
+
+    @Autowired
+    public FactoryConfirmedFactService(FactoryConfirmedFactRepository facts, PlatformTransactionManager transactions) {
+        this.facts = facts;
+        TransactionTemplate template = new TransactionTemplate(transactions);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.perItem = template;
+    }
+
+    public FactoryConfirmedFactService(FactoryConfirmedFactRepository facts) {
+        this.facts = facts;
+        this.perItem = null;
+    }
+
+    /** An item waiting for the user to confirm it. */
+    public record PendingItem(String field, String label, String value, String sourceRef) { }
 
     /** One item whose new answer differs from what the factory had confirmed. */
     public record Conflict(String field, String label, String confirmedValue, String newValue,
             String confirmedSource, String newSource, String pendingId) { }
 
     /**
-     * Records answers the user just gave. Same as the confirmed value: nothing written (it stays the
-     * same fact). No confirmed value yet: becomes the confirmed fact. Different: a pending conflict.
+     * Records answers. userDecided = the user made the decision (structured answer, exact option);
+     * false = the AI extracted it from free text.
+     * <ul>
+     *   <li>Same as the confirmed value: nothing written.</li>
+     *   <li>Different from a confirmed value: a pending conflict, the confirmed fact is untouched.</li>
+     *   <li>No confirmed value, user decided: becomes CONFIRMED (a waiting PENDING_CONFIRM with the same
+     *       value is promoted, a different one is superseded).</li>
+     *   <li>No confirmed value, extracted: only a PENDING_CONFIRM row, awaiting the user.</li>
+     * </ul>
      */
     @Transactional
     public List<Conflict> recordAnswers(String factoryId, String sessionId, String actor,
-            Map<String, String> accepted, Map<String, String> labels) {
+            Map<String, String> accepted, Map<String, String> labels, boolean userDecided) {
         List<Conflict> conflicts = new ArrayList<>();
         for (Map.Entry<String, String> entry : accepted.entrySet()) {
             String field = entry.getKey();
@@ -56,10 +86,7 @@ public class FactoryConfirmedFactService {
                     facts.findByFactoryIdAndFieldKeyAndStatus(factoryId, field, FactoryConfirmedFact.CONFIRMED);
             String label = labels == null ? field : labels.getOrDefault(field, field);
             if (confirmed.isEmpty()) {
-                int next = facts.findFirstByFactoryIdAndFieldKeyOrderByVersionNoDescCreatedAtDesc(factoryId, field)
-                        .map(row -> row.getVersionNo() + 1).orElse(1);
-                facts.save(row(factoryId, field, label, value, FactoryConfirmedFact.CONFIRMED, next,
-                        sessionId, null, actor));
+                recordWithoutConfirmed(factoryId, sessionId, actor, field, label, value, userDecided);
                 continue;
             }
             FactoryConfirmedFact current = confirmed.get();
@@ -95,6 +122,50 @@ public class FactoryConfirmedFactService {
         return conflicts;
     }
 
+    private void recordWithoutConfirmed(String factoryId, String sessionId, String actor, String field,
+            String label, String value, boolean userDecided) {
+        Optional<FactoryConfirmedFact> waiting =
+                facts.findByFactoryIdAndFieldKeyAndStatus(factoryId, field, FactoryConfirmedFact.PENDING_CONFIRM);
+        if (waiting.isPresent() && Objects.equals(waiting.get().getValueText(), value)) {
+            if (userDecided) {
+                FactoryConfirmedFact row = waiting.get();
+                row.setStatus(FactoryConfirmedFact.CONFIRMED);
+                row.setDecidedBy(actor);
+                row.setDecidedAt(LocalDateTime.now());
+                facts.save(row);
+            }
+            return;
+        }
+        waiting.ifPresent(row -> {
+            row.setStatus(FactoryConfirmedFact.SUPERSEDED);
+            row.setDecidedBy(actor);
+            row.setDecidedAt(LocalDateTime.now());
+            facts.saveAndFlush(row);
+        });
+        int next = facts.findFirstByFactoryIdAndFieldKeyOrderByVersionNoDescCreatedAtDesc(factoryId, field)
+                .map(row -> row.getVersionNo() + 1).orElse(1);
+        facts.save(row(factoryId, field, label, value,
+                userDecided ? FactoryConfirmedFact.CONFIRMED : FactoryConfirmedFact.PENDING_CONFIRM,
+                next, sessionId, null, actor));
+    }
+
+    /** Items carried over or extracted that this session has not answered yet, awaiting confirmation. */
+    @Transactional(readOnly = true)
+    public List<PendingItem> pendingFor(String factoryId, FactoryAssemblyConversationSession session) {
+        Map<String, String> collected = session.getCollectedParameters();
+        List<PendingItem> items = new ArrayList<>();
+        Map<String, String> labels = new LinkedHashMap<>();
+        session.getRequiredParameters().forEach(rp -> labels.put(rp.getName(), rp.getLabel()));
+        for (FactoryConfirmedFact row : facts.findByFactoryIdAndStatus(factoryId, FactoryConfirmedFact.PENDING_CONFIRM)) {
+            if (!labels.containsKey(row.getFieldKey())) continue;
+            String have = collected.get(row.getFieldKey());
+            if (have != null && !have.isBlank()) continue;
+            items.add(new PendingItem(row.getFieldKey(), labels.get(row.getFieldKey()), row.getValueText(),
+                    row.getSourceRef()));
+        }
+        return items;
+    }
+
     /**
      * Fills the not-yet-answered items of a new session from what the factory already confirmed,
      * so only differences are asked. Returns the reused field -> value (empty if none).
@@ -118,25 +189,38 @@ public class FactoryConfirmedFactService {
     }
 
     /** A fact a previous interview version confirmed, found in that session's own receipts. */
-    public record PriorFact(String field, String label, String value, String sessionId) { }
+    public record PriorFact(String field, String label, String value, String sessionId, boolean userDecided) { }
 
     /**
-     * Writes facts that earlier interview versions confirmed (through any path, free text included)
-     * into the history as CONFIRMED, only for items that have no history row yet. Never changes an
-     * existing row, so it cannot turn into a silent overwrite.
+     * Carries facts from earlier interview versions into the history, only for items that have no
+     * history row yet (an existing row is never touched, so this cannot become a silent overwrite).
+     * A value the user decided on stays CONFIRMED; a value the AI extracted from free text becomes
+     * PENDING_CONFIRM. Per item and duplicate-tolerant: a concurrent restart that inserted the same
+     * item first only costs this item, never the whole carry-over.
      */
-    @Transactional
     public int adoptPriorFacts(String factoryId, List<PriorFact> prior) {
         int adopted = 0;
         for (PriorFact fact : prior) {
             if (fact.field() == null || fact.value() == null || fact.value().isBlank()) continue;
-            if (facts.findFirstByFactoryIdAndFieldKeyOrderByVersionNoDescCreatedAtDesc(factoryId, fact.field())
-                    .isPresent()) continue;
-            facts.save(row(factoryId, fact.field(), fact.label(), fact.value(), FactoryConfirmedFact.CONFIRMED, 1,
-                    fact.sessionId(), null, "SYSTEM:carried-from-prior-version"));
-            adopted++;
+            try {
+                Boolean written = perItem == null
+                        ? adoptOne(factoryId, fact) : perItem.execute(status -> adoptOne(factoryId, fact));
+                if (Boolean.TRUE.equals(written)) adopted++;
+            } catch (DataIntegrityViolationException duplicate) {
+                log.info("carry-over of {} skipped: another restart already wrote it (factory={})",
+                        fact.field(), factoryId);
+            }
         }
         return adopted;
+    }
+
+    private boolean adoptOne(String factoryId, PriorFact fact) {
+        if (facts.findFirstByFactoryIdAndFieldKeyOrderByVersionNoDescCreatedAtDesc(factoryId, fact.field())
+                .isPresent()) return false;
+        facts.saveAndFlush(row(factoryId, fact.field(), fact.label(), fact.value(),
+                fact.userDecided() ? FactoryConfirmedFact.CONFIRMED : FactoryConfirmedFact.PENDING_CONFIRM, 1,
+                fact.sessionId(), null, "SYSTEM:carried-from-prior-version"));
+        return true;
     }
 
     /** Administrator picks the source for one conflicting item. */

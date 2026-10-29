@@ -541,8 +541,26 @@
             :title="`已沿用上一版确认的 ${Object.keys(progress?.reusedFacts ?? {}).length} 项资料，下面只需核对有差异的部分`"
           >
             <ul class="reused-list">
-              <li v-for="(value, field) in progress?.reusedFacts" :key="field">{{ progress?.answeredLabels?.[field] || field }}：{{ value }}</li>
+              <li v-for="item in progress?.reusedFactItems ?? []" :key="item.field">{{ item.label || '其他事项' }}：{{ item.value }}</li>
             </ul>
+          </el-alert>
+          <el-alert
+            v-if="(progress?.carriedFacts ?? []).length"
+            type="info"
+            :closable="false"
+            show-icon
+            class="mb16"
+            data-testid="carried-facts"
+            :title="`上一版已填写 ${(progress?.carriedFacts ?? []).length} 项，请确认（这些还不算已确认）`"
+          >
+            <ul class="reused-list">
+              <li v-for="item in progress?.carriedFacts" :key="item.field">
+                {{ item.label || '其他事项' }}：{{ item.value }}
+                <el-button link type="primary" :disabled="sending" @click="confirmCarried([item.field])">确认这一项</el-button>
+              </li>
+            </ul>
+            <el-button type="primary" size="small" :loading="sending" data-testid="confirm-all-carried" @click="confirmCarried()">全部确认</el-button>
+            <span class="hint">有不同的直接回答对应问题即可修改。</span>
           </el-alert>
           <el-alert
             v-if="(progress?.factConflicts ?? []).length"
@@ -554,7 +572,7 @@
             :title="`有 ${(progress?.factConflicts ?? []).length} 项新回答与已确认资料不同，需要选择采用哪个来源`"
           >
             <ul class="reused-list">
-              <li v-for="item in progress?.factConflicts" :key="item.pendingId">{{ item.label || item.field }}：已确认「{{ item.confirmedValue }}」，新回答「{{ item.newValue }}」</li>
+              <li v-for="item in progress?.factConflicts" :key="item.pendingId">{{ item.label || '其他事项' }}：已确认「{{ item.confirmedValue }}」，新回答「{{ item.newValue }}」</li>
             </ul>
             <span>请由本厂管理员在「建厂就绪 → 已确认资料与版本历史」逐条选择采用哪个来源。</span>
           </el-alert>
@@ -1068,6 +1086,7 @@ import {
   type PlannedChange,
   type CurrentFactoryConfig,
   submitStructuredAnswers,
+  confirmCarriedFacts,
   listFactories,
   humanizeKeys,
   type FactoryBrief,
@@ -2847,6 +2866,25 @@ async function publishBlueprint() {
     }, publishBlueprint)
   } finally {
     blueprintOperation.value = ''
+  }
+}
+
+async function confirmCarried(fields?: string[]) {
+  if (!factoryId.value || !sessionId.value || sending.value) return
+  clearFlowIssue()
+  sending.value = true
+  try {
+    await confirmCarriedFacts(factoryId.value, sessionId.value, fields)
+    await refreshProgress()
+  } catch (error) {
+    showFlowIssue({
+      title: '上一版的值没有确认成功，仍保持待确认',
+      detail: errorMessage(error),
+      sideEffect: '这些值仍是「待确认」，没有写入已确认资料。',
+      retryLabel: '重新确认',
+    }, () => confirmCarried(fields))
+  } finally {
+    sending.value = false
   }
 }
 

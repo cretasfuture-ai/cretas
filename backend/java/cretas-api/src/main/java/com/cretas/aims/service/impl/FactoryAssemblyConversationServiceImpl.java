@@ -414,7 +414,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
                 correctionApplied |= old != null && !Objects.equals(old, entry.getValue());
                 session.addCollectedParameter(entry.getKey(), entry.getValue());
             }
-            recordConfirmedFacts(session, validation.values());
+            recordConfirmedFacts(session, validation.values(), standaloneChoice);
 
             FactoryInterviewExpansion.expandIfReady(session);
             FactoryInterviewExpansion.expandProductsIfReady(session);
@@ -1616,7 +1616,8 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
     }
 
     /** 对话建厂的回答进入已确认事实历史; 与已确认值不同的变成待选冲突, 不覆盖。 */
-    private void recordConfirmedFacts(FactoryAssemblyConversationSession session, Map<String, String> values) {
+    private void recordConfirmedFacts(FactoryAssemblyConversationSession session, Map<String, String> values,
+            boolean userChoseExactOption) {
         if (confirmedFacts == null || values == null || values.isEmpty()
                 || !FactoryInterviewExpansion.INTENT.equals(session.getKnownIntentCode())) {
             return;
@@ -1624,7 +1625,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
         Map<String, String> labels = new LinkedHashMap<>();
         session.getRequiredParameters().forEach(rp -> labels.put(rp.getName(), rp.getLabel()));
         confirmedFacts.recordAnswers(session.getFactoryId(), session.getSessionId(),
-                session.getActorType() + ":" + session.getUserId(), values, labels);
+                session.getActorType() + ":" + session.getUserId(), values, labels, userChoseExactOption);
     }
 
     private ConversationResponse extractionFailureResponse(
