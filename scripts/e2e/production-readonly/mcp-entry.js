@@ -2926,6 +2926,7 @@ const { runReadOnlyPageScenario } = require('./_shared');
 
 const PATH = '/quality/inspections?batchId=11003';
 const STANDARD_PATH = '/api/mobile/F006/processing/batches/11003/quality-form';
+const TEMPERATURE_ITEM_ID = 'a562ea27-8436-4944-8a66-c0afc80f103a';
 
 async function inspectQualityStandard(page, ctx = {}) {
   const request = page.waitForResponse((response) => {
@@ -2940,7 +2941,8 @@ async function inspectQualityStandard(page, ctx = {}) {
   await dialog.waitFor({ state: 'visible' });
   await dialog.getByText('当前产品质检标准', { exact: true }).waitFor({ state: 'visible' });
   const visibleText = await dialog.innerText();
-  const item = (standard.items || []).find((value) => value.label === '温度');
+  const matchingItems = (standard.items || []).filter((value) => value.itemId === TEMPERATURE_ITEM_ID);
+  const item = matchingItems.length === 1 ? matchingItems[0] : null;
   const checks = {
     standardHttp200: response.status() === 200 && body.success === true,
     exactBatch: String(standard.batchId) === '11003',
@@ -2957,7 +2959,10 @@ async function inspectQualityStandard(page, ctx = {}) {
   checks.cancelClosed = !await dialog.isVisible();
   const pass = Object.values(checks).every(Boolean);
   return { assessment: { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'frontend', checks },
-    checks, batchId: 11003, screenshot, operation: 'Open existing batch standard and cancel; no submission' };
+    checks, batchId: 11003, screenshot,
+    observedTemperature: item ? { itemId: item.itemId, label: item.label, unit: item.unit,
+      min: item.effectiveMinValue, max: item.effectiveMaxValue, required: item.effectiveIsRequired } : null,
+    operation: 'Open existing batch standard and cancel; no submission' };
 }
 
 async function run(ctx) {
