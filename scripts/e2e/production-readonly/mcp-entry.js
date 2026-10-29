@@ -1043,6 +1043,7 @@ const SCENARIOS = [
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/smartbi-focused-acceptance-readonly').commerceJoint,
   require('../scenarios/smartbi-focused-acceptance-readonly').legacyKpi,
+  require('../scenarios/quality-standard-readonly'),
   require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
@@ -2918,6 +2919,68 @@ module.exports = {
 };
 
 },
+    "scenarios/quality-standard-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const PATH = '/quality/inspections?batchId=11003';
+const STANDARD_PATH = '/api/mobile/F006/processing/batches/11003/quality-form';
+const TEMPERATURE_BINDING_ID = 'a562ea27-8436-4944-8a66-c0afc80f103a';
+const TEMPERATURE_ITEM_ID = '52eb96b4-01d6-4ed0-9f46-ae6d226a5910';
+
+async function inspectQualityStandard(page, ctx = {}) {
+  const request = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === STANDARD_PATH;
+  }, { timeout: 20000 });
+  await page.getByRole('button', { name: '新建质检', exact: true }).click();
+  const response = await request;
+  const body = await response.json();
+  const standard = body?.data || {};
+  const dialog = page.getByRole('dialog', { name: '新建质检记录', exact: true });
+  await dialog.waitFor({ state: 'visible' });
+  await dialog.getByText('当前产品质检标准', { exact: true }).waitFor({ state: 'visible' });
+  const visibleText = await dialog.innerText();
+  const matchingItems = (standard.items || []).filter((value) => value.itemId === TEMPERATURE_ITEM_ID
+    && value.bindingId === TEMPERATURE_BINDING_ID);
+  const item = matchingItems.length === 1 ? matchingItems[0] : null;
+  const checks = {
+    standardHttp200: response.status() === 200 && body.success === true,
+    exactBatch: String(standard.batchId) === '11003',
+    requiredTemperature: Boolean(item && item.unit === '°C' && item.effectiveIsRequired === true
+      && Number(item.effectiveMinValue) === 0 && Number(item.effectiveMaxValue) === 4),
+    productStandardTitle: visibleText.includes('当前产品质检标准'),
+    requiredLabelVisible: /温度\s*[（(]必检[）)]/u.test(visibleText),
+    rangeVisible: /0\s*[~～]\s*4/u.test(visibleText) && visibleText.includes('°C'),
+    noInternalRevision: Boolean(standard.standardRevision && !visibleText.includes(standard.standardRevision)),
+  };
+  const screenshot = ctx.screenshot ? await ctx.screenshot('quality-standard-11003-open') : null;
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  checks.cancelClosed = !await dialog.isVisible();
+  const pass = Object.values(checks).every(Boolean);
+  return { assessment: { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'frontend', checks },
+    checks, batchId: 11003, screenshot,
+    observedTemperature: item ? { itemId: item.itemId, label: item.label, unit: item.unit,
+      min: item.effectiveMinValue, max: item.effectiveMaxValue, required: item.effectiveIsRequired } : null,
+    observedStandardItems: (standard.items || []).slice(0, 8).map((value) => ({ itemId: value.itemId,
+      bindingId: value.bindingId, label: value.label, unit: value.unit,
+      min: value.effectiveMinValue, max: value.effectiveMaxValue, required: value.effectiveIsRequired })),
+    operation: 'Open existing batch standard and cancel; no submission' };
+}
+
+async function run(ctx) {
+  if (ctx.expectedFactoryId !== 'F006') throw new Error('Quality standard acceptance is limited to F006');
+  return runReadOnlyPageScenario(ctx, {
+    id: 'quality-standard-readonly', path: PATH, landmarks: ['质检记录管理'],
+    timeoutMs: 60000, inspect: (page, _body, inspectCtx) => inspectQualityStandard(page, inspectCtx),
+  });
+}
+
+module.exports = { id: 'quality-standard-readonly', defaultEnabled: false, run, inspectQualityStandard };
+
+},
     "scenarios/restaurant-live-command-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -3551,13 +3614,33 @@ function candidateIsQualified(candidate) {
     && candidate?.detailStatus?.state !== 'capacity');
 }
 
+function verifiedWipVoucherCount(candidate, fact) {
+  if (familyOf(candidate) !== 'wip-plan-flow.plan-flow'
+    || !String(candidate?.source || '').startsWith('wip-plan-flow ·')
+    || fact?.label !== '独立流转条数' || fact?.unit !== '条') return false;
+  const headers = candidate?.tableData?.headers;
+  const rows = candidate?.tableData?.rows;
+  if (!Array.isArray(headers) || !Array.isArray(rows) || !rows.length) return false;
+  const voucher = headers.indexOf('MC凭证');
+  const quantity = headers.indexOf('数量');
+  const rowUnit = headers.indexOf('单位');
+  if ([voucher, quantity, rowUnit].some((index) => index < 0)) return false;
+  const unit = String(candidate?.unit || '').trim();
+  if (!rows.every((row) => Array.isArray(row) && /^MC:[1-9]\d*$/u.test(String(row[voucher]))
+    && String(row[rowUnit]).trim() === unit && Number.isFinite(Number(row[quantity]))
+    && Number(row[quantity]) > 0)) return false;
+  return new Set(rows.map((row) => String(row[voucher]))).size === rows.length
+    && Number.isSafeInteger(Number(fact.value)) && Number(fact.value) === rows.length;
+}
+
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
   if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
   return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
     const factUnit = String(fact?.unit || '').trim();
     return !factUnit || factUnit === unit
-      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')));
+      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')))
+      || verifiedWipVoucherCount(candidate, fact);
   });
 }
 
@@ -6513,7 +6596,12 @@ function validateScaleOptions(value) {
 }
 
 function subjectId(subject) {
-  return typeof subject?.id === 'string' && subject.id.trim() ? subject.id : null;
+  const value = subject?.id;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function isStableIdSubject(subject) {
+  return typeof subject?.id === 'string' && subject.id.trim().length > 0;
 }
 
 function subjectsFromBody(body) {
@@ -6543,24 +6631,68 @@ function candidateKpisMatch(candidate, expectedKpis) {
     && ['kg', '%', '%', '元'].every((unit, index) => candidate?.kpis?.[index]?.unit === unit);
 }
 
-function assessProductDetail(detail, expected, candidateId, detailContextId, periodLabel, candidate) {
+const PRODUCT_ID_KEYS = new Set(['产品id', '产品编号', 'productid', 'product_id', 'producttypeid', 'product_type_id']);
+
+function rowProductId(row) {
+  if (!row || typeof row !== 'object') return null;
+  const key = Object.keys(row).find((item) => PRODUCT_ID_KEYS.has(String(item).replace(/\s+/gu, '').toLowerCase()));
+  const value = key ? row[key] : null;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function rowUnit(row) {
+  if (!row || typeof row !== 'object') return null;
+  const key = Object.keys(row).find((item) => ['单位', 'unit', 'measure_unit', 'measureUnit'].includes(item));
+  const value = key ? row[key] : null;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+async function deriveSubjectIdentity(page, rawProductId, selectedSubjectId) {
+  if (typeof rawProductId !== 'string' || !rawProductId.trim()) {
+    return { rawProductId: rawProductId || null, derivedSubjectId: null, matches: false };
+  }
+  const derivedSubjectId = await page.evaluate(async (raw) => {
+    const bytes = new TextEncoder().encode(`smartbi-subject-v2:id:${raw}`);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    return `product-${hex.slice(0, 16)}`;
+  }, rawProductId);
+  return { rawProductId, derivedSubjectId, matches: derivedSubjectId === selectedSubjectId };
+}
+
+function assessProductDetail(detail, expected, candidateId, detailContextId, periodLabel, candidate, selectedSubjectId, subjectIdentity) {
   const data = detail?.body?.data || detail?.data || {};
   const rows = Array.isArray(data.rows) ? data.rows : [];
   const request = detail?.request || {};
+  const candidateSource = candidate?.source;
+  const expectedUnit = candidate?.unit;
+  const rowProductIds = rows.map(rowProductId);
+  const rowUnits = rows.map(rowUnit);
   const checks = {
     attempted: detail?.attempted === true,
     http200: detail?.status === 200,
     success: detail?.body?.success === true,
     factory: data.factoryId === 'F006',
     candidate: data.candidateId === candidateId,
-    source: data.source === 'upload',
+    source: typeof candidateSource === 'string' && candidateSource.trim().length > 0 && data.source === candidateSource,
     period: data.period === periodLabel,
     context: request.context_id === detailContextId,
     requestKeys: Object.keys(request).sort().join(',') === 'context_id,filters,page,page_size',
     pageSize: request.page_size === expected.pageSize && request.page === 1,
     productRows: data.total === expected.expectedProductRows && rows.length === expected.expectedProductRows,
+    productKeys: typeof subjectIdentity?.rawProductId === 'string'
+      && rowProductIds.length === expected.expectedProductRows
+      && rowProductIds.every((value) => value === subjectIdentity.rawProductId),
+    stableIdentity: typeof selectedSubjectId === 'string'
+      && subjectIdentity?.matches === true
+      && subjectIdentity?.derivedSubjectId === selectedSubjectId,
+    units: typeof expectedUnit === 'string' && expectedUnit.trim().length > 0
+      && candidate?.kpis?.[0]?.unit === expectedUnit
+      && rowUnits.length === expected.expectedProductRows
+      && rowUnits.every((value) => value === expectedUnit),
     noPoint: !Object.prototype.hasOwnProperty.call(request, 'point') && !Object.prototype.hasOwnProperty.call(data, 'point'),
-    candidateUnit: candidate?.unit === 'kg',
+    candidateUnit: typeof candidate?.unit === 'string' && candidate.unit.trim().length > 0,
+    targetUnit: selectedSubjectId === expected.targetProductId ? candidate?.unit === 'kg' : true,
     candidateFamily: candidate?.analysis?.familyId === 'production.inspection_fused',
   };
   const paginationEvidence = data.total > expected.pageSize
@@ -6577,6 +6709,12 @@ function assessProductDetail(detail, expected, candidateId, detailContextId, per
     checks,
     total: Number.isFinite(Number(data.total)) ? Number(data.total) : null,
     rowCount: rows.length,
+    selectedSubjectId: selectedSubjectId || null,
+    candidateSource: candidateSource || null,
+    candidateUnit: expectedUnit || null,
+    rowProductIds,
+    rowUnits,
+    stableIdentity: subjectIdentity || null,
     pagination: paginationEvidence ? 'PASS' : 'UNVERIFIED',
     note: paginationEvidence
       ? 'Observed page 1 with 50 rows and hasMore=true.'
@@ -6629,7 +6767,7 @@ function assessRawPagination(first, second, expected) {
   };
 }
 
-function assessScale({ factoryId, options, initial, selections = [], detail, rawPagination }) {
+function assessScale({ factoryId, options, initial, selections = [], detail, details = [], rawPagination }) {
   const subjects = subjectsFromBody(initial?.body);
   const initialData = initial?.body?.data || {};
   const initialRequest = initial?.request || {};
@@ -6639,6 +6777,7 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     const request = selection.request || {};
     const data = selection.body?.data || {};
     const candidate = Array.isArray(data.recommendations) ? data.recommendations[0] : null;
+    const detailResult = selection.detailResult || details.find((item) => item.selectedSubjectId === selection.selectedSubjectId)?.detail || null;
     const subjectMatches = selection.requestedSubjectId === selection.selectedSubjectId
       && subjectId(subjects.find((item) => subjectId(item) === selection.selectedSubjectId)) === selection.selectedSubjectId;
     const answerMatches = data.analysisSubject === selection.selectedSubjectId
@@ -6653,7 +6792,14 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
       expectedRows: Array.isArray(candidate?.tableData?.rows) && candidate.tableData.rows.length === options.expectedProductRows,
       answered: selection.status === 200 && selection.body?.success === true && data.status === 'answered',
       family: candidate?.analysis?.familyId === 'production.inspection_fused',
-      unit: candidate?.unit === 'kg',
+      unit: typeof candidate?.unit === 'string' && candidate.unit.trim().length > 0
+        && candidate?.kpis?.[0]?.unit === candidate.unit
+        && detailResult?.checks?.units === true,
+      targetUnit: selection.selectedSubjectId === options.targetProductId ? candidate?.unit === 'kg' : true,
+      detail: detailResult?.result === 'PASS'
+        && detailResult?.checks?.productKeys === true
+        && detailResult?.checks?.source === true
+        && detailResult?.checks?.stableIdentity === true,
       chartsBounded: Number.isInteger(selection.visibleChartCount) && selection.visibleChartCount > 0 && selection.visibleChartCount < options.expectedSubjectCount,
       canvasesBounded: Number.isInteger(selection.renderedCanvasCount) && selection.renderedCanvasCount > 0 && selection.renderedCanvasCount < options.expectedSubjectCount,
     };
@@ -6665,7 +6811,7 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     initialUploadRequest: initialScope,
     subjectCount: subjects.length === options.expectedSubjectCount,
     subjectsHaveStableIds: subjects.length === options.expectedSubjectCount
-      && subjects.every((item) => Boolean(subjectId(item)))
+      && subjects.every((item) => isStableIdSubject(item))
       && new Set(subjects.map(subjectId)).size === options.expectedSubjectCount,
     atLeastTwoProductFilters: selections.filter((item) => item.request?.analysisSubject).length >= 2,
     firstMiddleLastSelected: firstMiddleLastIds(subjects).every((id) => stableSubjectIds.includes(id)),
@@ -6679,9 +6825,14 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     fiveRowsEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.expectedRows),
     answeredEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.answered),
     familyEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.family),
-    unitEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.unit),
+    unitEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.unit && item.targetUnit),
+    detailEach: selectionChecks.length === selections.length && selectionChecks.length >= 2
+      && selectionChecks.every((item) => item.detail),
     noHundredCharts: selectionChecks.length > 0 && selectionChecks.every((item) => item.chartsBounded && item.canvasesBounded),
-    productDetail: detail?.result === 'PASS' && detail?.checks?.productRows === true,
+    productDetail: details.length === selections.length && details.length >= 2
+      && details.every((item) => item.detail?.result === 'PASS'
+        && item.detail?.checks?.productRows === true
+        && item.detail?.checks?.stableIdentity === true),
     // Product detail is only five rows; the actual 500-row upload table is
     // the sole evidence allowed to satisfy the pagination requirement.
     pagination: rawPagination?.result === 'PASS',
@@ -6701,6 +6852,13 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     selectedSubjectIds: stableSubjectIds,
     selectionChecks,
     detail: detail || null,
+    details,
+    selectionObservations: selections.map((item, index) => {
+      const check = selectionChecks[index] || {};
+      const detailItem = details.find((candidate) => candidate.selectedSubjectId === item.selectedSubjectId);
+      return `subject=${item.selectedSubjectId || 'missing'} unit=${item.unit || 'missing'} detailResult=${detailItem?.detail?.result || 'UNVERIFIED'} detailChecks=${Object.entries(detailItem?.detail?.checks || {}).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS'} selectionChecks=${Object.entries(check).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS'}`;
+    }),
+    detailObservations: details.map((item) => `subject=${item.selectedSubjectId || 'missing'} detailResult=${item.detail?.result || 'UNVERIFIED'} source=${item.detail?.candidateSource || 'missing'} rawProductId=${item.detail?.stableIdentity?.rawProductId || 'missing'} derivedSubjectId=${item.detail?.stableIdentity?.derivedSubjectId || 'missing'} identity=${item.detail?.checks?.stableIdentity === true} unit=${item.detail?.candidateUnit || 'missing'} rows=${item.detail?.rowCount ?? 0} productKeys=${item.detail?.checks?.productKeys === true} units=${item.detail?.checks?.units === true} checks=${Object.entries(item.detail?.checks || {}).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS'}`),
     rawPagination: rawPagination || null,
     note: result === 'PASS'
       ? '100 stable products, bounded rendering, exact subject-scoped answers, target KPI/rows and real pagination evidence passed.'
@@ -6809,6 +6967,7 @@ async function inspectScale(page, inspectCtx) {
   const selections = [];
   const screenshots = [];
   let detail = null;
+  const details = [];
   for (const [selectionIndex, subject] of ordered.entries()) {
     const selectedId = subjectId(subject);
     if (!selectedId) continue;
@@ -6830,9 +6989,10 @@ async function inspectScale(page, inspectCtx) {
       await cards.nth(index).locator('canvas').first().waitFor({ state: 'visible', timeout: 10_000 });
     }
     const renderedCanvasCount = await cards.locator('canvas').count();
-    const selection = { status: selectedResponse.status(), requestedSubjectId: selectedId, selectedSubjectId: body?.data?.analysisSubject || request.analysisSubject || null, body, request, visibleChartCount, renderedCanvasCount };
+    const selection = { status: selectedResponse.status(), requestedSubjectId: selectedId, selectedSubjectId: body?.data?.analysisSubject || request.analysisSubject || null, unit: null, body, request, visibleChartCount, renderedCanvasCount };
     const candidate = (body?.data?.recommendations || [])[0];
-    if (selectedId === options.targetProductId && candidate?.id) {
+    selection.unit = candidate?.unit || null;
+    if (candidate?.id && candidate?.detailContext?.id) {
       const card = page.getByTestId(`factory-chart-card-${candidate.id}`);
       const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true });
       if (await detailsButton.count()) {
@@ -6840,11 +7000,25 @@ async function inspectScale(page, inspectCtx) {
         await detailsButton.click();
         const detailsResponse = await responsePromise;
         const detailsBody = detailsResponse ? await responseBody(detailsResponse) : {};
-        detail = assessProductDetail({ attempted: true, status: detailsResponse?.status(), body: detailsBody, request: detailsResponse ? requestBody(detailsResponse) : {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate);
+        const detailRows = Array.isArray(detailsBody?.data?.rows) ? detailsBody.data.rows : [];
+        const subjectIdentity = await deriveSubjectIdentity(page, rowProductId(detailRows[0]), selectedId);
+        const detailResult = assessProductDetail({ attempted: true, status: detailsResponse?.status(), body: detailsBody, request: detailsResponse ? requestBody(detailsResponse) : {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate, selectedId, subjectIdentity);
+        const detailObservation = { selectedSubjectId: selectedId, detail: detailResult };
+        details.push(detailObservation);
+        selection.detailResult = detailResult;
+        if (selectedId === options.targetProductId) detail = detailResult;
         if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
       } else {
-        detail = assessProductDetail({ attempted: false, status: null, body: { success: false, data: {} }, request: {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate);
+        const detailResult = assessProductDetail({ attempted: false, status: null, body: { success: false, data: {} }, request: {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate, selectedId, { rawProductId: null, derivedSubjectId: null, matches: false });
+        details.push({ selectedSubjectId: selectedId, detail: detailResult });
+        selection.detailResult = detailResult;
+        if (selectedId === options.targetProductId) detail = detailResult;
       }
+    } else {
+      const detailResult = assessProductDetail({ attempted: false, status: null, body: { success: false, data: {} }, request: {} }, options, candidate?.id, candidate?.detailContext?.id, body?.data?.period?.label, candidate, selectedId, { rawProductId: null, derivedSubjectId: null, matches: false });
+      details.push({ selectedSubjectId: selectedId, detail: detailResult });
+      selection.detailResult = detailResult;
+      if (selectedId === options.targetProductId) detail = detailResult;
     }
     selections.push(selection);
     if (selectedId === options.targetProductId && inspectCtx.screenshot) {
@@ -6853,7 +7027,7 @@ async function inspectScale(page, inspectCtx) {
   }
   const rawPagination = await runRawUploadPagination(page, options);
   if (inspectCtx.screenshot) screenshots.push(await inspectCtx.screenshot('scale-original-upload-page-two'));
-  const assessment = assessScale({ factoryId: inspectCtx.expectedFactoryId, options, initial, selections, detail, rawPagination });
+  const assessment = assessScale({ factoryId: inspectCtx.expectedFactoryId, options, initial, selections, detail, details, rawPagination });
   return {
     assessment,
     ...assessment,
@@ -6864,6 +7038,9 @@ async function inspectScale(page, inspectCtx) {
       selectedSubjectId: item.selectedSubjectId,
       request: item.request,
       response: { factoryId: item.body?.data?.factoryId, source: item.body?.data?.source, analysisSubject: item.body?.data?.analysisSubject, recommendationCount: item.body?.data?.recommendations?.length || 0 },
+      unit: item.unit || null,
+      detailResult: item.detailResult?.result || 'UNVERIFIED',
+      detailChecks: Object.entries(item.detailResult?.checks || {}).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS',
       visibleChartCount: item.visibleChartCount,
       renderedCanvasCount: item.renderedCanvasCount,
     })),

@@ -306,9 +306,13 @@ def qualify_purchase_batch_rows(
     """
     materialized = [dict(row) for row in rows]
     key_counts: defaultdict[tuple[Any, Any], int] = defaultdict(int)
+    batch_counts: defaultdict[Any, int] = defaultdict(int)
     for row in materialized:
         key_counts[(row.get("收货单ID"), row.get("收货行ID"))] += 1
+        if row.get("物料批次ID"):
+            batch_counts[row.get("物料批次ID")] += 1
     duplicate_keys = {key for key, count in key_counts.items() if count > 1}
+    duplicate_batches = {batch for batch, count in batch_counts.items() if count > 1}
     qualified: list[dict[str, Any]] = []
     reasons: defaultdict[str, int] = defaultdict(int)
     for row in materialized:
@@ -316,6 +320,8 @@ def qualify_purchase_batch_rows(
         reason: str | None = None
         if key in duplicate_keys:
             reason = "收货行重复"
+        if row.get("物料批次ID") in duplicate_batches:
+            reason = reason or "物料批次被多个收货行重复关联"
         if row.get("收货工厂ID") != factory_id or row.get("批次工厂ID") != factory_id:
             reason = reason or "收货或批次租户不一致"
         if row.get("收货状态") != "CONFIRMED":
@@ -367,6 +373,12 @@ def qualify_purchase_batch_rows(
         material_label = row.get("物料") or row.get("物料ID")
         clean["数量"] = canonical_qty
         clean["数量单位"] = canonical_unit
+        if "批次已用数量" in row and "批次预留数量" in row:
+            used_qty = _decimal(row.get("批次已用数量"))
+            reserved_qty = _decimal(row.get("批次预留数量"))
+            available_qty = (canonical_qty - used_qty - reserved_qty
+                             if used_qty is not None and reserved_qty is not None else None)
+            clean["当前可用数量"] = available_qty
         clean["物料（单位）"] = f"{material_label}（{canonical_unit}）"
         clean["事实限定"] = "已确认收货 + 收货行物料批次双向来源校验"
         qualified.append(clean)

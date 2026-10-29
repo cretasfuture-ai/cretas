@@ -96,13 +96,33 @@ function candidateIsQualified(candidate) {
     && candidate?.detailStatus?.state !== 'capacity');
 }
 
+function verifiedWipVoucherCount(candidate, fact) {
+  if (familyOf(candidate) !== 'wip-plan-flow.plan-flow'
+    || !String(candidate?.source || '').startsWith('wip-plan-flow ·')
+    || fact?.label !== '独立流转条数' || fact?.unit !== '条') return false;
+  const headers = candidate?.tableData?.headers;
+  const rows = candidate?.tableData?.rows;
+  if (!Array.isArray(headers) || !Array.isArray(rows) || !rows.length) return false;
+  const voucher = headers.indexOf('MC凭证');
+  const quantity = headers.indexOf('数量');
+  const rowUnit = headers.indexOf('单位');
+  if ([voucher, quantity, rowUnit].some((index) => index < 0)) return false;
+  const unit = String(candidate?.unit || '').trim();
+  if (!rows.every((row) => Array.isArray(row) && /^MC:[1-9]\d*$/u.test(String(row[voucher]))
+    && String(row[rowUnit]).trim() === unit && Number.isFinite(Number(row[quantity]))
+    && Number(row[quantity]) > 0)) return false;
+  return new Set(rows.map((row) => String(row[voucher]))).size === rows.length
+    && Number.isSafeInteger(Number(fact.value)) && Number(fact.value) === rows.length;
+}
+
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
   if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
   return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
     const factUnit = String(fact?.unit || '').trim();
     return !factUnit || factUnit === unit
-      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')));
+      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')))
+      || verifiedWipVoucherCount(candidate, fact);
   });
 }
 
