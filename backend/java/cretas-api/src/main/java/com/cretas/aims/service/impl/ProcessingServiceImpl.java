@@ -851,6 +851,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     /**
      * 记录原材料消耗 (向后兼容，使用supervisorId或默认值)
      */
+    @Transactional(rollbackFor = Exception.class)
     public void recordMaterialConsumption(String factoryId, String productionBatchId,
                                          List<Map<String, Object>> consumptions) {
         recordMaterialConsumption(factoryId, productionBatchId, consumptions, null);
@@ -860,6 +861,7 @@ public class ProcessingServiceImpl implements ProcessingService {
      * 记录原材料消耗 (带用户ID参数)
      * N+1 修复：合并两个循环，使用缓存 Map 避免重复查询
      */
+    @Transactional(rollbackFor = Exception.class)
     public void recordMaterialConsumption(String factoryId, String productionBatchId,
                                          List<Map<String, Object>> consumptions, Long userId) {
         log.info("记录原材料消耗: factoryId={}, productionBatchId={}, userId={}", factoryId, productionBatchId, userId);
@@ -875,7 +877,7 @@ public class ProcessingServiceImpl implements ProcessingService {
 
             // 使用 computeIfAbsent 确保每个 materialBatchId 只查询一次
             MaterialBatch materialBatch = batchCache.computeIfAbsent(materialBatchId,
-                    id -> materialBatchRepository.findById(id)
+                    id -> materialBatchRepository.findByIdAndFactoryId(id, factoryId)
                             .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在: " + id)));
 
             // 检查库存
