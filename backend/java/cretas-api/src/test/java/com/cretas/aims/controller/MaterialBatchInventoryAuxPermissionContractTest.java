@@ -120,7 +120,7 @@ class MaterialBatchInventoryAuxPermissionContractTest {
         switch(route){
             case "inventory/statistics" -> {
                 result.andExpect(jsonPath("$.data.totalBatches").value(7)).andExpect(jsonPath("$.data.totalQuantity").value(25));
-                if(policy.hasPermission(actor,"procurement:price:view"))result.andExpect(jsonPath("$.data.totalValue").value(99));
+                if(new com.cretas.aims.security.PriceVisibility(policy).canView(actor,com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE))result.andExpect(jsonPath("$.data.totalValue").value(99)); // S5-12: 采购读或财务读 (配置)
                 else result.andExpect(jsonPath("$.data.totalValue").doesNotExist());
                 assertThat(source.get("totalValue")).isEqualTo(new BigDecimal("99"));verify(service).getInventoryStatistics("F006");
             }

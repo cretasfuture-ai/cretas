@@ -608,15 +608,12 @@ public class PurchaseController {
     @GetMapping("/statistics")
     @Operation(summary = "采购统计数据")
     @RequirePermission({"procurement:read_write", "procurement:read", "report:read"})
-    public ApiResponse<Map<String, Object>> getStatistics(
-            @PathVariable @NotBlank String factoryId,
-            jakarta.servlet.http.HttpServletRequest httpRequest) {
-        Map<String, Object> stats = new java.util.LinkedHashMap<>(purchaseService.getPurchaseStatistics(factoryId));
-        // S5-12: 顶层 Map 键不在 advice 的字段遍历里, 采购金额在这里按配置的采购读权限判; 看不到给 null 不给 0
-        if (!canViewPurchasePrices(httpRequest)) {
-            stats.put("monthlyPurchaseAmount", null);
-        }
-        return ApiResponse.success("查询成功", stats);
+    public ApiResponse<com.cretas.aims.dto.inventory.PurchaseStatisticsDTO> getStatistics(
+            @PathVariable @NotBlank String factoryId) {
+        // S5-12 (D-S5-07): 类型化 DTO —— 返回 Map 时 Rule 2b 会按「财务读写」剥掉名字带 amount 的键,
+        // 有采购读的采购经理反而看不到月采购额。金额由字段上的 PURCHASE 口径决定 (advice 统一剥)。
+        return ApiResponse.success("查询成功", com.cretas.aims.dto.inventory.PurchaseStatisticsDTO
+                .from(purchaseService.getPurchaseStatistics(factoryId)));
     }
 
     /**
@@ -670,11 +667,13 @@ public class PurchaseController {
 
     @GetMapping("/orders/{orderId}/price-comparison")
     @Operation(summary = "采购订单三价对比", description = "对比每个行项目的BOM标准单价、移动平均价、当前采购单价")
+    // S5-12 (D-S5-08): 裁定是「没有采购读才 403」—— 重新接受 procurement:read; 没有采购读的人 (含只有财务读写的)
+    // 仍由 requirePurchasePrices 按配置的采购读 403。下面 K5 的记录保留作历史。
     // Sprint1-Fix-K5 (2026-05-15): drop procurement:read AND finance:read —
     // 5x5 RBAC regression: viewer (has finance:read for cross-module read) still
     // leaked currentPrice. 三价对比仅 procurement:read_write + finance:read_write
     // (管理员/经理写权限) 可看; 只读角色 (viewer 等) deny。
-    @RequirePermission({"procurement:read_write", "finance:read_write"})
+    @RequirePermission({"procurement:read_write", "procurement:read", "finance:read_write"})
     public ApiResponse<List<MaterialPriceComparisonDTO>> getOrderPriceComparison(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,
@@ -687,7 +686,7 @@ public class PurchaseController {
     @GetMapping("/materials/{materialTypeId}/price-info")
     @Operation(summary = "原料三价查询", description = "查询单个原料的BOM标准单价、移动平均价，可选传入当前价计算偏差")
     // Sprint1-Fix-K5 (2026-05-15): sister site of price-comparison, same lock (drop finance:read).
-    @RequirePermission({"procurement:read_write", "finance:read_write"})
+    @RequirePermission({"procurement:read_write", "procurement:read", "finance:read_write"})
     public ApiResponse<MaterialPriceComparisonDTO> getMaterialPriceInfo(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String materialTypeId,

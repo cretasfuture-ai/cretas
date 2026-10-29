@@ -28,6 +28,9 @@ import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.security.PriceSensitiveSerializerModifier;
 import com.cretas.aims.service.listsummary.ListSummaryService;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.controller.MaterialBatchController;
+import com.cretas.aims.dto.material.MaterialStockSummaryDTO;
+import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.controller.MaterialPackagingHierarchyController;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.dto.material.MaterialPackagingHierarchyDTO;
@@ -91,7 +94,7 @@ class PurchasePriceVisibilityConfigContractTest {
     private static final String F = "S512-F";
     private static final String NO_CFG = "S512-NOCFG";
     private static final long PROCUREMENT = 1L, FINANCE = 2L, SALES = 3L, PRODUCTION = 4L, WAREHOUSE = 5L,
-            FINANCE_OTHER = 6L, N_CASHIER = 18L;
+            FINANCE_OTHER = 6L, N_CASHIER = 18L, DEPT_ADMIN = 7L;
     private static final long N_PROCUREMENT = 11L, N_FINANCE = 12L, N_WAREHOUSE = 15L, N_DISPATCHER = 16L,
             N_PRODUCTION = 17L;
 
@@ -108,6 +111,7 @@ class PurchasePriceVisibilityConfigContractTest {
     private final ApprovalHistoryRepository approvalHistory = mock(ApprovalHistoryRepository.class);
     private final MaterialPackagingHierarchyService packagingService = mock(MaterialPackagingHierarchyService.class);
     private final MobileService mobileForExport = mock(MobileService.class);
+    private final MaterialBatchService batchService = mock(MaterialBatchService.class);
     private final ObjectMapper json = new ObjectMapper().registerModule(new JavaTimeModule())
             .registerModule(new SimpleModule("PriceSensitiveModule")
                     .setSerializerModifier(new PriceSensitiveSerializerModifier()));
@@ -142,6 +146,18 @@ class PurchasePriceVisibilityConfigContractTest {
         user(FINANCE, F, "finance_manager");
         user(FINANCE_OTHER, F, "finance_manager");   // 同角色, 但不是这张单的审批人
         user(N_CASHIER, NO_CFG, "cashier");
+        // 真实矩阵里的 department_admin: L1 给 procurement=r / finance=r (只读, 不是读写)
+        user(DEPT_ADMIN, F, "department_admin");
+        override.put("department_admin", new HashMap<>(Map.of("procurement", "r", "finance", "r", "warehouse", "r")));
+        for (long id : new long[] {PROCUREMENT, FINANCE, SALES, PRODUCTION, WAREHOUSE, DEPT_ADMIN}) {
+            UserDTO token = new UserDTO();
+            token.setId(id);
+            when(mobileForExport.getUserFromToken("t" + id)).thenReturn(token);
+        }
+        when(batchService.getInventoryValuation(F)).thenReturn(new BigDecimal("119084.21"));
+        when(batchService.listStockSummary(F)).thenAnswer(inv -> List.of(MaterialStockSummaryDTO.builder()
+                .materialTypeId("MAT-A").totalQuantity(new BigDecimal("37.2"))
+                .totalValue(new BigDecimal("297.60")).avgUnitPrice(new BigDecimal("8.00")).build()));
         user(SALES, F, "sales_manager");
         user(PRODUCTION, F, "production_manager");
         user(WAREHOUSE, F, "warehouse_manager");
@@ -224,7 +240,9 @@ class PurchasePriceVisibilityConfigContractTest {
                         new ListSummaryController(listSummaryService, permissions, users),
                         new ReturnOrderController(returnOrderService, mobile, null),
                         packagingController,
-                        new BatchCostProbeController())
+                        new BatchCostProbeController(),
+                        new MaterialBatchController(batchService, mobileForExport,
+                                new PriceMaskResolver(mobileForExport, users, permissions), null))
                 .addFilters(new PriceSensitiveContextFilter())
                 .addInterceptors(new PermissionInterceptor(permissions, users, json))
                 .setControllerAdvice(advice, new GlobalExceptionHandler())
@@ -334,9 +352,7 @@ class PurchasePriceVisibilityConfigContractTest {
         JsonNode stats = body(SALES, "/api/mobile/" + F + "/purchase/statistics", 200);
         assertThat(stats.at("/data/monthlyOrderCount").asInt()).isEqualTo(3);
         assertThat(stats.at("/data/monthlyPurchaseAmount").isNull()).isTrue();
-        // 既有 Rule 2b: Map 里名字带 amount 的键对没有 finance:read_write 的人一律剥 (与本修复无关),
-        // 所以这条阳性对照给采购经理补上财务读写, 只看采购口径这一层
-        grant("procurement_manager", "finance", "rw");
+        // D-S5-07: 采购经理没有财务读写也要看得到 (原来 Map 被 Rule 2b 按「财务读写」剥掉)
         assertThat(body(PROCUREMENT, "/api/mobile/" + F + "/purchase/statistics", 200)
                 .at("/data/monthlyPurchaseAmount").decimalValue()).isEqualByComparingTo("450.00");
     }
@@ -429,6 +445,55 @@ class PurchasePriceVisibilityConfigContractTest {
                     .unitPrice(new BigDecimal("12.50")).totalValue(new BigDecimal("125.00"))
                     .totalPrice(new BigDecimal("125.00")).build());
         }
+    }
+
+    // ─── #1305 之后的生产残留 (D-S5-05..08), 用真实矩阵角色 ──────────────────────
+
+    @Test
+    void inventoryValuationFollowsProcurementOrFinanceRead() throws Exception {
+        String url = "/api/mobile/" + F + "/material-batches/inventory/valuation";
+        for (long role : new long[] {SALES, PRODUCTION}) {   // 两样都是「-」(原来在旧名单里能读)
+            assertThat(callAuth(role, url).getResponse().getStatus()).as("role=%s", role).isEqualTo(403);
+        }
+        for (long role : new long[] {PROCUREMENT, FINANCE, DEPT_ADMIN}) {
+            MvcResult r = callAuth(role, url);
+            assertThat(r.getResponse().getStatus()).as("role=%s", role).isEqualTo(200);
+            assertThat(json.readTree(r.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                    .at("/data").decimalValue()).isEqualByComparingTo("119084.21");
+        }
+    }
+
+    @Test
+    void stockSummaryValueFollowsProcurementOrFinanceRead() throws Exception {
+        String url = "/api/mobile/" + F + "/material-batches/stock-summary";
+        JsonNode production = json.readTree(callAuth(PRODUCTION, url).getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertThat(production.at("/data/0/totalQuantity").decimalValue()).isEqualByComparingTo("37.2");
+        assertThat(production.at("/data/0/totalValue").isNull()).isTrue();
+        assertThat(production.at("/data/0/avgUnitPrice").isNull()).isTrue();
+        JsonNode deptAdmin = json.readTree(callAuth(DEPT_ADMIN, url).getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertThat(deptAdmin.at("/data/0/totalValue").decimalValue()).isEqualByComparingTo("297.60");
+        assertThat(deptAdmin.at("/data/0/avgUnitPrice").decimalValue()).isEqualByComparingTo("8.00");
+    }
+
+    @Test
+    void purchaseStatisticsAmountIsVisibleToProcurementReadOnlyRole() throws Exception {
+        // department_admin: procurement=r, finance=r (不是读写) —— 原来被 Rule 2b 剥成 null
+        JsonNode stats = body(DEPT_ADMIN, "/api/mobile/" + F + "/purchase/statistics", 200);
+        assertThat(stats.at("/data/monthlyPurchaseAmount").decimalValue()).isEqualByComparingTo("450.00");
+        assertThat(stats.at("/data/monthlyOrderCount").asInt()).isEqualTo(3);
+    }
+
+    @Test
+    void priceComparisonAcceptsProcurementReadOnly() throws Exception {
+        assertThat(body(DEPT_ADMIN, "/api/mobile/" + F + "/purchase/orders/PO-1/price-comparison", 200)
+                .at("/data/0/currentPrice").decimalValue()).isEqualByComparingTo("1.50");
+        // 只有财务读写、没有采购读: 仍 403
+        assertThat(call(FINANCE, get("/api/mobile/" + F + "/purchase/orders/PO-1/price-comparison"))
+                .getResponse().getStatus()).isEqualTo(403);
+    }
+
+    private MvcResult callAuth(long userId, String url) throws Exception {
+        return call(userId, get(url).header("Authorization", "Bearer t" + userId));
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────────
