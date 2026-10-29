@@ -18,6 +18,7 @@ const SCENARIOS = [
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/smartbi-focused-acceptance-readonly').commerceJoint,
   require('../scenarios/smartbi-focused-acceptance-readonly').legacyKpi,
+  require('../scenarios/quality-standard-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
   require('../scenarios/table-top-scroll-readonly').sales,
