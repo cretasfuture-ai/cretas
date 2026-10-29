@@ -78,6 +78,8 @@ const stubs = {
   ElOption: PassThrough('ElOption'),
   ElInputNumber: PassThrough('ElInputNumber'),
   ElDatePicker: PassThrough('ElDatePicker'),
+  ElAlert: defineComponent({ name: 'ElAlert', props: { title: { type: String, default: '' } },
+    setup(props) { return () => h('div', { class: 'stub-alert' }, props.title); } }),
 };
 
 const SWITCH_URL = '/F006/config/v2/autonomous-writes/switch';
@@ -127,7 +129,8 @@ function buttonByText(wrapper: Awaited<ReturnType<typeof mountPage>>, text: stri
 
 beforeEach(() => {
   vi.clearAllMocks();
-  routeGet({ factoryId: 'F006', writesEnabled: false, reason: null, changedBy: null, changedAt: null });
+  routeGet({ factoryId: 'F006', writesEnabled: false, reason: null, changedBy: null, changedAt: null,
+    deploymentEnabled: true, writesAllowed: false });
 });
 
 describe('定时任务写入页', () => {
@@ -147,13 +150,23 @@ describe('定时任务写入页', () => {
 
     harness.prompt.mockResolvedValueOnce({ value: '试点开启' });
     harness.put.mockResolvedValueOnce({ success: true, data: {
-      factoryId: 'F006', writesEnabled: true, reason: '试点开启', changedBy: 7, changedAt: '2026-10-29T09:00:00' } });
+      factoryId: 'F006', writesEnabled: true, reason: '试点开启', changedBy: 7, changedAt: '2026-10-29T09:00:00',
+      deploymentEnabled: true, writesAllowed: true } });
     await buttonByText(wrapper, '打开').trigger('click');
     await flushPromises();
     expect(harness.put).toHaveBeenCalledWith(SWITCH_URL, { writesEnabled: true, reason: '试点开启' });
     expect(wrapper.find('[data-testid="switch-state"]').text()).toBe('已打开');
     expect(wrapper.text()).toContain('用户 #7');
     expect(wrapper.text()).toContain('试点开启');
+  });
+
+  it('部署级暂停时即使本厂已打开也显示暂停, 不显示已打开', async () => {
+    routeGet({ factoryId: 'F006', writesEnabled: true, reason: '试点', changedBy: 7, changedAt: '2026-10-29T09:00:00',
+      deploymentEnabled: false, writesAllowed: false });
+    const wrapper = await mountPage();
+    expect(wrapper.find('[data-testid="switch-state"]').text()).toBe('已暂停（部署级）');
+    expect(wrapper.find('[data-testid="deployment-suspended"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain('已打开');
   });
 
   it('授权列表用中文显示, 撤销先确认再 POST revoke', async () => {

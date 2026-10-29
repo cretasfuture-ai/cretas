@@ -59,6 +59,15 @@ async function reload() {
 // ============ 总开关 ============
 const switching = ref(false);
 
+/** 展示的是下一次触发是否真的会写入；部署级暂停时即使本厂已打开也显示暂停。 */
+const switchTag = computed(() => {
+  const state = switchState.value;
+  if (state && !state.deploymentEnabled) {
+    return { label: state.writesEnabled ? '已暂停（部署级）' : '已关闭（部署级也已暂停）', type: 'warning' as const };
+  }
+  return state?.writesAllowed ? { label: '已打开', type: 'success' as const } : { label: '已关闭', type: 'info' as const };
+});
+
 async function toggleSwitch(turnOn: boolean) {
   if (!factoryId.value) return;
   let reason = '';
@@ -159,9 +168,7 @@ onMounted(reload);
     <el-card shadow="never" class="block">
       <template #header>定时任务写入总开关</template>
       <div class="switch-row">
-        <el-tag :type="switchState?.writesEnabled ? 'success' : 'info'" size="large" data-testid="switch-state">
-          {{ switchState?.writesEnabled ? '已打开' : '已关闭' }}
-        </el-tag>
+        <el-tag :type="switchTag.type" size="large" data-testid="switch-state">{{ switchTag.label }}</el-tag>
         <span class="hint">
           <template v-if="switchState?.changedAt">
             最近由 用户 #{{ switchState.changedBy }} 于 {{ formatTime(switchState.changedAt) }} 修改{{ switchState.reason ? `：${switchState.reason}` : '' }}
@@ -171,6 +178,9 @@ onMounted(reload);
         <el-button v-if="switchState?.writesEnabled" type="danger" :loading="switching" @click="toggleSwitch(false)">关闭</el-button>
         <el-button v-else type="primary" :loading="switching" @click="toggleSwitch(true)">打开</el-button>
       </div>
+      <el-alert v-if="switchState && !switchState.deploymentEnabled" type="warning" :closable="false" show-icon
+        data-testid="deployment-suspended" class="deployment-alert"
+        title="系统已在部署级暂停所有工厂的定时任务写入（运维开关）。本厂开关的设置会保留，但在恢复前不会执行任何写入。" />
     </el-card>
 
     <el-card shadow="never" class="block">
@@ -272,4 +282,5 @@ onMounted(reload);
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .hint { color: var(--el-text-color-secondary); font-size: 12px; }
 .error-hint { color: var(--el-color-danger); font-size: 12px; margin-top: 8px; }
+.deployment-alert { margin-top: 12px; }
 </style>
