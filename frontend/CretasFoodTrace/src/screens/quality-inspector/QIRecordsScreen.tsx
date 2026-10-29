@@ -143,7 +143,7 @@ export default function QIRecordsScreen() {
           <Text style={styles.productName}>{item.productName}</Text>
         </View>
         <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[item.grade] }]}>
-          <Text style={styles.gradeText}>{item.grade}</Text>
+          <Text style={styles.gradeText}>{item.grade === 'UNKNOWN' ? '—' : item.grade}</Text>
         </View>
       </View>
 

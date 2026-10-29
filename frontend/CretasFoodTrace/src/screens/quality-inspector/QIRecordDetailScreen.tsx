@@ -103,7 +103,7 @@ export default function QIRecordDetailScreen() {
   const resultLabel = isConditional
     ? '有条件合格'
     : isPending
-      ? '待复检'
+      ? t('records.pending')
       : isUnknown
         ? t('records.unknown')
       : record.passed
@@ -112,7 +112,7 @@ export default function QIRecordDetailScreen() {
   const statusLabel = isConditional
     ? '待处置'
     : isPending
-      ? '待复检'
+      ? t('records.pending')
       : isUnknown
         ? t('records.unknown')
       : record.passed
@@ -143,7 +143,7 @@ export default function QIRecordDetailScreen() {
             : styles.headerFail,
       ]}>
         <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[record.grade] }]}>
-          <Text style={styles.gradeText}>{record.grade}</Text>
+          <Text style={styles.gradeText}>{record.grade === 'UNKNOWN' ? '—' : record.grade}</Text>
         </View>
         <View style={styles.resultInfo}>
           <Text style={styles.resultLabel}>{resultLabel}</Text>
