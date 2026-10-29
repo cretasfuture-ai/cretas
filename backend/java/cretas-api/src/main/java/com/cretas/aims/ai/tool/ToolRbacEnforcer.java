@@ -240,61 +240,9 @@ public class ToolRbacEnforcer {
             // ===== 定价策略 (改售价直接影响营收) =====
             Map.entry("pricing_strategy_create", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("pricing_strategy_update", Set.of("sales:read_write", "finance:read_write")),
-            Map.entry("pricing_strategy_toggle", Set.of("sales:read_write", "finance:read_write")),
-
-            // ===== S6 验收 (2026-10-29, ERP-S6-02-SKILL-ROLE-BYPASS-001): 读受控数据的工具 =====
-            // 生产经理 / 仓库经理经 monthly-financial-close Skill (以及「查看本月资产负债表」意图) 拿到了
-            // 资产负债表, 而同一个人直接 GET finance/report/balance-sheet 是 403。原因: 这些工具直接调
-            // service, 不经过 controller, controller 上那道 @RequirePermission 对 AI / Skill 路径不存在。
-            // 规则: AI / Skill 返回的东西不能多于这个人直接调接口能拿到的 ⇒ 每个工具挂上「读同一份数据的
-            // HTTP 方法」的权限码 (方法级优先, 否则类级), 逐字相同。权限码的唯一来源在 controller 一侧:
-            // GatedDataToolAiPathPermissionTest 逐条反射读对位方法的注解, 两边漂了当场红; 同一个测试还扫
-            // 全部工具, 凡注入了「只被带门 controller 使用的 service/repository」而没挂码的, 要么挂码要么登记理由。
-            // ⚠️ 读数口径 (运营报表): report_oee / report_efficiency / report_inventory / report_kpi 等的 HTTP 对位
-            //    方法只放 finance / procurement:price:view, 所以 AI 面随之收紧到同样的人。若业务上应当让生产 /
-            //    仓库角色看这些运营报表, 该改的是 ReportController 上的注解 (两面一起放宽), 不是在这里单独放宽 AI 面。
-            Map.entry("balance_sheet_query", Set.of("finance:read", "finance:read_write")),  // FinanceReportController#balanceSheet
-            Map.entry("income_statement_query", Set.of("finance:read", "finance:read_write")),  // FinanceReportController#incomeStatement
-            Map.entry("cashflow_statement_query", Set.of("finance:read", "finance:read_write")),  // FinanceReportController#cashFlow
-            Map.entry("period_status_query", Set.of("finance:read", "finance:read_write")),  // AccountingPeriodController#status
-            Map.entry("account_query", Set.of("finance:read", "finance:read_write")),  // AccountController#list
-            Map.entry("account_tree_lookup", Set.of("finance:read", "finance:read_write")),  // AccountController#tree
-            Map.entry("accounts_receivable_aging", Set.of("finance:read_write", "finance:read")),  // ArApController#getAgingAnalysis
-            Map.entry("sales_record_payment", Set.of("finance:read_write")),  // ArApController#recordArPayment
-            Map.entry("finance_dupont", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("finance_liquidity", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("finance_roa", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("finance_roe", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("finance_solvency", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("finance_stats", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("report_finance", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("report_finance_ratio", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("report_payment_status", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("payment_status", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getFinanceReport
-            Map.entry("finance_invoice_status", Set.of("finance:read_write", "finance:read", "sales:read_write", "sales:read")),  // InvoiceController#detail
-            Map.entry("finance_payment_record", Set.of("finance:read_write", "sales:read_write")),  // PaymentRecordController#recordPayment
-            Map.entry("wage_cost_summary", Set.of("hr:read_write", "hr:read")),  // WagePolicyController#listCalculations
-            Map.entry("opportunity_funnel_stats", Set.of("sales:view")),  // SalesOpportunityController#funnelStats
-            Map.entry("commission_pending_total", Set.of("sales:view")),  // CommissionController#list
-            Map.entry("report_dashboard_overview", Set.of("dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view")),  // ReportController#getDashboardOverview
-            Map.entry("report_sales", Set.of("dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view")),  // ReportController#getDashboardOverview
-            Map.entry("sales_report", Set.of("dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view")),  // ReportController#getDashboardOverview
-            Map.entry("report_workshop_daily", Set.of("dashboard:read_write", "dashboard:read", "warehouse:read_write", "warehouse:read", "production:read_write", "production:read", "inventory:read_write", "inventory:read", "quality:read_write", "quality:read", "finance:read_write", "finance:read", "procurement:price:view")),  // ReportController#getProductionDashboard
-            Map.entry("report_trends", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getPeriodComparisonReport
-            Map.entry("report_oee", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getOeeReport
-            Map.entry("report_efficiency", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getEfficiencyAnalysisReport
-            Map.entry("report_benefit_overview", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getEfficiencyAnalysisReport
-            Map.entry("report_kpi", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getKPIMetrics
-            Map.entry("report_anomaly", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getAnomalyReport
-            Map.entry("report_cost_variance", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getCostVarianceReport
-            Map.entry("report_inventory", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getInventoryReport
-            Map.entry("report_mrp_calculation", Set.of("finance:read", "finance:read_write", "procurement:price:view")),  // ReportController#getInventoryReport
-            Map.entry("ecn_create", Set.of("production:read_write", "rd:read_write", "finance:read_write")),  // EcnController#create
-            Map.entry("return_order_list", Set.of("sales:read_write", "sales:read", "procurement:read_write", "procurement:read")),  // ReturnOrderController#listReturnOrders
-            Map.entry("return_order_detail", Set.of("sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "finance:read_write", "finance:read")),  // ReturnOrderController#getReturnOrder
-            Map.entry("return_order_statistics", Set.of("sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "report:read")),  // ReturnOrderController#getStatistics
-            Map.entry("return_order_approve", Set.of("sales:read_write", "procurement:read_write")),  // ReturnOrderController#approveReturnOrder
-            Map.entry("batch_consumption_query", Set.of("procurement:price:view", "production:read", "production:read_write"))  // MaterialConsumptionController#getBatchConsumptionSummary
+            Map.entry("pricing_strategy_toggle", Set.of("sales:read_write", "finance:read_write"))
+            // S6 (2026-10-29): tools that read permission-gated data declare their codes on the tool itself
+            // (getRequiredPermissions / role gate), pinned per method by GatedDataToolAiPathPermissionTest.
     );
 
     /**

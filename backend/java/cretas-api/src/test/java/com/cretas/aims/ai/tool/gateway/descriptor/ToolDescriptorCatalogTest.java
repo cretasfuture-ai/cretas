@@ -96,7 +96,8 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
-        assertThat(statistics.requiresPermission()).isEqualTo(50);
+        // 2026-10-29 S6 gated-data rule: 13 role-gated tools now require a permission check.
+        assertThat(statistics.requiresPermission()).isEqualTo(63);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -115,6 +116,10 @@ class ToolDescriptorCatalogTest {
                 "sales_create_invoice", "finance_invoice_request", "finance_invoice_request_from_order");
         // 2026-10-06: 价格权限门 —— 显式登记而不是放宽上面的判据 (其它 LEGACY 工具仍必须是空集)
         Set<String> legacyToolsWithPriceViewPermission = Set.of("report_sku_gross_margin");
+        // 2026-10-29 S6 gated-data rule: tools that declare the codes of the direct API serving their data,
+        // listed (with the exact codes) in ai/tool/gated-data-declared.tsv, which GatedDataToolAiPathPermissionTest
+        // checks against the real declarations.
+        Map<String, Set<String>> s6Declared = s6DeclaredCodes();
         assertThat(catalog.inventory().descriptors())
                 .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
@@ -132,6 +137,9 @@ class ToolDescriptorCatalogTest {
                         assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
                     } else if (legacyToolsWithPriceViewPermission.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("procurement:price:view");
+                    } else if (s6Declared.containsKey(entry.toolName())) {
+                        assertThat(entry.requiredPermissions()).containsExactlyInAnyOrderElementsOf(
+                                s6Declared.get(entry.toolName()));
                     } else {
                         assertThat(entry.requiredPermissions()).isEmpty();
                     }
@@ -285,5 +293,22 @@ class ToolDescriptorCatalogTest {
                       domainTags: true
                     governanceStatus: APPROVED
                 """;
+    }
+
+    /** tool → codes, for the CODES lines of ai/tool/gated-data-declared.tsv (ROLES lines declare no codes). */
+    static Map<String, Set<String>> s6DeclaredCodes() {
+        Map<String, Set<String>> result = new java.util.HashMap<>();
+        try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                ToolDescriptorCatalogTest.class.getResourceAsStream("/ai/tool/gated-data-declared.tsv"),
+                java.nio.charset.StandardCharsets.UTF_8))) {
+            for (String line; (line = in.readLine()) != null; ) {
+                if (line.isBlank() || line.startsWith("#")) continue;
+                String[] cols = line.split("	");
+                if ("CODES".equals(cols[1])) result.put(cols[0], Set.of(cols[2].split(",")));
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+        return result;
     }
 }

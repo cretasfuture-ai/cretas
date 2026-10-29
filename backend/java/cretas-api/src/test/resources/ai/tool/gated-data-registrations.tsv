@@ -1,0 +1,167 @@
+# S6 gated-data registrations (GatedDataToolAiPathPermissionTest).
+# tool<TAB>kind<TAB>reason. kind: NO_COUNTERPART = no HTTP read endpoint serves any data method the tool calls;
+# RULED = codes set by an explicit ruling instead of derived from endpoints. A tool missing here that the scan
+# cannot classify fails the test; a line whose tool no longer needs it fails too (stale).
+additive_compliance_check_quality	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: AdditiveLimitRepository#findByAdditiveCodeAndFoodCategoryAndActiveTrue
+additive_smart_match	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: AdditiveLimitRepository#findAllActiveForFuzzy, AdditiveLimitRepository#findByAdditiveCodeAndActiveTrue, AdditiveLimitRepository#findByAdditiveNameAndActiveTrue, AdditiveLimitRepository#findByAdditiveNameContainingAndActi
+batch_trace_by_customer_date	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: CustomerRepository#findByIdAndFactoryId, ShipmentRecordRepository#findByFactoryIdAndCustomerIdOrderByShipmentDateDesc
+bom_expansion_calculate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: BomExpansionService#checkPickableAvailability, BomExpansionService#expandBOM
+business_link_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: LinkArrayService#getInboundLinks, LinkArrayService#getOutboundLinks
+ccp_monitor_detection	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+cold_chain_alert_active	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ColdChainAlertRepository#findByFactoryIdAndStatusInOrderByAlertTimeDesc, ColdChainEquipmentRepository#findById
+cold_chain_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: IotDeviceDataRepository#findByFactoryIdAndDeviceIdAndTimeRange, IotDeviceDataRepository#findByTimeRange
+cold_chain_temp_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ColdChainEquipmentRepository#findByFactoryIdAndEquipmentCode, ColdChainEquipmentRepository#findById, ColdChainTempReadingRepository#findByEquipmentIdAndRecordedAtAfterOrderByRecordedAtAsc
+context_continue	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ConversationMemoryService#getContext
+customer_quality_standard	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: CustomerQualityStandardRepository#findByFactoryIdAndCustomerIdAndActiveTrue, CustomerRepository#findByIdAndFactoryId
+customer_revenue_trend	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: CustomerRepository#findByIdAndFactoryId, SalesOrderRepository#findByFactoryIdAndCustomerId, SalesOrderRepository#findByFactoryIdAndDateRange
+customer_tracking_recent_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: CustomerRepository#findByIdAndFactoryId, CustomerTrackingRecordRepository#findRecentForCustomer
+dahua_device_discovery	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: DahuaDeviceService#discoverDevices, DahuaDeviceService#discoverOnAllInterfaces
+dictionary_list	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SmartBiDictionaryRepository#countByDictTypeAndIsActiveTrue, SmartBiDictionaryRepository#findAllDictTypes, SmartBiDictionaryRepository#findByDictTypeAndFactoryId, SmartBiDictionaryRepository#findByDictTypeAndIsActiveTrueO
+efficiency_comparison	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#getDailyEfficiencyTrend, ProductionReportRepository#getHoursSummary, ProductionReportRepository#getProgressSummary, ProductionReportRepository#getWorkerEfficiencyRanking
+execute_switch	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+food_knowledge_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+food_sample_trace	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: FoodSampleRepository#findByFactoryIdAndBatchNumber
+generic_detail	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+home_layout_suggest	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+ingredient_nutrition_fact_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: IngredientNutritionFactRepository#findByActiveTrue, IngredientNutritionFactRepository#findByIngredientCodeAndActiveTrue, IngredientNutritionFactRepository#findByIngredientNameContainingAndActiveTrue
+material_disposal_recommendation	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: MaterialBatchRepository#findExpiredBatches, MaterialBatchRepository#findExpiringBatches
+material_worker_count	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProcessingService#getDashboardOverview
+navigate_out_of_domain	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+nutrition_label_lookup	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: NutritionLabelRepository#findByFactoryIdAndProductCodeOrderByCreatedAtDesc, NutritionLabelRepository#findByFactoryIdAndProductNameContainingOrderByCreatedAtDesc, NutritionLabelRepository#findByFactoryIdOrderByCreatedAtDe
+online_staff_count	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: EmployeeWorkSessionRepository#countByFactoryIdAndStatus, TimeClockRecordRepository#countDistinctUsersByFactoryIdAndClockDateBetween
+order_today	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#findByFactoryIdAndDateRange
+out_of_domain	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+pagination_next	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ConversationMemoryService#getContext
+permission_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+pricing_test_calculate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: PricingEngine#simulate
+print_document	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+processing_capacity_today	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionBatchRepository#findByFactoryIdAndCreatedAtBetween
+profile_edit	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+quality_check_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: MaterialBatchRepository#findByIdAndFactoryId, ProductionBatchRepository#findByIdAndFactoryId, QualityInspectionService#getInspections
+quality_check_summary	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: MaterialBatchRepository#findByFactoryIdAndBatchNumber, QualityInspectionRepository#findByFactoryIdAndMaterialBatchId
+quality_record_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: QualityInspectionService#getInspections
+quality_stats_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: QualityInspectionRepository#calculateAveragePassRate, QualityInspectionRepository#calculateFirstPassRate, QualityInspectionRepository#calculateTotalFailCount, QualityInspectionRepository#calculateTotalPassCount, QualityI
+query_drools_rules	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+query_entity_schema	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+query_retry_last	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+rbac_audit	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+receive_quality_check_today	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: MaterialBatchRepository#countByFactoryIdAndReceiptDateAfter, MaterialBatchRepository#findByFactoryIdAndStatus
+report_ai_quality	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ReportService#getQualityReport
+report_analyze_equipment	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+report_attendance_stats_by_dept	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+report_bom_cost	RULED	组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本分析同口径
+report_cost_query	RULED	组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 同口径
+report_cost_trend_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: AIEnterpriseService#analyzeTimeRangeCost
+report_cost_trend_analysis	RULED	组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本趋势分析同口径 (那是 POST 分析端点, 扫描只看 GET)
+report_equipment_status_by_name	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+report_online_staff_count	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+report_production	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ReportService#getProductionReport
+report_production_weekly_comparison	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ReportService#getTrendAnalysisReport
+report_quality	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ReportService#getQualityReport
+restaurant_arap_payable_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ArApTransactionRepository#findByFactoryIdAndCounterpartyTypeOrderByTransactionDateDesc, ArApTransactionRepository#findOverduePayables, ArApTransactionRepository#sumPayables
+restaurant_avg_ticket	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_benchmark_alert	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_bestseller_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderItemRepository#findBySalesOrderId, SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_bom_layer_status	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_bom_variance	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_calibration_history	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_channel_margin	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_comprehensive_synthesis_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_cost_rigidity_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_cross_chain_benchmark	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_daily_reconciliation	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_daily_revenue	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_department_pnl	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_dining_heatmap	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_discount_usage_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_dish_bestseller_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_dish_list	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductTypeRepository#findByFactoryIdAndIsActive
+restaurant_dish_product_sales_ranking	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductTypeRepository#findByFactoryIdAndIsActive, SalesOrderItemRepository#findBySalesOrderId, SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_dish_sales_ranking	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderItemRepository#findBySalesOrderId, SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_dish_slowseller_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_economics_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_forecast	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_ingredient_expiry_alert	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: MaterialBatchRepository#findExpiringBatches
+restaurant_labor_productivity	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_long_tail_sku	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_member_rfm	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_menu_engineering	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_menu_normalization	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_multi_store_comparison	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_ops_gold_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_order_statistics	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#countByFactoryIdAndDate, SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_order_type_mix_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_peak_hours_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_peak_hours_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_peak_month_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_performance_eval	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_piecework_calc	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_procurement_forecast	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_return_anomaly	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_return_rate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_revenue_trend	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_revenue_trend_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_city	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_competitive	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_complaint	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_dish_issue	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_env_score	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_good_tags	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_platform	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_reply_rate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_score_tags	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_service_score	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_store_rank	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_summary	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_time_period	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_trend	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_vip	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_review_vip_tags	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_sales_plan_track	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_seat_occupancy	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_shift_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_shrinkage_analysis	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_slow_seller_query	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductTypeRepository#findByFactoryIdAndIsActive, SalesOrderItemRepository#findBySalesOrderId, SalesOrderRepository#findByFactoryIdAndDateRange
+restaurant_smart_reorder	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_staff_ranking_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_store_kpi_dashboard	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_store_pnl_one_pager	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_store_revenue_rank_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_stored_value	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_table_turnover	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderRepository#countByFactoryIdAndDate
+restaurant_temporal_comparison	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_value_summary	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+restaurant_voice_requisition	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: VoiceRequisitionParserService#parse
+restaurant_weekday_weekend_gold	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+revenue_report_generate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+rule_test_evaluate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: BusinessRuleRepository#findByFactoryIdAndRuleCode, RuleEngine#preview
+sales_forecast_7day	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SalesOrderItemRepository#findBySalesOrderId, SalesOrderRepository#findByFactoryIdAndDateRange
+scale_calibrate	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+scale_list_protocols	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ScaleProtocolAdapterService#getAvailableProtocols
+scale_protocol_detect	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ScaleProtocolAdapterService#autoDetectProtocolHex
+scale_test_parse	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ScaleProtocolAdapterService#autoDetectProtocolHex, ScaleProtocolAdapterService#dryRunParse
+scale_troubleshoot	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+send_wechat_notification	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+shortage_analyze	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ShortageAnalysisService#analyzeForSalesOrder, ShortageAnalysisService#suggestProcurement, ShortageAnalysisService#suggestProduction
+sop_analyze_complexity	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+sop_parse_document	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+ssop_execution_today	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SsopExecutionRecordRepository#findByFactoryIdAndExecutionDateOrderByShiftAscIdAsc, SsopProcedureRepository#findById
+ssop_monthly_audit_report	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SsopBlockingGateRepository#findByFactoryIdAndBlockedAtBetween, SsopExecutionRecordRepository#countByStatusInRange, SsopExecutionRecordRepository#findByFactoryIdAndExecutionDateBetween, SsopProcedureRepository#countByFact
+ssop_production_gate_check	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: SsopExecutionRecordRepository#findByFactoryIdAndExecutionDateAndStatusIn, SsopExecutionRecordRepository#findByFactoryIdAndExecutionDateOrderByShiftAscIdAsc, SsopProcedureRepository#findById
+store_review_revenue	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+supplier_price_alert	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+switch_factory	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+system_feedback	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+system_go_back	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+system_notification_settings	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+system_settings	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+unsupported_capability	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+wage_policy_query	RULED	组织者裁定 2026-10-29: 工资方案按 WagePolicyController 的 hr 读权限 (它的数据另由仅限管理员角色的 canvas 端点提供)
+workdesk_role_capabilities	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: 
+worker_realtime_count	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: EmployeeWorkSessionRepository#countByFactoryIdAndStatus, WorkerAssignmentRepository#findByFactoryIdAndStatus
+workflow_variable_test	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: WorkflowVariableService#testExpression
+workreport_checkin	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: BatchWorkSessionRepository#countByFactoryIdAndCheckInTimeBetween
+workreport_daily_summary	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#countByFactoryIdAndDate, ProductionReportRepository#getHoursSummary, ProductionReportRepository#getProgressSummary
+workreport_hours	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#getHoursSummary
+workreport_progress	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#getProgressSummary

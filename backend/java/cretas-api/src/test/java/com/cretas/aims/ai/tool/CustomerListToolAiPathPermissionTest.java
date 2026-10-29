@@ -278,10 +278,6 @@ class CustomerListToolAiPathPermissionTest {
     void exactlySevenToolsCarryTheRulingCodes() {
         List<String> carriers = ToolRbacEnforcer.TOOL_PERMISSION_MAP.entrySet().stream()
                 .filter(e -> e.getValue().equals(RULING_CODES))
-                // S6 (2026-10-29): tools that mirror their own HTTP method's codes under the gated-data rule
-                // (pinned one by one in GatedDataToolAiPathPermissionTest) are not roster-ruling carriers, even
-                // when that method's codes happen to be these four (finance_invoice_status ← InvoiceController#detail).
-                .filter(e -> !GatedDataToolAiPathPermissionTest.TOOL_TO_HTTP.containsKey(e.getKey()))
                 .map(Map.Entry::getKey)
                 .sorted()
                 .toList();

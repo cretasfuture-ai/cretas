@@ -2,11 +2,11 @@ package com.cretas.aims.ai.tool;
 
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ToolCall;
-import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.skill.SkillContext;
 import com.cretas.aims.dto.skill.SkillDefinition;
 import com.cretas.aims.dto.skill.SkillResult;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.smartbi.SmartBiSkillRepository;
@@ -15,34 +15,28 @@ import com.cretas.aims.service.execution.ToolPermissionChain;
 import com.cretas.aims.service.skill.impl.SkillExecutorImpl;
 import com.cretas.aims.service.skill.impl.SkillRegistryImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.springframework.beans.factory.config.BeanDefinition;
-import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
-import org.springframework.core.type.filter.AnnotationTypeFilter;
-import org.springframework.core.type.filter.AssignableTypeFilter;
 import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.web.bind.annotation.RestController;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -53,85 +47,47 @@ import static org.mockito.Mockito.when;
 /**
  * S6 acceptance (ERP-S6-02-SKILL-ROLE-BYPASS-001): a production manager ran the monthly-financial-close
  * Skill and read the balance sheet, while {@code GET finance/report/balance-sheet} is 403 for the same
- * person. The tools call services directly, so the controller's {@code @RequirePermission} never ran
- * on the AI / Skill path.
+ * person: tools call services directly, so a controller's gate never runs on the AI / Skill / MCP path.
  *
- * <p>Rule: an AI or Skill path never returns more than the caller can get from the direct API. Each
- * tool that reads data behind a permission-gated controller carries exactly the codes of the HTTP
- * method that serves the same data ({@link ToolRbacEnforcer#TOOL_PERMISSION_MAP}). The codes are
- * read from the controller annotations here, never copied by hand. A sweep then fails for any tool
- * (or registered Skill's tool) that injects a service or repository used only by gated controllers
- * yet carries no permission and is not registered with a reason.</p>
+ * <p>Rule ("AI 能做的 = App 里本来就能做的"): an AI path never returns more than the caller can read
+ * from the direct API. {@link GatedDataScan} reads the bytecode: for every GET handler it records the
+ * service / repository methods it calls and its effective gate; for every tool the same calls. Every
+ * READ tool is then classified, failing closed:</p>
+ * <ul>
+ *   <li>it calls data that only gated read endpoints serve → it must declare permission codes that each
+ *       of those endpoints accepts (any-of; a requireAll endpoint cannot be mirrored and fails), or, when
+ *       the endpoints are role-gated only, a role gate admitting no role they do not admit;</li>
+ *   <li>it calls only data some ungated read endpoint also serves → nothing to add;</li>
+ *   <li>no read endpoint serves anything it calls → it must declare a gate, or be registered with a
+ *       reason in {@code ai/tool/gated-data-registrations.tsv}.</li>
+ * </ul>
+ * An unclassified READ tool, or a stale registration, fails. The same applies to every tool of every
+ * built-in Skill (declared tools, DAG nodes and fallbacks).
  */
-@DisplayName("受控数据: AI / Skill 路径的权限与直接接口逐字相同")
+@DisplayName("受控数据: AI / Skill 路径不多于直接接口 (按方法扫描, 未分类即失败)")
 public class GatedDataToolAiPathPermissionTest {
 
     private static final String FACTORY = "F006";
     private static final long PRODUCTION_MANAGER = 9501L;
     private static final long FINANCE_MANAGER = 9502L;
+    private static final long SUPER_ADMIN = 9503L;
 
-    /** tool → HTTP counterpart serving the same service call (controller class, method name). */
-    static final Map<String, String[]> TOOL_TO_HTTP = new LinkedHashMap<>();
-    static {
-        String fr = "com.cretas.aims.controller.finance.FinanceReportController";
-        String rc = "com.cretas.aims.controller.ReportController";
-        pair("balance_sheet_query", fr, "balanceSheet");
-        pair("income_statement_query", fr, "incomeStatement");
-        pair("cashflow_statement_query", fr, "cashFlow");
-        pair("period_status_query", "com.cretas.aims.controller.finance.AccountingPeriodController", "status");
-        pair("account_query", "com.cretas.aims.controller.finance.AccountController", "list");
-        pair("account_tree_lookup", "com.cretas.aims.controller.finance.AccountController", "tree");
-        pair("accounts_receivable_aging", "com.cretas.aims.controller.finance.ArApController", "getAgingAnalysis");
-        pair("sales_record_payment", "com.cretas.aims.controller.finance.ArApController", "recordArPayment");
-        for (String tool : List.of("finance_dupont", "finance_liquidity", "finance_roa", "finance_roe",
-                "finance_solvency", "finance_stats", "report_finance", "report_finance_ratio",
-                "report_payment_status", "payment_status")) {
-            pair(tool, rc, "getFinanceReport");
+    private static GatedDataScan scan;
+    private static Map<String, String[]> registrations;
+
+    @BeforeAll
+    static void scanOnce() throws Exception {
+        scan = GatedDataScan.run();
+        registrations = new LinkedHashMap<>();
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(
+                GatedDataToolAiPathPermissionTest.class.getResourceAsStream("/ai/tool/gated-data-registrations.tsv"),
+                StandardCharsets.UTF_8))) {
+            for (String line; (line = in.readLine()) != null; ) {
+                if (line.isBlank() || line.startsWith("#")) continue;
+                String[] cols = line.split("\t", 3);
+                registrations.put(cols[0], new String[]{cols[1], cols.length > 2 ? cols[2] : ""});
+            }
         }
-        pair("finance_invoice_status", "com.cretas.aims.controller.finance.InvoiceController", "detail");
-        pair("finance_payment_record", "com.cretas.aims.controller.finance.PaymentRecordController", "recordPayment");
-        pair("wage_cost_summary", "com.cretas.aims.controller.WagePolicyController", "listCalculations");
-        pair("opportunity_funnel_stats", "com.cretas.aims.controller.SalesOpportunityController", "funnelStats");
-        pair("commission_pending_total", "com.cretas.aims.controller.CommissionController", "list");
-        pair("report_dashboard_overview", rc, "getDashboardOverview");
-        pair("report_sales", rc, "getDashboardOverview");
-        pair("sales_report", rc, "getDashboardOverview");
-        pair("report_workshop_daily", rc, "getProductionDashboard");
-        pair("report_trends", rc, "getPeriodComparisonReport");
-        pair("report_oee", rc, "getOeeReport");
-        pair("report_efficiency", rc, "getEfficiencyAnalysisReport");
-        pair("report_benefit_overview", rc, "getEfficiencyAnalysisReport");
-        pair("report_kpi", rc, "getKPIMetrics");
-        pair("report_anomaly", rc, "getAnomalyReport");
-        pair("report_cost_variance", rc, "getCostVarianceReport");
-        pair("report_inventory", rc, "getInventoryReport");
-        pair("report_mrp_calculation", rc, "getInventoryReport");
-        pair("ecn_create", "com.cretas.aims.controller.EcnController", "create");
-        String ro = "com.cretas.aims.controller.inventory.ReturnOrderController";
-        pair("return_order_list", ro, "listReturnOrders");
-        pair("return_order_detail", ro, "getReturnOrder");
-        pair("return_order_statistics", ro, "getStatistics");
-        pair("return_order_approve", ro, "approveReturnOrder");
-        pair("batch_consumption_query", "com.cretas.aims.controller.MaterialConsumptionController",
-                "getBatchConsumptionSummary");
-    }
-
-    private static void pair(String tool, String controller, String method) {
-        TOOL_TO_HTTP.put(tool, new String[]{controller, method});
-    }
-
-    /**
-     * Tools that inject a gated-only service but are deliberately not gated, each with the reason.
-     * An entry here is a registration, not an exemption from review.
-     */
-    static final Map<String, String> REGISTERED_NOT_GATED = new LinkedHashMap<>();
-    static {
-        String noCounterpart = "调用的 ReportService 方法没有任何 HTTP 方法暴露 (getProductionReport / getQualityReport /"
-                + " getTrendAnalysisReport), 没有可对齐的直接接口; 内容是生产 / 质检运营数据, 不含金额";
-        REGISTERED_NOT_GATED.put("report_production", noCounterpart);
-        REGISTERED_NOT_GATED.put("report_quality", noCounterpart);
-        REGISTERED_NOT_GATED.put("report_ai_quality", noCounterpart);
-        REGISTERED_NOT_GATED.put("report_production_weekly_comparison", noCounterpart);
     }
 
     private UserRepository users;
@@ -149,107 +105,245 @@ public class GatedDataToolAiPathPermissionTest {
         ReflectionTestUtils.setField(enforcer, "rbacGuard", guard);
         when(users.findById(PRODUCTION_MANAGER)).thenReturn(Optional.of(user(PRODUCTION_MANAGER, "production_manager")));
         when(users.findById(FINANCE_MANAGER)).thenReturn(Optional.of(user(FINANCE_MANAGER, "finance_manager")));
-        // finance_manager holds finance:read(_write); production_manager holds only production codes.
+        when(users.findById(SUPER_ADMIN)).thenReturn(Optional.of(user(SUPER_ADMIN, "factory_super_admin")));
+        // Mirrors the real matrix for these three: super admin holds everything; finance_manager holds
+        // finance:* (not hr:*, not sales:view); production_manager holds production:* only.
         when(permissions.hasAnyPermission(any(), any(String[].class))).thenAnswer(call -> {
             User user = call.getArgument(0);
-            Object[] args = call.getArguments();
             Set<String> asked = new HashSet<>();
+            Object[] args = call.getArguments();
             for (int i = 1; i < args.length; i++) {
                 if (args[i] instanceof String code) asked.add(code);
                 if (args[i] instanceof String[] codes) asked.addAll(Arrays.asList(codes));
             }
+            if (user.getId() == SUPER_ADMIN) return true;
             Set<String> held = user.getId() == FINANCE_MANAGER
-                    ? Set.of("finance:read", "finance:read_write")
+                    ? Set.of("finance:read", "finance:read_write", "sales:read", "analytics:read", "analytics:read_write")
                     : Set.of("production:read", "production:read_write");
             return asked.stream().anyMatch(held::contains);
         });
     }
 
-    // ==================== AI path: mirrored codes ====================
+    // ==================== classification (fail closed) ====================
 
-    @ParameterizedTest(name = "{0} 的权限码 = {1}#{2} 的 @RequirePermission")
-    @MethodSource("pairs")
-    void aiPathCodesEqualTheDirectApiCodes(String tool, String controller, String method) throws Exception {
-        assertThat(ToolRbacEnforcer.TOOL_PERMISSION_MAP.get(tool))
-                .as("%s must carry exactly the codes of %s#%s", tool, controller, method)
-                .isEqualTo(effectiveCodes(Class.forName(controller), method));
-    }
+    @Test
+    @DisplayName("🔴 每个 READ 工具都已分类: 读受控数据的挂了与直接接口一致的门, 无对位接口的登记了理由")
+    void everyReadToolIsClassified() {
+        // Readings that must happen, or this gate guards nothing.
+        assertThat(scan.uninstantiable).as("tools the scan cannot name are invisible to it").isEmpty();
+        assertThat(scan.toolCalls).hasSizeGreaterThan(500);
+        assertThat(scan.handlers).isGreaterThan(1000);
+        for (String known : List.of("balance_sheet_query", "attendance_stats", "purchase_statistics", "order_list")) {
+            assertThat(scan.gatedCalls(known)).as("%s must read gated data per the scan", known).isNotEmpty();
+        }
 
-    static Stream<Arguments> pairs() {
-        return TOOL_TO_HTTP.entrySet().stream()
-                .map(e -> Arguments.of(e.getKey(), e.getValue()[0], e.getValue()[1]));
+        List<String> problems = new ArrayList<>();
+        for (String tool : scan.toolCalls.keySet()) {
+            ToolExecutor instance = scan.instances.get(tool);
+            if (ToolAccessModes.isWrite(instance) && !registrations.containsKey(tool)) continue;
+            String problem = classify(tool, instance);
+            if (problem != null) problems.add(tool + ": " + problem);
+        }
+        assertThat(problems).as("unclassified or wrongly gated READ tools").isEmpty();
     }
 
     @Test
-    @DisplayName("生产经理经 AI 查资产负债表 → 拒绝; 财务经理 → 放行 (与直接接口一致)")
-    void productionManagerIsDeniedAndFinanceManagerAllowedOnTheAiPath() {
-        for (String tool : List.of("balance_sheet_query", "income_statement_query", "cashflow_statement_query",
-                "period_status_query", "accounts_receivable_aging")) {
-            assertThat(enforcer.check(named(tool), ctx(PRODUCTION_MANAGER, "production_manager")).isAllowed())
-                    .as("production_manager on %s", tool).isFalse();
-            assertThat(enforcer.check(named(tool), ctx(FINANCE_MANAGER, "finance_manager")).isAllowed())
-                    .as("finance_manager on %s", tool).isTrue();
+    @DisplayName("gated-data-declared.tsv 与工具源码里的声明逐条一致 (描述清册测试读它)")
+    void theDeclaredListMatchesTheTools() throws Exception {
+        Map<String, String> listed = new TreeMap<>();
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(
+                GatedDataToolAiPathPermissionTest.class.getResourceAsStream("/ai/tool/gated-data-declared.tsv"),
+                StandardCharsets.UTF_8))) {
+            for (String line; (line = in.readLine()) != null; ) {
+                if (line.isBlank() || line.startsWith("#")) continue;
+                String[] cols = line.split("	");
+                listed.put(cols[0], cols[1] + ":" + cols[2]);
+            }
         }
-        // The intent 「查看本月资产负债表」 (BALANCE_SHEET_QUERY → balance_sheet_query) is dispatched through
-        // ToolPermissionChain, the same chain checked here.
+        assertThat(listed).hasSizeGreaterThan(100);
+        for (Map.Entry<String, String> entry : listed.entrySet()) {
+            ToolExecutor tool = scan.instances.get(entry.getKey());
+            assertThat(tool).as(entry.getKey()).isNotNull();
+            String actual = declared(tool).isEmpty()
+                    ? "ROLES:" + String.join(",", allowedRoles(tool))
+                    : "CODES:" + String.join(",", new TreeSet<>(declared(tool)));
+            assertThat(actual).as(entry.getKey()).isEqualTo(entry.getValue());
+        }
+    }
+
+    @Test
+    @DisplayName("登记表没有过期条目, 每条都有理由")
+    void registrationsAreCurrentAndReasoned() {
+        List<String> stale = new ArrayList<>();
+        for (Map.Entry<String, String[]> entry : registrations.entrySet()) {
+            String tool = entry.getKey();
+            String kind = entry.getValue()[0];
+            assertThat(entry.getValue()[1]).as("reason for %s", tool).hasSizeGreaterThan(20);
+            ToolExecutor instance = scan.instances.get(tool);
+            if (instance == null) { stale.add(tool + " (no such tool)"); continue; }
+            if ("NO_COUNTERPART".equals(kind) && (scan.hasCounterpart(tool) || hasGate(tool, instance))) {
+                stale.add(tool + " (no longer without counterpart / gate)");
+            }
+            if ("RULED".equals(kind) && declared(instance).isEmpty()) {
+                stale.add(tool + " (ruled codes not declared)");
+            }
+        }
+        assertThat(stale).isEmpty();
+    }
+
+    @Test
+    @DisplayName("🔴 内置 Skill 的每个工具 (含 DAG 节点与备选) 都通过同一分类")
+    void everyBuiltInSkillToolIsClassified() {
+        SkillRegistryImpl registry = defaultSkills();
+        List<SkillDefinition> skills = registry.getAllSkills();
+        assertThat(skills).hasSizeGreaterThan(10);
+        List<String> problems = new ArrayList<>();
+        for (SkillDefinition skill : skills) {
+            Set<String> tools = new LinkedHashSet<>();
+            if (skill.getTools() != null) tools.addAll(skill.getTools());
+            if (skill.getExecutionGraph() != null) {
+                for (SkillDefinition.ExecutionNode node : skill.getExecutionGraph()) {
+                    if (node.getToolName() != null) tools.add(node.getToolName());
+                    if (node.getFallbackTool() != null) tools.add(node.getFallbackTool());
+                }
+            }
+            for (String tool : tools) {
+                ToolExecutor instance = scan.instances.get(tool);
+                if (instance == null || (ToolAccessModes.isWrite(instance) && !registrations.containsKey(tool))) continue;
+                String problem = classify(tool, instance);
+                if (problem != null) problems.add(skill.getName() + " → " + tool + ": " + problem);
+            }
+        }
+        assertThat(problems).isEmpty();
+        for (String skill : List.of("monthly-financial-close", "cost-analysis", "personnel-scheduling")) {
+            assertThat(registry.getSkill(skill).orElseThrow().getTools())
+                    .as("%s reads gated data: some of its tools must carry a gate", skill)
+                    .anySatisfy(tool -> assertThat(hasGate(tool, scan.instances.get(tool))).isTrue());
+        }
+    }
+
+    /** @return null when classified, otherwise what is wrong */
+    private static String classify(String tool, ToolExecutor instance) {
+        Map<GatedDataScan.DataMethod, Set<String>> gated = scan.gatedCalls(tool);
+        String[] registration = registrations.get(tool);
+        Set<String> codes = declared(instance);
+        if (codes.isEmpty()) {
+            Set<String> mapped = ToolRbacEnforcer.TOOL_PERMISSION_MAP.get(tool);
+            if (mapped != null) codes = mapped;
+        }
+        if (!gated.isEmpty()) {
+            for (GatedDataScan.DataMethod data : gated.keySet()) {
+                List<GatedDataScan.Endpoint> endpoints = scan.servedBy.get(data);
+                if (endpoints.stream().allMatch(e -> e.requireAll() && e.codes().size() > 1)) {
+                    return data + " is served only by requireAll endpoints " + endpoints
+                            + ": an any-of tool gate cannot mirror them";
+                }
+            }
+            if (registration != null && "RULED".equals(registration[0])) {
+                return codes.isEmpty() ? "ruled but declares no codes" : null;
+            }
+            Set<String> admitAll = null;
+            for (Set<String> admit : gated.values()) {
+                admitAll = admitAll == null ? new TreeSet<>(admit) : intersect(admitAll, admit);
+            }
+            if (!codes.isEmpty()) {
+                return admitAll.containsAll(codes) ? null
+                        : "declares " + codes + " but the direct endpoints admit only " + admitAll + " for " + gated.keySet();
+            }
+            if (roleGated(instance)) {
+                Set<String> allowed = allowedRoles(instance);
+                for (GatedDataScan.DataMethod data : gated.keySet()) {
+                    Set<String> roles = new HashSet<>();
+                    for (GatedDataScan.Endpoint e : scan.servedBy.get(data)) roles.addAll(e.roles());
+                    Set<String> permitted = roles.isEmpty() ? Set.of("factory_super_admin") : roles;
+                    if (!permitted.containsAll(allowed)) {
+                        return "role gate admits " + allowed + " but " + data + " is served only to " + permitted;
+                    }
+                }
+                return allowed.isEmpty() ? "role gate admits nobody" : null;
+            }
+            return "reads " + gated.keySet() + " (served only by gated endpoints " + admitAll + ") with no gate";
+        }
+        if (scan.hasCounterpart(tool)) return null;
+        if (hasGate(tool, instance)) return null;
+        return registration != null && "NO_COUNTERPART".equals(registration[0]) ? null
+                : "no read endpoint serves its data and it has neither a gate nor a registration";
+    }
+
+    private static Set<String> intersect(Set<String> a, Set<String> b) {
+        Set<String> r = new TreeSet<>(a);
+        r.retainAll(b);
+        return r;
+    }
+
+    private static Set<String> declared(ToolExecutor tool) {
+        Set<String> codes = tool == null ? null : tool.getRequiredPermissions();
+        return codes == null ? Set.of() : codes;
+    }
+
+    private static boolean roleGated(ToolExecutor tool) {
+        return tool.requiresPermission() && declared(tool).isEmpty() && !tool.hasPermission("unknown_role");
+    }
+
+    private static Set<String> allowedRoles(ToolExecutor tool) {
+        return Arrays.stream(FactoryUserRole.values()).map(Enum::name).filter(tool::hasPermission)
+                .collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    private static boolean hasGate(String tool, ToolExecutor instance) {
+        if (instance == null) return false;
+        Set<String> mapped = ToolRbacEnforcer.TOOL_PERMISSION_MAP.get(tool);
+        return !declared(instance).isEmpty() || (mapped != null && !mapped.isEmpty()) || roleGated(instance);
+    }
+
+    // ==================== AI path and Skill path ====================
+
+    @Test
+    @DisplayName("生产经理经 AI 查资产负债表 / 考勤 / 成本趋势等 → 拒绝; 财务经理查资产负债表 → 放行")
+    void productionManagerIsDeniedOnTheAiPathForGatedData() {
         com.cretas.aims.service.intent.FrontlineAiWriteGrantService frontline =
                 mock(com.cretas.aims.service.intent.FrontlineAiWriteGrantService.class);
         when(frontline.denyReason(any(), any(), any(), any())).thenReturn(Optional.empty());
         ToolPermissionChain chain = new ToolPermissionChain(enforcer, frontline);
-        assertThat(chain.denyReason(named("balance_sheet_query"), FACTORY, "production_manager", null,
-                ctx(PRODUCTION_MANAGER, "production_manager"))).isPresent();
-        assertThat(chain.denyReason(named("balance_sheet_query"), FACTORY, "finance_manager", null,
-                ctx(FINANCE_MANAGER, "finance_manager"))).isEmpty();
-        // Control: an ungated operational read still passes for the production manager.
-        assertThat(enforcer.check(named("report_production"), ctx(PRODUCTION_MANAGER, "production_manager"))
-                .isAllowed()).isTrue();
-    }
-
-    // ==================== Skill path: monthly-financial-close ====================
-
-    @Test
-    @DisplayName("生产经理运行月度财务复盘 Skill → 整个 Skill 按无权限拒绝, 一个工具都不执行; 财务经理只跑他能直接看的部分并被告知缺了什么")
-    void theFinanceCloseSkillIsRefusedBeforeAnyToolRunsForAProductionManager() throws Exception {
-        SkillRegistryImpl registry = defaultSkills();
-        SkillDefinition close = registry.getSkill("monthly-financial-close").orElseThrow();
-
-        ToolRegistry tools = mock(ToolRegistry.class);
-        List<String> executed = new ArrayList<>();
-        for (String toolName : close.getTools()) {
-            ToolExecutor tool = recording(toolName, executed);
-            when(tools.getExecutor(toolName)).thenReturn(Optional.of(tool));
-            when(tools.hasExecutor(toolName)).thenReturn(true);
-            when(tools.isToolEnabledForFactory(any(), any())).thenReturn(true);
+        for (String tool : List.of("balance_sheet_query", "income_statement_query", "attendance_stats",
+                "report_cost_trend_analysis", "purchase_statistics", "order_list", "wage_policy_query")) {
+            ToolExecutor real = scan.instances.get(tool);
+            assertThat(chain.denyReason(real, FACTORY, "production_manager", null,
+                    ctx(PRODUCTION_MANAGER, "production_manager"))).as("production_manager on %s", tool).isPresent();
         }
-        DashScopeClient llm = mock(DashScopeClient.class);
-        when(llm.chat(any(), any())).thenReturn("{\"tools_to_execute\":[]}");
-        SkillExecutorImpl executor = new SkillExecutorImpl(tools, llm, new ObjectMapper());
-        com.cretas.aims.service.intent.FrontlineAiWriteGrantService frontline =
-                mock(com.cretas.aims.service.intent.FrontlineAiWriteGrantService.class);
-        when(frontline.denyReason(any(), any(), any(), any())).thenReturn(Optional.empty());
-        ReflectionTestUtils.setField(executor, "toolPermissionChain", new ToolPermissionChain(enforcer, frontline));
-        ReflectionTestUtils.setField(executor, "writeGuardService", mock(WriteGuardService.class));
-        ReflectionTestUtils.setField(executor, "maxToolsPerSkill", 8);
-
-        SkillResult refused = executor.execute(close, context(PRODUCTION_MANAGER, "production_manager"));
-        assertThat(refused.isSuccess()).isFalse();
-        assertThat(refused.isPermissionDenied()).isTrue();
-        assertThat(executed).isEmpty();
-        verifyNoLlmCall(llm);
-
-        SkillResult allowed = executor.execute(close, context(FINANCE_MANAGER, "finance_manager"));
-        assertThat(allowed.isSuccess()).as(allowed.getMessage()).isTrue();
-        assertThat(allowed.isPermissionDenied()).isFalse();
-        // finance_manager holds finance codes but not hr / sales:view (as in the real matrix): the wage,
-        // funnel and commission parts are left out and named, never run.
-        assertThat(executed).contains("balance_sheet_query", "income_statement_query", "cashflow_statement_query",
-                "period_status_query", "accounts_receivable_aging");
-        assertThat(executed).doesNotContain("wage_cost_summary", "opportunity_funnel_stats", "commission_pending_total");
-        assertThat(allowed.getMessage()).contains("3 项").contains("wage_cost_summary");
+        assertThat(chain.denyReason(scan.instances.get("balance_sheet_query"), FACTORY, "finance_manager", null,
+                ctx(FINANCE_MANAGER, "finance_manager"))).isEmpty();
+        // Control: a tool whose data is served ungated stays open.
+        assertThat(chain.denyReason(scan.instances.get("attendance_today"), FACTORY, "production_manager", null,
+                ctx(PRODUCTION_MANAGER, "production_manager"))).isEmpty();
     }
 
     @Test
-    @DisplayName("Skill 入口把无权限拒绝映射成 403 (与直接接口同一个状态码)")
+    @DisplayName("Skill 里只要有一个工具读不了, 整个 Skill 拒绝且一个工具都不执行 (月度复盘 / 成本分析 / 人员排班)")
+    void aSkillWithAnyToolTheCallerMayNotUseIsRefusedWhole() throws Exception {
+        SkillRegistryImpl registry = defaultSkills();
+        for (String skillName : List.of("monthly-financial-close", "cost-analysis", "personnel-scheduling")) {
+            SkillDefinition skill = registry.getSkill(skillName).orElseThrow();
+            List<String> executed = new ArrayList<>();
+            SkillExecutorImpl executor = executorFor(skill, executed);
+            SkillResult refused = executor.execute(skill, context(PRODUCTION_MANAGER, "production_manager"));
+            assertThat(refused.isPermissionDenied()).as("%s for production_manager", skillName).isTrue();
+            assertThat(executed).as("%s ran tools", skillName).isEmpty();
+        }
+        // finance_manager lacks hr / sales:view (wage, funnel, commission): month-end close is refused whole too.
+        SkillDefinition close = registry.getSkill("monthly-financial-close").orElseThrow();
+        List<String> executed = new ArrayList<>();
+        assertThat(executorFor(close, executed).execute(close, context(FINANCE_MANAGER, "finance_manager"))
+                .isPermissionDenied()).isTrue();
+        assertThat(executed).isEmpty();
+        // Positive control: the super admin runs it.
+        SkillResult allowed = executorFor(close, executed).execute(close, context(SUPER_ADMIN, "factory_super_admin"));
+        assertThat(allowed.isPermissionDenied()).isFalse();
+        assertThat(executed).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("Skill 入口把无权限拒绝映射成 403")
     void theRegisteredSkillEntryAnswers403OnAPermissionRefusal() {
         com.cretas.aims.service.skill.contract.SavedSkillService service =
                 mock(com.cretas.aims.service.skill.contract.SavedSkillService.class);
@@ -273,61 +367,44 @@ public class GatedDataToolAiPathPermissionTest {
         }
     }
 
-    // ==================== Sweep ====================
-
-    @Test
-    @DisplayName("🔴 完备性: 注入了「只被带门 controller 使用」的 service/repository 的工具, 要么挂码要么登记理由")
-    void everyToolTouchingGatedDataCarriesAPermissionOrIsRegistered() throws Exception {
-        Set<Class<?>> gatedOnly = gatedOnlyTypes();
-        assertThat(gatedOnly).as("至少要量出财务报表服务, 否则判据坏了")
-                .extracting(Class::getSimpleName).contains("BalanceSheetService", "IncomeStatementService");
-
-        Map<String, Set<String>> toolTypes = toolsTouching(gatedOnly);
-        assertThat(toolTypes).as("至少要扫到月度财务复盘用的工具, 否则扫描坏了")
-                .containsKeys("balance_sheet_query", "income_statement_query", "cashflow_statement_query");
-
-        List<String> unaccounted = new ArrayList<>();
-        for (Map.Entry<String, Set<String>> entry : toolTypes.entrySet()) {
-            if (resolvedCodes(entry.getKey()).isEmpty() && !REGISTERED_NOT_GATED.containsKey(entry.getKey())) {
-                unaccounted.add(entry.getKey() + " " + entry.getValue());
-            }
-        }
-        assertThat(unaccounted)
-                .as("这些工具读的是只被带门 controller 使用的数据, 却没有权限码也没有登记理由")
-                .isEmpty();
-    }
-
-    @Test
-    @DisplayName("🔴 完备性: 内置 Skill 用到的读受控数据的工具全部挂了码 (或已登记)")
-    void everyRegisteredSkillToolTouchingGatedDataCarriesAPermission() throws Exception {
-        SkillRegistryImpl registry = defaultSkills();
-        Map<String, Set<String>> gatedTools = toolsTouching(gatedOnlyTypes());
-        List<SkillDefinition> skills = registry.getAllSkills();
-        assertThat(skills).as("内置 Skill 一个都没加载到 ⇒ 这条闸在守空气").hasSizeGreaterThan(10);
-
-        List<String> unaccounted = new ArrayList<>();
-        for (SkillDefinition skill : skills) {
-            if (skill.getTools() == null) continue;
-            for (String tool : skill.getTools()) {
-                if (gatedTools.containsKey(tool) && resolvedCodes(tool).isEmpty()
-                        && !REGISTERED_NOT_GATED.containsKey(tool)) {
-                    unaccounted.add(skill.getName() + " → " + tool);
-                }
-            }
-        }
-        assertThat(unaccounted).isEmpty();
-        assertThat(registry.getSkill("monthly-financial-close").orElseThrow().getTools())
-                .allSatisfy(tool -> assertThat(resolvedCodes(tool)).as(tool).isNotEmpty());
-    }
-
-    @Test
-    void everyRegisteredExemptionCarriesAReasonAndStillTouchesGatedData() throws Exception {
-        Map<String, Set<String>> toolTypes = toolsTouching(gatedOnlyTypes());
-        assertThat(REGISTERED_NOT_GATED.values()).allSatisfy(reason -> assertThat(reason).hasSizeGreaterThan(20));
-        assertThat(toolTypes.keySet()).as("stale registration").containsAll(REGISTERED_NOT_GATED.keySet());
-    }
-
     // ==================== helpers ====================
+
+    private SkillExecutorImpl executorFor(SkillDefinition skill, List<String> executed) {
+        ToolRegistry tools = mock(ToolRegistry.class);
+        for (String toolName : skill.getTools()) {
+            ToolExecutor real = scan.instances.get(toolName);
+            when(tools.getExecutor(toolName)).thenReturn(Optional.of(recording(real, toolName, executed)));
+            when(tools.hasExecutor(toolName)).thenReturn(true);
+        }
+        when(tools.isToolEnabledForFactory(any(), any())).thenReturn(true);
+        DashScopeClient llm = mock(DashScopeClient.class);
+        when(llm.chat(any(), any())).thenReturn("{\"tools_to_execute\":[]}");
+        SkillExecutorImpl executor = new SkillExecutorImpl(tools, llm, new ObjectMapper());
+        com.cretas.aims.service.intent.FrontlineAiWriteGrantService frontline =
+                mock(com.cretas.aims.service.intent.FrontlineAiWriteGrantService.class);
+        when(frontline.denyReason(any(), any(), any(), any())).thenReturn(Optional.empty());
+        ReflectionTestUtils.setField(executor, "toolPermissionChain", new ToolPermissionChain(enforcer, frontline));
+        ReflectionTestUtils.setField(executor, "writeGuardService", mock(WriteGuardService.class));
+        ReflectionTestUtils.setField(executor, "maxToolsPerSkill", 10);
+        return executor;
+    }
+
+    /** The real tool's gate (codes / roles), with execution recorded instead of performed. */
+    private static ToolExecutor recording(ToolExecutor real, String name, List<String> executed) {
+        return new ToolExecutor() {
+            @Override public String getToolName() { return name; }
+            @Override public String getDescription() { return name; }
+            @Override public Map<String, Object> getParametersSchema() { return Map.of(); }
+            @Override public AccessMode getAccessMode() { return AccessMode.READ; }
+            @Override public Set<String> getRequiredPermissions() { return declared(real); }
+            @Override public boolean requiresPermission() { return real != null && real.requiresPermission(); }
+            @Override public boolean hasPermission(String role) { return real == null || real.hasPermission(role); }
+            @Override public String execute(ToolCall c, Map<String, Object> ctx) {
+                executed.add(name);
+                return "{\"success\":true}";
+            }
+        };
+    }
 
     /** The registry as the application builds it: built-in Skills plus SKILL.md files, no database Skills. */
     public static SkillRegistryImpl defaultSkills() {
@@ -341,122 +418,6 @@ public class GatedDataToolAiPathPermissionTest {
                 mock(com.cretas.aims.repository.config.FactorySkillConfigRepository.class));
         registry.init();
         return registry;
-    }
-
-    /** Types injected only by controllers that carry a class-level {@code @RequirePermission}. */
-    private static Set<Class<?>> gatedOnlyTypes() throws Exception {
-        ClassPathScanningCandidateComponentProvider scanner = new ClassPathScanningCandidateComponentProvider(false);
-        scanner.addIncludeFilter(new AnnotationTypeFilter(RestController.class));
-        Map<Class<?>, Boolean> allGated = new HashMap<>();
-        int controllers = 0;
-        for (BeanDefinition bd : scanner.findCandidateComponents("com.cretas.aims.controller")) {
-            Class<?> c = Class.forName(bd.getBeanClassName());
-            controllers++;
-            boolean gated = c.isAnnotationPresent(RequirePermission.class);
-            for (Field f : c.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers())) continue;
-                String name = f.getType().getSimpleName();
-                if (!(name.endsWith("Service") || name.endsWith("Repository"))) continue;
-                allGated.merge(f.getType(), gated, Boolean::logicalAnd);
-            }
-        }
-        assertThat(controllers).as("no controllers scanned").isGreaterThan(100);
-        return allGated.entrySet().stream().filter(Map.Entry::getValue).map(Map.Entry::getKey)
-                .collect(Collectors.toSet());
-    }
-
-    /** tool name → the gated-only types it injects. */
-    private static Map<String, Set<String>> toolsTouching(Set<Class<?>> gatedOnly) throws Exception {
-        ClassPathScanningCandidateComponentProvider scanner = new ClassPathScanningCandidateComponentProvider(false);
-        scanner.addIncludeFilter(new AssignableTypeFilter(ToolExecutor.class));
-        Map<String, Set<String>> result = new LinkedHashMap<>();
-        List<String> uninstantiable = new ArrayList<>();
-        int tools = 0;
-        for (BeanDefinition bd : scanner.findCandidateComponents("com.cretas.aims.ai.tool")) {
-            Class<?> c = Class.forName(bd.getBeanClassName());
-            if (Modifier.isAbstract(c.getModifiers()) || c.isInterface()) continue;
-            tools++;
-            Set<String> touched = new TreeSet<>();
-            for (Class<?> k = c; k != null && k != Object.class; k = k.getSuperclass()) {
-                for (Field f : k.getDeclaredFields()) {
-                    if (gatedOnly.contains(f.getType())) touched.add(f.getType().getSimpleName());
-                }
-            }
-            if (touched.isEmpty()) continue;
-            try {
-                result.put(((ToolExecutor) c.getDeclaredConstructor().newInstance()).getToolName(), touched);
-            } catch (ReflectiveOperationException e) {
-                uninstantiable.add(c.getSimpleName());
-            }
-        }
-        assertThat(tools).as("no tools scanned").isGreaterThan(100);
-        assertThat(uninstantiable).as("tools whose name could not be read: this sweep is blind to them").isEmpty();
-        return result;
-    }
-
-    private static Set<String> resolvedCodes(String toolName) {
-        Set<String> mapped = ToolRbacEnforcer.TOOL_PERMISSION_MAP.get(toolName);
-        if (mapped != null && !mapped.isEmpty()) return mapped;
-        return declaredCodes(toolName);
-    }
-
-    private static final Map<String, Set<String>> DECLARED = new HashMap<>();
-
-    private static Set<String> declaredCodes(String toolName) {
-        if (DECLARED.isEmpty()) {
-            ClassPathScanningCandidateComponentProvider scanner = new ClassPathScanningCandidateComponentProvider(false);
-            scanner.addIncludeFilter(new AssignableTypeFilter(ToolExecutor.class));
-            for (BeanDefinition bd : scanner.findCandidateComponents("com.cretas.aims.ai.tool")) {
-                try {
-                    Class<?> c = Class.forName(bd.getBeanClassName());
-                    if (Modifier.isAbstract(c.getModifiers()) || c.isInterface()) continue;
-                    ToolExecutor tool = (ToolExecutor) c.getDeclaredConstructor().newInstance();
-                    Set<String> codes = tool.getRequiredPermissions();
-                    DECLARED.put(tool.getToolName(), codes == null ? Set.of() : codes);
-                } catch (ReflectiveOperationException | RuntimeException ignored) {
-                    // uninstantiable tools are reported by toolsTouching
-                }
-            }
-        }
-        return DECLARED.getOrDefault(toolName, Set.of());
-    }
-
-    private static Set<String> effectiveCodes(Class<?> controller, String methodName) {
-        List<Method> found = Arrays.stream(controller.getDeclaredMethods())
-                .filter(m -> m.getName().equals(methodName)).toList();
-        assertThat(found).as("%s#%s must be exactly one method", controller.getSimpleName(), methodName).hasSize(1);
-        RequirePermission onMethod = found.get(0).getAnnotation(RequirePermission.class);
-        RequirePermission onClass = controller.getAnnotation(RequirePermission.class);
-        RequirePermission effective = onMethod != null ? onMethod : onClass;
-        assertThat(effective).as("%s#%s has no @RequirePermission", controller.getSimpleName(), methodName)
-                .isNotNull();
-        return Set.of(effective.value());
-    }
-
-    private static ToolExecutor named(String name) {
-        return new ToolExecutor() {
-            @Override public String getToolName() { return name; }
-            @Override public String getDescription() { return name; }
-            @Override public Map<String, Object> getParametersSchema() { return Map.of(); }
-            @Override public String execute(ToolCall c, Map<String, Object> ctx) { return "{}"; }
-        };
-    }
-
-    private static ToolExecutor recording(String name, List<String> executed) {
-        return new ToolExecutor() {
-            @Override public String getToolName() { return name; }
-            @Override public String getDescription() { return name; }
-            @Override public Map<String, Object> getParametersSchema() { return Map.of(); }
-            @Override public AccessMode getAccessMode() { return AccessMode.READ; }
-            @Override public String execute(ToolCall c, Map<String, Object> ctx) {
-                executed.add(name);
-                return "{\"success\":true}";
-            }
-        };
-    }
-
-    private static void verifyNoLlmCall(DashScopeClient llm) {
-        org.mockito.Mockito.verifyNoInteractions(llm);
     }
 
     private static SkillContext context(long userId, String role) {

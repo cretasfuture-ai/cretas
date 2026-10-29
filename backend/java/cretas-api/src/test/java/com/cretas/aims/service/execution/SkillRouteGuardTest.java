@@ -197,13 +197,12 @@ class SkillRouteGuardTest {
 
         Run run = f.stream("班组看板", f.teamReport, OPERATOR_ID, OPERATOR);
 
-        // 必发生: 同一个 Skill 里开放给他的那个工具照常跑了 (证明 Skill 确实执行了)
-        assertThat(f.executedTools()).containsExactly("team_board_query");
+        // S6 (2026-10-29): one tool he may not use refuses the whole Skill before anything runs, so no
+        // part of the Skill's data reaches him (the admin control below shows the Skill itself works).
+        assertThat(f.executedTools()).isEmpty();
         assertThat(f.tool("staff_overview_query").calls).isEmpty();
-        // S6 (2026-10-29): the permission preflight leaves the tool out before anything runs and names it,
-        // instead of running the Skill into a per-tool refusal.
-        assertThat(String.valueOf(run.result().getResultData()))
-                .contains("_omittedForPermission=[staff_overview_query]");
+        assertThat(String.valueOf(run.result().getResultData()) + run.result().getMessage())
+                .contains("未执行任何操作");
     }
 
     @Test
@@ -234,7 +233,9 @@ class SkillRouteGuardTest {
         when(f.skillLlm.chat(anyString(), anyString())).thenReturn(
                 "{\"extracted_params\":{\"userRole\":\"factory_super_admin\",\"role\":\"factory_super_admin\",\"userId\":7}}");
 
-        f.stream("班组看板", f.teamReport, OPERATOR_ID, OPERATOR);
+        // S6 (2026-10-29): a Skill with a tool he may not use is refused whole, so this runs a Skill made
+        // only of the tool open to him; the forged role must still not reach it.
+        f.stream("班组看板单查", f.teamBoard, OPERATOR_ID, OPERATOR);
 
         Map<String, Object> seen = f.tool("team_board_query").calls.get(0);
         assertThat(seen.get("userRole")).isEqualTo(OPERATOR);
@@ -333,6 +334,7 @@ class SkillRouteGuardTest {
         final AIIntentConfig personnelOverview;
         final AIIntentConfig adminReport;
         final AIIntentConfig teamReport;
+        final AIIntentConfig teamBoard;
         final AIIntentConfig productionBatchCreate;
 
         Fixture() {
@@ -348,6 +350,7 @@ class SkillRouteGuardTest {
             personnelOverview = intent("PERSONNEL_OVERVIEW", "人员概况", null, all);
             adminReport = intent("ADMIN_REPORT", "管理报表", null, adminOnly);
             teamReport = intent("TEAM_REPORT", "班组看板", null, all);
+            teamBoard = intent("TEAM_BOARD", "班组看板单查", null, all);
             productionBatchCreate = intent("PRODUCTION_BATCH_CREATE", "创建生产批次", "production_batch_create", all);
             intent("TEAM_BOARD_QUERY", "班组看板查询", "team_board_query", all);
             intent("STAFF_OVERVIEW_QUERY", "员工总览", "staff_overview_query", all);
@@ -399,6 +402,9 @@ class SkillRouteGuardTest {
                     .contextNeeded(List.of("factoryId")).promptTemplate("${userQuery}").build());
             registry.register(SkillDefinition.builder().name("team-report").displayName("班组看板")
                     .triggers(List.of("测试专用触发词乙")).tools(List.of("team_board_query", "staff_overview_query"))
+                    .contextNeeded(List.of("factoryId")).promptTemplate("${userQuery}").build());
+            registry.register(SkillDefinition.builder().name("team-board").displayName("班组看板单查")
+                    .triggers(List.of("测试专用触发词丙")).tools(List.of("team_board_query"))
                     .contextNeeded(List.of("factoryId")).promptTemplate("${userQuery}").build());
             SkillExecutorImpl executor = new SkillExecutorImpl(toolRegistry, skillLlm, new ObjectMapper());
             ReflectionTestUtils.setField(executor, "writeGuardService", writeGuard);

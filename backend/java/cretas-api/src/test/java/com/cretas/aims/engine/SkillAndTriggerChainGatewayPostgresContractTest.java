@@ -213,15 +213,13 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         SkillResult result = skills.execute(skill(), context(salesUser, Map.of()));
 
         assertThat(result.isSuccess()).isFalse();
+        // S6 (2026-10-29): refused by the preflight with the gateway's own admission check, before any tool
+        // or gateway execution: no audit event, no receipt, nothing read.
+        assertThat(result.isPermissionDenied()).isTrue();
         assertThat(seenAsUser).isEmpty();
         verify(materialBatchService, never()).getExpiredBatches(any());
-        assertThat(count("tool_execution_audit_events WHERE source = 'SKILL_WORKFLOW' AND outcome_status = 'DENIED'"
-                + " AND principal_id = '" + salesUser + "'")).isEqualTo(1);
-        assertThat(text("SELECT status FROM skill_run_records WHERE id = '" + result.getRunId() + "'")).isEqualTo("DENIED");
-        // A denied run cannot become a reusable Skill.
-        assertThatThrownBy(() -> savedSkills.save("F-SK", salesUser,
-                new SavedSkillService.SaveRequest(result.getRunId(), "denied-run", null, null, null)))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("经工具网关执行成功");
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(result.getRunId()).isNull();
     }
 
     @Test void savedSkillRerunsWithNewParametersAsANewReceiptAndRefusesOutOfContractParameters() throws Exception {
@@ -284,8 +282,7 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         SavedSkillService.RunResult foreign = savedSkills.runSaved("F-SK", salesUser, "sales_manager", saved.id(),
                 Map.of("limit", 5), "s8");
         assertThat(foreign.result().isSuccess()).isFalse();
-        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'DENIED' AND principal_id = '"
-                + salesUser + "'")).isEqualTo(1);
+        assertThat(foreign.result().isPermissionDenied()).isTrue();
     }
 
     @Test void theRegisteredSkillEntryRunsAsTheCallerAndLeavesASavableReceipt() {
