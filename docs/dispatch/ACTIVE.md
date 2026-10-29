@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `SC60-FINAL-INTEGRATION-20261029` — `review` — Root；Base `d4c65b87b1561ad7cda4ccc6200cfe876fa221a8`；SC54导出/SC56质检/SC58目录源码冻结，风险复核通过；待最终JPA/PG制品与CI、发布、F006验收。范围见archive/2026-10-29-sc60-final-integration.md。
 
 
 
