@@ -137,3 +137,20 @@ test('login settlement rejects an unfinished request instead of silently navigat
   await assert.rejects(recorder.settle({ quietMs: 5, timeoutMs: 20 }), /did not settle.*1 requests/);
   recorder.dispose();
 });
+
+test('the network recorder retains login status without duplicating the secret-bearing body', async () => {
+  const context = new EventEmitter();
+  const recorder = installNetworkRecorder(context);
+  const login = request('/api/mobile/auth/unified-login');
+  context.emit('request', login);
+  context.emit('response', {
+    request: () => login, headers: () => ({ 'content-type': 'application/json' }), status: () => 401,
+    json: () => { throw new Error('Login body belongs to the independent identity verifier'); },
+  });
+  context.emit('requestfinished', login);
+  await recorder.flush();
+  assert.equal(recorder.snapshot().apiEvidence[0].status, 401);
+  assert.equal(recorder.snapshot().httpErrors[0].status, 401);
+  assert.deepEqual(recorder.snapshot().bodyReadErrors, []);
+  recorder.dispose();
+});

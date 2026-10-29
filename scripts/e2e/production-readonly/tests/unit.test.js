@@ -10,6 +10,7 @@ require('./bom-canvas-readonly-shared.test');
 require('./sanitizer.test');
 require('./console-recorder.test');
 require('./network-recorder.test');
+require('./smartbi-scale-readonly.test');
 require('./whitelist.test');
 require('./mutation-guard.test');
 require('./result-schema.test');

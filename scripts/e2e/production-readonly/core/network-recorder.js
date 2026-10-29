@@ -68,7 +68,11 @@ function installNetworkRecorder(context, options = {}) {
       let bodyTimer;
       try {
         const contentType = response.headers()['content-type'] || '';
-        if (/json/i.test(contentType)) {
+        // Authentication is verified independently by performUiLogin. Keep
+        // only its transport metadata here: its body contains session secrets,
+        // and a full-page login redirect can discard the duplicate body read.
+        const authentication = splitUrl(request.url()).pathname === '/api/mobile/auth/unified-login';
+        if (/json/i.test(contentType) && !authentication) {
           body = await Promise.race([
             response.json(),
             new Promise((_, reject) => {
