@@ -219,6 +219,18 @@ public class SseStreamingService {
     /** The last streamed "result" per emitter; the app's AI chat runs here, not through the facade. */
     private final Map<SseEmitter, IntentExecuteResponse> lastStreamedResult =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    /**
+     * The intent the router resolved for a streamed run. Skill/report branches stream the skill's own
+     * response, which carries no intent code, so the trace needs this to name the run.
+     */
+    private final Map<SseEmitter, String> streamedIntentCode =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    void noteStreamedIntent(SseEmitter emitter, String intentCode) {
+        if (intentCode != null) {
+            streamedIntentCode.put(emitter, intentCode);
+        }
+    }
 
     public SseEmitter executeStream(String factoryId, IntentExecuteRequest request,
                                      Long userId, String userRole) {
@@ -608,6 +620,7 @@ public class SseStreamingService {
                 streamSupplierIntentUnavailable(emitter, startTime);
                 return;
             }
+            noteStreamedIntent(emitter, canonicalIntent.get().getIntentCode());
             if (canonicalIntent.get() != intent) {
                 intent = canonicalIntent.get();
                 matchResult = matchResult.toBuilder().bestMatch(intent).build();
@@ -2152,6 +2165,9 @@ public class SseStreamingService {
     void sendSseEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
         if ("result".equals(eventName) && data instanceof IntentExecuteResponse streamed) {
             lastStreamedResult.put(emitter, streamed); // read back once, when the streamed run ends
+        } else if ("error".equals(eventName)) {
+            // The run ended in the error exit without ever sending a result: still a (failed) run.
+            lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
         }
         try {
             String json = objectMapper.writeValueAsString(data);
@@ -2166,11 +2182,12 @@ public class SseStreamingService {
     private void recordStreamedFactoryTrace(SseEmitter emitter, String factoryId, Long userId,
                                             String userRole, long startedNanos) {
         IntentExecuteResponse streamed = lastStreamedResult.remove(emitter);
+        String resolvedIntent = streamedIntentCode.remove(emitter);
         if (factoryTraceRecorder == null || streamed == null) {
             return;
         }
         factoryTraceRecorder.record(factoryId, userId, userRole, streamed,
-                (System.nanoTime() - startedNanos) / 1_000_000L);
+                (System.nanoTime() - startedNanos) / 1_000_000L, resolvedIntent);
     }
 
     private IntentExecuteResponse buildValidationFailureResponse(LlmSchemaValidationException e) {

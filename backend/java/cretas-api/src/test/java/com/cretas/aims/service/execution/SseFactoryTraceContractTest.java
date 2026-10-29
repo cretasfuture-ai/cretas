@@ -29,6 +29,10 @@ class SseFactoryTraceContractTest {
                            FactoryAgentTraceRecorder recorder) {}
 
     private Harness harness(String domain, IntentExecuteResponse streamedResult) {
+        return harness(domain, streamedResult, null);
+    }
+
+    private Harness harness(String domain, IntentExecuteResponse streamedResult, String routedIntent) {
         var executor = Executors.newSingleThreadExecutor();
         var real = new SseStreamingService(null, null, null, null,
                 new ObjectMapper().findAndRegisterModules(), null, null, null, null, null);
@@ -43,6 +47,9 @@ class SseFactoryTraceContractTest {
         // Stand in for the (heavy) routing: it ends the streamed run by sending its "result" event.
         doAnswer(call -> {
             SseEmitter emitter = call.getArgument(0);
+            if (routedIntent != null) {
+                service.noteStreamedIntent(emitter, routedIntent); // what the real router does once it resolved
+            }
             service.sendSseEvent(emitter, "result", streamedResult);
             return null;
         }).when(service).executeStreamAsync(any(), any(), any(), any(), any(), any());
@@ -76,6 +83,42 @@ class SseFactoryTraceContractTest {
         Thread.sleep(300);
         assertThat(h.recorder().awaitIdle(2_000)).isTrue();
         verify(h.client(), never()).recordFactoryTrace(any(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamedToolLessReportIntentIsTracedUnderTheRoutedIntent() throws Exception {
+        // REPORT_INVENTORY (tool_name NULL) streams the skill's own response: no intentCode, no toolName.
+        var skillResult = IntentExecuteResponse.builder().status("COMPLETED").message("库存报表").build();
+        var h = harness("FACTORY", skillResult, "REPORT_INVENTORY");
+
+        h.service().executeStream("F006", new IntentExecuteRequest(), 42L, "operator");
+
+        assertThat(awaitTrace(h)).isTrue();
+        ArgumentCaptor<Map<String, Object>> trace = ArgumentCaptor.forClass(Map.class);
+        verify(h.client()).recordFactoryTrace(trace.capture(), any());
+        assertThat(trace.getValue()).containsEntry("intentCode", "REPORT_INVENTORY")
+                .containsEntry("outcome", "SUCCESS");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamThatEndsInTheErrorExitIsTracedAsFailed() throws Exception {
+        var h = harness("FACTORY", null, "MATERIAL_BATCH_QUERY");
+        doAnswer(call -> {
+            SseEmitter emitter = call.getArgument(0);
+            h.service().noteStreamedIntent(emitter, "MATERIAL_BATCH_QUERY");
+            h.service().sendSseEvent(emitter, "error", Map.of("status", "FAILED", "message", "boom"));
+            return null;
+        }).when(h.service()).executeStreamAsync(any(), any(), any(), any(), any(), any());
+
+        h.service().executeStream("F006", new IntentExecuteRequest(), 42L, "operator");
+
+        assertThat(awaitTrace(h)).isTrue();
+        ArgumentCaptor<Map<String, Object>> trace = ArgumentCaptor.forClass(Map.class);
+        verify(h.client()).recordFactoryTrace(trace.capture(), any());
+        assertThat(trace.getValue()).containsEntry("intentCode", "MATERIAL_BATCH_QUERY")
+                .containsEntry("outcome", "FAILED");
     }
 
     private boolean awaitTrace(Harness h) throws InterruptedException {
