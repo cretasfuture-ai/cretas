@@ -21,11 +21,11 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllTenCompleteExplicitRuntimePolicies() {
+    void loadsAllElevenCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(10);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(11);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
@@ -38,7 +38,8 @@ class RuntimeToolPolicyLoaderTest {
                         "material_stock_summary",
                         "material_batch_query",
                         "material_expired_query",
-                        "smartbi_factory_analysis");
+                        "smartbi_factory_analysis",
+                        "alert_rule_toggle");
         assertThat(manifest.policies()).allSatisfy(policy -> {
             assertThat(policy.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
             assertThat(policy.requiredPermissions().isEmpty() && policy.allowedRoles().isEmpty())

@@ -3,7 +3,7 @@
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
 expectedToolCount: 587
-expectedLegacyCount: 569
+expectedLegacyCount: 568
 descriptors:
   - toolName: "unsupported_capability"
     implementationClass: "com.cretas.aims.ai.tool.impl.system.UnsupportedCapabilityTool"
@@ -7495,24 +7495,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "alert_rule_toggle"
     implementationClass: "com.cretas.aims.ai.tool.impl.alerts.AlertRuleToggleTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
+    provenance: EXPLICIT
+    actionType: UPDATE
+    riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    allowedRoles: ["factory_super_admin", "permission_admin"]
+    version: "2.0.0"
     domainTags: ["alert"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
+      actionType: true
+      riskLevel: true
       supportsPreview: true
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "alert_active"
     implementationClass: "com.cretas.aims.ai.tool.impl.alert.AlertActiveTool"
     provenance: LEGACY_INFERRED

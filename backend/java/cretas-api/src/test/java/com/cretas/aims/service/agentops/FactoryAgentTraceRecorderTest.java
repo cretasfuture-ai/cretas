@@ -142,4 +142,61 @@ class FactoryAgentTraceRecorderTest {
         assertThat(FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
                 .intentCode("MATERIAL_BATCH_QUERY").status("NEED_MORE_INFO").build(), 3)).isNull();
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void skillAndReportRoutedRunsWithoutAToolAreStillTraced() {
+        // REPORT_INVENTORY binds tool_name=NULL and runs through the Skill branch: no toolName anywhere.
+        IntentExecuteResponse report = IntentExecuteResponse.builder()
+                .intentCode("REPORT_INVENTORY").status("COMPLETED").build();
+        Map<String, Object> trace = FactoryAgentTraceRecorder.buildTrace(report, 40);
+        assertThat(trace).containsEntry("intentCode", "REPORT_INVENTORY").containsEntry("outcome", "SUCCESS");
+        assertThat(((List<Map<String, Object>>) trace.get("steps")).get(0))
+                .containsEntry("toolName", FactoryAgentTraceRecorder.INTENT_ROUTE_STEP);
+    }
+
+    @Test
+    void everyDenialStatusTheDispatchersEmitBecomesABlockedRow() {
+        // statuses produced by IntentExecutionOrchestrator / ToolDispatchService / SseStreamingService
+        for (String status : new String[]{"NO_PERMISSION", "PERMISSION_DENIED", "FORBIDDEN",
+                "READ_MODE_WRITE_BLOCKED", "WRITE_CONFIRM_REQUIRED", "TOOL_DISABLED", "PREVIEW_UNSUPPORTED"}) {
+            Map<String, Object> trace = FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                    .intentCode("CUSTOMER_QUERY").status(status).build(), 5);
+            assertThat(trace).as(status).isNotNull().containsEntry("outcome", "BLOCKED");
+        }
+        // session admission denial resolves no intent but is still recorded (never silently dropped)
+        Map<String, Object> admission = FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentRecognized(false).status("NO_PERMISSION").build(), 5);
+        assertThat(admission).containsEntry("intentCode", FactoryAgentTraceRecorder.UNRESOLVED_INTENT)
+                .containsEntry("outcome", "BLOCKED");
+        // a clarification turn is the system asking, not a run
+        assertThat(FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentRecognized(false).status("NEED_CLARIFICATION").build(), 5)).isNull();
+        assertThat(FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentRecognized(false).status("NEED_MORE_INFO").build(), 5)).isNull();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void attemptThatResolvedToNothingIsRecordedAsUnknownNeverSuccess() {
+        // sales_mgr 「停用员工账号」: intent=null, status COMPLETED
+        Map<String, Object> trace = FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentRecognized(false).status("COMPLETED").message("好的").build(), 9);
+        assertThat(trace).containsEntry("intentCode", FactoryAgentTraceRecorder.UNRESOLVED_INTENT)
+                .containsEntry("outcome", "UNKNOWN");
+        assertThat(((List<Map<String, Object>>) trace.get("steps")).get(0))
+                .containsEntry("toolName", FactoryAgentTraceRecorder.NO_TOOL_STEP)
+                .containsEntry("outcome", "UNKNOWN");
+        assertThat(FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentRecognized(false).status("NOT_RECOGNIZED").build(), 9))
+                .containsEntry("outcome", "UNKNOWN");
+    }
+
+    @Test
+    void fallbackIntentNamesARunWhoseResponseCarriesNone() {
+        // streamed skill/report result: no intentCode on the response, the router knew it
+        Map<String, Object> trace = FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .status("COMPLETED").build(), 9, "REPORT_INVENTORY");
+        assertThat(trace).containsEntry("intentCode", "REPORT_INVENTORY").containsEntry("outcome", "SUCCESS");
+    }
 }

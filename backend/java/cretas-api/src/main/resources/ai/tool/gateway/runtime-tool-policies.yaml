@@ -1,6 +1,6 @@
 # Runtime authorization truth. D1 tool-descriptors.yaml remains a separate source audit inventory.
 schemaVersion: 1
-expectedPolicyCount: 10
+expectedPolicyCount: 11
 policies:
   - implementationClass: "com.cretas.aims.ai.tool.impl.user.UserDisableTool"
     toolName: "user_disable"
@@ -201,3 +201,26 @@ policies:
       mode: ALLOWLIST_ONLY
       allowedDestinations:
       - python-smartbi.factory-chart-analysis.v1
+  # S6-04 (Steve 2026-10-28: scheduled tasks may call write tools through the gateway under a
+  # delegated grant). The first schedulable write: set one alert rule on or off. Internal only (no
+  # egress), factory-checked by the tool, same roles as the HTTP toggle. Each scheduled run needs a
+  # factory super admin's grant (confirmation + idempotency come from it) and the factory write switch.
+  - implementationClass: "com.cretas.aims.ai.tool.impl.alerts.AlertRuleToggleTool"
+    toolName: "alert_rule_toggle"
+    actionType: UPDATE
+    riskLevel: MEDIUM
+    requiredPermissions: []
+    allowedRoles: ["factory_super_admin", "permission_admin"]
+    allowedBusinessTypes: [FACTORY]
+    domainTags: ["alert"]
+    version: "2.0.0"
+    supportsPreview: true
+    confirmationPolicy: REQUIRED_FOR_EXECUTION
+    approvalPolicy: NOT_REQUIRED
+    idempotencyPolicy: REQUIRED_FOR_EXECUTION
+    dataClassification: INTERNAL
+    allowedSources: [SCHEDULER]
+    egressPolicy:
+      mode: DENY_ALL
+      allowedDestinations: []
+    provenance: EXPLICIT

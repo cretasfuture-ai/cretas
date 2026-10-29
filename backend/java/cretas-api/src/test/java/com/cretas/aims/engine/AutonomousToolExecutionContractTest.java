@@ -63,7 +63,13 @@ class AutonomousToolExecutionContractTest {
     private final DynamicSchedulerService scheduler =
             new DynamicSchedulerService(schedulerRepo, registry, runner, new ObjectMapper());
 
-    @BeforeEach void tools() {
+    @BeforeEach void tools() throws Exception {
+        // These cases are about grants, not the kill switch: a switch that lets writes through.
+        AutonomousWriteSwitch switchedOn = mock(AutonomousWriteSwitch.class);
+        when(switchedOn.suspension(any())).thenReturn(Optional.empty());
+        java.lang.reflect.Field field = AutonomousToolRunner.class.getDeclaredField("writeSwitch");
+        field.setAccessible(true);
+        field.set(runner, switchedOn);
         when(issuer.consumeForScheduledFire(any(), any(), any())).thenAnswer(call ->
                 grants.consume(call.getArgument(0), call.getArgument(1), call.getArgument(2), grantor -> true));
         when(registry.getExecutor("material_expired_query")).thenReturn(Optional.of(readTool));
@@ -180,6 +186,27 @@ class AutonomousToolExecutionContractTest {
         runScheduled(config, PLANNED);
         verifyNoInteractions(gateway);
         assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
+    }
+
+    @Test void withoutASwitchBeanOrWithTheSwitchOffAWriteIsSuspendedBeforeAnyGrant() throws Exception {
+        FactorySchedulerConfig config = schedule(82L, "dictionary_add", Map.of(), 42L);
+        when(schedulerRepo.findById(82L)).thenReturn(Optional.of(config));
+        Field field = AutonomousToolRunner.class.getDeclaredField("writeSwitch");
+        field.setAccessible(true);
+
+        field.set(runner, null);
+        runScheduled(config, PLANNED);
+        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
+        assertThat(config.getLastExecutionError()).contains("unavailable");
+
+        AutonomousWriteSwitch off = mock(AutonomousWriteSwitch.class);
+        when(off.suspension("F001")).thenReturn(Optional.of("not switched on"));
+        field.set(runner, off);
+        runScheduled(config, PLANNED);
+        assertThat(config.getLastExecutionStatus()).isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
+
+        verifyNoInteractions(gateway);
+        verify(grants, never()).consume(any(), any(), any(), any());
     }
 
     @Test void aWriteWithoutAPlannedFireIdentityIsRefusedRatherThanKeyedByItsStartTime() throws Exception {

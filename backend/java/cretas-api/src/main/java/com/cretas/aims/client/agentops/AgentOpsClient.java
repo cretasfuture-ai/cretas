@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import okhttp3.ConnectionPool;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -21,6 +22,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +73,9 @@ public class AgentOpsClient {
         SAFE_ERROR_CODES = java.util.Collections.unmodifiableSet(codes);
     }
 
+    /** Must stay below uvicorn's --timeout-keep-alive (5s). */
+    static final long IDLE_KEEP_ALIVE_SECONDS = 4;
+
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
     private final HttpUrl baseUrl;
@@ -82,6 +87,9 @@ public class AgentOpsClient {
             @Qualifier("pythonAiInternalSecret") String internalSecret,
             ObjectMapper objectMapper) {
         this.client = Objects.requireNonNull(sharedClient).newBuilder()
+                // uvicorn closes idle keep-alive connections after ~5s; OkHttp reusing one fails with
+                // "unexpected end of stream" (same cause as the SmartBI client, #985/#986). Drop ours first.
+                .connectionPool(new ConnectionPool(4, IDLE_KEEP_ALIVE_SECONDS, TimeUnit.SECONDS))
                 .followRedirects(false).followSslRedirects(false)
                 .retryOnConnectionFailure(false).build();
         this.objectMapper = Objects.requireNonNull(objectMapper);
@@ -138,7 +146,17 @@ public class AgentOpsClient {
 
     /** Records one factory-domain agent run trace; returns the stored (validated) trace. */
     public JsonNode recordFactoryTrace(Map<String, Object> trace, TrustedContext context) throws IOException {
-        return post(url("traces", "factory"), trace, context);
+        try {
+            return post(url("traces", "factory"), trace, context);
+        } catch (UpstreamException rejected) {
+            throw rejected; // a real HTTP answer (4xx/5xx) is never replayed
+        } catch (IOException transport) {
+            // A pooled connection can still be closed by the peer between our idle check and the send.
+            // Ingest is idempotent on runId (same payload returns the stored trace), so one replay on
+            // a fresh connection is safe.
+            client.connectionPool().evictAll();
+            return post(url("traces", "factory"), trace, context);
+        }
     }
 
     public JsonNode getTrace(UUID runId, long afterSequence, int limit, TrustedContext context) throws IOException {

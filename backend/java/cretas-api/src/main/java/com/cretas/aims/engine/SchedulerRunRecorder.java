@@ -37,7 +37,8 @@ public class SchedulerRunRecorder {
         if (rawStatus == null) return SchedulerRunResult.UNKNOWN;
         return switch (rawStatus) {
             case "SUCCESS" -> SchedulerRunResult.SUCCESS;
-            case "FAILED", "GATEWAY_DENIED", "GRANT_DENIED", "WRITE_DENIED", "CONFIG_INVALID",
+            // WRITES_SUSPENDED (S6-04 kill switch): refused before any grant or gateway, so it did not happen.
+            case "FAILED", "GATEWAY_DENIED", "GRANT_DENIED", "WRITE_DENIED", "WRITES_SUSPENDED", "CONFIG_INVALID",
                  "TOOL_NOT_FOUND", "RUN_AS_MISSING" -> SchedulerRunResult.FAILED;
             default -> SchedulerRunResult.UNKNOWN;
         };

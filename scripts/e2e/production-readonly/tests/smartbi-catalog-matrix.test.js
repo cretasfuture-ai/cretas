@@ -72,6 +72,24 @@ test('quantity-family facts cannot silently drift to another unit', () => {
   assert.equal(catalog.candidateUnitsAligned(candidate('wrong-percent', 'production.output', { kpis: [{ label: '产量', value: 10, unit: '%' }] })), false);
 });
 
+test('purchase price accepts only trusted nonadditive per-material table/chart facts', () => {
+  const good = candidate('purchase-price', 'purchase.price', {
+    source: 'purchase · authorized receipt lines', unit: '元/kg',
+    metadata: { aggregation: 'nonadditive' },
+    kpis: [],
+    tableData: [{ label: 'A', value: 2.5 }, { label: 'B', value: 3 }],
+    chart: { chartType: 'bar_horizontal', echartsOption: { yAxis: { data: ['B', 'A'] }, series: [{ data: [3, 2.5] }] } },
+  });
+  assert.deepEqual(catalog.purchasePriceEvidence(good).points.map((point) => point.value), [2.5, 3]);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, source: 'business' }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, unit: 'kg' }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, chart: { ...good.chart, echartsOption: { yAxis: { data: ['A', 'B'] }, series: [{ data: [2.5, 99] }] } } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: null }, { label: 'B', value: 3 }] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: '' }, { label: 'B', value: 3 }] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: [], rows: [] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: [{ label: 'A', value: 2.5 }, { label: 'A', value: 2.5 }] }), null);
+});
+
 test('stateless discovery snapshot can load details lazily without admitting unavailable or full contexts', () => {
   const lazy = candidate('lazy', 'production.output', {
     detailSnapshotKey: 'opaque-snapshot',

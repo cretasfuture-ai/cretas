@@ -39,7 +39,8 @@ class RuntimeToolDescriptorRegistryTest {
                         "material_stock_summary",
                         "material_batch_query",
                         "material_expired_query",
-                        "smartbi_factory_analysis");
+                        "smartbi_factory_analysis",
+                        "alert_rule_toggle");
         for (String toolName : registry.approvedToolNames()) {
             ToolDescriptor descriptor = registry.findApproved(toolName).orElseThrow();
             assertThat(descriptor.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
@@ -113,7 +114,7 @@ class RuntimeToolDescriptorRegistryTest {
                 "com.example.UnapprovedTool", "unapproved_tool", first.version());
         List<RuntimeToolPolicyEntry> extraPolicies = new ArrayList<>(manifest.policies());
         extraPolicies.add(extraEntry);
-        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 11, extraPolicies);
+        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 12, extraPolicies);
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, extra))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unapproved=[unapproved_tool]");
@@ -121,7 +122,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry driftedEntry = copy(
                 first, first.implementationClass(), first.toolName(), "2.0.1");
         RuntimeToolPolicyManifest drifted = new RuntimeToolPolicyManifest(
-                1, 10, manifest.policies().stream()
+                1, 11, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? driftedEntry : policy)
                         .toList());
@@ -132,7 +133,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry sourceDrift = copy(
                 first, "com.example.UserDisableTool", first.toolName(), first.version());
         RuntimeToolPolicyManifest sourceDriftManifest = new RuntimeToolPolicyManifest(
-                1, 10, manifest.policies().stream()
+                1, 11, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? sourceDrift : policy)
                         .toList());
@@ -144,7 +145,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry permissionDrift = copyWithPermissions(
                 first, Set.of("hr:read"));
         RuntimeToolPolicyManifest permissionDriftManifest = new RuntimeToolPolicyManifest(
-                1, 10, manifest.policies().stream()
+                1, 11, manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? permissionDrift : policy)
                         .toList());

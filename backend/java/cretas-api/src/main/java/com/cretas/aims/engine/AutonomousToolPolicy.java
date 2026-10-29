@@ -56,6 +56,24 @@ public final class AutonomousToolPolicy {
         return null;
     }
 
+    /**
+     * Parameters a scheduled write must carry so that every fire has the same stated outcome. A tool
+     * listed here would otherwise act on the current state (alert_rule_toggle without {@code enabled}
+     * flips the rule, so consecutive fires would undo each other).
+     */
+    static final Map<String, String> SCHEDULED_WRITE_REQUIRED_BOOLEAN = Map.of("alert_rule_toggle", "enabled");
+
+    /** @return null when a scheduled run of this write tool states its outcome; otherwise the reason */
+    public static String scheduledWriteRefusal(String toolName, Map<String, Object> params) {
+        String required = SCHEDULED_WRITE_REQUIRED_BOOLEAN.get(toolName);
+        if (required == null) {
+            return null;
+        }
+        Object value = params == null ? null : params.get(required);
+        return value instanceof Boolean ? null
+                : "scheduled " + toolName + " must set " + required + " to true or false explicitly";
+    }
+
     public static boolean isWriteDenial(String reason) {
         return reason != null && reason.startsWith(WRITE_PREFIX);
     }
