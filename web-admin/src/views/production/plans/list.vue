@@ -561,7 +561,21 @@ function planFinishedProductNames(row: TableRow): string[] {
   const targetIds = Array.isArray(row.targetFinishedGoodIds)
     ? row.targetFinishedGoodIds.map(String)
     : [];
-  const names = targetFinishedGoodNames(targetIds).filter(Boolean);
+  // 目录查不到 (该账号的 /product-types/active 没拿到, 或确实不在目录里) 时, 单产品计划用计划自带的品名,
+  // 而不是对着一个明明有名字的计划写「未知产品」(D-S2-09)。多产出计划无法逐个对名, 仍如实显示查不到。
+  const ownName = String(row.productTypeName || row.productName || '').trim();
+  const usableOwnName = ownName && !isRawWorkflowOwnerAnchorName(ownName) ? ownName : '';
+  // 先用服务端随计划下发的名称 (本厂目录解析, 与浏览器是否拿到产品目录无关), 再用本页拉到的目录。
+  const serverNames = (row.targetFinishedGoodNames ?? {}) as Record<string, string>;
+  const names = targetFinishedGoodNames(targetIds).filter(Boolean).map((label, index) =>
+    label === UNKNOWN_OUTPUT_PRODUCT_LABEL && serverNames[targetIds[index]]
+      ? serverNames[targetIds[index]]
+      : label === UNKNOWN_OUTPUT_PRODUCT_LABEL && usableOwnName && targetIds.length === 1
+        && String(row.productTypeId ?? '') === targetIds[0]
+        ? usableOwnName
+        : label === UNKNOWN_OUTPUT_PRODUCT_LABEL && !productCatalogLoaded.value
+          ? PRODUCT_CATALOG_LOADING_LABEL
+          : label);
   if (names.length > 0) return names;
   // ⚠️ 与上面同一条路径: targetFinishedGoodIds 为空时走这里, 原来同样会打出裸 UUID。
   // productTypeId 本身为空是合法的(没指定成品), 那种情况给 '-' 才诚实, 不要说「未识别 SKU」。
@@ -895,6 +909,11 @@ function bindPlanCreateRequestId<T extends Record<string, unknown>>(
   return { ...payload, clientRequestId: planCreateRequestId.value };
 }
 const productTypes = ref<TableRow[]>([]);
+const productCatalogError = ref('');
+// 产品目录还在加载时, 查不到只是「还没到」, 不是「档案查不到」—— 不能在这段时间里把计划写成未知产品。
+const productTypesSettled = ref(false);
+const rawMaterialTypesSettled = ref(false);
+const productCatalogLoaded = computed(() => productTypesSettled.value && rawMaterialTypesSettled.value);
 // 副产 SKU 不在 product_types 里 — 它们是原料 (raw_material_types)。核对结单/仓库确认入库
 // 两个对话框的「终端产出」行按 productTypeId 找名字时两张表都要查，否则副产行会读成
 // 「未知产品」(与 PR #2839 App 待确认入库屏同一个坑)。
@@ -1200,7 +1219,14 @@ async function loadProductTypes() {
     }
   } catch (error: any) {
     console.error('加载产品类型失败:', error);
-    if (!error?.actionHint) ElMessage.error('加载产品类型失败');
+    // 不再吞掉: 目录没拿到时页面会把没有服务端名称的产出写成「未知产品」, 用户必须知道那是因为目录没加载, 而不是产品真的不存在。
+    productCatalogError.value = error?.message || '产品目录加载失败';
+    ElMessage({
+      message: `产品目录没有加载成功（${productCatalogError.value}），列表里部分产品名可能显示为「未知产品」，请刷新重试`,
+      type: 'error', duration: 0, showClose: true,
+    });
+  } finally {
+    productTypesSettled.value = true;
   }
 }
 
@@ -1215,6 +1241,8 @@ async function loadRawMaterialTypesForNames() {
     }
   } catch (error) {
     console.error('加载原料类型(用于终端产出命名)失败:', error);
+  } finally {
+    rawMaterialTypesSettled.value = true;
   }
 }
 
@@ -3990,6 +4018,10 @@ function resolveOutputProductLabel(id: unknown): string {
   if (material) return String(material.name);
   return '未知产品(产品档案查不到)';
 }
+
+// 与上面函数里的字面量必须一致 (那个函数被测试抽出来单独执行, 不能引用模块级常量); 由测试钉住。
+const UNKNOWN_OUTPUT_PRODUCT_LABEL = '未知产品(产品档案查不到)';
+const PRODUCT_CATALOG_LOADING_LABEL = '产品名加载中…';
 
 // ==================== View Plan ====================
 const viewDialogVisible = ref(false);

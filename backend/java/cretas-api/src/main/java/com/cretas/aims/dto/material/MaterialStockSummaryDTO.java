@@ -60,7 +60,7 @@ public class MaterialStockSummaryDTO {
     private BigDecimal totalQuantity;
 
     /** 库存总价值 = SUM(剩余数量 * 单价). 价格脱敏: 无 procurement:price:view 权限置 null。 */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     private BigDecimal totalValue;
 
     /** 在库批次数 */
@@ -70,7 +70,7 @@ public class MaterialStockSummaryDTO {
     private Long warehouseCount;
 
     /** 移动均价 = totalValue / totalQuantity (除零保护 → null). 价格脱敏: 无 procurement:price:view 权限置 null。 */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     private BigDecimal avgUnitPrice;
 
     /**

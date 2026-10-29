@@ -101,7 +101,7 @@ class MaterialInventoryStatisticsPriceContractTest {
         assertBigDecimal("12.50", data.get("totalQuantity"));
         assertBigDecimal("34.00", data.get("totalWeight"));
         assertInventoryByType(data);
-        verify(permissionService).hasPermission(any(User.class), eq(PRICE_PERMISSION));
+        verify(permissionService).hasConfiguredPermission(any(User.class), eq("procurement:read"), any());
     }
 
     @Test
@@ -234,7 +234,10 @@ class MaterialInventoryStatisticsPriceContractTest {
         when(mobileService.getUserFromToken(token)).thenReturn(caller);
         User user = user(userId);
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
-        when(permissionService.hasPermission(user, PRICE_PERMISSION)).thenReturn(canViewPrice);
+        // S5-12: 库存总价值按「采购读 或 财务读」(配置) 判, 不再按 procurement:price:view 名单
+        when(permissionService.hasConfiguredPermission(
+                org.mockito.ArgumentMatchers.eq(user), org.mockito.ArgumentMatchers.eq("procurement:read"),
+                org.mockito.ArgumentMatchers.any())).thenReturn(canViewPrice);
     }
 
     private static Map<String, Object> immutableStatistics() {

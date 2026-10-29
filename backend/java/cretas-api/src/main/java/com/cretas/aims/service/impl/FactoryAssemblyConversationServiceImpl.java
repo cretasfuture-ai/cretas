@@ -418,6 +418,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
 
             FactoryInterviewExpansion.expandIfReady(session);
             FactoryInterviewExpansion.expandProductsIfReady(session);
+            FactoryInterviewExpansion.deriveSequentialTopology(session);
 
             session.addUserMessage(userReply, requestId, requestFingerprint);
             if (!session.nextRound()) {

@@ -177,7 +177,11 @@ public class FactoryBuildInterviewService {
             FactoryInterviewExpansion.expandIfReady(session);
             FactoryInterviewExpansion.expandProductsIfReady(session);
         }
-        if (reused.isEmpty()) return;
+        FactoryInterviewExpansion.deriveSequentialTopology(session);
+        if (reused.isEmpty()) {
+            if (session.allParametersCollected()) session.completeParameterCollection();
+            return;
+        }
         List<FactoryAssemblyConversationSession.ReplyFieldReceipt> fields = new ArrayList<>();
         StringJoiner message = new StringJoiner("；");
         Map<String, String> reusedLabels = new LinkedHashMap<>();
@@ -291,6 +295,8 @@ public class FactoryBuildInterviewService {
             session.setStatus(FactoryAssemblyConversationSession.SessionStatus.ACTIVE);
             session.setCompletedAt(null);
             session.setLastActiveAt(java.time.LocalDateTime.now());
+            // 恢复的会话里若有卡住的仅顺序路线连线 (被「暂时不确定」或没被抽出来), 在这里补上。
+            FactoryInterviewExpansion.deriveSequentialTopology(session);
             sessionRepository.save(session);
             return Optional.of(buildProgress(factoryId, session));
         }
@@ -733,6 +739,7 @@ public class FactoryBuildInterviewService {
         // stepCount 刚答上 → 展开 N 道工序的子项(含抬高 maxRounds)
         FactoryInterviewExpansion.expandIfReady(session);
         FactoryInterviewExpansion.expandProductsIfReady(session);
+        FactoryInterviewExpansion.deriveSequentialTopology(session);
         if (session.allParametersCollected()) {
             session.completeParameterCollection();
         }

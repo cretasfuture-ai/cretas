@@ -30,3 +30,11 @@ describe('已确认事实: 改某一项', () => {
     expect(page).toContain('draft.value = `把「${fact.label}」改成`')
   })
 })
+
+describe('逐条路线连线: 永远有路往前走', () => {
+  it('没有确认卡时页面说明先确认什么', () => {
+    expect(page).toContain('data-testid="route-topology-blocker"')
+    expect(page).toContain('先确认第 ${index} 个成品的「路线形态」')
+    expect(page).toContain('确认卡才会出现')
+  })
+})

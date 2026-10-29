@@ -433,8 +433,11 @@ export function buildRouteTopologyDraft(
   current: RouteTopologyDraft | null = null,
 ): RouteTopologyDraft | null {
   if (!progress) return null
+  // 「暂时不确定」的连线不在 pendingItems 里 (那份只放还问得动的题), 但它仍没答完, 卡片必须照样出现,
+  // 否则用户点过一次「暂时不确定」就再也没有路能回来补。
   const pending = progress.pendingItems?.find(item => /^product\d+\.routeTopology$/.test(item.name))
-  const productIndex = Number(pending?.name.match(/^product(\d+)\./)?.[1] ?? 0)
+  const deferredName = progress.unresolvedDecisions?.find(item => /^product\d+\.routeTopology$/.test(item.field))?.field
+  const productIndex = Number((pending?.name ?? deferredName)?.match(/^product(\d+)\./)?.[1] ?? 0)
   if (!productIndex) return null
   const preview = progress.routePreviews?.find(item => item.productIndex === productIndex)
   if (!preview || preview.routeShapes.length === 1 && preview.routeShapes[0] === '仅顺序') return null
