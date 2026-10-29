@@ -67,8 +67,17 @@ public class FactoryAgentTraceRecorder {
     /** Called from the execution facade after a run; never throws. */
     public void record(String factoryId, Long userId, String role,
                        IntentExecuteResponse response, long latencyMs) {
+        record(factoryId, userId, role, response, latencyMs, null);
+    }
+
+    /**
+     * @param fallbackIntentCode the intent the router resolved, for responses that do not carry it
+     *        (e.g. skill/report routes streamed straight from the skill result)
+     */
+    public void record(String factoryId, Long userId, String role,
+                       IntentExecuteResponse response, long latencyMs, String fallbackIntentCode) {
         try {
-            Map<String, Object> trace = buildTrace(response, latencyMs);
+            Map<String, Object> trace = buildTrace(response, latencyMs, fallbackIntentCode);
             if (trace == null || factoryId == null || userId == null || role == null) {
                 return;
             }
@@ -95,16 +104,37 @@ public class FactoryAgentTraceRecorder {
 
     /** Package-visible for tests: null when this response has nothing to trace. */
     static Map<String, Object> buildTrace(IntentExecuteResponse response, long latencyMs) {
+        return buildTrace(response, latencyMs, null);
+    }
+
+    /**
+     * Final answers that resolved no intent. A clarification turn (NEED_MORE_INFO / NEED_CLARIFICATION) is the
+     * system asking, not a run, so it is not traced; an attempted action that ended as a final answer
+     * (e.g. 「停用员工账号」 answered COMPLETED with intent=null) is exactly the miss worth seeing.
+     */
+    private static final Set<String> UNRESOLVED_FINAL = Set.of("COMPLETED", "SUCCESS", "NOT_RECOGNIZED", "FAILED");
+
+    static Map<String, Object> buildTrace(IntentExecuteResponse response, long latencyMs, String fallbackIntentCode) {
         if (response == null) {
             return null;
         }
         String outcome = outcomeOf(response.getStatus());
         String intent = response.getIntentCode();
         if (intent == null || !INTENT.matcher(intent).matches()) {
-            if (!"BLOCKED".equals(outcome)) {
+            intent = fallbackIntentCode;
+        }
+        if (intent == null || !INTENT.matcher(intent).matches()) {
+            String status = response.getStatus() == null ? "" : response.getStatus().toUpperCase(Locale.ROOT);
+            if (!"BLOCKED".equals(outcome) && !UNRESOLVED_FINAL.contains(status)) {
                 return null;
             }
-            intent = UNRESOLVED_INTENT; // a denied attempt is worth a row even before an intent resolved
+            intent = UNRESOLVED_INTENT; // denied or unanswered attempts are worth a row before an intent resolved
+            if ("SUCCESS".equals(outcome)) {
+                outcome = "UNKNOWN"; // an answer that resolved to nothing is never counted as a success
+            }
+            if (toolNameOf(response) == null) {
+                return unresolvedTrace(intent, outcome, latencyMs);
+            }
         }
         String toolName = toolNameOf(response);
         if (toolName == null) {
@@ -122,6 +152,22 @@ public class FactoryAgentTraceRecorder {
         int latency = (int) Math.max(0, Math.min(latencyMs, 3_600_000L));
         Map<String, Object> step = new LinkedHashMap<>();
         step.put("toolName", toolName);
+        step.put("latencyMs", latency);
+        step.put("outcome", outcome);
+        step.put("sourceRef", SOURCE_REF);
+        Map<String, Object> trace = new LinkedHashMap<>();
+        trace.put("runId", UUID.randomUUID().toString());
+        trace.put("intentCode", intent);
+        trace.put("outcome", outcome);
+        trace.put("latencyMs", latency);
+        trace.put("steps", List.of(step));
+        return trace;
+    }
+
+    private static Map<String, Object> unresolvedTrace(String intent, String outcome, long latencyMs) {
+        int latency = (int) Math.max(0, Math.min(latencyMs, 3_600_000L));
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("toolName", NO_TOOL_STEP);
         step.put("latencyMs", latency);
         step.put("outcome", outcome);
         step.put("sourceRef", SOURCE_REF);
