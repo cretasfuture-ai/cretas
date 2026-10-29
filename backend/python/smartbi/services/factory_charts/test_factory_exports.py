@@ -84,6 +84,17 @@ def test_factory_excel_print_layout_wraps_provenance_without_clipping_columns():
     assert sheet['B1'].value == 'F006上传报表'
 
 
+def test_factory_excel_long_analysis_is_split_into_printable_rows():
+    response=client().post('/export-excel',json=payload())
+    book=openpyxl.load_workbook(io.BytesIO(response.content),data_only=False)
+    sheet=book['逐图规则与来源']
+    values='\n'.join(str(cell.value or '') for row in sheet.iter_rows() for cell in row)
+    assert sheet.max_row > 5
+    assert '末尾事实校验' in values
+    assert '逐图规则完整保留' in values
+    assert max((row.height or 0) for row in sheet.row_dimensions.values()) <= 120
+
+
 def test_factory_ppt_actual_titles_period_images_kpi_and_last_fact_survive():
     response=client().post('/export-ppt',json=payload())
     assert response.status_code==200 and response.content.startswith(b'PK')
