@@ -212,8 +212,8 @@ class TrainingConsentGateContractTest {
         @Test
         void utteranceNamingAProcessSecretProductIsNotStored() {
             when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
-            when(processSecretSampleFilter.mentionsProtectedProduct("F006", "秘制牛肉干今天做了多少"))
-                    .thenReturn(true);
+            when(processSecretSampleFilter.checkTrainingSample("intent", "F006", "秘制牛肉干今天做了多少"))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
             assertThat(service.recordSample("F006", "秘制牛肉干今天做了多少", "PRODUCTION_QUERY",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
             verify(sampleRepository, never()).save(any());
@@ -222,6 +222,8 @@ class TrainingConsentGateContractTest {
         @Test
         void recipeUtteranceIsNotStoredEvenWhenAuthorized() {
             when(trainingConsentService.status("F_PRIV")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
+            when(processSecretSampleFilter.checkTrainingSample("intent", "F_PRIV", "这个产品配方里盐放多少"))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR); // 保密判断放行, 证明是配方规则拦下的
             assertThat(service.recordSample("F_PRIV", "这个产品配方里盐放多少", "BOM_RECIPE_QUERY",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
             verify(sampleRepository, never()).save(any());
@@ -230,6 +232,8 @@ class TrainingConsentGateContractTest {
         @Test
         void unauthorizedFactoryUtteranceIsStoredDesensitized() {
             when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
+            when(processSecretSampleFilter.checkTrainingSample("intent", "F006", "今天入库 350 箱，联系 13812345678"))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             service.recordSample("F006", "今天入库 350 箱，联系 13812345678", "MATERIAL_INBOUND",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1");
@@ -241,6 +245,8 @@ class TrainingConsentGateContractTest {
         @Test
         void authorizedFactoryUtteranceIsStoredAsIs() {
             when(trainingConsentService.status("F_PRIV")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
+            when(processSecretSampleFilter.checkTrainingSample("intent", "F_PRIV", "今天入库 350 箱"))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             service.recordSample("F_PRIV", "今天入库 350 箱", "MATERIAL_INBOUND",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1");
@@ -272,8 +278,8 @@ class TrainingConsentGateContractTest {
         @Test
         void lowConfidenceInputNamingAProcessSecretProductIsNotCollected() {
             when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
-            when(processSecretSampleFilter.mentionsProtectedProduct("F006", "秘制牛肉干还剩多少", null))
-                    .thenReturn(true);
+            when(processSecretSampleFilter.checkTrainingSample("active_learning", "F006", "秘制牛肉干还剩多少", null))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
             assertThat(service.collectSample("F006", 1L, "秘制牛肉干还剩多少", null, "X",
                     new BigDecimal("0.3"), "SEMANTIC", null, null, "rec-1")).isNull();
             verifyNoInteractions(sampleRepository);
@@ -302,6 +308,8 @@ class TrainingConsentGateContractTest {
         @Test
         void unauthorizedFactoryLowConfidenceInputIsCollectedDesensitized() {
             when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
+            when(processSecretSampleFilter.checkTrainingSample("active_learning", "F006", "那批 200 箱还剩多少", "那批 200 箱 剩余"))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR);
             when(sampleRepository.existsBySourceRecordId(anyString())).thenReturn(false);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             ActiveLearningSample s = service.collectSample("F006", 1L, "那批 200 箱还剩多少", "那批 200 箱 剩余",

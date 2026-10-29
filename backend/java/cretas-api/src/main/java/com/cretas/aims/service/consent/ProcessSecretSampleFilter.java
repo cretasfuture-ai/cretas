@@ -5,7 +5,13 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 
@@ -23,6 +29,8 @@ import java.util.Set;
 @Component
 public class ProcessSecretSampleFilter {
 
+    private static final Logger log = LoggerFactory.getLogger(ProcessSecretSampleFilter.class);
+
     static final int MIN_NAME_LENGTH = 2;
 
     private final ProcessSecretAccessService accessService;
@@ -37,6 +45,48 @@ public class ProcessSecretSampleFilter {
     /** 文本是否提到本厂某个工艺保密产品。 */
     public boolean mentionsProtectedProduct(String factoryId, String... texts) {
         return mentionsAny(protectedProductNames(factoryId), texts);
+    }
+
+    /** 收训练样本前的保密判断结果。只有 {@link #CLEAR} 才能存。 */
+    public enum SampleVerdict {
+        /** 没提到本厂保密产品 */
+        CLEAR,
+        /** 提到了本厂保密产品, 不存 */
+        PROTECTED,
+        /** 名单查不出来 (查库失败等), 判断不了 —— 这一条不存, 也不影响调用方的主流程 */
+        UNVERIFIED
+    }
+
+    static final String METRIC_SAMPLE_UNVERIFIED = "cretas.training_sample.secrecy_unverified";
+
+    @Autowired(required = false)
+    private MeterRegistry meterRegistry;
+
+    /**
+     * 收训练样本 (意图识别样本、低置信样本) 时用: 名单查库失败只丢掉这一条样本, 不抛给调用方 ——
+     * 识别请求照常返回 (2026-10-29: 名单查失败曾让用户的意图识别直接报错)。
+     *
+     * <p>不在调用方事务里查: 查库出错时仓库层会把所在事务标成只能回滚, 调用方即使接住异常,
+     * 提交时也会抛 {@code UnexpectedRollbackException}, 结果还是传进识别流程。挂起外层事务后,
+     * 出错只回滚名单查询自己的那个事务。
+     *
+     * <p>判断不了的样本没有「待复核」状态可放 (训练样本表没有状态列, 低置信样本表的状态里没有待复判),
+     * 所以不存, 记一条 WARN (工厂 + 原因, 不带原话) 和计数 {@value #METRIC_SAMPLE_UNVERIFIED}。
+     *
+     * @param kind 样本类别, 进日志和计数标签 (如 {@code intent} / {@code active_learning})
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public SampleVerdict checkTrainingSample(String kind, String factoryId, String... texts) {
+        try {
+            return mentionsProtectedProduct(factoryId, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
+        } catch (RuntimeException e) {
+            log.warn("训练样本保密判断失败, 本条不存: kind={}, factory={}, reason={}",
+                    kind, factoryId, e.getClass().getSimpleName());
+            if (meterRegistry != null) {
+                meterRegistry.counter(METRIC_SAMPLE_UNVERIFIED, "kind", kind == null ? "unknown" : kind).increment();
+            }
+            return SampleVerdict.UNVERIFIED;
+        }
     }
 
     /**
