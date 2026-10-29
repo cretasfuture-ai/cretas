@@ -7,6 +7,7 @@
 
 ## 在飞任务
 
+- `SC60-FINAL-INTEGRATION-20261029` — `review` — Root；Base `d4c65b87b1561ad7cda4ccc6200cfe876fa221a8`；SC54导出/SC56质检/SC58目录源码冻结，风险复核通过；待最终JPA/PG制品与CI、发布、F006验收。范围见archive/2026-10-29-sc60-final-integration.md。
 
 
 
@@ -18,7 +19,8 @@
 
 
 
-- `SMARTBI-F006-QA-20261028` — `blocked` — Root；产品已合并部署；Web双账号并发/断网恢复、附件确认入库及独立回读通过。原22项9过/13含手机延期或设备、封账数据、质检员Web前提未验；scope已释放。见archive/2026-10-29-sc40-sc42-parallel-closure.md。
+
+- `SMARTBI-F006-QA-20261028` — `in-progress` — Root；用户恢复真机角色与F006模拟数据验收，原22项15通过；4月月结20元、SC49成本10.30元回读已过。SC60修复及新11018原生质检续验，阿里云按用户要求不处理；见archive/2026-10-29-sc43-native-closeout-scope.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
