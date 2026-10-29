@@ -28,6 +28,9 @@ public interface ProductProcessWorkflowRevisionRepository
 
     Optional<ProductProcessWorkflowRevision> findByIdAndFactoryId(Long id, String factoryId);
 
+    /** Every saved revision of one Workflow row (a published version keeps the revisions it was built from). */
+    List<ProductProcessWorkflowRevision> findByFactoryIdAndWorkflowId(String factoryId, Long workflowId);
+
     Optional<ProductProcessWorkflowRevision> findByWorkflowIdAndRevisionHash(
             Long workflowId, String revisionHash);
 
