@@ -88,8 +88,10 @@ export interface DynamicQualitySubmitResponse {
 // 质检等级
 // ============================================
 
-export type QualityGrade = 'A' | 'B' | 'C' | 'D' | 'UNKNOWN';
-export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL' | 'PENDING' | 'UNKNOWN';
+export type QualityGrade = 'A' | 'B' | 'C' | 'D';
+export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL' | 'PENDING';
+export type QualityRecordGrade = QualityGrade | 'UNKNOWN';
+export type QualityRecordResult = QualityInspectionResult | 'UNKNOWN';
 
 export const GRADE_THRESHOLDS = {
   A: 95,   // ≥95分
@@ -173,9 +175,9 @@ export interface QualityRecord {
   packaging: ScoreItem;
   totalScore: number;
   passRate: number;
-  result: QualityInspectionResult;
+  result: QualityRecordResult;
   scoreDetailsRecorded: boolean;
-  grade: QualityGrade;
+  grade: QualityRecordGrade;
   passed: boolean;
 
   // 照片
@@ -417,7 +419,7 @@ export function calculateGrade(totalScore: number): QualityGrade {
 /**
  * 判断是否通过
  */
-export function isPassed(grade: QualityGrade): boolean {
+export function isPassed(grade: QualityRecordGrade): boolean {
   return grade === 'A' || grade === 'B' || grade === 'C';
 }
 
