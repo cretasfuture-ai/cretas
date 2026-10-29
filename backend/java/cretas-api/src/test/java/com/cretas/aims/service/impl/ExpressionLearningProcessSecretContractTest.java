@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  * </ul>
  * 保密产品名单走真实的 {@link ProcessSecretSampleFilter} (只 mock 它下面的保密策略和产品表)。
  */
-class ExpressionLearningProcessSecretTest {
+class ExpressionLearningProcessSecretContractTest {
 
     private static final String FA = "FA";
     private static final String FB = "FB";

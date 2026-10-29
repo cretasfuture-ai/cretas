@@ -44,7 +44,7 @@ import static org.mockito.Mockito.*;
  * 走真实入口 {@link AIAnalysisService#analyzeCost} (全部非流式成本分析的汇合点) + 真实判定链 + 真实
  * {@link ProcessSecretAccessService#audit}; 断言打在审计写入器收到的那一行上。
  */
-class ProcessSecretAiAccessAuditTest {
+class ProcessSecretAiAccessAuditContractTest {
 
     private final PythonSmartBIClient python = mock(PythonSmartBIClient.class);
     private ProcessSecretLlmCostScope scope;
