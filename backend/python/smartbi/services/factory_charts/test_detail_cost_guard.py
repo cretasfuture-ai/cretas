@@ -1,12 +1,20 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from types import SimpleNamespace
+import uuid
+from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 import pytest
 
-from . import cost_authorization, detail_store, details, engine
+from . import cost_authorization, detail_store, details, engine, newstock_buckets
+
+
+ROOT = Path(__file__).parents[3]
+MIGRATION = ROOT / "smartbi" / "database" / "migrations" / "V20261101_18__factory_chart_detail_contexts.sql"
 
 
 class _Acquire:
@@ -202,6 +210,179 @@ def test_prepared_cost_guard_uses_actual_engine_rows_and_immutable_hash():
          prepared["unit"], prepared["rows"], prepared["columns"], altered_guard],
         ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
     assert guard_changed_key != prepared["snapshot_key"]
+
+
+def test_prepared_mixed_units_drop_empty_cost_after_candidate_filter_and_keep_digest_contract():
+    request = SimpleNamespace(period_type="all", year=None, start_month=1, end_month=12,
+                              analysis_subject=None, source="production", include_optional=False)
+    source = "production · mixed-units"
+    frame = pd.DataFrame([
+        {"日期": "2026-01-01", "单位": "kg", "产品ID": "p-cost", "产量": 10, "总成本": 11},
+        {"日期": "2026-01-02", "单位": "盒", "产品ID": "p-empty", "产量": 20, "总成本": None},
+    ])
+    dataset = engine.Dataset(frame, source)
+    candidates = [
+        {"id": "cost-kg", "title": "kg成本", "source": source, "unit": "元/kg",
+         "chart": {"chartType": "bar", "echartsOption": {}}},
+        {"id": "cost-box", "title": "盒成本", "source": source, "unit": "元/盒",
+         "chart": {"chartType": "bar", "echartsOption": {}}},
+    ]
+
+    prepared = dict((item["id"], snapshot) for item, snapshot in detail_store._prepared(
+        candidates, [dataset], request, ("F006", 42, "factory_super_admin")))
+    priced = prepared["cost-kg"]
+    empty = prepared["cost-box"]
+    assert priced["columns"] == ("日期", "单位", "产品ID", "产量", "总成本")
+    assert priced["price_columns"] == ["总成本"]
+    assert priced["dimension_contract"]["costGuard"]["productIds"] == ["p-cost"]
+    assert empty["columns"] == ("日期", "单位", "产品ID", "产量")
+    assert empty["price_columns"] == []
+    assert "costGuard" not in empty["dimension_contract"]
+    assert all("总成本" not in row for row in empty["rows"])
+    assert empty["snapshot_key"] != priced["snapshot_key"]
+
+    # A genuine zero is a present cost value and must continue to require the
+    # existing authorization guard rather than being mistaken for null.
+    zero = engine.Dataset(pd.DataFrame([
+        {"日期": "2026-01-02", "单位": "盒", "产品ID": "p-zero", "产量": 20, "总成本": 0},
+    ]), "production · zero-cost")
+    zero_candidate = {**candidates[1], "source": zero.source}
+    zero_snapshot = list(detail_store._prepared([zero_candidate], [zero], request,
+                                                  ("F006", 42, "factory_super_admin")))[0][1]
+    assert zero_snapshot["columns"][-1] == "总成本"
+    assert zero_snapshot["price_columns"] == ["总成本"]
+    assert zero_snapshot["dimension_contract"]["costGuard"]["productIds"] == ["p-zero"]
+
+
+def test_prepared_stock_contract_keeps_verified_bucket_dimension_after_cost_column_drop():
+    request = SimpleNamespace(period_type="all", year=None, start_month=1, end_month=12,
+                              analysis_subject=None, source="inventory", include_optional=False)
+    source = "inventory · stock-cost-mixed"
+    dataset = engine.Dataset(pd.DataFrame([
+        {"批次": "b1", "日期": "2026-01-01", "单位": "kg", "产品": "A",
+         "库存数量": 1, "库龄天数": 10, "总成本": None},
+        {"批次": "b2", "日期": "2026-01-01", "单位": "kg", "产品": "B",
+         "库存数量": 1, "库龄天数": 45, "总成本": None},
+    ]), source)
+    candidate = {
+        "id": "inventory.stock.age:bar", "title": "库存库龄", "source": source, "unit": "批",
+        "engine": {"stockCountContract": newstock_buckets.contract(
+            "age", "库存数量", "库龄天数", "库存库龄桶")},
+        "chart": {"chartType": "bar", "echartsOption": {}},
+    }
+    item, snapshot = list(detail_store._prepared(
+        [candidate], [dataset], request, ("F006", 42, "factory_super_admin")))[0]
+    assert item["id"] == candidate["id"] and snapshot is not None
+    assert "总成本" not in snapshot["columns"]
+    assert "库存库龄桶" in snapshot["columns"]
+    assert "库存库龄桶" in snapshot["dimension_contract"]["fields"]
+    assert {row["库存库龄桶"] for row in snapshot["rows"]} == {"不超过30天", "31–90天"}
+
+
+@pytest.mark.asyncio
+async def test_real_shared_mixed_unit_cost_snapshots_filter_columns_and_recheck_authority(monkeypatch):
+    dsn = os.getenv("FACTORY_SELECTION_TEST_PG_URL") or os.getenv("DETAIL_STORE_TEST_PG_URL")
+    if not dsn:
+        pytest.skip("set FACTORY_SELECTION_TEST_PG_URL for disposable PostgreSQL")
+    target = urlparse(dsn)
+    assert target.hostname in ("localhost", "127.0.0.1") and target.port == 55439
+    asyncpg = pytest.importorskip("asyncpg")
+    admin = await asyncpg.connect(dsn)
+    schema = "cost_guard_" + uuid.uuid4().hex
+    role = "smartbi_user"
+    await admin.execute(
+        "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='smartbi_user') "
+        "THEN CREATE ROLE smartbi_user NOLOGIN; END IF; END $$"
+    )
+    await admin.execute(f"CREATE SCHEMA {schema}")
+    await admin.execute(f"SET search_path TO {schema},public")
+    await admin.execute(MIGRATION.read_text(encoding="utf-8"))
+    await admin.execute(f"GRANT USAGE ON SCHEMA {schema} TO {role}")
+
+    async def setup(connection):
+        await connection.execute(f"SET ROLE {role}")
+        await connection.execute(f"SET search_path TO {schema},public")
+
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=1,
+                                     server_settings={"search_path": f"{schema},public"}, setup=setup)
+    original = detail_store.config.get_pg_pool
+    detail_store.config.get_pg_pool = lambda: pool
+    try:
+        source = "production · mixed-units-real-pg"
+        dataset = engine.Dataset(pd.DataFrame([
+            {"日期": "2026-01-01", "单位": "kg", "产品ID": "p-cost", "产量": 10, "总成本": 11},
+            {"日期": "2026-01-02", "单位": "盒", "产品ID": "p-empty", "产量": 20, "总成本": None},
+        ]), source)
+        candidates = [
+            {"id": "real-cost-kg", "title": "kg成本", "source": source, "unit": "元/kg",
+             "chart": {"chartType": "bar", "echartsOption": {}}},
+            {"id": "real-cost-box", "title": "盒成本", "source": source, "unit": "元/盒",
+             "chart": {"chartType": "bar", "echartsOption": {}}},
+        ]
+        owner = ("F006", 4201, "factory_super_admin")
+        request = SimpleNamespace(period_type="all", year=None, start_month=1, end_month=12,
+                                  analysis_subject=None, source="production", include_optional=False)
+        registered = await detail_store.register_shared(candidates, [dataset], request, owner, True)
+        by_id = {item["id"]: item for item in registered}
+        assert by_id["real-cost-kg"]["detailContext"]["id"]
+        assert by_id["real-cost-box"]["detailContext"]["id"]
+
+        empty_page = await detail_store.page_shared(
+            {"context_id": by_id["real-cost-box"]["detailContext"]["id"]}, owner, True, True
+        )
+        assert empty_page["data"]["rows"]
+        assert "总成本" not in empty_page["data"]["columns"]
+        assert all("总成本" not in row for row in empty_page["data"]["rows"])
+
+        async def allow_cost(*_args, **_kwargs):
+            return cost_authorization.CostAuthorization("F006", 4201, frozenset({"p-cost"}), False)
+
+        monkeypatch.setattr(cost_authorization, "authorize_batches", allow_cost)
+        priced_page = await detail_store.page_shared(
+            {"context_id": by_id["real-cost-kg"]["detailContext"]["id"]}, owner, True, True, _request()
+        )
+        assert "总成本" in priced_page["data"]["columns"]
+        assert priced_page["data"]["rows"][0]["总成本"] == 11
+
+        async def deny_cost(*_args, **_kwargs):
+            return cost_authorization.CostAuthorization("F006", 4201, frozenset(), False)
+
+        monkeypatch.setattr(cost_authorization, "authorize_batches", deny_cost)
+        with pytest.raises(details.DetailError) as denied:
+            await detail_store.page_shared(
+                {"context_id": by_id["real-cost-kg"]["detailContext"]["id"]}, owner, True, True, _request()
+            )
+        assert denied.value.status_code == 403
+
+        legacy_key = "f" * 64
+        legacy_rows = [{"单位": "kg", "产品ID": "p-legacy", "总成本": 9}]
+        legacy_columns = ["单位", "产品ID", "总成本"]
+        legacy_dimensions = {"fields": ["单位", "产品ID"], "pointDimension": None}
+        legacy_snapshot = await admin.fetchval(
+            f"INSERT INTO {schema}.smart_bi_factory_chart_detail_snapshots "
+            "(factory_id,user_id,role,source,period_label,unit,rows,columns,dimensions,price_columns,financial,size_bytes,dedup_key) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13) RETURNING snapshot_id",
+            "F006", "4201", "factory_super_admin", "production · legacy-cost", "全部历史", "元",
+            json.dumps(legacy_rows, ensure_ascii=False), json.dumps(legacy_columns, ensure_ascii=False),
+            json.dumps(legacy_dimensions, ensure_ascii=False), json.dumps(["总成本"], ensure_ascii=False),
+            True, 123, legacy_key,
+        )
+        legacy_context = "legacy-cost-" + uuid.uuid4().hex
+        await admin.execute(
+            f"INSERT INTO {schema}.smart_bi_factory_chart_detail_contexts "
+            "(context_id,snapshot_id,factory_id,user_id,role,candidate_id,title,expires_at) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+            legacy_context, legacy_snapshot, "F006", "4201", "factory_super_admin", "legacy-cost", "旧成本",
+            datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        with pytest.raises(details.DetailError) as legacy_denied:
+            await detail_store.page_shared({"context_id": legacy_context}, owner, True, True, _request())
+        assert legacy_denied.value.status_code == 403
+    finally:
+        detail_store.config.get_pg_pool = original
+        await pool.close()
+        await admin.execute(f"DROP SCHEMA {schema} CASCADE")
+        await admin.close()
 
 
 def test_prepared_guard_marks_missing_product_id_rows_unscoped_and_supports_semantic_aliases():

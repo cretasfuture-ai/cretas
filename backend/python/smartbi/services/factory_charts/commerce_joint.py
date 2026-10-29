@@ -265,12 +265,21 @@ def _candidate(frame: pd.DataFrame, request: Any, unit: str, family: str,
                source_quantity_unit: str | None = None) -> dict[str, Any]:
     labels = [row["label"] for row in groups]
     table_dimension = point_dimension or ("客户渠道产品" if family == CUSTOMER_CHANNEL_FAMILY else "")
+    # Keep the full category values for axis tooltips and table/detail lookup;
+    # only constrain the painted tick labels so long customer/product names do
+    # not consume the whole small chart card.
+    axis_label = {
+        "rotate": 0 if family == CUSTOMER_CHANNEL_FAMILY else 35,
+        "width": 96,
+        "overflow": "truncate",
+        "ellipsis": "...",
+    }
     option = {
         "animation": False,
         "tooltip": {"trigger": "axis", "renderMode": "richText"},
         "legend": {"data": [item["name"] for item in series], "bottom": 0},
         "grid": {"left": 12, "right": 40, "top": 40, "bottom": 72, "containLabel": True},
-        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 35}},
+        "xAxis": {"type": "category", "data": labels, "axisLabel": axis_label},
         "yAxis": {"type": "value", "name": unit},
         "series": [{"name": item["name"], "type": "bar", "data": item["data"]} for item in series],
     }
