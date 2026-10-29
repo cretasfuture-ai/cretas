@@ -131,8 +131,8 @@ function purchasePriceEvidence(candidate) {
   const source = String(candidate?.source || '').trim();
   if (!/^purchase(?:\s*[·:|]|\s|$)/iu.test(source)) return null;
   const table = candidate?.tableData;
-  const headers = Array.isArray(table?.headers) ? table.headers.map(String) : [];
-  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const headers = Array.isArray(table) ? ['label', 'value'] : Array.isArray(table?.headers) ? table.headers.map(String) : [];
+  const rows = Array.isArray(table) ? table : Array.isArray(table?.rows) ? table.rows : [];
   const materialIndex = headers.findIndex((header) => /原料|物料|label|名称/u.test(header));
   const unitIndex = headers.findIndex((header) => /单位/u.test(header));
   const priceIndex = headers.findIndex((header) => /采购单价|入库单价|加权.*价|均价|value|价格/u.test(header));
@@ -153,8 +153,12 @@ function purchasePriceEvidence(candidate) {
   if (!tablePoints.length || !chartPoints.length || tablePoints.length !== chartPoints.length) return null;
   if (tablePoints.some((point) => !point.material || !point.unit || !Number.isFinite(point.value) || point.value < 0)) return null;
   if (chartPoints.some((point) => !point.material || !point.unit || !Number.isFinite(point.value) || point.value < 0)) return null;
-  const same = tablePoints.every((point, index) => point.material === chartPoints[index].material
-    && point.unit === chartPoints[index].unit && Math.abs(point.value - chartPoints[index].value) < 1e-9);
+  const chartByMaterial = new Map(chartPoints.map((point) => [point.material, point]));
+  if (new Set(tablePoints.map((point) => point.material)).size !== tablePoints.length || chartByMaterial.size !== chartPoints.length) return null;
+  const same = tablePoints.every((point) => {
+    const drawn = chartByMaterial.get(point.material);
+    return drawn && point.unit === drawn.unit && Math.abs(point.value - drawn.value) < 1e-9;
+  });
   return same ? { points: tablePoints.map((point) => ({ ...point })), source, nonadditive: true } : null;
 }
 

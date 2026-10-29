@@ -77,8 +77,8 @@ test('purchase price accepts only trusted nonadditive per-material table/chart f
     source: 'purchase · authorized receipt lines', unit: '元/kg',
     metadata: { aggregation: 'nonadditive' },
     kpis: [],
-    tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: 2.5 }, { label: 'B', value: 3 }] },
-    chart: { chartType: 'bar_horizontal', echartsOption: { yAxis: { data: ['A', 'B'] }, series: [{ data: [2.5, 3] }] } },
+    tableData: [{ label: 'A', value: 2.5 }, { label: 'B', value: 3 }],
+    chart: { chartType: 'bar_horizontal', echartsOption: { yAxis: { data: ['B', 'A'] }, series: [{ data: [3, 2.5] }] } },
   });
   assert.deepEqual(catalog.purchasePriceEvidence(good).points.map((point) => point.value), [2.5, 3]);
   assert.equal(catalog.purchasePriceEvidence({ ...good, source: 'business' }), null);
@@ -87,6 +87,7 @@ test('purchase price accepts only trusted nonadditive per-material table/chart f
   assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: null }, { label: 'B', value: 3 }] } }), null);
   assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: '' }, { label: 'B', value: 3 }] } }), null);
   assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: [], rows: [] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: [{ label: 'A', value: 2.5 }, { label: 'A', value: 2.5 }] }), null);
 });
 
 test('stateless discovery snapshot can load details lazily without admitting unavailable or full contexts', () => {
