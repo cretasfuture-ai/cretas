@@ -112,7 +112,8 @@ public class FactoryAgentTraceRecorder {
      * system asking, not a run, so it is not traced; an attempted action that ended as a final answer
      * (e.g. 「停用员工账号」 answered COMPLETED with intent=null) is exactly the miss worth seeing.
      */
-    private static final Set<String> UNRESOLVED_FINAL = Set.of("COMPLETED", "SUCCESS", "NOT_RECOGNIZED", "FAILED");
+    private static final Set<String> UNRESOLVED_FINAL = Set.of(
+            "COMPLETED", "SUCCESS", "NOT_RECOGNIZED", "FAILED", "NO_MATCH", "FACTORY_PACK_NO_MATCH", "VALIDATION_FAILED");
 
     static Map<String, Object> buildTrace(IntentExecuteResponse response, long latencyMs, String fallbackIntentCode) {
         if (response == null) {
@@ -124,7 +125,7 @@ public class FactoryAgentTraceRecorder {
             intent = fallbackIntentCode;
         }
         if (intent == null || !INTENT.matcher(intent).matches()) {
-            String status = response.getStatus() == null ? "" : response.getStatus().toUpperCase(Locale.ROOT);
+            String status = statusOf(response);
             if (!"BLOCKED".equals(outcome) && !UNRESOLVED_FINAL.contains(status)) {
                 return null;
             }
@@ -143,7 +144,8 @@ public class FactoryAgentTraceRecorder {
             // tool-bound successes, so keep them, named for what actually happened.
             if ("SUCCESS".equals(outcome)) {
                 toolName = INTENT_ROUTE_STEP;
-            } else if ("BLOCKED".equals(outcome) || "FAILED".equals(outcome)) {
+            } else if ("BLOCKED".equals(outcome) || "FAILED".equals(outcome)
+                    || UNRESOLVED_FINAL.contains(statusOf(response))) {
                 toolName = NO_TOOL_STEP;
             } else {
                 return null;
@@ -162,6 +164,10 @@ public class FactoryAgentTraceRecorder {
         trace.put("latencyMs", latency);
         trace.put("steps", List.of(step));
         return trace;
+    }
+
+    private static String statusOf(IntentExecuteResponse response) {
+        return response.getStatus() == null ? "" : response.getStatus().toUpperCase(Locale.ROOT);
     }
 
     private static Map<String, Object> unresolvedTrace(String intent, String outcome, long latencyMs) {
