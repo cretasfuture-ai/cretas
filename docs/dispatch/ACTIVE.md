@@ -7,6 +7,10 @@
 
 ## 在飞任务
 
+- `SC74-SANKEY-RUNTIME-20261030` — `review` — Root；Base `98ae3682196ba0ae0f6dbe82fcb6667387bed385`；Web/RN通用桑基formatter及目标测试已冻结，Jest8/Vitest2和双端类型通过；待PR/官方Web与Android OTA及实际图复验。禁数据/后端/权限/发布脚本；scope及OOM原记录见当日SC74归档。
+
+- `SC71-NATIVE-MATRIX-20261029` — `in-progress` — Root协调/sc55_native_catalogue唯一手机操作者；Base `98ae3682196ba0ae0f6dbe82fcb6667387bed385`；仅已连接小米的F006只读分类/图表/原始明细及私有sc67/sc70证据；冻结产品源码、禁模拟器/保存偏好/业务写入。验收36类矩阵及独立图像复核；见archive/2026-10-29-sc71-native-final-matrix.md。
+
 
 
 
