@@ -57,6 +57,31 @@ const FMT_REGISTRY: Record<string, (...args: unknown[]) => string> = {
     return `${d[2]}<br/>收入: ${Number(d[0]).toLocaleString()}<br/>利润率: ${d[1]}%`;
   },
   quadrant_scatter_label: (p: unknown) => String(((p as EChartsParam).data as unknown[])[2]),
+  // Generic Sankey formatters for non-financial quantities (for example, stock or people flow).
+  sankey_node_label: (p: unknown) => {
+    const param = p as EChartsParam;
+    const name = String(param.name ?? '');
+    const value = param.value;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return name;
+    return `${name}\n${value.toLocaleString('zh-CN')}`;
+  },
+  sankey_tooltip: (p: unknown) => {
+    const param = p as EChartsParam;
+    const escapeHtml = (value: unknown) => String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+    const formatQuantity = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+      ? value.toLocaleString('zh-CN')
+      : '-';
+    if (param.dataType === 'edge') {
+      const data = (param.data ?? {}) as Record<string, unknown>;
+      return `<b>${escapeHtml(data.source)} → ${escapeHtml(data.target)}</b><br/>数量: ${formatQuantity(data.value)}`;
+    }
+    return `<b>${escapeHtml(param.name)}</b><br/>数量: ${formatQuantity(param.value)}`;
+  },
   // Sankey financial chart formatters (unscaled values — auto-detect scale)
   sankey_financial_label: (p: unknown) => {
     const param = p as EChartsParam;
