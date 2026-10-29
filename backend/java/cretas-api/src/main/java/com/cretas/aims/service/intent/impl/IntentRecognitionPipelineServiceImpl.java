@@ -58,6 +58,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -1624,7 +1625,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
                     // 记录训练样本 (失败只丢这一条样本, 已算好的精确匹配结果照常返回)
                     if (matchingConfig.isSampleCollectionEnabled()) {
-                        recordTrainingSampleQuietly(factoryId, userInput,
+                        recordTrainingSampleQuietly("exact", factoryId, userInput,
                                 match.getIntentCode(), TrainingSample.MatchMethod.EXACT, 1.0);
                     }
 
@@ -2320,7 +2321,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
 
                 // 记录训练样本 (失败只丢这一条样本, 不让识别请求失败)
                 if (matchingConfig.isSampleCollectionEnabled()) {
-                    recordTrainingSampleQuietly(factoryId, userInput,
+                    recordTrainingSampleQuietly("parallel", factoryId, userInput,
                             parallelResult.getBestMatch().getIntentCode(),
                             TrainingSample.MatchMethod.KEYWORD, // 暂用KEYWORD
                             confidence);
@@ -5377,6 +5378,33 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         return timeout > 0 ? Math.min(timeout / 2, 1000L) : 800L;
     }
 
+    static final String METRIC_SAMPLE_CAPTURE_FAILED = "cretas.training_sample.capture_failed";
+
+    /** 收样本失败计数用 (没有注册表时只记日志) */
+    @Autowired(required = false)
+    private MeterRegistry meterRegistry;
+
+    /**
+     * 识别链路上收训练样本: 任何失败 (保密名单查不出来、样本表写不进) 只丢这一条样本, 不传进识别流程,
+     * 已算好的识别结果原样返回 (2026-10-29: 收样本失败曾让识别请求直接报错 / 丢掉精确匹配结果)。
+     * 日志只带工厂、意图和异常类型, 不带原话; 堆栈只在 DEBUG 打。计数 {@value #METRIC_SAMPLE_CAPTURE_FAILED}{path}。
+     *
+     * @param path 收样本的位置, 进计数标签: {@code exact} (精确表达命中) / {@code parallel} (并行评分高置信)
+     */
+    private void recordTrainingSampleQuietly(String path, String factoryId, String userInput, String intentCode,
+                                             TrainingSample.MatchMethod method, double confidence) {
+        try {
+            expressionLearningService.recordSample(factoryId, userInput, intentCode, method, confidence, null);
+        } catch (Exception e) {
+            log.warn("记录训练样本失败, 本条不存, 识别结果不受影响: factory={}, intent={}, reason={}",
+                    factoryId, intentCode, e.getClass().getSimpleName());
+            log.debug("记录训练样本失败堆栈: path={}, factory={}, intent={}", path, factoryId, intentCode, e);
+            if (meterRegistry != null) {
+                meterRegistry.counter(METRIC_SAMPLE_CAPTURE_FAILED, "path", path).increment();
+            }
+        }
+    }
+
     /**
      * v4.0 并行多层评分匹配
      *
@@ -5391,21 +5419,6 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
      * @param opType 操作类型
      * @return 意图匹配结果
      */
-    /**
-     * 识别链路上收训练样本: 任何失败 (保密名单查不出来、样本表写不进) 只丢这一条样本, 不传进识别流程,
-     * 已算好的识别结果原样返回 (2026-10-29: 收样本失败曾让识别请求直接报错 / 丢掉精确匹配结果)。
-     * 日志只带工厂、意图和异常类型, 不带原话。
-     */
-    private void recordTrainingSampleQuietly(String factoryId, String userInput, String intentCode,
-                                             TrainingSample.MatchMethod method, double confidence) {
-        try {
-            expressionLearningService.recordSample(factoryId, userInput, intentCode, method, confidence, null);
-        } catch (Exception e) {
-            log.warn("记录训练样本失败, 本条不存, 识别结果不受影响: factory={}, intent={}, reason={}",
-                    factoryId, intentCode, e.getClass().getSimpleName());
-        }
-    }
-
     private IntentMatchResult parallelScoreMatch(String userInput, String factoryId,
                                                   List<AIIntentConfig> allIntents, ActionType opType,
                                                   String businessDomain) {

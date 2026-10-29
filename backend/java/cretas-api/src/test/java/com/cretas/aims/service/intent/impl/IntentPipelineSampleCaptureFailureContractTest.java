@@ -137,6 +137,7 @@ class IntentPipelineSampleCaptureFailureContractTest {
                     mock(IntentFeedbackService.class), mock(TwoStageIntentClassifier.class), matchingConfig,
                     mock(ArenaRLConfig.class), knowledgeBase, mock(SemanticRouterService.class),
                     mock(LongTextHandler.class), configService, mock(NegationTwinPolicy.class));
+            ReflectionTestUtils.setField(pipeline, "meterRegistry", meters);
         }
 
         /** Layer 1 精确表达命中 */
@@ -159,6 +160,12 @@ class IntentPipelineSampleCaptureFailureContractTest {
 
         IntentMatchResult recognize() {
             return pipeline.recognizeIntentWithConfidence(INPUT, FACTORY, 3, 1L, "factory_super_admin", null);
+        }
+
+        double captureFailedCount(String path) {
+            Counter c = meters.find(IntentRecognitionPipelineServiceImpl.METRIC_SAMPLE_CAPTURE_FAILED)
+                    .tag("path", path).counter();
+            return c == null ? 0.0 : c.count();
         }
 
         double unverifiedCount() {
@@ -196,6 +203,7 @@ class IntentPipelineSampleCaptureFailureContractTest {
                     eq(TrainingSample.MatchMethod.EXACT), anyDouble(), isNull());
             verify(failing.sampleRepository, never()).save(any());
             assertThat(failing.unverifiedCount()).isEqualTo(1.0);
+            assertThat(failing.captureFailedCount("exact")).isZero();
         }
 
         @Test
@@ -205,6 +213,8 @@ class IntentPipelineSampleCaptureFailureContractTest {
             doThrow(new IllegalStateException("training_samples unavailable"))
                     .when(failing.els).recordSample(any(), any(), any(), any(), anyDouble(), any());
             assertSameRecognition(failing.recognize(), baseline);
+            assertThat(failing.captureFailedCount("exact")).isEqualTo(1.0);
+            assertThat(failing.captureFailedCount("parallel")).isZero();
         }
     }
 
@@ -237,6 +247,8 @@ class IntentPipelineSampleCaptureFailureContractTest {
             doThrow(new IllegalStateException("training_samples unavailable"))
                     .when(failing.els).recordSample(any(), any(), any(), any(), anyDouble(), any());
             assertSameRecognition(failing.recognize(), baseline);
+            assertThat(failing.captureFailedCount("parallel")).isEqualTo(1.0);
+            assertThat(failing.captureFailedCount("exact")).isZero();
         }
     }
 }
