@@ -10,6 +10,7 @@ Aggregates data across multiple uploaded sheets for comprehensive analysis:
 """
 import hashlib
 import logging
+from common.process_secret_harness import with_process_secret_harness
 import time
 from typing import Any, Dict, List, Optional
 
@@ -694,7 +695,8 @@ class CrossSheetAggregator:
                 "messages": [
                     {
                         "role": "system",
-                        "content": "你是一个资深财务分析师，擅长跨报表综合分析和横向对比。回答要简洁、结构清晰、有数据支撑。"
+                        "content": with_process_secret_harness(
+                            "你是一个资深财务分析师，擅长跨报表综合分析和横向对比。回答要简洁、结构清晰、有数据支撑。")
                     },
                     {
                         "role": "user",

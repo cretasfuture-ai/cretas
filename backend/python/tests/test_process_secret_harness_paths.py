@@ -3,16 +3,14 @@
 Steve 2026-10-29: 授权用户的 AI 对话里可以出现工艺保密产品, 但不许流到别的工厂, 也不许被学走、在外部复现。
 Java 侧同义常量是 ``ProcessSecretLlmCostScope.HARNESS_INSTRUCTION``。
 
-闸 (AST, 不是正则): 登记的每个模块里, 每个 ``{"role": "system", ...}`` 消息的内容 (字符串, 或
-``[{"type": "text", "text": ...}]`` 里的 text) 都必须是 ``with_process_secret_harness(...)`` 调用;
-每个模块的系统消息个数也钉住 —— 新加一条系统消息要么接上约束, 要么改这里并说明为什么不接。
+闸 (AST, 不是正则):
+1. 扫 ``smartbi/`` 下全部模块: 凡是写了 ``{"role": "system", ...}`` 消息的, 必须登记在 :data:`HARNESSED_PATHS`
+   (接约束) 或 :data:`EXCLUDED_PATHS` (写明为什么不接) 里 —— 新模块没登记当场红;
+2. 登记接约束的模块里, 每条系统消息的内容 (字符串, 或 ``[{"type": "text", "text": ...}]`` 里的 text) 都必须是
+   ``with_process_secret_harness(...)`` 调用, 系统消息个数也钉住。
 
-没有登记 (有意不接) 的路径:
-- ``smartbi/services/factory_charts/conversation.py``: 图表规划器, 只给目录 id, 不给经营数据;
-- ``smartbi/api/ai_proxy.py``: 规则 / 状态机 / 表单 / 工厂初始化配置的解析, 不解读经营数据;
-- 意图识别 (``ai/matcher``、``ai/router``): 用户原话 → 意图, 不带经营数据;
-- 字段识别 / 映射 / 清洗 / 结构分析: 输出 JSON 映射, 不产出给人看的解读;
-- 餐饮 (``smartbi/agent/orchestrator.py`` 的 SYSTEM_PROMPT、``smartbi/gold/restaurant``): 餐饮线已废弃 (Steve 10-08)。
+扫描面之外 (不在 ``smartbi/`` 下, 也不带经营数据): 意图识别 (``ai/matcher``、``ai/router``)、``llm/``、
+``food_kb``、``factory_assembly`` 等。
 """
 
 from __future__ import annotations
@@ -35,6 +33,36 @@ HARNESSED_PATHS = {
     "smartbi/agent/synthesis_engine.py": 1,
     "smartbi/api/financial_dashboard.py": 2,
     "smartbi/services/unified_analyzer.py": 1,
+    "smartbi/services/cross_sheet_aggregator.py": 1,
+}
+
+# 写了系统消息但有意不接约束的模块 → 理由 (不给经营数据做解读 / 已废弃 / 离线脚本)
+EXCLUDED_PATHS = {
+    "smartbi/api/ai_proxy.py": "规则 / 状态机 / 表单 / 工厂初始化配置的解析, 不解读经营数据",
+    "smartbi/services/factory_charts/conversation.py": "图表规划器: 只给目录 id, 不给经营数据",
+    "smartbi/services/factory_charts/ranking.py": "图表排序: 只给候选 id 与指标名, 输出理由代码",
+    "smartbi/services/chart_recommender.py": "按数据特征推荐图表类型, 输出 JSON",
+    "smartbi/services/data_cleaner.py": "数据清洗规则, 输出 JSON",
+    "smartbi/services/field_detector_llm.py": "字段识别, 输出 JSON 映射",
+    "smartbi/services/llm_mapper.py": "字段映射, 输出 JSON 映射",
+    "smartbi/services/llm_structure_analyzer.py": "表结构分析, 输出 JSON",
+    "smartbi/services/structure/llm_analyzer.py": "表结构分析, 输出 JSON",
+    "smartbi/services/scenario_detector.py": "按表头 / 样本判断业务场景, 输出 JSON",
+    "smartbi/services/sql_generator.py": "按表结构生成 SQL, 不解读数据",
+    "smartbi/agent/orchestrator.py": "餐饮连锁分析 (餐饮线已废弃, Steve 10-08)",
+    "smartbi/gold/restaurant/answer_addresses_query.py": "餐饮 (已废弃)",
+    "smartbi/gold/restaurant/answer_quality_judge.py": "餐饮 (已废弃)",
+    "smartbi/gold/restaurant/expansion_gate.py": "餐饮 (已废弃)",
+    "smartbi/gold/restaurant/promotion_llm_review.py": "餐饮 (已废弃)",
+    "smartbi/gold/restaurant/restaurant_agent.py": "餐饮 (已废弃)",
+    "smartbi/gold/restaurant/restaurant_intent.py": "餐饮 (已废弃)",
+    "smartbi/services/restaurant/review_analyzer_llm.py": "餐饮 (已废弃)",
+    "smartbi/services/restaurant/staffing_forecast.py": "餐饮 (已废弃)",
+    "smartbi/scripts/a36_provider_acceptance.py": "离线验收脚本, 不在服务路径上",
+    "smartbi/scripts/chain_context_diagnose.py": "离线诊断脚本, 不在服务路径上",
+    "smartbi/scripts/llm_capability_rank.py": "离线评测脚本, 不在服务路径上",
+    "smartbi/scripts/t3_aistore_thinking_probe.py": "离线探针脚本, 不在服务路径上",
+    "smartbi/scripts/t7_deepseek_acceptance.py": "离线验收脚本, 不在服务路径上",
 }
 
 HARNESS_CALL = "with_process_secret_harness"
@@ -80,6 +108,38 @@ def test_every_system_message_on_a_data_analysis_path_carries_the_harness(rel_pa
         assert texts, f"{rel_path}: 系统消息没有可识别的文本"
         for text in texts:
             assert _is_harness_call(text), f"{rel_path}:{text.lineno} 系统消息没有经 {HARNESS_CALL}(...)"
+
+
+def _modules_with_system_messages(root: Path):
+    found = {}
+    for path in sorted((root / "smartbi").rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if "/tests/" in rel or path.name.startswith("test_"):
+            continue
+        count = len(_system_message_contents(path.read_text(encoding="utf-8")))
+        if count:
+            found[rel] = count
+    return found
+
+
+def test_every_smartbi_module_that_builds_a_system_message_is_registered():
+    found = _modules_with_system_messages(ROOT)
+
+    assert found, "扫描没找到任何系统消息 —— 扫描本身坏了"
+    unregistered = sorted(set(found) - set(HARNESSED_PATHS) - set(EXCLUDED_PATHS))
+    assert not unregistered, f"这些模块写了系统消息但没登记 (接约束或写明为什么不接): {unregistered}"
+    assert not set(HARNESSED_PATHS) & set(EXCLUDED_PATHS)
+    # 登记不许烂: 不接的模块删了 / 不再写系统消息时要从名单里划掉
+    stale = sorted(set(EXCLUDED_PATHS) - set(found))
+    assert not stale, f"不接名单里这些模块已经没有系统消息了, 从名单里删掉: {stale}"
+
+
+def test_the_scan_notices_an_unregistered_module(tmp_path):
+    """阳性对照: 新模块写了系统消息、没登记 → 扫描能找到它。"""
+    module = tmp_path / "smartbi" / "services" / "brand_new_analyzer.py"
+    module.parent.mkdir(parents=True)
+    module.write_text('payload = {"messages": [{"role": "system", "content": "你是分析师"}]}', encoding="utf-8")
+    assert _modules_with_system_messages(tmp_path) == {"smartbi/services/brand_new_analyzer.py": 1}
 
 
 def test_the_ast_gate_sees_a_system_message_without_the_harness():
