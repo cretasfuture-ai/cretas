@@ -18,6 +18,7 @@ import pandas as pd
 
 import smartbi.config as config
 from .engine import Dataset
+from .wip_plan_flow import WIP_PLAN_FLOW_SQL, assemble_wip_plan_flows
 
 
 _CENT = Decimal("0.01")
@@ -392,6 +393,8 @@ async def load(factory_id: str, request: Any, can_price: bool):
         ("department", "部门经营快照 · 上传来源金额（人民币元）", config.get_cretas_pool,
          DEPARTMENT_SQL if can_price else DEPARTMENT_NO_PRICE_SQL, True, True),
         ("wip-report", "生产报工WIP引用 · 数量/单位事实", config.get_cretas_pool, WIP_REPORT_SQL, True, True),
+        ("wip-plan-flow", "工序在制品流转 · 已过账数量/单位事实", config.get_cretas_pool,
+         WIP_PLAN_FLOW_SQL, True, True),
     ]
     if request.period_type == "all":
         sources.extend([
@@ -437,6 +440,11 @@ async def load(factory_id: str, request: Any, can_price: bool):
                     financial = True
                 else:
                     frame = _strip_money(frame)
+            elif name == "wip-plan-flow":
+                validated, local_gaps = assemble_wip_plan_flows(raw_rows[name], factory_id)
+                frame = pd.DataFrame(validated)
+                if frame.empty:
+                    return None, None, local_gaps
             if not emit_dataset:
                 return None, None, local_gaps
             return Dataset(frame, name + " · " + title, financial=financial, currency=currency), None, local_gaps

@@ -38,7 +38,7 @@ class ToolDescriptorCatalogTest {
         assertThat(new RuntimeToolPolicyLoader().loadDefault().policies())
                 .extracting(RuntimeToolPolicyEntry::toolName).doesNotContain(PurchaseGrantExecuteTool.NAME);
         assertThat(RuntimeToolDescriptorRegistry.loadDefault().findApproved(PurchaseGrantExecuteTool.NAME)).isEmpty();
-        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(10);
+        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(11);
     }
 
     @Test
@@ -48,10 +48,11 @@ class ToolDescriptorCatalogTest {
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
         assertThat(catalog.inventory().expectedToolCount()).isEqualTo(587);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(569);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(568);
         // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
         assertThat(statistics.total()).isEqualTo(587);
-        assertThat(statistics.legacy()).isEqualTo(569);
+        // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
+        assertThat(statistics.legacy()).isEqualTo(568);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
         // 总数 584 → 585，LEGACY_INFERRED 不变。
         // 2026-08-27: 579 → 584 (+5, legacy 计数不变 — 全部落在 EXPLICIT 一侧)。
@@ -71,16 +72,16 @@ class ToolDescriptorCatalogTest {
         // 确认卡的影响说明要用「将修改……现有数据」措辞)。同 ToolDescriptorInventoryDriftTest 的
         // override actionType 61 → 63。riskLevel 桶不变 (UPDATE 的默认风险仍是 LOW)。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 443L,
+                ToolExecutor.ActionType.READ, 442L,
                 ToolExecutor.ActionType.WRITE, 62L,
-                ToolExecutor.ActionType.UPDATE, 28L,
+                ToolExecutor.ActionType.UPDATE, 29L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 20L,
                 ToolExecutor.ActionType.GENERATE, 16L,
                 ToolExecutor.ActionType.NOTIFY, 7L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 511L,
-                ToolExecutor.RiskLevel.MEDIUM, 67L,
+                ToolExecutor.RiskLevel.LOW, 510L,
+                ToolExecutor.RiskLevel.MEDIUM, 68L,
                 ToolExecutor.RiskLevel.HIGH, 9L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
@@ -95,14 +96,14 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
-        // 2026-10-29 (S5-12): purchase_statistics 声明 procurement:read (原来 requiredPermissions 为空, 任何人能问到采购金额) → 50。
-        assertThat(statistics.requiresPermission()).isEqualTo(50);
+        // 2026-10-29 (S5-12): purchase_statistics 声明 procurement:read (原来 requiredPermissions 为空, 任何人能问到采购金额) (main 已 50) → 51。
+        assertThat(statistics.requiresPermission()).isEqualTo(51);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 560L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 559L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 17L,
-                ToolGovernanceStatus.APPROVED, 10L,
+                ToolGovernanceStatus.APPROVED, 11L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         // 2026-08-27 (#185 修复解析器盲区后浮现): 这 3 个 LEGACY_INFERRED 的 HIGH 风险 WRITE
@@ -156,7 +157,8 @@ class ToolDescriptorCatalogTest {
                         "material_stock_summary",
                         "material_batch_query",
                         "material_expired_query",
-                        "smartbi_factory_analysis");
+                        "smartbi_factory_analysis",
+                        "alert_rule_toggle");
     }
 
     @Test

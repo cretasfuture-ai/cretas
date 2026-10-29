@@ -134,6 +134,9 @@ class BatchConsumptionShortfallContractTest {
         check.setShortfalls(List.of(shortfall));
         when(bomExpansionService.checkMaterialAvailability(eq(FACTORY), any()))
                 .thenReturn(check);
+        // 只读口径也给同一个结果: 若扣料误调它, 流程照常跑完, 由 verify(never()) 抓出, 而不是 NPE
+        org.mockito.Mockito.lenient().when(bomExpansionService.checkPickableAvailability(eq(FACTORY), any()))
+                .thenReturn(check);
 
         MaterialBatch mb = new MaterialBatch();
         mb.setId(REAL_BATCH);
@@ -193,5 +196,14 @@ class BatchConsumptionShortfallContractTest {
         verify(productionBatchRepository, times(1)).save(batch);
         assertEquals(0, new BigDecimal("15.00").compareTo(batch.getMaterialCost()),
                 "materialCost 应只含实际扣减的部分, 实得: " + batch.getMaterialCost());
+    }
+
+    @Test
+    @DisplayName("完工自动扣料只按扣料口径 (车间仓 + 物流仓) 取批次, 不走只读的可领料口径 —— 否则会从原料仓直接扣, 没有领料 / 调拨记录")
+    void autoConsumeUsesTheConsumptionScopeNotThePickableScope() {
+        service.autoConsumeForBatch(batch);
+
+        verify(bomExpansionService, atLeastOnce()).checkMaterialAvailability(eq(FACTORY), any());
+        verify(bomExpansionService, never()).checkPickableAvailability(any(), any());
     }
 }

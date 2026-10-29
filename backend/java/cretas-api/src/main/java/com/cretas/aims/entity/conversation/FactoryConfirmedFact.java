@@ -23,6 +23,8 @@ import lombok.Setter;
 public class FactoryConfirmedFact {
     public static final String CONFIRMED = "CONFIRMED";
     public static final String CONFLICT_PENDING = "CONFLICT_PENDING";
+    /** Extracted from free text or carried from an earlier version: waits for the user, not a confirmed fact. */
+    public static final String PENDING_CONFIRM = "PENDING_CONFIRM";
     public static final String SUPERSEDED = "SUPERSEDED";
     public static final String REJECTED = "REJECTED";
 

@@ -1042,7 +1042,9 @@ const SCENARIOS = [
   require('../scenarios/smartbi-factory-readonly'),
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/smartbi-focused-acceptance-readonly').commerceJoint,
+  require('../scenarios/smartbi-focused-acceptance-readonly').purchaseInventory,
   require('../scenarios/smartbi-focused-acceptance-readonly').legacyKpi,
+  require('../scenarios/quality-standard-readonly'),
   require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
@@ -1171,6 +1173,7 @@ async function runSuiteWithPage(page, options = {}) {
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
         factoryCatalogFamilies: options.factoryCatalogFamilies,
         smartbiCommerceJoint: options.smartbiCommerceJoint,
+        smartbiPurchaseInventory: options.smartbiPurchaseInventory,
         smartbiLegacyKpi: options.smartbiLegacyKpi,
         smartbiScale: options.smartbiScale,
         scenarioRef,
@@ -2918,6 +2921,68 @@ module.exports = {
 };
 
 },
+    "scenarios/quality-standard-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+
+const PATH = '/quality/inspections?batchId=11003';
+const STANDARD_PATH = '/api/mobile/F006/processing/batches/11003/quality-form';
+const TEMPERATURE_BINDING_ID = 'a562ea27-8436-4944-8a66-c0afc80f103a';
+const TEMPERATURE_ITEM_ID = '52eb96b4-01d6-4ed0-9f46-ae6d226a5910';
+
+async function inspectQualityStandard(page, ctx = {}) {
+  const request = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === STANDARD_PATH;
+  }, { timeout: 20000 });
+  await page.getByRole('button', { name: '新建质检', exact: true }).click();
+  const response = await request;
+  const body = await response.json();
+  const standard = body?.data || {};
+  const dialog = page.getByRole('dialog', { name: '新建质检记录', exact: true });
+  await dialog.waitFor({ state: 'visible' });
+  await dialog.getByText('当前产品质检标准', { exact: true }).waitFor({ state: 'visible' });
+  const visibleText = await dialog.innerText();
+  const matchingItems = (standard.items || []).filter((value) => value.itemId === TEMPERATURE_ITEM_ID
+    && value.bindingId === TEMPERATURE_BINDING_ID);
+  const item = matchingItems.length === 1 ? matchingItems[0] : null;
+  const checks = {
+    standardHttp200: response.status() === 200 && body.success === true,
+    exactBatch: String(standard.batchId) === '11003',
+    requiredTemperature: Boolean(item && item.unit === '°C' && item.effectiveIsRequired === true
+      && Number(item.effectiveMinValue) === 0 && Number(item.effectiveMaxValue) === 4),
+    productStandardTitle: visibleText.includes('当前产品质检标准'),
+    requiredLabelVisible: /温度\s*[（(]必检[）)]/u.test(visibleText),
+    rangeVisible: /0\s*[~～]\s*4/u.test(visibleText) && visibleText.includes('°C'),
+    noInternalRevision: Boolean(standard.standardRevision && !visibleText.includes(standard.standardRevision)),
+  };
+  const screenshot = ctx.screenshot ? await ctx.screenshot('quality-standard-11003-open') : null;
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  checks.cancelClosed = !await dialog.isVisible();
+  const pass = Object.values(checks).every(Boolean);
+  return { assessment: { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'frontend', checks },
+    checks, batchId: 11003, screenshot,
+    observedTemperature: item ? { itemId: item.itemId, label: item.label, unit: item.unit,
+      min: item.effectiveMinValue, max: item.effectiveMaxValue, required: item.effectiveIsRequired } : null,
+    observedStandardItems: (standard.items || []).slice(0, 8).map((value) => ({ itemId: value.itemId,
+      bindingId: value.bindingId, label: value.label, unit: value.unit,
+      min: value.effectiveMinValue, max: value.effectiveMaxValue, required: value.effectiveIsRequired })),
+    operation: 'Open existing batch standard and cancel; no submission' };
+}
+
+async function run(ctx) {
+  if (ctx.expectedFactoryId !== 'F006') throw new Error('Quality standard acceptance is limited to F006');
+  return runReadOnlyPageScenario(ctx, {
+    id: 'quality-standard-readonly', path: PATH, landmarks: ['质检记录管理'],
+    timeoutMs: 60000, inspect: (page, _body, inspectCtx) => inspectQualityStandard(page, inspectCtx),
+  });
+}
+
+module.exports = { id: 'quality-standard-readonly', defaultEnabled: false, run, inspectQualityStandard };
+
+},
     "scenarios/restaurant-live-command-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -3551,14 +3616,70 @@ function candidateIsQualified(candidate) {
     && candidate?.detailStatus?.state !== 'capacity');
 }
 
+function verifiedWipVoucherCount(candidate, fact) {
+  if (familyOf(candidate) !== 'wip-plan-flow.plan-flow'
+    || !String(candidate?.source || '').startsWith('wip-plan-flow ·')
+    || fact?.label !== '独立流转条数' || fact?.unit !== '条') return false;
+  const headers = candidate?.tableData?.headers;
+  const rows = candidate?.tableData?.rows;
+  if (!Array.isArray(headers) || !Array.isArray(rows) || !rows.length) return false;
+  const voucher = headers.indexOf('MC凭证');
+  const quantity = headers.indexOf('数量');
+  const rowUnit = headers.indexOf('单位');
+  if ([voucher, quantity, rowUnit].some((index) => index < 0)) return false;
+  const unit = String(candidate?.unit || '').trim();
+  if (!rows.every((row) => Array.isArray(row) && /^MC:[1-9]\d*$/u.test(String(row[voucher]))
+    && String(row[rowUnit]).trim() === unit && Number.isFinite(Number(row[quantity]))
+    && Number(row[quantity]) > 0)) return false;
+  return new Set(rows.map((row) => String(row[voucher]))).size === rows.length
+    && Number.isSafeInteger(Number(fact.value)) && Number(fact.value) === rows.length;
+}
+
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
   if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
   return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
     const factUnit = String(fact?.unit || '').trim();
     return !factUnit || factUnit === unit
-      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')));
+      || (factUnit === '%' && /率|占比|百分比/u.test(String(fact?.label || '')))
+      || verifiedWipVoucherCount(candidate, fact);
   });
+}
+
+function purchasePriceEvidence(candidate) {
+  if (familyOf(candidate) !== 'purchase.price') return null;
+  const source = String(candidate?.source || '').trim();
+  if (!/^purchase(?:\s*[·:|]|\s|$)/iu.test(source)) return null;
+  const table = candidate?.tableData;
+  const headers = Array.isArray(table) ? ['label', 'value'] : Array.isArray(table?.headers) ? table.headers.map(String) : [];
+  const rows = Array.isArray(table) ? table : Array.isArray(table?.rows) ? table.rows : [];
+  const materialIndex = headers.findIndex((header) => /原料|物料|label|名称/u.test(header));
+  const unitIndex = headers.findIndex((header) => /单位/u.test(header));
+  const priceIndex = headers.findIndex((header) => /采购单价|入库单价|加权.*价|均价|value|价格/u.test(header));
+  const rowValue = (row, index, header) => Array.isArray(row) ? row[index] : row && typeof row === 'object' ? row[header] : undefined;
+  const declaredUnit = String(candidate?.unit || '').trim();
+  if (!/^元\s*\/\s*[^\s/]+$/u.test(declaredUnit)) return null;
+  const numberValue = (raw) => !['number', 'string'].includes(typeof raw) || String(raw).trim() === '' ? NaN : Number(raw);
+  const tablePoints = materialIndex >= 0 && unitIndex >= 0 && priceIndex >= 0
+      ? rows.map((row) => ({ material: String(rowValue(row, materialIndex, headers[materialIndex]) ?? '').trim(), unit: String(rowValue(row, unitIndex, headers[unitIndex]) ?? '').trim(), value: numberValue(rowValue(row, priceIndex, headers[priceIndex])) }))
+    : materialIndex >= 0 && priceIndex >= 0
+      ? rows.map((row) => ({ material: String(rowValue(row, materialIndex, headers[materialIndex]) ?? '').trim(), unit: declaredUnit, value: numberValue(rowValue(row, priceIndex, headers[priceIndex])) }))
+    : [];
+  const option = candidate?.chart?.echartsOption || {};
+  const labels = Array.isArray(option?.xAxis?.data) ? option.xAxis.data.map(String)
+    : Array.isArray(option?.yAxis?.data) ? option.yAxis.data.map(String) : [];
+  const series = Array.isArray(option?.series) ? option.series[0]?.data : [];
+  const chartPoints = labels.map((material, index) => ({ material: material.trim(), unit: declaredUnit, value: numberValue(series?.[index]) }));
+  if (!tablePoints.length || !chartPoints.length || tablePoints.length !== chartPoints.length) return null;
+  if (tablePoints.some((point) => !point.material || !point.unit || !Number.isFinite(point.value) || point.value < 0)) return null;
+  if (chartPoints.some((point) => !point.material || !point.unit || !Number.isFinite(point.value) || point.value < 0)) return null;
+  const chartByMaterial = new Map(chartPoints.map((point) => [point.material, point]));
+  if (new Set(tablePoints.map((point) => point.material)).size !== tablePoints.length || chartByMaterial.size !== chartPoints.length) return null;
+  const same = tablePoints.every((point) => {
+    const drawn = chartByMaterial.get(point.material);
+    return drawn && point.unit === drawn.unit && Math.abs(point.value - drawn.value) < 1e-9;
+  });
+  return same ? { points: tablePoints.map((point) => ({ ...point })), source, nonadditive: true } : null;
 }
 
 function selectCatalogCandidates(data, requestedFamilies) {
@@ -3819,7 +3940,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
         batch: batchNumber,
       };
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
-      summary.checks.factsPresent = summary.facts.length > 0;
+      const purchasePrice = purchasePriceEvidence(candidate);
+      summary.purchasePrice = purchasePrice;
+      summary.checks.factsPresent = summary.facts.length > 0 || Boolean(purchasePrice);
+      summary.checks.priceEvidence = familyOf(candidate) === 'purchase.price' ? Boolean(purchasePrice) : true;
       summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch((error) => {
         summary.selectionError = String(error?.message || error).slice(0, 500);
         return false;
@@ -3940,6 +4064,7 @@ module.exports = {
   assessCatalog,
   candidateIsQualified,
   candidateUnitsAligned,
+  purchasePriceEvidence,
   familyOf,
   groupCandidates,
   isRestaurantOnly,
@@ -5955,6 +6080,8 @@ const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const UPLOADS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/uploads\/?$/;
 const DETAIL_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
 const COMMERCE_QUESTION = '联合看客户渠道销售、发货和库存';
+const PURCHASE_INVENTORY_QUESTION = '联合分析采购收货与当前库存';
+const PURCHASE_INVENTORY_FAMILY = 'purchase-batch-lineage.purchase.inventory';
 
 function pathname(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
@@ -5979,6 +6106,16 @@ function validateCommerceOptions(value) {
       ? value.expectedKpisByUnit : {},
     expectedChannelAmount: value.expectedChannelAmount,
   };
+}
+
+function validatePurchaseInventoryOptions(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object') throw new Error('smartbiPurchaseInventory must be an object');
+  const expectedKpisByUnit = value.expectedKpisByUnit;
+  if (!expectedKpisByUnit || typeof expectedKpisByUnit !== 'object' || !Object.keys(expectedKpisByUnit).length) {
+    throw new Error('smartbiPurchaseInventory.expectedKpisByUnit is required');
+  }
+  return { expectedKpisByUnit };
 }
 
 function validateLegacyOptions(value) {
@@ -6105,6 +6242,66 @@ function assessCommerce({ body, request, ui, expected }) {
   };
   const pass = Object.values(checks).every(Boolean);
   return { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'data', checks, families, plannerMode, kpiValues, candidateKpiValues, factKpiValues };
+}
+
+function assessPurchaseInventory({ body, request, ui, expected }) {
+  const data = body?.data || {};
+  const candidates = Array.isArray(data.recommendations) ? data.recommendations : [];
+  const candidate = candidates.find((item) => familyOf(item) === PURCHASE_INVENTORY_FAMILY);
+  const facts = Array.isArray(data.facts) ? data.facts : [];
+  const unit = String(candidate?.unit || '').trim();
+  const expectedKpis = expected?.expectedKpisByUnit?.[unit] || null;
+  const kpiByKey = (items) => Object.fromEntries((Array.isArray(items) ? items : []).map((item) => [String(item?.label || '').toLowerCase(), parseNumber(item?.value)]));
+  const candidateKpis = kpiByKey(candidate?.kpis);
+  const factKpis = kpiByKey(facts);
+  const labels = [['received', /收货|入库|received|inbound/u], ['used', /已用|领用|used/u], ['reserved', /预留|reserved/u], ['available', /当前可用|可用|available/u]];
+  const kpiChecks = {};
+  for (const [key, pattern] of labels) {
+    const candidateLabel = Object.keys(candidateKpis).find((label) => pattern.test(label));
+    const factLabel = Object.keys(factKpis).find((label) => pattern.test(label));
+    const expectedValue = expectedKpis?.[key];
+    kpiChecks[`kpi:${key}`] = Boolean(candidateLabel && factLabel && Number.isFinite(Number(expectedValue))
+      && candidateKpis[candidateLabel] === Number(expectedValue) && factKpis[factLabel] === Number(expectedValue));
+  }
+  const values = labels.map(([key]) => Number(expectedKpis?.[key]));
+  const conservation = values.every(Number.isFinite) && values[0] === values[1] + values[2] + values[3] && values[2] >= 0;
+  const candidateKpisValid = Array.isArray(candidate?.kpis) && candidate.kpis.length === 4
+    && candidate.kpis.every((kpi) => String(kpi?.unit || '') === unit && Number.isFinite(parseNumber(kpi?.value)) && parseNumber(kpi.value) >= 0);
+  const factsScoped = facts.length === 4 && facts.every((fact) => String(fact?.unit || '') === unit
+    && String(fact?.candidateId || '') === String(candidate?.id || '') && String(fact?.source || '') === String(candidate?.source || '')
+    && Number.isFinite(parseNumber(fact?.value)) && candidate?.kpis?.some((kpi) => kpi.label === fact.label && parseNumber(kpi.value) === parseNumber(fact.value)));
+  const limitations = [data.answer, ...(data.limitations || []), ...(candidate?.findings?.attention || []), ...(candidate?.findings?.limitations || [])].join(' ');
+  const checks = {
+    httpSuccess: body?.success === true, answered: data.status === 'answered', factoryF006: data.factoryId === 'F006',
+    requestQuestion: request?.question === PURCHASE_INVENTORY_QUESTION, exactFamily: candidates.length === 1 && familyOf(candidate) === PURCHASE_INVENTORY_FAMILY,
+    sourceBusiness: data.source === 'business' && request?.source === 'business', trustedSource: /^purchase-batch-lineage(?:\s*[·:|]|\s|$)/iu.test(String(candidate?.source || '')),
+    plannerAiEvidence: data.status === 'answered', unitExpected: Boolean(unit && expectedKpis), candidateKpisValid,
+    periodPresent: Boolean(data.period?.label) && /当前(?:时点)?快照|current.*snapshot/iu.test(limitations)
+      && /历史期末|historical.*(?:closing|period)/iu.test(limitations), factsScoped, conservation,
+    factsVisible: ui?.factsVisible === true, chartRendered: ui?.visibleChartCount === 1 && ui?.renderedCanvasCount === 1,
+    details: ui?.detailsValid === true, excelExported: ui?.excelExported === true, ...kpiChecks,
+  };
+  const pass = Object.values(checks).every(Boolean);
+  return { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'data', checks, unit, candidateKpis, factKpis };
+}
+
+function purchaseDetailMatches({ status, body, request, candidate, period }) {
+  const data = body?.data || {};
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  const keys = Object.keys(request || {});
+  if (status !== 200 || body?.success !== true || !candidate?.detailContext?.id
+    || request?.context_id !== candidate.detailContext.id || request.page !== 1 || request.page_size !== 50
+    || !keys.every((key) => ['context_id', 'page', 'page_size', 'filters'].includes(key))
+    || data.factoryId !== 'F006' || data.candidateId !== candidate.id || data.source !== candidate.source
+    || data.period !== period || !rows.length || !Number.isSafeInteger(data.total) || data.total < rows.length) return false;
+  const ids = new Set();
+  return rows.every((row) => {
+    if (!['收货单ID', '收货行ID', '物料批次ID'].every((key) => row[key] !== null && row[key] !== undefined && String(row[key]).trim())
+      || String(row['数量单位'] || '') !== String(candidate.unit || '') || ids.has(String(row['物料批次ID']))) return false;
+    ids.add(String(row['物料批次ID']));
+    const values = ['批次入库数量', '批次已用数量', '批次预留数量', '当前可用数量'].map((key) => !['number', 'string'].includes(typeof row[key]) || String(row[key]).trim() === '' ? NaN : Number(row[key]));
+    return values.every((value) => Number.isFinite(value) && value >= 0) && Math.abs(values[0] - values[1] - values[2] - values[3]) <= 1e-9;
+  });
 }
 
 function assessLegacyKpi({ visibleText, expected }) {
@@ -6241,6 +6438,43 @@ async function inspectCommercePage(page, inspectCtx, expected) {
     catalogFamilyIds: [...new Set((body.data?.catalog || []).map(familyOf).filter(Boolean))] };
 }
 
+async function runPurchaseInventory(ctx) {
+  const expected = validatePurchaseInventoryOptions(ctx.smartbiPurchaseInventory || ctx.options?.smartbiPurchaseInventory);
+  if (!expected) return { assessment: { result: 'NOT_RUN', rootCauseClass: 'none', checks: {} } };
+  if (ctx.expectedFactoryId !== 'F006') throw new Error('Purchase inventory acceptance is limited to F006');
+  return runReadOnlyPageScenario(ctx, { id: 'smartbi-purchase-inventory-readonly', path: FACTORY_QUERY_PATH,
+    landmarks: ['智能数据分析'], timeoutMs: 60_000, appMountTimeoutMs: 90_000,
+    inspect: async (page, _body, inspectCtx) => inspectPurchaseInventoryPage(page, inspectCtx, expected) });
+}
+
+async function inspectPurchaseInventoryPage(page, inspectCtx, expected) {
+  const input = page.getByTestId('factory-analysis-input'); await input.waitFor({ timeout: 60_000 });
+  const responsePromise = page.waitForResponse((item) => item.request().method() === 'POST' && ANALYSIS_PATH.test(pathname(item.url())), { timeout: 60_000 });
+  await input.fill(PURCHASE_INVENTORY_QUESTION); await page.getByTestId('factory-analysis-submit').click();
+  const response = await responsePromise; const body = await bodyOf(response); const request = requestOf(response);
+  const cards = page.locator('[data-testid^="factory-chart-card-"]:visible'); await cards.first().waitFor({ timeout: 30_000 }).catch(() => {});
+  await cards.first().scrollIntoViewIfNeeded().catch(() => {}); await cards.locator('canvas').first().waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+  const factHost = page.getByTestId('factory-analysis-facts').last(); const factText = await factHost.innerText().catch(() => '');
+  const factItems = Array.isArray(body?.data?.facts) ? body.data.facts : [];
+  const factsVisible = await factHost.isVisible().catch(() => false) && factItems.length === 4
+    && factItems.every((fact) => factText.includes(String(fact.label)) && factText.includes(String(fact.unit))
+      && new RegExp(`(^|[^0-9])${String(parseNumber(fact.value)).replace(/\./gu, '\\.')}([^0-9]|$)`, 'u').test(factText));
+  const candidate = (body?.data?.recommendations || []).find((item) => familyOf(item) === PURCHASE_INVENTORY_FAMILY);
+  let detailsValid = false; const detailButton = cards.locator('button').filter({ hasText: '查看原始明细' }).first();
+  if (await detailButton.count()) {
+    const detailPromise = page.waitForResponse((item) => item.request().method() === 'POST' && normalized(item.url()) === DETAIL_PATH, { timeout: 30_000 }).catch(() => null);
+    await detailButton.click().catch(() => {}); const detailResponse = await detailPromise; const detailBody = detailResponse ? await bodyOf(detailResponse) : {};
+    const detailRequest = detailResponse ? requestOf(detailResponse) : {};
+    detailsValid = purchaseDetailMatches({ status: detailResponse?.status(), body: detailBody, request: detailRequest, candidate, period: body?.data?.period?.label });
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.locator('.el-drawer:visible').waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+  }
+  const answer = page.locator('.turn.turn--assistant:visible').last(); const excel = answer.getByRole('button', { name: 'Excel', exact: true }); let excelExported = false;
+  if (await excel.count()) { const download = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null); const exportResponse = page.waitForResponse((item) => item.request().method() === 'POST' && normalized(item.url()).endsWith('/export-excel'), { timeout: 30_000 }).catch(() => null); await excel.click(); const [file, result] = await Promise.all([download, exportResponse]); if (file && result?.status() === 200 && inspectCtx.evidenceDir) { await file.saveAs(`${String(inspectCtx.evidenceDir).replace(/[\\/]+$/, '')}/smartbi-purchase-inventory-readonly.xlsx`); excelExported = true; } }
+  const assessment = assessPurchaseInventory({ body, request, ui: { visibleChartCount: await cards.count(), renderedCanvasCount: await cards.locator('canvas').count(), factsVisible, detailsValid, excelExported }, expected });
+  return { assessment, ...assessment, screenshot: inspectCtx.screenshot ? await inspectCtx.screenshot('smartbi-purchase-inventory-answer') : null };
+}
+
 async function runLegacy(ctx) {
   const expected = validateLegacyOptions(ctx.smartbiLegacyKpi || ctx.options?.smartbiLegacyKpi);
   if (!expected) return { assessment: { result: 'NOT_RUN', rootCauseClass: 'none', checks: {} } };
@@ -6297,8 +6531,9 @@ async function inspectLegacyPage(page, body, expected, inspectCtx = {}) {
 
 module.exports = {
   commerceJoint: { id: 'smartbi-commerce-joint-readonly', defaultEnabled: false, run: runCommerce },
+  purchaseInventory: { id: 'smartbi-purchase-inventory-readonly', defaultEnabled: false, run: runPurchaseInventory },
   legacyKpi: { id: 'smartbi-legacy-kpi-readonly', defaultEnabled: false, run: runLegacy },
-  validateCommerceOptions, validateLegacyOptions, assessCommerce, assessLegacyKpi, findLegacyBatchIndex, inspectCommercePage, inspectLegacyPage,
+  validateCommerceOptions, validatePurchaseInventoryOptions, validateLegacyOptions, assessCommerce, assessPurchaseInventory, purchaseDetailMatches, assessLegacyKpi, findLegacyBatchIndex, inspectCommercePage, inspectPurchaseInventoryPage, inspectLegacyPage,
 };
 
 },
@@ -6513,7 +6748,12 @@ function validateScaleOptions(value) {
 }
 
 function subjectId(subject) {
-  return typeof subject?.id === 'string' && subject.id.trim() ? subject.id : null;
+  const value = subject?.id;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function isStableIdSubject(subject) {
+  return typeof subject?.id === 'string' && subject.id.trim().length > 0;
 }
 
 function subjectsFromBody(body) {
@@ -6543,24 +6783,68 @@ function candidateKpisMatch(candidate, expectedKpis) {
     && ['kg', '%', '%', '元'].every((unit, index) => candidate?.kpis?.[index]?.unit === unit);
 }
 
-function assessProductDetail(detail, expected, candidateId, detailContextId, periodLabel, candidate) {
+const PRODUCT_ID_KEYS = new Set(['产品id', '产品编号', 'productid', 'product_id', 'producttypeid', 'product_type_id']);
+
+function rowProductId(row) {
+  if (!row || typeof row !== 'object') return null;
+  const key = Object.keys(row).find((item) => PRODUCT_ID_KEYS.has(String(item).replace(/\s+/gu, '').toLowerCase()));
+  const value = key ? row[key] : null;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function rowUnit(row) {
+  if (!row || typeof row !== 'object') return null;
+  const key = Object.keys(row).find((item) => ['单位', 'unit', 'measure_unit', 'measureUnit'].includes(item));
+  const value = key ? row[key] : null;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+async function deriveSubjectIdentity(page, rawProductId, selectedSubjectId) {
+  if (typeof rawProductId !== 'string' || !rawProductId.trim()) {
+    return { rawProductId: rawProductId || null, derivedSubjectId: null, matches: false };
+  }
+  const derivedSubjectId = await page.evaluate(async (raw) => {
+    const bytes = new TextEncoder().encode(`smartbi-subject-v2:id:${raw}`);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    return `product-${hex.slice(0, 16)}`;
+  }, rawProductId);
+  return { rawProductId, derivedSubjectId, matches: derivedSubjectId === selectedSubjectId };
+}
+
+function assessProductDetail(detail, expected, candidateId, detailContextId, periodLabel, candidate, selectedSubjectId, subjectIdentity) {
   const data = detail?.body?.data || detail?.data || {};
   const rows = Array.isArray(data.rows) ? data.rows : [];
   const request = detail?.request || {};
+  const candidateSource = candidate?.source;
+  const expectedUnit = candidate?.unit;
+  const rowProductIds = rows.map(rowProductId);
+  const rowUnits = rows.map(rowUnit);
   const checks = {
     attempted: detail?.attempted === true,
     http200: detail?.status === 200,
     success: detail?.body?.success === true,
     factory: data.factoryId === 'F006',
     candidate: data.candidateId === candidateId,
-    source: data.source === 'upload',
+    source: typeof candidateSource === 'string' && candidateSource.trim().length > 0 && data.source === candidateSource,
     period: data.period === periodLabel,
     context: request.context_id === detailContextId,
     requestKeys: Object.keys(request).sort().join(',') === 'context_id,filters,page,page_size',
     pageSize: request.page_size === expected.pageSize && request.page === 1,
     productRows: data.total === expected.expectedProductRows && rows.length === expected.expectedProductRows,
+    productKeys: typeof subjectIdentity?.rawProductId === 'string'
+      && rowProductIds.length === expected.expectedProductRows
+      && rowProductIds.every((value) => value === subjectIdentity.rawProductId),
+    stableIdentity: typeof selectedSubjectId === 'string'
+      && subjectIdentity?.matches === true
+      && subjectIdentity?.derivedSubjectId === selectedSubjectId,
+    units: typeof expectedUnit === 'string' && expectedUnit.trim().length > 0
+      && candidate?.kpis?.[0]?.unit === expectedUnit
+      && rowUnits.length === expected.expectedProductRows
+      && rowUnits.every((value) => value === expectedUnit),
     noPoint: !Object.prototype.hasOwnProperty.call(request, 'point') && !Object.prototype.hasOwnProperty.call(data, 'point'),
-    candidateUnit: candidate?.unit === 'kg',
+    candidateUnit: typeof candidate?.unit === 'string' && candidate.unit.trim().length > 0,
+    targetUnit: selectedSubjectId === expected.targetProductId ? candidate?.unit === 'kg' : true,
     candidateFamily: candidate?.analysis?.familyId === 'production.inspection_fused',
   };
   const paginationEvidence = data.total > expected.pageSize
@@ -6577,6 +6861,12 @@ function assessProductDetail(detail, expected, candidateId, detailContextId, per
     checks,
     total: Number.isFinite(Number(data.total)) ? Number(data.total) : null,
     rowCount: rows.length,
+    selectedSubjectId: selectedSubjectId || null,
+    candidateSource: candidateSource || null,
+    candidateUnit: expectedUnit || null,
+    rowProductIds,
+    rowUnits,
+    stableIdentity: subjectIdentity || null,
     pagination: paginationEvidence ? 'PASS' : 'UNVERIFIED',
     note: paginationEvidence
       ? 'Observed page 1 with 50 rows and hasMore=true.'
@@ -6629,7 +6919,7 @@ function assessRawPagination(first, second, expected) {
   };
 }
 
-function assessScale({ factoryId, options, initial, selections = [], detail, rawPagination }) {
+function assessScale({ factoryId, options, initial, selections = [], detail, details = [], rawPagination }) {
   const subjects = subjectsFromBody(initial?.body);
   const initialData = initial?.body?.data || {};
   const initialRequest = initial?.request || {};
@@ -6639,6 +6929,7 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     const request = selection.request || {};
     const data = selection.body?.data || {};
     const candidate = Array.isArray(data.recommendations) ? data.recommendations[0] : null;
+    const detailResult = selection.detailResult || details.find((item) => item.selectedSubjectId === selection.selectedSubjectId)?.detail || null;
     const subjectMatches = selection.requestedSubjectId === selection.selectedSubjectId
       && subjectId(subjects.find((item) => subjectId(item) === selection.selectedSubjectId)) === selection.selectedSubjectId;
     const answerMatches = data.analysisSubject === selection.selectedSubjectId
@@ -6653,7 +6944,14 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
       expectedRows: Array.isArray(candidate?.tableData?.rows) && candidate.tableData.rows.length === options.expectedProductRows,
       answered: selection.status === 200 && selection.body?.success === true && data.status === 'answered',
       family: candidate?.analysis?.familyId === 'production.inspection_fused',
-      unit: candidate?.unit === 'kg',
+      unit: typeof candidate?.unit === 'string' && candidate.unit.trim().length > 0
+        && candidate?.kpis?.[0]?.unit === candidate.unit
+        && detailResult?.checks?.units === true,
+      targetUnit: selection.selectedSubjectId === options.targetProductId ? candidate?.unit === 'kg' : true,
+      detail: detailResult?.result === 'PASS'
+        && detailResult?.checks?.productKeys === true
+        && detailResult?.checks?.source === true
+        && detailResult?.checks?.stableIdentity === true,
       chartsBounded: Number.isInteger(selection.visibleChartCount) && selection.visibleChartCount > 0 && selection.visibleChartCount < options.expectedSubjectCount,
       canvasesBounded: Number.isInteger(selection.renderedCanvasCount) && selection.renderedCanvasCount > 0 && selection.renderedCanvasCount < options.expectedSubjectCount,
     };
@@ -6665,7 +6963,7 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     initialUploadRequest: initialScope,
     subjectCount: subjects.length === options.expectedSubjectCount,
     subjectsHaveStableIds: subjects.length === options.expectedSubjectCount
-      && subjects.every((item) => Boolean(subjectId(item)))
+      && subjects.every((item) => isStableIdSubject(item))
       && new Set(subjects.map(subjectId)).size === options.expectedSubjectCount,
     atLeastTwoProductFilters: selections.filter((item) => item.request?.analysisSubject).length >= 2,
     firstMiddleLastSelected: firstMiddleLastIds(subjects).every((id) => stableSubjectIds.includes(id)),
@@ -6679,9 +6977,14 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     fiveRowsEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.expectedRows),
     answeredEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.answered),
     familyEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.family),
-    unitEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.unit),
+    unitEach: selectionChecks.length > 0 && selectionChecks.every((item) => item.unit && item.targetUnit),
+    detailEach: selectionChecks.length === selections.length && selectionChecks.length >= 2
+      && selectionChecks.every((item) => item.detail),
     noHundredCharts: selectionChecks.length > 0 && selectionChecks.every((item) => item.chartsBounded && item.canvasesBounded),
-    productDetail: detail?.result === 'PASS' && detail?.checks?.productRows === true,
+    productDetail: details.length === selections.length && details.length >= 2
+      && details.every((item) => item.detail?.result === 'PASS'
+        && item.detail?.checks?.productRows === true
+        && item.detail?.checks?.stableIdentity === true),
     // Product detail is only five rows; the actual 500-row upload table is
     // the sole evidence allowed to satisfy the pagination requirement.
     pagination: rawPagination?.result === 'PASS',
@@ -6701,6 +7004,13 @@ function assessScale({ factoryId, options, initial, selections = [], detail, raw
     selectedSubjectIds: stableSubjectIds,
     selectionChecks,
     detail: detail || null,
+    details,
+    selectionObservations: selections.map((item, index) => {
+      const check = selectionChecks[index] || {};
+      const detailItem = details.find((candidate) => candidate.selectedSubjectId === item.selectedSubjectId);
+      return `subject=${item.selectedSubjectId || 'missing'} unit=${item.unit || 'missing'} detailResult=${detailItem?.detail?.result || 'UNVERIFIED'} detailChecks=${Object.entries(detailItem?.detail?.checks || {}).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS'} selectionChecks=${Object.entries(check).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS'}`;
+    }),
+    detailObservations: details.map((item) => `subject=${item.selectedSubjectId || 'missing'} detailResult=${item.detail?.result || 'UNVERIFIED'} source=${item.detail?.candidateSource || 'missing'} rawProductId=${item.detail?.stableIdentity?.rawProductId || 'missing'} derivedSubjectId=${item.detail?.stableIdentity?.derivedSubjectId || 'missing'} identity=${item.detail?.checks?.stableIdentity === true} unit=${item.detail?.candidateUnit || 'missing'} rows=${item.detail?.rowCount ?? 0} productKeys=${item.detail?.checks?.productKeys === true} units=${item.detail?.checks?.units === true} checks=${Object.entries(item.detail?.checks || {}).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS'}`),
     rawPagination: rawPagination || null,
     note: result === 'PASS'
       ? '100 stable products, bounded rendering, exact subject-scoped answers, target KPI/rows and real pagination evidence passed.'
@@ -6809,6 +7119,7 @@ async function inspectScale(page, inspectCtx) {
   const selections = [];
   const screenshots = [];
   let detail = null;
+  const details = [];
   for (const [selectionIndex, subject] of ordered.entries()) {
     const selectedId = subjectId(subject);
     if (!selectedId) continue;
@@ -6830,9 +7141,10 @@ async function inspectScale(page, inspectCtx) {
       await cards.nth(index).locator('canvas').first().waitFor({ state: 'visible', timeout: 10_000 });
     }
     const renderedCanvasCount = await cards.locator('canvas').count();
-    const selection = { status: selectedResponse.status(), requestedSubjectId: selectedId, selectedSubjectId: body?.data?.analysisSubject || request.analysisSubject || null, body, request, visibleChartCount, renderedCanvasCount };
+    const selection = { status: selectedResponse.status(), requestedSubjectId: selectedId, selectedSubjectId: body?.data?.analysisSubject || request.analysisSubject || null, unit: null, body, request, visibleChartCount, renderedCanvasCount };
     const candidate = (body?.data?.recommendations || [])[0];
-    if (selectedId === options.targetProductId && candidate?.id) {
+    selection.unit = candidate?.unit || null;
+    if (candidate?.id && candidate?.detailContext?.id) {
       const card = page.getByTestId(`factory-chart-card-${candidate.id}`);
       const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true });
       if (await detailsButton.count()) {
@@ -6840,11 +7152,25 @@ async function inspectScale(page, inspectCtx) {
         await detailsButton.click();
         const detailsResponse = await responsePromise;
         const detailsBody = detailsResponse ? await responseBody(detailsResponse) : {};
-        detail = assessProductDetail({ attempted: true, status: detailsResponse?.status(), body: detailsBody, request: detailsResponse ? requestBody(detailsResponse) : {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate);
+        const detailRows = Array.isArray(detailsBody?.data?.rows) ? detailsBody.data.rows : [];
+        const subjectIdentity = await deriveSubjectIdentity(page, rowProductId(detailRows[0]), selectedId);
+        const detailResult = assessProductDetail({ attempted: true, status: detailsResponse?.status(), body: detailsBody, request: detailsResponse ? requestBody(detailsResponse) : {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate, selectedId, subjectIdentity);
+        const detailObservation = { selectedSubjectId: selectedId, detail: detailResult };
+        details.push(detailObservation);
+        selection.detailResult = detailResult;
+        if (selectedId === options.targetProductId) detail = detailResult;
         if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
       } else {
-        detail = assessProductDetail({ attempted: false, status: null, body: { success: false, data: {} }, request: {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate);
+        const detailResult = assessProductDetail({ attempted: false, status: null, body: { success: false, data: {} }, request: {} }, options, candidate.id, candidate.detailContext?.id, body?.data?.period?.label, candidate, selectedId, { rawProductId: null, derivedSubjectId: null, matches: false });
+        details.push({ selectedSubjectId: selectedId, detail: detailResult });
+        selection.detailResult = detailResult;
+        if (selectedId === options.targetProductId) detail = detailResult;
       }
+    } else {
+      const detailResult = assessProductDetail({ attempted: false, status: null, body: { success: false, data: {} }, request: {} }, options, candidate?.id, candidate?.detailContext?.id, body?.data?.period?.label, candidate, selectedId, { rawProductId: null, derivedSubjectId: null, matches: false });
+      details.push({ selectedSubjectId: selectedId, detail: detailResult });
+      selection.detailResult = detailResult;
+      if (selectedId === options.targetProductId) detail = detailResult;
     }
     selections.push(selection);
     if (selectedId === options.targetProductId && inspectCtx.screenshot) {
@@ -6853,7 +7179,7 @@ async function inspectScale(page, inspectCtx) {
   }
   const rawPagination = await runRawUploadPagination(page, options);
   if (inspectCtx.screenshot) screenshots.push(await inspectCtx.screenshot('scale-original-upload-page-two'));
-  const assessment = assessScale({ factoryId: inspectCtx.expectedFactoryId, options, initial, selections, detail, rawPagination });
+  const assessment = assessScale({ factoryId: inspectCtx.expectedFactoryId, options, initial, selections, detail, details, rawPagination });
   return {
     assessment,
     ...assessment,
@@ -6864,6 +7190,9 @@ async function inspectScale(page, inspectCtx) {
       selectedSubjectId: item.selectedSubjectId,
       request: item.request,
       response: { factoryId: item.body?.data?.factoryId, source: item.body?.data?.source, analysisSubject: item.body?.data?.analysisSubject, recommendationCount: item.body?.data?.recommendations?.length || 0 },
+      unit: item.unit || null,
+      detailResult: item.detailResult?.result || 'UNVERIFIED',
+      detailChecks: Object.entries(item.detailResult?.checks || {}).filter(([, value]) => value !== true).map(([key]) => key).join('|') || 'PASS',
       visibleChartCount: item.visibleChartCount,
       renderedCanvasCount: item.renderedCanvasCount,
     })),

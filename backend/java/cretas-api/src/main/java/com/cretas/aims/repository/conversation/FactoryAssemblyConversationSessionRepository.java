@@ -141,6 +141,10 @@ public interface FactoryAssemblyConversationSessionRepository extends JpaReposit
         @Param("actorType") AuthenticatedActorType actorType
     );
 
+    /** 本厂最近的会话 (不分账号), 新访谈版本从这里取上一版已确认的事实。 */
+    List<FactoryAssemblyConversationSession> findTop20ByFactoryIdAndKnownIntentCodeOrderByCreatedAtDesc(
+            String factoryId, String knownIntentCode);
+
     default List<FactoryAssemblyConversationSession> findRecentByUser(String factoryId, Long userId) {
         return findRecentByActor(factoryId, userId, AuthenticatedActorType.FACTORY_USER);
     }

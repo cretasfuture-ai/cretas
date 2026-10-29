@@ -701,7 +701,7 @@ public class SupplyChainOrchestrator {
         return isolated.execute(status -> {
             List<MaterialRequirement> requirements = bomExpansionService.expandBOM(
                     factoryId, productTypeId, shortfallQuantity);
-            return bomExpansionService.checkMaterialAvailability(factoryId, requirements);
+            return bomExpansionService.checkPickableAvailability(factoryId, requirements);
         });
     }
 

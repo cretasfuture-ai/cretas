@@ -115,10 +115,59 @@ public class FactoryBuildInterviewService {
     }
 
     /**
+     * 本厂此前各版访谈里「用户确认过」的事实: 取该会话里最新一条 ACCEPTED 回执, 且当前值仍等于回执值
+     * (被改过又没有新回执的不算)。越新的会话越优先; 提取候选、没有回执的值一律不采信。
+     */
+    List<FactoryConfirmedFactService.PriorFact> priorSessionFacts(
+            String factoryId, FactoryAssemblyConversationSession current) {
+        List<FactoryConfirmedFactService.PriorFact> found = new ArrayList<>();
+        Set<String> alreadySpoken = new HashSet<>();
+        for (FactoryAssemblyConversationSession prior : sessionRepository
+                .findTop20ByFactoryIdAndKnownIntentCodeOrderByCreatedAtDesc(factoryId, FACTORY_BUILD_PARAMS_INTENT)) {
+            if (prior.getSessionId() == null || prior.getSessionId().equals(current.getSessionId())) continue;
+            Map<String, String> labels = new LinkedHashMap<>();
+            prior.getRequiredParameters().forEach(rp -> labels.put(rp.getName(), rp.getLabel()));
+            Map<String, String> accepted = new LinkedHashMap<>();
+            Map<String, Boolean> decided = new LinkedHashMap<>();
+            for (FactoryAssemblyConversationSession.Message message : prior.getMessages()) {
+                FactoryAssemblyConversationSession.ReplyReceipt receipt = message.getReplyReceipt();
+                if (receipt == null || receipt.getFieldReceipts() == null) continue;
+                for (FactoryAssemblyConversationSession.ReplyFieldReceipt field : receipt.getFieldReceipts()) {
+                    if (field == null || isBlank(field.getField()) || !"ACCEPTED".equals(field.getResolution())) continue;
+                    accepted.put(field.getField(), field.getCanonicalValue());
+                    // 只有用户的决定算「已确认」; 提取 (VALIDATED 等) 只是格式通过, 进入待确认。
+                    String reason = field.getReasonCode();
+                    decided.put(field.getField(), reason != null
+                            && (reason.startsWith("STRUCTURED_DECISION_")
+                                || FactoryConfirmedFactService.REUSE_REASON_CODE.equals(reason)));
+                }
+            }
+            for (Map.Entry<String, String> entry : prior.getCollectedParameters().entrySet()) {
+                String field = entry.getKey();
+                if (isBlank(entry.getValue())) continue;
+                // 最新一版说过这一项就以它为准; 只有它没提这一项时才看更早的版本。
+                if (!alreadySpoken.add(field)) continue;
+                if (!Objects.equals(accepted.get(field), entry.getValue())) continue;
+                found.add(new FactoryConfirmedFactService.PriorFact(field, labels.getOrDefault(field, field),
+                        entry.getValue(), prior.getSessionId(), Boolean.TRUE.equals(decided.get(field))));
+            }
+        }
+        return found;
+    }
+
+    /**
      * 沿用本厂已确认事实: 只填「还没答」的题, 留下 REUSED_CONFIRMED_FACT 回执 (来源可追查),
      * 因此这些题不再被问; 工序道数被沿用后展开的子项也再沿用一轮。差异靠用户的新答案体现。
      */
     void reuseConfirmedFacts(String factoryId, FactoryAssemblyConversationSession session) {
+        // 上一版访谈里用户确认过的事实 (自由文本回答也算, 只要有回执) 先进入历史, 再统一沿用。
+        try {
+            confirmedFacts.adoptPriorFacts(factoryId, priorSessionFacts(factoryId, session));
+        } catch (RuntimeException failure) {
+            // 带入上一版是加分项: 失败不能让新会话起不来, 但要留痕, 页面上看到的就是「没有可沿用的」。
+            log.warn("carry-over from prior versions failed: factoryId={}, sessionId={}", factoryId,
+                    session.getSessionId(), failure);
+        }
         Map<String, String> reused = new LinkedHashMap<>();
         for (int pass = 0; pass < 2; pass++) {
             Map<String, String> round = confirmedFacts.reusableFor(factoryId, session);
@@ -372,6 +421,11 @@ public class FactoryBuildInterviewService {
             }
         }
         p.setFactConflicts(confirmedFacts.openConflicts(factoryId));
+        Map<String, String> requiredLabels = new LinkedHashMap<>();
+        session.getRequiredParameters().forEach(rp -> requiredLabels.put(rp.getName(), rp.getLabel()));
+        p.getReusedFacts().forEach((field, value) -> p.getReusedFactItems().add(
+                new FactoryConfirmedFactService.PendingItem(field, requiredLabels.get(field), value, null)));
+        p.setCarriedFacts(confirmedFacts.pendingFor(factoryId, session));
         p.setRoutePreviews(
                 com.cretas.aims.blueprint.canonical.FactoryRouteIntentCompiler.compile(collected));
 
@@ -634,10 +688,34 @@ public class FactoryBuildInterviewService {
         Map<String, String> labelsByName = new LinkedHashMap<>();
         byName.forEach((name, rp) -> labelsByName.put(name, rp.getLabel()));
         confirmedFacts.recordAnswers(factoryId, sessionId, actor.type() + ":" + actor.userId(),
-                accepted, labelsByName);
+                accepted, labelsByName, true);
         log.info("结构化答题写入 {} 项、暂时未决 {} 项: session={}, keys={}",
                 accepted.size(), deferred.size(), sessionId, answers.keySet());
 
+        return progress(factoryId, sessionId, actor);
+    }
+
+    /**
+     * 用户一键确认「上一版已填写」的值: 按结构化决策写入 (值会被逐项校验, 与手动答题同一条路径),
+     * 工序道数确认后才展开的子项在下一轮继续确认。fields 为空表示全部。
+     */
+    @Transactional
+    public FactoryBuildProgress confirmCarriedFacts(
+            String factoryId, String sessionId, ConversationActor actor, List<String> fields) {
+        for (int pass = 0; pass < 3; pass++) {
+            FactoryAssemblyConversationSession session = sessionRepository
+                    .findBySessionIdAndFactoryIdAndUserIdAndActorType(
+                            sessionId, factoryId, actor.userId(), actor.type())
+                    .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+            Map<String, Object> answers = new LinkedHashMap<>();
+            for (FactoryConfirmedFactService.PendingItem item : confirmedFacts.pendingFor(factoryId, session)) {
+                if (fields == null || fields.isEmpty() || fields.contains(item.field())) {
+                    answers.put(item.field(), item.value());
+                }
+            }
+            if (answers.isEmpty()) break;
+            submitStructuredAnswers(factoryId, sessionId, actor, answers);
+        }
         return progress(factoryId, sessionId, actor);
     }
 

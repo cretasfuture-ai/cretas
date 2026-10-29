@@ -1,12 +1,15 @@
 'use strict';
 
 const http = require('node:http');
+const crypto = require('node:crypto');
 const { test, expect } = require('@playwright/test');
 const { inspectScale, DEFAULT_OPTIONS } = require('../scenarios/smartbi-scale-readonly');
 
 const target = DEFAULT_OPTIONS.targetProductId;
+const rawProductId = index => `QA-SC28-SKU-${String(index + 1).padStart(3, '0')}`;
+const opaqueProductId = raw => `product-${crypto.createHash('sha256').update(`smartbi-subject-v2:id:${raw}`).digest('hex').slice(0, 16)}`;
 const subjects = Array.from({ length: 100 }, (_, index) => ({
-  id: index === 0 ? target : `product-13dbfb8a219e694e-${String(index).padStart(3, '0')}`,
+  id: opaqueProductId(rawProductId(index)),
   label: `产品 ${index + 1}`,
 }));
 // The production detail store persists this exact internal cost proof before
@@ -15,6 +18,9 @@ const contextCostGuards = new Map();
 
 function answer(subjectId) {
   const detailContextId = `detail-${subjectId}`;
+  const subjectIndex = subjects.findIndex((item) => item.id === subjectId);
+  const unit = subjectId === target ? 'kg' : subjectIndex === 50 ? '盒' : '袋';
+  const candidateSource = 'uploaded-production-inspection-fused · 显式上传生产/检验/成本';
   contextCostGuards.set(detailContextId, { productIds: [subjectId], unscoped: false });
   return {
     success: true,
@@ -22,10 +28,10 @@ function answer(subjectId) {
       factoryId: 'F006', source: 'upload', uploadId: 5278,
       jointUploads: { inspectionUploadId: 5277, costUploadId: 5279 },
       analysisSubject: subjectId, period: { label: '全部历史', year: 2026, periodType: 'all', startMonth: 1, endMonth: 12 }, status: 'answered',
-      recommendations: [{ id: `candidate-${subjectId}`, title: '生产检验联合', unit: 'kg',
+      recommendations: [{ id: `candidate-${subjectId}`, title: '生产检验联合', source: candidateSource, unit,
         analysis: { familyId: 'production.inspection_fused' }, detailContext: { id: detailContextId, expiresAt: '2099-12-31T00:00:00Z', drilldown: false },
-        kpis: [{ value: 500, unit: 'kg' }, { value: '96%', unit: '%' }, { value: '95%', unit: '%' }, { value: '6,250', unit: '元' }],
-        tableData: { rows: Array.from({ length: 5 }, (_, index) => ({ date: `2026-0${index + 1}-01` })) } }],
+        kpis: [{ value: subjectId === target ? 500 : 1, unit }, { value: subjectId === target ? '96%' : '1%', unit: '%' }, { value: subjectId === target ? '95%' : '1%', unit: '%' }, { value: subjectId === target ? '6,250' : '1', unit: '元' }],
+        tableData: { rows: Array.from({ length: 5 }, (_, index) => ({ 产品ID: rawProductId(subjectIndex), 日期: `2026-0${index + 1}-01`, 单位: unit })) } }],
     },
   };
 }
@@ -41,8 +47,9 @@ function pageHtml() {
       subjectInput.addEventListener('focus',()=>renderOptions(subjects));
       subjectInput.addEventListener('input',()=>renderOptions(subjects.filter(s=>s.label.includes(subjectInput.value))));
       function renderOptions(items){document.getElementById('options').innerHTML=items.map(s=>'<div role="option">'+s.label+'</div>').join('');document.querySelectorAll('[role="option"]').forEach(o=>o.onclick=()=>{current=subjects.find(s=>s.label===o.textContent);subjectInput.value=o.textContent;document.getElementById('options').innerHTML='<button id="retry">按当前产品重试</button>';document.getElementById('retry').onclick=retry;});}
-      async function send(){const r=await fetch('/api/mobile/F006/smart-bi/factory-analysis',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:'upload',uploadId:5278,inspectionUploadId:5277,costUploadId:5279,...(current ? {analysisSubject:current.id} : {}),question:'关联生产、质检和成本一起看'})});const body=await r.json();document.getElementById('options').innerHTML='';renderOptions(subjects);return body;}
-      async function retry(){const id=current.id;const r=await fetch('/api/mobile/F006/smart-bi/factory-analysis',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:'upload',uploadId:5278,inspectionUploadId:5277,costUploadId:5279,analysisSubject:id,question:'关联生产、质检和成本一起看'})});const body=await r.json();document.getElementById('turns').innerHTML='<div data-testid="factory-analysis-answer">回答</div><div data-testid="factory-chart-card-'+body.data.recommendations[0].id+'"><canvas></canvas><button>查看原始明细</button></div>';document.querySelector('[data-testid^="factory-chart-card-"] button').onclick=details;document.getElementById('options').innerHTML='';renderOptions(subjects);}
+      function renderAnswer(body){const recommendation=body.data.recommendations&&body.data.recommendations[0];if(!recommendation)return;document.getElementById('turns').innerHTML='<div data-testid="factory-analysis-answer">回答</div><div data-testid="factory-chart-card-'+recommendation.id+'"><canvas></canvas><button>查看原始明细</button></div>';document.querySelector('[data-testid^="factory-chart-card-"] button').onclick=details;}
+      async function send(){const r=await fetch('/api/mobile/F006/smart-bi/factory-analysis',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:'upload',uploadId:5278,inspectionUploadId:5277,costUploadId:5279,...(current ? {analysisSubject:current.id} : {}),question:'关联生产、质检和成本一起看'})});const body=await r.json();renderAnswer(body);document.getElementById('options').innerHTML='';renderOptions(subjects);return body;}
+      async function retry(){const id=current.id;const r=await fetch('/api/mobile/F006/smart-bi/factory-analysis',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:'upload',uploadId:5278,inspectionUploadId:5277,costUploadId:5279,analysisSubject:id,question:'关联生产、质检和成本一起看'})});const body=await r.json();renderAnswer(body);document.getElementById('options').innerHTML='';renderOptions(subjects);}
       async function details(){const r=await fetch('/smartbi-api/api/smartbi/financial-dashboard/factory-details',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({context_id:'detail-'+current.id,page:1,page_size:50,filters:[]})});const body=await r.json();const drawer=document.createElement('div');drawer.className='el-drawer';drawer.textContent='原始明细 共 '+body.data.total+' 行';document.body.appendChild(drawer);}
       document.getElementById('form').onsubmit=e=>{e.preventDefault();send();};
     </script></body></html>`;
@@ -93,9 +100,9 @@ test('scale scenario runs against an async online-shaped local fixture without A
         }
         res.end(JSON.stringify({ success: true, data: {
           factoryId: 'F006', candidateId: `candidate-${request.context_id.split('detail-')[1]}`,
-          title: '生产检验联合', source: 'upload', period: '全部历史', columns: ['日期'],
+          title: '生产检验联合', source: 'uploaded-production-inspection-fused · 显式上传生产/检验/成本', period: '全部历史', columns: ['产品ID', '日期', '单位'],
           total: 5, page: 1, pageSize: 50, hasMore: false,
-          rows: Array.from({ length: 5 }, (_, index) => ({ 日期: `2026-0${index + 1}-01` })),
+          rows: Array.from({ length: 5 }, (_, index) => { const subjectId = request.context_id.split('detail-')[1]; const subjectIndex = subjects.findIndex((item) => item.id === subjectId); const unit = subjectId === target ? 'kg' : subjectIndex === 50 ? '盒' : '袋'; return { 产品ID: rawProductId(subjectIndex), 日期: `2026-0${index + 1}-01`, 单位: unit }; }),
           appliedFilters: [], availableFilters: [], snapshotAt: 1793404800,
         } })); return;
       }

@@ -538,6 +538,26 @@ def _page_frame(payload: Mapping[str, Any], frame: _Frame, can_price: bool, fina
         # Financial contexts fail closed above. For non-financial uploads only
         # explicit non-money semantics survive; unknown columns are removed.
         safe = [c for c in frame.columns if c not in frame.price_columns and (_base_name(c) in _NON_MONEY_NAMES or c in frame.dimensions)]
+        # Trusted quantity families have a narrow, source-bound evidence
+        # contract.  This preserves auditable voucher/batch facts without
+        # broadening ordinary-upload redaction or allowing a candidate to
+        # self-declare arbitrary safe columns.
+        trusted_fields = None
+        if (frame.source.startswith("purchase-batch-lineage ·")
+                and frame.candidate_id.startswith("purchase-batch-lineage.purchase.inventory@")):
+            trusted_fields = {
+                "日期", "收货单ID", "收货行ID", "物料批次ID", "物料", "物料（单位）",
+                "收货单位", "批次数量单位", "包装单位快照", "库存基础单位快照",
+                "数量", "数量单位", "批次入库数量", "批次已用数量", "批次预留数量", "当前可用数量",
+            }
+        elif (frame.source.startswith("wip-plan-flow ·")
+                and frame.candidate_id.startswith("wip-plan-flow.plan-flow:sankey@")):
+            trusted_fields = {
+                "过账日期", "来源批次", "目标批次", "数量", "单位", "MC凭证",
+                "来源节点", "去向节点", "流量",
+            }
+        if trusted_fields is not None:
+            safe = [c for c in frame.columns if c not in frame.price_columns and c in trusted_fields]
         ordered = [{k: row[k] for k in safe} for row in ordered]
         columns = tuple(safe)
     else:

@@ -84,6 +84,7 @@ _FAMILY_LABELS = {
     'production.anomaly': '批次产量偏离观察', 'production.slope': '两期产品变化',
     'production.plan-rate': '累计计划达成率', 'stock.turnover': '库存金额周转',
     'stock.history': '历史库存余额',
+    'plan-flow': '普通Web在制过账流',
 }
 _PRODUCT_ID_NAMES = {
     '产品id', '产品编号', '产品编码', 'sku', 'sku编码', 'product_id',
@@ -609,6 +610,57 @@ def factory_candidates(dataset, request, can_price):
     return eligible, gaps
 
 
+def wip_plan_flow_candidates(dataset, request):
+    """Build unit-isolated Sankey/table candidates from posted MC edges only."""
+    if not getattr(request, 'include_optional', False):
+        return [], []
+    frame = dataset.frame.copy()
+    required = {'来源节点', '去向节点', '流量', '单位', '过账日期', 'MC凭证'}
+    if not required.issubset(frame.columns):
+        return [], [{'id': 'plan-flow', 'title': '普通Web在制过账流',
+                     'missing': ['来源/去向、过账数量、单位、过账日期和MC凭证不完整']}]
+    frame['流量'] = frame['流量'].map(number)
+    if frame['流量'].isna().any() or frame['流量'].le(0).any():
+        return [], [{'id': 'plan-flow', 'title': '普通Web在制过账流',
+                     'missing': ['所有已过账流量必须为正且可解析']}]
+    charts, gaps = [], []
+    for unit, rows in frame.groupby('单位', dropna=False):
+        if pd.isna(unit) or not str(unit).strip():
+            gaps.append({'id': 'plan-flow', 'title': '普通Web在制过账流', 'missing': ['每条流转必须有明确单位']})
+            continue
+        unit = str(unit).strip()
+        grouped = rows.groupby(['来源节点', '去向节点'], dropna=False)['流量'].sum().reset_index()
+        if grouped.empty:
+            continue
+        work = grouped.rename(columns={'来源节点': 'source', '去向节点': 'target', '流量': 'value'})
+        option = get_strategy('sankey').build(work, 'source', ['value'], 'target')
+        option['animation'] = False
+        option.setdefault('tooltip', {})['renderMode'] = 'richText'
+        total = rows['流量'].sum()
+        table_rows = rows[['过账日期', '来源节点', '去向节点', '流量', '单位', 'MC凭证']].values.tolist()
+        candidate = {
+            'id': f'plan-flow:sankey@{unit}',
+            'title': f'工序在制品流转（{unit}）',
+            'metric': '工序在制品流转', 'domain': '生产',
+            'reason': '已过账领料，来源库存与领料凭证数量核对一致',
+            'source': dataset.source, 'unit': unit,
+            'priority': 'optional',
+            'findings': {'good': [f'已过账跨工序流转量 {display(total)} {unit}'],
+                         'attention': ['该累计口径仅代表已核对的跨工序流转，不是原料投入总量，也不是当前库存余额'],
+                         'suggestions': []},
+            'kpis': [
+                {'label': '已过账跨工序流转量', 'value': display(total), 'unit': unit},
+                {'label': '独立流转条数', 'value': len(rows), 'unit': '条'},
+            ],
+            'tableData': {'headers': ['过账日期', '来源批次', '目标批次', '数量', '单位', 'MC凭证'], 'rows': table_rows},
+            'chart': {'chartType': 'sankey', 'echartsOption': option},
+            'engine': {'pointDimension': None, 'pointDrilldown': False,
+                       'detail': '原始MC凭证、来源/目标生产批次、过账日期与数量；日期为过账日期，不含价格'},
+        }
+        charts.append(_analysis_metadata(candidate))
+    return charts, gaps
+
+
 def _card_layout(option):
     """Reserve room for axis units and a separate legend in mounted/exported cards."""
     pies = [s for s in option.get('series', []) if s.get('type') == 'pie']
@@ -671,6 +723,19 @@ def build(datasets, request, can_price):
         elif dataset.source.startswith('commerce-joint ·'):
             from .commerce_joint import build as build_commerce_joint
             charts, gaps = build_commerce_joint(dataset.frame, request, can_price)
+        elif dataset.source.startswith('wip-plan-flow ·'):
+            charts, gaps = wip_plan_flow_candidates(dataset, request)
+        elif (dataset.source.startswith('purchase-batch-lineage ·')
+              and {"批次已用数量", "批次预留数量", "批次入库数量", "批次数量单位"}
+              .issubset({str(column) for column in dataset.frame.columns})):
+            from .trusted_business_metrics import build as trusted_business_metrics
+            from .purchase_inventory import build as build_purchase_inventory
+            charts, gaps = trusted_business_metrics(
+                dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
+            )
+            optional, optional_gaps = build_purchase_inventory(dataset.frame, request, can_price, dataset.source)
+            charts.extend(optional)
+            gaps.extend(optional_gaps)
         elif trusted_source:
             from .trusted_business_metrics import build as trusted_business_metrics
             charts, gaps = trusted_business_metrics(
@@ -680,7 +745,7 @@ def build(datasets, request, can_price):
             charts, gaps = financial_candidates(dataset, request, can_price)
         else:
             charts, gaps = factory_candidates(dataset, request, can_price)
-        business_source = trusted_source or dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused','uploaded-production-inspection-fused'}
+        business_source = trusted_source or dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused','uploaded-production-inspection-fused','wip-plan-flow'}
         if not dataset.frame.empty and not business_source:
             from .financial_addons import build as financial_addons
             extra, extra_gaps = financial_addons(dataset, request, can_price)

@@ -81,6 +81,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AutonomousScheduledWriteIsolatedPostgresContractTest {
 
     private static final String TOOL = "user_disable";
+    /** Since S6-04 review: a refused write leaves a DENIED audit row; anything else would be an execution. */
+    private static final String NOT_A_REFUSAL = "outcome_status IS DISTINCT FROM 'DENIED'"
+            + " OR result_code NOT IN ('GRANT_DENIED', 'AUTONOMOUS_WRITE_DENIED', 'WRITES_SUSPENDED')";
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
@@ -156,6 +159,8 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
             target = user("iso-target", "operator");
             bystander = user("iso-bystander", "operator");
         });
+        // Fail closed: delegated writes run only once the factory has switched them on.
+        writeSwitch.set("F-ISO", true, "isolated test", grantor, LocalDateTime.now());
         instanceB = new DynamicSchedulerService(schedules, toolRegistry, runner, objectMapper);
     }
 
@@ -247,7 +252,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
                 fireBinding, "slot:2026-10-22T01:01:00Z").status()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
 
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(active(target)).isTrue();
         assertThat(active(bystander)).isTrue();
     }
@@ -308,7 +313,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
             assertThat(count("autonomous_tool_grant_runs")).isZero();
             assertThat(count("intent_preview_tokens")).isZero();
             assertThat(count("tool_execution_idempotency")).isZero();
-            assertThat(count("tool_execution_audit_events")).isZero();
+            assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
             assertThat(active(target)).isTrue();
         } finally {
             instanceA.cancelTask(config.getFactoryId(), config.getTaskCode());
@@ -387,7 +392,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
 
         assertThat(count("autonomous_tool_grants WHERE id = '" + grantId + "' AND used_runs = 0")).isEqualTo(1);
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(active(target)).isTrue();
     }
 
@@ -408,7 +413,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
 
         assertThat(count("autonomous_tool_grants WHERE id = '" + newGrant + "' AND used_runs = 0")).isEqualTo(1);
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(active(target)).isTrue();
         assertThat(active(bystander)).isTrue();
     }
@@ -428,7 +433,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(runFired(fired, fireBinding, "slot:2026-10-24T02:01:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
 
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(active(target)).isTrue();
     }
 
@@ -508,7 +513,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
 
         assertThat(active(target)).isTrue();
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(text("SELECT last_execution_error FROM factory_scheduler_configs")).contains("no usable grant");
     }
 
@@ -526,7 +531,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         assertThat(runFired(fired, fireBinding, "slot:2026-10-24T04:01:00Z")).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
         assertThat(count("autonomous_tool_grants WHERE used_runs = 0 AND id = '" + grantId + "'")).isEqualTo(1);
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(active(target)).isTrue();
 
         // Positive control: the same grant spends again once the grantor is restored.
@@ -548,7 +553,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
                 .isEqualTo(AutonomousToolRunner.WRITES_SUSPENDED);
         assertThat(count("autonomous_tool_grants WHERE used_runs = 0 AND id = '" + grantId + "'")).isEqualTo(1);
         assertThat(count("autonomous_tool_grant_runs")).isZero();
-        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(count("tool_execution_audit_events WHERE " + NOT_A_REFUSAL)).isZero();
         assertThat(active(target)).isTrue();
         // Another factory's switch does not stop this one, and switching back on lets the same grant run.
         writeSwitch.set("F-OTHER", false, null, grantor, LocalDateTime.now());

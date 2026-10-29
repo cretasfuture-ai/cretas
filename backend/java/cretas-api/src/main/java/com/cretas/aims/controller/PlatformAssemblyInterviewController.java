@@ -272,6 +272,12 @@ public class PlatformAssemblyInterviewController {
         /** 本会话直接沿用的已确认事实 (字段 -> 值)，不再重复询问；差异项仍照常提问。 */
         private Map<String, String> reusedFacts = new LinkedHashMap<>();
 
+        /** 沿用项的可读清单 (字段, 名称, 值), 页面只显示这份, 不显示字段名。 */
+        private List<FactoryConfirmedFactService.PendingItem> reusedFactItems = new ArrayList<>();
+
+        /** 上一版/自由文本已填写、等用户确认的值: 不算已回答, 用户一键确认或逐项修改。 */
+        private List<FactoryConfirmedFactService.PendingItem> carriedFacts = new ArrayList<>();
+
         /** 新答案与已确认事实不同、等管理员逐条选择来源的项目；选定前不改写已确认事实。 */
         private List<FactoryConfirmedFactService.Conflict> factConflicts = new ArrayList<>();
 
@@ -1078,6 +1084,19 @@ public class PlatformAssemblyInterviewController {
         ConversationActor actor = conversationActorOf(httpRequest);
         return ApiResponse.success(interviewService.submitStructuredAnswers(
                 factoryId, sessionId, actor, answers));
+    }
+
+    /** 一键确认「上一版已填写」的值 (body.fields 为空 = 全部); 走与手动答题同一条结构化决策路径。 */
+    @PostMapping("/factories/{factoryId}/ai-initialize/converse/{sessionId}/confirm-carried")
+    @Operation(summary = "确认上一版已填写的值")
+    public ApiResponse<FactoryBuildProgress> confirmCarriedFacts(
+            @PathVariable String factoryId,
+            @PathVariable String sessionId,
+            @RequestBody(required = false) Map<String, List<String>> body,
+            HttpServletRequest httpRequest) {
+        ConversationActor actor = conversationActorOf(httpRequest);
+        return ApiResponse.success(interviewService.confirmCarriedFacts(
+                factoryId, sessionId, actor, body == null ? null : body.get("fields")));
     }
 
     // ==================== AI 生成配置 → 落库 ====================

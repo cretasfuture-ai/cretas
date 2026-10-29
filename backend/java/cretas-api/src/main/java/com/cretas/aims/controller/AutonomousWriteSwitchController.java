@@ -34,7 +34,7 @@ public class AutonomousWriteSwitchController {
 
     public record SwitchRequest(Boolean writesEnabled, String reason) { }
 
-    /** No row yet: writes are not switched off (grants still decide each run). */
+    /** No row yet: scheduled writes have never been switched on, so they do not run (fail closed). */
     public record SwitchView(String factoryId, boolean writesEnabled, String reason, Long changedBy,
             LocalDateTime changedAt) { }
 
@@ -46,13 +46,13 @@ public class AutonomousWriteSwitchController {
         return ApiResponse.success(writeSwitch.state(factoryId)
                 .map(state -> new SwitchView(state.factoryId(), state.writesEnabled(), state.reason(),
                         state.changedBy(), state.changedAt()))
-                .orElse(new SwitchView(factoryId, true, null, null, null)));
+                .orElse(new SwitchView(factoryId, false, null, null, null)));
     }
 
     @PutMapping
     @RequirePermission({AutonomousGrantController.GRANT_PERMISSION})
     @RequireRole({AutonomousGrantIssuer.GRANT_ROLE})
-    @Operation(summary = "打开或关闭本厂全部自动任务写操作（下次触发起生效，已在执行的不回滚）")
+    @Operation(summary = "打开或关闭本厂全部自动任务写操作（默认关闭；下次触发起生效，已在执行的不回滚）")
     public ApiResponse<SwitchView> set(@PathVariable String factoryId, @RequestBody SwitchRequest body) {
         Long actorId = AutonomousToolPolicy.requireRunAsUser(factoryId);
         issuer.currentAdmin(factoryId, actorId);
