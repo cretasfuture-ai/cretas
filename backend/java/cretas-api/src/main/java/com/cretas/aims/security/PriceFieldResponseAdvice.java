@@ -283,6 +283,44 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired(required = false)
+    private PriceVisibility priceVisibility;
+
+    /** 本次响应里每个 {@code @PriceSensitive} 口径可不可见; 只在 strip 期间设置。 */
+    private static final ThreadLocal<java.util.function.Predicate<String>> FIELD_VISIBILITY = new ThreadLocal<>();
+
+    /** advice 自己会去问的口径: 默认名单口径 + 采购 + 采购或财务。 */
+    private static final List<String> KNOWN_SPECS = List.of(
+            PRICE_VIEW_PERMISSION, PriceSensitive.PURCHASE, PriceSensitive.PURCHASE_OR_FINANCE);
+
+    private PriceVisibility visibility() {
+        // 单测按字段注入 permissionService 构造本类时没有 PriceVisibility bean, 用同一个 permissionService 现建
+        return priceVisibility != null ? priceVisibility : new PriceVisibility(permissionService);
+    }
+
+    /** 方法上的 {@link PriceScope} 优先于类上的。 */
+    private static PriceScope resolveScope(MethodParameter returnType) {
+        if (returnType == null) return null;
+        java.lang.reflect.Method method = returnType.getMethod();
+        if (method != null && method.isAnnotationPresent(PriceScope.class)) {
+            return method.getAnnotation(PriceScope.class);
+        }
+        Class<?> owner = returnType.getContainingClass();
+        return owner != null ? org.springframework.core.annotation.AnnotationUtils.findAnnotation(owner, PriceScope.class) : null;
+    }
+
+    /** 控制器运行时写进 request 的口径 ({@link PriceScope#REQUEST_ATTRIBUTE}) 优先于注解。 */
+    private static String requestAttribute(ServerHttpRequest request, String name) {
+        if (request instanceof ServletServerHttpRequest servlet) {
+            Object value = servlet.getServletRequest().getAttribute(name);
+            return value instanceof String s && !s.isBlank() ? s : null;
+        }
+        return null;
+    }
+
+    /** 遍历中当前子树被 {@link PriceSpecOverride} 覆盖成的默认口径 (栈顶)。 */
+    private static final ThreadLocal<Deque<String>> SPEC_OVERRIDES = ThreadLocal.withInitial(ArrayDeque::new);
+
     @Override
     public boolean supports(MethodParameter returnType, Class<? extends HttpMessageConverter<?>> converterType) {
         // Only intercept JSON-serializable responses (skip binary streams, file uploads).
@@ -353,14 +391,25 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         //                                          but still run map walk (Rule 2b fires)
         //   canViewPrices=F AND canViewFinance=*  → run full strip (Rule 2b also fires
         //                                          because !canViewFinance is implied)
-        boolean canViewPrices;
-        try {
-            canViewPrices = permissionService.hasPermission(currentUser, PRICE_VIEW_PERMISSION);
-        } catch (Exception e) {
-            log.warn("PriceFieldResponseAdvice: permission check failed for userId={} (price), defaulting fail-CLOSED (strip): {}",
-                    currentUser.getId(), e.getMessage());
-            canViewPrices = false;
-        }
+        //
+        // S5-12: 价格口径不止一个。字段可写 @PriceSensitive(permission = PURCHASE …), 采购价只看
+        // 配置的 procurement 读权限; 响应上的 @PriceScope 把本响应的「默认口径」也换成它。
+        // 每个口径只问一次 PriceVisibility (唯一判定点), 失败按不可见。
+        PriceScope scope = resolveScope(returnType);
+        String requestSpec = requestAttribute(request, PriceScope.REQUEST_ATTRIBUTE);
+        String defaultSpec = requestSpec != null ? requestSpec
+                : scope != null ? scope.value() : PRICE_VIEW_PERMISSION;
+        String requestRemap = requestAttribute(request, PriceScope.PURCHASE_REMAP_ATTRIBUTE);
+        String purchaseSpec = requestRemap != null ? requestRemap
+                : scope != null && !scope.purchase().isBlank() ? scope.purchase() : PriceSensitive.PURCHASE;
+        PriceVisibility pv = visibility();
+        Map<String, Boolean> specCache = new java.util.HashMap<>();
+        java.util.function.Predicate<String> visible = spec -> specCache.computeIfAbsent(
+                spec == null || PRICE_VIEW_PERMISSION.equals(spec) ? defaultSpec
+                        : PriceSensitive.PURCHASE.equals(spec) ? purchaseSpec : spec,
+                s -> pv.canView(currentUser, s));
+        boolean canViewPrices = visible.test(PRICE_VIEW_PERMISSION);
+        List<String> hiddenSpecs = KNOWN_SPECS.stream().filter(s -> !visible.test(s)).toList();
 
         boolean canViewFinance;
         try {
@@ -372,14 +421,15 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         }
 
         // Full access — skip all stripping.
-        if (canViewPrices && canViewFinance) {
+        if (hiddenSpecs.isEmpty() && canViewFinance) {
             return body;
         }
 
         // User lacks at least one permission — strip the relevant fields.
-        // canViewPrices=T + canViewFinance=F: only Rule 2b (finance upload columns) fires.
-        // canViewPrices=F + canViewFinance=*: full strip including @PriceSensitive fields.
-        Object bodyToStrip = canViewPrices ? body : copyListSummaryPayload(body);
+        // 所有价格口径都可见 + canViewFinance=F: only Rule 2b (finance upload columns) fires.
+        // 任一价格口径不可见: 按字段口径逐个剥 @PriceSensitive。
+        Object bodyToStrip = hiddenSpecs.isEmpty() ? body : copyListSummaryPayload(body);
+        FIELD_VISIBILITY.set(visible);
         try {
             stripPriceFields(bodyToStrip, new IdentityHashMap<>(), new ArrayDeque<>(), canViewPrices, canViewFinance);
         } catch (Exception e) {
@@ -389,14 +439,16 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     currentUser.getId(),
                     currentUser.getRoleEnum() != null ? currentUser.getRoleEnum().name() : "null",
                     e.getMessage());
+        } finally {
+            FIELD_VISIBILITY.remove();
         }
-        // Signal to Jackson only when price fields were actually stripped.
+        // Signal to Jackson only for the specs that were actually hidden.
         // canViewPrices=true + canViewFinance=false is the sales_manager path:
         // finance-upload map keys are masked, but @PriceSensitive invoice/order
-        // amounts must remain visible. Setting the ThreadLocal there would make
-        // Jackson null them during serialization even though the field walk did not.
-        if (!canViewPrices) {
-            PriceSensitiveContext.hide();
+        // amounts must remain visible. Hiding only the hidden specs keeps a role that
+        // may see purchase prices (config) but not the default list, or the reverse, correct.
+        if (!hiddenSpecs.isEmpty()) {
+            PriceSensitiveContext.hideOnly(new java.util.HashSet<>(hiddenSpecs));
         }
         return bodyToStrip;
     }
@@ -550,11 +602,42 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             return;
         }
 
-        if (!canViewPrices) {
-            // Only null @PriceSensitive fields when user lacks procurement:price:view.
+        // S5-12: 退货单这类采购 / 销售共用的实体由对象自己说口径; 子树 (行) 跟着它。
+        Deque<String> overrides = SPEC_OVERRIDES.get();
+        boolean pushed = false;
+        if (obj instanceof PriceSpecOverride pso) {
+            if (!overrides.isEmpty() && pso.priceSpecOverride() == null) {
+                pso.inheritPriceSpec(overrides.peek());
+            }
+            String own = pso.priceSpecOverride();
+            if (own != null) {
+                overrides.push(own);
+                pushed = true;
+            }
+        }
+        try {
+            stripOwnFields(obj, clazz, canViewPrices, overrides.peek());
+            descendChildren(obj, clazz, visited, pathStack, canViewPrices, canViewFinance);
+        } finally {
+            if (pushed) overrides.pop();
+        }
+    }
+
+    private void stripOwnFields(Object obj, Class<?> clazz, boolean canViewPrices, String overrideSpec) {
+        java.util.function.Predicate<String> fieldVisible = FIELD_VISIBILITY.get();
+        if (fieldVisible != null || !canViewPrices) {
+            // Null each @PriceSensitive field whose own spec is not visible (S5-12: 采购口径看配置,
+            // 默认口径看名单 / 响应 @PriceScope)。没有逐口径判定时退回旧的整体开关。
             if (!CLEAN_CLASSES.contains(clazz)) {
                 List<Field> priceFields = PRICE_FIELD_CACHE.computeIfAbsent(clazz, this::scanPriceFields);
                 for (Field f : priceFields) {
+                    String spec = f.getAnnotation(PriceSensitive.class).permission();
+                    if (overrideSpec != null && PRICE_VIEW_PERMISSION.equals(spec)) {
+                        spec = overrideSpec;
+                    }
+                    if (fieldVisible != null ? fieldVisible.test(spec) : canViewPrices) {
+                        continue;
+                    }
                     try {
                         f.set(obj, null);
                     } catch (IllegalAccessException e) {
@@ -563,8 +646,6 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 }
             }
         }
-
-        descendChildren(obj, clazz, visited, pathStack, canViewPrices, canViewFinance);
     }
 
     /** SummaryStat has no @PriceSensitive field; its explicit flag and currency format are the contract. */

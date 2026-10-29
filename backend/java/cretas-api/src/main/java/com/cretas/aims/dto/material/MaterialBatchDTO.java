@@ -117,15 +117,15 @@ public class MaterialBatchDTO {
     @Schema(description = "单位")
     private String unit;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Schema(description = "入库总价值(元)")
     private BigDecimal totalValue;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Schema(description = "单价(元/kg)")
     private BigDecimal unitPrice;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Schema(description = "总价")
     private BigDecimal totalPrice;
 

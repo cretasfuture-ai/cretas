@@ -100,10 +100,20 @@ public class PriceSensitiveSerializerModifier extends BeanSerializerModifier {
             this.permission = permission;
         }
 
+        /** S5-12: 采购 / 销售共用的实体 (退货单) 由对象自己决定默认口径。 */
+        private String effectivePermission(Object bean) {
+            if (bean instanceof PriceSpecOverride override
+                    && PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION.equals(permission)) {
+                String own = override.priceSpecOverride();
+                if (own != null) return own;
+            }
+            return permission;
+        }
+
         @Override
         public void serializeAsField(Object bean, JsonGenerator gen,
                                      SerializerProvider prov) throws Exception {
-            if (PriceSensitiveContext.shouldHide(permission)) {
+            if (PriceSensitiveContext.shouldHide(effectivePermission(bean))) {
                 // Emit field name with null value (parallels Jackson default for null fields).
                 // Skipping entirely would yield omitted key — to keep response schema
                 // stable for clients (and parallel field-strip behavior), emit explicit null.
@@ -118,7 +128,7 @@ public class PriceSensitiveSerializerModifier extends BeanSerializerModifier {
         @Override
         public void serializeAsElement(Object bean, JsonGenerator gen,
                                        SerializerProvider prov) throws Exception {
-            if (PriceSensitiveContext.shouldHide(permission)) {
+            if (PriceSensitiveContext.shouldHide(effectivePermission(bean))) {
                 gen.writeNull();
                 return;
             }

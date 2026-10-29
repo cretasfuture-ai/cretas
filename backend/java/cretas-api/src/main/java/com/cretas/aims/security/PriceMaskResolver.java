@@ -80,6 +80,18 @@ public class PriceMaskResolver {
      * @return {@code true} → remove operational cost keys, {@code false} → keep real values
      * @since 2026-06-18 (dashboard cost finance-gate alignment — sales_manager must not see unitCost)
      */
+    /**
+     * S5-12: 按价格口径 (同 {@link PriceSensitive#permission()}) 判二进制导出要不要脱敏,
+     * 走与 JSON 响应同一个 {@link PriceVisibility}。认不出调用人一律脱敏。
+     */
+    public boolean shouldMaskPrice(String authorization, String priceSpec) {
+        User currentUser = resolveCurrentUser(authorization);
+        if (currentUser == null) {
+            return true;
+        }
+        return !new PriceVisibility(permissionService).canView(currentUser, priceSpec);
+    }
+
     public boolean shouldMaskOperationalCost(String authorization) {
         User currentUser = resolveCurrentUser(authorization);
         if (currentUser == null) {

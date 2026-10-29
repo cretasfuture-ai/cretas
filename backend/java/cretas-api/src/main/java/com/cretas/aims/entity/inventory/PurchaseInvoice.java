@@ -78,15 +78,15 @@ public class PurchaseInvoice extends BaseEntity {
     private LocalDate invoiceDate;
 
     @NotNull
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "amount", nullable = false, precision = 12, scale = 2)
     private BigDecimal amount;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "tax_amount", precision = 12, scale = 2)
     private BigDecimal taxAmount;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "amount_without_tax", precision = 12, scale = 2)
     private BigDecimal amountWithoutTax;
 

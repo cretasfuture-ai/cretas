@@ -88,6 +88,13 @@ public class ToolPrincipalPolicy {
             context.put("roleCode", currentRole);
             context.put("permissions", currentPermissions);
             context.put("canViewPrices", canViewPrices);
+            // S5-12: 采购价按配置的 procurement 读权限判, 与上面的默认名单口径分开 (同 PriceFieldResponseAdvice)
+            com.cretas.aims.security.PriceVisibility visibility =
+                    new com.cretas.aims.security.PriceVisibility(permissionService);
+            context.put("canViewPurchasePrices", visibility.canView(
+                    user, com.cretas.aims.security.PriceSensitive.PURCHASE));
+            context.put("canViewPurchaseOrFinancePrices", visibility.canView(
+                    user, com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE));
             return Optional.of(new RehydratedPrincipal(current, Map.copyOf(context)));
         } catch (RuntimeException unavailableAuthorizationTruth) {
             return Optional.empty();

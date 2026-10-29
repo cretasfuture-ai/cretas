@@ -27,6 +27,8 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+/** S5-12: 采购金额按配置的采购读权限显示, 与后端采购价口径一致。 */
+const canViewPurchasePrice = computed(() => permissionStore.canViewPurchasePrice);
 
 // ---------- state ----------
 const loading = ref(false);
@@ -39,7 +41,8 @@ let chartInstance: ECharts | null = null;
 
 // ---------- summary data ----------
 const summary = ref({
-  purchaseTotal: 0,
+  /** null = 看不到或有单据金额被隐藏 —— 显示「—」, ⛔ 不当成 0 */
+  purchaseTotal: 0 as number | null,
   receivedQuantity: 0,
   consumedQuantity: emptyQuantitySummary(),
   productionBatches: 0,
@@ -58,7 +61,7 @@ interface PurchaseOrder {
   id: string;
   orderNumber: string;
   supplierName: string;
-  totalAmount: number;
+  totalAmount: number | null;  // S5-12: 无采购读权限时后端剥成 null
   status: string;
   createdAt: string;
 }
@@ -139,9 +142,11 @@ async function loadAllData() {
     if (purchaseRes.status === 'fulfilled' && purchaseRes.value.success && purchaseRes.value.data) {
       const data = purchaseRes.value.data;
       purchaseOrders.value = data.content || [];
-      summary.value.purchaseTotal = purchaseOrders.value.reduce(
-        (sum, o) => sum + (o.totalAmount || 0), 0
-      );
+      // 后端按权限把金额剥成 null; 任一张单子的金额读不到, 合计就不成立
+      summary.value.purchaseTotal = canViewPurchasePrice.value
+        && purchaseOrders.value.every((o) => o.totalAmount !== null && o.totalAmount !== undefined)
+        ? purchaseOrders.value.reduce((sum, o) => sum + Number(o.totalAmount), 0)
+        : null;
     }
 
     // Material receipts
@@ -374,9 +379,9 @@ function salesStatusText(status: unknown): string {
 
       <!-- Summary Cards -->
       <el-row :gutter="16" class="summary-cards">
-        <el-col v-if="canViewPrice" :xs="12" :sm="8" :md="4">
+        <el-col v-if="canViewPurchasePrice" :xs="12" :sm="8" :md="4">
           <el-card class="stat-card purchase" shadow="hover">
-            <div class="stat-value">{{ formatNumber(summary.purchaseTotal) }}</div>
+            <div class="stat-value">{{ summary.purchaseTotal === null ? '—' : formatNumber(summary.purchaseTotal) }}</div>
             <div class="stat-label">采购总额</div>
           </el-card>
         </el-col>
@@ -441,9 +446,9 @@ function salesStatusText(status: unknown): string {
             >
               <el-table-column prop="orderNumber" label="订单号" min-width="150" show-overflow-tooltip />
               <el-table-column prop="supplierName" label="供应商" min-width="150" show-overflow-tooltip />
-              <el-table-column v-if="canViewPrice" prop="totalAmount" label="总金额" width="120" align="right">
+              <el-table-column v-if="canViewPurchasePrice" prop="totalAmount" label="总金额" width="120" align="right">
                 <template #default="{ row }">
-                  {{ formatNumber(row.totalAmount) }}
+                  {{ row.totalAmount === null || row.totalAmount === undefined ? '—' : formatNumber(row.totalAmount) }}
                 </template>
               </el-table-column>
               <el-table-column label="状态" width="100" align="center">

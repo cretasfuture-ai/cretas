@@ -38,7 +38,9 @@ const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
-const canViewPrice = computed(() => permissionStore.canViewPrice);
+// S5-12: 采购价按配置的采购读权限 —— 而能进采购单页本身就要采购读, 前端再判一次恒为真 (分支可达性闸会判空转);
+// 价格是否下发由后端 PriceVisibility 决定, 被剥的金额是 null, formatAmount 显示「-」。
+const canViewPrice = computed(() => true);
 
 // ─────────────────────────────────────────────────────────────────────────
 // 缺陷 9 (2026-09-01, LIUSHANMEN 生产走查): 这一页有 3 个跨模块入口, 其中 2 个
@@ -383,11 +385,14 @@ async function loadPriceComparison() {
   if (priceLoading.value || !factoryId.value || !orderId.value) return;
   priceLoading.value = true;
   try {
-    const res = await get(`/${factoryId.value}/purchase/orders/${orderId.value}/price-comparison`);
+    // 三价对比只给有采购写 / 财务写的人, 且没有采购读时后端直接 403 (S5-12) ——
+    // 只读角色打开详情页不该弹一条报错, 静默请求、拿不到就不显示这一块。
+    const res = await get(`/${factoryId.value}/purchase/orders/${orderId.value}/price-comparison`,
+      { _silent: true } as never);
     if (res.success) {
       priceComparisons.value = Array.isArray(res.data) ? res.data : [];
     }
-  } catch { /* axios interceptor already displayed error toast */ }
+  } catch { priceComparisons.value = []; }
   finally { priceLoading.value = false; }
 }
 

@@ -1347,7 +1347,7 @@ public class MaterialBatchController {
     @GetMapping("/export")
     @Operation(summary = "导出库存报表",
             description = "导出原材料批次库存报表为Excel文件。"
-                    + "RBAC: 无 procurement:price:view 权限的角色, Excel 中 采购单价 / 库存价值 列显示 '—'.")
+                    + "RBAC: 没有采购读也没有财务读 (配置) 的角色, Excel 中 采购单价 / 库存价值 列显示 '—'.")
     public byte[] exportInventoryReport(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
@@ -1358,7 +1358,9 @@ public class MaterialBatchController {
             @RequestHeader("Authorization") String authorization) {
 
         // RBAC defense-in-depth (P0-C sweep, 2026-05-12): mirror PR #450 pattern.
-        boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization);
+        // S5-12: 批次采购单价 / 库存价值是采购成本, 按「采购读 或 财务读」判 (财务管库存计价), 与 JSON 同口径
+        boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization,
+                com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE);
 
         log.info("导出库存报表: factoryId={}, startDate={}, endDate={}, maskPrice={}",
                 factoryId, startDate, endDate, maskPrice);

@@ -82,7 +82,7 @@ public class PurchaseReceiveItem extends BaseEntity {
     @Column(name = "price_unit", nullable = false, length = 20)
     private String priceUnit;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 

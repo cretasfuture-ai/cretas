@@ -65,15 +65,15 @@ public class InquiryQuoteComparisonDTO {
         private String supplierName;
 
         /** 未税单价 (计价单位下)。 */
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal unitPrice;
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal taxRate;
         /** 含税单价 = 未税单价 × (1 + 税率); 税率未知时为空, ⛔ 不按 0 算。 */
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal taxInclusiveUnitPrice;
         /** 按询价数量估算的未税金额; 不可比时为空。 */
-        @PriceSensitive
+        @PriceSensitive(permission = PriceSensitive.PURCHASE)
         private BigDecimal estimatedAmount;
 
         private String currency;

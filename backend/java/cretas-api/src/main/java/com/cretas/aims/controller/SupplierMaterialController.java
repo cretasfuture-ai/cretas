@@ -13,6 +13,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/mobile/{factoryId}")
 @RequiredArgsConstructor
+@com.cretas.aims.security.PriceScope(com.cretas.aims.security.PriceSensitive.PURCHASE)
 public class SupplierMaterialController {
     private final SupplierMaterialService service;
     private final SupplierMaterialPurchaseSpecService purchaseSpecService;

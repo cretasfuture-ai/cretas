@@ -49,6 +49,19 @@ public interface PermissionService {
     boolean hasPermission(User user, String permissionCode);
 
     /**
+     * 只看<b>配置</b>的模块权限 (L2 工厂覆盖 → L1 平台默认), 不落到硬编码兜底矩阵 (S5-12)。
+     * 两层都没有这一格时, 只有 {@code fallbackRoleCodes} 里的角色算有权限。
+     * 超管照常全通。默认实现退回 {@link #hasPermission} (测试替身用)。
+     *
+     * @param permissionCode    module:action
+     * @param fallbackRoleCodes 未配置时允许的角色码
+     */
+    default boolean hasConfiguredPermission(User user, String permissionCode,
+                                            java.util.Set<String> fallbackRoleCodes) {
+        return hasPermission(user, permissionCode);
+    }
+
+    /**
      * 检查用户是否拥有多个权限中的任意一个
      *
      * @param user 用户对象

@@ -24,7 +24,24 @@ import org.hibernate.annotations.Where;
         }
 )
 @Where(clause = "deleted_at IS NULL")
-public class ReturnOrderItem extends BaseEntity {
+public class ReturnOrderItem extends BaseEntity implements com.cretas.aims.security.PriceSpecOverride {
+
+    /** S5-12: 行没有退货类型, 由价格遍历在父退货单处告知口径 (只供本次响应的序列化用, 不落库)。 */
+    @Transient
+    @JsonIgnore
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
+    private transient String inheritedPriceSpec;
+
+    @Override
+    public String priceSpecOverride() {
+        return inheritedPriceSpec;
+    }
+
+    @Override
+    public void inheritPriceSpec(String spec) {
+        this.inheritedPriceSpec = spec;
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

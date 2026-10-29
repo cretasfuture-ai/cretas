@@ -105,24 +105,24 @@ public class PurchaseOrderItem extends BaseEntity {
     @Column(name = "inventory_quantity_snapshot", precision = 24, scale = 12)
     private BigDecimal inventoryQuantitySnapshot;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
     /** 税率（百分比，如 13 表示 13%） */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "tax_rate", precision = 5, scale = 2)
     private BigDecimal taxRate = BigDecimal.ZERO;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "untaxed_amount_snapshot", precision = 18, scale = 2)
     private BigDecimal untaxedAmountSnapshot;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "tax_amount_snapshot", precision = 18, scale = 2)
     private BigDecimal taxAmountSnapshot;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "tax_inclusive_amount_snapshot", precision = 18, scale = 2)
     private BigDecimal taxInclusiveAmountSnapshot;
 
@@ -157,7 +157,7 @@ public class PurchaseOrderItem extends BaseEntity {
 
     /** 行金额 = 数量 × 单价. Price-sensitive: returns null when unitPrice stripped. */
     @Transient
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     public BigDecimal getLineAmount() {
         // Defensive null guard — unitPrice is @PriceSensitive, stripped to null
         // for warehouse_manager. Return null (not ZERO) to avoid leaking "free".
@@ -168,7 +168,7 @@ public class PurchaseOrderItem extends BaseEntity {
 
     /** 含税金额. Price-sensitive: returns null when unitPrice / taxRate stripped. */
     @Transient
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     public BigDecimal getLineAmountWithTax() {
         BigDecimal amount = getLineAmount();
         // Defensive: getLineAmount() now returns null when unitPrice stripped.

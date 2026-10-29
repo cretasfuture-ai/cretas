@@ -122,7 +122,7 @@ public class InquiryQuote extends BaseEntity {
     private String selectedSupplierId;
 
     /** 中标价格 (selectAndConvert 后填充) */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "selected_unit_price", precision = 15, scale = 4)
     private BigDecimal selectedUnitPrice;
 

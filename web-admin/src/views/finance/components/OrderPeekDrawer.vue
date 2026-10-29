@@ -34,8 +34,14 @@ const visible = defineModel<boolean>('visible', { default: false });
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-/** ⚠️ 金额仍受价格权限约束 —— 抽屉不绕过既有的价格闸。 */
-const canViewPrice = computed(() => permissionStore.canViewPrice);
+/**
+ * ⚠️ 金额仍受价格权限约束 —— 抽屉不绕过既有的价格闸。
+ * S5-12: 采购单按配置的采购读权限判; 抽屉只从 OA 审批中心打开采购单, 审批读 (approval-view)
+ * 对财务也给采购金额 (裁定 a), 所以采购单再加上财务读。销售单仍按原价格权限。
+ */
+const canViewPrice = computed(() => (props.kind === 'purchase'
+  ? permissionStore.canViewPurchasePrice || permissionStore.canAccess('finance')
+  : permissionStore.canViewPrice));
 
 const loading = ref(false);
 /** 🔴 三态: null=还没查 / 'forbidden'=没权限 / 'failed'=真故障。⛔ 不合并 —— 行动指引不同。 */
@@ -54,6 +60,8 @@ const title = computed(() => {
 
 function money(v: unknown): string {
   if (!canViewPrice.value) return '—';
+  // 后端按权限剥掉的金额是 null —— Number(null) 是 0, 会显示成「¥0.00」, 先挡住
+  if (v === null || v === undefined || v === '') return '—';
   const n = Number(v);
   // ⚠️ 读不到就显示「—」, ⛔ 不兜底成 0 ——
   //    「我不知道」和「是 0」对看账的人是两件完全不同的事。
@@ -154,9 +162,11 @@ async function load() {
   errorKind.value = null;
   order.value = null;
   try {
-    const base = props.kind === 'purchase' ? 'purchase' : 'sales';
-    const res = await get(`/${factoryId.value}/${base}/orders/${props.orderId}`,
-      { _silent: true } as never);
+    // 采购单走 OA 审批读 (财务审批要看金额, S5-12 裁定 a); 销售单照旧
+    const url = props.kind === 'purchase'
+      ? `/${factoryId.value}/purchase/orders/${props.orderId}/approval-view`
+      : `/${factoryId.value}/sales/orders/${props.orderId}`;
+    const res = await get(url, { _silent: true } as never);
     order.value = (res?.data ?? null) as Record<string, unknown> | null;
   } catch (err) {
     // ⚠️ 请求层抛的是 **ApiError**(status/code 在顶层, 没有 response) —— 两种形状都认。

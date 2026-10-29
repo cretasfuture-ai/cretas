@@ -17,11 +17,11 @@ public class PurchaseInvoiceLineViewDTO {
     String materialTypeId;
     BigDecimal quantity;
     String unit;
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal unitPrice;
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal amount;
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal expectedAmount;
     String matchStatus;
     String matchNote;

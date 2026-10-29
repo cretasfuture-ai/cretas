@@ -63,6 +63,7 @@ import com.cretas.aims.config.RequireRole;
 @RequiredArgsConstructor
 @org.springframework.validation.annotation.Validated  // Issue #816: enable @Min(1) on @RequestParam page/size
 @Tag(name = "采购管理", description = "采购订单与入库管理（工厂/餐饮通用）")
+@com.cretas.aims.security.PriceScope(com.cretas.aims.security.PriceSensitive.PURCHASE)
 public class PurchaseController {
 
     private final PurchaseService purchaseService;
@@ -142,7 +143,8 @@ public class PurchaseController {
             @RequestParam PurchaseOrderStatus status,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
         // Issue #736 fix (2026-05-17): viewer 角色虽有 procurement:read 但不应看到 PENDING_FINANCE_REVIEW
         // 状态采购单 (含供应商名、总金额、价格异常告警 — 业务敏感). 走独立 FINANCE_REVIEW_VIEW_PERMISSION
         // 角色白名单 (procurement_manager / finance_manager / dispatcher / super_admin).
@@ -158,6 +160,9 @@ public class PurchaseController {
                         currentUser != null ? currentUser.getRole() : "<null>");
                 throw new BusinessException(403, "无权查看待财审采购单");
             }
+            // S5-12 裁定 a: 待财审队列是财务的审批入口, 采购金额按「采购读 或 财务读」判
+            httpRequest.setAttribute(com.cretas.aims.security.PriceScope.PURCHASE_REMAP_ATTRIBUTE,
+                    com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE);
         }
         PageResponse<PurchaseOrder> result = purchaseService.getPurchaseOrdersByStatus(factoryId, status, page, size);
         return ApiResponse.success("查询成功", result);
@@ -186,6 +191,32 @@ public class PurchaseController {
             @PathVariable @NotBlank String orderId) {
         PurchaseOrder order = purchaseService.getPurchaseOrderById(factoryId, orderId);
         return ApiResponse.success("查询成功", order);
+    }
+
+    /**
+     * OA 审批中心的采购单速览 (OrderPeekDrawer, S5-12 裁定 a): 财务审批采购单要看金额,
+     * 所以本响应里采购价按「采购读 或 财务读」判; 其它采购单入口仍只看采购读。
+     * 只对走过 OA 审批的采购单开放 —— 没有审批实例的单子 404, 不能拿它当绕过采购读的通道。
+     */
+    @GetMapping("/orders/{orderId}/approval-view")
+    @Operation(summary = "OA 审批中的采购单速览 (财务审批用)")
+    @RequirePermission({"procurement:read_write", "procurement:read", "finance:read_write", "finance:read"})
+    @com.cretas.aims.security.PriceScope(value = com.cretas.aims.security.PriceSensitive.PURCHASE,
+            purchase = com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE)
+    public ApiResponse<PurchaseOrder> getOrderForApproval(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String orderId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // 只给这张单的审批人: 当前节点轮到他 (待办) 或他在这个实例上操作过 (已办) —— 与 OA 列表 B6 同一判据。
+        // 其余一律 404: 采购单 id 在待收票等处随处可见, 不能拿审批速览绕开采购读。
+        User caller = requestUser(httpRequest);
+        ApprovalWorkflowInstance instance = approvalInstanceRepository == null ? null : approvalInstanceRepository
+                .findFirstByFactoryIdAndModuleCodeAndBusinessEntityIdOrderByInitiatedAtDesc(
+                        factoryId, "PURCHASE_ORDER", orderId).orElse(null);
+        if (caller == null || instance == null || !isApproverOf(instance, caller)) {
+            throw new BusinessException(404, "没有这张采购单的审批任务");
+        }
+        return ApiResponse.success("查询成功", purchaseService.getPurchaseOrderById(factoryId, orderId));
     }
 
     @GetMapping("/orders/by-number/{orderNumber}")
@@ -235,7 +266,7 @@ public class PurchaseController {
         // 把 user 看不见的字段在 PDF 渲染入口替换为 "—".
         User currentUser = resolveCurrentUser(authorization);
         boolean maskPriceByPermission = currentUser == null
-                || !permissionService.hasPermission(currentUser, PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION);
+                || !priceVisibility().canView(currentUser, com.cretas.aims.security.PriceSensitive.PURCHASE); // S5-12: 采购价按配置的采购读
         boolean maskPrice = external || maskPriceByPermission;
 
         byte[] pdfBytes = purchaseOrderPdfService.generatePurchaseOrderPdf(factoryId, orderId, maskPrice, external);
@@ -578,8 +609,13 @@ public class PurchaseController {
     @Operation(summary = "采购统计数据")
     @RequirePermission({"procurement:read_write", "procurement:read", "report:read"})
     public ApiResponse<Map<String, Object>> getStatistics(
-            @PathVariable @NotBlank String factoryId) {
-        Map<String, Object> stats = purchaseService.getPurchaseStatistics(factoryId);
+            @PathVariable @NotBlank String factoryId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        Map<String, Object> stats = new java.util.LinkedHashMap<>(purchaseService.getPurchaseStatistics(factoryId));
+        // S5-12: 顶层 Map 键不在 advice 的字段遍历里, 采购金额在这里按配置的采购读权限判; 看不到给 null 不给 0
+        if (!canViewPurchasePrices(httpRequest)) {
+            stats.put("monthlyPurchaseAmount", null);
+        }
         return ApiResponse.success("查询成功", stats);
     }
 
@@ -641,7 +677,9 @@ public class PurchaseController {
     @RequirePermission({"procurement:read_write", "finance:read_write"})
     public ApiResponse<List<MaterialPriceComparisonDTO>> getOrderPriceComparison(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String orderId) {
+            @PathVariable @NotBlank String orderId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        requirePurchasePrices(httpRequest);
         List<MaterialPriceComparisonDTO> result = purchaseService.getOrderPriceComparison(factoryId, orderId);
         return ApiResponse.success("查询成功", result);
     }
@@ -653,7 +691,9 @@ public class PurchaseController {
     public ApiResponse<MaterialPriceComparisonDTO> getMaterialPriceInfo(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String materialTypeId,
-            @RequestParam(required = false) BigDecimal currentPrice) {
+            @RequestParam(required = false) BigDecimal currentPrice,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        requirePurchasePrices(httpRequest);
         MaterialPriceComparisonDTO result = purchaseService.getMaterialPriceInfo(factoryId, materialTypeId, currentPrice);
         return ApiResponse.success("查询成功", result);
     }
@@ -723,6 +763,50 @@ public class PurchaseController {
         } catch (Exception e) {
             log.debug("resolveCurrentUser failed: {}", e.getMessage());
             return null;
+        }
+    }
+
+    // ==================== S5-12 价格可见性 ====================
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.PriceVisibility priceVisibility;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ApprovalWorkflowInstanceRepository approvalInstanceRepository;
+
+    private com.cretas.aims.security.PriceVisibility priceVisibility() {
+        return priceVisibility != null ? priceVisibility
+                : new com.cretas.aims.security.PriceVisibility(permissionService);
+    }
+
+    /** JwtAuthInterceptor 写进 request 的 userId (与 PriceFieldResponseAdvice 同一来源)。 */
+    private User requestUser(jakarta.servlet.http.HttpServletRequest request) {
+        Object raw = request.getAttribute("userId");
+        Long id = raw instanceof Long l ? l : raw instanceof Integer i ? i.longValue()
+                : raw instanceof String s && !s.isBlank() ? Long.valueOf(s) : null;
+        return id == null ? null : userRepository.findById(id).orElse(null);
+    }
+
+    private boolean canViewPurchasePrices(jakarta.servlet.http.HttpServletRequest request) {
+        return priceVisibility().canView(requestUser(request), com.cretas.aims.security.PriceSensitive.PURCHASE);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ApprovalHistoryRepository approvalHistoryRepository;
+
+    /** 待办 (当前节点可操作) 或已办 (在该实例上有操作记录); 组件缺失一律不算 (fail closed)。 */
+    private boolean isApproverOf(ApprovalWorkflowInstance instance, User caller) {
+        boolean pending = workflowEngine != null && workflowEngine.canTransition(instance, caller);
+        boolean acted = approvalHistoryRepository != null && approvalHistoryRepository
+                .existsByFactoryIdAndInstanceIdAndActorId(instance.getFactoryId(), instance.getId(), caller.getId());
+        return pending || acted;
+    }
+
+    /** 只返回价格的入口: 看不到采购价就整个 403, 不返回一堆 null。 */
+    private void requirePurchasePrices(jakarta.servlet.http.HttpServletRequest request) {
+        if (!canViewPurchasePrices(request)) {
+            throw new BusinessException(403, "当前角色在权限配置里没有采购读权限，看不到采购价")
+                    .withHint("请管理员在角色权限配置里给该角色开采购模块读权限");
         }
     }
 }

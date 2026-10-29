@@ -43,7 +43,7 @@ public class SupplierMaterial extends BaseEntity {
      * SupplierMaterialPurchaseSpecServiceImpl / resolveEffectivePrice) 因此一行都不用改 ——
      * 「靠不改而正确」比「四处都记得改」强得多。
      */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "default_purchase_price", precision = 18, scale = 6)
     private BigDecimal defaultPurchasePrice;
 
@@ -58,7 +58,7 @@ public class SupplierMaterial extends BaseEntity {
      * 一个基准不明的数悄悄给采购单定价, 正是本次改动要消灭的东西。
      * ⛔ 也不为此加 flag 列: 多一个列就多一个会和它描述的两列漂开的东西。
      */
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "tax_included_default_purchase_price", precision = 18, scale = 6)
     private BigDecimal taxIncludedDefaultPurchasePrice;
     @Column(name = "currency", nullable = false, length = 8)

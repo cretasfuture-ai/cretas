@@ -22,12 +22,16 @@ import { computed, defineComponent, h, inject, provide } from 'vue';
 import type { ComputedRef } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const harness = vi.hoisted(() => ({ get: vi.fn() }));
+const harness = vi.hoisted(() => ({
+  get: vi.fn(),
+  // S5-12: 采购单抽屉按配置的采购读 / 财务读判 (审批速览), 不看旧名单 canViewPrice
+  permission: { canViewPrice: true, canViewPurchasePrice: true, canAccess: (_m: string) => false },
+}));
 
 vi.mock('@/api/request', () => ({ get: harness.get }));
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'LIUSHANMEN' }) }));
 vi.mock('@/store/modules/permission', () => ({
-  usePermissionStore: () => ({ canViewPrice: true }),
+  usePermissionStore: () => harness.permission,
 }));
 
 import OrderPeekDrawer from '../OrderPeekDrawer.vue';
@@ -319,5 +323,45 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
     const rate = wrapper.find('[data-label="税率"]');
     expect(rate.text(), '明细行读不到税率, 不许显示 0% 或任何猜测值').toBe('税率：—');
     expect(rate.text()).not.toContain('0%');
+  });
+});
+
+describe('OrderPeekDrawer S5-12 采购价可见性', () => {
+  beforeEach(() => {
+    harness.get.mockReset();
+    harness.permission = { canViewPrice: true, canViewPurchasePrice: true, canAccess: (_m: string) => false };
+  });
+
+  it('采购单走 OA 审批读 (approval-view), 不走普通详情', async () => {
+    harness.get.mockResolvedValue({ success: true, data: orderWithTax() });
+    await mountDrawer('po-9');
+    expect(harness.get).toHaveBeenCalledWith('/LIUSHANMEN/purchase/orders/po-9/approval-view', expect.anything());
+  });
+
+  it('后端剥成 null 的金额显示「—」, 不显示 ¥0.00', async () => {
+    harness.get.mockResolvedValue({
+      success: true,
+      data: { ...orderWithTax(), totalAmount: null, taxAmount: null, invoicedAmount: null, paidAmount: null,
+        items: [{ materialName: '牛前', quantity: 1, unit: 'kg', priceUnit: 'kg', unitPrice: null,
+          lineAmount: null, lineAmountWithTax: null }] },
+    });
+    const wrapper = await mountDrawer();
+    expect(wrapper.text(), '订单没渲染出来').toContain('PO-20260901-0004');
+    expect(wrapper.find('[data-label="未税总额"]').text()).toBe('未税总额：—');
+    expect(wrapper.text()).not.toContain('¥0.00');
+  });
+
+  it('财务 (配置无采购读、有财务读) 在审批抽屉里看得到采购金额 —— 裁定 a', async () => {
+    harness.permission = { canViewPrice: true, canViewPurchasePrice: false, canAccess: (m: string) => m === 'finance' };
+    harness.get.mockResolvedValue({ success: true, data: orderWithTax() });
+    const wrapper = await mountDrawer();
+    expect(wrapper.find('[data-label="未税总额"]').text()).toBe('未税总额：¥750.00');
+  });
+
+  it('旧名单里但既无采购读也无财务读 → 采购金额一律「—」', async () => {
+    harness.permission = { canViewPrice: true, canViewPurchasePrice: false, canAccess: (_m: string) => false };
+    harness.get.mockResolvedValue({ success: true, data: orderWithTax() });
+    const wrapper = await mountDrawer();
+    expect(wrapper.find('[data-label="未税总额"]').text()).toBe('未税总额：—');
   });
 });

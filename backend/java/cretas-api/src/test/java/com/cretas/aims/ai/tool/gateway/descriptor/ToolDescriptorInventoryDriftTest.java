@@ -206,9 +206,10 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(54);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
         // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(58);
+        // 2026-10-29 (S5-12): purchase_statistics 声明 procurement:read (+1 requiresPermission / requiredPermissions, 叠加在 main 之上)。
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(59);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(40);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(18);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(19);
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(13);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(25);
 

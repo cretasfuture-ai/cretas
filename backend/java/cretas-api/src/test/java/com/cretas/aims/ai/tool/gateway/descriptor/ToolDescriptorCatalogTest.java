@@ -96,7 +96,8 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
-        assertThat(statistics.requiresPermission()).isEqualTo(50);
+        // 2026-10-29 (S5-12): purchase_statistics 声明 procurement:read (原来 requiredPermissions 为空, 任何人能问到采购金额) (main 已 50) → 51。
+        assertThat(statistics.requiresPermission()).isEqualTo(51);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -132,6 +133,10 @@ class ToolDescriptorCatalogTest {
                         assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
                     } else if (legacyToolsWithPriceViewPermission.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("procurement:price:view");
+                    } else if ("purchase_statistics".equals(entry.toolName())) {
+                        // 2026-10-29 (S5-12): 采购统计含采购金额, 门 = 配置的采购读 (原来为空)
+                        assertThat(entry.requiredPermissions()).containsExactly("procurement:read");
+                        assertThat(entry.requiresPermission()).isTrue();
                     } else {
                         assertThat(entry.requiredPermissions()).isEmpty();
                     }

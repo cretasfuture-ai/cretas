@@ -104,11 +104,11 @@ public class PurchaseOrder extends BaseEntity {
     @Column(name = "expected_delivery_date")
     private LocalDate expectedDeliveryDate;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "total_amount", precision = 15, scale = 2)
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE)
     @Column(name = "tax_amount", precision = 15, scale = 2)
     private BigDecimal taxAmount = BigDecimal.ZERO;
 

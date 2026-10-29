@@ -19,7 +19,7 @@ public class PurchaseInvoiceViewDTO {
     String supplierId;
     String supplierName;
     String invoiceNumber;
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     BigDecimal amount;
     String reconcileStatus;
     String reconcileNote;

@@ -134,7 +134,7 @@ public class MaterialBatch extends BaseEntity {
     @Column(name = "reserved_quantity", nullable = false, precision = 18, scale = 6)
     private BigDecimal reservedQuantity = BigDecimal.ZERO;
 
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     @Column(name = "unit_price", precision = 10, scale = 2)
     private BigDecimal unitPrice;
     @Enumerated(EnumType.STRING)
@@ -443,7 +443,7 @@ public class MaterialBatch extends BaseEntity {
      * Price-sensitive: returns null when unitPrice stripped for warehouse_manager.
      */
     @Transient
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     public BigDecimal getTotalPrice() {
         // Defensive null guard — unitPrice is @PriceSensitive, stripped to null
         // for warehouse_manager. Return null (not ZERO) to avoid leaking "free".
@@ -457,7 +457,7 @@ public class MaterialBatch extends BaseEntity {
      * 获取总价值（与getTotalPrice相同）. Price-sensitive — see {@link #getTotalPrice()}.
      */
     @Transient
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     public BigDecimal getTotalValue() {
         return getTotalPrice();
     }
@@ -548,7 +548,7 @@ public class MaterialBatch extends BaseEntity {
      * delegate's defensive null guard. See PR #443 follow-up F3.
      */
     @Transient
-    @PriceSensitive
+    @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     public BigDecimal getTotalCost() {
         return getTotalPrice();
     }

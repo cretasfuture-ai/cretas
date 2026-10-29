@@ -115,10 +115,35 @@ public class ListSummaryController {
             return reject(httpResponse, 403, "当前角色无权读取该列表合计");
         }
 
+        // S5-12: 采购单合计金额按配置的采购读权限判; 退货合计不分采购 / 销售退货 (见
+        // computeReturnOrderSummary 只按状态过滤), 所以要两种口径都能看才给金额。
+        String priceSpec = summaryPriceSpec(entityType, currentUser);
+        if (priceSpec != null) {
+            httpRequest.setAttribute(com.cretas.aims.security.PriceScope.REQUEST_ATTRIBUTE, priceSpec);
+        }
+
         log.debug("list-summary: factory={}, entity={}, filter={}",
                 factoryId, entityType, request.getFilterConditions());
         ListSummaryResponse response = listSummaryService.computeSummary(factoryId, entityType, request);
         return ApiResponse.success("查询成功", response);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.PriceVisibility priceVisibility;
+
+    /** 本次合计里金额统计的价格口径; null = 沿用默认口径。 */
+    private String summaryPriceSpec(String entityType, User user) {
+        if ("purchaseOrder".equals(entityType)) {
+            return com.cretas.aims.security.PriceSensitive.PURCHASE;
+        }
+        if ("returnOrder".equals(entityType)) {
+            com.cretas.aims.security.PriceVisibility pv = priceVisibility != null ? priceVisibility
+                    : new com.cretas.aims.security.PriceVisibility(permissionService);
+            // 两个口径都要: 默认口径能看就再按采购口径判, 默认口径都看不到就留默认 (照样剥)
+            return pv.canView(user, com.cretas.aims.security.PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION)
+                    ? com.cretas.aims.security.PriceSensitive.PURCHASE : null;
+        }
+        return null;
     }
 
     private User resolveCurrentUser(HttpServletRequest request) {
