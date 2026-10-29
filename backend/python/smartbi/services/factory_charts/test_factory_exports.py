@@ -10,6 +10,7 @@ from pptx import Presentation
 from pypdf import PdfReader
 
 from smartbi.api import financial_dashboard as api
+from smartbi.services.ppt_generator import _wrap_for_ppt
 
 
 def client():
@@ -114,6 +115,22 @@ def test_factory_ppt_keeps_ascii_status_tokens_intact_when_paginating():
     texts=[shape.text for slide in ppt.slides for shape in slide.shapes if shape.has_text_frame]
     assert any('AVAILABLE快照' in value for value in texts)
     assert not any(value.strip() in {'AVAIL', 'ABLE快照', 'LE快照'} for value in texts)
+
+
+def test_factory_ppt_balances_single_cjk_tail_without_losing_fact_text():
+    data=payload()
+    fact='需要关注：仅统计订单与发货关联校验通过的订单行；缺少关系或单位不一致的行不计入，不代表全部销售'
+    data['analysis_results']['one'] = fact
+    response=client().post('/export-ppt',json=data)
+    assert response.status_code==200 and response.content.startswith(b'PK')
+    ppt=Presentation(io.BytesIO(response.content))
+    assert len(ppt.slides) == 6
+    texts=[shape.text for slide in ppt.slides for shape in slide.shapes if shape.has_text_frame]
+    fact_shapes=[value for value in texts if fact[:12] in value]
+    assert fact_shapes
+    assert any(''.join(value.splitlines()) == fact for value in fact_shapes)
+    assert not any(line.strip() == '售' for value in fact_shapes for line in value.splitlines())
+    assert _wrap_for_ppt('合格\n售') == ['合格', '售']
 
 
 def test_factory_pdf_actual_titles_period_images_kpi_and_last_fact_survive():

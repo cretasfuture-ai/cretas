@@ -36,6 +36,55 @@ CHART_DISPLAY_NAMES = {
 _PPT_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*|[^\x00-\x7F]|[^\r\n]")
 
 
+def _ppt_token_units(token: str) -> int:
+    """Return the display width used by the PPT wrapping policy."""
+    if token.isspace():
+        return len(token)
+    if token.isascii():
+        return len(token)
+    return sum(2 if ord(char) > 127 else 1 for char in token)
+
+
+def _is_single_cjk_token(token: str) -> bool:
+    """Whether ``token`` is one CJK ideograph that can move as a whole."""
+    if len(token) != 1:
+        return False
+    codepoint = ord(token)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x2FA1F
+    )
+
+
+def _rebalance_ppt_tail(lines: List[str], max_units: int) -> None:
+    """Avoid a visually orphaned final CJK character without splitting tokens.
+
+    This only rebalances the final two lines of one explicit paragraph.  A
+    whole CJK token is moved from the preceding line, so ASCII identifiers
+    (for example ``sales_order_item_id``) are never split or rewritten.
+    """
+    if len(lines) < 2 or not _is_single_cjk_token(lines[-1]):
+        return
+
+    previous = lines[-2]
+    previous_tokens = _PPT_TOKEN_RE.findall(previous)
+    if not previous_tokens or not _is_single_cjk_token(previous_tokens[-1]):
+        return
+
+    moved_token = previous_tokens[-1]
+    candidate_previous = previous[:-len(moved_token)]
+    if not candidate_previous:
+        return
+
+    candidate_tail = moved_token + lines[-1]
+    if _ppt_token_units(candidate_tail) > max_units:
+        return
+
+    lines[-2:] = [candidate_previous, candidate_tail]
+
+
 def _wrap_for_ppt(text: str, max_units: int = 46) -> List[str]:
     """Wrap mixed Chinese/ASCII text without splitting identifiers or facts.
 
@@ -47,17 +96,13 @@ def _wrap_for_ppt(text: str, max_units: int = 46) -> List[str]:
     lines: List[str] = []
     for paragraph in str(text).splitlines() or ['']:
         tokens = _PPT_TOKEN_RE.findall(paragraph)
+        paragraph_lines: List[str] = []
         current: List[str] = []
         units = 0
         for token in tokens:
-            if token.isspace():
-                token_units = len(token)
-            elif token.isascii():
-                token_units = len(token)
-            else:
-                token_units = sum(2 if ord(char) > 127 else 1 for char in token)
+            token_units = _ppt_token_units(token)
             if current and units + token_units > max_units:
-                lines.append(''.join(current).rstrip())
+                paragraph_lines.append(''.join(current).rstrip())
                 current = []
                 units = 0
                 if token.isspace():
@@ -68,7 +113,13 @@ def _wrap_for_ppt(text: str, max_units: int = 46) -> List[str]:
             # make a source/status fact unsearchable in the generated deck.
             current.append(token)
             units += token_units
-        lines.append(''.join(current).rstrip())
+        paragraph_lines.append(''.join(current).rstrip())
+        # The narrow analysis pages are the only layout that needs this
+        # cosmetic tail balance; keep the full-width conclusion wrapping
+        # unchanged.
+        if max_units == 46:
+            _rebalance_ppt_tail(paragraph_lines, max_units)
+        lines.extend(paragraph_lines)
     return lines
 
 
