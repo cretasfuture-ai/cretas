@@ -9441,8 +9441,40 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlanDTO dto = productionPlanMapper.toDTO(plan);
         enrichWithConversionRateInfo(dto, plan.getFactoryId(), plan.getProductTypeId());
         enrichWithAssignmentNames(dto, plan);
+        enrichWithTargetProductNames(dto, plan);
         enrichWithTerminalActionCapabilities(dto, plan);
         return dto;
+    }
+
+    /**
+     * 把计划的产出 id 解析成名称一并下发。列表页以前在浏览器里另拉 /product-types/active 去对名, 那次请求没拿到
+     * (权限/失败被吞) 时整页都写「未知产品」—— 计划自己的数据明明有名字。名称只取**本计划所属工厂**的
+     * 产品目录 (主产/联产在 product_types, 副产原料在 raw_material_types); 查不到的 id 不放进 map, 由前端如实显示。
+     */
+    private void enrichWithTargetProductNames(ProductionPlanDTO dto, ProductionPlan plan) {
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        if (plan.getTargetFinishedGoodIds() != null) ids.addAll(plan.getTargetFinishedGoodIds());
+        if (plan.getProductTypeId() != null) ids.add(plan.getProductTypeId());
+        ids.removeIf(id -> id == null || id.isBlank());
+        if (ids.isEmpty()) return;
+        java.util.Map<String, String> names = new java.util.LinkedHashMap<>();
+        if (productTypeRepository != null) {
+            for (ProductType type : productTypeRepository.findByIdIn(ids)) {
+                if (plan.getFactoryId().equals(type.getFactoryId()) && !isBlank(type.getName())) {
+                    names.put(type.getId(), type.getName());
+                }
+            }
+        }
+        if (rawMaterialTypeRepository != null && names.size() < ids.size()) {
+            java.util.Set<String> rest = new java.util.LinkedHashSet<>(ids);
+            rest.removeAll(names.keySet());
+            for (com.cretas.aims.entity.RawMaterialType raw : rawMaterialTypeRepository.findByIdIn(rest)) {
+                if (plan.getFactoryId().equals(raw.getFactoryId()) && !isBlank(raw.getName())) {
+                    names.put(raw.getId(), raw.getName());
+                }
+            }
+        }
+        dto.setTargetFinishedGoodNames(names);
     }
 
     /**

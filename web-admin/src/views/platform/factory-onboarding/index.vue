@@ -213,6 +213,10 @@
               <div class="av">AI</div>
               <FactoryConversationRoutePreview :previews="progress?.routePreviews ?? []" />
             </div>
+            <div v-if="routeTopologyBlocker" class="turn ai structured-turn" data-testid="route-topology-blocker">
+              <div class="av">AI</div>
+              <el-alert type="warning" :closable="false" show-icon :title="routeTopologyBlocker" />
+            </div>
             <div v-if="routeTopologyDraft" class="turn ai structured-turn">
               <div class="av">AI</div>
               <FactoryConversationTopologyCard
@@ -1259,6 +1263,24 @@ const productRows = ref<ProductFlowRow[]>([])
 const productPackaging = ref('')
 const confirmedProductSignature = ref('')
 const routeTopologyDraft = ref<RouteTopologyDraft | null>(null)
+// 逐条路线连线还没答完、却没有确认卡时, 必须说清先确认什么 —— 不能让用户面对一个永远「还差1项」的页面。
+const routeTopologyBlocker = computed(() => {
+  const snapshot = progress.value
+  if (!snapshot || routeTopologyDraft.value) return ''
+  const name = snapshot.pendingItems?.find(item => /^product\d+\.routeTopology$/.test(item.name))?.name
+    ?? snapshot.unresolvedDecisions?.find(item => /^product\d+\.routeTopology$/.test(item.field))?.field
+  const index = name?.match(/^product(\d+)\./)?.[1]
+  if (!index) return ''
+  const collected = snapshot.collected ?? {}
+  const shape = collected[`product${index}.routeShape`]?.trim()
+  if (!shape) return `先确认第 ${index} 个成品的「路线形态」，确认后才能确定逐条路线连线。`
+  if (shape === '仅顺序') return ''
+  if (!collected[`product${index}.steps`]?.trim()) return `先确认第 ${index} 个成品经过哪几道工序，再确认逐条路线连线。`
+  const missing = ['routeEntry', 'routeTerminal'].filter(key => !collected[`product${index}.${key}`]?.trim())
+  return missing.length
+    ? `先确认第 ${index} 个成品的路线${missing.map(key => (key === 'routeEntry' ? '起点' : '终点')).join('和')}，确认卡才会出现。`
+    : ''
+})
 const domainAnswers = ref<Record<string, string | string[]>>({})
 const userEditedSuggestedFields = new Set<string>()
 const compactProgressByDefault = typeof window !== 'undefined'

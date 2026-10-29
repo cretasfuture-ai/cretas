@@ -235,6 +235,9 @@ public class ProductionPlanDTO {
     @Schema(description = "raw-centric 多成品: 本计划要产的终端成品 productTypeId 列表 (null=非多成品计划)")
     private List<String> targetFinishedGoodIds;
 
+    @Schema(description = "产出 id → 名称 (本厂 product_types / raw_material_types 解析, 服务端给出, 不依赖浏览器单独拉产品目录); 查不到的 id 不在其中")
+    private java.util.Map<String, String> targetFinishedGoodNames;
+
     @Schema(description = "关联销售订单行ID (P0-12)")
     private String sourceOrderItemId;
 
