@@ -413,7 +413,7 @@
 
               <!-- 无数据 / 数据预览 — extracted to analysis/EmptySheetPlaceholder.vue (Item 1 phase 4c) -->
               <EmptySheetPlaceholder
-                :empty="!hasChartData(sheet) && !sheet.flowResult?.aiAnalysis && !enrichingSheets.has(sheet.sheetIndex)"
+                :empty="!sheet.uploadId || (sheet.savedRows ?? 0) <= 0"
                 @view-data="loadSheetData(sheet)"
               />
             </template>
