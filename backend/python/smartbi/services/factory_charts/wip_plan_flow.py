@@ -188,4 +188,3 @@ def assemble_wip_plan_flows(rows: Iterable[dict[str, Any]], factory_id: str | No
             })
     return edges, ([{"id": "wip-plan-flow.conservation", "title": "普通Web在制过账流",
                       "missing": gaps}] if gaps else [])
-
