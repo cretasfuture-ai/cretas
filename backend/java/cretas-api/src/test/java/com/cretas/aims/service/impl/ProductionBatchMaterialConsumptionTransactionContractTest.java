@@ -182,14 +182,32 @@ class ProductionBatchMaterialConsumptionTransactionContractTest {
     }
 
     @Test
-    @DisplayName("manual writer rollback restores stock, consumption rows, and batch cost after canonical read failure")
-    void rollbackCoversAllManualWriterWrites() {
+    @DisplayName("four-arg manual writer rollback restores stock, rows, and cost")
+    void rollbackCoversFourArgManualWriterWrites() {
+        assertRollbackAfterCanonicalReadFailure(true);
+    }
+
+    @Test
+    @DisplayName("three-arg compatibility writer rollback restores stock, rows, and cost")
+    void rollbackCoversThreeArgManualWriterWrites() {
+        assertRollbackAfterCanonicalReadFailure(false);
+    }
+
+    private void assertRollbackAfterCanonicalReadFailure(boolean explicitUserId) {
         assertTrue(AopUtils.isAopProxy(transactionalService), "writer must run through Spring AOP proxy");
 
+        List<Map<String, Object>> lines = List.of(
+                Map.of("materialBatchId", MATERIAL_BATCH_ID, "quantity", "1"));
         assertThrows(IllegalStateException.class,
-                () -> transactionalService.recordMaterialConsumption(
-                        FACTORY, Long.toString(BATCH_ID),
-                        List.of(Map.of("materialBatchId", MATERIAL_BATCH_ID, "quantity", "1")), 7L));
+                () -> {
+                    if (explicitUserId) {
+                        transactionalService.recordMaterialConsumption(
+                                FACTORY, Long.toString(BATCH_ID), lines, 7L);
+                    } else {
+                        transactionalService.recordMaterialConsumption(
+                                FACTORY, Long.toString(BATCH_ID), lines);
+                    }
+                });
 
         assertEquals(0, jdbc.queryForObject("SELECT used_quantity FROM material_batches WHERE id=?",
                 BigDecimal.class, MATERIAL_BATCH_ID).compareTo(BigDecimal.ZERO));
