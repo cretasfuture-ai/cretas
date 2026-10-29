@@ -32,6 +32,39 @@ export function capacityBlockReason(required: DailyCapacityRequired[], inputs: C
   return '';
 }
 
+/**
+ * 打开补填弹窗时的初始值: 之前填过的保留; 没填过且后端给了建议值 (联产计划按原料投入算) 就预填建议值,
+ * 人可改 —— 建议值只有点「保存并排程」才会保存。
+ */
+export function initialCapacityInputs(required: DailyCapacityRequired[], previous: CapacityInputs): CapacityInputs {
+  const next: CapacityInputs = {};
+  for (const item of required) {
+    const key = capacityKey(item);
+    const prev = previous[key];
+    if (prev !== undefined && prev.trim() !== '') {
+      next[key] = prev;
+    } else if (typeof item.suggestedPerDay === 'number' && Number.isFinite(item.suggestedPerDay) && item.suggestedPerDay > 0) {
+      next[key] = String(Math.round(item.suggestedPerDay * 100) / 100);
+    } else {
+      next[key] = undefined;
+    }
+  }
+  return next;
+}
+
+/**
+ * 历史不足 3 天时把那几天的实际量摆出来: 「近 90 天只有 1 天有记录：10-27 入库 40 盒」;
+ * 联产计划写「投入」。没有记录 (0 天) 返回 null, 原因已在 experienceNote 里。
+ */
+export function describeSampleDays(item: DailyCapacityRequired): string | null {
+  const days = item.sampleDays ?? [];
+  if (days.length === 0) return null;
+  const verb = item.historyBasis === 'RAW_INPUT' ? '投入' : '入库';
+  const window = item.historyWindowDays ?? 90;
+  const parts = days.map(d => `${String(d.date).slice(5, 10)} ${verb} ${Math.round(Number(d.quantity) * 100) / 100} ${d.unit}`);
+  return `近 ${window} 天只有 ${days.length} 天有记录：${parts.join('，')}`;
+}
+
 export function buildCapacityOverrides(
   required: DailyCapacityRequired[],
   inputs: CapacityInputs,

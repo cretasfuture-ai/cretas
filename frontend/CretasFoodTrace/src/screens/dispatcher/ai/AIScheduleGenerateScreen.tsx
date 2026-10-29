@@ -43,6 +43,8 @@ import {
   capacityBlockReason,
   capacityKey,
   describeCapacity,
+  describeSampleDays,
+  initialCapacityInputs,
   describeDateRange,
   describeDays,
   type CapacityInputs,
@@ -205,11 +207,8 @@ export default function AIScheduleGenerateScreen() {
           return;
         }
         setCapacityRequired(required);
-        setCapacityInputs(prev => {
-          const next: CapacityInputs = {};
-          for (const item of required) next[capacityKey(item)] = prev[capacityKey(item)];
-          return next;
-        });
+        // 之前填过的保留; 联产计划有建议值就预填 (可改, 点「保存并排程」才保存)
+        setCapacityInputs(prev => initialCapacityInputs(required, prev));
         setShowCapacityModal(true);
         return;
       }
@@ -701,7 +700,18 @@ export default function AIScheduleGenerateScreen() {
                     {item.reason === 'UNIT_MISMATCH'
                       ? `；产品上填的是 ${item.currentQuantityPerDay ?? '-'} ${item.currentUnit ?? ''}/天，和计划单位 ${item.unit} 对不上`
                       : ''}
+                    {item.experienceNote ? `；${item.experienceNote}` : ''}
                   </Text>
+                  {describeSampleDays(item) ? (
+                    <Text style={styles.capacityMeta} testID={`capacity-samples-${item.productTypeId}`}>
+                      {describeSampleDays(item)}
+                    </Text>
+                  ) : null}
+                  {item.suggestedPerDay ? (
+                    <Text style={styles.capacitySuggestion} testID={`capacity-suggestion-${item.productTypeId}`}>
+                      {`建议 ${item.suggestedPerDay} ${item.unit}/天，已预填，可以改；点「保存并排程」才会保存`}
+                    </Text>
+                  ) : null}
                   <View style={styles.capacityInputRow}>
                     <TextInput
                       style={styles.capacityInput}
@@ -1255,6 +1265,11 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     color: '#8c8c8c',
+  },
+  capacitySuggestion: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#1677ff',
   },
   capacityInputRow: {
     flexDirection: 'row',

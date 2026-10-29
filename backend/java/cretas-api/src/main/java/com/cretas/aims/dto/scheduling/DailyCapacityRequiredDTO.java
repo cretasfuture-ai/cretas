@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,9 +33,36 @@ public class DailyCapacityRequiredDTO {
     /** UNIT_MISMATCH 时产品上现有的值 / 单位, 方便对照。 */
     private BigDecimal currentQuantityPerDay;
     private String currentUnit;
-    /** 经验日产能 (可选; 算得出就不会进这个清单, 所以通常为空), 与算不出的原因。 */
+    /** 经验日产能 (可选; 普通产品算得出就不会进这个清单, 所以通常为空)。 */
     private BigDecimal experienceQuantityPerDay;
+    /** 历史口径说明 (有建议值时说明怎么算的, 没有时是原因)。 */
     private String experienceNote;
+    /**
+     * 建议值 (Steve 2026-10-29): 联产计划按近 90 天实际投入计划主原料的中位数, 计划单位/天。
+     * ⛔ 只作建议: 前端预填到输入框, 人可改, 点「保存日产能并排程」才作为人工值保存; 后端不会自动拿它排。
+     */
+    private BigDecimal suggestedPerDay;
+    /** 历史的来源: FINISHED_OUTPUT = 成品入库; RAW_INPUT = 原料投入 (联产计划)。 */
+    private String historyBasis;
+    /** 历史窗口天数 (近多少天)。 */
+    private Integer historyWindowDays;
+    /**
+     * 有记录的日子不足 3 天时那几天的实际量 (计划单位, 日期升序; 0 天为空)。
+     * 让问的时候看得到「近 90 天只有 1 天有记录: 10-27 入库 40 盒」。
+     */
+    @Builder.Default
+    private List<SampleDay> sampleDays = new ArrayList<>();
     /** 用到这个产品的计划编号。 */
     private List<String> planNumbers;
+
+    /** 某一天的实际量。 */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SampleDay {
+        /** yyyy-MM-dd */
+        private String date;
+        private BigDecimal quantity;
+        private String unit;
+    }
 }

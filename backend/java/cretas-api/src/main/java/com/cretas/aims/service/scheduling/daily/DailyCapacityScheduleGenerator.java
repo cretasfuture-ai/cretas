@@ -57,8 +57,11 @@ import java.util.Set;
  *       (落了的话同一天再提交会撞「该日期已存在调度计划」409, 用户补完也排不了)。
  *       前端当场让人填, 带 {@code dailyCapacityOverrides} 重新提交: 先保存到产品, 再排。</li>
  *   <li>联产计划 (一张图出多个成品, {@link PlanBomItems#isMultiOutput}): 计划量是计划单位下的投入 / 合并量
- *       (原料归属锚点的计划单位是原料 kg), 单个成品的入库量折不回去 ⇒ 不用历史估算, 直接问
- *       「这个计划一天能做多少」, 存在计划主产品 (锚点) 上。</li>
+ *       (原料归属锚点的计划单位是原料 kg), 单个成品的入库量折不回去 ⇒ 不用成品入库估算, 问
+ *       「这个计划一天能做多少」, 存在计划主产品 (锚点) 上。Steve 2026-10-29: 问的时候带建议值
+ *       {@code suggestedPerDay} = 近 90 天每天实际投入这种原料的中位数 ({@link ExperienceCapacityService#rawInput}),
+ *       前端预填、人可改; ⛔ 后端不自动拿建议值排, 没有人工值就仍返回 CAPACITY_REQUIRED。</li>
+ *   <li>历史不足 3 天: 门槛不变, 照样问; 需补清单带上那 1–2 天的实际量 ({@code sampleDays}), 普通产品与联产都适用。</li>
  *   <li>只排剩余量 = 计划量 − 已入库成品 (本计划的生产成品入库, 换得成计划单位的部分)。</li>
  *   <li>按天排, 不排到每道工序几点; 排程的计划开始 = 第一天 00:00, 计划结束 = 最后一天 23:59。⛔ 不自动派工。</li>
  * </ul>
@@ -138,7 +141,7 @@ public class DailyCapacityScheduleGenerator {
                 warnings.add("计划「" + planLabel(plan) + "」的产品不存在或已删除，没有排");
                 continue;
             }
-            // 同一产品同一单位: 联产与单品计划的经验值口径不同 (联产不用历史), 分开判
+            // 同一产品同一单位: 联产与单品计划的经验值口径不同 (联产按原料投入且只作建议), 分开判
             Capacity capacity = capacityByKey.computeIfAbsent(capacityKey(product.getId(), unit) + (joint ? "|J" : ""),
                     k -> resolveCapacity(factoryId, product, unit, joint, today, warnings));
             if (capacity.perDay() == null) {
@@ -236,7 +239,7 @@ public class DailyCapacityScheduleGenerator {
             }
         }
         ExperienceCapacity experience = joint
-                ? ExperienceCapacity.unavailable("联产计划（一张图出多个成品）按计划量排，单个成品的入库量折不回计划量，不用历史估算")
+                ? jointInputExperience(factoryId, product, name, unit, today)
                 : experienceCapacityService.experience(factoryId, product.getId(), unit, today);
 
         // 人工优先: 填了 (且单位对得上) 就用人工的; 经验值只做参考
@@ -248,10 +251,15 @@ public class DailyCapacityScheduleGenerator {
             }
             return new Capacity(manual, SOURCE_MANUAL, manual, experience, null);
         }
-        if (experience.available()) {
+        // 普通产品: 算得出就自动用。联产计划: 按原料投入算出的只作建议 (⛔ 不自动用), 照样问, 预填给人改
+        if (!joint && experience.available()) {
             warnings.add("「" + name + "」没有填日产能，" + LABEL_EXPERIENCE + " " + plain(experience.perDay()) + " "
                     + unit + "/天（" + experience.note() + "）");
             return new Capacity(experience.perDay(), SOURCE_EXPERIENCE, null, experience, null);
+        }
+        List<DailyCapacityRequiredDTO.SampleDay> sampleDays = new ArrayList<>();
+        for (ExperienceCapacity.DaySample s : experience.samples()) {
+            sampleDays.add(new DailyCapacityRequiredDTO.SampleDay(s.date().toString(), s.quantity(), s.unit()));
         }
         DailyCapacityRequiredDTO item = DailyCapacityRequiredDTO.builder()
                 .productTypeId(product.getId())
@@ -266,9 +274,26 @@ public class DailyCapacityScheduleGenerator {
                 .currentUnit(unitMismatch ? product.getDailyCapacityUnit() : null)
                 .experienceQuantityPerDay(null)
                 .experienceNote(experience.note())
+                .suggestedPerDay(joint && experience.available() ? experience.perDay() : null)
+                .historyBasis(experience.basis().name())
+                .historyWindowDays(ExperienceCapacity.WINDOW_DAYS)
+                .sampleDays(sampleDays)
                 .planNumbers(new ArrayList<>())
                 .build();
         return new Capacity(null, null, null, experience, item);
+    }
+
+    /**
+     * 联产计划的建议值来源 (Steve 2026-10-29): 计划主产品是原料归属锚点, id 与原料 {@code raw_material_types.id} 相同;
+     * 按这种原料近 90 天每天实际投入的量算。主产品对不上本厂原料时给不出建议。
+     */
+    private ExperienceCapacity jointInputExperience(String factoryId, ProductType product, String name, String unit,
+                                                    LocalDate today) {
+        if (rawMaterialTypeRepository.findByIdAndFactoryId(product.getId(), factoryId).isEmpty()) {
+            return ExperienceCapacity.unavailable("联产计划的主产品（" + name + "）不是本厂的原料，查不到投入记录，给不出建议值",
+                    ExperienceCapacity.Basis.RAW_INPUT);
+        }
+        return experienceCapacityService.rawInput(factoryId, product.getId(), name, unit, today);
     }
 
     static boolean differsTooMuch(BigDecimal manual, BigDecimal experience) {
