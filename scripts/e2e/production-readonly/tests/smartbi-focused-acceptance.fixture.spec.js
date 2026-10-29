@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { test, expect } = require('@playwright/test');
-const { inspectCommercePage, inspectLegacyPage, validateCommerceOptions, validateLegacyOptions } = require('../scenarios/smartbi-focused-acceptance-readonly');
+const { inspectCommercePage, inspectPurchaseInventoryPage, inspectLegacyPage, validateCommerceOptions, validateLegacyOptions } = require('../scenarios/smartbi-focused-acceptance-readonly');
 
 const expected = validateCommerceOptions({
   expectedFamilies: ['commerce-joint.sales.stock', 'commerce-joint.customer.channel'],
@@ -182,4 +182,24 @@ test('legacy fixture rejects same-money response from the wrong upload source', 
     expect(result.assessment.result).not.toBe('PASS');
     expect(result.assessment.checks.sourceDataVerified).toBe(false);
   });
+});
+
+test('purchase inventory fixture proves four same-unit facts, detail voucher scope and export', async ({ page }, testInfo) => {
+  const candidate = { id: 'purchase-inventory-kg', source: 'purchase-batch-lineage · 已确认收货与物料批次双向来源', unit: 'kg', detailContext: { id: 'ctx-purchase' }, analysis: { familyId: 'purchase-batch-lineage.purchase.inventory' }, kpis: [
+    { label: '收货', value: 595, unit: 'kg' }, { label: '已用', value: 20, unit: 'kg' }, { label: '预留', value: 5, unit: 'kg' }, { label: '当前可用', value: 570, unit: 'kg' },
+  ] };
+  const html = `<!doctype html><html><body><input data-testid="factory-analysis-input"><button data-testid="factory-analysis-submit">分析</button><div data-testid="factory-analysis-facts">收货 595 kg 已用 20 kg 预留 5 kg 当前可用 570 kg</div><section class="turn turn--assistant"><div data-testid="factory-chart-card-purchase-inventory-kg"><canvas></canvas><button>查看原始明细</button></div><button>Excel</button></section><script>
+    document.querySelector('[data-testid="factory-analysis-submit"]').onclick=async()=>fetch('/api/mobile/F006/smart-bi/factory-analysis',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question:document.querySelector('[data-testid="factory-analysis-input"]').value,source:'business'})});
+    document.querySelector('[data-testid^="factory-chart-card-"] button').onclick=async()=>fetch('/smartbi-api/api/smartbi/financial-dashboard/factory-details',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({context_id:'ctx-purchase',page:1,page_size:50,filters:[]})});
+    document.querySelector('.turn--assistant > button').onclick=async()=>{const r=await fetch('/smartbi-api/api/smartbi/financial-dashboard/export-excel',{method:'POST'});const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='purchase.xlsx';a.click();};</script></body></html>`;
+  const server = http.createServer((request, response) => { const url = new URL(request.url, 'http://fixture');
+    if (url.pathname === '/fixture') { response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); response.end(html); return; }
+    if (url.pathname.endsWith('/factory-analysis')) { response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); response.end(JSON.stringify({ success: true, data: { factoryId: 'F006', source: 'business', period: { label: '全部历史' }, limitations: ['库存为当前时点快照，不代表历史期末余额'], status: 'answered', recommendations: [candidate], facts: candidate.kpis.map((item, index) => ({ ...item, id: `fact-${index}`, candidateId: candidate.id, source: candidate.source })) } })); return; }
+    if (url.pathname.endsWith('/factory-details')) { response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); response.end(JSON.stringify({ success: true, data: { factoryId: 'F006', candidateId: candidate.id, source: candidate.source, period: '全部历史', rows: [{ 收货单ID: 'R1', 收货行ID: 'RL1', 物料批次ID: 'B1', 数量单位: 'kg', 批次入库数量: 595, 批次已用数量: 20, 批次预留数量: 5, 当前可用数量: 570 }], total: 1, page: 1, pageSize: 50 } })); return; }
+    if (url.pathname.endsWith('/export-excel')) { response.writeHead(200, { 'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'content-disposition': 'attachment; filename=purchase.xlsx' }); response.end('fixture'); return; }
+    response.writeHead(404); response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const evidenceDir = path.join('test-results', 'smartbi-focused-fixture'); fs.mkdirSync(evidenceDir, { recursive: true });
+  try { await page.goto(`http://127.0.0.1:${server.address().port}/fixture`, { waitUntil: 'domcontentloaded' }); const result = await inspectPurchaseInventoryPage(page, { evidenceDir, screenshot: (name) => page.screenshot({ path: path.join(evidenceDir, `${name}.png`) }) }, { expectedKpisByUnit: { kg: { received: 595, used: 20, reserved: 5, available: 570 } } }); expect(result.assessment.result).toBe('PASS'); } finally { server.closeAllConnections?.(); await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 });

@@ -126,6 +126,42 @@ function candidateUnitsAligned(candidate) {
   });
 }
 
+function purchasePriceEvidence(candidate) {
+  if (familyOf(candidate) !== 'purchase.price') return null;
+  const source = String(candidate?.source || '').trim();
+  if (!/^purchase(?:\s*[·:|]|\s|$)/iu.test(source)) return null;
+  const table = candidate?.tableData;
+  const headers = Array.isArray(table) ? ['label', 'value'] : Array.isArray(table?.headers) ? table.headers.map(String) : [];
+  const rows = Array.isArray(table) ? table : Array.isArray(table?.rows) ? table.rows : [];
+  const materialIndex = headers.findIndex((header) => /原料|物料|label|名称/u.test(header));
+  const unitIndex = headers.findIndex((header) => /单位/u.test(header));
+  const priceIndex = headers.findIndex((header) => /采购单价|入库单价|加权.*价|均价|value|价格/u.test(header));
+  const rowValue = (row, index, header) => Array.isArray(row) ? row[index] : row && typeof row === 'object' ? row[header] : undefined;
+  const declaredUnit = String(candidate?.unit || '').trim();
+  if (!/^元\s*\/\s*[^\s/]+$/u.test(declaredUnit)) return null;
+  const numberValue = (raw) => !['number', 'string'].includes(typeof raw) || String(raw).trim() === '' ? NaN : Number(raw);
+  const tablePoints = materialIndex >= 0 && unitIndex >= 0 && priceIndex >= 0
+      ? rows.map((row) => ({ material: String(rowValue(row, materialIndex, headers[materialIndex]) ?? '').trim(), unit: String(rowValue(row, unitIndex, headers[unitIndex]) ?? '').trim(), value: numberValue(rowValue(row, priceIndex, headers[priceIndex])) }))
+    : materialIndex >= 0 && priceIndex >= 0
+      ? rows.map((row) => ({ material: String(rowValue(row, materialIndex, headers[materialIndex]) ?? '').trim(), unit: declaredUnit, value: numberValue(rowValue(row, priceIndex, headers[priceIndex])) }))
+    : [];
+  const option = candidate?.chart?.echartsOption || {};
+  const labels = Array.isArray(option?.xAxis?.data) ? option.xAxis.data.map(String)
+    : Array.isArray(option?.yAxis?.data) ? option.yAxis.data.map(String) : [];
+  const series = Array.isArray(option?.series) ? option.series[0]?.data : [];
+  const chartPoints = labels.map((material, index) => ({ material: material.trim(), unit: declaredUnit, value: numberValue(series?.[index]) }));
+  if (!tablePoints.length || !chartPoints.length || tablePoints.length !== chartPoints.length) return null;
+  if (tablePoints.some((point) => !point.material || !point.unit || !Number.isFinite(point.value) || point.value < 0)) return null;
+  if (chartPoints.some((point) => !point.material || !point.unit || !Number.isFinite(point.value) || point.value < 0)) return null;
+  const chartByMaterial = new Map(chartPoints.map((point) => [point.material, point]));
+  if (new Set(tablePoints.map((point) => point.material)).size !== tablePoints.length || chartByMaterial.size !== chartPoints.length) return null;
+  const same = tablePoints.every((point) => {
+    const drawn = chartByMaterial.get(point.material);
+    return drawn && point.unit === drawn.unit && Math.abs(point.value - drawn.value) < 1e-9;
+  });
+  return same ? { points: tablePoints.map((point) => ({ ...point })), source, nonadditive: true } : null;
+}
+
 function selectCatalogCandidates(data, requestedFamilies) {
   const candidates = Array.isArray(data?.recommendations) ? data.recommendations : [];
   const groups = groupCandidates(candidates);
@@ -384,7 +420,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
         batch: batchNumber,
       };
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
-      summary.checks.factsPresent = summary.facts.length > 0;
+      const purchasePrice = purchasePriceEvidence(candidate);
+      summary.purchasePrice = purchasePrice;
+      summary.checks.factsPresent = summary.facts.length > 0 || Boolean(purchasePrice);
+      summary.checks.priceEvidence = familyOf(candidate) === 'purchase.price' ? Boolean(purchasePrice) : true;
       summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch((error) => {
         summary.selectionError = String(error?.message || error).slice(0, 500);
         return false;
@@ -505,6 +544,7 @@ module.exports = {
   assessCatalog,
   candidateIsQualified,
   candidateUnitsAligned,
+  purchasePriceEvidence,
   familyOf,
   groupCandidates,
   isRestaurantOnly,
