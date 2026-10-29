@@ -13,14 +13,14 @@
 |---|---|---|---|
 | C1-ai-scope | AI 查数据时工厂身份取自登录凭证，模型不能指定工厂 | live | Java `ai/tool/AbstractTool.java` 只从服务端上下文读 factoryId；`ToolPrincipalPolicy` 从数据库重新加载用户、工厂、权限（2026-10-22 只读核查） |
 | C1-api-scope | 每个读写工厂数据的接口都只按登录身份取数 | pending | 2026-10-22 已修复 `analysis-cache`（#1094，线上：不带凭证 401，读本厂 200，读他厂 404）。还缺 Python `PUBLIC_PREFIXES` 下其余路径、信任客户端 factory_id 的端点做同类排查（交给「方案审计与执行」第 7 项） |
-| C1-no-cross-learning | AI 学到的说法不跨工厂 | pending | 要关掉 KeywordPromotion / CrossFactoryKnowledge 的跨厂共享，并清理线上已经提升过的行（第 1 项） |
+| C1-no-cross-learning | AI 学到的说法不跨工厂 | pending | 内部口径（2026-10-29）：每家工厂学到的说法、关键词、短语，只用在本厂；提到任何一家保密产品的内容，不会进入共享数据，也不会进入训练、蒸馏样本。平台共享的只有人工整理的内容。依据 #1108（跨厂提升关闭）、#1297（学习/共享数据只写本厂），见文末 2026-10-29 更新（二）。页面状态仍是 commitment，等 11-01 定时任务首次运行确认被跳过后再改 live |
 | C1-headline | 「看不到。」 | pending | 依赖 C1-api-scope 和 C1-no-cross-learning 都变成 live |
 | C1-headline-ai | 「用 AI 问不出来。」（过渡用的标题） | 已删除 | 改为直接写 C1-headline「看不到。」 |
 | C2-platform-access | 配方代号显示、授权查看、平台访问留痕、工厂可查访问记录 | pending | 工艺保密（ProcessSecret，「方案审计与执行」在做）＋ 平台读取审计（第 3 项） |
 | C3-process-never / C3-desensitized / C3-excluded / C3-no-cross-process | 工艺内容任何情况不进训练；只用汇总指标和脱敏问答；排除清单；不分析比对工厂工艺 | live | 最终口径（Steve 2026-10-24 在「方案审计与执行」确认）。#1128 于 10-24 19:18 上线。线上探针由「方案审计与执行」验证：未授权工厂的普通问答脱敏后存入（工厂名换代号、电话换占位、金额分桶）；已授权的 F006 问配方不存；回答里带工艺细节的不存；factory_config_agent 不再生成全局模板。尚未写入页面的：基于公开标准的流程建议（模板库为空）、工艺保密产品不参与训练（功能未对客户开启）、专属模型 |
 | C4-provider | 阿里云百炼（通义千问）；按量付费 API 的调用数据不用于训练 | live | 阿里云官方页面 https://help.aliyun.com/zh/model-studio/ 的 FAQ「阿里云百炼会用我的数据进行训练吗？」写的是「使用百炼按量付费 API 和 Token Plan 团队版时，不会将您的数据用于模型训练」。Coding Plan 和 Token Plan 个人版不在这个承诺内，Steve 2026-10-22 确认账号都是按量付费。官方没写数据在哪里处理，所以页面上不写「境内处理」 |
 | C4-smartbi-redact | 智能报表分析发给模型前替换客户、门店、产品名称；替换失败就不发送 | live | #1096 上线（方案审计与执行，2026-10-22）。我独立核对：线上 8083 进程 17:37 启动，`common/llm_client.py` 里有 fail-closed（`EgressRedactionError`，失败时不发送）。名称替换只在 SmartBI insights 注册了 `RedactionScope` 的路径上生效，其余 Python 调用只用正则兜底 PII；**数字照常发送**，所以页面上不写「数字也脱敏」 |
-| C4-assistant-redact | 工厂 AI 助手（Java）发给模型前同样替换名称、失败不发 | live | 2026-10-27 起 live，见文末同日更新 |
+| C4-assistant-redact | 工厂 AI 助手（Java）发给模型前同样替换名称、失败不发 | live | 2026-10-27 起 live，见文末同日更新。2026-10-29 内部口径更新（#1295），见文末 2026-10-29 更新（二） |
 | C5-hosting | 阿里云中国境内服务器，用户到系统全程 HTTPS | live | nginx TLS 1.2/1.3（`ops/nginx-vhosts-139/admin.cretaceousfuture.com.conf`）；服务器 IP 属于阿里云。注意：网关到应用服务器（139 → 47:8083）是明文，所以只写「你和系统之间」 |
 | C5-daily-backup | 每天凌晨自动备份，保留 7 天 | live | 2026-10-22 线上只读核查：crontab 03:00 `backup-db.sh` ＋ `/etc/cron.d/pg_backup`，`/etc/cron.d/cretas-backup-retention` 保留 7 天；当天三个库的备份文件都在 |
 | C5-offsite-encrypted | 备份加密，并在独立存储里另存一份 | pending | 现在和数据在同一台机器上，而且没有加密。2026-10-22 Steve 定了钥匙保管：服务器放一份，Steve 自己离线存一份。实施由「方案审计与执行」负责（第 5 项），要求做一次从异地副本恢复的演练 |
@@ -151,4 +151,12 @@ Steve 决定：完整 11 条现在就对外发布，还没实现的部分由内�
 - 量金额账导出、规则导出的保密遮蔽 → live：#1286（合并 166e3f3d7f），无授权账号导出时保密产品的成本写成「已保密」（「工艺保密」会话回报）。我独立核对：网关活跃槽 47:10020，进程 2026-10-29 04:17:20 启动，加载的 jar（fd 4，未被替换，sha256 前 8 位 72c49a16）含 `ProcessSecretCostMask.class`（#1286 新增）。没有在界面上做导出验收。
 - 整厂导出例外的内部依据已合入：docs/security/factory-data-export-and-erasure-runbook.md「工艺保密（Steve 2026-10-28 裁定 A）」一节，与官网、隐私政策措辞一致。10-28 记的「runbook 还没有这段文字」已过时。
 - 页面不改。
-- 预告（未改）：AI 侧和跨厂的改动上线后，C4-assistant-redact、C1-no-cross-learning 两条的说法要更新，「工艺保密」会话届时给措辞。
+- 预告（未改）：AI 侧和跨厂的改动上线后，C4-assistant-redact、C1-no-cross-learning 两条的说法要更新，「工艺保密」会话届时给措辞。（已更新，见下）
+
+## 2026-10-29 更新（二）：AI 侧与跨厂的工艺保密
+- 上线：#1295（合并 bcb2052306，AI 侧按调用者授权：有权全量、无权裁剪，缓存按授权档隔离，报表合计只算可见行）、#1297（合并 31d2bfb0ee，跨厂不外流：学习/共享数据只写本厂，意图配置按 URL 工厂，外发脱敏按正确的工厂）。文档依据 docs/security/process-secret-ai-egress.md。
+- 我独立核对：网关活跃槽 47:10020，进程 2026-10-29 08:00:28 启动，加载的 jar 含 `ProcessSecretLlmCostScope.class`（#1295 新增）；8083 进程 08:02:59 启动，`ai/learning/learning_rules.py`（#1297 新增）sha256 与 origin/main 一致。
+- C4-assistant-redact 内部口径（「工艺保密」会话给出）：本厂有保密授权的人，在 AI 对话里能用到完整的工艺和成本，帮自己分析；没有授权的人（包括平台人员和其他工厂），AI 拿到的数据已经去掉保密产品的成本。AI 分析结果和缓存按授权分开保存，不会把有权的人看到的内容给到无权的人。发给外部大模型之前，保密产品名统一换成代号；拿不准数据属于哪家工厂时，宁可不发。唯一例外：意图识别会把用户原话（含产品名）发给模型，这是 Steve 2026-10-29 的裁定。
+- C1-no-cross-learning 内部口径（同上）：每家工厂学到的说法、关键词、短语，只用在本厂；提到任何一家保密产品的内容，不会进入共享数据，也不会进入训练、蒸馏样本。平台共享的只有人工整理的内容。
+- 页面不改：C4-assistant-redact 页面只承诺「查询结果交给模型总结前把名称换成代号，换不成功就不发送」，意图识别发原话这一例外不在这句承诺范围内（10-27 已记：页面只承诺查询结果）。C1-no-cross-learning 页面措辞已与口径一致，状态留在 commitment，理由见表格。
+- 界面验收结果另记。
