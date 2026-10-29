@@ -556,6 +556,79 @@ class FactoryConfirmedFactReuseTest {
         });
     }
 
+    private static final Map<String, Object> SEQUENTIAL_PRODUCT = Map.of(
+            "product1.name", "冷藏卤牛肉", "product1.steps", "原料解冻、修整清洗、焯水",
+            "product1.routeShape", "仅顺序", "product1.routeDetails", "没有",
+            "product1.routeEntry", "原料解冻", "product1.routeTerminal", "焯水");
+
+    private boolean isDeferred(FactoryAssemblyConversationSession session, String name) {
+        return session.getRequiredParameters().stream()
+                .anyMatch(rp -> name.equals(rp.getName()) && rp.isUserDeferred());
+    }
+
+    /** D-S2-08 现场: 仅顺序路线的连线被「暂时不确定」后, 补全路线事实就该自动确定, 而不是永远「还差1项」。 */
+    @Test
+    void aSequentialRoutesTopologyIsDerivedEvenAfterTheUserDeferredIt() {
+        String id = startSession();
+        interview.submitStructuredAnswers(F, id, ACTOR, Map.of("stepCount", "3", "productCount", "1"));
+        interview.submitStructuredAnswers(F, id, ACTOR,
+                Map.of("product1.routeTopology", com.cretas.aims.blueprint.interview.FactoryDecisionPacket.UNKNOWN_ANSWER_VALUE));
+        FactoryAssemblyConversationSession session = sessionOf(id);
+        assertThat(isDeferred(session, "product1.routeTopology")).as("前提: 已被「暂时不确定」").isTrue();
+
+        FactoryBuildProgress progress = interview.submitStructuredAnswers(F, id, ACTOR, SEQUENTIAL_PRODUCT);
+
+        assertThat(progress.getCollected()).containsEntry("product1.routeTopology", "按顺序自动确定");
+        assertThat(isDeferred(session, "product1.routeTopology")).as("明确的值解除了暂缓").isFalse();
+        assertThat(progress.getPending()).doesNotContain("product1.routeTopology");
+        assertThat(progress.getUnresolvedDecisions()).extracting(d -> d.getField())
+                .doesNotContain("product1.routeTopology");
+        assertThat(progress.getFactEvidence()).filteredOn(item -> "product1.routeTopology".equals(item.getField()))
+                .singleElement().satisfies(item -> assertThat(item.getReasonCode())
+                        .isEqualTo(FactoryInterviewExpansion.DERIVED_SEQUENTIAL_TOPOLOGY_REASON));
+    }
+
+    /** 复杂路线 (并行/分支/合流/返工) 的连线必须用户逐条确认: 不自动填。 */
+    @Test
+    void aComplexRoutesTopologyIsNeverDerived() {
+        String id = startSession();
+        interview.submitStructuredAnswers(F, id, ACTOR, Map.of("stepCount", "3", "productCount", "1"));
+        Map<String, Object> complex = new java.util.LinkedHashMap<>(SEQUENTIAL_PRODUCT);
+        complex.put("product1.routeShape", "有并行");
+        complex.put("product1.routeDetails", "修整清洗后分两路，焯水前合流");
+
+        FactoryBuildProgress progress = interview.submitStructuredAnswers(F, id, ACTOR, complex);
+
+        assertThat(progress.getCollected()).doesNotContainKey("product1.routeTopology");
+        assertThat(progress.getPending()).contains("product1.routeTopology");
+    }
+
+    /** 线上卡死的会话 (已超时、连线被暂缓、仅顺序): 恢复时补上, 页面不再停在「还差1项」。 */
+    @Test
+    void aStuckTimedOutSessionWithADeferredSequentialTopologyIsUnstuckOnResume() {
+        String completed = startSession();
+        ReflectionTestUtils.setField(sessionOf(completed), "status",
+                FactoryAssemblyConversationSession.SessionStatus.COMPLETED);
+        String id = startSession();
+        interview.submitStructuredAnswers(F, id, ACTOR, Map.of("stepCount", "3", "productCount", "1"));
+        interview.submitStructuredAnswers(F, id, ACTOR, SEQUENTIAL_PRODUCT);
+        FactoryAssemblyConversationSession session = sessionOf(id);
+        // 还原线上状态: 连线没有值 + 被暂缓, 会话已超时
+        session.removeCollectedParameter("product1.routeTopology");
+        session.deferParameter("product1.routeTopology");
+        session.timeout();
+        ReflectionTestUtils.setField(session, "lastActiveAt", java.time.LocalDateTime.now().minusHours(1));
+        assertThat(session.getCollectedParameters()).doesNotContainKey("product1.routeTopology");
+
+        FactoryBuildProgress recovered = interview.recoverableProgress(F, ACTOR).orElseThrow();
+
+        assertThat(recovered.getSessionId()).isEqualTo(id);
+        assertThat(recovered.getCollected()).containsEntry("product1.routeTopology", "按顺序自动确定");
+        assertThat(recovered.getPending()).doesNotContain("product1.routeTopology");
+        assertThat(recovered.getUnresolvedDecisions()).extracting(d -> d.getField())
+                .doesNotContain("product1.routeTopology");
+    }
+
     @Test
     void anAmbiguousChoiceCorrectionIsRejectedWithoutAConflict() {
         String first = startSession();

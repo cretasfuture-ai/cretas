@@ -119,6 +119,52 @@ public final class FactoryInterviewExpansion {
                 .build();
     }
 
+    /** 仅顺序路线的「逐条路线连线」: 与 FactoryRouteIntentCompiler 里 NO_TOPOLOGY 的同一个词。 */
+    public static final String SEQUENTIAL_TOPOLOGY_ANSWER = "按顺序自动确定";
+    public static final String DERIVED_SEQUENTIAL_TOPOLOGY_REASON = "DERIVED_SEQUENTIAL_TOPOLOGY";
+
+    /**
+     * 用户已确认某个成品「路线形态 = 仅顺序」时, 它的逐条路线连线是确定的 (没有额外的边, 顺序就是工序顺序),
+     * 题面也写着「仅顺序由确认卡自动确定」—— 而页面对仅顺序路线并不出确认卡, 这一项就只能靠用户恰好说出
+     * 「按顺序自动确定」或点「暂时不确定」(后者把它卡成永远的待补)。所以在这里确定性地填上, 并留回执。
+     *
+     * <p>只在 routeShape 恰好是单个「仅顺序」且这一项还没有值时才填; 复杂路线 (并行/分支/合流/返工) 一概不动,
+     * 必须由用户在确认卡里逐条确认。已有的值不会被覆盖; 用户之前选的「暂时不确定」由这次明确的值解除。
+     *
+     * @return 被填上的字段名 (没有则为空)
+     */
+    public static List<String> deriveSequentialTopology(FactoryAssemblyConversationSession session) {
+        if (session == null || !INTENT.equals(session.getKnownIntentCode())) return List.of();
+        java.util.Map<String, String> collected = session.getCollectedParameters();
+        List<String> derived = new java.util.ArrayList<>();
+        for (FactoryAssemblyConversationSession.RequiredParameter parameter : session.getRequiredParameters()) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("^product(\\d+)\\.routeTopology$").matcher(String.valueOf(parameter.getName()));
+            if (!matcher.matches() || parameter.isCollected()) continue;
+            String shape = collected.get("product" + matcher.group(1) + ".routeShape");
+            if (shape == null || !"仅顺序".equals(shape.trim())) continue;
+            session.addCollectedParameter(parameter.getName(), SEQUENTIAL_TOPOLOGY_ANSWER);
+            derived.add(parameter.getName());
+        }
+        if (derived.isEmpty()) return derived;
+        List<FactoryAssemblyConversationSession.ReplyFieldReceipt> receipts = new java.util.ArrayList<>();
+        for (String field : derived) {
+            receipts.add(FactoryAssemblyConversationSession.ReplyFieldReceipt.builder()
+                    .field(field).resolution("ACCEPTED").canonicalValue(SEQUENTIAL_TOPOLOGY_ANSWER)
+                    .reasonCode(DERIVED_SEQUENTIAL_TOPOLOGY_REASON).build());
+        }
+        FactoryAssemblyConversationSession.Message note = FactoryAssemblyConversationSession.Message.user(
+                "路线形态是「仅顺序」，逐条路线连线按工序顺序自动确定（" + derived.size() + " 个成品）");
+        note.setReplyReceipt(FactoryAssemblyConversationSession.ReplyReceipt.builder()
+                .extractionOutcome("SUCCESS").currentRound(session.getCurrentRound())
+                .maxRounds(session.getMaxRounds())
+                .status(session.getStatus() == null ? null : session.getStatus().name())
+                .completed(false).message("逐条路线连线按顺序自动确定").intentCode(session.getKnownIntentCode())
+                .progressMutated(true).correctionApplied(false).fieldReceipts(receipts).build());
+        session.addMessage(note);
+        return derived;
+    }
+
     /** 供闸与调用方核对条数用，不暴露可变引用。 */
     public static int subItemCount() {
         return STEP_SUB_ITEMS.size();

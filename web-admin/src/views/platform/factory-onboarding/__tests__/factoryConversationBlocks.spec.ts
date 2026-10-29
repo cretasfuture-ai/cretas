@@ -346,6 +346,38 @@ describe('工厂装配对话结构化消息块', () => {
     expect(productConfigurationPending(current)).toBe(false)
   })
 
+  it('用户点过「暂时不确定」的复杂路线连线仍然出拓扑卡 (不能只看待答清单)', () => {
+    const current = progress({
+      productCount: '1',
+      'product1.name': '调理肉制品',
+      'product1.steps': '收料→金检→返修→包装',
+      'product1.routeShape': '有条件分支、有返工',
+      'product1.routeDetails': '金检不合格返修',
+      'product1.routeEntry': '收料', 'product1.routeTerminal': '包装',
+    })
+    current.pendingItems = []
+    current.unresolvedDecisions = [{
+      decisionId: 'd1', field: 'product1.routeTopology', label: '逐条路线连线', question: '', whyItMatters: '',
+      inputType: 'NARRATIVE', state: 'UNRESOLVED',
+    } as never]
+    current.routePreviews = [{
+      productIndex: 1, productName: '调理肉制品',
+      routeShapes: ['有条件分支', '有返工'], routeDetails: '金检不合格返修',
+      status: 'BLOCKED', previewKind: 'ORDER_SKELETON', publishState: 'NOT_PUBLISHED', topologyComplete: false,
+      graph: {
+        productCode: 'product-1', productName: '调理肉制品',
+        nodes: ['收料', '金检', '返修', '包装'].map((label, index) => ({ id: `process-${index + 1}`, label })),
+        edges: [{ fromNodeId: 'process-1', toNodeId: 'process-2', type: 'FORWARD' }],
+        entryNodeIds: ['process-1'], terminalNodeIds: ['process-4'], validation: { valid: true, issues: [] },
+      },
+      issues: [], sourceFields: [],
+    }]
+
+    expect(buildRouteTopologyDraft(current)).toMatchObject({ productIndex: 1, entry: '收料', terminal: '包装' })
+    current.unresolvedDecisions = []
+    expect(buildRouteTopologyDraft(current)).toBeNull()
+  })
+
   it('成品表签名忽略无意义空格但包含包装规格', () => {
     const rows = [{ sequence: 1, name: '香卤牛肉', steps: '解冻→卤煮', routeShape: ['有返工'], routeDetails: '金检失败回拆包' }]
     expect(productFlowSignature([{ ...rows[0], name: ' 香卤牛肉 ' }], ' 一箱20袋 '))
