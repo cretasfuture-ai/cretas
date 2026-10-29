@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { installNetworkRecorder } = require('../core/network-recorder');
+const { runReadOnlyPageScenario } = require('../scenarios/_shared');
 
 function request(path) {
   return {
@@ -75,4 +76,31 @@ test('completed JSON and downloads flush without a body read error', async () =>
   assert.equal(recorder.snapshot().apiEvidence.length, 2);
   assert.deepEqual(recorder.snapshot().bodyReadErrors, []);
   recorder.dispose();
+});
+
+test('a visibly successful scenario fails when its response evidence is incomplete', async () => {
+  let inspected = false;
+  const emptyGuard = { actualBusinessWrites: 0, blockedMutationAttempts: [] };
+  const ctx = {
+    baseUrl: 'https://admin.cretaceousfuture.com', scenarioRef: {},
+    page: {
+      goto: async () => {}, waitForLoadState: async () => {},
+      url: () => 'https://admin.cretaceousfuture.com/smart-bi/analysis',
+      locator: () => ({ waitFor: async () => {}, innerText: async () => 'Expected rendered results with enough visible page content for the real page gate' }),
+    },
+    mutationGuard: { snapshot: () => emptyGuard },
+    consoleRecorder: { snapshot: () => ({ consoleErrors: [], pageErrors: [], consoleWarnings: [] }) },
+    network: {
+      flush: async () => {},
+      snapshot: () => ({ apiEvidence: [], httpErrors: [], bodyReadErrors: inspected ? [{ error: 'unfinished body' }] : [] }),
+    },
+  };
+  const result = await runReadOnlyPageScenario(ctx, {
+    id: 'body-read-contract', path: '/smart-bi/analysis', landmarks: ['Expected'],
+    inspect: async () => { inspected = true; return { assessment: { result: 'PASS', rootCauseClass: 'none' } }; },
+  });
+  assert.equal(result.result, 'TOOL_ERROR');
+  assert.equal(result.rootCauseClass, 'tool');
+  assert.equal(result.actualBusinessWrites, 0);
+  assert.ok(result.pageEvidence.some(item => item.bodyReadErrors?.length === 1));
 });

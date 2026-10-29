@@ -1126,6 +1126,10 @@ async function runSuiteWithPage(page, options = {}) {
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
         appMountTimeoutMs: options.appMountTimeoutMs,
       });
+      // Finish reading landing-page responses before the next full navigation
+      // invalidates their browser resource handles. Missing bodies stay errors.
+      await page.waitForLoadState('networkidle', { timeout: 6_000 }).catch(() => {});
+      await network.flush();
 
       const scenarioContext = {
         page,
