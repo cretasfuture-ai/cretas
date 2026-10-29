@@ -17,6 +17,15 @@ describe('生产计划列表: 生产成品名的兜底', () => {
     expect(src).toContain("return '未知产品(产品档案查不到)';")
   })
 
+  it('产品目录还在加载时显示中性占位, 不写「产品档案查不到」', () => {
+    expect(src).toContain("const PRODUCT_CATALOG_LOADING_LABEL = '产品名加载中…'")
+    expect(src).toMatch(/label === UNKNOWN_OUTPUT_PRODUCT_LABEL && !productCatalogLoaded\.value\s*\? PRODUCT_CATALOG_LOADING_LABEL/)
+    // 两个目录无论成功失败都要“结算”, 否则占位会永远挂着
+    expect(src).toContain('productTypesSettled.value = true')
+    expect(src).toContain('rawMaterialTypesSettled.value = true')
+    expect(src).toContain('productTypesSettled.value && rawMaterialTypesSettled.value')
+  })
+
   it('原料锚点不当产品名用', () => {
     expect(src).toContain('ownName && !isRawWorkflowOwnerAnchorName(ownName)')
   })
