@@ -191,18 +191,25 @@ class ProcessSecretAiAccessAuditContractTest {
 
     @Test
     void oneRecordPerHttpRequestWrittenWhenTheRequestCompletesWithTheFlagsMerged() throws Exception {
-        ServletRequestAttributes request = new ServletRequestAttributes(new MockHttpServletRequest());
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        http.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, owner());   // 请求线程上调用者取自请求
+        ServletRequestAttributes request = new ServletRequestAttributes(http);
         RequestContextHolder.setRequestAttributes(request);
         AIAnalysisService service = service();
         try (var ignored = as(owner())) {
-            service.analyzeCost(FACTORY, OWNER, "2", new HashMap<>(), null, "先看普通批次", true, 50);
-            service.analyzeCost(FACTORY, OWNER, "1", new HashMap<>(), null, "再看保密批次", true, 50);
+            // 先保密后普通: 合并后仍是「牵涉」; 若每个入口各记一条 (哪怕只剩最后一条), 读到的就是普通那条的 NONE
+            service.analyzeCost(FACTORY, OWNER, "1", new HashMap<>(), null, "先看保密批次", true, 50);
+            service.analyzeCost(FACTORY, OWNER, "2", new HashMap<>(), null, "再看普通批次", true, 50);
         }
+        verify(python, times(2)).analyzeGeneral(eq(FACTORY), nullable(String.class), any());   // 一定发生: 两次都发了
         assertThat(aiRows()).isEmpty();   // 请求还没结束: 不写
 
         request.requestCompleted();
 
-        assertThat(aiRows()).singleElement().satisfies(row -> assertThat(row.decision()).isEqualTo("PROTECTED"));
+        assertThat(aiRows()).singleElement().satisfies(row -> {
+            assertThat(row.decision()).isEqualTo("PROTECTED");
+            assertThat(row.ref()).isEqualTo("ai:cost-analysis");   // 第一个入口, 不是嵌套的上下文接口
+        });
     }
 
     @Test
