@@ -86,8 +86,8 @@ test('five product rows do not claim pagination; observed 500-row upload pages d
   const product = scenario.assessProductDetail({ attempted: true, status: 200, body: { success: true, data: { factoryId: 'F006', candidateId: 'c', source: 'upload', period, total: 5, rows: Array.from({ length: 5 }, () => ({})) } }, request: { page: 1, page_size: 50 } }, options, 'c', period);
   assert.equal(product.pagination, 'UNVERIFIED');
   const raw = scenario.assessRawPagination(
-    { status: 200, body: { success: true, data: { total: 500, page: 0, totalPages: 10, data: Array.from({ length: 50 }, (_, i) => ({ row: i })) } }, request: { page: 0, page_size: 50 }, mountedRows: 50, sourceSelected: true },
-    { status: 200, body: { success: true, data: { total: 500, page: 1, totalPages: 10, data: Array.from({ length: 50 }, (_, i) => ({ row: 50 + i })) } }, request: { page: 1, page_size: 50 }, mountedRows: 50, sourceSelected: true },
+    { status: 200, body: { success: true, data: { total: 500, page: 0, totalPages: 10, data: Array.from({ length: 50 }, (_, i) => ({ row: i })) } }, request: { page: 0, page_size: 50 }, mountedRows: 50, sourceSelected: true, uiMatchesRows: true },
+    { status: 200, body: { success: true, data: { total: 500, page: 1, totalPages: 10, data: Array.from({ length: 50 }, (_, i) => ({ row: 50 + i })) } }, request: { page: 1, page_size: 50 }, mountedRows: 50, sourceSelected: true, uiMatchesRows: true },
     options,
   );
   assert.equal(raw.result, 'PASS');

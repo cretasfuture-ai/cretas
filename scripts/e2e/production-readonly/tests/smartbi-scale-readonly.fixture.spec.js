@@ -58,7 +58,7 @@ function legacyPageHtml() {
       fetch('/api/mobile/F006/smart-bi/uploads?page=0&size=200').then(()=>{});
       document.querySelector('#switcher').onclick=()=>{document.querySelector('.el-select-dropdown').hidden=false;};
       document.querySelectorAll('.el-select-dropdown__item').forEach(item=>item.onclick=()=>{document.querySelector('.el-select-dropdown').hidden=true;});
-      async function load(page){const r=await fetch('/api/mobile/F006/smart-bi/uploads/5278/data?page='+page+'&size=50');const body=await r.json();const d=document.querySelector('#dialog');d.hidden=false;d.innerHTML='<div class="el-table__body-wrapper"><table><tbody>'+body.data.data.map(row=>'<tr class="el-table__row"><td>'+row['产品']+'</td></tr>').join('')+'</tbody></table></div><div class="el-pagination"><button class="btn-next">下一页</button><span class="number is-active">'+(page+1)+'</span><span>'+body.data.total+'</span></div>';d.querySelector('.btn-next').onclick=()=>load(1);}
+      async function load(page){const r=await fetch('/api/mobile/F006/smart-bi/uploads/5278/data?page='+page+'&size=50');const body=await r.json();const d=document.querySelector('#dialog');d.hidden=false;d.innerHTML='<div class="el-table__body-wrapper"><table><tbody>'+body.data.data.map(row=>'<tr class="el-table__row">'+Object.values(row).map(value=>'<td>'+value+'</td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="el-pagination"><button class="btn-next">下一页</button><span class="number is-active">'+(page+1)+'</span><span>'+body.data.total+'</span></div>';d.querySelector('.btn-next').onclick=()=>load(1);}
       document.querySelector('#preview').onclick=()=>load(0);
     </script></body></html>`;
 }
@@ -108,11 +108,13 @@ test('scale scenario runs against an async online-shaped local fixture without A
   try {
     const port = server.address().port;
     await page.goto(`http://127.0.0.1:${port}/smart-bi/analysis?tab=query&mode=factory&source=upload&upload_id=5278&inspection_upload_id=5277&cost_upload_id=5279`);
-    const result = await inspectScale(page, { expectedFactoryId: 'F006', smartbiScale: { ...DEFAULT_OPTIONS } });
+    const result = await inspectScale(page, { expectedFactoryId: 'F006', smartbiScale: { ...DEFAULT_OPTIONS },
+      screenshot: async name => { const path = test.info().outputPath(`${name}.png`); await page.screenshot({ path }); return path; } });
     expect(result.subjectCount).toBe(100);
     expect(result.checks.noHundredCharts).toBe(true);
     expect(result.checks.answersMatchSelectedIds).toBe(true);
     expect(result.rawPagination.result).toBe('PASS');
+    expect(result.screenshots).toHaveLength(2);
     expect(result.result).toBe('PASS');
   } finally {
     await new Promise((resolve) => server.close(resolve));

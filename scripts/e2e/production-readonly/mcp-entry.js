@@ -6613,6 +6613,7 @@ function assessRawPagination(first, second, expected) {
     pageAdvances: secondRequest.page === 1 && firstRequest.page === 0,
     distinctRows: new Set([...firstRows, ...secondRows].map(row => JSON.stringify(row))).size === expected.pageSize * 2,
     mountedRows: first?.mountedRows === expected.pageSize && second?.mountedRows === expected.pageSize,
+    visibleRowsMatchResponses: first?.uiMatchesRows === true && second?.uiMatchesRows === true,
     sourceSelected: first?.sourceSelected === true && second?.sourceSelected === true,
   };
   const pass = Object.values(checks).every(Boolean);
@@ -6756,6 +6757,15 @@ async function runRawUploadPagination(page, options) {
   const dialog = page.locator('.el-dialog:visible').first();
   await dialog.locator('.el-table__body-wrapper .el-table__row').first().waitFor({ state: 'visible', timeout: 15_000 });
   const firstMountedRows = await dialog.locator('.el-table__body-wrapper .el-table__row').count();
+  const rowMatches = async body => {
+    const record = tablePage(body).rows[0];
+    if (!record) return false;
+    const values = Object.values(record).filter(value => value != null && ['string', 'number', 'boolean'].includes(typeof value))
+      .map(String).filter(Boolean);
+    const text = await dialog.locator('.el-table__body-wrapper .el-table__row').first().innerText();
+    return values.length > 0 && values.every(value => text.includes(value));
+  };
+  const firstUiMatchesRows = await rowMatches(firstBody);
   const next = dialog.locator('.el-pagination .btn-next').first();
   await next.waitFor({ state: 'visible', timeout: 15_000 });
   const secondPromise = page.waitForResponse((response) => isRawUploadResponse(response, options.uploadId, 1, options.pageSize), { timeout: 30_000 });
@@ -6764,6 +6774,7 @@ async function runRawUploadPagination(page, options) {
   const secondBody = await responseBody(secondResponse);
   await dialog.locator('.el-pagination .number.is-active').filter({ hasText: /^2$/u }).waitFor({ state: 'visible', timeout: 15_000 });
   const secondMountedRows = await dialog.locator('.el-table__body-wrapper .el-table__row').count();
+  const secondUiMatchesRows = await rowMatches(secondBody);
   const selectedLabel = `${await switcher.innerText()} ${await switcher.locator('input').inputValue().catch(() => '')}`;
   const sourceSelected = selectedLabel.includes(targetUpload.fileName);
   const rawRequest = response => {
@@ -6771,8 +6782,8 @@ async function runRawUploadPagination(page, options) {
     return { page: Number(url.searchParams.get('page')), page_size: Number(url.searchParams.get('size')) };
   };
   return assessRawPagination(
-    { status: firstResponse.status(), body: firstBody, request: rawRequest(firstResponse), mountedRows: firstMountedRows, sourceSelected },
-    { status: secondResponse.status(), body: secondBody, request: rawRequest(secondResponse), mountedRows: secondMountedRows, sourceSelected },
+    { status: firstResponse.status(), body: firstBody, request: rawRequest(firstResponse), mountedRows: firstMountedRows, sourceSelected, uiMatchesRows: firstUiMatchesRows },
+    { status: secondResponse.status(), body: secondBody, request: rawRequest(secondResponse), mountedRows: secondMountedRows, sourceSelected, uiMatchesRows: secondUiMatchesRows },
     options,
   );
 }
@@ -6796,6 +6807,7 @@ async function inspectScale(page, inspectCtx) {
   const target = subjects.find((item) => subjectId(item) === options.targetProductId);
   if (target && !ordered.some((item) => subjectId(item) === options.targetProductId)) ordered.push(target);
   const selections = [];
+  const screenshots = [];
   let detail = null;
   for (const [selectionIndex, subject] of ordered.entries()) {
     const selectedId = subjectId(subject);
@@ -6835,12 +6847,17 @@ async function inspectScale(page, inspectCtx) {
       }
     }
     selections.push(selection);
+    if (selectedId === options.targetProductId && inspectCtx.screenshot) {
+      screenshots.push(await inspectCtx.screenshot('scale-selected-product-answer'));
+    }
   }
   const rawPagination = await runRawUploadPagination(page, options);
+  if (inspectCtx.screenshot) screenshots.push(await inspectCtx.screenshot('scale-original-upload-page-two'));
   const assessment = assessScale({ factoryId: inspectCtx.expectedFactoryId, options, initial, selections, detail, rawPagination });
   return {
     assessment,
     ...assessment,
+    screenshots,
     initial: { status: initial.status, request: initial.request, subjectCount: subjects.length, subjectIds: subjects.map(subjectId).filter(Boolean) },
     selections: selections.map((item) => ({
       requestedSubjectId: item.requestedSubjectId,

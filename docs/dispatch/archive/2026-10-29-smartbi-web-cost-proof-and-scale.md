@@ -2,6 +2,8 @@
 
 任务：`SC30-DETAIL-COST-PROOF-20261029`、`SC30-COMMERCE-LABEL-20261029`、`SC30-NETWORK-EVIDENCE-20261029`、`SC30-WEB-SCALE-20261029`。Base `b8b9d81d7b9a622abc56e53c39d4d1a9a23a4fe1`；Root 为唯一协调者。产品修改冻结并提交评审；合并、部署与最终网页回执分别以 Git、发布日志和私有台账核对。父任务 `SMARTBI-F006-QA-20261028` 继续负责验收。
 
+追加同批修复 `SC30-WEB-RAW-PREVIEW-20261029`：实际 100SKU 网页验收在原始数据入口超时，原失败保留于 `web-resumed-scale-v1-20261029/report.json`。此前无图表/无分析的 sheet 会隐藏预览，即使已有500行持久化数据；现在由持久化 uploadId 和 savedRows 判定入口，不再取决于图表生成结果。没有改动数据接口或权限。
+
 ## 问题与最终行为
 
 - F006 六个生产分析族的新详情返回 403。真实 context→snapshot 回读证明不是旧前端引用：数据集中的其他单位有成本，当前候选按单位过滤后成本全空，却残留成本列且无 costGuard。现在在候选单位过滤后清理空制造成本列，并同步行、列、价格字段、维度契约及指纹；保留库存账龄/效期的合成维度。真实 0 成本继续受授权保护，旧无证明快照继续拒绝。
@@ -14,6 +16,7 @@
 - 完整工厂分析套件：458 passed / 1 既有独立 schema skip，exit 0，冻结前后哈希一致。日志 `test-output/sc28-python-final-sc30-cost-label-final-v2.{log,json}`。首轮漏带已有 `/tmp/cretas-sc28-testdeps-20261028`，收集失败记录 v1 保留；更正为现成 `sc28-final-python-gate.sh` 后通过，未修改共享环境。
 - 成本权限真实 PG 15 passed / 0 skipped；库存计数 9 passed；真实 PG 库存点定位 1 passed / 4 deselected。日志 `test-output/sc30-cost-pytest-final-20261029.txt`。
 - Node 核心/规模断言 84 passed；本地异步网页 fixture 19 passed。日志 `test-output/sc30-canonical-unit-v5.log`、`test-output/sc30-local-fixtures-v2.log`。原 v1 的 6 项认证重复读体失败保留。
+- 规模验收补充页面截图与实际表格行/响应逐页一致性后，Node84项再次通过（`sc30-canonical-unit-v6.log`），仅复跑受影响的规模 fixture 1项通过（`sc30-scale-fixture-final-v3.log`）；网页类型检查 exit0（`sc30-web-tsc-v1.log`）。未因本段文档更新重复产品测试。
 - 独立风险复核通过：空成本清理、真 0、当前成本授权、旧快照拒绝、stock bucket 定位、原始类别数据及现有容量保护。未修改迁移、Java Entity/Repository 或权限矩阵。
 
 ## 当前线上证据和界限
