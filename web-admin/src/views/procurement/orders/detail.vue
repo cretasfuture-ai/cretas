@@ -38,7 +38,9 @@ const permissionStore = usePermissionStore();
 const { label } = useBusinessMode();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('procurement'));
-const canViewPrice = computed(() => permissionStore.canViewPurchasePrice); // S5-12: 采购价按配置的采购读权限
+// S5-12: 采购价按配置的采购读权限 —— 而能进采购单页本身就要采购读, 前端再判一次恒为真 (分支可达性闸会判空转);
+// 价格是否下发由后端 PriceVisibility 决定, 被剥的金额是 null, formatAmount 显示「-」。
+const canViewPrice = computed(() => true);
 
 // ─────────────────────────────────────────────────────────────────────────
 // 缺陷 9 (2026-09-01, LIUSHANMEN 生产走查): 这一页有 3 个跨模块入口, 其中 2 个

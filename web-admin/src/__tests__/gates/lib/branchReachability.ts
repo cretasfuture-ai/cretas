@@ -201,6 +201,7 @@ interface PiniaPermissionStore {
   canWriteSmartBI: () => boolean;
   hasAnyWriteAccess: () => boolean;
   canViewPrice: boolean;
+  canViewPurchasePrice: boolean;
   getPermissionLevel: (m: string) => string;
   setRole: (role: string, factoryId?: string, factoryType?: string, userId?: string | number, options?: { skipDbLoad?: boolean }) => void;
   [k: string]: unknown;
@@ -252,6 +253,7 @@ export const BOOL_MEMBERS: Record<string, BoolMember> = {
   canWriteSmartBI: { store: 'perm', kind: 'method0' },
   hasAnyWriteAccess: { store: 'perm', kind: 'method0' },
   canViewPrice: { store: 'perm', kind: 'prop' },
+  canViewPurchasePrice: { store: 'perm', kind: 'prop' },
   isAuthenticated: { store: 'auth', kind: 'prop' },
 };
 
