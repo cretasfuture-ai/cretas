@@ -226,6 +226,13 @@ public class SseStreamingService {
     private final Map<SseEmitter, String> streamedIntentCode =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
+    /**
+     * The "complete" status per emitter. A no-match stream sends its "result" as NEED_CLARIFICATION (to show the
+     * clarification text) but completes as NO_MATCH, which is the only place the two cases differ.
+     */
+    private final Map<SseEmitter, String> streamedCompleteStatus =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     void noteStreamedIntent(SseEmitter emitter, String intentCode) {
         if (intentCode != null) {
             streamedIntentCode.put(emitter, intentCode);
@@ -2165,6 +2172,9 @@ public class SseStreamingService {
     void sendSseEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
         if ("result".equals(eventName) && data instanceof IntentExecuteResponse streamed) {
             lastStreamedResult.put(emitter, streamed); // read back once, when the streamed run ends
+        } else if ("complete".equals(eventName) && data instanceof Map<?, ?> done
+                && done.get("status") instanceof String completeStatus) {
+            streamedCompleteStatus.put(emitter, completeStatus);
         } else if ("error".equals(eventName)) {
             // The run ended in the error exit without ever sending a result: still a (failed) run.
             lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
@@ -2183,8 +2193,13 @@ public class SseStreamingService {
                                             String userRole, long startedNanos) {
         IntentExecuteResponse streamed = lastStreamedResult.remove(emitter);
         String resolvedIntent = streamedIntentCode.remove(emitter);
+        String completeStatus = streamedCompleteStatus.remove(emitter);
         if (factoryTraceRecorder == null || streamed == null) {
             return;
+        }
+        if ("NO_MATCH".equals(completeStatus) && "NEED_CLARIFICATION".equals(streamed.getStatus())) {
+            // genuinely nothing matched (not a negation clarification): an unresolved final answer
+            streamed = IntentExecuteResponse.builder().intentRecognized(false).status("NO_MATCH").build();
         }
         factoryTraceRecorder.record(factoryId, userId, userRole, streamed,
                 (System.nanoTime() - startedNanos) / 1_000_000L, resolvedIntent);
