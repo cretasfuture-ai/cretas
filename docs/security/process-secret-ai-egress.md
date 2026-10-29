@@ -13,7 +13,7 @@
 | 意图识别（用户原话 → 识别意图 / 选层） | **不脱敏，原名发出**（已知例外，见下） | Java `LlmEgressGuard.utterance`；Python `common/llm_client.py` 的 `_names_for_this_request`（`utterance_egress` 上下文：`ai/matcher/llm.py`、`ai/matcher/decision.py`、`ai/router/llm_tier_selector.py`、`llm/api/endpoints.py`） |
 | 其余所有出口（对话、分析、报表、抽参、表单、SmartBI…） | 换代号；换不了就不发 | Java `LlmEgressGuard.texts / structured / textsWithRecord / combined`；Python `common/llm_client.py` 默认模式 |
 
-**系统约束（harness）**：Java 侧有保密产品的工厂，带业务数据的成本提示词带 `ProcessSecretLlmCostScope.HARNESS_INSTRUCTION`；Python 侧把工厂经营数据交给模型做分析 / 解读的系统提示词一律带 `common/process_secret_harness.py` 的 `PROCESS_SECRET_HARNESS`（不跨厂、保密产品细节只给有权的当前用户、不记住不复述；唯一一份常量）。接入的路径与有意不接的路径由 `tests/test_process_secret_harness_paths.py`（AST）钉住：`smartbi/services/insights/llm_client.py`（覆盖 `/api/chat/general-analysis` 与 chat 下钻流式解读）、`chart_insight_service`、`synthesis_engine`、`financial_dashboard`、`unified_analyzer`。
+**系统约束（harness）**：Java 侧有保密产品的工厂，带业务数据的成本提示词带 `ProcessSecretLlmCostScope.HARNESS_INSTRUCTION`；Python 侧把工厂经营数据交给模型做分析 / 解读的系统提示词一律带 `common/process_secret_harness.py` 的 `PROCESS_SECRET_HARNESS`（不跨厂、保密产品细节只给有权的当前用户、不记住不复述；唯一一份常量）。接入的路径与有意不接的路径由 `tests/test_process_secret_harness_paths.py`（AST）钉住：`smartbi/services/insights/llm_client.py`（覆盖 `/api/chat/general-analysis` 与 chat 下钻流式解读）、`chart_insight_service`、`synthesis_engine`、`financial_dashboard`、`unified_analyzer`、`cross_sheet_aggregator`。测试扫 `smartbi/` 下全部模块：写了系统消息却既没接约束、也没登记「不接的理由」的模块当场红。
 
 ### 已知例外：意图识别保留原名（Steve 2026-10-29 裁定，有意保留）
 
@@ -115,10 +115,14 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 | `reason` | `tier=<FULL / PARTIAL / NONE / NO_PROTECTED>(<缓存档位哈希>)`，整次未发时带 `; withheld` |
 | `resource_ref` | `ai:<入口>` |
 
-- **入口**（`ProcessSecretAiAccessAudit.Entry`）：`AIAnalysisService.analyzeCost`（全部非流式成本分析的汇合点）；`AIEnterpriseService.analyzeCost / analyzeTimeRangeCost / compareBatchCosts`（含缓存命中）；`AIEnterpriseService.analyzeTimeRangeCostStream`（流式）；`ProcessSecretToolOutputAspect`（全部 AI 工具调用）；`IntentExecutionOrchestrator.execute / executeWithExplicitIntent`；`AIContextServiceImpl.buildProductionContextForAi / buildCostContextForCaller`。`ProcessSecretLlmCostScope.withoutProtectedBatches` 排除了保密行时也标进当前那一条。
-- **一个请求一条**：在 HTTP 请求线程里，记录挂在请求上，请求结束时写一次（同一请求里几个入口、几次工具调用合并）；不在请求线程（流式执行线程、定时任务）时最外层入口结束写一次。
+- **入口**（`ProcessSecretAiAccessAudit.Entry`）：`AIAnalysisService.analyzeCost`（全部非流式成本分析的汇合点）；`AIEnterpriseService.analyzeCost / analyzeTimeRangeCost / compareBatchCosts`（含缓存命中）；`AIEnterpriseService.analyzeTimeRangeCostStream`（流式）；`ProcessSecretToolOutputAspect`（全部 AI 工具调用）；`IntentExecutionOrchestrator.execute / executeWithExplicitIntent`；`AIContextServiceImpl.buildProductionContextForAi / buildCostContextForCaller`；`AIEnterpriseService.generateDailyReport / generateWeeklyReport / generateMonthlyReport`（20:00 定时任务与 `IntentAnalysisController` 手动触发；定时任务没有调用者，记为 UNKNOWN、无权档；工厂走经营报告分支时看不到逐行，有保密产品的工厂按牵涉记）。`ProcessSecretLlmCostScope.withoutProtectedBatches` 排除了保密行时也标进当前那一条（没有打开的入口时这个标记不起作用 —— 所以报告入口必须先开）。
+- **一个请求一条**：在 HTTP 请求线程里，记录挂在请求上，请求结束时写一次（同一请求里几个入口、几次工具调用合并）；不在请求线程（流式执行线程、定时任务）时最外层入口结束写一次。线程上挂着已经结束的请求（线程池继承来的请求属性，读写会抛 `IllegalStateException`）按「不在请求线程」处理；请求上那一条已经写过（异步派发在请求结束后又进来）时另开一条。
 - **「牵涉」的口径**：结构化数据里出现本厂保密产品或牵涉它们的计划、单批分析的批次属于保密范围、AI 工具在本请求里读到的工艺内容。只有合计没有逐行产品的数据看不出来 —— 看档位：有保密产品的工厂里 FULL 档的合计含保密产品。全厂范围的缓存命中按「牵涉」记（条目当初的数据看不到，审计宁可多记）。
 - **写失败**：与页面侧同一处理 —— `ProcessSecretAccessService.audit` 捕获写失败、记 ERROR、返回 false，由调用方决定拦不拦。页面侧只在「放行完整工艺 (ALLOW)」时 fail-closed，因为那条审计是授权凭证；AI 访问审计不是授权（能看到什么已由 `ProcessSecretLlmCostScope` 按调用者裁剪 / 拦下），所以**不拦业务请求**，但**不静默**：再记一条 ERROR（`AI access audit NOT written`，带入口 / 工厂 / 是否牵涉）并累加 `writeFailures()` 计数。
+- **没有覆盖的入口（⛔ 不要当成全覆盖）**：
+  - **Python SmartBI 自己读数据的分析**（上传表格的洞察 / 图表解读 / 综合分析 / 跨表汇总 / 财务看板解读等，数据来自 Python 自己的库）：不经过 Java，不留这条记录；只有 Python 回调 Java 的 AI 上下文接口（`buildProductionContextForAi / buildCostContextForCaller`）时才记一条。
+  - **Java 的普通对话 / 直接外发**：走 `LlmEgressGuard.texts / structured / combined` 等出口、但不经过 `ToolExecutor`、`IntentExecutionOrchestrator` 或上面任何一个入口的调用不记。
+  - **绕过数据层打标的读取**：技能 / 工具经服务层取数、没有触发 `ProcessSecretReadTracker` 记录的（例如直接用 SQL 投影或聚合查询读成本），即使数据里有保密产品，`decision` 也会是 `NONE`；只有结构化数据里出现保密产品 / 计划、或批次排除时才能认出「牵涉」。
 
 ## 6. 已知风险（已裁定接受）
 
