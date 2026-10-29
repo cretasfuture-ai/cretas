@@ -2,7 +2,6 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.repository.FactoryRepository;
-import com.cretas.aims.service.consent.TrainingConsentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,24 +45,17 @@ public class AIReportScheduler {
     @Autowired
     private FactoryRepository factoryRepository;
 
-    @Autowired
-    private TrainingConsentService trainingConsentService;
-
     /**
      * 不生成定时 AI 报告的工厂 (逗号分隔)。2026-10-29 MOCK_REST AI writes stopped, owner-approved:
-     * 废弃的餐饮模拟租户撤回了训练授权, 其 AI 副本已清理, 不再往 ai_analysis_results 写。
-     * 清单与「训练授权已撤回」两条规则取并集; 设为空串只剩撤回规则。
+     * 废弃的餐饮模拟租户, 其 AI 副本已清理, 不再往 ai_analysis_results 写。设为空串 = 不排除任何工厂。
+     *
+     * <p>⛔ 不按训练授权判: Steve 2026-10-24 规则, 训练授权只管训练样本存不存 / 怎么存;
+     * 经营报告是给工厂的服务, 不是训练样本, 撤回训练授权的工厂照常出报告。
      */
     @Value("${cretas.ai.report.excluded-factories:MOCK_REST}")
     private String excludedFactories = "MOCK_REST";
 
-    /**
-     * 过滤掉不该生成定时 AI 报告的工厂: 在排除清单里的, 或训练授权已撤回 (withdrawn_at 非空) 的。
-     *
-     * <p>授权查不到 ({@code UNKNOWN}: SmartBI 数据源不可用 / 查询出错, 或查询本身抛异常) 时
-     * <b>照常生成</b>, 只记一条 warn。理由: 数据源一挂, 每家工厂都会读成 UNKNOWN, 按「查不到就跳过」
-     * 会让所有工厂的日报同时停掉; 而必须停的 MOCK_REST 由排除清单确定性兜住, 不依赖这次查询。
-     */
+    /** 过滤掉排除清单 {@code cretas.ai.report.excluded-factories} 里的工厂, 其余照常生成。 */
     List<Factory> reportableFactories(List<Factory> activeFactories, String kind) {
         Set<String> excluded = new HashSet<>();
         if (excludedFactories != null) {
@@ -79,20 +71,6 @@ public class AIReportScheduler {
             if (excluded.contains(factoryId)) {
                 log.info("工厂 {} 在排除清单 cretas.ai.report.excluded-factories 内, 跳过{}", factoryId, kind);
                 continue;
-            }
-            TrainingConsentService.Status status;
-            try {
-                status = trainingConsentService.status(factoryId);
-            } catch (RuntimeException e) {
-                status = TrainingConsentService.Status.UNKNOWN;
-                log.warn("工厂 {} 训练授权查询异常, 照常生成{}: {}", factoryId, kind, e.toString());
-            }
-            if (status == TrainingConsentService.Status.WITHDRAWN) {
-                log.info("工厂 {} 训练授权已撤回, 跳过{}", factoryId, kind);
-                continue;
-            }
-            if (status == TrainingConsentService.Status.UNKNOWN) {
-                log.warn("工厂 {} 训练授权查不到 (UNKNOWN), 照常生成{}", factoryId, kind);
             }
             result.add(factory);
         }

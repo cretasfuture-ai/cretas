@@ -17,16 +17,21 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 定时日报 / 周报 / 月报跳过
- * 排除清单里的工厂和训练授权已撤回的工厂; 正常工厂照常生成 (阴性对照);
- * 授权查不到 / 查询抛异常时照常生成, 不中断其它工厂。
+ * 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 定时日报 / 周报 / 月报只跳过排除清单
+ * {@code cretas.ai.report.excluded-factories} (默认 MOCK_REST) 里的工厂。
+ *
+ * <p>⛔ 不按训练授权判 (Steve 2026-10-24: 训练授权只管训练样本; 经营报告是服务, 不是训练样本)。
+ * 这里故意放一个对所有工厂都回 WITHDRAWN 的 {@link TrainingConsentService} 桩: 谁把「撤回就跳过」
+ * 加回调度器 (字段注入会被 {@code @InjectMocks} 填上这个桩), 撤回授权工厂那条阴性对照就红。
  *
  * <p>测试走的是 {@code @Scheduled} 方法本身 (生产入口), 不是只调过滤函数。
  */
@@ -49,10 +54,13 @@ class AIReportSchedulerExclusionTest {
         return f;
     }
 
+    private void everyFactoryHasWithdrawnTrainingConsent() {
+        lenient().when(trainingConsentService.status(anyString())).thenReturn(Status.WITHDRAWN);
+    }
+
     @Test
-    void dailyReport_skipsListedFactory_evenWhenConsentIsNormal_andStillReportsNormalFactory() {
+    void dailyReport_skipsMockRestByDefault_andStillReportsNormalFactory() {
         when(factoryRepository.findByIsActiveTrue()).thenReturn(List.of(factory("MOCK_REST"), factory("F006")));
-        when(trainingConsentService.status("F006")).thenReturn(Status.DEFAULT);
 
         scheduler.generateDailyReportsForAllFactories();
 
@@ -60,62 +68,62 @@ class AIReportSchedulerExclusionTest {
         verify(aiEnterpriseService, times(1)).generateDailyReport("F006");
     }
 
+    /** 阴性对照: 训练授权撤回但不在清单里的工厂, 报告照常 (报告不是训练样本)。 */
     @Test
-    void dailyReport_skipsWithdrawnFactory_whenExclusionListIsEmpty() {
+    void dailyReport_withdrawnTrainingConsentButNotListed_stillGetsReport() {
+        everyFactoryHasWithdrawnTrainingConsent();
+        when(factoryRepository.findByIsActiveTrue()).thenReturn(
+                List.of(factory("MOCK_REST"), factory("CONSENT_WITHDRAWN_FACTORY")));
+
+        scheduler.generateDailyReportsForAllFactories();
+
+        verify(aiEnterpriseService, times(1)).generateDailyReport("CONSENT_WITHDRAWN_FACTORY");
+        verify(aiEnterpriseService, never()).generateDailyReport("MOCK_REST");
+    }
+
+    /** 清单就是开关: 设为空串, MOCK_REST 也照常出报告。 */
+    @Test
+    void dailyReport_emptyExclusionList_excludesNobody() {
         ReflectionTestUtils.setField(scheduler, "excludedFactories", "");
+        when(factoryRepository.findByIsActiveTrue()).thenReturn(List.of(factory("MOCK_REST")));
+
+        scheduler.generateDailyReportsForAllFactories();
+
+        verify(aiEnterpriseService, times(1)).generateDailyReport("MOCK_REST");
+    }
+
+    @Test
+    void dailyReport_configuredListIsTrimmedAndCommaSeparated() {
+        ReflectionTestUtils.setField(scheduler, "excludedFactories", " A_FACTORY , ,B_FACTORY ");
+        when(factoryRepository.findByIsActiveTrue()).thenReturn(
+                List.of(factory("A_FACTORY"), factory("B_FACTORY"), factory("F006")));
+
+        scheduler.generateDailyReportsForAllFactories();
+
+        verify(aiEnterpriseService, never()).generateDailyReport("A_FACTORY");
+        verify(aiEnterpriseService, never()).generateDailyReport("B_FACTORY");
+        verify(aiEnterpriseService, times(1)).generateDailyReport("F006");
+    }
+
+    @Test
+    void weeklyReport_skipsListed_andReportsWithdrawnConsentFactory() {
+        everyFactoryHasWithdrawnTrainingConsent();
         when(factoryRepository.findByIsActiveTrue()).thenReturn(List.of(factory("MOCK_REST"), factory("F006")));
-        when(trainingConsentService.status("MOCK_REST")).thenReturn(Status.WITHDRAWN);
-        when(trainingConsentService.status("F006")).thenReturn(Status.AUTHORIZED);
-
-        scheduler.generateDailyReportsForAllFactories();
-
-        verify(aiEnterpriseService, never()).generateDailyReport("MOCK_REST");
-        verify(aiEnterpriseService, times(1)).generateDailyReport("F006");
-    }
-
-    @Test
-    void dailyReport_consentLookupFailure_doesNotStopOtherFactories() {
-        ReflectionTestUtils.setField(scheduler, "excludedFactories", "");
-        when(factoryRepository.findByIsActiveTrue()).thenReturn(
-                List.of(factory("F006"), factory("MOCK_REST"), factory("DEMO_FACTORY2")));
-        when(trainingConsentService.status("F006")).thenThrow(new IllegalStateException("smartbi down"));
-        when(trainingConsentService.status("MOCK_REST")).thenReturn(Status.WITHDRAWN);
-        when(trainingConsentService.status("DEMO_FACTORY2")).thenReturn(Status.UNKNOWN);
-
-        scheduler.generateDailyReportsForAllFactories();
-
-        // 查询抛异常 / UNKNOWN: 照常生成 (不让 SmartBI 一挂所有工厂日报停掉)
-        verify(aiEnterpriseService, times(1)).generateDailyReport("F006");
-        verify(aiEnterpriseService, times(1)).generateDailyReport("DEMO_FACTORY2");
-        // 抛异常的那家之后, 撤回的那家仍被正确跳过 (循环没被打断, 也没把异常当成放行全部)
-        verify(aiEnterpriseService, never()).generateDailyReport("MOCK_REST");
-    }
-
-    @Test
-    void weeklyReport_skipsListedAndWithdrawn_andReportsNormalFactory() {
-        when(factoryRepository.findByIsActiveTrue()).thenReturn(
-                List.of(factory("MOCK_REST"), factory("OTHER_WITHDRAWN"), factory("F006")));
-        when(trainingConsentService.status("OTHER_WITHDRAWN")).thenReturn(Status.WITHDRAWN);
-        when(trainingConsentService.status("F006")).thenReturn(Status.DEFAULT);
 
         scheduler.generateWeeklyReportsForAllFactories();
 
         verify(aiEnterpriseService, never()).generateWeeklyReport(eq("MOCK_REST"), any(LocalDate.class), any(LocalDate.class));
-        verify(aiEnterpriseService, never()).generateWeeklyReport(eq("OTHER_WITHDRAWN"), any(LocalDate.class), any(LocalDate.class));
         verify(aiEnterpriseService, times(1)).generateWeeklyReport(eq("F006"), any(LocalDate.class), any(LocalDate.class));
     }
 
     @Test
-    void monthlyReport_skipsListedAndWithdrawn_andReportsNormalFactory() {
-        when(factoryRepository.findByIsActiveTrue()).thenReturn(
-                List.of(factory("MOCK_REST"), factory("OTHER_WITHDRAWN"), factory("F006")));
-        when(trainingConsentService.status("OTHER_WITHDRAWN")).thenReturn(Status.WITHDRAWN);
-        when(trainingConsentService.status("F006")).thenReturn(Status.DEFAULT);
+    void monthlyReport_skipsListed_andReportsWithdrawnConsentFactory() {
+        everyFactoryHasWithdrawnTrainingConsent();
+        when(factoryRepository.findByIsActiveTrue()).thenReturn(List.of(factory("MOCK_REST"), factory("F006")));
 
         scheduler.generateMonthlyReportsForAllFactories();
 
         verify(aiEnterpriseService, never()).generateMonthlyReport(eq("MOCK_REST"), any(LocalDate.class), any(LocalDate.class));
-        verify(aiEnterpriseService, never()).generateMonthlyReport(eq("OTHER_WITHDRAWN"), any(LocalDate.class), any(LocalDate.class));
         verify(aiEnterpriseService, times(1)).generateMonthlyReport(eq("F006"), any(LocalDate.class), any(LocalDate.class));
     }
 
