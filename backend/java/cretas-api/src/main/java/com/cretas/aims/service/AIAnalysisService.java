@@ -85,6 +85,11 @@ public class AIAnalysisService {
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
             com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
+    /** AI 数据访问审计 (每个请求一条); 单测直接 new 本类时不记录。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit aiAccessAudit =
+            com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.disabled();
+
     /** 单批分析时按 batchId 认产品 (中央兜底); 单测没装时只按数据里的产品/计划判定。 */
     @Autowired(required = false)
     private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
@@ -148,14 +153,34 @@ public class AIAnalysisService {
                                            String customMessage,
                                            Boolean enableThinking,
                                            Integer thinkingBudget) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId,
+                com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.COST_ANALYSIS)) {
+            return analyzeCostAudited(factoryId, userId, batchId, costData, sessionId, customMessage,
+                    enableThinking, thinkingBudget, ai);
+        }
+    }
+
+    private Map<String, Object> analyzeCostAudited(String factoryId, Long userId, String batchId,
+                                                   Map<String, Object> costData, String sessionId,
+                                                   String customMessage, Boolean enableThinking,
+                                                   Integer thinkingBudget,
+                                                   com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai) {
         // 工艺保密 (中央兜底, 全部成本分析调用点都汇合在这里): 单批是当前账号无权查看的保密产品, 或数据里还夹着
         // 这类产品的行 (调用方该过滤没过滤) —— 整次不发给模型。负责人 / 有效授权照常发。判定本身出错也不发 (fail-closed)。
         if (involvesProcessSecret(factoryId, batchId, costData)) {
+            ai.withheld();
             Map<String, Object> withheld = new HashMap<>();
             withheld.put("success", false);
             withheld.put("processSecret", true);
             withheld.put("error", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON);
             return withheld;
+        }
+
+        // 审计: 这次发出去的数据牵涉保密产品吗 (与调用者无关; 有权的人分析保密批次 = 牵涉)
+        try {
+            ai.involvesProtected(involvesAnyProtected(factoryId, batchId, costData));
+        } catch (RuntimeException e) {
+            ai.involvementUnknown();
         }
 
         // 喂给模型的正文只拼一次: 两条通道原来各拼一份 (逐字相同), 而数字出处闸要拿
@@ -263,6 +288,19 @@ public class AIAnalysisService {
             log.warn("[process-secret] 成本分析保密范围判定失败, 不发给 AI: factoryId={}", factoryId);
             return true;
         }
+    }
+
+    /** 审计口径: 数据里出现本厂任一保密产品 / 牵涉它们的计划, 或单批属于保密范围 (与调用者无关)。 */
+    private boolean involvesAnyProtected(String factoryId, String batchId, Map<String, Object> costData) {
+        var all = llmCostScope.allProtected(factoryId);
+        if (all.isEmpty()) return false;
+        if (com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.mentions(all, costData)) return true;
+        if (batchId != null && productionBatchRepository != null && !batchId.isEmpty()
+                && batchId.chars().allMatch(Character::isDigit)) {
+            var batch = productionBatchRepository.findByIdAndFactoryId(Long.parseLong(batchId), factoryId);
+            return batch.isPresent() && all.coversBatch(batch.get().getProductTypeId(), batch.get().getProductionPlanId());
+        }
+        return false;
     }
 
     /** 成本分析喂给模型的正文: 自定义问题或格式化成本数据, 前面接预计算上下文。 */

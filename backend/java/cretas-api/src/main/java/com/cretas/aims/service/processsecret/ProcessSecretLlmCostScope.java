@@ -49,6 +49,13 @@ public class ProcessSecretLlmCostScope {
         public static final ReaderView NO_PROTECTED = new ReaderView(false, "", Set.of(), true);
 
         /** 没有保密产品 = 空串 (沿用原缓存); 否则 = 本厂保密产品集合 + 可完整查看集合 的稳定哈希。 */
+        /** 审计里给人看的档位: 本厂没有保密产品 / 全部能看 / 部分能看 / 都不能看。 */
+        public String auditLabel() {
+            if (!factoryHasProtected) return "NO_PROTECTED";
+            if (fullForAll) return "FULL";
+            return fullView.isEmpty() ? "NONE" : "PARTIAL";
+        }
+
         public String tier() {
             return factoryHasProtected ? "ps-" + sha256(protectedHash + "|" + String.join(",", fullView)).substring(0, 16) : "";
         }
@@ -217,6 +224,29 @@ public class ProcessSecretLlmCostScope {
                 scope.protectedProductTypeIds(), scope.protectedProductsByPlan(), scope.planProductTypeIds());
     }
 
+    /**
+     * 与调用者无关: 本厂全部保密产品的范围 (含牵涉它们的计划)。只给 AI 访问审计判「这次请求的数据是否牵涉保密产品」用,
+     * ⛔ 不用来裁剪 (裁剪按 {@link #forCurrentCaller})。
+     */
+    public Excluded allProtected(String factoryId) {
+        Set<String> protectedIds = protectedIds(factoryId);
+        if (protectedIds.isEmpty()) return Excluded.NONE;
+        ProcessSecretAggregateExclusions.ProtectedScope scope = exclusions.forHidden(factoryId, new TreeSet<>(protectedIds));
+        return new Excluded(Set.copyOf(scope.scope().productTypeIds()), Set.copyOf(scope.scope().planIds()),
+                scope.protectedProductTypeIds(), scope.protectedProductsByPlan(), scope.planProductTypeIds());
+    }
+
+    /** 与调用者无关: 结构化数据里任何一层出现本厂保密产品 / 牵涉它们的计划 (审计用, 口径同 {@link #containsProtected})。 */
+    public boolean dataInvolvesAnyProtected(String factoryId, Object data) {
+        Excluded all = allProtected(factoryId);
+        return !all.isEmpty() && scan(all, data, 0);
+    }
+
+    /** 结构化数据里任何一层出现 {@code scope} 覆盖的产品 / 计划 (已算好范围时用, 免得重复计算)。 */
+    public static boolean mentions(Excluded scope, Object data) {
+        return !scope.isEmpty() && scan(scope, data, 0);
+    }
+
     /** 本厂有没有任何保密产品 (与调用者无关)。 */
     public boolean factoryHasProtected(String factoryId) {
         return !protectedIds(factoryId).isEmpty();
@@ -273,6 +303,8 @@ public class ProcessSecretLlmCostScope {
                 allowed.add(row);
             }
         }
+        // AI 访问审计: 这次请求的数据里有保密行 (已按调用者排除) —— 标进当前请求的那条记录
+        if (excludedRows > 0) ProcessSecretAiAccessAudit.markCurrentInvolvesProtected();
         return new Rows(allowed, excludedRows, products.size());
     }
 

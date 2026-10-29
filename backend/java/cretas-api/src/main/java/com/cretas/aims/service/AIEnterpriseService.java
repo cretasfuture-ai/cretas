@@ -124,6 +124,10 @@ public class AIEnterpriseService {
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
 
+    /** AI 数据访问审计 (每个请求一条); 单测直接 new 本类时不记录。 */
+    @Autowired
+    private com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit aiAccessAudit = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.disabled();
+
     /** 分档缓存索引 (Redis / 内存); 单测没装时有保密产品的工厂一律不命中。 */
     @Autowired(required = false)
     private CacheService cacheService;
@@ -213,6 +217,48 @@ public class AIEnterpriseService {
     public MobileDTO.AICostAnalysisResponse analyzeCost(String factoryId, Long userId,
                                                          MobileDTO.AICostAnalysisRequest request,
                                                          HttpServletRequest httpRequest) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
+            MobileDTO.AICostAnalysisResponse response = analyzeCostUnaudited(factoryId, userId, request, httpRequest);
+            auditWithheld(ai, response);
+            // 缓存命中不经过成本分析汇合点: 单批是否保密在这里补判 (与调用者无关)
+            if (response != null && Boolean.TRUE.equals(response.getCacheHit()) && request.getBatchId() != null) {
+                try {
+                    var all = llmCostScope.allProtected(factoryId);
+                    if (!all.isEmpty()) {
+                        com.cretas.aims.entity.ProductionBatch batch = processingService.getBatchById(factoryId, request.getBatchId());
+                        ai.involvesProtected(all.coversBatch(batch.getProductTypeId(), batch.getProductionPlanId()));
+                    }
+                } catch (RuntimeException e) {
+                    ai.involvementUnknown();
+                }
+            }
+            return response;
+        }
+    }
+
+    /** 入口结果里能看出的审计信息: 因工艺保密整次未发给 AI。 */
+    private static void auditWithheld(com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai, MobileDTO.AICostAnalysisResponse response) {
+        if (response == null || response.getErrorMessage() == null) return;
+        String error = response.getErrorMessage();
+        if (error.equals(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON)
+                || error.contains("都是工艺保密产品")) {
+            ai.withheld();
+        }
+    }
+
+    /** 全厂范围的缓存命中: 条目当初用的数据这里看不到, 有保密产品的工厂按牵涉记 (审计宁可多记)。 */
+    private void auditCacheHit(com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai, String factoryId, MobileDTO.AICostAnalysisResponse response) {
+        if (response == null || !Boolean.TRUE.equals(response.getCacheHit())) return;
+        try {
+            ai.involvesProtected(llmCostScope.factoryHasProtected(factoryId));
+        } catch (RuntimeException e) {
+            ai.involvementUnknown();
+        }
+    }
+
+    private MobileDTO.AICostAnalysisResponse analyzeCostUnaudited(String factoryId, Long userId,
+                                                                  MobileDTO.AICostAnalysisRequest request,
+                                                                  HttpServletRequest httpRequest) {
         long startTime = System.currentTimeMillis();
         String questionType = determineQuestionType(factoryId, userId, request, httpRequest);
         boolean cacheHit = false;
@@ -801,6 +847,20 @@ public class AIEnterpriseService {
             LocalDateTime startDate, LocalDateTime endDate,
             String dimension, String question,
             HttpServletRequest httpRequest) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
+            MobileDTO.AICostAnalysisResponse response = analyzeTimeRangeCostUnaudited(factoryId, userId, startDate, endDate,
+                    dimension, question, httpRequest);
+            auditWithheld(ai, response);
+            auditCacheHit(ai, factoryId, response);
+            return response;
+        }
+    }
+
+    private MobileDTO.AICostAnalysisResponse analyzeTimeRangeCostUnaudited(
+            String factoryId, Long userId,
+            LocalDateTime startDate, LocalDateTime endDate,
+            String dimension, String question,
+            HttpServletRequest httpRequest) {
 
         long startTime = System.currentTimeMillis();
 
@@ -983,7 +1043,9 @@ public class AIEnterpriseService {
                 com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null);
         sseExecutor.execute(() -> {
           try (com.cretas.aims.security.AuthenticatedActor.ActorScope callerScope =
-                       com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(streamCaller)) {
+                       com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(streamCaller);
+               // 流式在执行线程上跑, 不在请求里: 这一次流式分析结束时写一条 (调用者已带进来)
+               com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.STREAM_ANALYSIS)) {
             try {
                 // 1. 发送开始事件
                 emitter.send(SseEmitter.event()
@@ -1037,7 +1099,14 @@ public class AIEnterpriseService {
                 // 工艺保密: 保密产品的批次整行不发 (提示词和随附的结构化数据都不带), 合计只在剩下的批次上累加
                 com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows = llmCostScope.withoutProtectedBatches(factoryId, fetchedBatches);
                 List<Map<String, Object>> batchesData = secretRows.allowed();
+                try {
+                    ai.involvesProtected(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.mentions(
+                            llmCostScope.allProtected(factoryId), batchesData));
+                } catch (RuntimeException e) {
+                    ai.involvementUnknown();
+                }
                 if (batchesData.isEmpty()) {
+                    ai.withheld();
                     emitter.send(SseEmitter.event().name("error").data(Map.of(
                             "type", "error", "message", "该时间段内的批次都是工艺保密产品，成本数据不提供给 AI 分析")));
                     emitter.complete();
@@ -1046,6 +1115,7 @@ public class AIEnterpriseService {
                 // 兜底 (流式不经过 AIAnalysisService.analyzeCost 的中央闸): 要发的数据里还夹着保密行就整次不发、不扣配额
                 if (llmCostScope.containsProtected(factoryId, batchesData)) {
                     log.warn("[process-secret] 流式时间范围分析的数据里仍有保密产品, 不发给 AI: factoryId={}", factoryId);
+                    ai.withheld();
                     emitter.send(SseEmitter.event().name("error").data(Map.of(
                             "type", "error", "message", com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.WITHHELD_REASON)));
                     emitter.complete();
@@ -1582,6 +1652,17 @@ public class AIEnterpriseService {
      */
     @Transactional
     public MobileDTO.AICostAnalysisResponse compareBatchCosts(
+            String factoryId, Long userId, List<String> batchIds,
+            String question, HttpServletRequest httpRequest) {
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = aiAccessAudit.begin(factoryId, com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.ENTERPRISE_ANALYSIS)) {
+            MobileDTO.AICostAnalysisResponse response = compareBatchCostsUnaudited(factoryId, userId, batchIds, question, httpRequest);
+            auditWithheld(ai, response);
+            auditCacheHit(ai, factoryId, response);
+            return response;
+        }
+    }
+
+    private MobileDTO.AICostAnalysisResponse compareBatchCostsUnaudited(
             String factoryId, Long userId, List<String> batchIds,
             String question, HttpServletRequest httpRequest) {
 
