@@ -70,6 +70,12 @@ class FactoryConfirmedFactReuseTest {
                 .thenAnswer(call -> sessions.stream()
                         .filter(session -> session.getSessionId().equals(call.getArgument(0))).findFirst());
         when(sessionRepo.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(sessionRepo.findTop20ByFactoryIdOrderByCreatedAtDesc(anyString())).thenAnswer(call -> {
+            List<FactoryAssemblyConversationSession> newestFirst = new ArrayList<>(sessions.stream()
+                    .filter(session -> call.getArgument(0).equals(session.getFactoryId())).toList());
+            java.util.Collections.reverse(newestFirst);
+            return newestFirst;
+        });
 
         FactoryAssemblyConversationService conversations = mock(FactoryAssemblyConversationService.class);
         when(conversations.startParameterCollection(anyString(), any(ConversationActor.class), anyString(), anyString(), any(), any()))
@@ -115,11 +121,62 @@ class FactoryConfirmedFactReuseTest {
         assertThat(store).as("沿用不新增历史行").hasSize(2);
     }
 
+    /** 模拟自由文本对话路径: 只有会话里的回执和 collected, 没有写 factory_confirmed_fact。 */
+    private String conversationalVersion(Map<String, String> answers, boolean withReceipts) {
+        String id = startSession();
+        FactoryAssemblyConversationSession session = sessions.stream()
+                .filter(s -> s.getSessionId().equals(id)).findFirst().orElseThrow();
+        answers.forEach(session::addCollectedParameter);
+        if (withReceipts) {
+            List<FactoryAssemblyConversationSession.ReplyFieldReceipt> fields = new ArrayList<>();
+            answers.forEach((field, value) -> fields.add(FactoryAssemblyConversationSession.ReplyFieldReceipt.builder()
+                    .field(field).resolution("ACCEPTED").canonicalValue(value).reasonCode("EXTRACTED").build()));
+            FactoryAssemblyConversationSession.Message message = FactoryAssemblyConversationSession.Message.user("答复");
+            message.setReplyReceipt(FactoryAssemblyConversationSession.ReplyReceipt.builder()
+                    .extractionOutcome("SUCCESS").fieldReceipts(fields).build());
+            session.addMessage(message);
+        }
+        return id;
+    }
+
+    @Test
+    void newVersionStartsFromThePreviousVersionsConfirmedFactsEvenWhenTheyWereAnsweredInFreeText() {
+        conversationalVersion(Map.of("businessType", "卤猪蹄", "industryHint", "卤味熟食"), true);
+        assertThat(store).as("自由文本路径没有写历史表 —— 这正是 D-S2-03 的现场").isEmpty();
+
+        String next = startSession();
+        FactoryBuildProgress progress = interview.progress(F, next, ACTOR);
+
+        assertThat(progress.getReusedFacts())
+                .containsEntry("businessType", "卤猪蹄").containsEntry("industryHint", "卤味熟食");
+        assertThat(progress.getPending()).doesNotContain("businessType", "industryHint");
+        assertThat(store).as("沿用同时把上一版事实记入历史, 来源指向原会话")
+                .extracting(FactoryConfirmedFact::getFieldKey).containsExactlyInAnyOrder("businessType", "industryHint");
+        assertThat(store).allSatisfy(row -> {
+            assertThat(row.getStatus()).isEqualTo(FactoryConfirmedFact.CONFIRMED);
+            assertThat(row.getSourceRef()).startsWith("conversation:");
+        });
+    }
+
+    @Test
+    void valuesWithoutAReceiptOrChangedAfterTheirReceiptAreNotTreatedAsConfirmed() {
+        conversationalVersion(Map.of("businessType", "卤猪蹄"), false);
+        String second = conversationalVersion(Map.of("industryHint", "卤味熟食"), true);
+        sessions.stream().filter(s -> s.getSessionId().equals(second)).findFirst().orElseThrow()
+                .addCollectedParameter("industryHint", "预制菜");
+
+        FactoryBuildProgress progress = interview.progress(F, startSession(), ACTOR);
+
+        assertThat(progress.getReusedFacts()).as("无回执的提取值不采信, 回执后被改过的也不采信").isEmpty();
+        assertThat(store).isEmpty();
+    }
+
     @Test
     void factsOfAnotherFactoryAreNeverReused() {
         String first = startSession();
         interview.submitStructuredAnswers(F, first, ACTOR, Map.of("businessType", "卤猪蹄"));
         store.forEach(row -> row.setFactoryId("F-OTHER"));
+        sessions.forEach(session -> ReflectionTestUtils.setField(session, "factoryId", "F-OTHER"));
 
         String second = startSession();
         assertThat(interview.progress(F, second, ACTOR).getReusedFacts()).isEmpty();

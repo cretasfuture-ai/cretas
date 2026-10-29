@@ -219,6 +219,12 @@ export interface FactoryBuildProgress {
   pendingLabels: string[]
   answered: string[]
   collected: Record<string, string>
+  /** 本版访谈直接沿用的上一版已确认事实 (字段 -> 值), 不再重复询问 */
+  reusedFacts?: Record<string, string>
+  /** 新答案与已确认事实不同、等管理员逐条选择来源 */
+  factConflicts?: Array<{
+    field: string; label: string | null; confirmedValue: string; newValue: string; pendingId: string
+  }>
   history?: ConversationHistoryMessage[]
   /** 只有 remaining=0 时才有值 */
   assembledDescription?: string | null

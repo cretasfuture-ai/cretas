@@ -115,10 +115,44 @@ public class FactoryBuildInterviewService {
     }
 
     /**
+     * 本厂此前各版访谈里「用户确认过」的事实: 取该会话里最新一条 ACCEPTED 回执, 且当前值仍等于回执值
+     * (被改过又没有新回执的不算)。越新的会话越优先; 提取候选、没有回执的值一律不采信。
+     */
+    List<FactoryConfirmedFactService.PriorFact> priorSessionFacts(
+            String factoryId, FactoryAssemblyConversationSession current) {
+        Map<String, FactoryConfirmedFactService.PriorFact> byField = new LinkedHashMap<>();
+        for (FactoryAssemblyConversationSession prior
+                : sessionRepository.findTop20ByFactoryIdOrderByCreatedAtDesc(factoryId)) {
+            if (prior.getSessionId() == null || prior.getSessionId().equals(current.getSessionId())) continue;
+            if (!FACTORY_BUILD_PARAMS_INTENT.equals(prior.getKnownIntentCode())) continue;
+            Map<String, String> labels = new LinkedHashMap<>();
+            prior.getRequiredParameters().forEach(rp -> labels.put(rp.getName(), rp.getLabel()));
+            Map<String, String> accepted = new LinkedHashMap<>();
+            for (FactoryAssemblyConversationSession.Message message : prior.getMessages()) {
+                FactoryAssemblyConversationSession.ReplyReceipt receipt = message.getReplyReceipt();
+                if (receipt == null || receipt.getFieldReceipts() == null) continue;
+                for (FactoryAssemblyConversationSession.ReplyFieldReceipt field : receipt.getFieldReceipts()) {
+                    if (field == null || isBlank(field.getField()) || !"ACCEPTED".equals(field.getResolution())) continue;
+                    accepted.put(field.getField(), field.getCanonicalValue());
+                }
+            }
+            Map<String, String> collected = prior.getCollectedParameters();
+            accepted.forEach((field, value) -> {
+                if (isBlank(value) || !Objects.equals(collected.get(field), value)) return;
+                byField.putIfAbsent(field, new FactoryConfirmedFactService.PriorFact(
+                        field, labels.getOrDefault(field, field), value, prior.getSessionId()));
+            });
+        }
+        return new ArrayList<>(byField.values());
+    }
+
+    /**
      * 沿用本厂已确认事实: 只填「还没答」的题, 留下 REUSED_CONFIRMED_FACT 回执 (来源可追查),
      * 因此这些题不再被问; 工序道数被沿用后展开的子项也再沿用一轮。差异靠用户的新答案体现。
      */
     void reuseConfirmedFacts(String factoryId, FactoryAssemblyConversationSession session) {
+        // 上一版访谈里用户确认过的事实 (自由文本回答也算, 只要有回执) 先进入历史, 再统一沿用。
+        confirmedFacts.adoptPriorFacts(factoryId, priorSessionFacts(factoryId, session));
         Map<String, String> reused = new LinkedHashMap<>();
         for (int pass = 0; pass < 2; pass++) {
             Map<String, String> round = confirmedFacts.reusableFor(factoryId, session);

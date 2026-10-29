@@ -530,6 +530,35 @@
             :title="progress.recommendationNote"
           />
 
+          <!-- S2-01/02: 沿用上一版已确认的资料只列出来让客户核对, 有不同再改; 与已确认值冲突的逐条选来源。 -->
+          <el-alert
+            v-if="Object.keys(progress?.reusedFacts ?? {}).length"
+            type="success"
+            :closable="false"
+            show-icon
+            class="mb16"
+            data-testid="reused-facts"
+            :title="`已沿用上一版确认的 ${Object.keys(progress?.reusedFacts ?? {}).length} 项资料，下面只需核对有差异的部分`"
+          >
+            <ul class="reused-list">
+              <li v-for="(value, field) in progress?.reusedFacts" :key="field">{{ progress?.answeredLabels?.[field] || field }}：{{ value }}</li>
+            </ul>
+          </el-alert>
+          <el-alert
+            v-if="(progress?.factConflicts ?? []).length"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mb16"
+            data-testid="fact-conflicts"
+            :title="`有 ${(progress?.factConflicts ?? []).length} 项新回答与已确认资料不同，需要选择采用哪个来源`"
+          >
+            <ul class="reused-list">
+              <li v-for="item in progress?.factConflicts" :key="item.pendingId">{{ item.label || item.field }}：已确认「{{ item.confirmedValue }}」，新回答「{{ item.newValue }}」</li>
+            </ul>
+            <span>请由本厂管理员在「建厂就绪 → 已确认资料与版本历史」逐条选择采用哪个来源。</span>
+          </el-alert>
+
           <!-- 已答事实与来源逐条来自服务端 typed receipts；pending/skipped 继续留在清单。 -->
           <FactoryConversationFactLedger :facts="progress.factEvidence ?? []" />
           <div class="checklist">
@@ -3166,6 +3195,7 @@ onMounted(async () => {
 </script>
 
 <style lang="scss" scoped>
+.reused-list { margin: 6px 0 0; padding-left: 18px; }
 .page-container {
   --assembly-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   padding: 20px;

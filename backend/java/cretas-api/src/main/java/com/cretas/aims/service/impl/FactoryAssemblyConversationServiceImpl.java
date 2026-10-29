@@ -65,6 +65,10 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
     @Autowired
     private LlmEgressGuard llmEgressGuard = LlmEgressGuard.standalone();
 
+    /** 对话建厂: 用户确认的回答同步进已确认事实历史 (与结构化答题同一份账本)。单测直接 new 时为空。 */
+    @Autowired(required = false)
+    private com.cretas.aims.blueprint.interview.FactoryConfirmedFactService confirmedFacts;
+
     static final String CONVERSATION_EGRESS_SITE = "factory-assembly-conversation";
     static final String PARAMETER_EGRESS_SITE = "factory-assembly-params";
 
@@ -410,6 +414,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
                 correctionApplied |= old != null && !Objects.equals(old, entry.getValue());
                 session.addCollectedParameter(entry.getKey(), entry.getValue());
             }
+            recordConfirmedFacts(session, validation.values());
 
             FactoryInterviewExpansion.expandIfReady(session);
             FactoryInterviewExpansion.expandProductsIfReady(session);
@@ -1608,6 +1613,18 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
                 .resolution(resolution)
                 .reasonCode(reason)
                 .build()).toList();
+    }
+
+    /** 对话建厂的回答进入已确认事实历史; 与已确认值不同的变成待选冲突, 不覆盖。 */
+    private void recordConfirmedFacts(FactoryAssemblyConversationSession session, Map<String, String> values) {
+        if (confirmedFacts == null || values == null || values.isEmpty()
+                || !FactoryInterviewExpansion.INTENT.equals(session.getKnownIntentCode())) {
+            return;
+        }
+        Map<String, String> labels = new LinkedHashMap<>();
+        session.getRequiredParameters().forEach(rp -> labels.put(rp.getName(), rp.getLabel()));
+        confirmedFacts.recordAnswers(session.getFactoryId(), session.getSessionId(),
+                session.getActorType() + ":" + session.getUserId(), values, labels);
     }
 
     private ConversationResponse extractionFailureResponse(

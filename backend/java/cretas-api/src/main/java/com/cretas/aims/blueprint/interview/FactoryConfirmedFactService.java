@@ -117,6 +117,28 @@ public class FactoryConfirmedFactService {
         return reuse;
     }
 
+    /** A fact a previous interview version confirmed, found in that session's own receipts. */
+    public record PriorFact(String field, String label, String value, String sessionId) { }
+
+    /**
+     * Writes facts that earlier interview versions confirmed (through any path, free text included)
+     * into the history as CONFIRMED, only for items that have no history row yet. Never changes an
+     * existing row, so it cannot turn into a silent overwrite.
+     */
+    @Transactional
+    public int adoptPriorFacts(String factoryId, List<PriorFact> prior) {
+        int adopted = 0;
+        for (PriorFact fact : prior) {
+            if (fact.field() == null || fact.value() == null || fact.value().isBlank()) continue;
+            if (facts.findFirstByFactoryIdAndFieldKeyOrderByVersionNoDescCreatedAtDesc(factoryId, fact.field())
+                    .isPresent()) continue;
+            facts.save(row(factoryId, fact.field(), fact.label(), fact.value(), FactoryConfirmedFact.CONFIRMED, 1,
+                    fact.sessionId(), null, "SYSTEM:carried-from-prior-version"));
+            adopted++;
+        }
+        return adopted;
+    }
+
     /** Administrator picks the source for one conflicting item. */
     @Transactional
     public FactoryConfirmedFact resolve(String factoryId, String field, String choice, String actor) {
