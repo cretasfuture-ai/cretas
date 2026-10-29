@@ -231,4 +231,3 @@ def test_real_pg_purchase_lineage_and_inventory_matrix():
             await conn.close()
 
     asyncio.run(run())
-

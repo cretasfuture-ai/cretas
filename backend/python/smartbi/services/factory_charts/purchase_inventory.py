@@ -119,4 +119,3 @@ def build(frame: pd.DataFrame, request: Any, can_price: bool, source: str):
         }
         candidates.append(candidate)
     return candidates, []
-
