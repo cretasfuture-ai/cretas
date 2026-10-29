@@ -979,7 +979,9 @@ public class MaterialBatchController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
 
         Map<String, Object> statistics = materialBatchService.getInventoryStatistics(factoryId);
-        if (priceMaskResolver.shouldMaskPrice(authorization) && statistics != null) {
+        // S5-12: 库存总价值是批次采购成本的合计, 与估值 / 汇总同一口径 (采购读 或 财务读)
+        if (priceMaskResolver.shouldMaskPrice(authorization,
+                com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE) && statistics != null) {
             Map<String, Object> maskedStatistics = new LinkedHashMap<>(statistics);
             maskedStatistics.remove("totalValue");
             statistics = maskedStatistics;
@@ -998,12 +1000,19 @@ public class MaterialBatchController {
      * 参考 {@code EquipmentController.calculateDepreciatedValue} 同形态先例.
      * 决策记录: {@code docs/qa-audits/2026-05-12-e5-valuation-rbac-decision.md}.
      */
-    @RequirePermission({"procurement:price:view"})
     @GetMapping("/inventory/valuation")
     @Operation(summary = "获取库存价值")
     public ApiResponse<BigDecimal> getInventoryValuation(
             @Parameter(description = "工厂ID", required = true, example = "F001")
-            @PathVariable @NotBlank String factoryId) {
+            @PathVariable @NotBlank String factoryId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        // S5-12 (D-S5-05): 全厂库存估值是批次采购成本的合计, 与批次单价同一口径 —— 「采购读 或 财务读」
+        // (配置的 L2 → L1)。原来门是 procurement:price:view 的固定名单, 销售 / 生产经理也能读到。
+        // 响应是裸金额, 没有字段可剥, 看不到就 403。
+        if (priceMaskResolver.shouldMaskPrice(authorization,
+                com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE)) {
+            throw new BusinessException(403, "当前角色在权限配置里没有采购读或财务读，看不到库存估值");
+        }
 
         BigDecimal valuation = materialBatchService.getInventoryValuation(factoryId);
         return ApiResponse.success(valuation);
