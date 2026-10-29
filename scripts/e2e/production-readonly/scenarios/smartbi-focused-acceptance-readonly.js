@@ -8,6 +8,8 @@ const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const UPLOADS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/uploads\/?$/;
 const DETAIL_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
 const COMMERCE_QUESTION = '联合看客户渠道销售、发货和库存';
+const PURCHASE_INVENTORY_QUESTION = '联合分析采购收货与当前库存';
+const PURCHASE_INVENTORY_FAMILY = 'purchase-batch-lineage.purchase.inventory';
 
 function pathname(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
@@ -32,6 +34,16 @@ function validateCommerceOptions(value) {
       ? value.expectedKpisByUnit : {},
     expectedChannelAmount: value.expectedChannelAmount,
   };
+}
+
+function validatePurchaseInventoryOptions(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object') throw new Error('smartbiPurchaseInventory must be an object');
+  const expectedKpisByUnit = value.expectedKpisByUnit;
+  if (!expectedKpisByUnit || typeof expectedKpisByUnit !== 'object' || !Object.keys(expectedKpisByUnit).length) {
+    throw new Error('smartbiPurchaseInventory.expectedKpisByUnit is required');
+  }
+  return { expectedKpisByUnit };
 }
 
 function validateLegacyOptions(value) {
@@ -158,6 +170,66 @@ function assessCommerce({ body, request, ui, expected }) {
   };
   const pass = Object.values(checks).every(Boolean);
   return { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'data', checks, families, plannerMode, kpiValues, candidateKpiValues, factKpiValues };
+}
+
+function assessPurchaseInventory({ body, request, ui, expected }) {
+  const data = body?.data || {};
+  const candidates = Array.isArray(data.recommendations) ? data.recommendations : [];
+  const candidate = candidates.find((item) => familyOf(item) === PURCHASE_INVENTORY_FAMILY);
+  const facts = Array.isArray(data.facts) ? data.facts : [];
+  const unit = String(candidate?.unit || '').trim();
+  const expectedKpis = expected?.expectedKpisByUnit?.[unit] || null;
+  const kpiByKey = (items) => Object.fromEntries((Array.isArray(items) ? items : []).map((item) => [String(item?.label || '').toLowerCase(), parseNumber(item?.value)]));
+  const candidateKpis = kpiByKey(candidate?.kpis);
+  const factKpis = kpiByKey(facts);
+  const labels = [['received', /收货|入库|received|inbound/u], ['used', /已用|领用|used/u], ['reserved', /预留|reserved/u], ['available', /当前可用|可用|available/u]];
+  const kpiChecks = {};
+  for (const [key, pattern] of labels) {
+    const candidateLabel = Object.keys(candidateKpis).find((label) => pattern.test(label));
+    const factLabel = Object.keys(factKpis).find((label) => pattern.test(label));
+    const expectedValue = expectedKpis?.[key];
+    kpiChecks[`kpi:${key}`] = Boolean(candidateLabel && factLabel && Number.isFinite(Number(expectedValue))
+      && candidateKpis[candidateLabel] === Number(expectedValue) && factKpis[factLabel] === Number(expectedValue));
+  }
+  const values = labels.map(([key]) => Number(expectedKpis?.[key]));
+  const conservation = values.every(Number.isFinite) && values[0] === values[1] + values[2] + values[3] && values[2] >= 0;
+  const candidateKpisValid = Array.isArray(candidate?.kpis) && candidate.kpis.length === 4
+    && candidate.kpis.every((kpi) => String(kpi?.unit || '') === unit && Number.isFinite(parseNumber(kpi?.value)) && parseNumber(kpi.value) >= 0);
+  const factsScoped = facts.length === 4 && facts.every((fact) => String(fact?.unit || '') === unit
+    && String(fact?.candidateId || '') === String(candidate?.id || '') && String(fact?.source || '') === String(candidate?.source || '')
+    && Number.isFinite(parseNumber(fact?.value)) && candidate?.kpis?.some((kpi) => kpi.label === fact.label && parseNumber(kpi.value) === parseNumber(fact.value)));
+  const limitations = [data.answer, ...(data.limitations || []), ...(candidate?.findings?.attention || []), ...(candidate?.findings?.limitations || [])].join(' ');
+  const checks = {
+    httpSuccess: body?.success === true, answered: data.status === 'answered', factoryF006: data.factoryId === 'F006',
+    requestQuestion: request?.question === PURCHASE_INVENTORY_QUESTION, exactFamily: candidates.length === 1 && familyOf(candidate) === PURCHASE_INVENTORY_FAMILY,
+    sourceBusiness: data.source === 'business' && request?.source === 'business', trustedSource: /^purchase-batch-lineage(?:\s*[·:|]|\s|$)/iu.test(String(candidate?.source || '')),
+    plannerAiEvidence: data.status === 'answered', unitExpected: Boolean(unit && expectedKpis), candidateKpisValid,
+    periodPresent: Boolean(data.period?.label) && /当前(?:时点)?快照|current.*snapshot/iu.test(limitations)
+      && /历史期末|historical.*(?:closing|period)/iu.test(limitations), factsScoped, conservation,
+    factsVisible: ui?.factsVisible === true, chartRendered: ui?.visibleChartCount === 1 && ui?.renderedCanvasCount === 1,
+    details: ui?.detailsValid === true, excelExported: ui?.excelExported === true, ...kpiChecks,
+  };
+  const pass = Object.values(checks).every(Boolean);
+  return { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'data', checks, unit, candidateKpis, factKpis };
+}
+
+function purchaseDetailMatches({ status, body, request, candidate, period }) {
+  const data = body?.data || {};
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  const keys = Object.keys(request || {});
+  if (status !== 200 || body?.success !== true || !candidate?.detailContext?.id
+    || request?.context_id !== candidate.detailContext.id || request.page !== 1 || request.page_size !== 50
+    || !keys.every((key) => ['context_id', 'page', 'page_size', 'filters'].includes(key))
+    || data.factoryId !== 'F006' || data.candidateId !== candidate.id || data.source !== candidate.source
+    || data.period !== period || !rows.length || !Number.isSafeInteger(data.total) || data.total < rows.length) return false;
+  const ids = new Set();
+  return rows.every((row) => {
+    if (!['收货单ID', '收货行ID', '物料批次ID'].every((key) => row[key] !== null && row[key] !== undefined && String(row[key]).trim())
+      || String(row['数量单位'] || '') !== String(candidate.unit || '') || ids.has(String(row['物料批次ID']))) return false;
+    ids.add(String(row['物料批次ID']));
+    const values = ['批次入库数量', '批次已用数量', '批次预留数量', '当前可用数量'].map((key) => !['number', 'string'].includes(typeof row[key]) || String(row[key]).trim() === '' ? NaN : Number(row[key]));
+    return values.every((value) => Number.isFinite(value) && value >= 0) && Math.abs(values[0] - values[1] - values[2] - values[3]) <= 1e-9;
+  });
 }
 
 function assessLegacyKpi({ visibleText, expected }) {
@@ -294,6 +366,43 @@ async function inspectCommercePage(page, inspectCtx, expected) {
     catalogFamilyIds: [...new Set((body.data?.catalog || []).map(familyOf).filter(Boolean))] };
 }
 
+async function runPurchaseInventory(ctx) {
+  const expected = validatePurchaseInventoryOptions(ctx.smartbiPurchaseInventory || ctx.options?.smartbiPurchaseInventory);
+  if (!expected) return { assessment: { result: 'NOT_RUN', rootCauseClass: 'none', checks: {} } };
+  if (ctx.expectedFactoryId !== 'F006') throw new Error('Purchase inventory acceptance is limited to F006');
+  return runReadOnlyPageScenario(ctx, { id: 'smartbi-purchase-inventory-readonly', path: FACTORY_QUERY_PATH,
+    landmarks: ['智能数据分析'], timeoutMs: 60_000, appMountTimeoutMs: 90_000,
+    inspect: async (page, _body, inspectCtx) => inspectPurchaseInventoryPage(page, inspectCtx, expected) });
+}
+
+async function inspectPurchaseInventoryPage(page, inspectCtx, expected) {
+  const input = page.getByTestId('factory-analysis-input'); await input.waitFor({ timeout: 60_000 });
+  const responsePromise = page.waitForResponse((item) => item.request().method() === 'POST' && ANALYSIS_PATH.test(pathname(item.url())), { timeout: 60_000 });
+  await input.fill(PURCHASE_INVENTORY_QUESTION); await page.getByTestId('factory-analysis-submit').click();
+  const response = await responsePromise; const body = await bodyOf(response); const request = requestOf(response);
+  const cards = page.locator('[data-testid^="factory-chart-card-"]:visible'); await cards.first().waitFor({ timeout: 30_000 }).catch(() => {});
+  await cards.first().scrollIntoViewIfNeeded().catch(() => {}); await cards.locator('canvas').first().waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+  const factHost = page.getByTestId('factory-analysis-facts').last(); const factText = await factHost.innerText().catch(() => '');
+  const factItems = Array.isArray(body?.data?.facts) ? body.data.facts : [];
+  const factsVisible = await factHost.isVisible().catch(() => false) && factItems.length === 4
+    && factItems.every((fact) => factText.includes(String(fact.label)) && factText.includes(String(fact.unit))
+      && new RegExp(`(^|[^0-9])${String(parseNumber(fact.value)).replace(/\./gu, '\\.')}([^0-9]|$)`, 'u').test(factText));
+  const candidate = (body?.data?.recommendations || []).find((item) => familyOf(item) === PURCHASE_INVENTORY_FAMILY);
+  let detailsValid = false; const detailButton = cards.locator('button').filter({ hasText: '查看原始明细' }).first();
+  if (await detailButton.count()) {
+    const detailPromise = page.waitForResponse((item) => item.request().method() === 'POST' && normalized(item.url()) === DETAIL_PATH, { timeout: 30_000 }).catch(() => null);
+    await detailButton.click().catch(() => {}); const detailResponse = await detailPromise; const detailBody = detailResponse ? await bodyOf(detailResponse) : {};
+    const detailRequest = detailResponse ? requestOf(detailResponse) : {};
+    detailsValid = purchaseDetailMatches({ status: detailResponse?.status(), body: detailBody, request: detailRequest, candidate, period: body?.data?.period?.label });
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.locator('.el-drawer:visible').waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
+  }
+  const answer = page.locator('.turn.turn--assistant:visible').last(); const excel = answer.getByRole('button', { name: 'Excel', exact: true }); let excelExported = false;
+  if (await excel.count()) { const download = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null); const exportResponse = page.waitForResponse((item) => item.request().method() === 'POST' && normalized(item.url()).endsWith('/export-excel'), { timeout: 30_000 }).catch(() => null); await excel.click(); const [file, result] = await Promise.all([download, exportResponse]); if (file && result?.status() === 200 && inspectCtx.evidenceDir) { await file.saveAs(`${String(inspectCtx.evidenceDir).replace(/[\\/]+$/, '')}/smartbi-purchase-inventory-readonly.xlsx`); excelExported = true; } }
+  const assessment = assessPurchaseInventory({ body, request, ui: { visibleChartCount: await cards.count(), renderedCanvasCount: await cards.locator('canvas').count(), factsVisible, detailsValid, excelExported }, expected });
+  return { assessment, ...assessment, screenshot: inspectCtx.screenshot ? await inspectCtx.screenshot('smartbi-purchase-inventory-answer') : null };
+}
+
 async function runLegacy(ctx) {
   const expected = validateLegacyOptions(ctx.smartbiLegacyKpi || ctx.options?.smartbiLegacyKpi);
   if (!expected) return { assessment: { result: 'NOT_RUN', rootCauseClass: 'none', checks: {} } };
@@ -350,6 +459,7 @@ async function inspectLegacyPage(page, body, expected, inspectCtx = {}) {
 
 module.exports = {
   commerceJoint: { id: 'smartbi-commerce-joint-readonly', defaultEnabled: false, run: runCommerce },
+  purchaseInventory: { id: 'smartbi-purchase-inventory-readonly', defaultEnabled: false, run: runPurchaseInventory },
   legacyKpi: { id: 'smartbi-legacy-kpi-readonly', defaultEnabled: false, run: runLegacy },
-  validateCommerceOptions, validateLegacyOptions, assessCommerce, assessLegacyKpi, findLegacyBatchIndex, inspectCommercePage, inspectLegacyPage,
+  validateCommerceOptions, validatePurchaseInventoryOptions, validateLegacyOptions, assessCommerce, assessPurchaseInventory, purchaseDetailMatches, assessLegacyKpi, findLegacyBatchIndex, inspectCommercePage, inspectPurchaseInventoryPage, inspectLegacyPage,
 };

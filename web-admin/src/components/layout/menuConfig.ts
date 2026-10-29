@@ -494,6 +494,9 @@ const rawMenuConfig: MenuItem[] = [
       // 2026-10-27 按工厂备份套餐: 工厂只读看本厂记录 / 平台开通与修改
       { path: '/system/data-backups', title: '数据备份', icon: '', module: 'system',
         roles: ['factory_super_admin', 'permission_admin'] },
+      // 2026-10-29 S6-07: 工厂管理员(仅本厂)可看 AI 运行轨迹与评测; 路由同白名单, 不再只能手输 URL
+      { path: '/ops/agent-ops', title: 'Agent 运行与评测', icon: '', module: 'analytics',
+        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
       { path: '/system/ai-intents', title: 'AI意图配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY, groupLabel: '平台治理' },
       { path: '/system/tenant-backups', title: '工厂数据备份', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },

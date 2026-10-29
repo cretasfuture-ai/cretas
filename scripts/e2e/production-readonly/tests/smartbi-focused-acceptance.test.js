@@ -96,3 +96,30 @@ test('legacy source IDs resolve to one UI batch without inventing a batch', () =
   assert.equal(scenario.findLegacyBatchIndex(uploads, { production: 5285, quality: 5286, cost: 5287 }), 0);
   assert.equal(scenario.findLegacyBatchIndex(uploads, { production: 9999, quality: 9998, cost: 9997 }), null);
 });
+
+test('purchase inventory requires exact trusted family, four equal facts and conservation', () => {
+  const expected = scenario.validatePurchaseInventoryOptions({ expectedKpisByUnit: { kg: { received: 595, used: 20, reserved: 5, available: 570 } } });
+  const candidate = { id: 'purchase-inventory-kg', source: 'purchase-batch-lineage · 已确认收货与物料批次双向来源', unit: 'kg', analysis: { familyId: 'purchase-batch-lineage.purchase.inventory' }, detailContext: { id: 'ctx-purchase' }, kpis: [
+    { label: '收货', value: 595, unit: 'kg' }, { label: '已用', value: 20, unit: 'kg' }, { label: '预留', value: 5, unit: 'kg' }, { label: '当前可用', value: 570, unit: 'kg' },
+  ] };
+  const body = { success: true, data: { factoryId: 'F006', source: 'business', period: { label: '全部历史' }, limitations: ['库存为当前时点快照，不代表历史期末余额'], status: 'answered', recommendations: [candidate], facts: candidate.kpis.map((kpi, i) => ({ ...kpi, id: `fact-${i}`, candidateId: candidate.id, source: candidate.source })) } };
+  const ui = { factsVisible: true, visibleChartCount: 1, renderedCanvasCount: 1, detailsValid: true, excelExported: true };
+  assert.equal(scenario.assessPurchaseInventory({ body, request: { question: '联合分析采购收货与当前库存', source: 'business' }, ui, expected }).result, 'PASS');
+  assert.equal(scenario.assessPurchaseInventory({ body: { ...body, data: { ...body.data, facts: body.data.facts.map((fact) => fact.label === '当前可用' ? { ...fact, value: 999 } : fact) } }, request: { question: '联合分析采购收货与当前库存', source: 'business' }, ui, expected }).result, 'UNVERIFIED');
+  for (const wrong of [{ source: 'other' }, { candidateId: 'other' }, { unit: '箱' }]) {
+    assert.equal(scenario.assessPurchaseInventory({ body: { ...body, data: { ...body.data, facts: body.data.facts.map((fact) => ({ ...fact, ...wrong })) } }, request: { question: '联合分析采购收货与当前库存', source: 'business' }, ui, expected }).result, 'UNVERIFIED');
+  }
+  assert.equal(scenario.assessPurchaseInventory({ body: { ...body, data: { ...body.data, limitations: [] } }, request: { question: '联合分析采购收货与当前库存', source: 'business' }, ui, expected }).result, 'UNVERIFIED');
+});
+
+test('purchase original details bind request pagination, owner scope, unique vouchers and reserved quantities', () => {
+  const candidate = { id: 'p1', unit: 'kg', source: 'purchase-batch-lineage · confirmed', detailContext: { id: 'ctx1' } };
+  const request = { context_id: 'ctx1', page: 1, page_size: 50, filters: [] };
+  const row = { 收货单ID: 'receipt1', 收货行ID: 12, 物料批次ID: 'batch1', 数量单位: 'kg', 批次入库数量: 10, 批次已用数量: 2, 批次预留数量: 3, 当前可用数量: 5 };
+  const body = { success: true, data: { factoryId: 'F006', candidateId: 'p1', source: candidate.source, period: '全部历史', rows: [row], total: 1 } };
+  const args = { status: 200, body, request, candidate, period: '全部历史' };
+  assert.equal(scenario.purchaseDetailMatches(args), true);
+  for (const changed of [{ point: 'bad' }, { page: 2 }, { page_size: 500 }, { context_id: 'other' }]) assert.equal(scenario.purchaseDetailMatches({ ...args, request: { ...request, ...changed } }), false);
+  for (const changed of [{ 数量单位: '箱' }, { 收货行ID: '' }, { 当前可用数量: 8 }, { 批次预留数量: null }]) assert.equal(scenario.purchaseDetailMatches({ ...args, body: { ...body, data: { ...body.data, rows: [{ ...row, ...changed }] } } }), false);
+  for (const changed of [{ factoryId: 'F002' }, { source: 'other' }, { candidateId: 'other' }, { period: '2025' }, { total: undefined }, { total: 2, rows: [row, row] }]) assert.equal(scenario.purchaseDetailMatches({ ...args, body: { ...body, data: { ...body.data, ...changed } } }), false);
+});

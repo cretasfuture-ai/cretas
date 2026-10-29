@@ -448,7 +448,8 @@ def _joint_axes(question: str) -> set[str]:
     patterns = {"production": r"生产|产量|\b(?:production|outputs?)\b",
                 "quality": r"质量|质检|检验|良品|\b(?:quality|qc|good|yields?|inspections?)\b",
                 "cost": r"成本|\bcosts?\b", "sales": r"销售|发货|\b(?:sales|shipments?)\b",
-                "inventory": r"库存|\b(?:stocks?|inventory)\b", "customer": r"客户|\bcustomers?\b",
+                "inventory": r"库存|\b(?:stocks?|inventory)\b", "purchase": r"采购|供应商收货|采购收货|采购入库|\b(?:purchases?|purchase\s+receipts?|supplier\s+(?:receipts?|inbound))\b",
+                "customer": r"客户|\bcustomers?\b",
                 "channel": r"渠道|\bchannels?\b"}
     return {axis for axis, pattern in patterns.items() if re.search(pattern, question, re.I)}
 
@@ -472,6 +473,9 @@ def joint_family_requirements(question: str) -> set[str]:
     if {"sales", "inventory"}.issubset(axes):
         families.add("commerce-joint.sales.stock")
         covered.update({"sales", "inventory"})
+    if {"purchase", "inventory"}.issubset(axes):
+        families.add("purchase-batch-lineage.purchase.inventory")
+        covered.update({"purchase", "inventory"})
     if len(axes & {"production", "quality", "cost"}) >= 2:
         if re.search(r"多表|跨表|跨数据|质检|检验|\bqc\b|inspection|cross[- ]?table|multiple tables|across tables|across sources", question, re.I):
             families.add("production.inspection_fused")

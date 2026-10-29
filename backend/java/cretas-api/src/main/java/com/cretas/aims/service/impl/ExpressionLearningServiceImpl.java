@@ -596,8 +596,13 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         // 训练规则 (2026-10-24): 撤回 / 查不到的工厂不存; 配方、工艺参数、客户名、人名不存;
         // 未授权工厂脱敏后存
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);
-        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本
-        if (!status.storable() || processSecretSampleFilter.mentionsProtectedProduct(factoryId, userInput)) {
+        if (!status.storable()) {
+            return null;
+        }
+        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本。名单查不出来 (UNVERIFIED) 也不存,
+        // 且不抛 —— 这里在意图识别链路上, 一条样本收不了不能让用户的识别请求失败 (2026-10-29)
+        if (processSecretSampleFilter.checkTrainingSample("intent", factoryId, userInput)
+                != ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
             return null;
         }
         String textToStore = TrainingSampleRules.textToStore(

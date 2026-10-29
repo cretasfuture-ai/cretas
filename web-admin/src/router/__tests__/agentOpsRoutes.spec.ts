@@ -5,13 +5,15 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(resolve(process.cwd(), 'src/router/modules/ops.ts'), 'utf8');
 
 describe('AgentOps route gate', () => {
-  it('exposes three evidence pages only to explicit admin roles on restaurant tenants', () => {
+  it('exposes three evidence pages only to explicit admin roles on factory and restaurant tenants', () => {
     expect(source).toContain("const agentOpsAdminRoles = [");
     for (const role of ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner']) {
       expect(source).toContain(`'${role}'`);
     }
-    expect(source).toMatch(/name:\s*'AgentOps'[\s\S]*roles:\s*agentOpsAdminRoles[\s\S]*hideForFactoryTypes:\s*\['FACTORY'\]/);
-    expect(source).toMatch(/name:\s*'AgentOps'[\s\S]*businessDomain:\s*'RESTAURANT'/);
+    expect(source).toMatch(/name:\s*'AgentOps'[\s\S]*roles:\s*agentOpsAdminRoles/);
+    // 工厂管理员必须能进入（不再对 FACTORY 隐藏）
+    expect(source).not.toMatch(/name:\s*'AgentOps'[\s\S]{0,400}hideForFactoryTypes/);
+    expect(source).toMatch(/name:\s*'AgentOps'[\s\S]*businessDomain:\s*\['FACTORY', 'RESTAURANT'\]/);
     expect(source).toContain("name: 'AgentOpsEvalSets'");
     expect(source).toContain("name: 'AgentOpsExperiments'");
     expect(source).toContain("name: 'AgentOpsRunTrace'");

@@ -530,6 +530,53 @@
             :title="progress.recommendationNote"
           />
 
+          <!-- S2-01/02: 沿用上一版已确认的资料只列出来让客户核对, 有不同再改; 与已确认值冲突的逐条选来源。 -->
+          <el-alert
+            v-if="Object.keys(progress?.reusedFacts ?? {}).length"
+            type="success"
+            :closable="false"
+            show-icon
+            class="mb16"
+            data-testid="reused-facts"
+            :title="`已沿用上一版确认的 ${Object.keys(progress?.reusedFacts ?? {}).length} 项资料，下面只需核对有差异的部分`"
+          >
+            <ul class="reused-list">
+              <li v-for="item in progress?.reusedFactItems ?? []" :key="item.field">{{ item.label || '其他事项' }}：{{ item.value }}</li>
+            </ul>
+          </el-alert>
+          <el-alert
+            v-if="(progress?.carriedFacts ?? []).length"
+            type="info"
+            :closable="false"
+            show-icon
+            class="mb16"
+            data-testid="carried-facts"
+            :title="`上一版已填写 ${(progress?.carriedFacts ?? []).length} 项，请确认（这些还不算已确认）`"
+          >
+            <ul class="reused-list">
+              <li v-for="item in progress?.carriedFacts" :key="item.field">
+                {{ item.label || '其他事项' }}：{{ item.value }}
+                <el-button link type="primary" :disabled="sending" @click="confirmCarried([item.field])">确认这一项</el-button>
+              </li>
+            </ul>
+            <el-button type="primary" size="small" :loading="sending" data-testid="confirm-all-carried" @click="confirmCarried()">全部确认</el-button>
+            <span class="hint">有不同的直接回答对应问题即可修改。</span>
+          </el-alert>
+          <el-alert
+            v-if="(progress?.factConflicts ?? []).length"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mb16"
+            data-testid="fact-conflicts"
+            :title="`有 ${(progress?.factConflicts ?? []).length} 项新回答与已确认资料不同，需要选择采用哪个来源`"
+          >
+            <ul class="reused-list">
+              <li v-for="item in progress?.factConflicts" :key="item.pendingId">{{ item.label || '其他事项' }}：已确认「{{ item.confirmedValue }}」，新回答「{{ item.newValue }}」</li>
+            </ul>
+            <span>请由本厂管理员在「建厂就绪 → 已确认资料与版本历史」逐条选择采用哪个来源。</span>
+          </el-alert>
+
           <!-- 已答事实与来源逐条来自服务端 typed receipts；pending/skipped 继续留在清单。 -->
           <FactoryConversationFactLedger :facts="progress.factEvidence ?? []" />
           <div class="checklist">
@@ -1039,6 +1086,7 @@ import {
   type PlannedChange,
   type CurrentFactoryConfig,
   submitStructuredAnswers,
+  confirmCarriedFacts,
   listFactories,
   humanizeKeys,
   type FactoryBrief,
@@ -2821,6 +2869,25 @@ async function publishBlueprint() {
   }
 }
 
+async function confirmCarried(fields?: string[]) {
+  if (!factoryId.value || !sessionId.value || sending.value) return
+  clearFlowIssue()
+  sending.value = true
+  try {
+    await confirmCarriedFacts(factoryId.value, sessionId.value, fields)
+    await refreshProgress()
+  } catch (error) {
+    showFlowIssue({
+      title: '上一版的值没有确认成功，仍保持待确认',
+      detail: errorMessage(error),
+      sideEffect: '这些值仍是「待确认」，没有写入已确认资料。',
+      retryLabel: '重新确认',
+    }, () => confirmCarried(fields))
+  } finally {
+    sending.value = false
+  }
+}
+
 async function restart() {
   const answered = progress.value?.answered?.length ?? 0
   const remaining = progress.value?.remaining ?? 0
@@ -3166,6 +3233,7 @@ onMounted(async () => {
 </script>
 
 <style lang="scss" scoped>
+.reused-list { margin: 6px 0 0; padding-left: 18px; }
 .page-container {
   --assembly-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   padding: 20px;

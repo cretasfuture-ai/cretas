@@ -212,6 +212,14 @@ public class SseStreamingService {
     /**
      * SSE 流式执行意图
      */
+    /** Optional so partial contexts / unit constructions keep working; null means "do not trace". */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.agentops.FactoryAgentTraceRecorder factoryTraceRecorder;
+
+    /** The last streamed "result" per emitter; the app's AI chat runs here, not through the facade. */
+    private final Map<SseEmitter, IntentExecuteResponse> lastStreamedResult =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
     public SseEmitter executeStream(String factoryId, IntentExecuteRequest request,
                                      Long userId, String userRole) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
@@ -231,7 +239,12 @@ public class SseStreamingService {
             try (var actorScope = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(actor);
                  SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId);
                  var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
-                executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
+                long startedNanos = System.nanoTime();
+                try {
+                    executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
+                } finally {
+                    recordStreamedFactoryTrace(emitter, factoryId, userId, userRole, startedNanos);
+                }
             }
         });
 
@@ -256,7 +269,8 @@ public class SseStreamingService {
         return cancellation;
     }
 
-    private void executeStreamAsync(SseEmitter emitter, String factoryId,
+    /** package-private so the trace wiring can be tested through the real executeStream worker */
+    void executeStreamAsync(SseEmitter emitter, String factoryId,
                                      IntentExecuteRequest request, Long userId, String userRole,
                                      com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation miniCancellation) {
         try {
@@ -2136,6 +2150,9 @@ public class SseStreamingService {
     }
 
     void sendSseEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
+        if ("result".equals(eventName) && data instanceof IntentExecuteResponse streamed) {
+            lastStreamedResult.put(emitter, streamed); // read back once, when the streamed run ends
+        }
         try {
             String json = objectMapper.writeValueAsString(data);
             emitter.send(SseEmitter.event().name(eventName).data(json));
@@ -2143,6 +2160,17 @@ public class SseStreamingService {
             log.warn("序列化 SSE 事件数据失败: {}", e.getMessage());
             throw new IOException("Failed to serialize SSE event data", e);
         }
+    }
+
+    /** S6-07: streamed runs (the app's AI chat) leave the same trace as facade runs; never throws. */
+    private void recordStreamedFactoryTrace(SseEmitter emitter, String factoryId, Long userId,
+                                            String userRole, long startedNanos) {
+        IntentExecuteResponse streamed = lastStreamedResult.remove(emitter);
+        if (factoryTraceRecorder == null || streamed == null) {
+            return;
+        }
+        factoryTraceRecorder.record(factoryId, userId, userRole, streamed,
+                (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
     private IntentExecuteResponse buildValidationFailureResponse(LlmSchemaValidationException e) {

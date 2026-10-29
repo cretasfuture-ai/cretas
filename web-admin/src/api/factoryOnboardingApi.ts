@@ -219,6 +219,16 @@ export interface FactoryBuildProgress {
   pendingLabels: string[]
   answered: string[]
   collected: Record<string, string>
+  /** 本版访谈直接沿用的上一版已确认事实 (字段 -> 值), 不再重复询问 */
+  reusedFacts?: Record<string, string>
+  /** 沿用项的可读清单 (名称 + 值), 页面只显示这份 */
+  reusedFactItems?: Array<{ field: string; label: string | null; value: string }>
+  /** 上一版/自由文本已填写、等用户确认的值: 不算已回答 */
+  carriedFacts?: Array<{ field: string; label: string | null; value: string }>
+  /** 新答案与已确认事实不同、等管理员逐条选择来源 */
+  factConflicts?: Array<{
+    field: string; label: string | null; confirmedValue: string; newValue: string; pendingId: string
+  }>
   history?: ConversationHistoryMessage[]
   /** 只有 remaining=0 时才有值 */
   assembledDescription?: string | null
@@ -582,6 +592,15 @@ export function submitStructuredAnswers(
   return request.post<unknown, Envelope<FactoryBuildProgress>>(
     `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}/answers`,
     answers,
+    ABS
+  )
+}
+
+/** 一键确认「上一版已填写」的值; fields 为空 = 全部。走与手动答题同一条结构化决策路径。 */
+export function confirmCarriedFacts(factoryId: string, sessionId: string, fields?: string[]) {
+  return request.post<unknown, Envelope<FactoryBuildProgress>>(
+    `/api/platform/factory-assembly/factories/${encodeURIComponent(factoryId)}/ai-initialize/converse/${encodeURIComponent(sessionId)}/confirm-carried`,
+    { fields: fields ?? [] },
     ABS
   )
 }

@@ -67,6 +67,11 @@ class FakeConnection:
         for marker, rows in sorted(self.rows_by_marker.items(), key=lambda item: len(item[0]), reverse=True):
             if marker in sql:
                 return rows
+        # The independent ordinary-Web MC source was added after this fake's
+        # original fixture map.  Keep legacy source tests explicit and empty
+        # for that new read path; production code must not detect this fake.
+        if "material_consumptions" in sql:
+            return []
         raise AssertionError(f"unexpected SQL: {sql}")
 
 
@@ -117,7 +122,8 @@ async def test_load_is_tenant_scoped_role_stripped_and_preserves_wip_units(monke
     assert any(g["id"] == "wip.inventory.snapshot" for g in gaps)
 
     fetches = [call for call in calls if call[0] == "fetch"]
-    assert len(fetches) == 4
+    assert len(fetches) == 5
+    assert any("material_consumptions" in call[1] for call in fetches)
     for _, sql, params in fetches:
         assert "$1" in sql and "F006" not in sql
         assert params[0] == "F006"

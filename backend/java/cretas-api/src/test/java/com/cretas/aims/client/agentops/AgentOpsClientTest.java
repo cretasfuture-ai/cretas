@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.SocketPolicy;
 import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -241,5 +242,34 @@ class AgentOpsClientTest {
         one.setMaxToolCalls(2);
         request.setCases(List.of(one));
         return request;
+    }
+
+    @Test
+    void traceUploadIsReplayedOnceWhenAPooledConnectionWasClosedByThePeer() throws Exception {
+        // uvicorn closed an idle keep-alive connection: the request is read, then the socket dies
+        // with no response ("unexpected end of stream").
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
+        server.enqueue(json(201, "{\"runId\":\"r1\"}"));
+
+        JsonNode stored = client.recordFactoryTrace(Map.of("runId", "r1"), context());
+
+        assertThat(stored.path("runId").asText()).isEqualTo("r1");
+        assertThat(server.getRequestCount()).isEqualTo(2);
+        assertThat(server.takeRequest().getPath()).endsWith("/traces/factory");
+        assertThat(server.takeRequest().getPath()).endsWith("/traces/factory");
+    }
+
+    @Test
+    void traceUploadGivesUpAfterOneReplayAndNeverReplaysARealHttpAnswer() throws Exception {
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
+        assertThatThrownBy(() -> client.recordFactoryTrace(Map.of("runId", "r1"), context()))
+                .isInstanceOf(java.io.IOException.class);
+        assertThat(server.getRequestCount()).isEqualTo(2);
+
+        server.enqueue(json(422, "{\"detail\":\"INVALID_TRACE_OUTCOME\"}"));
+        assertThatThrownBy(() -> client.recordFactoryTrace(Map.of("runId", "r2"), context()))
+                .isInstanceOf(AgentOpsClient.UpstreamException.class);
+        assertThat(server.getRequestCount()).isEqualTo(3); // the 422 was sent once, not replayed
     }
 }

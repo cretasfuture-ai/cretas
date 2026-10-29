@@ -72,6 +72,24 @@ test('quantity-family facts cannot silently drift to another unit', () => {
   assert.equal(catalog.candidateUnitsAligned(candidate('wrong-percent', 'production.output', { kpis: [{ label: '产量', value: 10, unit: '%' }] })), false);
 });
 
+test('purchase price accepts only trusted nonadditive per-material table/chart facts', () => {
+  const good = candidate('purchase-price', 'purchase.price', {
+    source: 'purchase · authorized receipt lines', unit: '元/kg',
+    metadata: { aggregation: 'nonadditive' },
+    kpis: [],
+    tableData: [{ label: 'A', value: 2.5 }, { label: 'B', value: 3 }],
+    chart: { chartType: 'bar_horizontal', echartsOption: { yAxis: { data: ['B', 'A'] }, series: [{ data: [3, 2.5] }] } },
+  });
+  assert.deepEqual(catalog.purchasePriceEvidence(good).points.map((point) => point.value), [2.5, 3]);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, source: 'business' }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, unit: 'kg' }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, chart: { ...good.chart, echartsOption: { yAxis: { data: ['A', 'B'] }, series: [{ data: [2.5, 99] }] } } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: null }, { label: 'B', value: 3 }] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: ['label', 'value'], rows: [{ label: 'A', value: '' }, { label: 'B', value: 3 }] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: { headers: [], rows: [] } }), null);
+  assert.equal(catalog.purchasePriceEvidence({ ...good, tableData: [{ label: 'A', value: 2.5 }, { label: 'A', value: 2.5 }] }), null);
+});
+
 test('stateless discovery snapshot can load details lazily without admitting unavailable or full contexts', () => {
   const lazy = candidate('lazy', 'production.output', {
     detailSnapshotKey: 'opaque-snapshot',
@@ -83,6 +101,23 @@ test('stateless discovery snapshot can load details lazily without admitting una
   assert.equal(catalog.candidateIsQualified({ ...lazy, detailStatus: { state: 'capacity' } }), false);
   assert.equal(catalog.candidateIsQualified({ ...lazy, chart: null }), false);
   assert.equal(catalog.selectCatalogCandidates({ recommendations: [lazy] }, null).selected.length, 1);
+});
+
+test('WIP voucher counts require exact unique original rows without relaxing physical units', () => {
+  const good = candidate('wip', 'wip-plan-flow.plan-flow', {
+    source: 'wip-plan-flow · 已过账工序流转',
+    kpis: [{ label: '已过账领用量', value: 1, unit: 'kg' }, { label: '独立流转条数', value: 1, unit: '条' }],
+    tableData: { headers: ['数量', '单位', 'MC凭证'], rows: [[1, 'kg', 'MC:3986']] },
+  });
+  assert.equal(catalog.candidateUnitsAligned(good), true);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, source: 'business' }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, analysis: { familyId: 'production.output' } }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, kpis: [{ label: '独立流转条数', value: 2, unit: '条' }] }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, kpis: [{ label: '产量', value: 1, unit: '条' }] }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, kpis: [{ label: '已过账领用量', value: 1, unit: '件' }] }), false);
+  for (const rows of [[[1, '件', 'MC:3986']], [[1, 'kg', 'MC:3986'], [1, 'kg', 'MC:3986']], [[1, 'kg', 'unknown']], [[0, 'kg', 'MC:3986']]]) {
+    assert.equal(catalog.candidateUnitsAligned({ ...good, tableData: { ...good.tableData, rows } }), false);
+  }
 });
 
 test('export coverage is based on actual payload candidate IDs', () => {

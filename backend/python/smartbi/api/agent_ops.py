@@ -172,6 +172,36 @@ def require_runtime_shadow_context(request: Request) -> AgentOpsContext:
     return context
 
 
+def require_trace_ingest_context(request: Request) -> AgentOpsContext:
+    """Trace ingest: any authenticated factory user's run may be recorded.
+
+    Operators run the agent, so ingest cannot require an admin role like the
+    read side does.  Still internal-auth only, FACTORY only, tenant from the
+    trusted headers (never query/body)."""
+
+    if getattr(request.state, "auth_method", None) != "internal":
+        raise HTTPException(status_code=401, detail="INTERNAL_AUTH_REQUIRED")
+    if any(key in request.query_params for key in ("factoryId", "factory_id", "tenantId", "tenant_id")):
+        raise HTTPException(status_code=422, detail="TENANT_PARAMETER_FORBIDDEN")
+    factory_id = getattr(request.state, "factory_id", None)
+    user_id = getattr(request.state, "user_id", None)
+    role = getattr(request.state, "role", None)
+    if not isinstance(factory_id, str) or not _SAFE_ID.fullmatch(factory_id):
+        raise HTTPException(status_code=403, detail="TRUSTED_TENANT_REQUIRED")
+    if not isinstance(user_id, str) or not _SAFE_ID.fullmatch(user_id):
+        raise HTTPException(status_code=403, detail="TRUSTED_ACTOR_REQUIRED")
+    if not isinstance(role, str) or not _SAFE_ID.fullmatch(role):
+        raise HTTPException(status_code=403, detail="TRUSTED_ACTOR_REQUIRED")
+    if getattr(request.state, "business_type", None) != "FACTORY":
+        raise HTTPException(status_code=403, detail="FACTORY_BUSINESS_REQUIRED")
+    correlation_id = get_correlation_id()
+    if correlation_id == "-":
+        correlation_id = str(uuid.uuid4())
+    if not _SAFE_ID.fullmatch(correlation_id):
+        raise HTTPException(status_code=422, detail="INVALID_CORRELATION_ID")
+    return AgentOpsContext(factory_id, user_id, role.lower(), correlation_id, "FACTORY")
+
+
 def require_agent_ops_context(request: Request) -> AgentOpsContext:
     if getattr(request.state, "auth_method", None) != "internal":
         raise HTTPException(status_code=401, detail="INTERNAL_AUTH_REQUIRED")
@@ -422,7 +452,7 @@ async def rerun_experiment(
 @router.post("/traces/factory", status_code=201)
 async def record_factory_trace(
     body: FactoryTraceBody,
-    context: AgentOpsContext = Depends(require_agent_ops_context),
+    context: AgentOpsContext = Depends(require_trace_ingest_context),
     service: AgentOpsService = Depends(get_agent_ops_service),
 ):
     if context.business_type != "FACTORY":
