@@ -40,6 +40,10 @@ public class FactoryAgentTraceRecorder {
             "PENDING_APPROVAL", "DENIED", "CONFIRMATION_REQUIRED", "APPROVAL_REQUIRED");
     /** Step name for a blocked/failed run that never reached a tool (the intent code still identifies it). */
     static final String NO_TOOL_STEP = "no_tool_dispatched";
+    /** A completed run that is bound to no tool (skill / report routes): the intent answered it. */
+    static final String INTENT_ROUTE_STEP = "intent_route";
+    /** Security-relevant denials that never resolved an intent (e.g. session admission). */
+    static final String UNRESOLVED_INTENT = "UNRESOLVED_INTENT";
     private static final String SOURCE_REF = "tool_dispatch";
 
     private final AgentOpsClient client;
@@ -91,19 +95,29 @@ public class FactoryAgentTraceRecorder {
 
     /** Package-visible for tests: null when this response has nothing to trace. */
     static Map<String, Object> buildTrace(IntentExecuteResponse response, long latencyMs) {
-        if (response == null || response.getIntentCode() == null
-                || !INTENT.matcher(response.getIntentCode()).matches()) {
+        if (response == null) {
             return null;
         }
         String outcome = outcomeOf(response.getStatus());
-        String toolName = toolNameOf(response);
-        if (toolName == null) {
-            // Blocked/forbidden/failed runs often stop before a tool is chosen. Dropping them would skew
-            // traces toward successes, so keep them (with the intent code) but never invent a success.
-            if (!"BLOCKED".equals(outcome) && !"FAILED".equals(outcome)) {
+        String intent = response.getIntentCode();
+        if (intent == null || !INTENT.matcher(intent).matches()) {
+            if (!"BLOCKED".equals(outcome)) {
                 return null;
             }
-            toolName = NO_TOOL_STEP;
+            intent = UNRESOLVED_INTENT; // a denied attempt is worth a row even before an intent resolved
+        }
+        String toolName = toolNameOf(response);
+        if (toolName == null) {
+            // Skill/report-routed runs (tool_name NULL, e.g. REPORT_INVENTORY) and blocked/failed runs that
+            // stopped before a tool was chosen carry no toolName. Dropping them skews traces toward the
+            // tool-bound successes, so keep them, named for what actually happened.
+            if ("SUCCESS".equals(outcome)) {
+                toolName = INTENT_ROUTE_STEP;
+            } else if ("BLOCKED".equals(outcome) || "FAILED".equals(outcome)) {
+                toolName = NO_TOOL_STEP;
+            } else {
+                return null;
+            }
         }
         int latency = (int) Math.max(0, Math.min(latencyMs, 3_600_000L));
         Map<String, Object> step = new LinkedHashMap<>();
@@ -113,7 +127,7 @@ public class FactoryAgentTraceRecorder {
         step.put("sourceRef", SOURCE_REF);
         Map<String, Object> trace = new LinkedHashMap<>();
         trace.put("runId", UUID.randomUUID().toString());
-        trace.put("intentCode", response.getIntentCode());
+        trace.put("intentCode", intent);
         trace.put("outcome", outcome);
         trace.put("latencyMs", latency);
         trace.put("steps", List.of(step));
