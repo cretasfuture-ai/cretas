@@ -270,13 +270,11 @@ public class QualityDispositionInventoryService {
             log.warn("质检处置库存桥接 — 在制批次 {} 待检, 不在处置桥接里放行 (须走质检放行)", mb.getBatchNumber());
         }
         if (decision == FlipDecision.FLIP) {
+            MaterialBatchStatus before = mb.getStatus();
             mb.setStatus(target);
             materialBatchRepository.save(mb);
-            if (target == MaterialBatchStatus.AVAILABLE && eventPublisher != null) {
-                // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-                eventPublisher.publishEvent(new com.cretas.aims.event.MaterialBatchReleasedEvent(
-                        this, mb.getFactoryId(), mb.getMaterialTypeId(), mb.getId()));
-            }
+            // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
+            com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, mb, before);
         }
         return decision;
     }

@@ -71,7 +71,7 @@ class ProcessSecretUrgentInsertMessageTest {
         MaterialCheckResult check = new MaterialCheckResult();
         check.setAllSatisfied(false);
         check.setShortfalls(List.of(shortfall));
-        when(bom.checkMaterialAvailability(eq(F), any())).thenReturn(check);
+        when(bom.checkPickableAvailability(eq(F), any())).thenReturn(check);
 
         PlatformTransactionManager tx = mock(PlatformTransactionManager.class);
         when(tx.getTransaction(any())).thenReturn(mock(TransactionStatus.class));

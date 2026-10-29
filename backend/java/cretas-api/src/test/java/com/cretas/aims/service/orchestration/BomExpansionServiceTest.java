@@ -190,6 +190,64 @@ class BomExpansionServiceTest {
         assertEquals(0, new BigDecimal("2").compareTo(sf.getShortfallQuantity()));
     }
 
+    /**
+     * 2026-10-29 验收 D-S3S4-01: 采购默认收进原料仓 (WH-RAW)。原料仓是生产领料来源, 那里的批次必须算进可用量 ——
+     * 只数车间仓 + 物流仓时, 到货 3 kg 后缺口仍是 12, 到货永远不抵缺口。
+     */
+    @Test
+    void stockReceivedIntoTheRawWarehouseReducesTheGap() {
+        when(warehouseResolver.productionPickingWarehouseIds("F006"))
+                .thenReturn(List.of("WH-WKS", "WH-LOG", "WH-RAW", "WH-LINE"));
+        // 扣料口径也打桩: 若只读检查退回扣料口径, 照常跑完, 由下面的数量断言抓出 (而不是 NPE)
+        org.mockito.Mockito.lenient().when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
+        org.mockito.Mockito.lenient().when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-WKS")).thenReturn(List.of());
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-LOG")).thenReturn(List.of());
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-RAW"))
+                .thenReturn(List.of(stockBatch("MB-RAW", "3", null)));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-LINE"))
+                .thenReturn(List.of(stockBatch("MB-LINE", "2", null)));
+
+        MaterialRequirement req = new MaterialRequirement();
+        req.setMaterialTypeId("MAT-BONE");
+        req.setMaterialTypeName("猪大骨");
+        req.setRequiredQuantity(new BigDecimal("15"));
+        req.setSourceUnit("kg");
+
+        com.cretas.aims.dto.orchestration.MaterialShortfall sf =
+                service.checkPickableAvailability("F006", List.of(req)).getShortfalls().get(0);
+
+        // 原料仓 3 + 线边仓 2 都算可用 ⇒ 15 − 5 = 10
+        assertEquals(0, new BigDecimal("5").compareTo(sf.getAvailableQuantity()));
+        assertEquals(0, new BigDecimal("10").compareTo(sf.getShortfallQuantity()));
+    }
+
+    /**
+     * 扣料口径不放宽: 完工自动扣料按 checkMaterialAvailability 的批次分配直接扣减, 若它也去原料仓取批次,
+     * 完工就会绕过领料单 / 调拨直接扣原料仓。原料仓里的 3 kg 在这里必须看不见。
+     */
+    @Test
+    void theConsumptionCheckNeverReadsTheRawWarehouse() {
+        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
+        when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-WKS")).thenReturn(List.of());
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-LOG")).thenReturn(List.of());
+
+        MaterialRequirement req = new MaterialRequirement();
+        req.setMaterialTypeId("MAT-BONE");
+        req.setMaterialTypeName("猪大骨");
+        req.setRequiredQuantity(new BigDecimal("15"));
+        req.setSourceUnit("kg");
+
+        com.cretas.aims.dto.orchestration.MaterialCheckResult result =
+                service.checkMaterialAvailability("F006", List.of(req));
+
+        assertEquals(true, result.getAllocations().isEmpty());
+        org.mockito.Mockito.verify(materialBatchRepository, org.mockito.Mockito.never())
+                .findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-RAW");
+        org.mockito.Mockito.verify(warehouseResolver, org.mockito.Mockito.never()).productionPickingWarehouseIds("F006");
+    }
+
     private static com.cretas.aims.entity.MaterialBatch stockBatch(String id, String qty, java.time.LocalDate expire) {
         com.cretas.aims.entity.MaterialBatch b = new com.cretas.aims.entity.MaterialBatch();
         b.setId(id);

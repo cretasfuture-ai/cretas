@@ -294,11 +294,8 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
 
         batch.setStatus(newStatus);
         materialBatchRepository.save(batch);
-        if (newStatus == MaterialBatchStatus.AVAILABLE && eventPublisher != null) {
-            // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-            eventPublisher.publishEvent(new com.cretas.aims.event.MaterialBatchReleasedEvent(
-                    this, batch.getFactoryId(), batch.getMaterialTypeId(), batch.getId()));
-        }
+        // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
+        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, batch, prevStatus);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("batchNumber", batchNumber);

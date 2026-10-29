@@ -130,7 +130,7 @@ public class BomExpansionTool extends AbstractBusinessTool {
 
         // Step 2: 库存校验 (可选)
         if (checkStock) {
-            MaterialCheckResult check = bomExpansionService.checkMaterialAvailability(factoryId, requirements);
+            MaterialCheckResult check = bomExpansionService.checkPickableAvailability(factoryId, requirements);
             result.put("stockCheck", Map.of(
                 "allSatisfied", check.isAllSatisfied(),
                 "shortfallCount", check.getShortfalls() != null ? check.getShortfalls().size() : 0,
