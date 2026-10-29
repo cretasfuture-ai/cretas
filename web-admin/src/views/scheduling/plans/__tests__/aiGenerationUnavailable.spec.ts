@@ -197,6 +197,55 @@ describe('scheduling create: daily-capacity auto-schedule when the server says A
     expect(boundary.push).toHaveBeenCalledWith({ path: '/scheduling/plans/SP-1', state: { apsWarnings: ['「卤猪蹄」没有填日产能，按历史估算 150 袋/天'] } });
   });
 
+  it('prefills the joint plan suggestion (editable, saved only on submit) and shows the 1 day of history', async () => {
+    serve([{ id: 'LINE-1', name: '一号线' }]);
+    const withHistory = { success: true, data: {
+      id: null, outcome: 'CAPACITY_REQUIRED', lineSchedules: [], warnings: [],
+      capacityRequired: [
+        { productTypeId: 'PT-BEEF', productName: '酱牛肉', unit: '盒', jointPlan: false, question: '「酱牛肉」一天能做多少 盒？', reason: 'MISSING',
+          experienceNote: '近 90 天只有 1 天有成品入库，不足 3 天，算不出历史日产能', historyBasis: 'FINISHED_OUTPUT', historyWindowDays: 90,
+          sampleDays: [{ date: '2026-10-27', quantity: 40, unit: '盒' }], planNumbers: ['PLAN-B'] },
+        { productTypeId: 'RAW-CHICKEN', productName: '西装鸡', unit: 'kg', jointPlan: true, question: '这个联产计划（西装鸡）一天能做多少 kg？', reason: 'MISSING',
+          suggestedPerDay: 200, experienceNote: '按近 90 天里 3 天实际投入西装鸡的中位数', historyBasis: 'RAW_INPUT', historyWindowDays: 90,
+          sampleDays: [], planNumbers: ['PLAN-A'] },
+      ],
+    } };
+    boundary.post.mockResolvedValueOnce(withHistory).mockResolvedValueOnce(scheduled);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="mode-daily-schedule"]').trigger('click');
+    await wrapper.get('[data-testid="aps-plan-PP-B"]').trigger('click');
+    await wrapper.get('[data-testid="aps-plan-PP-A"]').trigger('click');
+    await wrapper.findAll('.submit-area button')[1].trigger('click');
+    await flushPromises();
+
+    expect(boundary.post).toHaveBeenCalledTimes(1);
+    const chicken = wrapper.get('[data-testid="aps-capacity-RAW-CHICKEN"]');
+    // 建议值预填进输入框, 说明怎么算的
+    expect((chicken.get('input').element as HTMLInputElement).value).toBe('200');
+    expect(chicken.text()).toContain('实际投入西装鸡');
+    expect(chicken.get('[data-testid="aps-capacity-suggestion-RAW-CHICKEN"]').text()).toContain('200 kg/天');
+    expect(chicken.find('[data-testid="aps-capacity-samples-RAW-CHICKEN"]').exists()).toBe(false);
+    // 普通产品只有 1 天: 照样问, 把那 1 天摆出来, 不预填
+    const beef = wrapper.get('[data-testid="aps-capacity-PT-BEEF"]');
+    expect(beef.get('[data-testid="aps-capacity-samples-PT-BEEF"]').text()).toBe('近 90 天只有 1 天有记录：10-27 入库 40 盒');
+    expect((beef.get('input').element as HTMLInputElement).value).toBe('');
+    expect(beef.find('[data-testid="aps-capacity-suggestion-PT-BEEF"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="aps-capacity-block-reason"]').text()).toContain('酱牛肉');
+
+    await beef.get('input').setValue('40');
+    await chicken.get('input').setValue('180'); // 人改了建议值
+    await wrapper.get('[data-testid="aps-capacity-submit"]').trigger('click');
+    await flushPromises();
+
+    expect(boundary.post).toHaveBeenCalledTimes(2);
+    expect(boundary.post.mock.calls[1][1]).toMatchObject({
+      dailyCapacityOverrides: [
+        { productTypeId: 'PT-BEEF', quantityPerDay: 40, unit: '盒' },
+        { productTypeId: 'RAW-CHICKEN', quantityPerDay: 180, unit: 'kg' },
+      ],
+    });
+  });
+
   it('blocks submission up front when no plan is chosen or several lines exist without a choice', async () => {
     serve([{ id: 'LINE-1', name: '一号线' }, { id: 'LINE-2', name: '二号线' }]);
     const wrapper = await mountPage();

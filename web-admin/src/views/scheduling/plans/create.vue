@@ -24,6 +24,8 @@ import {
   buildCapacityOverrides,
   capacityBlockReason,
   capacityKey,
+  describeSampleDays,
+  initialCapacityInputs,
   type CapacityInputs
 } from './dailyCapacityForm';
 import {
@@ -223,9 +225,8 @@ function openCapacityDialog(required: DailyCapacityRequired[]) {
     return;
   }
   capacityRequired.value = required;
-  const inputs: CapacityInputs = {};
-  for (const item of required) inputs[capacityKey(item)] = capacityInputs.value[capacityKey(item)] ?? null;
-  capacityInputs.value = inputs;
+  // 这一轮之前填过的保留; 联产计划有建议值就预填 (可改, 点「保存日产能并排程」才保存)
+  capacityInputs.value = initialCapacityInputs(required, capacityInputs.value);
   capacityDialogVisible.value = true;
 }
 
@@ -471,6 +472,16 @@ async function handleSubmit() {
                 ；产品上填的是 {{ item.currentQuantityPerDay }} {{ item.currentUnit }}/天，和计划单位 {{ item.unit }} 对不上
               </template>
               <template v-if="item.experienceNote">；{{ item.experienceNote }}</template>
+            </span>
+            <span v-if="describeSampleDays(item)" class="auto-hint" :data-testid="`aps-capacity-samples-${item.productTypeId}`">
+              {{ describeSampleDays(item) }}
+            </span>
+            <span
+              v-if="item.suggestedPerDay"
+              class="auto-hint suggestion"
+              :data-testid="`aps-capacity-suggestion-${item.productTypeId}`"
+            >
+              建议 {{ item.suggestedPerDay }} {{ item.unit }}/天，已预填，可以改；点「保存日产能并排程」才会保存
             </span>
           </div>
           <label class="capacity-input">
@@ -738,6 +749,8 @@ async function handleSubmit() {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+
+  .suggestion { color: #409eff; }
 }
 
 .capacity-input {

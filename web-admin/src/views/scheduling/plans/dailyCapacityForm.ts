@@ -30,6 +30,42 @@ export function capacityBlockReason(required: DailyCapacityRequired[], inputs: C
   return '';
 }
 
+/**
+ * 打开补填面板时的初始值: 这一轮之前已经填过的保留; 没填过且后端给了建议值 (联产计划按原料投入算) 就预填建议值,
+ * 人可改 —— 建议值只有点「保存日产能并排程」才会保存。
+ */
+export function initialCapacityInputs(required: DailyCapacityRequired[], previous: CapacityInputs): CapacityInputs {
+  const inputs: CapacityInputs = {};
+  for (const item of required) {
+    const key = capacityKey(item);
+    const prev = previous[key];
+    const hasPrev = prev !== null && prev !== undefined && prev !== '';
+    inputs[key] = hasPrev ? prev : (toPositiveNumber(item.suggestedPerDay ?? null) ?? null);
+  }
+  return inputs;
+}
+
+function shortDate(date: string): string {
+  return /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(5, 10) : date;
+}
+
+function plainQuantity(n: number): string {
+  return String(Math.round(Number(n) * 100) / 100);
+}
+
+/**
+ * 历史不足 3 天时把那几天的实际量摆出来: 「近 90 天只有 1 天有记录：10-27 入库 40 盒」;
+ * 联产计划写「投入」。没有记录 (0 天) 返回空串, 原因已在 experienceNote 里。
+ */
+export function describeSampleDays(item: DailyCapacityRequired): string {
+  const days = item.sampleDays ?? [];
+  if (days.length === 0) return '';
+  const verb = item.historyBasis === 'RAW_INPUT' ? '投入' : '入库';
+  const window = item.historyWindowDays ?? 90;
+  const parts = days.map(d => `${shortDate(d.date)} ${verb} ${plainQuantity(d.quantity)} ${d.unit}`);
+  return `近 ${window} 天只有 ${days.length} 天有记录：${parts.join('，')}`;
+}
+
 /** 把填好的日产能变成请求体; 有没填的直接抛 (调用方先用 capacityBlockReason 挡住)。 */
 export function buildCapacityOverrides(
   required: DailyCapacityRequired[],
