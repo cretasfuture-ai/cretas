@@ -34,19 +34,27 @@ public class AutonomousWriteSwitchController {
 
     public record SwitchRequest(Boolean writesEnabled, String reason) { }
 
-    /** No row yet: scheduled writes have never been switched on, so they do not run (fail closed). */
+    /**
+     * {@code writesEnabled} is this factory's own switch (no row yet: never switched on, so off).
+     * {@code deploymentEnabled} is the deployment-wide switch; {@code writesAllowed} is what actually
+     * decides the next fire: both on.
+     */
     public record SwitchView(String factoryId, boolean writesEnabled, String reason, Long changedBy,
-            LocalDateTime changedAt) { }
+            LocalDateTime changedAt, boolean deploymentEnabled, boolean writesAllowed) { }
+
+    private SwitchView view(String factoryId, java.util.Optional<AutonomousWriteSwitch.State> state) {
+        boolean deployment = writeSwitch.deploymentEnabled();
+        return state.map(s -> new SwitchView(s.factoryId(), s.writesEnabled(), s.reason(), s.changedBy(),
+                        s.changedAt(), deployment, deployment && s.writesEnabled()))
+                .orElse(new SwitchView(factoryId, false, null, null, null, deployment, false));
+    }
 
     @GetMapping
     @RequireRole({AutonomousGrantIssuer.GRANT_ROLE})
     @Operation(summary = "查看本厂自动任务写操作总开关")
     public ApiResponse<SwitchView> get(@PathVariable String factoryId) {
         issuer.currentAdmin(factoryId, AutonomousToolPolicy.requireRunAsUser(factoryId));
-        return ApiResponse.success(writeSwitch.state(factoryId)
-                .map(state -> new SwitchView(state.factoryId(), state.writesEnabled(), state.reason(),
-                        state.changedBy(), state.changedAt()))
-                .orElse(new SwitchView(factoryId, false, null, null, null)));
+        return ApiResponse.success(view(factoryId, writeSwitch.state(factoryId)));
     }
 
     @PutMapping
@@ -64,7 +72,6 @@ public class AutonomousWriteSwitchController {
         }
         AutonomousWriteSwitch.State state = writeSwitch.set(factoryId, body.writesEnabled(), body.reason(), actorId,
                 LocalDateTime.now());
-        return ApiResponse.success(new SwitchView(state.factoryId(), state.writesEnabled(), state.reason(),
-                state.changedBy(), state.changedAt()));
+        return ApiResponse.success(view(factoryId, java.util.Optional.of(state)));
     }
 }

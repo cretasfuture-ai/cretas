@@ -222,13 +222,17 @@ public class AutonomousToolRunner {
             ExecutionPrincipal actor;
             try {
                 actor = principals.create(factoryId, runAsUserId, ASSERTED_ROLE);
-            } catch (SecurityException noUser) {
+            } catch (RuntimeException noUser) {
+                // Missing run-as, unavailable tenant, or the lookup itself failing: the refusal is still
+                // recorded, attributed to the scheduler.
                 actor = new ExecutionPrincipal(factoryId, "UNRESOLVED", "scheduler", PrincipalType.SYSTEM,
                         java.util.Set.of(), java.util.Set.of(), java.util.Set.of("scheduler"));
             }
             String id = source.name().toLowerCase() + "-" + UUID.randomUUID();
             ToolExecutionCommand command = new ToolExecutionCommand(id, correlationId == null ? id : correlationId, id,
-                    tool.getToolName(), tool.getVersion(), objectMapper.valueToTree(params), actor, source,
+                    tool.getToolName() == null ? "unknown" : tool.getToolName(),
+                    tool.getVersion() == null || tool.getVersion().isBlank() ? "unversioned" : tool.getVersion(),
+                    objectMapper.valueToTree(params), actor, source,
                     ToolExecutionMode.EXECUTE, Optional.empty(), Optional.empty(), Optional.empty(),
                     Instant.now().plus(DEADLINE));
             auditId = ledger.beginAudit(command, actor);
