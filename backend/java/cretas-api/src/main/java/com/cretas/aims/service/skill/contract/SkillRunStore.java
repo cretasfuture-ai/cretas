@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -15,6 +17,10 @@ import java.util.UUID;
 /**
  * Receipts of Skill runs ({@code skill_run_records}) and the Skills a factory saved from them
  * ({@code factory_saved_skills}). Every read is factory-scoped; there is no lookup by id alone.
+ *
+ * <p>Writes are transactional: the primary pool runs with auto-commit off, and a JdbcTemplate write
+ * outside a transaction is rolled back when its connection returns to the pool. A run receipt is
+ * written in its own transaction, so a caller that rolls back afterwards does not erase it.</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -49,6 +55,7 @@ public class SkillRunStore {
             Long createdBy, LocalDateTime createdAt) {
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public String recordRun(String factoryId, Long userId, String skillName, String savedSkillId, String status,
             List<Step> steps) {
         String id = UUID.randomUUID().toString();
@@ -70,6 +77,18 @@ public class SkillRunStore {
                 runId, factoryId).stream().findFirst();
     }
 
+    public List<Run> listRuns(String factoryId, Long userId, int limit) {
+        return jdbcTemplate.query("SELECT id, factory_id, user_id, skill_name, saved_skill_id, status,"
+                        + " CAST(steps AS TEXT) AS steps, created_at FROM skill_run_records"
+                        + " WHERE factory_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (rs, row) -> new Run(rs.getString("id"), rs.getString("factory_id"), rs.getLong("user_id"),
+                        rs.getString("skill_name"), rs.getString("saved_skill_id"), rs.getString("status"),
+                        List.of(read(rs.getString("steps"), Step[].class)),
+                        rs.getTimestamp("created_at").toLocalDateTime()),
+                factoryId, userId, Math.max(1, Math.min(limit, 100)));
+    }
+
+    @Transactional
     public SavedSkill saveSkill(String factoryId, String name, String displayName, Run source,
             List<SavedStep> steps, JsonNode contract, Long createdBy) {
         String id = UUID.randomUUID().toString();
@@ -92,6 +111,7 @@ public class SkillRunStore {
                 factoryId);
     }
 
+    @Transactional
     public int setSavedEnabled(String factoryId, String savedSkillId, boolean enabled) {
         return jdbcTemplate.update("UPDATE factory_saved_skills SET enabled = ?, updated_at = ?"
                         + " WHERE id = ? AND factory_id = ?",
