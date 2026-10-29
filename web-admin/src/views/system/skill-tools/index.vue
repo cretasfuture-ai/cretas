@@ -5,6 +5,7 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Plus, Delete, View } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
+import ReusableSkillsPanel from './ReusableSkillsPanel.vue';
 import {
   listSkills, getSkillDetail, createSkill, toggleSkill, deleteSkill,
   getRecommendations, getPatterns,
@@ -323,6 +324,11 @@ function confidenceColor(score: number) {
       </el-tab-pane>
 
       <!-- ========== Tab 2: 自动推荐 ========== -->
+      <!-- ========== 可复用 Skill (S6-02) ========== -->
+      <el-tab-pane label="可复用 Skill" name="reusable" lazy>
+        <ReusableSkillsPanel :skills="skills" />
+      </el-tab-pane>
+
       <el-tab-pane label="自动推荐" name="recommendations">
         <el-card shadow="never">
           <template #header>

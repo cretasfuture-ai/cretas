@@ -5,6 +5,7 @@ import com.cretas.aims.dto.skill.SkillDefinition;
 import com.cretas.aims.dto.skill.SkillResult;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.skill.SkillExecutor;
+import com.cretas.aims.service.skill.SkillRouterService;
 import com.cretas.aims.service.skill.contract.SkillParameterContract.ParamSpec;
 import com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType;
 import com.cretas.aims.service.skill.impl.SkillExecutorImpl;
@@ -46,12 +47,48 @@ public class SavedSkillService {
     private final SkillParameterContractValidator validator;
     private final SkillExecutor skillExecutor;
     private final ObjectMapper objectMapper;
+    private final SkillRouterService skillRouter;
 
     public record SaveRequest(String runId, String name, String displayName, JsonNode parameterContract,
             Map<String, Object> defaults) {
     }
 
     public record RunResult(SkillResult result, String savedSkillId, String sourceRunId) {
+    }
+
+    /**
+     * Runs a registered Skill by name as the given user: the same executor (and so the same gateway
+     * routing and receipt) as the AI chat path. A successful run's receipt can then be saved.
+     */
+    public SkillResult runRegistered(String factoryId, Long userId, String userRole, String skillName,
+            Map<String, Object> params, String userQuery, String sessionId) {
+        if (skillName == null || skillName.isBlank()) {
+            throw bad("skillName 必须填写");
+        }
+        Map<String, Object> callerParams = params == null ? new LinkedHashMap<>() : new LinkedHashMap<>(params);
+        for (String key : callerParams.keySet()) {
+            if (SkillParameterContractValidator.isReservedKey(key)) {
+                throw bad("不接受身份参数：" + key);
+            }
+        }
+        SkillContext context = SkillContext.builder()
+                .factoryId(factoryId)
+                .userId(String.valueOf(userId))
+                .userRole(userRole)
+                .sessionId(sessionId)
+                .userQuery(userQuery == null || userQuery.isBlank() ? "skill:" + skillName : userQuery.trim())
+                .extractedParams(callerParams)
+                .build();
+        SkillResult result = skillRouter.executeSkill(skillName, context);
+        if (result != null && !result.isSuccess() && result.getMessage() != null
+                && result.getMessage().startsWith("Skill not found")) {
+            throw new BusinessException(404, "没有找到这个 Skill：" + skillName);
+        }
+        return result;
+    }
+
+    public List<SkillRunStore.Run> recentRuns(String factoryId, Long userId) {
+        return store.listRuns(factoryId, userId, 20);
     }
 
     public SkillRunStore.Run run(String factoryId, String runId) {

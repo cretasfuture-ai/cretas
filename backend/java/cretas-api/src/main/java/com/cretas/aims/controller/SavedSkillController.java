@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.skill.SkillResult;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
@@ -38,7 +39,32 @@ public class SavedSkillController {
 
     public record RunRequest(Map<String, Object> params) { }
 
+    public record RegisteredRunRequest(Map<String, Object> params, String userQuery) { }
+
     public record EnabledRequest(Boolean enabled) { }
+
+    @PostMapping("/registered/{skillName}/run")
+    @Operation(summary = "运行一个已注册的 Skill（工具经工具网关执行，留下运行回执，成功的可保存为可复用 Skill）")
+    public ApiResponse<SkillResult> runRegistered(@PathVariable String factoryId, @PathVariable String skillName,
+            @RequestBody(required = false) RegisteredRunRequest body) {
+        AuthenticatedActor actor = factoryUser(factoryId);
+        SkillResult result = savedSkills.runRegistered(factoryId, actor.id(), actor.role(), skillName,
+                body == null ? Map.of() : body.params(), body == null ? null : body.userQuery(),
+                "skill-run-" + UUID.randomUUID());
+        if (!result.isSuccess()) {
+            String message = result.getMessage() == null ? "Skill 未完成" : result.getMessage();
+            throw new BusinessException(400, result.getRunId() == null
+                    ? message : message + "（运行回执 " + result.getRunId() + "）");
+        }
+        return ApiResponse.success(result);
+    }
+
+    @GetMapping("/runs")
+    @Operation(summary = "我最近的 Skill 运行回执")
+    public ApiResponse<List<SkillRunStore.Run>> recentRuns(@PathVariable String factoryId) {
+        AuthenticatedActor actor = factoryUser(factoryId);
+        return ApiResponse.success(savedSkills.recentRuns(factoryId, actor.id()));
+    }
 
     @GetMapping("/runs/{runId}")
     @Operation(summary = "查看一次 Skill 运行的回执")

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -20,6 +21,9 @@ import java.util.Optional;
  * </ul>
  * One config is stopped by disabling it or revoking its grant. When the factory's switch cannot be
  * read the write is treated as suspended: an unknown switch never lets a write through.
+ *
+ * <p>The primary pool runs with auto-commit off, so every write here is transactional; a
+ * JdbcTemplate write outside a transaction is rolled back when its connection returns to the pool.</p>
  */
 @Slf4j
 @Component
@@ -64,6 +68,7 @@ public class AutonomousWriteSwitch {
         return rows.stream().findFirst();
     }
 
+    @Transactional
     public State set(String factoryId, boolean writesEnabled, String reason, Long actorId, LocalDateTime now) {
         jdbcTemplate.update("INSERT INTO autonomous_write_switches (factory_id, writes_enabled, reason, changed_by,"
                         + " changed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (factory_id) DO UPDATE SET"

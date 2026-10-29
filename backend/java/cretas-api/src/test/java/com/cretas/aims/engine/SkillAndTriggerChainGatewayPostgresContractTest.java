@@ -118,6 +118,9 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
         registry.add("spring.jpa.properties.hibernate.dialect", () -> "org.hibernate.dialect.PostgreSQLDialect");
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "create");
+        // As in production (application-pg-prod.properties): a write outside a transaction is lost,
+        // so a receipt that is not written transactionally would never be seen.
+        registry.add("spring.datasource.hikari.auto-commit", () -> "false");
     }
 
     @org.springframework.boot.test.context.TestConfiguration
@@ -137,6 +140,7 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
     // Legacy (ungoverned) lane only; the governed tool here must never reach either of them.
     @MockBean WriteGuardService writeGuardService;
     @MockBean ToolPermissionChain toolPermissionChain;
+    @MockBean com.cretas.aims.service.skill.SkillRouterService skillRouter;
 
     @Autowired SkillExecutorImpl skills;
     @Autowired SavedSkillService savedSkills;
@@ -152,10 +156,13 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
     private final List<Long> seenAsUser = new ArrayList<>();
 
     @BeforeEach void fixtures() throws Exception {
-        jdbc.execute("DROP TABLE IF EXISTS factory_saved_skills, skill_run_records CASCADE");
         try (var connection = dataSource.getConnection()) {
+            try (var statement = connection.createStatement()) {
+                statement.execute("DROP TABLE IF EXISTS factory_saved_skills, skill_run_records CASCADE");
+            }
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource("db/flyway/V20261103_109__skill_runs_and_saved_skills.sql"));
+            connection.commit();
         }
         tx.executeWithoutResult(status -> {
             for (String table : List.of("tool_execution_audit_events", "factory_trigger_chains", "suppliers", "users")) {
@@ -167,8 +174,10 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
             warehouseUser = user("F-SK", "sk-warehouse");
             salesUser = user("F-SK", "sk-sales");
         });
-        supplier("SUP-OWN", "F-SK");
-        supplier("SUP-FOREIGN", "F-SK-OTHER");
+        tx.executeWithoutResult(status -> {
+            supplier("SUP-OWN", "F-SK");
+            supplier("SUP-FOREIGN", "F-SK-OTHER");
+        });
         seenAsUser.clear();
         when(permissionService.resolveModuleLevelsForAuthorization(any())).thenAnswer(call -> {
             User user = call.getArgument(0);
@@ -276,6 +285,27 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
                 + salesUser + "'")).isEqualTo(1);
     }
 
+    @Test void theRegisteredSkillEntryRunsAsTheCallerAndLeavesASavableReceipt() {
+        when(skillRouter.executeSkill(org.mockito.ArgumentMatchers.eq("expired-materials"), any()))
+                .thenAnswer(call -> skills.execute(skill(), call.getArgument(1)));
+
+        SkillResult result = savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager",
+                "expired-materials", Map.of("limit", 3), null, "entry-1");
+
+        assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
+        assertThat(seenAsUser).containsExactly(warehouseUser);
+        assertThat(savedSkills.recentRuns("F-SK", warehouseUser)).extracting(SkillRunStore.Run::id)
+                .containsExactly(result.getRunId());
+        assertThat(savedSkills.recentRuns("F-SK", salesUser)).isEmpty();
+        SkillRunStore.SavedSkill saved = savedSkills.save("F-SK", warehouseUser,
+                new SavedSkillService.SaveRequest(result.getRunId(), "from-entry", null, null, null));
+        assertThat(saved.steps()).extracting(SkillRunStore.SavedStep::tool).containsExactly(TOOL);
+        // Identity cannot be smuggled through the entry either.
+        assertThatThrownBy(() -> savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager",
+                "expired-materials", Map.of("factoryId", "F-SK-OTHER"), null, "entry-2"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("factoryId");
+    }
+
     @Test void triggerChainStepRunsThroughTheRealGatewayAsTheRunAsUser() throws Exception {
         FactoryTriggerChain chain = chain(warehouseUser);
         runChain(chain);
@@ -337,13 +367,15 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
     }
 
     private long count(String tableAndFilter) {
-        return ((Number) entityManager.createNativeQuery("SELECT count(*) FROM " + tableAndFilter)
-                .getSingleResult()).longValue();
+        return tx.execute(status -> ((Number) entityManager.createNativeQuery("SELECT count(*) FROM " + tableAndFilter)
+                .getSingleResult()).longValue());
     }
 
     private String text(String sql) {
-        List<?> rows = entityManager.createNativeQuery(sql).getResultList();
-        return rows.isEmpty() || rows.get(0) == null ? null : String.valueOf(rows.get(0));
+        return tx.execute(status -> {
+            List<?> rows = entityManager.createNativeQuery(sql).getResultList();
+            return rows.isEmpty() || rows.get(0) == null ? null : String.valueOf(rows.get(0));
+        });
     }
 
     private void factory(String id) {
