@@ -20,6 +20,7 @@ export interface FactoryAnalysisRequest {
 export interface FactoryAnalysisCatalogItem {
   id: string;
   familyId: string;
+  familyLabel?: string | null;
   chartType: string;
   domain: string;
   metric: string;

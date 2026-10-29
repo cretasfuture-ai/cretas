@@ -48,7 +48,7 @@ function answered(overrides: Record<string, unknown> = {}) {
   return {
     factoryId: 'F006', source: 'business', sourceLabel: '本厂业务系统', period: { label: '2025 全年', year: 2025, periodType: 'all', startMonth: 1, endMonth: 12 }, analysisScopeLabel: '当前工厂授权范围', question: '看产量',
     status: 'answered', answer: '可信事实：OEE=83%', selectedIds: [chart.id], recommendations: [chart],
-    catalog: Array.from({ length: 10 }, (_, index) => ({ id: `candidate-${index}`, familyId: `family-${index}`, chartType: 'bar', domain: '生产', metric: `指标${index}`, unit: '%', priority: 'optional', sourceKey: 'business' })),
+    catalog: Array.from({ length: 10 }, (_, index) => ({ id: `candidate-${index}`, familyId: `family-${index}`, familyLabel: `分析主题${index}`, chartType: 'bar', domain: '生产', metric: `指标${index}`, unit: '%', priority: 'optional', sourceKey: 'business' })),
     facts: [{ id: 'fact-1', candidateId: chart.id, label: 'OEE', value: 83, unit: '%', source: '业务系统' }], limitations: ['未覆盖联合分析'], sourceErrors: [{ source: '质量', message: '来源超时' }],
     followUpQuestions: ['再看质量指标'], contextId: 'ctx-latest', subjects: [], ...overrides,
   };
@@ -120,6 +120,8 @@ describe('FactoryAnalysisChatScreen', () => {
     expect(screen.queryByText('指标9')).toBeNull();
     fireEvent.press(screen.getByText('展开目录'));
     expect(screen.getByText(/指标9/)).toBeTruthy();
+    expect(screen.getByText('分析主题0')).toBeTruthy();
+    expect(screen.queryByText(/family-0/)).toBeNull();
   });
 
   it('folds long answer prose by default and exposes accessible expand/collapse control', async () => {

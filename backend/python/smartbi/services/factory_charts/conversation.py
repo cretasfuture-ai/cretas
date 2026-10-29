@@ -139,7 +139,7 @@ def semantic_catalog(recommendations: Sequence[Mapping[str, Any]]) -> list[dict[
         analysis = candidate.get("analysis") if isinstance(candidate.get("analysis"), Mapping) else {}
         # Candidate titles may include a product value.  The planner does not
         # need them; IDs, family, chart type, domain and unit are sufficient.
-        result.append({
+        item = {
             "id": cid,
             "familyId": str(analysis.get("familyId") or _canonical_family(candidate)),
             "chartType": str(chart.get("chartType") or ""),
@@ -148,7 +148,15 @@ def semantic_catalog(recommendations: Sequence[Mapping[str, Any]]) -> list[dict[
             "unit": str(candidate.get("unit") or ""),
             "priority": str(candidate.get("priority") or ""),
             "sourceKey": str(candidate.get("source") or "").split(" · ", 1)[0],
-        })
+        }
+        # ``familyLabel`` is server-owned semantic metadata.  Keep it public
+        # for catalogue rendering, but never derive it from candidate titles
+        # (which may contain product values) or put those values in the planner
+        # catalogue.
+        family_label = analysis.get("familyLabel")
+        if isinstance(family_label, str) and family_label.strip():
+            item["familyLabel"] = family_label.strip()
+        result.append(item)
     return result
 
 

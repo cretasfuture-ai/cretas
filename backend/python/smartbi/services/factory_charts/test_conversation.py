@@ -37,11 +37,14 @@ def _candidate(cid, family, chart_type='line', value='10'):
 def test_semantic_catalog_keeps_all_chart_kinds_without_values():
     candidates = [_candidate('production.output:line', 'production.output'),
                   _candidate('production.output:bar', 'production.output', 'bar')]
+    candidates[0]['title'] = '秘密产品A产量'
+    candidates[0]['analysis']['familyLabel'] = '产量趋势'
     catalog = conversation.semantic_catalog(candidates)
     assert [item['id'] for item in catalog] == ['production.output:line', 'production.output:bar']
     assert {item['chartType'] for item in catalog} == {'line', 'bar'}
+    assert catalog[0]['familyLabel'] == '产量趋势'
     assert all('tableData' not in item and 'detailContext' not in item for item in catalog)
-    assert all('A' not in json.dumps(item, ensure_ascii=False) for item in catalog)
+    assert all('秘密产品A' not in json.dumps(item, ensure_ascii=False) for item in catalog)
 
 
 @pytest.mark.asyncio
