@@ -88,8 +88,8 @@ export interface DynamicQualitySubmitResponse {
 // 质检等级
 // ============================================
 
-export type QualityGrade = 'A' | 'B' | 'C' | 'D';
-export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL' | 'PENDING';
+export type QualityGrade = 'A' | 'B' | 'C' | 'D' | 'UNKNOWN';
+export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL' | 'PENDING' | 'UNKNOWN';
 
 export const GRADE_THRESHOLDS = {
   A: 95,   // ≥95分
@@ -103,6 +103,7 @@ export const GRADE_COLORS = {
   B: '#2196F3', // 良好 - 蓝
   C: '#FFC107', // 合格 - 黄
   D: '#F44336', // 不合格 - 红
+  UNKNOWN: '#757575', // 未知 - 灰
 } as const;
 
 export const GRADE_LABELS = {
@@ -110,6 +111,7 @@ export const GRADE_LABELS = {
   B: '良好',
   C: '合格',
   D: '不合格',
+  UNKNOWN: '未知',
 } as const;
 
 // ============================================

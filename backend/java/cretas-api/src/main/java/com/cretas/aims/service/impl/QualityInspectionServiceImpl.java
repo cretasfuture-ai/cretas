@@ -118,13 +118,48 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         log.info("创建质量检验记录: factoryId={}, productionBatchId={}",
                 factoryId, inspection.getProductionBatchId());
 
-        // 生成UUID作为ID
-        if (inspection.getId() == null || inspection.getId().trim().isEmpty()) {
-            inspection.setId(java.util.UUID.randomUUID().toString());
+        /*
+         * 自动建任务先落一条 PENDING，之后质检员提交的是同一项任务的判定。
+         * 只复用未决行；PASS/FAIL/CONDITIONAL 之间仍然保留为独立观测，避免
+         * 把真实复检历史压成一条。复用后继续走本方法原有的 propagation、FAIL
+         * 告警和成品隔离路径，不能退回到只 updateInspection 的旁路。
+         */
+        QualityInspection target = inspection;
+        if (inspection.getProductionBatchId() != null
+                && inspection.getResult() != null
+                && !"PENDING".equalsIgnoreCase(inspection.getResult())) {
+            java.util.List<QualityInspection> existing = qualityInspectionRepository
+                    .findByFactoryIdAndProductionBatchId(factoryId, inspection.getProductionBatchId());
+            QualityInspection pending = existing == null ? null : existing.stream()
+                    .filter(row -> row != null && "PENDING".equalsIgnoreCase(row.getResult()))
+                    .max(java.util.Comparator.comparing(QualityInspection::getInspectionDate,
+                            java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                    .orElse(null);
+            if (pending != null) {
+                target = pending;
+                target.setFactoryId(factoryId);
+                target.setInspectorId(inspection.getInspectorId());
+                target.setInspectionDate(inspection.getInspectionDate());
+                target.setSampleSize(inspection.getSampleSize());
+                target.setPassCount(inspection.getPassCount());
+                target.setFailCount(inspection.getFailCount());
+                target.setPassRate(inspection.getPassRate());
+                target.setResult(inspection.getResult());
+                target.setNotes(inspection.getNotes());
+                target.setInspectionMode(inspection.getInspectionMode());
+                if (inspection.getCustomFields() != null && !inspection.getCustomFields().isEmpty()) {
+                    target.setCustomFields(inspection.getCustomFields());
+                }
+            }
         }
 
-        inspection.setFactoryId(factoryId);
-        QualityInspection saved = qualityInspectionRepository.save(inspection);
+        // 生成UUID作为ID
+        if (target.getId() == null || target.getId().trim().isEmpty()) {
+            target.setId(java.util.UUID.randomUUID().toString());
+        }
+
+        target.setFactoryId(factoryId);
+        QualityInspection saved = qualityInspectionRepository.save(target);
 
         log.info("质量检验记录创建成功: inspectionId={}", saved.getId());
 

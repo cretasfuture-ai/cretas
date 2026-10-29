@@ -66,9 +66,9 @@ export default function QIRecordsScreen() {
           endDate: formatDate(now),
         };
       case 'passed':
-        return { grade: 'A,B,C' };
+        return { result: 'PASS' };
       case 'failed':
-        return { grade: 'D' };
+        return { result: 'FAIL' };
       default:
         return {};
     }
@@ -172,8 +172,19 @@ export default function QIRecordsScreen() {
 
       <View style={styles.recordFooter}>
         <Text style={styles.timeText}>{formatDateTime(item.inspectedAt)}</Text>
-        <View style={[styles.statusBadge, item.passed ? styles.statusPass : styles.statusFail]}>
-          <Text style={styles.statusText}>{item.passed ? t('records.passed') : t('records.failed')}</Text>
+        <View style={[styles.statusBadge,
+          item.result === 'PASS' ? styles.statusPass
+            : item.result === 'FAIL' ? styles.statusFail
+              : item.result === 'CONDITIONAL' ? styles.statusConditional
+                : styles.statusUnknown,
+        ]}>
+          <Text style={styles.statusText}>
+            {item.result === 'PASS' ? t('records.passed')
+              : item.result === 'FAIL' ? t('records.failed')
+                : item.result === 'CONDITIONAL' ? t('records.conditional')
+                  : item.result === 'PENDING' ? t('records.pending')
+                    : t('records.unknown')}
+          </Text>
         </View>
       </View>
     </TouchableOpacity>
@@ -357,6 +368,12 @@ const styles = StyleSheet.create({
   },
   statusFail: {
     backgroundColor: '#FFEBEE',
+  },
+  statusConditional: {
+    backgroundColor: '#FFF8E1',
+  },
+  statusUnknown: {
+    backgroundColor: '#ECEFF1',
   },
   statusText: {
     fontSize: 12,

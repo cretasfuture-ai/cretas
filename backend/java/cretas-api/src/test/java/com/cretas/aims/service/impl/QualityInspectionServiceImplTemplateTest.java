@@ -5,6 +5,7 @@ import com.cretas.aims.engine.ValidationRuleEvaluator;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.ProductionAlert;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionAlertRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -20,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -109,6 +112,66 @@ class QualityInspectionServiceImplTemplateTest {
 
         verify(dynamicFieldService, never())
                 .setDynamicFields(any(), any(), any(), any());
+    }
+
+    @Test
+    void createInspection_completesExistingPendingTaskWithoutCreatingHistoryRow() {
+        QualityInspection pending = new QualityInspection();
+        pending.setId("qi-pending");
+        pending.setFactoryId("F001");
+        pending.setProductionBatchId(45L);
+        pending.setResult("PENDING");
+        pending.setInspectionDate(java.time.LocalDate.of(2026, 10, 28));
+        QualityInspection completion = new QualityInspection();
+        completion.setProductionBatchId(45L);
+        completion.setResult("PASS");
+        completion.setSampleSize(BigDecimal.ONE);
+        completion.setPassCount(BigDecimal.ONE);
+        completion.setFailCount(BigDecimal.ZERO);
+        completion.setPassRate(BigDecimal.valueOf(100));
+        completion.setInspectionDate(java.time.LocalDate.of(2026, 10, 29));
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId("F001", 45L))
+                .thenReturn(List.of(pending));
+        when(qualityInspectionRepository.save(any(QualityInspection.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        QualityInspection saved = service.createInspection("F001", completion);
+
+        assertEquals("qi-pending", saved.getId());
+        assertEquals("PASS", saved.getResult());
+        verify(qualityInspectionRepository, times(1)).save(pending);
+        ArgumentCaptor<ProductionBatch> batchCaptor = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(productionBatchRepository, times(1)).save(batchCaptor.capture());
+        assertEquals(QualityStatus.PASSED,
+                batchCaptor.getValue().getQualityStatus());
+    }
+
+    @Test
+    void createInspection_completesPendingTaskAsFailAndKeepsFailAlertPath() {
+        QualityInspection pending = new QualityInspection();
+        pending.setId("qi-pending-fail");
+        pending.setFactoryId("F001");
+        pending.setProductionBatchId(46L);
+        pending.setResult("PENDING");
+        QualityInspection completion = new QualityInspection();
+        completion.setProductionBatchId(46L);
+        completion.setResult("FAIL");
+        completion.setSampleSize(BigDecimal.ONE);
+        completion.setPassCount(BigDecimal.ZERO);
+        completion.setFailCount(BigDecimal.ONE);
+        completion.setPassRate(BigDecimal.ZERO);
+        when(qualityInspectionRepository.findByFactoryIdAndProductionBatchId("F001", 46L))
+                .thenReturn(List.of(pending));
+        when(qualityInspectionRepository.save(any(QualityInspection.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        QualityInspection saved = service.createInspection("F001", completion);
+
+        assertEquals("qi-pending-fail", saved.getId());
+        assertEquals("FAIL", saved.getResult());
+        verify(qualityInspectionRepository, times(1)).save(pending);
+        verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
+        verify(productionAlertRepository, times(1)).save(any(ProductionAlert.class));
     }
 
     @Test

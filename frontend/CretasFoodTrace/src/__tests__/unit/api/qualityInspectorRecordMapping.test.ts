@@ -109,4 +109,24 @@ describe('qualityInspectorApi record detail mapping', () => {
     expect(record.passed).toBe(false);
     expect(record.passRate).toBe(70);
   });
+
+  it('does not turn pending or unknown results into grade D/failed records', async () => {
+    mock.onGet(base).reply(200, {
+      success: true,
+      data: {
+        content: [
+          { id: 'QI-PENDING', productionBatchId: 10815, result: 'PENDING', passRate: null },
+          { id: 'QI-UNKNOWN', productionBatchId: 10816, result: 'REWORK', passRate: null },
+        ],
+        totalElements: 2,
+        totalPages: 1,
+      },
+    });
+
+    const records = await qualityInspectorApi.getInspectionRecords({ result: 'FAIL' });
+
+    expect(records.content[0]).toMatchObject({ result: 'PENDING', grade: 'UNKNOWN', passed: false });
+    expect(records.content[1]).toMatchObject({ result: 'UNKNOWN', grade: 'UNKNOWN', passed: false });
+    expect(mock.history.get[0].params).toMatchObject({ result: 'FAIL' });
+  });
 });

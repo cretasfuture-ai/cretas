@@ -554,6 +554,34 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     @Override
+    public PageResponse<ProductionBatch> getQualityPendingBatches(String factoryId, PageRequest pageRequest) {
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "inspectionDate"));
+        Page<QualityInspection> pendingPage = qualityInspectionRepository.findByFactoryIdAndResultIn(
+                factoryId, List.of("PENDING"), pageable);
+        Map<Long, ProductionBatch> batchesById = new LinkedHashMap<>();
+        for (QualityInspection pending : pendingPage.getContent()) {
+            if (pending == null || pending.getProductionBatchId() == null
+                    || hasEffectiveInspectionVerdict(factoryId, pending.getProductionBatchId())) {
+                continue;
+            }
+            productionBatchRepository.findByIdAndFactoryId(pending.getProductionBatchId(), factoryId)
+                    .filter(batch -> batch.getStatus() == ProductionBatchStatus.COMPLETED)
+                    .ifPresent(batch -> batchesById.putIfAbsent(batch.getId(), batch));
+        }
+        List<ProductionBatch> batches = new ArrayList<>(batchesById.values());
+        batches.forEach(this::enrichBatchDisplayFields);
+        return PageResponse.of(batches, pageRequest.getPage(), pageRequest.getSize(), pendingPage.getTotalElements());
+    }
+
+    private boolean hasEffectiveInspectionVerdict(String factoryId, Long batchId) {
+        return qualityInspectionRepository.findByFactoryIdAndProductionBatchId(factoryId, batchId)
+                .stream().anyMatch(this::hasQualityVerdict);
+    }
+
+    @Override
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId,
                                                     Boolean isTrial, Boolean includeClerkWip,
                                                     PageRequest pageRequest) {
@@ -683,6 +711,16 @@ public class ProcessingServiceImpl implements ProcessingService {
                 pageRequest.getSize(),
                 page.getTotalElements()
         );
+    }
+
+    private boolean hasQualityVerdict(QualityInspection inspection) {
+        if (inspection == null || inspection.getResult() == null) {
+            return false;
+        }
+        return switch (inspection.getResult().trim().toUpperCase(Locale.ROOT)) {
+            case "PASS", "PASSED", "QUALIFIED", "FAIL", "FAILED", "CONDITIONAL", "PARTIAL_PASS" -> true;
+            default -> false;
+        };
     }
 
     @Override
@@ -1379,7 +1417,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         breakdown.put("conditional",
                 inspections.stream().filter(i -> "CONDITIONAL".equalsIgnoreCase(i.getResult())).count());
         breakdown.put("pending", inspections.stream()
-                .filter(i -> i.getResult() == null || i.getResult().isBlank())
+                .filter(i -> i.getResult() == null || i.getResult().isBlank()
+                        || "PENDING".equalsIgnoreCase(i.getResult().trim()))
                 .count());
         statistics.put("breakdown", breakdown);
         statistics.put("qualitySummary", buildQualitySummary(inspections, startDate, endDate));
