@@ -199,4 +199,19 @@ class FactoryAgentTraceRecorderTest {
                 .status("COMPLETED").build(), 9, "REPORT_INVENTORY");
         assertThat(trace).containsEntry("intentCode", "REPORT_INVENTORY").containsEntry("outcome", "SUCCESS");
     }
+
+    @Test
+    void everyFinalNoIntentStatusTheStreamEmitsIsRecordedAsUnknown() {
+        for (String status : new String[]{"NO_MATCH", "FACTORY_PACK_NO_MATCH", "VALIDATION_FAILED"}) {
+            Map<String, Object> trace = FactoryAgentTraceRecorder.buildTrace(
+                    IntentExecuteResponse.builder().intentRecognized(false).status(status).build(), 4);
+            assertThat(trace).as(status).isNotNull()
+                    .containsEntry("intentCode", FactoryAgentTraceRecorder.UNRESOLVED_INTENT)
+                    .containsEntry("outcome", "UNKNOWN");
+        }
+        // with a resolved intent the pack's no-match keeps its intent code
+        assertThat(FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentCode("MATERIAL_BATCH_QUERY").status("FACTORY_PACK_NO_MATCH").build(), 4))
+                .containsEntry("intentCode", "MATERIAL_BATCH_QUERY").containsEntry("outcome", "UNKNOWN");
+    }
 }
