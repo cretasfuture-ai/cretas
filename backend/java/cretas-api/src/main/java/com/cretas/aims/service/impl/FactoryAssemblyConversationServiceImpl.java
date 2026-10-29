@@ -1482,11 +1482,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
             return value;
         }
         if (!param.isMultiSelect()) {
-            String normalized = normalizeChoiceToken(value);
-            return options.stream()
-                    .filter(option -> normalizeChoiceToken(option).equals(normalized))
-                    .findFirst()
-                    .orElse(null);
+            return mapToOption(options, value);
         }
         List<String> selected = Arrays.stream(value.split("[、,，;；]"))
                 .map(String::trim).filter(part -> !part.isEmpty()).toList();
@@ -1495,10 +1491,7 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
         }
         List<String> canonical = new ArrayList<>();
         for (String token : selected) {
-            String normalized = normalizeChoiceToken(token);
-            String option = options.stream()
-                    .filter(candidate -> normalizeChoiceToken(candidate).equals(normalized))
-                    .findFirst().orElse(null);
+            String option = mapToOption(options, token);
             if (option == null) {
                 return null;
             }
@@ -1507,6 +1500,52 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
             }
         }
         return String.join("、", canonical);
+    }
+
+    /**
+     * Maps what the user said onto one valid option, or null. Exact (case/space/bracket-insensitive) first,
+     * then punctuation-insensitive (「有部分」= 「有(部分)」), then a UNIQUE containment match (the longest
+     * option named inside the value, or the only option that contains the value). Ambiguity returns null:
+     * a correction is never mapped by guessing.
+     */
+    private String mapToOption(List<String> options, String value) {
+        String normalized = normalizeChoiceToken(value);
+        for (String option : options) {
+            if (normalizeChoiceToken(option).equals(normalized)) return option;
+        }
+        String loose = looseChoiceKey(value);
+        if (loose.isEmpty()) return null;
+        for (String option : options) {
+            if (looseChoiceKey(option).equals(loose)) return option;
+        }
+        String longestInside = null;
+        int longest = 0;
+        boolean tie = false;
+        for (String option : options) {
+            String key = looseChoiceKey(option);
+            if (key.length() < 2 || !loose.contains(key)) continue;
+            if (key.length() > longest) {
+                longest = key.length();
+                longestInside = option;
+                tie = false;
+            } else if (key.length() == longest) {
+                tie = true;
+            }
+        }
+        if (longestInside != null && !tie) return longestInside;
+        if (loose.length() < 2) return null;
+        String onlyContaining = null;
+        for (String option : options) {
+            if (looseChoiceKey(option).contains(loose)) {
+                if (onlyContaining != null) return null;
+                onlyContaining = option;
+            }
+        }
+        return onlyContaining;
+    }
+
+    private String looseChoiceKey(String value) {
+        return value == null ? "" : value.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT);
     }
 
     private String normalizeChoiceToken(String value) {
