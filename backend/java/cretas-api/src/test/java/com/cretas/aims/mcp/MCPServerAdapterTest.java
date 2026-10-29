@@ -206,7 +206,15 @@ class MCPServerAdapterTest {
     }
 
     private MCPServerAdapter configuredAdapter(ToolRegistry registry) {
-        return new MCPServerAdapter(
+        com.cretas.aims.service.execution.ToolPermissionChain allowAll =
+                mock(com.cretas.aims.service.execution.ToolPermissionChain.class);
+        when(allowAll.denyReason(any(), any(), any(), any(), anyMap())).thenReturn(Optional.empty());
+        return configuredAdapter(registry, allowAll);
+    }
+
+    private MCPServerAdapter configuredAdapter(ToolRegistry registry,
+            com.cretas.aims.service.execution.ToolPermissionChain chain) {
+        MCPServerAdapter adapter = new MCPServerAdapter(
                 registry,
                 new ObjectMapper(),
                 new WriteGuardService(),
@@ -215,5 +223,33 @@ class MCPServerAdapterTest {
                 USER_ID.toString(),
                 USER_ROLE,
                 "material_batch_query,material_batch_delete");
+        org.springframework.test.util.ReflectionTestUtils.setField(adapter, "toolPermissionChain", chain);
+        return adapter;
+    }
+
+    /** S6 (2026-10-29): MCP goes through the same permission chain as AI chat / Skills, as its configured user. */
+    @Test
+    void aToolTheConfiguredUserMayNotUseIsRefusedAndNeverRuns() throws Exception {
+        ToolRegistry registry = mock(ToolRegistry.class);
+        ToolExecutor tool = mock(ToolExecutor.class);
+        when(tool.getToolName()).thenReturn("material_batch_query");
+        when(tool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+        when(registry.getExecutor("material_batch_query")).thenReturn(Optional.of(tool));
+        when(registry.isToolEnabledForFactory(FACTORY_ID, "material_batch_query")).thenReturn(true);
+        com.cretas.aims.service.execution.ToolPermissionChain deny =
+                mock(com.cretas.aims.service.execution.ToolPermissionChain.class);
+        when(deny.denyReason(any(), any(), any(), any(), anyMap())).thenReturn(Optional.of("无权查看"));
+        MCPRequest request = MCPRequest.builder().id("call-deny")
+                .params(Map.of("name", "material_batch_query", "arguments", Map.of())).build();
+
+        ResponseEntity<MCPResponse> denied = configuredAdapter(registry, deny).callTool(request, API_KEY);
+        ResponseEntity<MCPResponse> noChain = configuredAdapter(registry, null).callTool(request, API_KEY);
+
+        assertThat(denied.getStatusCode().value()).isEqualTo(403);
+        assertThat(noChain.getStatusCode().value()).isEqualTo(403);
+        verify(tool, never()).execute(any(ToolCall.class), anyMap());
+        verify(deny).denyReason(org.mockito.ArgumentMatchers.eq(tool), org.mockito.ArgumentMatchers.eq(FACTORY_ID),
+                org.mockito.ArgumentMatchers.eq(USER_ROLE), org.mockito.ArgumentMatchers.isNull(), anyMap());
     }
 }

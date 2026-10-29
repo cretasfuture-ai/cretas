@@ -241,6 +241,8 @@ public class ToolRbacEnforcer {
             Map.entry("pricing_strategy_create", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("pricing_strategy_update", Set.of("sales:read_write", "finance:read_write")),
             Map.entry("pricing_strategy_toggle", Set.of("sales:read_write", "finance:read_write"))
+            // S6 (2026-10-29): tools that read permission-gated data declare their codes on the tool itself
+            // (getRequiredPermissions / role gate), pinned per method by GatedDataToolAiPathPermissionTest.
     );
 
     /**

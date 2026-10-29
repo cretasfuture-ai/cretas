@@ -98,7 +98,8 @@ import static org.mockito.Mockito.when;
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @Import({DefaultToolExecutionGateway.class, ToolPrincipalPolicy.class, ToolExecutionLedgerService.class,
         ToolConfirmationLease.class, LegacyToolMigrationRegistry.class, AuthenticatedToolPrincipalFactory.class,
-        ToolRegistry.class, MaterialExpiredQueryTool.class, AutonomousToolRunner.class, AutonomousGrantService.class,
+        ToolRegistry.class, MaterialExpiredQueryTool.class,
+        com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool.class, AutonomousToolRunner.class, AutonomousGrantService.class,
         AutonomousGrantIssuer.class, TriggerChainExecutor.class, SkillExecutorImpl.class,
         SkillParameterContractValidator.class, FactoryScopedReferenceChecker.class, SkillRunStore.class,
         SavedSkillService.class, com.cretas.aims.ai.tool.ToolRbacGuard.class,
@@ -212,15 +213,13 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         SkillResult result = skills.execute(skill(), context(salesUser, Map.of()));
 
         assertThat(result.isSuccess()).isFalse();
+        // S6 (2026-10-29): refused by the preflight with the gateway's own admission check, before any tool
+        // or gateway execution: no audit event, no receipt, nothing read.
+        assertThat(result.isPermissionDenied()).isTrue();
         assertThat(seenAsUser).isEmpty();
         verify(materialBatchService, never()).getExpiredBatches(any());
-        assertThat(count("tool_execution_audit_events WHERE source = 'SKILL_WORKFLOW' AND outcome_status = 'DENIED'"
-                + " AND principal_id = '" + salesUser + "'")).isEqualTo(1);
-        assertThat(text("SELECT status FROM skill_run_records WHERE id = '" + result.getRunId() + "'")).isEqualTo("DENIED");
-        // A denied run cannot become a reusable Skill.
-        assertThatThrownBy(() -> savedSkills.save("F-SK", salesUser,
-                new SavedSkillService.SaveRequest(result.getRunId(), "denied-run", null, null, null)))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("经工具网关执行成功");
+        assertThat(count("tool_execution_audit_events")).isZero();
+        assertThat(result.getRunId()).isNull();
     }
 
     @Test void savedSkillRerunsWithNewParametersAsANewReceiptAndRefusesOutOfContractParameters() throws Exception {
@@ -283,8 +282,7 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         SavedSkillService.RunResult foreign = savedSkills.runSaved("F-SK", salesUser, "sales_manager", saved.id(),
                 Map.of("limit", 5), "s8");
         assertThat(foreign.result().isSuccess()).isFalse();
-        assertThat(count("tool_execution_audit_events WHERE outcome_status = 'DENIED' AND principal_id = '"
-                + salesUser + "'")).isEqualTo(1);
+        assertThat(foreign.result().isPermissionDenied()).isTrue();
     }
 
     @Test void theRegisteredSkillEntryRunsAsTheCallerAndLeavesASavableReceipt() {
@@ -307,6 +305,55 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         assertThatThrownBy(() -> savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager",
                 "expired-materials", Map.of("factoryId", "F-SK-OTHER"), null, "entry-2"))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("factoryId");
+    }
+
+    @Test void theBuiltInMaterialBatchLookupSkillRunsSavesAndRerunsWithNewParameters() {
+        // The real built-in definition, as the application registers it (not a test-made one).
+        SkillDefinition lookup = com.cretas.aims.ai.tool.GatedDataToolAiPathPermissionTest.defaultSkills()
+                .getSkill("material-batch-lookup").orElseThrow();
+        when(skillRegistry.getSkill("material-batch-lookup")).thenReturn(java.util.Optional.of(lookup));
+        when(skillRouter.executeSkill(org.mockito.ArgumentMatchers.eq("material-batch-lookup"), any()))
+                .thenAnswer(call -> skills.execute(lookup, call.getArgument(1)));
+        List<com.cretas.aims.dto.common.PageRequest> queries = new ArrayList<>();
+        when(materialBatchService.getMaterialBatchList(org.mockito.ArgumentMatchers.eq("F-SK"), any()))
+                .thenAnswer(call -> {
+                    queries.add(call.getArgument(1));
+                    seenAsUser.add(SecurityUtils.currentUserId());
+                    return com.cretas.aims.dto.common.PageResponse.of(List.of(), 1, 10, 0L);
+                });
+
+        SkillResult first = savedSkills.runRegistered("F-SK", warehouseUser, "warehouse_manager",
+                "material-batch-lookup", Map.of("status", "AVAILABLE", "size", 5), null, "lookup-1");
+        assertThat(first.isSuccess()).as(first.getMessage()).isTrue();
+        assertThat(first.getRunId()).isNotNull();
+        assertThat(text("SELECT steps->0->>'auditEventId' FROM skill_run_records WHERE id = '" + first.getRunId() + "'"))
+                .isNotNull();
+
+        // Saved with the contract inferred from the run (status text, size integer), bounds edited.
+        var contract = new ObjectMapper().createObjectNode();
+        var params = contract.putArray("params");
+        params.addObject().put("name", "status").put("type", "ENUM").put("required", true)
+                .putArray("allowedValues").add("AVAILABLE").add("EXPIRED").add("DEPLETED");
+        params.addObject().put("name", "size").put("type", "INTEGER").put("min", 1).put("max", 50);
+        SkillRunStore.SavedSkill saved = savedSkills.save("F-SK", warehouseUser,
+                new SavedSkillService.SaveRequest(first.getRunId(), "batch-by-status", "按状态查批次", contract, null));
+
+        SavedSkillService.RunResult rerun = savedSkills.runSaved("F-SK", warehouseUser, "warehouse_manager",
+                saved.id(), Map.of("status", "EXPIRED", "size", 3), "lookup-2");
+        assertThat(rerun.result().isSuccess()).as(rerun.result().getMessage()).isTrue();
+        assertThat(queries).hasSize(2);
+        assertThat(queries.get(0).getStatus()).isEqualTo("AVAILABLE");
+        assertThat(queries.get(0).getSize()).isEqualTo(5);
+        assertThat(queries.get(1).getStatus()).isEqualTo("EXPIRED");
+        assertThat(queries.get(1).getSize()).isEqualTo(3);
+        assertThat(seenAsUser).containsExactly(warehouseUser, warehouseUser);
+        assertThat(text("SELECT saved_skill_id FROM skill_run_records WHERE id = '" + rerun.result().getRunId() + "'"))
+                .isEqualTo(saved.id());
+
+        // Out of contract: refused before the tool runs.
+        assertThat(savedSkills.runSaved("F-SK", warehouseUser, "warehouse_manager", saved.id(),
+                Map.of("status", "ALL", "size", 3), "lookup-3").result().getMessage()).contains("status");
+        assertThat(queries).hasSize(2);
     }
 
     @Test void theRegisteredSkillEntryEnforcesTheSkillsOwnRequiredPermission() {

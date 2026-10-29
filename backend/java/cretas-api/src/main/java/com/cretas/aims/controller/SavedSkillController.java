@@ -51,6 +51,9 @@ public class SavedSkillController {
         SkillResult result = savedSkills.runRegistered(factoryId, actor.id(), actor.role(), skillName,
                 body == null ? Map.of() : body.params(), body == null ? null : body.userQuery(),
                 "skill-run-" + UUID.randomUUID());
+        if (!result.isSuccess() && result.isPermissionDenied()) {
+            throw new BusinessException(403, result.getMessage());
+        }
         if (!result.isSuccess()) {
             String message = result.getMessage() == null ? "Skill 未完成" : result.getMessage();
             throw new BusinessException(400, result.getRunId() == null
@@ -112,6 +115,9 @@ public class SavedSkillController {
         AuthenticatedActor actor = factoryUser(factoryId);
         SavedSkillService.RunResult result = savedSkills.runSaved(factoryId, actor.id(), actor.role(), savedSkillId,
                 body == null ? Map.of() : body.params(), "saved-skill-" + UUID.randomUUID());
+        if (!result.result().isSuccess() && result.result().isPermissionDenied()) {
+            throw new BusinessException(403, result.result().getMessage());
+        }
         if (!result.result().isSuccess()) {
             String message = result.result().getMessage() == null ? "Skill 未完成" : result.result().getMessage();
             throw new BusinessException(400, result.result().getRunId() == null

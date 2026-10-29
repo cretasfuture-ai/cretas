@@ -203,6 +203,25 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        // 原料批次查询 Skill (S6-02, 2026-10-29) — 只读、单工具, 不经 LLM 直接执行; material_batch_query 有
+        // 审核过的运行策略并开放给 SKILL_WORKFLOW, 所以每次运行都经工具网关、按调用人当前权限执行并留下
+        // 运行回执 —— 这是第一个能「保存为可复用 Skill → 用新参数复跑」的真实 Skill。参数 (status / size /
+        // startDate / endDate / materialTypeId / batchNumber) 由调用方给出, 保存时被记录进参数契约。
+        registerWithSource(SkillDefinition.builder()
+                .name("material-batch-lookup")
+                .displayName("原料批次查询")
+                .description("按状态、日期、原料类型查询本厂原料批次（只读，可保存为可复用 Skill 并用新参数复跑）")
+                .version("1.0.0")
+                .category("INVENTORY")
+                .triggers(Arrays.asList("按状态查原料批次", "原料批次清单"))
+                .tools(Arrays.asList("material_batch_query"))
+                .contextNeeded(Arrays.asList("factoryId", "userId"))
+                .accessMode("READ")
+                .source("default")
+                .enabled(true)
+                .build());
+        count++;
+
         // 人员排班Skill — 排班查询 + 考勤统计 + 在线人数
         registerWithSource(SkillDefinition.builder()
                 .name("personnel-scheduling")

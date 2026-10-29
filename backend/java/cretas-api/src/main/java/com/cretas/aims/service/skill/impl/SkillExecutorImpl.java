@@ -112,6 +112,10 @@ public class SkillExecutorImpl implements SkillExecutor {
     private final Map<SkillContext, List<com.cretas.aims.service.skill.contract.SkillRunStore.Step>> runSteps =
             Collections.synchronizedMap(new IdentityHashMap<>());
 
+    /** Gateway admission for governed tools in the permission preflight (same check the gateway makes). */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy toolPrincipalPolicy;
+
     /** Source prefix of a definition built from a factory's saved Skill; the rest is the saved Skill id. */
     public static final String SAVED_SKILL_SOURCE_PREFIX = "FACTORY_SAVED:";
 
@@ -201,6 +205,25 @@ public class SkillExecutorImpl implements SkillExecutor {
                 log.warn("Skill is disabled: {}", skill.getName());
                 return SkillResult.error(skill.getName(), "Skill is disabled",
                         executedTools, System.currentTimeMillis() - startTime);
+            }
+
+            // 2a. Permission preflight (S6 acceptance, ERP-S6-02-SKILL-ROLE-BYPASS-001): every tool this Skill
+            // may run is checked against the caller's current permissions before anything runs. A Skill
+            // never returns part of what the caller could not read directly; one denied tool fails the
+            // whole Skill as a permission refusal.
+            Preflight preflight = permissionPreflight(skill, context);
+            if (preflight.unavailable() || !preflight.denied().isEmpty()) {
+                // One tool the caller may not use is enough: the whole Skill is refused and nothing runs,
+                // so a Skill never returns any part of what the caller could not read directly.
+                log.warn("Skill {} refused by permission preflight for userId={}: {}", skill.getName(),
+                        context.getUserId(), preflight.denied());
+                SkillResult refused = SkillResult.error(skill.getName(), preflight.unavailable()
+                                ? "权限校验暂不可用，未执行任何操作。"
+                                : "你没有运行「" + displayName(skill) + "」所需的全部权限（其中 " + preflight.denied().size()
+                                        + " 项数据你在系统里无权直接查看），未执行任何操作。请联系工厂管理员开通对应权限。",
+                        executedTools, System.currentTimeMillis() - startTime);
+                refused.setPermissionDenied(true);
+                return refused;
             }
 
             // 2b. Contract mode (S6-02): a Skill that declares a parameter contract runs only the
@@ -1142,6 +1165,9 @@ public class SkillExecutorImpl implements SkillExecutor {
             result.setSuccess(false);
             result.setMessage("Skill 未完成，工具网关没有放行：" + String.join("，", refused));
         }
+        if (steps.stream().anyMatch(step -> "DENIED".equals(step.gatewayStatus()))) {
+            result.setPermissionDenied(true);
+        }
         if (!result.isSuccess() && "SUCCEEDED".equals(status)) {
             status = "FAILED";
         }
@@ -1266,6 +1292,91 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .executedTools(executedTools)
                 .executionTime(System.currentTimeMillis() - startTime)
                 .build();
+    }
+
+    /** Result of the permission preflight: tools checked, tools denied, or the check unavailable. */
+    private record Preflight(int checked, List<String> denied, boolean unavailable) {
+    }
+
+    /** The gateway's own admission for a governed tool: principal re-read from the database, then policy resolve. */
+    private boolean gatewayAdmits(ToolExecutor tool, SkillContext context) {
+        if (toolPrincipalFactory == null || toolPrincipalPolicy == null) {
+            return false;
+        }
+        try {
+            com.cretas.aims.ai.tool.gateway.ExecutionPrincipal asserted = toolPrincipalFactory.create(
+                    context.getFactoryId(), parseUserId(context.getUserId()), context.getUserRole());
+            var current = toolPrincipalPolicy.rehydrate(asserted);
+            if (current.isEmpty()) {
+                return false;
+            }
+            String id = "skill-preflight-" + UUID.randomUUID();
+            com.cretas.aims.ai.tool.gateway.ToolExecutionCommand probe = new com.cretas.aims.ai.tool.gateway.ToolExecutionCommand(
+                    id, id, id, tool.getToolName(), tool.getVersion(), objectMapper.createObjectNode(), asserted,
+                    com.cretas.aims.ai.tool.gateway.ToolExecutionSource.SKILL_WORKFLOW,
+                    com.cretas.aims.ai.tool.gateway.ToolExecutionMode.EXECUTE,
+                    Optional.empty(), Optional.empty(), Optional.empty(), java.time.Instant.now().plusSeconds(30));
+            return toolRuntimeRegistry.resolve(probe, current.get().principal()).isPresent();
+        } catch (RuntimeException rejected) {
+            return false;
+        }
+    }
+
+    private static String displayName(SkillDefinition skill) {
+        return skill.getDisplayName() != null ? skill.getDisplayName() : skill.getName();
+    }
+
+    /**
+     * Checks every tool a Skill can run (declared tools, DAG nodes and their fallbacks; contract steps)
+     * with the same permission chain as each tool's execution, i.e. the same codes as the direct API
+     * serving that data. Governed tools are left to the tool gateway, which re-reads the caller's
+     * permissions itself.
+     */
+    private Preflight permissionPreflight(SkillDefinition skill, SkillContext context) {
+        java.util.LinkedHashSet<String> tools = new java.util.LinkedHashSet<>();
+        if (skill.getTools() != null) tools.addAll(skill.getTools());
+        if (skill.getExecutionGraph() != null) {
+            for (SkillDefinition.ExecutionNode node : skill.getExecutionGraph()) {
+                if (node.getToolName() != null) tools.add(node.getToolName());
+                if (node.getFallbackTool() != null) tools.add(node.getFallbackTool());
+            }
+        }
+        if (skill.getConfig() != null && skill.getConfig().get("steps") instanceof List<?> steps) {
+            for (Object step : steps) {
+                if (step instanceof Map<?, ?> map && map.get("tool") instanceof String tool) tools.add(tool);
+            }
+        }
+        String factoryId = context.getFactoryId();
+        Long userId = parseUserId(context.getUserId());
+        String userRole = context.getUserRole();
+        List<String> denied = new ArrayList<>();
+        int checked = 0;
+        for (String toolName : tools) {
+            Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+            if (tool.isEmpty()) {
+                continue;  // missing tools fail at context validation
+            }
+            if (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName)) {
+                checked++;
+                if (!gatewayAdmits(tool.get(), context)) {
+                    denied.add(toolName);
+                }
+                continue;
+            }
+            if (toolPermissionChain == null) {
+                return new Preflight(checked, denied, true);
+            }
+            checked++;
+            Map<String, Object> rbacCtx = new HashMap<>();
+            com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                    rbacCtx, factoryId, userId, userRole);
+            var fixedIntent = tool.get() instanceof com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool
+                    ? com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool.canonicalIntent() : null;
+            if (toolPermissionChain.denyReason(tool.get(), factoryId, userRole, fixedIntent, rbacCtx).isPresent()) {
+                denied.add(toolName);
+            }
+        }
+        return new Preflight(checked, List.copyOf(denied), false);
     }
 
     private static Long parseUserId(String userId) {
