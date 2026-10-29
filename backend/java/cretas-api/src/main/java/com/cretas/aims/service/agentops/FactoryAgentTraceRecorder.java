@@ -37,7 +37,9 @@ public class FactoryAgentTraceRecorder {
     private static final Set<String> BLOCKED = Set.of(
             "FORBIDDEN", "NO_PERMISSION", "PERMISSION_DENIED", "TOOL_DISABLED",
             "READ_MODE_WRITE_BLOCKED", "WRITE_CONFIRM_REQUIRED", "PREVIEW_UNSUPPORTED",
-            "PENDING_APPROVAL");
+            "PENDING_APPROVAL", "DENIED", "CONFIRMATION_REQUIRED", "APPROVAL_REQUIRED");
+    /** Step name for a blocked/failed run that never reached a tool (the intent code still identifies it). */
+    static final String NO_TOOL_STEP = "no_tool_dispatched";
     private static final String SOURCE_REF = "tool_dispatch";
 
     private final AgentOpsClient client;
@@ -93,11 +95,16 @@ public class FactoryAgentTraceRecorder {
                 || !INTENT.matcher(response.getIntentCode()).matches()) {
             return null;
         }
-        Object tool = response.getMetadata() == null ? null : response.getMetadata().get("toolName");
-        if (!(tool instanceof String toolName) || !IDENT.matcher(toolName).matches()) {
-            return null;
-        }
         String outcome = outcomeOf(response.getStatus());
+        String toolName = toolNameOf(response);
+        if (toolName == null) {
+            // Blocked/forbidden/failed runs often stop before a tool is chosen. Dropping them would skew
+            // traces toward successes, so keep them (with the intent code) but never invent a success.
+            if (!"BLOCKED".equals(outcome) && !"FAILED".equals(outcome)) {
+                return null;
+            }
+            toolName = NO_TOOL_STEP;
+        }
         int latency = (int) Math.max(0, Math.min(latencyMs, 3_600_000L));
         Map<String, Object> step = new LinkedHashMap<>();
         step.put("toolName", toolName);
@@ -113,16 +120,24 @@ public class FactoryAgentTraceRecorder {
         return trace;
     }
 
+    private static String toolNameOf(IntentExecuteResponse response) {
+        Object tool = response.getMetadata() == null ? null : response.getMetadata().get("toolName");
+        if (tool == null && response.getResultData() instanceof Map<?, ?> data) {
+            tool = data.get("toolName"); // e.g. FORBIDDEN responses carry it only in resultData
+        }
+        return tool instanceof String name && IDENT.matcher(name).matches() ? name : null;
+    }
+
     /** Unknown statuses stay UNKNOWN; they are never promoted to SUCCESS. */
     static String outcomeOf(String status) {
         if (status == null) {
             return "UNKNOWN";
         }
         String normalized = status.toUpperCase(Locale.ROOT);
-        if ("COMPLETED".equals(normalized) || "SUCCESS".equals(normalized)) {
+        if ("COMPLETED".equals(normalized) || "SUCCESS".equals(normalized) || "SUCCEEDED".equals(normalized)) {
             return "SUCCESS";
         }
-        if ("FAILED".equals(normalized)) {
+        if ("FAILED".equals(normalized) || "TIMEOUT".equals(normalized)) {
             return "FAILED";
         }
         return BLOCKED.contains(normalized) ? "BLOCKED" : "UNKNOWN";
@@ -147,7 +162,9 @@ public class FactoryAgentTraceRecorder {
     public boolean awaitIdle(long timeoutMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
-            if (executor.getQueue().isEmpty() && executor.getActiveCount() == 0) {
+            // getTaskCount counts submitted tasks, getCompletedTaskCount finished ones: equal means nothing
+            // is queued or running (queue-empty + active==0 can both be true while a task is being handed over).
+            if (executor.getCompletedTaskCount() == executor.getTaskCount()) {
                 return true;
             }
             Thread.sleep(10);

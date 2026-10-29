@@ -110,4 +110,36 @@ class FactoryAgentTraceRecorderTest {
         assertThat(recorder.failedCount()).isEqualTo(1);
         assertThat(recorder.recordedCount()).isZero();
     }
+
+    @Test
+    void gatewayStatusesMapToTheirRealOutcome() {
+        assertThat(FactoryAgentTraceRecorder.outcomeOf("SUCCEEDED")).isEqualTo("SUCCESS");
+        assertThat(FactoryAgentTraceRecorder.outcomeOf("DENIED")).isEqualTo("BLOCKED");
+        assertThat(FactoryAgentTraceRecorder.outcomeOf("TIMEOUT")).isEqualTo("FAILED");
+        assertThat(FactoryAgentTraceRecorder.outcomeOf("OUTCOME_UNKNOWN")).isEqualTo("UNKNOWN");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void blockedRunWithoutToolMetadataIsStillTracedWithItsIntent() throws Exception {
+        // ToolDispatchService FORBIDDEN: toolName only inside resultData
+        IntentExecuteResponse forbidden = IntentExecuteResponse.builder().intentCode("SUPPLIER_PRICE_COMPARE")
+                .status("FORBIDDEN").resultData(Map.of("code", "FORBIDDEN", "toolName", "supplier_price_compare")).build();
+        Map<String, Object> trace = FactoryAgentTraceRecorder.buildTrace(forbidden, 12);
+        assertThat(trace).containsEntry("outcome", "BLOCKED");
+        assertThat(((List<Map<String, Object>>) trace.get("steps")).get(0))
+                .containsEntry("toolName", "supplier_price_compare");
+
+        // blocked before any tool was chosen: keep it, name the step honestly
+        IntentExecuteResponse noTool = IntentExecuteResponse.builder().intentCode("MATERIAL_BATCH_CREATE")
+                .status("PERMISSION_DENIED").build();
+        Map<String, Object> blocked = FactoryAgentTraceRecorder.buildTrace(noTool, 3);
+        assertThat(blocked).containsEntry("outcome", "BLOCKED");
+        assertThat(((List<Map<String, Object>>) blocked.get("steps")).get(0))
+                .containsEntry("toolName", FactoryAgentTraceRecorder.NO_TOOL_STEP);
+
+        // clarification / not-recognised turns still have nothing to trace
+        assertThat(FactoryAgentTraceRecorder.buildTrace(IntentExecuteResponse.builder()
+                .intentCode("MATERIAL_BATCH_QUERY").status("NEED_MORE_INFO").build(), 3)).isNull();
+    }
 }

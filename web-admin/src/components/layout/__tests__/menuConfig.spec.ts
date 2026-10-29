@@ -888,3 +888,13 @@ describe('menuConfig — factory self-service readiness', () => {
     expect(router.resolve('/factory-review').meta.assemblyFeature).toBe(true);
   });
 });
+
+describe('menuConfig - AI 运行与评测 (S6-07)', () => {
+  it('is reachable from the sidebar for factory admins, not URL-only, and not for operators', () => {
+    const item = (findGroup('/system')?.children ?? []).find((child) => child.path === '/ops/agent-ops');
+    expect(item, 'missing /ops/agent-ops in the system group').toBeDefined();
+    expect(item!.roles).toEqual(['factory_super_admin', 'platform_admin', 'permission_admin']);
+    // must not be hidden for FACTORY tenants (that was the original defect)
+    expect(item!.hideForFactoryTypes ?? []).not.toContain('FACTORY');
+  });
+});
