@@ -47,7 +47,7 @@ import static org.mockito.Mockito.when;
  * the auto-planner (refusing the whole plan, no step runs), the dynamic tool chain and the LLM tool-calling fallback.
  */
 @DisplayName("动态选工具三条路径: 角色门工具与直接执行同一条权限链 (自动计划整单拒绝)")
-class DynamicPathRoleGatedToolTest {
+class DynamicPathRoleGatedToolPermissionTest {
 
     private static final String FACTORY = "F006";
     private static final long USER = 42L;
