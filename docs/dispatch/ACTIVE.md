@@ -17,7 +17,8 @@
 
 
 
-- `SMARTBI-F006-QA-20261028` — `blocked` — Root；代码已合并部署，35类及核心AI网页通过；仅手机延期、上传工具、封账数据和独立质检员Web前置条件未验；并发仅服务层通过。见archive/2026-10-29-sc39-web-proof-scope.md；产品scope已释放。
+
+- `SMARTBI-F006-QA-20261028` — `blocked` — Root；产品已合并部署；Web双账号并发/断网恢复、附件确认入库及独立回读通过。原22项9过/13含手机延期或设备、封账数据、质检员Web前提未验；scope已释放。见archive/2026-10-29-sc40-sc42-parallel-closure.md。
 
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
