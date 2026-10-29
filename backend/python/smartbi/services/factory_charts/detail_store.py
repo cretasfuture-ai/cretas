@@ -52,6 +52,28 @@ def _has_value(value: Any) -> bool:
     return True
 
 
+def _drop_empty_manufacturing_cost_columns(
+    rows: Sequence[Mapping[str, Any]], columns: Sequence[str]
+) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
+    """Remove cost fields which are empty in the rows being frozen.
+
+    The check must run after candidate-unit filtering as well as on the raw
+    dataset.  A mixed-unit dataset may have a real cost in one unit while the
+    selected candidate's rows contain only null cost values.
+    """
+    empty = {
+        column for column in columns
+        if cost_authorization.is_manufacturing_cost_column(column)
+        and not any(_has_value(row.get(column)) for row in rows)
+    }
+    if not empty:
+        return tuple(dict(row) for row in rows), tuple(columns)
+    return (
+        tuple({key: value for key, value in row.items() if key not in empty} for row in rows),
+        tuple(column for column in columns if column not in empty),
+    )
+
+
 async def _pool_or_error():
     try:
         pool = await config.get_pg_pool()
@@ -86,15 +108,7 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
             # field names with every value null.  Do not turn that into a
             # legacy cost-sensitive snapshot; remove empty cost columns before
             # classification and persist only the non-price facts.
-            empty_cost_columns = {
-                column for column in columns
-                if cost_authorization.is_manufacturing_cost_column(column)
-                and not any(_has_value(row.get(column)) for row in rows)
-            }
-            if empty_cost_columns:
-                columns = tuple(column for column in columns if column not in empty_cost_columns)
-                rows = tuple({key: value for key, value in row.items() if key not in empty_cost_columns}
-                             for row in rows)
+            rows, columns = _drop_empty_manufacturing_cost_columns(rows, columns)
             prices, dimensions = details._classify(columns)
             unit_col = next((c for c in columns if details._base_name(c) in details._UNIT_NAMES), None)
             units = {str(row.get(unit_col, "")).strip() for row in rows} if unit_col else set()
@@ -156,6 +170,10 @@ def _prepared(candidates: Sequence[Mapping[str, Any]], datasets: Sequence[Any], 
             else:
                 yield item, None
                 continue
+        rows, columns = _drop_empty_manufacturing_cost_columns(rows, columns)
+        retained_columns = set(columns)
+        prices = frozenset(column for column in prices if column in retained_columns)
+        dimensions = tuple(column for column in dimensions if column in retained_columns)
         financial = details._is_financial(str(source), item)
         engine_meta = item.get("engine") if isinstance(item.get("engine"), Mapping) else {}
         point_dimension = engine_meta.get("pointDimension")

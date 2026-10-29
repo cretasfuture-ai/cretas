@@ -18,6 +18,7 @@ const SCENARIOS = [
   require('../scenarios/smartbi-guided-readonly'),
   require('../scenarios/smartbi-focused-acceptance-readonly').commerceJoint,
   require('../scenarios/smartbi-focused-acceptance-readonly').legacyKpi,
+  require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
   require('../scenarios/table-top-scroll-readonly').sales,
@@ -128,6 +129,10 @@ async function runSuiteWithPage(page, options = {}) {
         allowMobileOnlyLanding: options.allowMobileOnlyLanding,
         appMountTimeoutMs: options.appMountTimeoutMs,
       });
+      // Finish reading landing-page responses before the next full navigation
+      // invalidates their browser resource handles. Missing bodies stay errors.
+      await network.settle();
+      await network.flush();
 
       const scenarioContext = {
         page,
@@ -142,6 +147,7 @@ async function runSuiteWithPage(page, options = {}) {
         factoryCatalogFamilies: options.factoryCatalogFamilies,
         smartbiCommerceJoint: options.smartbiCommerceJoint,
         smartbiLegacyKpi: options.smartbiLegacyKpi,
+        smartbiScale: options.smartbiScale,
         scenarioRef,
         mutationGuard,
         network,
@@ -174,6 +180,14 @@ async function runSuiteWithPage(page, options = {}) {
 
     const guardReport = mutationGuard.snapshot();
     const networkReport = network.snapshot();
+    if (networkReport.bodyReadErrors.length) {
+      const failure = createScenarioResult('network-evidence-read', page.url());
+      failure.result = 'TOOL_ERROR';
+      failure.rootCauseClass = 'tool';
+      failure.pageEvidence.push({ reason: 'Response evidence could not be read completely', bodyReadErrors: networkReport.bodyReadErrors });
+      failure.durationMs = Date.now() - startedAt;
+      results.push(assertScenarioResult(failure));
+    }
     const consoleReport = consoleRecorder.snapshot();
     const report = {
       runId,
