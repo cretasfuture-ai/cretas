@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>注释与字符串里的提及不算 (先剥掉注释和字面量再匹配), 否则讲历史的注释会把闸误报到被关掉。
  */
 @DisplayName("没开方法级安全时 src/main 不许出现不生效的方法安全注解")
-class InertMethodSecurityAnnotationArchitectureTest {
+class InertMethodSecurityAnnotationContractTest {
 
     private static final Path MAIN = Path.of("src/main/java");
 
