@@ -47,6 +47,32 @@ def test_semantic_catalog_keeps_all_chart_kinds_without_values():
     assert all('秘密产品A' not in json.dumps(item, ensure_ascii=False) for item in catalog)
 
 
+def test_semantic_catalog_drops_technical_family_label_fallbacks():
+    candidate = _candidate('finished-goods-inventory.finished_goods.inventory.current:bar',
+                           'finished-goods-inventory.finished_goods.inventory.current', 'bar')
+    candidate['metric'] = 'finished-goods-inventory.finished_goods.inventory.current'
+    candidate['analysis']['familyLabel'] = candidate['metric']
+    catalog = conversation.semantic_catalog([candidate])
+    assert 'familyLabel' not in catalog[0]
+    assert candidate['metric'] in catalog[0]['metric']
+
+
+def test_engine_known_trusted_families_have_generic_labels_before_source_prefix():
+    expected = {
+        'stock.age': '库存账龄',
+        'finished_goods.inventory.current': '当前成品库存',
+        'finished_goods.shipment': '成品发货数量',
+        'purchase.inventory': '采购入库与批次库存',
+        'sales.stock': '销售-发货-库存',
+        'customer.channel': '客户-显式渠道-产品',
+        'production.inspection_fused': '生产-检验-成本联合',
+    }
+    for family_id, label in expected.items():
+        candidate = {'id': family_id + ':bar', 'metric': family_id}
+        engine._analysis_metadata(candidate)
+        assert candidate['analysis'] == {'familyId': family_id, 'familyLabel': label}
+
+
 @pytest.mark.asyncio
 async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
     async def call(_slot, payload, **kwargs):

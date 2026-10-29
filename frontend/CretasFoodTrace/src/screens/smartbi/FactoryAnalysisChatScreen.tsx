@@ -166,7 +166,7 @@ function Catalog({ catalog }: { catalog: readonly FactoryAnalysisCatalogItem[] }
     <View style={styles.catalogHeading}><Text variant="titleMedium">可用图表目录（{catalog.length}）</Text><Button compact onPress={() => setExpanded(value => !value)}>{expanded ? '收起目录' : '展开目录'}</Button></View>
     {visible.map(item => <View key={item.id} style={styles.catalogRow}>
       <Text style={styles.catalogTitle}>{item.familyLabel?.trim() || '分析主题未提供'}</Text>
-      <Text style={styles.muted}>{item.domain || '领域未提供'} · {item.metric || '指标未提供'} · {catalogChartVariantLabel(item)}</Text>
+      <Text style={styles.muted}>{item.domain || '领域未提供'} · {catalogChartVariantLabel(item)}</Text>
     </View>)}
     {!expanded && catalog.length > visible.length && <Text style={styles.muted}>目录其余 {catalog.length - visible.length} 项未展开；回答仅渲染已选图表。</Text>}
   </View>;

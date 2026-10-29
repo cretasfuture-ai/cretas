@@ -66,7 +66,7 @@ const response = (overrides: Record<string, unknown> = {}) => {
       kpis: [{ label: '总产量', value: 12, unit: 'kg' }], tableData: [],
       detailContext: { id: 'detail-yield', expiresAt: '2099-01-01T00:00:00Z' },
     }],
-    catalog: [{ id: 'yield', familyId: 'production.yield', familyLabel: '产量趋势', chartType: 'line', domain: '生产', metric: '产量', unit: 'kg' }],
+    catalog: [{ id: 'yield', familyId: 'production.yield', familyLabel: '产量趋势', chartType: 'line', domain: '生产', metric: 'finished-goods-inventory.finished_goods.inventory.current', unit: 'kg' }],
     facts: [{ id: 'fact-1', candidateId: 'yield', label: '总产量', value: 12, unit: 'kg', source: '业务系统' }],
     limitations: ['仅基于当前期间'], sourceErrors: [], followUpQuestions: ['再看质量指标'], contextId: 'ctx-1', subjects: [],
       ...overrides,
@@ -172,6 +172,7 @@ describe('FactoryAnalysisChat mounted workflow', () => {
     expect(catalogue.text()).toContain('折线');
     expect(catalogue.text()).toContain('kg');
     expect(catalogue.text()).not.toContain('production.yield');
+    expect(catalogue.text()).not.toContain('finished-goods-inventory.finished_goods.inventory.current');
   });
 
   it('restores only validated route scope and sends the exact upload/month-range/product payload', async () => {
