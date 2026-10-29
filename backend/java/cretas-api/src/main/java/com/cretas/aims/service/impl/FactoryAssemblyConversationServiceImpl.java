@@ -1502,11 +1502,17 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
         return String.join("、", canonical);
     }
 
+    /** Words that can flip the meaning of what follows; a non-exact match containing one is never mapped. */
+    private static final List<String> NEGATIONS =
+            List.of("不", "没", "无", "非", "未", "别", "勿", "去掉", "删掉", "删除", "取消", "排除");
+
     /**
-     * Maps what the user said onto one valid option, or null. Exact (case/space/bracket-insensitive) first,
-     * then punctuation-insensitive (「有部分」= 「有(部分)」), then a UNIQUE containment match (the longest
-     * option named inside the value, or the only option that contains the value). Ambiguity returns null:
-     * a correction is never mapped by guessing.
+     * Maps what the user said onto exactly one valid option, or null (the caller then asks again).
+     * Order: exact (case/space/bracket-insensitive), then punctuation-insensitive (「有部分」= 「有(部分)」),
+     * and only for a longer sentence a UNIQUE containment: exactly one option is named inside the value,
+     * or the value is a fragment of exactly one option. Never guessed:
+     * two or more options named inside the value, a negation word in a non-exact value, or any
+     * ambiguity returns null. Applies to first-time answers and corrections alike.
      */
     private String mapToOption(List<String> options, String value) {
         String normalized = normalizeChoiceToken(value);
@@ -1518,21 +1524,17 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
         for (String option : options) {
             if (looseChoiceKey(option).equals(loose)) return option;
         }
-        String longestInside = null;
-        int longest = 0;
-        boolean tie = false;
+        for (String negation : NEGATIONS) {
+            if (value.contains(negation)) return null;
+        }
+        String inside = null;
         for (String option : options) {
             String key = looseChoiceKey(option);
             if (key.length() < 2 || !loose.contains(key)) continue;
-            if (key.length() > longest) {
-                longest = key.length();
-                longestInside = option;
-                tie = false;
-            } else if (key.length() == longest) {
-                tie = true;
-            }
+            if (inside != null) return null;
+            inside = option;
         }
-        if (longestInside != null && !tie) return longestInside;
+        if (inside != null) return inside;
         if (loose.length() < 2) return null;
         String onlyContaining = null;
         for (String option : options) {

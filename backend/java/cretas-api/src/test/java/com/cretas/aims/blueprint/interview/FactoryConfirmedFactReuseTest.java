@@ -499,6 +499,63 @@ class FactoryConfirmedFactReuseTest {
                 .singleElement().satisfies(conflict -> assertThat(conflict.newValue()).isEqualTo("预制菜"));
     }
 
+    /** 评审 #1312(b): 说法里点了两个选项、或带否定词 → 不映射, 不产生冲突, 值不变。 */
+    @Test
+    void aValueNamingTwoOptionsOrCarryingANegationIsNeverMappedToAnOption() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR,
+                Map.of("industryHint", "卤味熟食", "customerSupplied", "有(部分)"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+
+        // 两个选项都在里面: 不能因为「更长的赢」而选中已确认的那个、吞掉更正
+        replier(live, "{\"industryHint\":\"卤味熟食转做预制菜了\"}")
+                .continueConversation(F, ACTOR, second, "行业归类改成卤味熟食转做预制菜了", "r1");
+        // 否定词: 「不是没有」不能变成「没有」, 「去掉预制菜」不能变成「预制菜」
+        replier(live, "{\"customerSupplied\":\"不是没有\"}")
+                .continueConversation(F, ACTOR, second, "客供料改成不是没有", "r2");
+        replier(live, "{\"industryHint\":\"去掉预制菜\"}")
+                .continueConversation(F, ACTOR, second, "行业归类改成去掉预制菜", "r3");
+
+        assertThat(facts.openConflicts(F)).isEmpty();
+        assertThat(live.getCollectedParameters()).containsEntry("industryHint", "卤味熟食")
+                .containsEntry("customerSupplied", "有(部分)");
+        assertThat(effective("industryHint")).isEqualTo("卤味熟食");
+        assertThat(effective("customerSupplied")).isEqualTo("有(部分)");
+    }
+
+    /** 没有更正措辞的陈述不会让已回答的选择题变成冲突。 */
+    @Test
+    void aPlainStatementOnAnAnsweredChoiceItemWithoutCorrectionWordingCreatesNoConflict() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("industryHint", "卤味熟食"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+
+        replier(live, "{\"industryHint\":\"预制菜\"}").continueConversation(F, ACTOR, second, "行业是预制菜", "r1");
+
+        assertThat(facts.openConflicts(F)).isEmpty();
+        assertThat(live.getCollectedParameters()).containsEntry("industryHint", "卤味熟食");
+    }
+
+    /** 同一个映射器也管首次回答: 精确/标点不敏感/唯一包含 → 收下(待确认); 否则不收, 继续问。 */
+    @Test
+    void firstTimeChoiceAnswersGoThroughTheSameRules() {
+        String id = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(id);
+
+        replier(live, "{\"customerSupplied\":\"不是没有\"}").continueConversation(F, ACTOR, id, "客供料不是没有", "r1");
+        replier(live, "{\"industryHint\":\"卤味熟食转做预制菜了\"}").continueConversation(F, ACTOR, id, "行业归类卤味熟食转做预制菜了", "r2");
+        assertThat(live.getCollectedParameters()).doesNotContainKeys("customerSupplied", "industryHint");
+
+        replier(live, "{\"industryHint\":\"预制菜\"}").continueConversation(F, ACTOR, id, "行业是预制菜", "r3");
+        assertThat(live.getCollectedParameters()).containsEntry("industryHint", "预制菜");
+        assertThat(store).singleElement().satisfies(row -> {
+            assertThat(row.getFieldKey()).isEqualTo("industryHint");
+            assertThat(row.getStatus()).as("首次自由文本回答只是待确认").isEqualTo(FactoryConfirmedFact.PENDING_CONFIRM);
+        });
+    }
+
     @Test
     void anAmbiguousChoiceCorrectionIsRejectedWithoutAConflict() {
         String first = startSession();
