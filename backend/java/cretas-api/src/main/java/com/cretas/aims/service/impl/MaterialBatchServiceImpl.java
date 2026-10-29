@@ -2067,8 +2067,11 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
+        MaterialBatchStatus before = batch.getStatus();
         batch.setStatus(status);
         batch = materialBatchRepository.save(batch);
+        // 仓库页把「质检中」改成「可用」也是一次放行: 缺料实例要跟着刷新, 否则按旧缺口下采购单
+        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(applicationEventPublisher, this, batch, before);
         return materialBatchMapper.toDTO(batch);
     }
 

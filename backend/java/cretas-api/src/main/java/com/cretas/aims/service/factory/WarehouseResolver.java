@@ -12,7 +12,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * D1 双仓流转 — warehouse code → warehouse_id 解析器 (2026-05-10 spec, PR #309 A1=A).
@@ -157,6 +161,28 @@ public class WarehouseResolver {
     public String resolveProductionRawWh(String factoryId) {
         return resolveConfiguredWarehouseId(factoryId, WarehouseDefaultPurpose.PRODUCTION_RAW_DEFAULT)
                 .orElseGet(() -> resolveId(factoryId, WarehouseCodes.WH_LOG));
+    }
+
+    /**
+     * 生产能领到料的仓 — 缺料核对 / BOM 分配算「可用库存」的范围, 车间仓排第一 (先用车间余料)。
+     *
+     * <p>口径与生产领料同一个权威, ⛔ 不另列一份仓库类型清单: 车间默认仓、生产领料默认仓、采购入库默认仓
+     * (领料单的来源仓就是它, 见 {@code FactoryMaterialRequisitionServiceImpl}), 再加上本厂所有被
+     * {@link #isRawOrLogisticsWarehouse} / {@link #isWorkshopWarehouse} 认作可报工取料的仓。
+     * 采购默认收进原料仓 (WH-RAW) 的工厂, 到货因此直接抵缺口, 不必先调拨到物流仓。
+     */
+    public List<String> productionPickingWarehouseIds(String factoryId) {
+        Set<String> ids = new LinkedHashSet<>();
+        ids.add(resolveWorkshopId(factoryId));
+        ids.add(resolveProductionRawWh(factoryId));
+        ids.add(resolvePurchaseInboundWh(factoryId));
+        for (FactoryWarehouse wh : factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId)) {
+            if (isRawOrLogisticsWarehouse(factoryId, wh.getId()) || isWorkshopWarehouse(factoryId, wh.getId())) {
+                ids.add(wh.getId());
+            }
+        }
+        ids.remove(null);
+        return new ArrayList<>(ids);
     }
 
     /**

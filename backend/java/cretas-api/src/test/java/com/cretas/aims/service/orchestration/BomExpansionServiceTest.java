@@ -130,8 +130,7 @@ class BomExpansionServiceTest {
         java.time.LocalDate today = com.cretas.aims.util.InventoryExpiry.today();
         com.cretas.aims.entity.MaterialBatch expired = stockBatch("MB-EXP", "40", today.minusDays(1));
         com.cretas.aims.entity.MaterialBatch dueToday = stockBatch("MB-TODAY", "30", today);
-        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
-        when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
+        when(warehouseResolver.productionPickingWarehouseIds("F006")).thenReturn(List.of("WH-WKS", "WH-LOG"));
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-PORK", "WH-WKS"))
                 .thenReturn(List.of(expired, dueToday));
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-PORK", "WH-LOG"))
@@ -168,8 +167,7 @@ class BomExpansionServiceTest {
         org.springframework.test.util.ReflectionTestUtils.setField(service, "materialUomConverter", converter);
         when(converter.toComparableQuantity("MAT-SALT", new BigDecimal("5000"), "g", "kg"))
                 .thenReturn(MaterialUomConverter.ConversionResult.converted(new BigDecimal("5"), "kg"));
-        when(warehouseResolver.resolveWorkshopId("F006")).thenReturn("WH-WKS");
-        when(warehouseResolver.resolveLogisticsId("F006")).thenReturn("WH-LOG");
+        when(warehouseResolver.productionPickingWarehouseIds("F006")).thenReturn(List.of("WH-WKS", "WH-LOG"));
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-SALT", "WH-WKS"))
                 .thenReturn(List.of(stockBatch("MB-SALT", "3", null)));
         when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-SALT", "WH-LOG"))
@@ -188,6 +186,31 @@ class BomExpansionServiceTest {
         assertEquals(0, new BigDecimal("5").compareTo(sf.getRequiredQuantity()));
         assertEquals(0, new BigDecimal("3").compareTo(sf.getAvailableQuantity()));
         assertEquals(0, new BigDecimal("2").compareTo(sf.getShortfallQuantity()));
+    }
+
+    /**
+     * 2026-10-29 验收 D-S3S4-01: 采购默认收进原料仓 (WH-RAW)。原料仓是生产领料来源, 那里的批次必须算进可用量 ——
+     * 只数车间仓 + 物流仓时, 到货 3 kg 后缺口仍是 12, 到货永远不抵缺口。
+     */
+    @Test
+    void stockReceivedIntoTheRawWarehouseReducesTheGap() {
+        when(warehouseResolver.productionPickingWarehouseIds("F006")).thenReturn(List.of("WH-WKS", "WH-LOG", "WH-RAW"));
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-WKS")).thenReturn(List.of());
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-LOG")).thenReturn(List.of());
+        when(materialBatchRepository.findAvailableBatchesFEFOByWarehouse("F006", "MAT-BONE", "WH-RAW"))
+                .thenReturn(List.of(stockBatch("MB-RAW", "3", null)));
+
+        MaterialRequirement req = new MaterialRequirement();
+        req.setMaterialTypeId("MAT-BONE");
+        req.setMaterialTypeName("猪大骨");
+        req.setRequiredQuantity(new BigDecimal("15"));
+        req.setSourceUnit("kg");
+
+        com.cretas.aims.dto.orchestration.MaterialShortfall sf =
+                service.checkMaterialAvailability("F006", List.of(req)).getShortfalls().get(0);
+
+        assertEquals(0, new BigDecimal("3").compareTo(sf.getAvailableQuantity()));
+        assertEquals(0, new BigDecimal("12").compareTo(sf.getShortfallQuantity()));
     }
 
     private static com.cretas.aims.entity.MaterialBatch stockBatch(String id, String qty, java.time.LocalDate expire) {

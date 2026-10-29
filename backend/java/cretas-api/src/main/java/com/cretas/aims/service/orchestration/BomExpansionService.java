@@ -216,20 +216,18 @@ public class BomExpansionService {
         List<MaterialShortfall> shortfalls = new ArrayList<>();
         List<MaterialAllocation> allocations = new ArrayList<>();
 
-        // D1: warehouse strategy per PR #310 §5 — BOM 物料分配 WH-WKS 优先 → fallback WH-LOG
-        // (生产先用车间仓余料, 不够回 LOG 拿). 在循环外解析 warehouse_id 避免重复 lookup.
-        String workshopId = warehouseResolver.resolveWorkshopId(factoryId);
-        String logisticsId = warehouseResolver.resolveLogisticsId(factoryId);
+        // D1: warehouse strategy per PR #310 §5 — 车间仓余料优先, 再按生产能领料的其余仓.
+        // 范围 = 生产领料口径 (WarehouseResolver#productionPickingWarehouseIds): 采购默认收进原料仓的工厂,
+        // 只数 车间仓 + 物流仓 会让到货永远不抵缺口 (2026-10-29 验收 D-S3S4-01). 在循环外解析避免重复 lookup.
+        List<String> pickingWarehouseIds = warehouseResolver.productionPickingWarehouseIds(factoryId);
         LocalDate expiryToday = InventoryExpiry.today();
 
         for (MaterialRequirement req : requirements) {
-            // WH-WKS 优先, 不足再合并 WH-LOG
-            List<MaterialBatch> workshopBatches = materialBatchRepository
-                    .findAvailableBatchesFEFOByWarehouse(factoryId, req.getMaterialTypeId(), workshopId);
-            List<MaterialBatch> logisticsBatches = materialBatchRepository
-                    .findAvailableBatchesFEFOByWarehouse(factoryId, req.getMaterialTypeId(), logisticsId);
-            List<MaterialBatch> batches = new ArrayList<>(workshopBatches);
-            batches.addAll(logisticsBatches);
+            List<MaterialBatch> batches = new ArrayList<>();
+            for (String warehouseId : pickingWarehouseIds) {
+                batches.addAll(materialBatchRepository
+                        .findAvailableBatchesFEFOByWarehouse(factoryId, req.getMaterialTypeId(), warehouseId));
+            }
             // 过期批 (到期日 < 东八区今天) 不算可用: 状态还是 AVAILABLE 的过期批在每日 02:05
             // 置 EXPIRED 之前会被查询返回, 且按 FEFO 排在最前 —— 预留 / 插单核对会先吃它。
             // 口径与投料拦截同一个 (InventoryExpiry)。
