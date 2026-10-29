@@ -130,7 +130,7 @@ async function runSuiteWithPage(page, options = {}) {
       });
       // Finish reading landing-page responses before the next full navigation
       // invalidates their browser resource handles. Missing bodies stay errors.
-      await page.waitForLoadState('networkidle', { timeout: 6_000 }).catch(() => {});
+      await network.settle();
       await network.flush();
 
       const scenarioContext = {

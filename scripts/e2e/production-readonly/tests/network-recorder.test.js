@@ -104,3 +104,36 @@ test('a visibly successful scenario fails when its response evidence is incomple
   assert.equal(result.actualBusinessWrites, 0);
   assert.ok(result.pageEvidence.some(item => item.bodyReadErrors?.length === 1));
 });
+
+test('login settlement observes delayed SPA requests through body completion', async () => {
+  const context = new EventEmitter();
+  const recorder = installNetworkRecorder(context);
+  let bodyCompleted = false;
+  const query = request('/api/mobile/F006/config/disabled-modules');
+  setTimeout(() => {
+    context.emit('request', query);
+    context.emit('response', {
+      request: () => query, headers: () => ({ 'content-type': 'application/json' }), status: () => 200,
+      json: async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        bodyCompleted = true;
+        context.emit('requestfinished', query);
+        return { success: true };
+      },
+    });
+  }, 10);
+  await recorder.settle({ quietMs: 20, timeoutMs: 1_000 });
+  assert.equal(bodyCompleted, true);
+  assert.equal(recorder.snapshot().apiEvidence.length, 1);
+  assert.deepEqual(recorder.snapshot().bodyReadErrors, []);
+  recorder.dispose();
+  assert.equal(context.listenerCount('requestfinished'), 0);
+});
+
+test('login settlement rejects an unfinished request instead of silently navigating away', async () => {
+  const context = new EventEmitter();
+  const recorder = installNetworkRecorder(context);
+  context.emit('request', request('/api/mobile/F006/config/disabled-modules'));
+  await assert.rejects(recorder.settle({ quietMs: 5, timeoutMs: 20 }), /did not settle.*1 requests/);
+  recorder.dispose();
+});

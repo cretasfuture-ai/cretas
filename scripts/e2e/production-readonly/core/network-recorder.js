@@ -32,6 +32,8 @@ function installNetworkRecorder(context, options = {}) {
   const failedRequests = [];
   const started = new WeakMap();
   const pending = new Set();
+  const activeRequests = new Set();
+  let lastActivityAt = Date.now();
   const bodyReadErrors = [];
   const bodyTimeoutMs = Number.isSafeInteger(options.responseBodyTimeoutMs)
     && options.responseBodyTimeoutMs > 0 && options.responseBodyTimeoutMs <= 60_000
@@ -47,6 +49,8 @@ function installNetworkRecorder(context, options = {}) {
 
   const onRequest = (request) => {
     if (!observedApi(request.url())) return;
+    activeRequests.add(request);
+    lastActivityAt = Date.now();
     started.set(request, {
       at: Date.now(),
       payload: summarizePayload(parsePostData(request)),
@@ -56,6 +60,7 @@ function installNetworkRecorder(context, options = {}) {
   const onResponse = (response) => {
     const request = response.request();
     if (!observedApi(request.url())) return;
+    lastActivityAt = Date.now();
     const task = (async () => {
       const start = started.get(request);
       let body = null;
@@ -94,11 +99,16 @@ function installNetworkRecorder(context, options = {}) {
       if (response.status() >= 400) httpErrors.push(record);
     })();
     pending.add(task);
-    task.finally(() => pending.delete(task));
+    task.finally(() => { pending.delete(task); lastActivityAt = Date.now(); });
+  };
+
+  const onRequestFinished = (request) => {
+    if (activeRequests.delete(request)) lastActivityAt = Date.now();
   };
 
   const onRequestFailed = (request) => {
     if (!observedApi(request.url())) return;
+    onRequestFinished(request);
     const errorText = request.failure()?.errorText || 'request failed';
     // Requests aborted by the mutation guard are represented in the guard's
     // blockedMutationAttempts collection, not duplicated as HTTP failures.
@@ -114,6 +124,7 @@ function installNetworkRecorder(context, options = {}) {
   context.on('request', onRequest);
   context.on('response', onResponse);
   context.on('requestfailed', onRequestFailed);
+  context.on('requestfinished', onRequestFinished);
 
   return {
     records,
@@ -121,6 +132,17 @@ function installNetworkRecorder(context, options = {}) {
     failedRequests,
     async flush() {
       await Promise.allSettled([...pending]);
+    },
+    async settle({ quietMs = 1_000, timeoutMs = 15_000 } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      // SPA login can mount its shell before the landing page starts its API
+      // requests. Observe a quiet interval, not the document's old load state.
+      lastActivityAt = Date.now();
+      while (Date.now() < deadline) {
+        if (!activeRequests.size && !pending.size && Date.now() - lastActivityAt >= quietMs) return;
+        await new Promise(resolve => setTimeout(resolve, Math.min(50, Math.max(1, deadline - Date.now()))));
+      }
+      throw new Error(`API evidence did not settle within ${timeoutMs}ms (${activeRequests.size} requests, ${pending.size} bodies pending)`);
     },
     snapshot() {
       const duplicates = new Map();
@@ -143,6 +165,7 @@ function installNetworkRecorder(context, options = {}) {
       context.off('request', onRequest);
       context.off('response', onResponse);
       context.off('requestfailed', onRequestFailed);
+      context.off('requestfinished', onRequestFinished);
     },
   };
 }
