@@ -40,3 +40,39 @@ test('Python SmartBI validation errors and network failures cannot disappear fro
   recorder.dispose();
   assert.equal(context.listenerCount('response'), 0);
 });
+
+test('an unfinished JSON body produces bounded, explicit evidence failure', async () => {
+  const context = new EventEmitter();
+  const recorder = installNetworkRecorder(context, { responseBodyTimeoutMs: 20 });
+  const query = request('/smartbi-api/api/smartbi/financial-dashboard/factory-details');
+  context.emit('request', query);
+  context.emit('response', {
+    request: () => query, headers: () => ({ 'content-type': 'application/json' }),
+    json: () => new Promise(() => {}), status: () => 200,
+  });
+  await recorder.flush();
+  const snapshot = recorder.snapshot();
+  assert.equal(snapshot.apiEvidence.length, 1);
+  assert.equal(snapshot.bodyReadErrors.length, 1);
+  assert.match(snapshot.bodyReadErrors[0].error, /did not finish within 20ms/);
+  assert.equal(snapshot.apiEvidence[0].response.success, null);
+  assert.match(snapshot.apiEvidence[0].bodyReadError, /did not finish/);
+  recorder.dispose();
+});
+
+test('completed JSON and downloads flush without a body read error', async () => {
+  const context = new EventEmitter();
+  const recorder = installNetworkRecorder(context, { responseBodyTimeoutMs: 100 });
+  for (const [contentType, body] of [['application/json', { success: true }], ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', null]]) {
+    const query = request('/smartbi-api/api/smartbi/financial-dashboard/export-excel');
+    context.emit('request', query);
+    context.emit('response', {
+      request: () => query, headers: () => ({ 'content-type': contentType }),
+      json: async () => { assert.ok(body); return body; }, status: () => 200,
+    });
+  }
+  await recorder.flush();
+  assert.equal(recorder.snapshot().apiEvidence.length, 2);
+  assert.deepEqual(recorder.snapshot().bodyReadErrors, []);
+  recorder.dispose();
+});

@@ -174,6 +174,14 @@ async function runSuiteWithPage(page, options = {}) {
 
     const guardReport = mutationGuard.snapshot();
     const networkReport = network.snapshot();
+    if (networkReport.bodyReadErrors.length) {
+      const failure = createScenarioResult('network-evidence-read', page.url());
+      failure.result = 'TOOL_ERROR';
+      failure.rootCauseClass = 'tool';
+      failure.pageEvidence.push({ reason: 'Response evidence could not be read completely', bodyReadErrors: networkReport.bodyReadErrors });
+      failure.durationMs = Date.now() - startedAt;
+      results.push(assertScenarioResult(failure));
+    }
     const consoleReport = consoleRecorder.snapshot();
     const report = {
       runId,

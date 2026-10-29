@@ -84,6 +84,12 @@ async function runReadOnlyPageScenario(ctx, definition) {
   result.consoleWarnings = arrayDelta(afterConsole.consoleWarnings, beforeConsole.consoleWarnings.length);
   result.blockedMutationAttempts = arrayDelta(afterGuard.blockedMutationAttempts, beforeGuard.blockedMutationAttempts.length);
   result.actualBusinessWrites = afterGuard.actualBusinessWrites - beforeGuard.actualBusinessWrites;
+  const bodyReadErrors = arrayDelta(afterNetwork.bodyReadErrors, (beforeNetwork.bodyReadErrors || []).length);
+  if (bodyReadErrors.length) {
+    result.result = 'TOOL_ERROR';
+    result.rootCauseClass = 'tool';
+    result.pageEvidence.push({ reason: 'Response evidence could not be read completely', bodyReadErrors });
+  }
   if (result.blockedMutationAttempts.length || result.actualBusinessWrites > 0) {
     result.result = 'TOOL_ERROR';
     result.rootCauseClass = 'tool';

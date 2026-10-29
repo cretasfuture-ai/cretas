@@ -827,6 +827,10 @@ function installNetworkRecorder(context, options = {}) {
   const failedRequests = [];
   const started = new WeakMap();
   const pending = new Set();
+  const bodyReadErrors = [];
+  const bodyTimeoutMs = Number.isSafeInteger(options.responseBodyTimeoutMs)
+    && options.responseBodyTimeoutMs > 0 && options.responseBodyTimeoutMs <= 60_000
+    ? options.responseBodyTimeoutMs : 15_000;
   const extractors = options.responseExtractors || [];
 
   const observedApi = (url) => {
@@ -850,11 +854,26 @@ function installNetworkRecorder(context, options = {}) {
     const task = (async () => {
       const start = started.get(request);
       let body = null;
+      let bodyReadError = null;
+      let bodyTimer;
       try {
         const contentType = response.headers()['content-type'] || '';
-        if (/json/i.test(contentType)) body = await response.json();
-      } catch {
-        body = null;
+        if (/json/i.test(contentType)) {
+          body = await Promise.race([
+            response.json(),
+            new Promise((_, reject) => {
+              bodyTimer = setTimeout(() => reject(new Error(`JSON response body did not finish within ${bodyTimeoutMs}ms`)), bodyTimeoutMs);
+            }),
+          ]);
+        }
+      } catch (error) {
+        bodyReadError = {
+          method: request.method(), url: sanitizeUrl(request.url()), status: response.status(),
+          error: redactText(error?.message || String(error), 200),
+        };
+        bodyReadErrors.push(bodyReadError);
+      } finally {
+        if (bodyTimer) clearTimeout(bodyTimer);
       }
       const record = {
         method: request.method(),
@@ -864,6 +883,7 @@ function installNetworkRecorder(context, options = {}) {
         requestPayload: start?.payload || null,
         response: pickResponseSummary(body, extractors, request.url()),
         at: new Date(start?.at || Date.now()).toISOString(),
+        ...(bodyReadError ? { bodyReadError: bodyReadError.error } : {}),
       };
       records.push(record);
       if (response.status() >= 400) httpErrors.push(record);
@@ -907,6 +927,7 @@ function installNetworkRecorder(context, options = {}) {
         apiEvidence: records.slice(),
         httpErrors: httpErrors.slice(),
         failedRequests: failedRequests.slice(),
+        bodyReadErrors: bodyReadErrors.slice(),
         duplicateRequests: [...duplicates.entries()]
           .filter(([, count]) => count > 1)
           .map(([request, count]) => ({ request, count }))
@@ -1151,6 +1172,14 @@ async function runSuiteWithPage(page, options = {}) {
 
     const guardReport = mutationGuard.snapshot();
     const networkReport = network.snapshot();
+    if (networkReport.bodyReadErrors.length) {
+      const failure = createScenarioResult('network-evidence-read', page.url());
+      failure.result = 'TOOL_ERROR';
+      failure.rootCauseClass = 'tool';
+      failure.pageEvidence.push({ reason: 'Response evidence could not be read completely', bodyReadErrors: networkReport.bodyReadErrors });
+      failure.durationMs = Date.now() - startedAt;
+      results.push(assertScenarioResult(failure));
+    }
     const consoleReport = consoleRecorder.snapshot();
     const report = {
       runId,
@@ -1647,6 +1676,12 @@ async function runReadOnlyPageScenario(ctx, definition) {
   result.consoleWarnings = arrayDelta(afterConsole.consoleWarnings, beforeConsole.consoleWarnings.length);
   result.blockedMutationAttempts = arrayDelta(afterGuard.blockedMutationAttempts, beforeGuard.blockedMutationAttempts.length);
   result.actualBusinessWrites = afterGuard.actualBusinessWrites - beforeGuard.actualBusinessWrites;
+  const bodyReadErrors = arrayDelta(afterNetwork.bodyReadErrors, (beforeNetwork.bodyReadErrors || []).length);
+  if (bodyReadErrors.length) {
+    result.result = 'TOOL_ERROR';
+    result.rootCauseClass = 'tool';
+    result.pageEvidence.push({ reason: 'Response evidence could not be read completely', bodyReadErrors });
+  }
   if (result.blockedMutationAttempts.length || result.actualBusinessWrites > 0) {
     result.result = 'TOOL_ERROR';
     result.rootCauseClass = 'tool';

@@ -32,6 +32,10 @@ function installNetworkRecorder(context, options = {}) {
   const failedRequests = [];
   const started = new WeakMap();
   const pending = new Set();
+  const bodyReadErrors = [];
+  const bodyTimeoutMs = Number.isSafeInteger(options.responseBodyTimeoutMs)
+    && options.responseBodyTimeoutMs > 0 && options.responseBodyTimeoutMs <= 60_000
+    ? options.responseBodyTimeoutMs : 15_000;
   const extractors = options.responseExtractors || [];
 
   const observedApi = (url) => {
@@ -55,11 +59,26 @@ function installNetworkRecorder(context, options = {}) {
     const task = (async () => {
       const start = started.get(request);
       let body = null;
+      let bodyReadError = null;
+      let bodyTimer;
       try {
         const contentType = response.headers()['content-type'] || '';
-        if (/json/i.test(contentType)) body = await response.json();
-      } catch {
-        body = null;
+        if (/json/i.test(contentType)) {
+          body = await Promise.race([
+            response.json(),
+            new Promise((_, reject) => {
+              bodyTimer = setTimeout(() => reject(new Error(`JSON response body did not finish within ${bodyTimeoutMs}ms`)), bodyTimeoutMs);
+            }),
+          ]);
+        }
+      } catch (error) {
+        bodyReadError = {
+          method: request.method(), url: sanitizeUrl(request.url()), status: response.status(),
+          error: redactText(error?.message || String(error), 200),
+        };
+        bodyReadErrors.push(bodyReadError);
+      } finally {
+        if (bodyTimer) clearTimeout(bodyTimer);
       }
       const record = {
         method: request.method(),
@@ -69,6 +88,7 @@ function installNetworkRecorder(context, options = {}) {
         requestPayload: start?.payload || null,
         response: pickResponseSummary(body, extractors, request.url()),
         at: new Date(start?.at || Date.now()).toISOString(),
+        ...(bodyReadError ? { bodyReadError: bodyReadError.error } : {}),
       };
       records.push(record);
       if (response.status() >= 400) httpErrors.push(record);
@@ -112,6 +132,7 @@ function installNetworkRecorder(context, options = {}) {
         apiEvidence: records.slice(),
         httpErrors: httpErrors.slice(),
         failedRequests: failedRequests.slice(),
+        bodyReadErrors: bodyReadErrors.slice(),
         duplicateRequests: [...duplicates.entries()]
           .filter(([, count]) => count > 1)
           .map(([request, count]) => ({ request, count }))
