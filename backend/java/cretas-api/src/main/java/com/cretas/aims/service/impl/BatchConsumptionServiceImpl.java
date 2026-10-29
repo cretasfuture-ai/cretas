@@ -104,6 +104,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                 .collect(Collectors.toMap(MaterialRequirement::getMaterialTypeId, r -> r));
 
         BigDecimal totalMaterialCost = BigDecimal.ZERO;
+        boolean wroteConsumption = false;
 
         // 3. 按分配方案逐批次消耗
         // 按materialTypeId分组allocations
@@ -145,6 +146,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     consumption.setNotes("BOM自动扣料");
 
                     consumptionRepository.save(consumption);
+                    wroteConsumption = true;
                     recordRawLineage(factoryId, alloc.getMaterialBatchId(), batch.getId(),
                             alloc.getAllocatedQuantity(), SOURCE_AUTO_BOM, recordedBy, consumption.getId());
                     totalMaterialCost = totalMaterialCost.add(cost);
@@ -190,8 +192,15 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
                     shortfall.getShortfallQuantity());
         }
 
-        // 5. 更新批次物料成本
-        batch.setMaterialCost(totalMaterialCost);
+        // 5. 更新批次物料成本：读取本批次、本工厂已持久化的 signed totalCost，
+        // 使 AUTO_BOM 不覆盖手工领料或既有调整成本。
+        List<MaterialConsumption> persistedConsumptions = consumptionRepository
+                .findByProductionBatchIdAndFactoryId(batch.getId(), factoryId);
+        if (wroteConsumption && (persistedConsumptions == null || persistedConsumptions.isEmpty())) {
+            throw new BusinessException(500,
+                    "自动扣料已写入但无法读取本批次已持久化成本，拒绝伪造物料成本");
+        }
+        batch.setMaterialCost(MaterialConsumptionCostTotals.sum(persistedConsumptions));
         batch.calculateMetrics();
         productionBatchRepository.save(batch);
 
@@ -312,7 +321,8 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         }
 
         // 重算批次成本
-        BigDecimal newCost = consumptionRepository.calculateTotalCostByProductionBatch(batchId);
+        BigDecimal newCost = MaterialConsumptionCostTotals.forBatch(
+                consumptionRepository, batchId, factoryId);
         batch.setMaterialCost(newCost);
         batch.calculateMetrics();
         productionBatchRepository.save(batch);

@@ -851,6 +851,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     /**
      * 记录原材料消耗 (向后兼容，使用supervisorId或默认值)
      */
+    @Transactional(rollbackFor = Exception.class)
     public void recordMaterialConsumption(String factoryId, String productionBatchId,
                                          List<Map<String, Object>> consumptions) {
         recordMaterialConsumption(factoryId, productionBatchId, consumptions, null);
@@ -860,6 +861,7 @@ public class ProcessingServiceImpl implements ProcessingService {
      * 记录原材料消耗 (带用户ID参数)
      * N+1 修复：合并两个循环，使用缓存 Map 避免重复查询
      */
+    @Transactional(rollbackFor = Exception.class)
     public void recordMaterialConsumption(String factoryId, String productionBatchId,
                                          List<Map<String, Object>> consumptions, Long userId) {
         log.info("记录原材料消耗: factoryId={}, productionBatchId={}, userId={}", factoryId, productionBatchId, userId);
@@ -875,7 +877,7 @@ public class ProcessingServiceImpl implements ProcessingService {
 
             // 使用 computeIfAbsent 确保每个 materialBatchId 只查询一次
             MaterialBatch materialBatch = batchCache.computeIfAbsent(materialBatchId,
-                    id -> materialBatchRepository.findById(id)
+                    id -> materialBatchRepository.findByIdAndFactoryId(id, factoryId)
                             .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在: " + id)));
 
             // 检查库存
@@ -932,8 +934,10 @@ public class ProcessingServiceImpl implements ProcessingService {
             totalMaterialCost = totalMaterialCost.add(cost);
         }
 
-        // 更新生产批次的原材料成本
-        productionBatch.setMaterialCost(totalMaterialCost);
+        // 更新生产批次的原材料成本：从本批次、本工厂已持久化的消耗金额重算，
+        // 避免重复领料请求或 AUTO_BOM 先后写入时覆盖既有成本。
+        productionBatch.setMaterialCost(MaterialConsumptionCostTotals.forBatch(
+                materialConsumptionRepository, productionBatch.getId(), factoryId));
         productionBatchRepository.save(productionBatch);
     }
 
@@ -2179,10 +2183,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         Long batchIdLong = parseBatchId(batchId);
 
         // 重新计算原材料成本
-        List<MaterialConsumption> consumptions = materialConsumptionRepository.findByProductionBatchId(batchIdLong);
-        BigDecimal materialCost = consumptions.stream()
-                .map(c -> c.getQuantity().multiply(c.getBatch().getUnitPrice()))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal materialCost = MaterialConsumptionCostTotals.forBatch(
+                materialConsumptionRepository, batchIdLong, factoryId);
         batch.setMaterialCost(materialCost);
 
         // 重新计算设备成本 - 使用 BatchEquipmentUsage
