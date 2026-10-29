@@ -382,4 +382,30 @@ public interface MaterialConsumptionRepository extends JpaRepository<MaterialCon
             + "  WHERE b.factoryId = :factoryId AND b.productionPlanId = :planId)")
     List<MaterialConsumption> findByFactoryIdAndPlanProductionBatchesIncludingWip(
             @Param("factoryId") String factoryId, @Param("planId") String planId);
+
+    /**
+     * APS 联产计划的建议日产能取数 (Steve 2026-10-29): 某原料在 [from, toExclusive) 里<b>实际投入生产</b>的逐笔量。
+     * 返回 [consumptionTime, 来源批次库存单位 material_batches.quantity_unit, quantity]。
+     *
+     * <ul>
+     *   <li>原料按<b>来源批次</b>的 {@code material_batches.material_type_id} 认, 不按本表的 {@code material_type_id}
+     *       (有几条写入路径不填它)。在制品批次的 material_type_id 恒为 null, 自然不算进来。</li>
+     *   <li>只算挂在 (未软删的) 本厂生产批上的: 调拨出库 / 手工出库 / 计划级领料出库 / 关单退料
+     *       ({@code production_batch_id} 为空) 不是「投进生产」。</li>
+     *   <li>撤回 = 软删 ({@code deleted_at}): 类级 {@code @Where} + 显式条件双保险。</li>
+     *   <li>差异调整的负数行 (退回) <b>要</b>一起合计 —— 血缘边表是只增不减的, 表达不了退回, 所以取本表不取边表。</li>
+     *   <li>本表没有单位列, quantity 的单位就是来源批次的库存单位 (见 {@link MaterialConsumption#getQuantity()})。</li>
+     * </ul>
+     * 按日用 {@code consumption_time} (非空; {@code consumed_at} 有几条路径不写)。
+     */
+    @Query("SELECT m.consumptionTime, b.quantityUnit, m.quantity FROM MaterialConsumption m, MaterialBatch b "
+            + "WHERE b.id = m.batchId AND b.factoryId = :factoryId AND m.factoryId = :factoryId "
+            + "AND b.materialTypeId = :materialTypeId AND m.deletedAt IS NULL "
+            + "AND m.productionBatchId IN ("
+            + "  SELECT p.id FROM ProductionBatch p WHERE p.factoryId = :factoryId) "
+            + "AND m.consumptionTime >= :from AND m.consumptionTime < :toExclusive")
+    List<Object[]> findProductionInputOfMaterialType(@Param("factoryId") String factoryId,
+                                                      @Param("materialTypeId") String materialTypeId,
+                                                      @Param("from") LocalDateTime from,
+                                                      @Param("toExclusive") LocalDateTime toExclusive);
 }

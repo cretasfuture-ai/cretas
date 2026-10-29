@@ -50,6 +50,91 @@ class ExperienceCapacityTest {
         assertThat(e.perDay()).isNull();
         assertThat(e.sampleDays()).isEqualTo(2);
         assertThat(e.note()).contains("不足 3 天");
+        // 不够 3 天也把那两天的实际量带出来 (同一天先合计, 按日期升序, 计划单位)
+        assertThat(samples(e)).containsExactly(D + "=300袋", D.plusDays(1) + "=301袋");
+        assertThat(e.basis()).isEqualTo(ExperienceCapacity.Basis.FINISHED_OUTPUT);
+    }
+
+    @Test
+    void enoughDaysGiveNoSampleList() {
+        ExperienceCapacity e = ExperienceCapacity.fromRows(List.of(
+                row(0, "袋", "100"), row(1, "袋", "200"), row(2, "袋", "300")), "袋");
+
+        assertThat(e.available()).isTrue();
+        assertThat(e.samples()).isEmpty();
+    }
+
+    @Test
+    void noDaysAtAllGiveAnEmptySampleList() {
+        ExperienceCapacity e = ExperienceCapacity.fromRows(List.of(), "袋");
+
+        assertThat(e.available()).isFalse();
+        assertThat(e.sampleDays()).isZero();
+        assertThat(e.samples()).isEmpty();
+        assertThat(e.note()).contains("只有 0 天");
+    }
+
+    // ==================== 联产计划: 按原料投入 ====================
+
+    @Test
+    void rawInputMedianIsTakenOverDaysWithInputAndNamesTheMaterial() {
+        // 第 0 天 120 + 80 = 200; 第 2 天 300; 第 5 天 250 → 中位 250
+        ExperienceCapacity e = ExperienceCapacity.fromRows(List.of(
+                row(0, "kg", "120"), row(0, "kg", "80"), row(2, "kg", "300"), row(5, "kg", "250")),
+                "kg", ExperienceCapacity.Basis.RAW_INPUT, "西装鸡");
+
+        assertThat(e.available()).isTrue();
+        assertThat(e.perDay()).isEqualByComparingTo("250");
+        assertThat(e.sampleDays()).isEqualTo(3);
+        assertThat(e.basis()).isEqualTo(ExperienceCapacity.Basis.RAW_INPUT);
+        assertThat(e.note()).contains("实际投入西装鸡").contains("中位数").contains("3 天");
+        assertThat(e.samples()).isEmpty();
+    }
+
+    @Test
+    void rawInputReturnsAreNettedWithinTheDay() {
+        // 差异调整退回是负数行: 第 0 天 300 − 100 = 200; 第 1 天 −50 合计为负不算有投入的日子
+        ExperienceCapacity e = ExperienceCapacity.fromRows(List.of(
+                row(0, "kg", "300"), row(0, "kg", "-100"), row(1, "kg", "-50"),
+                row(2, "kg", "100"), row(3, "kg", "250")),
+                "kg", ExperienceCapacity.Basis.RAW_INPUT, "西装鸡");
+
+        assertThat(e.sampleDays()).isEqualTo(3);
+        assertThat(e.perDay()).isEqualByComparingTo("200"); // 100, 200, 250
+    }
+
+    @Test
+    void rawInputWithFewerThanThreeDaysGivesNoSuggestionButListsTheDaysInThePlanUnit() {
+        // 原料批次记的是 g 和斤, 计划单位 kg: 摆出来的量换成 kg
+        ExperienceCapacity e = ExperienceCapacity.fromRows(List.of(
+                row(4, "g", "40000"), row(1, "斤", "100"), row(1, "kg", "10")),
+                "kg", ExperienceCapacity.Basis.RAW_INPUT, "西装鸡");
+
+        assertThat(e.available()).isFalse();
+        assertThat(e.sampleDays()).isEqualTo(2);
+        assertThat(e.note()).contains("投入西装鸡").contains("不足 3 天").contains("建议值");
+        assertThat(samples(e)).containsExactly(D.plusDays(1) + "=60kg", D.plusDays(4) + "=40kg");
+    }
+
+    @Test
+    void rawInputUnitsAreConvertedAndUnconvertibleUnitsGiveNoSuggestion() {
+        ExperienceCapacity converted = ExperienceCapacity.fromRows(List.of(
+                row(0, "kg", "100"), row(1, "公斤", "200"), row(2, "斤", "600")),   // 300 kg
+                "kg", ExperienceCapacity.Basis.RAW_INPUT, "西装鸡");
+        assertThat(converted.perDay()).isEqualByComparingTo("200");
+
+        ExperienceCapacity unconvertible = ExperienceCapacity.fromRows(List.of(
+                row(0, "kg", "100"), row(1, "kg", "200"), row(2, "kg", "300"), row(3, "只", "40")),
+                "kg", ExperienceCapacity.Basis.RAW_INPUT, "西装鸡");
+        assertThat(unconvertible.available()).isFalse();
+        assertThat(unconvertible.note()).contains("只").contains("换算不了");
+        assertThat(unconvertible.samples()).isEmpty();
+    }
+
+    private static List<String> samples(ExperienceCapacity e) {
+        return e.samples().stream()
+                .map(s -> s.date() + "=" + s.quantity().stripTrailingZeros().toPlainString() + s.unit())
+                .toList();
     }
 
     @Test
