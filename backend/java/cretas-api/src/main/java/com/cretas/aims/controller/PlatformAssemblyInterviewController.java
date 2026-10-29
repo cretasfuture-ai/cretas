@@ -1052,7 +1052,7 @@ public class PlatformAssemblyInterviewController {
 
     @GetMapping("/factories/{factoryId}/ai-initialize/converse/recoverable")
     @Operation(summary = "读取可恢复的建厂访谈",
-               description = "只读返回当前操作者最新的 ACTIVE 或 COMPLETED 建厂访谈；不会创建或重启会话")
+               description = "返回当前操作者最新的 ACTIVE 或 COMPLETED 建厂访谈；不会创建、取消或重启会话。唯一的写入: 最新一版若只是空闲过期（ACTIVE 过期或 TIMEOUT）且 24 小时内，会被恢复并重新计时，其答案保留；已取消、已完成、他人或他厂的会话不会被恢复")
     public ApiResponse<FactoryBuildProgress> getRecoverableFactoryBuildConversation(
             @PathVariable String factoryId,
             HttpServletRequest httpRequest) {

@@ -20,3 +20,13 @@ describe('对话建厂: 上一版已填写的值需要用户确认', () => {
     expect(page).not.toMatch(/answeredLabels\?\.\[field\] \|\| field/)
   })
 })
+
+describe('已确认事实: 改某一项', () => {
+  const ledger = readFileSync(resolve(process.cwd(), 'src/views/platform/factory-onboarding/components/FactoryConversationFactLedger.vue'), 'utf8')
+  it('每行有「改这一项」, 点了把「把「名称」改成」写进输入框', () => {
+    expect(ledger).toContain('data-testid="edit-fact"')
+    expect(ledger).toContain("emit('edit', fact)")
+    expect(page).toContain('@edit="startEditingFact"')
+    expect(page).toContain('draft.value = `把「${fact.label}」改成`')
+  })
+})
