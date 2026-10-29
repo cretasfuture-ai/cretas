@@ -13,6 +13,8 @@
 | 意图识别（用户原话 → 识别意图 / 选层） | **不脱敏，原名发出**（已知例外，见下） | Java `LlmEgressGuard.utterance`；Python `common/llm_client.py` 的 `_names_for_this_request`（`utterance_egress` 上下文：`ai/matcher/llm.py`、`ai/matcher/decision.py`、`ai/router/llm_tier_selector.py`、`llm/api/endpoints.py`） |
 | 其余所有出口（对话、分析、报表、抽参、表单、SmartBI…） | 换代号；换不了就不发 | Java `LlmEgressGuard.texts / structured / textsWithRecord / combined`；Python `common/llm_client.py` 默认模式 |
 
+**系统约束（harness）**：Java 侧有保密产品的工厂，带业务数据的成本提示词带 `ProcessSecretLlmCostScope.HARNESS_INSTRUCTION`；Python 侧把工厂经营数据交给模型做分析 / 解读的系统提示词一律带 `common/process_secret_harness.py` 的 `PROCESS_SECRET_HARNESS`（不跨厂、保密产品细节只给有权的当前用户、不记住不复述；唯一一份常量）。接入的路径与有意不接的路径由 `tests/test_process_secret_harness_paths.py`（AST）钉住：`smartbi/services/insights/llm_client.py`（覆盖 `/api/chat/general-analysis` 与 chat 下钻流式解读）、`chart_insight_service`、`synthesis_engine`、`financial_dashboard`、`unified_analyzer`。
+
 ### 已知例外：意图识别保留原名（Steve 2026-10-29 裁定，有意保留）
 
 意图识别把用户原话连同其中的工艺保密产品名不脱敏发给外部模型。理由：识别链路不加库查询，替换名字会改坏原话、降低识别准确率。除意图识别以外的所有外发一律把保密产品名换代号。
@@ -102,11 +104,27 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 
 `SemanticCacheServiceImpl.cacheResult` 按「工厂 + 原话」存，不分调用者；有工艺保密产品（或判定失败）的工厂只存意图、不存执行结果（#1295），没有保密产品的工厂仍存完整执行结果。现在命中只回元数据，不回放结果（`SseSemanticCacheAdmissionContractTest` 钉着）。⛔ 要实现回放，必须先按调用者的保密访问档位隔离（工厂 + 调用者能 FULL 查看的保密产品集合）。
 
-## 5. 已知风险（已裁定接受）
+## 5. AI 数据访问审计（Steve 2026-10-29 选 A）
+
+每个 AI 请求一条记录，写进已有的工艺保密审计表 `process_secret_access_events`（动作 `AI_ACCESS`，无迁移）：
+
+| 列 | 内容 |
+|---|---|
+| `factory_id` / `actor_type` / `actor_id` | 工厂、调用者 |
+| `decision` | `PROTECTED` = 这次请求经手的数据牵涉保密产品（完整发出 / 裁剪后发出 / 整次未发都算）；`NONE` = 不牵涉 |
+| `reason` | `tier=<FULL / PARTIAL / NONE / NO_PROTECTED>(<缓存档位哈希>)`，整次未发时带 `; withheld` |
+| `resource_ref` | `ai:<入口>` |
+
+- **入口**（`ProcessSecretAiAccessAudit.Entry`）：`AIAnalysisService.analyzeCost`（全部非流式成本分析的汇合点）；`AIEnterpriseService.analyzeCost / analyzeTimeRangeCost / compareBatchCosts`（含缓存命中）；`AIEnterpriseService.analyzeTimeRangeCostStream`（流式）；`ProcessSecretToolOutputAspect`（全部 AI 工具调用）；`IntentExecutionOrchestrator.execute / executeWithExplicitIntent`；`AIContextServiceImpl.buildProductionContextForAi / buildCostContextForCaller`。`ProcessSecretLlmCostScope.withoutProtectedBatches` 排除了保密行时也标进当前那一条。
+- **一个请求一条**：在 HTTP 请求线程里，记录挂在请求上，请求结束时写一次（同一请求里几个入口、几次工具调用合并）；不在请求线程（流式执行线程、定时任务）时最外层入口结束写一次。
+- **「牵涉」的口径**：结构化数据里出现本厂保密产品或牵涉它们的计划、单批分析的批次属于保密范围、AI 工具在本请求里读到的工艺内容。只有合计没有逐行产品的数据看不出来 —— 看档位：有保密产品的工厂里 FULL 档的合计含保密产品。全厂范围的缓存命中按「牵涉」记（条目当初的数据看不到，审计宁可多记）。
+- **写失败**：与页面侧同一处理 —— `ProcessSecretAccessService.audit` 捕获写失败、记 ERROR、返回 false，由调用方决定拦不拦。页面侧只在「放行完整工艺 (ALLOW)」时 fail-closed，因为那条审计是授权凭证；AI 访问审计不是授权（能看到什么已由 `ProcessSecretLlmCostScope` 按调用者裁剪 / 拦下），所以**不拦业务请求**，但**不静默**：再记一条 ERROR（`AI access audit NOT written`，带入口 / 工厂 / 是否牵涉）并累加 `writeFailures()` 计数。
+
+## 6. 已知风险（已裁定接受）
 
 - **经营报告毛利汇总**：Steve 2026-10-29 裁定: 经营报告毛利汇总照常完整显示; 已知风险: 无权的人可用汇总减去其他产品的毛利倒推出保密产品的毛利。逐产品的毛利 / 毛利率对无权读者仍显示「已保密」（同计划联产的普通产品显示「不可单独计算」）。开关在 `OperatingReportProjection.MASK_MARGIN_SUMMARY_FOR_UNAUTHORIZED`（保持 `false`；改判时只改这一处，`maskMarginSummary` 遮已回填成本 / 毛利 / 毛利率，收入照常）。
 
-## 6. 已知缺口（未处理）
+## 7. 已知缺口（未处理）
 
 - **存量数据**：历史上已写进平台级意图行的关键词、已存在的无工厂学习行没有清理；读出口已不再使用系统学来的无工厂说法，但平台级意图行 `keywords` 里的存量词仍对所有工厂生效。清理要先在线上计数（只读）再定。
 - **外发脱敏的大小写**：`LlmEgressRedactor` 的名字替换仍按原样大小写比对（本轮按要求不改替换逻辑），只有学习侧的判断不分大小写。
