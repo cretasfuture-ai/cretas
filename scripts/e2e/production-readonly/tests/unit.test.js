@@ -29,6 +29,10 @@ require('./ui-login.test');
 require('./visual-page-census-readonly.test');
 require('./smartbi-factory-details.test');
 
+require('./parallel-run.test');
+require('./client-offline-evidence.test');
+
+
 const {
   assessDetailsResponse,
   clickAttempts,

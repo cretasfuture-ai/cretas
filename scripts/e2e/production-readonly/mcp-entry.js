@@ -488,7 +488,7 @@ module.exports = { establishCleanSession };
     "core/console-recorder.js": function(module, exports, require) {
 'use strict';
 
-const { redactText } = require('./sanitizer');
+const { redactText, sanitizeUrl } = require('./sanitizer');
 
 const DEFAULT_NOISE_RULES = [
   { id: 'favicon', pattern: /favicon\.ico/i },
@@ -512,6 +512,7 @@ function installConsoleRecorder(context, options = {}) {
   const raw = [];
   const accepted = [];
   const listeners = new Map();
+  let pendingOfflineConsole = null;
 
   function record(type, text, location = '') {
     const safeText = redactText(text, 500);
@@ -525,6 +526,12 @@ function installConsoleRecorder(context, options = {}) {
       filtered: Boolean(matched),
       filterRule: matched?.id || null,
     };
+    if (pendingOfflineConsole && Date.now() <= pendingOfflineConsole.expiresAt && type === 'error'
+      && sanitizeUrl(safeLocation) === pendingOfflineConsole.url
+      && /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(safeText)) {
+      item.expectedFault = 'controlled-client-offline';
+      pendingOfflineConsole = null;
+    }
     raw.push(item);
     if (!matched) accepted.push(item);
   }
@@ -564,12 +571,24 @@ function installConsoleRecorder(context, options = {}) {
   context.on('page', attach);
 
   return {
+    expectClientOfflineResourceError(request) {
+      const url = sanitizeUrl(request.url());
+      if (request.method() !== 'POST' || !/\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(url)
+        || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))) throw new Error('Unverified offline console exception');
+      const matched = accepted.filter(item => item.type === 'error' && sanitizeUrl(item.location) === url
+        && /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(item.text));
+      if (matched.length > 1) throw new Error('Unexpected duplicate offline console errors');
+      for (const item of matched) item.expectedFault = 'controlled-client-offline';
+      if (!matched.length) pendingOfflineConsole = { url, expiresAt: Date.now() + 2_000 };
+      return matched.length;
+    },
     snapshot() {
       return {
         rawCount: raw.length,
         filteredCount: raw.length - accepted.length,
-        retainedCount: accepted.length,
-        consoleErrors: accepted.filter((item) => item.type === 'error'),
+        retainedCount: accepted.filter(item => !item.expectedFault).length,
+        consoleErrors: accepted.filter((item) => item.type === 'error' && !item.expectedFault),
+        expectedConsoleErrors: accepted.filter(item => item.expectedFault).map(item => ({ ...item })),
         consoleWarnings: accepted.filter((item) => item.type === 'warning'),
         pageErrors: accepted.filter((item) => item.type === 'pageerror'),
         filteredNoise: raw.filter((item) => item.filtered),
@@ -825,6 +844,7 @@ function installNetworkRecorder(context, options = {}) {
   const records = [];
   const httpErrors = [];
   const failedRequests = [];
+  const failureByRequest = new WeakMap();
   const started = new WeakMap();
   const pending = new Set();
   const activeRequests = new Set();
@@ -912,12 +932,14 @@ function installNetworkRecorder(context, options = {}) {
     // Requests aborted by the mutation guard are represented in the guard's
     // blockedMutationAttempts collection, not duplicated as HTTP failures.
     if (/ERR_BLOCKED_BY_CLIENT|blockedbyclient/i.test(errorText)) return;
-    failedRequests.push({
+    const record = {
       method: request.method(),
       url: sanitizeUrl(request.url()),
       error: redactText(errorText, 160),
       at: new Date().toISOString(),
-    });
+    };
+    failedRequests.push(record);
+    failureByRequest.set(request, record);
   };
 
   context.on('request', onRequest);
@@ -929,6 +951,14 @@ function installNetworkRecorder(context, options = {}) {
     records,
     httpErrors,
     failedRequests,
+    expectClientOfflineFailure(request) {
+      const record = failureByRequest.get(request);
+      if (!record || record.method !== 'POST' || splitUrl(request.url()).pathname !== '/api/mobile/F006/smart-bi/factory-analysis'
+        || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))
+        || failedRequests.some(item => item.expectedFault)) throw new Error('Expected exactly one verified F006 client-offline analysis request');
+      record.expectedFault = 'controlled-client-offline';
+      return { ...record };
+    },
     async flush() {
       await Promise.allSettled([...pending]);
     },
@@ -952,7 +982,8 @@ function installNetworkRecorder(context, options = {}) {
       return {
         apiEvidence: records.slice(),
         httpErrors: httpErrors.slice(),
-        failedRequests: failedRequests.slice(),
+        failedRequests: failedRequests.filter(item => !item.expectedFault),
+        expectedTransportFailures: failedRequests.filter(item => item.expectedFault).map(item => ({ ...item })),
         bodyReadErrors: bodyReadErrors.slice(),
         duplicateRequests: [...duplicates.entries()]
           .filter(([, count]) => count > 1)
@@ -970,6 +1001,77 @@ function installNetworkRecorder(context, options = {}) {
 }
 
 module.exports = { installNetworkRecorder, normalizeDuplicateKey, pickResponseSummary };
+
+},
+    "core/parallel-run.js": function(module, exports, require) {
+'use strict';
+const { redactText } = require('./sanitizer');
+function validateParallelRuns(runs, parent = {}) {
+  if (!Array.isArray(runs) || runs.length < 2 || runs.length > 3) throw new Error('parallelRuns must contain 2 or 3 independent runs');
+  if (parent.expectedFactoryId && parent.expectedFactoryId !== 'F006') throw new Error('Parallel acceptance is limited to F006');
+  const parentId = parent.runId || `parallel-${Date.now()}`;
+  const root = parent.evidenceDir || `.playwright-mcp/production-readonly/${parentId}`;
+  const names = new Set(); const dirs = new Set(); const actors = new Set();
+  return runs.map((run, index) => {
+    if (!run || typeof run !== 'object') throw new Error(`parallelRuns[${index}] must be an object`);
+    if ((run.expectedFactoryId || 'F006') !== 'F006') throw new Error(`parallelRuns[${index}] is limited to F006`);
+    const username = run.username || parent.username; const expectedUsername = run.expectedUsername || username;
+    if (!username || username !== expectedUsername) throw new Error('Each parallel run needs a matching login identity');
+    const actorId = String(run.expectedActorId ?? '');
+    if (!/^[1-9]\d*$/u.test(actorId) || actors.has(actorId)) throw new Error('parallelRuns require distinct positive expectedActorId values');
+    actors.add(actorId);
+    const runId = run.runId || `${parentId}-lane-${index + 1}`;
+    if (!/^[A-Za-z0-9_-]{1,120}$/u.test(runId) || names.has(runId)) throw new Error('parallelRuns require unique safe runId values');
+    names.add(runId);
+    const evidenceDir = String(run.evidenceDir || `${root}/${runId}`).replace(/\\/gu, '/').replace(/\/+$/u, '');
+    if (evidenceDir.split('/').includes('..') || !/(?:^|\/)(?:\.playwright-mcp|test-output|test-results|tmp)(?:\/|$)/u.test(evidenceDir)
+      || dirs.has(evidenceDir.toLowerCase())) throw new Error('parallelRuns require unique safe evidenceDir values');
+    dirs.add(evidenceDir.toLowerCase());
+    return { ...run, runId, evidenceDir, username, expectedUsername, expectedActorId: actorId, expectedFactoryId: 'F006' };
+  });
+}
+function runPassed(result) {
+  return result?.safetyPassed === true && result.actorProof?.matchesExpectedUsername === true
+    && result.actorProof?.matchesExpectedActorId === true && result.actorProof?.factoryId === 'F006'
+    && Array.isArray(result.scenarios) && result.scenarios.length > 0 && result.scenarios.every(s => s.result === 'PASS')
+    && !['httpErrors', 'failedRequests', 'bodyReadErrors'].some(key => result.network?.[key]?.length)
+    && !result.console?.consoleErrors?.length && !result.console?.pageErrors?.length;
+}
+async function runParallelSuites(parentPage, options, runSuiteWithPage) {
+  const runId = options.runId || `parallel-${Date.now()}`;
+  const runs = validateParallelRuns(options.parallelRuns, { ...options, runId });
+  const browser = parentPage.context().browser();
+  if (!browser) throw new Error('MCP page browser is unavailable for parallel contexts');
+  const startedAt = new Date().toISOString();
+  const settled = await Promise.allSettled(runs.map(async (run, index) => {
+    const context = await browser.newContext(); const cleanup = { attempted: false, closed: false };
+    try {
+      const page = await context.newPage(); const child = { ...options, ...run }; delete child.parallelRuns;
+      const result = await runSuiteWithPage(page, child);
+      return { index, runId: run.runId, evidenceDir: run.evidenceDir, actorId: result.actorProof?.actorId || null, result, cleanup };
+    } finally { cleanup.attempted = true; await context.close(); cleanup.closed = true; }
+  }));
+  const output = settled.map((item, index) => {
+    if (item.status === 'fulfilled') return item.value;
+    let error = String(item.reason?.message || item.reason);
+    for (const value of [runs[index].password, runs[index].username, options.password, options.username]) {
+      if (value) error = error.split(String(value)).join('[REDACTED]');
+    }
+    return { index, runId: runs[index].runId, evidenceDir: runs[index].evidenceDir, result: { result: 'TOOL_ERROR', error: redactText(error, 500) } };
+  });
+  const allPassed = output.every((item, index) => item.cleanup?.closed === true
+    && String(item.actorId) === runs[index].expectedActorId && runPassed(item.result));
+  const actorIds = output.map(item => item.actorId).filter(Boolean);
+  const distinctActors = actorIds.length === runs.length && new Set(actorIds).size === runs.length;
+  const intervals = output.flatMap(item => (item.result?.network?.apiEvidence || [])
+    .filter(r => r.method === 'POST' && /\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(r.url) && r.status === 200 && Number.isFinite(r.durationMs))
+    .map(r => ({ actorId: item.actorId, start: Date.parse(r.at), end: Date.parse(r.at) + r.durationMs })));
+  const concurrentRequestsObserved = intervals.some((a, i) => intervals.slice(i + 1).some(b => a.actorId !== b.actorId && Math.min(a.end, b.end) > Math.max(a.start, b.start)));
+  return { runId, productionReadonly: true, parallel: true, maxParallelRuns: 3, startedAt, finishedAt: new Date().toISOString(), runs: output, allSettled: true, distinctActors, concurrentRequestsObserved,
+    allBusinessScenariosPassed: allPassed && distinctActors, result: allPassed && distinctActors && concurrentRequestsObserved ? 'PASS' : 'UNVERIFIED',
+    safetyPassed: output.every(item => item.cleanup?.closed === true && item.result?.safetyPassed === true) };
+}
+module.exports = { validateParallelRuns, runParallelSuites, runPassed };
 
 },
     "core/result-schema.js": function(module, exports, require) {
@@ -1035,6 +1137,7 @@ const { writeEvidence } = require('./evidence-writer');
 const { createScenarioResult, assertScenarioResult } = require('./result-schema');
 const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
+const { runParallelSuites } = require('./parallel-run');
 
 const SCENARIOS = [
   require('../scenarios/smartbi-factory-analysis-readonly'),
@@ -1044,6 +1147,7 @@ const SCENARIOS = [
   require('../scenarios/smartbi-focused-acceptance-readonly').commerceJoint,
   require('../scenarios/smartbi-focused-acceptance-readonly').purchaseInventory,
   require('../scenarios/smartbi-focused-acceptance-readonly').legacyKpi,
+  require('../scenarios/smartbi-parallel-recovery-readonly'),
   require('../scenarios/quality-standard-readonly'),
   require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
@@ -1118,6 +1222,7 @@ function resolveScenarios(requested) {
 }
 
 async function runSuiteWithPage(page, options = {}) {
+  if (options.parallelRuns) return runParallelSuites(page, options, runSuiteWithPage);
   const context = page.context();
   const baseUrl = String(options.baseUrl || 'https://admin.cretaceousfuture.com').replace(/\/$/, '');
   const expectedUsername = options.expectedUsername || 'f006_admin';
@@ -1186,7 +1291,8 @@ async function runSuiteWithPage(page, options = {}) {
       for (const scenario of selectedScenarios) {
         const before = mutationGuard.snapshot();
         if (before.actualBusinessWrites || before.blockedMutationAttempts.length) break;
-        results.push(await scenario.run(scenarioContext));
+        const scenarioResult = await scenario.run(scenarioContext);
+        results.push(scenarioResult);
         const after = mutationGuard.snapshot();
         if (after.actualBusinessWrites || after.blockedMutationAttempts.length) break;
       }
@@ -1239,6 +1345,14 @@ async function runSuiteWithPage(page, options = {}) {
       priorities: options.priorities || { P0: [], P1: [], P2: [] },
       safetyPassed: guardReport.actualBusinessWrites === 0 && guardReport.blockedMutationAttempts.length === 0,
     };
+    const actorProof = await page.evaluate((expected) => {
+      const value = JSON.parse(localStorage.getItem('cretas_user') || '{}');
+      const actorId = String(value.userId ?? value.id ?? '');
+      return { factoryId: String(value.factoryUser?.factoryId || value.factoryId || ''), actorId,
+        matchesExpectedUsername: String(value.username || value.factoryUser?.username || '') === expected.username,
+        matchesExpectedActorId: !expected.actorId || actorId === String(expected.actorId) };
+    }, { username: expectedUsername, actorId: options.expectedActorId || null });
+    report.actorProof = actorProof;
     const safeReport = sanitizeValue(report);
     const files = await writeEvidence(safeReport, evidenceDir, { productionReadonly: true, page });
     return { ...safeReport, evidence: files };
@@ -6661,6 +6775,58 @@ const scenario = {
 module.exports = scenario;
 module.exports.assess = assess;
 module.exports.responseIsRecommendations = responseIsRecommendations;
+
+},
+    "scenarios/smartbi-parallel-recovery-readonly.js": function(module, exports, require) {
+'use strict';
+const { runReadOnlyPageScenario } = require('./_shared');
+const { inspectCommercePage } = require('./smartbi-focused-acceptance-readonly');
+const PATH = '/api/mobile/F006/smart-bi/factory-analysis';
+const QUESTION = '联合看客户渠道销售、发货和库存';
+
+async function inspect(page, _body, ctx) {
+  if (ctx.expectedFactoryId !== 'F006' || !ctx.smartbiCommerceJoint) throw new Error('Recovery requires an explicit F006 commerce contract');
+  const input = page.getByTestId('factory-analysis-input'); const submit = page.getByTestId('factory-analysis-submit');
+  await input.waitFor({ state: 'visible', timeout: 30_000 });
+  await ctx.network.settle();
+  if (await page.locator('[data-testid^="factory-chart-card-"]:visible').count()) throw new Error('Recovery requires a fresh, empty conversation');
+  let onFailed; let timer;
+  const failed = new Promise((resolve, reject) => {
+    onFailed = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === PATH) resolve(request);
+    };
+    page.on('requestfailed', onFailed);
+    timer = setTimeout(() => reject(new Error('Expected offline analysis request was not observed')), 15_000);
+  });
+  let request;
+  try {
+    await input.fill(QUESTION);
+    await ctx.context.setOffline(true);
+    await submit.click();
+    request = await failed;
+  } finally {
+    clearTimeout(timer); page.off('requestfailed', onFailed);
+    await ctx.context.setOffline(false);
+  }
+  await page.locator('.el-alert--error, [role="alert"]').filter({ hasText: /失败|不可用|重试|网络|Network|Failed/iu }).first().waitFor({ state: 'visible', timeout: 10_000 });
+  const noFabricatedCharts = await page.locator('[data-testid^="factory-chart-card-"]:visible').count() === 0;
+  const noFabricatedFacts = (await page.getByTestId('factory-analysis-facts').allTextContents()).every(text => !text.trim());
+  if (!noFabricatedCharts || !noFabricatedFacts) throw new Error('Offline request displayed unverified facts or charts');
+  const expectedFailure = ctx.network.expectClientOfflineFailure(request);
+  ctx.consoleRecorder.expectClientOfflineResourceError(request);
+  const offlineShot = ctx.screenshot ? await ctx.screenshot('smartbi-client-offline-error') : null;
+  const online = await inspectCommercePage(page, ctx, ctx.smartbiCommerceJoint);
+  const expected = ctx.network.snapshot().expectedTransportFailures;
+  const pass = online.assessment?.result === 'PASS' && expected.length === 1 && noFabricatedCharts && noFabricatedFacts;
+  return { ...online, recovery: { result: pass ? 'PASS' : 'UNVERIFIED', offlineFailure: expectedFailure.error, expectedTransportFailures: expected.length,
+    explicitErrorVisible: true, noFabricatedCharts, noFabricatedFacts, retriedOnline: online.assessment?.result === 'PASS' },
+    screenshots: [offlineShot, online.screenshot].filter(Boolean),
+    assessment: { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'data' } };
+}
+
+module.exports = { id: 'smartbi-parallel-recovery-readonly', defaultEnabled: false,
+  run: ctx => runReadOnlyPageScenario(ctx, { id: 'smartbi-parallel-recovery-readonly', path: '/smart-bi/analysis?tab=analysis',
+    landmarks: ['智能数据分析'], timeoutMs: 60_000, appMountTimeoutMs: 90_000, inspect }) };
 
 },
     "scenarios/smartbi-scale-readonly.js": function(module, exports, require) {

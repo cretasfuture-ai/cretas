@@ -10,6 +10,7 @@ const { writeEvidence } = require('./evidence-writer');
 const { createScenarioResult, assertScenarioResult } = require('./result-schema');
 const { sanitizeValue } = require('./sanitizer');
 const { pathnameOf } = require('./url-utils');
+const { runParallelSuites } = require('./parallel-run');
 
 const SCENARIOS = [
   require('../scenarios/smartbi-factory-analysis-readonly'),
@@ -19,6 +20,7 @@ const SCENARIOS = [
   require('../scenarios/smartbi-focused-acceptance-readonly').commerceJoint,
   require('../scenarios/smartbi-focused-acceptance-readonly').purchaseInventory,
   require('../scenarios/smartbi-focused-acceptance-readonly').legacyKpi,
+  require('../scenarios/smartbi-parallel-recovery-readonly'),
   require('../scenarios/quality-standard-readonly'),
   require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
@@ -93,6 +95,7 @@ function resolveScenarios(requested) {
 }
 
 async function runSuiteWithPage(page, options = {}) {
+  if (options.parallelRuns) return runParallelSuites(page, options, runSuiteWithPage);
   const context = page.context();
   const baseUrl = String(options.baseUrl || 'https://admin.cretaceousfuture.com').replace(/\/$/, '');
   const expectedUsername = options.expectedUsername || 'f006_admin';
@@ -161,7 +164,8 @@ async function runSuiteWithPage(page, options = {}) {
       for (const scenario of selectedScenarios) {
         const before = mutationGuard.snapshot();
         if (before.actualBusinessWrites || before.blockedMutationAttempts.length) break;
-        results.push(await scenario.run(scenarioContext));
+        const scenarioResult = await scenario.run(scenarioContext);
+        results.push(scenarioResult);
         const after = mutationGuard.snapshot();
         if (after.actualBusinessWrites || after.blockedMutationAttempts.length) break;
       }
@@ -214,6 +218,14 @@ async function runSuiteWithPage(page, options = {}) {
       priorities: options.priorities || { P0: [], P1: [], P2: [] },
       safetyPassed: guardReport.actualBusinessWrites === 0 && guardReport.blockedMutationAttempts.length === 0,
     };
+    const actorProof = await page.evaluate((expected) => {
+      const value = JSON.parse(localStorage.getItem('cretas_user') || '{}');
+      const actorId = String(value.userId ?? value.id ?? '');
+      return { factoryId: String(value.factoryUser?.factoryId || value.factoryId || ''), actorId,
+        matchesExpectedUsername: String(value.username || value.factoryUser?.username || '') === expected.username,
+        matchesExpectedActorId: !expected.actorId || actorId === String(expected.actorId) };
+    }, { username: expectedUsername, actorId: options.expectedActorId || null });
+    report.actorProof = actorProof;
     const safeReport = sanitizeValue(report);
     const files = await writeEvidence(safeReport, evidenceDir, { productionReadonly: true, page });
     return { ...safeReport, evidence: files };
