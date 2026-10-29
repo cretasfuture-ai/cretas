@@ -30,6 +30,7 @@ function installNetworkRecorder(context, options = {}) {
   const records = [];
   const httpErrors = [];
   const failedRequests = [];
+  const failureByRequest = new WeakMap();
   const started = new WeakMap();
   const pending = new Set();
   const activeRequests = new Set();
@@ -117,12 +118,14 @@ function installNetworkRecorder(context, options = {}) {
     // Requests aborted by the mutation guard are represented in the guard's
     // blockedMutationAttempts collection, not duplicated as HTTP failures.
     if (/ERR_BLOCKED_BY_CLIENT|blockedbyclient/i.test(errorText)) return;
-    failedRequests.push({
+    const record = {
       method: request.method(),
       url: sanitizeUrl(request.url()),
       error: redactText(errorText, 160),
       at: new Date().toISOString(),
-    });
+    };
+    failedRequests.push(record);
+    failureByRequest.set(request, record);
   };
 
   context.on('request', onRequest);
@@ -134,6 +137,14 @@ function installNetworkRecorder(context, options = {}) {
     records,
     httpErrors,
     failedRequests,
+    expectClientOfflineFailure(request) {
+      const record = failureByRequest.get(request);
+      if (!record || record.method !== 'POST' || splitUrl(request.url()).pathname !== '/api/mobile/F006/smart-bi/factory-analysis'
+        || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))
+        || failedRequests.some(item => item.expectedFault)) throw new Error('Expected exactly one verified F006 client-offline analysis request');
+      record.expectedFault = 'controlled-client-offline';
+      return { ...record };
+    },
     async flush() {
       await Promise.allSettled([...pending]);
     },
@@ -157,7 +168,8 @@ function installNetworkRecorder(context, options = {}) {
       return {
         apiEvidence: records.slice(),
         httpErrors: httpErrors.slice(),
-        failedRequests: failedRequests.slice(),
+        failedRequests: failedRequests.filter(item => !item.expectedFault),
+        expectedTransportFailures: failedRequests.filter(item => item.expectedFault).map(item => ({ ...item })),
         bodyReadErrors: bodyReadErrors.slice(),
         duplicateRequests: [...duplicates.entries()]
           .filter(([, count]) => count > 1)
