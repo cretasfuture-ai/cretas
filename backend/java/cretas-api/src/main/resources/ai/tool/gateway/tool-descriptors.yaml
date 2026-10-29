@@ -3274,17 +3274,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["production:read", "production:read_write", "quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["haccp"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10143,17 +10143,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["production:read", "production:read_write", "quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["haccp"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -11143,7 +11143,7 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
+    requiresPermission: false
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["lineage"]
@@ -11151,8 +11151,8 @@ descriptors:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
+      requiresPermission: false
+      hasPermission: false
       requiredPermissions: false
       version: false
       domainTags: false

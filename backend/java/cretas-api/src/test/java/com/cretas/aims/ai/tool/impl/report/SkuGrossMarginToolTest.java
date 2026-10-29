@@ -311,6 +311,14 @@ class SkuGrossMarginToolTest {
         ReflectionTestUtils.setField(router, "toolEmbeddingRepository", mock(ToolEmbeddingRepository.class));
         ReflectionTestUtils.setField(router, "writeGuardService", new WriteGuardService());
         ReflectionTestUtils.setField(router, "toolRbacEnforcer", enforcer);
+        // 2026-10-29 (S6): the tool chain asks the full ToolPermissionChain; this tool declares codes, so RBAC decides.
+        ReflectionTestUtils.setField(router, "toolPermissionChain", new com.cretas.aims.service.execution.ToolPermissionChain(
+                enforcer,
+                new com.cretas.aims.service.intent.FrontlineAiWriteGrantService(
+                        mock(com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository.class),
+                        new WriteGuardService(),
+                        mock(com.cretas.aims.service.intent.IntentConfigManagementService.class),
+                        mock(ToolRegistry.class))));
 
         Map<String, Object> context = new HashMap<>();
         context.put("factoryId", "F1");

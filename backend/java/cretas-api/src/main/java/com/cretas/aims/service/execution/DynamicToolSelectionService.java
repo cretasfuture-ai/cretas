@@ -630,6 +630,22 @@ public class DynamicToolSelectionService {
                 .sorted((a, b) -> Integer.compare(a.getOrder(), b.getOrder()))
                 .collect(Collectors.toList());
 
+        // S6 (2026-10-29): every planned tool passes the same role chain as direct execution
+        // (frontline gate + role-gated tools + RBAC) before any step runs; one denial refuses the whole plan.
+        Optional<String> planDenied = autoPlanDenyReason(sortedSteps, factoryId, userId, userRole);
+        if (planDenied.isPresent()) {
+            log.warn("S6 AI-RBAC (auto-plan): plan refused, {}", planDenied.get());
+            return IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    .intentCategory(intent.getIntentCategory())
+                    .status("PERMISSION_DENIED")
+                    .message("您没有执行该计划所需的全部权限, 未执行任何操作。" + planDenied.get())
+                    .executedAt(LocalDateTime.now())
+                    .build();
+        }
+
         for (ToolRouterService.PlanStep step : sortedSteps) {
             String toolName = step.getToolName();
             String stepId = step.getStepId();
@@ -743,6 +759,27 @@ public class DynamicToolSelectionService {
                         : allResults)
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /** 空 = 计划里每个已注册工具都放行; 非空 = 第一个被拒工具及原因。权限链缺失按拒绝处理。 */
+    Optional<String> autoPlanDenyReason(List<ToolRouterService.PlanStep> steps,
+                                        String factoryId, Long userId, String userRole) {
+        if (toolPermissionChain == null) {
+            return Optional.of("权限校验暂不可用");
+        }
+        for (ToolRouterService.PlanStep step : steps) {
+            Optional<ToolExecutor> tool = toolRegistry.getExecutor(step.getToolName());
+            if (tool.isEmpty()) {
+                continue;   // 未注册的步骤执行时直接报「工具未找到」, 跑不到
+            }
+            Map<String, Object> trusted = new HashMap<>();
+            TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
+            Optional<String> denied = toolPermissionChain.denyReason(tool.get(), factoryId, userRole, null, trusted);
+            if (denied.isPresent()) {
+                return Optional.of(step.getToolName() + ": " + denied.get());
+            }
+        }
+        return Optional.empty();
     }
 
     /**

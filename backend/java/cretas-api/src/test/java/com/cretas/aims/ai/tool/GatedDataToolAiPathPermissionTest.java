@@ -60,6 +60,9 @@ import static org.mockito.Mockito.when;
  *   <li>it calls only data some ungated read endpoint also serves → nothing to add;</li>
  *   <li>no read endpoint serves anything it calls → it must declare a gate, or be registered with a
  *       reason in {@code ai/tool/gated-data-registrations.tsv}.</li>
+ *   <li>SURFACE registration: the same data reaches the user through other read endpoints than the ones the
+ *       scan links (e.g. lineage via {@code TraceabilityController}, not the admin canvas); the tool's gate
+ *       then equals those endpoints' gate exactly (open endpoints ⇒ no gate), checked by handler name.</li>
  * </ul>
  * An unclassified READ tool, or a stale registration, fails. The same applies to every tool of every
  * built-in Skill (declared tools, DAG nodes and fallbacks).
@@ -187,6 +190,12 @@ public class GatedDataToolAiPathPermissionTest {
             if ("RULED".equals(kind) && declared(instance).isEmpty()) {
                 stale.add(tool + " (ruled codes not declared)");
             }
+            if ("SURFACE".equals(kind)) {
+                for (String handler : surfaceHandlers(entry.getValue()[1])) {
+                    if (!scan.readEndpoints.containsKey(handler)) stale.add(tool + " (no read handler " + handler + ")");
+                }
+                if (scan.gatedCalls(tool).isEmpty()) stale.add(tool + " (reads no gated data: SURFACE not needed)");
+            }
         }
         assertThat(stale).isEmpty();
     }
@@ -242,6 +251,9 @@ public class GatedDataToolAiPathPermissionTest {
             if (registration != null && "RULED".equals(registration[0])) {
                 return codes.isEmpty() ? "ruled but declares no codes" : null;
             }
+            if (registration != null && "SURFACE".equals(registration[0])) {
+                return surfaceMismatch(instance, codes, surfaceHandlers(registration[1]));
+            }
             Set<String> admitAll = null;
             for (Set<String> admit : gated.values()) {
                 admitAll = admitAll == null ? new TreeSet<>(admit) : intersect(admitAll, admit);
@@ -268,6 +280,33 @@ public class GatedDataToolAiPathPermissionTest {
         if (hasGate(tool, instance)) return null;
         return registration != null && "NO_COUNTERPART".equals(registration[0]) ? null
                 : "no read endpoint serves its data and it has neither a gate nor a registration";
+    }
+
+    /** SURFACE reason column: {@code Controller#method[,Controller#method] — why}. */
+    private static List<String> surfaceHandlers(String reason) {
+        String head = reason.split(" ", 2)[0];
+        return Arrays.asList(head.split(","));
+    }
+
+    /** The tool's gate must equal the surface endpoints' gate: same codes, same roles, or none when they are open. */
+    private static String surfaceMismatch(ToolExecutor instance, Set<String> codes, List<String> handlers) {
+        Set<String> surfaceCodes = new TreeSet<>();
+        Set<String> surfaceRoles = new TreeSet<>();
+        for (String handler : handlers) {
+            GatedDataScan.Endpoint e = scan.readEndpoints.get(handler);
+            if (e == null) return "no read handler " + handler;
+            if (e.requireAll() && e.codes().size() > 1) return handler + " is requireAll: an any-of gate cannot mirror it";
+            surfaceCodes.addAll(e.codes());
+            surfaceRoles.addAll(e.roles());
+        }
+        Set<String> toolRoles = roleGated(instance) ? allowedRoles(instance) : Set.of();
+        if (!new TreeSet<>(codes).equals(surfaceCodes)) {
+            return "declares codes " + new TreeSet<>(codes) + " but " + handlers + " admit " + surfaceCodes;
+        }
+        if (!new TreeSet<>(toolRoles).equals(surfaceRoles)) {
+            return "role gate " + new TreeSet<>(toolRoles) + " but " + handlers + " admit roles " + surfaceRoles;
+        }
+        return null;
     }
 
     private static Set<String> intersect(Set<String> a, Set<String> b) {

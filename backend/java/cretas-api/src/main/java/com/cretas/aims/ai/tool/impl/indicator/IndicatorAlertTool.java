@@ -230,8 +230,8 @@ public class IndicatorAlertTool extends AbstractBusinessTool {
     }
 
     /**
-     * S6 gated-data rule (2026-10-29): its data is served only by role-gated (@RequireRole) endpoints,
-     * so the AI / Skill path admits the same roles; pinned by GatedDataToolAiPathPermissionTest.
+     * S6 gated-data rule (2026-10-29): indicators, thresholds and versions reach users through the CanvasIndicatorsController read endpoints, so the AI path admits the same roles;
+     * pinned by GatedDataToolAiPathPermissionTest.
      */
     @Override
     public boolean requiresPermission() {
@@ -240,6 +240,6 @@ public class IndicatorAlertTool extends AbstractBusinessTool {
 
     @Override
     public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin").contains(userRole);
+        return userRole != null && java.util.Set.of("factory_super_admin", "permission_admin", "operator").contains(userRole);
     }
 }

@@ -476,18 +476,4 @@ public class LineageQueryTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
-
-    /**
-     * S6 gated-data rule (2026-10-29): its data is served only by role-gated (@RequireRole) endpoints,
-     * so the AI / Skill path admits the same roles; pinned by GatedDataToolAiPathPermissionTest.
-     */
-    @Override
-    public boolean requiresPermission() {
-        return true;
-    }
-
-    @Override
-    public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin", "operator", "permission_admin").contains(userRole);
-    }
 }

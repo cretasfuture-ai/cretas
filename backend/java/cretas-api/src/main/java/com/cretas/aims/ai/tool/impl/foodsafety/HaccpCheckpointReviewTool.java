@@ -170,16 +170,11 @@ public class HaccpCheckpointReviewTool extends AbstractBusinessTool {
     }
 
     /**
-     * S6 gated-data rule (2026-10-29): its data is served only by role-gated (@RequireRole) endpoints,
-     * so the AI / Skill path admits the same roles; pinned by GatedDataToolAiPathPermissionTest.
+     * S6 gated-data rule (2026-10-29): CCP checkpoints and records reach users through CcpMonitoringController (production / quality read), so the AI path admits the same codes;
+     * pinned by GatedDataToolAiPathPermissionTest.
      */
     @Override
-    public boolean requiresPermission() {
-        return true;
-    }
-
-    @Override
-    public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin", "permission_admin").contains(userRole);
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("production:read", "production:read_write", "quality:read", "quality:read_write");
     }
 }

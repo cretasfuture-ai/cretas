@@ -165,3 +165,10 @@ workreport_checkin	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点�
 workreport_daily_summary	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#countByFactoryIdAndDate, ProductionReportRepository#getHoursSummary, ProductionReportRepository#getProgressSummary
 workreport_hours	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#getHoursSummary
 workreport_progress	NO_COUNTERPART	调用的数据方法没有任何 HTTP 端点直接暴露, 无可对齐的直接接口: ProductionReportRepository#getProgressSummary
+# SURFACE = the data reaches users through the listed read handlers (not the ones the scan links); the tool mirrors their gate exactly.
+lineage_query	SURFACE	TraceabilityController#getFullTrace,TraceabilityController#getImpact — 组织者复审 2026-10-29: 批次血缘在 App 里经溯源全链/召回影响面接口给到所有工厂用户 (不经 canvas 指标血缘)
+haccp_status_query	SURFACE	CcpMonitoringController#stepCheckpoints,CcpMonitoringController#listForBatch — 组织者复审 2026-10-29: CCP 检查点与记录在 App 里按生产/质检读权限给到 (canvas 食安页仅管理员)
+haccp_checkpoint_review	SURFACE	CcpMonitoringController#stepCheckpoints,CcpMonitoringController#listForBatch — 组织者复审 2026-10-29: 同 haccp_status_query, 按生产/质检读权限
+indicator_alert	SURFACE	CanvasIndicatorsController#getIndicator — 组织者复审 2026-10-29: 指标、阈值与最新值经指标详情读接口给到 (三个角色)
+indicator_comparison	SURFACE	CanvasIndicatorsController#getIndicator — 组织者复审 2026-10-29: 同 indicator_alert
+indicator_query	SURFACE	CanvasIndicatorsController#getIndicator,CanvasIndicatorsController#listVersions — 组织者复审 2026-10-29: 指标详情与历史版本读接口 (三个角色)

@@ -56,6 +56,8 @@ final class GatedDataScan {
     }
 
     final Map<DataMethod, List<Endpoint>> servedBy = new HashMap<>();
+    /** Every read handler by {@code Controller#method}. */
+    final Map<String, Endpoint> readEndpoints = new HashMap<>();
     final Map<String, Set<DataMethod>> toolCalls = new LinkedHashMap<>();
     final Map<String, Class<?>> toolClasses = new LinkedHashMap<>();
     final List<String> uninstantiable = new ArrayList<>();
@@ -183,6 +185,7 @@ final class GatedDataScan {
                         effective == null ? Set.of() : Set.of(effective.value()),
                         roles == null ? Set.of() : Set.of(roles.value()),
                         effective != null && effective.requireAll());
+                readEndpoints.put(endpoint.toString(), endpoint);
                 String key = m.getName() + org.springframework.asm.Type.getMethodDescriptor(m);
                 for (DataMethod data : calls.getOrDefault(key, Set.of())) {
                     servedBy.computeIfAbsent(data, k -> new ArrayList<>()).add(endpoint);
