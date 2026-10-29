@@ -15,4 +15,3 @@
 - Validation: existing record-mapping5 passed; complete RN TypeScript passed.
 - Source frozen for review; product scope released on merge. Final native OTA and
   exact old pending UI recheck remain delivery steps; no repeated QC submission.
-
