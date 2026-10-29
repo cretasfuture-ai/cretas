@@ -230,6 +230,23 @@ public class ProcessingController {
     }
 
     /**
+     * Quality inspector task queue.  Unlike the general COMPLETED batch history,
+     * this source is paged by persisted PENDING inspection observations.
+     */
+    @RequirePermission({"quality:read_write"})
+    @GetMapping("/batches/quality-pending")
+    @Operation(summary = "获取待质检批次", description = "按待检质检任务分页获取已完成生产批次")
+    public ApiResponse<PageResponse<ProductionBatch>> getQualityPendingBatches(
+            @PathVariable String factoryId,
+            @RequestParam(defaultValue = "1") Integer page,
+            @RequestParam(defaultValue = "20") Integer size) {
+        PageRequest pageRequest = new PageRequest();
+        pageRequest.setPage(page);
+        pageRequest.setSize(size);
+        return ApiResponse.success(processingService.getQualityPendingBatches(factoryId, pageRequest));
+    }
+
+    /**
      * 获取批次时间线
      */
     @GetMapping("/batches/{batchId}/timeline")

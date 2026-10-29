@@ -84,6 +84,13 @@ _FAMILY_LABELS = {
     'production.anomaly': '批次产量偏离观察', 'production.slope': '两期产品变化',
     'production.plan-rate': '累计计划达成率', 'stock.turnover': '库存金额周转',
     'stock.history': '历史库存余额',
+    'stock.age': '库存账龄', 'stock.expiry': '库存效期',
+    'finished_goods.inventory.current': '当前成品库存',
+    'finished_goods.shipment': '成品发货数量',
+    'purchase.inventory': '采购入库与批次库存',
+    'sales.customer_source': '客户来源获客归因',
+    'sales.stock': '销售-发货-库存', 'customer.channel': '客户-显式渠道-产品',
+    'production.inspection_fused': '生产-检验-成本联合',
     'plan-flow': '普通Web在制过账流',
 }
 _PRODUCT_ID_NAMES = {

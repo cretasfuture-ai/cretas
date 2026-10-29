@@ -2,8 +2,8 @@
 import base64
 import io
 import logging
+import re
 from typing import Dict, List, Optional
-from textwrap import wrap
 
 from smartbi.services.financial.export_conclusions import conclusion_rows
 from datetime import datetime
@@ -31,6 +31,45 @@ CHART_DISPLAY_NAMES = {
     "bullet_chart": "目标达成进度",
     "small_multiples": "多维度对比矩阵",
 }
+
+
+_PPT_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*|[^\x00-\x7F]|[^\r\n]")
+
+
+def _wrap_for_ppt(text: str, max_units: int = 46) -> List[str]:
+    """Wrap mixed Chinese/ASCII text without splitting identifiers or facts.
+
+    ``textwrap.wrap`` treats an identifier such as ``AVAILABLE`` as a long
+    word and, by default, splits it at the page boundary.  Tokenizing ASCII
+    identifiers separately lets Chinese prose wrap character-by-character
+    while keeping source names, status values, and units intact.
+    """
+    lines: List[str] = []
+    for paragraph in str(text).splitlines() or ['']:
+        tokens = _PPT_TOKEN_RE.findall(paragraph)
+        current: List[str] = []
+        units = 0
+        for token in tokens:
+            if token.isspace():
+                token_units = len(token)
+            elif token.isascii():
+                token_units = len(token)
+            else:
+                token_units = sum(2 if ord(char) > 127 else 1 for char in token)
+            if current and units + token_units > max_units:
+                lines.append(''.join(current).rstrip())
+                current = []
+                units = 0
+                if token.isspace():
+                    continue
+            if not current and token.isspace():
+                continue
+            # Keep an unusually long identifier whole; splitting it would
+            # make a source/status fact unsearchable in the generated deck.
+            current.append(token)
+            units += token_units
+        lines.append(''.join(current).rstrip())
+    return lines
 
 
 class FinancialPPTGenerator:
@@ -94,7 +133,12 @@ class FinancialPPTGenerator:
         lines = []
         for title, text in rows:
             for paragraph in f"{title}：{text}".splitlines():
-                lines.extend(wrap(paragraph, width=46) or [''])
+                # Conclusions are rendered in a full-width 12-inch text box.
+                # Keep the historical ~46-character line capacity (about 92
+                # mixed-width units) so a short visible fact remains
+                # searchable as one phrase; provenance/analysis panels retain
+                # the narrower source-safe wrapping below.
+                lines.extend(_wrap_for_ppt(paragraph, max_units=92) or [''])
             lines.append('')
         for start in range(0, len(lines), 15):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -161,7 +205,7 @@ class FinancialPPTGenerator:
                 # line on dedicated pages instead of truncating a narrow panel.
                 lines = []
                 for paragraph in analysis.splitlines():
-                    lines.extend(wrap(paragraph, width=46) or [''])
+                    lines.extend(_wrap_for_ppt(paragraph) or [''])
                 for start in range(0, len(lines), 15):
                     page = prs.slides.add_slide(prs.slide_layouts[6])
                     self._add_text(page, display_name + ' · 规则分析与来源', Inches(.5), Inches(.3), Inches(12), Inches(.7),

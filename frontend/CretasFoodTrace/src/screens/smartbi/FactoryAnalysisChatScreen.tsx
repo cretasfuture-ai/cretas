@@ -12,6 +12,7 @@ import type { FactoryChartExportFile, FactoryChartExportFormat, FactoryChartSour
 import { buildFactoryChartExportPayload } from '../../utils/smartbiFactoryChartExport';
 import type { FactoryChartPeriodSelection } from '../../utils/smartbiFactoryChartModel';
 import { buildRecommendationRequest, isValidPeriod } from '../../utils/smartbiFactoryChartModel';
+import { chartVariantLabel } from '../../utils/smartbiFactoryChartGuide';
 import { mergeRefreshedDetailContext, type FactoryDetailRefreshScope } from '../../utils/smartbiFactoryDetailRefresh';
 import type {
   FactoryAnalysisCatalogItem,
@@ -93,6 +94,25 @@ function answerRecommendations(items: readonly FactoryRecommendation[]): Factory
   });
 }
 
+function catalogChartVariantLabel(item: FactoryAnalysisCatalogItem): string {
+  // Reuse the chart-family guide's localized kind mapping without making the
+  // catalogue carry a second mapping or any planner-facing metadata.
+  return chartVariantLabel({
+    id: item.id,
+    title: item.familyLabel || '',
+    metric: item.metric,
+    domain: item.domain,
+    priority: 'optional',
+    reason: '',
+    source: item.sourceKey || '',
+    unit: item.unit,
+    findings: { good: [], attention: [], suggestions: [] },
+    chart: { chartType: item.chartType, echartsOption: {} },
+    kpis: [],
+    tableData: null,
+  });
+}
+
 function isPrimitive(value: unknown): value is string | number | boolean | null {
   return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
@@ -144,7 +164,10 @@ function Catalog({ catalog }: { catalog: readonly FactoryAnalysisCatalogItem[] }
   const visible = expanded ? catalog : catalog.slice(0, 8);
   return <View testID="factory-analysis-catalog" style={styles.catalog}>
     <View style={styles.catalogHeading}><Text variant="titleMedium">可用图表目录（{catalog.length}）</Text><Button compact onPress={() => setExpanded(value => !value)}>{expanded ? '收起目录' : '展开目录'}</Button></View>
-    {visible.map(item => <View key={item.id} style={styles.catalogRow}><Text style={styles.catalogTitle}>{item.domain || '未分类'} · {item.metric || item.chartType}</Text><Text style={styles.muted}>{item.familyId} · {item.unit || '单位未提供'} · {item.sourceKey || '来源未提供'}</Text></View>)}
+    {visible.map(item => <View key={item.id} style={styles.catalogRow}>
+      <Text style={styles.catalogTitle}>{item.familyLabel?.trim() || '分析主题未提供'}</Text>
+      <Text style={styles.muted}>{item.domain || '领域未提供'} · {catalogChartVariantLabel(item)}</Text>
+    </View>)}
     {!expanded && catalog.length > visible.length && <Text style={styles.muted}>目录其余 {catalog.length - visible.length} 项未展开；回答仅渲染已选图表。</Text>}
   </View>;
 }

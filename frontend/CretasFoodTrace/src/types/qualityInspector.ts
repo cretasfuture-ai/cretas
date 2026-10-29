@@ -90,6 +90,8 @@ export interface DynamicQualitySubmitResponse {
 
 export type QualityGrade = 'A' | 'B' | 'C' | 'D';
 export type QualityInspectionResult = 'PASS' | 'CONDITIONAL' | 'FAIL' | 'PENDING';
+export type QualityRecordGrade = QualityGrade | 'UNKNOWN';
+export type QualityRecordResult = QualityInspectionResult | 'UNKNOWN';
 
 export const GRADE_THRESHOLDS = {
   A: 95,   // ≥95分
@@ -103,6 +105,7 @@ export const GRADE_COLORS = {
   B: '#2196F3', // 良好 - 蓝
   C: '#FFC107', // 合格 - 黄
   D: '#F44336', // 不合格 - 红
+  UNKNOWN: '#757575', // 未知 - 灰
 } as const;
 
 export const GRADE_LABELS = {
@@ -110,6 +113,7 @@ export const GRADE_LABELS = {
   B: '良好',
   C: '合格',
   D: '不合格',
+  UNKNOWN: '未知',
 } as const;
 
 // ============================================
@@ -171,9 +175,9 @@ export interface QualityRecord {
   packaging: ScoreItem;
   totalScore: number;
   passRate: number;
-  result: QualityInspectionResult;
+  result: QualityRecordResult;
   scoreDetailsRecorded: boolean;
-  grade: QualityGrade;
+  grade: QualityRecordGrade;
   passed: boolean;
 
   // 照片
@@ -213,13 +217,15 @@ export interface QualityStatisticsResponse {
   totalInspections: number;
   averagePassRate?: number | string;
   passedBatches?: number;
-  /** 注意: 后端这个键的语义是"非 PASS", 含待检与 CONDITIONAL, 别当成 FAIL 用 */
+  /** 后端真实 FAIL 数量；PENDING/CONDITIONAL 分别在对应字段中返回 */
   failedBatches?: number;
   breakdown?: {
     pass: number;
     fail: number;
     conditional: number;
     pending: number;
+    unknown?: number;
+    empty?: number;
   };
 }
 
@@ -413,8 +419,8 @@ export function calculateGrade(totalScore: number): QualityGrade {
 /**
  * 判断是否通过
  */
-export function isPassed(grade: QualityGrade): boolean {
-  return grade !== 'D';
+export function isPassed(grade: QualityRecordGrade): boolean {
+  return grade === 'A' || grade === 'B' || grade === 'C';
 }
 
 /**

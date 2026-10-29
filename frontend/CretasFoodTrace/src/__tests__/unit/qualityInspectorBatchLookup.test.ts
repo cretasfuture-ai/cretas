@@ -29,4 +29,18 @@ describe('qualityInspectorApi exact batch-number lookup', () => {
     await expect(qualityInspectorApi.getBatchByQRCode('   ')).rejects.toThrow('Batch number is required');
     expect(mock.history.get).toHaveLength(0);
   });
+
+  it('loads the quality task queue from the PENDING-backed endpoint', async () => {
+    mock.onGet('/api/mobile/F006/processing/batches/quality-pending', {
+      params: { page: 1, size: 20 },
+    }).reply(200, {
+      success: true,
+      data: { content: [{ id: '10806', batchNumber: 'PB-REAL-10806' }], totalElements: 1, totalPages: 1 },
+    });
+
+    await expect(qualityInspectorApi.getPendingBatches()).resolves.toMatchObject({
+      totalElements: 1,
+      content: [{ id: '10806' }],
+    });
+  });
 });

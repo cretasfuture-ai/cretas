@@ -61,6 +61,40 @@ def test_factory_excel_uploaded_formulas_are_literal_cells():
     assert any(str(cell.value).startswith("' \t=HYPERLINK") and cell.data_type=='s' for row in sheet for cell in row)
 
 
+def test_factory_excel_formula_guard_also_applies_without_report_title():
+    data=payload()
+    data['report_title']=None
+    data['charts'][0]['tableData']['rows'][0][0]='=HYPERLINK("https://invalid")'
+    response=client().post('/export-excel',json=data)
+    book=openpyxl.load_workbook(io.BytesIO(response.content),data_only=False)
+    sheet=book['产品单位成本 甲']
+    assert any(cell.value=="'=HYPERLINK(\"https://invalid\")" and cell.data_type=='s' for row in sheet for cell in row)
+
+
+def test_factory_excel_print_layout_wraps_provenance_without_clipping_columns():
+    response=client().post('/export-excel',json=payload())
+    book=openpyxl.load_workbook(io.BytesIO(response.content),data_only=False)
+    sheet=book['产品单位成本 甲']
+    assert sheet.sheet_properties.pageSetUpPr.fitToPage is True
+    assert sheet.page_setup.orientation == 'landscape'
+    assert sheet.page_setup.fitToWidth == 1
+    assert sheet.page_setup.fitToHeight == 0
+    assert sheet.print_area == "'产品单位成本 甲'!$A$1:$B$6"
+    assert sheet['B1'].alignment.wrap_text is True
+    assert sheet['B1'].value == 'F006上传报表'
+
+
+def test_factory_excel_long_analysis_is_split_into_printable_rows():
+    response=client().post('/export-excel',json=payload())
+    book=openpyxl.load_workbook(io.BytesIO(response.content),data_only=False)
+    sheet=book['逐图规则与来源']
+    values='\n'.join(str(cell.value or '') for row in sheet.iter_rows() for cell in row)
+    assert sheet.max_row > 5
+    assert '末尾事实校验' in values
+    assert '逐图规则完整保留' in values
+    assert max((row.height or 0) for row in sheet.row_dimensions.values()) <= 120
+
+
 def test_factory_ppt_actual_titles_period_images_kpi_and_last_fact_survive():
     response=client().post('/export-ppt',json=payload())
     assert response.status_code==200 and response.content.startswith(b'PK')
@@ -70,6 +104,16 @@ def test_factory_ppt_actual_titles_period_images_kpi_and_last_fact_survive():
         assert value in text
     assert sum(shape.shape_type==13 for slide in ppt.slides for shape in slide.shapes)==2
     assert 'AI 分析' not in text
+
+
+def test_factory_ppt_keeps_ascii_status_tokens_intact_when_paginating():
+    data=payload()
+    data['analysis_results']['one'] = ('需要关注：发货必须通过sales_order_item_id精确关联；当前库存仅为AVAILABLE快照，不倒推历史\n' * 40)
+    response=client().post('/export-ppt',json=data)
+    ppt=Presentation(io.BytesIO(response.content))
+    texts=[shape.text for slide in ppt.slides for shape in slide.shapes if shape.has_text_frame]
+    assert any('AVAILABLE快照' in value for value in texts)
+    assert not any(value.strip() in {'AVAIL', 'ABLE快照', 'LE快照'} for value in texts)
 
 
 def test_factory_pdf_actual_titles_period_images_kpi_and_last_fact_survive():

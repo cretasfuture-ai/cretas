@@ -162,6 +162,10 @@ async def test_loader_bounds_join_to_authorized_product_and_preserves_later_insp
     charts, _ = engine.build(scoped(dataset, request()), request(), True)
     assert len(charts) == 1 and charts[0]['analysis']['familyId'] == joined.FAMILY
     assert 'qi.inspection_date >= $2' in sources.QUALITY_SQL
+    assert "UPPER(TRIM(COALESCE(qi.result, ''))) IN" in sources.QUALITY_SQL
+    assert "'PENDING'" not in sources.QUALITY_SQL.split(
+        "UPPER(TRIM(COALESCE(qi.result, ''))) IN", 1)[1].split('AND ($2::date', 1)[0]
+    assert "UPPER(TRIM(COALESCE(qi.result, ''))) IN" in sources.QUALITY_JOIN_SQL
     calls.clear()
     await sources.load('F006', sources_request(), True)
     assert not any(c[0] == 'fetch' and c[1] == 'join' for c in calls)

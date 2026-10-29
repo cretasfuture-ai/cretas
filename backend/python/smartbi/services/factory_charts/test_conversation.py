@@ -37,11 +37,47 @@ def _candidate(cid, family, chart_type='line', value='10'):
 def test_semantic_catalog_keeps_all_chart_kinds_without_values():
     candidates = [_candidate('production.output:line', 'production.output'),
                   _candidate('production.output:bar', 'production.output', 'bar')]
+    candidates[0]['title'] = '秘密产品A产量'
+    candidates[0]['analysis']['familyLabel'] = '产量趋势'
     catalog = conversation.semantic_catalog(candidates)
     assert [item['id'] for item in catalog] == ['production.output:line', 'production.output:bar']
     assert {item['chartType'] for item in catalog} == {'line', 'bar'}
+    assert catalog[0]['familyLabel'] == '产量趋势'
     assert all('tableData' not in item and 'detailContext' not in item for item in catalog)
-    assert all('A' not in json.dumps(item, ensure_ascii=False) for item in catalog)
+    assert all('秘密产品A' not in json.dumps(item, ensure_ascii=False) for item in catalog)
+
+
+def test_semantic_catalog_drops_technical_family_label_fallbacks():
+    candidate = _candidate('finished-goods-inventory.finished_goods.inventory.current:bar',
+                           'finished-goods-inventory.finished_goods.inventory.current', 'bar')
+    candidate['metric'] = 'finished-goods-inventory.finished_goods.inventory.current'
+    candidate['analysis']['familyLabel'] = candidate['metric']
+    catalog = conversation.semantic_catalog([candidate])
+    assert 'familyLabel' not in catalog[0]
+    assert candidate['metric'] in catalog[0]['metric']
+
+
+def test_semantic_catalog_keeps_human_label_matching_metric():
+    candidate = _candidate('quality.pass:bar', 'quality.pass', 'bar')
+    candidate['metric'] = '检验合格率'
+    candidate['analysis']['familyLabel'] = '检验合格率'
+    assert conversation.semantic_catalog([candidate])[0]['familyLabel'] == '检验合格率'
+
+
+def test_engine_known_trusted_families_have_generic_labels_before_source_prefix():
+    expected = {
+        'stock.age': '库存账龄',
+        'finished_goods.inventory.current': '当前成品库存',
+        'finished_goods.shipment': '成品发货数量',
+        'purchase.inventory': '采购入库与批次库存',
+        'sales.stock': '销售-发货-库存',
+        'customer.channel': '客户-显式渠道-产品',
+        'production.inspection_fused': '生产-检验-成本联合',
+    }
+    for family_id, label in expected.items():
+        candidate = {'id': family_id + ':bar', 'metric': family_id}
+        engine._analysis_metadata(candidate)
+        assert candidate['analysis'] == {'familyId': family_id, 'familyLabel': label}
 
 
 @pytest.mark.asyncio
