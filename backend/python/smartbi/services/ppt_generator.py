@@ -133,7 +133,12 @@ class FinancialPPTGenerator:
         lines = []
         for title, text in rows:
             for paragraph in f"{title}：{text}".splitlines():
-                lines.extend(_wrap_for_ppt(paragraph) or [''])
+                # Conclusions are rendered in a full-width 12-inch text box.
+                # Keep the historical ~46-character line capacity (about 92
+                # mixed-width units) so a short visible fact remains
+                # searchable as one phrase; provenance/analysis panels retain
+                # the narrower source-safe wrapping below.
+                lines.extend(_wrap_for_ppt(paragraph, max_units=92) or [''])
             lines.append('')
         for start in range(0, len(lines), 15):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
