@@ -85,6 +85,23 @@ test('stateless discovery snapshot can load details lazily without admitting una
   assert.equal(catalog.selectCatalogCandidates({ recommendations: [lazy] }, null).selected.length, 1);
 });
 
+test('WIP voucher counts require exact unique original rows without relaxing physical units', () => {
+  const good = candidate('wip', 'wip-plan-flow.plan-flow', {
+    source: 'wip-plan-flow · 已过账工序流转',
+    kpis: [{ label: '已过账领用量', value: 1, unit: 'kg' }, { label: '独立流转条数', value: 1, unit: '条' }],
+    tableData: { headers: ['数量', '单位', 'MC凭证'], rows: [[1, 'kg', 'MC:3986']] },
+  });
+  assert.equal(catalog.candidateUnitsAligned(good), true);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, source: 'business' }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, analysis: { familyId: 'production.output' } }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, kpis: [{ label: '独立流转条数', value: 2, unit: '条' }] }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, kpis: [{ label: '产量', value: 1, unit: '条' }] }), false);
+  assert.equal(catalog.candidateUnitsAligned({ ...good, kpis: [{ label: '已过账领用量', value: 1, unit: '件' }] }), false);
+  for (const rows of [[[1, '件', 'MC:3986']], [[1, 'kg', 'MC:3986'], [1, 'kg', 'MC:3986']], [[1, 'kg', 'unknown']], [[0, 'kg', 'MC:3986']]]) {
+    assert.equal(catalog.candidateUnitsAligned({ ...good, tableData: { ...good.tableData, rows } }), false);
+  }
+});
+
 test('export coverage is based on actual payload candidate IDs', () => {
   assert.deepEqual(catalog.summarizeExportIds({ charts: [{ id: 'one' }, { candidate_id: 'two' }], selected_ids: ['two', 'three'] }), ['one', 'two', 'three']);
   assert.deepEqual(catalog.summarizeExportIds({ charts: [] }), []);
