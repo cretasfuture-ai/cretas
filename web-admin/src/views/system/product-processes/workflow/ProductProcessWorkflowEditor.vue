@@ -180,10 +180,12 @@
           <span v-if="definition?.status === 'DRAFT' && activation?.enabled" class="version-chip">
             工艺 草稿 v{{ definition.version }} · 生产用 v{{ activation.activeDefinitionVersion }}
           </span>
-          <span v-for="line in bomVersionLines" :key="line.productId" class="version-chip">
-            {{ line.productName }}：<template v-if="line.activeVersion == null">未建 BOM</template>
-            <template v-else>BOM v{{ line.activeVersion }}<template v-if="line.draftVersion != null"> → 草稿 v{{ line.draftVersion }}</template></template>
-          </span>
+          <template v-if="previewingVersion === null">
+            <span v-for="line in bomVersionLines" :key="line.productId" class="version-chip">
+              {{ line.productName }}：<template v-if="line.activeVersion == null">未建 BOM</template>
+              <template v-else>BOM v{{ line.activeVersion }}<template v-if="line.draftVersion != null"> → BOM 草稿 v{{ line.draftVersion }}</template></template>
+            </span>
+          </template>
           <span v-if="pendingAnchorMove" class="version-chip version-chip--move">
             建议存放在「{{ pendingAnchorMove.name }}」
           </span>
@@ -263,6 +265,7 @@
         <!-- #12b: 历史版本预览横幅 (只读, 不会自动保存覆盖草稿) -->
         <div v-if="previewingVersion !== null" class="version-preview-bar" data-testid="version-preview-bar">
           <span>正在预览生产历史版本 <strong>v{{ previewingVersion }}</strong>（只读，不会覆盖当前配置）</span>
+          <span v-if="bomHistoryNotice" class="version-preview-notice" data-testid="bom-history-notice">{{ bomHistoryNotice }}</span>
           <el-button size="small" type="primary" @click="restorePreviewAsDraft">用此版本更新当前配置</el-button>
           <el-button size="small" @click="exitVersionPreview">退出预览</el-button>
         </div>
@@ -1255,6 +1258,7 @@ import {
   getProductProcessWorkflow,
   getProductProcessWorkflowActivation,
   getProductProcessWorkflowVersion,
+  getRecipePinnedToWorkflow,
   listProductProcessWorkflowVersions,
   publishAndActivateProductProcessWorkflow,
   getProductConfigurationReadiness,
@@ -1639,8 +1643,10 @@ const bomStatusBySku = computed<Record<string, BomVersionLine>>(() => {
 function bomBubbleText(line: BomVersionLine): string {
   const unpriced = bomUnpricedCountByProduct.value[line.productId] ?? 0;
   const suffix = unpriced > 0 ? ` · ${unpriced} 项辅料缺价` : '';
+  // 预览历史工艺版本时不显示今天的 BOM 状态 (D-S2-11): 那是现在的配方, 不是这个版本当时的。
+  if (previewingVersion.value !== null) return '';
   if (line.activeVersion == null) return '还没建 BOM';
-  if (line.draftVersion != null) return `草稿 v${line.draftVersion} 未生效${suffix}`;
+  if (line.draftVersion != null) return `BOM 草稿 v${line.draftVersion} 未生效${suffix}`;
   return `BOM 生效 v${line.activeVersion}${suffix}`;
 }
 
@@ -1649,7 +1655,7 @@ function bomBubbleText(line: BomVersionLine): string {
  * ⛔ 不含 activeIsEmpty —— 辅料/包材各自的 Cell 已经在说, 见 bomBubbleText 注释。
  */
 function bomBubbleNeedsAction(line: BomVersionLine | undefined): boolean {
-  return !!line && (line.activeVersion == null || line.draftVersion != null);
+  return previewingVersion.value === null && !!line && (line.activeVersion == null || line.draftVersion != null);
 }
 
 /** 每行右侧的一句话状态, 按严重度取最该说的那一句 (不叠加, 一行只说一件事)。 */
@@ -1659,7 +1665,7 @@ function bomVersionLineText(line: BomVersionLine): string {
   }
   const parts: string[] = [`BOM 生效 v${line.activeVersion}`];
   if (line.activeIsEmpty) parts.push('（还没配辅料 / 包材）');
-  if (line.draftVersion != null) parts.push(`· 草稿 v${line.draftVersion} 未生效`);
+  if (line.draftVersion != null) parts.push(`· BOM 草稿 v${line.draftVersion} 未生效`);
   if (line.mismatched) parts.push('· 与已启用工艺不一致，发布时自动同步');
   return parts.join('');
 }
@@ -2535,6 +2541,8 @@ const workflowClassificationLabel = computed(() => {
 });
 // #12b 预览历史版本标志 (非空=正在只读预览某历史版本); 提前声明供 canEdit 引用
 const previewingVersion = ref<number | null>(null);
+/** 历史版本预览里配方读不出来的原因 (空 = 正常); 此时不画任何 BOM 派生的格子, 并在横幅里明说。 */
+const bomHistoryNotice = ref('');
 // AI 输入默认可见；用户显式收起后仍保留可键盘访问的展开按钮。
 const aiCollapsed = ref(false);
 const unitReviewPending = ref(false);
@@ -2930,6 +2938,8 @@ async function previewVersion(v: WorkflowVersionSummary): Promise<void> {
     previewingVersion.value = v.definitionVersion;
     dirty.value = false; // 预览历史版本不算改动, 不触发自动保存 (否则会把旧版覆盖当前草稿)
     versionDrawerVisible.value = false;
+    bomHistoryNotice.value = '';
+    await loadBomOverlayData(); // 配方格子改读钉在这个历史版本上的配方 (D-S2-11)
     await fitCanvas();
   } catch (error) {
     console.error('[ProductProcessWorkflow] getVersion failed', error);
@@ -2937,7 +2947,9 @@ async function previewVersion(v: WorkflowVersionSummary): Promise<void> {
 }
 async function exitVersionPreview(): Promise<void> {
   previewingVersion.value = null;
+  bomHistoryNotice.value = '';
   await loadDefinition(); // 回到当前草稿/最新版本
+  await loadBomOverlayData(); // 配方格子从历史快照换回当前配方
   await fitCanvas();
 }
 async function restorePreviewAsDraft(): Promise<void> {
@@ -2960,7 +2972,9 @@ async function restorePreviewAsDraft(): Promise<void> {
       viewport: historicalGraph.viewport,
     });
     previewingVersion.value = null;
+    bomHistoryNotice.value = '';
     dirty.value = true;
+    void loadBomOverlayData(); // 恢复成草稿后配方格子换回当前配方
     ElMessage.success('已将该历史版本恢复为当前草稿，正在自动保存');
   } catch (error) {
     console.error('[ProductProcessWorkflow] restore preview failed', error);
@@ -3598,7 +3612,23 @@ async function loadBomOverlayData(options: {
     // 调料/包材写入只接受 DRAFT —— 格子照着生效版渲染再往生效版写, prod 实测恒 409。
     // 详见 bomEditableRecipe.ts。这里取全部版本自行择一, 保证「显示的」与「写入的」
     // 是同一条记录(否则编辑既有行时, 行 id 属于另一个版本)。
+    // D-S2-11: 预览历史工艺版本时, 配方只能是钉在那个版本上的; 没有就明说没有, 不拿当前配方顶替。
+    const historyWorkflowId = previewingVersion.value !== null ? (definition.value?.id ?? null) : null;
+    let historyNotice = '';
     const recipeResponses = await Promise.all(uniqueSkuIds.map(async (skuId) => {
+      if (previewingVersion.value !== null) {
+        try {
+          const pinned = historyWorkflowId == null
+            ? null
+            : await getRecipePinnedToWorkflow(factoryId, skuId, Number(historyWorkflowId));
+          const recipe = pinned?.success ? (pinned.data ?? null) : null;
+          if (!recipe) historyNotice ||= '历史版本不含配方快照';
+          return { skuId, recipe, versions: recipe ? [recipe] : [] };
+        } catch {
+          historyNotice = '历史版本的配方读取失败，未显示配方';
+          return { skuId, recipe: null, versions: [] };
+        }
+      }
       try {
         const response = await bomRecipeApi.getVersionsByProduct(factoryId, skuId);
         const versions = response?.success ? [...(response.data ?? [])] : [];
@@ -3615,6 +3645,7 @@ async function loadBomOverlayData(options: {
       }
     }));
     if (!stillCurrent()) return;
+    bomHistoryNotice.value = previewingVersion.value !== null ? historyNotice : '';
 
     const packagingByOutput: Record<string, BomOverlayPackagingInput> = {};
     const recipeIdBySku: Record<string, string> = {};

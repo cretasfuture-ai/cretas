@@ -1,4 +1,5 @@
 import { del, get, post, put } from '@/api/request';
+import type { BomRecipeSummary } from '@/api/bom';
 import type {
   ProductProcessWorkflowActivation,
   ProductProcessWorkflowDefinition,
@@ -135,6 +136,16 @@ export function getProductProcessWorkflowVersion(
 ) {
   return get<ProductProcessWorkflowDefinition>(
     `/${factoryId}/product-process-workflows/${productTypeId}/versions/${version}`,
+  );
+}
+
+/**
+ * 历史工艺版本当时用的 BOM 配方 (只读历史预览用): 返回钉在该工艺版本上的配方; 从来没钉过 → data 为 null,
+ * ⛔ 绝不回落成「当前配方」—— 追溯视图把今天的配方当历史展示就是错的。
+ */
+export function getRecipePinnedToWorkflow(factoryId: string, productTypeId: string, workflowId: number) {
+  return get<BomRecipeSummary | null>(
+    `/${factoryId}/bom/recipes/by-product/${productTypeId}/pinned-to-workflow/${workflowId}`,
   );
 }
 

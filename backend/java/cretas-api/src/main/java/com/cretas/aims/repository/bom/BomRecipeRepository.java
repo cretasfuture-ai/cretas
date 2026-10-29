@@ -35,6 +35,9 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
     Optional<BomRecipe> findFirstByFactoryIdAndProductTypeIdAndWorkflowRevisionIdAndStatusOrderByVersionDesc(
             String factoryId, String productTypeId, Long workflowRevisionId, Status status);
 
+    List<BomRecipe> findByFactoryIdAndProductTypeIdAndWorkflowRevisionIdInOrderByVersionDesc(
+            String factoryId, String productTypeId, java.util.Collection<Long> workflowRevisionIds);
+
     List<BomRecipe> findByFactoryIdAndWorkflowRevisionIdAndStatusOrderByProductTypeIdAsc(
             String factoryId, Long workflowRevisionId, Status status);
 
