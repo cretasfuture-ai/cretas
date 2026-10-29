@@ -23,7 +23,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -154,7 +153,6 @@ public class ProductProcessWorkflowController {
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @PutMapping("/{productTypeId}/draft")
     @Operation(summary = "保存 Workflow 草稿，不修改现有报工运行时")
     public ApiResponse<ProductProcessWorkflowDTO> saveDraft(
@@ -167,7 +165,6 @@ public class ProductProcessWorkflowController {
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @PostMapping("/{productTypeId}/publish")
     @Operation(summary = "兼容入口：自动同步 BOM、发布并启用 Workflow")
     public ApiResponse<ProductProcessWorkflowDTO> publish(
@@ -194,7 +191,6 @@ public class ProductProcessWorkflowController {
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PATH, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @PostMapping("/{productTypeId}/publish-and-activate")
     @Operation(summary = "自动同步 BOM、发布并启用当前 Workflow")
     public ApiResponse<WorkflowPublishAndActivateResponse> publishAndActivate(
@@ -216,7 +212,6 @@ public class ProductProcessWorkflowController {
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.WORKFLOW_PATH, name = "workflowId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @PutMapping("/{workflowId}/activation")
     @Operation(summary = "Activate an exact published product process workflow version")
     public ApiResponse<ProductProcessWorkflowActivationDTO> activate(
@@ -230,7 +225,6 @@ public class ProductProcessWorkflowController {
     @ProcessSecretGuard(action = ProcessSecretAction.EDIT, from = ProcessSecretGuard.Source.PRODUCT_PARAM, name = "productTypeId")
     @RequirePermission({"production:read_write"})
     @RequireRole({"factory_super_admin", "workshop_supervisor", "department_admin"})
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     @DeleteMapping("/activation")
     @Operation(summary = "Disable workflow activation without deleting runtime instances")
     public ApiResponse<ProductProcessWorkflowActivationDTO> deactivate(

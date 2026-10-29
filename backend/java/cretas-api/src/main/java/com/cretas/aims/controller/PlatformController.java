@@ -25,7 +25,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.access.prepost.PreAuthorize;
+import com.cretas.aims.config.RequireRole;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -53,6 +53,8 @@ import com.cretas.aims.exception.BusinessException;
 @RestController
 @RequestMapping("/api/platform")
 @RequiredArgsConstructor
+// 平台路径闸 (JwtAuthInterceptor) 之外再加角色闸, 不依赖 URL 前缀守门
+@RequireRole({"super_admin", "platform_admin"})
 @Validated
 @Tag(name = "Platform", description = "平台管理API")
 public class PlatformController {
@@ -67,7 +69,6 @@ public class PlatformController {
      */
     @GetMapping("/ai-quota")
     @Operation(summary = "获取所有工厂AI配额", description = "获取所有工厂的AI配额设置和历史调用统计（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<List<FactoryAIQuotaDTO>> getFactoryAIQuotas() {
         log.info("API调用: 获取所有工厂AI配额");
 
@@ -80,7 +81,6 @@ public class PlatformController {
      */
     @PutMapping("/ai-quota/{factoryId}")
     @Operation(summary = "更新工厂AI配额", description = "更新指定工厂的AI配额设置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<Map<String, Object>> updateFactoryAIQuota(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @Valid @RequestBody UpdateAIQuotaRequest request
@@ -101,7 +101,6 @@ public class PlatformController {
      */
     @GetMapping("/ai-usage-stats")
     @Operation(summary = "获取平台AI使用统计", description = "获取平台级别的AI使用统计数据（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<PlatformAIUsageStatsDTO> getPlatformAIUsageStats() {
         log.info("API调用: 获取平台AI使用统计");
 
@@ -116,7 +115,6 @@ public class PlatformController {
      */
     @GetMapping("/factories")
     @Operation(summary = "获取所有工厂列表", description = "获取所有工厂的详细信息（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<List<FactoryDTO>> getAllFactories(
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size) {
@@ -143,7 +141,6 @@ public class PlatformController {
      */
     @GetMapping("/factories/{factoryId}")
     @Operation(summary = "获取工厂详情", description = "根据ID获取工厂详细信息（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<FactoryDTO> getFactoryById(
             @PathVariable @Parameter(description = "工厂ID") String factoryId
     ) {
@@ -158,7 +155,6 @@ public class PlatformController {
      */
     @PostMapping("/factories")
     @Operation(summary = "创建新工厂", description = "创建新的工厂（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<FactoryDTO> createFactory(
             @Valid @RequestBody CreateFactoryRequest request
     ) {
@@ -174,7 +170,6 @@ public class PlatformController {
      */
     @PutMapping("/factories/{factoryId}")
     @Operation(summary = "更新工厂信息", description = "更新指定工厂的信息（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<FactoryDTO> updateFactory(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @Valid @RequestBody UpdateFactoryRequest request
@@ -190,7 +185,6 @@ public class PlatformController {
      */
     @DeleteMapping("/factories/{factoryId}")
     @Operation(summary = "删除工厂", description = "删除指定工厂（软删除，设置isActive=false）（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<String> deleteFactory(
             @PathVariable @Parameter(description = "工厂ID") String factoryId
     ) {
@@ -205,7 +199,6 @@ public class PlatformController {
      */
     @PostMapping("/factories/{factoryId}/activate")
     @Operation(summary = "激活工厂", description = "激活指定工厂（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<FactoryDTO> activateFactory(
             @PathVariable @Parameter(description = "工厂ID") String factoryId
     ) {
@@ -220,7 +213,6 @@ public class PlatformController {
      */
     @PostMapping("/factories/{factoryId}/deactivate")
     @Operation(summary = "停用工厂", description = "停用指定工厂（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<FactoryDTO> deactivateFactory(
             @PathVariable @Parameter(description = "工厂ID") String factoryId
     ) {
@@ -237,7 +229,6 @@ public class PlatformController {
      */
     @GetMapping("/factories/by-type/{type}")
     @Operation(summary = "按组织类型查询", description = "获取指定类型的所有组织（FACTORY/RESTAURANT/HEADQUARTERS/BRANCH/CENTRAL_KITCHEN）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<List<FactoryDTO>> getFactoriesByType(
             @PathVariable @Parameter(description = "组织类型") String type
     ) {
@@ -251,7 +242,6 @@ public class PlatformController {
      */
     @GetMapping("/factories/{factoryId}/children")
     @Operation(summary = "获取下级组织", description = "获取指定组织的直属下级列表")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<List<FactoryDTO>> getFactoryChildren(
             @PathVariable @Parameter(description = "组织ID") String factoryId
     ) {
@@ -265,7 +255,6 @@ public class PlatformController {
      */
     @GetMapping("/factories/{factoryId}/accessible-ids")
     @Operation(summary = "获取可访问组织ID列表", description = "返回该组织及其所有下属组织的ID列表，用于总部聚合查询")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin', 'factory_super_admin')")
     public ApiResponse<List<String>> getAccessibleFactoryIds(
             @PathVariable @Parameter(description = "组织ID") String factoryId
     ) {
@@ -283,7 +272,6 @@ public class PlatformController {
     @GetMapping("/dashboard/statistics")
     @Operation(summary = "获取平台统计数据",
                description = "获取所有工厂的汇总统计（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<PlatformStatisticsDTO> getDashboardStatistics() {
         log.info("API调用: 获取平台统计数据");
 
@@ -303,7 +291,6 @@ public class PlatformController {
     @GetMapping("/reports")
     @Operation(summary = "获取平台报表数据",
                description = "获取跨工厂的综合报表数据（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<PlatformReportDTO> getPlatformReport(
             @RequestParam(defaultValue = "production")
             @Parameter(description = "报表类型: production, financial, quality, user") String reportType,
@@ -426,7 +413,6 @@ public class PlatformController {
     @PostMapping("/factories/{factoryId}/ai-initialize")
     @Operation(summary = "AI初始化工厂配置",
                description = "使用AI根据自然语言描述生成工厂的完整表单配置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIFactoryInitResponse> aiInitializeFactory(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @Valid @RequestBody AIFactoryInitRequest request
@@ -524,7 +510,6 @@ public class PlatformController {
      */
     @GetMapping("/ai-quota-rules")
     @Operation(summary = "获取所有配额规则", description = "获取所有工厂的配额规则设置（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<List<AIQuotaRuleDTO>> getAllQuotaRules() {
         log.info("API调用: 获取所有配额规则");
 
@@ -537,7 +522,6 @@ public class PlatformController {
      */
     @GetMapping("/ai-quota-rules/factory/{factoryId}")
     @Operation(summary = "获取工厂配额规则", description = "获取指定工厂的配额规则（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIQuotaRuleDTO> getFactoryQuotaRule(
             @PathVariable @Parameter(description = "工厂ID") String factoryId
     ) {
@@ -552,7 +536,6 @@ public class PlatformController {
      */
     @GetMapping("/ai-quota-rules/default")
     @Operation(summary = "获取全局默认配额规则", description = "获取全局默认配额规则（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIQuotaRuleDTO> getGlobalDefaultQuotaRule() {
         log.info("API调用: 获取全局默认配额规则");
 
@@ -565,7 +548,6 @@ public class PlatformController {
      */
     @PostMapping("/ai-quota-rules")
     @Operation(summary = "创建配额规则", description = "创建工厂配额规则（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIQuotaRuleDTO> createQuotaRule(
             @Valid @RequestBody CreateAIQuotaRuleRequest request
     ) {
@@ -581,7 +563,6 @@ public class PlatformController {
      */
     @PutMapping("/ai-quota-rules/{ruleId}")
     @Operation(summary = "更新配额规则", description = "更新指定配额规则（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIQuotaRuleDTO> updateQuotaRule(
             @PathVariable @Parameter(description = "规则ID") Long ruleId,
             @Valid @RequestBody UpdateAIQuotaRuleRequest request
@@ -597,7 +578,6 @@ public class PlatformController {
      */
     @DeleteMapping("/ai-quota-rules/{ruleId}")
     @Operation(summary = "删除配额规则", description = "删除指定配额规则（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<String> deleteQuotaRule(
             @PathVariable @Parameter(description = "规则ID") Long ruleId
     ) {
@@ -613,7 +593,6 @@ public class PlatformController {
     @PostMapping("/ai-quota-rules/default")
     @Operation(summary = "创建或更新全局默认配额规则",
                description = "创建或更新全局默认配额规则（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<AIQuotaRuleDTO> createOrUpdateGlobalDefaultRule(
             @Valid @RequestBody CreateAIQuotaRuleRequest request
     ) {
@@ -629,7 +608,6 @@ public class PlatformController {
     @GetMapping("/ai-quota-rules/calculate")
     @Operation(summary = "计算用户配额",
                description = "根据工厂和角色计算用户的实际配额（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<Map<String, Object>> calculateUserQuota(
             @RequestParam @Parameter(description = "工厂ID") String factoryId,
             @RequestParam @Parameter(description = "用户角色") String role
@@ -655,7 +633,6 @@ public class PlatformController {
     @GetMapping("/system/metrics")
     @Operation(summary = "获取系统监控指标",
                description = "获取平台系统的实时监控数据（仅平台管理员）")
-    @PreAuthorize("hasAnyAuthority('super_admin', 'platform_admin')")
     public ApiResponse<SystemMetricsDTO> getSystemMetrics() {
         log.info("API调用: 获取系统监控指标");
 

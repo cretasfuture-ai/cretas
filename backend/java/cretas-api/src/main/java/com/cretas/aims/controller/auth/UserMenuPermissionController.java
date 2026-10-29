@@ -21,7 +21,7 @@ import java.util.Set;
  *
  * <p>提供 role 权限之上的 user-level GRANT/REVOKE 管理接口。
  *
- * <p>TODO 下一轮: 集成到 {@code @PreAuthorize} 或 JWT filter,
+ * <p>TODO 下一轮: 集成到拦截器 ({@code @RequirePermission} / {@code @RequireRole}) 或 JWT filter,
  * 让请求鉴权自动调用 {@code getEffectiveMenus} 替代直接查 role。
  * 本轮仅保证 Service + Controller 可独立工作,不改现有鉴权流。
  *
