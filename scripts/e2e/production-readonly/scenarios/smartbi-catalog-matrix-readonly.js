@@ -339,6 +339,14 @@ async function selectFamilyPreview(page, item, allGroups, deadline) {
   const familyRowId = `${String(item.candidate?.domain || '').trim()}:${item.familyId}`.replace(/^:/u, '');
   const row = page.locator(`.family-row[data-family-id="${String(familyRowId).replace(/"/gu, '\\"')}"]`).first();
   if (!await row.count()) throw new Error(`Catalogue family row missing: ${item.familyId}`);
+  const rows = page.locator('.family-row:visible');
+  for (let index = 0; index < await rows.count(); index += 1) {
+    const current = rows.nth(index);
+    const checked = current.locator('input[type="checkbox"]').first();
+    if (!await checked.count()) throw new Error(`Catalogue family checkbox missing: ${await current.getAttribute('data-family-id')}`);
+    const isTarget = (await current.getAttribute('data-family-id')) === familyRowId;
+    if ((await checked.isChecked()) !== isTarget) await current.locator('.el-checkbox').first().click({ timeout: remainingTimeout(deadline) });
+  }
   const control = row.locator('.el-select, .el-select-v2').first();
   if (!await control.count()) throw new Error(`Catalogue family variant control missing: ${item.familyId}`);
   const candidateIndex = allGroups.find((group) => group.familyId === item.familyId)?.candidates
@@ -352,6 +360,10 @@ async function selectFamilyPreview(page, item, allGroups, deadline) {
   const optionValue = await option.getAttribute('value') || await option.getAttribute('data-value');
   if (optionValue && optionValue !== String(item.candidate.id)) throw new Error(`Catalogue variant option ID drifted: ${optionValue}`);
   await option.click({ timeout: remainingTimeout(deadline) });
+  const targetCard = testId(page, `factory-chart-card-${item.candidate.id}`).first();
+  await targetCard.waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  const visibleCards = page.locator('[data-testid^="factory-chart-card-"]:visible');
+  if (await visibleCards.count() !== 1) throw new Error(`Catalogue selection rendered ${await visibleCards.count()} cards instead of one`);
   return true;
 }
 
