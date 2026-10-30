@@ -11,6 +11,7 @@ const EXPORTS = [
   { key: 'ppt', label: 'PPT', button: '导出当前显示图表 PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
 ];
 const MAX_OPTION_FAMILIES = 60;
+const MAX_OPTION_CANDIDATES = 120;
 const STEP_TIMEOUT_MS = 30_000;
 const TOTAL_TIMEOUT_MS = 10 * 60_000;
 
@@ -69,6 +70,18 @@ function validateCatalogFamilies(value) {
     return entry.trim();
   });
   if (new Set(result).size !== result.length) throw new Error('factoryCatalogFamilies contains duplicate family IDs');
+  return result;
+}
+
+function validateCatalogCandidateIds(value) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) throw new Error('factoryCatalogCandidateIds must be an array of candidate IDs');
+  if (value.length > MAX_OPTION_CANDIDATES) throw new Error(`factoryCatalogCandidateIds must contain at most ${MAX_OPTION_CANDIDATES} IDs`);
+  const result = value.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('factoryCatalogCandidateIds contains an empty candidate ID');
+    return entry.trim();
+  });
+  if (new Set(result).size !== result.length) throw new Error('factoryCatalogCandidateIds contains duplicate candidate IDs');
   return result;
 }
 
@@ -162,16 +175,24 @@ function purchasePriceEvidence(candidate) {
   return same ? { points: tablePoints.map((point) => ({ ...point })), source, nonadditive: true } : null;
 }
 
-function selectCatalogCandidates(data, requestedFamilies) {
+function selectCatalogCandidates(data, requestedFamilies, requestedCandidateIds = null) {
   const candidates = Array.isArray(data?.recommendations) ? data.recommendations : [];
   const groups = groupCandidates(candidates);
   const available = new Set(groups.map((group) => group.familyId));
   const requested = requestedFamilies || groups.map((group) => group.familyId);
   const requestedUnknown = requested.filter((family) => !available.has(family));
+  const availableCandidates = new Map(candidates.filter((candidate) => candidate?.id).map((candidate) => [String(candidate.id), candidate]));
+  const requestedCandidateUnknown = (requestedCandidateIds || []).filter((id) => !availableCandidates.has(id));
   const excluded = [];
   const blocked = [];
-  const eligibleGroups = groups.filter((group) => requested.includes(group.familyId)).map((group) => {
-    const sorted = [...group.candidates];
+  const explicitCandidates = requestedCandidateIds
+    ? requestedCandidateIds.map((id) => availableCandidates.get(id)).filter(Boolean)
+    : null;
+  const eligibleGroups = groups.filter((group) => requested.includes(group.familyId)
+    && (!requestedCandidateIds || requestedCandidateIds.some((id) => familyOf(availableCandidates.get(id)) === group.familyId))).flatMap((group) => {
+    const sorted = explicitCandidates
+      ? explicitCandidates.filter((candidate) => familyOf(candidate) === group.familyId)
+      : [...group.candidates];
     const restaurantOnly = sorted.filter(isRestaurantOnly);
     if (restaurantOnly.length) excluded.push(...restaurantOnly.map((candidate) => ({
       familyId: group.familyId,
@@ -179,8 +200,8 @@ function selectCatalogCandidates(data, requestedFamilies) {
       candidateId: candidate.id,
       reason: 'restaurant-only',
     })));
-    const candidate = sorted.find((item) => !isRestaurantOnly(item) && candidateIsQualified(item));
-    if (!candidate) {
+    const qualified = sorted.filter((item) => !isRestaurantOnly(item) && candidateIsQualified(item));
+    if (!qualified.length) {
       const blockedCandidate = sorted.find((item) => !isRestaurantOnly(item));
       blocked.push({
         familyId: group.familyId,
@@ -188,10 +209,11 @@ function selectCatalogCandidates(data, requestedFamilies) {
         candidateId: blockedCandidate?.id || null,
         reason: blockedCandidate?.detailStatus?.state || 'candidate-not-qualified',
       });
-      return null;
+      return [];
     }
-    return { familyId: group.familyId, familyLabel: group.familyLabel, candidate };
-  }).filter(Boolean);
+    const chosen = requestedCandidateIds ? qualified : qualified.slice(0, 1);
+    return chosen.map((candidate) => ({ familyId: group.familyId, familyLabel: group.familyLabel, candidate }));
+  });
   // Families are covered through individual previews by inspectCatalog. Keep the
   // explicit 60-family run bound, but never hide the remainder from the
   // assessment.
@@ -199,7 +221,7 @@ function selectCatalogCandidates(data, requestedFamilies) {
   const deferred = eligibleGroups.slice(MAX_OPTION_FAMILIES).map((item) => ({
     familyId: item.familyId, familyLabel: item.familyLabel, candidateId: item.candidate.id, reason: 'family-limit-60',
   }));
-  return { selected, deferred, blocked, excluded, requestedUnknown };
+  return { selected, deferred, blocked, excluded, requestedUnknown, requestedCandidateUnknown };
 }
 
 function detailPeriod(data) {
@@ -314,34 +336,55 @@ async function chooseBrowseMode(page, deadline) {
 }
 
 async function selectFamilyPreview(page, item, allGroups, deadline) {
-  // Browse checkbox changes deliberately persist user preferences. Read-only
-  // acceptance uses the existing guided preview action instead; no selection
-  // PUT is mocked, allowed or suppressed by this scenario.
-  const guideMode = testId(page, 'factory-chart-mode').locator('button, label').filter({ hasText: '问答引导' }).first();
-  await guideMode.click({ timeout: remainingTimeout(deadline) });
-  const domain = String(item.candidate.domain || '');
-  const labels = testId(page, 'factory-chart-guide-domain').locator('label');
-  let found = false;
-  for (let index = 0; index < await labels.count(); index += 1) {
-    if (await labels.nth(index).locator('input').first().getAttribute('value') === domain) {
-      await labels.nth(index).click({ timeout: remainingTimeout(deadline) });
-      found = true;
-      break;
-    }
-  }
-  if (!found) throw new Error(`Catalogue domain control missing: ${domain}`);
-  const scopedGroups = allGroups.filter((group) => group.candidates[0]?.domain === domain);
-  const index = scopedGroups.findIndex((group) => group.familyId === item.familyId);
-  if (index < 0) throw new Error(`Catalogue family missing from domain: ${item.familyId}`);
-  await testId(page, 'factory-chart-guide-topic').click({ timeout: remainingTimeout(deadline) });
-  const options = page.locator('.el-select-dropdown__item:visible');
+  const row = page.locator(`.family-row[data-family-id="${String(item.familyId).replace(/"/gu, '\\"')}"]`).first();
+  if (!await row.count()) throw new Error(`Catalogue family row missing: ${item.familyId}`);
+  const control = row.locator('.el-select, .el-select-v2').first();
+  if (!await control.count()) throw new Error(`Catalogue family variant control missing: ${item.familyId}`);
+  const candidateIndex = allGroups.find((group) => group.familyId === item.familyId)?.candidates
+    .findIndex((candidate) => String(candidate?.id) === String(item.candidate.id));
+  if (!Number.isInteger(candidateIndex) || candidateIndex < 0) throw new Error(`Catalogue candidate missing from family order: ${item.candidate.id}`);
+  await control.click({ timeout: remainingTimeout(deadline) });
+  const options = page.locator('.el-select-dropdown__item:visible, [role="option"]:visible');
   await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
-  if (await options.count() !== scopedGroups.length + 1) throw new Error(`Catalogue topic identities drifted: actual ${await options.count()}, expected ${scopedGroups.length + 1}`);
-  const option = options.nth(index + 1);
-  if (!(await option.innerText()).includes(item.familyLabel)) throw new Error('Catalogue topic label drifted');
+  if (await options.count() <= candidateIndex) throw new Error(`Catalogue variant options drifted for ${item.familyId}`);
+  const option = options.nth(candidateIndex);
+  const optionValue = await option.getAttribute('value') || await option.getAttribute('data-value');
+  if (optionValue && optionValue !== String(item.candidate.id)) throw new Error(`Catalogue variant option ID drifted: ${optionValue}`);
   await option.click({ timeout: remainingTimeout(deadline) });
-  await testId(page, 'factory-chart-guide-generate').click({ timeout: remainingTimeout(deadline) });
   return true;
+}
+
+function validateCatalogSubjectId(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string' || !value.trim()) throw new Error('factoryCatalogSubjectId must be a non-empty subject ID');
+  return value.trim();
+}
+
+async function selectCatalogSubject(page, subjectId, initialData, deadline) {
+  const subjects = Array.isArray(initialData?.subjects) ? initialData.subjects : [];
+  const subject = subjects.find((entry) => String(entry?.id || '') === subjectId);
+  if (!subject || !String(subject.label || '').trim()) throw new Error(`Factory catalog subject is absent from initial response: ${subjectId}`);
+  const control = testId(page, 'factory-chart-guide-subject');
+  if (!await control.count()) throw new Error('Factory catalog subject control missing');
+  await control.locator('input, button').first().click({ timeout: remainingTimeout(deadline) }).catch(() => control.click({ timeout: remainingTimeout(deadline) }));
+  const option = page.locator('[role="option"]:visible, .el-select-dropdown__item:visible').filter({ hasText: String(subject.label) }).first();
+  await option.waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  const responsePromise = waitResponse(page, isRecommendationsResponse, deadline);
+  await option.click({ timeout: remainingTimeout(deadline) });
+  const response = await responsePromise;
+  const body = await responseBody(response);
+  const request = requestBody(response);
+  if (request.analysis_subject !== subjectId || body?.data?.analysisSubject !== subjectId) {
+    throw new Error(`Factory catalog subject scope drifted: ${subjectId}`);
+  }
+  return response;
+}
+
+async function captureCardScreenshot(card, inspectCtx, candidateId, batchNumber) {
+  if (!inspectCtx.evidenceDir || !card) return null;
+  const safeId = String(candidateId).replace(/[^A-Za-z0-9._-]+/gu, '-').slice(0, 90) || 'candidate';
+  const target = `${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/factory-catalog-batch-${batchNumber}-${safeId}-card.png`;
+  try { await card.screenshot({ path: target }); return target; } catch { return null; }
 }
 
 async function inspectCatalog(page, _body, inspectCtx) {
@@ -349,7 +392,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
   const startedAt = Date.now();
   const deadline = startedAt + TOTAL_TIMEOUT_MS;
   const optionValue = inspectCtx.factoryCatalogFamilies || inspectCtx.options?.factoryCatalogFamilies;
+  const candidateOptionValue = inspectCtx.factoryCatalogCandidateIds || inspectCtx.options?.factoryCatalogCandidateIds;
+  const subjectId = validateCatalogSubjectId(inspectCtx.factoryCatalogSubjectId || inspectCtx.options?.factoryCatalogSubjectId);
   const requestedFamilies = validateCatalogFamilies(optionValue);
+  const requestedCandidateIds = validateCatalogCandidateIds(candidateOptionValue);
   const ui = { browseVisible: false, missing: false, httpFailure: false };
 
   await testId(page, 'factory-chart-guide').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) }).catch(() => {});
@@ -361,9 +407,13 @@ async function inspectCatalog(page, _body, inspectCtx) {
     recommendationResponse = await pending;
   }
   if (!recommendationResponse) ui.httpFailure = true;
-  const body = await responseBody(recommendationResponse);
+  let body = await responseBody(recommendationResponse);
+  if (subjectId) {
+    recommendationResponse = await selectCatalogSubject(page, subjectId, body?.data || {}, deadline);
+    body = await responseBody(recommendationResponse);
+  }
   const data = body?.data || {};
-  const selected = selectCatalogCandidates(data, requestedFamilies);
+  const selected = selectCatalogCandidates(data, requestedFamilies, requestedCandidateIds);
   const allGroups = groupCandidates(data.recommendations);
   const browse = await chooseBrowseMode(page, deadline).catch(() => false);
   ui.browseVisible = browse;
@@ -388,7 +438,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
   }));
   const exports = [];
   const screenshots = [];
-  const processedFamilyIds = new Set();
+  const processedCandidateIds = new Set();
   const batches = [];
   for (const item of selected.selected) {
     batches.push([item]);
@@ -431,11 +481,12 @@ async function inspectCatalog(page, _body, inspectCtx) {
       if (!summary.checks.familySelected) {
         summary.checkFailures = ['familySelected'];
         families.push(summary);
-        processedFamilyIds.add(summary.familyId);
+        processedCandidateIds.add(summary.candidateId);
         ui.selectionFailure = true;
         selectionFailed = true;
         break;
       }
+      summary.checks.variantSelected = summary.checks.familySelected;
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
       summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
@@ -450,6 +501,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
           .first().waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) })
           .then(() => true).catch(() => false);
       }
+      summary.cardScreenshot = summary.checks.chartRendered
+        ? await captureCardScreenshot(card, inspectCtx, candidate.id, batchNumber)
+        : null;
+      summary.checks.cardScreenshot = !inspectCtx.evidenceDir || Boolean(summary.cardScreenshot);
 
       if (summary.checks.cardRendered) {
     const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true }).first();
@@ -491,7 +546,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
       family.checkFailures = checkFailures(family.checks);
       family.status = family.checkFailures.length ? 'UNVERIFIED' : 'PASS';
       families.push(family);
-      processedFamilyIds.add(family.familyId);
+      processedCandidateIds.add(family.candidateId);
     }
     if (batchFamilies.length && inspectCtx.screenshot) {
       screenshots.push(await inspectCtx.screenshot(`factory-catalog-batch-${batchNumber}`));
@@ -506,8 +561,9 @@ async function inspectCatalog(page, _body, inspectCtx) {
     source: item?.source || null,
     message: item?.message || null,
   })) : [];
-  const remainingFamilyCount = selected.selected.filter((item) => !processedFamilyIds.has(item.familyId)).length;
-  const assessment = assessCatalog({ families, requestedUnknown: selected.requestedUnknown, deferred: selected.deferred, excluded: selected.excluded, eligibilityGaps, sourceErrors, remainingFamilyCount, ui });
+  const remainingFamilyCount = selected.selected.filter((item) => !processedCandidateIds.has(item.candidate.id)).length;
+  const requestedUnknown = [...selected.requestedUnknown, ...selected.requestedCandidateUnknown.map((id) => `candidate:${id}`)];
+  const assessment = assessCatalog({ families, requestedUnknown, deferred: selected.deferred, excluded: selected.excluded, eligibilityGaps, sourceErrors, remainingFamilyCount, ui });
   return {
     assessment,
     ...assessment,
@@ -551,6 +607,8 @@ module.exports = {
   selectCatalogCandidates,
   summarizeExportIds,
   validateCatalogFamilies,
+  validateCatalogCandidateIds,
+  validateCatalogSubjectId,
   isRecommendationsResponse,
   isDetailsResponse,
   isExportResponse,

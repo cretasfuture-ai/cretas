@@ -150,6 +150,8 @@ async function runSuiteWithPage(page, options = {}) {
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
         factoryCatalogFamilies: options.factoryCatalogFamilies,
+        factoryCatalogCandidateIds: options.factoryCatalogCandidateIds,
+        factoryCatalogSubjectId: options.factoryCatalogSubjectId,
         smartbiCommerceJoint: options.smartbiCommerceJoint,
         smartbiPurchaseInventory: options.smartbiPurchaseInventory,
         smartbiLegacyKpi: options.smartbiLegacyKpi,

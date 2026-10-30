@@ -17,9 +17,11 @@ const candidates = Array.from({ length: 8 }, (_, index) => {
     kpis: [{ label: '产量', value: 500 + index, unit: 'kg' }],
   };
 });
+candidates.splice(1, 0, { ...candidates[0], id: 'production.family-1@P1@件', unit: '件', source: 'xiaomi', analysis: { ...candidates[0].analysis, familyLabel: '重复标签' }, kpis: [{ label: '产量', value: 501, unit: '件' }] });
 const JSON_HEADERS = { 'content-type': 'application/json' };
+const subjects = Array.from({ length: 12 }, (_, index) => ({ id: `subject-${index + 1}`, label: `产品 ${index + 1}` }));
 
-function recommendationBody(withContext = false, selectedId = null) {
+function recommendationBody(withContext = false, selectedId = null, subjectId = null) {
   const listed = selectedId ? candidates.filter((item) => item.id === selectedId) : candidates;
   return {
     success: true,
@@ -36,18 +38,22 @@ function recommendationBody(withContext = false, selectedId = null) {
         : { ...item, detailSnapshotKey: `snapshot-${item.id}`, detailStatus: { state: 'unavailable', message: '点击查看时加载详情' } }),
       unavailable: [],
       sourceErrors: [],
+      subjects,
+      analysisSubject: subjectId,
     },
   };
 }
 
 function pageHtml() {
-  const familyRows = candidates.map((item, index) => `<div data-testid="factory-chart-family" data-family-id="${item.domain}:${item.analysis.familyId}"><label class="el-checkbox">${item.analysis.familyLabel}<input type="checkbox" style="position:absolute;width:0;height:0;opacity:0"${index < 4 ? ' checked' : ''}></label><div class="el-select">${item.unit}</div></div>`).join('');
+  const familyGroups = [...new Map(candidates.map((item) => [item.analysis.familyId, candidates.filter((candidate) => candidate.analysis.familyId === item.analysis.familyId)])).values()];
+  const familyRows = familyGroups.map((group) => `<div class="family-row" data-testid="factory-chart-family" data-family-id="${group[0].analysis.familyId}"><span>${group[0].analysis.familyLabel}</span><div class="el-select" data-family="${group[0].analysis.familyId}">${group[0].unit}</div></div>`).join('');
   const cards = candidates.map((item) => `<div data-testid="factory-chart-card-${item.id}" data-candidate-id="${item.id}"><div class="factory-chart-canvas"><canvas></canvas></div><button>查看原始明细</button></div>`).join('');
   return `<!doctype html><html><body>
     <main><h2>工厂分析</h2><p>按分类浏览</p>
       <button data-testid="factory-chart-refresh">刷新</button>
       <section data-testid="factory-chart-guide">
         <div data-testid="factory-chart-mode"><button>问答引导</button><button>按分类浏览</button></div>
+        <div data-testid="factory-chart-guide-subject" role="combobox"><button>产品</button><div id="subject-options" style="display:none">${subjects.map((subject) => `<div role="option" data-value="${subject.id}">${subject.label}</div>`).join('')}</div></div>
         <div data-testid="factory-chart-guide-domain"><label><input type="radio" value="生产" checked>生产完成情况怎样？</label></div>
         <div data-testid="factory-chart-guide-topic">选择主题</div>
         <div id="topic-options" style="display:none"><div class="el-select-dropdown__item">全部主题</div>${candidates.map(item => `<div class="el-select-dropdown__item">${item.analysis.familyLabel}</div>`).join('')}</div>
@@ -67,7 +73,7 @@ function pageHtml() {
       const detailPath = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
       const exportPaths = {'导出当前显示图表 Excel':'/smartbi-api/api/smartbi/financial-dashboard/export-excel','导出当前显示图表 PDF':'/smartbi-api/api/smartbi/financial-dashboard/export-pdf','导出当前显示图表 PPT':'/smartbi-api/api/smartbi/financial-dashboard/export-ppt'};
       document.querySelector('[data-testid="factory-chart-refresh"]').onclick = () => fetch(recPath, {method:'POST',headers:jsonHeaders,body:'{}'});
-      let chosenFamily = null;
+      let chosenFamily = null; let selectedVariant = null;
       document.querySelector('[data-testid="factory-chart-guide-topic"]').onclick = () => { setTimeout(() => { document.querySelector('#topic-options').style.display = 'block'; }, 50); };
       [...document.querySelectorAll('#topic-options .el-select-dropdown__item')].forEach((option, index) => option.onclick = () => {
         chosenFamily = index ? allCandidates[index - 1].analysis.familyId : null;
@@ -78,7 +84,9 @@ function pageHtml() {
           input.checked = input.closest('[data-family-id]').dataset.familyId === '生产:' + chosenFamily;
         }
       };
-      for (const input of document.querySelectorAll('[data-testid="factory-chart-family"] input')) input.onchange = () => fetch('/smartbi-api/api/smartbi/financial-dashboard/factory-selection', {method:'PUT', headers:jsonHeaders, body:'{}'});
+      for (const row of document.querySelectorAll('.family-row')) { const group = allCandidates.filter(item => item.analysis.familyId === row.dataset.familyId); row.querySelector('.el-select').onclick = () => { document.querySelectorAll('.el-select-dropdown__item').forEach(node => node.remove()); group.forEach(item => { const option = document.createElement('div'); option.className = 'el-select-dropdown__item'; option.textContent = item.unit + ' / ' + item.source; option.dataset.value = item.id; option.onclick = () => { selectedVariant = item.id; option.remove(); }; document.body.append(option); }); }; }
+      document.querySelector('[data-testid="factory-chart-guide-subject"] button').onclick = () => { document.querySelector('#subject-options').style.display = 'block'; };
+      for (const subjectOption of document.querySelectorAll('#subject-options [role="option"]')) subjectOption.onclick = () => { document.querySelector('#subject-options').style.display = 'none'; fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({analysis_subject:subjectOption.dataset.value})}); };
       for (const card of document.querySelectorAll('[data-testid^="factory-chart-card-"]')) card.querySelector('button').onclick = async () => {
         const candidateId = card.dataset.candidateId;
         const recommendation = await fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({detail_candidate_ids:[candidateId]})});
@@ -91,8 +99,7 @@ function pageHtml() {
       for (const button of document.querySelectorAll('button')) {
         if (!exportPaths[button.textContent]) continue;
         button.onclick = async () => {
-          const familyIds = [...document.querySelectorAll('[data-testid="factory-chart-family"] input:checked')].map(input => input.closest('[data-family-id]').dataset.familyId);
-          const ids = allCandidates.filter(item => familyIds.includes(item.domain + ':' + item.analysis.familyId)).map(item => item.id);
+          const ids = selectedVariant ? [selectedVariant] : allCandidates.filter(item => item.analysis.familyId === chosenFamily).map(item => item.id);
           const response = await fetch(exportPaths[button.textContent], {method:'POST',headers:jsonHeaders,body:JSON.stringify({charts:ids.map(id => ({id})), selected_ids:ids})});
           const blob = await response.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = button.textContent.includes('Excel') ? 'factory.xlsx' : button.textContent.includes('PDF') ? 'factory.pdf' : 'factory.pptx'; link.click();
         };
@@ -114,11 +121,12 @@ test('catalog matrix fixture uses the real browse, detail, and export endpoint s
       let body = {}; try { body = JSON.parse(raw || '{}'); } catch {}
       requests.push({ path: url.pathname, body });
       if (url.pathname === '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations') {
-        response.writeHead(200, JSON_HEADERS); response.end(JSON.stringify(recommendationBody(Boolean(body.detail_candidate_ids?.length), body.detail_candidate_ids?.[0] || null))); return;
+        response.writeHead(200, JSON_HEADERS); response.end(JSON.stringify(recommendationBody(Boolean(body.detail_candidate_ids?.length), body.detail_candidate_ids?.[0] || null, body.analysis_subject || null))); return;
       }
       if (url.pathname === '/smartbi-api/api/smartbi/financial-dashboard/factory-details') {
         const detailId = String(body.context_id || '').replace(/^detail-/u, '');
-        response.writeHead(200, JSON_HEADERS); response.end(JSON.stringify({ success: true, data: { factoryId: 'F006', candidateId: detailId, source: 'business', period: '全部历史', columns: ['batch'], rows: [{ batch: 'B1' }], total: 1, page: 1, pageSize: 50 } })); return;
+        const detailCandidate = candidates.find((item) => item.id === detailId);
+        response.writeHead(200, JSON_HEADERS); response.end(JSON.stringify({ success: true, data: { factoryId: 'F006', candidateId: detailId, source: detailCandidate?.source || 'business', period: '全部历史', columns: ['batch'], rows: [{ batch: 'B1' }], total: 1, page: 1, pageSize: 50 } })); return;
       }
       if (url.pathname.endsWith('/export-excel') || url.pathname.endsWith('/export-pdf') || url.pathname.endsWith('/export-ppt')) {
         response.writeHead(200, { 'content-type': 'application/octet-stream' }); response.end(Buffer.from('fixture-binary')); return;
@@ -143,8 +151,26 @@ test('catalog matrix fixture uses the real browse, detail, and export endpoint s
     expect(result.exports[1].filename).toBe('factory-catalog-batch-2-excel.xlsx');
     const exports = requests.filter(item => item.path.endsWith('/export-excel'));
     expect(exports).toHaveLength(8);
-    expect(exports.map(item => item.body.selected_ids)).toEqual(candidates.map(item => [item.id]));
+    const defaultCandidates = candidates.filter((item, index) => candidates.findIndex((candidate) => candidate.analysis.familyId === item.analysis.familyId) === index);
+    expect(exports.map(item => item.body.selected_ids)).toEqual(defaultCandidates.map(item => [item.id]));
     expect(requests.filter(item => item.path.endsWith('/factory-selection'))).toHaveLength(0);
+
+    const explicitVariant = await inspectCatalog(page, '', {
+      expectedFactoryId: 'F006',
+      factoryCatalogCandidateIds: ['production.family-1@P1@件'],
+      evidenceDir: '',
+    });
+    expect(explicitVariant.assessment.result).toBe('PASS');
+    expect(explicitVariant.families.map((item) => item.candidateId)).toEqual(['production.family-1@P1@件']);
+
+    const explicitSubject = await inspectCatalog(page, '', {
+      expectedFactoryId: 'F006',
+      factoryCatalogSubjectId: 'subject-12',
+      evidenceDir: '',
+    });
+    expect(explicitSubject.assessment.result).toBe('PASS');
+    const subjectRequests = requests.filter((item) => item.path.endsWith('/factory-recommendations') && item.body.analysis_subject === 'subject-12');
+    expect(subjectRequests.length).toBeGreaterThan(0);
   } finally {
     server.closeAllConnections?.();
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
