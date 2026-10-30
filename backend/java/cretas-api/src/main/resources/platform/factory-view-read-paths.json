@@ -21,5 +21,12 @@
   "/label-qc/tasks/[A-Za-z0-9][A-Za-z0-9_-]{0,127}",
   "/label-qc/photos/[A-Za-z0-9][A-Za-z0-9_-]{0,127}/image",
   "/feature-config",
-  "/config/disabled-modules"
+  "/config/disabled-modules",
+  "/config/modules/production_plan/effective",
+  "/config/modules/material_batch/effective",
+  "/config/modules/purchase_order/effective",
+  "/config/modules/sales_order/effective",
+  "/workflow-stats/production",
+  "/workflow-stats/purchase",
+  "/workflow-stats/sales"
 ]

@@ -118,6 +118,32 @@ class PlatformFactoryViewSecurityContractTest {
         assertDenied("GET", "/api/mobile/F001/reports/dashboard/overview", longLived, null);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "/config/modules/production_plan/effective", "/config/modules/material_batch/effective",
+            "/config/modules/purchase_order/effective", "/config/modules/sales_order/effective",
+            "/workflow-stats/production", "/workflow-stats/purchase", "/workflow-stats/sales"})
+    void supportedPageMetadataIsReadableOnlyWithinItsExactFactoryAndPath(String suffix) throws Exception {
+        String token = jwt.generatePlatformFactoryViewToken(7L, "admin", "platform_admin", "F001");
+        prepare("GET", "/api/mobile/F001" + suffix, token);
+        assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
+        verifyNoInteractions(users);
+        assertDenied("POST", "/api/mobile/F001" + suffix, token, null);
+        assertDenied("GET", "/api/mobile/F002" + suffix, token, null);
+        assertDenied("GET", "/api/mobile/F001" + suffix, token, new String[]{"F001", "F002"});
+        assertDenied("GET", "/api/mobile/F001" + suffix + "/details", token, null);
+    }
+
+    @Test
+    void metadataAllowanceDoesNotOpenOtherModulesOrWorkflowNamespaces() throws Exception {
+        String token = jwt.generatePlatformFactoryViewToken(7L, "admin", "platform_admin", "F001");
+        for (String suffix : java.util.List.of("/config/modules/finance/effective",
+                "/config/modules/production_report/effective", "/config/modules/quality_inspection/effective",
+                "/workflow-stats/finance", "/workflow-stats/inventory", "/workflow-stats")) {
+            assertDenied("GET", "/api/mobile/F001" + suffix, token, null);
+        }
+    }
+
     private void assertDenied(String method, String uri, String token, String[] factoryValues) throws Exception {
         assertDenied(method, uri, token, factoryValues, HttpServletResponse.SC_FORBIDDEN);
     }
