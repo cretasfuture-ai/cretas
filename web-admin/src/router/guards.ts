@@ -8,6 +8,15 @@ import type { User } from '@/types/auth';
 import { isDemoFactoryId, resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
 import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
 
+const PLATFORM_WORKSPACE_PATHS = [
+  '/platform/factories',
+  '/system/llm-usage',
+];
+
+export function isPlatformWorkspaceRoute(path: string): boolean {
+  return PLATFORM_WORKSPACE_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 // 白名单路由 - 不需要登录
 const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
 
@@ -128,6 +137,27 @@ export function setupRouterGuards(router: Router) {
         next();
       }
       return;
+    }
+
+    // A platform identity has no implicit factory tenant. The sidebar is not
+    // the security boundary: direct factory URLs are blocked unless the user
+    // explicitly entered a server-issued, read-only factory view context.
+    let isFactoryView = false;
+    if (authStore.isPlatform) {
+      const { usePlatformFactoryContextStore } = await import('@/store/modules/platformFactoryContext');
+      isFactoryView = usePlatformFactoryContextStore().isViewingFactory;
+    }
+    if (authStore.isPlatform && !isFactoryView && !isPlatformWorkspaceRoute(to.path)) {
+      next(to.path === '/dashboard' ? '/platform/factories' : '/403');
+      return;
+    }
+
+    if (authStore.isPlatform && isFactoryView && !isPlatformWorkspaceRoute(to.path)) {
+      const { isFactoryViewPageRoute } = await import('@/store/modules/platformFactoryContext');
+      if (!isFactoryViewPageRoute(to.path)) {
+        next('/403');
+        return;
+      }
     }
 
     const logisticsLanding = resolveLogisticsDemoRoute(to.path, authStore.factoryType, authStore.factoryId);

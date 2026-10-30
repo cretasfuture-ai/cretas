@@ -15,6 +15,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { User } from '@/types/auth';
 import { isPlatformUser, isFactoryUser, ROLE_METADATA } from '@/types/auth';
+import { factoryViewContext, resetFactoryViewContext } from './platformFactoryContext';
 
 // localStorage keys (only for non-sensitive user info)
 const USER_KEY = 'cretas_user';
@@ -40,6 +41,15 @@ function resolveBusinessDomain(factoryType?: string, explicitDomain?: string): '
   const type = factoryType?.toUpperCase();
   if (type === 'LOGISTICS') return 'LOGISTICS';
   return type === 'RESTAURANT' || type === 'BRANCH' ? 'RESTAURANT' : 'FACTORY';
+}
+
+function isPlatformIdentity(user: User | null): boolean {
+  if (isPlatformUser(user)) return true;
+  // Older unified-login responses represented platform super admins as a
+  // factory-shaped user with role=super_admin and no tenant.
+  return !!user && isFactoryUser(user)
+    && String(user.factoryUser.role) === 'super_admin'
+    && !user.factoryUser.factoryId;
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -68,6 +78,12 @@ export const useAuthStore = defineStore('auth', () => {
   // If the cookie expired, the next API call will 401 and the interceptor redirects to login.
   const isAuthenticated = computed(() => !!user.value);
 
+  // Platform identity remains platform-owned while the effective tenant is
+  // supplied by the server-issued read-only view context.
+  const activeFactoryView = computed(() => (
+    isPlatformIdentity(user.value as User | null) ? factoryViewContext.value : null
+  ));
+
   const currentRole = computed(() => {
     const u = user.value as User | null;
     if (!u) return 'unactivated';
@@ -91,6 +107,7 @@ export const useAuthStore = defineStore('auth', () => {
   const factoryId = computed(() => {
     const u = user.value as User | null;
     if (!u) return '';
+    if (activeFactoryView.value) return activeFactoryView.value.factoryId;
     if (isFactoryUser(u)) return u.factoryUser?.factoryId || '';
     return '';
   });
@@ -98,19 +115,24 @@ export const useAuthStore = defineStore('auth', () => {
   const factoryType = computed(() => {
     const u = user.value as User | null;
     if (!u) return '';
+    if (activeFactoryView.value) return activeFactoryView.value.factoryType || 'FACTORY';
     if (isFactoryUser(u)) return u.factoryUser?.factoryType || 'FACTORY';
     return '';
   });
 
   const businessDomain = computed(() => {
     const u = user.value as User | null;
-    if (!u || !isFactoryUser(u)) return '';
+    if (!u) return '';
+    if (activeFactoryView.value) return resolveBusinessDomain(activeFactoryView.value.factoryType);
+    if (!isFactoryUser(u)) return '';
     return resolveBusinessDomain(u.factoryUser?.factoryType, u.factoryUser?.businessDomain);
   });
 
   const factoryName = computed(() => {
     const u = user.value as User | null;
-    if (!u || !isFactoryUser(u)) return '';
+    if (!u) return '';
+    if (activeFactoryView.value) return activeFactoryView.value.factoryName || activeFactoryView.value.factoryId;
+    if (!isFactoryUser(u)) return '';
     const factoryUser = u.factoryUser;
     return getFactoryBrandOverride(factoryUser?.factoryId)?.name
       || factoryUser?.factoryName
@@ -153,13 +175,18 @@ export const useAuthStore = defineStore('auth', () => {
     return metadata;
   });
 
-  const isPlatform = computed(() => isPlatformUser(user.value as User | null));
+  const isPlatform = computed(() => isPlatformIdentity(user.value as User | null));
   const isFactory = computed(() => isFactoryUser(user.value as User | null));
+  const isFactoryViewReadOnly = computed(() => !!activeFactoryView.value);
   const userLevel = computed(() => roleMetadata.value?.level ?? 99);
   const department = computed(() => roleMetadata.value?.department ?? 'none');
 
   // Actions
   function setUser(userData: User) {
+    const previousUser = user.value;
+    if (previousUser && (previousUser.id !== userData.id || previousUser.userType !== userData.userType)) {
+      resetFactoryViewContext();
+    }
     user.value = userData;
     localStorage.setItem(USER_KEY, JSON.stringify(userData));
   }
@@ -168,10 +195,12 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null;
     localStorage.removeItem(USER_KEY);
     localStorage.removeItem('cretas_access_token');
+    resetFactoryViewContext();
     // Note: HttpOnly cookies are cleared by the server on logout
   }
 
   async function login(username: string, password: string): Promise<boolean> {
+    resetFactoryViewContext();
     loading.value = true;
     try {
       // 动态导入 API，避免循环依赖
@@ -258,6 +287,7 @@ export const useAuthStore = defineStore('auth', () => {
   // MobileAuthService.demoLogin("logistics") 签发真实 JWT, 锁定 factoryId=DEMO_LOGISTICS —
   // 与 rest/factory 完全同构, 不再需要前端特判.)
   async function demoLogin(tenant: DemoTenant): Promise<boolean> {
+    resetFactoryViewContext();
     loading.value = true;
     try {
       const { demoLogin: demoApi } = await import('@/api/auth');
@@ -336,6 +366,7 @@ export const useAuthStore = defineStore('auth', () => {
     roleMetadata,
     isPlatform,
     isFactory,
+    isFactoryViewReadOnly,
     userLevel,
     department,
 

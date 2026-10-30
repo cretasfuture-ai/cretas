@@ -8,6 +8,11 @@ import { ApiResponse, ApiError } from '@/types/api';
 import type { ApiData } from '@/types/api';
 import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
 import { currentActionId } from '@/utils/activityTracker';
+import {
+  factoryViewTokenForRequest,
+  isFactoryViewRequest,
+  isFactoryViewReadonlyPost,
+} from '@/store/modules/platformFactoryContext';
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
@@ -185,10 +190,28 @@ const getRouter = async () => {
 // 请求拦截器
 request.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Add Authorization header from localStorage token
-    const token = localStorage.getItem('cretas_access_token');
+    // Platform factory viewing uses a separate, short-lived token for every
+    // business request. Management endpoints intentionally keep the original
+    // platform token. Never fall back to the platform token after expiry.
+    let viewToken: string | null = null;
+    const effectiveUrl = request.getUri(config);
+    const method = String(config.method || 'get').toUpperCase();
+    try {
+      viewToken = factoryViewTokenForRequest(effectiveUrl, method);
+    } catch (error) {
+      return Promise.reject(new AxiosError(error instanceof Error ? error.message : '工厂查看凭证无效', 'FACTORY_VIEW_INVALID', config));
+    }
+    if (viewToken && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+      && !(method === 'POST' && isFactoryViewReadonlyPost(effectiveUrl, config.data))) {
+      return Promise.reject(new AxiosError('工厂只读查看不允许业务写操作', 'FACTORY_VIEW_READ_ONLY', config));
+    }
+    const token = viewToken || localStorage.getItem('cretas_access_token');
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (viewToken) {
+      config.headers['X-Factory-View-Token'] = 'true';
+      config.headers['X-Client-Type'] = 'platform-factory-view';
     }
     config.headers['X-Correlation-ID'] = correlationIdFrom(config.headers) || newCorrelationId();
     config.headers['X-Activity-Client'] = 'web-admin';
@@ -311,12 +334,20 @@ request.interceptors.response.use(
     };
   },
   async (error: AxiosError<ApiResponse>) => {
+    if (error.code === 'FACTORY_VIEW_INVALID' || error.code === 'FACTORY_VIEW_READ_ONLY') return Promise.reject(error);
     const originalRequest = error.config as InternalAxiosRequestConfig & {
       _retry?: boolean;
       _silent?: boolean;
       _handledErrorCodes?: string[];
     };
     const status = error.response?.status;
+
+    // A view token is never refreshed with the platform session. Keep the
+    // explicit expired state so subsequent calls fail closed as well.
+    if (status === 401 && isFactoryViewRequest(originalRequest ? request.getUri(originalRequest) : '', originalRequest?.method)) {
+      window.dispatchEvent(new CustomEvent('cretas:factory-view-expired'));
+      return Promise.reject(new ApiError('工厂查看凭证已过期，请返回平台后重新进入', 'FACTORY_VIEW_EXPIRED', 401));
+    }
 
     // Apr 20 Bug BR-01 fix: 用户点浏览器回退/路由切换时, 进行中的 axios 请求会被 abort,
     // 抛 AxiosError code=ERR_CANCELED, message='canceled'. 之前默认路径会走 showMessage

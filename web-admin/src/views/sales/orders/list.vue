@@ -927,7 +927,7 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 const goldSummary = ref<FinanceSummary | null>(null);
 const goldSummaryRangeLabel = ref<string>('');
 async function loadGoldSummary() {
-  if (!factoryId.value) return;
+  if (!factoryId.value || authStore.isFactoryViewReadOnly) return;
   const year = new Date().getFullYear();
   const today = toDateString(new Date());
   const ranges: Array<{ start: string; end: string; label: string }> = [

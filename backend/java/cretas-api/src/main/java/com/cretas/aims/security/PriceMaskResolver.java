@@ -93,6 +93,7 @@ public class PriceMaskResolver {
     }
 
     public boolean shouldMaskOperationalCost(String authorization) {
+        if (PlatformFactoryViewReadPolicy.isCurrentView()) return true;
         User currentUser = resolveCurrentUser(authorization);
         if (currentUser == null) {
             return true; // closed-by-default: no resolvable caller → mask
@@ -109,6 +110,7 @@ public class PriceMaskResolver {
      * scope so multiple controllers can share without duplication.
      */
     private User resolveCurrentUser(String authorization) {
+        if (PlatformFactoryViewReadPolicy.isCurrentView()) return null;
         try {
             String token = TokenUtils.extractToken(authorization);
             Long userId = mobileService.getUserFromToken(token).getId();

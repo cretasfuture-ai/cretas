@@ -917,6 +917,7 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             return null;
         }
         HttpServletRequest servletReq = ((ServletServerHttpRequest) request).getServletRequest();
+        if (PlatformFactoryViewReadPolicy.isView(servletReq)) return null;
         Object userIdObj = servletReq.getAttribute("userId");
         if (userIdObj == null) {
             return null;

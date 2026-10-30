@@ -19,10 +19,39 @@ describe('restaurant agent run API', () => {
     vi.restoreAllMocks();
     vi.stubEnv('VITE_API_BASE_URL', '/api/mobile');
     localStorage.clear();
+    sessionStorage.clear();
   });
 
   afterEach(() => {
+    sessionStorage.clear();
     vi.unstubAllEnvs();
+  });
+
+  it('blocks task creation before fetch while viewing a factory', async () => {
+    vi.stubEnv('VITE_RESTAURANT_AGENT_RUN_MODE', 'ACTIVE');
+    sessionStorage.setItem('cretas_platform_factory_view', JSON.stringify({
+      factoryId: 'REST-1', accessToken: 'view-token', readOnly: true, expiresAt: Date.now() + 300000,
+    }));
+    localStorage.setItem('cretas_access_token', 'platform-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    await expect(streamGrossMarginDeclineRun('REST-1', {
+      schemaVersion: '1.0', routeCode: 'GROSS_MARGIN_DECLINE_ATTRIBUTION',
+      startDate: '2026-07-01', endDate: '2026-07-19',
+    }, { onEvent: vi.fn() })).rejects.toThrow('只读查看');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('never uses the platform credential for replay in factory view', async () => {
+    vi.stubEnv('VITE_RESTAURANT_AGENT_RUN_MODE', 'ACTIVE');
+    sessionStorage.setItem('cretas_platform_factory_view', JSON.stringify({
+      factoryId: 'REST-1', accessToken: 'view-token', readOnly: true, expiresAt: Date.now() + 300000,
+    }));
+    localStorage.setItem('cretas_access_token', 'platform-token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 403 }));
+    await expect(replayGrossMarginDeclineRun('REST-1', event(1).runId)).rejects.toThrow('无权');
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer view-token' }),
+    }));
   });
 
   it('fails closed in default OFF mode without issuing a Run request', async () => {

@@ -37,6 +37,21 @@ const financeReviewRoles = [
   'department_admin',
 ];
 
+function defaultLandingPath(): string {
+  try {
+    const stored = JSON.parse(localStorage.getItem('cretas_user') || 'null') as {
+      userType?: string;
+      factoryUser?: { role?: string; factoryId?: string };
+    } | null;
+    const legacyPlatform = stored?.userType === 'factory'
+      && stored.factoryUser?.role === 'super_admin'
+      && !stored.factoryUser.factoryId;
+    return stored?.userType === 'platform' || legacyPlatform ? '/platform/factories' : '/dashboard';
+  } catch {
+    return '/dashboard';
+  }
+}
+
 // 基础路由 - 不需要权限
 const baseRoutes: RouteRecordRaw[] = [
   {
@@ -87,7 +102,7 @@ const businessRoutes: RouteRecordRaw[] = [
     path: '/',
     name: 'Layout',
     component: () => import('@/components/layout/AppLayout.vue'),
-    redirect: '/dashboard',
+    redirect: defaultLandingPath,
     children: [
       // Dashboard
       {
@@ -95,6 +110,18 @@ const businessRoutes: RouteRecordRaw[] = [
         name: 'Dashboard',
         component: () => import('@/views/dashboard/index.vue'),
         meta: { requiresAuth: true, title: '首页', icon: 'House', module: 'dashboard' }
+      },
+      {
+        path: 'platform/factories',
+        name: 'PlatformFactories',
+        component: () => import('@/views/platform/factories/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '工厂管理',
+          icon: 'Setting',
+          module: 'system',
+          roles: platformAdminOnlyRoles,
+        },
       },
       {
         path: 'dashboard/ai-value',

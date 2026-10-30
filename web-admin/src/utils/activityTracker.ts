@@ -1,10 +1,11 @@
 import type { Router } from 'vue-router';
+import { factoryViewContext } from '@/store/modules/platformFactoryContext';
 
 type Source = 'screen' | 'click' | 'input' | 'block';
 type Detail = Record<string, string | number | boolean>;
 type ActivityEvent = { source: Source; action: string; route: string; detail?: Detail;
   eventId: string; clientActionId?: string; occurredAt: number };
-type Auth = { factoryId: string; userId: number | string | undefined; isAuthenticated: boolean; accessToken?: string | null };
+type Auth = { factoryId: string; userId: number | string | undefined; isAuthenticated: boolean; accessToken?: string | null; readOnly?: boolean };
 
 const SAFE = /^[A-Za-z0-9_.:-]{1,128}$/;
 // Exact UI verbs only. Never derive an event name from arbitrary button text or form data.
@@ -58,6 +59,13 @@ function auth(): Auth | null {
     return null;
   }
   const value = authGetter?.();
+  if (value?.readOnly || factoryViewContext.value) {
+    queue.length = 0;
+    actionId = '';
+    actionAt = 0;
+    activeActor = '';
+    return null;
+  }
   const actor = value?.isAuthenticated && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(value.factoryId)
     && /^\d+$/.test(String(value.userId)) ? `${value.factoryId}:${value.userId}` : '';
   if (actor !== activeActor) {

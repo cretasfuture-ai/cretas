@@ -42,6 +42,11 @@ public class WebLoginSessionFilter extends OncePerRequestFilter {
         String clientType = request.getHeader(CookieAuthHelper.CLIENT_TYPE_HEADER);
         String authorization = request.getHeader("Authorization");
         boolean explicitBearer = authorization != null && authorization.startsWith("Bearer ");
+        // Restrictively preserve explicit view credentials instead of replacing
+        // them with the unrestricted browser session. JWT authorization follows.
+        if ("platform-factory-view".equalsIgnoreCase(clientType)
+                || "true".equalsIgnoreCase(request.getHeader("X-Factory-View-Token"))
+                || (explicitBearer && jwt.hasPlatformFactoryViewMarker(authorization.substring(7).trim()))) return true;
         boolean nativeClient = !cookies.isWebClient(request) && (clientType != null
                 || (explicitBearer && !jwt.hasWebSessionMarker(authorization.substring(7).trim())));
         return "OPTIONS".equalsIgnoreCase(request.getMethod())
