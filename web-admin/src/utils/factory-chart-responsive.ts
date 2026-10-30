@@ -33,7 +33,9 @@ export function applyFactoryChartResponsive(option: ChartRecord, width: number):
           ...(label ?? {}),
           padding: label?.padding ?? [1, 3],
         },
-        labelLayout: { ...(labelLayout ?? {}), hideOverlap: true },
+        labelLayout: typeof current.labelLayout === 'function'
+          ? current.labelLayout
+          : { ...(labelLayout ?? {}), hideOverlap: true },
       };
     });
   }

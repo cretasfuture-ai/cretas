@@ -126,8 +126,23 @@ describe('factory chart responsive display safeguards', () => {
     expect(laidOutLabels.length).toBeLessThanOrEqual(baselineLabels.length);
     const baselineGap = minimumSameRowGap(numericLabelGeometry(renderSvg(option, 440, 320)));
     const narrowGap = minimumSameRowGap(numericLabelGeometry(renderSvg(narrow, 440, 320)));
+    expect(Number.isFinite(narrowGap)).toBe(true);
     expect(narrowGap).toBeGreaterThanOrEqual(baselineGap);
     expect(narrowGap).toBeGreaterThan(1);
+    const wideGap = minimumSameRowGap(numericLabelGeometry(renderSvg(wide, 800, 320)));
+    expect(Number.isFinite(wideGap)).toBe(true);
+    expect(wideGap).toBeGreaterThan(1);
+  });
+
+  it('preserves an explicit label-layout callback without executing or replacing it', () => {
+    const layout = vi.fn(() => ({ x: 42, rotate: 15 }));
+    const data = [[0, 0, 80]];
+    const option = { series: [{ type: 'heatmap', data, labelLayout: layout }] };
+    const result = applyFactoryChartResponsive(option, 440);
+    const series = (result.series as Array<Record<string, unknown>>)[0];
+    expect(series.labelLayout).toBe(layout);
+    expect(series.data).toBe(data);
+    expect(layout).not.toHaveBeenCalled();
   });
 
   it('aligns the final date label while preserving the full axis and series', () => {
