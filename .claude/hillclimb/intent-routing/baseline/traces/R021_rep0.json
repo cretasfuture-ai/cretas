@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "ISO 22000最新版本有什么变化？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"ISO 22000最新版本有什么变化？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"SUPPLIER_QUALIFICATION_CREATE\",\n  \"intentName\": \"登记供应商资质\",\n  \"intentCategory\": \"DATA_OP\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「登记供应商资质」。\\n\\n需要您提供以下信息：\\n1. 请问是哪个供应商？说名称就行\\n2. 请提供证书编号 (必填). e.g. SC10532010300001\\n3. 请提供颁发机构 (必填). e.g. 国家市场监督管理总局\\n4. 请提供颁发日期 (必填). ISO 格式 YYYY-MM-DD\\n5. 请提供过期日期 (必填). ISO 格式 YYYY-MM-DD\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「登记供应商资质」。\\n\\n需要您提供以下信息：\\n1. 请问是哪个供应商？说名称就行\\n2. 请提供证书编号 (必填). e.g. SC10532010300001\\n3. 请提供颁发机构 (必填). e.g. 国家市场监督管理总局\\n4. 请提供颁发日期 (必填). ISO 格式 YYYY-MM-DD\\n5. 请提供过期日期 (必填). ISO 格式 YYYY-MM-DD\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请问是哪个供应商？说名称就行\",\n    \"请提供证书编号 (必填). e.g. SC10532010300001\",\n    \"请提供颁发机构 (必填). e.g. 国家市场监督管理总局\",\n    \"请提供颁发日期 (必填). ISO 格式 YYYY-MM-DD\",\n    \"请提供过期日期 (必填). ISO 格式 YYYY-MM-DD\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:02.1538191\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"supplierId\",\n        \"label\": \"供应商\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"certificateNumber\",\n        \"label\": \"证书编号 (必填). e.g. SC10532010300001\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"issuingAuthority\",\n        \"label\": \"颁发机构 (必填). e.g. 国家市场监督管理总局\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"issueDate\",\n        \"label\": \"颁发日期 (必填). ISO 格式 YYYY-MM-DD\"\n      },\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"expiryDate\",\n        \"label\": \"过期日期 (必填). ISO 格式 YYYY-MM-DD\"\n      }\n    ],\n    \"extractedParams\": {\n      \"qualificationType\": \"ISO22000\"\n    }\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"7d5a906a-bed8-4e33-91c1-a804451509e7\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「登记供应商资质」。\n\n需要您提供以下信息：\n1. 请问是哪个供应商？说名称就行\n2. 请提供证书编号 (必填). e.g. SC10532010300001\n3. 请提供颁发机构 (必填). e.g. 国家市场监督管理总局\n4. 请提供颁发日期 (必填). ISO 格式 YYYY-MM-DD\n5. 请提供过期日期 (必填). ISO 格式 YYYY-MM-DD\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

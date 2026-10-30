@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "统计一下水产加工线的产量"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"统计一下水产加工线的产量\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_PRODUCTION\",\n  \"intentName\": \"生产报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"生产报表 (本周 (09-04 ~ 09-11))\\n总产量: 0 kg\",\n  \"formattedText\": \"生产报表 (本周 (09-04 ~ 09-11))\\n总产量: 0 kg\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"reportType\": \"PRODUCTION\",\n    \"period\": \"week\",\n    \"queryConditions\": {\n      \"period\": \"week\",\n      \"endDate\": \"2026-09-11\",\n      \"startDate\": \"2026-09-04\"\n    },\n    \"data\": {\n      \"totalOutput\": 0,\n      \"dailyOutput\": [\n        {\n          \"date\": \"2026-09-04\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-05\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-06\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-07\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-08\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-09\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-10\",\n          \"output\": 0\n        },\n        {\n          \"date\": \"2026-09-11\",\n          \"output\": 0\n        }\n      ],\n      \"totalCost\": 0\n    },\n    \"endDate\": \"2026-09-11\",\n    \"generatedAt\": \"2026-09-11\",\n    \"startDate\": \"2026-09-04\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:35.8656056\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"report_production\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "生产报表 (本周 (09-04 ~ 09-11))\n总产量: 0 kg"
+  }
+]

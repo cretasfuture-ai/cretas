@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "帮我登记一条客户投诉：客户反映收到的带鱼有异味，涉及发货单SHP-2026-0120-001"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"帮我登记一条客户投诉：客户反映收到的带鱼有异味，涉及发货单SHP-2026-0120-001\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"CUSTOMER_STATS\",\n  \"intentName\": \"客户统计\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"当前暂无客户统计数据。请先在客户管理中录入客户信息。\",\n  \"formattedText\": \"当前暂无客户统计数据。请先在客户管理中录入客户信息。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"ratingDistribution\": {\n      \"0\": 0,\n      \"1\": 0,\n      \"2\": 0,\n      \"3\": 0,\n      \"4\": 0,\n      \"5\": 0\n    },\n    \"typeDistribution\": {},\n    \"overallStatistics\": {\n      \"totalCustomers\": 0,\n      \"ratingDistribution\": {\n        \"0\": 0,\n        \"1\": 0,\n        \"2\": 0,\n        \"3\": 0,\n        \"4\": 0,\n        \"5\": 0\n      },\n      \"typeDistribution\": {},\n      \"activeCustomers\": 0,\n      \"averageRating\": 0.0,\n      \"totalCreditLimit\": 0,\n      \"industryDistribution\": {},\n      \"totalOutstandingBalance\": 0\n    },\n    \"type\": \"OVERALL\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:10.0717145\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"customer_stats\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "当前暂无客户统计数据。请先在客户管理中录入客户信息。"
+  }
+]
