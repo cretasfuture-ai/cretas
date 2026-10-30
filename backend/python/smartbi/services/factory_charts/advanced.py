@@ -1,4 +1,5 @@
 """Conditioned factory views using the existing chart strategies."""
+import math
 import pandas as pd
 from smartbi.services.charts.registry import get_strategy
 from smartbi.services.financial import metrics as M
@@ -36,7 +37,7 @@ def build(frame, cols, request, can_price, source):
                 if line['name'] == '达成率':
                     line['data'] = [M.ratio(a, p).value for (_, a), (_, p) in zip(actual, planned)]
                     line['itemStyle']['color'] = '#e6a23c'
-                    option['yAxis'][1]['max'] = max(120, max(line['data']) * 1.1)
+                    option['yAxis'][1]['max'] = math.ceil(round(max(120, max(line['data']) * 1.1), 8) / 10) * 10
             option['legend']['data'] = ['计划' if n == '预算' else n for n in option['legend']['data']]
             s = Series(f'production.plan@{unit}', '计划与实际产量', '生产', str(unit), actual, source)
             c = candidate(s, 'budget_comparison', option)
@@ -58,7 +59,8 @@ def build(frame, cols, request, can_price, source):
                 c['priority'] = 'optional'
                 charts.append(c)
                 gauge = get_strategy('gauge').build(pd.DataFrame({'完成率': [rate]}), y_fields=['完成率'])
-                gauge['series'][0]['max'] = max(100, rate * 1.1)
+                # Ten equal gauge intervals must not expose floating-point tails.
+                gauge['series'][0]['max'] = math.ceil(round(max(100, rate * 1.1), 8) / 10) * 10
                 gauge['series'][0]['detail']['formatter'] = '{value}%'
                 rate_series = Series(f'production.plan-rate@{unit}', '累计计划达成率', '生产', '%', [('累计', rate)], source, 'ratio', achieved, target)
                 c = candidate(rate_series, 'gauge', gauge)
@@ -84,6 +86,9 @@ def build(frame, cols, request, can_price, source):
             work[cols['date']] = work[cols['date']].astype(str)
             work[dim] = work[dim].astype(str)
             option = get_strategy('heatmap').build(work, cols['date'], [cols['output']], dim)
+            # Keep every cell and its tooltip, hiding only colliding text labels.
+            for heatmap_series in option.get('series', []):
+                heatmap_series.setdefault('labelLayout', {})['hideOverlap'] = True
             points = [(f'{r[cols["date"]]} / {r[dim]}', r[cols['output']]) for _, r in work.iterrows()]
             s = Series(f'production.heatmap@{unit}', '日期与工序/产品产量', '生产', str(unit), points, source)
             charts.append(candidate(s, 'heatmap', option))

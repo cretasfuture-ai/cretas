@@ -93,7 +93,7 @@ watch(
 
 const mainStyle = computed(() => ({
   marginLeft: isReferenceFrame.value || appStore.isMobile ? '0px' : `${appStore.currentSidebarWidth}px`,
-  transition: 'margin-left 0.3s'
+  transition: 'margin-left 0.3s ease-in-out'
 }));
 
 function pinDraggedReference(event: DragEvent): void {
@@ -168,6 +168,10 @@ function pinDraggedReference(event: DragEvent): void {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-main { transition: none !important; }
 }
 
 .workspace-content-shell {
