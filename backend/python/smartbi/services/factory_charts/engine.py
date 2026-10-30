@@ -789,6 +789,19 @@ def _card_layout(option, chart_id=''):
     if isinstance(legend, dict) and legend.get('orient', 'horizontal') == 'horizontal':
         legend.pop('top', None)
         legend['bottom'] = 0
+    zooms = option.get('dataZoom', [])
+    zooms = zooms if isinstance(zooms, list) else [zooms]
+    for zoom in zooms:
+        if (isinstance(zoom, dict) and zoom.get('type') == 'slider'
+                and (zoom.get('orient') == 'horizontal' or (
+                    not zoom.get('orient') and not (
+                        'yAxisIndex' in zoom and 'xAxisIndex' not in zoom)))
+                and zoom.get('show', True)):
+            # Slider controls and the legend need separate footer rows.
+            zoom.pop('top', None)
+            zoom['bottom'] = reserve(zoom.get('bottom'), 32)
+            zoom['height'] = 18
+            grid['bottom'] = reserve(grid.get('bottom'), 88)
     axes = option['xAxis'] if isinstance(option['xAxis'], list) else [option['xAxis']]
     y_axes = option['yAxis'] if isinstance(option['yAxis'], list) else [option['yAxis']]
     category_axes = [(axis, 'x') for axis in axes] + [(axis, 'y') for axis in y_axes]
@@ -808,6 +821,10 @@ def _card_layout(option, chart_id=''):
         data = axis.get('data')
         if not isinstance(data, list):
             continue
+        raw_values = [str(value) for value in data]
+        if orientation == 'x' and raw_values and all(
+                re.fullmatch(r'\d{4}[-/]\d{2}[-/]\d{2}', value) for value in raw_values):
+            continue  # Keep complete date tokens, even for only 2–4 periods.
         longest = max((sum(12 if ord(char) > 127 else 7 for char in str(value))
                        for value in data), default=48)
         if orientation == 'x' and len(data) > 4:
@@ -815,11 +832,7 @@ def _card_layout(option, chart_id=''):
             # bounded labels and ECharts' automatic interval selection. Keep
             # the complete axis data/tooltip values; only the painted labels
             # are abbreviated to fit the card.
-            raw_values = [str(value) for value in data]
-            is_date_axis = bool(raw_values) and all(
-                re.fullmatch(r'\d{4}[-/]\d{2}[-/]\d{2}', value) for value in raw_values
-            )
-            if is_date_axis or longest <= 48 or max(map(len, raw_values), default=0) < 16:
+            if longest <= 48 or max(map(len, raw_values), default=0) < 16:
                 continue
             labels = axis.setdefault('axisLabel', {})
             labels.update({'interval': 'auto', 'hideOverlap': True,
@@ -840,6 +853,15 @@ def _card_layout(option, chart_id=''):
         if isinstance(axis, dict) and axis.get('type') == 'value':
             axis.setdefault('axisLabel', {}).setdefault('hideOverlap', True)
             axis.setdefault('splitNumber', 3)
+    for index, axis in enumerate(y_axes):
+        if (isinstance(axis, dict) and axis.get('type') == 'value' and axis.get('name')
+                and axis.get('nameLocation', 'end') != 'middle'
+                and axis.get('nameRotate', 0) in (None, 0)):
+            # End captions must extend into the card instead of across its edge.
+            style = axis.setdefault('nameTextStyle', {})
+            if isinstance(style, dict):
+                position = axis.get('position', 'left' if index == 0 else 'right')
+                style.setdefault('align', 'right' if position == 'right' else 'left')
     for axis in axes:
         if axis.get('type') == 'value' and axis.get('name'):
             # End-position names extend beyond the final tick and can be cropped.

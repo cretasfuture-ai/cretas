@@ -122,17 +122,48 @@ def test_dense_long_x_categories_only_change_painted_labels_not_source_data():
     }
 
 
-def test_date_x_axis_with_six_points_keeps_existing_label_configuration():
-    dates = [f'2026-01-{index:02d}' for index in range(1, 7)]
+@pytest.mark.parametrize('count', [2, 3, 4, 6])
+def test_date_x_axis_keeps_existing_label_configuration(count):
+    dates = [f'2026-01-{index:02d}' for index in range(1, count+1)]
     option = {'xAxis': {'type': 'category', 'data': dates,
                         'axisLabel': {'rotate': 30}},
               'yAxis': {'type': 'value'},
-              'series': [{'type': 'line', 'data': [1, 2, 3, 4, 5, 6]}]}
+              'series': [{'type': 'line', 'data': list(range(1, count+1))}]}
 
     _card_layout(option, 'production.output:line')
 
     assert option['xAxis']['data'] == dates
     assert option['xAxis']['axisLabel'] == {'rotate': 30}
+
+
+def test_zoom_slider_keeps_all_data_and_range_while_separating_legend():
+    option = {'xAxis': {'type': 'category', 'data': [str(i) for i in range(20)]},
+              'yAxis': {'type': 'value'}, 'series': [{'type': 'bar', 'data': list(range(20))}],
+              'legend': {'data': ['产量'], 'bottom': 0},
+              'dataZoom': [{'type': 'inside', 'start': 20, 'end': 80},
+                           {'type': 'slider', 'start': 20, 'end': 80, 'bottom': 0, 'height': 30}]}
+    original = deepcopy(option)
+    _card_layout(option)
+    assert option['series'] == original['series']
+    assert option['xAxis']['data'] == original['xAxis']['data']
+    assert option['dataZoom'][0] == original['dataZoom'][0]
+    assert [(z['start'], z['end']) for z in option['dataZoom']] == [(20, 80), (20, 80)]
+    assert option['dataZoom'][1]['bottom'] >= 32
+    assert option['grid']['bottom'] >= 88
+
+
+def test_y_bound_gantt_slider_without_orient_keeps_its_vertical_geometry():
+    option = {'xAxis': {'type': 'value'},
+              'yAxis': {'type': 'category', 'data': [f'Task{i}' for i in range(12)]},
+              'grid': {'left': 80, 'right': 40, 'top': 40, 'bottom': 64, 'containLabel': True},
+              'series': [{'type': 'bar', 'data': list(range(12))}],
+              'dataZoom': [{'type': 'slider', 'yAxisIndex': 0, 'right': 5, 'width': 15,
+                            'start': 0, 'end': 100},
+                           {'type': 'inside', 'yAxisIndex': 0, 'start': 0, 'end': 100}]}
+    original = deepcopy(option)
+    _card_layout(option)
+    assert option['dataZoom'] == original['dataZoom']
+    assert option['grid'] == original['grid']
 
 
 def test_short_x_categories_show_all_labels_without_trimming_data():
