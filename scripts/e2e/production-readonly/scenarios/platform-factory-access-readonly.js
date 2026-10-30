@@ -27,6 +27,11 @@ async function inspect(page, _body, ctx) {
     }
     if (label === '功能开通') await page.locator('.activation-row').first().waitFor();
     if (label === '岗位权限') await page.locator('.permission-table tbody tr').first().waitFor();
+    if (label === '菜单显示') {
+      await page.locator('.module-card').first().waitFor();
+      if (!await page.locator('.factory-row.active').filter({ hasText: target }).isVisible()
+          || await page.locator('.error-alert').isVisible()) throw new Error('Target factory menu settings did not load');
+    }
     if (label === '员工授权') {
       const protectedUser = directory?.find(user => user.protectedRole === true);
       if (!protectedUser) throw new Error('Protected factory administrator is absent from the accepted employee page');
