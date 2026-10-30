@@ -32,8 +32,13 @@ describe('platform menu catalog consumed by the backend', () => {
       '../backend/java/cretas-api/src/main/resources/platform/factory-view-read-paths.json'), 'utf8'));
     const allows = (path: string) => (paths as string[]).some(pattern => new RegExp(`^(?:${pattern})$`).test(path));
     for (const path of ['/reports/dashboard/overview', '/production-plans', '/material-batches',
-      '/purchase/orders', '/sales/orders', '/label-qc/tasks']) expect(allows(path)).toBe(true);
+      '/purchase/orders', '/sales/orders', '/label-qc/tasks',
+      '/config/modules/production_plan/effective', '/config/modules/material_batch/effective',
+      '/config/modules/purchase_order/effective', '/config/modules/sales_order/effective',
+      '/workflow-stats/production', '/workflow-stats/purchase', '/workflow-stats/sales']) expect(allows(path)).toBe(true);
     for (const path of ['/users/current', '/smart-bi/analysis/dynamic', '/scheduling/config',
-      '/purchase/orders/by-status', '/sales/orders/by-status']) expect(allows(path)).toBe(false);
+      '/purchase/orders/by-status', '/sales/orders/by-status', '/config/modules/finance/effective',
+      '/config/modules/production_plan/effective/details', '/workflow-stats/finance',
+      '/workflow-stats/inventory', '/workflow-stats/production/details']) expect(allows(path)).toBe(false);
   });
 });
