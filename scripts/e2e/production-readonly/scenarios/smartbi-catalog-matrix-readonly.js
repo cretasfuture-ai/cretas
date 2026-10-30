@@ -128,9 +128,172 @@ function verifiedWipVoucherCount(candidate, fact) {
     && Number.isSafeInteger(Number(fact.value)) && Number(fact.value) === rows.length;
 }
 
+const FUSED_KPI_UNITS = Object.freeze({
+  '已覆盖批次产量': 'physical',
+  '累计生产良品率': '%',
+  '累计检验合格率': '%',
+  '已覆盖批次总成本': '元',
+});
+
+const PHYSICAL_UNITS = new Set([
+  'kg', 'g', 'mg', 't', '吨', '个', '盒', '袋', 'box', 'case', '张', '卷', '件', '箱', '批',
+  '瓶', '桶', '包', '罐', '盘', '支', '台', '套', 'm', '米', 'cm', 'L', 'l', 'ml', 'mL', '毫升', '升',
+]);
+
+function isPhysicalUnit(unit) {
+  const value = String(unit || '').trim();
+  return PHYSICAL_UNITS.has(value) || PHYSICAL_UNITS.has(value.toLowerCase());
+}
+
+function strictFiniteNumber(raw) {
+  if (raw == null || typeof raw === 'boolean') return null;
+  if (!['number', 'string'].includes(typeof raw)) return null;
+  if (typeof raw === 'string' && raw.trim() === '') return null;
+  const normalized = typeof raw === 'string' ? raw.replace(/,/gu, '').trim() : raw;
+  if (normalized === '') return null;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+
+function fusedCandidateUnitsAligned(candidate) {
+  const unit = String(candidate?.unit || '').trim();
+  if (!isPhysicalUnit(unit)) return false;
+  const facts = Array.isArray(candidate?.kpis) ? candidate.kpis : [];
+  const labels = facts.map((fact) => String(fact?.label || '').trim());
+  const expectedLabels = Object.keys(FUSED_KPI_UNITS);
+  if (facts.length !== expectedLabels.length || new Set(labels).size !== expectedLabels.length
+    || !expectedLabels.every((label) => labels.includes(label))) return false;
+  if (!/^production-inspection-fused\s*[·:|]/iu.test(String(candidate?.source || '').trim())) return false;
+  const sourceMetadata = candidate?.sourceMetadata;
+  if (sourceMetadata?.sourceKey !== 'production-inspection-fused'
+    || sourceMetadata?.costAuthorized !== true
+    || !Array.isArray(sourceMetadata?.sources)
+    || !sourceMetadata.sources.includes('production')
+    || !sourceMetadata.sources.includes('quality')) return false;
+  if (!facts.every((fact) => {
+    const label = String(fact?.label || '').trim();
+    const expectedUnit = FUSED_KPI_UNITS[label] === 'physical' ? unit : FUSED_KPI_UNITS[label];
+    const value = strictFiniteNumber(fact?.value);
+    const validRange = expectedUnit === '%' ? value != null && value >= 0 && value <= 100 : value != null && value >= 0;
+    return String(fact?.unit || '').trim() === expectedUnit && validRange;
+  })) return false;
+
+  const table = candidate?.tableData;
+  const headers = Array.isArray(table?.headers) ? table.headers.map((header) => String(header).trim()) : [];
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  if (!headers.length || !rows.length) return false;
+  const findHeader = (pattern) => headers.findIndex((header) => pattern.test(header));
+  const escapedUnit = unit.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const dateIndex = findHeader(/^(?:日期|date)$/iu);
+  const productionIndex = findHeader(new RegExp(`产量\\s*[（(]${escapedUnit}[）)]`, 'u'));
+  const inspectionIndex = findHeader(/检验合格率\s*[（(]%[）)]/u);
+  const yieldIndex = findHeader(/生产良品率\s*[（(]%[）)]/u);
+  const costIndex = findHeader(/总成本\s*[（(]元[）)]/u);
+  const indices = [dateIndex, productionIndex, inspectionIndex, yieldIndex, costIndex];
+  if (indices.some((index) => index < 0) || new Set(indices).size !== indices.length) return false;
+  if (!rows.every((row) => {
+    if (!Array.isArray(row) || row.length <= Math.max(...indices) || !String(row[dateIndex] || '').trim()) return false;
+    const production = strictFiniteNumber(row[productionIndex]);
+    const inspection = strictFiniteNumber(row[inspectionIndex]);
+    const yieldRate = strictFiniteNumber(row[yieldIndex]);
+    const cost = strictFiniteNumber(row[costIndex]);
+    return production != null && production >= 0 && inspection != null && inspection >= 0 && inspection <= 100
+      && yieldRate != null && yieldRate >= 0 && yieldRate <= 100 && cost != null && cost >= 0;
+  })) return false;
+
+  const option = candidate?.chart?.echartsOption || {};
+  const axes = Array.isArray(option.yAxis) ? option.yAxis : [];
+  if (axes.length !== 3 || axes.some((axis) => axis?.type !== 'value')) return false;
+  if (String(axes[0]?.name || '').trim() !== unit
+    || String(axes[1]?.name || '').trim() !== '%'
+    || String(axes[2]?.name || '').trim() !== '元'
+    || axes[1]?.min !== 0 || axes[1]?.max !== 100) return false;
+  const legend = Array.isArray(option?.legend?.data) ? option.legend.data.map((item) => String(item).trim()) : [];
+  const expectedSeries = ['产量', '检验合格率', '生产良品率', '总成本'];
+  if (legend.length !== expectedSeries.length || new Set(legend).size !== expectedSeries.length
+    || !expectedSeries.every((name) => legend.includes(name))) return false;
+  const series = Array.isArray(option.series) ? option.series : [];
+  if (series.length !== expectedSeries.length || new Set(series.map((item) => String(item?.name || '').trim())).size !== expectedSeries.length) return false;
+  return series.every((item) => {
+    const name = String(item?.name || '').trim();
+    const expectedAxis = name === '产量' ? 0 : name === '总成本' ? 2 : 1;
+    const values = Array.isArray(item?.data) ? item.data : [];
+    const validValues = values.map(strictFiniteNumber);
+    const valuesInRange = name === '产量' || name === '总成本'
+      ? validValues.every((value) => value != null && value >= 0)
+      : validValues.every((value) => value != null && value >= 0 && value <= 100);
+    return expectedSeries.includes(name) && Number(item?.yAxisIndex || 0) === expectedAxis
+      && values.length === rows.length && valuesInRange;
+  });
+}
+
+function anomalyPoints(candidate) {
+  const table = candidate?.tableData;
+  if (Array.isArray(table)) {
+    return table.map((row) => ({ label: String(row?.label || '').trim(), value: strictFiniteNumber(row?.value) }));
+  }
+  const headers = Array.isArray(table?.headers) ? table.headers.map((header) => String(header).trim()) : [];
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const labelIndex = headers.findIndex((header) => /批次|batch/iu.test(header));
+  const valueIndex = headers.findIndex((header) => /产量|数量|实际|数值|value/iu.test(header));
+  if (labelIndex < 0 || valueIndex < 0) return [];
+  return rows.map((row) => ({ label: String(Array.isArray(row) ? row[labelIndex] : '').trim(), value: strictFiniteNumber(Array.isArray(row) ? row[valueIndex] : undefined) }));
+}
+
+function anomalyEvidence(candidate) {
+  if (familyOf(candidate) !== 'production.anomaly') return null;
+  const source = String(candidate?.source || '').trim();
+  const unit = String(candidate?.unit || '').trim();
+  if (!/^production\s*[·:|]/iu.test(source) || !isPhysicalUnit(unit)) return null;
+  if (!Array.isArray(candidate?.kpis) || candidate.kpis.length !== 0) return null;
+  const points = anomalyPoints(candidate);
+  if (points.length < 10 || new Set(points.map((point) => point.label)).size !== points.length
+    || points.some((point) => !point.label || !Number.isFinite(point.value) || point.value < 0)) return null;
+  const mean = points.reduce((total, point) => total + point.value, 0) / points.length;
+  const populationStdDev = Math.sqrt(points.reduce((total, point) => total + ((point.value - mean) ** 2), 0) / points.length);
+  const anomalyThreshold = 2 * populationStdDev;
+  const anomalies = populationStdDev > 0
+    ? points.filter((point) => Math.abs(point.value - mean) > anomalyThreshold)
+    : [];
+  const attention = candidate?.findings?.attention;
+  const observations = Array.isArray(attention)
+    ? attention.filter((text) => typeof text === 'string')
+      .map((text) => text.trim().match(/^(\d+)个同SKU\/单位批次，(\d+)个值偏离均值超过2个总体标准差；仅统计观察，不代表原因$/u))
+      .filter(Boolean)
+    : [];
+  const observation = observations.length === 1 ? observations[0] : null;
+  const sampleCount = observation ? Number(observation[1]) : null;
+  const anomalyCount = observation ? Number(observation[2]) : null;
+  if (sampleCount !== points.length || anomalyCount !== anomalies.length || !anomalies.length) return null;
+  return {
+    source,
+    unit,
+    sampleCount: points.length,
+    mean,
+    populationStdDev,
+    anomalyCount: anomalies.length,
+    anomalyLabels: anomalies.map((point) => point.label),
+    findingsSampleCount: sampleCount,
+    findingsAnomalyCount: anomalyCount,
+  };
+}
+
+function factsPresent(candidate) {
+  const family = familyOf(candidate);
+  if (family === 'production.anomaly') return Boolean(anomalyEvidence(candidate));
+  return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).length > 0
+    || Boolean(purchasePriceEvidence(candidate));
+}
+
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
-  if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
+  if (!unit) {
+    const family = familyOf(candidate);
+    const hasMoneyFact = (Array.isArray(candidate?.kpis) ? candidate.kpis : [])
+      .some((fact) => /^(?:元|USD|CNY|RMB|美元|人民币|[$¥€])$/iu.test(String(fact?.unit || '').trim()));
+    return !(family && family.startsWith('production.') && hasMoneyFact);
+  } // Financial table candidates may legitimately be multi-unit.
+  if (familyOf(candidate) === 'production.inspection_fused') return fusedCandidateUnitsAligned(candidate);
   return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
     const factUnit = String(fact?.unit || '').trim();
     return !factUnit || factUnit === unit
@@ -502,7 +665,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
         filenames: [],
         exportCoverage: [],
         http: { recommendation: recommendationResponse?.status() || null, detail: null, exports: {} },
-        checks: { familySelected: false, cardRendered: false, chartRendered: false, unitAligned: false, factsPresent: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
+        checks: { familySelected: false, cardRendered: false, chartRendered: false, unitAligned: false, factsPresent: false, anomalyEvidence: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
         checkFailures: [],
         status: 'UNVERIFIED',
         batch: batchNumber,
@@ -510,7 +673,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
       const purchasePrice = purchasePriceEvidence(candidate);
       summary.purchasePrice = purchasePrice;
-      summary.checks.factsPresent = summary.facts.length > 0 || Boolean(purchasePrice);
+      const anomalyProof = anomalyEvidence(candidate);
+      summary.anomalyEvidence = anomalyProof;
+      summary.checks.anomalyEvidence = familyOf(candidate) !== 'production.anomaly' || Boolean(anomalyProof);
+      summary.checks.factsPresent = factsPresent(candidate);
       summary.checks.priceEvidence = familyOf(candidate) === 'purchase.price' ? Boolean(purchasePrice) : true;
       summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch((error) => {
         summary.selectionError = String(error?.message || error).slice(0, 500);
@@ -638,6 +804,9 @@ module.exports = {
   assessCatalog,
   candidateIsQualified,
   candidateUnitsAligned,
+  fusedCandidateUnitsAligned,
+  anomalyEvidence,
+  factsPresent,
   purchasePriceEvidence,
   familyOf,
   groupCandidates,
