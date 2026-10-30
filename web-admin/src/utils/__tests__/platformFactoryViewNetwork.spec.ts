@@ -317,4 +317,3 @@ describe('platform factory native network boundary', () => {
     expect(xhr.headers.get('authorization')).toBe('Bearer external-credential');
   });
 });
-

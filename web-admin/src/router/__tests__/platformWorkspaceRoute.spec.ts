@@ -25,4 +25,3 @@ describe('platform workspace route boundary', () => {
     }
   });
 });
-

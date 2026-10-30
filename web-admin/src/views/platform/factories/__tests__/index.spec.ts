@@ -163,4 +163,3 @@ describe('platform factory console', () => {
     expect(apiMocks.getFactoryMenuConfig).not.toHaveBeenCalled();
   });
 });
-

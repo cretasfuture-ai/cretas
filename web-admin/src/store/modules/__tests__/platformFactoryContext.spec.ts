@@ -35,4 +35,3 @@ describe('platform factory view request boundary', () => {
     })).toBe(false);
   });
 });
-

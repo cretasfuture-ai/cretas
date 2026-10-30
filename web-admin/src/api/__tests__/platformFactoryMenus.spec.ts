@@ -38,4 +38,3 @@ describe('platform factory menu API', () => {
     expect(requestMocks.adminPost).toHaveBeenCalledWith('/api/platform/factories/F%2F006/view-context', {}, { baseURL: '' });
   });
 });
-
