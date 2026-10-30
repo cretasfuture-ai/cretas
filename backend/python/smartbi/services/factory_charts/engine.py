@@ -379,6 +379,17 @@ def _option(series, kind):
     frame = pd.DataFrame(points, columns=['项目', f'{series.title}（{series.unit}）'])
     field = frame.columns[1]
     option = get_strategy(kind).build(frame, x_field='项目', y_fields=[field])
+    if kind in ('line', 'area'):
+        # The generic strategy may rescale large monetary values to 万/千.
+        # Factory cards must retain the source unit and exact source values;
+        # only the date-axis completion below may add None for an absent day.
+        option.setdefault('series', [{}])[0]['data'] = [value for _, value in points]
+        y_axis = option.get('yAxis')
+        if isinstance(y_axis, list):
+            if y_axis:
+                y_axis[0]['name'] = series.unit
+        elif isinstance(y_axis, dict):
+            y_axis['name'] = series.unit
     if kind == 'bar_horizontal':
         # Long batch/SKU labels can leave a narrow value axis in a chart card.
         option.setdefault('xAxis', {}).setdefault('axisLabel', {})['hideOverlap'] = True
@@ -387,14 +398,14 @@ def _option(series, kind):
         axis = pd.date_range(min(observed), max(observed), freq='D')
         if len(axis) <= 1000:
             labels = axis.strftime('%Y-%m-%d').tolist()
-            rendered = dict(zip(option['xAxis']['data'], option['series'][0]['data']))
+            rendered = dict(points)
             option['xAxis']['data'] = labels
             option['series'][0]['data'] = [rendered.get(label) for label in labels]
             option['series'][0]['connectNulls'] = False
         else:
             option['_factoryUnavailable'] = '日期跨度超过连续轴安全上限，请先按月汇总或缩小期间'
     elif kind in ('line', 'area') and all(re.fullmatch(r'\d{1,2}月', label) for label, _ in points):
-        rendered = dict(zip(option['xAxis']['data'], option['series'][0]['data']))
+        rendered = dict(points)
         months = [int(label[:-1]) for label, _ in points]
         labels = [f'{m}月' for m in range(min(months), max(months) + 1)]
         option['xAxis']['data'] = labels
@@ -722,7 +733,7 @@ def wip_plan_flow_candidates(dataset, request):
     return charts, gaps
 
 
-def _card_layout(option):
+def _card_layout(option, chart_id=''):
     """Reserve room for axis units and a separate legend in mounted/exported cards."""
     pies = [s for s in option.get('series', []) if s.get('type') == 'pie']
     for series in pies:
@@ -741,6 +752,11 @@ def _card_layout(option):
     grid = option.setdefault('grid', {})
     if not isinstance(grid, dict):
         return  # Multi-panel charts own their individual grid layouts.
+    for series in option.get('series', []):
+        if isinstance(series, dict) and isinstance(series.get('label'), dict) and series['label'].get('show'):
+            layout = series.setdefault('labelLayout', {})
+            if isinstance(layout, dict):
+                layout.setdefault('hideOverlap', True)
 
     def reserve(value, minimum):
         if isinstance(value, (int, float)):
@@ -754,7 +770,8 @@ def _card_layout(option):
                 pass
         return minimum
 
-    for side, minimum in [('left', 12), ('right', 40), ('top', 40), ('bottom', 64)]:
+    minimum_right = 140 if 'channel_analysis' in str(chart_id) else 40
+    for side, minimum in [('left', 12), ('right', minimum_right), ('top', 40), ('bottom', 64)]:
         grid[side] = reserve(grid.get(side), minimum)
     grid['containLabel'] = True
     legend = option.get('legend')
@@ -762,6 +779,37 @@ def _card_layout(option):
         legend.pop('top', None)
         legend['bottom'] = 0
     axes = option['xAxis'] if isinstance(option['xAxis'], list) else [option['xAxis']]
+    y_axes = option['yAxis'] if isinstance(option['yAxis'], list) else [option['yAxis']]
+    category_axes = [(axis, 'x') for axis in axes] + [(axis, 'y') for axis in y_axes]
+    def edge_pixels(value):
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str) and value.endswith('%'):
+            try:
+                return float(value[:-1]) * 3.2
+            except ValueError:
+                pass
+        return 0
+    x_label_budget = max(64, 320 - edge_pixels(grid.get('left')) - edge_pixels(grid.get('right')) - 64)
+    for axis, orientation in category_axes:
+        if not isinstance(axis, dict) or axis.get('type') != 'category':
+            continue
+        data = axis.get('data')
+        if not isinstance(data, list) or len(data) > (4 if orientation == 'x' else 8):
+            continue
+        longest = max((sum(12 if ord(char) > 127 else 7 for char in str(value))
+                       for value in data), default=48)
+        width = min(140, max(48, longest)) if orientation == 'y' else min(96, max(16, int(x_label_budget / max(1, len(data)))))
+        labels = axis.setdefault('axisLabel', {})
+        labels.update({'interval': 0, 'hideOverlap': False,
+                       'overflow': 'breakAll' if orientation == 'x' or len(data) <= 2 else 'truncate',
+                       'lineHeight': 16,
+                       'width': width})
+    # containLabel already reserves wrapped text on both axes; adding that
+    # size to left/bottom as well would consume the plot on a physical phone.
+    for axis in [*axes, *y_axes]:
+        if isinstance(axis, dict) and axis.get('type') == 'value':
+            axis.setdefault('axisLabel', {}).setdefault('hideOverlap', True)
     for axis in axes:
         if axis.get('type') == 'value' and axis.get('name'):
             # End-position names extend beyond the final tick and can be cropped.
@@ -838,7 +886,7 @@ def build(datasets, request, can_price):
                     for value in node: safe_tooltips(value)
             safe_tooltips(chart['chart']['echartsOption'])
             chart['chart']['echartsOption'].setdefault('tooltip', {})['renderMode'] = 'richText'
-            _card_layout(chart['chart']['echartsOption'])
+            _card_layout(chart['chart']['echartsOption'], chart.get('id', ''))
             if '@' in chart['id']:
                 head, suffix = chart['id'].split('@', 1)
                 chart['id'] = head + '@' + hashlib.sha256(suffix.encode()).hexdigest()[:12]
