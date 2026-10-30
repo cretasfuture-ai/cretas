@@ -13,6 +13,7 @@ const { pathnameOf } = require('./url-utils');
 const { runParallelSuites } = require('./parallel-run');
 
 const SCENARIOS = [
+  require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
   require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
@@ -147,6 +148,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedUsername,
         expectedFactoryId,
         loginEvidence,
+        factoryAccessFactoryId: options.factoryAccessFactoryId,
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,

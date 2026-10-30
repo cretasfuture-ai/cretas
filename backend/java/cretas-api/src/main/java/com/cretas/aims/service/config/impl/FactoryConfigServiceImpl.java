@@ -31,6 +31,18 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AssemblyActivationActorResolver actorResolver;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.platform.PlatformFactoryControlAuthority platformControlAuthority;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.FactoryFeatureConfigRepository platformFeatureRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock configurationWriteLock;
+
+    private void lockConfiguration(String factoryId) {
+        if (configurationWriteLock != null) configurationWriteLock.lock(factoryId);
+    }
+
     private transient ThreadLocal<ActorRef> typedActor = ThreadLocal.withInitial(() -> null);
 
     private final ModuleSchemaRepository moduleSchemaRepository;
@@ -384,6 +396,68 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
         saveModuleConfig(factoryId, moduleCode, dto, operatorId);
     }
 
+    /** Module-only publication; unrelated drafts/DDL and assembly activation stay untouched. */
+    @Override
+    @Transactional
+    public int setModuleEnabledForPlatform(String factoryId, String moduleCode, boolean enabled, ActorRef actor) {
+        if (platformControlAuthority == null || platformFeatureRepository == null) {
+            throw new BusinessException(503, "平台功能开通服务暂不可用");
+        }
+        platformControlAuthority.lock(actor, factoryId);
+        moduleSchemaRepository.findByModuleCode(moduleCode)
+                .orElseThrow(() -> new ResourceNotFoundException("ModuleSchema", "moduleCode", moduleCode));
+        List<FactoryConfiguration> versions = factoryConfigurationRepository.findByFactoryIdOrderByConfigVersionDesc(factoryId);
+        if (versions.stream().anyMatch(v -> v.getDeletedAt() == null && Set.of("DRAFT", "APPROVED", "PENDING_REVIEW").contains(v.getStatus()))) {
+            throw new BusinessException(409, "工厂存在未发布配置，请先处理后再调整功能开通");
+        }
+        Optional<FactoryConfiguration> current = factoryConfigurationRepository.findLatestPublished(factoryId);
+        if (isModuleEnabled(factoryId, moduleCode) == enabled) {
+            return current.map(FactoryConfiguration::getConfigVersion).orElse(0);
+        }
+        int next = versions.stream().mapToInt(FactoryConfiguration::getConfigVersion).max().orElse(0) + 1;
+        // Legacy permission rows use version1 without a published configuration. Never promote them implicitly.
+        if (next == 1 && !factoryModuleConfigRepository.findByFactoryIdAndConfigVersion(factoryId, 1).isEmpty()) next = 2;
+        FactoryConfiguration snapshot = new FactoryConfiguration();
+        snapshot.setFactoryId(factoryId); snapshot.setConfigVersion(next); snapshot.setStatus("DRAFT");
+        snapshot.setCreatedActor(actor);
+        snapshot = factoryConfigurationRepository.saveAndFlush(snapshot);
+        int version = snapshot.getConfigVersion();
+        if (current.isPresent()) {
+            for (FactoryModuleConfig source : factoryModuleConfigRepository.findByFactoryIdAndConfigVersion(factoryId, current.get().getConfigVersion())) {
+                FactoryModuleConfig copy = new FactoryModuleConfig();
+                org.springframework.beans.BeanUtils.copyProperties(source, copy, "id", "createdAt", "updatedAt", "deletedAt", "configVersion");
+                copy.setFactoryId(factoryId); copy.setConfigVersion(version);
+                factoryModuleConfigRepository.save(copy);
+            }
+        }
+        FactoryModuleConfig target = factoryModuleConfigRepository
+                .findByFactoryIdAndModuleCodeAndConfigVersion(factoryId, moduleCode, version)
+                .orElseGet(() -> FactoryModuleConfig.builder().factoryId(factoryId).moduleCode(moduleCode).configVersion(version).build());
+        target.setEnabled(enabled);
+        factoryModuleConfigRepository.saveAndFlush(target);
+        current.ifPresent(previous -> { previous.setStatus("ARCHIVED"); factoryConfigurationRepository.save(previous); });
+        snapshot.setStatus("PUBLISHED"); snapshot.setPublishedAt(LocalDateTime.now()); snapshot.setPublishedActor(actor);
+        snapshot.setChangeSummary("平台调整业务模块 " + moduleCode + (enabled ? " 开通" : " 停用"));
+        factoryConfigurationRepository.save(snapshot);
+        // Reflect the backend group state in existing clients, preserving platform menu JSON.
+        for (var entry : com.cretas.aims.blueprint.interview.InterviewModuleConfigCatalog.all()) {
+            if (!entry.gateCodes().contains(moduleCode)) continue;
+            boolean groupEnabled = entry.gateCodes().stream().filter(this::isModuleGateDefined)
+                    .anyMatch(code -> isModuleEnabled(factoryId, code));
+            var feature = platformFeatureRepository.findByFactoryIdAndModuleIdAndDeletedAtIsNull(factoryId, entry.moduleId())
+                    .orElseGet(() -> com.cretas.aims.entity.FactoryFeatureConfig.builder().factoryId(factoryId)
+                            .moduleId(entry.moduleId()).moduleName(entry.label()).config(new HashMap<>()).build());
+            feature.setEnabled(groupEnabled);
+            platformFeatureRepository.save(feature);
+        }
+        ConfigChangeLog audit = ConfigChangeLog.builder().factoryId(factoryId).moduleCode(moduleCode)
+                .operation("PLATFORM_MODULE_TOGGLE").beforeValue(Map.of("enabled", !enabled))
+                .afterValue(Map.of("enabled", enabled, "configurationVersion", version))
+                .operatorId(actor.id()).operatorType(actor.type().name()).diffSummary(snapshot.getChangeSummary()).build();
+        configChangeLogRepository.save(audit);
+        return version;
+    }
+
     @Override
     @Transactional
     public void toggleModuleByActor(String factoryId, String moduleCode, boolean enabled, ActorRef actor) {
@@ -434,6 +508,7 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
     @Override
     @Transactional
     public void publishConfig(String factoryId, Long operatorId, String changeSummary) {
+        lockConfiguration(factoryId);
         // Canvas audit fix: publishNow needs to publish APPROVED configs too, not only DRAFT.
         // Try DRAFT first (normal flow), then APPROVED (审核通过→立即发布 flow).
         FactoryConfiguration draft = factoryConfigurationRepository.findDraft(factoryId)
@@ -491,6 +566,7 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
     @Override
     @Transactional
     public void rollbackConfig(String factoryId, int targetVersion, Long operatorId) {
+        lockConfiguration(factoryId);
         FactoryConfiguration target = factoryConfigurationRepository
                 .findByFactoryIdAndConfigVersion(factoryId, targetVersion)
                 .orElseThrow(() -> new BusinessException(404, "目标版本不存在: " + targetVersion)
@@ -1060,6 +1136,7 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
     // ========== Private Helpers ==========
 
     private FactoryConfiguration getOrCreateDraft(String factoryId, Long operatorId) {
+        lockConfiguration(factoryId);
         return factoryConfigurationRepository.findDraft(factoryId)
                 .orElseGet(() -> {
                     FactoryConfiguration draft = new FactoryConfiguration();

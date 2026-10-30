@@ -35,6 +35,9 @@ public class PermissionServiceImpl implements PermissionService {
     @Autowired(required = false)
     private FactoryModuleConfigRepository factoryConfigRepo;
 
+    @Autowired(required = false)
+    private com.cretas.aims.service.platform.PlatformEmployeeModulePermissions employeeModulePermissions;
+
     // 简易 TTL cache: permissionKey -> [expiresAtMs, Boolean]
     // Key: userId:permissionCode:factoryId
     // TTL: 5 minutes. Cleared on any matrix update via invalidateCache().
@@ -554,6 +557,7 @@ public class PermissionServiceImpl implements PermissionService {
         // A fresh authorization read must distinguish a successful empty result from an
         // unavailable repository.  Only successful empty rows may reach the hardcoded fallback.
         String permType = resolveEffectiveLevel(user.getFactoryId(), role, module, null, true);
+        if (employeeModulePermissions != null) permType = employeeModulePermissions.apply(user, module, permType);
 
         boolean result = checkAction(permType, action);
         resolveCache.put(cacheKey, new long[]{now + CACHE_TTL_MS});
@@ -587,6 +591,10 @@ public class PermissionServiceImpl implements PermissionService {
         }
         if (level == null) {
             level = resolveLayer1(role.name(), parts[0], true);
+        }
+        if (employeeModulePermissions != null) {
+            String personal = employeeModulePermissions.overrides(user).get(parts[0]);
+            if (personal != null) return checkAction(personal, parts[1]);
         }
         if (level == null) {
             return fallbackRoleCodes != null && fallbackRoleCodes.contains(role.name());
@@ -638,7 +646,8 @@ public class PermissionServiceImpl implements PermissionService {
         if (role == null || role == FactoryUserRole.unactivated) {
             return Collections.emptyMap();
         }
-        return resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role));
+        Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role));
+        return employeeModulePermissions == null ? levels : employeeModulePermissions.apply(user, levels);
     }
 
     @Override
@@ -674,7 +683,8 @@ public class PermissionServiceImpl implements PermissionService {
     @Override
     public Map<String, String> resolveModuleLevelsForAuthorization(User user) {
         if (user == null) return Collections.emptyMap();
-        return resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true);
+        Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true);
+        return employeeModulePermissions == null ? levels : employeeModulePermissions.apply(user, levels);
     }
 
     private Map<String, String> resolveRoleModuleLevels(
