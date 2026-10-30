@@ -4052,7 +4052,22 @@ async function captureCardScreenshot(card, inspectCtx, candidateId, batchNumber)
   if (!inspectCtx.evidenceDir || !card) return null;
   const safeId = String(candidateId).replace(/[^A-Za-z0-9._-]+/gu, '-').slice(0, 90) || 'candidate';
   const target = `${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/factory-catalog-batch-${batchNumber}-${safeId}-card.png`;
-  try { await card.screenshot({ path: target }); return target; } catch { return null; }
+  const originalViewport = card.page().viewportSize();
+  try {
+    const box = await card.boundingBox();
+    if (!box) return null;
+    const width = originalViewport?.width || 1280;
+    const height = Math.max(originalViewport?.height || 720, Math.ceil(box.height + 320));
+    if (originalViewport) await card.page().setViewportSize({ width, height });
+    await card.evaluate((element) => element.scrollIntoView({ block: 'start', inline: 'nearest' }));
+    await card.page().evaluate(() => window.scrollBy(0, -320));
+    await card.page().waitForTimeout(100);
+    await card.screenshot({ path: target });
+    return target;
+  } catch { return null; }
+  finally {
+    if (originalViewport) await card.page().setViewportSize(originalViewport).catch(() => {});
+  }
 }
 
 async function inspectCatalog(page, _body, inspectCtx) {
