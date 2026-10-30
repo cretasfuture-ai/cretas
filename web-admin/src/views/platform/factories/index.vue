@@ -13,6 +13,7 @@ import {
   type PlatformFactory,
 } from '@/api/platformFactoryMenus';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
+import FactoryAccessPanel from '@/components/FactoryAccessPanel.vue';
 
 const router = useRouter();
 const factoryView = usePlatformFactoryContextStore();
@@ -25,6 +26,8 @@ const savingModule = ref<string | null>(null);
 let menuLoadSequence = 0;
 const search = ref('');
 const errorMessage = ref('');
+const activeTab = ref<'activation' | 'roles' | 'employees' | 'menu'>('menu');
+const accessSaving = ref(false);
 
 const filteredFactories = computed(() => {
   const term = search.value.trim().toLowerCase();
@@ -128,7 +131,7 @@ onMounted(() => { void loadFactories(); });
     <div class="page-header">
       <div>
         <h2>工厂管理</h2>
-        <p>平台日常工作区。这里仅控制网页菜单显示，不会开通业务模块或改变接口权限。</p>
+        <p>选择工厂，统一调整功能开通、岗位权限、员工授权和菜单显示。</p>
       </div>
       <el-button v-if="factoryView.isViewingFactory" type="primary" plain @click="returnToPlatform">
         返回平台
@@ -151,9 +154,9 @@ onMounted(() => { void loadFactories(); });
             :key="factory.id"
             class="factory-row"
             :class="{ active: selectedFactoryId === factory.id }"
-            :aria-disabled="savingModule ? 'true' : undefined"
+            :aria-disabled="savingModule || accessSaving ? 'true' : undefined"
             type="button"
-            @click="!savingModule && (selectedFactoryId = factory.id)"
+            @click="!savingModule && !accessSaving && (selectedFactoryId = factory.id)"
           >
             <span><strong>{{ factory.name }}</strong><small>{{ factory.id }}</small></span>
             <el-tag v-if="factory.isActive === false" type="info" size="small">停用</el-tag>
@@ -165,35 +168,48 @@ onMounted(() => { void loadFactories(); });
         <template #header>
           <div class="card-title">
             <span>{{ menuConfigState?.factoryName || '选择工厂后配置菜单显示' }}</span>
-            <el-tag v-if="menuConfigState" type="warning">菜单显示配置</el-tag>
+            <el-tag v-if="activeTab === 'menu' && menuConfigState" type="warning">菜单显示配置</el-tag>
           </div>
         </template>
-        <el-skeleton v-if="loadingConfig" :rows="8" animated />
-        <el-empty v-else-if="!menuConfigState" description="请选择左侧工厂" />
-        <div v-else class="module-list">
-          <section v-for="module in menuModules" :key="module.moduleId" class="module-card">
-            <div class="module-heading">
-              <div>
-                <h3>{{ module.moduleName }}</h3>
-                <p>{{ module.configured ? '已配置显示规则' : '沿用当前显示逻辑，尚未单独配置' }}</p>
-              </div>
-              <el-switch v-model="module.visible" :disabled="!!savingModule" :loading="savingModule === module.moduleId" @change="saveModule(module)" />
+        <el-tabs v-model="activeTab" class="access-tabs">
+          <el-tab-pane label="功能开通" name="activation" :disabled="accessSaving">
+            <FactoryAccessPanel v-if="activeTab === 'activation'" :factory-id="selectedFactoryId" active-tab="activation" @writing-change="accessSaving = $event" />
+          </el-tab-pane>
+          <el-tab-pane label="岗位权限" name="roles" :disabled="accessSaving">
+            <FactoryAccessPanel v-if="activeTab === 'roles'" :factory-id="selectedFactoryId" active-tab="roles" @writing-change="accessSaving = $event" />
+          </el-tab-pane>
+          <el-tab-pane label="员工授权" name="employees" :disabled="accessSaving">
+            <FactoryAccessPanel v-if="activeTab === 'employees'" :factory-id="selectedFactoryId" active-tab="employees" @writing-change="accessSaving = $event" />
+          </el-tab-pane>
+          <el-tab-pane label="菜单显示" name="menu" :disabled="accessSaving">
+            <el-skeleton v-if="loadingConfig" :rows="8" animated />
+            <el-empty v-else-if="!menuConfigState" description="请选择左侧工厂" />
+            <div v-else class="module-list">
+              <section v-for="module in menuModules" :key="module.moduleId" class="module-card">
+                <div class="module-heading">
+                  <div>
+                    <h3>{{ module.moduleName }}</h3>
+                    <p>{{ module.configured ? '已配置显示规则' : '沿用当前显示逻辑，尚未单独配置' }}</p>
+                  </div>
+                  <el-switch :model-value="module.visible" :disabled="!!savingModule" :loading="savingModule === module.moduleId" @change="(value: boolean) => { module.visible = value; saveModule(module); }" />
+                </div>
+                <p class="module-note">关闭只隐藏网页入口，不修改模块开通、发布版本或接口权限。</p>
+                <div v-if="menuOptions(module.moduleId).length" class="menu-options">
+                  <span class="options-label">隐藏网页子菜单</span>
+                  <el-checkbox-group v-model="module.disabledMenuPaths">
+                    <el-checkbox v-for="option in menuOptions(module.moduleId)" :key="option.path" :disabled="!!savingModule" :value="option.path">
+                      {{ option.label }}
+                    </el-checkbox>
+                  </el-checkbox-group>
+                  <el-button size="small" type="primary" plain :disabled="!!savingModule" :loading="savingModule === module.moduleId" @click="saveModule(module)">
+                    保存本组
+                  </el-button>
+                </div>
+                <span v-else class="no-options">当前大菜单没有可配置子菜单</span>
+              </section>
             </div>
-            <p class="module-note">关闭只隐藏网页入口，不修改模块开通、发布版本或接口权限。</p>
-            <div v-if="menuOptions(module.moduleId).length" class="menu-options">
-              <span class="options-label">隐藏网页子菜单</span>
-              <el-checkbox-group v-model="module.disabledMenuPaths">
-                <el-checkbox v-for="option in menuOptions(module.moduleId)" :key="option.path" :disabled="!!savingModule" :value="option.path">
-                  {{ option.label }}
-                </el-checkbox>
-              </el-checkbox-group>
-              <el-button size="small" type="primary" plain :disabled="!!savingModule" :loading="savingModule === module.moduleId" @click="saveModule(module)">
-                保存本组
-              </el-button>
-            </div>
-            <span v-else class="no-options">当前大菜单没有可配置子菜单</span>
-          </section>
-        </div>
+          </el-tab-pane>
+        </el-tabs>
       </el-card>
     </div>
 

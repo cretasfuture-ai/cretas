@@ -35,6 +35,9 @@ public interface FactoryConfigService {
     // ========== 配置写操作 ==========
     void saveModuleConfig(String factoryId, String moduleCode, ModuleConfigDTO config, Long operatorId);
     void toggleModule(String factoryId, String moduleCode, boolean enabled, Long operatorId);
+    default int setModuleEnabledForPlatform(String factoryId, String moduleCode, boolean enabled, ActorRef actor) {
+        throw new UnsupportedOperationException("平台业务模块开通服务未配置");
+    }
     default void toggleModuleByActor(String factoryId, String moduleCode, boolean enabled, ActorRef actor) {
         toggleModule(factoryId, moduleCode, enabled, actor.factoryUserId());
     }
