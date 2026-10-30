@@ -32,9 +32,12 @@ export function getDisabledFactoryMenuPaths(features: unknown): string[] {
     const disabled = (config as Record<string, unknown>).disabledMenuPaths;
     if (!Array.isArray(disabled)) continue;
     for (const path of disabled) {
-      if (typeof path === 'string' && /^\/(?!\/)[a-zA-Z0-9_/-]+$/.test(path) && path !== '/') {
-        paths.add(path.replace(/\/$/, ''));
-      }
+      if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) continue;
+      try {
+        const url = new URL(path, 'https://factory-menu.invalid');
+        if (url.origin !== 'https://factory-menu.invalid' || url.pathname === '/') continue;
+        paths.add(url.pathname.replace(/\/$/, '') + url.search);
+      } catch { /* Ignore malformed configuration entries. */ }
     }
   }
   return [...paths];
@@ -42,7 +45,15 @@ export function getDisabledFactoryMenuPaths(features: unknown): string[] {
 
 export function isFactoryMenuHidden(path: string, disabledPaths: readonly string[]): boolean {
   const pathname = path.split(/[?#]/)[0];
-  return disabledPaths.some(disabled => pathname === disabled || pathname.startsWith(`${disabled}/`));
+  return disabledPaths.some(disabled => {
+    const [disabledPath, query] = disabled.split('?');
+    if (query) {
+      if (pathname !== disabledPath) return false;
+      const actual = new URLSearchParams(path.split('?')[1]?.split('#')[0] || '');
+      return [...new URLSearchParams(query)].every(([key, value]) => actual.getAll(key).includes(value));
+    }
+    return pathname === disabledPath || pathname.startsWith(`${disabledPath}/`);
+  });
 }
 
 /** Reuse the actual menu tree so configuration options track menu additions and labels. */

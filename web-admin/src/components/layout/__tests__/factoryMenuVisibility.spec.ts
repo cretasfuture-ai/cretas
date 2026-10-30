@@ -95,4 +95,14 @@ describe('per-factory child menu visibility', () => {
     expect(sales).toContainEqual(expect.objectContaining({ path: '/sales/vehicles' }));
     expect(sales.some(item => item.path === '/warehouse/source-individuals')).toBe(false);
   });
+
+  it('supports child menus that share a route but select different tabs', () => {
+    const disabled = getDisabledFactoryMenuPaths([{ config: {
+      disabledMenuPaths: ['/warehouse/inventory-query?tab=raw'],
+    } }]);
+    expect(disabled).toEqual(['/warehouse/inventory-query?tab=raw']);
+    expect(isFactoryMenuHidden('/warehouse/inventory-query?extra=1&tab=raw', disabled)).toBe(true);
+    expect(isFactoryMenuHidden('/warehouse/inventory-query?tab=finished', disabled)).toBe(false);
+    expect(isFactoryMenuHidden('/warehouse/inventory-query', disabled)).toBe(false);
+  });
 });
