@@ -92,8 +92,20 @@ function visibleDateLabelGeometry(document: XMLDocument): Array<{ left: number; 
 describe('factory chart responsive display safeguards', () => {
   it('uses real label-layout geometry for dense narrow heatmaps without changing data', () => {
     enableTextMetrics();
-    const xAxisData = Array.from({ length: 17 }, (_, index) => `2026-10-${String(index + 1).padStart(2, '0')}`);
-    const yAxisData = Array.from({ length: 6 }, (_, index) => `Product ${index}`);
+    const xAxisData = [
+      '2026-06-11', '2026-07-20', '2026-08-18', '2026-08-19', '2026-08-20',
+      '2026-08-24', '2026-08-25', '2026-08-29', '2026-08-31', '2026-09-01',
+      '2026-09-03', '2026-09-07', '2026-09-20', '2026-10-24', '2026-10-27',
+      '2026-10-28', '2026-10-29',
+    ];
+    const yAxisData = [
+      '叮咚好食光椒麻掌中宝 120g',
+      'E2E-MVP-20260719-2111-黄油鸡-成品800g',
+      'SOP-20260817-01-黄油鸡-成品800g',
+      'SOP-20260903-01-黄油鸡-成品800g',
+      '【演示L3】卤味三拼 400g',
+      'QA-S3-1027-卤牛肉',
+    ];
     const sourceData = [
       [0, 0, 18], [1, 1, 10], [2, 2, 80], [3, 2, 115], [4, 2, 4], [5, 2, 21],
       [6, 2, 10], [7, 2, 8], [8, 2, 1], [9, 2, 1], [10, 3, 8], [11, 3, 1],
@@ -104,7 +116,7 @@ describe('factory chart responsive display safeguards', () => {
       xAxis: { type: 'category', data: xAxisData },
       yAxis: { type: 'category', data: yAxisData },
       visualMap: { min: 1, max: 17, show: false },
-      grid: { left: 160, right: 40, top: 40, bottom: 64, containLabel: true },
+      grid: { left: 12, right: 40, top: 40, bottom: 64, containLabel: true },
       series: [{ type: 'heatmap', data: sourceData, label: { show: true } }],
     } as Record<string, unknown>;
     const narrow = applyFactoryChartResponsive(option, 360);
@@ -114,6 +126,7 @@ describe('factory chart responsive display safeguards', () => {
     const wideSeries = (wide.series as Array<Record<string, unknown>>)[0];
     expect(narrowSeries.labelLayout).toMatchObject({ hideOverlap: true });
     expect(narrowSeries.label).toMatchObject({ padding: [1, 3] });
+    expect(typeof (narrowSeries.label as Record<string, unknown>).formatter).toBe('function');
     expect(wideSeries.labelLayout).toBeUndefined();
     expect(narrowSeries.data).toBe(sourceData);
     expect(narrow.xAxis).toMatchObject({ data: xAxisData });
@@ -141,8 +154,39 @@ describe('factory chart responsive display safeguards', () => {
     const result = applyFactoryChartResponsive(option, 440);
     const series = (result.series as Array<Record<string, unknown>>)[0];
     expect(series.labelLayout).toBe(layout);
+    expect((series.label as Record<string, unknown>).formatter).toBeUndefined();
     expect(series.data).toBe(data);
     expect(layout).not.toHaveBeenCalled();
+  });
+
+  it('preserves an explicit heatmap label formatter', () => {
+    const formatter = vi.fn(() => 'source-label');
+    const data = [[0, 0, 80]];
+    const option = { series: [{ type: 'heatmap', data, label: { show: true, formatter } }] };
+    const result = applyFactoryChartResponsive(option, 440);
+    const label = ((result.series as Array<Record<string, unknown>>)[0].label ?? {}) as Record<string, unknown>;
+    expect(label.formatter).toBe(formatter);
+    expect(data).toEqual([[0, 0, 80]]);
+    expect(formatter).not.toHaveBeenCalled();
+  });
+
+  it('leaves unsupported dataset/object heatmap points on the source label path', () => {
+    const objectData = [{ value: [0, 0, 80] }];
+    const dataset = { source: [['x', 'y', 'value'], ['0', '0', 80]] };
+    const objectOption = {
+      xAxis: { data: ['0'] },
+      yAxis: { data: ['0'] },
+      series: [{ type: 'heatmap', data: objectData, label: { show: true } }],
+    };
+    const datasetOption = {
+      dataset,
+      series: [{ type: 'heatmap', label: { show: true } }],
+    };
+    const objectSeries = (applyFactoryChartResponsive(objectOption, 440).series as Array<Record<string, unknown>>)[0];
+    const datasetSeries = (applyFactoryChartResponsive(datasetOption, 440).series as Array<Record<string, unknown>>)[0];
+    expect((objectSeries.label as Record<string, unknown>).formatter).toBeUndefined();
+    expect((datasetSeries.label as Record<string, unknown>).formatter).toBeUndefined();
+    expect(objectSeries.data).toBe(objectData);
   });
 
   it('aligns the final date label while preserving the full axis and series', () => {
