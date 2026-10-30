@@ -85,6 +85,7 @@ class PlatformFactoryViewActorIsolationContractTest {
         factoryUser.setFactoryId("F001");
         when(users.findById(7L)).thenReturn(Optional.of(factoryUser));
         when(permissions.hasPermission(eq(factoryUser), anyString())).thenReturn(true);
+        when(permissions.hasConfiguredPermission(eq(factoryUser), anyString(), any())).thenReturn(true);
         var request = viewRequest();
         request.removeAttribute(PlatformFactoryViewReadPolicy.REQUEST_ATTRIBUTE);
         request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,

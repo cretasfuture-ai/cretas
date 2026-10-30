@@ -110,7 +110,9 @@ class PlatformFactoryViewSecurityContractTest {
             Map<String, Object> modified = new HashMap<>(claims);
             modified.putAll(change);
             String token = ReflectionTestUtils.invokeMethod(jwt, "createToken", modified, "admin", 900_000L);
-            assertDenied("GET", "/api/mobile/F001/reports/dashboard/overview", token, null);
+            int expected = change.containsKey("actorType") || change.containsKey("factoryId")
+                    ? HttpServletResponse.SC_UNAUTHORIZED : HttpServletResponse.SC_FORBIDDEN;
+            assertDenied("GET", "/api/mobile/F001/reports/dashboard/overview", token, null, expected);
         }
         String longLived = ReflectionTestUtils.invokeMethod(jwt, "createToken", new HashMap<>(claims), "admin", 86_400_000L);
         assertDenied("GET", "/api/mobile/F001/reports/dashboard/overview", longLived, null);
