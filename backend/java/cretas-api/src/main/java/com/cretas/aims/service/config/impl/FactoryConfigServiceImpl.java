@@ -408,7 +408,8 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
                 .orElseThrow(() -> new ResourceNotFoundException("ModuleSchema", "moduleCode", moduleCode));
         List<FactoryConfiguration> versions = factoryConfigurationRepository.findByFactoryIdOrderByConfigVersionDesc(factoryId);
         if (versions.stream().anyMatch(v -> v.getDeletedAt() == null && Set.of("DRAFT", "APPROVED", "PENDING_REVIEW").contains(v.getStatus()))) {
-            throw new BusinessException(409, "工厂存在未发布配置，请先处理后再调整功能开通");
+            throw new BusinessException(409, "工厂存在未发布配置，请先处理后再调整功能开通")
+                    .withHint("请先处理工厂的未发布配置，再重试功能开通");
         }
         Optional<FactoryConfiguration> current = factoryConfigurationRepository.findLatestPublished(factoryId);
         if (isModuleEnabled(factoryId, moduleCode) == enabled) {
