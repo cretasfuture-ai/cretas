@@ -29,4 +29,3 @@ describe('platform factory view permission boundary', () => {
     expect(store.canWrite('production')).toBe(false);
   });
 });
-

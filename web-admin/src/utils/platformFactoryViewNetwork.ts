@@ -382,4 +382,3 @@ export function installPlatformFactoryViewNetworkGuard(): () => void {
     if (XMLHttpRequest.prototype.send !== originalSend) XMLHttpRequest.prototype.send = originalSend;
   };
 }
-
