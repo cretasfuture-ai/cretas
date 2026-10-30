@@ -336,7 +336,8 @@ async function chooseBrowseMode(page, deadline) {
 }
 
 async function selectFamilyPreview(page, item, allGroups, deadline) {
-  const row = page.locator(`.family-row[data-family-id="${String(item.familyId).replace(/"/gu, '\\"')}"]`).first();
+  const familyRowId = `${String(item.candidate?.domain || '').trim()}:${item.familyId}`.replace(/^:/u, '');
+  const row = page.locator(`.family-row[data-family-id="${String(familyRowId).replace(/"/gu, '\\"')}"]`).first();
   if (!await row.count()) throw new Error(`Catalogue family row missing: ${item.familyId}`);
   const control = row.locator('.el-select, .el-select-v2').first();
   if (!await control.count()) throw new Error(`Catalogue family variant control missing: ${item.familyId}`);

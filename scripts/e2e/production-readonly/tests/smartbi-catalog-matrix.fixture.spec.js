@@ -46,7 +46,7 @@ function recommendationBody(withContext = false, selectedId = null, subjectId = 
 
 function pageHtml() {
   const familyGroups = [...new Map(candidates.map((item) => [item.analysis.familyId, candidates.filter((candidate) => candidate.analysis.familyId === item.analysis.familyId)])).values()];
-  const familyRows = familyGroups.map((group) => `<div class="family-row" data-testid="factory-chart-family" data-family-id="${group[0].analysis.familyId}"><span>${group[0].analysis.familyLabel}</span><div class="el-select" data-family="${group[0].analysis.familyId}">${group[0].unit}</div></div>`).join('');
+  const familyRows = familyGroups.map((group) => `<div class="family-row" data-testid="factory-chart-family" data-family-id="${group[0].domain}:${group[0].analysis.familyId}"><span>${group[0].analysis.familyLabel}</span><div class="el-select" data-family="${group[0].analysis.familyId}">${group[0].unit}</div></div>`).join('');
   const cards = candidates.map((item) => `<div data-testid="factory-chart-card-${item.id}" data-candidate-id="${item.id}"><div class="factory-chart-canvas"><canvas></canvas></div><button>查看原始明细</button></div>`).join('');
   return `<!doctype html><html><body>
     <main><h2>工厂分析</h2><p>按分类浏览</p>
@@ -84,7 +84,7 @@ function pageHtml() {
           input.checked = input.closest('[data-family-id]').dataset.familyId === '生产:' + chosenFamily;
         }
       };
-      for (const row of document.querySelectorAll('.family-row')) { const group = allCandidates.filter(item => item.analysis.familyId === row.dataset.familyId); row.querySelector('.el-select').onclick = () => { document.querySelectorAll('.el-select-dropdown__item').forEach(node => node.remove()); group.forEach(item => { const option = document.createElement('div'); option.className = 'el-select-dropdown__item'; option.textContent = item.unit + ' / ' + item.source; option.dataset.value = item.id; option.onclick = () => { selectedVariant = item.id; option.remove(); }; document.body.append(option); }); }; }
+      for (const row of document.querySelectorAll('.family-row')) { const familyId = row.dataset.familyId.replace(/^[^:]+:/, ''); const group = allCandidates.filter(item => item.analysis.familyId === familyId); row.querySelector('.el-select').onclick = () => { document.querySelectorAll('.el-select-dropdown__item').forEach(node => node.remove()); group.forEach(item => { const option = document.createElement('div'); option.className = 'el-select-dropdown__item'; option.textContent = item.unit + ' / ' + item.source; option.dataset.value = item.id; option.onclick = () => { selectedVariant = item.id; option.remove(); }; document.body.append(option); }); }; }
       document.querySelector('[data-testid="factory-chart-guide-subject"] button').onclick = () => { document.querySelector('#subject-options').style.display = 'block'; };
       for (const subjectOption of document.querySelectorAll('#subject-options [role="option"]')) subjectOption.onclick = () => { document.querySelector('#subject-options').style.display = 'none'; fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({analysis_subject:subjectOption.dataset.value})}); };
       for (const card of document.querySelectorAll('[data-testid^="factory-chart-card-"]')) card.querySelector('button').onclick = async () => {
