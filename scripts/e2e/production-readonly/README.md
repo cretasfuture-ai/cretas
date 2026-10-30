@@ -63,12 +63,19 @@ expectedUsername  default f006_admin
 expectedFactoryId default F006
 evidenceDir       absolute path under a gitignored evidence directory
 scenarios         array of scenario IDs
+factoryAccessCases required by platform-factory-access-readonly: 2-4 exact {factoryId, username, protectedRole} cases; at least two factories and both protection states
 factoryAnalysisSubjectId optional exact product ID from the authorized clarification response; unknown IDs fail closed
 dryRun            true loads/describes only; no navigation or login
 ```
 
 The MCP entry consumes the page supplied by Codex Playwright MCP. It does not
 launch a second browser and does not close the shared MCP session.
+
+The CLI passes the same case list through `E2E_FACTORY_ACCESS_CASES` (JSON).
+Use existing active accounts: the ordinary case proves editable permission
+controls, and the protected case proves all native comboboxes disabled. Never
+change an account role to fit the acceptance fixture. Both cases share the same
+clean platform login session and retain the zero-business-write guard.
 
 ### Bounded parallel F006 acceptance
 
