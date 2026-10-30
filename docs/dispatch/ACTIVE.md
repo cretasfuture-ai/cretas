@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `YDWM-BI-MENU-20261030` — `in-progress` — Owner root — Base 4543c06466afa4bc7ad234658477d93cd1be823b — Scope AppSidebar、factoryMenuVisibility及测试、factory类型、system/features；按厂配置BI与子菜单，其他工厂默认不变；验收目标测试、Web构建及新工厂UI。
+
 
 
 
@@ -99,6 +101,8 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `YDWM-BI-MENU-20261030`：web-admin/src/components/layout/{AppSidebar.vue,factoryMenuVisibility.ts,__tests__/factoryMenuVisibility.spec.ts}、src/types/factory.ts、src/views/system/features/index.vue；仅root写，不改全局菜单、角色矩阵及其他工厂配置。
 
 
 

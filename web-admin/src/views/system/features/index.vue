@@ -7,6 +7,8 @@ import {
   getFeatureConfigs, toggleModule, updateModuleConfig, initDefaultConfigs
 } from '@/api/factory';
 import type { FeatureConfig, ModuleConfigDetail } from '@/types/factory';
+import { menuConfig } from '@/components/layout/menuConfig';
+import { getFactoryModuleMenuOptions } from '@/components/layout/factoryMenuVisibility';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -19,6 +21,8 @@ const drawerVisible = ref(false);
 const saving = ref(false);
 const editingModule = ref<FeatureConfig | null>(null);
 const editConfig = ref<ModuleConfigDetail>({});
+const webMenuOptions = computed(() => editingModule.value
+  ? getFactoryModuleMenuOptions(menuConfig, editingModule.value.moduleId) : []);
 
 // Module metadata for display
 const moduleIcons: Record<string, string> = {
@@ -198,6 +202,7 @@ function openConfigDrawer(config: FeatureConfig) {
   if (!editConfig.value.quickActions) editConfig.value.quickActions = [];
   if (!editConfig.value.analysisDimensions) editConfig.value.analysisDimensions = [];
   if (!editConfig.value.disabledReports) editConfig.value.disabledReports = [];
+  if (!editConfig.value.disabledMenuPaths) editConfig.value.disabledMenuPaths = [];
   drawerVisible.value = true;
 }
 
@@ -217,6 +222,9 @@ async function saveConfig() {
         configs.value[idx].config = { ...editConfig.value };
       }
       ElMessage.success('配置已保存');
+      window.dispatchEvent(new CustomEvent('cretas:factory-features-updated', {
+        detail: { factoryId: factoryId.value },
+      }));
       drawerVisible.value = false;
     } else {
       ElMessage.error(response.message || '保存失败');
@@ -344,6 +352,15 @@ function getModuleColor(moduleId: string): string {
       direction="rtl"
     >
       <div v-if="editingModule" class="drawer-content">
+        <div v-if="webMenuOptions.length" class="config-section">
+          <h4>隐藏的网页子菜单</h4>
+          <p class="section-hint">勾选后隐藏当前工厂的菜单入口，其他工厂不受影响；已有数据和接口权限保持不变。</p>
+          <el-checkbox-group v-model="editConfig.disabledMenuPaths">
+            <el-checkbox v-for="item in webMenuOptions" :key="item.path" :value="item.path">
+              {{ item.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </div>
         <!-- Disabled Screens -->
         <div
           v-if="moduleScreens[editingModule.moduleId]"

@@ -18,6 +18,10 @@ import {
 } from '@element-plus/icons-vue';
 import { menuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
 import SidebarMenuNode from './SidebarMenuNode.vue';
+import {
+  hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
+  getDisabledFactoryMenuPaths, isFactoryMenuHidden,
+} from './factoryMenuVisibility';
 
 const router = useRouter();
 const route = useRoute();
@@ -32,6 +36,8 @@ const roleCode = computed(() => authStore.currentRole);
 
 // R19: Canvas module enable/disable — hide disabled modules from sidebar
 const disabledModuleCodes = ref<string[]>([]);
+const factoryAnalyticsMenuEnabled = ref(false);
+const hiddenFactoryMenuPaths = ref<string[]>([]);
 // Backend-authoritative assembly switch. Keep the default closed until the
 // platform capability endpoint explicitly returns enabled=true.
 const factoryAssemblyEnabled = ref(false);
@@ -107,19 +113,30 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 let disabledFetchToken = 0;
 async function fetchDisabledModules(factoryId: string) {
   const token = ++disabledFetchToken;
+  factoryAnalyticsMenuEnabled.value = false;
+  hiddenFactoryMenuPaths.value = [];
   if (!factoryId || isDemoTenant(factoryId)) {
     disabledModuleCodes.value = [];
     return;
   }
   try {
-    const res = await get(`/${factoryId}/config/disabled-modules`);
+    const [disabledResult, featuresResult] = await Promise.allSettled([
+      get(`/${factoryId}/config/disabled-modules`),
+      get(`/${factoryId}/feature-config`),
+    ]);
     // Guard against stale responses if factoryId changed mid-flight (re-login).
     if (token !== disabledFetchToken) return;
-    if (res.success && Array.isArray(res.data)) {
+    const res = disabledResult.status === 'fulfilled' ? disabledResult.value : null;
+    if (res?.success && Array.isArray(res.data)) {
       disabledModuleCodes.value = res.data;
     } else {
       disabledModuleCodes.value = [];
     }
+    factoryAnalyticsMenuEnabled.value = featuresResult.status === 'fulfilled'
+      && featuresResult.value.success
+      && hasFactoryAnalyticsSidebarOptIn(featuresResult.value.data);
+    hiddenFactoryMenuPaths.value = featuresResult.status === 'fulfilled' && featuresResult.value.success
+      ? getDisabledFactoryMenuPaths(featuresResult.value.data) : [];
   } catch {
     /* config not set up for this factory */
     if (token === disabledFetchToken) disabledModuleCodes.value = [];
@@ -178,7 +195,13 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
+  const factoryAnalyticsVisible = canShowOptedInFactoryAnalytics(
+    factoryType, item.path, factoryAnalyticsMenuEnabled.value,
+  );
   const assemblyEnabled = factoryAssemblyEnabled.value;
+  const hiddenByFactory = isFactoryMenuHidden(item.path, hiddenFactoryMenuPaths.value);
+
+  if (hiddenByFactory) return false;
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(authStore.factoryId)) {
@@ -191,7 +214,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
     }
   }
 
-  if (item.hideForFactoryTypes?.includes(factoryType)) {
+  if (item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible) {
     return false;
   }
   if (
@@ -285,6 +308,11 @@ function refreshBadgesWhenVisible(): void {
   if (document.visibilityState === 'visible') scheduleBadgeRefresh();
 }
 
+function refreshFactoryFeatures(event: Event): void {
+  const factoryId = (event as CustomEvent<{ factoryId: string }>).detail?.factoryId;
+  if (factoryId && factoryId === authStore.factoryId) void fetchDisabledModules(factoryId);
+}
+
 watch(
   () => authStore.factoryId,
   (factoryId) => {
@@ -302,6 +330,7 @@ onMounted(() => {
     () => document.visibilityState === 'visible',
   );
   window.addEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
+  window.addEventListener('cretas:factory-features-updated', refreshFactoryFeatures);
   document.addEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 
@@ -310,6 +339,7 @@ onBeforeUnmount(() => {
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
   badgeRefreshForced = false;
   window.removeEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
+  window.removeEventListener('cretas:factory-features-updated', refreshFactoryFeatures);
   document.removeEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 
