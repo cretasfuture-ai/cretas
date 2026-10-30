@@ -2,6 +2,7 @@
 const { test, expect } = require('@playwright/test');
 const { inspectMotion } = require('../scenarios/sidebar-motion-readonly');
 const { installMutationGuard } = require('../core/mutation-guard');
+const { sanitizeValue } = require('../core/sanitizer');
 
 function fixture({ fade = true, drift = false } = {}) {
   return `<!doctype html><html><head><style>
@@ -35,6 +36,12 @@ for (const [name, options, result, message] of [
       const evidence = await inspectMotion(page, '', { mutationGuard: guard,
         screenshot: async label => { const file = testInfo.outputPath(label+'.png'); await page.screenshot({path:file}); return file; } });
       expect(evidence.assessment.result).toBe(result);
+      if(result === 'PASS') {
+        const saved = sanitizeValue({scenarios:[{pageEvidence:[evidence]}]}).scenarios[0].pageEvidence[0];
+        expect(saved.closingOpacities.some(value => typeof value === 'number' && value > 0 && value < 1)).toBe(true);
+        expect(saved.closingWidths.at(-1)).toBe(64);
+        expect(saved.maximumIconShiftPx).toBe(0);
+      }
       if(message) expect(evidence.error).toContain(message);
       expect(guard.snapshot().actualBusinessWrites).toBe(0);
       expect(guard.snapshot().blockedMutationAttempts).toHaveLength(0);

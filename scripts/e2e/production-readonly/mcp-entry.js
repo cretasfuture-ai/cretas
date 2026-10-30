@@ -3733,7 +3733,17 @@ async function inspectMotion(page, _body, ctx) {
     check(phone.opacity === '1' && phone.visibility === 'visible' && phone.width > 20, 'mobile drawer must retain readable text');
     screenshots.push(await ctx.screenshot('sidebar-motion-mobile'));
     check(ctx.mutationGuard.snapshot().actualBusinessWrites === 0 && ctx.mutationGuard.snapshot().blockedMutationAttempts.length === 0, 'read-only mutation guard must remain clean');
-    return { closing, opening, reduced, phone, rapidReversalPassed: true, screenshots,
+    // Keep frame columns flat: the shared evidence sanitizer deliberately
+    // truncates deeply nested objects, but retains non-sensitive scalar arrays.
+    return { closingWidths: closing.map(s => s.width), closingOpacities: closing.map(s => s.opacity),
+      closingTimesMs: closing.map(s => s.timeMs), closingLeafOpacities: closing.map(s => s.leafOpacity),
+      closingLogoOpacities: closing.map(s => s.logoOpacity),
+      openingWidths: opening.map(s => s.width), openingOpacities: opening.map(s => s.opacity),
+      openingTimesMs: opening.map(s => s.timeMs),
+      maximumIconShiftPx: Math.max(...closing.map(s => Math.abs(s.iconX - s.iconStartX))),
+      maximumContentOffsetErrorPx: Math.max(...closing.map(s => Math.abs(s.mainX - s.width))),
+      reducedMotionPassed: reduced.every(s => s.opacity === 0 && Math.abs(s.width - 64) < 1),
+      phone, rapidReversalPassed: true, screenshots,
       assessment: { result: 'PASS', rootCauseClass: 'none' } };
   } catch (error) {
     if (!String(error.message).startsWith('Sidebar motion assertion:')) throw error;
