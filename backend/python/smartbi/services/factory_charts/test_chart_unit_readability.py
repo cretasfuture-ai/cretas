@@ -1,5 +1,48 @@
 from smartbi.services.factory_charts.engine import Series, _card_layout, _option
+from copy import deepcopy
 import pytest
+
+
+def test_dense_attainment_chart_keeps_all_points_thresholds_and_tooltip():
+    option = {
+        'xAxis': {'type': 'category', 'data': [f'2026-06-{i:02}' for i in range(1, 8)]},
+        'yAxis': [{'type': 'value'}, {'type': 'value'}],
+        'tooltip': {'trigger': 'axis'},
+        'series': [{'name': '达成率', 'type': 'line', 'data': [100.63, 12, 513, 9.42, .8, 85, 100],
+                    'label': {'show': True},
+                    'markLine': {'data': [{'yAxis': 80, 'label': {'show': True}},
+                                          {'yAxis': 100, 'label': {'show': True}}]}},
+                   {'name': '普通走势', 'type': 'line', 'data': [1, 2, 3, 4, 5, 6, 7],
+                    'label': {'show': True}}],
+    }
+    original = deepcopy(option)
+    _card_layout(option, 'production.production.plan@test')
+    assert option['xAxis']['data'] == original['xAxis']['data']
+    assert option['tooltip'] == original['tooltip']
+    for after, before in zip(option['series'], original['series']):
+        assert after['data'] == before['data']
+    assert [r['yAxis'] for r in option['series'][0]['markLine']['data']] == [80, 100]
+    assert option['series'][0]['label']['show'] is False
+    assert option['series'][1]['label']['show'] is True
+
+
+def test_attainment_axis_and_gauge_round_limits_without_changing_rates():
+    import pandas as pd
+    from smartbi.api.financial_dashboard import FactoryRecommendationRequest
+    from smartbi.services.factory_charts.advanced import build
+    from smartbi.services.factory_charts.engine import columns
+    frame = pd.DataFrame([
+        {'日期': '2026-06-01', '产品': '产品A', '单位': 'kg', '产量': 513, '计划产量': 100},
+        {'日期': '2026-06-02', '产品': '产品A', '单位': 'kg', '产量': 100, '计划产量': 100},
+    ])
+    candidates, _ = build(frame, columns(frame), FactoryRecommendationRequest(use_ai=False), True, 'fixture')
+    plan = next(c for c in candidates if c['id'].endswith(':budget_comparison'))
+    option = plan['chart']['echartsOption']
+    assert next(s['data'] for s in option['series'] if s['name'] == '达成率') == [513, 100]
+    assert option['yAxis'][1]['max'] == 570
+    gauge = next(c for c in candidates if c['id'].endswith(':gauge'))
+    assert gauge['chart']['echartsOption']['series'][0]['data'][0]['value'] == 306.5
+    assert gauge['chart']['echartsOption']['series'][0]['max'] == 340
 
 
 @pytest.mark.parametrize('unit', ['元', 'kg'])

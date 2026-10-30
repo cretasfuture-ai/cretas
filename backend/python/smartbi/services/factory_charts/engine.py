@@ -757,6 +757,17 @@ def _card_layout(option, chart_id=''):
             layout = series.setdefault('labelLayout', {})
             if isinstance(layout, dict):
                 layout.setdefault('hideOverlap', True)
+        if (isinstance(series, dict) and series.get('name') == '达成率'
+                and len(series.get('data', [])) > 4):
+            # A phone's short plot cannot fit every percentage and both
+            # reference-line labels. Keep all points/reference values and
+            # their tooltip, reserving painted text for the axes instead.
+            series.setdefault('label', {})['show'] = False
+            mark_line = series.get('markLine', {})
+            if isinstance(mark_line, dict):
+                for reference in mark_line.get('data', []):
+                    if isinstance(reference, dict):
+                        reference.setdefault('label', {})['show'] = False
 
     def reserve(value, minimum):
         if isinstance(value, (int, float)):
@@ -828,6 +839,7 @@ def _card_layout(option, chart_id=''):
     for axis in [*axes, *y_axes]:
         if isinstance(axis, dict) and axis.get('type') == 'value':
             axis.setdefault('axisLabel', {}).setdefault('hideOverlap', True)
+            axis.setdefault('splitNumber', 3)
     for axis in axes:
         if axis.get('type') == 'value' and axis.get('name'):
             # End-position names extend beyond the final tick and can be cropped.
