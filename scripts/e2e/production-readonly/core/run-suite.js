@@ -29,6 +29,7 @@ const SCENARIOS = [
   require('../scenarios/table-top-scroll-readonly').purchase,
   require('../scenarios/table-top-scroll-readonly').transfer,
   require('../scenarios/workspace-sidebar-readonly'),
+  require('../scenarios/sidebar-motion-readonly'),
   require('../scenarios/merged-order-state-readonly'),
   require('../scenarios/order-entry-readonly').purchase,
   require('../scenarios/order-entry-readonly').sales,
