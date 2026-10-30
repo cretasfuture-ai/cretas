@@ -1,10 +1,12 @@
 # PLATFORM-CONSOLE-20261030 candidate freeze
 
-Release Base SHA: c51415ce6ec4de1eb1ac38620ee0b6574b90cc73
+Release Base SHA: 5b77af88bd8f38b0fff66003a10909cf83f9c889
 Original Base SHA: cf6d18e1bf8656caafc9041aaabc1c9f264c335f
 Owner: root. PR: https://github.com/cretasfuture-ai/cretas/pull/1338
 
 Status: review; implementation frozen, scope locks released with candidate commit. Merge, production activation and actual UI acceptance remain pending; this archive does not assert their completion. All subagents returned ownership. Java/Web only; Python has no task diff and is not deployed. Detailed scope: 2026-10-30-platform-console-scope.md.
+
+CI follow-up: the full-suite stream identified three existing BudgetBusinessSummaryTest errors from its obsolete five-argument reflective call; production WorkflowInstanceController already has six arguments and is unchanged by this task. Root owns only that test's call-site correction (false purchase-amount flag), preserving all three assertions. No active scope lock overlaps it. The final target selector includes this test (108 total), followed by exact-head full CI. Integrated current main's chart-only changes before freezing the corrected candidate; they are upstream changes, not Python deployment scope. Earlier cf2f candidate build evidence remains retained, not substituted for this new candidate.
 
 Evidence (private): C:/Users/Steve/.codex/tmp/platform-console-20261030/. Local Web full: 6724 passed / 5 skipped, followed by 34 passed changed-boundary tests; final vue-tsc exit 0. Java security/unit targets 101 passed, actual PostgreSQL concurrency 3 passed / 0 skipped, formal-activation PostgreSQL 1 passed / 0 skipped. Final unified candidate build will run all 105 targets together and publish its manifest; required exact-head CI and independent security review remain release gates.
 
