@@ -57,6 +57,41 @@ def test_dense_y_names_keep_full_data_and_tooltip_names_without_multiline_collis
     assert option['yAxis']['axisLabel']['overflow'] == 'truncate'
 
 
+def test_dense_long_x_categories_only_change_painted_labels_not_source_data():
+    names = [f'445ccb2d-1e66-48bd-8ff3-07e5d8d11f{index:02d}' for index in range(11)]
+    values = list(range(11))
+    option = {'xAxis': {'type': 'category', 'data': names},
+              'yAxis': {'type': 'value'},
+              'tooltip': {'trigger': 'axis'},
+              'series': [{'type': 'bar', 'data': values}]}
+
+    _card_layout(option, 'production.anomaly:bar')
+
+    assert option['xAxis']['data'] == names
+    assert option['series'][0]['data'] == values
+    assert option['tooltip'] == {'trigger': 'axis'}
+    assert option['xAxis']['axisLabel'] == {
+        'interval': 'auto',
+        'hideOverlap': True,
+        'overflow': 'truncate',
+        'lineHeight': 16,
+        'width': 48,
+    }
+
+
+def test_date_x_axis_with_six_points_keeps_existing_label_configuration():
+    dates = [f'2026-01-{index:02d}' for index in range(1, 7)]
+    option = {'xAxis': {'type': 'category', 'data': dates,
+                        'axisLabel': {'rotate': 30}},
+              'yAxis': {'type': 'value'},
+              'series': [{'type': 'line', 'data': [1, 2, 3, 4, 5, 6]}]}
+
+    _card_layout(option, 'production.output:line')
+
+    assert option['xAxis']['data'] == dates
+    assert option['xAxis']['axisLabel'] == {'rotate': 30}
+
+
 def test_short_x_categories_show_all_labels_without_trimming_data():
     categories = ['供应商甲', '供应商乙', '供应商丙', '供应商丁']
     option = {

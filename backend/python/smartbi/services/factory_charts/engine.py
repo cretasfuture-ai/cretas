@@ -795,10 +795,28 @@ def _card_layout(option, chart_id=''):
         if not isinstance(axis, dict) or axis.get('type') != 'category':
             continue
         data = axis.get('data')
-        if not isinstance(data, list) or len(data) > (4 if orientation == 'x' else 8):
+        if not isinstance(data, list):
             continue
         longest = max((sum(12 if ord(char) > 127 else 7 for char in str(value))
                        for value in data), default=48)
+        if orientation == 'x' and len(data) > 4:
+            # Dense long categories (for example shipment batch UUIDs) need
+            # bounded labels and ECharts' automatic interval selection. Keep
+            # the complete axis data/tooltip values; only the painted labels
+            # are abbreviated to fit the card.
+            raw_values = [str(value) for value in data]
+            is_date_axis = bool(raw_values) and all(
+                re.fullmatch(r'\d{4}[-/]\d{2}[-/]\d{2}', value) for value in raw_values
+            )
+            if is_date_axis or longest <= 48 or max(map(len, raw_values), default=0) < 16:
+                continue
+            labels = axis.setdefault('axisLabel', {})
+            labels.update({'interval': 'auto', 'hideOverlap': True,
+                           'overflow': 'truncate', 'lineHeight': 16,
+                           'width': min(96, max(48, int(x_label_budget / len(data))))})
+            continue
+        if len(data) > (8 if orientation == 'y' else 4):
+            continue
         width = min(140, max(48, longest)) if orientation == 'y' else min(96, max(16, int(x_label_budget / max(1, len(data)))))
         labels = axis.setdefault('axisLabel', {})
         labels.update({'interval': 0, 'hideOverlap': False,
