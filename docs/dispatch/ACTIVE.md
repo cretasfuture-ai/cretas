@@ -102,14 +102,9 @@
 - `CI-SIX-WORKFLOWS-STILL-PINNED-TO-HOSTED-20260907` — `queued` — Owner: 迁移任务 — 自建 `windows-wsl-ci` 已恢复，#758 的 Java/Web/扫描真实运行通过；Ops/扫描两条已接入统一路由。托管 billing 未调整，剩余定时及 Docker 专用工作流仍待迁移核验；不得将 runner online 等同于全部工作流可运行。证据：`archive/2026-09-09-ci-recovery.md`。
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
-- `PLATFORM-CONSOLE-20261030` — `in-progress` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 平台日常菜单与工厂业务分离；选厂配置菜单、保留实名平台主体的只读协助查看。UI/API子scope与契约见archive/2026-10-30-platform-console-scope.md；目标测试、独立终审、CI、main发布及UI验收。
-- `PLATFORM-CONSOLE-UI-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅前端平台导航/选厂菜单配置/只读查看上下文及目标测试；精确scope见同批scope归档；不改后端/ACTIVE。
-- `PLATFORM-CONSOLE-API-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅平台菜单配置API、工厂旧入口敏感字段保护、带平台主体的短期只读查看令牌与Java正向护栏及目标测试；Python不改、不开放查看凭证；不改前端/ACTIVE/Entity/Repository。
-- `PLATFORM-CONSOLE-NETWORK-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅utils/platformFactoryViewNetwork.ts、对应测试、main.ts接线；原生fetch/XHR短期凭证与只读护栏，验收命令和scope见同批归档；不改Root/API源码或ACTIVE。
 
 ## Scope 锁地图
 
-- `PLATFORM-CONSOLE-20261030`：仅root写ACTIVE/本批归档、审查集成及发布；前后端互斥scope与API契约以archive/2026-10-30-platform-console-scope.md为准；不修改其他工厂业务数据、不打开factory-assembly全局灰度。
 
 
 
