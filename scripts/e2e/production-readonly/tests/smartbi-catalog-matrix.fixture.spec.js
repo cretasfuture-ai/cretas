@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const http = require('node:http');
 const { test, expect } = require('@playwright/test');
 const { inspectCatalog } = require('../scenarios/smartbi-catalog-matrix-readonly');
@@ -46,10 +47,10 @@ function recommendationBody(withContext = false, selectedId = null, subjectId = 
 
 function pageHtml() {
   const familyGroups = [...new Map(candidates.map((item) => [item.analysis.familyId, candidates.filter((candidate) => candidate.analysis.familyId === item.analysis.familyId)])).values()];
-  const familyRows = familyGroups.map((group) => `<div class="family-row" data-testid="factory-chart-family" data-family-id="${group[0].domain}:${group[0].analysis.familyId}"><span>${group[0].analysis.familyLabel}</span><div class="el-select" data-family="${group[0].analysis.familyId}">${group[0].unit}</div></div>`).join('');
-  const cards = candidates.map((item) => `<div data-testid="factory-chart-card-${item.id}" data-candidate-id="${item.id}"><div class="factory-chart-canvas"><canvas></canvas></div><button>查看原始明细</button></div>`).join('');
+  const familyRows = familyGroups.map((group, index) => `<div class="family-row" data-testid="factory-chart-family" data-family-id="${group[0].domain}:${group[0].analysis.familyId}"><label class="el-checkbox"><input type="checkbox"${index === 0 ? ' checked' : ''}>${group[0].analysis.familyLabel}</label><div class="el-select" data-family="${group[0].analysis.familyId}">${group[0].unit}</div></div>`).join('');
+  const cards = candidates.map((item) => `<div data-testid="factory-chart-card-${item.id}" data-candidate-id="${item.id}" style="display:none;min-height:800px"><div class="factory-chart-canvas"><canvas></canvas></div><button>查看原始明细</button></div>`).join('');
   return `<!doctype html><html><body>
-    <main><h2>工厂分析</h2><p>按分类浏览</p>
+    <header style="position:fixed;top:0;left:0;right:0;height:180px;background:#fff;z-index:10"><div>数据与分析</div><div>经营分析</div></header><main style="padding-top:200px"><h2>工厂分析</h2><p>按分类浏览</p>
       <button data-testid="factory-chart-refresh">刷新</button>
       <section data-testid="factory-chart-guide">
         <div data-testid="factory-chart-mode"><button>问答引导</button><button>按分类浏览</button></div>
@@ -85,7 +86,10 @@ function pageHtml() {
           input.checked = input.closest('[data-family-id]').dataset.familyId === '生产:' + chosenFamily;
         }
       };
-      for (const row of document.querySelectorAll('.family-row')) { const familyId = row.dataset.familyId.replace(/^[^:]+:/, ''); const group = allCandidates.filter(item => item.analysis.familyId === familyId); row.querySelector('.el-select').onclick = () => { document.querySelectorAll('.el-select-dropdown__item').forEach(node => node.remove()); group.forEach(item => { const option = document.createElement('div'); option.className = 'el-select-dropdown__item'; option.textContent = item.unit + ' / ' + item.source; option.dataset.value = item.id; option.onclick = () => { selectedVariant = item.id; option.remove(); }; document.body.append(option); }); }; }
+      const updateCards = () => { const selectedFamilies = [...document.querySelectorAll('.family-row input:checked')].map(input => input.closest('.family-row').dataset.familyId.replace(/^[^:]+:/, '')); for (const card of document.querySelectorAll('[data-testid^="factory-chart-card-"]')) { const item = allCandidates.find(candidate => candidate.id === card.dataset.candidateId); card.style.display = selectedFamilies.includes(item.analysis.familyId) && (!selectedVariant || item.id === selectedVariant) ? 'block' : 'none'; } };
+      for (const input of document.querySelectorAll('.family-row input')) input.onchange = updateCards;
+      for (const row of document.querySelectorAll('.family-row')) { const familyId = row.dataset.familyId.replace(/^[^:]+:/, ''); const group = allCandidates.filter(item => item.analysis.familyId === familyId); row.querySelector('.el-select').onclick = () => { document.querySelectorAll('.el-select-dropdown__item').forEach(node => node.remove()); group.forEach(item => { const option = document.createElement('div'); option.className = 'el-select-dropdown__item'; option.textContent = item.unit + ' / ' + item.source; option.dataset.value = item.id; option.onclick = () => { selectedVariant = item.id; option.remove(); updateCards(); }; document.body.append(option); }); }; }
+      updateCards();
       const subjectInput = document.querySelector('[data-testid="factory-chart-guide-subject"] input');
       subjectInput.onfocus = () => { document.querySelector('#subject-options').style.display = 'block'; };
       subjectInput.oninput = () => { const query = subjectInput.value; const options = allSubjects.filter(subject => subject.label.includes(query)); document.querySelector('#subject-options').style.display = 'block'; document.querySelector('#subject-options').innerHTML = options.map(subject => '<div role="option" data-value="' + subject.id + '">' + subject.label + '</div>').join(''); for (const subjectOption of document.querySelectorAll('#subject-options [role="option"]')) subjectOption.onclick = () => { document.querySelector('#subject-options').style.display = 'none'; fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({analysis_subject:subjectOption.dataset.value})}); }; };
@@ -138,10 +142,12 @@ test('catalog matrix fixture uses the real browse, detail, and export endpoint s
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
+    const screenshotDir = 'test-output/sc84-card-capture';
+    fs.mkdirSync(screenshotDir, { recursive: true });
     await page.goto(`http://127.0.0.1:${server.address().port}/fixture`, { waitUntil: 'domcontentloaded' });
     const result = await inspectCatalog(page, '', {
       expectedFactoryId: 'F006',
-      evidenceDir: '',
+      evidenceDir: screenshotDir,
     });
     expect(result.assessment.result).toBe('PASS');
     expect(result.familyCount).toBe(8);
@@ -149,6 +155,7 @@ test('catalog matrix fixture uses the real browse, detail, and export endpoint s
     expect(result.failedFamilyCount).toBe(0);
     expect(result.remainingFamilyCount).toBe(0);
     expect(result.families.every((item) => item.rowTotal === 1 && item.exportCoverage.includes('excel'))).toBe(true);
+    expect(result.families.every((item) => item.cardScreenshot && item.cardScreenshot.endsWith('-card.png'))).toBe(true);
     expect(result.exports[0].filename).toBe('factory-catalog-batch-1-excel.xlsx');
     expect(result.exports[1].filename).toBe('factory-catalog-batch-2-excel.xlsx');
     const exports = requests.filter(item => item.path.endsWith('/export-excel'));
