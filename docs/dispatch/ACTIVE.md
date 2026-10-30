@@ -7,9 +7,8 @@
 
 ## 在飞任务
 
-- `SC84-VARIANT-PROOFS-20261030` — `in-progress` — capability_impl；Base `6ab8abfd78d244d3580c204aca2129f712266b84`；仅canonical smartbi-catalog-matrix-readonly.js、其测试及生成mcp-entry.js；精确联合四KPI单位契约/非加和异常独立重算；Node252+新增正反例及bundle drift，禁弱化普通候选。
 - `SC84-ALL-VARIANTS-20261030` — `in-progress` — Root；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；F006全部历史业务目录及合格产品的画法/单位变体双端实际验收；场景表私有sc84-variants/scenarios.json。网页MCP/小米并行、禁模拟器、只读零业务写；默认旧证据不代替变体新证据，详见当日SC84归档。
-- `SC84-NATIVE-VARIANTS-20261030` — `in-progress` — sc84_native_finish唯一小米操作者；Base `cf6d18e1bf8656caafc9041aaabc1c9f264c335f`；仅私有test-output/sc84-native*及sc84-variants/native证据；正常UI切画法/单位、图/来源/明细/原数量单位列；先正常应用OTA1793330584015；禁源码/ledger/业务写/模拟器，逐exactID验收。
+- `SC84-NATIVE-VARIANTS-20261030` — `in-progress` — Root唯一小米操作者；Base `cf6d18e1bf8656caafc9041aaabc1c9f264c335f`；仅私有test-output/sc84-native*及sc84-variants/native证据；正常UI切画法/单位、图/来源/明细/原数量单位列；先正常应用OTA1793330584015；禁源码/ledger/业务写/模拟器，逐exactID验收。
 
 
 

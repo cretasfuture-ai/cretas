@@ -90,6 +90,105 @@ test('quantity-family facts cannot silently drift to another unit', () => {
   assert.equal(catalog.candidateUnitsAligned(candidate('wrong-percent', 'production.output', { kpis: [{ label: '产量', value: 10, unit: '%' }] })), false);
 });
 
+function fusedCandidate(extra = {}) {
+  return candidate('fused@盒', 'production.inspection_fused', {
+    source: 'production-inspection-fused · 生产/检验/成本联合',
+    sourceMetadata: {
+      sourceKey: 'production-inspection-fused',
+      sources: ['production', 'quality'],
+      costAuthorized: true,
+    },
+    unit: '盒',
+    kpis: [
+      { label: '已覆盖批次产量', value: '110', unit: '盒' },
+      { label: '累计生产良品率', value: '96.36', unit: '%' },
+      { label: '累计检验合格率', value: '95.24', unit: '%' },
+      { label: '已覆盖批次总成本', value: '1,307', unit: '元' },
+    ],
+    tableData: {
+      headers: ['日期', '产量（盒）', '检验合格率（%）', '生产良品率（%）', '总成本（元）'],
+      rows: [['2026-10-28', 110, 95.24, 96.36, 1307]],
+    },
+    chart: {
+      chartType: 'combination',
+      echartsOption: {
+        legend: { data: ['产量', '检验合格率', '生产良品率', '总成本'] },
+        yAxis: [{ type: 'value', name: '盒' }, { type: 'value', name: '%', min: 0, max: 100 }, { type: 'value', name: '元' }],
+        series: [
+          { name: '产量', data: [110] },
+          { name: '检验合格率', yAxisIndex: 1, data: [95.24] },
+          { name: '生产良品率', yAxisIndex: 1, data: [96.36] },
+          { name: '总成本', yAxisIndex: 2, data: [1307] },
+        ],
+      },
+    },
+    ...extra,
+  });
+}
+
+test('fused production proof requires exact four KPI units, trusted source, headers, and three axes', () => {
+  const good = fusedCandidate();
+  assert.equal(catalog.fusedCandidateUnitsAligned(good), true);
+  assert.equal(catalog.candidateUnitsAligned(good), true);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.slice(0, 3) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, source: 'business' }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '已覆盖批次产量' ? { ...fact, unit: 'kg' } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '已覆盖批次总成本' ? { ...fact, unit: 'USD' } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '已覆盖批次总成本' ? { ...fact, label: '金额' } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, chart: { ...good.chart, echartsOption: { ...good.chart.echartsOption, yAxis: good.chart.echartsOption.yAxis.slice(0, 2) } } }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, unit: 'USD/kg' }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, unit: 'CNY/盒' }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, unit: 'mystery' }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '已覆盖批次产量' ? { ...fact, value: null } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '已覆盖批次产量' ? { ...fact, value: true } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '已覆盖批次产量' ? { ...fact, value: -1 } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, kpis: good.kpis.map((fact) => fact.label === '累计生产良品率' ? { ...fact, value: 101 } : fact) }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, tableData: { ...good.tableData, rows: [['2026-10-28', null, 95.24, 96.36, 1307]] } }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, tableData: { ...good.tableData, rows: [['2026-10-28', 110, 101, 96.36, 1307]] } }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, chart: { ...good.chart, echartsOption: { ...good.chart.echartsOption, series: good.chart.echartsOption.series.map((item) => item.name === '总成本' ? { ...item, data: [true] } : item) } } }), false);
+  assert.equal(catalog.fusedCandidateUnitsAligned({ ...good, chart: { ...good.chart, echartsOption: { ...good.chart.echartsOption, series: good.chart.echartsOption.series.map((item) => item.name === '生产良品率' ? { ...item, data: [101] } : item) } } }), false);
+  assert.equal(catalog.candidateUnitsAligned(candidate('ordinary-money', 'production.output', {
+    unit: '盒', kpis: [{ label: '产量', value: 1, unit: '元' }],
+  })), false);
+  assert.equal(catalog.candidateUnitsAligned(candidate('ordinary-money-without-unit', 'production.output', {
+    unit: '', kpis: [{ label: '金额', value: 1, unit: '元' }],
+  })), false);
+});
+
+function anomalyCandidate(extra = {}) {
+  const values = [80, 75, 40, 4, 1, 10, 10, 10, 8, 1, 1];
+  return candidate('anomaly@盒', 'production.anomaly', {
+    source: 'production · 已完成生产批次 · 保留批次单位快照',
+    unit: '盒',
+    kpis: [],
+    tableData: values.map((value, index) => ({ label: `PB-${index + 1}`, value })),
+    findings: {
+      attention: ['最高为PB-1 80盒；最低为PB-5 1盒', '11个同SKU/单位批次，1个值偏离均值超过2个总体标准差；仅统计观察，不代表原因'],
+    },
+    ...extra,
+  });
+}
+
+test('anomaly proof independently recomputes population statistics and keeps empty-KPI gaps explicit', () => {
+  const good = anomalyCandidate();
+  const proof = catalog.anomalyEvidence(good);
+  assert.ok(proof);
+  assert.equal(proof.sampleCount, 11);
+  assert.equal(proof.anomalyCount, 1);
+  assert.deepEqual(proof.anomalyLabels, ['PB-1']);
+  assert.equal(catalog.factsPresent(good), true);
+  assert.equal(catalog.anomalyEvidence({ ...good, findings: { attention: ['11个同SKU/单位批次，0个值偏离均值超过2个总体标准差'] } }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, tableData: good.tableData.map((point) => ({ ...point, value: -point.value })) }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, tableData: good.tableData.map((point, index) => ({ ...point, value: index === 0 ? null : point.value })) }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, tableData: good.tableData.map((point, index) => ({ ...point, value: index === 0 ? true : point.value })) }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, source: 'business' }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, kpis: [{ label: '合计', value: 236, unit: '盒' }] }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, findings: { attention: [], suggestions: ['11个同SKU/单位批次，1个值偏离均值超过2个总体标准差'] } }), null);
+  assert.equal(catalog.anomalyEvidence({ ...good, findings: { attention: ['11个同SKU/单位批次', '1个值偏离均值超过2个总体标准差'] } }), null);
+  assert.ok(catalog.anomalyEvidence({ ...good, findings: { attention: ['11个同SKU/单位批次，1个值偏离均值超过2个总体标准差；仅统计观察，不代表原因'], suggestions: ['11个同SKU/单位批次，1个值偏离均值超过2个总体标准差'] } }));
+  assert.equal(catalog.factsPresent(candidate('empty-output', 'production.output', { unit: '盒', kpis: [] })), false);
+});
+
 test('purchase price accepts only trusted nonadditive per-material table/chart facts', () => {
   const good = candidate('purchase-price', 'purchase.price', {
     source: 'purchase · authorized receipt lines', unit: '元/kg',
