@@ -167,6 +167,20 @@ const disabledSidebarModules = computed(() => {
 
 const isCollapsedSidebar = computed(() => appStore.sidebarCollapsed && !appStore.isMobile);
 
+// Element Plus moves leaf titles into tooltips when collapse becomes true.
+// Keep them in place until the 140ms fade finishes, and cancel on reversal.
+const menuCollapsed = ref(isCollapsedSidebar.value);
+let collapseTimer: ReturnType<typeof setTimeout> | undefined;
+watch(isCollapsedSidebar, (collapsed) => {
+  clearTimeout(collapseTimer);
+  if (!collapsed || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    menuCollapsed.value = collapsed;
+    return;
+  }
+  collapseTimer = setTimeout(() => { menuCollapsed.value = true; }, 160);
+});
+onBeforeUnmount(() => clearTimeout(collapseTimer));
+
 // 图标映射
 const iconMap: Record<string, any> = {
   House, Operation, Box, Checked, ShoppingCart, Goods,
@@ -416,7 +430,7 @@ function handleSelect(path: string) {
     <!-- Logo -->
     <div class="sidebar-logo">
       <img :src="authStore.factoryLogoUrl" :alt="authStore.brandTitle" class="logo-icon" />
-      <span v-if="!appStore.sidebarCollapsed || appStore.isMobile" class="logo-copy">
+      <span class="logo-copy" :aria-hidden="isCollapsedSidebar">
         <span class="logo-title">{{ authStore.brandTitle }}</span>
         <span v-if="authStore.brandSubtitle" class="logo-subtitle">{{ authStore.brandSubtitle }}</span>
       </span>
@@ -425,9 +439,11 @@ function handleSelect(path: string) {
     <!-- 菜单 -->
     <el-scrollbar class="sidebar-menu-wrap" @wheel.stop>
       <el-menu
+        class="sidebar-menu"
         :default-active="activeMenu"
         :default-openeds="defaultOpeneds"
-        :collapse="isCollapsedSidebar"
+        :collapse="menuCollapsed"
+        :collapse-transition="false"
         :unique-opened="!shouldFlatten"
         background-color="transparent"
         text-color="#ffffffa6"
@@ -457,7 +473,7 @@ function handleSelect(path: string) {
   bottom: 0;
   width: 220px;
   background: linear-gradient(180deg, #0C1929 0%, #132238 60%, #0F1D2E 100%);
-  transition: width 0.3s;
+  transition: width 0.3s ease-in-out;
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -471,7 +487,7 @@ function handleSelect(path: string) {
   height: 64px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 0 16px;
   position: relative;
 
@@ -487,6 +503,7 @@ function handleSelect(path: string) {
   }
 
   .logo-icon {
+    flex-shrink: 0;
     width: 32px;
     height: 32px;
     object-fit: contain;
@@ -501,6 +518,13 @@ function handleSelect(path: string) {
     flex-direction: column;
     justify-content: center;
     line-height: 1.1;
+    max-width: 144px;
+    overflow: hidden;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 140ms ease-out, max-width 0.3s ease-in-out,
+      margin-left 0.3s ease-in-out, visibility 0s;
+    transition-behavior: allow-discrete;
   }
 
   .logo-title {
@@ -526,6 +550,66 @@ function handleSelect(path: string) {
 .sidebar-menu-wrap {
   flex: 1;
   padding: 8px;
+}
+
+// Keep the icon at the same x position in both layouts. Scope label rules to
+// root items so teleported submenus and their tooltip text remain readable.
+:deep(.sidebar-menu) {
+  --el-menu-base-level-padding: 12px;
+  width: 100%;
+}
+
+:deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+:deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+:deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+:deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) {
+  height: auto;
+  width: auto;
+  max-width: 160px;
+  visibility: visible;
+  opacity: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 140ms ease-out, max-width 0.3s ease-in-out, visibility 0s;
+  transition-behavior: allow-discrete;
+}
+
+.is-collapsed {
+  .logo-copy {
+    max-width: 0;
+    margin-left: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 0s, 140ms;
+  }
+
+  :deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+  :deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) {
+    max-width: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 140ms;
+  }
+}
+
+@starting-style {
+  :deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+  :deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .sidebar-logo .logo-copy,
+  :deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+  :deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) {
+    transition: none;
+  }
 }
 
 :deep(.el-menu) {
