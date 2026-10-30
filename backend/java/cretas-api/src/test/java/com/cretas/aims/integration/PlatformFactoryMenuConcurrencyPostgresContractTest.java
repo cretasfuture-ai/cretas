@@ -39,6 +39,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 /** Real PostgreSQL proof that the parent factory lock serializes JSON read-before-write operations. */
 @DataJpaTest(properties = {"spring.jpa.hibernate.ddl-auto=create", "spring.flyway.enabled=false", "cretas.platform.factory-assembly.enabled=true"})
