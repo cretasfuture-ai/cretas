@@ -853,6 +853,15 @@ def _card_layout(option, chart_id=''):
         if isinstance(axis, dict) and axis.get('type') == 'value':
             axis.setdefault('axisLabel', {}).setdefault('hideOverlap', True)
             axis.setdefault('splitNumber', 3)
+    for index, axis in enumerate(y_axes):
+        if (isinstance(axis, dict) and axis.get('type') == 'value' and axis.get('name')
+                and axis.get('nameLocation', 'end') != 'middle'
+                and axis.get('nameRotate', 0) in (None, 0)):
+            # End captions must extend into the card instead of across its edge.
+            style = axis.setdefault('nameTextStyle', {})
+            if isinstance(style, dict):
+                position = axis.get('position', 'left' if index == 0 else 'right')
+                style.setdefault('align', 'right' if position == 'right' else 'left')
     for axis in axes:
         if axis.get('type') == 'value' and axis.get('name'):
             # End-position names extend beyond the final tick and can be cropped.
