@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `YDWM-BI-MENU-20261030` — `in-progress` — Owner root — Base 4543c06466afa4bc7ad234658477d93cd1be823b — Scope AppSidebar、factoryMenuVisibility及测试、factory类型、system/features；按厂配置BI与子菜单，其他工厂默认不变；验收目标测试、Web构建及新工厂UI。
 
 
 
@@ -102,7 +101,6 @@
 
 ## Scope 锁地图
 
-- `YDWM-BI-MENU-20261030`：web-admin/src/components/layout/{AppSidebar.vue,factoryMenuVisibility.ts,__tests__/factoryMenuVisibility.spec.ts}、src/types/factory.ts、src/views/system/features/index.vue；仅root写，不改全局菜单、角色矩阵及其他工厂配置。
 
 
 
