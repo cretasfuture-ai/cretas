@@ -13,6 +13,7 @@ async function inspect(page, _body, ctx) {
   if (await factory.count() !== 1) throw new Error('Target factory selection is ambiguous');
   await factory.click();
   const screenshots = [];
+  let directory;
   for (const label of ['功能开通', '岗位权限', '员工授权', '菜单显示']) {
     const responsePath = label === '员工授权' ? `/api/platform/factories/${target}/access/users` : `/api/platform/factories/${target}/access`;
     const response = ['菜单显示', '岗位权限'].includes(label) ? null : page.waitForResponse(r => new URL(r.url()).pathname === responsePath && r.request().method() === 'GET');
@@ -22,19 +23,24 @@ async function inspect(page, _body, ctx) {
       const body = await result.json();
       if (!result.ok() || body.success !== true) throw new Error(`${label} failed to read real server state`);
       if (label !== '员工授权' && body.data.factoryId !== target) throw new Error('Factory access tenant mismatch');
+      if (label === '员工授权') directory = body.data.content;
     }
     if (label === '功能开通') await page.locator('.activation-row').first().waitFor();
     if (label === '岗位权限') await page.locator('.permission-table tbody tr').first().waitFor();
     if (label === '员工授权') {
-      const employee = page.locator('.employee-row').first();
+      const protectedUser = directory?.find(user => user.protectedRole === true);
+      if (!protectedUser) throw new Error('Protected factory administrator is absent from the accepted employee page');
+      const employee = page.locator('.employee-row').filter({ hasText: protectedUser.username });
+      if (await employee.count() !== 1) throw new Error('Protected employee selection is ambiguous');
       await employee.waitFor();
-      const permissions = page.waitForResponse(r => new RegExp(`/api/platform/factories/${target}/access/users/[0-9]+/permissions$`).test(new URL(r.url()).pathname));
+      const permissions = page.waitForResponse(r => new URL(r.url()).pathname === `/api/platform/factories/${target}/access/users/${protectedUser.id}/permissions`);
       await employee.click();
       const result = await permissions; const body = await result.json();
       if (!result.ok() || body.success !== true) throw new Error('Employee permission read failed');
+      if (String(body.data.user.id) !== String(protectedUser.id) || body.data.user.username !== protectedUser.username || body.data.user.protectedRole !== true) throw new Error('Protected employee response does not match selected account');
       await page.locator('.employee-permission-row').first().waitFor();
       // This factory's full administrator must remain protected.
-      if (body.data.user.protectedRole && await page.locator('.employee-permission-row .el-select:not(.is-disabled)').count()) {
+      if (await page.locator('.employee-permission-row .el-select:not(.is-disabled)').count()) {
         throw new Error('Protected employee permission control is editable');
       }
     }
