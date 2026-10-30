@@ -379,6 +379,9 @@ def _option(series, kind):
     frame = pd.DataFrame(points, columns=['项目', f'{series.title}（{series.unit}）'])
     field = frame.columns[1]
     option = get_strategy(kind).build(frame, x_field='项目', y_fields=[field])
+    if kind == 'bar_horizontal':
+        # Long batch/SKU labels can leave a narrow value axis in a chart card.
+        option.setdefault('xAxis', {}).setdefault('axisLabel', {})['hideOverlap'] = True
     if kind in ('line', 'area') and all(re.fullmatch(r'\d{4}-\d{2}-\d{2}', label) for label, _ in points):
         observed = dict(points)
         axis = pd.date_range(min(observed), max(observed), freq='D')
