@@ -10,6 +10,7 @@ from typing import Any
 
 import label_qc_tray_patch_dataset as patch_dataset
 import tray_workflow
+from tray_training_selection import validate_training_selection
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -39,6 +40,7 @@ def validate_dataset_manifest(path: Path) -> dict[str, Any]:
     data_yaml = Path(str(manifest.get("data_yaml") or "")).resolve()
     if not data_yaml.is_file() or data_yaml.parent != root:
         raise RuntimeError("dataset data.yaml boundary drift")
+    validate_training_selection(root, data_yaml)
     return manifest
 
 

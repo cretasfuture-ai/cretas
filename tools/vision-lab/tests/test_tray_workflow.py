@@ -20,6 +20,20 @@ SPEC.loader.exec_module(module)
 
 
 class TrayWorkflowTests(unittest.TestCase):
+    def test_direct_training_entry_rejects_ignored_photo_before_model_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "images/train").mkdir(parents=True)
+            (root / "images/train/ignored.jpg").write_bytes(b"original")
+            (root / "provenance.json").write_text(json.dumps({"rows": [
+                {"stem": "ignored", "split": "train", "training_excluded": True},
+            ]}), encoding="utf-8")
+            yaml = root / "data.yaml"
+            yaml.write_text(f"path: {root.as_posix()}\ntrain: images/train\n", encoding="utf-8")
+            # Empty config has no base model; the data gate must stop first.
+            with self.assertRaisesRegex(RuntimeError, "excluded training image: ignored"):
+                module.train_candidate({}, {"data_yaml":str(yaml)}, root)
+
     def test_training_source_forces_offline_without_amp_probe(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('os.environ["YOLO_OFFLINE"] = "true"', source)
