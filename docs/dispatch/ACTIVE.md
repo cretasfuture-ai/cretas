@@ -104,7 +104,7 @@
 
 - `PLATFORM-CONSOLE-20261030` — `in-progress` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 平台日常菜单与工厂业务分离；选厂配置菜单、保留实名平台主体的只读协助查看。UI/API子scope与契约见archive/2026-10-30-platform-console-scope.md；目标测试、独立终审、CI、main发布及UI验收。
 - `PLATFORM-CONSOLE-UI-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅前端平台导航/选厂菜单配置/只读查看上下文及目标测试；精确scope见同批scope归档；不改后端/ACTIVE。
-- `PLATFORM-CONSOLE-API-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅平台菜单配置API、工厂旧入口敏感字段保护、带平台主体的短期只读查看令牌与Java/Python护栏及目标测试；不改前端/ACTIVE/Entity/Repository。
+- `PLATFORM-CONSOLE-API-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅平台菜单配置API、工厂旧入口敏感字段保护、带平台主体的短期只读查看令牌与Java正向护栏及目标测试；Python不改、不开放查看凭证；不改前端/ACTIVE/Entity/Repository。
 - `PLATFORM-CONSOLE-NETWORK-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅utils/platformFactoryViewNetwork.ts、对应测试、main.ts接线；原生fetch/XHR短期凭证与只读护栏，验收命令和scope见同批归档；不改Root/API源码或ACTIVE。
 
 ## Scope 锁地图

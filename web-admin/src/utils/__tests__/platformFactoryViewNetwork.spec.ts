@@ -266,6 +266,17 @@ describe('platform factory native network boundary', () => {
     expect(XMLHttpRequest.prototype.send).toBe(originalSend);
   });
 
+  it('keeps unsupported Python requests local instead of expiring a valid Java view', async () => {
+    activateView();
+    uninstall = installPlatformFactoryViewNetworkGuard();
+    await expect(fetch('/smartbi-api/api/smartbi/gold/finance-summary')).rejects.toThrow('暂不提供数据分析服务');
+    const xhr = new XMLHttpRequest() as unknown as FakeXHR;
+    xhr.open('GET', '/smartbi-api/api/smartbi/gold/finance-summary');
+    expect(() => xhr.send()).toThrow('暂不提供数据分析服务');
+    expect(xhr.sent).toBe(false);
+    expect(nativeFetch).not.toHaveBeenCalled();
+  });
+
   it('blocks same-origin non-API writes and nonstandard mutation methods before send', async () => {
     activateView();
     uninstall = installPlatformFactoryViewNetworkGuard();

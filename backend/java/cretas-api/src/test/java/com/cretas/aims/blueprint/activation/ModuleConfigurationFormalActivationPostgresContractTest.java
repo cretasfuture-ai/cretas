@@ -103,6 +103,9 @@ class ModuleConfigurationFormalActivationPostgresContractTest {
     void aDraftWithFrontendModuleIdsWhoseGateCodesLackSchemasActivatesAndReadsBackActive() {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String factory = "FS-" + suffix;
+        entityManager.getEntityManager().createNativeQuery(
+                "INSERT INTO factories (id,name,type,level,is_active,manually_verified,ai_weekly_quota,created_at,updated_at) VALUES (?1,?2,'FACTORY',0,TRUE,FALSE,20,NOW(),NOW())")
+                .setParameter(1, factory).setParameter(2, factory).executeUpdate();
         for (String code : PROD_SCHEMA_CODES) {
             if (schemas.findByModuleCode(code).isEmpty()) schemas.save(schema(code));
         }

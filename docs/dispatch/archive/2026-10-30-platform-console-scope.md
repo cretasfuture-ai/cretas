@@ -4,6 +4,8 @@ Base: cf6d18e1bf8656caafc9041aaabc1c9f264c335f。Root为协调者；代码两个
 
 ## 用户确认与目标
 
+最终组件边界：只交付Java与Web。查看入口只开放已审的六个Java列表/首页，不向Python或BI路径发送查看请求；已有Python受保护接口无法验证域隔离查看签名，不获得任何平台/工厂数据权限。工厂账号的BI状态与普通分析流程保持原状。曾准备的Python纵深防护已从本PR移出并留存私有补丁；Python全量CI发现既有模型注册表21日复审到期，此处不修改审计日期、不削弱门禁，也不部署不属于菜单整理所需的服务。此段覆盖下文初始跨端计划。
+
 平台日常只显示平台管理菜单；保留“进入指定工厂”的协助查看入口。平台管理员可以选择每个工厂配置网页大菜单和子菜单显示；工厂账号不能自行改平台开放范围。这是菜单显示管理，不借机授予业务权限，不删除业务数据。
 
 ## UI scope
@@ -35,6 +37,8 @@ Root整合审查确认的必要UI扩展：`src/views/login/index.vue`（平台�
 Root终审扩展：真实菜单快照`backend/java/cretas-api/src/main/resources/platform/factory-menu-paths.json`及前端漂移测试；该资源只用于菜单路径闭集，不影响Entity/Repository。查看凭证暂不开放任何POST（存量查询可能解析工厂用户数字ID或写缓存），因此Root只在查看模式停止`useListSummary.ts`、`useLinkChipCounts.ts`的可选查询，并由`components/list/{TableFooter,LinkChipCell}.vue`明确显示未提供/未加载，禁止伪造零统计；对应目标测试同步覆盖，普通工厂账号行为不变。
 
 Root安全收口scope：新增Java/Python正向只读策略与镜像资源，查看页限定首页/生产计划/仓储物料/采购订单/销售订单/标签质检六页；Header通知、Sidebar计数、PendingApprovalsWidget和L4用户权限在查看态不加载工厂用户专属数据。新增FactoryFeatureMenuWriteLock并接平台/旧配置/ModuleSwitchService，真实PG并发与原正式激活测试验收；不改Entity/Repository/迁移或全局灰度。仅view marker使PriceFieldResponseAdvice与PriceMaskResolver直接脱敏、不查工厂用户，审计从typed actor取原平台租户。`.github/workflows/java-gate-pr.yml`仅把新并发测试加入既有真实PG选择器；独立终审覆盖。所有扩展Owner Root，子代理已回交写权。
+
+最终Web补充：只在平台查看态停止sales/orders/list.vue的可选Gold合计请求，common与原生网络守卫在发送前拒绝Python路径，避免未开放服务的401误使Java查看凭证过期。对应正反例覆盖，普通工厂账号继续原路径。跨语言镜像测试已改为Java资源的正向/拒绝集合；无Python净差异。
 
 回滚边界：查看JWT使用域隔离HMAC-SHA256派生密钥，旧版主密钥解码器拒绝，防止回滚后将查看凭证提升为普通平台凭证。浏览器查看请求统一`X-Client-Type=platform-factory-view`，保留旧版native-skip语义；WebLoginSessionFilter新增限制性skip，禁止用原平台HttpOnly会话覆盖显式查看Bearer。真实cookie→filter→interceptor与旧主密钥拒绝测试覆盖。签发与审计目标ID统一最多64字符（现网8个工厂实时回读均满足）；不扩数据库列/角色权限。
 

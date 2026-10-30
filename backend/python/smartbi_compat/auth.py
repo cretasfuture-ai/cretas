@@ -9,7 +9,6 @@ shared secret, enforces:
 """
 from __future__ import annotations
 import os
-from platform_factory_view_policy import authorize_factory_view, decode_platform_credential
 from dataclasses import dataclass
 from typing import Optional
 
@@ -48,7 +47,7 @@ async def verify_jwt_and_factory(
     token = auth_header[len("Bearer "):]
 
     try:
-        payload = decode_platform_credential(token, _get_secret())
+        payload = jwt.decode(token, _get_secret(), algorithms=[JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except jwt.InvalidTokenError as e:
@@ -56,16 +55,6 @@ async def verify_jwt_and_factory(
 
     token_factory: Optional[str] = payload.get("factoryId")
     role: str = payload.get("role") or ""
-
-    try:
-        view_factory = authorize_factory_view(payload, request.url.path, request.method,
-                                               request.scope.get("query_string", b""))
-    except ValueError as denied:
-        raise HTTPException(403, str(denied)) from denied
-    if view_factory is not None:
-        if view_factory != factory_id:
-            raise HTTPException(403, "Invalid factory view scope")
-        token_factory = view_factory
 
     if token_factory is None:
         if role not in PRIVILEGED_ROLES:

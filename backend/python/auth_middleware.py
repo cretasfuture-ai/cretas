@@ -22,7 +22,6 @@ import json
 import logging
 import os
 import re
-from platform_factory_view_policy import authorize_factory_view, has_view_marker, decode_platform_credential
 from typing import Optional, Set
 
 import jwt as pyjwt
@@ -321,24 +320,6 @@ class JWTAuthMiddleware:
         # Disabling general JWT auth must never disable the exact internal-only
         # route gate above. All other routes retain the historical disabled-mode
         # behavior.
-        # A valid view credential must never fall through public/stateless route
-        # shortcuts: some of those routes write caches or run analysis tools.
-        presented = headers.get("authorization", "")
-        if presented.startswith("Bearer "):
-            try:
-                markers = pyjwt.decode(presented[7:], options={"verify_signature": False})
-            except pyjwt.PyJWTError:
-                markers = {}
-            if has_view_marker(markers):
-                view_claims = self._verify_token(presented[7:])
-                if view_claims is None:
-                    await self._send_json_response(send, 401, {"success": False, "message": "Invalid or expired factory view token"})
-                    return
-                try:
-                    authorize_factory_view(view_claims, path, scope.get("method", "GET"), scope.get("query_string", b""))
-                except ValueError as denied:
-                    await self._send_json_response(send, 403, {"success": False, "code": "VIEW_SCOPE", "message": str(denied)})
-                    return
         if not self.enabled:
             await self.app(scope, receive, send)
             return
@@ -389,13 +370,6 @@ class JWTAuthMiddleware:
         if "state" not in scope:
             scope["state"] = {}
         factory_id = claims.get("factoryId")
-        try:
-            view_factory = authorize_factory_view(claims, path, scope.get("method", "GET"), scope.get("query_string", b""))
-        except ValueError as denied:
-            await self._send_json_response(send, 403, {"success": False, "code": "VIEW_SCOPE", "message": str(denied)})
-            return
-        if view_factory is not None:
-            factory_id = view_factory
         scope["state"]["factory_id"] = factory_id
         scope["state"]["user_id"] = claims.get("userId")
         scope["state"]["username"] = claims.get("sub")
@@ -549,7 +523,12 @@ class JWTAuthMiddleware:
             logger.error("JWT verification rejected: JWT secret is not configured")
             return None
         try:
-            payload = decode_platform_credential(token, self.jwt_secret)
+            payload = pyjwt.decode(
+                token,
+                self.jwt_secret,
+                algorithms=["HS256"],
+                options={"verify_exp": True},
+            )
             return payload
         except pyjwt.ExpiredSignatureError:
             logger.warning("JWT token expired")

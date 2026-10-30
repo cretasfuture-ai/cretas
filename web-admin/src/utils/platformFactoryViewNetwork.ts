@@ -116,6 +116,14 @@ function isTrustedConfiguredApi(url: URL): boolean {
   return prefixes.some((prefix) => url.origin === prefix.origin && hasPathBoundary(url.pathname, prefix.pathname));
 }
 
+function isPythonApi(url: URL): boolean {
+  if (isSameOrigin(url) && hasPathBoundary(url.pathname, '/smartbi-api')) return true;
+  const configured = configuredAbsolutePrefix(import.meta.env.VITE_SMARTBI_URL);
+  return !!configured && url.origin === configured.origin
+    && !(configured.pathname === '/' && isSameOrigin(url))
+    && hasPathBoundary(url.pathname, configured.pathname);
+}
+
 function isBusinessApi(url: URL): boolean {
   if (isSameOrigin(url)) {
     return url.pathname === '/api'
@@ -211,6 +219,7 @@ function validateViewRequest(details: RequestDetails, state: ViewState): void {
     return;
   }
   if (state.kind !== 'active') throw guardError(state);
+  if (isPythonApi(details.url)) throw new Error('平台只读查看暂不提供数据分析服务，请使用工厂账号');
   if (isWrite(details.method)
     && !(details.method === 'POST' && readonlyPostAllowed(details.url, details.body, details.hasBodyOverride))) {
     throw new Error('工厂只读查看不允许业务写操作');

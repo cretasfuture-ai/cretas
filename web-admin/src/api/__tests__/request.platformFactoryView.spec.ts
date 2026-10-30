@@ -81,15 +81,13 @@ describe('factory view through real request adapters', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it('locks Python authorization to the scoped token despite caller headers', async () => {
+  it('does not send unsupported Python data requests or the original platform credential', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', {
       status: 200, headers: { 'content-type': 'application/json' },
     }));
-    await pythonFetch('/api/smartbi/financial-dashboard/factory-details', {
+    await expect(pythonFetch('/api/smartbi/financial-dashboard/factory-details', {
       method: 'GET', headers: { Authorization: 'Bearer original-platform-token' },
-    });
-    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      headers: expect.objectContaining({ Authorization: 'Bearer scoped-view-token' }),
-    }));
+    })).rejects.toThrow('暂不提供数据分析服务');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

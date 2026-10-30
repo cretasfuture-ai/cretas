@@ -105,7 +105,7 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
                 if (!release.await(20, TimeUnit.SECONDS)) throw new IllegalStateException("release timeout");
             }
             return result;
-        }).when(lock).lock(factory);
+        }).when(org.springframework.test.util.AopTestUtils.<FactoryFeatureMenuWriteLock>getUltimateTargetObject(lock)).lock(factory);
         var pool = Executors.newFixedThreadPool(2);
         try {
             var first = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
@@ -115,7 +115,9 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
             }));
             assertThat(firstLocked.await(10, TimeUnit.SECONDS)).isTrue();
             var second = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
-                legacyController.update(factory, "restaurant_buy", Map.of("enabledForReports", true));
+                // The legacy endpoint replaces non-menu config; its normal UI
+                // payload includes the unchanged ordinary fields as well.
+                legacyController.update(factory, "restaurant_buy", Map.of("enabledForReports", true, "unrelated", "keep"));
                 return null;
             }));
             assertThat(secondAttempted.await(10, TimeUnit.SECONDS)).isTrue();
@@ -153,7 +155,7 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
                 if (!release.await(20, TimeUnit.SECONDS)) throw new IllegalStateException("release timeout");
             }
             return result;
-        }).when(lock).lock(factory);
+        }).when(org.springframework.test.util.AopTestUtils.<FactoryFeatureMenuWriteLock>getUltimateTargetObject(lock)).lock(factory);
         var pool = Executors.newFixedThreadPool(2);
         try {
             var first = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {

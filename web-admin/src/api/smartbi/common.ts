@@ -142,7 +142,7 @@ function webTokenClaims(token: string | null): { webSessionHash?: string; exp?: 
 
 export async function getPythonAuthHeaders(requestPath = '/api/smartbi'): Promise<Record<string, string>> {
   const viewToken = factoryViewTokenForRequest(requestPath);
-  if (viewToken) return { ...PYTHON_HEADERS, Authorization: `Bearer ${viewToken}`, 'X-Client-Type': 'platform-factory-view' };
+  if (viewToken) throw new Error('平台只读查看暂不提供数据分析服务，请使用工厂账号');
   const originalToken = localStorage.getItem('cretas_access_token');
   const originalClaims = webTokenClaims(originalToken);
   // Python validates bounded JWTs directly. Renew through the Java cookie authority

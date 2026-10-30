@@ -27,11 +27,13 @@ describe('platform menu catalog consumed by the backend', () => {
     expect(catalog.sales).toContain('/sales/vehicles');
   });
 
-  it('keeps Java and Python factory-view policies identical', () => {
-    const java = JSON.parse(readFileSync(resolve(process.cwd(),
+  it('keeps the Java view policy closed around the supported lists', () => {
+    const paths = JSON.parse(readFileSync(resolve(process.cwd(),
       '../backend/java/cretas-api/src/main/resources/platform/factory-view-read-paths.json'), 'utf8'));
-    const python = JSON.parse(readFileSync(resolve(process.cwd(),
-      '../backend/python/platform_factory_view_read_paths.json'), 'utf8'));
-    expect(java).toEqual(python);
+    const allows = (path: string) => (paths as string[]).some(pattern => new RegExp(`^(?:${pattern})$`).test(path));
+    for (const path of ['/reports/dashboard/overview', '/production-plans', '/material-batches',
+      '/purchase/orders', '/sales/orders', '/label-qc/tasks']) expect(allows(path)).toBe(true);
+    for (const path of ['/users/current', '/smart-bi/analysis/dynamic', '/scheduling/config',
+      '/purchase/orders/by-status', '/sales/orders/by-status']) expect(allows(path)).toBe(false);
   });
 });
