@@ -4012,9 +4012,19 @@ async function selectCatalogSubject(page, subjectId, initialData, deadline) {
   if (!subject || !String(subject.label || '').trim()) throw new Error(`Factory catalog subject is absent from initial response: ${subjectId}`);
   const control = testId(page, 'factory-chart-guide-subject');
   if (!await control.count()) throw new Error('Factory catalog subject control missing');
-  await control.locator('input, button').first().click({ timeout: remainingTimeout(deadline) }).catch(() => control.click({ timeout: remainingTimeout(deadline) }));
-  const option = page.locator('[role="option"]:visible, .el-select-dropdown__item:visible').filter({ hasText: String(subject.label) }).first();
-  await option.waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  const input = control.locator('input').first();
+  if (!await input.count()) throw new Error('Factory catalog subject filter input missing');
+  await input.click({ timeout: remainingTimeout(deadline) });
+  await input.fill(String(subject.label), { timeout: remainingTimeout(deadline) });
+  const options = page.locator('[role="option"]:visible');
+  await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  const exactOptions = options.filter({ hasText: String(subject.label) });
+  const matching = [];
+  for (let index = 0; index < await exactOptions.count(); index += 1) {
+    if ((await exactOptions.nth(index).innerText()).trim() === String(subject.label)) matching.push(exactOptions.nth(index));
+  }
+  if (matching.length !== 1) throw new Error(`Factory catalog subject option is not unique: ${subject.label}`);
+  const option = matching[0];
   const responsePromise = waitResponse(page, isRecommendationsResponse, deadline);
   await option.click({ timeout: remainingTimeout(deadline) });
   const response = await responsePromise;

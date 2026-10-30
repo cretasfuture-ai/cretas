@@ -310,20 +310,26 @@ watch([source, uploadId, includeOptional, useAi, analysisSubject], () => {
     void loadRecommendations();
   }
 }, { deep: true });
-function applyGuidedSelection(ids: string[], save = false) {
+function applyGuidedSelection(ids: string[]) {
   if (!data.value || loading.value) return;
-  if (save) generatedGuideIntent.value = null;
-  else generatedGuideIntent.value = { domain: guideContext.value.domain, family: guideContext.value.family };
+  generatedGuideIntent.value = { domain: guideContext.value.domain, family: guideContext.value.family };
   const eligible = new Set(recommendations.value.map(item => item.id));
   const nextIds = [...new Set(ids.filter(id => eligible.has(id)))];
-  selectedIds.value = save ? nextIds : nextIds.slice(0, 4);
+  selectedIds.value = nextIds.slice(0, 4);
   const key = `${factoryId.value}:${source.value}:${uploadId.value ?? 'business'}`;
+  selectionIntentByScope.set(key, [...selectedIds.value]);
   ++selectionDirtyVersion;
-  if (save) {
-    selectionIntentByScope.set(key, [...selectedIds.value]);
-  }
   selectionSyncState.value = 'local';
-  if (save) void persistUserSelection();
+}
+function applyPreviewSelection(ids: string[]) {
+  if (!data.value || loading.value) return;
+  generatedGuideIntent.value = null;
+  const eligible = new Set(recommendations.value.map(item => item.id));
+  selectedIds.value = [...new Set(ids.filter(id => eligible.has(id)))];
+  const key = `${factoryId.value}:${source.value}:${uploadId.value ?? 'business'}`;
+  selectionIntentByScope.set(key, [...selectedIds.value]);
+  ++selectionDirtyVersion;
+  selectionSyncState.value = 'local';
 }
 async function persistUserSelection() {
   if (!selectionReady || !factoryId.value) return;
@@ -452,7 +458,7 @@ function findingsFor(item: FactoryRecommendation) {
       <div class="scope-note">选择期间和数据源后，在下方按问题查看分析，或按业务分类浏览。</div>
     </el-card>
 
-    <FactoryChartGuide v-if="guideItems.length || subjectOptions.length || analysisSubject" :key="`${factoryId}:${source}:${uploadId}`" :items="guideItems" :selected-ids="selectedIds" :subjects="subjectOptions" :subject="analysisSubject" :loading="loading || !data" :context="guideContext" @context="guideContext = $event" @analysis="applyGuidedSelection($event)" @selection="applyGuidedSelection($event, true)" @subject="analysisSubject = $event" />
+    <FactoryChartGuide v-if="guideItems.length || subjectOptions.length || analysisSubject" :key="`${factoryId}:${source}:${uploadId}`" :items="guideItems" :selected-ids="selectedIds" :subjects="subjectOptions" :subject="analysisSubject" :loading="loading || !data" :context="guideContext" @context="guideContext = $event" @analysis="applyGuidedSelection" @preview="applyPreviewSelection" @selection="applyPreviewSelection" @subject="analysisSubject = $event" />
 
     <el-alert v-if="sourceLoadError" type="warning" show-icon :closable="false" class="state-alert" data-testid="factory-chart-source-load-error">
       <template #title>{{ sourceLoadError }}</template>

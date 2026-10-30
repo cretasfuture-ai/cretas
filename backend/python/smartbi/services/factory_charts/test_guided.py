@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pandas as pd
@@ -6,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from smartbi.api import financial_dashboard as api
 from smartbi.services.factory_charts.engine import (
-    Dataset, analysis_subjects, build, scope_datasets,
+    Dataset, _analysis_metadata, analysis_subjects, build, scope_datasets,
 )
 from smartbi.services.factory_charts import detail_store
 from smartbi.services.factory_charts import details
@@ -125,6 +126,50 @@ def test_name_only_source_aliases_unique_canonical_id():
     assert len(subjects) == 1
     scoped, _, _ = scope_datasets([identified, name_only], req(analysis_subject=subjects[0]['id']), subjects, True)
     assert {dataset.source for dataset in scoped} == {'production · identified', 'upload · name-only'}
+
+
+def test_ratio_analysis_exposes_source_quantity_unit_without_changing_ids_or_values():
+    frame = pd.DataFrame([
+        {'日期': '2026-01-01', '产品': '卤牛肉', '单位': 'kg', '良品数': 8, '产量': 10,
+         '计划产量': 12},
+        {'日期': '2026-01-02', '产品': '汤', '单位': 'kg', '良品数': 9, '产量': 10,
+         '计划产量': 11},
+        {'日期': '2026-01-01', '产品': '卤牛肉', '单位': 'box', '良品数': 7, '产量': 10,
+         '计划产量': 12},
+        {'日期': '2026-01-02', '产品': '汤', '单位': '盒', '良品数': 9, '产量': 10,
+         '计划产量': 11},
+    ])
+    charts, _ = build([Dataset(frame, 'upload-variant · 本厂报表')], req(guided=False), True)
+    ratios = [item for item in charts if item['analysis']['familyId'].endswith(
+        ('production.quality', 'production.plan-rate'))]
+    assert {family for family in ('production.quality', 'production.plan-rate')
+            if any(item['analysis']['familyId'].endswith(family) for item in ratios)} == {
+                'production.quality', 'production.plan-rate'}
+    assert len(ratios) >= 3
+    assert {item['analysis']['sourceQuantityUnit'] for item in ratios} >= {'kg', 'box', '盒'}
+    assert all(item['unit'] == '%' for item in ratios)
+    assert len({item['id'] for item in ratios}) == len(ratios)
+
+
+def test_analysis_metadata_only_adds_optional_source_unit_and_preserves_candidate_identity():
+    candidate = {
+        'id': 'production.plan-rate@stable:gauge',
+        'title': '累计计划达成率',
+        'detailSnapshotKey': 'existing-snapshot',
+        'chart': {'chartType': 'gauge', 'echartsOption': {'series': []}},
+        'engine': {'sourceQuantityUnit': ' kg '},
+    }
+    before = deepcopy(candidate)
+    _analysis_metadata(candidate)
+    assert candidate['analysis']['sourceQuantityUnit'] == 'kg'
+    candidate_without_metadata = dict(candidate)
+    candidate_without_metadata.pop('analysis')
+    assert candidate_without_metadata == before
+
+    blank = {'id': 'finance.kpi:bar', 'metric': '财务指标',
+             'engine': {'sourceQuantityUnit': '  '}}
+    _analysis_metadata(blank)
+    assert 'sourceQuantityUnit' not in blank['analysis']
 
 
 def test_detail_registration_receives_filtered_dataset_only():

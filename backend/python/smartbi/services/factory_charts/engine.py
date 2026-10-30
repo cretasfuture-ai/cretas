@@ -194,7 +194,11 @@ def _analysis_metadata(candidate):
         # Titles can contain product names, so they are intentionally not used
         # as the family label.  Keep an opaque, stable fallback for new views.
         label = candidate.get('metric') or family_id.rsplit('.', 1)[-1].replace('_', ' ')
-    candidate['analysis'] = {'familyId': family_id, 'familyLabel': label}
+    analysis = {'familyId': family_id, 'familyLabel': label}
+    source_unit = candidate.get('engine', {}).get('sourceQuantityUnit')
+    if source_unit is not None and str(source_unit).strip():
+        analysis['sourceQuantityUnit'] = str(source_unit).strip()
+    candidate['analysis'] = analysis
     return candidate
 
 

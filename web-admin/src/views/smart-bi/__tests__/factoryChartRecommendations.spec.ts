@@ -163,14 +163,24 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     await openCatalog(page!);
     const boxes = page!.findAll('.selection-panel input[type="checkbox"]');
     await boxes[0].setValue(false);
+    await flushPromises();
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
+    await page!.get('[data-testid="factory-chart-save-selection"]').trigger('click');
+    await nextTick();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenCalledTimes(1);
+    expect(h.api.saveFactoryChartSelection).toHaveBeenNthCalledWith(1, 'F006', 'business', ['margin']);
     await boxes[1].setValue(false);
     await flushPromises();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenCalledTimes(1);
+    await page!.get('[data-testid="factory-chart-save-selection"]').trigger('click');
+    await nextTick();
     expect(h.api.saveFactoryChartSelection).toHaveBeenCalledTimes(1);
     h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ source: 'upload' }));
     page!.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', 'upload');
     await flushPromises();
     finishFirst({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['margin'], updatedAt: 'now' } });
     await flushPromises();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenCalledTimes(2);
     expect(h.api.saveFactoryChartSelection).toHaveBeenNthCalledWith(2, 'F006', 'business', []);
   });
   it('does not let a stale preference GET overwrite a newer checkbox choice', async () => {
@@ -183,9 +193,43 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     await nextTick();
     resolvePreference({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['yield'], updatedAt: null } });
     await flushPromises();
-    expect(JSON.parse(localStorage.getItem('smartbi.factory-chart-selection:F006:business')!)).toEqual(['margin']);
+    expect(localStorage.getItem('smartbi.factory-chart-selection:F006:business')).toBeNull();
     expect(page!.findAll('.chart-stub')).toHaveLength(1);
     expect(page!.find('.chart-stub').attributes('data-title')).toBe('毛利趋势');
+  });
+  it('previews a variant locally, replaces the same family, and only saves explicitly', async () => {
+    const [production, margin] = response().data.recommendations;
+    const kg = { ...production, id: 'yield-kg', analysis: { familyId: 'yield', familyLabel: '产量' } };
+    const box = { ...kg, id: 'yield-box', unit: '盒' };
+    h.api.getFactoryChartRecommendations.mockResolvedValue(response({
+      recommendations: [kg, box, margin], defaultSelection: ['yield-kg', 'margin'],
+    }));
+    const page = await mountPage();
+    await openCatalog(page!);
+    const family = page!.findAll('[data-testid="factory-chart-family"]')[0];
+    family.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 'yield-box');
+    await nextTick();
+    expect(page!.find('[data-testid="factory-chart-card-yield-box"]').exists()).toBe(true);
+    expect(page!.find('[data-testid="factory-chart-card-yield-kg"]').exists()).toBe(false);
+    await page!.findAll('.selection-panel input[type="checkbox"]')[1].setValue(false);
+    await flushPromises();
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
+    expect(localStorage.getItem('smartbi.factory-chart-selection:F006:business')).toBeNull();
+    await page!.get('[data-testid="factory-chart-save-selection"]').trigger('click');
+    await flushPromises();
+    expect(h.api.saveFactoryChartSelection).toHaveBeenCalledWith('F006', 'business', ['yield-box']);
+  });
+  it('keeps a local variant preview across a late preference GET', async () => {
+    let resolvePreference!: (value: unknown) => void;
+    h.api.getFactoryChartSelection.mockImplementationOnce(() => new Promise(resolve => { resolvePreference = resolve; }));
+    const page = await mountPage();
+    await openCatalog(page!);
+    page!.findComponent(FactoryChartGuide).vm.$emit('preview', ['margin']);
+    await nextTick();
+    resolvePreference({ success: true, data: { factoryId: 'F006', source: 'business', selectedIds: ['yield'], updatedAt: null } });
+    await flushPromises();
+    expect(page!.find('.chart-stub').attributes('data-title')).toBe('毛利趋势');
+    expect(h.api.saveFactoryChartSelection).not.toHaveBeenCalled();
   });
   it('keeps user intent when a period temporarily excludes the selected chart', async () => {
     const page = await mountPage();
@@ -193,11 +237,11 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     await page!.findAll('.selection-panel input[type="checkbox"]')[1].setValue(false);
     await nextTick();
     const key = 'smartbi.factory-chart-selection:F006:business';
-    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(['yield']);
+    expect(localStorage.getItem(key)).toBeNull();
     h.api.getFactoryChartRecommendations.mockResolvedValueOnce(response({ recommendations: [response().data.recommendations[1]] }));
     page!.findComponent(PeriodSelector).vm.$emit('change', { type: 'year', year: 2026, value: '2026', allHistory: false, compareEnabled: false });
     await flushPromises();
-    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(['yield']);
+    expect(localStorage.getItem(key)).toBeNull();
     page!.findComponent(PeriodSelector).vm.$emit('change', { type: 'year', year: 2026, value: '2026', allHistory: true, compareEnabled: false });
     await flushPromises();
     expect(page!.findAll('.chart-stub')).toHaveLength(1);
@@ -234,6 +278,8 @@ describe('FactoryChartRecommendations mounted workflow', () => {
     await boxes[0].setValue(false);
     await nextTick();
     expect(page!.findAll('.chart-stub')).toHaveLength(1);
+    await page!.get('[data-testid="factory-chart-save-selection"]').trigger('click');
+    await flushPromises();
     expect(localStorage.getItem('smartbi.factory-chart-selection:F006:business')).toContain('margin');
     await page!.get('[data-testid="factory-chart-refresh"]').trigger('click');
     await flushPromises();

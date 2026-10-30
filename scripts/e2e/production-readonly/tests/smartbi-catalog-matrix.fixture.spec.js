@@ -53,7 +53,7 @@ function pageHtml() {
       <button data-testid="factory-chart-refresh">刷新</button>
       <section data-testid="factory-chart-guide">
         <div data-testid="factory-chart-mode"><button>问答引导</button><button>按分类浏览</button></div>
-        <div data-testid="factory-chart-guide-subject" role="combobox"><button>产品</button><div id="subject-options" style="display:none">${subjects.map((subject) => `<div role="option" data-value="${subject.id}">${subject.label}</div>`).join('')}</div></div>
+        <div data-testid="factory-chart-guide-subject" role="combobox"><input aria-label="分析产品" placeholder="全部产品 / 全厂范围"><div id="subject-options" style="display:none"></div></div>
         <div data-testid="factory-chart-guide-domain"><label><input type="radio" value="生产" checked>生产完成情况怎样？</label></div>
         <div data-testid="factory-chart-guide-topic">选择主题</div>
         <div id="topic-options" style="display:none"><div class="el-select-dropdown__item">全部主题</div>${candidates.map(item => `<div class="el-select-dropdown__item">${item.analysis.familyLabel}</div>`).join('')}</div>
@@ -68,6 +68,7 @@ function pageHtml() {
     </main>
     <script>
       const allCandidates = ${JSON.stringify(candidates)};
+      const allSubjects = ${JSON.stringify(subjects)};
       const jsonHeaders = {'content-type':'application/json'};
       const recPath = '/smartbi-api/api/smartbi/financial-dashboard/factory-recommendations';
       const detailPath = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
@@ -85,8 +86,9 @@ function pageHtml() {
         }
       };
       for (const row of document.querySelectorAll('.family-row')) { const familyId = row.dataset.familyId.replace(/^[^:]+:/, ''); const group = allCandidates.filter(item => item.analysis.familyId === familyId); row.querySelector('.el-select').onclick = () => { document.querySelectorAll('.el-select-dropdown__item').forEach(node => node.remove()); group.forEach(item => { const option = document.createElement('div'); option.className = 'el-select-dropdown__item'; option.textContent = item.unit + ' / ' + item.source; option.dataset.value = item.id; option.onclick = () => { selectedVariant = item.id; option.remove(); }; document.body.append(option); }); }; }
-      document.querySelector('[data-testid="factory-chart-guide-subject"] button').onclick = () => { document.querySelector('#subject-options').style.display = 'block'; };
-      for (const subjectOption of document.querySelectorAll('#subject-options [role="option"]')) subjectOption.onclick = () => { document.querySelector('#subject-options').style.display = 'none'; fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({analysis_subject:subjectOption.dataset.value})}); };
+      const subjectInput = document.querySelector('[data-testid="factory-chart-guide-subject"] input');
+      subjectInput.onfocus = () => { document.querySelector('#subject-options').style.display = 'block'; };
+      subjectInput.oninput = () => { const query = subjectInput.value; const options = allSubjects.filter(subject => subject.label.includes(query)); document.querySelector('#subject-options').style.display = 'block'; document.querySelector('#subject-options').innerHTML = options.map(subject => '<div role="option" data-value="' + subject.id + '">' + subject.label + '</div>').join(''); for (const subjectOption of document.querySelectorAll('#subject-options [role="option"]')) subjectOption.onclick = () => { document.querySelector('#subject-options').style.display = 'none'; fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({analysis_subject:subjectOption.dataset.value})}); }; };
       for (const card of document.querySelectorAll('[data-testid^="factory-chart-card-"]')) card.querySelector('button').onclick = async () => {
         const candidateId = card.dataset.candidateId;
         const recommendation = await fetch(recPath, {method:'POST',headers:jsonHeaders,body:JSON.stringify({detail_candidate_ids:[candidateId]})});

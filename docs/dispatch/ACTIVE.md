@@ -8,8 +8,7 @@
 ## 在飞任务
 
 - `SC84-ALL-VARIANTS-20261030` — `in-progress` — Root；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；F006全部历史业务目录及合格产品的画法/单位变体双端实际验收；场景表私有sc84-variants/scenarios.json。网页MCP/小米并行、禁模拟器、只读零业务写；默认旧证据不代替变体新证据，详见当日SC84归档。
-- `SC84-WEB-VARIANTS-20261030` — `in-progress` — sc84_web_variants；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；readonly catalog scenario/2测试、core/run-suite.js选项桥及对应测试、生成mcp-entry/README；按候选ID逐变体验证，保留before-send保护。Node目标/本地fixture/drift；Root负责MCP/合并。
-- `SC84-NATIVE-VARIANTS-20261030` — `claimed` — sc84_native_variants唯一小米操作者；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；仅私有test-output/sc84-native*及sc84-variants/native证据；正常UI切画法/单位、图/来源/明细/单位列，禁源码/ledger/业务写/模拟器；新清单逐candidateID验收。
+- `SC84-NATIVE-VARIANTS-20261030` — `in-progress` — sc77_executor唯一小米操作者；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；仅私有test-output/sc84-native*及sc84-variants/native证据；正常UI切画法/单位、图/来源/明细/单位列，禁源码/ledger/业务写/模拟器；新清单逐candidateID验收。
 
 
 
