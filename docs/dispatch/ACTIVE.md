@@ -7,6 +7,11 @@
 
 ## 在飞任务
 
+- `PLATFORM-CONSOLE-20261030` — `in-progress` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 平台日常菜单与工厂业务分离；选厂配置菜单、保留实名平台主体的只读协助查看。UI/API子scope与契约见archive/2026-10-30-platform-console-scope.md；目标测试、独立终审、CI、main发布及UI验收。
+- `PLATFORM-CONSOLE-UI-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅前端平台导航/选厂菜单配置/只读查看上下文及目标测试；精确scope见同批scope归档；不改后端/ACTIVE。
+- `PLATFORM-CONSOLE-API-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅平台菜单配置API、工厂旧入口敏感字段保护、带平台主体的短期只读查看令牌与Java/Python护栏及目标测试；不改前端/ACTIVE/Entity/Repository。
+- `PLATFORM-CONSOLE-NETWORK-20261030` — `review` — Owner root — Base cf6d18e1bf8656caafc9041aaabc1c9f264c335f — 仅utils/platformFactoryViewNetwork.ts、对应测试、main.ts接线；原生fetch/XHR短期凭证与只读护栏，验收命令和scope见同批归档；不改Root/API源码或ACTIVE。
+
 - `SC84-ALL-VARIANTS-20261030` — `in-progress` — Root；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；F006全部历史业务目录及合格产品的画法/单位变体双端实际验收；场景表私有sc84-variants/scenarios.json。网页MCP/小米并行、禁模拟器、只读零业务写；默认旧证据不代替变体新证据，详见当日SC84归档。
 - `SC84-NATIVE-VARIANTS-20261030` — `in-progress` — sc77_executor唯一小米操作者；Base `4543c06466afa4bc7ad234658477d93cd1be823b`；仅私有test-output/sc84-native*及sc84-variants/native证据；正常UI切画法/单位、图/来源/明细/单位列，禁源码/ledger/业务写/模拟器；新清单逐candidateID验收。
 
@@ -103,6 +108,8 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 ## Scope 锁地图
+
+- `PLATFORM-CONSOLE-20261030`：仅root写ACTIVE/本批归档、审查集成及发布；前后端互斥scope与API契约以archive/2026-10-30-platform-console-scope.md为准；不修改其他工厂业务数据、不打开factory-assembly全局灰度。
 
 
 

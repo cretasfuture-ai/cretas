@@ -4,6 +4,7 @@
  */
 import request from '../request';
 import { get, post } from '../request';
+import { factoryViewContext, getStoredFactoryViewContext, factoryViewTokenForRequest, isFactoryViewRequest, isFactoryViewReadonlyPost } from '@/store/modules/platformFactoryContext';
 
 // Re-export request utilities for submodules
 export { request, get, post };
@@ -33,6 +34,13 @@ export function getUserData(): { factoryId: string; [key: string]: unknown } {
  * If no factoryId is available, throw so the caller can redirect to login.
  */
 export function getFactoryId(): string {
+  // Validate the view credential before reading its tenant. Never use the
+  // original platform identity as a fallback for an invalid or expired view.
+  if (factoryViewTokenForRequest('/api/mobile/factory-view')) {
+    const view = factoryViewContext.value || getStoredFactoryViewContext();
+    if (!view) throw new Error('工厂查看凭证无效，请返回平台后重新进入');
+    return view.factoryId;
+  }
   try {
     const user = getUserData();
     // Auth store stores factoryId nested: { factoryUser: { factoryId } }
@@ -132,7 +140,9 @@ function webTokenClaims(token: string | null): { webSessionHash?: string; exp?: 
   }
 }
 
-export async function getPythonAuthHeaders(): Promise<Record<string, string>> {
+export async function getPythonAuthHeaders(requestPath = '/api/smartbi'): Promise<Record<string, string>> {
+  const viewToken = factoryViewTokenForRequest(requestPath);
+  if (viewToken) return { ...PYTHON_HEADERS, Authorization: `Bearer ${viewToken}`, 'X-Client-Type': 'platform-factory-view' };
   const originalToken = localStorage.getItem('cretas_access_token');
   const originalClaims = webTokenClaims(originalToken);
   // Python validates bounded JWTs directly. Renew through the Java cookie authority
@@ -224,13 +234,21 @@ export async function pythonFetch<T = any>(path: string, options: RequestInit & 
   }
 
   try {
-    const response = await fetch(`${PYTHON_SMARTBI_URL}${path}`, {
+    const method = String(fetchOptions.method || 'GET').toUpperCase();
+    const requestUrl = `${PYTHON_SMARTBI_URL}${path}`;
+    if (isFactoryViewRequest(requestUrl) && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+      && !(method === 'POST' && isFactoryViewReadonlyPost(requestUrl, fetchOptions.body))) {
+      throw new Error('工厂只读查看不允许业务写操作');
+    }
+    const authHeaders = await getPythonAuthHeaders(requestUrl);
+    const response = await fetch(requestUrl, {
       ...fetchOptions,
       signal: controller.signal,
       credentials: 'include', // Send cookies through proxy
       headers: {
-        ...await getPythonAuthHeaders(),
+        ...authHeaders,
         ...fetchOptions.headers,
+        ...(isFactoryViewRequest(requestUrl) ? { Authorization: authHeaders.Authorization } : {}),
       },
     });
 

@@ -5,6 +5,7 @@
 import { ref, watch, type Ref } from 'vue'
 import { fetchListSummary } from '@/api/listSummary'
 import { useFactoryId } from './useFactoryId'
+import { factoryViewContext } from '@/store/modules/platformFactoryContext'
 import type {
   ListSummaryRequest,
   ListSummaryResponse,
@@ -21,6 +22,12 @@ export function useListSummary(
   const factoryId = useFactoryId()
 
   async function refresh() {
+    if (factoryViewContext.value) {
+      summary.value = null
+      loading.value = false
+      error.value = new Error('工厂只读查看暂不提供列表合计')
+      return
+    }
     if (!factoryId.value) {
       error.value = new Error('useListSummary: no factoryId in auth store')
       summary.value = null
@@ -39,7 +46,7 @@ export function useListSummary(
       // RN sibling hook frontend/CretasFoodTrace/src/hooks/useListSummary.ts:41
       // already does this unwrap; this restores cross-platform parity.
       const envelope = await fetchListSummary(factoryId.value, entityType, request.value)
-      summary.value = envelope.data
+      summary.value = factoryViewContext.value ? null : envelope.data
     } catch (e) {
       error.value = e instanceof Error ? e : new Error(String(e))
       summary.value = null

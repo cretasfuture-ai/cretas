@@ -49,7 +49,7 @@ public class PlatformDataAccessLogInterceptor implements AsyncHandlerInterceptor
     static final String PRINCIPAL_ATTRIBUTE = PlatformDataAccessLogInterceptor.class.getName() + ".principal";
     static final String RECORDED_ATTRIBUTE = PlatformDataAccessLogInterceptor.class.getName() + ".recorded";
 
-    private static final Pattern SAFE_FACTORY = Pattern.compile("[A-Za-z0-9_-]{1,64}");
+    private static final Pattern SAFE_FACTORY = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}");
     private static final Pattern SAFE_PARAM_NAME = Pattern.compile("[A-Za-z0-9_.\\[\\]-]{1,64}");
     private static final Pattern SAFE_IP = Pattern.compile("[0-9A-Fa-f.:\\[\\]]{1,64}");
 
@@ -139,6 +139,7 @@ public class PlatformDataAccessLogInterceptor implements AsyncHandlerInterceptor
         Object rawRole = request.getAttribute("role");
         String role = rawRole == null ? null : String.valueOf(rawRole);
         AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
+        if (actor != null) tokenFactoryId = actor.factoryId();
 
         boolean platformSide = (actor != null && actor.isPlatformAdmin())
                 || "PLATFORM".equals(tokenFactoryId)

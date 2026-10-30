@@ -9,6 +9,11 @@ import App from './App.vue';
 import './style.css';
 import { registerEChartsTheme } from './utils/echarts-theme';
 import { installClientErrorReporter } from './utils/clientErrorReporter';
+import { installPlatformFactoryViewNetworkGuard } from './utils/platformFactoryViewNetwork';
+
+// Install before async app bootstrap so pages that still use native fetch/XHR
+// cannot issue an unscoped request during initial route/component effects.
+installPlatformFactoryViewNetworkGuard();
 
 // 异步引导函数
 async function bootstrap() {

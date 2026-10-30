@@ -3,14 +3,13 @@ import type { MenuItem } from './menuConfig';
 /** Factories retain the existing hidden analytics menu until explicitly opted in. */
 export function hasFactoryAnalyticsSidebarOptIn(features: unknown): boolean {
   if (!Array.isArray(features)) return false;
-  return features.some((feature: unknown) => {
-    if (!feature || typeof feature !== 'object') return false;
-    const row = feature as Record<string, unknown>;
-    if (row.moduleId !== 'analytics' || row.enabled !== true) return false;
-    const config = row.config;
-    return Boolean(config && typeof config === 'object'
-      && (config as Record<string, unknown>).showInSidebar === true);
-  });
+  const rows = features.filter((feature): feature is Record<string, unknown> => !!feature && typeof feature === 'object');
+  const row = rows.find(feature => feature.moduleId === 'analytics')
+    || rows.find(feature => feature.moduleId === 'smartbi');
+  if (!row || row.enabled !== true) return false;
+  const config = row.config;
+  return Boolean(config && typeof config === 'object'
+    && (config as Record<string, unknown>).showInSidebar === true);
 }
 
 /** This only lifts the factory-type hiding of the analytics group, never access checks. */
@@ -41,6 +40,24 @@ export function getDisabledFactoryMenuPaths(features: unknown): string[] {
     }
   }
   return [...paths];
+}
+
+/** Platform-owned parent visibility. `enabled` and permission gates remain separate. */
+export function getHiddenFactoryMenuModules(features: unknown): string[] {
+  if (!Array.isArray(features)) return [];
+  const hidden = new Set<string>();
+  for (const feature of features) {
+    if (!feature || typeof feature !== 'object') continue;
+    const row = feature as Record<string, unknown>;
+    const moduleId = typeof row.moduleId === 'string' ? row.moduleId : '';
+    const config = row.config;
+    if (!moduleId || !config || typeof config !== 'object') continue;
+    if ((config as Record<string, unknown>).menuVisible === false) {
+      hidden.add(moduleId === 'smartbi' ? 'analytics'
+        : moduleId === 'restaurant_buy' ? 'restaurantProcurement' : moduleId);
+    }
+  }
+  return [...hidden];
 }
 
 export function isFactoryMenuHidden(path: string, disabledPaths: readonly string[]): boolean {

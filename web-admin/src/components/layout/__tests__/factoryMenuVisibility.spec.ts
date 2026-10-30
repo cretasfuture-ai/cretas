@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
   getDisabledFactoryMenuPaths, isFactoryMenuHidden, getFactoryModuleMenuOptions,
+  getHiddenFactoryMenuModules,
 } from '../factoryMenuVisibility';
 import { menuConfig } from '../menuConfig';
 
@@ -19,8 +20,18 @@ describe('factory analytics sidebar opt-in', () => {
       [{ moduleId: 'analytics', enabled: false, config: { showInSidebar: true } }],
       [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }],
       [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: 'true' } }],
-      [{ moduleId: 'smartbi', enabled: true, config: { showInSidebar: true } }],
     ]) expect(hasFactoryAnalyticsSidebarOptIn(features)).toBe(false);
+  });
+
+  it('reads the legacy SmartBI alias only when the canonical analytics row is absent', () => {
+    const legacy = { moduleId: 'smartbi', enabled: true, config: { showInSidebar: true } };
+    expect(hasFactoryAnalyticsSidebarOptIn([legacy])).toBe(true);
+    expect(hasFactoryAnalyticsSidebarOptIn([
+      legacy, { moduleId: 'analytics', enabled: false, config: { showInSidebar: true } },
+    ])).toBe(false);
+    expect(getHiddenFactoryMenuModules([
+      { moduleId: 'restaurant_buy', config: { menuVisible: false } },
+    ])).toContain('restaurantProcurement');
   });
 
   it('only lifts factory-type hiding for the data-and-analysis group', () => {
@@ -54,6 +65,8 @@ describe('factory analytics sidebar opt-in', () => {
     expect(src).toContain('hasFactoryAnalyticsSidebarOptIn(featuresResult.value.data)');
     expect(src).toContain('if (token !== disabledFetchToken) return;');
     expect(src).toContain('factoryAnalyticsMenuEnabled.value = false;');
+    expect(src).toContain('getHiddenFactoryMenuModules(featuresResult.value.data)');
+    expect(src).toContain('hiddenFactoryMenuModules.value.includes(item.module)');
     expect(src).toContain('item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible');
     expect(src).toContain('return item.roles.includes(currentRole) && canAccess;');
     expect(src).toContain('if (disabledSet.has(item.module))');
@@ -61,6 +74,15 @@ describe('factory analytics sidebar opt-in', () => {
 });
 
 describe('per-factory child menu visibility', () => {
+  it('reads platform-owned parent visibility without treating enabled as menu visibility', () => {
+    expect(getHiddenFactoryMenuModules([
+      { moduleId: 'production', enabled: true, config: { menuVisible: false } },
+      { moduleId: 'warehouse', enabled: false, config: { menuVisible: true } },
+      { moduleId: 'smartbi', enabled: true, config: { menuVisible: false } },
+    ])).toEqual(['production', 'analytics']);
+    expect(getHiddenFactoryMenuModules([{ moduleId: 'production', enabled: false, config: {} }])).toEqual([]);
+  });
+
   it('combines module-specific disabled menus without mutating another factory configuration', () => {
     const otherFactory = [{ moduleId: 'warehouse', config: {} }];
     const disabled = getDisabledFactoryMenuPaths([

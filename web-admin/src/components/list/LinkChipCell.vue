@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { LinkChipCounts } from '@/composables/useLinkChipCounts';
+import { factoryViewContext } from '@/store/modules/platformFactoryContext';
 
 /**
  * Sprint 6 W3-A — Inline 3-chip link counter cell (文件 / 图片 / 合同).
@@ -28,7 +29,8 @@ const total = computed(() =>
 </script>
 
 <template>
-  <span v-if="total === 0" style="color: var(--text-color-secondary, #909399);">-</span>
+  <span v-if="factoryViewContext" title="工厂只读查看暂不加载附件数量" style="color: var(--text-color-secondary, #909399);">未加载</span>
+  <span v-else-if="total === 0" style="color: var(--text-color-secondary, #909399);">-</span>
   <span v-else class="link-chip-row">
     <el-tooltip placement="top">
       <template #content>

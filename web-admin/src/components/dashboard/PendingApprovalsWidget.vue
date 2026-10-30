@@ -47,7 +47,7 @@ const loadError = ref('');
 const visible = computed(() => total.value > 0);
 
 async function load(): Promise<void> {
-  if (!factoryId.value) return;
+  if (!factoryId.value || authStore.isPlatform) return;
   loading.value = true;
   loadError.value = '';
   try {

@@ -1,0 +1,218 @@
+{
+  "analytics": [
+    "/analytics/ai-reports",
+    "/analytics/alert-dashboard",
+    "/analytics/indicators",
+    "/analytics/overview",
+    "/analytics/supply-chain",
+    "/crm/member-analysis",
+    "/ops/agent-ops",
+    "/ops/operations-analysis",
+    "/production-analytics/cost-summary",
+    "/smart-bi/analysis",
+    "/smart-bi/analysis-hub",
+    "/smart-bi/calibration",
+    "/smart-bi/dashboard",
+    "/smart-bi/data-completeness",
+    "/smart-bi/fallback-log",
+    "/smart-bi/food-kb-feedback",
+    "/smart-bi/health-report",
+    "/smart-bi/mapping-review",
+    "/smart-bi/query-templates",
+    "/smart-bi/revenue-report",
+    "/smart-bi/upload"
+  ],
+  "dashboard": [
+    "/dashboard",
+    "/dashboard/ai-value",
+    "/restaurant/supplier-delivery",
+    "/workflow/acted",
+    "/workflow/copied",
+    "/workflow/my-created",
+    "/workflow/pending"
+  ],
+  "equipment": [
+    "/equipment/alerts",
+    "/equipment/list",
+    "/equipment/maintenance"
+  ],
+  "finance": [
+    "/finance/accounting-period",
+    "/finance/adjustments",
+    "/finance/ar-ap",
+    "/finance/costs",
+    "/finance/gross-margin-redline",
+    "/finance/invoices",
+    "/finance/payments",
+    "/finance/purchase-invoices",
+    "/finance/reports",
+    "/finance/sku-margin",
+    "/finance/three-statements",
+    "/finance/voucher-export",
+    "/finance/voucher-list",
+    "/finance/voucher-template",
+    "/workdesk/finance-manager"
+  ],
+  "hr": [
+    "/hr/attendance",
+    "/hr/departments",
+    "/hr/employees",
+    "/hr/whitelist",
+    "/hr/work-types"
+  ],
+  "inventory": [
+    "/transfer/list"
+  ],
+  "procurement": [
+    "/procurement/ai-purchase",
+    "/procurement/orders",
+    "/procurement/price-lists",
+    "/procurement/requisitions",
+    "/procurement/requisitions/my",
+    "/procurement/requisitions/pending-approval",
+    "/procurement/suppliers",
+    "/restaurant/purchase-plan",
+    "/workdesk/purchaser"
+  ],
+  "production": [
+    "/dashboard/production-progress",
+    "/production/analysis-query",
+    "/production/approval",
+    "/production/batches",
+    "/production/bom/ecns",
+    "/production/kanban",
+    "/production/material-flow",
+    "/production/plans",
+    "/production/process-hub",
+    "/production/shortage-cases",
+    "/production/traceability",
+    "/production/yield-standard",
+    "/system/products",
+    "/workdesk/production-manager"
+  ],
+  "quality": [
+    "/quality/ccp",
+    "/quality/defects",
+    "/quality/disposals",
+    "/quality/disposition",
+    "/quality/inspections",
+    "/quality/label-qc",
+    "/quality/recalls",
+    "/quality/release",
+    "/quality/returns",
+    "/quality/standards",
+    "/quality/vision-training",
+    "/workdesk/quality-chief",
+    "/workdesk/quality-manager"
+  ],
+  "rd": [
+    "/rd/converted",
+    "/rd/samples"
+  ],
+  "restaurant": [
+    "/restaurant/admin/etl-status",
+    "/restaurant/admin/name-resolution",
+    "/restaurant/data-completeness"
+  ],
+  "restaurantFinance": [
+    "/restaurant/cost-attribution",
+    "/restaurant/finance",
+    "/restaurant/price-anomaly",
+    "/restaurant/supplier-reconciliation"
+  ],
+  "restaurantHr": [
+    "/restaurant/hr",
+    "/restaurant/staffing"
+  ],
+  "restaurantMarketing": [
+    "/restaurant/analytics/dishes",
+    "/restaurant/analytics/platform",
+    "/restaurant/analytics/role-kpi",
+    "/restaurant/analytics/stores",
+    "/restaurant/commission",
+    "/restaurant/marketing"
+  ],
+  "restaurantOps": [
+    "/restaurant/ops",
+    "/restaurant/recipes",
+    "/restaurant/requisitions",
+    "/restaurant/stocktaking",
+    "/restaurant/wastage"
+  ],
+  "restaurantProcurement": [
+    "/restaurant/procurement"
+  ],
+  "sales": [
+    "/sales/customers",
+    "/sales/orders",
+    "/sales/payment-requests",
+    "/sales/returns",
+    "/sales/shipments",
+    "/sales/vehicles",
+    "/workdesk/sales-owner"
+  ],
+  "scheduling": [
+    "/scheduling/alerts",
+    "/scheduling/logistics/orders",
+    "/scheduling/logistics/records",
+    "/scheduling/logistics/resources",
+    "/scheduling/logistics/stores",
+    "/scheduling/logistics/workbench",
+    "/scheduling/overview",
+    "/scheduling/plans",
+    "/scheduling/realtime",
+    "/scheduling/settings",
+    "/scheduling/workers"
+  ],
+  "system": [
+    "/calibration/list",
+    "/canvas-editor",
+    "/factory-onboarding",
+    "/factory-readiness",
+    "/factory-review",
+    "/system/ai-flywheel",
+    "/system/ai-frontline-grants",
+    "/system/ai-intents",
+    "/system/ai-quota",
+    "/system/approval-chains",
+    "/system/autonomous-writes",
+    "/system/badge-generator",
+    "/system/business-thresholds",
+    "/system/data-backups",
+    "/system/data-quality-queue",
+    "/system/encoding-rules",
+    "/system/features",
+    "/system/label-qc-platform-diagnostics",
+    "/system/label-qc-tray-crops",
+    "/system/llm-usage",
+    "/system/logs",
+    "/system/operation-log",
+    "/system/permission-matrix",
+    "/system/platform-access-log",
+    "/system/pos",
+    "/system/process-secret",
+    "/system/reusable-skills",
+    "/system/roles",
+    "/system/settings",
+    "/system/skill-tools",
+    "/system/smartbi-config",
+    "/system/tenant-backups",
+    "/system/users",
+    "/system/workflow-designer",
+    "/unit-dictionary"
+  ],
+  "warehouse": [
+    "/warehouse/inventory-query",
+    "/warehouse/material-price-trend",
+    "/warehouse/material-segments",
+    "/warehouse/material-types",
+    "/warehouse/materials",
+    "/warehouse/shipments",
+    "/warehouse/source-individuals",
+    "/warehouse/stocktake-query",
+    "/warehouse/storage-locations",
+    "/warehouse/unordered-inbound-applications",
+    "/warehouse/wastage-reports",
+    "/workdesk/warehouse-keeper"
+  ]
+}

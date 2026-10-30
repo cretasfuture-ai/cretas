@@ -8,6 +8,7 @@ import { computed } from 'vue'
 import { ElPagination, ElButton, ElIcon } from 'element-plus'
 import { DataAnalysis, Download } from '@element-plus/icons-vue'
 import { usePermissionStore } from '@/store/modules/permission'
+import { factoryViewContext } from '@/store/modules/platformFactoryContext'
 import type { SummaryStat, ListSummaryPagination } from '@/types/listSummary'
 
 interface Props {
@@ -74,7 +75,10 @@ function formatValue(stat: SummaryStat): string {
 <template>
   <div class="table-footer">
     <div class="stats">
-      <template v-if="loading">
+      <template v-if="factoryViewContext">
+        <span class="empty">工厂只读查看暂不提供列表合计</span>
+      </template>
+      <template v-else-if="loading">
         <span class="loading">加载中…</span>
       </template>
       <template v-else-if="visibleStats.length === 0">
@@ -104,7 +108,7 @@ function formatValue(stat: SummaryStat): string {
       @size-change="(s: number) => emit('page-size-change', s)"
     />
 
-    <div class="actions">
+    <div v-if="!factoryViewContext" class="actions">
       <ElButton v-if="showAi" link size="small" @click="emit('ai-analyze')" title="AI 分析">
         <ElIcon><DataAnalysis /></ElIcon>
         <span class="action-text">AI 分析</span>

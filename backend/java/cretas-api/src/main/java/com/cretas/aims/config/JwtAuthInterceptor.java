@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -227,6 +228,34 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
                     new com.cretas.aims.security.AuthenticatedActor(actorType, userId, tokenFactoryId, tokenRole));
         }
 
+        // Factory-view credentials retain the platform actor but are strictly read-only and
+        // scoped to the one factory selected by the platform console.
+        if (token != null && jwtUtil.hasPlatformFactoryViewMarker(token)
+                && !jwtUtil.isPlatformFactoryViewToken(token)) {
+            sendForbiddenResponse(response, "工厂查看令牌声明不完整");
+            return false;
+        }
+        if (token != null && jwtUtil.isPlatformFactoryViewToken(token)) {
+            String target = jwtUtil.getViewFactoryIdFromToken(token);
+            String pathFactory = urlFactoryId(requestUri);
+            if (requestUri.startsWith(PLATFORM_API_PREFIX)) {
+                sendForbiddenResponse(response, "工厂查看令牌不能访问平台管理API");
+                return false;
+            }
+            if (target == null || pathFactory == null || !target.equals(pathFactory)
+                    || hasConflictingFactoryQuery(request, target)) {
+                sendForbiddenResponse(response, "工厂查看令牌范围不匹配");
+                return false;
+            }
+            if (!Set.of("GET", "HEAD", "OPTIONS").contains(request.getMethod().toUpperCase(Locale.ROOT))
+                    || !com.cretas.aims.security.PlatformFactoryViewReadPolicy.allows(requestUri, target)) {
+                sendForbiddenResponse(response, "工厂查看模式为只读");
+                return false;
+            }
+            request.setAttribute("factoryId", target);
+            request.setAttribute(com.cretas.aims.security.PlatformFactoryViewReadPolicy.REQUEST_ATTRIBUTE, Boolean.TRUE);
+        }
+
         // Admin API 权限验证 — 仅允许已认证用户(平台管理员或工厂管理员)访问
         if (requestUri.startsWith("/api/admin/")) {
             if (userId == null) {
@@ -349,6 +378,23 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             }
         }
         return null;
+    }
+
+    private String urlFactoryId(String uri) {
+        Matcher matcher = FACTORY_ID_PATTERN.matcher(uri);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private boolean hasConflictingFactoryQuery(HttpServletRequest request, String target) {
+        for (String name : Set.of("factoryId", "factory_id", "viewFactoryId", "view_factory_id", "tenantId", "tenant_id")) {
+            String[] values = request.getParameterValues(name);
+            if (values != null) {
+                for (String value : values) {
+                    if (!target.equals(value)) return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

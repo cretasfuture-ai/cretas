@@ -14,6 +14,7 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('system'));
+const isFactoryAccount = computed(() => authStore.isFactory);
 
 const loading = ref(false);
 const configs = ref<FeatureConfig[]>([]);
@@ -21,7 +22,7 @@ const drawerVisible = ref(false);
 const saving = ref(false);
 const editingModule = ref<FeatureConfig | null>(null);
 const editConfig = ref<ModuleConfigDetail>({});
-const webMenuOptions = computed(() => editingModule.value
+const webMenuOptions = computed(() => editingModule.value && !isFactoryAccount.value
   ? getFactoryModuleMenuOptions(menuConfig, editingModule.value.moduleId) : []);
 
 // Module metadata for display
@@ -210,10 +211,13 @@ async function saveConfig() {
   if (!factoryId.value || !editingModule.value) return;
   saving.value = true;
   try {
+    // Menu visibility is platform-owned. Never send these fields from a
+    // factory account, even if an old payload hydrated them from the server.
+    const { disabledMenuPaths: _disabledMenuPaths, menuVisible: _menuVisible, showInSidebar: _showInSidebar, ...factoryConfig } = editConfig.value;
     const response = await updateModuleConfig(
       factoryId.value,
       editingModule.value.moduleId,
-      editConfig.value
+      isFactoryAccount.value ? factoryConfig : editConfig.value
     );
     if (response.success) {
       // Update local state

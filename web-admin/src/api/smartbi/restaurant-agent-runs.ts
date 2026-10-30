@@ -4,6 +4,7 @@ import type {
   RestaurantAgentRunMode,
   RestaurantAgentRunReplayV1,
 } from '@/types/restaurant-agent-run';
+import { factoryViewTokenForRequest, isFactoryViewRequest } from '@/store/modules/platformFactoryContext';
 import {
   RESTAURANT_AGENT_RUN_ROUTE,
   isRestaurantAgentRunId,
@@ -62,13 +63,13 @@ function apiBaseUrl(): string {
   return (import.meta.env.VITE_API_BASE_URL || '/api/mobile').replace(/\/$/, '');
 }
 
-function authHeaders(): Record<string, string> {
+function authHeaders(requestPath: string): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'text/event-stream',
     'Content-Type': 'application/json',
     'X-Client-Type': 'web',
   };
-  const token = localStorage.getItem('cretas_access_token');
+  const token = factoryViewTokenForRequest(requestPath) || localStorage.getItem('cretas_access_token');
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 }
@@ -119,12 +120,15 @@ export async function streamGrossMarginDeclineRun(
   const trustedFactoryId = validateFactoryId(factoryId);
   validateRequest(body);
 
+  const requestPath = `${apiBaseUrl()}/${encodeURIComponent(trustedFactoryId)}/restaurant-agent/runs`;
+  if (isFactoryViewRequest(requestPath)) throw new Error('工厂只读查看不允许启动分析任务');
+
   const response = await fetch(
-    `${apiBaseUrl()}/${encodeURIComponent(trustedFactoryId)}/restaurant-agent/runs`,
+    requestPath,
     {
       method: 'POST',
       credentials: 'include',
-      headers: authHeaders(),
+      headers: authHeaders(requestPath),
       body: JSON.stringify(body),
       signal,
     },
@@ -184,13 +188,14 @@ export async function replayGrossMarginDeclineRun(
   if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
     throw new Error('AFTER_SEQUENCE_INVALID');
   }
+  const requestPath = `${apiBaseUrl()}/${encodeURIComponent(trustedFactoryId)}/restaurant-agent/runs/${encodeURIComponent(runId)}/events?afterSequence=${afterSequence}`;
   const response = await fetch(
-    `${apiBaseUrl()}/${encodeURIComponent(trustedFactoryId)}/restaurant-agent/runs/${encodeURIComponent(runId)}/events?afterSequence=${afterSequence}`,
+    requestPath,
     {
       method: 'GET',
       credentials: 'include',
       headers: {
-        ...authHeaders(),
+        ...authHeaders(requestPath),
         Accept: 'application/json',
       },
       signal,

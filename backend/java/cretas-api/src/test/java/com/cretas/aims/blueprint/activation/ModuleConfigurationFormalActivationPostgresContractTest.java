@@ -128,7 +128,9 @@ class ModuleConfigurationFormalActivationPostgresContractTest {
         ReflectionTestUtils.setField(runtime, "actorResolver", actors);
         ReflectionTestUtils.setField(runtime, "ddlExecutor", mock(DDLExecutor.class));
         ReflectionTestUtils.setField(runtime, "dynamicFieldService", mock(DynamicFieldService.class));
-        ModuleSwitchService moduleSwitch = new ModuleSwitchService(runtime, features);
+        var featureWriteLock = new com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock();
+        ReflectionTestUtils.setField(featureWriteLock, "entityManager", entityManager);
+        ModuleSwitchService moduleSwitch = new ModuleSwitchService(runtime, features, featureWriteLock);
         BlueprintModuleConfigurationApplyService apply =
                 new BlueprintModuleConfigurationApplyService(draftRows, draftItems, runtime, moduleSwitch);
         ModuleConfigDraftCommand drafts = mock(ModuleConfigDraftCommand.class);
