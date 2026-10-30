@@ -149,6 +149,7 @@ async function runSuiteWithPage(page, options = {}) {
         expectedFactoryId,
         loginEvidence,
         factoryAccessFactoryId: options.factoryAccessFactoryId,
+        factoryAccessCases: options.factoryAccessCases,
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
