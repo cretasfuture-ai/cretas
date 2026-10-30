@@ -22,6 +22,24 @@ test('catalog options are bounded, unique, and fail closed', () => {
   assert.throws(() => catalog.validateCatalogFamilies('production.output'), /array/);
   assert.throws(() => catalog.validateCatalogFamilies(['same', 'same']), /duplicate/);
   assert.throws(() => catalog.validateCatalogFamilies(Array.from({ length: 61 }, (_, i) => `family-${i}`)), /at most 60/);
+  assert.deepEqual(catalog.validateCatalogCandidateIds(['same@kg', 'same@件']), ['same@kg', 'same@件']);
+  assert.throws(() => catalog.validateCatalogCandidateIds(['same@kg', 'same@kg']), /duplicate/);
+  assert.throws(() => catalog.validateCatalogCandidateIds(Array.from({ length: 121 }, (_, i) => `candidate-${i}`)), /at most 120/);
+  assert.equal(catalog.validateCatalogSubjectId('product-a'), 'product-a');
+  assert.equal(catalog.validateCatalogSubjectId(null), null);
+  assert.throws(() => catalog.validateCatalogSubjectId(''), /non-empty/);
+});
+
+test('explicit candidate IDs keep same-family unit/source variants visible', () => {
+  const recommendations = [
+    candidate('family@kg@business', 'production.output', { unit: 'kg', source: 'business' }),
+    candidate('family@件@business', 'production.output', { unit: '件', source: 'business' }),
+    candidate('family@kg@xiaomi', 'production.output', { unit: 'kg', source: 'xiaomi' }),
+  ];
+  const selected = catalog.selectCatalogCandidates({ recommendations }, null, ['family@kg@business', 'family@件@business', 'family@kg@xiaomi']);
+  assert.deepEqual(selected.selected.map((item) => item.candidate.id), ['family@kg@business', 'family@件@business', 'family@kg@xiaomi']);
+  assert.deepEqual(selected.requestedCandidateUnknown, []);
+  assert.deepEqual(catalog.selectCatalogCandidates({ recommendations }, null, ['missing']).requestedCandidateUnknown, ['missing']);
 });
 
 test('catalog matrix groups variants and caps selected families at four', () => {

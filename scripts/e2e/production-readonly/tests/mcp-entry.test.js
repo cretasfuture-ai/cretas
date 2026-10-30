@@ -13,6 +13,8 @@ test('MCP filename entry is a single async page function with no top-level execu
   assert.equal(typeof entry, 'function');
   assert.equal(entry.constructor.name, 'AsyncFunction');
   assert.match(source, /runSuiteWithPage\(page/);
+  assert.match(source, /factoryCatalogCandidateIds: options\.factoryCatalogCandidateIds/);
+  assert.match(source, /factoryCatalogSubjectId: options\.factoryCatalogSubjectId/);
   assert.equal(source, renderBundle(), 'mcp-entry.js must match the deterministic bundle from canonical core/scenarios');
   assert.doesNotMatch(source, /require\(['"]node:|\bprocess\.(?:env|cwd)/);
   const callbackStart = source.indexOf('chartHost.evaluate(async (element, target) => {');

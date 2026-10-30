@@ -41,7 +41,7 @@ export interface FactoryRecommendation {
   detailStatus?: FactoryChartDetailStatus;
   /** Opaque immutable source proof returned with an allocated context. */
   detailSnapshotKey?: string;
-  analysis?: { familyId?: string | null; familyLabel?: string | null };
+  analysis?: { familyId?: string | null; familyLabel?: string | null; sourceQuantityUnit?: string | null };
 }
 
 export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: boolean; }

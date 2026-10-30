@@ -43,7 +43,7 @@ export interface FactoryRecommendation {
   detailContext?: FactoryChartDetailContext;
   detailSnapshotKey?: string;
   detailStatus?: { state: 'unavailable' | 'capacity'; message: string; retryAfterSeconds?: number };
-  analysis?: { familyId: string; familyLabel: string };
+  analysis?: { familyId: string; familyLabel: string; sourceQuantityUnit?: string | null };
 }
 
 export interface FactoryChartDetailContext { id: string; expiresAt: string; drilldown?: boolean; }

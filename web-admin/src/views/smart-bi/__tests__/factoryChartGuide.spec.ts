@@ -4,7 +4,7 @@ import ElementPlus from 'element-plus';
 import { describe, it, expect } from 'vitest';
 import type { FactoryRecommendation } from '@/api/smartbi/factory-charts';
 import FactoryChartGuide from '../FactoryChartGuide.vue';
-import { analysisFamilies, recommendedAnalysisIds, replaceFamilySelection } from '../factoryChartGuide';
+import { analysisFamilies, chartVariantLabel, recommendedAnalysisIds, replaceFamilySelection } from '../factoryChartGuide';
 
 function item(id: string, family = 'stock', unit = 'kg', kind = 'bar', domain = '库存'): FactoryRecommendation {
   return { id, title: `${family} ${unit}`, metric: family, domain, priority: 'required', reason: '实测数据', source: 'business', unit,
@@ -22,6 +22,13 @@ describe('factory analysis families', () => {
     expect(analysisFamilies(items)[0].items).toHaveLength(3);
     expect(replaceFamilySelection(['kg', 'other'], analysisFamilies(items)[0], 'box')).toEqual(['other', 'box']);
     expect(JSON.stringify(items)).toBe(before);
+  });
+
+  it('labels ratio source units while leaving financial percentages unqualified', () => {
+    expect(chartVariantLabel(item('ratio', 'ratio', '%', 'gauge'))).toBe('仪表 · %');
+    expect(chartVariantLabel({ ...item('ratio-kg', 'ratio', '%', 'gauge'), analysis: { familyId: 'ratio', familyLabel: '比率', sourceQuantityUnit: 'kg' } })).toBe('仪表 · % · 口径：kg');
+    expect(chartVariantLabel({ ...item('ratio-box', 'ratio', '%', 'gauge'), analysis: { familyId: 'ratio', familyLabel: '比率', sourceQuantityUnit: 'box' } })).toBe('仪表 · % · 口径：box');
+    expect(chartVariantLabel({ ...item('ratio-盒', 'ratio', '%', 'gauge'), analysis: { familyId: 'ratio', familyLabel: '比率', sourceQuantityUnit: '盒' } })).toBe('仪表 · % · 口径：盒');
   });
   it('recommends at most four distinct families in server order within the question scope', () => {
     const items = Array.from({ length: 15 }, (_, i) => item(String(i), `metric${Math.floor(i / 2)}`));
@@ -52,7 +59,7 @@ describe('mounted factory analysis guide', () => {
     const row = page.findAll('[data-testid="factory-chart-family"]')[0];
     row.findComponent({ name: 'ElSelect' }).vm.$emit('update:modelValue', 'box');
     await nextTick();
-    expect(page.emitted('selection')?.at(-1)).toEqual([['box']]);
+    expect(page.emitted('preview')?.at(-1)).toEqual([['box']]);
     await page.get('[aria-label="搜索分析主题"]').setValue('cost');
     expect(page.findAll('[data-testid="factory-chart-family"]')).toHaveLength(1);
     expect(page.find('[data-testid="factory-chart-family"]').text()).toContain('cost');
