@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `YDWM-IMAGE-CONTEXT-20261031` — `in-progress` — Owner root — Base 7769ceb34549f3f9c69f33ddf206a1ae70bfd402 — scope仓库识别Controller、PythonLLMClient仓库专用传输及相关测试/本批dispatch；补可信工厂上下文，保留隐私/角色/模块/画布权限。验收见archive/2026-10-31-ydwm-image-context.md。
 
 
 
