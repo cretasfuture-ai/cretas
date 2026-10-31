@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `YDWM-IMAGE-AUTH-20261031` — `in-progress` — Owner root — Base f703c96d18a5d18ac482712adde99d94656f8988 — scope WarehouseLayoutController.java、WarehouseLayoutControllerTest.java、新识别权限ContractTest及本批dispatch；仅图片识别改为warehouse:write，角色/模块/画布AI不变。验收见archive/2026-10-31-ydwm-image-auth.md。
 
 
 
