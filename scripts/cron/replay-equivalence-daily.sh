@@ -29,6 +29,17 @@ LOG="${REPLAY_EQ_LOG:-/www/wwwroot/cretas/logs/replay-equivalence.log}"
 ALERTS="${REPLAY_EQ_ALERTS:-/www/wwwroot/cretas/logs/replay-equivalence-alerts.log}"
 LEDGER="${REPLAY_EQ_LEDGER:-/www/wwwroot/cretas/logs/replay-equivalence-ledger.jsonl}"
 ENV_PROD="${REPLAY_EQ_ENV_PROD:-/www/wwwroot/cretas/.env.prod}"
+
+# ⛔ 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 已停。
+#    本探针只验餐饮回放 (ai_promoted_routes WHERE domain='restaurant' + 餐饮执行链 tiered_answer),
+#    PROBE_FACTORY 默认 MOCK_REST, 每跑一次往 smart_bi_llm_fallback_log / narrative_cache 写 MOCK_REST 的
+#    AI 数据; 该租户已撤回训练授权、AI 副本已清理, 餐饮线已废弃。换成工厂租户也没意义 (工厂不走这条链,
+#    domain='restaurant' 的存量在工厂租户下回放不出来)。
+#    默认直接退出 0 并在日志记一句; 只有显式 REPLAY_EQ_ENABLED=1 才跑 (留给测试与将来真要恢复时)。
+if [ "${REPLAY_EQ_ENABLED:-0}" != "1" ]; then
+  echo "=== $(date '+%F %T') replay equivalence: 已停 (2026-10-29 MOCK_REST AI writes stopped, owner-approved); 设 REPLAY_EQ_ENABLED=1 才跑 ===" >> "$LOG" 2>/dev/null
+  exit 0
+fi
 # 2026-09-06 审计批 2: 钉 PATH; venv 不在 ⇒ rc=2 (⛔ 不掉回系统 python 3.6.8); .env.prod 不在 ⇒ rc=2。
 # shellcheck source=scripts/cron/cron-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/cron-common.sh"
