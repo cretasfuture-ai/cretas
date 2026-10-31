@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
+import Editor from '../../index.vue'
 
 let releaseRunningCount: ((count: number) => void) | undefined
 const deferredRunningCount = new Promise<number>((resolve) => { releaseRunningCount = resolve })
@@ -24,6 +25,13 @@ const workflow = {
   ]),
 }
 
+// The editor chain only uses ElMessage / ElMessageBox from element-plus. Loading
+// the real barrel cost ~3.5s cold (of a ~5.5s editor import) and pushed this case
+// past its 15s limit when it ran inside the parallel src/views/platform suite.
+vi.mock('element-plus', () => ({
+  ElMessage: { success: vi.fn(), info: vi.fn(), warning: vi.fn(), error: vi.fn() },
+  ElMessageBox: { confirm: vi.fn(() => Promise.resolve('confirm')), alert: vi.fn(() => Promise.resolve('confirm')) },
+}))
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006' }) }))
 vi.mock('@/api/approvalWorkflow', () => {
   const ok = (data: unknown) => Promise.resolve({ success: true, data })
@@ -44,7 +52,6 @@ if (!SVGElement.prototype.getBBox) {
 
 describe('approval canvas real editor edge persistence', () => {
   it('mounts production editor and renders the API five-node/four-edge graph', async () => {
-    const { default: Editor } = await import('../../index.vue')
     const wrapper = mount(Editor, {
       props: { embedded: true, initialDecisionType: 'PURCHASE_ORDER_APPROVAL', initialWorkflowId: workflow.id, lockDecisionType: true },
       global: { stubs: { StepListEditor: true, ApprovalWorkflowAIComposer: true, WorkflowSimulator: true, ConditionRulesPanel: true } },
