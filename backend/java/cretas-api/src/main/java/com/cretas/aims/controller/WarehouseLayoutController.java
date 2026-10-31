@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.FactoryFeatureConfig;
@@ -81,7 +82,7 @@ public class WarehouseLayoutController {
     }
 
     @PostMapping("/recognize")
-    @RequireRole({"factory_super_admin", "warehouse_manager"})
+    @RequirePermission("warehouse:write")
     public ApiResponse<Map<String, Object>> recognizeLayout(
             @PathVariable String factoryId,
             @RequestBody Map<String, String> request) {
