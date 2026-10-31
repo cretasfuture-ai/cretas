@@ -87,14 +87,14 @@ class WarehouseLayoutControllerTest {
     @Test
     void recognitionUsesRealVisionClientAndReturnsStructuredZones() {
         byte[] image = new byte[] { 1, 2, 3 };
-        when(visionClient.visionChatWarehouse(any(byte[].class), eq("image/png"), anyString()))
+        when(visionClient.visionChatWarehouse(eq("F006"), any(byte[].class), eq("image/png"), anyString()))
                 .thenReturn("{\"zones\":[{\"name\":\"冷藏区\",\"prefix\":\"LC\"}],\"racks\":[]}");
 
         Map<String, Object> recognized = controller.recognizeLayout("F006", Map.of(
                 "imageBase64", Base64.getEncoder().encodeToString(image), "contentType", "image/png")).getData();
 
         assertThat(recognized).containsKeys("zones", "racks");
-        verify(visionClient).visionChatWarehouse(any(byte[].class), eq("image/png"), anyString());
+        verify(visionClient).visionChatWarehouse(eq("F006"), any(byte[].class), eq("image/png"), anyString());
     }
 
     @Test

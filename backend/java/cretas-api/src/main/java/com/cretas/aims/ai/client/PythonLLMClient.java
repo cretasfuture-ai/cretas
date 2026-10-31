@@ -61,6 +61,10 @@ public class PythonLLMClient {
     @Autowired(required = false)
     private DashScopeFaultInjector dashScopeFaultInjector;
 
+    @Autowired
+    @Qualifier("pythonAiInternalSecret")
+    private String warehouseVisionInternalSecret;
+
     private static final MediaType JSON_MEDIA = MediaType.get("application/json; charset=utf-8");
 
     /**
@@ -578,11 +582,24 @@ public class PythonLLMClient {
     }
 
     /** 仓库平面图专用视觉链；其它拍照识别仍走 vl。 */
-    public String visionChatWarehouse(byte[] imageBytes, String contentType, String prompt) {
-        return visionChatWithSlot(imageBytes, contentType, prompt, "warehouse_vl");
+    public String visionChatWarehouse(String factoryId, byte[] imageBytes, String contentType, String prompt) {
+        // The controller supplies the JWT-validated route factory, never a body/header hint.
+        if (factoryId == null || !factoryId.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
+                || "PLATFORM".equalsIgnoreCase(factoryId)) {
+            throw new IllegalArgumentException("仓库识别缺少有效工厂范围");
+        }
+        if (warehouseVisionInternalSecret == null || warehouseVisionInternalSecret.isBlank()) {
+            throw new IllegalStateException("仓库识别内部服务认证配置缺失");
+        }
+        return visionChatWithSlot(imageBytes, contentType, prompt, "warehouse_vl", factoryId);
     }
 
     private String visionChatWithSlot(byte[] imageBytes, String contentType, String prompt, String slot) {
+        return visionChatWithSlot(imageBytes, contentType, prompt, slot, null);
+    }
+
+    private String visionChatWithSlot(byte[] imageBytes, String contentType, String prompt,
+                                      String slot, String factoryId) {
         if (contentType == null || contentType.isBlank()) {
             contentType = "image/jpeg";
         }
@@ -595,12 +612,21 @@ public class PythonLLMClient {
                 .addFormDataPart("slot", slot)
                 .build();
 
-        Request httpRequest = new Request.Builder()
+        Request.Builder request = new Request.Builder()
                 .url(baseUrl + "/api/llm/vision")
-                .post(requestBody)
-                .build();
+                .post(requestBody);
+        OkHttpClient transport = httpClient;
+        if (factoryId != null) {
+            request.header("X-Internal-Secret", warehouseVisionInternalSecret)
+                    .header("X-Factory-Id", factoryId);
+            // Keep internal credentials out of caller logging/interceptors and redirects.
+            OkHttpClient.Builder scoped = httpClient.newBuilder();
+            scoped.interceptors().clear();
+            scoped.networkInterceptors().clear();
+            transport = scoped.followRedirects(false).followSslRedirects(false).build();
+        }
 
-        try (Response response = httpClient.newCall(httpRequest).execute()) {
+        try (Response response = transport.newCall(request.build()).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "";
                 log.error("PythonLLMClient visionChat error: {} - {}", response.code(), errorBody);

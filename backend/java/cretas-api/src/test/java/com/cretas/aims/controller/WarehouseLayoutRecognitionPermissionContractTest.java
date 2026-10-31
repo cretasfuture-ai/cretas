@@ -95,7 +95,7 @@ class WarehouseLayoutRecognitionPermissionContractTest {
                 new WarehouseLocationCatalog(layouts), vision, mapper);
         mvc = MockMvcBuilders.standaloneSetup(controller).addInterceptors(auth,
                 new PermissionInterceptor(permissions, users, mapper), new RequireRoleInterceptor(mapper)).build();
-        when(vision.visionChatWarehouse(any(byte[].class), eq("image/png"), anyString()))
+        when(vision.visionChatWarehouse(eq(FACTORY), any(byte[].class), eq("image/png"), anyString()))
                 .thenReturn("{\"zones\":[{\"id\":\"z1\",\"name\":\"冷藏区\",\"prefix\":\"LC\"}],\"racks\":[]}");
     }
 
@@ -105,7 +105,7 @@ class WarehouseLayoutRecognitionPermissionContractTest {
                 .header("Authorization", "Bearer unit-token").contentType(MediaType.APPLICATION_JSON).content(IMAGE))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.zones[0].prefix").value("LC"));
-        verify(vision).visionChatWarehouse(any(byte[].class), eq("image/png"), anyString());
+        verify(vision).visionChatWarehouse(eq(FACTORY), any(byte[].class), eq("image/png"), anyString());
         verifyNoInteractions(layouts, goods);
         assertThat(user.getRoleCode()).isEqualTo("department_admin");
         assertThat(permissions.hasPermission(user, "finance:write")).isFalse();
@@ -151,6 +151,17 @@ class WarehouseLayoutRecognitionPermissionContractTest {
                 .content("{\"zones\":[],\"locations\":[],\"floors\":[]}"))
                 .andExpect(status().isForbidden());
         verifyNoInteractions(vision, layouts, goods);
+    }
+
+    @Test
+    void bodyFactoryAndUntrustedFactoryHeaderCannotOverrideTheAuthenticatedRoute() throws Exception {
+        mvc.perform(post("/api/mobile/{factoryId}/warehouse/layout/recognize", FACTORY)
+                .header("Authorization", "Bearer unit-token").header("X-Factory-Id", "OTHER")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"imageBase64\":\"AQID\",\"contentType\":\"image/png\",\"factoryId\":\"OTHER\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true));
+        verify(vision).visionChatWarehouse(eq(FACTORY), any(byte[].class), eq("image/png"), anyString());
+        verifyNoInteractions(layouts, goods);
     }
 
     private void assertRecognitionDenied(int status) throws Exception {
