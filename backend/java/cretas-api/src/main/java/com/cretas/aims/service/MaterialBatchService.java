@@ -71,6 +71,13 @@ public interface MaterialBatchService {
      * 获取原材料批次列表（分页）
       */
     PageResponse<MaterialBatchDTO> getMaterialBatchList(String factoryId, PageRequest pageRequest);
+
+    /**
+     * 同上, 另加原料类型 / 入库日期范围筛选; 所有条件都在数据库里、分页之前生效,
+     * 返回的总数是满足全部条件的真实条数。
+     */
+    PageResponse<MaterialBatchDTO> getMaterialBatchList(String factoryId, PageRequest pageRequest,
+                                                        com.cretas.aims.dto.material.MaterialBatchListFilter filter);
      /**
      * 根据状态获取批次
       */

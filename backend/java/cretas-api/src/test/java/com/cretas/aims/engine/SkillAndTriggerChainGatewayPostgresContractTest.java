@@ -315,7 +315,10 @@ class SkillAndTriggerChainGatewayPostgresContractTest {
         when(skillRouter.executeSkill(org.mockito.ArgumentMatchers.eq("material-batch-lookup"), any()))
                 .thenAnswer(call -> skills.execute(lookup, call.getArgument(1)));
         List<com.cretas.aims.dto.common.PageRequest> queries = new ArrayList<>();
-        when(materialBatchService.getMaterialBatchList(org.mockito.ArgumentMatchers.eq("F-SK"), any()))
+        // material_batch_query calls the filtered overload (ERP-S6-02: material type / dates filtered in the
+        // database before paging); stubbing the 2-arg one would hand the tool a null page.
+        when(materialBatchService.getMaterialBatchList(org.mockito.ArgumentMatchers.eq("F-SK"), any(),
+                any(com.cretas.aims.dto.material.MaterialBatchListFilter.class)))
                 .thenAnswer(call -> {
                     queries.add(call.getArgument(1));
                     seenAsUser.add(SecurityUtils.currentUserId());
