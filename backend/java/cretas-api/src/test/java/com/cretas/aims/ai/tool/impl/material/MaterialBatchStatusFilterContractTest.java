@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @DisplayName("批次列表 status 筛选 — AI 工具 / 服务 / 仓储整链 (ERP-S6-02)")
-class MaterialBatchStatusFilterEntryTest {
+class MaterialBatchStatusFilterContractTest {
 
     private static final String F = "F-MBS-1";
     private static final String OTHER_F = "F-MBS-OTHER";

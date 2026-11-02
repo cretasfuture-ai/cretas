@@ -70,7 +70,7 @@ import static org.mockito.Mockito.when;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @DisplayName("对话里说的批次状态 → material_batch_query 按它过滤 (ERP-S6-10)")
-class MaterialBatchChatStatusEntryTest {
+class MaterialBatchChatStatusContractTest {
 
     private static final String F = "F-MBC-1";
     private static final Map<MaterialBatchStatus, Integer> SEEDED = Map.of(

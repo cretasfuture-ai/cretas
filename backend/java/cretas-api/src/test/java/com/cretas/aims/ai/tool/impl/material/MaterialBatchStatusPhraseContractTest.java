@@ -11,8 +11,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** 句子里的批次状态说法 → 枚举 (ERP-S6-10)。整链行为见 {@link MaterialBatchChatStatusEntryTest}。 */
-class MaterialBatchStatusPhraseTest {
+/** 句子里的批次状态说法 → 枚举 (ERP-S6-10)。整链行为见 {@link MaterialBatchChatStatusContractTest}。 */
+class MaterialBatchStatusPhraseContractTest {
 
     @ParameterizedTest(name = "「{0}」→ {1}")
     @CsvSource({
