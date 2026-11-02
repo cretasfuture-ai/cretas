@@ -288,10 +288,21 @@ public class FactoryBlueprintCapabilityCatalog {
                 .map(item -> item.getToCode()).distinct().count();
         return conversions + (data.getWorkProcesses() != null
                 ? (int) data.getWorkProcesses().stream()
-                        .filter(item -> (item.getAuxMaterials() != null && !item.getAuxMaterials().isEmpty())
-                                || (item.getPackMaterials() != null && !item.getPackMaterials().isEmpty()))
+                        .filter(item -> item != null && ((item.getAuxMaterials() != null && !item.getAuxMaterials().isEmpty())
+                                || (item.getPackMaterials() != null && !item.getPackMaterials().isEmpty())
+                                || hasPositiveYield(item)))
                         .count()
                 : 0);
+    }
+
+    /**
+     * D-S2-10: a numeric yield the user stated on a step (even a semi-finished one) is a recipe fact.
+     * The generator only emits raw→finished conversions when the last step is the finished product, so a
+     * route ending in a semi-finished step used to leave {@code bom} unsatisfiable by natural answers.
+     */
+    private static boolean hasPositiveYield(ApplyAIInitRequest.WorkProcessItem item) {
+        return (item.getYieldMin() != null && item.getYieldMin().signum() > 0)
+                || (item.getYieldMax() != null && item.getYieldMax().signum() > 0);
     }
 
     /**

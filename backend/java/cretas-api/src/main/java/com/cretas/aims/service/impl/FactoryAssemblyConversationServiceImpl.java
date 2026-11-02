@@ -300,7 +300,19 @@ public class FactoryAssemblyConversationServiceImpl implements FactoryAssemblyCo
                     .build();
         }
 
-        if (!session.canContinue()) {
+        // D-S2-13: 全部沿用后访谈直接 COMPLETED; 此后「把第1道辅料改成盐」不能被静默吞掉。
+        // 更正措辞 → 照常走提取与账本 (已确认的值产生待选冲突); 其余回复 → 明说没写入。
+        boolean completedFactoryBuild = session.getStatus() == SessionStatus.COMPLETED
+                && session.isParameterCollectionMode()
+                && FactoryInterviewExpansion.INTENT.equals(session.getKnownIntentCode())
+                && session.getCurrentRound() < session.getMaxRounds();
+        if (completedFactoryBuild && !looksLikeCorrection(userReply)) {
+            return extractionFailureResponse(
+                    session, stableRequestId, ExtractionOutcome.CONFLICT, null,
+                    "这次访谈已经完成，这句话没有写入。要修改某一项，请点那一项的「改这一项」，或说「把…改成…」。",
+                    List.of());
+        }
+        if (!completedFactoryBuild && !session.canContinue()) {
             return ConversationResponse.builder()
                     .sessionId(sessionId)
                     .status(session.getStatus())

@@ -317,7 +317,7 @@ public class CanonicalFactoryBlueprintService {
                         .code("MISSING_CAPABILITY_DEPENDENCY")
                         .capabilityId(capability.getId())
                         .message(capability.getLabel() + " 缺少依赖：" + String.join("、", capability.getMissingDependencies()))
-                        .recovery("补齐依赖后重新保存草稿并验证")
+                        .recovery(dependencyRecovery(capability, "补齐依赖后重新保存草稿并验证"))
                         .build())
                 .toList());
         planService.blueprintSemanticIssues(
@@ -434,7 +434,7 @@ public class CanonicalFactoryBlueprintService {
                         .capabilityId(capability.getId())
                         .message(capability.getLabel() + " 缺少依赖："
                                 + String.join("、", capability.getMissingDependencies()))
-                        .recovery("补齐依赖后重新保存、验证并模拟")
+                        .recovery(dependencyRecovery(capability, "补齐依赖后重新保存、验证并模拟"))
                         .build())
                 .forEach(simulationBlockers::add);
         changes.stream()
@@ -1373,5 +1373,16 @@ public class CanonicalFactoryBlueprintService {
 
     private BusinessException invalid(String code, String message) {
         return new BusinessException(400, message).withCode(code).withSeverity("BLOCKING");
+    }
+
+    /** 缺的是 bom 时, 回到建厂访谈里点名那道「出成率」题, 不让用户只看到「缺少依赖：bom」就走进死胡同。 */
+    static String dependencyRecovery(CapabilityView capability, String base) {
+        List<String> missing = capability.getMissingDependencies();
+        if (missing == null || !missing.contains("bom")) {
+            return base;
+        }
+        return "没有原料到成品的出成换算就建不出配方/BOM，危害分析和关键控制点也要等配方有了才能生成。"
+                + "两种补法：到「专业复核 → 01 → 原料到成品转换」补一行；或回到建厂访谈的「出成率」一题填一个数字"
+                + "（如 0.85，注水类可大于 1），也可以补充辅料或包材。" + base;
     }
 }

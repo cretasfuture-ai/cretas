@@ -18,6 +18,7 @@ import time
 from typing import Dict, List, Tuple
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 # 2026-10-29: 没有工厂上下文的外发会被拒绝; 本文件测路由 / 出口行为, 按本厂请求跑 (见 conftest)
@@ -223,7 +224,8 @@ def test_review_fallback_is_our_aliyun_accounts_only_and_spans_several_quotas():
     """
     chain = llm_router.SLOT_MODELS[SLOT.REVIEW]
     assert chain, "REVIEW 是空链"
-    ours = {"aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl"}
+    # 2026-11-03: 自有机器上的本地模型(local_canada)也算「我们自己的」, 见 _TEXT_TAIL。
+    ours = {"aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl", "local_canada"}
     foreign = [(a, m) for a, m in chain if a not in ours]
     assert not foreign, f"REVIEW 链上出现了非阿里云后备: {foreign}"
     assert len({a for a, _m in chain}) >= 2, f"REVIEW 只靠一个账号的额度: {chain}"
@@ -786,8 +788,13 @@ class _ScriptedClient:
             account = "ark"
         elif "bigmodel" in url:
             account = "zhipu"
+        elif "127.0.0.1:11437" in url:
+            account = "local_canada"
         self.call_log.append((account or "unknown", model))
-        return self.by_account.get(account, _fake_response(500, "no canned response"))
+        canned = self.by_account.get(account, _fake_response(500, "no canned response"))
+        if isinstance(canned, Exception):
+            raise canned  # 机器离线 / 隧道断: 连接层失败, 不是 HTTP 响应
+        return canned
 
 
 def _patch_keys(monkeypatch):
@@ -805,6 +812,7 @@ def _patch_keys(monkeypatch):
     monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
     monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
     monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
+    monkeypatch.setenv("LLM_LOCAL_CANADA_API_KEY", "key_local_fake")  # 2026-11-03 本地兜底
 
 
 # 2026-08-09: the real SLOT_MODELS[SLOT.CHAT] head (qwen3.7-flash* on b/c) was
@@ -1442,7 +1450,9 @@ def test_vl_accounts_actually_receive_enable_thinking_false():
 
 _PRODUCT_TEXT_CHAIN = [("aliyun_c_vl", "qwen3.8-flash"),
                        ("aliyun_a_vl", "qwen3.8-flash"),
-                       ("aliyun_b_vl", "qwen3.8-flash")]
+                       ("aliyun_b_vl", "qwen3.8-flash"),
+                       # 2026-11-03: 自有机器本地模型作最后一跳(Steve 裁定)
+                       ("local_canada", "qwen3:8b")]
 
 
 @pytest.fixture
@@ -1463,18 +1473,55 @@ async def test_all_aliyun_channels_down_is_an_explicit_exhaustion(monkeypatch, _
     assert llm_router.SLOT_MODELS[SLOT.CHAT] == _PRODUCT_TEXT_CHAIN, (
         "CHAT 产品链变了 —— 本用例的前提要跟着重看")
     quota = _fake_response(403, "AllocationQuota.FreeTierOnly")
-    client = _ScriptedClient({"aliyun_c": quota, "aliyun_a": quota, "aliyun_b": quota})
+    # 本地机器离线: 连接层失败(⛔ 不是 HTTP 响应), 必须同样落进明确的耗尽错误。
+    offline = httpx.ConnectError("tunnel down")
+    client = _ScriptedClient({"aliyun_c": quota, "aliyun_a": quota, "aliyun_b": quota,
+                              "local_canada": offline})
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
 
     with pytest.raises(llm_router.LLMChainExhausted) as ei:
         await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
 
-    assert [a for a, _m in client.call_log] == ["aliyun_c", "aliyun_a", "aliyun_b"]
+    assert [a for a, _m in client.call_log] == ["aliyun_c", "aliyun_a", "aliyun_b", "local_canada"]
     assert ei.value.slot == "chat"
-    for account, model in _PRODUCT_TEXT_CHAIN:
+    for account, model in _PRODUCT_TEXT_CHAIN[:3]:
         assert f"{account}/{model}: quota 403" in ei.value.errors, (
             f"{account} 那一跳的原因没进错误消息: {ei.value.errors}")
+    # 本地那一跳: 机器离线 = 连接层异常, 原因照样逐条列出(⛔ 不被吞成空串)。
+    assert "local_canada/qwen3:8b: ConnectError" in ei.value.errors, ei.value.errors
     assert isinstance(ei.value, RuntimeError), "老调用方的 except RuntimeError 必须还接得住"
+
+
+@pytest.mark.asyncio
+async def test_all_aliyun_down_falls_to_the_local_model(monkeypatch, _isolated_quota_state):
+    """2026-11-03 线上核对的单测版: 三个云账号都不可用 ⇒ 答案来自本地模型(最后一跳),
+    且请求真的发到了本地端点(call_log 里有 local_canada), 不是别处冒出来的 200。"""
+    _patch_keys(monkeypatch)
+    quota = _fake_response(403, "AllocationQuota.FreeTierOnly")
+    ok = {"choices": [{"message": {"content": "本地模型接住了。"}}]}
+    client = _ScriptedClient({"aliyun_c": quota, "aliyun_a": quota, "aliyun_b": quota,
+                              "local_canada": _fake_response(200, json_payload=ok)})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+
+    result = await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert result == ok
+    assert client.call_log[-1] == ("local_canada", "qwen3:8b")
+
+
+@pytest.mark.asyncio
+async def test_local_model_without_its_key_is_never_called(monkeypatch, _isolated_quota_state):
+    """阴性对照: 没配 LLM_LOCAL_CANADA_API_KEY ⇒ 该跳 empty_api_key, 不发请求
+    (⛔ 不 fallback 到别的 key)。"""
+    _patch_keys(monkeypatch)
+    monkeypatch.delenv("LLM_LOCAL_CANADA_API_KEY", raising=False)
+    quota = _fake_response(403, "AllocationQuota.FreeTierOnly")
+    client = _ScriptedClient({"aliyun_c": quota, "aliyun_a": quota, "aliyun_b": quota})
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
+    with pytest.raises(llm_router.LLMChainExhausted) as ei:
+        await call_chain(SLOT.CHAT, {"messages": [{"role": "user", "content": "hi"}]})
+    assert "local_canada" not in [a for a, _m in client.call_log]
+    assert "local_canada: empty_api_key" in ei.value.errors
 
 
 @pytest.mark.asyncio
