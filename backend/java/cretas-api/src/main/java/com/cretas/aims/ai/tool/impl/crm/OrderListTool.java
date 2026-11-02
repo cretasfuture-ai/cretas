@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -44,9 +45,12 @@ public class OrderListTool extends AbstractBusinessTool {
                 "type", "integer",
                 "description", "每页数量",
                 "default", 20));
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED"));
+        properties.put("status", StatusFilter.property("销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED", StatusFilter.wordsOf(SalesOrderStatus.class, SalesOrderStatus::getDisplayName, java.util.Map.of(
+                SalesOrderStatus.PENDING_FINANCE_REVIEW, List.of("待审核"),
+                SalesOrderStatus.FINANCE_APPROVED, List.of("财务通过"),
+                SalesOrderStatus.FINANCE_REJECTED, List.of("财务驳回"),
+                SalesOrderStatus.PROCESSING, List.of("备货中", "拣货中"),
+                SalesOrderStatus.SHORT_CLOSED, List.of("短交")))));
         return Map.of(
                 "type", "object",
                 "properties", properties,

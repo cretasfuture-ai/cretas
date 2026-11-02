@@ -52,7 +52,7 @@ class MaterialBatchStatusPhraseContractTest {
     void aNamedStatusThatCannotBeMappedIsRejectedNotDropped(String sentence) {
         assertThatThrownBy(() -> MaterialBatchStatusPhrase.fromSentence(sentence))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("没认出你说的批次状态")
+                .hasMessageContaining("没认出你说的状态")
                 .extracting(e -> ((BusinessException) e).getCode()).isEqualTo(400);
     }
 
@@ -60,7 +60,7 @@ class MaterialBatchStatusPhraseContractTest {
     void twoDifferentStatusesInOneSentenceAreRejected() {
         assertThatThrownBy(() -> MaterialBatchStatusPhrase.fromSentence("可用和已过期的批次"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("一次只能按一个批次状态查询");
+                .hasMessageContaining("一次只能按一个状态查询");
     }
 
     @ParameterizedTest

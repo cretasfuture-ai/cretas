@@ -106,15 +106,9 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         properties.put("materialTypeId", materialTypeId);
 
         // status: 状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "批次状态筛选");
-        // 取自批次状态枚举本身: 以前手写的列表里有 PENDING / IN_USE / REJECTED 这些不存在的状态,
-        // 又漏了 DEPLETED —— 模型照着选就是一次必然查空/报错的调用。
-        status.put("enum", Arrays.stream(com.cretas.aims.entity.enums.MaterialBatchStatus.values())
-                .map(Enum::name)
-                .collect(java.util.stream.Collectors.toList()));
-        properties.put("status", status);
+        // 状态词表 (含「即将过期」等要换个问法的说法): 对话里说的状态由 AbstractBusinessTool 统一认 (StatusFilter)
+        // enum 取自批次状态枚举本身: 以前手写的列表里有不存在的状态、又漏了 DEPLETED。
+        properties.put("status", MaterialBatchStatusPhrase.property());
 
         // page: 页码（可选，默认1）
         Map<String, Object> page = new HashMap<>();
@@ -174,14 +168,9 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         // 解析筛选参数
         String batchNumber = getString(params, "batchNumber");
         String materialTypeId = getString(params, "materialTypeId");
-        // ERP-S6-10: 对话入口对只有可选参数的读工具不做参数抽取, 「查询已用完状态的原料批次」到这里
-        // status 是空的 —— 以前就返回了全部批次。显式参数优先 (中文名也认), 否则从原话里认;
-        // 说了状态却认不出会 400, 不静默变成「不限状态」。
-        String status = MaterialBatchStatusPhrase.normalizeParam(getString(params, "status"));
-        if (status == null) {
-            status = MaterialBatchStatusPhrase.fromSentence(getString(params, "userInput"))
-                    .map(Enum::name).orElse(null);
-        }
+        // ERP-S6-10: 对话里说的状态 (「已用完」) 已由 AbstractBusinessTool 按 status 词表认成代码放进 params;
+        // 说了却认不出的在那里就 400 了, 不会静默变成「不限状态」。
+        String status = getString(params, "status");
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
 

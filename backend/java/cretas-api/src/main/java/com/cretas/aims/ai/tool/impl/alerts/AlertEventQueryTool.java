@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.alerts;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.alerts.AlertEvent;
 import com.cretas.aims.entity.alerts.AlertEventStatus;
@@ -44,10 +45,10 @@ public class AlertEventQueryTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "事件状态过滤 (可选)");
-        status.put("enum", List.of("OPEN", "ACKNOWLEDGED", "RESOLVED"));
+        Map<String, Object> status = StatusFilter.property("事件状态过滤 (可选)", StatusFilter.table(
+                StatusFilter.words("OPEN", "未处理", "待处理", "未解决", "未关闭"),
+                StatusFilter.words("ACKNOWLEDGED", "已确认", "已知悉"),
+                StatusFilter.words("RESOLVED", "已解决", "已处理", "已关闭")));
 
         Map<String, Object> page = new HashMap<>();
         page.put("type", "integer");

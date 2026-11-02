@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.processing;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.WorkProcessTaskDTO;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -35,10 +36,12 @@ public class ProcessTaskQueryTool extends AbstractBusinessTool {
     @Override
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> properties = new HashMap<>();
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "任务状态: PENDING/IN_PROGRESS/COMPLETED/SKIPPED/CANCELLED",
-                "enum", List.of("PENDING", "IN_PROGRESS", "COMPLETED", "SKIPPED", "CANCELLED")));
+        properties.put("status", StatusFilter.property("任务状态: PENDING/IN_PROGRESS/COMPLETED/SKIPPED/CANCELLED", StatusFilter.table(
+                StatusFilter.words("PENDING", "待开始", "未开始", "待处理"),
+                StatusFilter.words("IN_PROGRESS", "进行中", "处理中", "执行中"),
+                StatusFilter.words("COMPLETED", "已完成"),
+                StatusFilter.words("SKIPPED", "已跳过", "跳过"),
+                StatusFilter.words("CANCELLED", "已取消"))));
         properties.put("productTypeId", Map.of("type", "string", "description", "产品类型ID筛选"));
         return Map.of("type", "object", "properties", properties, "required", Collections.emptyList());
     }

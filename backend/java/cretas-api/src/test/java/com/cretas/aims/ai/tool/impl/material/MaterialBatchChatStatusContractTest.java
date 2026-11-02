@@ -166,6 +166,26 @@ class MaterialBatchChatStatusContractTest {
 
         assertThat(response.getStatus()).isNotEqualTo("SUCCESS");
         assertThat(String.valueOf(response.getMessage())).contains("冻结").contains("没有按状态查询");
+        // 回复里列出能查的状态 (中文名 + 代码), 用户才知道该怎么换个说法
+        assertThat(String.valueOf(response.getMessage()))
+                .contains("能查的状态").contains("可用(AVAILABLE)").contains("已用完(USED_UP)").contains("已过期(EXPIRED)");
+    }
+
+    @Test
+    void aFilteredQueryWithNoHitsNamesTheFilterInsteadOfSayingTheLibraryIsEmpty() throws Exception {
+        // 种子里没有已报废的批次: 按「已报废」筛, 0 条
+        IntentExecuteResponse response = run("查询已报废状态的原料批次");
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = mapper.convertValue(response.getResultData(), Map.class);
+        assertThat(((Number) data.get("totalElements")).longValue()).isZero();
+
+        String reply = new com.cretas.aims.service.impl.ResultFormatterServiceImpl().format(response);
+
+        assertThat(reply).contains("已报废").contains("按状态筛选").doesNotContain("当前暂无原料批次记录");
+        // 对照: 不加筛选、有数据时照常是批次列表, 不会被这条措辞劫持
+        String unfiltered = new com.cretas.aims.service.impl.ResultFormatterServiceImpl().format(run("查询原料批次"));
+        assertThat(unfiltered).contains("查询到 " + TOTAL + " 条原料记录").doesNotContain("按状态筛选");
     }
 
     @Test

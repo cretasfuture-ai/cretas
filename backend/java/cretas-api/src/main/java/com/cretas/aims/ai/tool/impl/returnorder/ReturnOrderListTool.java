@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.returnorder;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.enums.ReturnOrderStatus;
@@ -43,10 +44,12 @@ public class ReturnOrderListTool extends AbstractBusinessTool {
         returnType.put("enum", Arrays.asList("PURCHASE_RETURN", "SALES_RETURN"));
         properties.put("returnType", returnType);
 
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "退货单状态");
-        status.put("enum", Arrays.asList("DRAFT", "SUBMITTED", "APPROVED", "PROCESSING", "COMPLETED", "REJECTED", "CANCELLED"));
+        // 状态取自枚举本身: 以前手写的列表里有枚举不存在的值 (valueOf 必炸), 又漏了真实状态
+        Map<String, Object> status = StatusFilter.property("退货单状态",
+                StatusFilter.wordsOf(ReturnOrderStatus.class, ReturnOrderStatus::getDisplayName, Map.of(
+                        ReturnOrderStatus.SUBMITTED, List.of("待审批"),
+                        ReturnOrderStatus.APPROVED, List.of("已批准"),
+                        ReturnOrderStatus.REJECTED, List.of("驳回", "已拒绝"))));
         properties.put("status", status);
 
         Map<String, Object> page = new HashMap<>();

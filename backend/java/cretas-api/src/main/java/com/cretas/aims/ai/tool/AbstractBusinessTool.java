@@ -74,6 +74,8 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             // 1. 解析参数
             Map<String, Object> params = parseArguments(toolCall);
             String factoryId = getFactoryId(context);
+            // 1.5 用户在对话里说的状态 → status (工具在 schema 里声明了状态词表时; 见 StatusFilter)
+            StatusFilter.apply(getParametersSchema(), params);
 
             // 2. 校验必需参数
             List<String> missingParams = validateRequiredParams(params);
@@ -88,6 +90,8 @@ public abstract class AbstractBusinessTool extends AbstractTool {
 
             // 3. 执行业务逻辑
             Map<String, Object> result = doExecute(factoryId, params, context);
+            // 记下这次按哪个状态筛的, 0 条时回复要点名它, 不能说成「暂无记录」
+            result = StatusFilter.annotate(getParametersSchema(), params, result);
 
             // 4. 构建成功响应
             String response = buildSuccessResult(result);
@@ -262,6 +266,7 @@ public abstract class AbstractBusinessTool extends AbstractTool {
         try {
             Map<String, Object> params = parseArguments(toolCall);
             String factoryId = getFactoryId(context);
+            StatusFilter.apply(getParametersSchema(), params);
 
             List<String> missingParams = previewMissingParameters(params);
             if (!missingParams.isEmpty()) {

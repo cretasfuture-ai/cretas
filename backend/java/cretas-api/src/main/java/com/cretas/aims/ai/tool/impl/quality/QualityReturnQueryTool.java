@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.quality;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.QualityReturnOrder;
@@ -39,9 +40,8 @@ public class QualityReturnQueryTool extends AbstractBusinessTool {
     @Override
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> properties = new HashMap<>();
-        properties.put("status", Map.of(
-                "type", "string", "description", "状态过滤 (可选)",
-                "enum", Arrays.asList("DRAFT", "CONFIRMED", "SHIPPED")));
+        properties.put("status", StatusFilter.property("状态过滤 (可选)", StatusFilter.wordsOf(QualityReturnStatus.class, QualityReturnStatus::getDisplayName, java.util.Map.of(
+                QualityReturnStatus.SHIPPED, List.of("已退回")))));
         properties.put("targetType", Map.of(
                 "type", "string", "description", "目标类型过滤 (可选)",
                 "enum", Arrays.asList("SUPPLIER", "SUBCONTRACT")));
