@@ -28,3 +28,12 @@ export function interviewModuleLabel(moduleId: string | undefined): string {
   const key = (moduleId ?? '').trim().toLowerCase()
   return INTERVIEW_MODULE_OPTIONS.find((option) => option.moduleId === key)?.label ?? ''
 }
+
+/** 保存前在页面上就能发现的模块行问题（服务端对空 id 会回 400，页面上却看不见）。 */
+export function moduleConfigProblems(rows: ReadonlyArray<{ moduleId?: string | null }> | null | undefined): string[] {
+  return (rows ?? []).flatMap((row, index) => {
+    if (!(row.moduleId ?? '').trim()) return [`前端模块裁剪第 ${index + 1} 行还没有选模块，请选一个模块或删除这一行`]
+    if (!isKnownInterviewModule(row.moduleId ?? '')) return [`前端模块裁剪第 ${index + 1} 行的模块「${row.moduleId}」不可用，请从下拉里选`]
+    return []
+  })
+}
