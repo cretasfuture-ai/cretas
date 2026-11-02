@@ -1,27 +1,33 @@
-== chat (len=3)
+== chat (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== simple_text (len=3)
+   2099-01-01  local_canada/qwen3:8b
+== simple_text (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== insights (len=3)
+   2099-01-01  local_canada/qwen3:8b
+== insights (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== chart (len=3)
+   2099-01-01  local_canada/qwen3:8b
+== chart (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== mapper (len=3)
+   2099-01-01  local_canada/qwen3:8b
+== mapper (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== reasoning (len=3)
+   2099-01-01  local_canada/qwen3:8b
+== reasoning (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  local_canada/qwen3:8b
 == vl (len=3)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
@@ -33,10 +39,11 @@
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
-== review (len=3)
+== review (len=4)
    2099-01-01  aliyun_c_vl/qwen3.8-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash
    2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  local_canada/qwen3:8b
 == decision (len=3)
    2099-01-01  aliyun_a_vl/qwen3.7-flash
    2099-01-01  aliyun_a_vl/qwen3.8-flash

@@ -186,6 +186,7 @@ _REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
     ("aliyun_a_vl", "kimi-k3"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
     ("aliyun_a_vl", "qwen3.8-27b"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定(本就不在自动池)",
     ("aliyun_a_vl", "qwen3.8-max-0902"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
+    ("local_canada", "qwen3:8b"): "ok 200 (11-03 新增: 47→隧道→加拿大 mini ollama, 0.63s; 合成基准 意图10/10 分析9/10)",
 }
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
@@ -348,6 +349,11 @@ def _vl_pool() -> List[Tuple[str, str]]:
     return []
 
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # 2026-11-03 本地模型兜底(Steve:「换模型 用aurora或者加拿大macmini的模型」→ 加拿大 Mac mini):
+    # 自有机器上的 ollama qwen3:8b, 经 47 loopback:11437 反向隧道 + bearer 代理。
+    # 没有计费面(None = 无到期概念, 不是「额度未知」): 机器离线时请求在连接层失败 → 下一跳 /
+    # LLMChainExhausted, ⛔ 不会落到任何付费端点。数据不出我们自己的机器。
+    ("local_canada", "qwen3:8b"): None,
     # 2026-09-29 owner 要求先用截图中的有限额模型；额度/自动停状态未在截图展示。
     # 显式开关控制仓库专用调用；None 表示额度到期日未知，不表示免费或无限额。
     ("aliyun_a_vl", "qwen3.8-27b"): None,
@@ -533,6 +539,8 @@ _THINKING_ONLY: frozenset = frozenset({
 # 瞎猜图片, 同 §9.1 对 VL 到期的处置一致), 不是遗漏。Fail SAFE, not open —— 但
 # "safe" 不承诺"每个槽都有兜底", 只承诺"有兜底的槽兜底的是活的模型"。
 _MINIMAL_SAFE_SET: frozenset = frozenset({
+    # 2026-11-03: 本地兜底在 registry 超龄时也必须保留 —— 它是 aliyun 全部欠费/耗尽时唯一还能答的一跳。
+    ("local_canada", "qwen3:8b"),
     # registry 超龄时专用视觉槽也必须保留已核验的候选。
     ("aliyun_a_vl", "qwen3.8-27b"),
     ("aliyun_a_vl", "kimi-k3"),
@@ -1364,6 +1372,14 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     #    三个账号都不可用时 call_chain 抛 LLMChainExhausted 并逐条列出原因 ——
     #    ⛔ 不再有任何「非 DashScope 地板」, 也不许为了「多一条后备」把死通道加回来。
     #    ⚠️ 2026-10-07 探针: aliyun_b_vl 当天 403 quota(保留, 已报 owner)。
+    # 🔴 2026-11-03: 追加自有机器上的本地模型作**最后一跳**(同时在 `_ABSOLUTE_LAST` 里, 结构键保证
+    #    排最后)。动机: 11-03 探针 aliyun_c 400 Arrearage、b 与 a 的 4 个专用条目 403, 文本槽实际
+    #    只剩 aliyun_a 一个账号。读数(合成提示词 10 意图 + 10 分析, 同台对照 aliyun_a flash):
+    #    qwen3:8b 意图 10/10 / 分析 9/10, 与 flash 持平; 首 token ~0.1-0.3s, ~49 tok/s,
+    #    并发 2 串行。运维与回落见 docs/ops/local-llm-canada-mini.md。
+    #    ⛔ 它不是「多一条付费后备」: 机器离线 ⇒ 连接失败 ⇒ call_chain 照常抛 LLMChainExhausted
+    #       并逐条列出原因, 不静默降级。
+    ("local_canada", "qwen3:8b"),
     # (原此处的 zhipu/glm-4.5-air 及其「必须留在最后一位」的 08-09 事故判据, 迁到
     #  `_ABSOLUTE_LAST` 注释里存档 —— 那条判据针对的候选已不在册, 机制仍在。)
 ]
@@ -1531,7 +1547,11 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
 # 而链是**串行且共享同一个总预算**, 它排在前面会把后面本来 0.5-1.1s 就能答的
 # 候选一起拖到超时、连续 2 次即熔断 60 秒(当天实测连坐 4 个健康候选)。
 # ⛔ 往这里加条目 = 声明"这个候选只在其它全挂时才可接受", 需要同等级别的实测证据。
-_ABSOLUTE_LAST: frozenset = frozenset()
+_ABSOLUTE_LAST: frozenset = frozenset({
+    # 2026-11-03: 本地模型只在 aliyun 三账号都不可用时才轮到它(隧道 + 单并发, 比云端慢 ~2-3x);
+    # 证据 = 同日合成基准, 见 `_TEXT_TAIL` 里那段。
+    ("local_canada", "qwen3:8b"),
+})
 
 # VL 槽不追加文本地板 —— 文本模型看不见图片, 追加只会把「明确失败」变成
 # 「拿一段瞎猜的文字冒充图片理解」。这个集合是 _build_chain 的唯一例外,
@@ -1996,6 +2016,13 @@ def _provider_config(account: str) -> Tuple[str, str]:
         # ⛔ 与 aistore / deepseek 同一条纪律: **不 fallback 到 `LLM_API_KEY`
         #    或任何别的 key**。写成 `os.getenv(..., "")`。把一个不相干的凭证
         #    发给这个 provider 是计费事故, 不是便利。
+        # 2026-11-03 本地兜底: 加拿大 Mac mini 上的 ollama, 经 47 本机回环 11437 的反向隧道,
+        # 前面是 bearer 鉴权代理(只放行 qwen3:8b)。⛔ key 只读 LLM_LOCAL_CANADA_API_KEY,
+        # 不 fallback 到任何别的 key(同 aistore/deepseek 纪律)。没配 ⇒ empty_api_key, 不发请求。
+        "local_canada": (
+            os.getenv("LLM_LOCAL_CANADA_BASE_URL", "http://127.0.0.1:11437/v1"),
+            os.getenv("LLM_LOCAL_CANADA_API_KEY", ""),
+        ),
         "aliyun_c_vl": (
             os.getenv("LLM_ALIYUN_C_BASE_URL",
                       "https://dashscope.aliyuncs.com/compatible-mode/v1"),
@@ -2093,6 +2120,8 @@ DEFAULT_CHAIN: List[str] = [
     #    时注释写「entire removal was 1 file」, 这次加回来才发现少了
     #    thinking 注入那一半, 差点 DOA。
     "aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl",
+    # 2026-11-03: 自有机器上的本地模型兜底(Steve 裁定), 见 `_TEXT_TAIL`。
+    "local_canada",
 ]
 
 

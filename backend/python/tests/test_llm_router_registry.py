@@ -76,6 +76,9 @@ _FROZEN_REGISTRY = {
     # ⚠️ 2026-09-15 实测带图 **33-48s/次**(同模型纯文本 2.4s) ⇒ ⛔ 不作默认:
     #    手机端用户举着手机等的就是这段时间。
     ("aliyun_a_vl", "qwen3.7-flash"): None,
+    # 2026-11-03 Steve 裁定「换模型 用aurora或者加拿大macmini的模型」→ 加拿大 Mac mini 上的
+    # ollama qwen3:8b 作文本槽最后一跳兜底(自有机器, 无计费面)。
+    ("local_canada", "qwen3:8b"): None,
 }
 
 
@@ -151,8 +154,15 @@ def test_absolute_last_mechanism_still_sinks_its_members(monkeypatch):
 _OUR_ALIYUN_ACCOUNTS = frozenset({"aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl"})
 
 
+#: 2026-11-03 Steve 追加裁定: 自有机器上的本地模型(加拿大 Mac mini)也算「我们自己的」。
+#: ⛔ 这不是把死通道请回来 —— 它没有计费面, 数据不出我们自己的机器。
+_OUR_MACHINE_ACCOUNTS = frozenset({"local_canada"})
+_OUR_ACCOUNTS = _OUR_ALIYUN_ACCOUNTS | _OUR_MACHINE_ACCOUNTS
+
+
 def _non_aliyun(pairs):
-    return sorted({p for p in pairs if p[0] not in _OUR_ALIYUN_ACCOUNTS})
+    """名字沿用旧的, 语义 = 「既不是我们的阿里云账号、也不是我们自己机器上的本地账号」。"""
+    return sorted({p for p in pairs if p[0] not in _OUR_ACCOUNTS})
 
 
 def test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling():
@@ -168,7 +178,12 @@ def test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling():
     assert _non_aliyun(llm_router._MINIMAL_SAFE_SET) == []
     for slot, chain in llm_router.SLOT_MODELS.items():
         assert _non_aliyun(chain) == [], f"{slot.value} 链上有非阿里云条目"
-    assert set(llm_router.DEFAULT_CHAIN) <= _OUR_ALIYUN_ACCOUNTS
+    assert set(llm_router.DEFAULT_CHAIN) <= _OUR_ACCOUNTS
+    # 2026-11-03: 本地兜底进了册, 且在每个文本槽的链尾(结构键 `_ABSOLUTE_LAST` 保证)。
+    assert ("local_canada", "qwen3:8b") in llm_router._SAFE_MODELS
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        if slot not in llm_router._NO_TEXT_TAIL_SLOTS:
+            assert chain[-1] == ("local_canada", "qwen3:8b"), f"{slot.value} 链尾不是本地兜底: {chain}"
     assert llm_router._SAFE_MODELS, "注册表空了 —— 上面几条恒真"
 
 
