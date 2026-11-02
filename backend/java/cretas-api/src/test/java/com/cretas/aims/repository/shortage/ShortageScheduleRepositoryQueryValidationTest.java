@@ -1,12 +1,21 @@
 package com.cretas.aims.repository.shortage;
 
+import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.LineSchedule;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.SchedulingPlan;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.shortage.RescheduleProposal;
+import com.cretas.aims.service.scheduling.ScheduleLineLocks;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -29,11 +38,16 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * 局部重排的 JPQL 在真实映射上跑 (H2; 设了 CRETAS_WORKFLOW_PG_URL 时在 PG 上跑): 只取本厂、这张订单、还没开工的任务; 重叠只算在排 / 在做且不含自己;
- * 到货日取在走采购单的最晚日期, 并数出没填日期的单。
+ * 局部重排的 JPQL 在真实映射上跑 —— H2, 以及设了 CRETAS_WORKFLOW_PG_URL 时的 PostgreSQL (CI 的 PG 层)。
+ * 父表 (工厂 / 用户 / 产品 / 原料 / 排程计划) 都是真造的行, 所以两种库都走同一套数据, 外键照常生效。
+ *
+ * <p>证明: 只取本厂、这张订单、还没开工的任务 —— 批次或计划已有报工的不算, 排程计划已完成 / 取消的不算;
+ * 重叠只算在排 / 在做且不含被挪的任务; 加锁取任务按 id 排; 到货日取已提交以后的在走采购单最晚日期, 草稿不算,
+ * 并数出没填日期的单; 产线锁在 PG 上真取到。
  */
 @DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -42,7 +56,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @EnableJpaRepositories(basePackageClasses = ShortageScheduleQueryRepository.class, includeFilters = @ComponentScan.Filter(
         type = FilterType.ASSIGNABLE_TYPE,
         classes = {ShortageScheduleQueryRepository.class, RescheduleProposalRepository.class}))
-class ShortageScheduleQueryValidationTest {
+class ShortageScheduleRepositoryQueryValidationTest {
 
     private static final LocalDate DAY = LocalDate.of(2026, 11, 10);
 
@@ -70,11 +84,51 @@ class ShortageScheduleQueryValidationTest {
     @Autowired ShortageScheduleQueryRepository schedules;
     @Autowired RescheduleProposalRepository proposals;
 
-    private SchedulingPlan sp(String factoryId) {
+    private Long userId;
+    private int planSeq;
+
+    @BeforeEach
+    void parents() {
+        for (String f : List.of("F1", "F2")) {
+            Factory factory = new Factory();
+            factory.setId(f);
+            factory.setName(f);
+            em.persist(factory);
+        }
+        User u = new User();
+        u.setFactoryId("F1");
+        u.setUsername("planner-" + UUID.randomUUID());
+        u.setPasswordHash("unused");
+        u.setIsActive(true);
+        em.persist(u);
+        em.flush();
+        userId = u.getId();
+
+        ProductType pt = new ProductType();
+        pt.setId("P1");
+        pt.setFactoryId("F1");
+        pt.setCode("P1");
+        pt.setName("产品一");
+        pt.setUnit("kg");
+        em.persist(pt);
+        for (String m : List.of("M1", "M2")) {
+            RawMaterialType rm = new RawMaterialType();
+            rm.setId(m);
+            rm.setFactoryId("F1");
+            rm.setCode(m);
+            rm.setName(m);
+            rm.setUnit("kg");
+            em.persist(rm);
+        }
+        em.flush();
+    }
+
+    private SchedulingPlan sp(String factoryId, SchedulingPlan.PlanStatus status) {
         SchedulingPlan p = new SchedulingPlan();
         p.setId(UUID.randomUUID().toString());
         p.setFactoryId(factoryId);
-        p.setPlanDate(DAY);
+        p.setPlanDate(DAY.minusDays(planSeq++));   // (工厂, 计划日期) 唯一; 任务时间不依赖它
+        p.setStatus(status);
         em.persist(p);
         return p;
     }
@@ -86,9 +140,9 @@ class ShortageScheduleQueryValidationTest {
         p.setPlanNumber("PP-" + UUID.randomUUID().toString().substring(0, 12));
         p.setProductTypeId("P1");
         p.setPlannedQuantity(BigDecimal.TEN);
-        p.setPlannedUnit("KG");
+        p.setPlannedUnit("kg");
         p.setSourceOrderId(salesOrderId);
-        p.setCreatedBy(1L);
+        p.setCreatedBy(userId);
         em.persist(p);
         return p;
     }
@@ -107,36 +161,91 @@ class ShortageScheduleQueryValidationTest {
         return ls;
     }
 
+    private ProductionBatch batch(ProductionPlan pp) {
+        ProductionBatch b = new ProductionBatch();
+        b.setFactoryId(pp.getFactoryId());
+        b.setBatchNumber("B-" + UUID.randomUUID().toString().substring(0, 12));
+        b.setProductTypeId("P1");
+        b.setQuantity(BigDecimal.TEN);
+        b.setUnit("kg");
+        b.setStatus(ProductionBatchStatus.IN_PROGRESS);
+        b.setBatchType("REGULAR");
+        b.setCostIncomplete(false);
+        b.setProductionPlanId(pp.getId());
+        em.persist(b);
+        return b;
+    }
+
+    private void report(ProductionBatch b) {
+        ProductionReport r = new ProductionReport();
+        r.setFactoryId(b.getFactoryId());
+        r.setBatchId(b.getId());
+        r.setWorkerId(userId);
+        r.setReportType("PROGRESS");
+        r.setReportMode(com.cretas.aims.entity.enums.ReportMode.MODE_1);
+        r.setReportDate(DAY);
+        r.setDataCorrected(false);
+        em.persist(r);
+    }
+
     @Test
-    void notStartedTasksAreThisFactoryThisOrderAndPendingOnly() {
-        assumeTrue(onH2(), "seeds bypass FK parents; H2 only (PG covers the schema in the migration test)");
-        em.getEntityManager().createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
-        SchedulingPlan f1 = sp("F1");
-        SchedulingPlan f2 = sp("F2");
+    void notStartedTasksAreThisFactoryThisOrderAndNotYetReportedOrClosed() {
+        SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.confirmed);
+        SchedulingPlan f1Done = sp("F1", SchedulingPlan.PlanStatus.completed);
+        SchedulingPlan f2 = sp("F2", SchedulingPlan.PlanStatus.confirmed);
         ProductionPlan mine = pp("F1", "SO-1");
+        ProductionPlan reported = pp("F1", "SO-1");
         ProductionPlan otherOrder = pp("F1", "SO-2");
         ProductionPlan otherFactory = pp("F2", "SO-1");
         LineSchedule wanted = task(f1, mine, "L1", 8, 16, LineSchedule.ScheduleStatus.pending);
-        task(f1, mine, "L1", 16, 20, LineSchedule.ScheduleStatus.in_progress);
+        task(f1, mine, "L1", 16, 20, LineSchedule.ScheduleStatus.in_progress);   // 已在做
+        task(f1Done, mine, "L2", 8, 16, LineSchedule.ScheduleStatus.pending);    // 排程计划已完成
+        task(f1, reported, "L3", 8, 16, LineSchedule.ScheduleStatus.pending);    // 计划已报工, 任务状态却还是 pending
         task(f1, otherOrder, "L1", 8, 16, LineSchedule.ScheduleStatus.pending);
         task(f2, otherFactory, "L1", 8, 16, LineSchedule.ScheduleStatus.pending);
+        report(batch(reported));
         em.flush();
 
         assertThat(schedules.findNotStartedForSalesOrder("F1", "SO-1")).extracting(LineSchedule::getId)
                 .containsExactly(wanted.getId());
-        assertThat(schedules.lockByIds("F2", List.of(wanted.getId()))).isEmpty();
-        assertThat(schedules.lockByIds("F1", List.of(wanted.getId()))).hasSize(1);
+    }
+
+    @Test
+    void aReportOnTheTasksOwnBatchAlsoCountsAsStarted() {
+        SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.confirmed);
+        ProductionPlan mine = pp("F1", "SO-1");
+        ProductionPlan unrelated = pp("F1", "SO-9");
+        ProductionBatch b = batch(unrelated);   // 批次挂在别的计划上, 任务直接指向它
+        LineSchedule t = task(f1, mine, "L1", 8, 16, LineSchedule.ScheduleStatus.pending);
+        em.flush();
+        t.setBatchId(b.getId());
+        report(b);
+        em.flush();
+
+        assertThat(schedules.findNotStartedForSalesOrder("F1", "SO-1")).isEmpty();
+    }
+
+    @Test
+    void lockingTasksIsFactoryScopedAndOrderedById() {
+        SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.confirmed);
+        SchedulingPlan f2 = sp("F2", SchedulingPlan.PlanStatus.confirmed);
+        LineSchedule a = task(f1, null, "L1", 8, 9, LineSchedule.ScheduleStatus.pending);
+        LineSchedule b = task(f1, null, "L1", 9, 10, LineSchedule.ScheduleStatus.pending);
+        LineSchedule foreign = task(f2, null, "L1", 8, 9, LineSchedule.ScheduleStatus.pending);
+        em.flush();
+
+        List<String> expected = java.util.stream.Stream.of(a.getId(), b.getId()).sorted().toList();
+        assertThat(schedules.lockByIds("F1", List.of(b.getId(), a.getId(), foreign.getId())))
+                .extracting(LineSchedule::getId).containsExactlyElementsOf(expected);
     }
 
     @Test
     void overlapCountsLiveTasksOnTheLineButNotTheOnesBeingMoved() {
-        assumeTrue(onH2(), "seeds bypass FK parents; H2 only (PG covers the schema in the migration test)");
-        em.getEntityManager().createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
-        SchedulingPlan f1 = sp("F1");
+        SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.confirmed);
         LineSchedule moving = task(f1, null, "L1", 8, 12, LineSchedule.ScheduleStatus.pending);
         LineSchedule busy = task(f1, null, "L1", 10, 14, LineSchedule.ScheduleStatus.in_progress);
         task(f1, null, "L1", 10, 14, LineSchedule.ScheduleStatus.cancelled);
-        task(f1, null, "L1", 12, 14, LineSchedule.ScheduleStatus.completed);
+        task(f1, null, "L1", 11, 14, LineSchedule.ScheduleStatus.completed);
         task(f1, null, "L2", 10, 14, LineSchedule.ScheduleStatus.pending);
         task(f1, null, "L1", 12, 15, LineSchedule.ScheduleStatus.pending);   // 窗口 [9, 12) 之后才开始, 不算
         em.flush();
@@ -148,19 +257,18 @@ class ShortageScheduleQueryValidationTest {
     }
 
     @Test
-    void arrivalIsTheLatestDateAmongLiveOrdersAndCountsUndatedOnes() {
-        assumeTrue(onH2(), "seeds bypass FK parents; H2 only (PG covers the schema in the migration test)");
-        em.getEntityManager().createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
-        item(order("F1", PurchaseOrderStatus.DRAFT, DAY.plusDays(2)), "M1", "10", "0");
+    void arrivalIsTheLatestDateAmongSubmittedOrdersAndCountsUndatedOnes() {
+        item(order("F1", PurchaseOrderStatus.DRAFT, DAY.plusDays(20)), "M1", "10", "0");     // 草稿不算
+        item(order("F1", PurchaseOrderStatus.SUBMITTED, DAY.plusDays(2)), "M1", "10", "0");
         item(order("F1", PurchaseOrderStatus.APPROVED, DAY.plusDays(5)), "M1", "10", "4");
-        item(order("F1", PurchaseOrderStatus.CANCELLED, DAY.plusDays(9)), "M1", "10", "0");   // 取消不算
-        item(order("F1", PurchaseOrderStatus.APPROVED, DAY.plusDays(9)), "M1", "10", "10");   // 收完不算
-        item(order("F2", PurchaseOrderStatus.APPROVED, DAY.plusDays(9)), "M1", "10", "0");    // 别厂不算
-        item(order("F1", PurchaseOrderStatus.APPROVED, DAY.plusDays(9)), "M2", "10", "0");    // 别的料不算
+        item(order("F1", PurchaseOrderStatus.CANCELLED, DAY.plusDays(9)), "M1", "10", "0");  // 取消不算
+        item(order("F1", PurchaseOrderStatus.APPROVED, DAY.plusDays(9)), "M1", "10", "10");  // 收完不算
+        item(order("F2", PurchaseOrderStatus.APPROVED, DAY.plusDays(9)), "M1", "10", "0");   // 别厂不算
+        item(order("F1", PurchaseOrderStatus.APPROVED, DAY.plusDays(9)), "M2", "10", "0");   // 别的料不算
         em.flush();
 
         Object[] row = schedules.findLiveOrderArrival("F1", "M1").get(0);
-        assertThat(row[0]).isEqualTo(DAY.plusDays(5));
+        assertThat(asDate(row[0])).isEqualTo(DAY.plusDays(5));
         assertThat(((Number) row[1]).longValue()).isZero();
         assertThat(((Number) row[2]).longValue()).isEqualTo(2);
 
@@ -168,7 +276,17 @@ class ShortageScheduleQueryValidationTest {
         em.flush();
         row = schedules.findLiveOrderArrival("F1", "M1").get(0);
         assertThat(((Number) row[1]).longValue()).isEqualTo(1);
-        assertThat(((Number) schedules.findLiveOrderArrival("F1", "M9").get(0)[2]).longValue()).isZero();
+        assertThat(((Number) schedules.findLiveOrderArrival("F1", "M2").get(0)[2]).longValue()).isEqualTo(1);
+    }
+
+    @Test
+    void lineLocksAreTakenInsideTheTransaction() {
+        ScheduleLineLocks locks = new ScheduleLineLocks(em.getEntityManager());
+        assertThatCode(() -> {
+            locks.lock("F1", List.of("L2", "L1", "L1"));
+            locks.lock("F1", List.of("L1"));   // 同一事务里重入不阻塞
+        }).doesNotThrowAnyException();
+        assertThat(ScheduleLineLocks.key("F1", "L1")).isEqualTo("line_schedule:F1:L1");
     }
 
     @Test
@@ -193,6 +311,10 @@ class ShortageScheduleQueryValidationTest {
         assertThat(proposals.findTop5ByFactoryIdAndCaseIdOrderByCreatedAtDesc("F1", "C1")).hasSize(1);
     }
 
+    private static LocalDate asDate(Object v) {
+        return v instanceof java.sql.Date d ? d.toLocalDate() : (LocalDate) v;
+    }
+
     private PurchaseOrder order(String factoryId, PurchaseOrderStatus status, LocalDate expected) {
         PurchaseOrder o = new PurchaseOrder();
         o.setId(UUID.randomUUID().toString());
@@ -201,7 +323,7 @@ class ShortageScheduleQueryValidationTest {
         o.setOrderDate(DAY);
         o.setExpectedDeliveryDate(expected);
         o.setStatus(status);
-        o.setCreatedBy(1L);
+        o.setCreatedBy(userId);
         em.persist(o);
         return o;
     }

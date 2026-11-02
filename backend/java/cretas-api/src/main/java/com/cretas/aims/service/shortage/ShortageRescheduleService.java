@@ -23,10 +23,13 @@ import com.cretas.aims.repository.shortage.ShortageScheduleQueryRepository;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
+import com.cretas.aims.service.scheduling.ScheduleLineLocks;
+import com.cretas.aims.service.unit.UnitContractService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -73,6 +76,8 @@ public class ShortageRescheduleService {
     private final ProductionLineRepository productionLineRepository;
     private final SalesOrderRepository salesOrderRepository;
     private final LineCapacityEquipmentCheck capacityCheck;
+    private final ScheduleLineLocks lineLocks;
+    private final UnitContractService unitContractService;
 
     /** 生成预览并存下基线。 */
     @Transactional
@@ -82,6 +87,10 @@ public class ShortageRescheduleService {
         if (c.getClosedAt() != null || c.getStage().isTerminal()) {
             throw new BusinessException(409, "缺料实例已结束 (" + c.getStage().label() + "), 不能再重排")
                     .withHint("已结束的实例只能查看; 需要调整排程请到「生产排程」");
+        }
+        if (c.getSourceType() != ShortageCase.SourceType.SALES_ORDER) {
+            throw new BusinessException(409, "只有来自销售订单的缺料实例能重排")
+                    .withHint("其它来源的缺料请到「生产排程」手工调整");
         }
         Plan plan = plan(c);
         RescheduleProposal p = new RescheduleProposal();
@@ -130,6 +139,14 @@ public class ShortageRescheduleService {
                     .withHint("选一个可行的候选; 转人工请用「转人工」按钮");
         }
 
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> moves = (List<Map<String, Object>>) chosen.get("moves");
+        // 先按 (工厂, 产线) 取锁, 涉及的源线与目标线一起、排序后取: 否则重算看到的空档在写之前可能被别人占掉
+        Set<String> touchedLines = new TreeSet<>();
+        p.getBaseline().forEach(b -> touchedLines.add((String) b.get("lineId")));
+        moves.forEach(m -> touchedLines.add((String) m.get("toLineId")));
+        lineLocks.lock(factoryId, touchedLines);
+
         // S4-04: 锁住任务后逐个比对基线
         List<String> ids = p.getBaseline().stream().map(b -> (String) b.get("scheduleId")).toList();
         Map<String, LineSchedule> locked = new HashMap<>();
@@ -152,17 +169,27 @@ public class ShortageRescheduleService {
         }
 
         LocalDateTime at = LocalDateTime.now();
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> moves = (List<Map<String, Object>>) chosen.get("moves");
+        List<String> outsidePlanDay = new ArrayList<>();
         for (Map<String, Object> m : moves) {
             LineSchedule ls = locked.get((String) m.get("scheduleId"));
+            LocalDateTime toStart = LocalDateTime.parse((String) m.get("toStart"));
+            Duration delta = Duration.between(ls.getPlannedStartTime(), toStart);
             ls.setProductionLineId((String) m.get("toLineId"));
-            ls.setPlannedStartTime(LocalDateTime.parse((String) m.get("toStart")));
+            ls.setPlannedStartTime(toStart);
             ls.setPlannedEndTime(LocalDateTime.parse((String) m.get("toEnd")));
+            // APS 的按天分配与工序时间线跟着平移同样的量, 否则日视图还把量算在旧日期上
+            ls.setTaskTimeline(shiftTimeline(ls.getTaskTimeline(), delta));
+            ls.setDailyAllocations(shiftDailyAllocations(ls.getDailyAllocations(), delta));
             ls.setAdjustmentCount((ls.getAdjustmentCount() == null ? 0 : ls.getAdjustmentCount()) + 1);
             ls.setLastAdjustmentTime(at);
             ls.setAdjustmentReason(truncate("缺料重排 (" + chosen.get("label") + "), 缺料实例 " + c.getId(), 200));
+            LocalDate planDay = ls.getPlan() == null ? null : ls.getPlan().getPlanDate();
+            if (planDay != null && !planDay.equals(toStart.toLocalDate())) {
+                outsidePlanDay.add(String.valueOf(m.get("scheduleId")));
+            }
         }
+        String planDayNote = outsidePlanDay.isEmpty() ? ""
+                : "; " + outsidePlanDay.size() + " 个任务移出了所属排程计划的日期 (排程计划日期未改)";
         p.setStatus(RescheduleProposal.Status.APPLIED);
         p.setAppliedCandidate(candidateKey);
         p.setAppliedAt(at);
@@ -174,7 +201,7 @@ public class ShortageRescheduleService {
         a.setActionType(ShortageCaseAction.ActionType.RESCHEDULE_APPLIED);
         a.setStatus(ShortageCaseAction.Status.DONE);
         a.setResultRef(p.getId());
-        a.setReason(truncate((String) chosen.get("label"), 500));
+        a.setReason(truncate(chosen.get("label") + planDayNote, 500));
         a.setActorType(actor.type().name());
         a.setActorId(actor.id());
         actionRepository.saveAndFlush(a);
@@ -184,7 +211,8 @@ public class ShortageRescheduleService {
             c.setStage(Stage.PLANNED);
             caseRepository.saveAndFlush(c);
         }
-        event(c, from, c.getStage(), "RESCHEDULE_APPLIED", chosen.get("label") + ": 调整 " + moves.size() + " 个排程任务", actor);
+        event(c, from, c.getStage(), "RESCHEDULE_APPLIED",
+                chosen.get("label") + ": 调整 " + moves.size() + " 个排程任务" + planDayNote, actor);
         return p;
     }
 
@@ -263,6 +291,7 @@ public class ShortageRescheduleService {
         List<Map<String, Object>> moves = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         Map<String, ProductionLine> lines = lines(factoryId);
+        List<Slot> claimed = new ArrayList<>();   // 本方案里已经占下的 (线, 时段), 被挪的任务之间也不能撞
         boolean ok = true;
         for (LineSchedule ls : affected) {
             LocalDateTime start = ls.getPlannedStartTime().plus(shift);
@@ -273,10 +302,11 @@ public class ShortageRescheduleService {
                 notes.add(name(line, ls.getProductionLineId()) + " 不在运行");
             }
             List<LineSchedule> clash = scheduleQuery.findOverlapping(factoryId, ls.getProductionLineId(), start, end, movingIds);
-            if (!clash.isEmpty()) {
+            if (!clash.isEmpty() || Slot.collides(claimed, ls.getProductionLineId(), start, end)) {
                 ok = false;
-                notes.add(name(line, ls.getProductionLineId()) + " 在 " + start + " – " + end + " 已排了 " + clash.size() + " 个任务");
+                notes.add(name(line, ls.getProductionLineId()) + " 在 " + start + " – " + end + " 已有任务");
             }
+            claimed.add(new Slot(ls.getProductionLineId(), start, end));
             moves.add(move(ls, lines, ls.getProductionLineId(), start, end));
         }
         deliveryNote(moves, due, notes);
@@ -289,6 +319,7 @@ public class ShortageRescheduleService {
         List<Map<String, Object>> moves = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         Map<String, ProductionLine> lines = lines(factoryId);
+        List<Slot> claimed = new ArrayList<>();
         boolean ok = true;
         for (LineSchedule ls : affected) {
             LocalDateTime start = ls.getPlannedStartTime().plus(shift);
@@ -306,18 +337,24 @@ public class ShortageRescheduleService {
                 if (line.getId().equals(ls.getProductionLineId()) || line.getStatus() != ProductionLine.LineStatus.active) {
                     continue;
                 }
-                ResourceCheckResult cap = capacityCheck.checkCapacity(factoryId, pp.getProductTypeId(), pp.getPlannedQuantity(),
-                        pp.getPlannedUnit(), line.getId(), start, end);
+                // 这个任务自己的量 (一个计划可拆成多段任务); 单位按单位字典认, 认不出 (盒 / 袋 …) 就如实判产能未验证
+                BigDecimal qty = ls.getPlannedQuantity() != null ? BigDecimal.valueOf(ls.getPlannedQuantity()) : pp.getPlannedQuantity();
+                ResourceCheckResult cap = capacityCheck.checkCapacity(factoryId, pp.getProductTypeId(), qty,
+                        capacityUnit(factoryId, pp.getPlannedUnit()), line.getId(), start, end);
                 if (!LineCapacityEquipmentCheck.READY.equals(LineCapacityEquipmentCheck.status(cap))) {
                     why.add(line.getName() + ": " + cap.getMessage());
                     continue;
                 }
-                if (!scheduleQuery.findOverlapping(factoryId, line.getId(), start, end, movingIds).isEmpty()) {
+                if (!scheduleQuery.findOverlapping(factoryId, line.getId(), start, end, movingIds).isEmpty()
+                        || Slot.collides(claimed, line.getId(), start, end)) {
                     why.add(line.getName() + ": 该时段已有任务");
                     continue;
                 }
                 target = line.getId();
                 break;
+            }
+            if (target != null) {
+                claimed.add(new Slot(target, start, end));
             }
             if (target == null) {
                 ok = false;
@@ -332,6 +369,81 @@ public class ShortageRescheduleService {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** 本方案里已占下的一段 (线, [start, end))。 */
+    private record Slot(String lineId, LocalDateTime start, LocalDateTime end) {
+        static boolean collides(List<Slot> claimed, String lineId, LocalDateTime start, LocalDateTime end) {
+            return claimed.stream().anyMatch(s -> s.lineId.equals(lineId) && s.start.isBefore(end) && s.end.isAfter(start));
+        }
+    }
+
+    /**
+     * 计划单位 → 产能单位代码 (PIECE / KG / BATCH)。先认代码本身, 再按单位字典认「等同于 件 / 个 / kg / 批」的写法;
+     * 都不是 (盒 / 袋 等包装单位) 原样返回, 由产能核对如实判「未验证」(Owner 10-28: 不猜、不换算)。
+     */
+    private String capacityUnit(String factoryId, String raw) {
+        if (raw == null || raw.isBlank() || LineCapacityEquipmentCheck.parseUnit(raw) != null) {
+            return raw;
+        }
+        if (unitContractService.areEquivalent(factoryId, raw, "kg")) {
+            return "KG";
+        }
+        if (unitContractService.areEquivalent(factoryId, raw, "件") || unitContractService.areEquivalent(factoryId, raw, "个")) {
+            return "PIECE";
+        }
+        if (unitContractService.areEquivalent(factoryId, raw, "批")) {
+            return "BATCH";
+        }
+        return raw;
+    }
+
+    /** 工序时间线 start / end (ISO 本地时间) 平移 delta; 读不懂的条目原样保留。 */
+    static List<Map<String, Object>> shiftTimeline(List<Map<String, Object>> timeline, Duration delta) {
+        if (timeline == null || delta.isZero()) {
+            return timeline;
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> step : timeline) {
+            Map<String, Object> copy = new LinkedHashMap<>(step);
+            for (String k : List.of("start", "end")) {
+                if (copy.get(k) instanceof String v) {
+                    try {
+                        copy.put(k, LocalDateTime.parse(v).plus(delta).toString());
+                    } catch (java.time.format.DateTimeParseException ignored) {
+                        // 不是本地时间字符串: 不动
+                    }
+                }
+            }
+            out.add(copy);
+        }
+        return out;
+    }
+
+    /** APS v2 按天分配 days[].date 平移 delta 的天数; 其它键原样保留。 */
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> shiftDailyAllocations(Map<String, Object> daily, Duration delta) {
+        long days = delta.toDays();
+        if (daily == null || days == 0 || !(daily.get("days") instanceof List<?> list)) {
+            return daily;
+        }
+        Map<String, Object> out = new LinkedHashMap<>(daily);
+        List<Object> shifted = new ArrayList<>();
+        for (Object o : list) {
+            if (o instanceof Map<?, ?> d && d.get("date") instanceof String date) {
+                Map<String, Object> copy = new LinkedHashMap<>((Map<String, Object>) d);
+                try {
+                    copy.put("date", LocalDate.parse(date).plusDays(days).toString());
+                } catch (java.time.format.DateTimeParseException ignored) {
+                    // 不是日期: 不动
+                }
+                shifted.add(copy);
+            } else {
+                shifted.add(o);
+            }
+        }
+        out.put("days", shifted);
+        return out;
+    }
 
     static Map<String, Object> fingerprint(LineSchedule ls) {
         Map<String, Object> m = new LinkedHashMap<>();

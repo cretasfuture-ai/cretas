@@ -30,7 +30,7 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId || '');
 const canPurchase = computed(() => permissionStore.canWrite('procurement'));
 const canDecide = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production'));
-const canReschedule = computed(() => permissionStore.canWrite('production'));
+const canReschedule = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('scheduling'));
 
 const STAGE_LABEL: Record<ShortageCaseStage, string> = {
   DETECTED: '待处理',
@@ -200,6 +200,13 @@ const reschedule = ref<RescheduleProposal | null>(null);
 const proposing = ref(false);
 const applying = ref<string | null>(null);
 
+/** 后端 409 带的操作提示一起显示, 用户才知道下一步做什么 (如「重新生成重排方案」)。 */
+function errorText(e: unknown, fallback: string) {
+  const err = e as { message?: string; actionHint?: string | null };
+  const msg = err?.message || fallback;
+  return err?.actionHint ? `${msg}（${err.actionHint}）` : msg;
+}
+
 function shortTime(iso: string) {
   return iso.replace('T', ' ').slice(0, 16);
 }
@@ -215,7 +222,7 @@ async function propose() {
       ElMessage.error(res.message || '生成重排方案失败');
     }
   } catch (e: unknown) {
-    ElMessage.error((e as { message?: string })?.message || '生成重排方案失败');
+    ElMessage.error(errorText(e, '生成重排方案失败'));
   } finally {
     proposing.value = false;
   }
@@ -241,7 +248,7 @@ async function applyCandidate(key: string, label: string) {
     }
   } catch (e: unknown) {
     // 409 方案已过期: 丢掉旧方案, 让用户重新生成
-    ElMessage.error((e as { message?: string })?.message || '应用失败');
+    ElMessage.error(errorText(e, '应用失败'));
     reschedule.value = null;
   } finally {
     applying.value = null;

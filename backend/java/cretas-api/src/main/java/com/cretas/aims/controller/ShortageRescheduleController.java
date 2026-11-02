@@ -58,7 +58,8 @@ public class ShortageRescheduleController {
         }
     }
 
-    @RequirePermission({"production:read", "production:read_write", "procurement:read", "procurement:read_write"})
+    @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write",
+            "procurement:read", "procurement:read_write"})
     @GetMapping
     @Operation(summary = "最近的重排方案")
     public ApiResponse<List<ProposalView>> recent(@PathVariable String factoryId, @PathVariable String caseId) {
@@ -68,7 +69,7 @@ public class ShortageRescheduleController {
                 .findTop5ByFactoryIdAndCaseIdOrderByCreatedAtDesc(factoryId, caseId).stream().map(ProposalView::of).toList());
     }
 
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
     @PostMapping
     @Operation(summary = "生成重排方案", description = "同线顺延 / 顺延并换线 / 转人工; 只预览, 不改排程")
     public ApiResponse<ProposalView> propose(@PathVariable String factoryId, @PathVariable String caseId,
@@ -77,7 +78,7 @@ public class ShortageRescheduleController {
         return ApiResponse.success("重排方案已生成, " + ShortageRescheduleService.ttlMinutes() + " 分钟内有效", ProposalView.of(p));
     }
 
-    @RequirePermission({"production:read_write"})
+    @RequirePermission({"production:read_write", "scheduling:read_write"})
     @PostMapping("/{proposalId}/apply")
     @Operation(summary = "应用重排方案", description = "排程在生成方案后变过就 409, 不写任何东西")
     public ApiResponse<ProposalView> apply(@PathVariable String factoryId, @PathVariable String caseId,
