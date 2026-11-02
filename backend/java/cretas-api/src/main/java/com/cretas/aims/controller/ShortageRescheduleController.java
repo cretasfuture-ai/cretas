@@ -1,0 +1,90 @@
+package com.cretas.aims.controller;
+
+import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.entity.shortage.RescheduleProposal;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.shortage.RescheduleProposalRepository;
+import com.cretas.aims.repository.shortage.ShortageCaseRepository;
+import com.cretas.aims.service.shortage.ShortageRescheduleService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 缺料实例上的局部重排 (S4 L1 切片 3): 生成方案 (预览差异) → 确认应用。
+ *
+ * <p>应用时基线或按当前数据重算的结果有一处对不上就整体 409「方案已过期」, 不改任何排程。
+ */
+@RestController
+@RequiredArgsConstructor
+@RequestMapping("/api/mobile/{factoryId}/shortage-cases/{caseId}/reschedule-proposals")
+@Tag(name = "缺料异常", description = "局部重排")
+public class ShortageRescheduleController {
+
+    private final ShortageRescheduleService rescheduleService;
+    private final RescheduleProposalRepository proposalRepository;
+    private final ShortageCaseRepository caseRepository;
+
+    @Data
+    public static class ApplyRequest {
+        @NotBlank(message = "请选择一个候选方案")
+        private String candidateKey;
+    }
+
+    public record ProposalView(String id, String status, String statusLabel, List<Map<String, Object>> candidates,
+                               String appliedCandidate, LocalDateTime expiresAt, LocalDateTime createdAt,
+                               LocalDateTime appliedAt) {
+        static ProposalView of(RescheduleProposal p) {
+            return new ProposalView(p.getId(), p.getStatus().name(), label(p.getStatus()), p.getCandidates(),
+                    p.getAppliedCandidate(), p.getExpiresAt(), p.getCreatedAt(), p.getAppliedAt());
+        }
+
+        private static String label(RescheduleProposal.Status s) {
+            return switch (s) {
+                case OPEN -> "待确认";
+                case APPLIED -> "已应用";
+                case STALE -> "已过期";
+            };
+        }
+    }
+
+    @RequirePermission({"production:read", "production:read_write", "procurement:read", "procurement:read_write"})
+    @GetMapping
+    @Operation(summary = "最近的重排方案")
+    public ApiResponse<List<ProposalView>> recent(@PathVariable String factoryId, @PathVariable String caseId) {
+        caseRepository.findByIdAndFactoryId(caseId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "缺料实例不存在或不属于本厂"));
+        return ApiResponse.success("获取成功", proposalRepository
+                .findTop5ByFactoryIdAndCaseIdOrderByCreatedAtDesc(factoryId, caseId).stream().map(ProposalView::of).toList());
+    }
+
+    @RequirePermission({"production:read_write"})
+    @PostMapping
+    @Operation(summary = "生成重排方案", description = "同线顺延 / 顺延并换线 / 转人工; 只预览, 不改排程")
+    public ApiResponse<ProposalView> propose(@PathVariable String factoryId, @PathVariable String caseId,
+                                             HttpServletRequest http) {
+        RescheduleProposal p = rescheduleService.propose(factoryId, caseId, ShortageCaseActionController.actor(http, factoryId));
+        return ApiResponse.success("重排方案已生成, " + ShortageRescheduleService.ttlMinutes() + " 分钟内有效", ProposalView.of(p));
+    }
+
+    @RequirePermission({"production:read_write"})
+    @PostMapping("/{proposalId}/apply")
+    @Operation(summary = "应用重排方案", description = "排程在生成方案后变过就 409, 不写任何东西")
+    public ApiResponse<ProposalView> apply(@PathVariable String factoryId, @PathVariable String caseId,
+                                           @PathVariable String proposalId, @Valid @RequestBody ApplyRequest request,
+                                           HttpServletRequest http) {
+        RescheduleProposal p = rescheduleService.apply(factoryId, caseId, proposalId, request.getCandidateKey(),
+                ShortageCaseActionController.actor(http, factoryId));
+        return ApiResponse.success("排程已调整", ProposalView.of(p));
+    }
+}

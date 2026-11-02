@@ -15,7 +15,10 @@ import {
   getProcurementProposals,
   createProcurementDraft,
   decideShortageCase,
+  proposeReschedule,
+  applyReschedule,
   type ProcurementProposal,
+  type RescheduleProposal,
   type ShortageCase,
   type ShortageCaseDecision,
   type ShortageCaseDetail,
@@ -27,6 +30,7 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId || '');
 const canPurchase = computed(() => permissionStore.canWrite('procurement'));
 const canDecide = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production'));
+const canReschedule = computed(() => permissionStore.canWrite('production'));
 
 const STAGE_LABEL: Record<ShortageCaseStage, string> = {
   DETECTED: '待处理',
@@ -62,6 +66,8 @@ const REASON_LABEL: Record<string, string> = {
   MATERIAL_BATCH_RELEASED: '质检放行',
   MANUAL_REFRESH: '手动核对',
   PURCHASE_DRAFT_CREATED: '生成采购草稿',
+  RESCHEDULE_PROPOSED: '生成重排方案',
+  RESCHEDULE_APPLIED: '应用重排',
   DECISION_CANCEL: '取消',
   DECISION_MANUAL: '转人工',
   DECISION_CLOSE: '关闭',
@@ -118,6 +124,7 @@ async function openDetail(row: ShortageCase) {
   detailVisible.value = true;
   detailLoading.value = true;
   detail.value = null;
+  reschedule.value = null;
   try {
     const res = await getShortageCase(factoryId.value, row.id);
     if (res.success) {
@@ -185,6 +192,59 @@ async function draft(materialTypeId: string) {
     ElMessage.error((e as { message?: string })?.message || '生成采购草稿失败');
   } finally {
     drafting.value = null;
+  }
+}
+
+// ---- 局部重排: 生成方案 (只预览) → 选一个候选应用; 排程在生成后变过, 后端整体 409, 一行不改
+const reschedule = ref<RescheduleProposal | null>(null);
+const proposing = ref(false);
+const applying = ref<string | null>(null);
+
+function shortTime(iso: string) {
+  return iso.replace('T', ' ').slice(0, 16);
+}
+
+async function propose() {
+  if (!detail.value) return;
+  proposing.value = true;
+  try {
+    const res = await proposeReschedule(factoryId.value, detail.value.case.id);
+    if (res.success && res.data) {
+      reschedule.value = res.data;
+    } else {
+      ElMessage.error(res.message || '生成重排方案失败');
+    }
+  } catch (e: unknown) {
+    ElMessage.error((e as { message?: string })?.message || '生成重排方案失败');
+  } finally {
+    proposing.value = false;
+  }
+}
+
+async function applyCandidate(key: string, label: string) {
+  if (!detail.value || !reschedule.value) return;
+  try {
+    await ElMessageBox.confirm(`按「${label}」调整排程？`, '应用重排', { confirmButtonText: '应用', cancelButtonText: '先不' });
+  } catch {
+    return;
+  }
+  applying.value = key;
+  try {
+    const res = await applyReschedule(factoryId.value, detail.value.case.id, reschedule.value.id, key);
+    if (res.success) {
+      ElMessage.success('排程已调整');
+      reschedule.value = null;
+      await openDetail(detail.value.case);
+      await load();
+    } else {
+      ElMessage.error(res.message || '应用失败');
+    }
+  } catch (e: unknown) {
+    // 409 方案已过期: 丢掉旧方案, 让用户重新生成
+    ElMessage.error((e as { message?: string })?.message || '应用失败');
+    reschedule.value = null;
+  } finally {
+    applying.value = null;
   }
 }
 
@@ -335,6 +395,48 @@ onMounted(load);
             </el-button>
           </div>
 
+          <template v-if="canReschedule && isOpen">
+            <div class="section-head">
+              <h4>局部重排</h4>
+              <el-button size="small" :loading="proposing" @click="propose">
+                {{ reschedule ? '重新生成方案' : '生成重排方案' }}
+              </el-button>
+            </div>
+            <div v-if="!reschedule" class="hint">按缺料的预计到货日给出顺延 / 换线方案, 只预览, 确认后才改排程。</div>
+            <div v-else>
+              <div class="hint">方案 {{ shortTime(reschedule.expiresAt) }} 前有效; 期间排程被改过, 应用会被拒绝, 需重新生成。</div>
+              <el-card v-for="c in reschedule.candidates" :key="c.key" shadow="never" class="candidate">
+                <div class="candidate-head">
+                  <strong>{{ c.label }}</strong>
+                  <el-tag v-if="!c.applicable" size="small" type="info">不可直接应用</el-tag>
+                  <el-button
+                    v-else
+                    size="small"
+                    type="primary"
+                    :loading="applying === c.key"
+                    @click="applyCandidate(c.key, c.label)"
+                  >
+                    应用此方案
+                  </el-button>
+                </div>
+                <el-table v-if="c.moves.length" :data="c.moves" size="small">
+                  <el-table-column label="产线" min-width="140">
+                    <template #default="{ row }">
+                      {{ row.fromLineName }}<span v-if="row.toLineId !== row.fromLineId"> → {{ row.toLineName }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="开始" min-width="200">
+                    <template #default="{ row }">{{ shortTime(row.fromStart) }} → {{ shortTime(row.toStart) }}</template>
+                  </el-table-column>
+                  <el-table-column label="结束" min-width="200">
+                    <template #default="{ row }">{{ shortTime(row.fromEnd) }} → {{ shortTime(row.toEnd) }}</template>
+                  </el-table-column>
+                </el-table>
+                <div v-for="(n, i) in c.notes" :key="i" class="hint">{{ n }}</div>
+              </el-card>
+            </div>
+          </template>
+
           <h4>处理记录</h4>
           <el-timeline>
             <el-timeline-item v-for="(e, i) in detail.events" :key="i" :timestamp="time(e.createdAt)">
@@ -359,4 +461,6 @@ onMounted(load);
 .hint { color: var(--el-text-color-secondary); font-size: 12px; }
 .gap { color: var(--el-color-danger); font-weight: 600; }
 .decision-bar { display: flex; gap: 8px; margin: 12px 0; }
+.candidate { margin: 8px 0; }
+.candidate-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 </style>
