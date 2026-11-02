@@ -157,22 +157,35 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 # ⇒ 文本槽从此**只有** aliyun 三账号轮转 qwen3.8-flash; 三个都不可用时 call_chain
 #   抛 LLMChainExhausted 并逐条列出原因(明确失败, ⛔ 不静默降级)。
 # 下次到期: 2026-10-28 是最后一个不超龄日, 10-29 起 test_registry_audit_date_is_not_stale 变红。
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 10, 7)  # 10-07 复审: 删 6 留 8, 见上
+#
+# ── 2026-11-03 复审 (10-29 起 test_registry_audit_date_is_not_stale 红, main Python Gate 随之红) ──
+# 证据: 47 上 `scripts/cron/probe-llm-registry.sh`(包 `python -m scripts.probe_llm_registry`,
+#   key 从 .env.prod 注入, 不落盘不打印) 2026-11-03 00:12 CST 共探 8 条, ok 3 / 非 ok 5;
+#   再用同一套 `_run()` 逐条取 HTTP 状态与响应头部(见下面 `_REGISTRY_AUDIT_PROBE`)。
+# ⇒ 注册表**一条未增未删**(删 provider 由 Steve 定, 本轮只报告):
+#   · 活: aliyun_a_vl qwen3.8-flash / qwen3.7-flash / deepseek-v4.1-flash(仓库专用)
+#   · 🔴 新: aliyun_c_vl qwen3.8-flash 由 10-07 的 ok 200 变成 **400 Arrearage(账号欠费)** ——
+#     不是额度, 是 aliyun_c 账号本身欠费; 链上表现是一跳 400 → 下一跳, 不计费。报 owner。
+#   · 10-07 起仍 403 FreeTierOnly 的 4 条原样保留(aliyun_b_vl qwen3.8-flash, aliyun_a_vl
+#     kimi-k3 / qwen3.8-27b / qwen3.8-max-0902), 仍待 owner 裁定。
+# ⇒ 当前文本槽实际只剩 aliyun_a 一个账号能出内容; a 也耗尽时 call_chain 抛 LLMChainExhausted。
+# 下次到期: 2026-11-24 是最后一个不超龄日, 11-25 起上述定时闸变红。
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 11, 3)  # 11-03 复审: 0 删 0 增, 见上
 #: 复审当天对**注册表每一条**的探针读数(值是读数本身, ⛔ 不是布尔)。
 #: 由 test_registry_audit_has_a_probe_reading_for_every_entry 钉住两件事:
 #:   ① 键集合 == `_SAFE_MODELS` 的键集合 —— 新增/保留一条却没有当天读数 ⇒ 红;
 #:   ② `_REGISTRY_AUDIT_PROBE_DATE == _REGISTRY_AUDIT_DATE` —— **只推审计日期** ⇒ 红。
 #: ⇒ 推日期必须同时换上新一轮的逐条读数, 「只推日期过闸」在结构上做不到不留痕。
-_REGISTRY_AUDIT_PROBE_DATE = datetime.date(2026, 10, 7)
+_REGISTRY_AUDIT_PROBE_DATE = datetime.date(2026, 11, 3)
 _REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
-    ("aliyun_c_vl", "qwen3.8-flash"): "ok 200",
+    ("aliyun_c_vl", "qwen3.8-flash"): "error 400 Arrearage(账号欠费) —— 10-07 为 ok 200, 保留, 报 owner 裁定",
     ("aliyun_a_vl", "qwen3.8-flash"): "ok 200",
     ("aliyun_a_vl", "qwen3.7-flash"): "ok 200",
     ("aliyun_a_vl", "deepseek-v4.1-flash"): "ok 200 (仓库专用, 需 LLM_WAREHOUSE_V41_ENABLED=1)",
-    ("aliyun_b_vl", "qwen3.8-flash"): "quota 403 —— 保留, 报 owner 裁定",
-    ("aliyun_a_vl", "kimi-k3"): "quota 403 —— 保留, 报 owner 裁定",
-    ("aliyun_a_vl", "qwen3.8-27b"): "quota 403 —— 保留, 报 owner 裁定(本就不在自动池)",
-    ("aliyun_a_vl", "qwen3.8-max-0902"): "quota 403 —— 保留, 报 owner 裁定",
+    ("aliyun_b_vl", "qwen3.8-flash"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
+    ("aliyun_a_vl", "kimi-k3"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
+    ("aliyun_a_vl", "qwen3.8-27b"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定(本就不在自动池)",
+    ("aliyun_a_vl", "qwen3.8-max-0902"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
 }
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
