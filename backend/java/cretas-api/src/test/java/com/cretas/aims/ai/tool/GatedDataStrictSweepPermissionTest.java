@@ -115,7 +115,7 @@ class GatedDataStrictSweepPermissionTest {
 
     @Test
     void attendanceToolsBindTheSubjectToTheCallerUnlessTheyReadHr() throws Exception {
-        // V20261103_140 opens ATTENDANCE_TODAY / HISTORY / STATUS to every role, like /time-clock/today etc.;
+        // V20261103_131 opens ATTENDANCE_TODAY / HISTORY / STATUS to every role, like /time-clock/today etc.;
         // those endpoints bind the subject to the JWT user, so the tools must not take any userId from the model.
         com.cretas.aims.service.TimeClockService clock = mock(com.cretas.aims.service.TimeClockService.class);
         for (ToolExecutor tool : java.util.List.<ToolExecutor>of(

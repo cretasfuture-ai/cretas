@@ -20,17 +20,17 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * V20261103_140 drops the legacy intent-level required_roles of read intents (S6 follow-up: the intent layer
+ * V20261103_131 drops the legacy intent-level required_roles of read intents (S6 follow-up: the intent layer
  * must not be stricter than the App page; 2026-11-03 retest: quality_manager / production_manager got NO_PERMISSION
  * for 「追溯批次」 while /traceability/full and /impact answer them). This pins what the migration may touch:
  * only intents whose tool is a READ tool, so the tool's own gate (pinned to the App by
  * GatedDataToolAiPathPermissionTest) takes over; no write intent is loosened.
  */
-@DisplayName("V20261103_140: 只去掉读意图的旧角色名单, 写意图一个不动")
+@DisplayName("V20261103_131: 只去掉读意图的旧角色名单, 写意图一个不动")
 class IntentRequiredRolesCleanupContractTest {
 
     private static final Path MIGRATION = Path.of(
-            "src/main/resources/db/flyway/V20261103_140__read_intents_drop_legacy_required_roles.sql");
+            "src/main/resources/db/flyway/V20261103_131__read_intents_drop_legacy_required_roles.sql");
 
     private static GatedDataScan scan;
     private static Map<String, String> pairs;
@@ -73,7 +73,7 @@ class IntentRequiredRolesCleanupContractTest {
         com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl intents =
                 org.mockito.Mockito.mock(com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl.class,
                         org.mockito.Mockito.CALLS_REAL_METHODS);
-        // The prod row before V20261103_140: 「追溯批次」 refused for quality_manager / production_manager (2026-11-03 retest).
+        // The prod row before V20261103_131: 「追溯批次」 refused for quality_manager / production_manager (2026-11-03 retest).
         assertThat((Boolean) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
                 intents, "checkRolePermission", before, "quality_manager")).isFalse();
         assertThat((Boolean) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
