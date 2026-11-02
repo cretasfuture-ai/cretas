@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Connection, Delete } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
 
 const loading = ref(false);
 const connections = ref<TableRow[]>([]);
@@ -123,7 +120,7 @@ async function handleSync(id: string) {
             <span class="data-count">{{ connections.length }} 个连接</span>
           </div>
           <div class="header-right">
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="dialogVisible = true">新建连接</el-button>
+            <el-button type="primary" :icon="Plus" @click="dialogVisible = true">新建连接</el-button>
             <el-button :icon="Refresh" @click="loadConnections">刷新</el-button>
           </div>
         </div>
@@ -136,13 +133,10 @@ async function handleSync(id: string) {
             配置完成后, 系统会自动同步 POS 订单、菜品、门店数据到 SmartBI,
             你就可以在 <b>经营驾驶舱</b>、<b>菜品四象限</b>、<b>门店对比</b> 等看板中看到实时分析。
           </div>
-          <el-button v-if="canWrite" type="primary" size="large" :icon="Plus"
+          <el-button type="primary" size="large" :icon="Plus"
             @click="dialogVisible = true" style="margin-top: 16px">
             立即接入 POS
           </el-button>
-          <el-alert v-if="!canWrite" type="info" :closable="false" style="margin-top: 16px; max-width: 500px">
-            当前账号无 POS 集成权限, 请联系工厂管理员
-          </el-alert>
         </div>
 
         <div class="brand-list">
@@ -176,7 +170,7 @@ async function handleSync(id: string) {
               </el-tag>
               <span class="conn-name">{{ conn.connectionName }}</span>
             </div>
-            <el-switch v-if="canWrite" :model-value="conn.isActive" @change="(val: boolean) => handleToggle(conn.id, val)" />
+            <el-switch :model-value="conn.isActive" @change="(val: boolean) => handleToggle(conn.id, val)" />
           </div>
 
           <el-descriptions :column="2" size="small" border style="margin-top: 12px">
@@ -194,7 +188,7 @@ async function handleSync(id: string) {
             <el-alert :title="conn.lastError" type="error" :closable="false" show-icon />
           </div>
 
-          <div class="conn-actions" v-if="canWrite">
+          <div class="conn-actions">
             <el-button type="primary" size="small" :icon="Connection" :loading="testLoading[conn.id]"
               @click="handleTest(conn.id)">测试连接</el-button>
             <el-button type="warning" size="small" :loading="syncLoading[conn.id]"

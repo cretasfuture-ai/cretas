@@ -6,16 +6,13 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Refresh } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -110,7 +107,7 @@ async function handleDelete(row: TableRow) {
           </div>
           <div class="header-right">
             <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">新建配额规则</el-button>
+            <el-button type="primary" :icon="Plus" @click="openCreate">新建配额规则</el-button>
           </div>
         </div>
       </template>
@@ -129,8 +126,8 @@ async function handleDelete(row: TableRow) {
         </el-table-column>
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
+            <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
