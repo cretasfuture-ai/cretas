@@ -152,7 +152,8 @@ def question_variants(seed: str, rng: random.Random, n: int) -> List[str]:
         lambda: rng.choice(_COLLOQUIAL)(seed),
         lambda: ("那" + seed) if not seed.startswith("那") else seed,
         lambda: seed + "？",
-        lambda: seed.replace("销售额", "卖了多少钱") if "销售额" in seed else seed + "呢",
+        lambda: (seed.replace("销售额是多少", "卖了多少钱").replace("销售额多少", "卖了多少钱")
+                 if "销售额是多少" in seed or "销售额多少" in seed else seed + "呢"),
     ]
     tries = 0
     while len(out) < n and tries < 40:
@@ -327,13 +328,14 @@ def _build_scheduling(rng: random.Random) -> Snapshot:
 
 def _build_efficiency(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂岗位人效: 岗位 / 在岗人数 / 本月产出(件) / 人均产出(件)】"]
+    lines = ["【合成工厂岗位人效: 岗位 / 在岗人数 / 本月产出(件) / 本月人均产出(件) / 上月人均产出(件)】"]
     for p in POSITIONS:
         n = rng.randint(5, 18)
         out = rng.randint(2000, 9000)
         per = round(out / n, 1)
-        lines.append(f"{p} / {n} / {out} / {per}")
-        s.add(n, out, per)
+        prev = round(per * rng.uniform(0.85, 1.15), 1)
+        lines.append(f"{p} / {n} / {out} / {per} / {prev}")
+        s.add(n, out, per, prev)
     s.names.update(POSITIONS)
     s.text = "\n".join(lines)
     return s
@@ -420,9 +422,9 @@ SYSTEM_PROMPT = (
 )
 
 _NONE_NOTES = {
-    "OUT_OF_DOMAIN": "无数据。问题与工厂经营无关, 请礼貌说明只回答工厂经营相关问题, 并举 2 个能问的例子。",
-    "SYSTEM_HELP": "无数据。请介绍你能帮忙查的内容: 销售额与趋势、毛利、成本、库存与预警、订单、排班与人效、领料、异常提醒、销售预测。",
-    "UNSUPPORTED_CAPABILITY": "无数据。该分析目前做不了, 请明确说『现在做不了』, 不要假装给出结果, 并给出 2 个现在能查的替代问法。",
+    "OUT_OF_DOMAIN": "无数据。问题与工厂经营无关, 请礼貌说明只回答工厂经营相关问题, 并举两个能问的例子。回答里不要出现任何阿拉伯数字。",
+    "SYSTEM_HELP": "无数据。请介绍你能帮忙查的内容: 销售额与趋势、毛利、成本、库存与预警、订单、排班与人效、领料、异常提醒、销售预测。回答里不要出现任何阿拉伯数字。",
+    "UNSUPPORTED_CAPABILITY": "无数据。该分析目前做不了, 请明确说『现在做不了』, 不要假装给出结果, 并给出两个现在能查的替代问法。回答里不要出现任何阿拉伯数字。",
 }
 
 
@@ -434,6 +436,7 @@ class Sample:
     input_text: str
     snapshot: Snapshot
     followup_of: Optional[str] = None
+    _allowed: Optional[set] = None
 
 
 def build_sample(spec: IntentSpec, seed: str, question: str, rng: random.Random) -> Sample:
@@ -472,10 +475,26 @@ _NAME_RE = re.compile(r"(?:产品|原料|供应商|岗位)[A-Za-z0-9甲乙丙丁
 
 
 def _tokens(sample: Sample) -> set:
-    toks = set()
-    for m in _NUM_RE.finditer(sample.input_text):
-        toks.add(_norm(float(m.group().replace(",", ""))))
-    return toks | sample.snapshot.numbers
+    if sample._allowed is not None:
+        return sample._allowed
+    """Numbers in the data the model saw, plus what plain arithmetic on them gives:
+    sum / difference / ratio / percent change of any two (a total of all), and 万 forms."""
+    base = set()
+    body = sample.input_text.split("【问题】")[0]
+    for m in _NUM_RE.finditer(body):
+        base.add(_norm(float(m.group().replace(",", ""))))
+    vals = sorted(v for v in base if v)
+    toks = set(base) | sample.snapshot.numbers
+    for a in vals:
+        if abs(a) >= 10000:
+            toks.update((round(a / 10000, 1), round(a / 10000, 2)))
+        for b in vals:
+            toks.update((_norm(a + b), _norm(abs(a - b)), _norm(a / b), _norm(a / b * 100),
+                         round(a / b * 100), round(abs(a - b) / b * 100, 1),
+                         round(abs(a - b) / b * 100)))
+    toks.add(_norm(sum(vals)))
+    sample._allowed = toks
+    return toks
 
 
 def check_answer(sample: Sample, answer: str) -> Optional[str]:
@@ -498,7 +517,7 @@ def check_answer(sample: Sample, answer: str) -> Optional[str]:
         v = _norm(float(m.group().replace(",", "")))
         if v in allowed:
             continue
-        if any(abs(v - a) <= max(0.051, abs(a) * 0.0051) for a in allowed):
+        if abs(v) < 1000 and any(abs(v - a) <= 0.051 for a in allowed if abs(a) < 1000):
             continue
         return f"untraceable_number:{m.group()}"
     return None
