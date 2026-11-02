@@ -2,7 +2,6 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage } from 'element-plus';
 import { Setting, Connection, PieChart, Collection, Odometer } from '@element-plus/icons-vue';
 import {
@@ -14,9 +13,7 @@ import {
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
 
 // 当前选中的 Tab
 const activeTab = ref('overview');
@@ -286,7 +283,6 @@ function getOperatorType(op?: string) {
                     :min="0"
                     :precision="2"
                     size="small"
-                    :disabled="!canWrite"
                     controls-position="right"
                     style="width: 120px"
                   />
@@ -299,7 +295,6 @@ function getOperatorType(op?: string) {
                     :min="0"
                     :precision="2"
                     size="small"
-                    :disabled="!canWrite"
                     controls-position="right"
                     style="width: 120px"
                   />
@@ -314,7 +309,6 @@ function getOperatorType(op?: string) {
                 <template #default="{ row }">
                   <el-switch
                     v-model="row.isActive"
-                    :disabled="!canWrite"
                     @change="saveThreshold(row)"
                   />
                 </template>
@@ -325,7 +319,6 @@ function getOperatorType(op?: string) {
                     type="primary"
                     link
                     :loading="thresholdSavingIds.has(row.id)"
-                    :disabled="!canWrite"
                     @click="saveThreshold(row)"
                   >
                     保存

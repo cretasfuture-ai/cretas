@@ -341,4 +341,13 @@ public class SupplierQualificationCreateTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): supplier qualifications belong to procurement; creating one needs procurement write;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("procurement:read_write");
+    }
 }

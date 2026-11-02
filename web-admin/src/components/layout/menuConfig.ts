@@ -786,4 +786,34 @@ export const platformMenuConfig: MenuItem[] = [
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: ['platform_admin'] },
     ],
   },
+  {
+    // 2026-11-03 Steve: 平台专属工具(对话建厂/建厂复核/平台治理/诊断等)回到平台侧栏。
+    // 取自 menuConfig 里 roles 恰为 ['platform_admin'] 的条目, 不另维护第二份名单;
+    // 工厂日常菜单(生产/仓储/采购/销售…)仍不进平台侧栏。
+    path: '/platform-tools',
+    title: '平台工具',
+    icon: 'Monitor',
+    module: 'system',
+    roles: ['platform_admin'],
+    children: collectPlatformOnlyItems(menuConfig)
+      .filter((item) => item.path !== '/system/llm-usage'),
+  },
 ];
+
+/** menuConfig 中只有平台超级管理员可见的叶子条目(roles 恰为 ['platform_admin'])。 */
+function collectPlatformOnlyItems(items: MenuItem[]): MenuItem[] {
+  const out: MenuItem[] = [];
+  for (const item of items) {
+    if (item.children?.length) {
+      out.push(...collectPlatformOnlyItems(item.children));
+    } else if (item.roles?.length === 1 && item.roles[0] === 'platform_admin') {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/** 平台身份在不进入工厂查看上下文时可以打开的路由前缀(与平台侧栏同源)。 */
+export const platformWorkspacePaths: string[] = platformMenuConfig
+  .flatMap((group) => group.children ?? [])
+  .map((item) => item.path);

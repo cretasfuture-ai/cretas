@@ -47,6 +47,18 @@ class PriceHistoryQueryToolTest {
     @BeforeEach
     void setUp() throws Exception {
         injectField(tool, "objectMapper", objectMapper);
+        // #1305 purchase-price rule, real decision: no config rows → only procurement_manager sees purchase prices.
+        com.cretas.aims.service.impl.PermissionServiceImpl matrix = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(matrix);
+        injectField(tool, "priceVisibility", new com.cretas.aims.security.PriceVisibility(matrix));
+        com.cretas.aims.repository.UserRepository users = org.mockito.Mockito.mock(com.cretas.aims.repository.UserRepository.class);
+        com.cretas.aims.entity.User buyer = new com.cretas.aims.entity.User();
+        buyer.setId(1L);
+        buyer.setFactoryId(FACTORY_ID);
+        buyer.setRoleCode("procurement_manager");
+        buyer.setIsActive(true);
+        org.mockito.Mockito.lenient().when(users.findById(1L)).thenReturn(Optional.of(buyer));
+        injectField(tool, "userRepository", users);
     }
 
     @Test

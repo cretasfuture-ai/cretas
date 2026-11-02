@@ -77,7 +77,11 @@ public class WriteGuardService {
      */
     private static final Set<String> NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS = Set.of(
             "REVENUE_REPORT_GENERATE",
-            "MONTHLY_FINANCIAL_CLOSE");
+            "MONTHLY_FINANCIAL_CLOSE",
+            // 2026-11-03 (S6 follow-up): "REJECT" here is "拒收原因" (why batches were rejected), a query:
+            // its only data call is MaterialBatchService#getExpiredBatches. Pinned by
+            // GatedDataStrictSweepPermissionTest#materialRejectionReasonIsAReadToolGatedLikeTheInventoryPages.
+            "MATERIAL_REJECTION_REASON");
 
     public boolean isWriteAction(ToolExecutor.ActionType t) {
         return t == ToolExecutor.ActionType.WRITE

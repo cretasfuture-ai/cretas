@@ -12,4 +12,7 @@ public interface MaterialTypeDraftRepository extends JpaRepository<MaterialTypeD
     Optional<MaterialTypeDraft> findByFactoryIdAndIdempotencyKey(String factoryId, String idempotencyKey);
 
     Optional<MaterialTypeDraft> findByIdAndFactoryId(String id, String factoryId);
+
+    java.util.List<MaterialTypeDraft> findByFactoryIdAndBlueprintIdAndBlueprintVersionAndStatusOrderByDesiredNameAsc(
+            String factoryId, String blueprintId, Long blueprintVersion, String status);
 }

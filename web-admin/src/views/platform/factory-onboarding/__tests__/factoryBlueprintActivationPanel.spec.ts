@@ -145,3 +145,41 @@ describe('resuming persisted approvals without typing their number', () => {
     wrapper.unmount()
   })
 })
+
+describe('module configuration must be applied before the blueprint is published', () => {
+  it('a published blueprint locks the modules card with the redo steps and never calls preview', async () => {
+    const wrapper = mount(Panel, { props: { factoryId: 'Ftest', blueprintId: 'blueprint', canConfirm: true, lifecycleState: 'PUBLISHED',
+      written: [{ capabilityId: 'modules', supported: true, drafts: [{ draftId: 'config-id', label: '配置', naturalKey: 'config', status: 'DRAFT' }] }] }, global: { stubs } })
+    expect(wrapper.get('[data-testid="formal-modules-locked"]').text()).toContain('发布之前应用')
+    expect(wrapper.get('[data-testid="formal-preview-modules"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="formal-preview-modules"]').trigger('click'); await flushPromises()
+    expect(api.previewFormal).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="formal-preview-workflow"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+  it('a validated blueprint keeps the modules card open and says to finish it before publishing', async () => {
+    const wrapper = mount(Panel, { props: { factoryId: 'Ftest', blueprintId: 'blueprint', canConfirm: true, lifecycleState: 'VALIDATED', written: [] }, global: { stubs } })
+    expect(wrapper.find('[data-testid="formal-modules-locked"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="formal-preview-modules"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).toContain('发布蓝图版本')
+    wrapper.unmount()
+  })
+})
+
+describe('separation of duties on the page', () => {
+  it('the approver sees the execute button disabled with a hint; another operator does not', async () => {
+    api.readFormal.mockResolvedValue({ data: { ...approval, status: 'APPROVED', approvalDigest: 'approved', approvedActor: { type: 'PLATFORM_ADMIN', id: 8 } } })
+    const props = (id: number) => ({ factoryId: 'Ftest', blueprintId: 'blueprint', canConfirm: true, written: [], currentActor: { type: 'PLATFORM_ADMIN' as const, id } })
+    const self = mount(Panel, { props: props(8), global: { stubs } })
+    await self.get('[data-testid="formal-approval-id-modules"]').setValue('approval-id')
+    await self.get('[data-testid="formal-read-modules"]').trigger('click'); await flushPromises()
+    expect(self.get('[data-testid="formal-execute-modules"]').attributes('disabled')).toBeDefined()
+    expect(self.get('[data-testid="formal-self-execute-modules"]').text()).toContain('不能再由你执行')
+    const other = mount(Panel, { props: props(9), global: { stubs } })
+    await other.get('[data-testid="formal-approval-id-modules"]').setValue('approval-id')
+    await other.get('[data-testid="formal-read-modules"]').trigger('click'); await flushPromises()
+    expect(other.get('[data-testid="formal-execute-modules"]').attributes('disabled')).toBeUndefined()
+    expect(other.find('[data-testid="formal-self-execute-modules"]').exists()).toBe(false)
+    self.unmount(); other.unmount()
+  })
+})

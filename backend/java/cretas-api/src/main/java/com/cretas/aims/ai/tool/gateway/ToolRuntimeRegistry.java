@@ -81,6 +81,7 @@ public class ToolRuntimeRegistry {
                     || !descriptor.domainTags().equals(executor.getDomainTags())
                     || !executor.requiresPermission()
                     || !hasExactRoleBehavior(descriptor, executor)
+                    || !requiredRolesCovered(descriptor, executor)
                     || !hasExactEgressBehavior(descriptor, executor)) {
                 return Optional.empty();
             }
@@ -114,6 +115,20 @@ public class ToolRuntimeRegistry {
     public enum ResolutionLane {
         APPROVED_POLICY,
         LEGACY_INTENT_DISPATCH_MIGRATION
+    }
+
+    /**
+     * S6 (2026-11-03): {@link ToolExecutor#getRequiredRoles} is enforced by ToolRbacEnforcer on the legacy execution
+     * sites, not by this lane. A tool that declares required roles may only resolve here when the descriptor's
+     * allowed roles (which this lane enforces) already stay inside them; otherwise it fails closed (unavailable,
+     * never ungated), so promoting a LEGACY tool cannot silently drop its role requirement.
+     */
+    static boolean requiredRolesCovered(ToolDescriptor descriptor, ToolExecutor executor) {
+        Set<String> required = executor.getRequiredRoles();
+        if (required == null || required.isEmpty()) {
+            return true;
+        }
+        return !descriptor.allowedRoles().isEmpty() && required.containsAll(descriptor.allowedRoles());
     }
 
     private static boolean hasExactRoleBehavior(

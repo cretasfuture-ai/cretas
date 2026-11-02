@@ -5,6 +5,10 @@
     <article v-for="capability in capabilities" :key="capability" :data-testid="`formal-${capability}`" class="formal-card">
       <h4>{{ label(capability) }}</h4>
       <template v-if="capability === 'modules'">
+        <p v-if="modulesLocked" role="alert" data-testid="formal-modules-locked" class="muted">
+          这一版蓝图已经发布，模块配置只能在发布之前应用，所以这里不能再预览。要应用模块配置：回到蓝图修改后保存成新版本，重新写入模块草稿，先在这里完成「配置应用」，再发布蓝图。Workflow 发布不受影响。
+        </p>
+        <p v-else class="muted">模块配置要在「发布蓝图版本」之前完成：先在这里预览、申请、审批并执行，再发布蓝图。</p>
         <label>配置草稿
           <select v-model="configDraftId" data-testid="formal-config-selection" :disabled="busy">
             <option value="">请选择已写入的配置草稿</option>
@@ -32,7 +36,7 @@
           </select>
         </label>
       </template>
-      <el-button :disabled="!canConfirm || busy" :data-testid="`formal-preview-${capability}`" @click="preview(capability)">预览{{ label(capability) }}</el-button>
+      <el-button :disabled="!canConfirm || busy || (capability === 'modules' && modulesLocked)" :data-testid="`formal-preview-${capability}`" @click="preview(capability)">预览{{ label(capability) }}</el-button>
       <div v-if="plans[capability]" :data-testid="`formal-plan-${capability}`">
         <p>预览状态：{{ plans[capability]!.status }} · 摘要 {{ plans[capability]!.planDigest }}</p>
         <ul><li v-for="issue in plans[capability]!.issues" :key="issue.code">{{ issue.message }} · {{ issue.recovery }}</li></ul>
@@ -65,11 +69,14 @@
         <label v-if="approvals[capability]!.status === 'REQUESTED'">审批说明<input v-model="reasons[capability]" :data-testid="`formal-reason-${capability}`" /></label>
         <el-button v-if="approvals[capability]!.status === 'REQUESTED'" :disabled="!canConfirm || busy || !reasons[capability].trim()"
           :data-testid="`formal-approve-${capability}`" @click="approve(capability)">由另一位操作人确认审批</el-button>
-        <el-button v-if="approvals[capability]!.status === 'APPROVED' || approvals[capability]!.status === 'EXECUTED'" :disabled="!canConfirm || busy"
+        <el-button v-if="approvals[capability]!.status === 'APPROVED' || approvals[capability]!.status === 'EXECUTED'" :disabled="!canConfirm || busy || approverIsMe(capability)"
           :data-testid="`formal-execute-${capability}`" @click="execute(capability)">
           {{ approvals[capability]!.status === 'EXECUTED' ? '回放原执行回执' : `执行${label(capability)}` }}
         </el-button>
       </div>
+      <p v-if="approverIsMe(capability)" class="muted" :data-testid="`formal-self-execute-${capability}`">
+        这一步你自己审批了，不能再由你执行；请换另一位操作人登录后读取这个申请并执行。
+      </p>
       <p v-if="errors[capability]" role="alert" :data-testid="`formal-error-${capability}`">{{ errors[capability] }}</p>
       <div v-if="results[capability]" :data-testid="`formal-result-${capability}`">
         <p>执行状态 {{ results[capability]!.status }} · 本次写入 {{ results[capability]!.invocationBusinessWriteCount }} · {{ results[capability]!.readonlyReadback ? '只读回读' : results[capability]!.idempotentReplay ? '幂等回放' : '首次执行' }}</p>
@@ -83,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import type { WrittenCapability } from '@/api/factoryBlueprintDraftApi'
 import { previewFormal, requestFormal, readFormal, readFormalReceipt, approveFormal, executeFormal,
@@ -91,7 +98,12 @@ import { previewFormal, requestFormal, readFormal, readFormalReceipt, approveFor
   type FormalCapability, type FormalSelection, type FormalPlan, type FormalApproval,
   type FormalExecution, type FormalActor, type FormalRecoverable } from '@/api/factoryBlueprintActivationApi'
 import { draftErrorMessage } from '../factoryBlueprintDrafts'
-const props = defineProps<{ factoryId: string; blueprintId: string; canConfirm: boolean; written: WrittenCapability[] | null }>()
+const props = defineProps<{ factoryId: string; blueprintId: string; canConfirm: boolean; written: WrittenCapability[] | null; lifecycleState?: string; currentActor?: FormalActor | null }>()
+const approverIsMe = (capability: FormalCapability) => {
+  const approver = approvals[capability]?.approvedActor, me = props.currentActor
+  return !!approver && !!me && approver.type === me.type && approver.id === me.id
+}
+const modulesLocked = computed(() => ['PUBLISHED', 'APPLIED'].includes(props.lifecycleState ?? ''))
 const emit = defineEmits<{ changed: []; formalState: [FormalCapability, FormalExecution | null] }>()
 const capabilities: FormalCapability[] = ['modules', 'workflow']
 const configDraftId = ref(''), workflowDraftId = ref(''), bomDraftId = ref(''), criticalControlsDraftId = ref('')

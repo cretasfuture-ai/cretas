@@ -117,7 +117,7 @@ export type ShortageCaseDecision = 'CANCEL' | 'MANUAL' | 'CLOSE';
 
 export interface ShortageCaseAction {
   id: number;
-  actionType: 'PURCHASE_DRAFT' | 'DECISION';
+  actionType: 'PURCHASE_DRAFT' | 'DECISION' | 'RESCHEDULE_APPLIED';
   materialTypeId: string | null;
   status: 'DONE' | 'SUPERSEDED';
   resultRef: string | null;
@@ -152,4 +152,49 @@ export function decideShortageCase(
 
 export function getShortageCaseActions(factoryId: string, caseId: string): Promise<ApiResponse<ShortageCaseAction[]>> {
   return get(`/${factoryId}/shortage-cases/${caseId}/actions`);
+}
+
+export interface RescheduleMove {
+  scheduleId: string;
+  productionPlanId: string | null;
+  fromLineId: string;
+  fromLineName: string;
+  toLineId: string;
+  toLineName: string;
+  fromStart: string;
+  toStart: string;
+  fromEnd: string;
+  toEnd: string;
+}
+
+export interface RescheduleCandidate {
+  key: string;
+  label: string;
+  applicable: boolean;
+  moves: RescheduleMove[];
+  notes: string[];
+}
+
+export interface RescheduleProposal {
+  id: string;
+  status: 'OPEN' | 'APPLIED' | 'STALE';
+  statusLabel: string;
+  candidates: RescheduleCandidate[];
+  appliedCandidate: string | null;
+  expiresAt: string;
+  createdAt: string;
+  appliedAt: string | null;
+}
+
+export function proposeReschedule(factoryId: string, caseId: string): Promise<ApiResponse<RescheduleProposal>> {
+  return post(`/${factoryId}/shortage-cases/${caseId}/reschedule-proposals`, {});
+}
+
+export function applyReschedule(
+  factoryId: string,
+  caseId: string,
+  proposalId: string,
+  candidateKey: string,
+): Promise<ApiResponse<RescheduleProposal>> {
+  return post(`/${factoryId}/shortage-cases/${caseId}/reschedule-proposals/${proposalId}/apply`, { candidateKey });
 }

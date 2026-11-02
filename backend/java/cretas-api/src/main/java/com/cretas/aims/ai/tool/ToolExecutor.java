@@ -103,6 +103,16 @@ public interface ToolExecutor {
     }
 
     /**
+     * S6 (2026-11-03): 此工具在 AI 路径上<b>另外</b>要求的角色 (与 {@link #getRequiredPermissions()} 是「且」)。
+     * 用于工具读的数据在 App 里只经 {@code @RequireRole} 接口给到、而工具本身又带写权限码的情形
+     * (例: 改预警规则要 system:read_write, 但预警规则在 App 里只给管理员看)。
+     * 平台管理员与 {@code RequireRoleInterceptor} 一致, 总是放行。默认空 = 不额外限制。
+     */
+    default java.util.Set<String> getRequiredRoles() {
+        return java.util.Set.of();
+    }
+
+    /**
      * W9 红线 (AI-RBAC 系统性收口): 此工具在 AI 路径上要求的权限码 (module:action 格式,
      * 与 controller {@code @RequirePermission} 同源)。返回任一权限即可执行 (requireAll=false 语义)。
      *

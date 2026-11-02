@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Refresh, Plus, Delete, View } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
@@ -12,9 +11,7 @@ import {
 } from '@/api/governance';
 
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
 
 // ============ Skills Tab ============
 const loading = ref(false);
@@ -267,7 +264,7 @@ function confidenceColor(score: number) {
                 />
                 <el-button :icon="Refresh" @click="loadSkills">刷新</el-button>
               </div>
-              <el-button v-if="canWrite" type="primary" :icon="Plus" @click="createDialogVisible = true">
+              <el-button type="primary" :icon="Plus" @click="createDialogVisible = true">
                 创建 Skill
               </el-button>
             </div>
@@ -302,7 +299,7 @@ function confidenceColor(score: number) {
               <template #default="{ row }">
                 <el-switch
                   v-model="row.enabled"
-                  :disabled="!canWrite || !row.source?.startsWith('database')"
+                  :disabled="!row.source?.startsWith('database')"
                   @change="(val: boolean) => handleToggle(row, val)"
                   size="small"
                 />
@@ -312,7 +309,7 @@ function confidenceColor(score: number) {
               <template #default="{ row }">
                 <el-button type="primary" link :icon="View" @click="openDetail(row)">详情</el-button>
                 <el-button
-                  v-if="canWrite && row.source?.startsWith('database')"
+                  v-if="row.source?.startsWith('database')"
                   type="danger" link :icon="Delete"
                   @click="handleDelete(row)"
                 >删除</el-button>
@@ -363,7 +360,7 @@ function confidenceColor(score: number) {
             <el-table-column label="操作" width="100" fixed="right" align="center">
               <template #default="{ row }">
                 <el-button
-                  v-if="canWrite && !row.alreadyCoveredBySkill"
+                  v-if="!row.alreadyCoveredBySkill"
                   type="primary" link size="small"
                   @click="adoptRecommendation(row)"
                 >采纳</el-button>

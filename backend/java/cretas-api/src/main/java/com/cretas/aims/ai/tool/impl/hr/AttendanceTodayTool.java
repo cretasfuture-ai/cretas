@@ -28,6 +28,9 @@ public class AttendanceTodayTool extends AbstractBusinessTool {
     @Autowired
     private TimeClockService timeClockService;
 
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.ToolRbacGuard rbacGuard;
+
     @Override
     public String getToolName() {
         return "attendance_today";
@@ -65,14 +68,8 @@ public class AttendanceTodayTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        // Use userId from params if provided, otherwise fall back to context (current user)
-        Long userId;
-        String userIdParam = getString(params, "userId");
-        if (userIdParam != null && !userIdParam.isEmpty()) {
-            userId = Long.parseLong(userIdParam);
-        } else {
-            userId = getLong(context, "userId");
-        }
+        // The App binds the subject to the logged-in user; another employee only for hr readers (AttendanceSubject).
+        Long userId = AttendanceSubject.resolve(getString(params, "userId"), context, rbacGuard);
 
         try {
             TimeClockRecord record = timeClockService.getTodayRecord(factoryId, userId);

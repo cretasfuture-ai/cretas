@@ -350,6 +350,34 @@ class FactoryConfirmedFactReuseTest {
         assertThat(effective("stepCount")).as("已确认事实在选来源之前不被改写").isEqualTo("3");
     }
 
+    /** D-S2-13 现场: 全部沿用后访谈已 COMPLETED, 「第1道辅料改成盐」曾被静默吞掉 (200、无消息、无冲突)。 */
+    @Test
+    void aCorrectionOnACompletedInterviewStillBecomesAConflictAndOtherRepliesAreRejectedOutLoud() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("stepCount", "3"));
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("step1.auxMaterials", "没有"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+        assertThat(live.getCollectedParameters()).containsEntry("step1.auxMaterials", "没有");
+        live.completeParameterCollection();
+
+        var rejected = replier(live, "{\"step1.auxMaterials\":\"盐\"}")
+                .continueConversation(F, ACTOR, second, "第1道辅料是盐", "r0");
+        assertThat(rejected.getMessage()).as("不是更正措辞: 明说没写入, 不是静默").contains("没有写入");
+        assertThat(rejected.isProgressMutated()).isFalse();
+        assertThat(facts.openConflicts(F)).isEmpty();
+
+        var applied = replier(live, "{\"step1.auxMaterials\":\"盐\"}")
+                .continueConversation(F, ACTOR, second, "第1道辅料改成盐", "r1");
+        assertThat(applied.isProgressMutated()).isTrue();
+        assertThat(facts.openConflicts(F)).singleElement().satisfies(conflict -> {
+            assertThat(conflict.field()).isEqualTo("step1.auxMaterials");
+            assertThat(conflict.confirmedValue()).isEqualTo("没有");
+            assertThat(conflict.newValue()).isEqualTo("盐");
+        });
+        assertThat(effective("step1.auxMaterials")).isEqualTo("没有");
+    }
+
     private com.cretas.aims.service.impl.FactoryAssemblyConversationServiceImpl replier(
             FactoryAssemblyConversationSession session, String extractedJson) {
         com.cretas.aims.ai.client.DashScopeClient llm = mock(com.cretas.aims.ai.client.DashScopeClient.class);
@@ -471,6 +499,30 @@ class FactoryConfirmedFactReuseTest {
                 .extracting(FactoryConfirmedFact::getStatus)
                 .containsExactlyInAnyOrder(FactoryConfirmedFact.SUPERSEDED, FactoryConfirmedFact.REJECTED,
                         FactoryConfirmedFact.CONFIRMED);
+    }
+
+    /** D-S2-22 现场: 已完成访谈里「辅料改成盐」产生冲突, 选「保留已确认值」后被驳回的「盐」不许留在会话里(否则方案带着它, 保存时报物料盐缺储存类型)。 */
+    @Test
+    void keepingTheConfirmedValueRemovesTheRejectedAnswerEvenWhenTheInterviewIsAlreadyCompleted() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("stepCount", "3"));
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("step1.auxMaterials", "没有"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+        live.completeParameterCollection();
+        replier(live, "{\"step1.auxMaterials\":\"盐\"}")
+                .continueConversation(F, ACTOR, second, "第1道辅料改成盐", "r1");
+        assertThat(live.getCollectedParameters()).containsEntry("step1.auxMaterials", "盐");
+        assertThat(live.getStatus()).isEqualTo(FactoryAssemblyConversationSession.SessionStatus.COMPLETED);
+        String answeredIn = facts.openConflicts(F).get(0).newSource();
+
+        facts.resolve(F, "step1.auxMaterials", FactoryConfirmedFactService.CHOICE_KEEP_CONFIRMED, "FACTORY_USER:7");
+        interview.syncSessionToConfirmedFact(F, answeredIn, "step1.auxMaterials");
+
+        assertThat(live.getCollectedParameters()).as("被驳回的盐不在会话的已收集值里")
+                .containsEntry("step1.auxMaterials", "没有")
+                .doesNotContainValue("盐");
+        assertThat(effective("step1.auxMaterials")).isEqualTo("没有");
     }
 
     /** 选择题: 用户的说法按「唯一可对上的选项」映射; 对不上或有歧义 → 不猜, 也不产生冲突。 */

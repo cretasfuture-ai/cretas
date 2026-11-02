@@ -145,4 +145,13 @@ public class RestaurantProcurementCreateTool extends AbstractBusinessTool {
         );
         return displayNames.getOrDefault(paramName, paramName);
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): it creates purchase orders, so procurement write (the purchase-order surfaces gate the data it reads);
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("procurement:read_write");
+    }
 }

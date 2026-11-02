@@ -3,6 +3,7 @@ package com.cretas.aims.service.bom;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -57,6 +58,7 @@ class BomPinnedRecipeLookupTest {
         recipe.setProductTypeId(PRODUCT);
         recipe.setVersion(version);
         recipe.setWorkflowRevisionId(revisionId);
+        recipe.setStatus(BomRecipe.Status.ACTIVE);
         return recipe;
     }
 
@@ -97,6 +99,33 @@ class BomPinnedRecipeLookupTest {
 
         BomRecipe v2 = service.findRecipePinnedToWorkflow(F, PRODUCT, 2L).orElseThrow();
         assertThat(v2.getItems()).extracting(BomRecipeItem::getMaterialName).containsExactly("QA-S2-06-辅料");
+    }
+
+    /** prod 实测: v1 的工艺行上挂着一份在 v2 发布前建的草稿 (带后来才加的辅料), 不能被当成 v1 当时的配方。 */
+    @Test
+    void aDraftRecipeCreatedOnTheOldRevisionBeforeThePublishIsNeverTheHistoricalRecipe() {
+        BomRecipe staleDraft = recipe("R-D", 3, 11L);
+        staleDraft.setStatus(BomRecipe.Status.DRAFT);
+        BomRecipeItem later = new BomRecipeItem();
+        later.setId(8L);
+        later.setMaterialName("QA-S2-06-辅料");
+        staleDraft.getItems().add(later);
+        recipeV1.setStatus(BomRecipe.Status.ARCHIVED);
+        // 重新打桩不能用 when(...): 它会拿 null 实参先调一次 setUp 里那个 answer
+        doAnswer(call -> {
+            Collection<Long> ids = call.getArgument(2);
+            return List.of(staleDraft, recipeV2, recipeV1).stream()
+                    .filter(recipe -> ids.contains(recipe.getWorkflowRevisionId())).toList();
+        }).when(recipes).findByFactoryIdAndProductTypeIdAndWorkflowRevisionIdInOrderByVersionDesc(
+                anyString(), anyString(), any());
+
+        BomRecipe v1 = service.findRecipePinnedToWorkflow(F, PRODUCT, 1L).orElseThrow();
+        assertThat(v1.getId()).as("v1 当时用过的是归档的 R-1, 不是后建的草稿").isEqualTo("R-1");
+        assertThat(v1.getItems()).isEmpty();
+
+        // 只有草稿 → 没有快照 (前端显示「历史版本不含配方快照」), 不是拿草稿顶替
+        recipeV1.setStatus(BomRecipe.Status.DRAFT);
+        assertThat(service.findRecipePinnedToWorkflow(F, PRODUCT, 1L)).isEmpty();
     }
 
     @Test
