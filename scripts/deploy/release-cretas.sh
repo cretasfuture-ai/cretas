@@ -84,19 +84,17 @@ PARALLEL_CONFIRM=
 ORDER=backend-first
 ORDER_EXPLICIT=false
 STAGE_BACKEND_CONFIRM=
-# 默认【开】(2026-07-31 Steve 拍板)。
+# 默认【关】(2026-10-05 翻回; 2026-07-31 到 10-05 期间默认开)。
 #
-# 为什么翻过来: 默认关的时候, 整条 CI 制品链路(Java 制品 + 预热 + Web dist 取回)对日常发布
-# 【形同不存在】—— 因为标准发布命令不带这个 flag。实测同为「java+web 都改」的两次真实
-# prod 发布: 带开关 234s, 不带 405s。
+# 为什么翻回: CI 制品车道在本组织走不通 —— 私有仓没有 attestation, 组织制品存储配额已满
+# (2026-09-15 实测三处同时不通)。默认开时, 只要探测发现有候选制品就会承诺「取制品」路径,
+# 到验签才晚失败, 再串行补建 Java, 比一开始就本地并行构建更慢。常规发布因此一律手写
+# --no-prefer-ci-artifact, 漏写一次就踩一次。加速靠合并前 --phase build --stage-backend
+# 的 manifest 复用, 不靠这条车道。
 #
-# 默认开的代价是【探测那几秒】: 取不到 CI 制品就自动回退本地构建, Java 探测约 2s、
-# Web 查制品约 4s, 出现在一次 400s 量级的发布里可以忽略。而且回退是【有声】的
-# (CI_ARTIFACT_UNAVAILABLE reason=... / WEB_CI_ARTIFACT=fallback), 不会把"其实重编了一遍"
-# 混成"用了 CI 制品"。
-#
-# 关掉: `--no-prefer-ci-artifact` 或 `CRETAS_RELEASE_PREFER_CI_ARTIFACT=0`。
-if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-1}" = "1" ]; then
+# 开启: `--prefer-ci-artifact` 或 `CRETAS_RELEASE_PREFER_CI_ARTIFACT=1`(车道修通后再用)。
+# `--no-prefer-ci-artifact` 仍然接受, 旧命令不用改。
+if [ "${CRETAS_RELEASE_PREFER_CI_ARTIFACT:-0}" = "1" ]; then
     PREFER_CI_ARTIFACT=true
 else
     PREFER_CI_ARTIFACT=false
@@ -113,11 +111,11 @@ Usage:
     [--phase build|deploy|all] \
     [--order backend-first|web-first] \
     [--stage-backend YES-STAGE] \
-    [--no-prefer-ci-artifact] \
+    [--prefer-ci-artifact | --no-prefer-ci-artifact] \
     [--parallel-if-independent YES-INDEPENDENT-SERVICES]
 
---prefer-ci-artifact (【默认开启】; 关掉用 --no-prefer-ci-artifact 或
-CRETAS_RELEASE_PREFER_CI_ARTIFACT=0): build 阶段先复用一份 CI 已构建、provenance 已验证的
+--prefer-ci-artifact (【默认关闭】; 本组织的 CI 制品车道目前不通, 修通后再用 --prefer-ci-artifact
+或 CRETAS_RELEASE_PREFER_CI_ARTIFACT=1 开启): build 阶段先复用一份 CI 已构建、provenance 已验证的
 制品, 顶替本地 clean package。制品字节走 GitHub → 东京 → OSS → ECS, 一次都不经过本机, 直接
 落进 deploy-backend.sh 的服务器端 sha256 缓存。任何一环不满足(制品不存在 / 测试选择器不同 /
 签名验不过)都会明确说明并照旧本地构建 —— 不会静默降级。
@@ -528,14 +526,14 @@ build_web() {
 
 stage_backend_artifact() {
     if [ "$STAGE_BACKEND_CONFIRM" != YES-STAGE ]; then
-        # AGENTS.md §11 要求「预期合并后立即部署时」用 --stage-backend 把 JAR 预传到
+        # AGENTS.md「发布与 E2E 去重复」第 1 条要求「预期合并后立即部署时」用 --stage-backend 把 JAR 预传到
         # 服务器不可变缓存, 让部署阶段命中缓存、跳过网络上传。但它是显式 opt-in,
         # 实际调用里长期没人传 —— 2026-07-29 连查 6 次发布回执, staging 全是
         # not-requested, 每次都在部署窗口里现传 JAR。这里给一句可见提示, 让遗漏
         # 在构建结束时就被看到, 而不是等回执事后复盘才发现。
         if [ "$JAVA_CHANGED" = true ]; then
             echo "HINT: Java 制品未预热到服务器缓存。若合并后即部署, 重跑本命令并加"
-            echo "      --stage-backend YES-STAGE, 可把 JAR 上传移出部署窗口 (AGENTS.md §11)。"
+            echo "      --stage-backend YES-STAGE, 可把 JAR 上传移出部署窗口 (AGENTS.md「发布与 E2E 去重复」第 1 条)。"
         fi
         return 0
     fi
