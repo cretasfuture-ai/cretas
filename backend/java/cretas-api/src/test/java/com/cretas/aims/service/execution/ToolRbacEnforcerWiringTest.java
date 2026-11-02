@@ -111,6 +111,14 @@ class ToolRbacEnforcerWiringTest {
         ReflectionTestUtils.setField(router, "toolEmbeddingRepository", mock(ToolEmbeddingRepository.class));
         ReflectionTestUtils.setField(router, "writeGuardService", new WriteGuardService());
         ReflectionTestUtils.setField(router, "toolRbacEnforcer", denyingEnforcer());
+        // 2026-10-29 (S6): SITE E asks ToolPermissionChain (frontline → role gate → RBAC); RBAC is the layer isolated here.
+        ReflectionTestUtils.setField(router, "toolPermissionChain", new ToolPermissionChain(
+                denyingEnforcer(),
+                new com.cretas.aims.service.intent.FrontlineAiWriteGrantService(
+                        mock(com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository.class),
+                        new WriteGuardService(),
+                        mock(com.cretas.aims.service.intent.IntentConfigManagementService.class),
+                        mock(ToolRegistry.class))));
 
         Method m = ToolRouterServiceImpl.class.getDeclaredMethod(
                 "executeSingleTool", String.class, Map.class);
@@ -118,7 +126,9 @@ class ToolRbacEnforcerWiringTest {
 
         Throwable thrown = catchInvoke(() -> m.invoke(router, "customer_delete", ctx()));
         assertThat(thrown).isInstanceOf(IllegalStateException.class);
-        assertThat(thrown.getMessage()).contains("没有权限");
+        // Since 2026-10-29 the chain's frontline gate refuses an operator's write before RBAC is asked;
+        // either layer refusing is the property here: the tool never runs.
+        assertThat(thrown.getMessage()).containsAnyOf("没有权限", "一线角色");
         verify(tool, never()).execute(any(), any());
     }
 

@@ -79,6 +79,11 @@ public class ToolRouterServiceImpl implements ToolRouterService {
     @Autowired
     private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
 
+    // S6 (2026-10-29): the same role chain direct execution uses; missing ⇒ refuse.
+    @Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.execution.ToolPermissionChain toolPermissionChain;
+
     @Autowired(required = false)
     private ArenaRLTournamentService arenaRLTournamentService;
 
@@ -593,9 +598,18 @@ public class ToolRouterServiceImpl implements ToolRouterService {
         // W9 红线 (AI-RBAC 系统性收口) — SITE E: central RBAC enforce. This path calls executor.execute()
         // directly, bypassing ToolDispatchService (Site B). Exception-based (mirrors W0 above); callers
         // catch Exception → per-tool error + stop chain.
-        if (!toolRbacEnforcer.isAllowed(executor, context)) {
+        // S6 (2026-10-29): the full role chain (frontline gate + role-gated tools + RBAC), not RBAC alone.
+        if (toolPermissionChain == null) {
+            throw new IllegalStateException("权限校验暂不可用，未执行任何操作。");
+        }
+        Object ctxFactory = context == null ? null : context.get("factoryId");
+        Object ctxRole = context == null ? null : context.get("userRole");
+        Optional<String> denied = toolPermissionChain.denyReason(executor,
+                ctxFactory == null ? null : ctxFactory.toString(),
+                ctxRole == null ? null : ctxRole.toString(), null, context);
+        if (denied.isPresent()) {
             log.warn("W9 AI-RBAC (tool-chain): denied tool={}", toolName);
-            throw new IllegalStateException(toolRbacEnforcer.denyMessage(executor, context));
+            throw new IllegalStateException(denied.get());
         }
 
         // 🔴 2026-08-27: 与 ToolDispatchService 的 SITE B 对齐 —— W0 与 RBAC 查完之后

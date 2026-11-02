@@ -71,6 +71,52 @@ def test_engine_emits_unit_isolated_sankey_with_whole_chart_drilldown_disabled()
     assert charts[0]['tableData']['rows'][0][-1] == 'MC:3986'
 
 
+def test_engine_wip_sankey_aliases_long_near_identical_batches_without_changing_graph():
+    source_a = 'CLK-W-20261029-1151'
+    source_b = 'CLK-X-20261029-1151'
+    target_a = 'CLK-W-20261029-92940'
+    target_b = 'CLK-W-20261029-92941'
+    frame = pd.DataFrame([
+        {'过账日期': '2026-10-29', '来源节点': source_a, '去向节点': target_a, '流量': Decimal('1.25'),
+         '单位': 'kg', 'MC凭证': 'MC:3986'},
+        {'过账日期': '2026-10-29', '来源节点': source_b, '去向节点': target_b, '流量': Decimal('2.5'),
+         '单位': 'kg', 'MC凭证': 'MC:3987'},
+    ])
+    dataset = engine.Dataset(frame, 'wip-plan-flow · 普通Web在制过账流')
+    charts, gaps = engine.wip_plan_flow_candidates(dataset, type('R', (), {'include_optional': True})())
+    assert not gaps
+    option = charts[0]['chart']['echartsOption']
+    series = option['series'][0]
+    nodes = {node['name']: node for node in series['data']}
+    assert set(nodes) == {source_a, source_b, target_a, target_b}
+    aliases = [node['label']['formatter'] for node in nodes.values()]
+    assert len(aliases) == len(set(aliases))
+    assert all(len(alias) <= 10 for alias in aliases)
+    assert all(alias.startswith('#') for alias in aliases)
+    assert len(set(aliases)) == 4
+    assert series['left'] == series['right'] == 36
+    assert series['top'] == series['bottom'] == 20
+    assert all(node['label']['position'] == 'inside' for node in nodes.values())
+    assert any('# 为批次短号' in item for item in charts[0]['findings']['attention'])
+    assert {(link['source'], link['target'], link['value']) for link in series['links']} == {
+        (source_a, target_a, 1.25), (source_b, target_b, 2.5),
+    }
+    assert '完整批次号' in charts[0]['engine']['detail']
+
+
+def test_engine_wip_sankey_keeps_short_node_label_on_generic_formatter():
+    dataset = engine.Dataset(pd.DataFrame([{
+        '过账日期': '2026-10-29', '来源节点': 'S', '去向节点': 'T', '流量': Decimal('1'),
+        '单位': 'kg', 'MC凭证': 'MC:3986',
+    }]), 'wip-plan-flow · 普通Web在制过账流')
+    charts, gaps = engine.wip_plan_flow_candidates(dataset, type('R', (), {'include_optional': True})())
+    assert not gaps
+    series = charts[0]['chart']['echartsOption']['series'][0]
+    assert all('label' not in node for node in series['data'])
+    assert series['label']['formatter'] == '__FMT__sankey_node_label'
+    assert not any('# 为批次短号' in item for item in charts[0]['findings']['attention'])
+
+
 def test_engine_candidate_details_preserve_original_mc_rows_without_point_drilldown():
     from . import details
     dataset = engine.Dataset(pd.DataFrame([row()]), 'wip-plan-flow · 普通Web在制过账流')

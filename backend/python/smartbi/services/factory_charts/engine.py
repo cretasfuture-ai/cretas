@@ -84,6 +84,13 @@ _FAMILY_LABELS = {
     'production.anomaly': '批次产量偏离观察', 'production.slope': '两期产品变化',
     'production.plan-rate': '累计计划达成率', 'stock.turnover': '库存金额周转',
     'stock.history': '历史库存余额',
+    'stock.age': '库存账龄', 'stock.expiry': '库存效期',
+    'finished_goods.inventory.current': '当前成品库存',
+    'finished_goods.shipment': '成品发货数量',
+    'purchase.inventory': '采购入库与批次库存',
+    'sales.customer_source': '客户来源获客归因',
+    'sales.stock': '销售-发货-库存', 'customer.channel': '客户-显式渠道-产品',
+    'production.inspection_fused': '生产-检验-成本联合',
     'plan-flow': '普通Web在制过账流',
 }
 _PRODUCT_ID_NAMES = {
@@ -187,7 +194,11 @@ def _analysis_metadata(candidate):
         # Titles can contain product names, so they are intentionally not used
         # as the family label.  Keep an opaque, stable fallback for new views.
         label = candidate.get('metric') or family_id.rsplit('.', 1)[-1].replace('_', ' ')
-    candidate['analysis'] = {'familyId': family_id, 'familyLabel': label}
+    analysis = {'familyId': family_id, 'familyLabel': label}
+    source_unit = candidate.get('engine', {}).get('sourceQuantityUnit')
+    if source_unit is not None and str(source_unit).strip():
+        analysis['sourceQuantityUnit'] = str(source_unit).strip()
+    candidate['analysis'] = analysis
     return candidate
 
 
@@ -368,19 +379,33 @@ def _option(series, kind):
     frame = pd.DataFrame(points, columns=['项目', f'{series.title}（{series.unit}）'])
     field = frame.columns[1]
     option = get_strategy(kind).build(frame, x_field='项目', y_fields=[field])
+    if kind in ('line', 'area'):
+        # The generic strategy may rescale large monetary values to 万/千.
+        # Factory cards must retain the source unit and exact source values;
+        # only the date-axis completion below may add None for an absent day.
+        option.setdefault('series', [{}])[0]['data'] = [value for _, value in points]
+        y_axis = option.get('yAxis')
+        if isinstance(y_axis, list):
+            if y_axis:
+                y_axis[0]['name'] = series.unit
+        elif isinstance(y_axis, dict):
+            y_axis['name'] = series.unit
+    if kind == 'bar_horizontal':
+        # Long batch/SKU labels can leave a narrow value axis in a chart card.
+        option.setdefault('xAxis', {}).setdefault('axisLabel', {})['hideOverlap'] = True
     if kind in ('line', 'area') and all(re.fullmatch(r'\d{4}-\d{2}-\d{2}', label) for label, _ in points):
         observed = dict(points)
         axis = pd.date_range(min(observed), max(observed), freq='D')
         if len(axis) <= 1000:
             labels = axis.strftime('%Y-%m-%d').tolist()
-            rendered = dict(zip(option['xAxis']['data'], option['series'][0]['data']))
+            rendered = dict(points)
             option['xAxis']['data'] = labels
             option['series'][0]['data'] = [rendered.get(label) for label in labels]
             option['series'][0]['connectNulls'] = False
         else:
             option['_factoryUnavailable'] = '日期跨度超过连续轴安全上限，请先按月汇总或缩小期间'
     elif kind in ('line', 'area') and all(re.fullmatch(r'\d{1,2}月', label) for label, _ in points):
-        rendered = dict(zip(option['xAxis']['data'], option['series'][0]['data']))
+        rendered = dict(points)
         months = [int(label[:-1]) for label, _ in points]
         labels = [f'{m}月' for m in range(min(months), max(months) + 1)]
         option['xAxis']['data'] = labels
@@ -634,6 +659,52 @@ def wip_plan_flow_candidates(dataset, request):
             continue
         work = grouped.rename(columns={'来源节点': 'source', '去向节点': 'target', '流量': 'value'})
         option = get_strategy('sankey').build(work, 'source', ['value'], 'target')
+        # WIP batch numbers are often long and share the same prefix. Keep the
+        # canonical node names for links/tooltips, but use a bounded unique
+        # alias for the label painted inside a narrow card.
+        series = option.get('series', [{}])[0]
+        nodes = series.get('data', []) if isinstance(series, dict) else []
+        canonical_names = {str(node.get('name', '')) for node in nodes if isinstance(node, dict)}
+        used_aliases = set(canonical_names)
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get('name', ''))
+            if len(name) <= 16:
+                continue
+            tail = re.split(r'[-_/]', name)[-1].strip() or name[-6:]
+            base = f'#{tail[-6:]}'
+            alias = base[:10]
+            ordinal = 2
+            while alias in used_aliases:
+                suffix = f'-{ordinal}'
+                alias = f'#{tail[-(9 - len(suffix)):]}{suffix}'
+                ordinal += 1
+            used_aliases.add(alias)
+            node['label'] = {
+                'formatter': alias, 'width': 66, 'overflow': 'truncate',
+                'position': 'inside', 'align': 'center', 'verticalAlign': 'middle',
+                'fontSize': 10, 'color': '#172b4d',
+                'textBorderColor': '#fff', 'textBorderWidth': 2,
+            }
+        if isinstance(series, dict):
+            series.update({
+                'nodeWidth': 14,
+                'nodeGap': 14,
+                'left': 36,
+                'right': 36,
+                'top': 20,
+                'bottom': 20,
+                'layoutIterations': 32,
+            })
+            series.setdefault('label', {}).update({
+                'fontSize': 10, 'color': '#172b4d',
+                'width': 88,
+                'overflow': 'truncate',
+                'lineHeight': 12, 'position': 'inside', 'align': 'center',
+                'verticalAlign': 'middle', 'textBorderColor': '#fff', 'textBorderWidth': 2,
+            })
+        has_short_aliases = any(isinstance(node, dict) and 'label' in node for node in nodes)
         option['animation'] = False
         option.setdefault('tooltip', {})['renderMode'] = 'richText'
         total = rows['流量'].sum()
@@ -646,7 +717,8 @@ def wip_plan_flow_candidates(dataset, request):
             'source': dataset.source, 'unit': unit,
             'priority': 'optional',
             'findings': {'good': [f'已过账跨工序流转量 {display(total)} {unit}'],
-                         'attention': ['该累计口径仅代表已核对的跨工序流转，不是原料投入总量，也不是当前库存余额'],
+                         'attention': (['该累计口径仅代表已核对的跨工序流转，不是原料投入总量，也不是当前库存余额']
+                                       + (['图内 # 为批次短号，完整批次号见提示或原始明细'] if has_short_aliases else [])),
                          'suggestions': []},
             'kpis': [
                 {'label': '已过账跨工序流转量', 'value': display(total), 'unit': unit},
@@ -655,13 +727,13 @@ def wip_plan_flow_candidates(dataset, request):
             'tableData': {'headers': ['过账日期', '来源批次', '目标批次', '数量', '单位', 'MC凭证'], 'rows': table_rows},
             'chart': {'chartType': 'sankey', 'echartsOption': option},
             'engine': {'pointDimension': None, 'pointDrilldown': False,
-                       'detail': '原始MC凭证、来源/目标生产批次、过账日期与数量；日期为过账日期，不含价格'},
+                       'detail': '原始MC凭证、来源/目标生产批次、过账日期与数量；日期为过账日期，不含价格；图中长批次号使用唯一#短号，完整批次号请查看节点/连线提示或原始明细'},
         }
         charts.append(_analysis_metadata(candidate))
     return charts, gaps
 
 
-def _card_layout(option):
+def _card_layout(option, chart_id=''):
     """Reserve room for axis units and a separate legend in mounted/exported cards."""
     pies = [s for s in option.get('series', []) if s.get('type') == 'pie']
     for series in pies:
@@ -680,6 +752,22 @@ def _card_layout(option):
     grid = option.setdefault('grid', {})
     if not isinstance(grid, dict):
         return  # Multi-panel charts own their individual grid layouts.
+    for series in option.get('series', []):
+        if isinstance(series, dict) and isinstance(series.get('label'), dict) and series['label'].get('show'):
+            layout = series.setdefault('labelLayout', {})
+            if isinstance(layout, dict):
+                layout.setdefault('hideOverlap', True)
+        if (isinstance(series, dict) and series.get('name') == '达成率'
+                and len(series.get('data', [])) > 4):
+            # A phone's short plot cannot fit every percentage and both
+            # reference-line labels. Keep all points/reference values and
+            # their tooltip, reserving painted text for the axes instead.
+            series.setdefault('label', {})['show'] = False
+            mark_line = series.get('markLine', {})
+            if isinstance(mark_line, dict):
+                for reference in mark_line.get('data', []):
+                    if isinstance(reference, dict):
+                        reference.setdefault('label', {})['show'] = False
 
     def reserve(value, minimum):
         if isinstance(value, (int, float)):
@@ -693,14 +781,87 @@ def _card_layout(option):
                 pass
         return minimum
 
-    for side, minimum in [('left', 12), ('right', 40), ('top', 40), ('bottom', 64)]:
+    minimum_right = 140 if 'channel_analysis' in str(chart_id) else 40
+    for side, minimum in [('left', 12), ('right', minimum_right), ('top', 40), ('bottom', 64)]:
         grid[side] = reserve(grid.get(side), minimum)
     grid['containLabel'] = True
     legend = option.get('legend')
     if isinstance(legend, dict) and legend.get('orient', 'horizontal') == 'horizontal':
         legend.pop('top', None)
         legend['bottom'] = 0
+    zooms = option.get('dataZoom', [])
+    zooms = zooms if isinstance(zooms, list) else [zooms]
+    for zoom in zooms:
+        if (isinstance(zoom, dict) and zoom.get('type') == 'slider'
+                and (zoom.get('orient') == 'horizontal' or (
+                    not zoom.get('orient') and not (
+                        'yAxisIndex' in zoom and 'xAxisIndex' not in zoom)))
+                and zoom.get('show', True)):
+            # Slider controls and the legend need separate footer rows.
+            zoom.pop('top', None)
+            zoom['bottom'] = reserve(zoom.get('bottom'), 32)
+            zoom['height'] = 18
+            grid['bottom'] = reserve(grid.get('bottom'), 88)
     axes = option['xAxis'] if isinstance(option['xAxis'], list) else [option['xAxis']]
+    y_axes = option['yAxis'] if isinstance(option['yAxis'], list) else [option['yAxis']]
+    category_axes = [(axis, 'x') for axis in axes] + [(axis, 'y') for axis in y_axes]
+    def edge_pixels(value):
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str) and value.endswith('%'):
+            try:
+                return float(value[:-1]) * 3.2
+            except ValueError:
+                pass
+        return 0
+    x_label_budget = max(64, 320 - edge_pixels(grid.get('left')) - edge_pixels(grid.get('right')) - 64)
+    for axis, orientation in category_axes:
+        if not isinstance(axis, dict) or axis.get('type') != 'category':
+            continue
+        data = axis.get('data')
+        if not isinstance(data, list):
+            continue
+        raw_values = [str(value) for value in data]
+        if orientation == 'x' and raw_values and all(
+                re.fullmatch(r'\d{4}[-/]\d{2}[-/]\d{2}', value) for value in raw_values):
+            continue  # Keep complete date tokens, even for only 2–4 periods.
+        longest = max((sum(12 if ord(char) > 127 else 7 for char in str(value))
+                       for value in data), default=48)
+        if orientation == 'x' and len(data) > 4:
+            # Dense long categories (for example shipment batch UUIDs) need
+            # bounded labels and ECharts' automatic interval selection. Keep
+            # the complete axis data/tooltip values; only the painted labels
+            # are abbreviated to fit the card.
+            if longest <= 48 or max(map(len, raw_values), default=0) < 16:
+                continue
+            labels = axis.setdefault('axisLabel', {})
+            labels.update({'interval': 'auto', 'hideOverlap': True,
+                           'overflow': 'truncate', 'lineHeight': 16,
+                           'width': min(96, max(48, int(x_label_budget / len(data))))})
+            continue
+        if len(data) > (8 if orientation == 'y' else 4):
+            continue
+        width = min(140, max(48, longest)) if orientation == 'y' else min(96, max(16, int(x_label_budget / max(1, len(data)))))
+        labels = axis.setdefault('axisLabel', {})
+        labels.update({'interval': 0, 'hideOverlap': False,
+                       'overflow': 'breakAll' if orientation == 'x' or len(data) <= 2 else 'truncate',
+                       'lineHeight': 16,
+                       'width': width})
+    # containLabel already reserves wrapped text on both axes; adding that
+    # size to left/bottom as well would consume the plot on a physical phone.
+    for axis in [*axes, *y_axes]:
+        if isinstance(axis, dict) and axis.get('type') == 'value':
+            axis.setdefault('axisLabel', {}).setdefault('hideOverlap', True)
+            axis.setdefault('splitNumber', 3)
+    for index, axis in enumerate(y_axes):
+        if (isinstance(axis, dict) and axis.get('type') == 'value' and axis.get('name')
+                and axis.get('nameLocation', 'end') != 'middle'
+                and axis.get('nameRotate', 0) in (None, 0)):
+            # End captions must extend into the card instead of across its edge.
+            style = axis.setdefault('nameTextStyle', {})
+            if isinstance(style, dict):
+                position = axis.get('position', 'left' if index == 0 else 'right')
+                style.setdefault('align', 'right' if position == 'right' else 'left')
     for axis in axes:
         if axis.get('type') == 'value' and axis.get('name'):
             # End-position names extend beyond the final tick and can be cropped.
@@ -777,7 +938,7 @@ def build(datasets, request, can_price):
                     for value in node: safe_tooltips(value)
             safe_tooltips(chart['chart']['echartsOption'])
             chart['chart']['echartsOption'].setdefault('tooltip', {})['renderMode'] = 'richText'
-            _card_layout(chart['chart']['echartsOption'])
+            _card_layout(chart['chart']['echartsOption'], chart.get('id', ''))
             if '@' in chart['id']:
                 head, suffix = chart['id'].split('@', 1)
                 chart['id'] = head + '@' + hashlib.sha256(suffix.encode()).hexdigest()[:12]

@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { useWorkspaceStore } from '@/store/modules/workspace';
+import { usePlatformFactoryContextStore, isFactoryViewPageRoute } from '@/store/modules/platformFactoryContext';
 import type { User as AuthUser } from '@/types/auth';
 import { get } from '@/api/request';
 import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
@@ -16,8 +17,12 @@ import {
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
   Histogram, KnifeFork
 } from '@element-plus/icons-vue';
-import { menuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
 import SidebarMenuNode from './SidebarMenuNode.vue';
+import {
+  hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
+  getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden,
+} from './factoryMenuVisibility';
 
 const router = useRouter();
 const route = useRoute();
@@ -26,12 +31,18 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const taskBadges = useTaskBadgeStore();
 const workspace = useWorkspaceStore();
+const factoryView = usePlatformFactoryContextStore();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
+const effectiveFactoryId = computed(() => factoryView.factoryId || authStore.factoryId);
+const effectiveFactoryType = computed(() => factoryView.context?.factoryType || authStore.factoryType);
 
 // R19: Canvas module enable/disable — hide disabled modules from sidebar
 const disabledModuleCodes = ref<string[]>([]);
+const factoryAnalyticsMenuEnabled = ref(false);
+const hiddenFactoryMenuPaths = ref<string[]>([]);
+const hiddenFactoryMenuModules = ref<string[]>([]);
 // Backend-authoritative assembly switch. Keep the default closed until the
 // platform capability endpoint explicitly returns enabled=true.
 const factoryAssemblyEnabled = ref(false);
@@ -107,26 +118,43 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 let disabledFetchToken = 0;
 async function fetchDisabledModules(factoryId: string) {
   const token = ++disabledFetchToken;
+  factoryAnalyticsMenuEnabled.value = false;
+  hiddenFactoryMenuPaths.value = [];
+  hiddenFactoryMenuModules.value = [];
   if (!factoryId || isDemoTenant(factoryId)) {
     disabledModuleCodes.value = [];
     return;
   }
   try {
-    const res = await get(`/${factoryId}/config/disabled-modules`);
+    const [disabledResult, featuresResult] = await Promise.allSettled([
+      get(`/${factoryId}/config/disabled-modules`),
+      get(`/${factoryId}/feature-config`),
+    ]);
     // Guard against stale responses if factoryId changed mid-flight (re-login).
     if (token !== disabledFetchToken) return;
-    if (res.success && Array.isArray(res.data)) {
+    const res = disabledResult.status === 'fulfilled' ? disabledResult.value : null;
+    if (res?.success && Array.isArray(res.data)) {
       disabledModuleCodes.value = res.data;
     } else {
       disabledModuleCodes.value = [];
     }
+    factoryAnalyticsMenuEnabled.value = featuresResult.status === 'fulfilled'
+      && featuresResult.value.success
+      && hasFactoryAnalyticsSidebarOptIn(featuresResult.value.data);
+    hiddenFactoryMenuPaths.value = featuresResult.status === 'fulfilled' && featuresResult.value.success
+      ? getDisabledFactoryMenuPaths(featuresResult.value.data) : [];
+    hiddenFactoryMenuModules.value = featuresResult.status === 'fulfilled' && featuresResult.value.success
+      ? getHiddenFactoryMenuModules(featuresResult.value.data) : [];
   } catch {
     /* config not set up for this factory */
-    if (token === disabledFetchToken) disabledModuleCodes.value = [];
+    if (token === disabledFetchToken) {
+      disabledModuleCodes.value = [];
+      hiddenFactoryMenuModules.value = [];
+    }
   }
 }
 watch(
-  () => authStore.factoryId,
+  () => effectiveFactoryId.value,
   (factoryId) => { void fetchDisabledModules(factoryId); },
   { immediate: true },
 );
@@ -149,6 +177,20 @@ const disabledSidebarModules = computed(() => {
 });
 
 const isCollapsedSidebar = computed(() => appStore.sidebarCollapsed && !appStore.isMobile);
+
+// Element Plus moves leaf titles into tooltips when collapse becomes true.
+// Keep them in place until the 140ms fade finishes, and cancel on reversal.
+const menuCollapsed = ref(isCollapsedSidebar.value);
+let collapseTimer: ReturnType<typeof setTimeout> | undefined;
+watch(isCollapsedSidebar, (collapsed) => {
+  clearTimeout(collapseTimer);
+  if (!collapsed || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    menuCollapsed.value = collapsed;
+    return;
+  }
+  collapseTimer = setTimeout(() => { menuCollapsed.value = true; }, 160);
+});
+onBeforeUnmount(() => clearTimeout(collapseTimer));
 
 // 图标映射
 const iconMap: Record<string, any> = {
@@ -174,14 +216,24 @@ const iconMap: Record<string, any> = {
 // the (DB-or-fallback) permission level for the module — so any of them
 // changing reliably re-runs the filter.
 function canSeeMenuItem(item: MenuItem): boolean {
-  const factoryType = authStore.factoryType;
+  // Keep the auth identity read eager for Vue dependency tracking; a factory
+  // view context only overrides the effective tenant below.
+  const authFactoryType = authStore.factoryType;
+  const factoryType = effectiveFactoryType.value || authFactoryType;
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
+  const factoryAnalyticsVisible = canShowOptedInFactoryAnalytics(
+    factoryType, item.path, factoryAnalyticsMenuEnabled.value,
+  );
   const assemblyEnabled = factoryAssemblyEnabled.value;
+  const hiddenByFactory = isFactoryMenuHidden(item.path, hiddenFactoryMenuPaths.value);
+  const hiddenByModule = hiddenFactoryMenuModules.value.includes(item.module);
+
+  if (hiddenByFactory || hiddenByModule) return false;
 
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
-  if (isDemoTenant(authStore.factoryId)) {
+  if (isDemoTenant(effectiveFactoryId.value)) {
     const hidePaths = DEMO_HIDE_PATHS_BY_TYPE[factoryType] || [];
     if (hidePaths.some(p => item.path === p || item.path.startsWith(p + '/'))) {
       return false;
@@ -191,7 +243,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
     }
   }
 
-  if (item.hideForFactoryTypes?.includes(factoryType)) {
+  if (item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible) {
     return false;
   }
   if (
@@ -215,6 +267,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
 }
 
 function filterMenuItem(item: MenuItem): MenuItem | null {
+  if (factoryView.isViewingFactory && !item.children?.length && !isFactoryViewPageRoute(item.path)) return null;
   if (!canSeeMenuItem(item)) return null;
   if (!item.children?.length) return item;
 
@@ -229,7 +282,9 @@ function filterMenuItem(item: MenuItem): MenuItem | null {
 // 过滤有权限的菜单。财务主管虽使用简化菜单，也必须经过同一套业态、模块和角色过滤；
 // 否则 hideForFactoryTypes 只写在配置里却从未执行，会产生「菜单可见、点击 403」。
 const filteredMenu = computed(() => {
-  const sourceMenu = roleCode.value === 'finance_manager' ? financeManagerMenu : menuConfig;
+  const sourceMenu = authStore.isPlatform && !factoryView.isViewingFactory
+    ? platformMenuConfig
+    : roleCode.value === 'finance_manager' ? financeManagerMenu : menuConfig;
   return sourceMenu
     .map(item => filterMenuItem(item))
     .filter((item): item is MenuItem => item !== null);
@@ -262,6 +317,7 @@ function titleForItem(item: MenuItem): string {
 }
 
 function badgeForItem(item: MenuItem): number | 'unknown' | null {
+  if (factoryView.isViewingFactory) return null;
   if (taskBadges.isUnknown(item.badgeKey)) return 'unknown';
   return taskBadges.badge(item.badgeKey);
 }
@@ -270,12 +326,13 @@ let stopBadgeTimer: (() => void) | undefined;
 let badgeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let badgeRefreshForced = false;
 function scheduleBadgeRefresh(force = false): void {
+  if (factoryView.isViewingFactory) return;
   badgeRefreshForced ||= force;
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
   badgeRefreshTimer = setTimeout(() => {
     const shouldForce = badgeRefreshForced;
     badgeRefreshForced = false;
-    void taskBadges.loadAll(shouldForce);
+    if (!factoryView.isViewingFactory) void taskBadges.loadAll(shouldForce);
   }, 350);
 }
 function forceBadgeRefresh(): void {
@@ -285,10 +342,15 @@ function refreshBadgesWhenVisible(): void {
   if (document.visibilityState === 'visible') scheduleBadgeRefresh();
 }
 
+function refreshFactoryFeatures(event: Event): void {
+  const factoryId = (event as CustomEvent<{ factoryId: string }>).detail?.factoryId;
+  if (factoryId && factoryId === authStore.factoryId) void fetchDisabledModules(factoryId);
+}
+
 watch(
   () => authStore.factoryId,
   (factoryId) => {
-    taskBadges.setFactory(factoryId || '');
+    taskBadges.setFactory(factoryView.isViewingFactory ? '' : (factoryId || ''));
     scheduleBadgeRefresh();
   },
   { immediate: true },
@@ -298,10 +360,11 @@ watch(() => route.path, () => scheduleBadgeRefresh());
 
 onMounted(() => {
   stopBadgeTimer = startVisibleBadgeRefresh(
-    () => { void taskBadges.loadAll(); },
+    () => { if (!factoryView.isViewingFactory) void taskBadges.loadAll(); },
     () => document.visibilityState === 'visible',
   );
   window.addEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
+  window.addEventListener('cretas:factory-features-updated', refreshFactoryFeatures);
   document.addEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 
@@ -310,6 +373,7 @@ onBeforeUnmount(() => {
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
   badgeRefreshForced = false;
   window.removeEventListener('cretas:task-badges-refresh', forceBadgeRefresh);
+  window.removeEventListener('cretas:factory-features-updated', refreshFactoryFeatures);
   document.removeEventListener('visibilitychange', refreshBadgesWhenVisible);
 });
 
@@ -386,7 +450,7 @@ function handleSelect(path: string) {
     <!-- Logo -->
     <div class="sidebar-logo">
       <img :src="authStore.factoryLogoUrl" :alt="authStore.brandTitle" class="logo-icon" />
-      <span v-if="!appStore.sidebarCollapsed || appStore.isMobile" class="logo-copy">
+      <span class="logo-copy" :aria-hidden="isCollapsedSidebar">
         <span class="logo-title">{{ authStore.brandTitle }}</span>
         <span v-if="authStore.brandSubtitle" class="logo-subtitle">{{ authStore.brandSubtitle }}</span>
       </span>
@@ -395,9 +459,11 @@ function handleSelect(path: string) {
     <!-- 菜单 -->
     <el-scrollbar class="sidebar-menu-wrap" @wheel.stop>
       <el-menu
+        class="sidebar-menu"
         :default-active="activeMenu"
         :default-openeds="defaultOpeneds"
-        :collapse="isCollapsedSidebar"
+        :collapse="menuCollapsed"
+        :collapse-transition="false"
         :unique-opened="!shouldFlatten"
         background-color="transparent"
         text-color="#ffffffa6"
@@ -427,7 +493,7 @@ function handleSelect(path: string) {
   bottom: 0;
   width: 220px;
   background: linear-gradient(180deg, #0C1929 0%, #132238 60%, #0F1D2E 100%);
-  transition: width 0.3s;
+  transition: width 0.3s ease-in-out;
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -441,7 +507,7 @@ function handleSelect(path: string) {
   height: 64px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 0 16px;
   position: relative;
 
@@ -457,6 +523,7 @@ function handleSelect(path: string) {
   }
 
   .logo-icon {
+    flex-shrink: 0;
     width: 32px;
     height: 32px;
     object-fit: contain;
@@ -471,6 +538,13 @@ function handleSelect(path: string) {
     flex-direction: column;
     justify-content: center;
     line-height: 1.1;
+    max-width: 144px;
+    overflow: hidden;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 140ms ease-out, max-width 0.3s ease-in-out,
+      margin-left 0.3s ease-in-out, visibility 0s;
+    transition-behavior: allow-discrete;
   }
 
   .logo-title {
@@ -496,6 +570,66 @@ function handleSelect(path: string) {
 .sidebar-menu-wrap {
   flex: 1;
   padding: 8px;
+}
+
+// Keep the icon at the same x position in both layouts. Scope label rules to
+// root items so teleported submenus and their tooltip text remain readable.
+:deep(.sidebar-menu) {
+  --el-menu-base-level-padding: 12px;
+  width: 100%;
+}
+
+:deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+:deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+:deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+:deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) {
+  height: auto;
+  width: auto;
+  max-width: 160px;
+  visibility: visible;
+  opacity: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 140ms ease-out, max-width 0.3s ease-in-out, visibility 0s;
+  transition-behavior: allow-discrete;
+}
+
+.is-collapsed {
+  .logo-copy {
+    max-width: 0;
+    margin-left: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 0s, 140ms;
+  }
+
+  :deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+  :deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) {
+    max-width: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 140ms;
+  }
+}
+
+@starting-style {
+  :deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+  :deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .sidebar-logo .logo-copy,
+  :deep(.sidebar-menu > .el-menu-item .menu-title-copy),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-title-copy),
+  :deep(.sidebar-menu > .el-menu-item .menu-task-badge),
+  :deep(.sidebar-menu > .el-sub-menu > .el-sub-menu__title > .menu-task-badge) {
+    transition: none;
+  }
 }
 
 :deep(.el-menu) {

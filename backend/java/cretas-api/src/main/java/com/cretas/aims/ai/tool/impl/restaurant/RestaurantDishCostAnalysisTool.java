@@ -194,4 +194,13 @@ public class RestaurantDishCostAnalysisTool extends AbstractBusinessTool {
             return false;
         }
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29): the AI / Skill path admits exactly who the direct API admits
+     * for the same data; pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read", "inventory:read", "procurement:read", "procurement:read_write", "production:read", "sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write");
+    }
 }

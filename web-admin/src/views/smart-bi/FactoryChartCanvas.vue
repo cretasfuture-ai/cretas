@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { applyFactoryChartResponsive } from '@/utils/factory-chart-responsive';
 
 const props = withDefaults(defineProps<{ option: Record<string, unknown>; height?: number }>(), { height: 320 });
 const emit = defineEmits<{
@@ -28,7 +29,9 @@ async function render() {
   if (!chartEl.value) return;
   if (version !== renderVersion) return;
   if (!instance) instance = echarts.init(chartEl.value, 'cretas') as unknown as ChartInstance;
-  instance.setOption(processEChartsOptions(props.option), { notMerge: true });
+  const processed = processEChartsOptions(props.option);
+  const width = chartEl.value.clientWidth || chartEl.value.getBoundingClientRect().width;
+  instance.setOption(applyFactoryChartResponsive(processed, width), { notMerge: true });
   instance.off?.('click'); instance.on?.('click', (params) => emit('click', params));
   instance.resize();
   if (version === renderVersion) emit('ready');
@@ -42,7 +45,7 @@ async function render() {
 onMounted(async () => {
   await nextTick(); void render();
   if (chartEl.value && typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(() => instance?.resize()); resizeObserver.observe(chartEl.value);
+    resizeObserver = new ResizeObserver(() => { instance?.resize(); void render(); }); resizeObserver.observe(chartEl.value);
   }
 });
 watch(() => props.option, () => { void render(); }, { deep: true });

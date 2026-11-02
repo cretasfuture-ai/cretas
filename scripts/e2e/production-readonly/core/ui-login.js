@@ -17,6 +17,7 @@ function compactLoginData(body) {
     factoryId: data.factoryId || factoryUser.factoryId || null,
     factoryName: data.factoryName || factoryUser.factoryName || null,
     role: data.role || factoryUser.role || null,
+    actorType: data.actorType || null,
   };
 }
 
@@ -80,6 +81,8 @@ async function performUiLogin(page, options) {
         factoryId: value.factoryId || factoryUser.factoryId || null,
         factoryName: value.factoryName || factoryUser.factoryName || null,
         role: value.role || factoryUser.role || null,
+        userType: value.userType || null,
+        platformRole: value.platformUser?.role || null,
       };
     } catch {
       return {};
@@ -93,7 +96,8 @@ async function performUiLogin(page, options) {
   const landingMount = await waitForAppMount(page, options.appMountTimeoutMs);
   const pageText = await page.locator('body').innerText().catch(() => '');
   const actualUsername = stored.username || login.username;
-  const actualFactoryId = stored.factoryId || login.factoryId;
+  const platformSession = isPlatformSession(login, stored);
+  const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
   const actualFactoryName = stored.factoryName || login.factoryName;
   const businessSuccess = login.success ?? Boolean(actualUsername && actualFactoryId);
   // 这道 canary 抓的是「别的租户残留在本次会话的页面上」。租户名写死成字面量时,
@@ -103,7 +107,7 @@ async function performUiLogin(page, options) {
     && STALE_TENANT_MARKER.test(pageText);
   if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
   if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
-  const actualRole = String(stored.role || login.role || '').toLowerCase();
+  const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
   if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
   if (staleTenantDetected) throw new Error('Stale tenant marker liushanmen_admin detected after clean UI login');
   if (actualFactoryName && !pageText.includes(actualFactoryName)
@@ -131,4 +135,9 @@ async function performUiLogin(page, options) {
   };
 }
 
-module.exports = { allowsMissingFactoryName, compactLoginData, performUiLogin, waitForLoginOutcome };
+function isPlatformSession(login, stored) {
+  return login.actorType === 'PLATFORM_ADMIN' && stored.userType === 'platform'
+    && !login.factoryId && !stored.factoryId && login.role === stored.platformRole
+    && ['super_admin', 'system_admin', 'operation_admin', 'auditor', 'platform_admin'].includes(login.role);
+}
+module.exports = { allowsMissingFactoryName, compactLoginData, performUiLogin, waitForLoginOutcome, isPlatformSession };

@@ -52,6 +52,9 @@ class DynamicToolSelectionServiceExecutionContextSecurityTest {
             return true;
         });
         ReflectionTestUtils.setField(service, "toolRbacEnforcer", rbac);
+        ToolPermissionChain chain = mock(ToolPermissionChain.class);
+        when(chain.denyReason(any(), any(), any(), any(), anyMap())).thenReturn(Optional.empty());
+        ReflectionTestUtils.setField(service, "toolPermissionChain", chain);
 
         candidate = ToolRouterService.ToolCandidate.builder()
                 .toolName("security_context_query")

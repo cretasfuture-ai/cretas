@@ -16,6 +16,11 @@ export const chartTypeNames: Record<string, string> = {
 };
 export const chartTypeLabel = (item: FactoryRecommendation) => chartTypeNames[item.chart.chartType] || '财务图表';
 
+export function chartVariantLabel(item: FactoryRecommendation): string {
+  const sourceUnit = item.analysis?.sourceQuantityUnit?.trim();
+  return `${chartTypeLabel(item)} · ${item.unit || '单位未标注'}${sourceUnit ? ` · 口径：${sourceUnit}` : ''}`;
+}
+
 /** Server owns metric identity. The fallback only supports older server responses. */
 export function analysisFamilies(items: readonly FactoryRecommendation[]): AnalysisFamily[] {
   const groups = new Map<string, AnalysisFamily>();

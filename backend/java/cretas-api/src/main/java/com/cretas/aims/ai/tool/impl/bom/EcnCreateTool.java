@@ -101,4 +101,13 @@ public class EcnCreateTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29): same codes as the HTTP method serving this data;
+     * pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("production:read_write", "rd:read_write", "finance:read_write");
+    }
 }

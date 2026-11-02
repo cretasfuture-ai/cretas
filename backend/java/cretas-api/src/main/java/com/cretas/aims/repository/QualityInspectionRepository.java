@@ -1,6 +1,8 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.QualityInspection;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -40,6 +42,36 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      * 拿到同一份**全量**列表, 拼接后<b>每条出现两遍</b>, 且 PASS 的行也混了进来。</p>
      */
     Page<QualityInspection> findByFactoryIdAndResultIn(String factoryId, java.util.Collection<String> results, Pageable pageable);
+
+    /**
+     * Factory-scoped pending work only: a PENDING observation is claimable when
+     * its batch has no completed verdict yet.  Keeping this predicate in the
+     * repository is important; filtering a paged PENDING result in the service
+     * makes both page content and totalElements lie when legacy PENDING rows
+     * coexist with a later PASS/FAIL observation.
+     */
+    @Query("SELECT q FROM QualityInspection q " +
+           "JOIN q.productionBatch batch " +
+           "WHERE q.factoryId = :factoryId " +
+           "AND batch.factoryId = :factoryId " +
+           "AND batch.status = com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED " +
+           "AND q.productionBatchId IS NOT NULL " +
+           "AND UPPER(TRIM(q.result)) = 'PENDING' " +
+           "AND NOT EXISTS (" +
+           "  SELECT completed FROM QualityInspection completed " +
+           "  WHERE completed.factoryId = q.factoryId " +
+           "  AND completed.productionBatchId = q.productionBatchId " +
+           "  AND UPPER(TRIM(completed.result)) IN " +
+           "      ('PASS', 'PASSED', 'QUALIFIED', 'FAIL', 'FAILED', 'CONDITIONAL', 'PARTIAL_PASS')" +
+           ") " +
+           "AND NOT EXISTS (" +
+           "  SELECT duplicate FROM QualityInspection duplicate " +
+           "  WHERE duplicate.factoryId = q.factoryId " +
+           "  AND duplicate.productionBatchId = q.productionBatchId " +
+           "  AND duplicate.id <> q.id " +
+           "  AND UPPER(TRIM(duplicate.result)) = 'PENDING'" +
+           ")")
+    Page<QualityInspection> findEffectivePendingByFactoryId(String factoryId, Pageable pageable);
 
     Page<QualityInspection> findByFactoryIdAndProductionBatchIdAndResultIn(
             String factoryId, Long productionBatchId, java.util.Collection<String> results, Pageable pageable);
@@ -189,6 +221,19 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      * 用于处置历史查询
      */
     List<QualityInspection> findByFactoryIdAndProductionBatchId(String factoryId, Long productionBatchId);
+
+    /** Serialize completion of an existing pending task per batch. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT q FROM QualityInspection q WHERE q.factoryId = :factoryId " +
+           "AND q.productionBatchId = :productionBatchId")
+    List<QualityInspection> findByFactoryIdAndProductionBatchIdForUpdate(
+            @Param("factoryId") String factoryId, @Param("productionBatchId") Long productionBatchId);
+
+    /** Serialize completion of a specific pending observation for AI/legacy updates. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT q FROM QualityInspection q WHERE q.id = :inspectionId AND q.factoryId = :factoryId")
+    Optional<QualityInspection> findByIdAndFactoryIdForUpdate(
+            @Param("factoryId") String factoryId, @Param("inspectionId") String inspectionId);
 
     // ========== Sprint 9 P1.1 Fix 2: MaterialBatch 直查路径 ==========
 

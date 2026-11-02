@@ -1198,6 +1198,7 @@ async def export_excel(request: ExcelExportRequest):
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.worksheet.properties import PageSetupProperties
 
         wb = openpyxl.Workbook()
         if request.report_title:
@@ -1206,6 +1207,57 @@ async def export_excel(request: ExcelExportRequest):
             info.append(['工厂', request.company_name])
             info.append(['期间', request.period_label or f'{request.year}年{request.start_month}–{request.end_month}月'])
             info.append(['说明', '仅包含页面当前显示且选中的图表；逐图来源、单位与规则分析见明细及分析表'])
+            info.column_dimensions['A'].width = 18
+            info.column_dimensions['B'].width = 72
+
+        def excel_wrap_lines(value, width):
+            """Split mixed Chinese/ASCII text into visible Excel lines."""
+            lines = []
+            for paragraph in str(value).splitlines() or ['']:
+                current = []
+                used = 0
+                for char in paragraph:
+                    char_width = 2 if ord(char) > 127 else 1
+                    if current and used + char_width > width:
+                        lines.append(''.join(current))
+                        current, used = [], 0
+                    current.append(char)
+                    used += char_width
+                lines.append(''.join(current))
+            return lines
+
+        def configure_print_layout(ws):
+            """Keep each sheet readable in print preview without dropping columns."""
+            ws.sheet_view.showGridLines = False
+            ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True, autoPageBreaks=False)
+            ws.page_setup.orientation = 'landscape'
+            ws.page_setup.paperSize = ws.PAPERSIZE_A4
+            ws.page_setup.fitToWidth = 1
+            ws.page_setup.fitToHeight = 0
+            ws.page_margins.left = 0.25
+            ws.page_margins.right = 0.25
+            ws.page_margins.top = 0.45
+            ws.page_margins.bottom = 0.45
+            ws.print_options.horizontalCentered = False
+            if ws.max_row and ws.max_column:
+                ws.print_area = f'A1:{ws.cell(ws.max_row, ws.max_column).coordinate}'
+                ws.print_title_rows = '1:1'
+
+        def wrap_sheet_text(ws):
+            """Wrap long source/fact cells and give print engines a deterministic row height."""
+            for row in ws.iter_rows():
+                max_lines = 1
+                for cell in row:
+                    if isinstance(cell.value, str):
+                        cell.alignment = Alignment(
+                            horizontal=cell.alignment.horizontal or 'left',
+                            vertical='top',
+                            wrap_text=True,
+                        )
+                        width = ws.column_dimensions[cell.column_letter].width or 10
+                        max_lines = max(max_lines, len(excel_wrap_lines(cell.value, max(8, int(width)))))
+                if max_lines > 1:
+                    ws.row_dimensions[row[0].row].height = 15 * max_lines
 
         # Header styles
         header_font = Font(bold=True, color="FFFFFF", size=11)
@@ -1258,6 +1310,8 @@ async def export_excel(request: ExcelExportRequest):
         for col in ws_summary.columns:
             max_len = max(len(str(cell.value or "")) for cell in col) + 2
             ws_summary.column_dimensions[col[0].column_letter].width = min(max_len, 30)
+        for column, width in {'A': 40, 'B': 20, 'C': 14, 'D': 12, 'E': 10}.items():
+            ws_summary.column_dimensions[column].width = width
 
         # Sheet per chart with tableData
         from smartbi.services.ppt_generator import CHART_DISPLAY_NAMES
@@ -1299,7 +1353,9 @@ async def export_excel(request: ExcelExportRequest):
 
             for col in ws.columns:
                 max_len = max(len(str(cell.value or "")) for cell in col) + 2
-                ws.column_dimensions[col[0].column_letter].width = min(max_len, 25)
+                # Source/rule columns need room to wrap without clipping the
+                # provenance that makes a number auditable in print preview.
+                ws.column_dimensions[col[0].column_letter].width = min(max(max_len, 18), 58 if col[0].column == 2 else 34)
 
         # Sheet: AI Analysis
         if request.analysis_results:
@@ -1310,18 +1366,26 @@ async def export_excel(request: ExcelExportRequest):
                 cell.fill = header_fill
             for chart_type, analysis in request.analysis_results.items():
                 display_name = request.chart_titles.get(chart_type) or CHART_DISPLAY_NAMES.get(chart_type, chart_type)
-                ws_ai.append([display_name, analysis if request.report_title else analysis[:5000]])
-            ws_ai.column_dimensions["A"].width = 20
-            ws_ai.column_dimensions["B"].width = 80
+                text = analysis if request.report_title else analysis[:5000]
+                # Keep each physical row to a bounded number of wrapped lines;
+                # this avoids relying on Excel's implicit auto-fit for long
+                # source/fact paragraphs, which can clip at PDF render time.
+                lines = excel_wrap_lines(text, 76)
+                for start in range(0, len(lines), 8):
+                    ws_ai.append([display_name if start == 0 else '', '\n'.join(lines[start:start + 8])])
+            ws_ai.column_dimensions["A"].width = 32
+            ws_ai.column_dimensions["B"].width = 88
 
-        if request.report_title:
-            # Treat uploaded strings as text in every sheet, including metadata.
-            import re
-            for sheet in wb:
-                for row in sheet:
-                    for cell in row:
-                        if isinstance(cell.value, str) and re.match(r'^\s*[=+@-]', cell.value):
-                            cell.value = "'" + cell.value
+        # Treat uploaded strings as text in every sheet, including exports
+        # without a report title.  Never let user content become a formula.
+        import re
+        for sheet in wb:
+            wrap_sheet_text(sheet)
+            configure_print_layout(sheet)
+            for row in sheet:
+                for cell in row:
+                    if isinstance(cell.value, str) and re.match(r'^\s*[=+@-]', cell.value):
+                        cell.value = "'" + cell.value
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)

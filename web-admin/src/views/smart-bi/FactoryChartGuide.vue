@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { FactoryRecommendation } from '@/api/smartbi/factory-charts';
-import { analysisFamilies, chartTypeLabel, recommendedAnalysisIds, replaceFamilySelection, type AnalysisFamily } from './factoryChartGuide';
+import { analysisFamilies, chartVariantLabel, recommendedAnalysisIds, replaceFamilySelection, type AnalysisFamily } from './factoryChartGuide';
 
 const props = defineProps<{
   items: FactoryRecommendation[];
@@ -13,6 +13,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   analysis: [ids: string[]];
+  preview: [ids: string[]];
   selection: [ids: string[]];
   subject: [id: string | null];
   context: [value: { mode: string; domain: string; family: string }];
@@ -60,7 +61,7 @@ function selected(group: AnalysisFamily): boolean { return group.items.some(item
 function toggle(group: AnalysisFamily, checked: unknown) {
   emit('selection', replaceFamilySelection(props.selectedIds, group, checked ? chosen(group) : null));
 }
-function variant(group: AnalysisFamily, id: string) { emit('selection', replaceFamilySelection(props.selectedIds, group, id)); }
+function variant(group: AnalysisFamily, id: string) { emit('preview', replaceFamilySelection(props.selectedIds, group, id)); }
 </script>
 
 <template>
@@ -93,7 +94,7 @@ function variant(group: AnalysisFamily, id: string) { emit('selection', replaceF
       </div>
     </div>
     <template v-if="mode === 'guide'">
-      <p class="guide-note">期间使用上方选择。产品目录来自当前数据源，结果按所选期间计算；查看分析不会自动保存选择。</p>
+      <p class="guide-note">期间使用上方选择。产品目录来自当前数据源；切换画法与单位仅预览，点击“保存当前选择”后才同步。</p>
       <el-button type="primary" :disabled="loading || !recommendationIds.length" data-testid="factory-chart-guide-generate" @click="emit('analysis', recommendationIds)">查看分析{{ recommendationIds.length ? `（${recommendationIds.length} 张）` : '' }}</el-button>
       <p v-if="!recommendationIds.length" class="guide-note" role="status">当前范围没有满足数据条件的分析，请调整范围或查看下方条件说明。</p>
     </template>
@@ -103,9 +104,10 @@ function variant(group: AnalysisFamily, id: string) { emit('selection', replaceF
         <el-checkbox :model-value="selected(group)" @update:model-value="toggle(group, $event)">{{ group.label }}</el-checkbox>
         <span class="family-domain">{{ group.domain }}</span>
         <el-select :model-value="chosen(group)" :aria-label="`${group.label}的画法与单位`" size="small" @update:model-value="variant(group, $event)">
-          <el-option v-for="item in group.items" :key="item.id" :value="item.id" :label="`${chartTypeLabel(item)} · ${item.unit}${group.items.some(other => other.id !== item.id && other.unit === item.unit && other.chart.chartType === item.chart.chartType) ? ` · ${item.title}` : ''}`" />
+          <el-option v-for="item in group.items" :key="item.id" :value="item.id" :label="`${chartVariantLabel(item)}${group.items.some(other => other.id !== item.id && other.unit === item.unit && other.chart.chartType === item.chart.chartType) ? ` · ${item.title}` : ''}`" />
         </el-select>
       </div>
+      <p class="guide-note">切换画法与单位是本地预览；保存当前选择后同步到当前工厂。</p>
       <el-empty v-if="!searchedFamilies.length" description="此分类没有匹配的分析" :image-size="50" />
     </div>
   </section>

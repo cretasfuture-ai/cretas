@@ -1,0 +1,7 @@
+# FACTORY-ACCESS-UI-ELIGIBILITY-20261030
+
+Base 2e15ca03f2a9ba9bedee9b480cf029bec2cbf1db. Owner root, DIRECT. Scope only canonical production-readonly CLI/core option plumbing, platform-factory-access-readonly scenario/eligibility tests and deterministic mcp-entry bundle. No application, API, Entity/Repository, account roles, deployment scripts or production business writes.
+
+Initial online acceptance read the target factory successfully with zero HTTP/console errors and zero business writes, but its protected-admin fixture assumption was ineligible: the existing target administrator is an ordinary active management role. Preserve that role. Accept explicit exact-account cases, prove ordinary active controls enabled and a separately existing protected full administrator's controls disabled, using one clean platform UI session and the same before-send mutation guard. Missing/ambiguous/inactive/mismatched accounts remain hard failures; no conditional protection assertion is silently skipped. Scope includes a factory switch to prove stale employee state is not reused. Real usernames and credentials remain in gitignored inputs/evidence only.
+
+Acceptance: complete canonical harness unit suite, deterministic bundle check, and actual headed two-factory UI run with zero business writes; application Java/Web trees must remain identical to deployed PR1347, so no redeployment is needed for this test-only correction. All source ownership stays with root.

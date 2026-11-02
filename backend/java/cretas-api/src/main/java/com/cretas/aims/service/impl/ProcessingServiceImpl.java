@@ -554,6 +554,28 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     @Override
+    public PageResponse<ProductionBatch> getQualityPendingBatches(String factoryId, PageRequest pageRequest) {
+        org.springframework.data.domain.PageRequest pageable = org.springframework.data.domain.PageRequest.of(
+                pageRequest.getPage() - 1,
+                pageRequest.getSize(),
+                Sort.by(Sort.Direction.DESC, "inspectionDate"));
+        Page<QualityInspection> pendingPage = qualityInspectionRepository.findEffectivePendingByFactoryId(
+                factoryId, pageable);
+        Map<Long, ProductionBatch> batchesById = new LinkedHashMap<>();
+        for (QualityInspection pending : pendingPage.getContent()) {
+            if (pending == null || pending.getProductionBatchId() == null) {
+                continue;
+            }
+            productionBatchRepository.findByIdAndFactoryId(pending.getProductionBatchId(), factoryId)
+                    .filter(batch -> batch.getStatus() == ProductionBatchStatus.COMPLETED)
+                    .ifPresent(batch -> batchesById.putIfAbsent(batch.getId(), batch));
+        }
+        List<ProductionBatch> batches = new ArrayList<>(batchesById.values());
+        batches.forEach(this::enrichBatchDisplayFields);
+        return PageResponse.of(batches, pageRequest.getPage(), pageRequest.getSize(), pendingPage.getTotalElements());
+    }
+
+    @Override
     public PageResponse<ProductionBatch> getBatches(String factoryId, String status, Long supervisorId,
                                                     Boolean isTrial, Boolean includeClerkWip,
                                                     PageRequest pageRequest) {
@@ -851,6 +873,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     /**
      * 记录原材料消耗 (向后兼容，使用supervisorId或默认值)
      */
+    @Transactional(rollbackFor = Exception.class)
     public void recordMaterialConsumption(String factoryId, String productionBatchId,
                                          List<Map<String, Object>> consumptions) {
         recordMaterialConsumption(factoryId, productionBatchId, consumptions, null);
@@ -860,6 +883,7 @@ public class ProcessingServiceImpl implements ProcessingService {
      * 记录原材料消耗 (带用户ID参数)
      * N+1 修复：合并两个循环，使用缓存 Map 避免重复查询
      */
+    @Transactional(rollbackFor = Exception.class)
     public void recordMaterialConsumption(String factoryId, String productionBatchId,
                                          List<Map<String, Object>> consumptions, Long userId) {
         log.info("记录原材料消耗: factoryId={}, productionBatchId={}, userId={}", factoryId, productionBatchId, userId);
@@ -875,7 +899,7 @@ public class ProcessingServiceImpl implements ProcessingService {
 
             // 使用 computeIfAbsent 确保每个 materialBatchId 只查询一次
             MaterialBatch materialBatch = batchCache.computeIfAbsent(materialBatchId,
-                    id -> materialBatchRepository.findById(id)
+                    id -> materialBatchRepository.findByIdAndFactoryId(id, factoryId)
                             .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在: " + id)));
 
             // 检查库存
@@ -932,8 +956,10 @@ public class ProcessingServiceImpl implements ProcessingService {
             totalMaterialCost = totalMaterialCost.add(cost);
         }
 
-        // 更新生产批次的原材料成本
-        productionBatch.setMaterialCost(totalMaterialCost);
+        // 更新生产批次的原材料成本：从本批次、本工厂已持久化的消耗金额重算，
+        // 避免重复领料请求或 AUTO_BOM 先后写入时覆盖既有成本。
+        productionBatch.setMaterialCost(MaterialConsumptionCostTotals.forBatch(
+                materialConsumptionRepository, productionBatch.getId(), factoryId));
         productionBatchRepository.save(productionBatch);
     }
 
@@ -1359,22 +1385,43 @@ public class ProcessingServiceImpl implements ProcessingService {
             }
             statistics.put("averagePassRate", averagePassRate);
             long passedCount = inspections.stream()
-                    .filter(i -> "PASS".equalsIgnoreCase(i.getResult()))
+                    .filter(i -> "PASS".equals(normalizeQualityResult(i.getResult())))
                     .count();
             statistics.put("passedBatches", passedCount);
-            statistics.put("failedBatches", inspections.size() - passedCount);
+            long failedCount = inspections.stream()
+                    .filter(i -> "FAIL".equals(normalizeQualityResult(i.getResult())))
+                    .count();
+            statistics.put("failedBatches", failedCount);
+            statistics.put("conditionalBatches", inspections.stream()
+                    .filter(i -> "CONDITIONAL".equals(normalizeQualityResult(i.getResult())))
+                    .count());
+            statistics.put("pendingBatches", inspections.stream()
+                    .filter(i -> "PENDING".equals(normalizeQualityResult(i.getResult())))
+                    .count());
         }
-        // APP-CONTRACT-004 (2026-08-02): 上面的 failedBatches 语义是"非 PASS", 把待检和
-        // CONDITIONAL 都算进了"未通过", 移动端质检首页要分开显示"待检/通过/未通过", 拿它算不出来。
-        // 既有键的语义不动 (web-admin DashboardAdmin.vue / QualityRateWidget 已按老口径读),
-        // 另加一个语义明确的 breakdown, 且**无论有没有记录都输出** —— 之前空结果只回 totalInspections,
-        // 客户端读到 undefined 与"0 条"分不开。
+        statistics.putIfAbsent("passedBatches", 0L);
+        statistics.putIfAbsent("failedBatches", 0L);
+        statistics.putIfAbsent("conditionalBatches", 0L);
+        statistics.putIfAbsent("pendingBatches", 0L);
+        // Mobile quality views need real result buckets: pending and conditional
+        // are neither failures nor passes.  Keep the explicit breakdown on empty
+        // periods too, so clients can distinguish zero from a missing response.
         Map<String, Object> breakdown = new LinkedHashMap<>();
-        breakdown.put("pass", inspections.stream().filter(i -> "PASS".equalsIgnoreCase(i.getResult())).count());
-        breakdown.put("fail", inspections.stream().filter(i -> "FAIL".equalsIgnoreCase(i.getResult())).count());
+        breakdown.put("pass", inspections.stream().filter(i -> "PASS".equals(normalizeQualityResult(i.getResult()))).count());
+        breakdown.put("fail", inspections.stream().filter(i -> "FAIL".equals(normalizeQualityResult(i.getResult()))).count());
         breakdown.put("conditional",
-                inspections.stream().filter(i -> "CONDITIONAL".equalsIgnoreCase(i.getResult())).count());
+                inspections.stream().filter(i -> "CONDITIONAL".equals(normalizeQualityResult(i.getResult()))).count());
         breakdown.put("pending", inspections.stream()
+                .filter(i -> "PENDING".equals(normalizeQualityResult(i.getResult())))
+                .count());
+        breakdown.put("unknown", inspections.stream()
+                .filter(i -> {
+                    String result = normalizeQualityResult(i.getResult());
+                    if (result == null) return false;
+                    return !Set.of("PASS", "FAIL", "CONDITIONAL", "PENDING").contains(result);
+                })
+                .count());
+        breakdown.put("empty", inspections.stream()
                 .filter(i -> i.getResult() == null || i.getResult().isBlank())
                 .count());
         statistics.put("breakdown", breakdown);
@@ -1385,8 +1432,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     /**
      * 质量报表移动端摘要。
      *
-     * <p>保留上面的 legacy 字段及其「非 PASS」failedBatches 口径，避免影响 web-admin
-     * 消费者；新摘要按完整查询周期统计每一种真实结果，并把空结果、未知结果、缺失数值
+     * <p>摘要按完整查询周期统计每一种真实结果，把空结果、未知结果、缺失数值
      * 与合法的零值分开表达。分页样本不参与这里的统计。
      */
     private Map<String, Object> buildQualitySummary(List<QualityInspection> inspections,
@@ -1411,12 +1457,11 @@ public class ProcessingServiceImpl implements ProcessingService {
         long reportedPassRateCount = 0L;
 
         for (QualityInspection inspection : inspections) {
-            String result = inspection.getResult();
-            if (result == null || result.isBlank()) {
+            String result = normalizeQualityResult(inspection.getResult());
+            if (result == null) {
                 statusCounts.computeIfPresent("EMPTY", (key, value) -> value + 1L);
             } else {
-                String normalizedResult = result.trim().toUpperCase(Locale.ROOT);
-                String statusKey = switch (normalizedResult) {
+                String statusKey = switch (result) {
                     case "PASS" -> "PASS";
                     case "FAIL" -> "FAIL";
                     case "CONDITIONAL" -> "CONDITIONAL";
@@ -1481,6 +1526,17 @@ public class ProcessingServiceImpl implements ProcessingService {
         summary.put("missingPassCount", missingPassCount);
         summary.put("missingFailCount", missingFailCount);
         return summary;
+    }
+
+    /** Normalize persisted quality aliases without treating unknown values as a verdict. */
+    private String normalizeQualityResult(String result) {
+        if (result == null || result.isBlank()) return null;
+        return switch (result.trim().toUpperCase(Locale.ROOT)) {
+            case "PASSED", "QUALIFIED" -> "PASS";
+            case "FAILED" -> "FAIL";
+            case "PARTIAL_PASS" -> "CONDITIONAL";
+            default -> result.trim().toUpperCase(Locale.ROOT);
+        };
     }
 
     /**
@@ -2179,10 +2235,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         Long batchIdLong = parseBatchId(batchId);
 
         // 重新计算原材料成本
-        List<MaterialConsumption> consumptions = materialConsumptionRepository.findByProductionBatchId(batchIdLong);
-        BigDecimal materialCost = consumptions.stream()
-                .map(c -> c.getQuantity().multiply(c.getBatch().getUnitPrice()))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal materialCost = MaterialConsumptionCostTotals.forBatch(
+                materialConsumptionRepository, batchIdLong, factoryId);
         batch.setMaterialCost(materialCost);
 
         // 重新计算设备成本 - 使用 BatchEquipmentUsage

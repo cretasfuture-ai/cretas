@@ -1,5 +1,6 @@
 import {
   filterSubjects,
+  chartVariantLabel,
   groupChartFamilies,
   selectionForFamilies,
   selectedFamilyIds,
@@ -19,6 +20,13 @@ describe('smartbiFactoryChartGuide', () => {
     const ids = selectedFamilyIds(items, ['f1@box']);
     expect(selectionForFamilies(items, ids, new Map([['f1', 'f1@box']]))).toEqual(['f1@box']);
     expect(selectionForFamilies(items, new Set(['f1', 'f2']), new Map(), ['f1@box'])).toEqual(['f1@box', 'f2']);
+  });
+
+  it('labels source quantity units without converting them or inventing them for financial percent', () => {
+    expect(chartVariantLabel(item('ratio@kg', 'ratio', '比率', '%'))).toBe('柱形 · %');
+    expect(chartVariantLabel({ ...item('ratio@kg', 'ratio', '比率', '%'), analysis: { familyId: 'ratio', familyLabel: '比率', sourceQuantityUnit: 'kg' } })).toBe('柱形 · % · 口径：kg');
+    expect(chartVariantLabel({ ...item('ratio@box', 'ratio', '比率', '%'), analysis: { familyId: 'ratio', familyLabel: '比率', sourceQuantityUnit: 'box' } })).toBe('柱形 · % · 口径：box');
+    expect(chartVariantLabel({ ...item('ratio@盒', 'ratio', '比率', '%'), analysis: { familyId: 'ratio', familyLabel: '比率', sourceQuantityUnit: '盒' } })).toBe('柱形 · % · 口径：盒');
   });
 
   it('bounds searchable subjects instead of rendering a hundred chips', () => {

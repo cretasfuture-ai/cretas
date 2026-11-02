@@ -17,6 +17,7 @@
  */
 import { ref, type Ref } from 'vue';
 import { post } from '@/api/request';
+import { factoryViewContext } from '@/store/modules/platformFactoryContext';
 
 /**
  * Attachment.EntityType values relevant to inline link counter.
@@ -60,6 +61,10 @@ export function useLinkChipCounts(
   const linkChipCountsMap = ref<Record<string, LinkChipCounts>>({});
 
   async function fetchLinkChipCounts(entityIds: string[]): Promise<void> {
+    if (factoryViewContext.value) {
+      linkChipCountsMap.value = {};
+      return;
+    }
     if (!factoryId.value || entityIds.length === 0) {
       linkChipCountsMap.value = {};
       return;

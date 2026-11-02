@@ -11,6 +11,7 @@ const EXPORTS = [
   { key: 'ppt', label: 'PPT', button: '导出当前显示图表 PPT', path: '/smartbi-api/api/smartbi/financial-dashboard/export-ppt', extension: 'pptx' },
 ];
 const MAX_OPTION_FAMILIES = 60;
+const MAX_OPTION_CANDIDATES = 120;
 const STEP_TIMEOUT_MS = 30_000;
 const TOTAL_TIMEOUT_MS = 10 * 60_000;
 
@@ -72,6 +73,18 @@ function validateCatalogFamilies(value) {
   return result;
 }
 
+function validateCatalogCandidateIds(value) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) throw new Error('factoryCatalogCandidateIds must be an array of candidate IDs');
+  if (value.length > MAX_OPTION_CANDIDATES) throw new Error(`factoryCatalogCandidateIds must contain at most ${MAX_OPTION_CANDIDATES} IDs`);
+  const result = value.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('factoryCatalogCandidateIds contains an empty candidate ID');
+    return entry.trim();
+  });
+  if (new Set(result).size !== result.length) throw new Error('factoryCatalogCandidateIds contains duplicate candidate IDs');
+  return result;
+}
+
 function groupCandidates(candidates) {
   const groups = new Map();
   for (const candidate of Array.isArray(candidates) ? candidates : []) {
@@ -115,9 +128,172 @@ function verifiedWipVoucherCount(candidate, fact) {
     && Number.isSafeInteger(Number(fact.value)) && Number(fact.value) === rows.length;
 }
 
+const FUSED_KPI_UNITS = Object.freeze({
+  '已覆盖批次产量': 'physical',
+  '累计生产良品率': '%',
+  '累计检验合格率': '%',
+  '已覆盖批次总成本': '元',
+});
+
+const PHYSICAL_UNITS = new Set([
+  'kg', 'g', 'mg', 't', '吨', '个', '盒', '袋', 'box', 'case', '张', '卷', '件', '箱', '批',
+  '瓶', '桶', '包', '罐', '盘', '支', '台', '套', 'm', '米', 'cm', 'L', 'l', 'ml', 'mL', '毫升', '升',
+]);
+
+function isPhysicalUnit(unit) {
+  const value = String(unit || '').trim();
+  return PHYSICAL_UNITS.has(value) || PHYSICAL_UNITS.has(value.toLowerCase());
+}
+
+function strictFiniteNumber(raw) {
+  if (raw == null || typeof raw === 'boolean') return null;
+  if (!['number', 'string'].includes(typeof raw)) return null;
+  if (typeof raw === 'string' && raw.trim() === '') return null;
+  const normalized = typeof raw === 'string' ? raw.replace(/,/gu, '').trim() : raw;
+  if (normalized === '') return null;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+
+function fusedCandidateUnitsAligned(candidate) {
+  const unit = String(candidate?.unit || '').trim();
+  if (!isPhysicalUnit(unit)) return false;
+  const facts = Array.isArray(candidate?.kpis) ? candidate.kpis : [];
+  const labels = facts.map((fact) => String(fact?.label || '').trim());
+  const expectedLabels = Object.keys(FUSED_KPI_UNITS);
+  if (facts.length !== expectedLabels.length || new Set(labels).size !== expectedLabels.length
+    || !expectedLabels.every((label) => labels.includes(label))) return false;
+  if (!/^production-inspection-fused\s*[·:|]/iu.test(String(candidate?.source || '').trim())) return false;
+  const sourceMetadata = candidate?.sourceMetadata;
+  if (sourceMetadata?.sourceKey !== 'production-inspection-fused'
+    || sourceMetadata?.costAuthorized !== true
+    || !Array.isArray(sourceMetadata?.sources)
+    || !sourceMetadata.sources.includes('production')
+    || !sourceMetadata.sources.includes('quality')) return false;
+  if (!facts.every((fact) => {
+    const label = String(fact?.label || '').trim();
+    const expectedUnit = FUSED_KPI_UNITS[label] === 'physical' ? unit : FUSED_KPI_UNITS[label];
+    const value = strictFiniteNumber(fact?.value);
+    const validRange = expectedUnit === '%' ? value != null && value >= 0 && value <= 100 : value != null && value >= 0;
+    return String(fact?.unit || '').trim() === expectedUnit && validRange;
+  })) return false;
+
+  const table = candidate?.tableData;
+  const headers = Array.isArray(table?.headers) ? table.headers.map((header) => String(header).trim()) : [];
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  if (!headers.length || !rows.length) return false;
+  const findHeader = (pattern) => headers.findIndex((header) => pattern.test(header));
+  const escapedUnit = unit.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const dateIndex = findHeader(/^(?:日期|date)$/iu);
+  const productionIndex = findHeader(new RegExp(`产量\\s*[（(]${escapedUnit}[）)]`, 'u'));
+  const inspectionIndex = findHeader(/检验合格率\s*[（(]%[）)]/u);
+  const yieldIndex = findHeader(/生产良品率\s*[（(]%[）)]/u);
+  const costIndex = findHeader(/总成本\s*[（(]元[）)]/u);
+  const indices = [dateIndex, productionIndex, inspectionIndex, yieldIndex, costIndex];
+  if (indices.some((index) => index < 0) || new Set(indices).size !== indices.length) return false;
+  if (!rows.every((row) => {
+    if (!Array.isArray(row) || row.length <= Math.max(...indices) || !String(row[dateIndex] || '').trim()) return false;
+    const production = strictFiniteNumber(row[productionIndex]);
+    const inspection = strictFiniteNumber(row[inspectionIndex]);
+    const yieldRate = strictFiniteNumber(row[yieldIndex]);
+    const cost = strictFiniteNumber(row[costIndex]);
+    return production != null && production >= 0 && inspection != null && inspection >= 0 && inspection <= 100
+      && yieldRate != null && yieldRate >= 0 && yieldRate <= 100 && cost != null && cost >= 0;
+  })) return false;
+
+  const option = candidate?.chart?.echartsOption || {};
+  const axes = Array.isArray(option.yAxis) ? option.yAxis : [];
+  if (axes.length !== 3 || axes.some((axis) => axis?.type !== 'value')) return false;
+  if (String(axes[0]?.name || '').trim() !== unit
+    || String(axes[1]?.name || '').trim() !== '%'
+    || String(axes[2]?.name || '').trim() !== '元'
+    || axes[1]?.min !== 0 || axes[1]?.max !== 100) return false;
+  const legend = Array.isArray(option?.legend?.data) ? option.legend.data.map((item) => String(item).trim()) : [];
+  const expectedSeries = ['产量', '检验合格率', '生产良品率', '总成本'];
+  if (legend.length !== expectedSeries.length || new Set(legend).size !== expectedSeries.length
+    || !expectedSeries.every((name) => legend.includes(name))) return false;
+  const series = Array.isArray(option.series) ? option.series : [];
+  if (series.length !== expectedSeries.length || new Set(series.map((item) => String(item?.name || '').trim())).size !== expectedSeries.length) return false;
+  return series.every((item) => {
+    const name = String(item?.name || '').trim();
+    const expectedAxis = name === '产量' ? 0 : name === '总成本' ? 2 : 1;
+    const values = Array.isArray(item?.data) ? item.data : [];
+    const validValues = values.map(strictFiniteNumber);
+    const valuesInRange = name === '产量' || name === '总成本'
+      ? validValues.every((value) => value != null && value >= 0)
+      : validValues.every((value) => value != null && value >= 0 && value <= 100);
+    return expectedSeries.includes(name) && Number(item?.yAxisIndex || 0) === expectedAxis
+      && values.length === rows.length && valuesInRange;
+  });
+}
+
+function anomalyPoints(candidate) {
+  const table = candidate?.tableData;
+  if (Array.isArray(table)) {
+    return table.map((row) => ({ label: String(row?.label || '').trim(), value: strictFiniteNumber(row?.value) }));
+  }
+  const headers = Array.isArray(table?.headers) ? table.headers.map((header) => String(header).trim()) : [];
+  const rows = Array.isArray(table?.rows) ? table.rows : [];
+  const labelIndex = headers.findIndex((header) => /批次|batch/iu.test(header));
+  const valueIndex = headers.findIndex((header) => /产量|数量|实际|数值|value/iu.test(header));
+  if (labelIndex < 0 || valueIndex < 0) return [];
+  return rows.map((row) => ({ label: String(Array.isArray(row) ? row[labelIndex] : '').trim(), value: strictFiniteNumber(Array.isArray(row) ? row[valueIndex] : undefined) }));
+}
+
+function anomalyEvidence(candidate) {
+  if (familyOf(candidate) !== 'production.anomaly') return null;
+  const source = String(candidate?.source || '').trim();
+  const unit = String(candidate?.unit || '').trim();
+  if (!/^production\s*[·:|]/iu.test(source) || !isPhysicalUnit(unit)) return null;
+  if (!Array.isArray(candidate?.kpis) || candidate.kpis.length !== 0) return null;
+  const points = anomalyPoints(candidate);
+  if (points.length < 10 || new Set(points.map((point) => point.label)).size !== points.length
+    || points.some((point) => !point.label || !Number.isFinite(point.value) || point.value < 0)) return null;
+  const mean = points.reduce((total, point) => total + point.value, 0) / points.length;
+  const populationStdDev = Math.sqrt(points.reduce((total, point) => total + ((point.value - mean) ** 2), 0) / points.length);
+  const anomalyThreshold = 2 * populationStdDev;
+  const anomalies = populationStdDev > 0
+    ? points.filter((point) => Math.abs(point.value - mean) > anomalyThreshold)
+    : [];
+  const attention = candidate?.findings?.attention;
+  const observations = Array.isArray(attention)
+    ? attention.filter((text) => typeof text === 'string')
+      .map((text) => text.trim().match(/^(\d+)个同SKU\/单位批次，(\d+)个值偏离均值超过2个总体标准差；仅统计观察，不代表原因$/u))
+      .filter(Boolean)
+    : [];
+  const observation = observations.length === 1 ? observations[0] : null;
+  const sampleCount = observation ? Number(observation[1]) : null;
+  const anomalyCount = observation ? Number(observation[2]) : null;
+  if (sampleCount !== points.length || anomalyCount !== anomalies.length || !anomalies.length) return null;
+  return {
+    source,
+    unit,
+    sampleCount: points.length,
+    mean,
+    populationStdDev,
+    anomalyCount: anomalies.length,
+    anomalyLabels: anomalies.map((point) => point.label),
+    findingsSampleCount: sampleCount,
+    findingsAnomalyCount: anomalyCount,
+  };
+}
+
+function factsPresent(candidate) {
+  const family = familyOf(candidate);
+  if (family === 'production.anomaly') return Boolean(anomalyEvidence(candidate));
+  return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).length > 0
+    || Boolean(purchasePriceEvidence(candidate));
+}
+
 function candidateUnitsAligned(candidate) {
   const unit = String(candidate?.unit || '').trim();
-  if (!unit) return true; // Financial table candidates may legitimately be multi-unit.
+  if (!unit) {
+    const family = familyOf(candidate);
+    const hasMoneyFact = (Array.isArray(candidate?.kpis) ? candidate.kpis : [])
+      .some((fact) => /^(?:元|USD|CNY|RMB|美元|人民币|[$¥€])$/iu.test(String(fact?.unit || '').trim()));
+    return !(family && family.startsWith('production.') && hasMoneyFact);
+  } // Financial table candidates may legitimately be multi-unit.
+  if (familyOf(candidate) === 'production.inspection_fused') return fusedCandidateUnitsAligned(candidate);
   return (Array.isArray(candidate?.kpis) ? candidate.kpis : []).every((fact) => {
     const factUnit = String(fact?.unit || '').trim();
     return !factUnit || factUnit === unit
@@ -162,16 +338,24 @@ function purchasePriceEvidence(candidate) {
   return same ? { points: tablePoints.map((point) => ({ ...point })), source, nonadditive: true } : null;
 }
 
-function selectCatalogCandidates(data, requestedFamilies) {
+function selectCatalogCandidates(data, requestedFamilies, requestedCandidateIds = null) {
   const candidates = Array.isArray(data?.recommendations) ? data.recommendations : [];
   const groups = groupCandidates(candidates);
   const available = new Set(groups.map((group) => group.familyId));
   const requested = requestedFamilies || groups.map((group) => group.familyId);
   const requestedUnknown = requested.filter((family) => !available.has(family));
+  const availableCandidates = new Map(candidates.filter((candidate) => candidate?.id).map((candidate) => [String(candidate.id), candidate]));
+  const requestedCandidateUnknown = (requestedCandidateIds || []).filter((id) => !availableCandidates.has(id));
   const excluded = [];
   const blocked = [];
-  const eligibleGroups = groups.filter((group) => requested.includes(group.familyId)).map((group) => {
-    const sorted = [...group.candidates];
+  const explicitCandidates = requestedCandidateIds
+    ? requestedCandidateIds.map((id) => availableCandidates.get(id)).filter(Boolean)
+    : null;
+  const eligibleGroups = groups.filter((group) => requested.includes(group.familyId)
+    && (!requestedCandidateIds || requestedCandidateIds.some((id) => familyOf(availableCandidates.get(id)) === group.familyId))).flatMap((group) => {
+    const sorted = explicitCandidates
+      ? explicitCandidates.filter((candidate) => familyOf(candidate) === group.familyId)
+      : [...group.candidates];
     const restaurantOnly = sorted.filter(isRestaurantOnly);
     if (restaurantOnly.length) excluded.push(...restaurantOnly.map((candidate) => ({
       familyId: group.familyId,
@@ -179,8 +363,8 @@ function selectCatalogCandidates(data, requestedFamilies) {
       candidateId: candidate.id,
       reason: 'restaurant-only',
     })));
-    const candidate = sorted.find((item) => !isRestaurantOnly(item) && candidateIsQualified(item));
-    if (!candidate) {
+    const qualified = sorted.filter((item) => !isRestaurantOnly(item) && candidateIsQualified(item));
+    if (!qualified.length) {
       const blockedCandidate = sorted.find((item) => !isRestaurantOnly(item));
       blocked.push({
         familyId: group.familyId,
@@ -188,10 +372,11 @@ function selectCatalogCandidates(data, requestedFamilies) {
         candidateId: blockedCandidate?.id || null,
         reason: blockedCandidate?.detailStatus?.state || 'candidate-not-qualified',
       });
-      return null;
+      return [];
     }
-    return { familyId: group.familyId, familyLabel: group.familyLabel, candidate };
-  }).filter(Boolean);
+    const chosen = requestedCandidateIds ? qualified : qualified.slice(0, 1);
+    return chosen.map((candidate) => ({ familyId: group.familyId, familyLabel: group.familyLabel, candidate }));
+  });
   // Families are covered through individual previews by inspectCatalog. Keep the
   // explicit 60-family run bound, but never hide the remainder from the
   // assessment.
@@ -199,7 +384,7 @@ function selectCatalogCandidates(data, requestedFamilies) {
   const deferred = eligibleGroups.slice(MAX_OPTION_FAMILIES).map((item) => ({
     familyId: item.familyId, familyLabel: item.familyLabel, candidateId: item.candidate.id, reason: 'family-limit-60',
   }));
-  return { selected, deferred, blocked, excluded, requestedUnknown };
+  return { selected, deferred, blocked, excluded, requestedUnknown, requestedCandidateUnknown };
 }
 
 function detailPeriod(data) {
@@ -314,34 +499,93 @@ async function chooseBrowseMode(page, deadline) {
 }
 
 async function selectFamilyPreview(page, item, allGroups, deadline) {
-  // Browse checkbox changes deliberately persist user preferences. Read-only
-  // acceptance uses the existing guided preview action instead; no selection
-  // PUT is mocked, allowed or suppressed by this scenario.
-  const guideMode = testId(page, 'factory-chart-mode').locator('button, label').filter({ hasText: '问答引导' }).first();
-  await guideMode.click({ timeout: remainingTimeout(deadline) });
-  const domain = String(item.candidate.domain || '');
-  const labels = testId(page, 'factory-chart-guide-domain').locator('label');
-  let found = false;
-  for (let index = 0; index < await labels.count(); index += 1) {
-    if (await labels.nth(index).locator('input').first().getAttribute('value') === domain) {
-      await labels.nth(index).click({ timeout: remainingTimeout(deadline) });
-      found = true;
-      break;
-    }
+  const familyRowId = `${String(item.candidate?.domain || '').trim()}:${item.familyId}`.replace(/^:/u, '');
+  const row = page.locator(`.family-row[data-family-id="${String(familyRowId).replace(/"/gu, '\\"')}"]`).first();
+  if (!await row.count()) throw new Error(`Catalogue family row missing: ${item.familyId}`);
+  const rows = page.locator('.family-row:visible');
+  for (let index = 0; index < await rows.count(); index += 1) {
+    const current = rows.nth(index);
+    const checked = current.locator('input[type="checkbox"]').first();
+    if (!await checked.count()) throw new Error(`Catalogue family checkbox missing: ${await current.getAttribute('data-family-id')}`);
+    const isTarget = (await current.getAttribute('data-family-id')) === familyRowId;
+    if ((await checked.isChecked()) !== isTarget) await current.locator('.el-checkbox').first().click({ timeout: remainingTimeout(deadline) });
   }
-  if (!found) throw new Error(`Catalogue domain control missing: ${domain}`);
-  const scopedGroups = allGroups.filter((group) => group.candidates[0]?.domain === domain);
-  const index = scopedGroups.findIndex((group) => group.familyId === item.familyId);
-  if (index < 0) throw new Error(`Catalogue family missing from domain: ${item.familyId}`);
-  await testId(page, 'factory-chart-guide-topic').click({ timeout: remainingTimeout(deadline) });
-  const options = page.locator('.el-select-dropdown__item:visible');
+  const control = row.locator('.el-select, .el-select-v2').first();
+  if (!await control.count()) throw new Error(`Catalogue family variant control missing: ${item.familyId}`);
+  const candidateIndex = allGroups.find((group) => group.familyId === item.familyId)?.candidates
+    .findIndex((candidate) => String(candidate?.id) === String(item.candidate.id));
+  if (!Number.isInteger(candidateIndex) || candidateIndex < 0) throw new Error(`Catalogue candidate missing from family order: ${item.candidate.id}`);
+  await control.click({ timeout: remainingTimeout(deadline) });
+  const options = page.locator('.el-select-dropdown__item:visible, [role="option"]:visible');
   await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
-  if (await options.count() !== scopedGroups.length + 1) throw new Error(`Catalogue topic identities drifted: actual ${await options.count()}, expected ${scopedGroups.length + 1}`);
-  const option = options.nth(index + 1);
-  if (!(await option.innerText()).includes(item.familyLabel)) throw new Error('Catalogue topic label drifted');
+  if (await options.count() <= candidateIndex) throw new Error(`Catalogue variant options drifted for ${item.familyId}`);
+  const option = options.nth(candidateIndex);
+  const optionValue = await option.getAttribute('value') || await option.getAttribute('data-value');
+  if (optionValue && optionValue !== String(item.candidate.id)) throw new Error(`Catalogue variant option ID drifted: ${optionValue}`);
   await option.click({ timeout: remainingTimeout(deadline) });
-  await testId(page, 'factory-chart-guide-generate').click({ timeout: remainingTimeout(deadline) });
+  const targetCard = testId(page, `factory-chart-card-${item.candidate.id}`).first();
+  await targetCard.waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  const visibleCards = page.locator('[data-testid^="factory-chart-card-"]:visible');
+  if (await visibleCards.count() !== 1) throw new Error(`Catalogue selection rendered ${await visibleCards.count()} cards instead of one`);
   return true;
+}
+
+function validateCatalogSubjectId(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string' || !value.trim()) throw new Error('factoryCatalogSubjectId must be a non-empty subject ID');
+  return value.trim();
+}
+
+async function selectCatalogSubject(page, subjectId, initialData, deadline) {
+  const subjects = Array.isArray(initialData?.subjects) ? initialData.subjects : [];
+  const subject = subjects.find((entry) => String(entry?.id || '') === subjectId);
+  if (!subject || !String(subject.label || '').trim()) throw new Error(`Factory catalog subject is absent from initial response: ${subjectId}`);
+  const control = testId(page, 'factory-chart-guide-subject');
+  if (!await control.count()) throw new Error('Factory catalog subject control missing');
+  const input = control.locator('input').first();
+  if (!await input.count()) throw new Error('Factory catalog subject filter input missing');
+  await input.click({ timeout: remainingTimeout(deadline) });
+  await input.fill(String(subject.label), { timeout: remainingTimeout(deadline) });
+  const options = page.locator('[role="option"]:visible');
+  await options.first().waitFor({ state: 'visible', timeout: remainingTimeout(deadline) });
+  const exactOptions = options.filter({ hasText: String(subject.label) });
+  const matching = [];
+  for (let index = 0; index < await exactOptions.count(); index += 1) {
+    if ((await exactOptions.nth(index).innerText()).trim() === String(subject.label)) matching.push(exactOptions.nth(index));
+  }
+  if (matching.length !== 1) throw new Error(`Factory catalog subject option is not unique: ${subject.label}`);
+  const option = matching[0];
+  const responsePromise = waitResponse(page, isRecommendationsResponse, deadline);
+  await option.click({ timeout: remainingTimeout(deadline) });
+  const response = await responsePromise;
+  const body = await responseBody(response);
+  const request = requestBody(response);
+  if (request.analysis_subject !== subjectId || body?.data?.analysisSubject !== subjectId) {
+    throw new Error(`Factory catalog subject scope drifted: ${subjectId}`);
+  }
+  return response;
+}
+
+async function captureCardScreenshot(card, inspectCtx, candidateId, batchNumber) {
+  if (!inspectCtx.evidenceDir || !card) return null;
+  const safeId = String(candidateId).replace(/[^A-Za-z0-9._-]+/gu, '-').slice(0, 90) || 'candidate';
+  const target = `${String(inspectCtx.evidenceDir).replace(/[\\/]+$/u, '')}/factory-catalog-batch-${batchNumber}-${safeId}-card.png`;
+  const originalViewport = card.page().viewportSize();
+  try {
+    const box = await card.boundingBox();
+    if (!box) return null;
+    const width = originalViewport?.width || 1280;
+    const height = Math.max(originalViewport?.height || 720, Math.ceil(box.height + 320));
+    if (originalViewport) await card.page().setViewportSize({ width, height });
+    await card.evaluate((element) => element.scrollIntoView({ block: 'start', inline: 'nearest' }));
+    await card.page().evaluate(() => window.scrollBy(0, -320));
+    await card.page().waitForTimeout(100);
+    await card.screenshot({ path: target });
+    return target;
+  } catch { return null; }
+  finally {
+    if (originalViewport) await card.page().setViewportSize(originalViewport).catch(() => {});
+  }
 }
 
 async function inspectCatalog(page, _body, inspectCtx) {
@@ -349,7 +593,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
   const startedAt = Date.now();
   const deadline = startedAt + TOTAL_TIMEOUT_MS;
   const optionValue = inspectCtx.factoryCatalogFamilies || inspectCtx.options?.factoryCatalogFamilies;
+  const candidateOptionValue = inspectCtx.factoryCatalogCandidateIds || inspectCtx.options?.factoryCatalogCandidateIds;
+  const subjectId = validateCatalogSubjectId(inspectCtx.factoryCatalogSubjectId || inspectCtx.options?.factoryCatalogSubjectId);
   const requestedFamilies = validateCatalogFamilies(optionValue);
+  const requestedCandidateIds = validateCatalogCandidateIds(candidateOptionValue);
   const ui = { browseVisible: false, missing: false, httpFailure: false };
 
   await testId(page, 'factory-chart-guide').waitFor({ state: 'visible', timeout: remainingTimeout(deadline) }).catch(() => {});
@@ -361,9 +608,13 @@ async function inspectCatalog(page, _body, inspectCtx) {
     recommendationResponse = await pending;
   }
   if (!recommendationResponse) ui.httpFailure = true;
-  const body = await responseBody(recommendationResponse);
+  let body = await responseBody(recommendationResponse);
+  if (subjectId) {
+    recommendationResponse = await selectCatalogSubject(page, subjectId, body?.data || {}, deadline);
+    body = await responseBody(recommendationResponse);
+  }
   const data = body?.data || {};
-  const selected = selectCatalogCandidates(data, requestedFamilies);
+  const selected = selectCatalogCandidates(data, requestedFamilies, requestedCandidateIds);
   const allGroups = groupCandidates(data.recommendations);
   const browse = await chooseBrowseMode(page, deadline).catch(() => false);
   ui.browseVisible = browse;
@@ -388,7 +639,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
   }));
   const exports = [];
   const screenshots = [];
-  const processedFamilyIds = new Set();
+  const processedCandidateIds = new Set();
   const batches = [];
   for (const item of selected.selected) {
     batches.push([item]);
@@ -414,7 +665,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
         filenames: [],
         exportCoverage: [],
         http: { recommendation: recommendationResponse?.status() || null, detail: null, exports: {} },
-        checks: { familySelected: false, cardRendered: false, chartRendered: false, unitAligned: false, factsPresent: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
+        checks: { familySelected: false, cardRendered: false, chartRendered: false, unitAligned: false, factsPresent: false, anomalyEvidence: false, detailHttp: false, detailScope: false, detailRows: false, exportAtLeastOne: false },
         checkFailures: [],
         status: 'UNVERIFIED',
         batch: batchNumber,
@@ -422,7 +673,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
       summary.checks.unitAligned = candidateUnitsAligned(candidate);
       const purchasePrice = purchasePriceEvidence(candidate);
       summary.purchasePrice = purchasePrice;
-      summary.checks.factsPresent = summary.facts.length > 0 || Boolean(purchasePrice);
+      const anomalyProof = anomalyEvidence(candidate);
+      summary.anomalyEvidence = anomalyProof;
+      summary.checks.anomalyEvidence = familyOf(candidate) !== 'production.anomaly' || Boolean(anomalyProof);
+      summary.checks.factsPresent = factsPresent(candidate);
       summary.checks.priceEvidence = familyOf(candidate) === 'purchase.price' ? Boolean(purchasePrice) : true;
       summary.checks.familySelected = await selectFamilyPreview(page, item, allGroups, deadline).catch((error) => {
         summary.selectionError = String(error?.message || error).slice(0, 500);
@@ -431,11 +685,12 @@ async function inspectCatalog(page, _body, inspectCtx) {
       if (!summary.checks.familySelected) {
         summary.checkFailures = ['familySelected'];
         families.push(summary);
-        processedFamilyIds.add(summary.familyId);
+        processedCandidateIds.add(summary.candidateId);
         ui.selectionFailure = true;
         selectionFailed = true;
         break;
       }
+      summary.checks.variantSelected = summary.checks.familySelected;
       const card = testId(page, `factory-chart-card-${candidate.id}`).first();
       summary.checks.cardRendered = await card.waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) }).then(() => true).catch(() => false);
       if (!summary.checks.cardRendered) {
@@ -450,6 +705,10 @@ async function inspectCatalog(page, _body, inspectCtx) {
           .first().waitFor({ state: 'visible', timeout: Math.min(5000, remainingTimeout(deadline)) })
           .then(() => true).catch(() => false);
       }
+      summary.cardScreenshot = summary.checks.chartRendered
+        ? await captureCardScreenshot(card, inspectCtx, candidate.id, batchNumber)
+        : null;
+      summary.checks.cardScreenshot = !inspectCtx.evidenceDir || Boolean(summary.cardScreenshot);
 
       if (summary.checks.cardRendered) {
     const detailsButton = card.getByRole('button', { name: '查看原始明细', exact: true }).first();
@@ -491,7 +750,7 @@ async function inspectCatalog(page, _body, inspectCtx) {
       family.checkFailures = checkFailures(family.checks);
       family.status = family.checkFailures.length ? 'UNVERIFIED' : 'PASS';
       families.push(family);
-      processedFamilyIds.add(family.familyId);
+      processedCandidateIds.add(family.candidateId);
     }
     if (batchFamilies.length && inspectCtx.screenshot) {
       screenshots.push(await inspectCtx.screenshot(`factory-catalog-batch-${batchNumber}`));
@@ -506,8 +765,9 @@ async function inspectCatalog(page, _body, inspectCtx) {
     source: item?.source || null,
     message: item?.message || null,
   })) : [];
-  const remainingFamilyCount = selected.selected.filter((item) => !processedFamilyIds.has(item.familyId)).length;
-  const assessment = assessCatalog({ families, requestedUnknown: selected.requestedUnknown, deferred: selected.deferred, excluded: selected.excluded, eligibilityGaps, sourceErrors, remainingFamilyCount, ui });
+  const remainingFamilyCount = selected.selected.filter((item) => !processedCandidateIds.has(item.candidate.id)).length;
+  const requestedUnknown = [...selected.requestedUnknown, ...selected.requestedCandidateUnknown.map((id) => `candidate:${id}`)];
+  const assessment = assessCatalog({ families, requestedUnknown, deferred: selected.deferred, excluded: selected.excluded, eligibilityGaps, sourceErrors, remainingFamilyCount, ui });
   return {
     assessment,
     ...assessment,
@@ -544,6 +804,9 @@ module.exports = {
   assessCatalog,
   candidateIsQualified,
   candidateUnitsAligned,
+  fusedCandidateUnitsAligned,
+  anomalyEvidence,
+  factsPresent,
   purchasePriceEvidence,
   familyOf,
   groupCandidates,
@@ -551,6 +814,8 @@ module.exports = {
   selectCatalogCandidates,
   summarizeExportIds,
   validateCatalogFamilies,
+  validateCatalogCandidateIds,
+  validateCatalogSubjectId,
   isRecommendationsResponse,
   isDetailsResponse,
   isExportResponse,

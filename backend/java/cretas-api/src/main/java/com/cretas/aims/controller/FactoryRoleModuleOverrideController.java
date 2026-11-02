@@ -46,6 +46,8 @@ public class FactoryRoleModuleOverrideController {
 
     private final FactoryModuleConfigRepository factoryConfigRepo;
     private final PermissionService permissionService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock platformWriteLock;
 
     @GetMapping
     @Operation(summary = "获取本工厂 role × module override (L2)")
@@ -65,6 +67,7 @@ public class FactoryRoleModuleOverrideController {
     @PutMapping("/{role}/{module}")
     @Operation(summary = "更新本工厂 override. level=null 清除回归全局默认")
     @RequirePermission({"system:read_write"})
+    @org.springframework.transaction.annotation.Transactional
     public ApiResponse<Void> update(
             @PathVariable String factoryId,
             @PathVariable String role,
@@ -83,12 +86,25 @@ public class FactoryRoleModuleOverrideController {
             throw new IllegalArgumentException("无效权限级别: " + level);
         }
 
+        if (platformWriteLock != null) platformWriteLock.lock(factoryId);
         // Find or create sentinel config row for overrides
         List<FactoryModuleConfig> configs = factoryConfigRepo.findByFactoryIdAndConfigVersion(factoryId, 1);
         FactoryModuleConfig target = configs.stream()
             .filter(c -> "__permissions__".equals(c.getModuleCode()))
             .findFirst()
             .orElse(null);
+
+        // Both management entries canonicalize one cell across legacy v1 rows.
+        for (FactoryModuleConfig row : configs) {
+            Map<String, Map<String,String>> cleaned = new HashMap<>();
+            if (row.getRoleModuleOverride() != null) row.getRoleModuleOverride().forEach((r, values) -> cleaned.put(r, new HashMap<>(values)));
+            if (cleaned.containsKey(role)) {
+                cleaned.get(role).remove(module);
+                if (cleaned.get(role).isEmpty()) cleaned.remove(role);
+            }
+            row.setRoleModuleOverride(cleaned);
+            factoryConfigRepo.save(row);
+        }
 
         if (target == null) {
             target = FactoryModuleConfig.builder()
@@ -136,6 +152,14 @@ public class FactoryRoleModuleOverrideController {
 
         if (permissionService instanceof PermissionServiceImpl) {
             ((PermissionServiceImpl) permissionService).invalidateCache();
+        }
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override public void afterCommit() {
+                        if (permissionService instanceof PermissionServiceImpl impl) impl.invalidateCache();
+                    }
+                });
         }
 
         return ApiResponse.success(null);

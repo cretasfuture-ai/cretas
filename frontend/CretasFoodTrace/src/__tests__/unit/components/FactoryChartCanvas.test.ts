@@ -78,7 +78,7 @@ describe('FactoryChartCanvas', () => {
   it('executes canonical formatters in the bounded HTML without eval', () => {
     let captured: Record<string, unknown> | undefined;
     const messages: string[] = [];
-    const html = buildFactoryChartHtml({ yAxis: { axisLabel: { formatter: '__FMT__thousands_sep' }, }, series: [{ label: { formatter: '__FMT__sankey_financial_tooltip' } }, { tooltip: { formatter: '__FMT__financial_rich_tooltip' } }] }, 'vm-nonce');
+    const html = buildFactoryChartHtml({ yAxis: { axisLabel: { formatter: '__FMT__thousands_sep' }, }, series: [{ label: { formatter: '__FMT__sankey_financial_tooltip' } }, { tooltip: { formatter: '__FMT__financial_rich_tooltip' } }, { label: { formatter: '__FMT__sankey_node_label' }, tooltip: { formatter: '__FMT__sankey_tooltip' } }] }, 'vm-nonce');
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
     const script = scripts[scripts.length - 1]?.[1];
     expect(script).toBeTruthy();
@@ -90,6 +90,16 @@ describe('FactoryChartCanvas', () => {
     const tooltip = ((captured!.series as Array<Record<string, unknown>>)[0]!.label as Record<string, unknown>).formatter as (value: unknown) => string;
     expect(tooltip({ dataType: 'edge', data: { source: '<来源>', target: '去向', value: 12345 }})).toContain('1.23万元');
     expect(tooltip({ dataType: 'edge', data: { source: '<script>', target: '去向', value: 1 }})).toContain('&lt;script&gt;');
+    const genericLabel = ((captured!.series as Array<Record<string, unknown>>)[2]!.label as Record<string, unknown>).formatter as (value: unknown) => string;
+    const genericTooltip = ((captured!.series as Array<Record<string, unknown>>)[2]!.tooltip as Record<string, unknown>).formatter as (value: unknown) => string;
+    expect(genericLabel({ name: '库存', value: 1234 })).toBe('库存\n1,234');
+    expect(genericLabel({ name: '无数量', value: undefined })).toBe('无数量');
+    expect(genericTooltip({ name: '<节点>', value: 0 })).toContain('&lt;节点&gt;');
+    expect(genericTooltip({ name: '<节点>', value: 0 })).toContain('数量: 0');
+    const genericEdge = genericTooltip({ dataType: 'edge', data: { source: '<来源>', target: '<去向>', value: undefined } });
+    expect(genericEdge).toContain('&lt;来源&gt; → &lt;去向&gt;');
+    expect(genericEdge).toContain('数量: -');
+    expect(genericTooltip({ dataType: 'edge', data: { source: '<来源>', target: '去向', value: 12.5 } })).toContain('数量: 12.5');
     const rich = ((captured!.series as Array<Record<string, unknown>>)[1]!.tooltip as Record<string, unknown>).formatter as (value: unknown) => string;
     const pie = rich({ componentType: 'series', seriesType: 'pie', seriesName: '费用构成', name: '<材料>', value: 12000, percent: 12.5, color: '#123456' });
     expect(pie).toContain('1.2万');

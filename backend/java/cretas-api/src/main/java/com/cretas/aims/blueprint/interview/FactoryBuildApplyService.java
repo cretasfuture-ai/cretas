@@ -85,6 +85,8 @@ import org.springframework.transaction.annotation.Transactional;
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @Service
 public class FactoryBuildApplyService {
+    @Autowired(required = false)
+    private com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock platformConfigurationWriteLock;
 
     @Autowired
     private CanonicalBlueprintActorAuthority canonicalActorAuthority;
@@ -263,6 +265,7 @@ public class FactoryBuildApplyService {
             throw new IllegalStateException("Canonical blueprint authority is not configured");
         }
         canonicalActorAuthority.requireAuthorized(factoryId, actor);
+        if (platformConfigurationWriteLock != null) platformConfigurationWriteLock.lock(factoryId);
         // 2. 全量校验(先于任何写入)
         List<String> problems = new ArrayList<>(validator.validateApplyRequest(request, factoryId));
         problems.addAll(explicitRouteApplyProblems(request));

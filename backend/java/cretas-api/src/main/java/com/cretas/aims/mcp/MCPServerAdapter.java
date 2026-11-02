@@ -42,6 +42,14 @@ import java.util.stream.Collectors;
 @ConditionalOnProperty(prefix = "cretas.mcp", name = "enabled", havingValue = "true")
 public class MCPServerAdapter {
 
+    /**
+     * S6 (2026-10-29): MCP runs tools as its configured user through the same permission chain as AI
+     * chat and Skills, so an MCP client never gets data that user could not read directly. Field-injected;
+     * absent → every call is refused.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.execution.ToolPermissionChain toolPermissionChain;
+
     private static final Set<String> MCP_IDENTITY_FIELDS = Set.of(
             "factoryid", "tenantid", "userid", "userrole");
 
@@ -235,6 +243,17 @@ public class MCPServerAdapter {
                 return ResponseEntity.status(403)
                         .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_REQUEST,
                                 "MCP Phase 0 only permits READ and ANALYZE tools"));
+            }
+
+            // Same permission chain as AI chat / Skills, for the configured MCP user.
+            Optional<String> permissionDenied = toolPermissionChain == null
+                    ? Optional.of("权限校验暂不可用，未执行任何操作。")
+                    : toolPermissionChain.denyReason(executor, principalFactoryId, principalUserRole, null,
+                            buildServerPrincipalContext());
+            if (permissionDenied.isPresent()) {
+                log.warn("MCP tools/call: 权限拒绝 - tool={}, userId={}", toolName, principalUserId);
+                return ResponseEntity.status(403)
+                        .body(MCPResponse.error(requestId, MCPProtocol.ERROR_INVALID_REQUEST, permissionDenied.get()));
             }
 
             // 构建 ToolCall 对象

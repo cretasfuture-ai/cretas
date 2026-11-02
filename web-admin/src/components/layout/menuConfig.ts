@@ -767,3 +767,23 @@ function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {
 }
 
 export const menuConfig: MenuItem[] = sortTopLevelMenu(rawMenuConfig);
+
+/**
+ * Platform operators have a separate daily workspace. Keep this list made
+ * from real platform routes; factory operations are intentionally not part of
+ * the platform sidebar. A factory read-only context switches back to the
+ * normal menu tree without changing the platform identity.
+ */
+export const platformMenuConfig: MenuItem[] = [
+  {
+    path: '/platform',
+    title: '平台管理',
+    icon: 'Setting',
+    module: 'system',
+    roles: ['platform_admin'],
+    children: [
+      { path: '/platform/factories', title: '工厂管理', icon: '', module: 'system', roles: ['platform_admin'] },
+      { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: ['platform_admin'] },
+    ],
+  },
+];

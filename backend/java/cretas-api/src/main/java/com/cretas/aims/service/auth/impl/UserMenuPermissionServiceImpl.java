@@ -65,6 +65,7 @@ public class UserMenuPermissionServiceImpl implements UserMenuPermissionService 
     @Override
     @Transactional
     public void clearUserOverride(String factoryId, String userId, String menuCode) {
+        rejectPlatformNamespace(menuCode);
         repository.deleteByFactoryIdAndUserIdAndMenuCode(factoryId, userId, menuCode);
         log.info("[P0-6] 清除用户菜单覆盖 factory={} user={} menu={}", factoryId, userId, menuCode);
     }
@@ -77,6 +78,7 @@ public class UserMenuPermissionServiceImpl implements UserMenuPermissionService 
 
     private UserMenuPermission upsert(String factoryId, String userId, String menuCode,
                                        GrantType type, String grantedBy, String remark) {
+        rejectPlatformNamespace(menuCode);
         UserMenuPermission entity = repository
                 .findByFactoryIdAndUserIdAndMenuCode(factoryId, userId, menuCode)
                 .orElseGet(UserMenuPermission::new);
@@ -90,5 +92,11 @@ public class UserMenuPermissionServiceImpl implements UserMenuPermissionService 
         log.info("[P0-6] 用户菜单覆盖 upsert factory={} user={} menu={} type={} by={}",
                 factoryId, userId, menuCode, type, grantedBy);
         return saved;
+    }
+
+    private void rejectPlatformNamespace(String code) {
+        if (code != null && code.startsWith(com.cretas.aims.service.platform.PlatformEmployeeModulePermissions.PREFIX)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "员工业务权限只能在平台工厂管理中调整");
+        }
     }
 }

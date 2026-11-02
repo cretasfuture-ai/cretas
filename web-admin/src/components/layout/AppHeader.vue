@@ -3,8 +3,9 @@ import { computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import { ElMessageBox, ElMessage } from 'element-plus';
-import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny } from '@element-plus/icons-vue';
+import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny, Box, ArrowLeft } from '@element-plus/icons-vue';
 import ReminderBell from '@/components/notifications/ReminderBell.vue';
 import AlertNotificationBell from '@/components/notifications/AlertNotificationBell.vue';
 
@@ -12,6 +13,7 @@ const router = useRouter();
 const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
+const factoryView = usePlatformFactoryContextStore();
 
 // 面包屑
 //
@@ -58,6 +60,11 @@ function handleRefresh() {
   router.go(0);
 }
 
+function returnToPlatform(): void {
+  factoryView.leaveFactoryView();
+  void router.push('/platform/factories');
+}
+
 // 退出登录
 async function handleLogout() {
   try {
@@ -77,7 +84,7 @@ async function handleLogout() {
 </script>
 
 <template>
-  <header class="app-header">
+  <header class="app-header" :class="{ 'is-factory-view': factoryView.isViewingFactory }">
     <div class="header-left">
       <!-- 折叠/汉堡按钮 -->
       <el-icon class="collapse-btn" @click="toggleSidebar">
@@ -98,6 +105,14 @@ async function handleLogout() {
     </div>
 
     <div class="header-right">
+      <div v-if="factoryView.isViewingFactory" class="factory-view-status" role="status">
+        <el-icon><Box /></el-icon>
+        <span><strong>{{ factoryView.factoryName }}</strong> · 只读查看</span>
+        <el-tag size="small" type="warning">平台身份保留</el-tag>
+        <el-button size="small" type="primary" plain @click="returnToPlatform">
+          <el-icon><ArrowLeft /></el-icon> 返回平台
+        </el-button>
+      </div>
       <!-- 暗色模式切换 -->
       <el-tooltip :content="appStore.theme === 'light' ? '暗色模式' : '亮色模式'" placement="bottom">
         <el-icon class="header-action" @click="appStore.toggleTheme()">
@@ -107,10 +122,10 @@ async function handleLogout() {
       </el-tooltip>
 
       <!-- 2026-07-11: 站内通知 bell (含餐饮经营体检预警/反回扣推送) -->
-      <AlertNotificationBell />
+      <AlertNotificationBell v-if="!factoryView.isViewingFactory" />
 
       <!-- Sprint 4 W2 S-REMIND-1: 我的提醒 bell badge -->
-      <ReminderBell />
+      <ReminderBell v-if="!factoryView.isViewingFactory" />
 
       <!-- 刷新按钮 -->
       <el-tooltip content="刷新页面" placement="bottom">
@@ -188,6 +203,21 @@ async function handleLogout() {
   align-items: center;
   gap: 16px;
 
+  .factory-view-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--el-color-warning-light-5, #f5dab1);
+    border-radius: 8px;
+    background: var(--el-color-warning-light-9, #fdf6ec);
+    color: var(--el-color-warning-dark-2, #8d5b13);
+    font-size: 13px;
+    white-space: nowrap;
+
+    strong { color: var(--el-text-color-primary, #1a2332); }
+  }
+
   .header-action {
     font-size: 18px;
     cursor: pointer;
@@ -253,6 +283,10 @@ async function handleLogout() {
   }
   .user-detail {
     display: none !important;
+  }
+  .factory-view-status span,
+  .factory-view-status .el-tag {
+    display: none;
   }
 }
 </style>

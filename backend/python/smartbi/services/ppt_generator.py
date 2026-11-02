@@ -2,8 +2,8 @@
 import base64
 import io
 import logging
+import re
 from typing import Dict, List, Optional
-from textwrap import wrap
 
 from smartbi.services.financial.export_conclusions import conclusion_rows
 from datetime import datetime
@@ -31,6 +31,96 @@ CHART_DISPLAY_NAMES = {
     "bullet_chart": "目标达成进度",
     "small_multiples": "多维度对比矩阵",
 }
+
+
+_PPT_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*|[^\x00-\x7F]|[^\r\n]")
+
+
+def _ppt_token_units(token: str) -> int:
+    """Return the display width used by the PPT wrapping policy."""
+    if token.isspace():
+        return len(token)
+    if token.isascii():
+        return len(token)
+    return sum(2 if ord(char) > 127 else 1 for char in token)
+
+
+def _is_single_cjk_token(token: str) -> bool:
+    """Whether ``token`` is one CJK ideograph that can move as a whole."""
+    if len(token) != 1:
+        return False
+    codepoint = ord(token)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x2FA1F
+    )
+
+
+def _rebalance_ppt_tail(lines: List[str], max_units: int) -> None:
+    """Avoid a visually orphaned final CJK character without splitting tokens.
+
+    This only rebalances the final two lines of one explicit paragraph.  A
+    whole CJK token is moved from the preceding line, so ASCII identifiers
+    (for example ``sales_order_item_id``) are never split or rewritten.
+    """
+    if len(lines) < 2 or not _is_single_cjk_token(lines[-1]):
+        return
+
+    previous = lines[-2]
+    previous_tokens = _PPT_TOKEN_RE.findall(previous)
+    if not previous_tokens or not _is_single_cjk_token(previous_tokens[-1]):
+        return
+
+    moved_token = previous_tokens[-1]
+    candidate_previous = previous[:-len(moved_token)]
+    if not candidate_previous:
+        return
+
+    candidate_tail = moved_token + lines[-1]
+    if _ppt_token_units(candidate_tail) > max_units:
+        return
+
+    lines[-2:] = [candidate_previous, candidate_tail]
+
+
+def _wrap_for_ppt(text: str, max_units: int = 46) -> List[str]:
+    """Wrap mixed Chinese/ASCII text without splitting identifiers or facts.
+
+    ``textwrap.wrap`` treats an identifier such as ``AVAILABLE`` as a long
+    word and, by default, splits it at the page boundary.  Tokenizing ASCII
+    identifiers separately lets Chinese prose wrap character-by-character
+    while keeping source names, status values, and units intact.
+    """
+    lines: List[str] = []
+    for paragraph in str(text).splitlines() or ['']:
+        tokens = _PPT_TOKEN_RE.findall(paragraph)
+        paragraph_lines: List[str] = []
+        current: List[str] = []
+        units = 0
+        for token in tokens:
+            token_units = _ppt_token_units(token)
+            if current and units + token_units > max_units:
+                paragraph_lines.append(''.join(current).rstrip())
+                current = []
+                units = 0
+                if token.isspace():
+                    continue
+            if not current and token.isspace():
+                continue
+            # Keep an unusually long identifier whole; splitting it would
+            # make a source/status fact unsearchable in the generated deck.
+            current.append(token)
+            units += token_units
+        paragraph_lines.append(''.join(current).rstrip())
+        # The narrow analysis pages are the only layout that needs this
+        # cosmetic tail balance; keep the full-width conclusion wrapping
+        # unchanged.
+        if max_units == 46:
+            _rebalance_ppt_tail(paragraph_lines, max_units)
+        lines.extend(paragraph_lines)
+    return lines
 
 
 class FinancialPPTGenerator:
@@ -94,7 +184,12 @@ class FinancialPPTGenerator:
         lines = []
         for title, text in rows:
             for paragraph in f"{title}：{text}".splitlines():
-                lines.extend(wrap(paragraph, width=46) or [''])
+                # Conclusions are rendered in a full-width 12-inch text box.
+                # Keep the historical ~46-character line capacity (about 92
+                # mixed-width units) so a short visible fact remains
+                # searchable as one phrase; provenance/analysis panels retain
+                # the narrower source-safe wrapping below.
+                lines.extend(_wrap_for_ppt(paragraph, max_units=92) or [''])
             lines.append('')
         for start in range(0, len(lines), 15):
             slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -161,7 +256,7 @@ class FinancialPPTGenerator:
                 # line on dedicated pages instead of truncating a narrow panel.
                 lines = []
                 for paragraph in analysis.splitlines():
-                    lines.extend(wrap(paragraph, width=46) or [''])
+                    lines.extend(_wrap_for_ppt(paragraph) or [''])
                 for start in range(0, len(lines), 15):
                     page = prs.slides.add_slide(prs.slide_layouts[6])
                     self._add_text(page, display_name + ' · 规则分析与来源', Inches(.5), Inches(.3), Inches(12), Inches(.7),

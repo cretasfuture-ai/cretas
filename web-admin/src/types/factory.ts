@@ -16,6 +16,7 @@ export interface ModuleConfigDetail {
   analysisDimensions?: string[];
   disabledScreens?: string[];
   disabledReports?: string[];
+  disabledMenuPaths?: string[];
   quickActions?: string[];
   benchmarks?: Record<string, number>;
   priority?: number;

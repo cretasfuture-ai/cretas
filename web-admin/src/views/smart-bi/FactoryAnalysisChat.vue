@@ -22,6 +22,7 @@ import FactoryChartDetails from './FactoryChartDetails.vue';
 import type { FactoryDetailRefreshScope } from './factoryChartDetailRefresh';
 import { sameJointUploads, validJointUploads } from './factoryJointUploads';
 import { buildFactoryChartExportPayload, captureFactoryChartImages, downloadFactoryChartExport } from './factoryChartExport';
+import { chartTypeNames } from './factoryChartGuide';
 
 interface ChatTurn {
   id: string;
@@ -163,9 +164,12 @@ let identityLoadScheduled = false;
 const filteredCatalog = computed(() => {
   const needle = catalogSearch.value.trim().toLocaleLowerCase();
   if (!needle) return catalog.value;
-  return catalog.value.filter(item => [item.id, item.familyId, item.chartType, item.domain, item.metric, item.unit, item.sourceKey]
+  return catalog.value.filter(item => [item.familyLabel, chartTypeNames[item.chartType], item.domain, item.unit]
     .some(value => String(value || '').toLocaleLowerCase().includes(needle)));
 });
+function catalogChartTypeLabel(chartType: string): string {
+  return chartTypeNames[chartType] || '图表类型未提供';
+}
 const sourceLabel = computed(() => source.value === 'business' ? '业务系统' : '上传报表');
 const selectedJointUploads = computed<FactoryJointUploads | null>(() => {
   const value = { inspectionUploadId: inspectionUploadId.value, costUploadId: costUploadId.value };
@@ -719,7 +723,7 @@ onBeforeUnmount(() => { requestVersion.value += 1; clearChartReadiness(); });
 
     <el-card shadow="never" class="catalog-card">
       <div class="catalog-header"><strong>当前授权图表目录</strong><span>{{ catalog.length }} 类候选（回答最多 4 个不同分析族）</span><el-button text @click="catalogOpen = !catalogOpen">{{ catalogOpen ? '收起目录' : '展开目录' }}</el-button></div>
-      <div v-if="catalogOpen"><el-input v-model="catalogSearch" clearable :prefix-icon="Search" placeholder="搜索分析主题、指标、单位或画法" aria-label="搜索授权图表目录" /><div class="catalog-list"><div v-for="item in filteredCatalog" :key="item.id" class="catalog-item"><strong>{{ item.metric || item.id }}</strong><span>{{ item.domain }} · {{ item.chartType }} · {{ item.unit || '单位未提供' }}</span><small>{{ item.familyId }}</small></div><el-empty v-if="!filteredCatalog.length" description="没有匹配的授权候选" :image-size="50" /></div></div>
+      <div v-if="catalogOpen"><el-input v-model="catalogSearch" clearable :prefix-icon="Search" placeholder="搜索分析主题、领域、画法或单位" aria-label="搜索授权图表目录" /><div class="catalog-list"><div v-for="item in filteredCatalog" :key="item.id" class="catalog-item"><strong>{{ item.familyLabel?.trim() || '分析主题未提供' }}</strong><span>{{ item.domain || '领域未提供' }} · {{ catalogChartTypeLabel(item.chartType) }} · {{ item.unit || '单位未提供' }}</span></div><el-empty v-if="!filteredCatalog.length" description="没有匹配的授权候选" :image-size="50" /></div></div>
     </el-card>
 
     <form class="composer" @submit.prevent="sendQuestion()">

@@ -86,6 +86,7 @@ import {
   AxisPointerComponent,
   PolarComponent,
 } from 'echarts/components'
+import { LabelLayout } from 'echarts/features'
 
 // ---- Renderers ----
 import { CanvasRenderer, SVGRenderer } from 'echarts/renderers'
@@ -124,6 +125,7 @@ echarts.use([
   DataZoomComponent, ToolboxComponent, MarkLineComponent, MarkPointComponent, MarkAreaComponent,
   VisualMapComponent, GeoComponent, GraphicComponent, DatasetComponent,
   TransformComponent, ParallelComponent, AxisPointerComponent, PolarComponent,
+  LabelLayout,
   // renderers
   CanvasRenderer, SVGRenderer,
 ])

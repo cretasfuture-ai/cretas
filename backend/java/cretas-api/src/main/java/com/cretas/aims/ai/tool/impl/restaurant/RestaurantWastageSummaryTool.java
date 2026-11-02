@@ -183,4 +183,13 @@ public class RestaurantWastageSummaryTool extends AbstractBusinessTool {
                     "当前可通过「食材库存」查看过期食材情况。", null);
         }
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29): the AI / Skill path admits exactly who the direct API admits
+     * for the same data; pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read");
+    }
 }

@@ -406,6 +406,12 @@ async def test_external_task_cancellation_propagates_without_timeout_reclassific
 @pytest.mark.asyncio
 async def test_python38_timeout_fallback_preserves_success(monkeypatch):
     monkeypatch.delattr(asyncio, "timeout_at", raising=False)
+    loop = asyncio.get_running_loop()
+    frozen_loop_time = loop.time()
+    # This case verifies the compatibility success path, not hosted-runner
+    # scheduling latency. Timeout and cancellation behavior have dedicated
+    # real-clock tests below, so keep this path deterministically pre-deadline.
+    monkeypatch.setattr(loop, "time", lambda: frozen_loop_time)
 
     async def adapter(bound_pool, trusted, parameters, descriptor):
         await asyncio.sleep(0)

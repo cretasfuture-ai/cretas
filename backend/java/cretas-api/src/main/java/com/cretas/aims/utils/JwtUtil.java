@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
+import javax.crypto.Mac;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
@@ -53,6 +54,33 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
+    /** Old releases cannot validate these credentials as unrestricted platform JWTs. */
+    private SecretKey getFactoryViewSigningKey() {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(getSigningKey());
+            return Keys.hmacShaKeyFor(mac.doFinal("cretas-platform-factory-view-v1".getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.GeneralSecurityException error) {
+            throw new IllegalStateException("Unable to derive platform factory-view key", error);
+        }
+    }
+
+    private Claims parseVerifiedClaims(String token) {
+        try {
+            Claims claims = Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(token).getBody();
+            if (hasViewMarker(claims)) throw new SignatureException("Factory view requires its dedicated signing key");
+            return claims;
+        } catch (SignatureException ordinarySignatureMismatch) {
+            Claims claims = Jwts.parserBuilder().setSigningKey(getFactoryViewSigningKey()).build().parseClaimsJws(token).getBody();
+            if (!Boolean.TRUE.equals(claims.get("platformFactoryView"))) throw new SignatureException("Missing factory-view marker");
+            return claims;
+        }
+    }
+
+    private static boolean hasViewMarker(Map<String, ?> claims) {
+        return claims.containsKey("platformFactoryView") || claims.containsKey("viewFactoryId") || claims.containsKey("viewReadOnly");
+    }
+
     /**
      * 生成Token（包含角色信息）
      */
@@ -88,6 +116,20 @@ public class JwtUtil {
         claims.put("role", role);
         claims.put("actorType", "PLATFORM_ADMIN");
         return createToken(claims, username);
+    }
+
+    /** Short-lived platform identity scoped to a read-only factory view. */
+    public String generatePlatformFactoryViewToken(Long id, String username, String role, String factoryId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("userId", id);
+        claims.put("factoryId", "PLATFORM");
+        claims.put("username", username);
+        claims.put("role", role);
+        claims.put("actorType", "PLATFORM_ADMIN");
+        claims.put("platformFactoryView", true);
+        claims.put("viewFactoryId", factoryId);
+        claims.put("viewReadOnly", true);
+        return createToken(claims, username, 900_000L);
     }
 
     public boolean isExplicitPlatformToken(String token) {
@@ -128,16 +170,57 @@ public class JwtUtil {
     }
 
     private String createToken(Map<String, Object> claims, String subject) {
+        return createToken(claims, subject, expiration);
+    }
+
+    private String createToken(Map<String, Object> claims, String subject, long ttlMillis) {
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + expiration);
+        Date expiryDate = new Date(now.getTime() + ttlMillis);
         return Jwts.builder()
                 .setClaims(claims)
                 .setId(UUID.randomUUID().toString())
                 .setSubject(subject)
                 .setIssuedAt(now)
                 .setExpiration(expiryDate)
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .signWith(hasViewMarker(claims) ? getFactoryViewSigningKey() : getSigningKey(), SignatureAlgorithm.HS256)
                 .compact();
+    }
+
+    public boolean isPlatformFactoryViewToken(String token) {
+        Claims claims = getClaimsFromToken(token);
+        if (claims == null) return false;
+        try {
+            Date issued = claims.getIssuedAt();
+            Date expires = claims.getExpiration();
+            Object target = claims.get("viewFactoryId");
+            Object role = claims.get("role");
+            Long actorId = getUserIdFromToken(token);
+            return Boolean.TRUE.equals(claims.get("platformFactoryView"))
+                    && Boolean.TRUE.equals(claims.get("viewReadOnly"))
+                    && "PLATFORM".equals(claims.get("factoryId"))
+                    && "PLATFORM_ADMIN".equals(claims.get("actorType"))
+                    && ("super_admin".equals(role) || "platform_admin".equals(role))
+                    && actorId != null && actorId > 0
+                    && target instanceof String factory && factory.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
+                    && issued != null && expires != null
+                    && expires.after(issued) && expires.getTime() - issued.getTime() <= 900_000L
+                    && issued.getTime() <= System.currentTimeMillis() + 30_000L;
+        } catch (RuntimeException invalidClaims) {
+            return false;
+        }
+    }
+
+    /** Detects a signed view marker, including incomplete or malformed marker combinations. */
+    public boolean hasPlatformFactoryViewMarker(String token) {
+        Claims claims = getClaimsFromToken(token);
+        return claims != null && (claims.containsKey("platformFactoryView")
+                || claims.containsKey("viewFactoryId")
+                || claims.containsKey("viewReadOnly"));
+    }
+
+    public String getViewFactoryIdFromToken(String token) {
+        Claims claims = getClaimsFromToken(token);
+        return claims == null ? null : claims.get("viewFactoryId", String.class);
     }
 
     /**
@@ -153,10 +236,7 @@ public class JwtUtil {
             return false;
         }
         try {
-            Jwts.parserBuilder()
-                    .setSigningKey(getSigningKey())
-                    .build()
-                    .parseClaimsJws(token);
+            parseVerifiedClaims(token);
             return true;
         } catch (ExpiredJwtException e) {
             // Expected — access tokens expire after 24h, refresh after 7d.
@@ -191,11 +271,7 @@ public class JwtUtil {
             return null;
         }
         try {
-            return Jwts.parserBuilder()
-                    .setSigningKey(getSigningKey())
-                    .build()
-                    .parseClaimsJws(token)
-                    .getBody();
+            return parseVerifiedClaims(token);
         } catch (ExpiredJwtException e) {
             log.debug("Token 已过期, 无法解析 Claims (预期): {}", e.getMessage());
             return null;

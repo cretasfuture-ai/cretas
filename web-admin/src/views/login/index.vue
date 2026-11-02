@@ -43,7 +43,11 @@ async function handleLogin() {
 
         // 跳转到原页面或首页
         const redirect = route.query.redirect as string;
-        router.push(redirect || '/dashboard');
+        const platformRedirectAllowed = !authStore.isPlatform || ['/platform/factories', '/system/llm-usage']
+          .some((path) => redirect === path || redirect?.startsWith(`${path}/`));
+        router.push(authStore.isPlatform && !platformRedirectAllowed
+          ? '/platform/factories'
+          : (redirect || (authStore.isPlatform ? '/platform/factories' : '/dashboard')));
       }
       // R18-ext fix #280: do not show a hardcoded "用户名或密码错误" on failure.
       // The response interceptor already surfaces the server's actual message

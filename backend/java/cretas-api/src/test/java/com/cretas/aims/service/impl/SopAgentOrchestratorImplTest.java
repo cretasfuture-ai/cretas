@@ -162,4 +162,61 @@ class SopAgentOrchestratorImplTest {
         boolean result = evaluateCondition("#nonExistent.field == 'x'", ctx);
         assertFalse(result, "未知字段不应抛异常, 仅返 false 让 rule 不 match");
     }
+
+    // ==================== S6 (2026-10-29): SOP chain steps go through the permission chain ====================
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("SOP 工具链: 每一步按上传人当前权限过同一条权限链; 无执行人 / 别厂账号 / 被拒 → 不执行")
+    void eachSopChainStepIsCheckedAsTheUploaderAndDeniedStepsNeverRun() throws Exception {
+        com.cretas.aims.repository.smartbi.AiAgentRuleRepository rules =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.smartbi.AiAgentRuleRepository.class);
+        com.cretas.aims.ai.tool.ToolRegistry registry = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRegistry.class);
+        com.cretas.aims.ai.tool.ToolExecutor tool = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolExecutor.class);
+        org.mockito.Mockito.when(tool.execute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap()))
+                .thenReturn("{\"success\":true}");
+        org.mockito.Mockito.when(registry.getExecutor("balance_sheet_query")).thenReturn(java.util.Optional.of(tool));
+        com.cretas.aims.entity.smartbi.AiAgentRule rule = new com.cretas.aims.entity.smartbi.AiAgentRule();
+        rule.setToolChainConfig("{\"tools\":[{\"toolName\":\"balance_sheet_query\",\"paramsMapping\":{}}]}");
+        org.mockito.Mockito.when(rules.findById("r1")).thenReturn(java.util.Optional.of(rule));
+        com.cretas.aims.repository.UserRepository users = org.mockito.Mockito.mock(com.cretas.aims.repository.UserRepository.class);
+        com.cretas.aims.entity.User uploader = new com.cretas.aims.entity.User();
+        uploader.setId(7L);
+        uploader.setFactoryId("F006");
+        uploader.setRoleCode("production_manager");
+        uploader.setIsActive(true);
+        org.mockito.Mockito.when(users.findById(7L)).thenReturn(java.util.Optional.of(uploader));
+        com.cretas.aims.service.execution.ToolPermissionChain chain =
+                org.mockito.Mockito.mock(com.cretas.aims.service.execution.ToolPermissionChain.class);
+        org.mockito.Mockito.when(chain.denyReason(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap()))
+                .thenReturn(java.util.Optional.of("无权查看"));
+        for (String[] field : new String[][]{{"ruleRepository"}, {"toolRegistry"}, {"toolPermissionChain"}, {"userRepository"}}) {
+            Field f = SopAgentOrchestratorImpl.class.getDeclaredField(field[0]);
+            f.setAccessible(true);
+            f.set(orchestrator, switch (field[0]) {
+                case "ruleRepository" -> rules;
+                case "toolRegistry" -> registry;
+                case "toolPermissionChain" -> chain;
+                default -> users;
+            });
+        }
+
+        Map<String, Object> denied = orchestrator.executeRuleToolChain("r1",
+                new HashMap<>(Map.of("factoryId", "F006", "uploadedBy", 7L)));
+        Map<String, Object> noUser = orchestrator.executeRuleToolChain("r1", new HashMap<>(Map.of("factoryId", "F006")));
+        Map<String, Object> otherFactory = orchestrator.executeRuleToolChain("r1",
+                new HashMap<>(Map.of("factoryId", "F999", "uploadedBy", 7L)));
+        assertFalse((Boolean) denied.get("success"));
+        assertFalse((Boolean) noUser.get("success"));
+        assertFalse((Boolean) otherFactory.get("success"));
+        org.mockito.Mockito.verify(tool, org.mockito.Mockito.never())
+                .execute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap());
+
+        // Positive control: the same step runs once the chain admits the uploader.
+        org.mockito.Mockito.when(chain.denyReason(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap()))
+                .thenReturn(java.util.Optional.empty());
+        orchestrator.executeRuleToolChain("r1", new HashMap<>(Map.of("factoryId", "F006", "uploadedBy", 7L)));
+        org.mockito.Mockito.verify(tool).execute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap());
+    }
 }

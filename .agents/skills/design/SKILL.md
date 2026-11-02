@@ -15,7 +15,17 @@ description: "统一设计 Skill — 智能路由到正确的设计工作流。�
 | "做一个landing page"、"展示页"、"海报"、"酷一点" | 强调视觉/创意/独立页 | **→ 创意设计** |
 | "照着这个截图做"、"参考这个设计" | 提供了截图/参考图 | **→ 截图提取** (调 `ui-designer` 插件) |
 | "审查UI"、"检查设计"、"accessibility" | 审查/检查类动词 | **→ UI审查** (调 `web-design-guidelines`) |
+| "侧栏收起"、"图标与文字切换"、"菜单淡出" | 导航折叠过渡 | **→ 菜单文字过渡** (下节) |
 | 不确定 | — | 问用户："你要做业务页面还是创意展示页？" |
+
+---
+
+## 菜单文字过渡
+
+- 展开/收起时显式动画 `opacity`，配合受限宽度、`min-width: 0`、`overflow: hidden`、`white-space: nowrap`；图标 `flex-shrink: 0`，主内容偏移与侧栏宽度使用相同曲线/时长。
+- `transition-behavior: allow-discrete` 只允许离散属性参与 transition，**不会因空间不足自动淡出**。实际切换 `display` 时才将其列入 transition，并按需加 `@starting-style`；保留节点时用 opacity 和延迟 visibility 即可兼容。
+- 先检查组件库行为：Element Plus collapse 会立即把叶子 title 移入 tooltip，`v-if` 也会卸载节点。保留文字至淡出结束，快速反向时取消延迟、卸载时清理；仅覆盖根菜单，不污染传送到侧栏外的子菜单。
+- logo、分组、角标和箭头同步检查；图标态保留可访问名称/tooltip。用真实中间帧证明 opacity 在 0 与 1 之间，验证快速反向、窄屏和手机抽屉，遵守系统与产品的减少动效设置。
 
 ---
 

@@ -128,4 +128,13 @@ public class AttendanceDepartmentTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29): the AI / Skill path admits exactly who the direct API admits
+     * for the same data; pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("hr:read", "hr:read_write");
+    }
 }

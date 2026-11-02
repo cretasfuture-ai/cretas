@@ -89,6 +89,9 @@ public class SkillResult {
      */
     private String runId;
 
+    /** True when the Skill was refused because the caller lacks a permission one of its tools needs (→ 403). */
+    private boolean permissionDenied;
+
     /**
      * 创建成功结果
      *

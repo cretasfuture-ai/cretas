@@ -102,13 +102,11 @@ class QualityInspectorApiClient {
     keyword?: string;
   }): Promise<QIPagedResponse<QIBatch>> {
     const response = await apiClient.get<QIApiResponse<QIPagedResponse<QIBatch>>>(
-      `${this.getBasePath()}/processing/batches`,
+      `${this.getBasePath()}/processing/batches/quality-pending`,
       {
         params: {
           page: params?.page ?? 1,
           size: params?.size ?? 20,
-          status: params?.status ?? 'COMPLETED',
-          keyword: params?.keyword,
         },
       }
     );
@@ -209,14 +207,21 @@ class QualityInspectorApiClient {
    */
   private mapInspectionToRecord(raw: Record<string, unknown>): QualityRecord {
     const passRate = Number(raw.passRate ?? 0);
-    const rawResult = String(raw.result ?? '').toUpperCase();
+    const rawResult = String(raw.result ?? '').trim().toUpperCase();
     const result: QualityRecord['result'] = ['PASS', 'PASSED', 'QUALIFIED'].includes(rawResult)
       ? 'PASS'
       : rawResult === 'CONDITIONAL'
         ? 'CONDITIONAL'
         : rawResult === 'PENDING'
           ? 'PENDING'
-          : 'FAIL';
+          : rawResult === 'FAIL' || rawResult === 'FAILED'
+            ? 'FAIL'
+            : 'UNKNOWN';
+    const rawGrade = String(raw.qualityGrade ?? '').trim().toUpperCase();
+    const grade: QualityRecord['grade'] = ['A', 'B', 'C', 'D'].includes(rawGrade)
+      && result !== 'PENDING' && result !== 'UNKNOWN'
+      ? rawGrade as QualityRecord['grade']
+      : 'UNKNOWN';
     const customFields = raw.customFields && typeof raw.customFields === 'object'
       ? raw.customFields as Record<string, unknown>
       : {};
@@ -248,7 +253,7 @@ class QualityInspectorApiClient {
       passRate,
       result,
       scoreDetailsRecorded,
-      grade: (raw.qualityGrade as QualityRecord['grade']) ?? 'D',
+      grade,
       passed: result === 'PASS',
       photos: [],
       inspector: {
@@ -275,6 +280,7 @@ class QualityInspectorApiClient {
     endDate?: string;
     grade?: string;
     inspectorId?: number;
+    result?: string;
   }): Promise<QIPagedResponse<QualityRecord>> {
     const response = await apiClient.get<QIApiResponse<QIPagedResponse<Record<string, unknown>>>>(
       `${this.getBasePath()}/processing/quality/inspections`,

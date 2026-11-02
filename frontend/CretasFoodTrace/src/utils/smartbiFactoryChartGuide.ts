@@ -50,7 +50,8 @@ export function selectionForFamilies(items: readonly FactoryRecommendation[], fa
 
 const kinds: Record<string, string> = { line: '折线', area: '面积', bar: '柱形', bar_horizontal: '横条', pie: '饼图', donut: '环形', nested_donut: '双环', scatter: '散点', boxplot: '箱线', dual_axis: '双轴', heatmap: '热力', matrix_heatmap: '矩阵热力', budget_comparison: '计划对比', combination: '组合', bullet: '子弹图', gauge: '仪表', pareto: '帕累托', sankey: '流向', waterfall: '瀑布', slope: '两期比较' };
 export function chartVariantLabel(item: FactoryRecommendation): string {
-  return `${kinds[item.chart.chartType] || '财务图表'} · ${item.unit || '单位未标注'}`;
+  const sourceUnit = item.analysis?.sourceQuantityUnit?.trim();
+  return `${kinds[item.chart.chartType] || '财务图表'} · ${item.unit || '单位未标注'}${sourceUnit ? ` · 口径：${sourceUnit}` : ''}`;
 }
 
 export function guideSubjects(subjects: readonly GuideSubject[] | undefined): GuideSubject[] {

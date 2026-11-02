@@ -685,6 +685,11 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.ai.tool.ToolRbacEnforcer toolRbacEnforcer;
 
+    // S6 (2026-10-29): the same role chain direct execution uses; missing ⇒ refuse.
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.execution.ToolPermissionChain toolPermissionChain;
+
     /**
      * 构建意图分类系统提示词
      *
@@ -2931,6 +2936,15 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
                 && toolRegistry.hasExecutor("create_new_intent");
     }
 
+    /** S6 (2026-10-29): empty = the tool-calling path may run this tool for this caller; a missing chain refuses. */
+    public java.util.Optional<String> toolCallingDenyReason(ToolExecutor executor, String factoryId, String userRole,
+                                                            Map<String, Object> context) {
+        if (toolPermissionChain == null) {
+            return java.util.Optional.of("权限校验暂不可用，未执行任何操作。");
+        }
+        return toolPermissionChain.denyReason(executor, factoryId, userRole, null, context);
+    }
+
     /**
      * 通过 Tool Calling 创建新意图（新架构）
      *
@@ -3039,9 +3053,11 @@ public class LlmIntentFallbackClientImpl implements LlmIntentFallbackClient {
 
                 // W9 红线 (AI-RBAC 系统性收口) — SITE F: LLM-fallback path bypasses Site B. Central RBAC
                 // enforce on the LLM-selected tool. context (buildToolExecutionContext) carries userId.
-                if (!toolRbacEnforcer.isAllowed(executor, context)) {
+                // S6 (2026-10-29): the full role chain (frontline gate + role-gated tools + RBAC), not RBAC alone.
+                java.util.Optional<String> denied = toolCallingDenyReason(executor, factoryId, userRole, context);
+                if (denied.isPresent()) {
                     log.warn("W9 AI-RBAC (llm-fallback): denied tool={}", toolName);
-                    throw new IllegalStateException(toolRbacEnforcer.denyMessage(executor, context));
+                    throw new IllegalStateException(denied.get());
                 }
 
                 // 执行工具

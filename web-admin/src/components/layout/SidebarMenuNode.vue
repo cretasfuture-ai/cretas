@@ -22,13 +22,14 @@ function badgeLabel(value: number | 'unknown' | null): string {
 </script>
 
 <template>
-  <div v-if="item.groupLabel && !collapsed" class="menu-group-label">
+  <div v-if="item.groupLabel" class="menu-group-label" :class="{ 'is-hidden-group': collapsed }" :aria-hidden="collapsed">
     {{ item.groupLabel }}
   </div>
 
   <el-sub-menu
     v-if="item.children?.length"
     :index="item.path"
+    :aria-label="titleForItem(item)"
     popper-class="app-sidebar-menu-popper"
   >
     <template #title>
@@ -51,7 +52,7 @@ function badgeLabel(value: number | 'unknown' | null): string {
     />
   </el-sub-menu>
 
-  <el-menu-item v-else :index="item.path">
+  <el-menu-item v-else :index="item.path" :aria-label="titleForItem(item)">
     <el-icon v-if="item.icon && iconMap[item.icon]">
       <component :is="iconMap[item.icon]" />
     </el-icon>
@@ -73,12 +74,30 @@ function badgeLabel(value: number | 'unknown' | null): string {
   white-space: nowrap;
   overflow: hidden;
   user-select: none;
+  max-height: 40px;
+  opacity: 1;
+  transition: opacity 140ms ease-out, max-height 0.3s ease-in-out,
+    padding 0.3s ease-in-out, margin 0.3s ease-in-out;
+  transition-behavior: allow-discrete;
 }
 
 .menu-group-label:not(:first-child) {
   margin-top: 4px;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
   padding-top: 10px;
+}
+
+.menu-group-label.is-hidden-group {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 0;
+  border-top-width: 0;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-group-label { transition: none; }
 }
 
 .menu-title-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

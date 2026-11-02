@@ -15,6 +15,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -31,9 +32,11 @@ class AgentOpsClientTest {
     @BeforeEach
     void setUp() throws Exception {
         server = new MockWebServer();
-        server.start();
+        // Socket-replay tests need one reachable address, not localhost's IPv4/IPv6 route fallback.
+        server.start(InetAddress.getByName("127.0.0.1"), 0);
         mapper = new ObjectMapper().findAndRegisterModules();
-        client = new AgentOpsClient(new OkHttpClient(), server.url("/").toString(), "secret", mapper);
+        client = new AgentOpsClient(new OkHttpClient(),
+                server.url("/").newBuilder().host("127.0.0.1").build().toString(), "secret", mapper);
     }
 
     @AfterEach

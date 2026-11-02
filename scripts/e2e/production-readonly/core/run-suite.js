@@ -13,6 +13,7 @@ const { pathnameOf } = require('./url-utils');
 const { runParallelSuites } = require('./parallel-run');
 
 const SCENARIOS = [
+  require('../scenarios/platform-factory-access-readonly'),
   require('../scenarios/smartbi-factory-analysis-readonly'),
   require('../scenarios/smartbi-catalog-matrix-readonly'),
   require('../scenarios/smartbi-factory-readonly'),
@@ -29,6 +30,7 @@ const SCENARIOS = [
   require('../scenarios/table-top-scroll-readonly').purchase,
   require('../scenarios/table-top-scroll-readonly').transfer,
   require('../scenarios/workspace-sidebar-readonly'),
+  require('../scenarios/sidebar-motion-readonly'),
   require('../scenarios/merged-order-state-readonly'),
   require('../scenarios/order-entry-readonly').purchase,
   require('../scenarios/order-entry-readonly').sales,
@@ -146,10 +148,14 @@ async function runSuiteWithPage(page, options = {}) {
         expectedUsername,
         expectedFactoryId,
         loginEvidence,
+        factoryAccessFactoryId: options.factoryAccessFactoryId,
+        factoryAccessCases: options.factoryAccessCases,
         factoryAnalysisSubjectId: options.factoryAnalysisSubjectId,
         factoryAnalysisUploadedJoint: options.factoryAnalysisUploadedJoint,
         factoryAnalysisLifecycle: options.factoryAnalysisLifecycle,
         factoryCatalogFamilies: options.factoryCatalogFamilies,
+        factoryCatalogCandidateIds: options.factoryCatalogCandidateIds,
+        factoryCatalogSubjectId: options.factoryCatalogSubjectId,
         smartbiCommerceJoint: options.smartbiCommerceJoint,
         smartbiPurchaseInventory: options.smartbiPurchaseInventory,
         smartbiLegacyKpi: options.smartbiLegacyKpi,

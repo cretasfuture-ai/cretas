@@ -128,6 +128,23 @@ def _canonical_family(candidate: Mapping[str, Any]) -> str:
     return raw.split("@", 1)[0].split(":", 1)[0]
 
 
+def _public_family_label(value: Any, family_id: str, metric: str) -> Optional[str]:
+    """Return only server-owned human metadata, never an opaque fallback."""
+    if not isinstance(value, str):
+        return None
+    label = value.strip()
+    if not label or label == family_id:
+        return None
+    # Unknown engine families currently fall back to an id-shaped metric or
+    # the final technical segment.  Keep those out of both UI and planner.
+    if re.fullmatch(r"[A-Za-z0-9_.:-]+", label) and re.search(r"[._:-]", label):
+        return None
+    family_suffix = re.sub(r"[_-]+", " ", family_id.rsplit(".", 1)[-1]).strip()
+    if family_suffix and label.casefold() == family_suffix.casefold():
+        return None
+    return label
+
+
 def semantic_catalog(recommendations: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Strip values/rows while retaining the complete eligible chart catalogue."""
     result: list[dict[str, Any]] = []
@@ -137,18 +154,28 @@ def semantic_catalog(recommendations: Sequence[Mapping[str, Any]]) -> list[dict[
             continue
         chart = candidate.get("chart") if isinstance(candidate.get("chart"), Mapping) else {}
         analysis = candidate.get("analysis") if isinstance(candidate.get("analysis"), Mapping) else {}
+        family_id = str(analysis.get("familyId") or _canonical_family(candidate))
+        metric = str(candidate.get("aiMetric") or candidate.get("metric") or "")
         # Candidate titles may include a product value.  The planner does not
         # need them; IDs, family, chart type, domain and unit are sufficient.
-        result.append({
+        item = {
             "id": cid,
-            "familyId": str(analysis.get("familyId") or _canonical_family(candidate)),
+            "familyId": family_id,
             "chartType": str(chart.get("chartType") or ""),
             "domain": str(candidate.get("domain") or ""),
-            "metric": str(candidate.get("aiMetric") or candidate.get("metric") or ""),
+            "metric": metric,
             "unit": str(candidate.get("unit") or ""),
             "priority": str(candidate.get("priority") or ""),
             "sourceKey": str(candidate.get("source") or "").split(" · ", 1)[0],
-        })
+        }
+        # ``familyLabel`` is server-owned semantic metadata.  Keep it public
+        # for catalogue rendering, but never derive it from candidate titles
+        # (which may contain product values) or put those values in the planner
+        # catalogue.
+        family_label = _public_family_label(analysis.get("familyLabel"), family_id, metric)
+        if family_label:
+            item["familyLabel"] = family_label
+        result.append(item)
     return result
 
 

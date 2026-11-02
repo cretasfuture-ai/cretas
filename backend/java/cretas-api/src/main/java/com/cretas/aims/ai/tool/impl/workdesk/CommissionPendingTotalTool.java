@@ -122,4 +122,13 @@ public class CommissionPendingTotalTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29): same codes as the HTTP method serving this data;
+     * pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("sales:view");
+    }
 }

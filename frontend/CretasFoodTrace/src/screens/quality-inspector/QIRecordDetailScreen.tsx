@@ -98,22 +98,27 @@ export default function QIRecordDetailScreen() {
 
   const isConditional = record.result === 'CONDITIONAL';
   const isPending = record.result === 'PENDING';
+  const isUnknown = record.result === 'UNKNOWN';
   const canDispose = record.result === 'FAIL' || record.result === 'CONDITIONAL';
   const resultLabel = isConditional
     ? '有条件合格'
     : isPending
-      ? '待复检'
+      ? t('records.pending')
+      : isUnknown
+        ? t('records.unknown')
       : record.passed
         ? GRADE_LABELS[record.grade]
         : t('recordDetail.unqualified');
   const statusLabel = isConditional
     ? '待处置'
     : isPending
-      ? '待复检'
+      ? t('records.pending')
+      : isUnknown
+        ? t('records.unknown')
       : record.passed
         ? t('recordDetail.qualified')
         : t('recordDetail.unqualified');
-  const statusIcon: IoniconsName = isConditional || isPending
+  const statusIcon: IoniconsName = isConditional || isPending || isUnknown
     ? 'warning'
     : record.passed
       ? 'checkmark-circle'
@@ -131,26 +136,28 @@ export default function QIRecordDetailScreen() {
       {/* 结果头部 */}
       <View style={[
         styles.resultHeader,
-        isConditional || isPending
+        isConditional || isPending || isUnknown
           ? styles.headerConditional
           : record.passed
             ? styles.headerPass
             : styles.headerFail,
       ]}>
         <View style={[styles.gradeBadge, { backgroundColor: GRADE_COLORS[record.grade] }]}>
-          <Text style={styles.gradeText}>{record.grade}</Text>
+          <Text style={styles.gradeText}>{record.grade === 'UNKNOWN' ? '—' : record.grade}</Text>
         </View>
         <View style={styles.resultInfo}>
           <Text style={styles.resultLabel}>{resultLabel}</Text>
           <Text style={styles.resultScore}>
-            {record.scoreDetailsRecorded
+            {isPending || isUnknown
+              ? '—'
+              : record.scoreDetailsRecorded
               ? `${record.totalScore}/100分`
               : `合格率 ${record.passRate}%`}
           </Text>
         </View>
         <View style={[
           styles.statusTag,
-          isConditional || isPending
+          isConditional || isPending || isUnknown
             ? styles.tagConditional
             : record.passed
               ? styles.tagPass

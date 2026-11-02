@@ -247,6 +247,43 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
     /**
      * 执行工具链
      */
+    /**
+     * S6 (2026-10-29): each SOP chain step goes through the same permission chain as AI chat and Skills,
+     * as the user behind the chain (context userId, else the SOP uploader), re-read from the database.
+     * No such user, another factory's user, or the chain unavailable → the step is refused.
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.execution.ToolPermissionChain toolPermissionChain;
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.UserRepository userRepository;
+
+    private Optional<String> stepDenied(ToolExecutor executor, Map<String, Object> context) {
+        if (toolPermissionChain == null || userRepository == null) {
+            return Optional.of("权限校验暂不可用");
+        }
+        Object factoryId = context.get("factoryId");
+        Object rawUser = context.get("userId") != null ? context.get("userId") : context.get("uploadedBy");
+        Long userId;
+        try {
+            userId = rawUser == null ? null : Long.valueOf(String.valueOf(rawUser));
+        } catch (NumberFormatException e) {
+            userId = null;
+        }
+        if (userId == null || factoryId == null) {
+            return Optional.of("没有可确认的执行人");
+        }
+        Optional<com.cretas.aims.entity.User> user = userRepository.findById(userId);
+        if (user.isEmpty() || !String.valueOf(factoryId).equals(user.get().getFactoryId())
+                || !Boolean.TRUE.equals(user.get().getIsActive())) {
+            return Optional.of("执行人不存在、已停用或不属于本厂");
+        }
+        Map<String, Object> trusted = new HashMap<>();
+        com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                trusted, String.valueOf(factoryId), userId, user.get().getRoleCode());
+        return toolPermissionChain.denyReason(executor, String.valueOf(factoryId), user.get().getRoleCode(), null, trusted);
+    }
+
     private Map<String, Object> executeToolChainInternal(ToolChainConfig config, Map<String, Object> context) {
         Map<String, Object> outputs = new HashMap<>();
         Map<String, Object> lastResult = null;
@@ -263,6 +300,12 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
             }
 
             ToolExecutor executor = executorOpt.get();
+
+            Optional<String> denied = stepDenied(executor, context);
+            if (denied.isPresent()) {
+                log.warn("SOP 工具链步骤权限拒绝: toolName={}, reason={}", toolName, denied.get());
+                return Map.of("success", false, "error", "无权执行「" + toolName + "」: " + denied.get());
+            }
 
             // 解析参数
             Map<String, Object> params = resolveParams(step.getParamsMapping(), context, outputs);

@@ -145,4 +145,13 @@ public class HaccpStatusQueryTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29): CCP checkpoints and records reach users through CcpMonitoringController (production / quality read), so the AI path admits the same codes;
+     * pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("production:read", "production:read_write", "quality:read", "quality:read_write");
+    }
 }

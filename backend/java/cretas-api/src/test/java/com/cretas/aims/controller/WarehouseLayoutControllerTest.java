@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.entity.FactoryFeatureConfig;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
@@ -86,25 +87,27 @@ class WarehouseLayoutControllerTest {
     @Test
     void recognitionUsesRealVisionClientAndReturnsStructuredZones() {
         byte[] image = new byte[] { 1, 2, 3 };
-        when(visionClient.visionChatWarehouse(any(byte[].class), eq("image/png"), anyString()))
+        when(visionClient.visionChatWarehouse(eq("F006"), any(byte[].class), eq("image/png"), anyString()))
                 .thenReturn("{\"zones\":[{\"name\":\"冷藏区\",\"prefix\":\"LC\"}],\"racks\":[]}");
 
         Map<String, Object> recognized = controller.recognizeLayout("F006", Map.of(
                 "imageBase64", Base64.getEncoder().encodeToString(image), "contentType", "image/png")).getData();
 
         assertThat(recognized).containsKeys("zones", "racks");
-        verify(visionClient).visionChatWarehouse(any(byte[].class), eq("image/png"), anyString());
+        verify(visionClient).visionChatWarehouse(eq("F006"), any(byte[].class), eq("image/png"), anyString());
     }
 
     @Test
-    void editingAndRecognitionAreLimitedToFactoryAdminAndWarehouseManager() throws Exception {
+    void layoutEditingKeepsRoleGateWhileRecognitionUsesWarehouseWritePermission() throws Exception {
         RequireRole saveRoles = WarehouseLayoutController.class
                 .getMethod("saveLayout", String.class, Map.class).getAnnotation(RequireRole.class);
-        RequireRole recognitionRoles = WarehouseLayoutController.class
-                .getMethod("recognizeLayout", String.class, Map.class).getAnnotation(RequireRole.class);
+        var recognition = WarehouseLayoutController.class.getMethod("recognizeLayout", String.class, Map.class);
+        RequirePermission recognitionPermission = recognition.getAnnotation(RequirePermission.class);
 
         assertThat(saveRoles.value()).containsExactlyInAnyOrder("factory_super_admin", "warehouse_manager");
-        assertThat(recognitionRoles.value()).containsExactlyInAnyOrder("factory_super_admin", "warehouse_manager");
+        assertThat(recognition.getAnnotation(RequireRole.class)).isNull();
+        assertThat(recognitionPermission).isNotNull();
+        assertThat(recognitionPermission.value()).containsExactly("warehouse:write");
     }
 
     /** 让 F006 拥有一份配置了 LC01/LC02 的仓储布局。 */

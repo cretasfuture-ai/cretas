@@ -205,7 +205,8 @@ class PythonLLMClientUsageLogTest {
         mockServer.enqueue(new MockResponse().setBody(response).setHeader("Content-Type", "application/json"));
         mockServer.enqueue(new MockResponse().setBody(response).setHeader("Content-Type", "application/json"));
 
-        assertThat(client.visionChatWarehouse(new byte[] {1, 2}, "image/png", "read map")).isEqualTo("{}");
+        org.springframework.test.util.ReflectionTestUtils.setField(client, "warehouseVisionInternalSecret", "unit-internal-secret");
+        assertThat(client.visionChatWarehouse("F006", new byte[] {1, 2}, "image/png", "read map")).isEqualTo("{}");
         var warehouseRequest = mockServer.takeRequest();
         assertThat(warehouseRequest.getPath()).isEqualTo("/api/llm/vision");
         assertThat(warehouseRequest.getBody().readUtf8()).contains("name=\"slot\"", "warehouse_vl");

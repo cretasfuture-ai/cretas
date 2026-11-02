@@ -142,4 +142,13 @@ public class ReportCostTrendAnalysisTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-10-29, organizer ruling): same codes as AIController#analyzeTimeRangeCost;
+     * pinned by GatedDataToolAiPathPermissionTest.
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("analytics:read_write");
+    }
 }

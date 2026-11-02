@@ -31,10 +31,9 @@ class BudgetBusinessSummaryTest {
         inst.setModuleCode("BUDGET");
         inst.setBusinessEntityId(bizId);
         inst.setContextJson(context);
-        // buildBusinessSummary 签名现为 5 参(含 stocktakeById, 服务 INVENTORY_ADJUSTMENT 分支) ——
-        // 本测试只覆盖 BUDGET 分支, 传空 map 占位第 5 个参数即可.
+        // The sixth argument controls purchase amounts; BUDGET has no purchase amounts.
         return (String) ReflectionTestUtils.invokeMethod(
-                controller, "buildBusinessSummary", inst, Map.of(), Map.of(), Map.of(), Map.of());
+                controller, "buildBusinessSummary", inst, Map.of(), Map.of(), Map.of(), Map.of(), false);
     }
 
     @Test

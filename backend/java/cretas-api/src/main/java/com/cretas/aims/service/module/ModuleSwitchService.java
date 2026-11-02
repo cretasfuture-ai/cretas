@@ -71,6 +71,7 @@ public class ModuleSwitchService {
 
     private final FactoryConfigService factoryConfigService;
     private final FactoryFeatureConfigRepository featureConfigRepository;
+    private final com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock featureWriteLock;
 
     /**
      * 切换一个模块的开关。
@@ -112,6 +113,7 @@ public class ModuleSwitchService {
                     .withHintTarget("moduleId");
         }
         ModuleSwitchLayers effective = layers == null ? ModuleSwitchLayers.BOTH : layers;
+        if (effective.touchesFrontend()) featureWriteLock.lock(factoryId);
 
         List<String> touchedGates = new ArrayList<>();
         if (effective.touchesBackend()) {

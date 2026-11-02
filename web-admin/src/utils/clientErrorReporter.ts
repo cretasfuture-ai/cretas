@@ -1,4 +1,5 @@
 import type { App } from 'vue';
+import { factoryViewContext } from '@/store/modules/platformFactoryContext';
 
 export type ClientErrorCategory = 'vue' | 'window_error' | 'unhandled_rejection' | 'request_failure';
 
@@ -6,6 +7,7 @@ export interface ClientErrorAuthContext {
   factoryId: string;
   isAuthenticated: boolean;
   accessToken?: string | null;
+  readOnly?: boolean;
 }
 
 export interface ClientErrorMetadata {
@@ -185,6 +187,7 @@ export function reportRequestFailure(error: unknown): void {
 function readAuth(): ClientErrorAuthContext | null {
   try {
     const value = authGetter?.();
+    if (value?.readOnly || factoryViewContext.value) return null;
     if (value?.isAuthenticated === true && FACTORY_PATTERN.test(value.factoryId)) return value;
   } catch {
     return null;

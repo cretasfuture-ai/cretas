@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
+import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.FactoryFeatureConfig;
@@ -81,7 +82,7 @@ public class WarehouseLayoutController {
     }
 
     @PostMapping("/recognize")
-    @RequireRole({"factory_super_admin", "warehouse_manager"})
+    @RequirePermission("warehouse:write")
     public ApiResponse<Map<String, Object>> recognizeLayout(
             @PathVariable String factoryId,
             @RequestBody Map<String, String> request) {
@@ -104,7 +105,7 @@ public class WarehouseLayoutController {
                 x、y、width、height 均使用 0 到 100 的百分比；不确定时保留合理低置信度，不要虚构图中没有的区域。
                 """;
         try {
-            String result = pythonLLMClient.visionChatWarehouse(bytes,
+            String result = pythonLLMClient.visionChatWarehouse(factoryId, bytes,
                     request.getOrDefault("contentType", "image/jpeg"), prompt);
             Matcher matcher = JSON_OBJECT_PATTERN.matcher(result);
             if (!matcher.find()) {

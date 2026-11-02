@@ -65,6 +65,9 @@ public interface ProcessingService {
       */
     PageResponse<ProductionBatch> getBatches(String factoryId, String status, PageRequest pageRequest);
 
+    /** Quality task queue backed by persisted PENDING inspection observations. */
+    PageResponse<ProductionBatch> getQualityPendingBatches(String factoryId, PageRequest pageRequest);
+
     /**
      * 获取批次列表（带主管过滤）
      */

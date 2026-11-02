@@ -19,6 +19,7 @@ import {
 } from '@/api/permissionApi';
 import { PRODUCTION_MODULE_REGISTRY, resolveModuleRegistryItem } from '@/config/moduleRegistry';
 import { DEPARTMENTS, DEPARTMENT_ORDER } from '@/views/restaurant/departments/departmentConfig';
+import { factoryViewContext } from './platformFactoryContext';
 
 // 权限矩阵 - 定义每个角色对每个模块的权限
 type PermissionLevel = 'rw' | 'r' | 'w' | '-';
@@ -530,7 +531,7 @@ export const usePermissionStore = defineStore('permission', () => {
 
         let l4Rows: UserModuleAccessView[] = [];
         let l4Loaded = false;
-        if (factoryId && userId) {
+        if (factoryId && userId && role !== 'platform_admin') {
           try {
             l4Rows = await getUserModuleAccess(factoryId, userId, { silent: true });
             l4Loaded = true;
@@ -675,6 +676,7 @@ export const usePermissionStore = defineStore('permission', () => {
   }
 
   function canWrite(module: ModuleName): boolean {
+    if (factoryViewContext.value) return false;
     const permission = permissionLevelFor(String(module));
     return permission === 'rw' || permission === 'w';
   }
