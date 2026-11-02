@@ -381,7 +381,15 @@ def build_appended_occurrences(
 ) -> tuple[list[str], dict[str, Any]]:
     if appended_repeats < 1 or appended_repeats > 8:
         raise ValueError("appended repeats must be between 1 and 8")
-    train_stems = [str(row.get("stem") or "") for row in provenance_rows if row.get("split") == "train"]
+    train_rows = [row for row in provenance_rows if row.get("split") == "train"]
+    for row in train_rows:
+        if "training_excluded" in row and type(row["training_excluded"]) is not bool:
+            raise RuntimeError("training_excluded provenance flag is not boolean")
+    all_stems = [str(row.get("stem") or "") for row in train_rows]
+    if "" in all_stems or len(set(all_stems)) != len(all_stems):
+        raise RuntimeError("train provenance stems are invalid")
+    excluded = sorted(str(row["stem"]) for row in train_rows if row.get("training_excluded") is True)
+    train_stems = [str(row["stem"]) for row in train_rows if row.get("training_excluded") is not True]
     if not train_stems or "" in train_stems or len(set(train_stems)) != len(train_stems):
         raise RuntimeError("train provenance stems are invalid")
     appended = list(appended_stems)
@@ -398,6 +406,7 @@ def build_appended_occurrences(
         "appended_repeats": appended_repeats,
         "effective_train_occurrences": len(occurrences),
         "unique_train_images": len(train_stems),
+        "excluded_historical_stems": excluded,
         "validation_unchanged": True,
     }
 
@@ -421,6 +430,10 @@ def build_dataset(
     provenance = load_json(provenance_path)
     prior_rows = provenance.get("rows") or []
     prior_effective_counts = audited_provenance_counts(prior_root, prior_rows)
+    excluded_historical = sorted(
+        str(row["stem"]) for row in prior_rows
+        if row.get("split") == "train" and row.get("training_excluded") is True
+    )
     append_audit = validate_append_contract(prior, queue_manifest, reviewed, prior_rows)
     training_stems = set(append_audit["training_stems"])
     training_reviewed = [
@@ -438,6 +451,7 @@ def build_dataset(
         "split_policy": "append_train_only_preserve_base_validation",
         "tight_patch_rows_included": False,
         "appended_repeats": appended_repeats,
+        "excluded_historical_stems": excluded_historical,
     }
     dataset_id = "tray-full-" + hashlib.sha256(patch_dataset.stable_json(identity)).hexdigest()[:12]
     output = output_root / dataset_id
@@ -510,8 +524,12 @@ def build_dataset(
     occurrences, replay_policy = build_appended_occurrences(
         copied_rows, [str(row["stem"]) for row in appended], appended_repeats,
     )
+    active_stems = set(occurrences)
+    counts["train_images"] = len(active_stems)
+    counts["train_boxes"] = sum(int(row["box_count"]) for row in copied_rows
+                              if row.get("split") == "train" and row["stem"] in active_stems)
     train_source = "images/train"
-    if appended_repeats > 1:
+    if appended_repeats > 1 or excluded_historical:
         train_source = "train-focus.txt"
         (temporary / train_source).write_text(
             "\n".join(f"./images/train/{stem}.jpg" for stem in occurrences) + "\n",

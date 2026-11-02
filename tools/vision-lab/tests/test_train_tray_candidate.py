@@ -24,7 +24,12 @@ spec.loader.exec_module(module)
 
 
 def write_dataset(tmp_path: Path, **overrides) -> Path:
-    (tmp_path / "data.yaml").write_text("path: .\n", encoding="utf-8")
+    (tmp_path / "images" / "train").mkdir(parents=True)
+    (tmp_path / "images" / "train" / "safe.jpg").write_bytes(b"image")
+    (tmp_path / "provenance.json").write_text(json.dumps({"rows": [
+        {"stem": "safe", "split": "train"},
+    ]}), encoding="utf-8")
+    (tmp_path / "data.yaml").write_text("path: .\ntrain: images/train\n", encoding="utf-8")
     manifest = {
         "training_allowed": True,
         "protected_holdout_included": False,
@@ -43,6 +48,51 @@ def write_dataset(tmp_path: Path, **overrides) -> Path:
 def test_validate_dataset_manifest_accepts_safe_train_only_dataset(tmp_path):
     path = write_dataset(tmp_path)
     assert module.validate_dataset_manifest(path)["training_allowed"] is True
+
+
+@pytest.mark.parametrize("selector", ["images/train", "train-focus.txt"])
+@pytest.mark.parametrize("suffix", [".jpg", ".heic"])
+def test_training_gate_rejects_excluded_image_despite_manifest_claim(tmp_path, selector, suffix):
+    path = write_dataset(tmp_path)
+    (tmp_path / ("images/train/ignored"+suffix)).write_bytes(b"ignored original")
+    (tmp_path / "provenance.json").write_text(json.dumps({"rows": [
+        {"stem": "safe", "split": "train"},
+        {"stem": "ignored", "split": "train", "training_excluded": True},
+    ]}), encoding="utf-8")
+    (tmp_path / "train-focus.txt").write_text(f"./images/train/safe.jpg\n./images/train/ignored{suffix}\n", encoding="utf-8")
+    (tmp_path / "data.yaml").write_text(f"path: .\ntrain: {selector}\n", encoding="utf-8")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["dataset_sha256"] = module.patch_dataset.dataset_digest(tmp_path)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="excluded.*ignored"):
+        module.validate_dataset_manifest(path)
+
+
+def test_training_gate_allows_retained_excluded_original_outside_actual_selector(tmp_path):
+    path = write_dataset(tmp_path)
+    (tmp_path / "images/train/ignored.jpg").write_bytes(b"ignored original")
+    (tmp_path / "provenance.json").write_text(json.dumps({"rows": [
+        {"stem": "safe", "split": "train"},
+        {"stem": "ignored", "split": "train", "training_excluded": True},
+    ]}), encoding="utf-8")
+    (tmp_path / "train-focus.txt").write_text("./images/train/safe.jpg\n", encoding="utf-8")
+    (tmp_path / "data.yaml").write_text("path: .\ntrain: train-focus.txt\n", encoding="utf-8")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["dataset_sha256"] = module.patch_dataset.dataset_digest(tmp_path)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert module.validate_dataset_manifest(path)["training_allowed"] is True
+
+
+@pytest.mark.parametrize("rows", [[], [{"stem": "safe", "split": "val"}],
+                                     [{"stem": "safe", "split": "train", "training_excluded": "false"}]])
+def test_training_gate_rejects_unbound_or_ambiguous_selected_image(tmp_path, rows):
+    path = write_dataset(tmp_path)
+    (tmp_path / "provenance.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["dataset_sha256"] = module.patch_dataset.dataset_digest(tmp_path)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="provenance|training_excluded"):
+        module.validate_dataset_manifest(path)
 
 
 @pytest.mark.parametrize("field,value", [
