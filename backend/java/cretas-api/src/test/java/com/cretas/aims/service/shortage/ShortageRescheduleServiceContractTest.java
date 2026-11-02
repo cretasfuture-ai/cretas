@@ -368,4 +368,14 @@ class ShortageRescheduleServiceContractTest {
         service.propose("F1", "C1", PLANNER);
         verify(capacity).checkCapacity(eq("F1"), eq("P1"), any(), eq("盒"), eq("L2"), any(), any());
     }
+
+    @Test
+    void aCaseThatDoesNotComeFromASalesOrderIsRefusedBeforeAnythingIsRead() {
+        theCase.setSourceType(null);   // 今天只有 SALES_ORDER 一种来源; 任何别的 (含未填) 都拒
+
+        assertThatThrownBy(() -> service.propose("F1", "C1", PLANNER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("只有来自销售订单");
+        verify(orders, never()).findById(anyString());
+        verify(proposals, never()).saveAndFlush(any());
+    }
 }
