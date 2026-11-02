@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "对比一下两个批次"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"对比一下两个批次\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"BATCH_UPDATE\",\n  \"intentName\": \"批次更新\",\n  \"intentCategory\": \"DATA_OP\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"好的，我来帮您执行「批次更新」。\\n\\n需要您提供以下信息：\\n1. 请提供批次号，例如：MT-20240115-001\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"formattedText\": \"好的，我来帮您执行「批次更新」。\\n\\n需要您提供以下信息：\\n1. 请提供批次号，例如：MT-20240115-001\\n\\n请直接告诉我，我会帮您完成操作。\",\n  \"clarificationQuestions\": [\n    \"请提供批次号，例如：MT-20240115-001\"\n  ],\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:35.277509\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"slotFilling\": true,\n    \"missingSlots\": [\n      {\n        \"type\": \"TEXT\",\n        \"name\": \"batchId\",\n        \"label\": \"批次ID，必需参数\"\n      }\n    ]\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": \"07fba487-f533-4162-b60f-d920d56a10e8\",\n  \"conversationRound\": 1,\n  \"maxConversationRounds\": 5,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "好的，我来帮您执行「批次更新」。\n\n需要您提供以下信息：\n1. 请提供批次号，例如：MT-20240115-001\n\n请直接告诉我，我会帮您完成操作。"
+  }
+]

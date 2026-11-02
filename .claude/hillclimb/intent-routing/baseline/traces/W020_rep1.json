@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "更正张三昨天的考勤记录，打卡时间从9:05改成8:55"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"更正张三昨天的考勤记录，打卡时间从9:05改成8:55\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_HISTORY\",\n  \"intentName\": \"考勤历史\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### 考勤历史总览\\n\\n- 当前查询的考勤历史记录为空，系统中暂无符合筛选条件的考勤数据。\\n- 查询条件对应的页码为第1页，每页显示10条记录，共计0条数据，总页数为0页。\\n- 查询结果状态为“查询成功”，但无数据返回。\\n\\n### 关键指标\\n\\n- **考勤记录条数**：0条\\n- **涉及人员**：无\\n- **涉及客户**：无\\n- **批次信息**：无\\n- **金额/数量/库存**：无相关数据\\n- **告警**：无\\n\\n### 风险提示\\n\\n当前无任何考勤历史记录，可能原因包括筛选条件不匹配、数据尚未生成或系统初始化阶段。建议检查查询日期、人员范围等参数是否正确，或确认考勤数据是否已录入系统。暂无其他风险。\",\n  \"formattedText\": \"### 考勤历史总览\\n\\n- 当前查询的考勤历史记录为空，系统中暂无符合筛选条件的考勤数据。\\n- 查询条件对应的页码为第1页，每页显示10条记录，共计0条数据，总页数为0页。\\n- 查询结果状态为“查询成功”，但无数据返回。\\n\\n### 关键指标\\n\\n- **考勤记录条数**：0条\\n- **涉及人员**：无\\n- **涉及客户**：无\\n- **批次信息**：无\\n- **金额/数量/库存**：无相关数据\\n- **告警**：无\\n\\n### 风险提示\\n\\n当前无任何考勤历史记录，可能原因包括筛选条件不匹配、数据尚未生成或系统初始化阶段。建议检查查询日期、人员范围等参数是否正确，或确认考勤数据是否已录入系统。暂无其他风险。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"content\": [],\n      \"page\": 1,\n      \"size\": 10,\n      \"totalElements\": 0,\n      \"totalPages\": 0,\n      \"first\": true,\n      \"last\": true,\n      \"currentPage\": 1,\n      \"number\": 0,\n      \"empty\": true\n    },\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:50.8388047\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### 考勤历史总览\n\n- 当前查询的考勤历史记录为空，系统中暂无符合筛选条件的考勤数据。\n- 查询条件对应的页码为第1页，每页显示10条记录，共计0条数据，总页数为0页。\n- 查询结果状态为“查询成功”，但无数据返回。\n\n### 关键指标\n\n- **考勤记录条数**：0条\n- **涉及人员**：无\n- **涉及客户**：无\n- **批次信息**：无\n- **金额/数量/库存**：无相关数据\n- **告警**：无\n\n### 风险提示\n\n当前无任何考勤历史记录，可能原因包括筛选条件不匹配、数据尚未生成或系统初始化阶段。建议检查查询日期、人员范围等参数是否正确，或确认考勤数据是否已录入系统。暂无其他风险。"
+  }
+]

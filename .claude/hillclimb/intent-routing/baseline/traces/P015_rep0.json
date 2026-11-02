@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "访问客户的联系方式和订单历史"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"访问客户的联系方式和订单历史\",\n  \"previewOnly\": false,\n  \"login_as\": \"hr_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"CUSTOMER_PURCHASE_HISTORY\",\n  \"intentName\": \"客户购买历史\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": \"LOW\",\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NO_PERMISSION\",\n  \"message\": \"您没有权限执行此操作。需要角色: [\\\"factory_super_admin\\\", \\\"department_admin\\\"]\",\n  \"formattedText\": \"您没有权限执行此操作。需要角色: [\\\"factory_super_admin\\\", \\\"department_admin\\\"]\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:47.2465787\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您没有权限执行此操作。需要角色: [\"factory_super_admin\", \"department_admin\"]"
+  }
+]

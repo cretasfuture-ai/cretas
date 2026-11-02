@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "虽然订单数量增加了，可是发货效率反而下降了。帮我对比一下这个月和上个月的平均发货周期"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"虽然订单数量增加了，可是发货效率反而下降了。帮我对比一下这个月和上个月的平均发货周期\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ORDER_LIST\",\n  \"intentName\": \"订单列表\",\n  \"intentCategory\": \"CRM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"查询到 0 个销售订单\",\n  \"formattedText\": \"当前暂无订单数据。可通过「创建订单」新建销售订单。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"total\": 0,\n    \"size\": 20,\n    \"totalPages\": 0,\n    \"orders\": [],\n    \"page\": 1,\n    \"source\": \"sales_orders\",\n    \"message\": \"查询到 0 个销售订单\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:24.6082232\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "当前暂无订单数据。可通过「创建订单」新建销售订单。"
+  }
+]

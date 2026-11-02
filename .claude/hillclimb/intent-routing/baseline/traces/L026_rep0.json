@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "不是不信任新员工，但毕竟缺乏经验。帮我筛选一下所有入职不满三个月的员工，看看他们的培训完成情况"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"不是不信任新员工，但毕竟缺乏经验。帮我筛选一下所有入职不满三个月的员工，看看他们的培训完成情况\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"HR_LEAVE_REQUEST_QUERY\",\n  \"intentName\": \"请假申请查询\",\n  \"intentCategory\": \"DATA_QUERY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.65,\n  \"matchMethod\": \"LLM\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"这个问题我还没有把握直接回答。请换一种问法，或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。\",\n  \"formattedText\": \"这个问题我还没有把握直接回答。请换一种问法，或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:18.4494778\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"请假申请查询\",\n      \"description\": \"Sprint 4 W2 H-LEAVE-1: 查询请假申请, 支持 mine/pending/all scope + 月度汇总. read-only.\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"HR_LEAVE_REQUEST_QUERY\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "这个问题我还没有把握直接回答。请换一种问法，或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。"
+  }
+]

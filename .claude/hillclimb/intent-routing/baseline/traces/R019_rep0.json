@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "冷链物流行业有什么新技术趋势？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"冷链物流行业有什么新技术趋势？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"OUT_OF_DOMAIN\",\n  \"intentName\": \"域外无关输入\",\n  \"intentCategory\": \"SYSTEM\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"我是白垩纪AI Agent助手，可以帮您查询库存、生产、质检、设备、发货等业务数据。请告诉我您需要什么帮助？\",\n  \"formattedText\": \"我是白垩纪AI Agent助手，可以帮您查询库存、生产、质检、设备、发货等业务数据。请告诉我您需要什么帮助？\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"message\": \"我是白垩纪AI Agent助手，可以帮您查询库存、生产、质检、设备、发货等业务数据。请告诉我您需要什么帮助？\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:54.6120078\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"out_of_domain\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "我是白垩纪AI Agent助手，可以帮您查询库存、生产、质检、设备、发货等业务数据。请告诉我您需要什么帮助？"
+  }
+]

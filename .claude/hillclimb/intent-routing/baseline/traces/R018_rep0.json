@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "同行业的平均库存周转率是多少？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"同行业的平均库存周转率是多少？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"REPORT_KPI\",\n  \"intentName\": \"KPI指标报表\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"### KPI 指标月度报表摘要 (2026-09-11)\\n\\n本报表为月度KPI指标报告，数据日期为2026年9月11日。当前查询条件下，所有关键指标数据均为空或零值，无法形成有效分析。\\n\\n- **交付指标**: 交付达成率、交货提前期、按时交付率均为空，暂无数据。\\n- **生产效率**: 生产效率和设备OEE均为空，暂无数据。\\n- **成本指标**: 单位成本、人工成本、材料成本、制造费用均为空，暂无数据。\\n- **生产指标**: 生产周期、良品率均为空，产量为0。\\n- **交付准时率**: 暂无数据。\\n- **质量指标**: 返工率、缺陷率、一次通过率、报废率均为空，整体质量合格率也无数据。\\n\\n### 风险提示\\n\\n当前报告期间未获取到任何实际业务数据，所有核心KPI（交付、效率、成本、生产、质量）均为空或零。建议检查数据源连接、数据采集逻辑或报告配置是否正确，确保后续能够正常生成有效报表。无任何库存预警、应收过期或合规问题需要提示。\",\n  \"formattedText\": \"### KPI 指标月度报表摘要 (2026-09-11)\\n\\n本报表为月度KPI指标报告，数据日期为2026年9月11日。当前查询条件下，所有关键指标数据均为空或零值，无法形成有效分析。\\n\\n- **交付指标**: 交付达成率、交货提前期、按时交付率均为空，暂无数据。\\n- **生产效率**: 生产效率和设备OEE均为空，暂无数据。\\n- **成本指标**: 单位成本、人工成本、材料成本、制造费用均为空，暂无数据。\\n- **生产指标**: 生产周期、良品率均为空，产量为0。\\n- **交付准时率**: 暂无数据。\\n- **质量指标**: 返工率、缺陷率、一次通过率、报废率均为空，整体质量合格率也无数据。\\n\\n### 风险提示\\n\\n当前报告期间未获取到任何实际业务数据，所有核心KPI（交付、效率、成本、生产、质量）均为空或零。建议检查数据源连接、数据采集逻辑或报告配置是否正确，确保后续能够正常生成有效报表。无任何库存预警、应收过期或合规问题需要提示。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"reportType\": \"KPI\",\n    \"period\": \"month\",\n    \"queryConditions\": {\n      \"period\": \"month\",\n      \"reportDate\": \"2026-09-11\"\n    },\n    \"reportDate\": \"2026-09-11\",\n    \"data\": {\n      \"delivery\": {\n        \"fillRate\": null,\n        \"leadTime\": null,\n        \"onTimeRate\": null\n      },\n      \"productionEfficiency\": null,\n      \"equipmentOEE\": null,\n      \"cost\": {\n        \"unitCost\": null,\n        \"laborCost\": null,\n        \"materialCost\": null,\n        \"overheadCost\": null\n      },\n      \"production\": {\n        \"cycleTime\": null,\n        \"yield\": null,\n        \"throughput\": 0,\n        \"oee\": null\n      },\n      \"deliveryOnTime\": null,\n      \"quality\": {\n        \"reworkRate\": null,\n        \"defectRate\": null,\n        \"fpy\": null,\n        \"scrapRate\": null\n      },\n      \"qualityRate\": null\n    },\n    \"generatedAt\": \"2026-09-11\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:50.8363185\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"report_kpi\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "### KPI 指标月度报表摘要 (2026-09-11)\n\n本报表为月度KPI指标报告，数据日期为2026年9月11日。当前查询条件下，所有关键指标数据均为空或零值，无法形成有效分析。\n\n- **交付指标**: 交付达成率、交货提前期、按时交付率均为空，暂无数据。\n- **生产效率**: 生产效率和设备OEE均为空，暂无数据。\n- **成本指标**: 单位成本、人工成本、材料成本、制造费用均为空，暂无数据。\n- **生产指标**: 生产周期、良品率均为空，产量为0。\n- **交付准时率**: 暂无数据。\n- **质量指标**: 返工率、缺陷率、一次通过率、报废率均为空，整体质量合格率也无数据。\n\n### 风险提示\n\n当前报告期间未获取到任何实际业务数据，所有核心KPI（交付、效率、成本、生产、质量）均为空或零。建议检查数据源连接、数据采集逻辑或报告配置是否正确，确保后续能够正常生成有效报表。无任何库存预警、应收过期或合规问题需要提示。"
+  }
+]

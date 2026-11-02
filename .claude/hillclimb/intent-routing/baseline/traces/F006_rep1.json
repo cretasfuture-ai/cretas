@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "低库存预警"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"低库存预警\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"MATERIAL_LOW_STOCK_ALERT\",\n  \"intentName\": \"低库存预警\",\n  \"intentCategory\": \"MATERIAL\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"当前没有低库存预警，所有原材料库存充足\",\n  \"formattedText\": \"库存预警检查完成：当前所有原材料库存充足，暂无低库存预警项。系统将持续监控库存水位。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"total\": 0,\n    \"warnings\": [],\n    \"message\": \"当前没有低库存预警，所有原材料库存充足\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:58.8669193\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "库存预警检查完成：当前所有原材料库存充足，暂无低库存预警项。系统将持续监控库存水位。"
+  }
+]

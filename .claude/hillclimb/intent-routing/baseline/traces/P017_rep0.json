@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "删除三个月前的所有考勤异常记录"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"删除三个月前的所有考勤异常记录\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_STATS_BY_DEPT\",\n  \"intentName\": \"部门考勤统计\",\n  \"intentCategory\": \"REPORT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"部门考勤统计 (2026-09-01 ~ 2026-09-11)\",\n  \"formattedText\": \"workDays: 9 | absentCount: 54 | totalEmployees: 6\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"earlyLeaveCount\": 0,\n      \"totalRecords\": 0,\n      \"workDays\": 9,\n      \"lateCount\": 0,\n      \"attendanceRate\": 0.0,\n      \"normalCount\": 0,\n      \"absentCount\": 54,\n      \"totalEmployees\": 6\n    },\n    \"message\": \"部门考勤统计 (2026-09-01 ~ 2026-09-11)\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:31.530574\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"attendance_stats_by_dept\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "workDays: 9 | absentCount: 54 | totalEmployees: 6"
+  }
+]
