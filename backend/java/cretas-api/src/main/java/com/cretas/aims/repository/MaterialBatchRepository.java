@@ -157,8 +157,8 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
                                         Pageable pageable);
 
     /**
-     * 列表搜索框的关键词覆盖面 —— <b>唯一一份</b>, 四条分页查询 (有无 DataScope × 有无状态筛选) 共用,
-     * 换个角色或加个状态筛选都不会换一套搜索口径。
+     * 列表搜索框的关键词覆盖面 —— <b>唯一一份</b>, 三条分页查询 (无筛选 × 有无 DataScope, 以及
+     * {@link #searchFiltered}) 共用, 换个角色或加个筛选条件都不会换一套搜索口径。
      */
     String KEYWORD_MATCH =
            "(m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
@@ -167,38 +167,35 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "OR m.supplierBatchNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
            "OR m.factoryNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')";
 
-    // ---- 批次列表按状态筛选 (ERP-S6-02-STATUS-FILTER-IGNORED-001): 在分页之前过滤 ----
-
-    @EntityGraph(attributePaths = {"materialType", "supplier"})
-    Page<MaterialBatch> findByFactoryIdAndStatus(String factoryId, MaterialBatchStatus status, Pageable pageable);
-
-    @EntityGraph(attributePaths = {"materialType", "supplier"})
-    Page<MaterialBatch> findByFactoryIdAndStatusAndCreatedByIn(
-            String factoryId, MaterialBatchStatus status, java.util.Collection<Long> createdByList, Pageable pageable);
-
+    /**
+     * 批次列表的条件筛选 —— 全部在<b>分页之前</b>由数据库过滤 (ERP-S6-02-STATUS-FILTER-IGNORED-001)。
+     *
+     * <p>以前 status 被忽略、原料类型与入库日期在 AI 工具里按「当前这一页」事后过滤:
+     * 匹配项落在第 2 页以后就读成「没有」, 总数也是错的。这里每个条件都可选 (null = 不限),
+     * 用 {@code CAST(:x AS string) IS NULL} 给 PostgreSQL 类型提示 (database-entity-sync 规则)。
+     *
+     * @param scoped        true 时按 {@code createdByList} 限定 (DataScope); false 时传任意非空占位列表
+     * @param keyword       已转义的关键词; null = 不按关键词搜
+     */
     @EntityGraph(attributePaths = {"materialType"})
     @Query("SELECT m FROM MaterialBatch m " +
            "LEFT JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
-           "AND m.status = :status " +
-           "AND " + KEYWORD_MATCH)
-    Page<MaterialBatch> searchByKeywordAndStatus(@Param("factoryId") String factoryId,
-                                                 @Param("keyword") String keyword,
-                                                 @Param("status") MaterialBatchStatus status,
-                                                 Pageable pageable);
-
-    @EntityGraph(attributePaths = {"materialType"})
-    @Query("SELECT m FROM MaterialBatch m " +
-           "LEFT JOIN m.materialType mt " +
-           "WHERE m.factoryId = :factoryId " +
-           "AND m.createdBy IN :createdByList " +
-           "AND m.status = :status " +
-           "AND " + KEYWORD_MATCH)
-    Page<MaterialBatch> searchByKeywordAndStatusAndCreatedByIn(@Param("factoryId") String factoryId,
-                                                               @Param("keyword") String keyword,
-                                                               @Param("status") MaterialBatchStatus status,
-                                                               @Param("createdByList") java.util.Collection<Long> createdByList,
-                                                               Pageable pageable);
+           "AND (:scoped = false OR m.createdBy IN :createdByList) " +
+           "AND (CAST(:status AS string) IS NULL OR m.status = :status) " +
+           "AND (CAST(:materialTypeId AS string) IS NULL OR m.materialTypeId = :materialTypeId) " +
+           "AND (CAST(:receiptFrom AS string) IS NULL OR m.receiptDate >= :receiptFrom) " +
+           "AND (CAST(:receiptTo AS string) IS NULL OR m.receiptDate <= :receiptTo) " +
+           "AND (CAST(:keyword AS string) IS NULL OR " + KEYWORD_MATCH + ")")
+    Page<MaterialBatch> searchFiltered(@Param("factoryId") String factoryId,
+                                       @Param("scoped") boolean scoped,
+                                       @Param("createdByList") java.util.Collection<Long> createdByList,
+                                       @Param("status") MaterialBatchStatus status,
+                                       @Param("materialTypeId") String materialTypeId,
+                                       @Param("receiptFrom") LocalDate receiptFrom,
+                                       @Param("receiptTo") LocalDate receiptTo,
+                                       @Param("keyword") String keyword,
+                                       Pageable pageable);
 
     /**
      * Sprint 6 W2-B (RBAC DataScope SELF/SELF_AND_BELOW/DEPT_AND_BELOW) — by createdBy IN list.

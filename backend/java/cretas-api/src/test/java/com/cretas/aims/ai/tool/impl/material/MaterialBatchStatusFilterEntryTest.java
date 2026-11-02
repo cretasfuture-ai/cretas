@@ -61,6 +61,8 @@ class MaterialBatchStatusFilterEntryTest {
     private static final String OTHER_F = "F-MBS-OTHER";
     private static final long CREATOR = 7L;
     private static final long OTHER_CREATOR = 8L;
+    private static final String OTHER_MATERIAL = "MT-MBS-2";
+    private static final LocalDate JANUARY_RECEIPT = LocalDate.of(2026, 1, 15);
 
     /** 每个状态种几条; AVAILABLE 最多且最新, 撑满第一页。 */
     private static final Map<MaterialBatchStatus, Integer> SEEDED = Map.of(
@@ -91,6 +93,12 @@ class MaterialBatchStatusFilterEntryTest {
         repo.saveAndFlush(batch(OTHER_F, "X1", MaterialBatchStatus.USED_UP, CREATOR));
         // 阴性对照: 同厂别人建的 USED_UP 批次, DataScope=SELF 时不得出现
         repo.saveAndFlush(batch(F, "OTHERS-1", MaterialBatchStatus.USED_UP, OTHER_CREATOR));
+        // 另一种原料的唯一一条批次, 建得很早 —— 默认排序下远在第 1 页之后 (原料类型筛选用)
+        MaterialBatch otherMaterial = batch(F, "LATE-MT2", MaterialBatchStatus.SCRAPPED, CREATOR);
+        otherMaterial.setMaterialTypeId(OTHER_MATERIAL);
+        repo.saveAndFlush(otherMaterial);
+        // 最早那条 (B0) 是 1 月入库的, 其余都是今天 (入库日期筛选用)
+        jdbcTemplate.update("UPDATE material_batches SET inbound_date = ? WHERE id = ?", JANUARY_RECEIPT, "B0");
         // createdAt 由 @PrePersist 写 now(); 改成递增的旧时间, 让排序确定
         jdbcTemplate.update("UPDATE material_batches SET created_at = ? WHERE factory_id = ?",
                 base, OTHER_F);
@@ -165,7 +173,63 @@ class MaterialBatchStatusFilterEntryTest {
 
         assertThat(page.getContent()).extracting(MaterialBatchDTO::getStatus)
                 .containsOnly(MaterialBatchStatus.AVAILABLE);
-        assertThat(page.getTotalElements()).isEqualTo(19L);
+        assertThat(page.getTotalElements()).isEqualTo(20L);
+    }
+
+    @Test
+    @DisplayName("AI 工具 materialTypeId: 唯一匹配远在第 1 页之后也能查到, 总数是真实条数")
+    void aiToolMaterialTypeMatchBeyondFirstPage() throws Exception {
+        Map<String, Object> params = new HashMap<>();
+        params.put("materialTypeId", OTHER_MATERIAL);
+        params.put("size", 5);
+
+        Map<String, Object> result = tool.doExecute(F, params, Map.of());
+
+        @SuppressWarnings("unchecked")
+        List<MaterialBatchDTO> content = (List<MaterialBatchDTO>) result.get("content");
+        assertThat(content).extracting(MaterialBatchDTO::getId).containsExactly("LATE-MT2");
+        assertThat(((Number) result.get("totalElements")).longValue()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("AI 工具入库日期范围: 唯一匹配是最早的一条 (最后一页) 也能查到, 总数是真实条数")
+    void aiToolDateRangeMatchBeyondFirstPage() throws Exception {
+        Map<String, Object> params = new HashMap<>();
+        params.put("startDate", "2026-01-01");
+        params.put("endDate", "2026-01-31");
+        params.put("size", 5);
+
+        Map<String, Object> result = tool.doExecute(F, params, Map.of());
+
+        @SuppressWarnings("unchecked")
+        List<MaterialBatchDTO> content = (List<MaterialBatchDTO>) result.get("content");
+        assertThat(content).extracting(MaterialBatchDTO::getId).containsExactly("B0");
+        assertThat(((Number) result.get("totalElements")).longValue()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("原料类型 + 状态组合: 两个条件在数据库里同时生效")
+    void materialTypeAndStatusTogether() {
+        PageRequest request = new PageRequest();
+        request.setSize(5);
+        request.setStatus("AVAILABLE");
+
+        PageResponse<MaterialBatchDTO> page = service.getMaterialBatchList(F, request,
+                new com.cretas.aims.dto.material.MaterialBatchListFilter(OTHER_MATERIAL, null, null));
+
+        assertThat(page.getContent()).isEmpty();
+        assertThat(page.getTotalElements()).isZero();
+    }
+
+    @Test
+    @DisplayName("日期写错 → 400, 不静默当成「不限日期」")
+    void unparseableDateIsRejected() {
+        Map<String, Object> params = new HashMap<>();
+        params.put("startDate", "2026/01/01");
+
+        assertThatThrownBy(() -> tool.doExecute(F, params, Map.of()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("2026/01/01");
     }
 
     @Test
