@@ -45,4 +45,16 @@ class MaterialBatchQueryPaginationContractTest {
         assertThat(filter.getValue().materialTypeId()).isEqualTo("A");
         assertThat(result.get("queryConditions")).isEqualTo(Map.of("materialTypeId", "A"));
     }
+
+    @org.junit.jupiter.api.Test
+    void aMissingPageIsAClearErrorNotAnEmptyListOrNpe() {
+        var service = mock(MaterialBatchService.class);
+        var tool = new MaterialBatchQueryTool();
+        ReflectionTestUtils.setField(tool, "materialBatchService", service);
+        // An unstubbed mock returns null: the tool must say so, not report 0 batches.
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> tool.doExecute("F006", new HashMap<>(Map.of("status", "AVAILABLE")), Map.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("没有返回分页结果");
+    }
 }

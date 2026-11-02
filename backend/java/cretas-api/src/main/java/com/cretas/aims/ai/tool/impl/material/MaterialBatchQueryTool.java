@@ -205,6 +205,10 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
                 factoryId, pageRequest, new MaterialBatchListFilter(
                         materialTypeId != null && !materialTypeId.trim().isEmpty() ? materialTypeId.trim() : null,
                         startDate, endDate));
+        if (pageResponse == null) {
+            // ⛔ 不当成「0 条」: 服务没给出分页结果就是没查到, 明确报错而不是空列表或 NPE
+            throw new IllegalStateException("原料批次查询没有返回分页结果 (factoryId=" + factoryId + ")");
+        }
 
         List<MaterialBatchDTO> content = pageResponse.getContent();
 
