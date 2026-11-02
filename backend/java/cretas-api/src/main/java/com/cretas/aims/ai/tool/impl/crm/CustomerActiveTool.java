@@ -92,4 +92,13 @@ public class CustomerActiveTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): mirrors the customer endpoints that serve the same data (not stricter than the App);
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read", "finance:read_write", "sales:read", "sales:read_write", "warehouse:read_write");
+    }
 }

@@ -415,6 +415,7 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("production:read", "production:read_write", "warehouse:read", "warehouse:read_write");
+        return java.util.Set.of("quality:read", "quality:read_write");
     }
+
 }

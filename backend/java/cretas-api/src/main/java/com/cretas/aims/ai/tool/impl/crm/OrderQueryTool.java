@@ -136,6 +136,6 @@ public class OrderQueryTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("finance:read", "sales:read", "sales:read_write");
+        return java.util.Set.of("sales:read_write", "sales:read", "finance:read");
     }
 }

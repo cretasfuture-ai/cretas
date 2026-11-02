@@ -44,6 +44,13 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
     @Autowired
     private PurchaseOrderRepository purchaseOrderRepository;
 
+    /** #1305 采购价口径: 配置的 procurement 读 (无配置行时只认采购岗)。缺了就拒绝 (fail closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.security.PriceVisibility priceVisibility;
+
+    @Autowired(required = false)
+    private com.cretas.aims.repository.UserRepository userRepository;
+
     @Override
     public String getToolName() {
         return "price_history_query";
@@ -95,6 +102,12 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
+        // 整个结果就是采购价 (月均价 / 环比), 不能像列表那样只遮价格字段: 看不到采购价的人一个数都不给。
+        // 与 PurchaseController / PriceFieldResponseAdvice 同一个判定 (S5-12 / #1305), 不用默认矩阵。
+        if (!callerMayViewPurchasePrices(context)) {
+            throw new com.cretas.aims.exception.BusinessException(403,
+                    "采购价历史只对有采购价查看权限的人开放 (按工厂权限配置; 未配置时为采购岗)。");
+        }
         String materialTypeId = getString(params, "materialTypeId");
         int monthsBack = clamp(getInteger(params, "monthsBack", DEFAULT_MONTHS_BACK),
                 1, MAX_MONTHS_BACK);
@@ -257,9 +270,35 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
         }
     }
 
+    private boolean callerMayViewPurchasePrices(Map<String, Object> context) {
+        if (priceVisibility == null || userRepository == null || context == null) {
+            return false;
+        }
+        Object id = context.get("userId");
+        Long userId;
+        try {
+            userId = id instanceof Number n ? n.longValue() : id != null ? Long.parseLong(id.toString()) : null;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        if (userId == null) {
+            return false;
+        }
+        return userRepository.findById(userId).map(priceVisibility::canViewPurchasePrices).orElse(false);
+    }
+
     /** spec §8.2 只读查询, 无副作用 */
     @Override
     public AccessMode getAccessMode() {
         return AccessMode.READ;
+    }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("procurement:read");
     }
 }

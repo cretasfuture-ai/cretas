@@ -70,6 +70,6 @@ public class ReturnOrderDetailTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "finance:read_write", "finance:read");
+        return java.util.Set.of("sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "finance:read_write", "finance:read", "report:read");
     }
 }

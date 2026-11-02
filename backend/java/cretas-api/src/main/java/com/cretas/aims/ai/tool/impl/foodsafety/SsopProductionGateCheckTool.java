@@ -155,4 +155,13 @@ public class SsopProductionGateCheckTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): organizer ruling (no App read page; the module that owns the work): SSOP is quality, and the pre-production check also admits production read;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("quality:read", "quality:read_write", "production:read", "production:read_write");
+    }
 }

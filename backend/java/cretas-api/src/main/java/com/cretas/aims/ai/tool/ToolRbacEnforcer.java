@@ -245,6 +245,9 @@ public class ToolRbacEnforcer {
             // (getRequiredPermissions / role gate), pinned per method by GatedDataToolAiPathPermissionTest.
     );
 
+    /** Kept in sync with RequireRoleInterceptor: platform admins pass every role requirement. */
+    public static final Set<String> PLATFORM_ADMIN_ROLES = Set.of("super_admin", "platform_admin", "developer", "platform_super_admin");
+
     /**
      * 中央鉴权判定。在 <b>每个 tool 执行 SITE</b> 紧邻 W0 WriteGuard 调用。
      *
@@ -255,6 +258,15 @@ public class ToolRbacEnforcer {
     public Decision check(ToolExecutor tool, Map<String, Object> context) {
         if (tool == null) {
             return Decision.allow();
+        }
+        Set<String> roles = tool.getRequiredRoles();
+        if (roles != null && !roles.isEmpty()) {
+            String role = rbacGuard.roleOf(context);
+            if (role == null || !(roles.contains(role) || PLATFORM_ADMIN_ROLES.contains(role))) {
+                log.warn("S6 AI-RBAC 角色拒绝: tool={}, requiredRoles={}, userId={}", tool.getToolName(), roles,
+                        context != null ? context.get("userId") : null);
+                return Decision.deny(rbacGuard.denyMessage(context, tool.getToolName()), Set.of());
+            }
         }
         Set<String> required = resolveRequiredPermissions(tool);
         if (required.isEmpty()) {

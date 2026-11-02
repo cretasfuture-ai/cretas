@@ -169,4 +169,13 @@ public class SupplierQualificationQueryExpiringTool extends AbstractBusinessTool
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): supplier qualifications have no App read page; procurement owns them, procurement read;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("procurement:read", "procurement:read_write");
+    }
 }
