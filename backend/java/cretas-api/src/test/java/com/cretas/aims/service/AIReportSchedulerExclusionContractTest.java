@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
  * <p>测试走的是 {@code @Scheduled} 方法本身 (生产入口), 不是只调过滤函数。
  */
 @ExtendWith(MockitoExtension.class)
-class AIReportSchedulerExclusionTest {
+class AIReportSchedulerExclusionContractTest {
 
     @Mock
     private AIEnterpriseService aiEnterpriseService;
