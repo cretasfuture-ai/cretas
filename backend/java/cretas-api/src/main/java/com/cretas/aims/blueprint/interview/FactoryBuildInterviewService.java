@@ -224,7 +224,7 @@ public class FactoryBuildInterviewService {
 
     /**
      * 管理员在事实页选完来源后, 让还在进行的那次访谈里的值与已确认事实一致 (保留已确认值 → 会话退回原值;
-     * 改用新回答 → 会话本来就是新值, 无需改)。只动仍在进行的会话, 且只动被选的那一项。
+     * 改用新回答 → 会话本来就是新值, 无需改)。只动仍在进行或已完成的会话, 且只动被选的那一项。
      */
     @Transactional
     public void syncSessionToConfirmedFact(String factoryId, String sourceRef, String field) {
@@ -232,7 +232,10 @@ public class FactoryBuildInterviewService {
         String sessionId = sourceRef.substring("conversation:".length());
         FactoryAssemblyConversationSession session = sessionRepository
                 .findBySessionIdAndFactoryId(sessionId, factoryId).orElse(null);
-        if (session == null || session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE) return;
+        // 已完成的访谈同样要退回：被驳回的值留在会话里，后面据此生成的方案就会带着它（物料「盐」缺储存类型）。
+        if (session == null
+                || (session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE
+                    && session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.COMPLETED)) return;
         String target = confirmedFacts.confirmedValue(factoryId, field).orElse(null);
         if (target == null || target.equals(session.getCollectedParameters().get(field))) return;
         session.addCollectedParameter(field, target);

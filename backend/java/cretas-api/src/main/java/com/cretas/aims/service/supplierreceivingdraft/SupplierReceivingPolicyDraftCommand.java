@@ -359,7 +359,13 @@ public class SupplierReceivingPolicyDraftCommand {
     }
 
     private void authorize(DraftRequest request, AuthenticatedOperator operator) {
-        if (operator == null || operator.operatorId() <= 0 || operator.actor().id() != request.operatorId()
+        // 平台管理员做对话建厂时是被允许的操作人（与物料/模块/包装草稿一致），以 PLATFORM_ADMIN 身份落库审计；
+        // 工厂账号仍必须是请求所属工厂的有效成员。
+        var actorType = operator == null ? null : operator.actor().type();
+        if (operator == null || operator.operatorId() <= 0
+                || (actorType != com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER
+                    && actorType != com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN)
+                || operator.actor().id() != request.operatorId()
                 || !request.factoryId().equals(clean(operator.factoryId()))) {
             throw invalid(403, "来料策略操作人身份与工厂范围不一致", "SUPPLIER_RECEIVING_OPERATOR_SCOPE_MISMATCH",
                     "从当前认证会话构造 operatorId 与 factoryId", "operator");
@@ -368,6 +374,7 @@ public class SupplierReceivingPolicyDraftCommand {
             throw invalid(403, "缺少来料策略模板权限", "SUPPLIER_RECEIVING_PERMISSION_REQUIRED",
                     "由供应链/质量负责人授予 supplier:policy:draft", "permission");
         }
+        if (actorType == com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN) return;
         var member = userRepository.findByIdAndFactoryId(operator.operatorId(), operator.factoryId());
         if (member.isEmpty() || !Boolean.TRUE.equals(member.get().getIsActive())) {
             throw invalid(403, "操作人不是当前工厂有效成员", "SUPPLIER_RECEIVING_OPERATOR_MEMBERSHIP_REQUIRED",

@@ -501,6 +501,30 @@ class FactoryConfirmedFactReuseTest {
                         FactoryConfirmedFact.CONFIRMED);
     }
 
+    /** D-S2-22 现场: 已完成访谈里「辅料改成盐」产生冲突, 选「保留已确认值」后被驳回的「盐」不许留在会话里(否则方案带着它, 保存时报物料盐缺储存类型)。 */
+    @Test
+    void keepingTheConfirmedValueRemovesTheRejectedAnswerEvenWhenTheInterviewIsAlreadyCompleted() {
+        String first = startSession();
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("stepCount", "3"));
+        interview.submitStructuredAnswers(F, first, ACTOR, Map.of("step1.auxMaterials", "没有"));
+        String second = startSession();
+        FactoryAssemblyConversationSession live = sessionOf(second);
+        live.completeParameterCollection();
+        replier(live, "{\"step1.auxMaterials\":\"盐\"}")
+                .continueConversation(F, ACTOR, second, "第1道辅料改成盐", "r1");
+        assertThat(live.getCollectedParameters()).containsEntry("step1.auxMaterials", "盐");
+        assertThat(live.getStatus()).isEqualTo(FactoryAssemblyConversationSession.SessionStatus.COMPLETED);
+        String answeredIn = facts.openConflicts(F).get(0).newSource();
+
+        facts.resolve(F, "step1.auxMaterials", FactoryConfirmedFactService.CHOICE_KEEP_CONFIRMED, "FACTORY_USER:7");
+        interview.syncSessionToConfirmedFact(F, answeredIn, "step1.auxMaterials");
+
+        assertThat(live.getCollectedParameters()).as("被驳回的盐不在会话的已收集值里")
+                .containsEntry("step1.auxMaterials", "没有")
+                .doesNotContainValue("盐");
+        assertThat(effective("step1.auxMaterials")).isEqualTo("没有");
+    }
+
     /** 选择题: 用户的说法按「唯一可对上的选项」映射; 对不上或有歧义 → 不猜, 也不产生冲突。 */
     @Test
     void choiceCorrectionsAreMappedToAValidOptionOrRejectedNeverGuessed() {
