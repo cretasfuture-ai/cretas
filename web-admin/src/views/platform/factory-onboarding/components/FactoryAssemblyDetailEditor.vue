@@ -207,6 +207,9 @@
           <small v-if="module.moduleId && !isKnownInterviewModule(module.moduleId)" class="module-id-error" data-testid="module-id-unknown" role="alert">
             「{{ module.moduleId }}」不是可用的模块 ID，请从下拉里选一个。
           </small>
+          <small v-else-if="!module.moduleId" class="module-id-error" data-testid="module-id-empty" role="alert">
+            这一行还没有选模块：保存前请选一个模块，或删除这一行。
+          </small>
           <el-input v-model="module.moduleName" placeholder="显示名" @update:model-value="changed" />
           <el-switch v-model="module.enabled" inline-prompt active-text="开" inactive-text="关" @update:model-value="changed" />
           <span class="json-summary">配置 JSON {{ Object.keys(module.config ?? {}).length }} 项</span>

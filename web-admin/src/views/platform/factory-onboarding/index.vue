@@ -1128,6 +1128,7 @@ import FactoryConversationRoutePreview from './components/FactoryConversationRou
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
 import { PLAN_STALE_MESSAGE, isPlanStale } from './planStaleness'
+import { moduleConfigProblems } from './interviewModuleCatalog'
 import FactoryReadiness from '../factory-review/components/FactoryReadiness.vue'
 import FactoryBasicsHandoff from './components/FactoryBasicsHandoff.vue'
 import type { FormalCapability, FormalExecution } from '@/api/factoryBlueprintActivationApi'
@@ -1681,9 +1682,14 @@ function errorMessage(error: unknown): string {
   return String(candidate.response?.data?.message ?? candidate.message ?? '请求没有完成')
 }
 
+/** 页面有一万多像素高，顶部的错误条在保存按钮处看不到：同时弹一个不自动消失的错误提示，并把错误条滚到视野里 */
+let flowToast: { close: () => void } | null = null
+
 function clearFlowIssue() {
   flowIssue.value = null
   retryTask.value = null
+  flowToast?.close()
+  flowToast = null
 }
 
 function showFlowIssue(
@@ -1692,6 +1698,11 @@ function showFlowIssue(
 ) {
   flowIssue.value = issue
   retryTask.value = retry
+  flowToast?.close()
+  flowToast = ElMessage.error({
+    message: `${issue.title}：${issue.detail}`, duration: 0, showClose: true, grouping: true,
+  })
+  void nextTick(() => document.querySelector('.flow-issue')?.scrollIntoView({ block: 'center', behavior: 'smooth' }))
 }
 
 async function retryFlowIssue() {
@@ -2676,6 +2687,8 @@ async function saveAuthoritativeDraft(): Promise<CanonicalFactoryBlueprint> {
   if (!generated.value?.schemas || !generated.value.suggestedData) {
     throw new Error('生成配置不完整，无法保存权威蓝图')
   }
+  const moduleProblems = moduleConfigProblems(generated.value.suggestedData.moduleConfigs)
+  if (moduleProblems.length) throw new Error(moduleProblems.join('；'))
   const canonicalSourceCustomerSupplied = canonicalBlueprint.value?.customerSupplied ?? undefined
   const authoritativeSessionId = canonicalViewMode.value
     ? canonicalBlueprint.value?.sessionId ?? undefined
