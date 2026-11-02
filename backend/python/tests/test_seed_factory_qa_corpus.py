@@ -89,6 +89,12 @@ def test_gate_rejects_unknown_entity_name():
     assert sf.check_answer(s, "产品Z的毛利率最高，值得关注一下哦。") == "unknown_name"
 
 
+def test_gate_rejects_meta_leak_and_markdown():
+    s = _one()
+    assert sf.check_answer(s, "合成工厂本月销售额不错，请继续关注变化哦。") == "meta_leak"
+    assert sf.check_answer(s, "**结论**：销售额平稳，请继续关注变化哦。") == "meta_leak"
+
+
 def test_gate_rejects_empty():
     assert sf.check_answer(_one(), "  ") == "empty"
 

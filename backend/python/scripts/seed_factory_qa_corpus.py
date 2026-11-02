@@ -212,7 +212,7 @@ def _build_monthly(rng: random.Random) -> Snapshot:
         sales.append(v)
         orders.append(int(v / rng.randint(900, 1500)))
     margin = [round(rng.uniform(18, 32), 1) for _ in months]
-    lines = ["【合成工厂月度数据: 月份 / 销售额(元) / 订单数 / 毛利率(%)】"]
+    lines = ["【工厂月度数据: 月份 / 销售额(元) / 订单数 / 毛利率(%)】"]
     s = Snapshot("")
     for m, sv, o, mg in zip(months, sales, orders, margin):
         lines.append(f"{m}月: {sv} / {o} / {mg}")
@@ -264,7 +264,7 @@ def _split(total: int, parts: int, rng: random.Random) -> List[int]:
 
 def _build_product_margin(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂产品毛利: 产品 / 本月销售额(元) / 本月成本(元) / 本月毛利率(%) / 上月毛利率(%)】"]
+    lines = ["【工厂产品毛利: 产品 / 本月销售额(元) / 本月成本(元) / 本月毛利率(%) / 上月毛利率(%)】"]
     tot_s = tot_c = 0
     for p in PRODUCTS:
         sv = rng.randint(8, 30) * 10000
@@ -285,7 +285,7 @@ def _build_product_margin(rng: random.Random) -> Snapshot:
 
 def _build_inventory(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂原料库存(公斤): 原料 / 当前库存 / 安全库存】"]
+    lines = ["【工厂原料库存(公斤): 原料 / 当前库存 / 安全库存】"]
     for m in MATERIALS:
         safe = rng.randint(2, 8) * 100
         cur = int(safe * rng.uniform(0.4, 1.8))
@@ -299,7 +299,7 @@ def _build_inventory(rng: random.Random) -> Snapshot:
 
 def _build_supplier_price(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂原料单价(元/公斤): 原料 / 供应商 / 本月 / 上月】"]
+    lines = ["【工厂原料单价(元/公斤): 原料 / 供应商 / 本月 / 上月】"]
     m = MATERIALS[0]
     for sup in SUPPLIERS:
         prev = round(rng.uniform(8, 20), 1)
@@ -315,7 +315,7 @@ def _build_supplier_price(rng: random.Random) -> Snapshot:
 
 def _build_scheduling(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂明日排班(人数): 班次 / 需求人数 / 已排人数】"]
+    lines = ["【工厂明日排班(人数): 班次 / 需求人数 / 已排人数】"]
     for sh in SHIFTS:
         need = rng.randint(8, 20)
         have = max(1, need + rng.randint(-5, 4))
@@ -328,7 +328,7 @@ def _build_scheduling(rng: random.Random) -> Snapshot:
 
 def _build_efficiency(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂岗位人效: 岗位 / 在岗人数 / 本月产出(件) / 本月人均产出(件) / 上月人均产出(件)】"]
+    lines = ["【工厂岗位人效: 岗位 / 在岗人数 / 本月产出(件) / 本月人均产出(件) / 上月人均产出(件)】"]
     for p in POSITIONS:
         n = rng.randint(5, 18)
         out = rng.randint(2000, 9000)
@@ -343,7 +343,7 @@ def _build_efficiency(rng: random.Random) -> Snapshot:
 
 def _build_anomaly(rng: random.Random) -> Snapshot:
     s = Snapshot("")
-    lines = ["【合成工厂本月指标 vs 近3月均值】"]
+    lines = ["【工厂本月指标 vs 近3月均值】"]
     for name, base, unit in (("损耗率", 3.2, "%"), ("返品率", 1.1, "%"), ("单位耗电", 42.0, "度")):
         cur = round(base * rng.uniform(0.8, 1.6), 1)
         lines.append(f"{name}: 本月 {cur}{unit} / 近3月均值 {base}{unit}")
@@ -356,7 +356,7 @@ def _build_anomaly(rng: random.Random) -> Snapshot:
 def _build_cost(rng: random.Random) -> Snapshot:
     s = Snapshot("")
     sales = rng.randint(30, 60) * 10000
-    lines = [f"【合成工厂本月成本构成(元); 本月销售额 {sales}】"]
+    lines = [f"【工厂本月成本构成(元); 本月销售额 {sales}】"]
     s.add(sales)
     tot = 0
     for it in COST_ITEMS:
@@ -376,7 +376,7 @@ def _build_consumption(rng: random.Random) -> Snapshot:
     for _ in range(4):
         v = int(v * rng.uniform(0.85, 1.2))
         vals.append(v)
-    lines = ["【合成工厂近4周领料量(公斤): 第1周 ... 第4周】", " / ".join(map(str, vals))]
+    lines = ["【工厂近4周领料量(公斤): 第1周 ... 第4周】", " / ".join(map(str, vals))]
     s.add(*vals, sum(vals), sum(vals) / 4, 1, 2, 3, 4)
     for i in range(1, 4):
         _derived(s, vals[i], vals[i - 1])
@@ -394,7 +394,7 @@ def _build_forecast(rng: random.Random) -> Snapshot:
         vals.append(v)
     avg = round(sum(vals) / 4)
     lo, hi = min(vals), max(vals)
-    lines = ["【合成工厂近4周每周销售额(元)】", " / ".join(map(str, vals)),
+    lines = ["【工厂近4周每周销售额(元)】", " / ".join(map(str, vals)),
              f"近4周均值 {avg}, 最低 {lo}, 最高 {hi}"]
     s.add(*vals, avg, lo, hi, 1, 2, 3, 4, 7)
     s.text = "\n".join(lines)
@@ -418,6 +418,7 @@ SYSTEM_PROMPT = (
     "规则: 1) 只能使用【数据】里给出的数字, 或由这些数字直接算出的比例/差值, 不得编造任何数字; "
     "2) 用大白话, 短句, 先给结论再给依据; 3) 用观察动词(关注/排查/了解), 不下因果断言, 问『为什么』时只列数据上能看到的变化; "
     "4) 数据里没有的内容如实说明『现有数据看不出』; 5) 不涉及生产工艺步骤、配方参数、个人薪酬; "
+    "不要用 markdown 符号(星号、井号), 不要提到『合成』『模拟』『示例』; "
     "6) 问题与工厂无关时, 礼貌说明只回答工厂经营问题; 问题要求做不到的分析时, 明确说现在做不了并给出能查的替代查询。"
 )
 
@@ -453,7 +454,7 @@ def build_sample(spec: IntentSpec, seed: str, question: str, rng: random.Random)
     return Sample(spec.code, seed, question, "\n".join(parts), snap, prev_q)
 
 
-def build_all_samples(per_seed: int = 3, seed: int = RANDOM_SEED) -> List[Sample]:
+def build_all_samples(per_seed: int = 4, seed: int = RANDOM_SEED) -> List[Sample]:
     out: List[Sample] = []
     for spec in INTENTS:
         for i, s in enumerate(spec.seeds):
@@ -506,6 +507,8 @@ def check_answer(sample: Sample, answer: str) -> Optional[str]:
     for w in RESTAURANT_WORDS:
         if w in answer or w in sample.input_text:
             return "restaurant_word"
+    if any(t in answer for t in ("合成", "模拟", "示例", "**", "##")):
+        return "meta_leak"
     if qa_has_blocked_content(sample.input_text, answer):
         return "training_rule"
     # 名称: 回答里出现的产品/原料/供应商/岗位名必须来自合成数据
@@ -693,7 +696,7 @@ def main() -> None:
     g = sub.add_parser("generate")
     g.add_argument("--out", required=True)
     g.add_argument("--review")
-    g.add_argument("--per-seed", type=int, default=3)
+    g.add_argument("--per-seed", type=int, default=4)
     w = sub.add_parser("write")
     w.add_argument("--manifest", required=True)
     w.add_argument("--confirm", default="")
