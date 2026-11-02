@@ -38,4 +38,28 @@ class AssemblyRawRecipeIntentContractTest {
         assertFalse(catalog.derive(snapshot, List.of(), payload).getFirst().isIncluded());
         verifyNoInteractions(repository, modules);
     }
+
+    /** D-S2-10: 路线终点是半成品、没有 raw→成品换算时, 工序上填的数字出成率就是配方事实 (QATEST 实测 conversionRates=0)。 */
+    @Test
+    void numericYieldOnASemiFinishedStepOpensBomButNonNumericOrZeroDoesNot() {
+        var catalog = new FactoryBlueprintCapabilityCatalog(mock(FactoryCapabilityDefinitionRepository.class),
+                mock(ModuleSchemaRepository.class));
+        var definition = FactoryCapabilityDefinition.builder().capabilityId("bom").label("配方").displayOrder(1)
+                .derivationStrategy("BOM").dependsOn(List.of()).build();
+        var snapshot = new FactoryBlueprintCapabilityCatalog.CatalogSnapshot("test", "digest", List.of(definition), LocalDateTime.now());
+        var payload = new ApplyAIInitRequest();
+        var data = new ApplyAIInitRequest.SuggestedData();
+        payload.setSuggestedData(data);
+        var step = new ApplyAIInitRequest.WorkProcessItem();
+        step.setName("焯水");
+        data.setWorkProcesses(List.of(step));
+        assertFalse(catalog.derive(snapshot, List.of(), payload).getFirst().isIncluded()); // 阴性: 没填出成率
+
+        step.setYieldMin(BigDecimal.ZERO); step.setYieldMax(BigDecimal.ZERO);
+        assertFalse(catalog.derive(snapshot, List.of(), payload).getFirst().isIncluded()); // 阴性: 0 不是出成率
+
+        step.setYieldMin(new BigDecimal("0.85")); step.setYieldMax(new BigDecimal("0.85"));
+        var bom = catalog.derive(snapshot, List.of(), payload).getFirst();
+        assertTrue(bom.isIncluded()); assertEquals("READY", bom.getStatus()); assertEquals(1, bom.getPlannedCount());
+    }
 }

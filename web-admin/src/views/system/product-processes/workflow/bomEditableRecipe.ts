@@ -32,7 +32,11 @@ export function pickEditableRecipe<T extends RecipeVersionLike>(versions: T[] | 
   if (!Array.isArray(versions) || versions.length === 0) return null;
 
   // 多个草稿属于异常数据; 取版本号最大的那个, 与 BOM 页「继续编辑最新草稿」一致。
-  const drafts = versions.filter((item) => upper(item.status) === 'DRAFT');
+  // 版本号不高于生效版的草稿是过期草稿 (prod 实测: 发布并生效后, 发布前建的草稿 v2 还挂着, 页头一直说「草稿 v2 未生效」
+  // 而生效的已是 v3), 它永远不会成为生效版, 不算「待生效的草稿」。
+  const activeVersion = Math.max(0, ...versions.filter((item) => upper(item.status) === 'ACTIVE')
+    .map((item) => item.version ?? 0));
+  const drafts = versions.filter((item) => upper(item.status) === 'DRAFT' && (item.version ?? 0) > activeVersion);
   if (drafts.length > 0) {
     return drafts.reduce((best, item) => ((item.version ?? 0) > (best.version ?? 0) ? item : best));
   }

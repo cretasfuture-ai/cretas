@@ -548,6 +548,47 @@ def _normalize_conversions(suggested: dict):
             skipped.append('%s(%s)' % (label, why))
     return (kept, skipped)
 
+def _derive_chain_conversion(suggested: dict):
+    """D-S2-10: 访谈里每道工序填的数字出成率, 在「一个原料 → 一个成品」时连成原料→成品换算。
+
+    模型自己写 conversionRates 经常给 0 条 (QATEST 实测: 第3道 85% 只落在工序 yieldMin/Max 上, 换算为空,
+    配方依赖 bom 永远补不上)。这里做的是**乘法**, 不是理解:
+    · 只在换算为空、原料恰好 1 个、成品恰好 1 个、至少有一道工序给了数字出成率时才产出;
+    · 每道工序取 yieldMin==yieldMax 的值 (只给一端也用那一端), 区间不一致的工序不敢取、整条不产出;
+    · 没填出成率的工序不计入 (note 里明说), 来源标 CALCULATED, 用户在专业复核里看得到也改得了。
+    :return: 换算 dict 或 None
+    """
+    if not isinstance(suggested, dict):
+        return None
+    if suggested.get('conversionRates'):
+        return None
+    mats = [t for t in suggested.get('materialTypes') or [] if isinstance(t, dict) and str(t.get('code') or '').strip()]
+    prods = [t for t in suggested.get('productTypes') or [] if isinstance(t, dict) and str(t.get('code') or '').strip()]
+    if len(mats) != 1 or len(prods) != 1:
+        return None
+    steps = [w for w in suggested.get('workProcesses') or [] if isinstance(w, dict)]
+    steps.sort(key=lambda w: w.get('sortOrder') if isinstance(w.get('sortOrder'), (int, float)) else 0)
+    rate, used, unused = (1.0, [], [])
+    for w in steps:
+        lo, hi = (w.get('yieldMin'), w.get('yieldMax'))
+        nums = [v for v in (lo, hi) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0]
+        name = str(w.get('name') or '').strip() or '某道工序'
+        if not nums:
+            unused.append(name)
+            continue
+        if len(nums) == 2 and lo != hi:
+            return None
+        rate *= nums[0]
+        used.append('%s %s' % (name, nums[0]))
+    if not used:
+        return None
+    note = '由访谈里各道工序的出成率相乘得出（%s）' % '、'.join(used)
+    if unused:
+        note += '；%s 没填出成率，没有计入' % '、'.join(unused)
+    return {'fromCode': str(mats[0]['code']).strip(), 'toCode': str(prods[0]['code']).strip(),
+            'rate': round(rate, 6), 'provenance': 'CALCULATED', 'note': note}
+
+
 _FIELD_NAME_PLAIN = {'suggestedData': '这次配出来的东西', 'productTypes': '成品清单', 'materialTypes': '原料清单', 'conversionRates': '出成换算', 'workProcesses': '工序清单', 'productProcesses': '产品工序链', 'haccpCheckpoints': '关键控制点', 'codeSegments': '编码大类', 'metricWatches': '要盯的指标', 'moduleConfigs': '功能开关', 'indicatorOptOut': '不看的指标', 'warehouses': '存放区', 'productionLines': '产线与设备产能', 'alerts': '提醒', 'fromCode': '原料', 'toCode': '成品', 'boxConversionCoefficient': '一箱装多少', 'level1Unit': '包装单位', 'industryCode': '行业', 'aiSummary': '说明'}
 
 def _plainify(text, suggested):
@@ -1179,6 +1220,10 @@ async def generate_configuration(request: FactoryInitRequest):
         logger.info('Factory init: productProcesses=%d 条; 跳过 %d 条 %s', len(pps), len(pp_skipped), pp_skipped)
         parsed['aiSummary'] = (parsed.get('aiSummary') or '') + _product_process_note(pp_skipped)
         conversions, conv_skipped = _normalize_conversions(parsed['suggestedData'])
+        if not conversions:
+            _chained = _derive_chain_conversion(parsed['suggestedData'])
+            if _chained:
+                conversions = [_chained]
         parsed['suggestedData']['conversionRates'] = conversions
         logger.info('Factory init: conversionRates=%d 条; 丢掉 %d 条 %s', len(conversions), len(conv_skipped), conv_skipped)
         parsed['aiSummary'] = (parsed.get('aiSummary') or '') + _conversion_note(conv_skipped)

@@ -128,3 +128,40 @@ async def test_cache_separates_all_prompt_inputs_and_reuses_only_exact_request(m
         assert result["success"] is True
         assert result["data"]["factoryName"] == request["factory_name"]
     assert len(calls) == 4
+
+
+def _chain_data(**over):
+    data = {
+        "materialTypes": [{"code": "RM_BEEF", "name": "冻牛肉"}],
+        "productTypes": [{"code": "PROD_LB", "name": "卤牛肉"}],
+        "conversionRates": [],
+        "workProcesses": [
+            {"name": "解冻", "sortOrder": 1},
+            {"name": "修整", "sortOrder": 2},
+            {"name": "焯水", "sortOrder": 3, "yieldMin": 0.85, "yieldMax": 0.85},
+        ],
+    }
+    data.update(over)
+    return data
+
+
+def test_chain_conversion_multiplies_the_numeric_step_yields_and_says_where_it_came_from():
+    got = generation._derive_chain_conversion(_chain_data())
+    assert got["fromCode"] == "RM_BEEF" and got["toCode"] == "PROD_LB"
+    assert got["rate"] == 0.85 and got["provenance"] == "CALCULATED"
+    assert "焯水 0.85" in got["note"] and "解冻" in got["note"] and "没有计入" in got["note"]
+    data = _chain_data()
+    data["workProcesses"][0].update(yieldMin=0.9, yieldMax=0.9)
+    assert generation._derive_chain_conversion(data)["rate"] == 0.765
+
+
+def test_chain_conversion_refuses_to_guess():
+    assert generation._derive_chain_conversion(_chain_data(conversionRates=[{"fromCode": "A"}])) is None
+    assert generation._derive_chain_conversion(_chain_data(materialTypes=[])) is None
+    two = _chain_data(materialTypes=[{"code": "A"}, {"code": "B"}])
+    assert generation._derive_chain_conversion(two) is None
+    no_yield = _chain_data(workProcesses=[{"name": "解冻", "sortOrder": 1}])
+    assert generation._derive_chain_conversion(no_yield) is None
+    ranged = _chain_data()
+    ranged["workProcesses"][2].update(yieldMin=0.8, yieldMax=0.9)
+    assert generation._derive_chain_conversion(ranged) is None

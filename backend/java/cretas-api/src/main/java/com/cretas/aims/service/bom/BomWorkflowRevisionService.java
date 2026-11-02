@@ -77,7 +77,11 @@ public class BomWorkflowRevisionService {
         if (revisionIds.isEmpty()) return Optional.empty();
         Optional<BomRecipe> recipe = recipeRepository
                 .findByFactoryIdAndProductTypeIdAndWorkflowRevisionIdInOrderByVersionDesc(
-                        factoryId, productTypeId, revisionIds).stream().findFirst();
+                        factoryId, productTypeId, revisionIds).stream()
+                // 草稿从没生效过, 不是这个历史版本「当时用的」配方: prod 实测 v1 上挂着一份在 v2 发布前建的草稿 v2,
+                // 取最新版会把它当成 v1 的配方 (带着后来才加的辅料)。只认生效过的 (ACTIVE / ARCHIVED)。
+                .filter(item -> item.getStatus() != BomRecipe.Status.DRAFT)
+                .findFirst();
         recipe.ifPresent(found -> found.getItems().size());
         return recipe;
     }
