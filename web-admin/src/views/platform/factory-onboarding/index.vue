@@ -847,6 +847,18 @@
           description="下面只能显示「将写入什么」，无法标出哪些是覆盖。建议确认后再核对一次工厂配置。"
         />
 
+        <el-alert
+          v-if="planStale"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="访谈答案已经变化，当前方案是按旧答案生成的"
+          data-testid="plan-stale-alert"
+        >
+          <p>{{ PLAN_STALE_MESSAGE }}</p>
+          <el-button type="primary" size="small" :loading="generating" @click="generate">按最新答案重新生成</el-button>
+        </el-alert>
+
         <!-- Rule 1: 逐项显示 现值 → 结果 -->
         <el-table :data="diffRows" size="small" border class="diff">
           <el-table-column prop="group" label="类别" width="110" />
@@ -1064,7 +1076,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, WarningFilled } from '@element-plus/icons-vue'
@@ -1115,6 +1127,7 @@ import FactoryInterviewArchive from './components/FactoryInterviewArchive.vue'
 import FactoryConversationRoutePreview from './components/FactoryConversationRoutePreview.vue'
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
+import { PLAN_STALE_MESSAGE, isPlanStale } from './planStaleness'
 import FactoryReadiness from '../factory-review/components/FactoryReadiness.vue'
 import FactoryBasicsHandoff from './components/FactoryBasicsHandoff.vue'
 import type { FormalCapability, FormalExecution } from '@/api/factoryBlueprintActivationApi'
@@ -1216,6 +1229,10 @@ const retryTask = ref<null | (() => Promise<void> | void)>(null)
 const progress = ref<FactoryBuildProgress | null>(null)
 const progressChangeNotice = ref<{ title: string; detail: string } | null>(null)
 const generated = ref<AIFactoryInitResult | null>(null)
+/** 生成方案时用的访谈描述；访谈答案之后变了，方案就过期了（见 planStaleness.ts） */
+const generatedFromDescription = ref('')
+const planStale = computed(() => !canonicalViewMode.value
+  && isPlanStale(generatedFromDescription.value, progress.value?.assembledDescription, !!generated.value))
 const proposalNeedsCorrection = ref(false)
 const canonicalBlueprint = ref<CanonicalFactoryBlueprint | null>(null)
 const formalExecutions = ref<Partial<Record<FormalCapability, FormalExecution>>>({})
@@ -1806,6 +1823,16 @@ async function chooseFactory() {
 async function scrollLog() {
   await nextTick()
   if (logRef.value) logRef.value.scrollTop = logRef.value.scrollHeight
+}
+
+/** 回到本页（例如从「已确认资料」页选完来源回来）时静默读回最新答案；失败不打扰 */
+async function refreshProgressQuietly() {
+  if (!sessionId.value || canonicalViewMode.value || sending.value || generating.value || previewing.value) return
+  try { await refreshProgress() } catch { /* 读不到就保持现状，保存时服务端仍会校验 */ }
+}
+
+function onPageVisible() {
+  if (document.visibilityState === 'visible') void refreshProgressQuietly()
 }
 
 async function refreshProgress() {
@@ -2679,6 +2706,17 @@ async function saveAuthoritativeDraft(): Promise<CanonicalFactoryBlueprint> {
 async function refreshPreview(): Promise<boolean> {
   if (!generated.value?.schemas || !generated.value.suggestedData || previewing.value) return false
   clearFlowIssue()
+  await refreshProgressQuietly()
+  if (planStale.value) {
+    previewDirty.value = true
+    showFlowIssue({
+      title: '方案需要按最新答案重新生成',
+      detail: PLAN_STALE_MESSAGE,
+      sideEffect: '没有写入工厂；点「按最新答案重新生成」会用最新答案重做方案，手工改过的细节需要再确认。',
+      retryLabel: '按最新答案重新生成',
+    }, generate)
+    return false
+  }
   previewing.value = true
   try {
     await saveAuthoritativeDraft()
@@ -2708,6 +2746,7 @@ async function retrySavedPreview() {
 
 async function generate() {
   if (!progress.value?.assembledDescription) return
+  const describedFrom = progress.value.assembledDescription
   clearFlowIssue()
   generating.value = true
   proposalNeedsCorrection.value = false
@@ -2725,6 +2764,7 @@ async function generate() {
       })
     }
     generated.value = res.data
+    generatedFromDescription.value = describedFrom
     generationReceived = true
     // Rule 1: 进预览前先把现值取回来, 才谈得上「现值 → 确认后的值」
     currentLoadFailed.value = false
@@ -3260,6 +3300,13 @@ onMounted(async () => {
     await hydrateFactoryWorkspace()
   }
   else await loadFactories()
+  document.addEventListener('visibilitychange', onPageVisible)
+  window.addEventListener('focus', onPageVisible)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onPageVisible)
+  window.removeEventListener('focus', onPageVisible)
 })
 </script>
 
