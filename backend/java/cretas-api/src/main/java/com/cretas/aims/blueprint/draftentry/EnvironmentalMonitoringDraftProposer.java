@@ -8,8 +8,8 @@ import java.util.Arrays; import java.util.List;
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @Component public class EnvironmentalMonitoringDraftProposer implements CapabilityDraftProposer {
  private static final String WHY="蓝图没有环境采样点、目标微生物、频率、阈值、验证和证据的完整事实";
- private static List<Option> opts(Class<? extends Enum<?>> c){return Arrays.stream(c.getEnumConstants()).map(e->new Option(e.name(),e.name())).toList();}
- private static String ec(Class<? extends Enum<?>> c){return String.join("、",opts(c).stream().map(Option::value).toList())+" 之一";}
+ private static List<Option> opts(Class<? extends Enum<?>> c){return Arrays.stream(c.getEnumConstants()).map(e->new Option(e.name(),DraftEnumLabels.label(e))).toList();}
+ private static String ec(Class<? extends Enum<?>> c){return String.join("、",opts(c).stream().map(Option::label).toList())+" 之一";}
  private static List<RequiredInput> fields(){return List.of(
   RequiredInput.text("zoneCode","卫生分区",WHY,"最长 64 位",64), RequiredInput.text("sanitationTemplateCode","清洁模板",WHY,"最长 128 位",128),
   RequiredInput.oneOf("contactClass","接触类别",WHY,ec(ContactClass.class),opts(ContactClass.class)), RequiredInput.oneOf("sampleMedium","样本介质",WHY,ec(SampleMedium.class),opts(SampleMedium.class)),

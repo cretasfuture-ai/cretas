@@ -67,7 +67,7 @@ public class AccountsDraftProposer implements CapabilityDraftProposer {
             Competency.INTERNAL_AUDIT, "内部审核",
             Competency.FIRST_AID, "急救"));
     private static final String COMPETENCY_VALUES = String.join("、",
-            Arrays.stream(Competency.values()).map(Enum::name).toList());
+            COMPETENCY_OPTIONS.stream().map(Option::label).toList());
 
     /** The command's row limits ({@code positions} non-empty, at most {@code MAX_POSITIONS}) and field lengths. */
     static final int MIN_POSITIONS = 1;

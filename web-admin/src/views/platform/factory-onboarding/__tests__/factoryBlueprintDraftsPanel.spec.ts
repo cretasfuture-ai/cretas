@@ -308,6 +308,14 @@ describe('FactoryBlueprintDraftsPanel', () => {
     applied.unmount()
   })
 
+  it('no dropdown option in the drafts panel is shown as a raw enum code', async () => {
+    const w = mountPanel(); await flushPromises()
+    const labels = w.findAll('option').map((o) => o.text().trim()).filter(Boolean)
+    expect(labels.length, '页面上确实渲染了下拉选项').toBeGreaterThan(0)
+    expect(labels.filter((text) => /^[A-Z_]+$/.test(text)), '这些选项显示的是英文代码而不是中文名').toEqual([])
+    w.unmount()
+  })
+
   it('(a2) a factory super admin of another factory is treated like the platform admin', async () => {
     auth.factoryId = 'F001'
     mountPanel()

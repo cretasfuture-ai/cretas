@@ -64,7 +64,7 @@ public class WarehousesDraftProposer implements CapabilityDraftProposer {
             .map(type -> new Option(type.name(), TYPE_LABELS.getOrDefault(type, type.name())))
             .toList();
     private static final String TYPE_CONSTRAINT = String.join("、",
-            TYPE_OPTIONS.stream().map(Option::value).toList()) + " 之一";
+            TYPE_OPTIONS.stream().map(Option::label).toList()) + " 之一";
     private static final Option CREATE = new Option(DraftOperation.CREATE.name(), "新建");
     private static final Option UPDATE = new Option(DraftOperation.UPDATE.name(), "修改已有");
     static final List<Option> OPERATION_OPTIONS = List.of(CREATE, UPDATE);
@@ -101,7 +101,7 @@ public class WarehousesDraftProposer implements CapabilityDraftProposer {
                     "2–" + MAX_EQUIPMENT_CODE + " 位大写字母、数字、下划线或连字符，草稿内不重复", MAX_EQUIPMENT_CODE),
             RequiredInput.text("equipmentName", "控制点名称", WHY_NO_COLD, "1–" + MAX_EQUIPMENT_NAME + " 字", MAX_EQUIPMENT_NAME),
             RequiredInput.oneOf("type", "控制点类型", WHY_NO_COLD,
-                    String.join("、", COLD_TYPE_OPTIONS.stream().map(Option::value).toList()) + " 之一",
+                    String.join("、", COLD_TYPE_OPTIONS.stream().map(Option::label).toList()) + " 之一",
                     COLD_TYPE_OPTIONS),
             RequiredInput.text("warehouseCode", "所在仓库编号", WHY_NO_COLD,
                     "本草稿里的仓库或库里已启用的仓库编号（最长 " + MAX_CODE + " 位）；只有冷藏车可以留空", MAX_CODE).allowNull(),
