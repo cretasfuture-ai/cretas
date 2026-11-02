@@ -241,7 +241,7 @@ public final class FactoryBlueprintActivationCenter {
         // runs them. approve() already refuses a self-approving requester, so with this the three
         // roles cannot collapse into one person.
         if (executedActor.equals(approved.approvedActor())) {
-            throw new IllegalArgumentException("Approver cannot execute their own activation");
+            throw new IllegalArgumentException("Approver cannot execute their own activation（审批人不能执行自己审批的申请，请换另一位操作人执行）");
         }
         if (approved.approvedAt() == null || approved.approvedAt().isAfter(clock.instant())) {
             throw new IllegalArgumentException("Approval expired; re-preview and re-approve");
@@ -558,9 +558,18 @@ public final class FactoryBlueprintActivationCenter {
                          "workflow".equals(candidate.capabilityId())
                          && com.cretas.aims.blueprint.draftentry.BlueprintDraftLifecycle.allows(
                              response.getLifecycleState(), candidate.capabilityId()))))) {
-            issues.add(issue("BLUEPRINT_LINEAGE_MISMATCH", request.blueprintId(),
-                    "服务端当前 Blueprint 与 activation 请求的身份或版本不一致",
-                    "刷新当前 Blueprint 后重新预览"));
+            boolean published = response != null && request.blueprintId().equals(response.getId())
+                    && response.getVersion() != null && request.blueprintVersion() == response.getVersion()
+                    && ("PUBLISHED".equals(response.getLifecycleState()) || "APPLIED".equals(response.getLifecycleState()));
+            if (published) {
+                issues.add(issue("BLUEPRINT_LINEAGE_MISMATCH", request.blueprintId(),
+                        "蓝图第" + response.getVersion() + "版已经发布，模块配置只能在发布之前应用，发布之后这一版不能再应用模块配置",
+                        "回到蓝图修改后保存成新版本，重新写入模块草稿，先完成「配置应用」，再发布蓝图；Workflow 发布不受影响，可继续"));
+            } else {
+                issues.add(issue("BLUEPRINT_LINEAGE_MISMATCH", request.blueprintId(),
+                        "服务端当前 Blueprint 与 activation 请求的身份或版本不一致（蓝图可能已被改成新版本）",
+                        "刷新页面读取当前蓝图后，重新写入草稿并重新预览"));
+            }
             return;
         }
         if (!request.blueprintDigest().equals(serverBlueprintDigest(response))) {

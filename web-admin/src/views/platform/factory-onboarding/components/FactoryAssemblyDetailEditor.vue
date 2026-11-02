@@ -199,7 +199,14 @@
 
         <h4>前端模块裁剪</h4>
         <div v-for="(module, index) in moduleConfigs" :key="`${module.moduleId}-${index}`" class="module-row">
-          <el-input v-model="module.moduleId" placeholder="模块 ID" @update:model-value="changed" />
+          <el-select v-model="module.moduleId" filterable placeholder="选择模块" data-testid="module-id-select"
+                     @update:model-value="(id: string) => onModuleChosen(module, id)">
+            <el-option v-for="option in INTERVIEW_MODULE_OPTIONS" :key="option.moduleId" :label="`${option.label}（${option.moduleId}）`" :value="option.moduleId" />
+            <el-option v-if="module.moduleId && !isKnownInterviewModule(module.moduleId)" :label="`${module.moduleId}（不可用）`" :value="module.moduleId" disabled />
+          </el-select>
+          <small v-if="module.moduleId && !isKnownInterviewModule(module.moduleId)" class="module-id-error" data-testid="module-id-unknown" role="alert">
+            「{{ module.moduleId }}」不是可用的模块 ID，请从下拉里选一个。
+          </small>
           <el-input v-model="module.moduleName" placeholder="显示名" @update:model-value="changed" />
           <el-switch v-model="module.enabled" inline-prompt active-text="开" inactive-text="关" @update:model-value="changed" />
           <span class="json-summary">配置 JSON {{ Object.keys(module.config ?? {}).length }} 项</span>
@@ -274,6 +281,7 @@ import type {
   WorkProcessSuggestion,
 } from '@/api/factoryOnboardingApi'
 import PanelTitle from './FactoryAssemblyPanelTitle.vue'
+import { INTERVIEW_MODULE_OPTIONS, interviewModuleLabel, isKnownInterviewModule } from '../interviewModuleCatalog'
 
 const props = defineProps<{ suggestedData: SuggestedData; schemas: EntitySchema[] }>()
 const emit = defineEmits<{
@@ -414,6 +422,10 @@ function addHaccp() { haccp.value.push({ name: '', hazardType: '', criticalLimit
 function addWarehouse() { warehouses.value.push({ code: '', name: '', type: '' } satisfies WarehouseSuggestion); changed() }
 function addCodeSegment() { codeSegments.value.push({ code: '', label: '' } satisfies CodeSegmentSuggestion); changed() }
 function addThreshold() { thresholds.value.push({ key: '', value: '' } satisfies ThresholdSuggestion); changed() }
+function onModuleChosen(module: ModuleConfigSuggestion, id: string) {
+  if (!module.moduleName?.trim()) module.moduleName = interviewModuleLabel(id)
+  changed()
+}
 function addModuleConfig() { moduleConfigs.value.push({ moduleId: '', moduleName: '', enabled: true, config: {} } satisfies ModuleConfigSuggestion); changed() }
 function addSchema() { props.schemas.push({ entityType: '', entityName: '', description: '', fields: [] }); changed() }
 
@@ -486,6 +498,7 @@ h4 { margin: 18px 0 9px; color: #1a2332; font-size: 14px; }
 .route-edge-row { grid-template-columns: minmax(160px,1fr) minmax(110px,.45fr) minmax(160px,1fr) auto; }
 .pair-row { grid-template-columns: minmax(160px,.4fr) minmax(220px,1fr) auto; }
 .pair-row.compact { grid-template-columns: 1fr auto; margin-top: 10px; }
+.module-id-error { grid-column: 1 / -1; color: #c0392b; }
 .module-row { grid-template-columns: minmax(130px,.4fr) minmax(160px,.6fr) auto minmax(140px,.5fr) auto; }
 .schema-row { grid-template-columns: minmax(130px,.35fr) minmax(160px,.5fr) minmax(220px,1fr) auto auto; }
 .json-summary, .schema-row > span { color: #7a8599; font-size: 12px; }

@@ -94,7 +94,7 @@
       </li>
     </ol>
     <FactoryBlueprintActivationPanel :factory-id="factoryId" :blueprint-id="blueprint.id"
-      :can-confirm="canConfirm" :written="written" @changed="loadPromotions"
+      :can-confirm="canConfirm" :written="written" :lifecycle-state="blueprint.lifecycleState" :current-actor="currentActor" @changed="loadPromotions"
       @formal-state="(capability, result) => emit('formalState', capability, result)" />
   </section>
 </template>
@@ -146,6 +146,13 @@ const canConfirm = computed(() => canConfirmBlueprintDrafts({
   currentRole: String(authStore.currentRole ?? ''),
   factoryId: String(authStore.factoryId ?? ''),
 }, props.factoryId))
+
+/** 当前登录人的 actor 身份：用来在页面上提前说「审批人不能执行自己审批的申请」 */
+const currentActor = computed<{ type: 'FACTORY_USER' | 'PLATFORM_ADMIN'; id: number } | null>(() => {
+  const id = Number(authStore.user?.id)
+  if (!Number.isSafeInteger(id) || id <= 0) return null
+  return { type: authStore.user?.userType === 'platform' ? 'PLATFORM_ADMIN' : 'FACTORY_USER', id }
+})
 
 const rows = ref<DraftWriteOrderRow[]>([])
 const continuationRows = computed(() => ['PUBLISHED', 'APPLIED'].includes(props.blueprint.lifecycleState ?? '')

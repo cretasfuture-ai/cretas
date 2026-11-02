@@ -281,8 +281,11 @@ public class SupplierReceivingPolicyDraftCommand {
         String relationshipSnapshot;
         if (requested.materialRefType() == MaterialRefType.LIVE_MATERIAL) {
             RawMaterialType material = materialRepository.findByIdAndFactoryId(materialRefId, factoryId).orElse(null);
-            if (material == null) issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_NOT_FOUND", target + ".materialRefId",
-                    "当前工厂没有该正式物料", "选择当前工厂正式物料或 A2 物料草稿"));
+            if (material == null && materialDraftRepository.findByIdAndFactoryId(materialRefId, factoryId).isPresent()) {
+                issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_REF_TYPE_MISMATCH", target + ".materialRefType",
+                        "你选的是物料草稿，物料引用类型却选了正式物料", "把「物料引用类型」改成 MATERIAL_DRAFT"));
+            } else if (material == null) issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_NOT_FOUND", target + ".materialRefId",
+                    "当前工厂没有该正式物料", "从「物料引用」下拉里选当前工厂的正式物料或物料草稿"));
             else if (!Boolean.TRUE.equals(material.getIsActive())) issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_INACTIVE",
                     target + ".materialRefId", "停用物料不能进入新来料策略", "选择启用物料"));
             materialSnapshot = materialSnapshot(material);
@@ -290,14 +293,15 @@ public class SupplierReceivingPolicyDraftCommand {
                     .findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, materialRefId).orElse(null);
             if (relation == null || !Boolean.TRUE.equals(relation.getActive())) {
                 issues.add(issue("SUPPLIER_RECEIVING_RELATIONSHIP_REQUIRED", target + ".materialRefId",
-                        "正式物料必须已有同工厂有效供货关系", "由供应商主数据流程确认供货关系后重新预览"));
+                        "正式物料必须已有同工厂有效供货关系，这个供应商还没有这个物料的供货关系",
+                        "先在供应商档案里给该供应商添加这个物料的供货关系；或者改选「草稿 · …」物料并把类型改成 MATERIAL_DRAFT（草稿物料转正后再建供货关系）"));
             }
             relationshipSnapshot = relationshipSnapshot(relation);
         } else if (requested.materialRefType() == MaterialRefType.MATERIAL_DRAFT) {
             MaterialTypeDraft materialDraft = materialDraftRepository.findByIdAndFactoryId(materialRefId, factoryId).orElse(null);
             if (materialDraft == null || !"DRAFT".equals(materialDraft.getStatus())) {
                 issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_DRAFT_REQUIRED", target + ".materialRefId",
-                        "A2 物料草稿不存在或状态不是 DRAFT", "选择当前工厂可回读的 A2 物料草稿"));
+                        "A2 物料草稿不存在或状态不是 DRAFT（填写的可能是物料编码而不是草稿标识）", "从「物料引用」下拉里选「草稿 · …」那一项；下拉里没有就先写入「物料」草稿"));
             } else if (!Objects.equals(request.blueprintId(), materialDraft.getBlueprintId())
                     || request.blueprintVersion() != Objects.requireNonNullElse(materialDraft.getBlueprintVersion(), -1L)) {
                 issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_DRAFT_LINEAGE_MISMATCH", target + ".materialRefId",
