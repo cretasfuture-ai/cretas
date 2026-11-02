@@ -171,31 +171,55 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      * 批次列表的条件筛选 —— 全部在<b>分页之前</b>由数据库过滤 (ERP-S6-02-STATUS-FILTER-IGNORED-001)。
      *
      * <p>以前 status 被忽略、原料类型与入库日期在 AI 工具里按「当前这一页」事后过滤:
-     * 匹配项落在第 2 页以后就读成「没有」, 总数也是错的。这里每个条件都可选 (null = 不限),
-     * 用 {@code CAST(:x AS string) IS NULL} 给 PostgreSQL 类型提示 (database-entity-sync 规则)。
+     * 匹配项落在第 2 页以后就读成「没有」, 总数也是错的。这里每个条件都可选 (null = 不限)。
+     *
+     * <p>⛔ 不用 {@code CAST(:x AS string) IS NULL}: 那个写法对字符串参数成立, 对 null 的
+     * {@code LocalDate} / 枚举参数, Hibernate 6 在 PostgreSQL 上绑定不出类型, 驱动直接报
+     * 「Unknown Types value.」(H2 照样能跑, 只有 PG 测试照得出来)。所以每个可选条件拆成
+     * 「是否生效」的布尔标志 + 一个<b>永远非空</b>的值, 由 {@link #searchFilteredBound} 执行;
+     * 标志为 false 时值只是占位, 不参与过滤。
      *
      * @param scoped        true 时按 {@code createdByList} 限定 (DataScope); false 时传任意非空占位列表
      * @param keyword       已转义的关键词; null = 不按关键词搜
      */
+    default Page<MaterialBatch> searchFiltered(String factoryId, boolean scoped, Collection<Long> createdByList,
+                                               MaterialBatchStatus status, String materialTypeId,
+                                               LocalDate receiptFrom, LocalDate receiptTo, String keyword,
+                                               Pageable pageable) {
+        return searchFilteredBound(factoryId, scoped, createdByList,
+                status != null, status != null ? status : MaterialBatchStatus.AVAILABLE,
+                materialTypeId != null, materialTypeId != null ? materialTypeId : "",
+                receiptFrom != null, receiptFrom != null ? receiptFrom : LocalDate.of(1970, 1, 1),
+                receiptTo != null, receiptTo != null ? receiptTo : LocalDate.of(9999, 12, 31),
+                keyword != null, keyword != null ? keyword : "",
+                pageable);
+    }
+
+    /** 只由 {@link #searchFiltered} 调用: 所有值参数都非空, 是否生效看对应的布尔标志。 */
     @EntityGraph(attributePaths = {"materialType"})
     @Query("SELECT m FROM MaterialBatch m " +
            "LEFT JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
            "AND (:scoped = false OR m.createdBy IN :createdByList) " +
-           "AND (CAST(:status AS string) IS NULL OR m.status = :status) " +
-           "AND (CAST(:materialTypeId AS string) IS NULL OR m.materialTypeId = :materialTypeId) " +
-           "AND (CAST(:receiptFrom AS string) IS NULL OR m.receiptDate >= :receiptFrom) " +
-           "AND (CAST(:receiptTo AS string) IS NULL OR m.receiptDate <= :receiptTo) " +
-           "AND (CAST(:keyword AS string) IS NULL OR " + KEYWORD_MATCH + ")")
-    Page<MaterialBatch> searchFiltered(@Param("factoryId") String factoryId,
-                                       @Param("scoped") boolean scoped,
-                                       @Param("createdByList") java.util.Collection<Long> createdByList,
-                                       @Param("status") MaterialBatchStatus status,
-                                       @Param("materialTypeId") String materialTypeId,
-                                       @Param("receiptFrom") LocalDate receiptFrom,
-                                       @Param("receiptTo") LocalDate receiptTo,
-                                       @Param("keyword") String keyword,
-                                       Pageable pageable);
+           "AND (:byStatus = false OR m.status = :status) " +
+           "AND (:byMaterialType = false OR m.materialTypeId = :materialTypeId) " +
+           "AND (:byReceiptFrom = false OR m.receiptDate >= :receiptFrom) " +
+           "AND (:byReceiptTo = false OR m.receiptDate <= :receiptTo) " +
+           "AND (:byKeyword = false OR " + KEYWORD_MATCH + ")")
+    Page<MaterialBatch> searchFilteredBound(@Param("factoryId") String factoryId,
+                                            @Param("scoped") boolean scoped,
+                                            @Param("createdByList") Collection<Long> createdByList,
+                                            @Param("byStatus") boolean byStatus,
+                                            @Param("status") MaterialBatchStatus status,
+                                            @Param("byMaterialType") boolean byMaterialType,
+                                            @Param("materialTypeId") String materialTypeId,
+                                            @Param("byReceiptFrom") boolean byReceiptFrom,
+                                            @Param("receiptFrom") LocalDate receiptFrom,
+                                            @Param("byReceiptTo") boolean byReceiptTo,
+                                            @Param("receiptTo") LocalDate receiptTo,
+                                            @Param("byKeyword") boolean byKeyword,
+                                            @Param("keyword") String keyword,
+                                            Pageable pageable);
 
     /**
      * Sprint 6 W2-B (RBAC DataScope SELF/SELF_AND_BELOW/DEPT_AND_BELOW) — by createdBy IN list.
