@@ -149,7 +149,16 @@ def _is_far_background_supplement(
 
 
 def _is_candidate_tray_source(source: str) -> bool:
-    return source in {"candidate_lower_band", "candidate_full_frame_work_area"}
+    return source in {
+        "candidate_lower_band", "candidate_full_frame_work_area", "candidate_tiled_supplement",
+    }
+
+
+def _tiled_supplement_enabled(manifest: dict[str, Any]) -> bool:
+    value = manifest.get("trayTiledSupplementEnabled", False)
+    if type(value) is not bool:
+        raise RuntimeError("trayTiledSupplementEnabled must be a boolean")
+    return value
 
 
 def _box_iou(first: Sequence[float], second: Sequence[float]) -> float:
@@ -551,6 +560,7 @@ class _V8CascadeModels:
         candidate_tray_confidence: float = CANDIDATE_TRAY_CONFIDENCE,
         tray_full_frame_supplement: Any | None = None,
         full_frame_tray_confidence: float = 0.40,
+        tiled_supplement_enabled: bool = False,
     ) -> None:
         self.production = production
         self.tray_supplement = tray_supplement
@@ -559,6 +569,8 @@ class _V8CascadeModels:
         self.candidate_tray_confidence = float(candidate_tray_confidence)
         self.tray_full_frame_supplement = tray_full_frame_supplement
         self.full_frame_tray_confidence = float(full_frame_tray_confidence)
+        self.tiled_supplement_enabled = tiled_supplement_enabled
+        self._primary_tray_count = 0
         self.detection_type = Detection
         self.iou_threshold = 0.50
         self.ios_threshold = 0.80
@@ -609,6 +621,50 @@ class _V8CascadeModels:
         ]
 
     def detect_trays(self, image: np.ndarray, conf: float) -> list[Detection]:
+        preserved = self._detect_existing_trays(image, conf)
+        if not self.tiled_supplement_enabled:
+            return preserved
+        height, width = image.shape[:2]
+        triggered = width < height and self._primary_tray_count < SUPPLEMENT_SKIP_TRAY_COUNT
+        self.last_stats.update(tiledSupplementTriggered=triggered, tiledSupplementBoxesKept=0)
+        if not triggered or len(preserved) >= MAX_TRAYS:
+            return preserved
+        tile_width, tile_height = max(1, round(width * 0.65)), max(1, round(height * 0.65))
+        proposals: list[Detection] = []
+        # The existing cascade already supplements the lower band. Restrict this
+        # optional pass to the upper band, retaining both horizontal positions.
+        for x, y in ((0, 0), (width - tile_width, 0)):
+            for row in self.production.detect_trays(
+                image[y:y + tile_height, x:x + tile_width], PRODUCTION_TRAY_CONFIDENCE,
+            ):
+                # A tile's internal cut is not a physical tray boundary.
+                if ((x > 0 and row.x0 <= 2) or (y > 0 and row.y0 <= 2)
+                        or (x + tile_width < width and row.x1 >= tile_width - 2)
+                        or (y + tile_height < height and row.y1 >= tile_height - 2)):
+                    continue
+                proposals.append(Detection(
+                    row.x0 + x, row.y0 + y, row.x1 + x, row.y1 + y,
+                    row.confidence, row.class_id,
+                ))
+        unique: list[Detection] = []
+        for row in sorted(proposals, key=lambda item: -item.confidence):
+            if not self._duplicate(row, unique):
+                unique.append(row)
+        added = [row for row in unique if not _is_far_background_supplement(
+            row.as_xyxy(), width, height,
+        ) and not any(
+            _intersection_over_smaller(row.as_xyxy(), base.as_xyxy()) >= 0.60
+            for base in preserved
+        )][:max(0, MAX_TRAYS - len(preserved))]
+        combined = [*preserved, *added]
+        self.last_raw_detections.extend(
+            _detection_row(row, "candidate_tiled_supplement") for row in added
+        )
+        self.last_stats["tiledSupplementBoxesKept"] = len(added)
+        self._set_label_routes(image, combined)
+        return combined
+
+    def _detect_existing_trays(self, image: np.ndarray, conf: float) -> list[Detection]:
         preserved = self._detect_legacy_trays(image, conf)
         if self.tray_full_frame_supplement is None:
             return preserved
@@ -669,6 +725,7 @@ class _V8CascadeModels:
     ) -> list[Detection]:
         height, width = image.shape[:2]
         production = list(self.production.detect_trays(image, conf))
+        self._primary_tray_count = len(production)
         if width >= height or len(production) >= SUPPLEMENT_SKIP_TRAY_COUNT:
             self.last_raw_detections = [
                 _detection_row(row, "production_full") for row in production
@@ -1053,6 +1110,7 @@ class LabelQcV8Models:
                 return
             try:
                 bindings = self._bindings()
+                tiled_supplement_enabled = _tiled_supplement_enabled(self._manifest)
                 production = LabelQcYoloModels(self._model_dir)
                 if not production.available:
                     raise RuntimeError(production.load_error or "production models unavailable")
@@ -1123,6 +1181,7 @@ class LabelQcV8Models:
                     candidate_label=candidate_label,
                     tray_full_frame_supplement=tray_full_frame_supplement,
                     full_frame_tray_confidence=full_frame_confidence,
+                    tiled_supplement_enabled=tiled_supplement_enabled,
                 )
                 logger.info("Label QC v8 bundle loaded from %s", self._model_dir)
             except Exception as exc:  # environment and artifact dependent
