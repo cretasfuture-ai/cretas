@@ -30,3 +30,4 @@ test-reap-orphan-testenvs-retired.sh
 test-f006-aurora-runtime.sh
 test-public-repo-hosted-only.sh
 test-backup-copy-retention.sh
+test-pr-test-selection-ratchet.sh
