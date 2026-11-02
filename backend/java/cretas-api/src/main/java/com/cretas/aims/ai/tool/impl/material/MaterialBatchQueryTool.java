@@ -108,16 +108,11 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         Map<String, Object> status = new HashMap<>();
         status.put("type", "string");
         status.put("description", "批次状态筛选");
-        status.put("enum", Arrays.asList(
-                "PENDING",      // 待检验
-                "AVAILABLE",    // 可用
-                "RESERVED",     // 已预留
-                "IN_USE",       // 使用中
-                "USED_UP",      // 已用完
-                "EXPIRED",      // 已过期
-                "FROZEN",       // 冻品
-                "REJECTED"      // 已拒收
-        ));
+        // 取自批次状态枚举本身: 以前手写的列表里有 PENDING / IN_USE / REJECTED 这些不存在的状态,
+        // 又漏了 DEPLETED —— 模型照着选就是一次必然查空/报错的调用。
+        status.put("enum", Arrays.stream(com.cretas.aims.entity.enums.MaterialBatchStatus.values())
+                .map(Enum::name)
+                .collect(java.util.stream.Collectors.toList()));
         properties.put("status", status);
 
         // page: 页码（可选，默认1）

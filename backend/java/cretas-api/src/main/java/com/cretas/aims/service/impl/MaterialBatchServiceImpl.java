@@ -943,9 +943,28 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         Page<MaterialBatch> batchPage;
         boolean hasKeyword = pageRequest.getKeyword() != null && !pageRequest.getKeyword().trim().isEmpty();
+        // ERP-S6-02-STATUS-FILTER-IGNORED-001: status 以前绑定进来却从没用过, 列表与 AI 工具
+        // 都在 queryConditions 里回显了 status, 返回的却是全部状态。现在在分页之前按状态过滤;
+        // 不认识的状态 400, ⛔ 不静默忽略 (那正是原缺陷的样子)。
+        MaterialBatchStatus statusFilter = parseStatusFilter(pageRequest.getStatus());
 
-        // 如果提供了关键词，使用搜索方法；否则使用普通查询
-        if (hasKeyword) {
+        if (statusFilter != null) {
+            String escaped = hasKeyword
+                    ? com.cretas.aims.util.SqlLikeEscaper.escape(pageRequest.getKeyword().trim()) : null;
+            if (hasKeyword && chain != null) {
+                batchPage = materialBatchRepository.searchByKeywordAndStatusAndCreatedByIn(
+                        factoryId, escaped, statusFilter, chain, pageable);
+            } else if (hasKeyword) {
+                batchPage = materialBatchRepository.searchByKeywordAndStatus(
+                        factoryId, escaped, statusFilter, pageable);
+            } else if (chain != null) {
+                batchPage = materialBatchRepository.findByFactoryIdAndStatusAndCreatedByIn(
+                        factoryId, statusFilter, chain, pageable);
+            } else {
+                batchPage = materialBatchRepository.findByFactoryIdAndStatus(factoryId, statusFilter, pageable);
+            }
+        } else if (hasKeyword) {
+            // 如果提供了关键词，使用搜索方法；否则使用普通查询
             String escaped = com.cretas.aims.util.SqlLikeEscaper.escape(pageRequest.getKeyword().trim());
             log.debug("搜索原材料批次: factoryId={}, keyword={}", factoryId, pageRequest.getKeyword());
             if (chain != null) {
@@ -971,6 +990,21 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 pageRequest.getSize(),
                 batchPage.getTotalElements()
         );
+    }
+
+    /** 列表状态筛选: 空 = 不筛; 认不出的值 400 并列出可选值, ⛔ 不当成「不筛」。 */
+    private static MaterialBatchStatus parseStatusFilter(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return MaterialBatchStatus.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "未知的批次状态: " + raw.trim())
+                    .withHint("可选状态: " + java.util.Arrays.stream(MaterialBatchStatus.values())
+                            .map(Enum::name).collect(Collectors.joining(", ")))
+                    .withHintTarget("status");
+        }
     }
 
     @Override

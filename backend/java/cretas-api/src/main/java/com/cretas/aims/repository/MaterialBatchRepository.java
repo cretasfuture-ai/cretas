@@ -151,14 +151,54 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     @Query("SELECT m FROM MaterialBatch m " +
            "LEFT JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
-           "AND (m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
-           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
-           "OR m.contractNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
-           "OR m.supplierBatchNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
-           "OR m.factoryNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
+           "AND " + KEYWORD_MATCH)
     Page<MaterialBatch> searchByKeyword(@Param("factoryId") String factoryId,
                                         @Param("keyword") String keyword,
                                         Pageable pageable);
+
+    /**
+     * 列表搜索框的关键词覆盖面 —— <b>唯一一份</b>, 四条分页查询 (有无 DataScope × 有无状态筛选) 共用,
+     * 换个角色或加个状态筛选都不会换一套搜索口径。
+     */
+    String KEYWORD_MATCH =
+           "(m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
+           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.contractNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.supplierBatchNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
+           "OR m.factoryNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')";
+
+    // ---- 批次列表按状态筛选 (ERP-S6-02-STATUS-FILTER-IGNORED-001): 在分页之前过滤 ----
+
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    Page<MaterialBatch> findByFactoryIdAndStatus(String factoryId, MaterialBatchStatus status, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"materialType", "supplier"})
+    Page<MaterialBatch> findByFactoryIdAndStatusAndCreatedByIn(
+            String factoryId, MaterialBatchStatus status, java.util.Collection<Long> createdByList, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"materialType"})
+    @Query("SELECT m FROM MaterialBatch m " +
+           "LEFT JOIN m.materialType mt " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.status = :status " +
+           "AND " + KEYWORD_MATCH)
+    Page<MaterialBatch> searchByKeywordAndStatus(@Param("factoryId") String factoryId,
+                                                 @Param("keyword") String keyword,
+                                                 @Param("status") MaterialBatchStatus status,
+                                                 Pageable pageable);
+
+    @EntityGraph(attributePaths = {"materialType"})
+    @Query("SELECT m FROM MaterialBatch m " +
+           "LEFT JOIN m.materialType mt " +
+           "WHERE m.factoryId = :factoryId " +
+           "AND m.createdBy IN :createdByList " +
+           "AND m.status = :status " +
+           "AND " + KEYWORD_MATCH)
+    Page<MaterialBatch> searchByKeywordAndStatusAndCreatedByIn(@Param("factoryId") String factoryId,
+                                                               @Param("keyword") String keyword,
+                                                               @Param("status") MaterialBatchStatus status,
+                                                               @Param("createdByList") java.util.Collection<Long> createdByList,
+                                                               Pageable pageable);
 
     /**
      * Sprint 6 W2-B (RBAC DataScope SELF/SELF_AND_BELOW/DEPT_AND_BELOW) — by createdBy IN list.
@@ -182,11 +222,7 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
            "LEFT JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
            "AND m.createdBy IN :createdByList " +
-           "AND (m.batchNumber LIKE CONCAT(:keyword, '%') ESCAPE '\\' " +
-           "OR mt.name LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
-           "OR m.contractNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
-           "OR m.supplierBatchNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' " +
-           "OR m.factoryNumber LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')")
+           "AND " + KEYWORD_MATCH)
     Page<MaterialBatch> searchByKeywordAndCreatedByIn(@Param("factoryId") String factoryId,
                                                        @Param("keyword") String keyword,
                                                        @Param("createdByList") java.util.Collection<Long> createdByList,
