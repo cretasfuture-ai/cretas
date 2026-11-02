@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, View } from '@element-plus/icons-vue';
 import { handleCatchError } from '@/utils/errorToast';
 import { getIntentList, getIntentCategories, toggleIntentActive, type AIIntentConfig } from '@/api/intent';
 
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
 
 const loading = ref(false);
 const tableData = ref<AIIntentConfig[]>([]);
@@ -250,7 +247,6 @@ function formatDate(dateStr?: string): string {
           <template #default="{ row }">
             <el-switch
               :model-value="row.isActive"
-              :disabled="!canWrite"
               @change="handleToggleActive(row)"
             />
           </template>

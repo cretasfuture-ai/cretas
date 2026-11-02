@@ -2,7 +2,6 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
-import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Plus,
@@ -27,9 +26,7 @@ import {
 
 const router = useRouter();
 const authStore = useAuthStore();
-const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
-const canWrite = computed(() => permissionStore.canWrite('system'));
 
 // 数据状态
 const loading = ref(false);
@@ -400,7 +397,7 @@ function goBack() {
       <template #header>
         <div class="card-header">
           <span>图表模板列表</span>
-          <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">
+          <el-button type="primary" :icon="Plus" @click="handleAdd">
             新建模板
           </el-button>
         </div>
@@ -454,10 +451,10 @@ function goBack() {
             <el-button type="primary" link :icon="View" @click="handlePreview(row)">
               预览
             </el-button>
-            <el-button v-if="canWrite" type="primary" link :icon="Edit" @click="handleEdit(row)">
+            <el-button type="primary" link :icon="Edit" @click="handleEdit(row)">
               编辑
             </el-button>
-            <el-button v-if="canWrite" type="danger" link :icon="Delete" @click="handleDelete(row)">
+            <el-button type="danger" link :icon="Delete" @click="handleDelete(row)">
               删除
             </el-button>
           </template>
@@ -476,7 +473,7 @@ function goBack() {
 
       <div v-if="tableData.length === 0 && !loading" class="empty-state">
         <el-empty description="暂无图表模板">
-          <el-button v-if="canWrite" type="primary" @click="handleAdd">创建模板</el-button>
+          <el-button type="primary" @click="handleAdd">创建模板</el-button>
         </el-empty>
       </div>
     </el-card>
