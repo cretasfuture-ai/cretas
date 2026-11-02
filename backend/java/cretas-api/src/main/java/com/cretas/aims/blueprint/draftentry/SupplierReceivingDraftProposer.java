@@ -28,12 +28,11 @@ import com.cretas.aims.repository.material.MaterialTypeDraftRepository;
     .forEach(d->options.add(new Option(d.getId(),"草稿 · "+d.getDesiredName()+(d.getNaturalKey()==null?"":"（"+d.getNaturalKey()+"）"))));
   liveMaterials.findByFactoryIdAndIsActive(s.factoryId(),true)
     .forEach(m->options.add(new Option(m.getId(),"正式 · "+m.getName()+(m.getCode()==null?"":"（"+m.getCode()+"）"))));
-  String rule="选「草稿 · …」时上面的物料引用类型选 MATERIAL_DRAFT；选「正式 · …」时选 LIVE_MATERIAL，并且该供应商必须已有这个物料的有效供货关系";
+  String rule="选「草稿 · …」是还没转正的物料；选「正式 · …」的物料，该供应商必须已有这个物料的有效供货关系";
   if(options.isEmpty())return RequiredInput.text("materialRefId","物料引用",WHY,"本厂还没有物料草稿或正式物料，请先写入「物料」草稿；"+rule,128);
   return RequiredInput.oneOf("materialRefId","物料引用",WHY,rule,options);}
  private List<RequiredInput> fields(Source s){return List.of(
   supplierInput(s),
-  RequiredInput.oneOf("materialRefType","物料引用类型",WHY,ec(MaterialRefType.class),opts(MaterialRefType.class)),
   materialInput(s),
   RequiredInput.oneOf("acceptanceMode","验收模式",WHY,ec(AcceptanceMode.class),opts(AcceptanceMode.class)),
   RequiredInput.oneOf("qualificationExpiryPolicy","资质到期规则",WHY,ec(QualificationExpiryPolicy.class),opts(QualificationExpiryPolicy.class)),

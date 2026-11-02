@@ -884,6 +884,7 @@
           :factory-name="factoryName || canonicalBlueprint.factoryName"
           :blueprint="canonicalBlueprint"
           @formal-state="onFormalState"
+          @modules-draft-pending="onModulesDraftPending"
         />
 
         <div class="acts">
@@ -1114,7 +1115,6 @@ import FactoryInterviewArchive from './components/FactoryInterviewArchive.vue'
 import FactoryConversationRoutePreview from './components/FactoryConversationRoutePreview.vue'
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
-import { interviewErrorText } from './interviewErrorText'
 import FactoryReadiness from '../factory-review/components/FactoryReadiness.vue'
 import FactoryBasicsHandoff from './components/FactoryBasicsHandoff.vue'
 import type { FormalCapability, FormalExecution } from '@/api/factoryBlueprintActivationApi'
@@ -1661,7 +1661,7 @@ function errorMessage(error: unknown): string {
     message?: unknown
     response?: { data?: { message?: unknown } }
   }
-  return interviewErrorText(String(candidate.response?.data?.message ?? candidate.message ?? '请求没有完成'))
+  return String(candidate.response?.data?.message ?? candidate.message ?? '请求没有完成')
 }
 
 function clearFlowIssue() {
@@ -2862,12 +2862,15 @@ async function simulateBlueprint() {
   }
 }
 
+const modulesDraftPending = ref(false)
+function onModulesDraftPending(pending: boolean) { modulesDraftPending.value = pending }
+
 async function publishBlueprint() {
   const blueprint = canonicalBlueprint.value
   if (!blueprint || !blueprint.simulation?.safe) return
   try {
     await ElMessageBox.confirm(
-      `将发布 ${blueprint.factoryName} 的蓝图 v${blueprint.version}。本动作只固化不可变快照，不应用配置、不发布 Workflow。发布之后这一版不能再应用模块配置：如果写过模块草稿，请先在上方「配置应用」完成，再发布。`,
+      `将发布 ${blueprint.factoryName} 的蓝图 v${blueprint.version}。本动作只固化不可变快照，不应用配置、不发布 Workflow。${modulesDraftPending.value ? '有已写入但还没应用的模块草稿：发布之后这一版不能再应用模块配置，请先取消，在上方「配置应用」完成后再发布。' : ''}`,
       `发布 Factory Blueprint — ${blueprint.factoryId}`,
       { type: 'warning', confirmButtonText: '确认发布蓝图', cancelButtonText: '再看看' },
     )

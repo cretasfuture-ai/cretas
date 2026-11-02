@@ -135,7 +135,7 @@ const props = defineProps<{
     capabilities?: Array<{ id: string; label: string }> | null
   }
 }>()
-const emit = defineEmits<{ formalState: [FormalCapability, FormalExecution | null] }>()
+const emit = defineEmits<{ formalState: [FormalCapability, FormalExecution | null]; modulesDraftPending: [boolean] }>()
 
 const authStore = useAuthStore()
 const canConfirm = computed(() => canConfirmBlueprintDrafts({
@@ -162,6 +162,12 @@ const loadingWriteOrder = ref(false)
 const writeOrderError = ref('')
 const written = ref<WrittenCapability[] | null>(null)
 const writtenError = ref('')
+/** 有已写入、还没应用的模块配置草稿：发布蓝图前要提醒先应用 */
+watch(written, (value) => {
+  const pending = (value ?? []).some((w) => w.capabilityId === 'modules'
+    && (w.drafts ?? []).some((d) => d.status === 'DRAFT'))
+  emit('modulesDraftPending', pending)
+}, { deep: true })
 /** 已写入列表所属的血缘(版本 + 血缘摘要), 转正幂等键用它 */
 const writtenLineage = ref<{ blueprintVersion: number; sourceDigest: string } | null>(null)
 const promoted = ref<Map<string, PromotionRecord>>(new Map())

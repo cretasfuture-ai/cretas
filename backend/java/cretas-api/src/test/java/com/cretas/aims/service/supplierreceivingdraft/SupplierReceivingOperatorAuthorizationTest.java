@@ -85,4 +85,31 @@ class SupplierReceivingOperatorAuthorizationTest {
         assertThatThrownBy(() -> { try { method.invoke(command, request, wrongFactory); } catch (InvocationTargetException e) { throw e.getCause(); } })
                 .hasMessageContaining("身份与工厂范围不一致");
     }
+
+    private final MaterialTypeDraftRepository drafts = mock(MaterialTypeDraftRepository.class);
+    private final RawMaterialTypeRepository live = mock(RawMaterialTypeRepository.class);
+    private final SupplierReceivingPolicyDraftCommand inferring = new SupplierReceivingPolicyDraftCommand(
+            mock(SupplierReceivingPolicyDraftRepository.class), mock(SupplierReceivingPolicyDraftItemRepository.class),
+            mock(SupplierReceivingPolicyDraftQualificationRepository.class), mock(FactoryRepository.class), users,
+            mock(SupplierRepository.class), mock(SupplierMaterialRepository.class), mock(SupplierQualificationRepository.class),
+            live, drafts, mock(SupplierAdmissionRuleConfigRepository.class));
+
+    private SupplierReceivingPolicyDraftModels.RequestedPolicy infer(String materialRefId) throws Exception {
+        var policy = new SupplierReceivingPolicyDraftModels.RequestedPolicy("sup", null, materialRefId, null, null, null,
+                1, 1, true, true, "basis", List.of());
+        Method method = SupplierReceivingPolicyDraftCommand.class.getDeclaredMethod("withInferredMaterialRefType",
+                String.class, SupplierReceivingPolicyDraftModels.RequestedPolicy.class);
+        method.setAccessible(true);
+        return (SupplierReceivingPolicyDraftModels.RequestedPolicy) method.invoke(inferring, "F1", policy);
+    }
+
+    @Test
+    void materialReferenceTypeIsDerivedFromTheChosenMaterial() throws Exception {
+        when(drafts.findByIdAndFactoryId("draft-1", "F1")).thenReturn(Optional.of(new com.cretas.aims.entity.material.MaterialTypeDraft()));
+        when(live.findByIdAndFactoryId("rmt-1", "F1")).thenReturn(Optional.of(new com.cretas.aims.entity.RawMaterialType()));
+        assertThat(infer("draft-1").materialRefType()).isEqualTo(SupplierReceivingPolicyDraftModels.MaterialRefType.MATERIAL_DRAFT);
+        assertThat(infer("rmt-1").materialRefType()).isEqualTo(SupplierReceivingPolicyDraftModels.MaterialRefType.LIVE_MATERIAL);
+        assertThat(infer("unknown").materialRefType()).as("认不出就保持为空，由校验说清楚").isNull();
+        assertThat(infer("").materialRefType()).isNull();
+    }
 }

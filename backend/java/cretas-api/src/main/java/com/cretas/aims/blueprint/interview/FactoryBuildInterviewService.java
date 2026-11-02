@@ -244,6 +244,20 @@ public class FactoryBuildInterviewService {
         sessionRepository.save(session);
     }
 
+    /**
+     * 找不到「本人的」会话时，分清两种情况再说话：会话其实存在、属于另一位操作人（给出路），
+     * 还是这个编号本工厂根本没有 / 已失效（让本人重新开始）。
+     */
+    private BusinessException sessionNotAvailable(String factoryId, String sessionId) {
+        boolean ownedByAnother = sessionRepository.findBySessionIdAndFactoryId(sessionId, factoryId).isPresent();
+        return ownedByAnother
+                ? new BusinessException(404, "这次建厂访谈是另一位操作人发起的，你的账号不能接着回答它。已保存的蓝图仍可查看；"
+                        + "要重新答题，请点「开始新的访谈版本」，系统会为你的账号单独开一份访谈。")
+                        .withCode("INTERVIEW_SESSION_OWNED_BY_ANOTHER_OPERATOR")
+                : new BusinessException(404, "这次访谈已经失效或已结束，请点「开始新的访谈版本」重新开始。")
+                        .withCode("INTERVIEW_SESSION_NOT_FOUND");
+    }
+
     public List<InterviewDefaults.Section> interviewDefaults(String factoryId) {
         return interviewDefaults.forFactory(factoryId);
     }
@@ -268,7 +282,7 @@ public class FactoryBuildInterviewService {
         FactoryAssemblyConversationSession session = sessionRepository
                 .findBySessionIdAndFactoryIdAndUserIdAndActorType(
                         sessionId, factoryId, actor.userId(), actor.type())
-                .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+                .orElseThrow(() -> sessionNotAvailable(factoryId, sessionId));
 
         return buildProgress(factoryId, session);
     }
@@ -657,7 +671,7 @@ public class FactoryBuildInterviewService {
         FactoryAssemblyConversationSession session = sessionRepository
                 .findBySessionIdAndFactoryIdAndUserIdAndActorType(
                         sessionId, factoryId, actor.userId(), actor.type())
-                .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+                .orElseThrow(() -> sessionNotAvailable(factoryId, sessionId));
 
         if (session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE) {
             throw new BusinessException(409,
@@ -770,7 +784,7 @@ public class FactoryBuildInterviewService {
             FactoryAssemblyConversationSession session = sessionRepository
                     .findBySessionIdAndFactoryIdAndUserIdAndActorType(
                             sessionId, factoryId, actor.userId(), actor.type())
-                    .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+                    .orElseThrow(() -> sessionNotAvailable(factoryId, sessionId));
             Map<String, Object> answers = new LinkedHashMap<>();
             for (FactoryConfirmedFactService.PendingItem item : confirmedFacts.pendingFor(factoryId, session)) {
                 if (fields == null || fields.isEmpty() || fields.contains(item.field())) {

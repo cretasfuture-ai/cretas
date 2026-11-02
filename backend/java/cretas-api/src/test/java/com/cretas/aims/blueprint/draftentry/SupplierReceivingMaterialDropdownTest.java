@@ -50,7 +50,11 @@ class SupplierReceivingMaterialDropdownTest {
         assertThat(input.options()).extracting(o -> o.value()).containsExactly("draft-uuid-1", "rmt-1");
         assertThat(input.options().get(0).label()).contains("草稿").contains("冷冻牛肉").contains("RM_FROZEN_BEEF");
         assertThat(input.options().get(1).label()).contains("正式").contains("面粉");
-        assertThat(input.constraint()).contains("MATERIAL_DRAFT").contains("供货关系");
+        assertThat(input.constraint()).contains("供货关系").doesNotContain("MATERIAL_DRAFT").doesNotContain("LIVE_MATERIAL");
+        // 物料引用类型由所选物料决定，页面上不再有这个字段，也没有枚举名
+        var blueprint = BlueprintResponse.builder().id("bp").factoryId("F1").version(3).rowVersion(1L).lifecycleState("VALIDATED").build();
+        var itemFields = proposer.propose(new Source("F1", blueprint, null, "d".repeat(64))).items().get(0).requiredInputs().get(0).itemFields();
+        assertThat(itemFields).extracting(f -> f.path()).doesNotContain("materialRefType");
     }
 
     @Test
