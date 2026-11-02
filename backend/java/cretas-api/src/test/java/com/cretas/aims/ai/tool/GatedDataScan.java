@@ -58,6 +58,11 @@ final class GatedDataScan {
     final Map<DataMethod, List<Endpoint>> servedBy = new HashMap<>();
     /** Every read handler by {@code Controller#method}. */
     final Map<String, Endpoint> readEndpoints = new HashMap<>();
+    /**
+     * Data methods called by write handlers (POST / PUT / PATCH / DELETE): a write tool doing what a write
+     * endpoint does (look the purchase order up, then record the receipt) is judged against that endpoint too.
+     */
+    final Map<DataMethod, List<Endpoint>> writeServedBy = new HashMap<>();
     final Map<String, Set<DataMethod>> toolCalls = new LinkedHashMap<>();
     final Map<String, Class<?>> toolClasses = new LinkedHashMap<>();
     final List<String> uninstantiable = new ArrayList<>();
@@ -162,6 +167,15 @@ final class GatedDataScan {
                 .contains(org.springframework.web.bind.annotation.RequestMethod.GET);
     }
 
+    private static boolean isWriteHandler(Method m) {
+        if (m.isAnnotationPresent(org.springframework.web.bind.annotation.PostMapping.class)
+                || m.isAnnotationPresent(org.springframework.web.bind.annotation.PutMapping.class)
+                || m.isAnnotationPresent(org.springframework.web.bind.annotation.PatchMapping.class)
+                || m.isAnnotationPresent(org.springframework.web.bind.annotation.DeleteMapping.class)) return true;
+        RequestMapping rm = m.getAnnotation(RequestMapping.class);
+        return rm != null && rm.method().length > 0 && !isReadHandler(m);
+    }
+
     private void scanControllers() throws Exception {
         ClassPathScanningCandidateComponentProvider scanner = new ClassPathScanningCandidateComponentProvider(false);
         scanner.addIncludeFilter(new AnnotationTypeFilter(RestController.class));
@@ -175,8 +189,10 @@ final class GatedDataScan {
                 if (!Modifier.isPublic(m.getModifiers())) continue;
                 // Only read handlers say who may read a piece of data: a write handler that happens to
                 // look a record up does not make reading that record require the write permission.
-                if (!isReadHandler(m)) continue;
-                handlers++;
+                // Write handlers are kept apart, for write tools only (see writeServedBy).
+                boolean read = isReadHandler(m);
+                if (!read && !isWriteHandler(m)) continue;
+                if (read) handlers++;
                 RequirePermission onMethod = m.getAnnotation(RequirePermission.class);
                 RequirePermission effective = onMethod != null ? onMethod : onClass;
                 com.cretas.aims.config.RequireRole rolesOnMethod = m.getAnnotation(com.cretas.aims.config.RequireRole.class);
@@ -185,10 +201,10 @@ final class GatedDataScan {
                         effective == null ? Set.of() : Set.of(effective.value()),
                         roles == null ? Set.of() : Set.of(roles.value()),
                         effective != null && effective.requireAll());
-                readEndpoints.put(endpoint.toString(), endpoint);
+                if (read) readEndpoints.put(endpoint.toString(), endpoint);
                 String key = m.getName() + org.springframework.asm.Type.getMethodDescriptor(m);
                 for (DataMethod data : calls.getOrDefault(key, Set.of())) {
-                    servedBy.computeIfAbsent(data, k -> new ArrayList<>()).add(endpoint);
+                    (read ? servedBy : writeServedBy).computeIfAbsent(data, k -> new ArrayList<>()).add(endpoint);
                 }
             }
         }
@@ -246,16 +262,12 @@ final class GatedDataScan {
         return gated;
     }
 
-    /** True when at least one data method the tool calls is served by some HTTP handler. */
-    boolean hasCounterpart(String tool) {
-        return toolCalls.getOrDefault(tool, Set.of()).stream().anyMatch(servedBy::containsKey);
-    }
-
-    List<Endpoint> endpointsFor(String tool) {
+    /** Read endpoints that call any method of this owner. */
+    List<Endpoint> readEndpointsOfOwner(String owner) {
         List<Endpoint> all = new ArrayList<>();
-        for (DataMethod data : toolCalls.getOrDefault(tool, Set.of())) {
-            all.addAll(servedBy.getOrDefault(data, List.of()));
-        }
+        servedBy.forEach((data, endpoints) -> {
+            if (data.owner().equals(owner)) all.addAll(endpoints);
+        });
         return all;
     }
 }

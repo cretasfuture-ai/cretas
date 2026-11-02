@@ -113,4 +113,13 @@ public class BatchConsumptionAdjustTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): the data it reads is served only to these roles in the App, on top of its own permission codes;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredRoles() {
+        return java.util.Set.of("factory_super_admin", "permission_admin", "restaurant_owner");
+    }
 }

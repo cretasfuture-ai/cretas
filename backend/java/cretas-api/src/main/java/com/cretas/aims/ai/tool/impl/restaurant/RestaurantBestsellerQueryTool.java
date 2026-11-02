@@ -102,4 +102,13 @@ public class RestaurantBestsellerQueryTool extends AbstractBusinessTool {
         log.info("畅销菜品查询完成 - TOP5第一名: {}", bestSellers.get(0).get("菜品"));
         return result;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read", "procurement:read", "sales:read", "sales:read_write");
+    }
 }

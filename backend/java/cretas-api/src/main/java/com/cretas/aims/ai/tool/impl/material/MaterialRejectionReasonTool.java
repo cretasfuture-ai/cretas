@@ -90,4 +90,13 @@ public class MaterialRejectionReasonTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("inventory:read", "inventory:read_write", "warehouse:read", "warehouse:read_write");
+    }
 }

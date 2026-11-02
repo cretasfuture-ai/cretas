@@ -132,4 +132,13 @@ public class RestaurantArApPayableTool extends AbstractBusinessTool {
 
         return buildSimpleResult(message.toString(), data);
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read", "finance:read_write");
+    }
 }

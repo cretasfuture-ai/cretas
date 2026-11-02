@@ -96,6 +96,21 @@ public class ToolRbacGuard {
     }
 
     /**
+     * 调用者在库里的角色码 (按 context 的 userId 加载, 不信 context 里自带的 userRole)。
+     *
+     * @return 角色码; null = 无法解析 (调用方按拒绝处理)
+     */
+    public String roleOf(Map<String, Object> context) {
+        try {
+            User user = loadUser(context);
+            return user == null ? null : user.getRoleCode();
+        } catch (Exception e) {
+            log.warn("AI tool 角色解析失败, fail-closed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 拒绝时构造一致的提示文案 (4 位一体: 谁的角色 / 缺什么权限 / 怎么办)。
      */
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {

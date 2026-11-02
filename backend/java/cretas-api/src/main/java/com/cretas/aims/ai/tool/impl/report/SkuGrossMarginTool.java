@@ -438,4 +438,13 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): the data it reads is served only to these roles in the App, on top of its own permission codes;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredRoles() {
+        return java.util.Set.of("department_admin", "dispatcher", "factory_super_admin", "finance_manager", "permission_admin", "procurement_manager", "production_manager", "restaurant_owner", "sales_manager");
+    }
 }

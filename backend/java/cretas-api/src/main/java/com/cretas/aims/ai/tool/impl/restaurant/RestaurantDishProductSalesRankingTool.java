@@ -150,4 +150,13 @@ public class RestaurantDishProductSalesRankingTool extends AbstractBusinessTool 
         log.info("产品维度销量排行完成 - 共 {} 个产品", ranking.size());
         return result;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read", "procurement:read", "sales:read", "sales:read_write");
+    }
 }

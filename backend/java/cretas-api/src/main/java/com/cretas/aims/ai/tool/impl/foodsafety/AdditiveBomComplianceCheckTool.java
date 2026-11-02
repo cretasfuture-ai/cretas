@@ -417,4 +417,13 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
     public java.util.Set<String> getRequiredPermissions() {
         return java.util.Set.of("production:read", "production:read_write", "warehouse:read", "warehouse:read_write");
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): the data it reads is served only to these roles in the App, on top of its own permission codes;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredRoles() {
+        return java.util.Set.of("factory_super_admin", "permission_admin");
+    }
 }

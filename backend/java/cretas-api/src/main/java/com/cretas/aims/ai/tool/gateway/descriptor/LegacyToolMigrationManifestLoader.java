@@ -31,8 +31,7 @@ public final class LegacyToolMigrationManifestLoader {
     static final int YAML_CODE_POINT_LIMIT = 32_000;
     static final Set<String> INITIAL_ALLOWED_TOOLS = Set.of(
             "restaurant_dish_list",
-            "restaurant_ingredient_stock",
-            "restaurant_order_statistics");
+            "restaurant_ingredient_stock");
 
     private static final Pattern JAVA_CLASS_NAME = Pattern.compile(
             "[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)+");
