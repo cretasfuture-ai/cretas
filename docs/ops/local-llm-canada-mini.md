@@ -30,6 +30,15 @@
 
 备份：改 47 前存过 `/etc/ssh/sshd_config.bak-llm-20261103`、`/www/wwwroot/cretas/.env.prod.bak-llm-20261103`。
 
+## 3b. 两条通路（推理 / 管理）与 tailscale 断了怎么办
+
+- **推理通路（47 → 本地模型）不依赖 tailscale**：加拿大 mini 主动向 47 的公网 SSH（22 端口）发起出站连接建反向隧道，47 只在回环上收。tailscale 断了推理照常，只要 mini 能出网。
+- **管理通路（人 → mini）有两条**，指向同一台 `Mac-mini-01.local`：
+  - `ssh canada-mini`：走 tailscale（`100.85.234.108`）。
+  - `ssh canada-mini-backup`：tailscale 用不了时用。`~/.ssh/config` 里是 `HostName 127.0.0.1 / Port 22026 / ProxyJump aliyun`；`aliyun` 别名是 **139 网关**（`139.196.165.140`，不是 47），22026 是 139 回环上的反向隧道，由 mini 上 root 的 launchd 进程（`/var/db/canada-ssh-fallback/` 密钥）发起。
+  - 切换：`canada-mini` 超时（`Connection timed out`）就换 `canada-mini-backup`；两条都不通才是 mini 本机断网/关机，需要人到场。
+- ollama 不在 PATH：它是 **Ollama.app**（登录项），命令行在 `/Applications/Ollama.app/Contents/Resources/ollama`（`ollama pull` 用这个全路径）。
+
 ## 4. 为什么是 qwen3:8b
 
 2026-11-03 合成提示词（10 条意图判定 + 10 条简短分析，不含任何客户数据），同台对照：
