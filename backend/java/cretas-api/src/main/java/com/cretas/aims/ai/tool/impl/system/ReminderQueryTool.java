@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.system;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.Reminder;
 import com.cretas.aims.entity.enums.ReminderStatus;
@@ -60,10 +61,10 @@ public class ReminderQueryTool extends AbstractBusinessTool {
     @Override
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> properties = new HashMap<>();
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "过滤状态: PENDING / SNOOZED / DISMISSED (可逗号分隔多个), "
-                        + "默认 'PENDING,SNOOZED' 即仍需处理的提醒"));
+        properties.put("status", StatusFilter.withoutEnum(StatusFilter.property("过滤状态: PENDING / SNOOZED / DISMISSED (可逗号分隔多个), 默认 'PENDING,SNOOZED' 即仍需处理的提醒", StatusFilter.table(
+                StatusFilter.words("PENDING", "待处理", "未处理"),
+                StatusFilter.words("SNOOZED", "稍后提醒", "已推迟", "已延后"),
+                StatusFilter.words("DISMISSED", "已忽略", "已关闭")))));
         properties.put("limit", Map.of(
                 "type", "integer",
                 "description", "返回条数, 默认 " + DEFAULT_LIMIT + ", 最大 " + MAX_LIMIT));

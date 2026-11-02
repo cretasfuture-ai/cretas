@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.dataop;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -65,15 +66,11 @@ public class ProductTypeQueryTool extends AbstractBusinessTool {
         properties.put("category", category);
 
         // status: 状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "产品状态筛选");
-        status.put("enum", Arrays.asList(
-                "ACTIVE",       // 在产
-                "INACTIVE",     // 停产
-                "DEVELOPING",   // 开发中
-                "DISCONTINUED"  // 已下架
-        ));
+        Map<String, Object> status = StatusFilter.property("产品状态筛选", StatusFilter.table(
+                StatusFilter.words("ACTIVE", "在产", "启用"),
+                StatusFilter.words("INACTIVE", "停产", "停用"),
+                StatusFilter.words("DEVELOPING", "开发中", "研发中"),
+                StatusFilter.words("DISCONTINUED", "已下架", "下架")));
         properties.put("status", status);
 
         // shelfLife: 保质期范围（可选）

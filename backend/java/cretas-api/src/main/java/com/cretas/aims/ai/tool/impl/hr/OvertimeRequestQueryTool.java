@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.hr;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.hr.OvertimeRequest;
 import com.cretas.aims.entity.hr.enums.CompensationType;
@@ -45,9 +46,12 @@ public class OvertimeRequestQueryTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         properties.put("userId", Map.of("type", "string",
                 "description", "用户 ID, 默认当前用户"));
-        properties.put("status", Map.of("type", "string",
-                "description", "状态过滤",
-                "enum", List.of("DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "CANCELLED")));
+        properties.put("status", StatusFilter.property("状态过滤", StatusFilter.table(
+                StatusFilter.words("DRAFT", "草稿"),
+                StatusFilter.words("SUBMITTED", "待审批", "审批中", "已提交"),
+                StatusFilter.words("APPROVED", "已批准", "已通过", "批准了"),
+                StatusFilter.words("REJECTED", "已拒绝", "已驳回", "被拒", "驳回"),
+                StatusFilter.words("CANCELLED", "已取消", "已撤回", "撤回"))));
         properties.put("scope", Map.of("type", "string",
                 "description", "范围: mine / pending / all",
                 "enum", List.of("mine", "pending", "all"),

@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -47,10 +48,11 @@ public class SupplierListTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
 
         // status: 状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "供应商状态筛选");
-        status.put("enum", Arrays.asList("ACTIVE", "INACTIVE", "PENDING", "BLACKLISTED"));
+        Map<String, Object> status = StatusFilter.property("供应商状态筛选", StatusFilter.table(
+                StatusFilter.words("ACTIVE", "合作中", "活跃", "正常", "启用"),
+                StatusFilter.words("INACTIVE", "不活跃", "停用", "已停用", "禁用"),
+                StatusFilter.words("PENDING", "待审核", "审核中", "待审批"),
+                StatusFilter.words("BLACKLISTED", "黑名单", "已拉黑", "拉黑")));
         properties.put("status", status);
 
         // page: 页码（可选，默认1）

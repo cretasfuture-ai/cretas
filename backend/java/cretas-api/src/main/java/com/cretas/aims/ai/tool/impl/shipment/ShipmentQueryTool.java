@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.shipment;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.ShipmentRecord;
 import com.cretas.aims.service.ShipmentRecordService;
@@ -51,15 +52,11 @@ public class ShipmentQueryTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
 
         // status: 状态筛选（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "出货单状态筛选");
-        status.put("enum", Arrays.asList(
-                "PENDING",    // 待发货
-                "SHIPPED",    // 已发货
-                "DELIVERED",  // 已送达
-                "CANCELLED"   // 已取消
-        ));
+        Map<String, Object> status = StatusFilter.property("出货单状态筛选", StatusFilter.table(
+                StatusFilter.words("PENDING", "待发货", "未发货"),
+                StatusFilter.words("SHIPPED", "已发货", "运输中", "在途"),
+                StatusFilter.words("DELIVERED", "已送达", "已签收", "已到货"),
+                StatusFilter.words("CANCELLED", "已取消")));
         properties.put("status", status);
 
         // customerId: 客户ID筛选（可选）

@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.purchase;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -36,10 +37,12 @@ public class PurchaseOrderListTool extends AbstractBusinessTool {
 
         Map<String, Object> properties = new HashMap<>();
 
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "采购订单状态筛选");
-        status.put("enum", Arrays.asList("DRAFT", "SUBMITTED", "APPROVED", "RECEIVING", "COMPLETED", "CANCELLED"));
+        // 状态取自枚举本身: 以前手写的列表里有枚举不存在的值 (valueOf 必炸), 又漏了真实状态
+        Map<String, Object> status = StatusFilter.property("采购订单状态筛选",
+                StatusFilter.wordsOf(PurchaseOrderStatus.class, PurchaseOrderStatus::getDisplayName, Map.of(
+                        PurchaseOrderStatus.SUBMITTED, List.of("待审批"),
+                        PurchaseOrderStatus.APPROVED, List.of("已批准", "审批通过"),
+                        PurchaseOrderStatus.PARTIAL_RECEIVED, List.of("收货中", "到货中"))));
         properties.put("status", status);
 
         Map<String, Object> page = new HashMap<>();

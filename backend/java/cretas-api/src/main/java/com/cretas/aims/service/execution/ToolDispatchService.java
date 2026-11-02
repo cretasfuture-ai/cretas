@@ -90,6 +90,18 @@ public class ToolDispatchService {
     @Autowired(required = false)
     private ConversationService conversationService;
 
+    /**
+     * 短语直达 / 显式意图分支 (matchResult == null) 没经过识别管线的预处理, 「这个批次」「上个月」
+     * 到不了工具。这里补跑同样的<b>规则</b>步骤 (时间归一 + 会话指代), 不调大模型。见 {@link #shortcutPreprocess}。
+     */
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private com.cretas.aims.service.QueryPreprocessorService queryPreprocessorService;
+
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private com.cretas.aims.service.ConversationMemoryService conversationMemoryService;
+
     // W0 write-guard (intent-w0) — SITE B. This is the direct-Tool execution choke point reached
     // by the main execute() ToolDirect branch AND by executeWithExplicitIntent. The guard blocks a
     // write tool (polymorphic getActionType() WRITE/UPDATE/DELETE) unless previewOnly or confirmed.
@@ -345,8 +357,13 @@ public class ToolDispatchService {
             params.put("intentCode", intent.getIntentCode());
 
             // 2.5. 从预处理结果中提取解析的引用
-            if (matchResult != null && matchResult.getPreprocessedQuery() != null) {
-                PreprocessedQuery pq = matchResult.getPreprocessedQuery();
+            // 识别分支带着管线的预处理结果; 短语直达 / 显式意图分支没有, 补跑规则预处理 (ERP-S6-10 同因):
+            // 以前那条分支上「这个批次」「上个月」直接丢了, 同一句话走哪条分支结果不同。
+            PreprocessedQuery preprocessed = matchResult != null && matchResult.getPreprocessedQuery() != null
+                    ? matchResult.getPreprocessedQuery()
+                    : shortcutPreprocess(request, factoryId, userId);
+            if (preprocessed != null) {
+                PreprocessedQuery pq = preprocessed;
                 Map<String, PreprocessedQuery.ResolvedReference> refs = pq.getResolvedReferences();
                 if (refs != null && !refs.isEmpty()) {
                     for (Map.Entry<String, PreprocessedQuery.ResolvedReference> entry : refs.entrySet()) {
@@ -1540,6 +1557,48 @@ public class ToolDispatchService {
             log.info("纠错参数未落地, 已退回原值: tool={}, dropped={}", tool.getToolName(), grounded.dropped());
         }
         TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+    }
+
+    /**
+     * 没经过识别管线的分支 (短语直达 / 显式意图) 补跑的预处理: 只跑规则 —— 时间归一
+     * ({@code preprocessRulesOnly}) 加上有会话时的指代消解 ({@code resolveReferences}), 不做大模型改写。
+     * 两个服务没装配 (切片测试) 或用户原话为空时返回 null, 与以前一样不补参数。
+     */
+    PreprocessedQuery shortcutPreprocess(IntentExecuteRequest request, String factoryId, Long userId) {
+        if (queryPreprocessorService == null || request == null
+                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+            return null;
+        }
+        try {
+            PreprocessedQuery pq = queryPreprocessorService.preprocessRulesOnly(request.getUserInput());
+            if (pq == null) {
+                return null;
+            }
+            Map<String, PreprocessedQuery.ResolvedReference> refs = new HashMap<>();
+            if (pq.getResolvedReferences() != null) {
+                refs.putAll(pq.getResolvedReferences());
+            }
+            if (request.getSessionId() != null && conversationMemoryService != null) {
+                com.cretas.aims.dto.conversation.ConversationContext context =
+                        conversationMemoryService.getContext(request.getSessionId());
+                if (context != null) {
+                    com.cretas.aims.service.QueryPreprocessorService.ReferenceResolutionResult resolved =
+                            queryPreprocessorService.resolveReferences(request.getUserInput(), context);
+                    if (resolved != null && resolved.isHasResolutions() && resolved.getResolvedEntities() != null) {
+                        resolved.getResolvedEntities().forEach((said, e) -> refs.put(said,
+                                PreprocessedQuery.ResolvedReference.of(
+                                        e.getEntityType(), e.getEntityId(), e.getEntityName(), said)));
+                    }
+                }
+            }
+            pq.setResolvedReferences(refs);
+            return pq;
+        } catch (RuntimeException e) {
+            // 补跑失败不拦查询 (与以前「这条分支不补参数」一致), 但要留痕, 不静默
+            log.warn("短语直达分支的规则预处理失败, 本次不补时间/指代参数: tool input='{}', error={}",
+                    request.getUserInput(), e.toString());
+            return null;
+        }
     }
 
     /** 工具 schema 顶层开关: 只有可选参数的工具要不要在执行前让大模型抽可选参数 (默认不抽)。 */

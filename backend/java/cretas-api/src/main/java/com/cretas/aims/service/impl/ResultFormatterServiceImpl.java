@@ -42,6 +42,11 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         Object resultData = response.getResultData();
 
         try {
+            // 按状态筛过却一条都没有: 点名筛选条件, 不走各意图「当前暂无 XX 记录」的模板 (那读起来像整个库是空的)
+            String emptyFiltered = com.cretas.aims.ai.tool.StatusFilter.emptyFilteredReply(resultData);
+            if (emptyFiltered != null) {
+                return emptyFiltered;
+            }
             // 根据意图分类选择格式化器
             String formatted = switch (intentCategory) {
                 case "SHIPMENT" -> formatShipmentResult(intentCode, resultData);

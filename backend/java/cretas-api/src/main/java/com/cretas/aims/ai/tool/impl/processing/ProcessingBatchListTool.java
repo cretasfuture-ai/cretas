@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.processing;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -48,16 +49,12 @@ public class ProcessingBatchListTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
 
         // status: 状态筛选（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "批次状态筛选");
-        status.put("enum", Arrays.asList(
-                "PLANNED",      // 已计划
-                "IN_PROGRESS",  // 生产中
-                "PAUSED",       // 已暂停
-                "COMPLETED",    // 已完成
-                "CANCELLED"     // 已取消
-        ));
+        Map<String, Object> status = StatusFilter.property("批次状态筛选", StatusFilter.table(
+                StatusFilter.words("PLANNED", "已计划", "计划中", "未开始"),
+                StatusFilter.words("IN_PROGRESS", "生产中", "进行中"),
+                StatusFilter.words("PAUSED", "已暂停", "暂停"),
+                StatusFilter.words("COMPLETED", "已完成", "完工", "已完工"),
+                StatusFilter.words("CANCELLED", "已取消")));
         properties.put("status", status);
 
         // page: 页码（可选，默认1）

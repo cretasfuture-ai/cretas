@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -47,10 +48,9 @@ public class CustomerListTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
 
         // status: 状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "客户状态筛选");
-        status.put("enum", Arrays.asList("ACTIVE", "INACTIVE"));
+        Map<String, Object> status = StatusFilter.property("客户状态筛选", StatusFilter.table(
+                StatusFilter.words("ACTIVE", "活跃", "正常", "启用", "有效"),
+                StatusFilter.words("INACTIVE", "不活跃", "停用", "已停用", "禁用", "无效")));
         properties.put("status", status);
 
         // page: 页码（可选，默认1）

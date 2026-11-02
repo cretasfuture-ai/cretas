@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.quality;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -64,15 +65,11 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         properties.put("batchId", batchId);
 
         // status: 检验结果状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "检验结果状态筛选");
-        status.put("enum", Arrays.asList(
-                "PENDING",      // 待检验
-                "PASS",         // 合格
-                "FAIL",         // 不合格
-                "CONDITIONAL"   // 条件通过
-        ));
+        Map<String, Object> status = StatusFilter.property("检验结果状态筛选", StatusFilter.table(
+                StatusFilter.words("PENDING", "待检验", "待检", "未检验"),
+                StatusFilter.words("PASS", "合格", "已通过", "通过"),
+                StatusFilter.words("FAIL", "不合格", "未通过"),
+                StatusFilter.words("CONDITIONAL", "条件通过", "让步接收")));
         properties.put("status", status);
 
         // checkType: 质检类型（可选）
