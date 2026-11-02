@@ -133,6 +133,10 @@ is_flaky() {
 }
 
 n_total=0 n_pass=0 n_fail=0 n_known=0 n_fixed=0 n_flaky=0 n_skipped=0
+n_dropped=0
+DROPPED_IN=()
+# 「本该是读数却被丢掉」的判据 —— ⛔ 只此一份, 本文件与 test-dropped-reading-lines.sh 都引用它。
+DROP_AWK="$ROOT_DIR/scripts/ci/dropped-reading-lines.awk"
 declare -a FAILED=() FIXED=() SKIPPED=()
 
 # rc=77 的自证: 用例必须在自己的输出里打一行 `SKIPPED:<理由>`。
@@ -227,10 +231,30 @@ for f in "$TESTS_DIR"/*.sh; do
     fi
     # ⛔ 放在四个分支之外 —— 口径行跟红绿无关, 绿的那次尤其需要它。
     print_readings "$LOG_DIR/$base.log"
+
+    # ── 有多少行「本该是读数」被上面那个 grep 吃掉了 ────────────────────────
+    # ⚠️ 只数**像读数却进不去**的那两类(漏 READING: 前缀 / READING: 之后的续行),
+    #    ⛔ 不数所有非 READING 行 —— 那是每一条 `ok - …`, 几百行噪声。
+    #    判据在 scripts/ci/dropped-reading-lines.awk, 本文件与它的闸**都引用那一份**。
+    drop_line=$(awk -f "$DROP_AWK" "$LOG_DIR/$base.log" 2>/dev/null || true)
+    drop_n=${drop_line##*continuation=}
+    case "$drop_n" in ''|*[!0-9]*) drop_n=0 ;; esac
+    if [ "$drop_n" -gt 0 ]; then
+        printf '         READING: DROPPED_NON_READING_LINES %s ⇒ 这些行在 CI 里**不存在**\n' "$drop_line"
+        n_dropped=$((n_dropped + drop_n))
+        DROPPED_IN+=("$base:$drop_n")
+    fi
 done
 
 echo
 echo "TOTAL=$n_total PASS=$n_pass FAIL=$n_fail KNOWN_FAILING=$n_known FIXED=$n_fixed FLAKY=$n_flaky SKIPPED=$n_skipped"
+# ⚠️ 这一行**无论是否为 0 都打** —— 0 与「我根本没在数」必须分得开。
+echo "READING: DROPPED_NON_READING_LINES total=$n_dropped tests_with_drops=${#DROPPED_IN[@]}"
+if [ "$n_dropped" -gt 0 ]; then
+    echo "⇒ 以下用例有「写了但 CI 里看不见」的行(⛔ 不红, 只报数): ${DROPPED_IN[*]}"
+    echo "  ① 漏 \`READING: \` 前缀   ② 写成 READING: 一行 + 若干续行(只有第一行活下来)"
+    echo "  ⇒ 每一行读数各自带 \`READING: \`, ⛔ 不要靠续行。"
+fi
 
 if [ "$n_skipped" -gt 0 ]; then
     echo

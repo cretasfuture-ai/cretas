@@ -1,0 +1,12 @@
+# 验收样本 = 2026-09-07 两次真实事故的**原始输入**, ⛔ 不是编的例子。
+# ⚠️ 行的顺序与内容都别改: test-dropped-reading-lines.sh 按类别数(漏前缀 2 / 续行 3)。
+  ok - 三处内联的 run 体逐字相同
+A1: payload_stale=no payload_behind_by=0
+D: payload_stale=yes payload_behind_by=1
+READING: VERIFIER_SCOPE=header-matches-replay
+  ⇒ ⛔ 守不住「基线与文件头一起被改」——两侧一致即通过
+  ⇒ ⛔ 守不住基线过期
+  ⇒ 只有重新采集能证明基线是对的；本闸只能证明它没有被单侧改坏
+READING: BASELINE_DIR=present files=1
+  ok - 边界已声明
+PASS: 6 项断言全部通过
