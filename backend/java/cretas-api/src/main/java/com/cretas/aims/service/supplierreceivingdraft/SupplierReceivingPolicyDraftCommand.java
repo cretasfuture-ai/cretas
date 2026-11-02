@@ -249,6 +249,24 @@ public class SupplierReceivingPolicyDraftCommand {
                 "SUPPLY_AND_QUALITY_OWNER_CONFIRMATION", 0);
     }
 
+    /**
+     * 物料引用类型由所选物料决定，不让人再选一遍：该工厂有这个标识的物料草稿 → 草稿物料，否则有这个标识的正式物料 → 正式物料。
+     * 两边都认不出时保持为空，由后面的校验说清楚。显式给出的类型原样保留（旧调用方）。
+     */
+    private RequestedPolicy withInferredMaterialRefType(String factoryId, RequestedPolicy requested) {
+        if (requested.materialRefType() != null) return requested;
+        String id = clean(requested.materialRefId());
+        if (id.isBlank()) return requested;
+        MaterialRefType inferred = materialDraftRepository.findByIdAndFactoryId(id, factoryId).isPresent()
+                ? MaterialRefType.MATERIAL_DRAFT
+                : materialRepository.findByIdAndFactoryId(id, factoryId).isPresent() ? MaterialRefType.LIVE_MATERIAL : null;
+        if (inferred == null) return requested;
+        return new RequestedPolicy(requested.supplierId(), inferred, requested.materialRefId(), requested.acceptanceMode(),
+                requested.qualificationExpiryPolicy(), requested.samplePercentage(), requested.minSampleSize(),
+                requested.maxSampleSize(), requested.quarantineOnFailure(), requested.receivingEvidenceRequired(),
+                requested.policyBasis(), requested.requiredQualifications());
+    }
+
     private ResolvedPolicy resolve(DraftRequest request, RequestedPolicy requested, int index, Set<String> identities,
                                    List<DraftIssue> issues) {
         String factoryId = request.factoryId();
@@ -257,6 +275,7 @@ public class SupplierReceivingPolicyDraftCommand {
             issues.add(issue("SUPPLIER_RECEIVING_POLICY_REQUIRED", target, "来料策略不能为空", "补充 typed 来料策略"));
             return emptyPolicy();
         }
+        requested = withInferredMaterialRefType(factoryId, requested);
         String supplierId = clean(requested.supplierId());
         String materialRefId = clean(requested.materialRefId());
         String identity = supplierId + "|" + requested.materialRefType() + "|" + materialRefId;
@@ -281,8 +300,11 @@ public class SupplierReceivingPolicyDraftCommand {
         String relationshipSnapshot;
         if (requested.materialRefType() == MaterialRefType.LIVE_MATERIAL) {
             RawMaterialType material = materialRepository.findByIdAndFactoryId(materialRefId, factoryId).orElse(null);
-            if (material == null) issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_NOT_FOUND", target + ".materialRefId",
-                    "当前工厂没有该正式物料", "选择当前工厂正式物料或 A2 物料草稿"));
+            if (material == null && materialDraftRepository.findByIdAndFactoryId(materialRefId, factoryId).isPresent()) {
+                issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_REF_TYPE_MISMATCH", target + ".materialRefType",
+                        "你选的是物料草稿，不是正式物料", "重新从「物料引用」下拉里选择这一项"));
+            } else if (material == null) issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_NOT_FOUND", target + ".materialRefId",
+                    "当前工厂没有该正式物料", "从「物料引用」下拉里选当前工厂的正式物料或物料草稿"));
             else if (!Boolean.TRUE.equals(material.getIsActive())) issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_INACTIVE",
                     target + ".materialRefId", "停用物料不能进入新来料策略", "选择启用物料"));
             materialSnapshot = materialSnapshot(material);
@@ -290,14 +312,15 @@ public class SupplierReceivingPolicyDraftCommand {
                     .findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, materialRefId).orElse(null);
             if (relation == null || !Boolean.TRUE.equals(relation.getActive())) {
                 issues.add(issue("SUPPLIER_RECEIVING_RELATIONSHIP_REQUIRED", target + ".materialRefId",
-                        "正式物料必须已有同工厂有效供货关系", "由供应商主数据流程确认供货关系后重新预览"));
+                        "正式物料必须已有同工厂有效供货关系，这个供应商还没有这个物料的供货关系",
+                        "先在供应商档案里给该供应商添加这个物料的供货关系；或者在「物料引用」下拉里改选「草稿 · …」物料（草稿物料转正后再建供货关系）"));
             }
             relationshipSnapshot = relationshipSnapshot(relation);
         } else if (requested.materialRefType() == MaterialRefType.MATERIAL_DRAFT) {
             MaterialTypeDraft materialDraft = materialDraftRepository.findByIdAndFactoryId(materialRefId, factoryId).orElse(null);
             if (materialDraft == null || !"DRAFT".equals(materialDraft.getStatus())) {
                 issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_DRAFT_REQUIRED", target + ".materialRefId",
-                        "A2 物料草稿不存在或状态不是 DRAFT", "选择当前工厂可回读的 A2 物料草稿"));
+                        "A2 物料草稿不存在或状态不是 DRAFT（填写的可能是物料编码而不是草稿标识）", "从「物料引用」下拉里选「草稿 · …」那一项；下拉里没有就先写入「物料」草稿"));
             } else if (!Objects.equals(request.blueprintId(), materialDraft.getBlueprintId())
                     || request.blueprintVersion() != Objects.requireNonNullElse(materialDraft.getBlueprintVersion(), -1L)) {
                 issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_DRAFT_LINEAGE_MISMATCH", target + ".materialRefId",
@@ -307,7 +330,7 @@ public class SupplierReceivingPolicyDraftCommand {
             relationshipSnapshot = digest("PROPOSED_AFTER_MATERIAL_ACTIVATION", factoryId, supplierId, materialRefId);
         } else {
             issues.add(issue("SUPPLIER_RECEIVING_MATERIAL_REF_TYPE_REQUIRED", target + ".materialRefType",
-                    "物料引用类型不能为空", "选择 LIVE_MATERIAL 或 MATERIAL_DRAFT"));
+                    "还没有选物料，或选的物料在本工厂找不到", "从「物料引用」下拉里选一个物料；下拉里没有就先写入「物料」草稿"));
             materialSnapshot = digest("MATERIAL", "INVALID");
             relationshipSnapshot = digest("RELATIONSHIP", "INVALID");
         }
@@ -355,7 +378,13 @@ public class SupplierReceivingPolicyDraftCommand {
     }
 
     private void authorize(DraftRequest request, AuthenticatedOperator operator) {
-        if (operator == null || operator.operatorId() <= 0 || operator.actor().id() != request.operatorId()
+        // 平台管理员做对话建厂时是被允许的操作人（与物料/模块/包装草稿一致），以 PLATFORM_ADMIN 身份落库审计；
+        // 工厂账号仍必须是请求所属工厂的有效成员。
+        var actorType = operator == null ? null : operator.actor().type();
+        if (operator == null || operator.operatorId() <= 0
+                || (actorType != com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER
+                    && actorType != com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN)
+                || operator.actor().id() != request.operatorId()
                 || !request.factoryId().equals(clean(operator.factoryId()))) {
             throw invalid(403, "来料策略操作人身份与工厂范围不一致", "SUPPLIER_RECEIVING_OPERATOR_SCOPE_MISMATCH",
                     "从当前认证会话构造 operatorId 与 factoryId", "operator");
@@ -364,6 +393,7 @@ public class SupplierReceivingPolicyDraftCommand {
             throw invalid(403, "缺少来料策略模板权限", "SUPPLIER_RECEIVING_PERMISSION_REQUIRED",
                     "由供应链/质量负责人授予 supplier:policy:draft", "permission");
         }
+        if (actorType == com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN) return;
         var member = userRepository.findByIdAndFactoryId(operator.operatorId(), operator.factoryId());
         if (member.isEmpty() || !Boolean.TRUE.equals(member.get().getIsActive())) {
             throw invalid(403, "操作人不是当前工厂有效成员", "SUPPLIER_RECEIVING_OPERATOR_MEMBERSHIP_REQUIRED",
