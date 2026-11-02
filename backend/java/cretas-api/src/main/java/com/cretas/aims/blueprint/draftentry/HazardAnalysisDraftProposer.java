@@ -13,10 +13,10 @@ import java.util.List;
 public class HazardAnalysisDraftProposer implements CapabilityDraftProposer {
     private static final String WHY = "蓝图没有危害类型、原因、风险、预防措施和法规依据的完整事实";
     private static List<Option> options(Class<? extends Enum<?>> type) {
-        return Arrays.stream(type.getEnumConstants()).map(value -> new Option(value.name(), value.name())).toList();
+        return Arrays.stream(type.getEnumConstants()).map(value -> new Option(value.name(), DraftEnumLabels.label(value))).toList();
     }
     private static String enumConstraint(Class<? extends Enum<?>> type) {
-        return String.join("、", options(type).stream().map(Option::value).toList()) + " 之一";
+        return String.join("、", options(type).stream().map(Option::label).toList()) + " 之一";
     }
     private static List<RequiredInput> itemFields() {
         return List.of(

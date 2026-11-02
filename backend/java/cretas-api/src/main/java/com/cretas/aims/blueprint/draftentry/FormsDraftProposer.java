@@ -91,7 +91,7 @@ public class FormsDraftProposer implements CapabilityDraftProposer {
                     "小写字母开头，只含小写字母、数字、下划线，最长 " + MAX_KEY + " 位，同一表单内不重复", MAX_KEY),
             RequiredInput.text("label", "字段中文名", WHY_NO_FIELDS, "1–" + MAX_TITLE + " 字", MAX_TITLE),
             RequiredInput.oneOf("fieldType", "字段类型", WHY_NO_FIELDS,
-                    String.join("、", Arrays.stream(FieldType.values()).map(Enum::name).toList())
+                    String.join("、", Arrays.stream(FieldType.values()).map(DraftEnumLabels::label).toList())
                             + " 之一；选定后按类型补齐长度、范围、单位或选项", FIELD_TYPE_OPTIONS),
             RequiredInput.bool("required", "是否必填", WHY_NO_FIELDS, "是 / 否"),
             RequiredInput.integer("maxLength", "最多能填多少字", WHY_NO_FIELDS,
@@ -164,7 +164,7 @@ public class FormsDraftProposer implements CapabilityDraftProposer {
                     "建厂访谈没有问记录的保存要求", RETENTION_CONSTRAINT, RETENTION_OPTIONS));
             inputs.add(RequiredInput.oneOf(at + "responsibleRole", name + "由谁负责填写",
                     "建厂访谈没有问表单负责人",
-                    String.join("、", Arrays.stream(ResponsibleRole.values()).map(Enum::name).toList()) + " 之一",
+                    String.join("、", Arrays.stream(ResponsibleRole.values()).map(DraftEnumLabels::label).toList()) + " 之一",
                     RESPONSIBLE_OPTIONS));
 
             List<Map<String, Object>> rawFields = schema.getFields() == null ? List.of() : schema.getFields();
@@ -262,7 +262,7 @@ public class FormsDraftProposer implements CapabilityDraftProposer {
         } else if (fieldType == null) {
             inputs.add(RequiredInput.oneOf(at + "fieldType", fieldName + "是什么类型",
                     type.isEmpty() ? "访谈没有给字段类型" : "访谈给的类型“" + type + "”不在表单字段类型里",
-                    String.join("、", Arrays.stream(FieldType.values()).map(Enum::name).toList())
+                    String.join("、", Arrays.stream(FieldType.values()).map(DraftEnumLabels::label).toList())
                             + " 之一；选定后按类型补齐长度、范围、单位或选项", FIELD_TYPE_OPTIONS));
         }
         return new FieldInput(key, label.isEmpty() ? null : label, fieldType,
@@ -283,7 +283,7 @@ public class FormsDraftProposer implements CapabilityDraftProposer {
                         "模块配置草稿中已启用的模块之一：" + String.join("、", enabled), modules),
                 RequiredInput.oneOf("retentionClass", "属于哪类记录", why, RETENTION_CONSTRAINT, RETENTION_OPTIONS),
                 RequiredInput.oneOf("responsibleRole", "由谁负责填写", why,
-                        String.join("、", Arrays.stream(ResponsibleRole.values()).map(Enum::name).toList()) + " 之一",
+                        String.join("、", Arrays.stream(ResponsibleRole.values()).map(DraftEnumLabels::label).toList()) + " 之一",
                         RESPONSIBLE_OPTIONS),
                 RequiredInput.list("fields", "有哪些字段", why, FIELDS_CONSTRAINT, "字段", MIN_FIELDS, MAX_FIELDS, FIELD_FIELDS),
                 RequiredInput.text("changeReason", "建这张表单的依据", why, "1–" + MAX_REASON + " 字", MAX_REASON));

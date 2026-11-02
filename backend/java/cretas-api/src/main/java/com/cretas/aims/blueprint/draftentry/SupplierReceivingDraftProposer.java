@@ -11,8 +11,8 @@ import com.cretas.aims.repository.material.MaterialTypeDraftRepository;
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "cretas.platform.factory-assembly.enabled", havingValue = "true", matchIfMissing = false)
 @Component public class SupplierReceivingDraftProposer implements CapabilityDraftProposer {
  private static final String WHY="蓝图没有供应商来料验收、抽样、隔离和资质要求的完整事实";
- private static <E extends Enum<E>> List<Option> opts(Class<E> c){return java.util.Arrays.stream(c.getEnumConstants()).map(e->new Option(e.name(),e.name())).toList();}
- private static <E extends Enum<E>> String ec(Class<E> c){return java.util.Arrays.stream(c.getEnumConstants()).map(Enum::name).collect(java.util.stream.Collectors.joining("、"))+" 之一";}
+ private static <E extends Enum<E>> List<Option> opts(Class<E> c){return java.util.Arrays.stream(c.getEnumConstants()).map(e->new Option(e.name(),DraftEnumLabels.label(e))).toList();}
+ private static <E extends Enum<E>> String ec(Class<E> c){return java.util.Arrays.stream(c.getEnumConstants()).map(DraftEnumLabels::label).collect(java.util.stream.Collectors.joining("、"))+" 之一";}
  private final MaterialTypeDraftRepository materialDrafts; private final RawMaterialTypeRepository liveMaterials; private final SupplierRepository suppliers;
  public SupplierReceivingDraftProposer(MaterialTypeDraftRepository materialDrafts, RawMaterialTypeRepository liveMaterials, SupplierRepository suppliers){this.materialDrafts=materialDrafts;this.liveMaterials=liveMaterials;this.suppliers=suppliers;}
  /** 供应商：本厂启用的供应商做成下拉；一个都没有时才退回手填，并说明原因。 */

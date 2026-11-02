@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
 public class ProcessesDraftProposer implements CapabilityDraftProposer {
 
     private static final String OUTPUT_KINDS = Arrays.stream(WorkProcessOutputMaterialKind.values())
-            .map(Enum::name).collect(Collectors.joining("、"));
+            .map(DraftEnumLabels::label).collect(Collectors.joining("、"));
     static final List<Option> OUTPUT_KIND_OPTIONS = Option.ofEnum(WorkProcessOutputMaterialKind.class, Map.of(
             WorkProcessOutputMaterialKind.SEMI_FINISHED, "半成品", WorkProcessOutputMaterialKind.FINISHED_GOOD, "成品"));
     /** The command's limits (name / category / description length, estimated minutes, yield ratio). */

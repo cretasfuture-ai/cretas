@@ -66,7 +66,7 @@ public interface CapabilityDraftProposer {
         /** Every constant of the command's enum, labelled from {@code labels} (the constant's name when absent). */
         public static <E extends Enum<E>> List<Option> ofEnum(Class<E> type, Map<E, String> labels) {
             return Arrays.stream(type.getEnumConstants())
-                    .map(constant -> new Option(constant.name(), labels.getOrDefault(constant, constant.name())))
+                    .map(constant -> new Option(constant.name(), labels.getOrDefault(constant, DraftEnumLabels.label(constant))))
                     .toList();
         }
     }

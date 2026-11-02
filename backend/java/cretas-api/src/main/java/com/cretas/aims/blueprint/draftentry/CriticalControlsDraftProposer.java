@@ -265,7 +265,7 @@ public class CriticalControlsDraftProposer implements CapabilityDraftProposer {
         if (parameterType == null) {
             inputs.add(RequiredInput.oneOf(at + "parameterType", name + "监控的是什么量",
                     rawUnit.isEmpty() ? "建厂访谈没有给单位" : "访谈单位“" + rawUnit + "”不能唯一确定参数类型",
-                    String.join("、", Arrays.stream(ParameterType.values()).map(Enum::name).toList()) + " 之一",
+                    String.join("、", Arrays.stream(ParameterType.values()).map(DraftEnumLabels::label).toList()) + " 之一",
                     PARAMETER_TYPE_OPTIONS));
             inputs.add(RequiredInput.text(at + "unit", name + "限值的单位",
                     rawUnit.isEmpty() ? "建厂访谈没有给单位" : "访谈单位“" + rawUnit + "”在单位目录里不能确定",
@@ -311,6 +311,6 @@ public class CriticalControlsDraftProposer implements CapabilityDraftProposer {
     }
 
     private static String enumValues(Enum<?>[] values) {
-        return String.join("、", Arrays.stream(values).map(Enum::name).toList()) + " 之一";
+        return String.join("、", Arrays.stream(values).map(DraftEnumLabels::label).toList()) + " 之一";
     }
 }
