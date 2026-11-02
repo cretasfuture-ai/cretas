@@ -1,0 +1,2 @@
+#!/bin/bash
+exec /usr/bin/ssh -N -T -F /dev/null -i /Users/rex/cretas-llm/tunnel_ed25519 -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/Users/rex/cretas-llm/known_hosts -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=10 -R 127.0.0.1:11437:127.0.0.1:11500 cretas-llm-canada@47.100.235.168
