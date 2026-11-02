@@ -174,7 +174,14 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         // 解析筛选参数
         String batchNumber = getString(params, "batchNumber");
         String materialTypeId = getString(params, "materialTypeId");
-        String status = getString(params, "status");
+        // ERP-S6-10: 对话入口对只有可选参数的读工具不做参数抽取, 「查询已用完状态的原料批次」到这里
+        // status 是空的 —— 以前就返回了全部批次。显式参数优先 (中文名也认), 否则从原话里认;
+        // 说了状态却认不出会 400, 不静默变成「不限状态」。
+        String status = MaterialBatchStatusPhrase.normalizeParam(getString(params, "status"));
+        if (status == null) {
+            status = MaterialBatchStatusPhrase.fromSentence(getString(params, "userInput"))
+                    .map(Enum::name).orElse(null);
+        }
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
 
