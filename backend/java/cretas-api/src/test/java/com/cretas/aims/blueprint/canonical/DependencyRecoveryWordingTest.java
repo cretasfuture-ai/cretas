@@ -20,7 +20,7 @@ class DependencyRecoveryWordingTest {
     @Test
     void missingBomPointsBackToTheYieldQuestionByName() {
         String text = CanonicalFactoryBlueprintService.dependencyRecovery(blocked("bom"), "补齐依赖后重新保存草稿并验证");
-        assertThat(text).contains("「出成率」").contains("数字").contains("危害分析").endsWith("补齐依赖后重新保存草稿并验证");
+        assertThat(text).contains("「出成率」").contains("专业复核 → 01 → 原料到成品转换").contains("数字").contains("危害分析").endsWith("补齐依赖后重新保存草稿并验证");
     }
 
     @Test

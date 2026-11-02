@@ -2921,7 +2921,7 @@ async function restart() {
   if (sessionId.value || canonicalBlueprint.value) {
     try {
       await ElMessageBox.confirm(
-        `当前访谈已确认 ${answered} 项、还剩 ${remaining} 项。重新开始会创建新访谈版本，当前未完成会话将不再继续；已保存的蓝图不会被删除。`,
+        `当前访谈已确认 ${answered} 项、还剩 ${remaining} 项。重新开始会创建新访谈版本，当前未完成会话将不再继续；已确认的资料会沿用到新版本（不会被清掉），已保存的蓝图也不会被删除。`,
         `重新开始 ${factoryName.value || factoryId.value} 的建厂访谈？`,
         {
           type: 'warning',

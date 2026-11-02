@@ -19,6 +19,15 @@ describe('画布解析可编辑 BOM 版本', () => {
     expect(pickEditableRecipe([archived, active, draft])?.id).toBe('r3');
   });
 
+  it('版本号低于生效版的草稿是过期草稿: 不选它, 也不再提示「草稿未生效」', () => {
+    const staleDraft = { id: 'r0', version: 2, status: 'DRAFT', isCurrent: false };
+    const activeV3 = { id: 'r4', version: 3, status: 'ACTIVE', isCurrent: true };
+    expect(pickEditableRecipe([staleDraft, activeV3])?.id).toBe('r4');
+    expect(buildDraftBomNotice('P1', '产品', [staleDraft, activeV3])).toBeNull();
+    // 阳性对照: 高于生效版的草稿照常提示
+    expect(buildDraftBomNotice('P1', '产品', [activeV3, { ...staleDraft, id: 'r5', version: 4 }])?.draftVersion).toBe(4);
+  });
+
   it('没有草稿时退回生效版', () => {
     expect(pickEditableRecipe([archived, active])?.id).toBe('r2');
   });
