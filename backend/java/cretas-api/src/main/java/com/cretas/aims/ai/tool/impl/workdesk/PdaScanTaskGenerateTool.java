@@ -214,6 +214,6 @@ public class PdaScanTaskGenerateTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("finance:read", "inventory:write", "procurement:read", "procurement:read_write", "sales:read", "warehouse:read", "warehouse:read_write");
+        return java.util.Set.of("warehouse:read_write", "inventory:write");
     }
 }

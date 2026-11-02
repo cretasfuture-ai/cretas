@@ -1,18 +1,26 @@
 # S6 gated-data registrations (GatedDataToolAiPathPermissionTest).
 # tool<TAB>kind<TAB>reason. Data no endpoint serves is classified per owner in gated-data-domains.tsv (2026-11-03).
-# RULED = codes set by an explicit ruling instead of derived from endpoints. A tool missing here that the scan
+# RULED = the gate is set by an explicit ruling (reason starts with CODES:... / ROLES:...); it replaces the derived requirements and the tool is compared against it both ways. A tool missing here that the scan
 # cannot classify fails the test; a line whose tool no longer needs it fails too (stale).
-report_bom_cost	RULED	组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本分析同口径
-report_cost_query	RULED	组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 同口径
-report_cost_trend_analysis	RULED	组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本趋势分析同口径 (那是 POST 分析端点, 扫描只看 GET)
-wage_policy_query	RULED	组织者裁定 2026-10-29: 工资方案按 WagePolicyController 的 hr 读权限 (它的数据另由仅限管理员角色的 canvas 端点提供)
+report_bom_cost	RULED	CODES:analytics:read_write 组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本分析同口径
+report_cost_query	RULED	CODES:analytics:read_write 组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 同口径
+report_cost_trend_analysis	RULED	CODES:analytics:read_write 组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本趋势分析同口径 (那是 POST 分析端点, 扫描只看 GET)
+wage_policy_query	SURFACE	WagePolicyController#listPolicies — 组织者裁定 2026-10-29: 工资方案按 WagePolicyController 的 hr 读权限 (同一份数据另由仅限管理员角色的 canvas 端点提供, 不作口径)
 # SURFACE = the data reaches users through the listed read handlers (not the ones the scan links); the tool mirrors their gate exactly.
-lineage_query	SURFACE	TraceabilityController#getFullTrace,TraceabilityController#getImpact — 组织者复审 2026-10-29: 批次血缘在 App 里经溯源全链/召回影响面接口给到所有工厂用户 (不经 canvas 指标血缘)
+lineage_query	SURFACE	TraceabilityController#getFullTrace — 组织者复审 2026-10-29: 批次血缘在 App 里经溯源全链/召回影响面接口给到所有工厂用户 (不经 canvas 指标血缘)
 haccp_status_query	SURFACE	CcpMonitoringController#stepCheckpoints,CcpMonitoringController#listForBatch — 组织者复审 2026-10-29: CCP 检查点与记录在 App 里按生产/质检读权限给到 (canvas 食安页仅管理员)
 haccp_checkpoint_review	SURFACE	CcpMonitoringController#stepCheckpoints,CcpMonitoringController#listForBatch — 组织者复审 2026-10-29: 同 haccp_status_query, 按生产/质检读权限
 indicator_alert	SURFACE	CanvasIndicatorsController#getIndicator — 组织者复审 2026-10-29: 指标、阈值与最新值经指标详情读接口给到 (三个角色)
 indicator_comparison	SURFACE	CanvasIndicatorsController#getIndicator — 组织者复审 2026-10-29: 同 indicator_alert
 indicator_query	SURFACE	CanvasIndicatorsController#getIndicator,CanvasIndicatorsController#listVersions — 组织者复审 2026-10-29: 指标详情与历史版本读接口 (三个角色)
-price_history_query	RULED	组织者复审 2026-10-29 (B2): 采购价历史是采购价汇总, 按 #1305 的采购价口径 (配置的采购读 procurement:read), 不随采购单列表放宽到销售/仓储
-production_demand_query	SURFACE	ProductionPlanController#getSelectableSalesOrders,ProductionPlanController#getDeliveryWarnings — 生产需求 (未完成销售订单的待产数量) 在 App 里经生产计划的来源订单选择与交期预警给到, 对工厂用户开放
-production_batch_create	SURFACE	ProductionPlanController#getSelectableSalesOrders,ProductionPlanController#getDeliveryWarnings — 建生产批次时按来源订单取待产明细, 与生产计划来源选择同一份数据 (写工具: 只要求不多于这些接口的放行范围)
+price_history_query	RULED	CODES:procurement:read 组织者复审 2026-10-29 (B2): 采购价历史是采购价汇总, 按 #1305 的采购价口径 (配置的采购读 procurement:read), 不随采购单列表放宽到销售/仓储
+production_demand_query	SURFACE	ProductionPlanController#getSelectableSalesOrders — 生产需求 (未完成销售订单的待产数量) 在 App 里经生产计划的来源订单选择与交期预警给到, 对工厂用户开放
+production_batch_create	SURFACE	ProductionPlanController#getSelectableSalesOrders — 建生产批次时按来源订单取待产明细, 与生产计划来源选择同一份数据 (写工具: 只要求不多于这些接口的放行范围)
+additive_compliance_check	RULED	CODES:quality:read,quality:read_write 组织者裁定 2026-11-03: 添加剂限量属质检工作, 质检读 (仅管理员的 canvas 食安页不作口径)
+additive_smart_match	RULED	CODES:quality:read,quality:read_write 组织者裁定 2026-11-03: 添加剂限量属质检工作, 质检读
+additive_compliance_check_quality	RULED	CODES:quality:read,quality:read_write 组织者裁定 2026-11-03: 添加剂限量属质检工作, 质检读
+additive_bom_compliance_check	RULED	CODES:quality:read,quality:read_write 组织者裁定 2026-11-03: 添加剂限量属质检工作, 质检读
+ssop_production_gate_check	RULED	CODES:quality:read,quality:read_write,production:read,production:read_write 组织者裁定 2026-11-03: SSOP 属质检, 开工前检查另让生产读 (车间主任、班组长) 看得到
+purchase_statistics	RULED	CODES:procurement:read #1305 (S5-12) 裁定: 采购统计含采购金额, 门 = 配置的采购读; 金额另按 canViewPurchasePrices 脱敏
+report_sku_gross_margin	RULED	CODES:procurement:price:view 既有裁定: SKU 毛利用的是 App 里同一个价格查看权限 (SkuGrossMarginToolTest 钉着)
+online_staff_count	RULED	CODES:production:read,dashboard:read 组织者裁定 2026-11-03: 只是在岗人数, 按生产/看板读, 不按 hr

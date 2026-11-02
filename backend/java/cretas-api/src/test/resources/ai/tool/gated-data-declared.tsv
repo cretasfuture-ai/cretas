@@ -6,10 +6,10 @@ abaca_weight_summary	CODES	procurement:read,procurement:read_write
 account_query	CODES	finance:read,finance:read_write
 account_tree_lookup	CODES	finance:read,finance:read_write
 accounts_receivable_aging	CODES	finance:read,finance:read_write
-additive_bom_compliance_check	CODES	production:read,production:read_write,warehouse:read,warehouse:read_write	REQ_ROLES:factory_super_admin,permission_admin
-additive_compliance_check	ROLES	factory_super_admin,permission_admin
-additive_compliance_check_quality	ROLES	factory_super_admin,permission_admin
-additive_smart_match	ROLES	factory_super_admin,permission_admin
+additive_bom_compliance_check	CODES	quality:read,quality:read_write
+additive_compliance_check	CODES	quality:read,quality:read_write
+additive_compliance_check_quality	CODES	quality:read,quality:read_write
+additive_smart_match	CODES	quality:read,quality:read_write
 alert_event_acknowledge	ROLES	factory_super_admin,permission_admin
 alert_event_query	ROLES	factory_super_admin,permission_admin
 alert_rule_create	BASE	-	REQ_ROLES:factory_super_admin,permission_admin
@@ -27,20 +27,21 @@ call_record_followup_pending	BASE	-	REQ_ROLES:department_admin,dispatcher,factor
 canvas_product_work_process_recommend	CODES	production:read,production:read_write,warehouse:read,warehouse:read_write
 canvas_set_user_permission	ROLES	factory_super_admin,permission_admin
 cashflow_statement_query	CODES	finance:read,finance:read_write
-cold_chain_alert_acknowledge	CODES	equipment:read
-cold_chain_alert_active	CODES	equipment:read
-cold_chain_equipment_register	CODES	equipment:read
-cold_chain_query	CODES	equipment:read
-cold_chain_temp_query	CODES	equipment:read
+cold_chain_alert_acknowledge	CODES	equipment:read_write,quality:read_write
+cold_chain_alert_active	CODES	equipment:read,inventory:read,inventory:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
+cold_chain_equipment_register	CODES	equipment:read_write
+cold_chain_query	CODES	equipment:read,inventory:read,inventory:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
+cold_chain_temp_query	CODES	equipment:read,inventory:read,inventory:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 commission_pending_total	CODES	sales:view
+customer_active	CODES	finance:read,finance:read_write,sales:read,sales:read_write,warehouse:read_write
 customer_notify_batch	ROLES	factory_super_admin,permission_admin
 customer_priority_query	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
-customer_quality_standard	CODES	finance:read,finance:read_write,sales:read,sales:read_write
+customer_quality_standard	CODES	quality:read,quality:read_write
 customer_revenue_trend	CODES	finance:read,procurement:read,sales:read,sales:read_write
 customer_stats	CODES	finance:read,finance:read_write,sales:read,sales:read_write
 customer_tracking_recent_query	CODES	sales:view
-dictionary_add	CODES	analytics:read
-dictionary_batch_import	CODES	analytics:read
+dictionary_add	CODES	analytics:read_write
+dictionary_batch_import	CODES	analytics:read_write
 dictionary_list	CODES	analytics:read
 ecn_create	CODES	finance:read_write,production:read_write,rd:read_write
 efficiency_comparison	CODES	work_report:read
@@ -67,10 +68,10 @@ finance_roa	CODES	finance:read,finance:read_write,procurement:price:view
 finance_roe	CODES	finance:read,finance:read_write,procurement:price:view
 finance_solvency	CODES	finance:read,finance:read_write,procurement:price:view
 finance_stats	CODES	finance:read,finance:read_write,procurement:price:view
-food_sample_create	ROLES	factory_super_admin,permission_admin
-food_sample_dispose	ROLES	factory_super_admin,permission_admin
-food_sample_query_pending_dispose	ROLES	factory_super_admin,permission_admin
-food_sample_trace	ROLES	factory_super_admin,permission_admin
+food_sample_create	CODES	quality:read_write
+food_sample_dispose	CODES	quality:read_write
+food_sample_query_pending_dispose	CODES	quality:read,quality:read_write
+food_sample_trace	CODES	quality:read,quality:read_write
 governance_pattern_discovery	ROLES	factory_super_admin,permission_admin
 governance_skill_compose	ROLES	factory_super_admin,permission_admin
 governance_skill_manage	ROLES	factory_super_admin,permission_admin
@@ -81,7 +82,7 @@ income_statement_query	CODES	finance:read,finance:read_write
 indicator_alert	ROLES	factory_super_admin,operator,permission_admin
 indicator_comparison	ROLES	factory_super_admin,operator,permission_admin
 indicator_query	ROLES	factory_super_admin,operator,permission_admin
-ingredient_nutrition_fact_query	ROLES	factory_super_admin,permission_admin
+ingredient_nutrition_fact_query	CODES	quality:read,quality:read_write
 leave_balance_query	CODES	hr:read,hr:read_write
 leave_request_query	CODES	hr:read_write
 material_batch_wip_query	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
@@ -95,9 +96,9 @@ notify_send	ROLES	factory_super_admin,permission_admin
 notify_template_create	ROLES	factory_super_admin,permission_admin
 notify_template_delete	ROLES	factory_super_admin,permission_admin
 notify_template_update	ROLES	factory_super_admin,permission_admin
-nutrition_label_generate	ROLES	factory_super_admin,permission_admin
-nutrition_label_lookup	ROLES	factory_super_admin,permission_admin
-online_staff_count	CODES	hr:read,hr:read_write
+nutrition_label_generate	CODES	quality:read_write
+nutrition_label_lookup	CODES	quality:read,quality:read_write
+online_staff_count	CODES	dashboard:read,production:read
 operation_log_query	ROLES	factory_super_admin,permission_admin
 opportunity_funnel_stats	CODES	sales:view
 opportunity_stage_alert	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
@@ -106,7 +107,7 @@ order_query	CODES	finance:read,sales:read,sales:read_write
 order_today	CODES	finance:read,procurement:read,sales:read,sales:read_write
 overtime_request_query	CODES	hr:read_write
 payment_status	CODES	finance:read,finance:read_write,procurement:price:view
-pda_scan_task_generate	CODES	finance:read,inventory:write,procurement:read,procurement:read_write,sales:read,warehouse:read,warehouse:read_write
+pda_scan_task_generate	CODES	inventory:write,warehouse:read_write
 period_status_query	CODES	finance:read,finance:read_write
 permission_audit	CODES	system:audit
 price_history_query	CODES	procurement:read
@@ -151,7 +152,7 @@ report_production	CODES	dashboard:read,dashboard:read_write,finance:read,finance
 report_production_weekly_comparison	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_quality	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_sales	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
-report_sku_gross_margin	CODES	procurement:price:view	REQ_ROLES:department_admin,dispatcher,factory_super_admin,finance_manager,permission_admin,procurement_manager,production_manager,restaurant_owner,sales_manager
+report_sku_gross_margin	CODES	procurement:price:view
 report_trends	CODES	finance:read,finance:read_write,procurement:price:view
 report_workshop_daily	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 restaurant_arap_payable_query	CODES	finance:read,finance:read_write
@@ -168,15 +169,16 @@ restaurant_order_statistics	CODES	finance:read,procurement:read,sales:read,sales
 restaurant_peak_hours_analysis	CODES	finance:read,procurement:read,sales:read,sales:read_write
 restaurant_performance_rule_manage	CODES	hr:read,hr:read_write
 restaurant_piecework_config	CODES	hr:read,hr:read_write
-restaurant_rep_commission_query	ROLES	factory_super_admin
+restaurant_procurement_create	CODES	procurement:read_write
+restaurant_rep_commission_query	CODES	sales:view
 restaurant_return_rate	CODES	finance:read,procurement:read,sales:read,sales:read_write
 restaurant_revenue_trend	CODES	finance:read,procurement:read,sales:read,sales:read_write
 restaurant_slow_seller_query	CODES	finance:read,procurement:read,sales:read,sales:read_write
 restaurant_table_turnover	CODES	finance:read,procurement:read,sales:read,sales:read_write
 restaurant_vip_guest_query	CODES	restaurant:read
-restaurant_wastage_summary	CODES	finance:read
+restaurant_wastage_summary	CODES	finance:read,finance:read_write,procurement:price:view
 return_order_approve	CODES	procurement:read_write,sales:read_write
-return_order_detail	CODES	finance:read,finance:read_write,procurement:read,procurement:read_write,sales:read,sales:read_write
+return_order_detail	CODES	finance:read,finance:read_write,procurement:read,procurement:read_write,report:read,sales:read,sales:read_write
 return_order_list	CODES	procurement:read,procurement:read_write,sales:read,sales:read_write
 return_order_statistics	CODES	procurement:read,procurement:read_write,report:read,sales:read,sales:read_write
 rule_create	BASE	-	REQ_ROLES:factory_super_admin,permission_admin
@@ -199,13 +201,17 @@ shipment_confirm_create	CODES	sales:read_write
 shortage_analyze	CODES	procurement:read,procurement:read_write,production:read,production:read_write,quality:read,quality:read_write,sales:read,sales:read_write,warehouse:read,warehouse:read_write
 source_individual_query	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
 split_order	ROLES	department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
-ssop_execute_complete	ROLES	factory_super_admin,permission_admin
-ssop_execution_today	ROLES	factory_super_admin,permission_admin
-ssop_monthly_audit_report	ROLES	factory_super_admin,permission_admin
-ssop_procedure_create	ROLES	factory_super_admin,permission_admin
-ssop_production_gate_check	ROLES	factory_super_admin,permission_admin
+ssop_execute_complete	CODES	quality:read_write
+ssop_execution_today	CODES	quality:read,quality:read_write
+ssop_monthly_audit_report	CODES	quality:read,quality:read_write
+ssop_procedure_create	CODES	quality:read_write
+ssop_production_gate_check	CODES	production:read,production:read_write,quality:read,quality:read_write
 stock_alert	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
+supplier_can_order_check	CODES	procurement:read,procurement:read_write
 supplier_delivery_eta	ROLES	factory_super_admin,permission_admin,procurement_manager
+supplier_qualification_create	CODES	procurement:read_write
+supplier_qualification_lookup	CODES	procurement:read,procurement:read_write
+supplier_qualification_query_expiring	CODES	procurement:read,procurement:read_write
 transfer_detail	CODES	inventory:read,inventory:write,warehouse:read,warehouse:read_write
 transfer_list	CODES	inventory:read,inventory:write
 transfer_statistics	CODES	inventory:read,inventory:write,report:read

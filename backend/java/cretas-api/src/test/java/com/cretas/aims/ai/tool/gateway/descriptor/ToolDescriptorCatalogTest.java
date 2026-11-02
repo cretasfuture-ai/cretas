@@ -98,8 +98,9 @@ class ToolDescriptorCatalogTest {
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
         // 2026-10-29 S6 gated-data rule: 13 role-gated tools now require a permission check; S5-12 adds purchase_statistics;
         // re-review: lineage_query opens again (traceability parity) and the 2 HACCP tools move to codes (-3).
-        // 2026-11-03 strict sweep (follow-up of #1316): 31 more tools whose data only role-gated endpoints serve get a role gate.
-        assertThat(statistics.requiresPermission()).isEqualTo(92);
+        // 2026-11-03 strict sweep (follow-up of #1316): role gates where the data is only served by role-gated endpoints;
+        // after the organizer's rulings (quality / cold chain / procurement / not-stricter) most became permission codes.
+        assertThat(statistics.requiresPermission()).isEqualTo(76);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(

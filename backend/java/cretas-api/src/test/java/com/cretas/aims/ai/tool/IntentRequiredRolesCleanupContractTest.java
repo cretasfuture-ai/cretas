@@ -62,6 +62,32 @@ class IntentRequiredRolesCleanupContractTest {
     }
 
     @Test
+    void qualityManagerAskingToTraceABatchPassesTheIntentGateOnceTheRoleListIsGone() {
+        // The real intent gate: TRACE_BATCH has no required_permission, so IntentPermissionGate hands over to the
+        // legacy required_roles check (IntentConfigManagementServiceImpl#checkRolePermission).
+        AIIntentConfig before = AIIntentConfig.builder().intentCode("TRACE_BATCH").intentName("批次溯源")
+                .toolName("trace_batch")
+                .requiredRoles("[\"factory_super_admin\", \"department_admin\", \"quality_inspector\"]").build();
+        assertThat(new com.cretas.aims.service.execution.IntentPermissionGate().check(before, 42L, "quality_manager").isLegacy())
+                .isTrue();
+        com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl intents =
+                org.mockito.Mockito.mock(com.cretas.aims.service.intent.impl.IntentConfigManagementServiceImpl.class,
+                        org.mockito.Mockito.CALLS_REAL_METHODS);
+        // The prod row before V20261103_140: 「追溯批次」 refused for quality_manager / production_manager (2026-11-03 retest).
+        assertThat((Boolean) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                intents, "checkRolePermission", before, "quality_manager")).isFalse();
+        assertThat((Boolean) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                intents, "checkRolePermission", before, "production_manager")).isFalse();
+        // After the migration (required_roles = NULL): admitted at the intent layer; the tool's own gate decides.
+        AIIntentConfig after = AIIntentConfig.builder().intentCode("TRACE_BATCH").intentName("批次溯源")
+                .toolName("trace_batch").requiredRoles(null).build();
+        assertThat((Boolean) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                intents, "checkRolePermission", after, "quality_manager")).isTrue();
+        assertThat((Boolean) org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                intents, "checkRolePermission", after, "production_manager")).isTrue();
+    }
+
+    @Test
     void withTheRoleListGoneTheTraceIntentsAreOpenLikeTheTraceabilityPages() {
         // Intent layer: an empty required_roles admits every role (IntentConfigManagementServiceImpl#checkRolePermission).
         AIIntentConfig cleared = AIIntentConfig.builder().intentCode("TRACE_BATCH").toolName("trace_batch").build();

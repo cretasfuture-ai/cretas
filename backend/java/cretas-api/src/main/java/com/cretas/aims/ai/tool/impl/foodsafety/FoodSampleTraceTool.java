@@ -146,16 +146,11 @@ public class FoodSampleTraceTool extends AbstractBusinessTool {
     }
 
     /**
-     * S6 gated-data rule (2026-11-03): its data is served only by role-gated (@RequireRole) endpoints, so the AI path admits the same roles;
+     * S6 gated-data rule (2026-11-03): organizer ruling (no App read page; the module that owns the work): food safety belongs to quality, quality read;
      * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
      */
     @Override
-    public boolean requiresPermission() {
-        return true;
-    }
-
-    @Override
-    public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin", "permission_admin").contains(userRole);
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("quality:read", "quality:read_write");
     }
 }

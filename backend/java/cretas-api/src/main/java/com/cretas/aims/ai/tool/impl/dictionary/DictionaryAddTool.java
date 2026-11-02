@@ -199,6 +199,6 @@ public class DictionaryAddTool extends AbstractTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("analytics:read");
+        return java.util.Set.of("analytics:read_write");
     }
 }

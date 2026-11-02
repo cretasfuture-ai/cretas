@@ -172,6 +172,6 @@ public class ColdChainAlertActiveTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("equipment:read");
+        return java.util.Set.of("warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write", "quality:read", "quality:read_write", "equipment:read");
     }
 }

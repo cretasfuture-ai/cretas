@@ -53,6 +53,22 @@ class ToolRuntimeRegistryTest {
     }
 
     @Test
+    void aToolWithRequiredRolesResolvesOnlyWhenTheDescriptorRolesStayInsideThem() {
+        ToolExecutor plain = mock(ToolExecutor.class);
+        when(plain.getRequiredRoles()).thenReturn(Set.of());
+        assertThat(ToolRuntimeRegistry.requiredRolesCovered(egressDescriptor(Set.of()), plain)).isTrue();
+
+        ToolExecutor adminsOnly = mock(ToolExecutor.class);
+        when(adminsOnly.getRequiredRoles()).thenReturn(Set.of("factory_super_admin", "permission_admin"));
+        // No role restriction on the descriptor: the lane would admit everyone, so it must not resolve.
+        assertThat(ToolRuntimeRegistry.requiredRolesCovered(egressDescriptor(Set.of()), adminsOnly)).isFalse();
+        assertThat(ToolRuntimeRegistry.requiredRolesCovered(
+                egressDescriptor(Set.of("factory_super_admin", "sales_manager")), adminsOnly)).isFalse();
+        assertThat(ToolRuntimeRegistry.requiredRolesCovered(
+                egressDescriptor(Set.of("permission_admin")), adminsOnly)).isTrue();
+    }
+
+    @Test
     void springContextSelectsTheProductionConstructor() {
         try (AnnotationConfigApplicationContext context =
                      new AnnotationConfigApplicationContext()) {
@@ -238,6 +254,26 @@ class ToolRuntimeRegistryTest {
                 ToolExecutor.RiskLevel.LOW,
                 Set.of("hr:read_write"),
                 Set.of(),
+                Set.of(FactoryType.FACTORY),
+                Set.of("restaurant", "analytics"),
+                "1.0.0",
+                true,
+                ConfirmationPolicy.NOT_REQUIRED,
+                ApprovalPolicy.NOT_REQUIRED,
+                IdempotencyPolicy.NOT_REQUIRED,
+                DataClassification.INTERNAL,
+                Set.of(ToolExecutionSource.HTTP_CONTROLLER),
+                ToolEgressPolicy.legacyUnspecified(),
+                DescriptorProvenance.LEGACY_INFERRED);
+    }
+
+    private static ToolDescriptor egressDescriptor(Set<String> allowedRoles) {
+        return new ToolDescriptor(
+                "egress_test_tool",
+                ToolExecutor.ActionType.READ,
+                ToolExecutor.RiskLevel.LOW,
+                Set.of("hr:read_write"),
+                allowedRoles,
                 Set.of(FactoryType.FACTORY),
                 Set.of("restaurant", "analytics"),
                 "1.0.0",

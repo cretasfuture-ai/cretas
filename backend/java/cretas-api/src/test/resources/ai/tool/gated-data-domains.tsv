@@ -1,41 +1,43 @@
-# Data owners (repositories / services) that tools call through methods no read endpoint calls (S6 follow-up, 2026-10-29).
+# Data owners (repositories / services) that tools call through methods no read endpoint calls (S6 follow-up, 2026-11-03).
 # An owner not listed here keeps the gate of the read endpoints that call its other methods (same repository = same data);
 # an owner no read endpoint touches at all must be listed. Pinned by GatedDataToolAiPathPermissionTest.
-# name	kind	ownerRegex	readHandlers	reason
-# kind: GATE = the listed read handlers serve this data in the App and their gate applies to every tool that reads it;
-#       OPEN = the listed read handlers serve it ungated; INTERNAL = no business data;
-#       NO_APP_PAGE = business data with no App read page, the reason says why it is not sensitive.
+# name	kind	ownerRegex	readHandlers | gate	reason
+# kind: GATE = the listed read handlers serve this data in the App (each must reach one of the row's owners through
+#       service / repository code, checked) and their gate applies to every tool that reads it;
+#       OPEN = the same, with open handlers; INTERNAL = no business data;
+#       NO_APP_PAGE = business data with no App read page: the gate column states the ruling (CODES:a,b | ROLES:a,b | - = open),
+#       following the module that owns the work (organizer ruling, 2026-11-03).
 sales-orders	GATE	SalesOrderRepository|SalesOrderItemRepository|SalesDeliveryRecordRepository|SalesPlanService	SalesController#listOrders	销售订单、明细、发货与销售计划 (金额、客户、数量) 在 App 里经销售订单接口给到; 参考数据下拉只给编号名称不给明细, 不作口径
 sales-crm	GATE	SalesOpportunityRepository|CallRecordRepository|WechatRecordRepository|CommissionRepository	SalesOpportunityController#list,CallRecordController#list,WechatRecordController#list,CommissionController#list	商机、通话、微信跟进与提成在 App 里都按 sales:view 给到
-customer-quality	GATE	CustomerQualityStandardRepository	CustomerController#getCustomerById	客户质量标准属于客户档案, 按客户档案接口的权限给到
-procurement	GATE	PurchaseOrderItemRepository|PurchaseReceiveRecordRepository|PurchaseGrantCallerService	PurchaseController#listOrders,PurchaseController#getOrder,PurchaseController#getReceivingTasks	采购单明细与收货记录在 App 里经采购单列表/详情与仓库收货任务给到 (采购、财务、仓储读); 采购价另按 #1305 配置的采购读权限脱敏, 读采购价汇总的工具单独裁定
+procurement	GATE	PurchaseOrderRepository|PurchaseOrderItemRepository|PurchaseReceiveRecordRepository|PurchaseGrantCallerService	PurchaseController#listOrders,PurchaseController#getOrder,PurchaseController#getReceivingTasks	采购单 (含明细与收货记录, 随采购单一起加载) 在 App 里经采购单列表/详情与仓库收货任务给到 (采购、财务、仓储读); 采购价另按 #1305 配置的采购读权限脱敏, 读采购价汇总的工具单独裁定
 finance-arap	GATE	ArApTransactionRepository	ArApController#listTransactions	应收应付流水在 App 里只经财务应收应付接口给到
-pricing	GATE	PricingEngine	PricingStrategyController#listStrategies	定价引擎的试算基于定价策略, 策略在 App 里只给财务/销售经理与管理员
+pricing	GATE	PricingEngine|PricingStrategyRepository	PricingStrategyController#listStrategies	定价引擎按定价策略试算, 策略在 App 里只给财务/销售经理与管理员
 hr-attendance	GATE	TimeClockRecordRepository	TimeClockController#getAllEmployeesClockHistory	全员打卡记录在 App 里只给 hr 读; 本人打卡走 TimeClockService 的本人接口
-hr-pay-rules	GATE	PieceworkConfigRepository|PerformanceRuleService	WagePolicyController#listPolicies	计件与绩效规则决定工资, 与工资方案同按 hr 读
 work-reports	GATE	ProductionReportRepository	WorkReportingController#getReports,WorkReportingController#getSummary,ProcessWorkReportingController#listReports	报工记录与汇总在 App 里按 work_report:read 给到
 alert-events	GATE	AlertEventRepository	CanvasAlertController#listEvents	预警事件在 App 里只在管理员的预警页
-scheduled-tasks	GATE	DynamicSchedulerService	ScheduledTaskController#list	定时任务在 App 里只给管理员
-food-safety	GATE	FoodSampleRepository|IngredientNutritionFactRepository|NutritionLabelRepository|SsopProcedureRepository|SsopExecutionRecordRepository|SsopBlockingGateRepository|RegulatoryReportPdfService	CanvasFoodSafetyController#summary	留样、营养成分、SSOP 与监管报告在 App 里只在管理员的食安页
-cold-chain	GATE	ColdChainAlertRepository|ColdChainEquipmentRepository|ColdChainTempReadingRepository|IotDeviceDataRepository	EquipmentController#getEquipmentList	冷链设备、温度读数与 IoT 数据属于设备数据, 设备接口按 equipment:read 给到
+scheduled-tasks	GATE	DynamicSchedulerService|ScheduledTaskRepository	ScheduledTaskController#list	定时任务在 App 里只给管理员
 source-individuals	GATE	SourceIndividualRepository	SourceIndividualController#list	来源个体 (活体/批次个体) 在 App 里按库存/仓储读权限给到
 menu-permissions	GATE	UserMenuPermissionRepository	UserMenuPermissionController#list	用户菜单权限只给管理员与权限管理员
-smartbi-config	GATE	SmartBiDictionaryRepository|SmartBiSkillRepository	SmartBIConfigController#listIntents	SmartBI 字典与技能配置在 App 里按 analytics:read 给到
-shortage	GATE	ShortageAnalysisService	ShortageCaseController#list	缺料分析与缺料案件同一份数据, 按缺料案件接口的权限
-bom	OPEN	BomExpansionService|BomVersionRepository	BomVersionController#getCurrent,BomController#calculateCost	BOM 版本与展开在 App 里对工厂用户开放
+smartbi-config	GATE	SmartBiDictionaryRepository|SmartBiSkillRepository	SmartBIConfigController#listFieldMappings	SmartBI 字典 (字段映射) 在 App 里按 analytics:read 给到; SmartBI 技能同属 SmartBI 配置
+bom	OPEN	BomExpansionService|BomVersionRepository	BomVersionController#getCurrent	BOM 版本与展开在 App 里对工厂用户开放
 shipments	OPEN	ShipmentRecordRepository	ShipmentController#getShipments	出货记录在 App 的出货页对工厂用户开放 (溯源/召回也要用)
-devices	OPEN	DahuaDeviceService|IsapiDeviceRepository	DahuaDeviceController#listDevices,IsapiDeviceController#getDevice	摄像头设备在 App 里对工厂用户开放
-scale-protocols	OPEN	ScaleProtocolAdapterService	ScaleProtocolController#getProtocols	秤协议目录在 App 里开放
+devices	OPEN	DahuaDeviceService|DahuaDeviceRepository|IsapiDeviceRepository	DahuaDeviceController#listDevices,IsapiDeviceController#getDevice	摄像头设备在 App 里对工厂用户开放
+scale-protocols	OPEN	ScaleProtocolAdapterService|ScaleProtocolConfigRepository	ScaleProtocolController#getProtocols	秤协议目录在 App 里开放
 lowcode	OPEN	LowcodeComponentDefinitionRepository|LowcodePageConfigRepository	LowcodeController#getPages	低代码页面与组件定义在 App 里开放
-notifications	OPEN	NotificationService	NotificationController#getNotifications	通知在 App 里对工厂用户开放
+notifications	OPEN	NotificationService|NotificationRepository	NotificationController#getNotifications	通知在 App 里对工厂用户开放
 workflows	OPEN	ProductProcessWorkflowRepository|ProductWorkProcessRepository|WorkflowTemplateService	ProductProcessWorkflowController#listVersions,ProductWorkProcessController#listByProduct	产品工艺流程与工序在 App 里开放 (工艺保密另由工艺保密授权管)
-quality-disposition	OPEN	QualityDispositionRuleService|QualityInspectionService|QualityDispositionInventoryService	QualityDispositionController#getPendingDispositions,QualityDispositionController#getDispositionHistory	质检与处置在 App 的处置页开放
-sku-complexity	OPEN	SkuComplexityRepository	SchedulingOptimizationController#getSkuComplexity	SKU 复杂度在排产优化页开放
-rule-engine	OPEN	RuleEngine	BusinessRuleController#getValidationRules	业务规则在 App 里开放
-units	OPEN	UnitConversionService	SystemConfigController#getUnits	单位与换算在 App 里开放
+quality-disposition	OPEN	QualityDispositionRuleService|QualityInspectionService|QualityDispositionInventoryService	QualityDispositionController#getPendingDispositions	质检与处置在 App 的处置页开放
+sku-complexity	OPEN	SkuComplexityRepository|SkuComplexityService	SchedulingOptimizationController#getSkuComplexity	SKU 复杂度在排产优化页开放
 worker-scheduling	OPEN	WorkerAssignmentRepository|ShiftScheduleService	SchedulingController#getWorkerAssignments	人员排班与分配在排产页开放
 work-sessions	OPEN	EmployeeWorkSessionRepository	WorkSessionController#getStats	工作时段统计在 App 里开放
-supplier-admission	OPEN	SupplierQualificationRepository	SupplierAdmissionController#evaluateAdmission,SupplierAdmissionController#checkSupplyPermission	供应商资质与准入判断在 App 里开放 (价格类报告另按 procurement:price:view)
+food-safety	NO_APP_PAGE	FoodSampleRepository|IngredientNutritionFactRepository|NutritionLabelRepository|SsopProcedureRepository|SsopExecutionRecordRepository|SsopBlockingGateRepository|RegulatoryReportPdfService	CODES:quality:read,quality:read_write	组织者裁定 2026-11-03: 留样、营养成分/标签、SSOP 与监管报告没有 App 读页面 (canvas 食安页不读这些表), 归质检模块: 质检读 (管理员另有全权)
+cold-chain	NO_APP_PAGE	ColdChainAlertRepository|ColdChainEquipmentRepository|ColdChainTempReadingRepository|IotDeviceDataRepository	CODES:warehouse:read,warehouse:read_write,inventory:read,inventory:read_write,quality:read,quality:read_write,equipment:read	组织者裁定 2026-11-03: 冷链设备/温度/IoT 读数没有 App 读页面, 仓储/库存读、质检读或设备读任一可看; 登记与确认告警另需对应写权限 (工具上声明)
+customer-quality	NO_APP_PAGE	CustomerQualityStandardRepository	CODES:quality:read,quality:read_write	客户质量标准没有 App 读页面 (客户档案接口不读它), 归质检模块: 质检读
+hr-pay-rules	NO_APP_PAGE	PieceworkConfigRepository|PerformanceRuleService	CODES:hr:read,hr:read_write	计件与绩效规则没有 App 读页面, 决定工资, 归人事模块: hr 读
+supplier-qualification	NO_APP_PAGE	SupplierQualificationRepository	CODES:procurement:read,procurement:read_write	供应商资质没有 App 读页面 (准入接口不读这张表), 归采购模块: 采购读
+shortage	NO_APP_PAGE	ShortageAnalysisService	CODES:procurement:read,procurement:read_write,production:read,production:read_write,quality:read,quality:read_write,sales:read,sales:read_write,warehouse:read,warehouse:read_write	缺料分析没有 App 读页面 (缺料案件接口不调它), 与缺料案件同属一件事, 按缺料案件的权限
+rule-engine	NO_APP_PAGE	RuleEngine	ROLES:factory_super_admin,permission_admin	规则试算没有 App 读页面, 业务规则由管理员维护 (rule_* 工具同为管理员)
+units	NO_APP_PAGE	UnitConversionService	-	单位换算是参考数据 (千克/吨/箱的换算关系), 没有 App 读页面, 不含经营数据, 对工厂用户开放
 ai-conversation	INTERNAL	ConversationMemoryService	-	调用者本人的对话上下文 (上一轮的结果与翻页游标), 不读别人的业务数据
 ai-tool-catalog	INTERNAL	ToolMetadataRepository|ToolSimilarityService	-	工具目录元数据 (工具名、描述、相似度), 不含业务数据
 voice-requisition	INTERNAL	VoiceRequisitionParserService	-	把一句语音解析成领料单草稿字段, 不读业务数据

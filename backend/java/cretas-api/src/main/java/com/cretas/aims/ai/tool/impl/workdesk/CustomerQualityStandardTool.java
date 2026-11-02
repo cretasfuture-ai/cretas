@@ -222,6 +222,6 @@ public class CustomerQualityStandardTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("finance:read", "finance:read_write", "sales:read", "sales:read_write");
+        return java.util.Set.of("quality:read", "quality:read_write");
     }
 }

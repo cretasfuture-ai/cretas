@@ -83,10 +83,12 @@ public class GatedDataToolAiPathPermissionTest {
     /**
      * A row of {@code gated-data-domains.tsv}: data owners (repositories / services) whose methods a tool calls
      * but no read endpoint calls. GATE: the listed read handlers serve that data domain in the app, and their
-     * gate applies; OPEN: the listed read handlers serve it ungated; INTERNAL: no business data (reason says why).
+     * gate applies; OPEN: the listed read handlers serve it ungated; INTERNAL: no business data (reason says why);
+     * NO_APP_PAGE: no App read page, {@code ruled} is the ruling's gate (codes / roles; both empty = open).
      */
     private record Domain(String name, String kind, java.util.regex.Pattern owners,
-                          List<String> handlers, String reason, List<GatedDataScan.Endpoint> derived) {
+                          List<String> handlers, String reason, List<GatedDataScan.Endpoint> derived,
+                          Requirement ruled) {
         List<GatedDataScan.Endpoint> endpoints() {
             return derived != null ? derived : handlers.stream().map(scan.readEndpoints::get).toList();
         }
@@ -112,9 +114,10 @@ public class GatedDataToolAiPathPermissionTest {
             for (String line; (line = in.readLine()) != null; ) {
                 if (line.isBlank() || line.startsWith("#")) continue;
                 String[] cols = line.split("	", 5);
-                List<String> handlers = cols[3].equals("-") ? List.of() : Arrays.asList(cols[3].split(","));
+                boolean ruling = "NO_APP_PAGE".equals(cols[1]);
+                List<String> handlers = ruling || cols[3].equals("-") ? List.of() : Arrays.asList(cols[3].split(","));
                 domains.add(new Domain(cols[0], cols[1], java.util.regex.Pattern.compile(cols[2]), handlers,
-                        cols.length > 4 ? cols[4] : "", null));
+                        cols.length > 4 ? cols[4] : "", null, ruling ? gateSpec(cols[0], cols[3]) : null));
             }
         }
     }
@@ -131,7 +134,34 @@ public class GatedDataToolAiPathPermissionTest {
         if (served.isEmpty() && !base.equals(owner)) served = scan.readEndpointsOfOwner(base);
         if (served.isEmpty()) return null;
         boolean allGated = served.stream().allMatch(GatedDataScan.Endpoint::gated);
-        return new Domain("derived:" + base, allGated ? "GATE" : "OPEN", null, List.of(), "derived", served);
+        return new Domain("derived:" + base, allGated ? "GATE" : "OPEN", null, List.of(), "derived", served, null);
+    }
+
+    /** Whether some data the tool reads is served by an App endpoint (directly or through a GATE / OPEN row). */
+    private static boolean hasAppSurface(String tool) {
+        for (GatedDataScan.DataMethod data : scan.toolCalls.getOrDefault(tool, Set.of())) {
+            List<GatedDataScan.Endpoint> served = scan.servedBy.get(data);
+            if (served != null && !served.isEmpty()) return true;
+            Domain domain = domainOf(data.owner());
+            if (domain != null && Set.of("GATE", "OPEN").contains(domain.kind())) return true;
+            // A NO_APP_PAGE ruling with a gate is the surface: the tool must admit whom the ruling admits.
+            if (domain != null && domain.ruled() != null
+                    && !(domain.ruled().codes().isEmpty() && domain.ruled().roles().isEmpty())) return true;
+        }
+        return false;
+    }
+
+    static Set<String> allRoles() {
+        return Arrays.stream(FactoryUserRole.values()).map(Enum::name).collect(Collectors.toCollection(TreeSet::new));
+    }
+
+    /** {@code CODES:a,b} / {@code ROLES:a,b} / {@code -} (open) → the ruled gate. */
+    static Requirement gateSpec(String label, String spec) {
+        String s = spec.trim();
+        if (s.equals("-")) return new Requirement(label, Set.of(), Set.of());
+        if (s.startsWith("CODES:")) return new Requirement(label, new TreeSet<>(Arrays.asList(s.substring(6).split(","))), Set.of());
+        if (s.startsWith("ROLES:")) return new Requirement(label, Set.of(), new TreeSet<>(Arrays.asList(s.substring(6).split(","))));
+        throw new IllegalArgumentException(label + ": bad gate spec " + spec);
     }
 
     private UserRepository users;
@@ -236,6 +266,8 @@ public class GatedDataToolAiPathPermissionTest {
             for (String h : d.handlers()) {
                 GatedDataScan.Endpoint e = scan.readEndpoints.get(h);
                 if (e == null) problems.add(d.name() + ": no read handler " + h);
+                else if (!reachesSafely(h, o -> d.owners().matcher(o).matches()))
+                    problems.add(d.name() + ": " + h + " never reaches the row's owners (a borrowed gate)");
                 else if ("GATE".equals(d.kind()) && !e.gated()) problems.add(d.name() + ": " + h + " is open, not a GATE surface");
                 else if ("OPEN".equals(d.kind()) && e.gated()) problems.add(d.name() + ": " + h + " is gated, not an OPEN surface");
             }
@@ -257,12 +289,17 @@ public class GatedDataToolAiPathPermissionTest {
             ToolExecutor instance = scan.instances.get(tool);
             if (instance == null) { stale.add(tool + " (no such tool)"); continue; }
             if (!Set.of("RULED", "SURFACE").contains(kind)) stale.add(tool + " (unknown kind " + kind + ")");
-            if ("RULED".equals(kind) && declared(instance).isEmpty()) {
-                stale.add(tool + " (ruled codes not declared)");
+            if ("RULED".equals(kind) && !entry.getValue()[1].matches("^(CODES|ROLES):\\S+ .*")) {
+                stale.add(tool + " (a RULED reason starts with the ruled gate, CODES:... or ROLES:...)");
             }
             if ("SURFACE".equals(kind)) {
+                Set<String> owners = new HashSet<>();
+                scan.toolCalls.getOrDefault(tool, Set.of()).forEach(dm ->
+                        owners.add(dm.owner().contains("$") ? dm.owner().substring(0, dm.owner().indexOf('$')) : dm.owner()));
                 for (String handler : surfaceHandlers(entry.getValue()[1])) {
                     if (!scan.readEndpoints.containsKey(handler)) stale.add(tool + " (no read handler " + handler + ")");
+                    else if (!reachesSafely(handler, owners::contains))
+                        stale.add(tool + " (" + handler + " never reaches the data the tool reads: a borrowed gate)");
                 }
                 if (requirementsOf(tool, new ArrayList<>()).isEmpty()) stale.add(tool + " (reads no gated data: SURFACE not needed)");
             }
@@ -320,24 +357,40 @@ public class GatedDataToolAiPathPermissionTest {
         if (!unclassified.isEmpty()) {
             return "no read endpoint serves " + unclassified + " and no row of gated-data-domains.tsv covers their owners";
         }
-        if (registration != null && "RULED".equals(registration[0])) {
-            return codes.isEmpty() ? "ruled but declares no codes" : null;
-        }
         if (registration != null && "SURFACE".equals(registration[0])) {
             return surfaceMismatch(instance, codes, surfaceHandlers(registration[1]));
         }
-        if (requirements.isEmpty()) return null;
-        // Compared as roles under the default permission matrix (PermissionServiceImpl, no factory overrides):
-        // the tool may admit no role that some direct read surface of its data refuses.
+        // RULED: a ruling names the gate (CODES:... / ROLES:... at the head of the reason); it replaces the derived
+        // requirements, and the tool is still compared against it in both directions (no skip).
+        boolean ruled = registration != null && "RULED".equals(registration[0]);
+        if (ruled) {
+            requirements = List.of(gateSpec(tool + " (ruling)", registration[1].split(" ", 2)[0]));
+        }
+        // Compared as roles under the default permission matrix (PermissionServiceImpl, no factory overrides).
         Set<String> toolRoles = rolesAdmittedByTool(instance, codes);
+        Set<String> expected = allRoles();
         for (Requirement r : requirements) {
             Set<String> admitted = rolesAdmittedBy(r);
+            expected.retainAll(admitted);
+            // Not more than the App: the tool may admit no role that some direct surface of its data refuses.
             Set<String> extra = new TreeSet<>(toolRoles);
             extra.removeAll(admitted);
             if (!extra.isEmpty()) {
                 return (codes.isEmpty() && !roleGated(instance) ? "has no gate" : "admits " + extra)
                         + " but " + r.data() + " is served only to " + admitted
                         + " (codes " + r.codes() + (r.roles().isEmpty() ? "" : ", roles " + r.roles()) + ")";
+            }
+        }
+        // Not stricter than the App (READ tools): every role the surfaces of all its data admit, the tool admits too.
+        // Write tools carry their own write gate on top, so only the first direction applies to them.
+        if ((!ToolAccessModes.isWrite(instance) && hasAppSurface(tool)) || ruled) {
+            Set<String> missing = new TreeSet<>(expected);
+            missing.removeAll(toolRoles);
+            if (!missing.isEmpty()) {
+                return "refuses " + missing + " although every direct surface of its data admits them"
+                        + (requirements.isEmpty() ? " (all its data is served openly)"
+                        : " (surfaces: " + requirements.stream().map(r -> r.codes().isEmpty() ? "roles " + r.roles() : "codes " + r.codes())
+                                .distinct().toList() + ")");
             }
         }
         return toolRoles.isEmpty() ? "its gate admits nobody" : null;
@@ -348,7 +401,11 @@ public class GatedDataToolAiPathPermissionTest {
         // Mirrors ToolPermissionChain: the legacy role gate applies only when the tool declares no codes,
         // and then RBAC still applies the permission-map codes on top.
         Set<String> roles = Arrays.stream(FactoryUserRole.values()).map(Enum::name).collect(Collectors.toCollection(TreeSet::new));
-        if (declared(instance).isEmpty() && roleGated(instance)) roles.retainAll(allowedRoles(instance));
+        if (declared(instance).isEmpty() && roleGated(instance)) {
+            Set<String> allowed = new TreeSet<>(allowedRoles(instance));
+            allowed.addAll(PLATFORM_ADMIN_ROLES);   // ToolPermissionChain.legacyRoleDenied lets platform admins through
+            roles.retainAll(allowed);
+        }
         if (!codes.isEmpty()) roles.retainAll(rolesHoldingAny(codes));
         Set<String> requiredRoles = instance.getRequiredRoles();
         if (requiredRoles != null && !requiredRoles.isEmpty()) {
@@ -418,6 +475,9 @@ public class GatedDataToolAiPathPermissionTest {
                 unclassified.add(data.toString());
             } else if ("GATE".equals(domain.kind())) {
                 requirements.add(requirementOf(data + " (domain " + domain.name() + ")", domain.endpoints()));
+            } else if (domain.ruled() != null && !(domain.ruled().codes().isEmpty() && domain.ruled().roles().isEmpty())) {
+                requirements.add(new Requirement(data + " (ruling " + domain.name() + ")",
+                        domain.ruled().codes(), domain.ruled().roles()));
             }
         }
         return requirements;
@@ -432,6 +492,14 @@ public class GatedDataToolAiPathPermissionTest {
             roles.addAll(e.roles());
         }
         return new Requirement(data, codes, roles);
+    }
+
+    private static boolean reachesSafely(String handler, java.util.function.Predicate<String> owner) {
+        try {
+            return scan.reaches(handler, owner);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** SURFACE reason column: {@code Controller#method[,Controller#method] — why}. */

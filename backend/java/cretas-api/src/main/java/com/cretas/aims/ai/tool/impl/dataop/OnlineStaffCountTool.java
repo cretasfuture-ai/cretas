@@ -91,6 +91,6 @@ public class OnlineStaffCountTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("hr:read", "hr:read_write");
+        return java.util.Set.of("production:read", "dashboard:read");
     }
 }

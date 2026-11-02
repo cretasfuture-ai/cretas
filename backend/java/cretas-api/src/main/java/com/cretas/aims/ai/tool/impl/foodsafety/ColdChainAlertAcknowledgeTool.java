@@ -294,6 +294,6 @@ public class ColdChainAlertAcknowledgeTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("equipment:read");
+        return java.util.Set.of("equipment:read_write", "quality:read_write");
     }
 }

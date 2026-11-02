@@ -246,7 +246,7 @@ public class ToolRbacEnforcer {
     );
 
     /** Kept in sync with RequireRoleInterceptor: platform admins pass every role requirement. */
-    static final Set<String> PLATFORM_ADMIN_ROLES = Set.of("super_admin", "platform_admin", "developer", "platform_super_admin");
+    public static final Set<String> PLATFORM_ADMIN_ROLES = Set.of("super_admin", "platform_admin", "developer", "platform_super_admin");
 
     /**
      * 中央鉴权判定。在 <b>每个 tool 执行 SITE</b> 紧邻 W0 WriteGuard 调用。

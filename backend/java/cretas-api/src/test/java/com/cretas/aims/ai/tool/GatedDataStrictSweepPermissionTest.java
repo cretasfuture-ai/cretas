@@ -36,7 +36,8 @@ import static org.mockito.Mockito.when;
  *       order gate ({@code SalesController#listOrders}).</li>
  *   <li>{@code price_history_query} returned purchase-price aggregates to operators / QC: now the #1305 purchase-price
  *       rule ({@code procurement:read}).</li>
- *   <li>{@code material_rejection_reason} (a WRITE-mode tool, skipped before) read inventory data ungated.</li>
+ *   <li>{@code material_rejection_reason} (declared WRITE, so skipped before, though it only reads) read inventory data
+ *       ungated: now READ and gated like the inventory pages.</li>
  *   <li>{@code ssop_execution_today}: SSOP records are only on the admin food-safety page.</li>
  *   <li>{@code alert_rule_create} keeps its {@code system:read_write} code and now also requires the admin roles
  *       ({@link ToolExecutor#getRequiredRoles}): {@code restaurant_owner} holds the code but not the alert pages.</li>
@@ -51,13 +52,14 @@ class GatedDataStrictSweepPermissionTest {
     private final Map<String, Long> userIds = new HashMap<>();
     private UserRepository users;
     private ToolPermissionChain chain;
+    private ToolRbacGuard guard;
 
     @BeforeEach
     void setUp() {
         PermissionServiceImpl matrix = new PermissionServiceImpl();
         PermissionRepositoryFixtures.installSuccessfulEmpty(matrix);
         users = mock(UserRepository.class);
-        ToolRbacGuard guard = new ToolRbacGuard();
+        guard = new ToolRbacGuard();
         ReflectionTestUtils.setField(guard, "userRepository", users);
         ReflectionTestUtils.setField(guard, "permissionService", matrix);
         ToolRbacEnforcer enforcer = new ToolRbacEnforcer();
@@ -88,18 +90,124 @@ class GatedDataStrictSweepPermissionTest {
     }
 
     @Test
-    void aWriteModeToolThatReadsInventoryIsGatedLikeTheInventoryPages() {
+    void priceHistoryRefusesAWarehouseManagerWithNoPriceConfigAndNeverReadsPurchases() throws Exception {
+        // #1305: with no L1/L2 rows only procurement_manager sees purchase prices, although the fallback matrix
+        // gives warehouse_manager procurement:read. The whole result is purchase prices, so the tool itself refuses.
+        PriceHistoryQueryTool tool = new PriceHistoryQueryTool();
+        com.cretas.aims.repository.inventory.PurchaseOrderItemRepository items =
+                mock(com.cretas.aims.repository.inventory.PurchaseOrderItemRepository.class);
+        ReflectionTestUtils.setField(tool, "purchaseOrderItemRepository", items);
+        ReflectionTestUtils.setField(tool, "purchaseOrderRepository",
+                mock(com.cretas.aims.repository.inventory.PurchaseOrderRepository.class));
+        ReflectionTestUtils.setField(tool, "objectMapper", new com.fasterxml.jackson.databind.ObjectMapper());
+        PermissionServiceImpl matrix = new PermissionServiceImpl();
+        PermissionRepositoryFixtures.installSuccessfulEmpty(matrix);
+        ReflectionTestUtils.setField(tool, "priceVisibility", new com.cretas.aims.security.PriceVisibility(matrix));
+        ReflectionTestUtils.setField(tool, "userRepository", users);
+
+        String refused = run(tool, "warehouse_manager");
+        assertThat(refused).contains("\"success\":false").contains("采购价");
+        org.mockito.Mockito.verify(items, org.mockito.Mockito.never()).findByMaterialTypeId(org.mockito.ArgumentMatchers.anyString());
+
+        org.mockito.Mockito.when(items.findByMaterialTypeId("M1")).thenReturn(java.util.List.of());
+        assertThat(run(tool, "procurement_manager")).contains("\"success\":true");
+    }
+
+    @Test
+    void attendanceToolsBindTheSubjectToTheCallerUnlessTheyReadHr() throws Exception {
+        // V20261103_140 opens ATTENDANCE_TODAY / HISTORY / STATUS to every role, like /time-clock/today etc.;
+        // those endpoints bind the subject to the JWT user, so the tools must not take any userId from the model.
+        com.cretas.aims.service.TimeClockService clock = mock(com.cretas.aims.service.TimeClockService.class);
+        for (ToolExecutor tool : java.util.List.<ToolExecutor>of(
+                new com.cretas.aims.ai.tool.impl.hr.AttendanceTodayTool(),
+                new com.cretas.aims.ai.tool.impl.hr.AttendanceHistoryTool(),
+                new com.cretas.aims.ai.tool.impl.hr.AttendanceStatusTool())) {
+            ReflectionTestUtils.setField(tool, "timeClockService", clock);
+            ReflectionTestUtils.setField(tool, "rbacGuard", guard);
+            ReflectionTestUtils.setField(tool, "objectMapper", new com.fasterxml.jackson.databind.ObjectMapper());
+
+            String other = runWith(tool, "sales_manager", "{\"userId\":\"22\"}");
+            assertThat(other).as(tool.getToolName()).contains("\"success\":false").contains("本人");
+            org.mockito.Mockito.verifyNoInteractions(clock);
+
+            denied(tool, "sales_manager");
+            long own = userIds.get("sales_manager");
+            assertThat(runWith(tool, "sales_manager", "{\"userId\":\"" + own + "\"}")).as(tool.getToolName())
+                    .doesNotContain("本人的考勤");
+            assertThat(runWith(tool, "hr_admin", "{\"userId\":\"22\"}")).as(tool.getToolName())
+                    .doesNotContain("本人的考勤");
+            org.mockito.Mockito.clearInvocations(clock);
+        }
+    }
+
+    private String runWith(ToolExecutor tool, String role, String args) throws Exception {
+        denied(tool, role);
+        Map<String, Object> context = new HashMap<>();
+        TrustedExecutionContext.enforcePrincipal(context, FACTORY, userIds.get(role), role);
+        return tool.execute(com.cretas.aims.ai.dto.ToolCall.of("t1", tool.getToolName(), args), context);
+    }
+
+    private String run(ToolExecutor tool, String role) throws Exception {
+        denied(tool, role); // registers the user for this role
+        Map<String, Object> context = new HashMap<>();
+        TrustedExecutionContext.enforcePrincipal(context, FACTORY, userIds.get(role), role);
+        return tool.execute(com.cretas.aims.ai.dto.ToolCall.of("t1", tool.getToolName(), "{\"materialTypeId\":\"M1\"}"), context);
+    }
+
+    @Test
+    void materialRejectionReasonIsAReadToolGatedLikeTheInventoryPages() throws Exception {
+        // It was declared WRITE (and so skipped by the read sweep) although it only reads expired batches.
         ToolExecutor tool = GatedDataScan.instance(MaterialRejectionReasonTool.class);
-        assertThat(ToolAccessModes.isWrite(tool)).isTrue();
+        assertThat(ToolAccessModes.isWrite(tool)).isFalse();
+        // Evidence for the WriteGuardService suffix exception (MATERIAL_REJECTION_REASON): it only reads.
+        GatedDataScan scan = GatedDataScan.run();
+        assertThat(scan.toolCalls.get("material_rejection_reason"))
+                .extracting(GatedDataScan.DataMethod::name)
+                .allMatch(name -> name.startsWith("get") || name.startsWith("find") || name.startsWith("count"));
+        assertThat(new WriteGuardService().hasWriteSuffix("material_rejection_reason")).isFalse();
         assertThat(denied(tool, "hr_admin")).isTrue();
         assertThat(denied(tool, "warehouse_manager")).isFalse();
     }
 
     @Test
-    void ssopRecordsAreAdminOnlyLikeTheFoodSafetyPage() {
-        ToolExecutor tool = GatedDataScan.instance(SsopExecutionTodayTool.class);
-        assertThat(denied(tool, "quality_manager")).isTrue();
-        assertThat(denied(tool, "permission_admin")).isFalse();
+    void foodSafetyFollowsTheQualityRuling() {
+        // Organizer ruling 2026-11-03: SSOP / food samples / nutrition / additives have no App read page; quality owns them.
+        ToolExecutor ssop = GatedDataScan.instance(SsopExecutionTodayTool.class);
+        assertThat(denied(ssop, "quality_manager")).isFalse();
+        assertThat(denied(ssop, "quality_inspector")).isFalse();
+        assertThat(denied(ssop, "sales_manager")).isTrue();
+        // The pre-production check also admits production read: workshop supervisors and team leaders keep it.
+        ToolExecutor gate = GatedDataScan.instance(com.cretas.aims.ai.tool.impl.foodsafety.SsopProductionGateCheckTool.class);
+        assertThat(denied(gate, "workshop_supervisor")).isFalse();
+        assertThat(denied(gate, "team_leader")).isFalse();
+        assertThat(denied(gate, "sales_manager")).isTrue();
+    }
+
+    @Test
+    void coldChainReadsAreOpenToWarehouseQualityAndEquipmentButWritesNeedTheWrite() {
+        ToolExecutor temps = GatedDataScan.instance(com.cretas.aims.ai.tool.impl.foodsafety.ColdChainTempQueryTool.class);
+        assertThat(denied(temps, "warehouse_manager")).isFalse();
+        assertThat(denied(temps, "quality_manager")).isFalse();
+        assertThat(denied(temps, "sales_manager")).isTrue();
+        ToolExecutor register = GatedDataScan.instance(com.cretas.aims.ai.tool.impl.foodsafety.ColdChainEquipmentRegisterTool.class);
+        assertThat(register.getRequiredPermissions()).containsExactly("equipment:read_write");
+        assertThat(denied(register, "warehouse_manager")).isTrue();
+    }
+
+    @Test
+    void headcountIsProductionOrDashboardReadNotHr() {
+        ToolExecutor tool = GatedDataScan.instance(com.cretas.aims.ai.tool.impl.dataop.OnlineStaffCountTool.class);
+        assertThat(tool.getRequiredPermissions()).containsExactlyInAnyOrder("production:read", "dashboard:read");
+        assertThat(denied(tool, "production_manager")).isFalse();
+        assertThat(denied(tool, "workshop_supervisor")).isFalse();
+    }
+
+    @Test
+    void platformAdminsPassLegacyRoleGatesLikeRequireRole() {
+        ToolExecutor tool = GatedDataScan.instance(com.cretas.aims.ai.tool.impl.system.OperationLogQueryTool.class);
+        assertThat(tool.hasPermission("platform_admin")).isFalse();
+        assertThat(denied(tool, "platform_admin")).isFalse();
+        assertThat(denied(tool, "production_manager")).isTrue();
     }
 
     @Test

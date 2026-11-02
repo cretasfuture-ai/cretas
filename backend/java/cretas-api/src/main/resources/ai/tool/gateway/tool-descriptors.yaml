@@ -532,17 +532,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["sales:view"]
     version: "1.0.0"
     domainTags: ["restaurant"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -693,7 +693,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["finance:read"]
+    requiredPermissions: ["finance:read", "finance:read_write", "procurement:price:view"]
     version: "1.0.0"
     domainTags: ["restaurant"]
     overrideFlags:
@@ -2535,7 +2535,7 @@ descriptors:
     riskLevel: MEDIUM
     supportsPreview: false
     requiresPermission: true
-    requiredPermissions: []
+    requiredPermissions: ["procurement:read_write"]
     version: "1.0.0"
     domainTags: ["restaurant"]
     overrideFlags:
@@ -2544,7 +2544,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: true
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED_P0
@@ -3034,17 +3034,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["additive"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -3355,7 +3355,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["finance:read", "finance:read_write", "sales:read", "sales:read_write"]
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["customer"]
     overrideFlags:
@@ -4238,7 +4238,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["finance:read", "inventory:write", "procurement:read", "procurement:read_write", "sales:read", "warehouse:read", "warehouse:read_write"]
+    requiredPermissions: ["warehouse:read_write", "inventory:write"]
     version: "1.0.0"
     domainTags: ["pda"]
     overrideFlags:
@@ -4958,7 +4958,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "finance:read_write", "finance:read"]
+    requiredPermissions: ["sales:read_write", "sales:read", "procurement:read_write", "procurement:read", "finance:read_write", "finance:read", "report:read"]
     version: "1.0.0"
     domainTags: ["return"]
     overrideFlags:
@@ -6118,7 +6118,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["hr:read", "hr:read_write"]
+    requiredPermissions: ["production:read", "dashboard:read"]
     version: "1.0.0"
     domainTags: ["online"]
     overrideFlags:
@@ -6138,7 +6138,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["equipment:read"]
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write", "quality:read", "quality:read_write", "equipment:read"]
     version: "1.0.0"
     domainTags: ["cold"]
     overrideFlags:
@@ -6278,7 +6278,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["finance:read", "sales:read", "sales:read_write"]
+    requiredPermissions: ["sales:read_write", "sales:read", "finance:read"]
     version: "1.0.0"
     domainTags: ["order"]
     overrideFlags:
@@ -6318,7 +6318,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["finance:read", "sales:read", "sales:read_write"]
+    requiredPermissions: ["sales:read_write", "sales:read", "finance:read"]
     version: "1.0.0"
     domainTags: ["order"]
     overrideFlags:
@@ -7240,7 +7240,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["analytics:read"]
+    requiredPermissions: ["analytics:read_write"]
     version: "1.0.0"
     domainTags: []
     overrideFlags:
@@ -7260,7 +7260,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["analytics:read"]
+    requiredPermissions: ["analytics:read_write"]
     version: "1.0.0"
     domainTags: []
     overrideFlags:
@@ -7961,7 +7961,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["finance:read", "finance:read_write", "sales:read", "sales:read_write", "warehouse:read_write"]
     version: "1.0.0"
     domainTags: ["customer"]
     overrideFlags:
@@ -7970,7 +7970,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10123,17 +10123,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["ingredient"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10163,17 +10163,17 @@ descriptors:
     actionType: WRITE
     riskLevel: LOW
     supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read_write"]
     version: "1.0.0"
     domainTags: ["nutrition"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10203,17 +10203,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["food"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10223,17 +10223,17 @@ descriptors:
     actionType: WRITE
     riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read_write"]
     version: "1.0.0"
     domainTags: ["food"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10263,17 +10263,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["food"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10283,17 +10283,17 @@ descriptors:
     actionType: WRITE
     riskLevel: HIGH
     supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read_write"]
     version: "1.0.0"
     domainTags: ["food"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10303,17 +10303,17 @@ descriptors:
     actionType: WRITE
     riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read_write"]
     version: "1.0.0"
     domainTags: ["ssop"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10323,17 +10323,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["ssop"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10344,7 +10344,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["procurement:read", "procurement:read_write"]
     version: "1.0.0"
     domainTags: ["supplier"]
     overrideFlags:
@@ -10353,7 +10353,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10363,17 +10363,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write", "production:read", "production:read_write"]
     version: "1.0.0"
     domainTags: ["ssop"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10383,17 +10383,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["ssop"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10423,17 +10423,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["nutrition"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10443,17 +10443,17 @@ descriptors:
     actionType: WRITE
     riskLevel: MEDIUM
     supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read_write"]
     version: "1.0.0"
     domainTags: ["ssop"]
     overrideFlags:
       actionType: true
       riskLevel: true
       supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10484,7 +10484,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["equipment:read"]
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write", "quality:read", "quality:read_write", "equipment:read"]
     version: "1.0.0"
     domainTags: ["cold"]
     overrideFlags:
@@ -10684,7 +10684,7 @@ descriptors:
     riskLevel: MEDIUM
     supportsPreview: true
     requiresPermission: false
-    requiredPermissions: ["equipment:read"]
+    requiredPermissions: ["equipment:read_write", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["cold"]
     overrideFlags:
@@ -10724,7 +10724,7 @@ descriptors:
     riskLevel: MEDIUM
     supportsPreview: true
     requiresPermission: false
-    requiredPermissions: ["equipment:read"]
+    requiredPermissions: ["equipment:read_write"]
     version: "1.0.0"
     domainTags: ["cold"]
     overrideFlags:
@@ -10744,7 +10744,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["equipment:read"]
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write", "quality:read", "quality:read_write", "equipment:read"]
     version: "1.0.0"
     domainTags: ["cold"]
     overrideFlags:
@@ -10784,7 +10784,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["production:read", "production:read_write", "warehouse:read", "warehouse:read_write"]
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["additive"]
     overrideFlags:
@@ -10823,17 +10823,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["additive"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10843,17 +10843,17 @@ descriptors:
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
+    requiresPermission: false
+    requiredPermissions: ["quality:read", "quality:read_write"]
     version: "1.0.0"
     domainTags: ["additive"]
     overrideFlags:
       actionType: false
       riskLevel: false
       supportsPreview: false
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -10864,7 +10864,7 @@ descriptors:
     riskLevel: MEDIUM
     supportsPreview: true
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["procurement:read_write"]
     version: "1.0.0"
     domainTags: ["supplier"]
     overrideFlags:
@@ -10873,7 +10873,7 @@ descriptors:
       supportsPreview: true
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -11385,7 +11385,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["procurement:read", "procurement:read_write"]
     version: "1.0.0"
     domainTags: ["supplier"]
     overrideFlags:
@@ -11394,7 +11394,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -11405,7 +11405,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["procurement:read", "procurement:read_write"]
     version: "1.0.0"
     domainTags: ["supplier"]
     overrideFlags:
@@ -11414,7 +11414,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

@@ -63,6 +63,8 @@ final class GatedDataScan {
      * endpoint does (look the purchase order up, then record the receipt) is judged against that endpoint too.
      */
     final Map<DataMethod, List<Endpoint>> writeServedBy = new HashMap<>();
+    /** Read handler ({@code Controller#method}) → data methods it calls directly. */
+    final Map<String, Set<DataMethod>> handlerCalls = new HashMap<>();
     final Map<String, Set<DataMethod>> toolCalls = new LinkedHashMap<>();
     final Map<String, Class<?>> toolClasses = new LinkedHashMap<>();
     final List<String> uninstantiable = new ArrayList<>();
@@ -201,8 +203,12 @@ final class GatedDataScan {
                         effective == null ? Set.of() : Set.of(effective.value()),
                         roles == null ? Set.of() : Set.of(roles.value()),
                         effective != null && effective.requireAll());
-                if (read) readEndpoints.put(endpoint.toString(), endpoint);
                 String key = m.getName() + org.springframework.asm.Type.getMethodDescriptor(m);
+                if (read) {
+                    readEndpoints.put(endpoint.toString(), endpoint);
+                    handlerCalls.computeIfAbsent(endpoint.toString(), k -> new HashSet<>())
+                            .addAll(calls.getOrDefault(key, Set.of()));
+                }
                 for (DataMethod data : calls.getOrDefault(key, Set.of())) {
                     (read ? servedBy : writeServedBy).computeIfAbsent(data, k -> new ArrayList<>()).add(endpoint);
                 }
@@ -260,6 +266,65 @@ final class GatedDataScan {
             }
         }
         return gated;
+    }
+
+    /** Owner simple name (Impl folded, as {@link #simpleName}) → main classes implementing it. */
+    private Map<String, List<String>> ownerClasses;
+    private final Map<String, Map<String, Set<DataMethod>>> callsByClass = new HashMap<>();
+
+    private Map<String, List<String>> ownerClasses() throws IOException {
+        if (ownerClasses != null) return ownerClasses;
+        ownerClasses = new HashMap<>();
+        org.springframework.core.io.support.PathMatchingResourcePatternResolver resolver =
+                new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
+        for (org.springframework.core.io.Resource r : resolver.getResources("classpath*:com/cretas/aims/**/*.class")) {
+            String url = r.getURL().toString();
+            if (url.contains("test-classes")) continue;
+            String internal = url.substring(url.indexOf("com/cretas/aims/"), url.length() - ".class".length());
+            if (internal.contains("$") || !isDataOwner(internal)) continue;
+            ownerClasses.computeIfAbsent(simpleName(internal), k -> new ArrayList<>()).add(internal.replace('/', '.'));
+        }
+        return ownerClasses;
+    }
+
+    /** Data methods called by every overload of {@code owner#method} in the main classes implementing the owner. */
+    private Set<DataMethod> callsOf(DataMethod data) throws IOException {
+        Set<DataMethod> out = new HashSet<>();
+        for (String className : ownerClasses().getOrDefault(data.owner(), List.of())) {
+            Map<String, Set<DataMethod>> calls = callsByClass.get(className);
+            if (calls == null) {
+                try {
+                    calls = callsPerMethod(Class.forName(className, false, GatedDataScan.class.getClassLoader()));
+                } catch (ClassNotFoundException | LinkageError e) {
+                    calls = Map.of();
+                }
+                callsByClass.put(className, calls);
+            }
+            calls.forEach((key, called) -> {
+                if (key.startsWith(data.name() + "(")) out.addAll(called);
+            });
+        }
+        return out;
+    }
+
+    /**
+     * Whether a read handler reaches a method of an owner the predicate accepts, through service / repository
+     * implementations (up to 6 hops). A table row or a SURFACE registration may only name handlers that do.
+     */
+    boolean reaches(String handler, java.util.function.Predicate<String> owner) throws IOException {
+        Set<DataMethod> seen = new HashSet<>();
+        List<DataMethod> frontier = new ArrayList<>(handlerCalls.getOrDefault(handler, Set.of()));
+        for (int depth = 0; depth <= 6 && !frontier.isEmpty(); depth++) {
+            List<DataMethod> next = new ArrayList<>();
+            for (DataMethod d : frontier) {
+                if (!seen.add(d)) continue;
+                String base = d.owner().contains("$") ? d.owner().substring(0, d.owner().indexOf('$')) : d.owner();
+                if (owner.test(base)) return true;
+                next.addAll(callsOf(d));
+            }
+            frontier = next;
+        }
+        return false;
     }
 
     /** Read endpoints that call any method of this owner. */

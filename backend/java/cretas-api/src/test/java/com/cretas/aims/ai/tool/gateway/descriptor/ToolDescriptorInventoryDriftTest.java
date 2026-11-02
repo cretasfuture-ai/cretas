@@ -208,10 +208,10 @@ class ToolDescriptorInventoryDriftTest {
         // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
         // 2026-10-29 S6 gated-data rule: 107 tools declare the codes / role gate of the direct API serving their data; S5-12 adds purchase_statistics requiresPermission.
         // Re-review: lineage_query loses its role gate (-1 / -1); the 2 HACCP tools swap role gate for codes (-2 / -2 / +2).
-        // 2026-11-03 strict sweep: +31 role gates (requiresPermission / hasPermission), +56 declared codes.
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(100);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(81);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(171);
+        // 2026-11-03 strict sweep + organizer rulings: role gates and declared codes per GatedDataToolAiPathPermissionTest.
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(84);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(65);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(193);
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(13);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(25);
 
