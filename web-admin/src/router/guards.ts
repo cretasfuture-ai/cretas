@@ -7,14 +7,10 @@ import type { ModuleName } from '@/store/modules/permission';
 import type { User } from '@/types/auth';
 import { isDemoFactoryId, resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
 import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
-
-const PLATFORM_WORKSPACE_PATHS = [
-  '/platform/factories',
-  '/system/llm-usage',
-];
+import { platformWorkspacePaths } from '@/components/layout/menuConfig';
 
 export function isPlatformWorkspaceRoute(path: string): boolean {
-  return PLATFORM_WORKSPACE_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+  return platformWorkspacePaths.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
 // 白名单路由 - 不需要登录
