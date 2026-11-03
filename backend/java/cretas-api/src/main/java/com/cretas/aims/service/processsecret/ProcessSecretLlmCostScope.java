@@ -217,7 +217,8 @@ public class ProcessSecretLlmCostScope {
         AuthenticatedActor actor = caller();
         Set<String> full = new TreeSet<>();
         for (String productTypeId : protectedIds) {
-            if (accessService.decide(actor, factoryId, productTypeId, ProcessSecretAction.VIEW_FULL).permitted()) {
+            // 平台账号的放行每次记一条完整查看 (permitsViewFull); 负责人 / 授权持有人照旧不记
+            if (accessService.permitsViewFull(actor, factoryId, productTypeId, "ai cost context " + productTypeId)) {
                 full.add(productTypeId);
             }
         }

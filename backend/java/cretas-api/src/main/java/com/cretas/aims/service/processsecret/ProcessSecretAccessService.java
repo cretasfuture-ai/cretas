@@ -445,6 +445,26 @@ public class ProcessSecretAccessService {
         throw new BusinessException(403, "该账号是工艺保密负责人或持有工艺授权，不能由管理员代为重置密码，请本人修改");
     }
 
+    /**
+     * 只判不抛的「完整查看」: 给不走 {@link #require} 的读路径用 (BOM 递归展开的子层半成品、锅次详情解除遮挡、
+     * AI 成本上下文的完整查看集合)。平台账号对受保护产品的放行在这里写一条 ALLOW VIEW_FULL 审计
+     * (b 的说明「每一次查看、编辑都记入保密访问记录」, 审查跟进); 同一次 HTTP 请求里已经记过的不重复记;
+     * 写不进去按不放行 (与 require 一致)。本厂负责人 / 授权持有人照旧不在这里记 (避免日常读刷屏)。
+     */
+    public boolean permitsViewFull(AuthenticatedActor actor, String factoryId, String productTypeId,
+                                   String resourceRef) {
+        Decision decision = decide(actor, factoryId, productTypeId, ProcessSecretAction.VIEW_FULL);
+        if (!decision.permitted()) return false;
+        if (!decision.isProtected() || actor == null || !actor.isPlatformAdmin()) return true;
+        if (viewFullAllowedInRequest(factoryId, productTypeId)) return true;
+        boolean recorded = audit(factoryId, productTypeId, actor, ProcessSecretAction.VIEW_FULL, "ALLOW",
+                decision.reason(), resourceRef);
+        if (!recorded) {
+            log.error("[process-secret] audit write failed, hiding {}/{} from platform view", factoryId, productTypeId);
+        }
+        return recorded;
+    }
+
     /** 写审计; 失败只返回 false (不吞掉判定), 由调用方决定是否 fail-closed。 */
     public boolean audit(String factoryId, String productTypeId, AuthenticatedActor actor,
                          ProcessSecretAction action, String decision, String reason, String resourceRef) {

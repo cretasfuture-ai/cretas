@@ -119,9 +119,9 @@ class FactorySecrecyGatesContractTest {
     // ------------------------------------------------------------------ 挂靠闸
 
     /**
-     * 已知会由在途 PR 新增的读取点 (还没进 main, 允许暂时不存在; 进了 main 就按普通登记生效)。
-     * PR #1377 (claude/process-secret-filter-rules, 训练数据过滤 d): 合并后把这几条挪进上面的正式清单即可 ——
-     * 不挪也不会红, 只是「登记了却不读」的检查对它们不生效。
+     * 已知会由在途 PR 新增的读取点: 文件还不在代码树里时预先登记归属项。<b>有效期到文件落地为止</b> ——
+     * 路径一旦存在, 闸就红, 直到把它挪进上面的正式清单 (挪过去之后「登记了却不读」的检查才对它生效)。
+     * PR #1377 (claude/process-secret-filter-rules, 训练数据过滤 d) 合 main 时要把这四条挪进正式清单。
      */
     static final Map<String, Set<String>> JAVA_PENDING = new TreeMap<>(Map.ofEntries(
             Map.entry("com/cretas/aims/repository/learning/FactoryNameDirectoryRepository.java", Set.of("TRAINING_FILTER")),
@@ -133,27 +133,68 @@ class FactorySecrecyGatesContractTest {
     @Test
     void everyJavaClassReadingASecrecySourceIsAttachedToAnItem() throws IOException {
         Map<String, Set<String>> found = scan(JAVA_MAIN, ".java", JAVA_SOURCE, FactorySecrecyGatesContractTest::stripJavaComments);
-        assertAttached(found, JAVA_ATTACHMENTS, JAVA_PENDING, "直接读保密数据源的 Java 类");
+        assertAttached(JAVA_MAIN, found, JAVA_ATTACHMENTS, JAVA_PENDING, "直接读保密数据源的 Java 类");
     }
 
     @Test
     void everyPythonModuleReadingASecrecySourceIsAttachedToAnItem() throws IOException {
         Map<String, Set<String>> found = scan(PYTHON_ROOT, ".py", PYTHON_SOURCE, FactorySecrecyGatesContractTest::stripPythonComments);
-        assertAttached(found, PYTHON_ATTACHMENTS, PYTHON_PENDING, "直接读保密数据源的 Python 模块 (测试除外)");
+        assertAttached(PYTHON_ROOT, found, PYTHON_ATTACHMENTS, PYTHON_PENDING, "直接读保密数据源的 Python 模块 (测试除外)");
     }
 
-    /** 读到的 = 正式登记 ∪ (在途登记 ∩ 已存在); 正式登记必须都还在读 (清单不许过期)。 */
-    static void assertAttached(Map<String, Set<String>> found, Map<String, Set<String>> registered,
+    /**
+     * 读到的必须都在正式登记里; 正式登记必须都还在读 (清单不许过期); 在途登记的路径一旦出现在代码树里就红,
+     * 直到挪进正式登记 (在途豁免只到文件落地为止)。
+     */
+    static void assertAttached(Path root, Map<String, Set<String>> found, Map<String, Set<String>> registered,
                                Map<String, Set<String>> pending, String what) {
+        assertThat(landedPending(root, pending))
+                .as(what + ": 在途登记的路径已经进了代码树 —— move this path into the registered list (挪进正式登记清单)")
+                .isEmpty();
         Set<String> unregistered = new TreeSet<>(found.keySet());
         unregistered.removeAll(registered.keySet());
-        unregistered.removeAll(pending.keySet());
         assertThat(unregistered).as(what + ": 新出现、没登记归属项的").isEmpty();
         Set<String> stale = new TreeSet<>(registered.keySet());
         stale.removeAll(found.keySet());
         assertThat(stale).as(what + ": 登记了却已经不读的 (请删掉)").isEmpty();
         assertItemsAreKnown(registered);
         assertItemsAreKnown(pending);
+    }
+
+    /** 在途登记里已经存在于代码树的路径。 */
+    static Set<String> landedPending(Path root, Map<String, Set<String>> pending) {
+        Set<String> landed = new TreeSet<>();
+        for (String rel : pending.keySet()) {
+            if (Files.exists(root.resolve(rel))) landed.add(rel);
+        }
+        return landed;
+    }
+
+    /** 在途豁免会过期: 路径落地后闸红, 提示挪进正式清单; 挪进去之后转绿。 */
+    @Test
+    void aPendingPathThatLandedMustBeMovedIntoTheRegisteredList(@org.junit.jupiter.api.io.TempDir Path tree)
+            throws IOException {
+        Map<String, Set<String>> pending = Map.of("common/landed.py", Set.of("TRAINING_FILTER"),
+                "common/not_yet.py", Set.of("TRAINING_FILTER"));
+        Map<String, Set<String>> registered = Map.of("common/old.py", Set.of("PROCESS_SECRET"));
+        Map<String, Set<String>> found = new TreeMap<>(Map.of("common/old.py", Set.of("process_secret_policies")));
+        Files.createDirectories(tree.resolve("common"));
+        Files.writeString(tree.resolve("common/old.py"), "SQL = 'select 1 from process_secret_policies'");
+        // 还没落地: 豁免有效
+        assertAttached(tree, found, registered, pending, "t");
+
+        Files.writeString(tree.resolve("common/landed.py"), "SQL = 'select 1 from process_secret_policies'");
+        found.put("common/landed.py", Set.of("process_secret_policies"));
+        assertThat(landedPending(tree, pending)).containsExactly("common/landed.py");
+        assertThatThrownBy(() -> assertAttached(tree, found, registered, pending, "t"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("move this path into the registered list")
+                .hasMessageContaining("common/landed.py");
+
+        // 挪进正式清单 (并从在途里删掉) 后转绿
+        Map<String, Set<String>> moved = new TreeMap<>(registered);
+        moved.put("common/landed.py", Set.of("TRAINING_FILTER"));
+        assertAttached(tree, found, moved, Map.of("common/not_yet.py", Set.of("TRAINING_FILTER")), "t");
     }
 
     @Test
