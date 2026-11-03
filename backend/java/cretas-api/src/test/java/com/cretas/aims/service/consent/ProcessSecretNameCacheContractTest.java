@@ -90,10 +90,10 @@ class ProcessSecretNameCacheContractTest {
     @Test
     void anyFactoryCheckCoversEveryFactoryThatHasAPolicy() {
         when(access.factoriesWithPolicyProducts()).thenReturn(Set.of("F007", "F006"));
-        assertThat(filter.mentionsAnyFactoryPolicyProductForSharedContent("秘制酱牛肉多少钱")).isTrue();
-        assertThat(filter.mentionsAnyFactoryPolicyProductForSharedContent("普通牛肉多少钱")).isFalse();
+        assertThat(filter.checkSharedContent("t", "秘制酱牛肉多少钱")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
+        assertThat(filter.checkSharedContent("t", "普通牛肉多少钱")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
         when(access.factoriesWithPolicyProducts()).thenReturn(Set.of());
-        assertThat(filter.mentionsAnyFactoryPolicyProductForSharedContent("秘制酱牛肉多少钱")).isFalse();
+        assertThat(filter.checkSharedContent("t", "秘制酱牛肉多少钱")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
     }
 
     @Test

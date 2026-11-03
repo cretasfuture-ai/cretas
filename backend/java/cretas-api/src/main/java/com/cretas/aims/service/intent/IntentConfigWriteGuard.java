@@ -122,17 +122,19 @@ public class IntentConfigWriteGuard {
         throw new BusinessException(403, "只有平台账号可以修改平台级意图");
     }
 
-    /** 平台级行对所有工厂可见: 文字字段提到任何一家工厂的保密产品名 → 409; 查不了 → 503。 */
+    /**
+     * 平台级行对所有工厂可见: 文字字段提到任何一家工厂的保密词 (全名 / 编码 / ID / 专属别名) → 409; 查不了 → 503。
+     * 跨厂保护: 与全局说法 / 短语表同一份共享并集, 不看任何保密开关 (第四 / 六轮复审); 挂起调用方事务查, 查库失败
+     * 不把调用方事务标成只能回滚。
+     */
     public void requireNoProtectedNames(AIIntentConfig intent) {
-        boolean mentions;
-        try {
-            // 跨厂保护: 所有工厂的全部策略产品, 不看任何保密开关 (第四轮复审第 1 条)
-            mentions = processSecretSampleFilter.mentionsAnyFactoryPolicyProductForSharedContent(textFields(intent));
-        } catch (RuntimeException e) {
+        ProcessSecretSampleFilter.SampleVerdict verdict =
+                processSecretSampleFilter.checkSharedContent("platform_intent", textFields(intent));
+        if (verdict == ProcessSecretSampleFilter.SampleVerdict.UNVERIFIED) {
             log.warn("平台级意图写入前的保密产品检查失败, 不写: intent={}", intent.getIntentCode());
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未保存, 请稍后重试");
         }
-        if (mentions) {
+        if (verdict != ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
             throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存")
                     .withHint(PROTECTED_NAME_HINT);
         }
@@ -142,18 +144,18 @@ public class IntentConfigWriteGuard {
      * 一批平台级写入 (批量回滚) 先取一次全厂保密产品名; 取不到 → 503, 调用方在动任何一行之前整批失败
      * (复审 M1, 2026-10-29: 循环里逐行查库, 查库异常会把外层事务标成只能回滚, 前面成功的也一起撤销、报 500)。
      */
-    public java.util.Set<String> allFactoriesPolicyProductNamesForSharedContent() {
-        try {
-            return java.util.Set.copyOf(processSecretSampleFilter.allFactoriesPolicyProductNamesForSharedContent());
-        } catch (RuntimeException e) {
-            log.warn("批量写平台级意图前的保密产品名查询失败, 整批不做");
+    public java.util.Set<String> allFactoriesPolicyTermsForSharedContent() {
+        java.util.Set<String> terms = processSecretSampleFilter.allFactoriesPolicyTermsForSharedContentOrNull();
+        if (terms == null) {
+            log.warn("批量写平台级意图前的保密词查询失败, 整批不做");
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未回滚, 请稍后重试");
         }
+        return terms;
     }
 
-    /** 用预先取好的全厂名单检查 (不查库): 提到 → 409。 */
-    public static void requireNoProtectedNames(AIIntentConfig intent, java.util.Set<String> allFactoryNames) {
-        if (ProcessSecretSampleFilter.mentionsAny(allFactoryNames, textFields(intent))) {
+    /** 用预先取好的全厂保密词 ({@link #allFactoriesPolicyTermsForSharedContent}) 检查 (不查库): 提到 → 409。 */
+    public static void requireNoProtectedNames(AIIntentConfig intent, java.util.Set<String> allFactoryTerms) {
+        if (com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(allFactoryTerms, textFields(intent))) {
             throw new BusinessException(409, "平台级意图的关键词或示例提到工艺保密产品, 不能保存")
                     .withHint(PROTECTED_NAME_HINT);
         }

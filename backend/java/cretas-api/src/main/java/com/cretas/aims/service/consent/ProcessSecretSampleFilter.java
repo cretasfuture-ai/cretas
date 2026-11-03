@@ -34,10 +34,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *       本厂「名单」= 保密产品的全名 / 编码 / ID ({@link ProcessSecretTerms}: 纯数字名与品类词不收,
  *       编码按边界匹配) + 本厂人员姓名 + 本厂客户名称 (精确匹配)。与 Python
  *       {@code smartbi/services/process_secret_names.py} 同一规则 (Steve 2026-10-29 选 A)。</li>
- *   <li><b>写给所有工厂的共享内容</b> —— 全局人工说法 / 种子 ({@link #checkSharedContent},
- *       {@link #allFactoriesPolicyTermsForSharedContentOrNull}), 共享短语表 / 全局知识, 平台级意图与晋升 / 回滚
- *       ({@link #allFactoriesPolicyProductNamesForSharedContent}, {@link #mentionsAnyFactoryPolicyProductForSharedContent}):
- *       所有工厂登记了保密策略的全部产品 (含已软删除的), <b>不看任何保密开关 (a–f)</b> —— 跨厂保护不受开关影响
+ *   <li><b>写给所有工厂的共享内容</b> —— 平台级意图与晋升 / 回滚、全局人工说法 / 种子、共享短语表 / 全局知识, 全部用
+ *       <b>同一份</b>并集 ({@link #checkSharedContent}, {@link #allFactoriesPolicyTermsForSharedContent},
+ *       {@link #allFactoriesPolicyTermsForSharedContentOrNull}): 所有工厂全部策略产品 (含已软删除的) 的全名 / 编码 / ID /
+ *       专属别名, 品类词不收; <b>不看任何保密开关 (a–f)</b> —— 跨厂保护不受开关影响
  *       (第四 / 五轮复审)。按 d 剔工厂的全厂并集已没有调用方, 删掉了 (d 只按样本所属工厂判, 见 {@link #trainingFilterOff})。</li>
  *   <li><b>外发脱敏</b> ({@link #protectedProductNames}, {@link #mentionsAny}): 本厂生效中的保密产品名。</li>
  * </ul>
@@ -246,13 +246,15 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 所有工厂的保密词 (全名 / 编码 / ID / 专属别名; 并集, 只给写共享内容用), 每次都算, <b>不看任何保密开关</b>:
-     * 登记了保密策略的每一家工厂 ({@code factoriesWithPolicyProducts}), 每家的全部策略产品 (含已软删除的)。查库出错照样抛。
+     * <b>唯一一份</b>共享内容并集 (第六轮: 平台级意图与全局说法 / 短语表 / 知识用同一份): 所有工厂的保密词 —— 全名 / 编码 /
+     * ID / 专属别名, 与训练同一套词规则 (纯数字名、品类词不收: 泛泛的词不因保密被拦) —— 每次都算, <b>不看任何保密开关</b>:
+     * 登记了保密策略的每一家工厂 ({@code factoriesWithPolicyProducts}), 每家的全部策略产品 (含已软删除的)。
+     * 只取保密词, 不查人员 / 客户。查库出错照样抛。
      */
     public Set<String> allFactoriesPolicyTermsForSharedContent() {
         Set<String> terms = new LinkedHashSet<>();
         for (String factoryId : accessService.factoriesWithPolicyProducts()) {
-            terms.addAll(trainingLists(factoryId).terms());
+            terms.addAll(policyTerms(factoryId, trainingPolicyProductIds(factoryId)));
         }
         return terms;
     }
@@ -274,7 +276,16 @@ public class ProcessSecretSampleFilter {
     }
 
     private TrainingLists loadTrainingLists(String factoryId, Set<String> protectedIds) {
-        // 原生查询: 含已软删除的保密产品 (复审 N2; findAllById 会被 @Where 过滤掉), 与 Python 同一口径
+        List<String> names = new ArrayList<>(directoryRepository.findPeopleNames(factoryId));
+        names.addAll(directoryRepository.findCustomerNames(factoryId));
+        return new TrainingLists(policyTerms(factoryId, protectedIds), ProcessSecretTerms.directoryNames(names));
+    }
+
+    /**
+     * 一家工厂的保密词 (全名 / 编码 / ID / 专属别名; {@link ProcessSecretTerms} 的词规则)。训练名单与共享内容并集共用这一份。
+     * 原生查询: 含已软删除的保密产品 (复审 N2; findAllById 会被 @Where 过滤掉), 与 Python 同一口径。
+     */
+    private Set<String> policyTerms(String factoryId, Set<String> protectedIds) {
         List<ProcessSecretTerms.Product> products = new ArrayList<>();
         List<String> aliases = new ArrayList<>();
         if (!protectedIds.isEmpty()) {
@@ -286,10 +297,7 @@ public class ProcessSecretSampleFilter {
                 aliases.addAll(ProcessSecretTerms.policyAliases(raw));
             }
         }
-        List<String> names = new ArrayList<>(directoryRepository.findPeopleNames(factoryId));
-        names.addAll(directoryRepository.findCustomerNames(factoryId));
-        return new TrainingLists(ProcessSecretTerms.secretTerms(products, aliases),
-                ProcessSecretTerms.directoryNames(names));
+        return ProcessSecretTerms.secretTerms(products, aliases);
     }
 
     private static String str(Object o) {
@@ -303,37 +311,6 @@ public class ProcessSecretSampleFilter {
 
     /** 每家工厂上次成功查到的名单 (名单查询失败时兜底; 只在内存里, 进程重启后要先成功查一次)。 */
     private final Map<String, TrainingLists> lastGoodLists = new ConcurrentHashMap<>();
-
-    /**
-     * 文本是否提到<b>任何一家</b>工厂登记了保密策略的产品名 —— 写<b>共享配置</b> (平台级意图、意图晋升 / 回滚) 前用:
-     * 共享配置对每家工厂可见 (Steve 2026-10-29: 保密内容不出本厂)。<b>不看任何保密开关</b>: 跨厂保护不受开关影响
-     * (第四轮复审第 1 条)。查库出错照样抛, 调用方据此不写。一批写入先取一次
-     * {@link #allFactoriesPolicyProductNamesForSharedContent()} 再用 {@link #mentionsAny} 逐条比对。
-     */
-    public boolean mentionsAnyFactoryPolicyProductForSharedContent(String... texts) {
-        return mentionsAny(allFactoriesPolicyProductNamesForSharedContent(), texts);
-    }
-
-    /**
-     * 所有工厂登记了保密策略的全部产品名 (并集, 每次都算), 不看任何保密开关 (a–f), <b>含已软删除的保密产品</b>
-     * (原生查询, 与训练名单同一个; 第五轮复审: {@code findAllById} 会被软删除过滤掉)。查库出错照样抛。
-     */
-    public Set<String> allFactoriesPolicyProductNamesForSharedContent() {
-        Set<String> names = new LinkedHashSet<>();
-        for (String factoryId : accessService.factoriesWithPolicyProducts()) {
-            Set<String> ids = trainingPolicyProductIds(factoryId);   // 全部策略产品 (生效中的 ∪ 因 a / e 不生效的)
-            if (ids.isEmpty()) {
-                continue;
-            }
-            for (Object[] r : directoryRepository.findProtectedProductRows(factoryId, ids)) {
-                String name = str(r[2]);
-                if (name != null && name.strip().length() >= MIN_NAME_LENGTH) {
-                    names.add(name.strip());
-                }
-            }
-        }
-        return names;
-    }
 
     /**
      * 名单里任一名字出现在任一文本里。字母不分大小写 (「SecretX」与「secretx」算同一个名字 —— 说法学习会把原话转小写),

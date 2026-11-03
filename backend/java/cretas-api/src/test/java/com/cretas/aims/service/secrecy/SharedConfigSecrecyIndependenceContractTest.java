@@ -54,15 +54,18 @@ class SharedConfigSecrecyIndependenceContractTest {
     /** 共享内容检查 (不看开关)。定义它们的两个类自身不算调用方。 */
     static final Pattern SHARED_CONTENT_CALL = Pattern.compile(
             "\\.(checkSharedContent|allFactoriesPolicyTermsForSharedContent(?:OrNull)?"
-                    + "|allFactoriesPolicyProductNamesForSharedContent|mentionsAnyFactoryPolicyProductForSharedContent"
                     + "|factoriesWithPolicyProducts)\\s*\\(");
     static final Set<String> DEFINERS = Set.of(
             "com/cretas/aims/service/consent/ProcessSecretSampleFilter.java",
             "com/cretas/aims/service/processsecret/ProcessSecretAccessService.java");
 
-    /** 训练专用的全厂并集 (按 d 剔工厂) —— 已删, 允许清单为空。 */
+    /**
+     * 已删的全厂并集: 训练专用 (按 d 剔工厂) 的允许清单为空; 只认全名的那一份也删了 (第六轮: 共享内容只有一份并集,
+     * 全名 / 编码 / ID / 别名都认)。
+     */
     static final Pattern REMOVED_D_FILTERED_UNION = Pattern.compile(
-            "\\b(factoriesWithProtectedProducts|allFactoriesProtectedNames|allFactoriesTrainingTerms\\w*)\\b");
+            "\\b(factoriesWithProtectedProducts|allFactoriesProtectedNames|allFactoriesTrainingTerms\\w*"
+                    + "|allFactoriesPolicyProductNamesForSharedContent|mentionsAnyFactoryPolicyProductForSharedContent)\\b");
 
     /** 结果随某家工厂的开关变的方法 (过滤器 / 访问服务)。 */
     static final Pattern SWITCH_DEPENDENT = Pattern.compile(
@@ -113,7 +116,6 @@ class SharedConfigSecrecyIndependenceContractTest {
                 .doesNotContain("secrecy").doesNotContain("SecrecyItem");
         String filter = code("com/cretas/aims/service/consent/ProcessSecretSampleFilter.java");
         for (String signature : List.of("public Set<String> allFactoriesPolicyTermsForSharedContent()",
-                "public Set<String> allFactoriesPolicyProductNamesForSharedContent()",
                 "public SampleVerdict checkSharedContent(")) {
             assertThat(body(filter, signature)).as(signature)
                     .doesNotContain("trainingFilterOff").doesNotContain("secrecy").doesNotContain("factoriesWithProtected");
