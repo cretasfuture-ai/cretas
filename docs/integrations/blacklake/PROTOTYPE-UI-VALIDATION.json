@@ -1,0 +1,103 @@
+{
+  "task_id": "BLACKLAKE-READONLY-20261103",
+  "slice_base_sha": "f015b1f07ead743d0f4dcaa48207a01517bbd0bc",
+  "prototype_thread": "01a18137-a2c6-7461-85c6-c55279ba0726",
+  "prototype_versions": {
+    "nuxt_ui": "4.12.0",
+    "tailwindcss": "4.3.3",
+    "lucide": "1.2.148"
+  },
+  "prototype_source_files": {
+    "src/style.css": "1137ef7a030a9e9336a98d384aa2d0df124142f391f5f57e8f0aed2d2dfa10cc",
+    "src/main.ts": "eff5eaff48e8420185e97c7a4194447ef6a391b716c6f190362059ee0f44a3ad",
+    "src/fusion/CostOverview.vue": "c2f77bad98655ad821b76b51954f9efc014d4985b277c365a1a337fa01b54825",
+    "vite.config.ts": "ed134c317db89a06356854639eef1d605cfc0574fe84918d9c0bcf041b1a68ff",
+    "package.json": "6864ab40e36a176b7964889ebb960efdbfffa692f2a7d02ddc871438e9f61dd6"
+  },
+  "backend": {
+    "passed": 266,
+    "skipped": 0,
+    "exit_code": 0,
+    "command": "python -m blacklake.test_local",
+    "retained_log": "pytest-prototype-final.log/xml"
+  },
+  "frontend": {
+    "passed": 35,
+    "typecheck_exit": 0,
+    "isolated_build_exit": 0,
+    "default_build_exit": 0
+  },
+  "default_build_isolation": {
+    "prototypeHtmlAbsent": true,
+    "prototypeChunksAbsent": true,
+    "legacyBlacklakeChunkExists": true,
+    "prototypeTokensAbsent": true
+  },
+  "browser": {
+    "success": true,
+    "prototype": "samples-v5",
+    "sourceBusinessWrites": 0,
+    "blockedMutationAttempts": [],
+    "pageErrors": [],
+    "sectionAnswers": [
+      "finished",
+      "product_cost",
+      "labor",
+      "material",
+      "production",
+      "inventory",
+      "coverage"
+    ],
+    "metadataWrites": 1,
+    "progressSurvivesReload": true,
+    "focusedAlertBound": true,
+    "refreshClearsContext": true,
+    "plainChartVerified": true,
+    "mobileOverflow": false,
+    "brandPrimary": "#1b65a8",
+    "eligible": 16,
+    "blocked": 93
+  },
+  "source_snapshot": {
+    "records": 1879,
+    "source_and_target_digest": "ee9d927d8c9754d0c67d6c66f232e7ba885c319fffec00fcbaa6331b3269be70",
+    "unchanged": true,
+    "snapshot_at": "2026-11-03T09:21:49.302723+00:00"
+  },
+  "followup_storage": "private test SQLite; scope tenant/sourceFactory/run/alert; optimistic revision and actor audit",
+  "source_business_writes": 0,
+  "production_deployed": false,
+  "merged": false,
+  "risk_review": "three findings fixed and reread; no remaining static blocker",
+  "limitations": [
+    "Prototype-aligned isolated workspace, not a global production theme release",
+    "Identifiable direct cost only; original 16/93 eligibility and missingness remain",
+    "Human verified status does not resolve source cost blockers",
+    "Local AI still bounded representative review, not open-ended causal proof"
+  ],
+  "verified_files": {
+    "backend/python/blacklake/smartbi_api.py": "086d048a30632851653a37969632bd87cf6f1c7e75c24b4cef8cc734e0618bb9",
+    "backend/python/blacklake/smartbi_app.py": "0a81d707524c45335026dfda9994895c4681ef3a0bc2022865f44b362aa4f935",
+    "backend/python/tests/test_blacklake_sections.py": "6aab04f53d3093e1ffff1fb6aa298abd1cc49b017ec70c2b7de660f38bcff5f2",
+    "web-admin/.gitignore": "d862f12519c887405ed091737e7aafe7893472694a2c0d4fe14324677dbb9e8a",
+    "web-admin/package-lock.json": "da7c947b97951e79cb5e6cb124713f2c39e6f227f216df8e113d1cfcd4f71f26",
+    "web-admin/package.json": "5f3d7580fa3c4b88ce7425d0be166d0a4bdde1ec4819d357db1a5bd05500c38e",
+    "web-admin/src/api/smartbi/blacklake.ts": "11c6075e966efd64902c13d1521591fdac1c2b1841492cb5ddf4ab570dbeeab6",
+    "web-admin/src/blacklake-main.ts": "0e6e891041df94841a8d658e0402feef74de71b45f36ac6a4885ed40c8ecf92b",
+    "web-admin/src/components/smartbi/DynamicChartRenderer.vue": "c72b3e87e2ee5f5427349fa293ce9d8b34ffb8a4d23367e8c46c2df73aa5239f",
+    "web-admin/src/smartbi-alerts-main.ts": "6b30921ebeb319860c1a934004d2b062d5994bb5be66b6dd673e2bc8f5dca236",
+    "web-admin/src/views/smart-bi/BlacklakeTestEntry.vue": "e7a7a1c005ba21f2cb13008ec9e7cafbe517ad92dcac2dddf4d8e76c001b5843",
+    "web-admin/vite.config.ts": "c8e50ec7bf3655c44b94eec0dfae1f166f9b206a998fd69460e5bbed90a5e8c7",
+    "backend/python/blacklake/alert_followups.py": "482a7df26ac91db5f6c12ab8c53261e67dbc173c5f9cebe85dd793fbfcbbe95d",
+    "web-admin/scripts/blacklake-prototype-acceptance.mjs": "de856d0ba7f6d9b50801bf8ac2e3beaf7ecd6029a6d140a9d5567fed3339e2be",
+    "web-admin/src/components/smartbi/PrototypeSectionInsight.vue": "b97c7812b63fb7db4b3f7e2cf2257065c5d19d7002da246ef7fb3e8af4c6978a",
+    "web-admin/src/components/smartbi/__tests__/DynamicChartRenderer.presentation.spec.ts": "18e42c1f16585ac0aaa91e2e0f670b453346ee4d0ddc058b884ab53c21b33d98",
+    "web-admin/src/components/smartbi/__tests__/PrototypeSectionInsight.spec.ts": "e4232ffb83563496a59f8e564f2683619e40980da29c0942e7ae4a0d055d88a4",
+    "web-admin/src/styles/blacklake-prototype.css": "03fb8bf1f1e088ea17cd91324726b4addf936a8da94bee52c02c5afbee58b41b",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeAnalysis.vue": "214195acab85c4181257c3133d60ba24843ffe8e15e6638904af8b0fa969a882",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeCostAlerts.vue": "5160e99ab82ce0143951d94023fbb743bd35bd133b2fb78a39198e0b80ad3f92",
+    "web-admin/src/views/smart-bi/__tests__/blacklakePrototypeCostAlerts.spec.ts": "338b5d89f83374252e12bbd0aed446ea81aeca52292285ea968734ff81d45344",
+    "web-admin/src/views/smart-bi/__tests__/costOverview.spec.ts": "5b9ee6a748f27a7d4817a0e0de188a923f6b63057bf3fce66da86b470a07dca7",
+    "web-admin/src/views/smart-bi/costOverview.ts": "11159e3ec9a5d0462895cb040d2a093ee5e5785d83bc5e3f6c448c36453bdc51"
+  }
+}

@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
+import ui from '@nuxt/ui/vite';
 import { resolve } from 'path';
 import { elementPlusTableResize, elementPlusTableResizePrebundle } from './tooling/elementPlusTableResize';
 import { elementPlusTableColumnResize, elementPlusTableColumnResizePrebundle } from './tooling/elementPlusTableColumnResize';
@@ -8,7 +9,10 @@ import { elementPlusTableColumnResize, elementPlusTableColumnResizePrebundle } f
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
-    plugins: [elementPlusTableResize(), elementPlusTableColumnResize(), vue()],
+    plugins: [elementPlusTableResize(), elementPlusTableColumnResize(), vue(),
+      ...(['blacklake','smartbi-alerts'].includes(mode) ? [ui({colorMode:false,router:false,dts:false,
+        icon:{clientBundle:{scan:true}},ui:{colors:{primary:'blue',neutral:'slate'}},
+        experimental:{componentDetection:true}})] : [])],
     optimizeDeps: { esbuildOptions: { plugins: [elementPlusTableResizePrebundle(), elementPlusTableColumnResizePrebundle()] } },
     resolve: {
       alias: {

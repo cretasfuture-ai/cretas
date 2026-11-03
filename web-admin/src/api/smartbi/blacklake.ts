@@ -23,6 +23,7 @@ export interface CostProject {
   materialLinesDetail: MaterialLine[]; processes: ProcessLine[]; issues: string[]; unitCostAvailable: boolean;
 }
 export interface BlacklakeAnalysis {
+  alertFollowups?: Record<string, AlertFollowup>;
   sectionInsights?: SectionInsightReport[];
   costAlerts?: CostAlertReport;
   eligibleCostReview?: EligibleCostReview;
@@ -46,10 +47,25 @@ export interface SectionInsightReport {
 }
 export async function askBlacklakeSection(payload: {
   section_id: string; question: string; run_id: string;
+  alert_id?: string;
   history?: { role: 'user' | 'assistant'; content: string }[];
-}): Promise<{ answer: string; sectionId: string; runId: string; engine: string; ai?: { status: string; model?: string; message?: string } }> {
-  const response = await pythonFetch<{ success: boolean; data: { answer: string; sectionId: string; runId: string; engine: string; ai?: { status: string; model?: string; message?: string } }; message: string }>(
+}): Promise<{ answer: string; sectionId: string; runId: string; alertId?: string | null; engine: string; ai?: { status: string; model?: string; message?: string } }> {
+  const response = await pythonFetch<{ success: boolean; data: { answer: string; sectionId: string; runId: string; alertId?: string | null; engine: string; ai?: { status: string; model?: string; message?: string } }; message: string }>(
     '/api/smartbi/blacklake/sections/followup', { method: 'POST', body: JSON.stringify(payload), preserveResponseKeys: true, timeoutMs: 170000 });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+
+export interface AlertFollowup {
+  alertId: string; status: 'open' | 'awaiting_data' | 'verified'; note: string;
+  revision: number; updatedBy: number; updatedAt: string;
+}
+export async function saveBlacklakeAlertFollowup(alertId: string, payload: {
+  run_id: string; status: AlertFollowup['status']; note: string; expected_revision: number;
+}): Promise<AlertFollowup> {
+  const response = await pythonFetch<{success:boolean;data:AlertFollowup;message:string}>(
+    `/api/smartbi/blacklake/alerts/${encodeURIComponent(alertId)}/followup`,
+    {method:'POST',body:JSON.stringify(payload),preserveResponseKeys:true});
   if (!response.success) throw new Error(response.message);
   return response.data;
 }

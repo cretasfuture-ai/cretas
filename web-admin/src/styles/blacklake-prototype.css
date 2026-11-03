@@ -1,0 +1,35 @@
+/* Source: thread 01a18137-a2c6-7461-85c6-c55279ba0726, samples-v5/src/style.css.
+   Loaded by isolated test entries only. Shared production styling is unchanged. */
+@layer theme, base, legacy, components, utilities;
+@import "tailwindcss" source("../");
+@import "@nuxt/ui";
+@import "element-plus/dist/index.css" layer(legacy);
+@theme static { --font-sans: "Segoe UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, sans-serif; }
+:root {
+  color-scheme: light;
+  --c-primary:#1b65a8; --c-primary-soft:#eaf2fa; --c-primary-deep:#174b78;
+  --c-ink:#1a293d; --c-text:#41536a; --c-muted:#8491a3;
+  --c-page:#f4f6f9; --c-surface:#fff; --c-line:#e5eaf1; --c-line-strong:#d4deea;
+  --c-success:#29816b; --c-warning:#b38336; --c-danger:#bb635f;
+  --c-radius:10px; --c-shadow:0 5px 24px rgb(27 47 78 / 4%); --motion-duration:220ms;
+  --ui-primary:var(--c-primary); --ui-text:var(--c-ink); --ui-text-muted:var(--c-text);
+  --ui-success:var(--c-success); --ui-warning:var(--c-warning); --ui-error:var(--c-danger);
+  --ui-bg:var(--c-surface); --ui-bg-muted:#f2f5f9; --ui-border:var(--c-line); --ui-radius:.45rem;
+  --el-color-primary:var(--c-primary); --el-color-primary-light-3:#5c94c5; --el-color-primary-light-5:#91b6d7;
+  --el-color-primary-light-7:#c1d7e9; --el-color-primary-light-8:#d8e7f3; --el-color-primary-light-9:#edf4fa;
+  --el-color-success:var(--c-success); --el-color-warning:var(--c-warning); --el-color-danger:var(--c-danger);
+  --el-text-color-primary:var(--c-ink); --el-text-color-regular:var(--c-text); --el-text-color-secondary:#60718a;
+  --el-border-color:var(--c-line-strong); --el-border-color-lighter:var(--c-line);
+  --el-fill-color-light:#f6f8fb; --el-border-radius-base:6px; --el-font-size-base:14px;
+  --text-primary:var(--c-ink); --text-secondary:var(--c-text);
+}
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.6 var(--font-sans); color:var(--c-ink); background:var(--c-page); -webkit-font-smoothing:antialiased; }
+button,input,textarea,select { font-family:inherit; }
+button,a { -webkit-tap-highlight-color:transparent; }
+button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible { outline:2px solid #70a7d2; outline-offset:3px; }
+.el-card { border-color:var(--c-line); border-radius:var(--c-radius); box-shadow:none; }
+.el-table { --el-table-header-bg-color:#f3f6fa; font-variant-numeric:tabular-nums; }
+.el-card__body { padding:20px 22px; }
+@media(max-width:760px) { .el-card__body { padding:14px; } }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important; } }

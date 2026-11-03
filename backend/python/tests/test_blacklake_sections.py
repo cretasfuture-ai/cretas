@@ -52,11 +52,12 @@ def test_missing_cost_stays_blocked_and_followup_explains_gap(source):
 
 
 @pytest.fixture
-def section_client(monkeypatch,source):
+def section_client(monkeypatch,source,tmp_path):
     key='synthetic-section-test-signing-key-only'
     monkeypatch.setenv('BLACKLAKE_SMARTBI_CONFIG','synthetic.dpapi')
     monkeypatch.setenv('SMARTBI_ALERT_AI_TRANSPORT','disabled')
-    monkeypatch.setattr(smartbi_api,'settings',lambda p:{'tenant_id':'BLACKLAKE_POC_TEST'})
+    monkeypatch.setenv('BLACKLAKE_ALERT_FOLLOWUP_DB',str(tmp_path/'followups.sqlite3'))
+    monkeypatch.setattr(smartbi_api,'settings',lambda p:{'tenant_id':'BLACKLAKE_POC_TEST','source_factory_id':'synthetic-source','run_id':'synthetic'})
     monkeypatch.setattr(smartbi_api,'read',lambda p:copy.deepcopy(analysis(source)))
     async def full(*args):return SimpleNamespace(is_full=True)
     from smartbi.services.factory_charts import cost_scope
@@ -123,3 +124,55 @@ def test_persisted_review_rejects_changed_facts_and_old_model(source,tmp_path,mo
     assert restored['ai']['status']=='stale'
     saved[0]['ai']['model']='qwen3:8b';section_review.attach(report,path)
     assert report['ai']['status']=='stale'
+
+
+def test_alert_progress_is_persistent_scoped_and_does_not_change_costs(section_client):
+    client,headers=section_client
+    base='/api/smartbi/blacklake'
+    original=client.get(base+'/analysis',headers=headers).json()['data']
+    alert=original['costAlerts']['items'][0]
+    body={'run_id':'synthetic','status':'awaiting_data','note':'合成核对：等待来源凭证','expected_revision':0}
+    path=base+'/alerts/'+alert['id']+'/followup'
+    assert client.post(path,json=body).status_code==401
+    result=client.post(path,headers=headers,json=body)
+    assert result.status_code==200 and result.json()['data']['revision']==1
+    assert client.post(path,headers=headers,json=body).status_code==409
+    assert client.post(path,headers=headers,json={**body,'run_id':'stale'}).status_code==409
+    assert client.post(path,headers=headers,json={**body,'note':' '}).status_code==422
+    assert client.post(base+'/alerts/not-current/followup',headers=headers,json=body).status_code==404
+    result=client.post(path,headers=headers,json={**body,'status':'verified','expected_revision':1})
+    assert result.status_code==200
+    refreshed=client.get(base+'/analysis',headers=headers).json()['data']
+    assert refreshed['alertFollowups'][alert['id']]['status']=='verified'
+    assert refreshed['cost']==original['cost'] and refreshed['costAlerts']==original['costAlerts']
+
+
+def test_alert_question_context_must_belong_to_current_section(section_client,source):
+    client,headers=section_client
+    from blacklake.section_insights import section_alerts,SECTIONS
+    data=analysis(source)
+    candidates=[(key,a) for key in SECTIONS for a in section_alerts(data,key)]
+    section,alert=candidates[0]
+    body={'section_id':section,'run_id':'synthetic','question':'接下来查什么？','alert_id':alert['id']}
+    response=client.post('/api/smartbi/blacklake/sections/followup',headers=headers,json=body)
+    assert response.status_code==200 and response.json()['data']['alertId']==alert['id']
+    assert alert['message'] in response.json()['data']['answer']
+    assert client.post('/api/smartbi/blacklake/sections/followup',headers=headers,json={**body,'alert_id':'unknown'}).status_code==404
+
+
+def test_followup_store_isolates_factory_source_run_and_serializes_writers(monkeypatch,tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from blacklake import alert_followups as progress
+    monkeypatch.setenv('BLACKLAKE_ALERT_FOLLOWUP_DB',str(tmp_path/'progress.sqlite3'))
+    config={'tenant_id':'T','source_factory_id':'A','run_id':'R'}
+    assert progress.load(config,'R')=={}
+    progress.save(config,'R','alert','open','synthetic',0,1)
+    assert progress.load({**config,'source_factory_id':'B'},'R')=={}
+    assert progress.load({**config,'tenant_id':'X'},'R')=={}
+    assert progress.load({**config,'run_id':'S'},'S')=={}
+    def update(actor):
+        try:progress.save(config,'R','alert','awaiting_data','synthetic',1,actor);return 'saved'
+        except progress.FollowupConflict:return 'conflict'
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(update,[2,3]))
+    assert sorted(results)==['conflict','saved']
+    assert progress.load(config,'R')['alert']['revision']==2

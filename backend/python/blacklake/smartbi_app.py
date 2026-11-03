@@ -20,6 +20,7 @@ def create_app():
     if len(configured.get('jwt_secret',''))<32:
         raise RuntimeError('TEST_JWT_KEY_REQUIRED')
     os.environ['BLACKLAKE_SMARTBI_CONFIG']=str(path)
+    os.environ['BLACKLAKE_ALERT_FOLLOWUP_DB']=str(path.resolve().parent/'alert-followups.sqlite3')
     # Dedicated current-policy test Java; shared legacy 11010 stays untouched.
     os.environ['JAVA_API_BASE_URL']='http://127.0.0.1:11210'
     os.environ['SMARTBI_ALERT_AI_TRANSPORT']='ssh'
@@ -32,7 +33,7 @@ def create_app():
 
     @app.get('/health')
     def health():
-        return {'success':True,'environment':'test','source':'blacklake','businessWritesEnabled':False}
+        return {'success':True,'environment':'test','source':'blacklake','businessWritesEnabled':False,'followupMetadataWritesEnabled':True}
 
     @app.exception_handler(HTTPException)
     async def http_error(request,exc):
