@@ -146,7 +146,10 @@ class FactorySecrecyConfigContractTest {
         assertThat(access.protectedProductTypeIds(F)).as("下一次重读, 新保密产品生效").containsExactly("P-NEW");
     }
 
-    /** 审查 #3: 工厂表里没有的工厂编号按开启处理 (不是按「没有配置行 = 关」); 存在性与配置同一条缓存。 */
+    /**
+     * 审查 #3: 工厂表里没有的工厂编号按开启处理 (不是按「没有配置行 = 关」)。
+     * 审查跟进 2a: 不存在的编号不进缓存、也不建代数条目 (查多少个都不留永久条目); 存在的工厂照常进 10 秒缓存。
+     */
     @Test
     void aFactoryThatDoesNotExistIsTreatedAsOn() {
         com.cretas.aims.repository.FactoryRepository factories = mock(com.cretas.aims.repository.FactoryRepository.class);
@@ -159,7 +162,13 @@ class FactorySecrecyConfigContractTest {
             assertThat(checked.isOn(F, item)).as("对照: 存在的工厂没有行 = 关 " + item).isFalse();
         }
         assertThat(checked.effectiveByCode("F-GHOST").values()).containsOnly(true);
-        verify(factories, times(1)).existsById("F-GHOST");   // 进了同一条 10 秒缓存
+        int lookups = SecrecyItem.values().length + 1;
+        verify(factories, times(lookups)).existsById("F-GHOST");   // 不缓存: 每次都现查
+        assertThat(checked.isCached("F-GHOST")).as("不存在的工厂不留缓存条目").isFalse();
+        assertThat(((java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(checked, "generations"))
+                .containsKey("F-GHOST")).as("读不建代数条目").isFalse();
+        verify(factories, times(1)).existsById(F);                  // 对照: 存在的工厂进了同一条 10 秒缓存
+        assertThat(checked.isCached(F)).isTrue();
     }
 
     @Test

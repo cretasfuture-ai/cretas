@@ -75,7 +75,8 @@ import static org.mockito.Mockito.when;
 @Import({ProcessSecretAccessService.class, ProcessSecretAuditRecorder.class,
         ProcessSecretReadTrackerConfiguration.class, ProcessSecretAggregateExclusions.class,
         ProcessSecretLlmCostScope.class, ProcessSecretPayloadScrubber.class, ProcessSecretCostMask.class,
-        ProcessSecretSampleFilter.class, FactorySecrecySwitchJpaContractTest.Config.class})
+        ProcessSecretSampleFilter.class, com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard.class,
+        FactorySecrecySwitchJpaContractTest.Config.class})
 class FactorySecrecySwitchJpaContractTest {
 
     static final String F = "F-SW-A";
@@ -279,22 +280,54 @@ class FactorySecrecySwitchJpaContractTest {
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).isTrue();
     }
 
-    /** 审查 #1: b 关只让平台「看」(完整查看 / 导出), 编辑照旧要授权。 */
+    /**
+     * Steve 2026-11-04: b 关时平台账号对该厂保密产品的所有动作 (看 / 导出 / 编辑) 都放行; 每一次放行都写一条
+     * ALLOW 审计 (动作 + 平台身份)。走真实写入口用的那道闸 (ProcessSecretRecipeGuard.requireProduct, 工艺图发布 /
+     * 建厂应用 / BOM 草稿转正 / BOM 与工艺接口都经它或同一个 require)。b 开时编辑拒绝, 同样留 DENY。
+     */
     @Test
-    void platformRecipeBlockOffGrantsThePlatformViewAndExportButNotEdit() {
+    void platformRecipeBlockOffLetsThePlatformEditAndEveryEditIsAudited() {
         set(F, SecrecyItem.PROCESS_SECRET, true);
         set(F, SecrecyItem.PLATFORM_RECIPE_BLOCK, false);
-        com.cretas.aims.entity.processsecret.ProcessSecretAction view = com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL;
-        com.cretas.aims.entity.processsecret.ProcessSecretAction export = com.cretas.aims.entity.processsecret.ProcessSecretAction.EXPORT;
         com.cretas.aims.entity.processsecret.ProcessSecretAction edit = com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT;
-        assertThat(accessService.decide(platform(), F, SECRET, view).permitted()).isTrue();
-        assertThat(accessService.decide(platform(), F, SECRET, export).permitted()).isTrue();
-        assertThat(accessService.decide(platform(), F, SECRET, edit).permitted()).as("b 关也不能改配方").isFalse();
-        // 对照: b 开时三样都不行
+        assertThat(accessService.decide(platform(), F, SECRET,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL).permitted()).isTrue();
+        assertThat(accessService.decide(platform(), F, SECRET,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EXPORT).permitted()).isTrue();
+        assertThat(accessService.decide(platform(), F, SECRET, edit).permitted()).isTrue();
+
+        String ref = "platform-edit-" + java.util.UUID.randomUUID();
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(platform())) {
+            recipeGuard.requireProduct(F, SECRET, edit, ref);
+            recipeGuard.requireProduct(F, SECRET, edit, ref);   // 每一次都记, 不去重
+        }
+        assertThat(events(ref)).hasSize(2).allSatisfy(e -> {
+            assertThat(e.getDecision()).isEqualTo("ALLOW");
+            assertThat(e.getAction()).isEqualTo(edit);
+            assertThat(e.getActorType()).isEqualTo("PLATFORM_ADMIN");
+            assertThat(e.getActorId()).isEqualTo(platform().id());
+            assertThat(e.getProductTypeId()).isEqualTo(SECRET);
+        });
+
+        // b 开: 编辑拒绝 (403), 也留 DENY
         set(F, SecrecyItem.PLATFORM_RECIPE_BLOCK, true);
-        assertThat(accessService.decide(platform(), F, SECRET, view).permitted()).isFalse();
-        assertThat(accessService.decide(platform(), F, SECRET, edit).permitted()).isFalse();
+        String denyRef = "platform-edit-deny-" + java.util.UUID.randomUUID();
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(platform())) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> recipeGuard.requireProduct(F, SECRET, edit, denyRef))
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                    .satisfies(e -> assertThat(((com.cretas.aims.exception.BusinessException) e).getCode()).isEqualTo(403));
+        }
+        assertThat(events(denyRef)).singleElement().satisfies(e -> assertThat(e.getDecision()).isEqualTo("DENY"));
     }
+
+    private java.util.List<com.cretas.aims.entity.processsecret.ProcessSecretAccessEvent> events(String ref) {
+        return accessEvents.findByFactoryIdAndProductTypeIdOrderByCreatedAtDesc(F, SECRET,
+                        org.springframework.data.domain.PageRequest.of(0, 200)).stream()
+                .filter(e -> ref.equals(e.getResourceRef())).toList();
+    }
+
+    @Autowired com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard recipeGuard;
+    @Autowired com.cretas.aims.repository.processsecret.ProcessSecretAccessEventRepository accessEvents;
 
     /** Q1=A (Steve 2026-11-03): 训练剔除保密产品名只看 d —— a 关、d 开照样剔; a 关、d 关不剔。 */
     @Test

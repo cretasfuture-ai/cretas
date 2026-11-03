@@ -9,6 +9,7 @@ import com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService.Decision;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService.Outcome;
+import com.cretas.aims.service.processsecret.ProcessSecretPayloadScrubber;
 import com.cretas.aims.service.processsecret.ProcessSecretTestHooks;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,8 +27,12 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -94,12 +99,25 @@ class ProcessSecretResponseAdviceRowFactoryContractTest {
         assertThat(data.get(1).get("conversionRate").asDouble()).isEqualTo(0.7);
     }
 
+    /**
+     * 审查跟进 2b: 原来只断言「返回同一个对象」, 而 scrubber 什么都没裁时也返回同一个对象 —— 快路径删掉也绿。
+     * 现在用 mock scrubber 断言快路径上 scrubber 根本没被调用; 对照组 (库里有策略) 必须调用。
+     */
     @Test
     void theWholeOutputIsSkippedOnlyWhenNoFactoryHasAnyPolicy() {
-        when(access.noProcessSecretPolicyAnywhere()).thenReturn(true);
+        ProcessSecretPayloadScrubber scrubber = mock(ProcessSecretPayloadScrubber.class);
+        advice = new ProcessSecretResponseAdvice(access, mock(BomRecipeRepository.class),
+                mock(ProductionPlanRepository.class), scrubber, json);
         when(access.protectedProductTypeIds(PROTECTED)).thenReturn(Set.of());
+        AuthenticatedActor operator = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 5L, PLAIN, "operator");
+
+        when(access.noProcessSecretPolicyAnywhere()).thenReturn(true);
         ApiResponse<List<Map<String, Object>>> body = rows();
-        assertThat(write(body, new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 5L, PLAIN, "operator")))
-                .isSameAs(body);
+        assertThat(write(body, operator)).isSameAs(body);
+        verify(scrubber, never()).scrub(any(), any(), any(), any(), any(), anyBoolean());
+
+        when(access.noProcessSecretPolicyAnywhere()).thenReturn(false);
+        write(rows(), operator);
+        verify(scrubber, times(1)).scrub(any(), any(), any(), any(), any(), anyBoolean());
     }
 }

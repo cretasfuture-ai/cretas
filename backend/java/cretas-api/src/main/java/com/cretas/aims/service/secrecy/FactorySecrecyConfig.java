@@ -157,8 +157,15 @@ public class FactorySecrecyConfig {
         cache.remove(key);
     }
 
+    /** 只有 {@link #bump} 建代数条目 (平台真实写配置时); 读一律 {@code get}, 没有条目按 0 —— 查询不留永久条目。 */
     private long generation(String key) {
-        return generations.computeIfAbsent(key, k -> new java.util.concurrent.atomic.AtomicLong()).get();
+        java.util.concurrent.atomic.AtomicLong generation = generations.get(key);
+        return generation == null ? 0L : generation.get();
+    }
+
+    /** 测试用: 该工厂此刻是否有缓存条目。 */
+    boolean isCached(String factoryId) {
+        return cache.containsKey(factoryId);
     }
 
     static boolean unknownFactory(String factoryId) {
@@ -185,10 +192,11 @@ public class FactorySecrecyConfig {
             return Optional.ofNullable(cached.stored());
         }
         try {
-            // 工厂存在性与配置行在同一次读里、进同一条 10 秒缓存 (审查 #3: 不存在的工厂编号按开启处理, 不是按默认关)
+            // 工厂存在性与配置行在同一次读里 (审查 #3: 不存在的工厂编号按开启处理, 不是按默认关)。
+            // 只缓存存在的工厂: 不存在的编号不进缓存, 查多少个都不会留下永久条目 (缓存条目总数 ≤ 真实工厂数)
             Map<SecrecyItem, Stored> stored = readTx == null ? readExisting(factoryId)
                     : readTx.execute(status -> readExisting(factoryId));
-            cache.put(factoryId, new Cached(stored, now, generation));
+            if (stored != null) cache.put(factoryId, new Cached(stored, now, generation));
             return Optional.ofNullable(stored);
         } catch (RuntimeException e) {
             // 读不到配置: 一律当开启 (偏向保密), 不缓存失败
