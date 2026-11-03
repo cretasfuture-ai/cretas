@@ -40,7 +40,9 @@ class FactorySecrecyGatesContractTest {
     static final Pattern JAVA_SOURCE = Pattern.compile(
             "ProcessSecretPolicyRepository|ProcessSecretGrantRepository|process_secret_policies|process_secret_grants"
                     + "|FROM\\s+ProcessSecretPolicy\\b|FROM\\s+ProcessSecretGrant\\b"
-                    + "|new\\s+LlmEgressRedactor\\s*\\(|LlmEgressRedactor\\s*\\.\\s*passThrough"
+                    + "|new\\s+LlmEgressRedactor\\s*\\(|LlmEgressRedactor\\s*::\\s*new|LlmEgressRedactor\\s*\\.\\s*passThrough"
+                    // 经保密策略服务读 (审查 #6: 绕开仓库直接拿策略)
+                    + "|\\bProcessSecretPolicyService\\b"
                     + "|FactorySecrecySettingRepository|factory_secrecy_settings|FROM\\s+FactorySecrecySetting\\b");
 
     /** 类 (相对 src/main/java 的路径) → 归属的项。 */
@@ -58,6 +60,8 @@ class FactorySecrecyGatesContractTest {
                     Set.of("PROCESS_SECRET", "PLATFORM_RECIPE_BLOCK", "CUSTOMER_HELD", "TRAINING_FILTER")),
             // 策略管理 (13 个接口经 ProcessSecretController 的开关闸)
             Map.entry("com/cretas/aims/service/processsecret/ProcessSecretPolicyService.java", Set.of("PROCESS_SECRET")),
+            // 保密策略管理接口 (开关闸: a 或 e 开才放行)
+            Map.entry("com/cretas/aims/controller/ProcessSecretController.java", Set.of("PROCESS_SECRET", "CUSTOMER_HELD")),
             // B 档客户侧工艺包
             Map.entry("com/cretas/aims/service/processsecret/ProcessSecretExternalService.java", Set.of("CUSTOMER_HELD")),
             // 平台统计 (JPQL 直接连保密策略与配置表)
@@ -72,7 +76,9 @@ class FactorySecrecyGatesContractTest {
     /** Python 里直接碰保密数据源的写法 (SQL 表名 / 出外脱敏器 / 保密名查询)。 */
     static final Pattern PYTHON_SOURCE = Pattern.compile(
             "process_secret_policies|process_secret_grants|factory_secrecy_settings"
-                    + "|\\bredact_payload_for_egress\\b|\\bredact_texts\\s*\\(|_protected_names_for_egress");
+                    // common/llm_redactor.py 与 common/llm_egress_text.py 里的每一个脱敏函数 (按名字认, 不要求后面跟括号:
+                    // import / 别名 / getattr 字符串都算; 审查 #6)
+                    + "|\\bredact_(?:text|texts|dict|payload|payload_for_egress)\\b|_protected_names_for_egress");
 
     static final Map<String, Set<String>> PYTHON_ATTACHMENTS = new TreeMap<>(Map.ofEntries(
             Map.entry("common/factory_secrecy.py", Set.of("CONFIG")),
@@ -129,6 +135,18 @@ class FactorySecrecyGatesContractTest {
         assertThat(JAVA_SOURCE.matcher(stripJavaComments(
                 "class X { /* ProcessSecretPolicyRepository */ // process_secret_policies\n }")).find()).isFalse();
         assertThat(JAVA_SOURCE.matcher("var r = new LlmEgressRedactor (mapper);").find()).isTrue();
+        // 审查 #6 补的写法: 方法引用构造、经保密策略服务读; 每一种都要认得出, 注释里的不算
+        assertThat(JAVA_SOURCE.matcher("Function<ObjectMapper, LlmEgressRedactor> f = LlmEgressRedactor :: new;").find()).isTrue();
+        assertThat(JAVA_SOURCE.matcher("private final ProcessSecretPolicyService policies;").find()).isTrue();
+        assertThat(JAVA_SOURCE.matcher(stripJavaComments("// LlmEgressRedactor::new\n/* ProcessSecretPolicyService */")).find()).isFalse();
+        assertThat(JAVA_SOURCE.matcher("ProcessSecretPolicyServiceHelper x;").find()).as("名字的一部分不算").isFalse();
+        for (String python : List.of("from common.llm_redactor import redact_text", "out = redact_dict(row, alloc)",
+                "redacted, meta = redact_payload(p, allocator=a)", "from common.llm_egress_text import redact_texts as rt",
+                "fn = getattr(llm_egress_text, 'redact_texts')", "x = redact_payload_for_egress(p, names)")) {
+            assertThat(PYTHON_SOURCE.matcher(stripPythonComments(python)).find()).as(python).isTrue();
+        }
+        assertThat(PYTHON_SOURCE.matcher(stripPythonComments("# redact_text(x)")).find()).isFalse();
+        assertThat(PYTHON_SOURCE.matcher("unredact_textual = 1").find()).as("名字的一部分不算").isFalse();
         assertThat(PYTHON_SOURCE.matcher(stripPythonComments("rows = await conn.fetch('SELECT * FROM process_secret_policies')")).find()).isTrue();
         assertThat(PYTHON_SOURCE.matcher(stripPythonComments("# process_secret_policies")).find()).isFalse();
         assertThatThrownBy(() -> assertItemsAreKnown(Map.of("x", Set.of("NOT_AN_ITEM")))).isInstanceOf(AssertionError.class);

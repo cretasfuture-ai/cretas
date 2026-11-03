@@ -1,6 +1,7 @@
 package com.cretas.aims.service.secrecy;
 
 import com.cretas.aims.entity.secrecy.FactorySecrecySetting;
+import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.secrecy.FactorySecrecySettingRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <ul>
  *   <li>按工厂缓存 {@link #CACHE_TTL} (10 秒); 平台改了设置立即失效 ({@link #invalidate}, 提交后再清一次)。</li>
- *   <li>读库失败、工厂为 null / 空 / {@code PLATFORM} → 一律 {@code true} (偏向保密, fail-closed)。读失败不缓存。</li>
+ *   <li>读库失败、工厂为 null / 空 / {@code PLATFORM}、工厂表里没有这家工厂 → 一律 {@code true} (偏向保密, fail-closed)。读失败不缓存。</li>
  *   <li>没有行 → 默认值: 关; {@link SecrecyItem#AI_SECRECY_AUDIT} 跟随 {@link SecrecyItem#PROCESS_SECRET}。</li>
  * </ul>
  *
@@ -43,9 +44,16 @@ public class FactorySecrecyConfig {
     /** 存的值: ON / OFF / FOLLOW (跟随工艺保密); 没有行 = UNSET。 */
     public enum Stored { UNSET, ON, OFF, FOLLOW }
 
-    private record Cached(Map<SecrecyItem, Stored> stored, long loadedAtMillis) { }
+    /**
+     * {@code stored} 为 null = 工厂表里没有这家工厂 (按开启处理)。{@code generation}: 读之前那一刻的失效代数,
+     * 读的过程中被 invalidate 过的条目在下次读时作废 (审查 #2: 不让提交前开始读的读者把旧值放回缓存)。
+     */
+    private record Cached(Map<SecrecyItem, Stored> stored, long loadedAtMillis, long generation) { }
 
     private final FactorySecrecySettingRepository repository;
+    /** 工厂是否存在 (不存在 → 每一项都当开启)。null = 不查 (只给直接 new 的单测用, 那些工厂不在工厂表里)。 */
+    private final FactoryRepository factories;
+    private final Map<String, java.util.concurrent.atomic.AtomicLong> generations = new ConcurrentHashMap<>();
     /** 读配置在自己的只读事务里 (挂起调用方事务): 读失败不把调用方事务标成只能回滚。null = 直接读 (单测)。 */
     private final TransactionTemplate readTx;
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
@@ -55,14 +63,21 @@ public class FactorySecrecyConfig {
      * 两种都由 {@link ObjectProvider#getIfAvailable()} 取到。
      */
     @Autowired
-    public FactorySecrecyConfig(FactorySecrecySettingRepository repository,
+    public FactorySecrecyConfig(FactorySecrecySettingRepository repository, FactoryRepository factories,
                                 ObjectProvider<PlatformTransactionManager> transactionManagers) {
-        this(repository, transactionManagers == null ? null : transactionManagers.getIfAvailable());
+        this(repository, factories, transactionManagers == null ? null : transactionManagers.getIfAvailable());
     }
 
+    /** 单测用: 不查工厂是否存在 (测试里的工厂编号多半不在工厂表里)。生产走上面那个构造器。 */
     public FactorySecrecyConfig(FactorySecrecySettingRepository repository,
                                 PlatformTransactionManager transactionManager) {
+        this(repository, null, transactionManager);
+    }
+
+    public FactorySecrecyConfig(FactorySecrecySettingRepository repository, FactoryRepository factories,
+                                PlatformTransactionManager transactionManager) {
         this.repository = repository;
+        this.factories = factories;
         if (transactionManager == null) {
             this.readTx = null;
         } else {
@@ -75,6 +90,7 @@ public class FactorySecrecyConfig {
 
     private FactorySecrecyConfig() {
         this.repository = null;
+        this.factories = null;
         this.readTx = null;
     }
 
@@ -125,20 +141,24 @@ public class FactorySecrecyConfig {
     public void invalidate(String factoryId) {
         if (factoryId == null) return;
         String key = factoryId.trim();
-        cache.remove(key);
+        bump(key);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
-                public void afterCommit() {
-                    cache.remove(key);
-                }
-
-                @Override
                 public void afterCompletion(int status) {
-                    cache.remove(key);
+                    bump(key);
                 }
             });
         }
+    }
+
+    private void bump(String key) {
+        generations.computeIfAbsent(key, k -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+        cache.remove(key);
+    }
+
+    private long generation(String key) {
+        return generations.computeIfAbsent(key, k -> new java.util.concurrent.atomic.AtomicLong()).get();
     }
 
     static boolean unknownFactory(String factoryId) {
@@ -159,21 +179,29 @@ public class FactorySecrecyConfig {
 
     private Optional<Map<SecrecyItem, Stored>> load(String factoryId) {
         long now = System.currentTimeMillis();
+        long generation = generation(factoryId);
         Cached cached = cache.get(factoryId);
-        if (cached != null && now - cached.loadedAtMillis() < CACHE_TTL.toMillis()) {
-            return Optional.of(cached.stored());
+        if (cached != null && cached.generation() == generation && now - cached.loadedAtMillis() < CACHE_TTL.toMillis()) {
+            return Optional.ofNullable(cached.stored());
         }
         try {
-            Map<SecrecyItem, Stored> stored = readTx == null ? readStored(factoryId)
-                    : readTx.execute(status -> readStored(factoryId));
-            cache.put(factoryId, new Cached(stored, now));
-            return Optional.of(stored);
+            // 工厂存在性与配置行在同一次读里、进同一条 10 秒缓存 (审查 #3: 不存在的工厂编号按开启处理, 不是按默认关)
+            Map<SecrecyItem, Stored> stored = readTx == null ? readExisting(factoryId)
+                    : readTx.execute(status -> readExisting(factoryId));
+            cache.put(factoryId, new Cached(stored, now, generation));
+            return Optional.ofNullable(stored);
         } catch (RuntimeException e) {
             // 读不到配置: 一律当开启 (偏向保密), 不缓存失败
             log.error("[secrecy-config] read failed for factory {}, treating every item as ON: {}",
                     factoryId, e.getClass().getSimpleName());
             return Optional.empty();
         }
+    }
+
+    /** 工厂不存在 → null (调用方当开启); 否则读配置行。 */
+    private Map<SecrecyItem, Stored> readExisting(String factoryId) {
+        if (factories != null && !factories.existsById(factoryId)) return null;
+        return readStored(factoryId);
     }
 
     private Map<SecrecyItem, Stored> readStored(String factoryId) {

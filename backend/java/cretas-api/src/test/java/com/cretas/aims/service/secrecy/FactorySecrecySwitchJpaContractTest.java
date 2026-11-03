@@ -91,8 +91,11 @@ class FactorySecrecySwitchJpaContractTest {
     @TestConfiguration
     static class Config {
         @Bean
-        FactorySecrecyConfig factorySecrecyConfig(FactorySecrecySettingRepository repository) {
-            return new FactorySecrecyConfig(repository, (org.springframework.transaction.PlatformTransactionManager) null);
+        FactorySecrecyConfig factorySecrecyConfig(FactorySecrecySettingRepository repository,
+                                                  com.cretas.aims.repository.FactoryRepository factories) {
+            // 与生产一样查工厂是否存在 (本测试的两家工厂在工厂表里); 只是不另开读事务
+            return new FactorySecrecyConfig(repository, factories,
+                    (org.springframework.transaction.PlatformTransactionManager) null);
         }
     }
 
@@ -274,6 +277,23 @@ class FactorySecrecySwitchJpaContractTest {
         set(F, SecrecyItem.TRAINING_FILTER, true);
         assertThat(sampleFilter.allFactoriesProtectedNames()).contains("SW乙厂秘制酱", "SW保密卤牛肉");
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).isTrue();
+    }
+
+    /** 审查 #1: b 关只让平台「看」(完整查看 / 导出), 编辑照旧要授权。 */
+    @Test
+    void platformRecipeBlockOffGrantsThePlatformViewAndExportButNotEdit() {
+        set(F, SecrecyItem.PROCESS_SECRET, true);
+        set(F, SecrecyItem.PLATFORM_RECIPE_BLOCK, false);
+        com.cretas.aims.entity.processsecret.ProcessSecretAction view = com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL;
+        com.cretas.aims.entity.processsecret.ProcessSecretAction export = com.cretas.aims.entity.processsecret.ProcessSecretAction.EXPORT;
+        com.cretas.aims.entity.processsecret.ProcessSecretAction edit = com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT;
+        assertThat(accessService.decide(platform(), F, SECRET, view).permitted()).isTrue();
+        assertThat(accessService.decide(platform(), F, SECRET, export).permitted()).isTrue();
+        assertThat(accessService.decide(platform(), F, SECRET, edit).permitted()).as("b 关也不能改配方").isFalse();
+        // 对照: b 开时三样都不行
+        set(F, SecrecyItem.PLATFORM_RECIPE_BLOCK, true);
+        assertThat(accessService.decide(platform(), F, SECRET, view).permitted()).isFalse();
+        assertThat(accessService.decide(platform(), F, SECRET, edit).permitted()).isFalse();
     }
 
     /** Q1=A (Steve 2026-11-03): 训练剔除保密产品名只看 d —— a 关、d 开照样剔; a 关、d 关不剔。 */

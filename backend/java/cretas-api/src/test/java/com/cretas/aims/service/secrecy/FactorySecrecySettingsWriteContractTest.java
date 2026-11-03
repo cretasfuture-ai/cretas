@@ -149,6 +149,9 @@ class FactorySecrecySettingsWriteContractTest {
         assertStatus(() -> controller.put(F, "EGRESS_REDACTION",
                 new FactorySecrecySettingsService.Update(null, null, "x", null), superAdmin()), 400);
         assertStatus(() -> controller.put(F, "NOT_AN_ITEM", on("x"), superAdmin()), 400);
+        // 400 的说明不回显原始 itemCode (审查 #8)
+        assertThatThrownBy(() -> controller.put(F, "<script>x</script>", on("x"), superAdmin()))
+                .isInstanceOf(BusinessException.class).hasMessage("未知的保密配置项");
         controller.put(F, "AI_SECRECY_AUDIT", new FactorySecrecySettingsService.Update(false, null, null, null), superAdmin());
         controller.put(F, "AI_SECRECY_AUDIT", new FactorySecrecySettingsService.Update(null, true, null, null), superAdmin());
         assertThat(rows).singleElement().satisfies(r -> assertThat(r.getEnabled()).isNull());

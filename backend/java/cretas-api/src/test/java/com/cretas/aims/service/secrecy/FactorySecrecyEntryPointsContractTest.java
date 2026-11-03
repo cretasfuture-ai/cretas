@@ -177,6 +177,22 @@ class FactorySecrecyEntryPointsContractTest {
         assertThat(guard.utterance("t", "打给 13812345678").text(0)).doesNotContain("13812345678");
     }
 
+    /** 审查 #3: 工厂表里没有的工厂编号, 外发照样脱敏 (不按「没有配置行 = 出外脱敏关」原样发)。 */
+    @Test
+    void egressForAFactoryIdThatDoesNotExistIsStillRedacted() {
+        com.cretas.aims.repository.FactoryRepository factories = mock(com.cretas.aims.repository.FactoryRepository.class);
+        when(factories.existsById(F)).thenReturn(true);
+        when(factories.existsById("F-GHOST")).thenReturn(false);
+        config = new FactorySecrecyConfig(settings, factories, (org.springframework.transaction.PlatformTransactionManager) null);
+        LlmEgressGuard guard = guard();
+        LlmEgressRedactor.Result ghost = guard.structured("t", "F-GHOST", Map.of("customerName", "张记食品有限公司"));
+        assertThat(ghost.refused()).isFalse();
+        assertThat(ghost.payload()).doesNotContain("张记食品有限公司");
+        // 对照: 存在的工厂、出外脱敏关 → 原样发
+        set(F, SecrecyItem.EGRESS_REDACTION, false);
+        assertThat(guard.structured("t", F, Map.of("customerName", "张记食品有限公司")).payload()).contains("张记食品有限公司");
+    }
+
     @Test
     void egressFailsClosedWhenTheConfigCannotBeRead() {
         when(settings.findByFactoryId(anyString())).thenThrow(new org.springframework.dao.QueryTimeoutException("slow"));

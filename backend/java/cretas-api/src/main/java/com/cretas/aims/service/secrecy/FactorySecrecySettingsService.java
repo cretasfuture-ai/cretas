@@ -168,7 +168,7 @@ public class FactorySecrecySettingsService {
 
     static SecrecyItem requireItem(String itemCode) {
         return SecrecyItem.fromCode(itemCode)
-                .orElseThrow(() -> new BusinessException(400, "未知的保密配置项: " + itemCode));
+                .orElseThrow(() -> new BusinessException(400, "未知的保密配置项"));
     }
 
     static FactorySecrecyConfig.Stored target(SecrecyItem item, Update body) {

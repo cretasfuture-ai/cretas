@@ -31,6 +31,8 @@ def settings(monkeypatch):
         reads.append(factory_id)
         if table.get("__broken__"):
             raise RuntimeError("db down")
+        if factory_id in table.get("__missing__", ()):
+            return None   # 工厂表里没有这家工厂 (与真实 _read 同形)
         return dict(table.get(factory_id, {}))
 
     monkeypatch.setattr(fs, "_read", fake_read)
@@ -172,6 +174,21 @@ async def test_an_unknown_egress_factory_is_still_redacted_or_refused_with_every
 
 
 @pytest.mark.asyncio
+async def test_a_factory_id_that_does_not_exist_is_treated_as_on_and_still_redacted(settings, wrapper):
+    """审查 #3: 工厂表里没有的工厂编号不能按「没有配置行 = 关」放行。"""
+    table, _ = settings
+    up, client = wrapper
+    table["__missing__"] = {"F-GHOST"}
+    for code in fs.CODES:
+        assert await fs.is_on("F-GHOST", code) is True, code
+    await _post_as("F-GHOST", client)
+    sent = json.dumps(up.bodies, ensure_ascii=False)
+    assert up.bodies and "赵铁柱" not in sent and "13912345678" not in sent
+    # 对照: 存在的工厂没有配置行 = 关
+    assert await fs.is_on(F, fs.EGRESS_REDACTION) is False
+
+
+@pytest.mark.asyncio
 async def test_a_failed_config_read_keeps_redacting(settings, wrapper):
     table, _ = settings
     up, client = wrapper
@@ -299,37 +316,36 @@ async def test_the_egress_drops_the_process_secret_clause_only_when_a_and_e_are_
     assert PROCESS_SECRET_CLAUSE in texts[2]
 
 
-# ------------------------------------------------------------------ a: 成本授权的 fail-closed 路径
+# ------------------------------------------------------------------ a: 成本授权 (审查 #5: 不在 Python 抄近路)
+#
+# 成本范围一律问 Java (/smart-bi/cost-product-access: 请求身份必须与路径工厂一致 + analytics:read + 按 a / e 判);
+# a、e 都关时 Java 自己答「全部可看」。Python 不再因为 a、e 关着就跳过身份 / 权限 —— 没有请求身份、Java 不可用
+# 照旧不给成本 (fail-closed)。
 
 
 @pytest.mark.asyncio
-async def test_cost_scope_without_a_request_is_full_only_when_a_and_e_are_off(settings):
+async def test_cost_scope_still_requires_a_request_identity_even_with_a_and_e_off(settings):
     from smartbi.services.factory_charts import cost_scope
 
     table, _ = settings
-    resolver = cost_scope.CostScopeResolver(None, F)        # 没有请求身份 (内部调用)
-    _set(table, F, fs.PROCESS_SECRET, True)
-    assert (await resolver.scope_for(["P1"])).is_unavailable
     _set(table, F, fs.PROCESS_SECRET, False)
-    assert (await resolver.scope_for(["P1"])).is_full
-    _set(table, F, fs.CUSTOMER_HELD, True)
-    assert (await resolver.scope_for(["P1"])).is_unavailable
-    table["__broken__"] = True
-    fs.invalidate(F)
-    assert (await cost_scope.CostScopeResolver(None, F).scope_for(["P1"])).is_unavailable, "读不到配置按开启"
+    _set(table, F, fs.CUSTOMER_HELD, False)
+    assert (await cost_scope.CostScopeResolver(None, F).scope_for(["P1"])).is_unavailable
 
 
 @pytest.mark.asyncio
-async def test_cost_scope_java_failure_is_full_only_when_a_and_e_are_off(settings, monkeypatch):
+async def test_cost_scope_still_asks_java_with_a_and_e_off(settings, monkeypatch):
     from smartbi.services.factory_charts import cost_authorization, cost_scope
 
     table, _ = settings
+    asked = []
 
     async def java_down(*a, **k):
+        asked.append(a)
         raise cost_authorization.CostAuthorizationError("java authority unavailable")
 
     monkeypatch.setattr(cost_authorization, "authorize_batches", java_down)
-    _set(table, F, fs.PROCESS_SECRET, True)
-    assert (await cost_scope.CostScopeResolver(object(), F).scope_for(["P1"])).is_unavailable
     _set(table, F, fs.PROCESS_SECRET, False)
-    assert (await cost_scope.CostScopeResolver(object(), F).scope_for(["P1"])).is_full
+    _set(table, F, fs.CUSTOMER_HELD, False)
+    assert (await cost_scope.CostScopeResolver(object(), F).scope_for(["P1"])).is_unavailable
+    assert asked, "a、e 关着也要问 Java (身份 + analytics:read 在 Java 那边判)"

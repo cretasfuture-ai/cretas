@@ -534,6 +534,7 @@ class ProductionPotContractTest {
     @Autowired private org.springframework.transaction.PlatformTransactionManager transactionManager;
     @Autowired private com.cretas.aims.repository.secrecy.FactorySecrecySettingRepository secrecySettings;
     @Autowired private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecyConfig;
+    @Autowired private com.cretas.aims.repository.FactoryRepository factoryRepo;
 
     private record SecretPot(ProcessSheetRowResult row, Long potId, Long ownerId) { }
 
@@ -560,7 +561,7 @@ class ProductionPotContractTest {
 
     private com.cretas.aims.service.secrecy.FactorySecrecyTestSettings secrecyOn(boolean processSecret) {
         com.cretas.aims.service.secrecy.FactorySecrecyTestSettings handle =
-                com.cretas.aims.service.secrecy.FactorySecrecyTestSettings.set(transactionManager, secrecySettings,
+                com.cretas.aims.service.secrecy.FactorySecrecyTestSettings.set(transactionManager, secrecySettings, factoryRepo,
                         secrecyConfig, F, Map.of(com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET, processSecret));
         secretAccess.invalidate(F);
         assertThat(secrecyConfig.isOn(F, com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET))

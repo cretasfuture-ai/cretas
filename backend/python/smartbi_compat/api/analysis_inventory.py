@@ -573,7 +573,7 @@ def _metric_result_of(code: str, name: str, value: Decimal, unit: str) -> dict:
 
 
 async def _visible_consumption_total(
-    consumptions: list[dict], cost_resolver, factory_id: Optional[str] = None
+    consumptions: list[dict], cost_resolver
 ) -> tuple[Optional[Decimal], Optional[dict]]:
     """工艺保密: sum ``total_cost`` over the consumption rows this caller may see.
 
@@ -583,9 +583,6 @@ async def _visible_consumption_total(
     resolved are left out.  Without an authorization answer the total is
     ``None`` (fail closed, never 0).  Returns ``(total, costScope annotation)``.
     """
-    if cost_resolver is None and factory_id:
-        # 内部调用 (没有请求身份): 解析器按「授权未执行」遮; 该厂没有生效的产品级保密 (a、e 都关) 时不遮
-        cost_resolver = process_secret.CostScopeResolver(None, factory_id)
     if cost_resolver is None:
         scope = process_secret.unavailable(process_secret.REASON_NOT_RUN)
     else:
@@ -677,7 +674,7 @@ async def _turnover_analysis_scoped(
     # _query_inventory_value_total already coalesces null → Decimal('0')
 
     consumptions = await _query_material_consumptions_in_range(factory_id, start_date, end_date)
-    total_consumption, cost_scope = await _visible_consumption_total(consumptions, cost_resolver, factory_id)
+    total_consumption, cost_scope = await _visible_consumption_total(consumptions, cost_resolver)
     if total_consumption is None:
         return _consumption_hidden_metrics(current_inventory_value, cost_scope), cost_scope
     scope_note = (cost_scope or {}).get("note")
@@ -774,7 +771,7 @@ async def _get_turnover_trend_chart(
         )
         # 工艺保密: same per-row rule as the turnover metrics (allowed rows only;
         # no authorization answer → null, never 0).
-        month_consumption, _ = await _visible_consumption_total(month_consumptions, cost_resolver, factory_id)
+        month_consumption, _ = await _visible_consumption_total(month_consumptions, cost_resolver)
 
         chart_data.append({
             "month":       f"{current.year}-{current.month:02d}",

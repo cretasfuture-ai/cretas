@@ -29,8 +29,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from common import factory_secrecy
-
 from . import cost_authorization
 
 FULL = "FULL"
@@ -118,14 +116,9 @@ class CostScopeResolver:
         self._failure: Optional[str] = None if auth_request is not None else REASON_NOT_RUN
 
     async def scope_for(self, product_ids: Iterable[Any]) -> CostScope:
-        ids = {p for p in (_raw(v) for v in product_ids) if p is not None}
-        # 工厂级保密配置 (Steve 2026-11-03): 该厂「工艺保密」(a) 与「客户侧保管」(e) 都关着 = 没有生效的产品级保密,
-        # 「没有请求身份 / Java 不可用 / 授权失败」这几条 fail-closed 路径不再把成本遮成「授权未确认」。
-        # 读不到配置按开启 (照旧问 Java / 照旧遮)。
-        if await factory_secrecy.process_secret_inert(self._factory_id):
-            return CostScope(FULL, frozenset(ids))
         if self._failure:
             return unavailable(self._failure)
+        ids = {p for p in (_raw(v) for v in product_ids) if p is not None}
         if self._full:
             return CostScope(FULL, frozenset(ids))
         # Raw ids only; non-canonical ids are denied without asking Java.
