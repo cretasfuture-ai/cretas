@@ -82,6 +82,7 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
 
     private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     private AIContextServiceImpl contexts;
+    private Long seededUserId;
 
     @BeforeEach
     void seed() {
@@ -96,6 +97,7 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
         user.setIsActive(true);
         entityManager.persist(user);
         entityManager.flush();
+        seededUserId = user.getId();
         productTypes.saveAndFlush(product(SECRET, "QA-S4-SECRET", user.getId()));
         productTypes.saveAndFlush(product(NORMAL, "L3-NORMAL", user.getId()));
 
@@ -248,20 +250,19 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
                 LocalDateTime.now().minusDays(1)).get(0).getId();
         Long normalBatch = batches.findByFactoryIdAndProductTypeIdAndCreatedAtAfter(F, NORMAL,
                 LocalDateTime.now().minusDays(1)).get(0).getId();
-        // 消耗记录外键指向原料批次: 建一个真实的原料批次 (不关外键检查, 那在 H2 上会提交事务、漏进别的测试)
+        // 消耗记录外键指向原料批次 / 用户: 建真实的行 (不关外键检查, 那在 H2 上会提交事务、漏进别的测试)
         com.cretas.aims.entity.MaterialBatch material = new com.cretas.aims.entity.MaterialBatch();
         material.setId("MB-OF");
         material.setFactoryId(F);
         material.setBatchNumber("MB-OF");
-        material.setMaterialTypeId("MT-OF-1");
         material.setWarehouseId("WH-OF-1");
         material.setReceiptDate(java.time.LocalDate.now());
         material.setReceiptQuantity(new BigDecimal("10"));
         material.setQuantityUnit("kg");
-        material.setCreatedBy(COLLEAGUE);
+        material.setCreatedBy(seededUserId);   // 外键指向 users: 用真实建好的用户
         entityManager.persist(material);
-        entityManager.persist(consumption(secretBatch, "88.80"));
-        entityManager.persist(consumption(normalBatch, "12.30"));
+        entityManager.persist(consumption(secretBatch, "88.80", seededUserId));
+        entityManager.persist(consumption(normalBatch, "12.30", seededUserId));
         entityManager.flush();
         com.cretas.aims.security.PriceMaskResolver prices = mock(com.cretas.aims.security.PriceMaskResolver.class);
         com.cretas.aims.repository.MaterialBatchRepository materialBatches =
@@ -286,7 +287,7 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
 
     @Autowired com.cretas.aims.repository.MaterialConsumptionRepository consumptionRepository;
 
-    static com.cretas.aims.entity.MaterialConsumption consumption(Long productionBatchId, String totalCost) {
+    static com.cretas.aims.entity.MaterialConsumption consumption(Long productionBatchId, String totalCost, Long recordedBy) {
         com.cretas.aims.entity.MaterialConsumption c = new com.cretas.aims.entity.MaterialConsumption();
         c.setFactoryId(F);
         c.setBatchId("MB-OF");
@@ -295,7 +296,7 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
         c.setUnitPrice(new BigDecimal(totalCost));
         c.setTotalCost(new BigDecimal(totalCost));
         c.setConsumptionTime(LocalDateTime.now());
-        c.setRecordedBy(COLLEAGUE);
+        c.setRecordedBy(recordedBy);
         return c;
     }
 
