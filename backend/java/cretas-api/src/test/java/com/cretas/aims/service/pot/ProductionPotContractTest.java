@@ -470,22 +470,12 @@ class ProductionPotContractTest {
     @Test
     @DisplayName("工艺保密: 无完整查看权的账号拿不到锅次的工序名 / 工艺参数 / 备注 (锅号、时间、用料照给); 保密负责人看得到")
     void processSecretRedactsPotProcessFields() {
-        ProcessSheetRowResult row = save(cookRow("pott-sec", List.of(pot(1, "80", List.of(mat(rawA, "60"), mat(rawB, "40"))))));
-        Long potId = potController.listForBatch(F, row.getBatchId()).getData().pots().get(0).id();
-        potController.correct(F, potId, new ProductionPotService.CorrectionCommand(null, null, null, null, null, null,
-                null, null, null, Map.of("temperatureC", 96), null, null, null, "复测温度"), operatorId, "主管乙");
-        User owner = new User();
-        owner.setFactoryId(F);
-        owner.setUsername("pott_owner_" + UUID.randomUUID().toString().substring(0, 6));
-        owner.setPasswordHash("$2a$10$DUMMYHASHFORTESTPLACEHOLDERONLY1");
-        owner.setIsActive(true);
-        Long ownerId = userRepo.saveAndFlush(owner).getId();
-        LocalDateTime now = LocalDateTime.now();
-        policyRepo.saveAndFlush(com.cretas.aims.entity.processsecret.ProcessSecretPolicy.builder()
-                .factoryId(F).productTypeId(PT_SEMI)
-                .storageMode(com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CLOUD_RESTRICTED)
-                .ownerUserId(ownerId).createdBy(ownerId).createdAt(now).updatedAt(now).build());
-        secretAccess.invalidate(F);
+        SecretPot fixture = secretPot("pott-sec");
+        ProcessSheetRowResult row = fixture.row();
+        Long potId = fixture.potId();
+        Long ownerId = fixture.ownerId();
+        // 工厂级保密配置 (2026-11-03): 没有配置行 = 工艺保密关。本测试守「开着时遮」, 显式打开 a
+        com.cretas.aims.service.secrecy.FactorySecrecyTestSettings on = secrecyOn(true);
         try {
             actAs(operatorId);   // 本厂普通账号, 不是保密负责人、没有授权
             ProductionPotService.PotView hidden = potController.listForBatch(F, row.getBatchId()).getData().pots().get(0);
@@ -518,11 +508,71 @@ class ProductionPotContractTest {
             assertThat(full.processParams()).containsEntry("temperatureC", 96);
             assertThat(full.processName()).isEqualTo("卤煮");
         } finally {
-            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
-            policyRepo.deleteAll(policyRepo.findByFactoryIdOrderByProductTypeIdAsc(F));
-            policyRepo.flush();
-            secretAccess.invalidate(F);
+            on.close();
+            cleanUpSecretPot();
         }
+    }
+
+    @Test
+    @DisplayName("工艺保密关着 (工厂级配置, 默认): 同一个无授权账号照常看到锅次的工序名 / 工艺参数, 也能更正; 策略留在库里不动")
+    void processSecretOffLeavesPotProcessFieldsVisible() {
+        SecretPot fixture = secretPot("pott-sec-off");
+        com.cretas.aims.service.secrecy.FactorySecrecyTestSettings off = secrecyOn(false);
+        try {
+            actAs(operatorId);
+            ProductionPotService.PotView view = potController.listForBatch(F, fixture.row().getBatchId()).getData().pots().get(0);
+            assertThat(view.processRedacted()).isFalse();
+            assertThat(view.processParams()).containsEntry("temperatureC", 96);
+            assertThat(view.processName()).isEqualTo("卤煮");
+            assertThat(policyRepo.findByFactoryIdOrderByProductTypeIdAsc(F)).as("策略还在库里").hasSize(1);
+        } finally {
+            off.close();
+            cleanUpSecretPot();
+        }
+    }
+
+    @Autowired private org.springframework.transaction.PlatformTransactionManager transactionManager;
+    @Autowired private com.cretas.aims.repository.secrecy.FactorySecrecySettingRepository secrecySettings;
+    @Autowired private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecyConfig;
+
+    private record SecretPot(ProcessSheetRowResult row, Long potId, Long ownerId) { }
+
+    /** 一锅卤煮 (工艺参数 temperatureC=96, 有一条更正) + PT_SEMI 设为保密 (负责人是新建的账号)。 */
+    private SecretPot secretPot(String tag) {
+        ProcessSheetRowResult row = save(cookRow(tag, List.of(pot(1, "80", List.of(mat(rawA, "60"), mat(rawB, "40"))))));
+        Long potId = potController.listForBatch(F, row.getBatchId()).getData().pots().get(0).id();
+        potController.correct(F, potId, new ProductionPotService.CorrectionCommand(null, null, null, null, null, null,
+                null, null, null, Map.of("temperatureC", 96), null, null, null, "复测温度"), operatorId, "主管乙");
+        User owner = new User();
+        owner.setFactoryId(F);
+        owner.setUsername("pott_owner_" + UUID.randomUUID().toString().substring(0, 6));
+        owner.setPasswordHash("$2a$10$DUMMYHASHFORTESTPLACEHOLDERONLY1");
+        owner.setIsActive(true);
+        Long ownerId = userRepo.saveAndFlush(owner).getId();
+        LocalDateTime now = LocalDateTime.now();
+        policyRepo.saveAndFlush(com.cretas.aims.entity.processsecret.ProcessSecretPolicy.builder()
+                .factoryId(F).productTypeId(PT_SEMI)
+                .storageMode(com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CLOUD_RESTRICTED)
+                .ownerUserId(ownerId).createdBy(ownerId).createdAt(now).updatedAt(now).build());
+        secretAccess.invalidate(F);
+        return new SecretPot(row, potId, ownerId);
+    }
+
+    private com.cretas.aims.service.secrecy.FactorySecrecyTestSettings secrecyOn(boolean processSecret) {
+        com.cretas.aims.service.secrecy.FactorySecrecyTestSettings handle =
+                com.cretas.aims.service.secrecy.FactorySecrecyTestSettings.set(transactionManager, secrecySettings,
+                        secrecyConfig, F, Map.of(com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET, processSecret));
+        secretAccess.invalidate(F);
+        assertThat(secrecyConfig.isOn(F, com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET))
+                .as("前提: 工艺保密的配置已生效").isEqualTo(processSecret);
+        return handle;
+    }
+
+    private void cleanUpSecretPot() {
+        org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        policyRepo.deleteAll(policyRepo.findByFactoryIdOrderByProductTypeIdAsc(F));
+        policyRepo.flush();
+        secretAccess.invalidate(F);
     }
 
     @Test
