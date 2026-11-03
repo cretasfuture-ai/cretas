@@ -337,6 +337,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             allocations.addAll(productionStockAllocationService.plan(
                     factoryId, planId, req.getMaterialInputTotals()));
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
+            reconcileInputUnitBeforeAllocation(factoryId, req);
             applyAllocatedInputQuantity(req, allocations);
         } else if (req.getRawMaterialInputs() != null && !req.getRawMaterialInputs().isEmpty()) {
             if (productionStockAllocationService == null) {
@@ -349,6 +350,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             allocations.addAll(productionStockAllocationService.planExplicit(
                     factoryId, planId, req.getRawMaterialInputs()));
             req.setRawMaterialInputs(productionStockAllocationService.toRawInputs(allocations));
+            reconcileInputUnitBeforeAllocation(factoryId, req);
             applyAllocatedInputQuantity(req, allocations);
         }
 
@@ -4297,6 +4299,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             // contract, but do not allow a new dual-unit payload to bypass configuration.
             if (req.getInputUnit() == null && req.getOutputUnit() == null) {
                 String legacyUnit = firstNonBlank(req.getUnit(), "kg");
+                // input-unit-override: guarded (只在客户端两个单位字段都没传时设置, 没有可被覆盖的声明)
                 req.setInputUnit(legacyUnit);
                 req.setOutputUnit(legacyUnit);
                 req.setUnit(legacyUnit);
@@ -4478,6 +4481,13 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .filter(port -> !"RAW_MATERIAL".equals(port.getMaterialKind())).toList() : ports;
     }
 
+    /** applyAllocatedInputQuantity 会把无上游行的 inputUnit 改成 kg; 改之前先把客户端单位换算到 kg。 */
+    private void reconcileInputUnitBeforeAllocation(String factoryId, ProcessSheetRowRequest req) {
+        if (req.getUpstreamSources() == null || req.getUpstreamSources().isEmpty()) {
+            reconcileClientInputUnit(factoryId, req, "kg", req.getProductTypeId());
+        }
+    }
+
     private static void applyAllocatedInputQuantity(ProcessSheetRowRequest req,
             List<ProductionStockAllocationService.PlannedAllocation> allocations) {
         if (req.getUpstreamSources() != null && !req.getUpstreamSources().isEmpty()) {
@@ -4493,6 +4503,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                     .map(ProductionStockAllocationService.PlannedAllocation::quantity)
                     .reduce(BigDecimal.ZERO, BigDecimal::add));
         }
+        // input-unit-override: guarded (两个调用点在调用前先 reconcileClientInputUnit 换算到 kg; 有上游时在上面已返回)
         req.setInputUnit("kg");
     }
 
@@ -4526,7 +4537,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 // Draft/unit normalization can arrive before the operator selects concrete
                 // ports. The workflow still owns the unit contract when every candidate
                 // input uses the same reporting unit.
-                req.setInputUnit(workflowInputUnit(descriptor));
+                String draftInputUnit = workflowInputUnit(descriptor);
+                reconcileClientInputUnit(factoryId, req, draftInputUnit, req.getProductTypeId());
+                req.setInputUnit(draftInputUnit);
             }
             return;
         }
@@ -4634,10 +4647,14 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         boolean allMass = normalizedUnits.stream().allMatch(unit -> "kg".equals(unit) || "g".equals(unit));
         if (normalizedUnits.size() == 1) {
-            req.setInputUnit(requireWorkflowPortUnit(
-                    workflowQuantityInputs(ports).stream().filter(port -> submitted.contains(port.getWorkflowPortId())).findFirst().orElseThrow().getUnit(),
-                    "投入"));
+            com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO.PortDescriptor groupPort =
+                    workflowQuantityInputs(ports).stream().filter(port -> submitted.contains(port.getWorkflowPortId())).findFirst().orElseThrow();
+            String groupUnit = requireWorkflowPortUnit(groupPort.getUnit(), "投入");
+            reconcileClientInputUnit(factoryId, req, groupUnit,
+                    firstNonBlank(groupPort.getSkuId(), req.getProductTypeId()));
+            req.setInputUnit(groupUnit);
         } else if (allMass) {
+            reconcileClientInputUnit(factoryId, req, "kg", req.getProductTypeId());
             req.setInputUnit("kg"); // 组级 inputQuantity 的内部统一口径
         } else {
             throw new BusinessException(409, "不同物理维度的投入不能合并为一个组级投入总量")
@@ -4751,6 +4768,46 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return source.getProductTypeId();
     }
 
+    /**
+     * 工艺图(Workflow)的投入端口单位是权威值, 服务端会把行级 inputUnit 改写成端口单位。
+     * ⛔ 只改标签不改数量就是静默出错: 客户端传 inputQuantity=4 / inputUnit=只, 端口是 kg,
+     * 改完变成「4 kg」。F006 2026-11-03 实测: 4 只被记成 4 kg, 调料按 4 kg 算。
+     *
+     * <p>规则: 客户端没声明单位(旧客户端) → 按目标单位处理, 行为不变; 声明了且与目标等价 → 不动;
+     * 声明了且不同 → 用 UnitContractService 按产品换算 inputQuantity, 换不了就 409 拒绝, 不猜。
+     * 每个 {@code req.setInputUnit(} 覆盖点之前都必须先过这里 (RowInputUnitOverrideContractTest 数着)。
+     */
+    private void reconcileClientInputUnit(String factoryId, ProcessSheetRowRequest req,
+                                          String targetUnit, String productTypeId) {
+        String supplied = req.getInputUnit();
+        if (supplied == null || supplied.isBlank() || req.getInputQuantity() == null
+                || targetUnit == null || targetUnit.isBlank()) {
+            return;
+        }
+        if (builtInUnitsEquivalent(supplied, targetUnit)
+                || (unitContractService != null
+                && unitContractService.areEquivalent(factoryId, supplied, targetUnit))) {
+            return;
+        }
+        com.cretas.aims.service.unit.UnitConversionResult result = unitContractService == null ? null
+                : unitContractService.convert(req.getInputQuantity(),
+                new com.cretas.aims.service.unit.UnitConversionContext(factoryId, productTypeId, supplied,
+                        targetUnit, java.time.LocalDateTime.now(),
+                        com.cretas.aims.service.unit.UnitUsageScene.PRODUCTION, 6, RoundingMode.HALF_UP));
+        if (result == null || !result.succeeded() || result.quantity() == null) {
+            String why = result == null || result.message() == null ? "" : " (" + result.message() + ")";
+            throw new BusinessException(409, "投入单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(supplied)
+                    + "」与工序投入端口单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(targetUnit)
+                    + "」不一致, 且无法换算" + why)
+                    .withCode("ROW_INPUT_UNIT_NOT_CONVERTIBLE")
+                    .withHint("请改用「" + com.cretas.aims.service.unit.UnitDisplayNames.display(targetUnit)
+                            + "」填写投入数量, 或先在单位换算里登记两个单位之间的换算(或产品单重)")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget("投入数量");
+        }
+        req.setInputQuantity(result.quantity());
+    }
+
     private static String requireWorkflowPortUnit(String unit, String side) {
         if (unit != null && !unit.isBlank()) {
             return unit.trim();
@@ -4776,6 +4833,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         assertConfiguredUnit(req.getOutputUnit(), outputUnit, "产出");
         assertConfiguredUnit(req.getUnit(), outputUnit, "产出");
 
+        // input-unit-override: guarded (上面 assertConfiguredUnit 已拒绝与配置不一致的客户端单位)
         req.setInputUnit(inputUnit);
         req.setOutputUnit(outputUnit);
         req.setUnit(outputUnit);
