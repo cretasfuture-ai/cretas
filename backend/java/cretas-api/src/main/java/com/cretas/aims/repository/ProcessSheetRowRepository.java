@@ -34,6 +34,10 @@ public interface ProcessSheetRowRepository extends JpaRepository<ProcessSheetRow
             @org.springframework.data.repository.query.Param("processCode") String processCode,
             @org.springframework.data.repository.query.Param("clientRowId") String clientRowId);
 
+    /** 缺口 03: 某个池化锚下的纯库存产出入账行 (回料来源归属用)。 */
+    List<ProcessSheetRow> findByFactoryIdAndBatchNumberAndRowStatus(
+            String factoryId, String batchNumber, String rowStatus);
+
     List<ProcessSheetRow> findByFactoryIdAndPlanIdAndProcessCode(
             String factoryId, String planId, String processCode);
 
