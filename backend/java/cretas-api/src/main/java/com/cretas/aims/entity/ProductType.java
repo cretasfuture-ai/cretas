@@ -372,6 +372,13 @@ public class ProductType extends BaseEntity {
     @Column(name = "accepts_rework")
     private Boolean acceptsRework = Boolean.TRUE;
 
+    /**
+     * 回料比例上限 (%): 一道工序回料投入 / 主料投入 的上限。null = 没设, 不拦。
+     * 超限必须填原因才能正式提交 (见 ReworkRatioCheck)。
+     */
+    @Column(name = "max_rework_ratio_percent", precision = 6, scale = 2)
+    private java.math.BigDecimal maxReworkRatioPercent;
+
     // ==================== End 回料纯度 ====================
 
     /**

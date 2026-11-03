@@ -368,6 +368,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         applyNetContentContract(productType, dto, false);
         productType.setWipToFgYield(dto.getWipToFgYield());
         productType.setReworkPurityLevel(dto.getReworkPurityLevel());
+        productType.setMaxReworkRatioPercent(normalizeMaxReworkRatio(dto.getMaxReworkRatioPercent()));
         // 2026-09-02 prod hotfix: accepts_rework 是 NOT NULL DEFAULT TRUE, 但 Hibernate
         // 插入时会把这一列显式带上 null (列出现在 INSERT 里, DB 侧默认值不生效) ⇒ 违反
         // NOT NULL。请求没传这个字段就维持 DB 语义上的默认值 TRUE, 不要把实体的默认值
@@ -512,6 +513,9 @@ public class ProductTypeServiceImpl implements ProductTypeService {
         }
         if (dto.getWipToFgYield() != null) productType.setWipToFgYield(dto.getWipToFgYield());
         if (dto.getReworkPurityLevel() != null) productType.setReworkPurityLevel(dto.getReworkPurityLevel());
+        if (dto.getMaxReworkRatioPercent() != null) {
+            productType.setMaxReworkRatioPercent(normalizeMaxReworkRatio(dto.getMaxReworkRatioPercent())); // 0 = 清除
+        }
         if (dto.getAcceptsRework() != null) productType.setAcceptsRework(dto.getAcceptsRework());
         if (dto.getInspectionRequired() != null) productType.setInspectionRequired(dto.getInspectionRequired());
         if (dto.getQuotedLaborCostPerKg() != null) productType.setQuotedLaborCostPerKg(dto.getQuotedLaborCostPerKg()); // SP9-M1
@@ -1372,6 +1376,7 @@ public class ProductTypeServiceImpl implements ProductTypeService {
                 .netContentUnit(productType.getNetContentUnit())
                 .wipToFgYield(productType.getWipToFgYield())
                 .reworkPurityLevel(productType.getReworkPurityLevel())
+                .maxReworkRatioPercent(productType.getMaxReworkRatioPercent())
                 .acceptsRework(productType.getAcceptsRework())
                 .inspectionRequired(Boolean.TRUE.equals(productType.getInspectionRequired()))
                 .quotedLaborCostPerKg(productType.getQuotedLaborCostPerKg()) // SP9-M1
@@ -1406,6 +1411,15 @@ public class ProductTypeServiceImpl implements ProductTypeService {
     /**
      * 统一 SKU 净含量契约。质量型同时维护 gramsPerUnit 兼容桥；容量型绝不伪装为克重。
      */
+    /** 回料上限: 0 = 清除(null); 合法域 (0,100], 域外 400, 不夹逼。 */
+    private static BigDecimal normalizeMaxReworkRatio(BigDecimal v) {
+        if (v == null || v.signum() == 0) return null;
+        if (v.signum() < 0 || v.compareTo(new BigDecimal("100")) > 0) {
+            throw new BusinessException(400, "回料比例上限必须在 0~100 之间");
+        }
+        return v;
+    }
+
     private void applyNetContentContract(ProductType entity, ProductTypeDTO dto, boolean update) {
         boolean structuredPresent = dto.isNetContentQuantityPresent() || dto.isNetContentUnitPresent();
         if (structuredPresent) {

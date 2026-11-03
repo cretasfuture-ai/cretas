@@ -203,6 +203,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
 
+    /** 缺口 03 回料比例上限校验 (正式提交才校验)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.ReworkRatioCheck reworkRatioCheck;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveDraft(String factoryId, String planId,
@@ -392,6 +396,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         ReworkPolicyAutoDeduction.Outcome reworkAuto = reworkPolicyAutoDeduction == null
                 ? ReworkPolicyAutoDeduction.Outcome.empty()
                 : reworkPolicyAutoDeduction.apply(factoryId, planId, req);
+        // 缺口 03: 回料占比 (手工 + 自动) 超过产品上限 => 必须带原因; 没设上限不拦。在扣库存之前判。
+        if (reworkRatioCheck != null) {
+            reworkRatioCheck.enforce(factoryId, planId, req);
+        }
 
         // 回料是一个已经存在于常驻 SFI 的可复用库存批次。与普通 SFI（小结时扣减）不同，
         // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
@@ -1974,6 +1982,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         one.setInputLineageUpstreamSources(base.getUpstreamSources());
         one.setMaterialInputTotals(base.getMaterialInputTotals());
         one.setBlendRatio(base.getBlendRatio());   // 缺口 06 配比快照随每个产出行留痕
+        one.setReworkRatio(base.getReworkRatio()); // 缺口 03 回料超限原因随每个产出行留痕
         List<com.cretas.aims.dto.processentry.LaborSegment> outputLabor = o.getLaborSegments();
         List<com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct> outputByproducts = o.getByproducts();
         // 旧客户端只在顶层传工时/副产：仍由首产出承载一次；新客户端逐产出字段各自落行。

@@ -77,6 +77,7 @@ class ProcessSecretDataLayerContractTest {
      * 将来新加的配方字段一起吞掉。
      */
     static final Set<String> NOT_RECIPE_FIELDS = Set.of(
+            "maxReworkRatioPercent", "limitPercent", "actualPercent", // 缺口03: 回料占比上限/实际占比 (阈值与实测, 不是配方份额)
             "acceptanceRate", "accuracyRate", "achievementRate", "achievementRatePct", "activationRate",
             "actualAuxCostPerUnit", "actualCostPerUnit", "actualDurationHours", "actualEquipmentCostRatio",
             "actualLaborCostPerKg", "actualLaborCostRatio", "actualMaterialCostRatio", "actualOtherCostRatio",
