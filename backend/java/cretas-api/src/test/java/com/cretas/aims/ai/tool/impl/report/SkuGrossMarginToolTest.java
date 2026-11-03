@@ -334,23 +334,27 @@ class SkuGrossMarginToolTest {
         }
     }
 
+    /** 与 web SKU 毛利视图同一个门 (FinanceReportController 类门, 组织者裁定 2026-11-03): 财务模块读。 */
     @Test
-    void toolDeclaresThePriceViewPermissionTheAppUses() {
+    void toolDeclaresTheFinanceReadGateTheWebViewUses() {
         assertTrue(tool.requiresPermission());
-        assertEquals(Set.of("procurement:price:view"), tool.getRequiredPermissions());
+        assertEquals(Set.of("finance:read", "finance:read_write"), tool.getRequiredPermissions());
     }
 
     @Test
-    void rolesWithoutPriceViewGetADenialAndNoNumbers() throws Exception {
+    void rolesWithoutFinanceReadGetADenialAndNoNumbers() throws Exception {
         type("A", "牛肉酱", "100");
         pricedBatch("A", "60");
         sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
-        for (String role : List.of("operator", "warehouse_manager", "quality_inspector")) {
+        // 销售 / 生产主管有价格查看权限, 但没有财务模块: web SKU 毛利视图给 403, 对话也整份拒 (2026-11-03)。
+        // (采购主管在本测试用的内置兜底矩阵里有财务读, 与 prod L1「-」不同; prod 口径见 SkuGrossMarginChatGateContractTest)
+        for (String role : List.of("operator", "warehouse_manager", "quality_inspector",
+                "sales_manager", "production_manager")) {
             IllegalStateException denied = assertThrows(IllegalStateException.class, () -> runViaRouter(role), role);
             assertTrue(denied.getMessage().contains("没有权限"), denied.getMessage());
             assertFalse(denied.getMessage().contains("36.84"), "denial must carry no numbers");
         }
-        // 拒绝发生在查库之前: 没有价格权限的角色连 SQL 都没跑
+        // 拒绝发生在查库之前: 没有财务读的角色连 SQL 都没跑
         verify(realizedQuery, org.mockito.Mockito.never()).fetch(any(), any(), any());
     }
 
@@ -359,7 +363,7 @@ class SkuGrossMarginToolTest {
         type("A", "牛肉酱", "100");
         pricedBatch("A", "60");
         sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
-        for (String role : List.of("finance_manager", "factory_super_admin", "sales_manager")) {
+        for (String role : List.of("finance_manager", "factory_super_admin")) {
             Object result = runViaRouter(role);
             JsonNode json = (JsonNode) result;
             assertTrue(json.get("success").asBoolean(), role + ": " + json);

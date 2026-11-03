@@ -118,7 +118,8 @@ class ToolDescriptorCatalogTest {
         Set<String> legacyToolsWithKnownRequiredPermissions = Set.of(
                 "sales_create_invoice", "finance_invoice_request", "finance_invoice_request_from_order");
         // 2026-10-06: 价格权限门 —— 显式登记而不是放宽上面的判据 (其它 LEGACY 工具仍必须是空集)
-        Set<String> legacyToolsWithPriceViewPermission = Set.of("report_sku_gross_margin");
+        // 2026-11-03: report_sku_gross_margin 改按 web SKU 毛利视图的财务读门 (登记在 gated-data-declared.tsv), 不再是价格权限例外
+        Set<String> legacyToolsWithPriceViewPermission = Set.of();
         // 2026-10-29 S6 gated-data rule: tools that declare the codes of the direct API serving their data,
         // listed (with the exact codes) in ai/tool/gated-data-declared.tsv, which GatedDataToolAiPathPermissionTest
         // checks against the real declarations.

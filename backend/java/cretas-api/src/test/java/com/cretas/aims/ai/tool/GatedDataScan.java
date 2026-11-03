@@ -50,7 +50,8 @@ final class GatedDataScan {
     }
 
     /** One HTTP handler: where it is, its effective codes and roles (both empty = ungated) and requireAll. */
-    record Endpoint(String controller, String method, Set<String> codes, Set<String> roles, boolean requireAll) {
+    record Endpoint(String controller, String method, Set<String> codes, Set<String> roles, boolean requireAll,
+                    Set<String> alsoAny) {
         boolean gated() { return !codes.isEmpty() || !roles.isEmpty(); }
         @Override public String toString() { return controller + "#" + method; }
     }
@@ -202,7 +203,8 @@ final class GatedDataScan {
                 Endpoint endpoint = new Endpoint(c.getSimpleName(), m.getName(),
                         effective == null ? Set.of() : Set.of(effective.value()),
                         roles == null ? Set.of() : Set.of(roles.value()),
-                        effective != null && effective.requireAll());
+                        effective != null && effective.requireAll(),
+                        effective == null ? Set.of() : Set.of(effective.alsoAny()));
                 String key = m.getName() + org.springframework.asm.Type.getMethodDescriptor(m);
                 if (read) {
                     readEndpoints.put(endpoint.toString(), endpoint);
