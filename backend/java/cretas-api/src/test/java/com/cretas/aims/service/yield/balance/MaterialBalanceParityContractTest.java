@@ -111,6 +111,25 @@ class MaterialBalanceParityContractTest {
         assertThat(line.getUnexplained()).isEqualByComparingTo("3");
     }
 
+    @Test
+    @DisplayName("web 逐道录入的报工没有工序任务: 按批次 + 工序序号 + 工序名归并, 不丢行, 不同工序不串")
+    void webRowsWithoutTask_groupedByBatchAndProcess() {
+        Map<String, Object> a = reportRow(1L, "100", "kg", "97", "kg", null, null, null);
+        a.put("task_id", null);
+        a.put("batch_id", 7L);
+        Map<String, Object> b = reportRow(2L, "50", "kg", "30", "kg", null, null, null);
+        b.put("task_id", null);
+        b.put("batch_id", 7L);
+        b.put("process_order", 2);
+        b.put("process_id", "卤制");
+        b.put("process_name", "卤制");
+        var rows = service().build(List.of(a, b), Thresholds.DEFAULT).getPlans().get(0).getRows();
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0).getLevel()).isEqualTo("BALANCED");
+        assertThat(rows.get(1).getLevel()).isEqualTo("RED");
+        assertThat(rows.get(1).getUnexplainedPct()).isEqualByComparingTo("40.0");
+    }
+
     private static Level lvl(String in, String inU, String out, String outU) {
         return MaterialBalanceCalculator.compute(d(in), inU, d(out), outU, null, null, null, Thresholds.DEFAULT).level();
     }

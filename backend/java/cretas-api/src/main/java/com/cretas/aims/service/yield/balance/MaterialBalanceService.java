@@ -60,7 +60,7 @@ public class MaterialBalanceService {
             String processKey = str(r.get("process_id"));
             tree.computeIfAbsent(planKey, k -> new LinkedHashMap<>())
                     .computeIfAbsent(processKey, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(r.get("task_id"), k -> new ArrayList<>())
+                    .computeIfAbsent(taskKey(r), k -> new ArrayList<>())
                     .add(r);
         }
         List<MaterialBalanceTableDTO.PlanBlock> plans = new ArrayList<>();
@@ -95,6 +95,15 @@ public class MaterialBalanceService {
                 .redPct(t.red().multiply(HUNDRED).stripTrailingZeros())
                 .plans(plans)
                 .build();
+    }
+
+    /**
+     * 同一道工序的归并键。App 路的报工带工序任务 id; web 逐道录入的报工没有任务, 同一批次同一道工序
+     * (序号 + 工序名) 的报工 (含三阶段 INPUT / OUTPUT) 算同一份。
+     */
+    private static Object taskKey(Map<String, Object> r) {
+        if (r.get("task_id") != null) return "T" + r.get("task_id");
+        return "B" + r.get("batch_id") + "|" + r.get("process_order") + "|" + r.get("process_name");
     }
 
     /** 一个工序任务下的全部报工合成一份投入 / 去向, 过计算器。 */
