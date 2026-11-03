@@ -108,6 +108,11 @@ public class ProcessSecretPayloadScrubber {
     public static final Set<String> AGGREGATE_ANY_SEGMENTS = Set.of(
             "kpi", "statistics", "analytics", "trend", "daily-trend", "by-process", "by-product");
 
+    /** 订单成本缺项 (OrderCostSummaryRowDTO / OrderCostBreakdownDTO): 形如 {@code 代码:明细}。 */
+    static final String MISSING_COST_ITEMS = "missingCostItems";
+    /** 明细是配方结构标识 (锁定 BOM 的 id、版本) 的缺项代码: 受限时只留代码。 */
+    static final List<String> BOM_DETAIL_MISSING_CODES = List.of("PINNED_BOM_", "BOM_VERSION_MIXED");
+
     /** 分页信息 (无权档也保留, 否则列表翻不了页)。 */
     static final Set<String> PAGING_FIELDS = Set.of(
             "totalElements", "totalPages", "page", "size", "pageSize", "pageNum", "pageNumber", "current", "pages",
@@ -650,6 +655,29 @@ public class ProcessSecretPayloadScrubber {
                 hidden.addAll(otherNumbers);
             }
             hide(object, hidden, level, auditKey);
+            if (level != Level.FULL && stripBomDetails(object)) {
+                marker(object, level).withArray("hiddenFields").add(MISSING_COST_ITEMS + "(BOM 标识)");
+                changed = true;
+            }
+        }
+
+        /** 成本缺项里锁定 BOM 的 id / 版本、BOM 版本混用的版本号: 只留缺项代码 (说明成本缺什么), 去掉配方结构标识。 */
+        boolean stripBomDetails(ObjectNode object) {
+            if (!(object.get(MISSING_COST_ITEMS) instanceof ArrayNode items)) return false;
+            boolean stripped = false;
+            for (int i = 0; i < items.size(); i++) {
+                JsonNode item = items.get(i);
+                if (!item.isTextual()) continue;
+                String text = item.asText();
+                int colon = text.indexOf(':');
+                if (colon < 0) continue;
+                String code = text.substring(0, colon);
+                if (BOM_DETAIL_MISSING_CODES.stream().anyMatch(code::startsWith)) {
+                    items.set(i, com.fasterxml.jackson.databind.node.TextNode.valueOf(code));
+                    stripped = true;
+                }
+            }
+            return stripped;
         }
 
         /**
@@ -676,12 +704,7 @@ public class ProcessSecretPayloadScrubber {
         void hide(ObjectNode object, List<String> hidden, Level level, Key auditKey) {
             if (hidden.isEmpty() || level == Level.FULL) return;
             for (String name : hidden) object.putNull(name);
-            // 已有标记 (V1 摘要) 时并入, 不覆盖它的 RESTRICTED
-            ObjectNode marker = object.get(MARKER) instanceof ObjectNode existing ? existing : object.putObject(MARKER);
-            if (!"RESTRICTED".equals(marker.path("visibility").asText())) {
-                marker.put("visibility", level == Level.NONE ? "RESTRICTED" : "TOTALS_ONLY");
-                marker.put("message", level == Level.NONE ? RESTRICTED_MESSAGE : TOTALS_ONLY_MESSAGE);
-            }
+            ObjectNode marker = marker(object, level);
             ArrayNode names = marker.get("hiddenFields") instanceof ArrayNode existingNames
                     ? existingNames : marker.putArray("hiddenFields");
             hidden.forEach(names::add);
@@ -693,6 +716,16 @@ public class ProcessSecretPayloadScrubber {
                     hiddenByKey.computeIfAbsent(read, k -> new LinkedHashSet<>()).addAll(hidden);
                 }
             }
+        }
+
+        /** 对象上的保密标记; 已有标记 (V1 摘要) 时并入, 不覆盖它的 RESTRICTED。 */
+        ObjectNode marker(ObjectNode object, Level level) {
+            ObjectNode marker = object.get(MARKER) instanceof ObjectNode existing ? existing : object.putObject(MARKER);
+            if (!"RESTRICTED".equals(marker.path("visibility").asText())) {
+                marker.put("visibility", level == Level.NONE ? "RESTRICTED" : "TOTALS_ONLY");
+                marker.put("message", level == Level.NONE ? RESTRICTED_MESSAGE : TOTALS_ONLY_MESSAGE);
+            }
+            return marker;
         }
 
         void flushAudits() {

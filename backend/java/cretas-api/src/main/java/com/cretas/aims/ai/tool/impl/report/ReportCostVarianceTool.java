@@ -123,7 +123,13 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         }
 
         // 调用服务获取成本差异报表数据
-        CostVarianceReportDTO costVarianceData = reportService.getCostVarianceReport(factoryId, startDate, endDate);
+        // 工艺保密: 报表已按调用者剔除看不到的批次成本 (llmCostScope), 每个产品行带 productTypeId, 出口照样按归属裁剪。
+        // 这里不再把全厂批次记进读数 —— 下面按产品 / 阈值筛掉保密产品行之后, 那笔读数就没了归属,
+        // 出口会把剩下的非保密产品整份遮掉 (2026-11-03 同形误伤)。
+        final LocalDate from = startDate;
+        final LocalDate to = endDate;
+        CostVarianceReportDTO costVarianceData = com.cretas.aims.service.processsecret.ProcessSecretReadTracker
+                .untracked(() -> reportService.getCostVarianceReport(factoryId, from, to));
 
         // 如果指定了产品类型ID，过滤数据
         if (productTypeId != null && costVarianceData.getProductVariances() != null) {

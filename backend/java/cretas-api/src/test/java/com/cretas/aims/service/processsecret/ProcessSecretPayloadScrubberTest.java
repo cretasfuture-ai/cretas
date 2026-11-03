@@ -464,6 +464,31 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void bomIdentifiersInMissingCostItemsOfAProtectedProductAreReducedToTheirCode() throws Exception {
+        // 2026-11-03 验收: 成本汇总里无权账号能在缺项里读到保密产品锁定 BOM 的 id / 版本; 缺项代码照常给 (说明成本缺什么)
+        String body = "{'rows':[{'productTypeId':'P17','planId':'plan-a','totalCost':100,'missingCostItems':["
+                + "'PINNED_BOM_SNAPSHOT_MISSING:r-secret:v3','BOM_VERSION_MIXED:秘制牛肉:v1,v2','PACKAGING_PRICE:MAT-1']},"
+                + "{'productTypeId':'PLAIN','planId':'plan-b','totalCost':50,'missingCostItems':["
+                + "'PINNED_BOM_SNAPSHOT_MISSING:r-plain:v2']}]}";
+
+        JsonNode colleague = tree(body);
+        scrubber.scrub(colleague, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, SECRET),
+                "GET /order-cost-summary", false);
+        assertThat(colleague.at("/rows/0/missingCostItems").toString())
+                .isEqualTo("[\"PINNED_BOM_SNAPSHOT_MISSING\",\"BOM_VERSION_MIXED\",\"PACKAGING_PRICE:MAT-1\"]");
+        assertThat(colleague.at("/rows/0/processSecret/hiddenFields").toString()).contains("missingCostItems(BOM 标识)");
+        assertThat(colleague.at("/rows/0/totalCost").isNull()).isTrue();
+        // 阴性对照: 不保密产品的行一个字不动
+        assertThat(colleague.at("/rows/1/missingCostItems/0").asText()).isEqualTo("PINNED_BOM_SNAPSHOT_MISSING:r-plain:v2");
+        assertThat(colleague.at("/rows/1/processSecret").isMissingNode()).isTrue();
+
+        JsonNode owner = tree(body);
+        scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, SECRET),
+                "GET /order-cost-summary", false);
+        assertThat(owner.at("/rows/0/missingCostItems/0").asText()).isEqualTo("PINNED_BOM_SNAPSHOT_MISSING:r-secret:v3");
+    }
+
+    @Test
     void persistedBatchAndInventoryCostsOfAProtectedProductAreHiddenButPlainProductsKeepTheirs() throws Exception {
         // 批次 / 半成品 / 成品的单位成本是报工时把调料、包材的配方金额滚进去的, 出口不带明细行
         String body = "[{'productTypeId':'P17','batchNumber':'B1','materialCost':812,'totalCost':900,'unitCost':9,"

@@ -185,6 +185,18 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByFactoryIdAndCreatedAtAfter(String factoryId, LocalDateTime createdAt);
 
     /**
+     * 某产品某时间后的批次。只看一个产品时用它, ⛔ 不要先取全厂再在内存里筛:
+     * 加载到的每个批次都会记进工艺保密的读数 (ProcessSecretReadTracker), 别的保密产品的批次被读到、
+     * 却没出现在输出里, 出口会把整份输出按受限处理 —— 非保密产品的成本也被遮住 (2026-11-03 线上实测)。
+     */
+    java.util.List<ProductionBatch> findByFactoryIdAndProductTypeIdAndCreatedAtAfter(
+            String factoryId, String productTypeId, LocalDateTime createdAt);
+
+    /** 某产品某状态的批次 (理由同上: 只看一个产品时别取全厂)。 */
+    java.util.List<ProductionBatch> findByFactoryIdAndProductTypeIdAndStatus(
+            String factoryId, String productTypeId, ProductionBatchStatus status);
+
+    /**
      * 统计某状态的批次数 (排除 CLERK_WIP 内部工件批次, 避免虚增仪表盘指标).
      * SP-D Fix 1a: CLERK_WIP 批次是文员录入的中间半成品, 不应计入面向用户的统计.
      */
