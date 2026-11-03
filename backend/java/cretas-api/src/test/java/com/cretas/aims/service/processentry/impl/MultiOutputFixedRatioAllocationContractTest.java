@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 食品 DAG 缺口 10 (Steve 2026-11-03): 联产工序在工艺版本上选「固定比例」, 报工时自动带出, 仍可改, 改了留记录;
  * 默认按重量 (现状)。⛔ 不做按售价比例。
  */
-class MultiOutputFixedRatioAllocationTest {
+class MultiOutputFixedRatioAllocationContractTest {
 
     private static final Map<String, BigDecimal> FIXED_80_20 =
             Map.of("out-main", new BigDecimal("80"), "out-side", new BigDecimal("20"));
