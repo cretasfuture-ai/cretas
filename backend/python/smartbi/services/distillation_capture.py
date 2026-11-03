@@ -94,19 +94,22 @@ _CAPTURE_ENV = "SMARTBI_DISTILL_CAPTURE"
 
 # Held rows past the retention are swept from the capture path (second review: the
 # re-judge only runs from corpus_judge, so without this a held row and its raw copy
-# could stay forever). At most once per EXPIRY_INTERVAL_S per process.
+# could stay forever). It runs at the top of EVERY capture call — skipped / refused /
+# disabled captures included (review round 3, item 3) — at most once per
+# EXPIRY_INTERVAL_S per process, on its own connection; it never blocks or fails a capture.
 EXPIRY_INTERVAL_S = 3600.0
 _LAST_EXPIRY = {"at": None}
 
 
-async def _maybe_expire_held_rows(conn) -> None:
+async def _maybe_expire_held_rows(pool) -> None:
     now = time.monotonic()
     last = _LAST_EXPIRY["at"]
     if last is not None and now - last < EXPIRY_INTERVAL_S:
         return
     _LAST_EXPIRY["at"] = now
     try:
-        n = await expire_held_rows(conn)
+        async with pool.acquire() as conn:
+            n = await expire_held_rows(conn)
         if n:
             logger.info("[distill] deleted %d held rows past the retention", n)
     except Exception as e:  # noqa: BLE001 - housekeeping never blocks a capture
@@ -257,9 +260,10 @@ async def persist_distillation_sample(
         metadata: optional dict, JSON-encoded into the jsonb column. ``None`` →
             NULL.
     """
-    if os.getenv(_CAPTURE_ENV, "1") == "0":
-        return
     if pool is None:
+        return
+    await _maybe_expire_held_rows(pool)          # every call, before any early return (hourly)
+    if os.getenv(_CAPTURE_ENV, "1") == "0":
         return
     # Guard the NOT NULL columns: never attempt an INSERT we know will fail.
     if not input_text or not teacher_output:
@@ -354,7 +358,6 @@ async def persist_distillation_sample(
                     "(factory=%s, cross-factory conflicts so far=%d)",
                     factory_id, CROSS_FACTORY_CONFLICTS["count"])
                 return
-            await _maybe_expire_held_rows(conn)
         logger.debug(
             "[distill] captured sample (source=%s, task_type=%s, "
             "business_type=%s, factory=%s)",

@@ -153,3 +153,22 @@ def test_desensitize_cases():
         assert out == c["expected"], (c["text"], out)
     assert "菜品A" not in desensitize_for_training("### 按产品明细", "")[0]
     assert "工厂A" not in desensitize_for_training("分析以下工厂数据", "")[0]
+
+
+def test_word_file_switch_is_a_strict_json_boolean():
+    """Review round 3, item 2: bool("false") is True in Python while Java reads it as false —
+    only a JSON true / false is accepted; anything else fails loudly."""
+    import pytest
+
+    from common import process_secret_terms as pst
+    from common.training_values import WORDS
+
+    assert WORDS["full_name_category_word_matches"] is False          # Steve 2026-11-03 chose B
+    assert pst.FULL_NAME_CATEGORY_WORD_MATCHES is False
+    assert pst.strict_bool({"k": True}, "k") is True
+    assert pst.strict_bool({"k": False}, "k") is False
+    for bad in ("false", "true", 0, 1, None, [], {}):
+        with pytest.raises(ValueError, match="must be a JSON boolean"):
+            pst.strict_bool({"k": bad}, "k")
+    with pytest.raises(ValueError, match="must be a JSON boolean"):
+        pst.strict_bool({}, "k")

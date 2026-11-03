@@ -38,7 +38,17 @@ from common.training_values import WORDS as _RULE_WORDS  # noqa: E402
 
 CATEGORY_WORDS = tuple(_RULE_WORDS["category_words"])
 # 保密产品的「全名」本身就是品类词 (产品就叫「牛腱」) 时还收不收: Steve 2026-11-03 选 B = 不收 (只靠编码 / ID / 工艺数值规则), 词表文件里一行改
-FULL_NAME_CATEGORY_WORD_MATCHES: bool = bool(_RULE_WORDS["full_name_category_word_matches"])
+def strict_bool(words: Mapping[str, Any], key: str) -> bool:
+    """A word-file switch: a JSON ``true`` / ``false`` only. Anything else (the string "false",
+    0, null, missing) raises — ``bool("false")`` is True, and Java would read it as false, so
+    the two languages would disagree silently (review round 3, item 2)."""
+    value = words.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"training_rule_words.json: {key} must be a JSON boolean (true / false), got {value!r}")
+    return value
+
+
+FULL_NAME_CATEGORY_WORD_MATCHES: bool = strict_bool(_RULE_WORDS, "full_name_category_word_matches")
 
 # 纯数字 (允许中间夹空格 / 点 / 横线 / 下划线 / 斜杠): 398、2024-01、１２３
 _PURE_NUMERIC = re.compile(r"[0-9０-９ \t.\-_/　]+")

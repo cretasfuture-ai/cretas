@@ -662,6 +662,31 @@ async def test_capture_runs_the_held_row_expiry_at_most_once_per_interval(monkey
     assert len(EXPIRY_CALLS) == 2
 
 
+
+async def test_the_expiry_sweep_also_runs_on_captures_that_return_early(monkeypatch):
+    """Review round 3, item 3: a factory whose captures are all skipped (no factory, a restaurant
+    tenant, capture switched off) must still get its held rows expired."""
+    from smartbi.services import distillation_capture as dc
+
+    for case in ("disabled", "no_factory", "restaurant"):
+        monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+        EXPIRY_CALLS.clear()
+        sink: list = []
+        with monkeypatch.context() as m:
+            if case == "disabled":
+                m.setenv("SMARTBI_DISTILL_CAPTURE", "0")
+                await _capture(_RecordingPool(sink, {}), factory_id="F006")
+            elif case == "no_factory":
+                await _capture(_RecordingPool(sink, {}), factory_id=None)
+            else:
+                await _capture(_RecordingPool(sink, {}), factory_id="MOCK_REST")
+        assert sink == [], case                                          # nothing captured ...
+        assert len(EXPIRY_CALLS) == 1, case                              # ... but the sweep ran
+    # a sweep that cannot get a connection never raises out of the capture
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+    await _capture(_ExplodingPool(), factory_id="F006")
+
+
 def test_python_hold_retention_equals_the_java_default():
     from pathlib import Path
 
