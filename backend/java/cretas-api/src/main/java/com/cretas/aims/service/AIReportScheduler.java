@@ -5,13 +5,17 @@ import com.cretas.aims.repository.FactoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * AI报告定时任务调度器
@@ -42,6 +46,38 @@ public class AIReportScheduler {
     private FactoryRepository factoryRepository;
 
     /**
+     * 不生成定时 AI 报告的工厂 (逗号分隔)。2026-10-29 MOCK_REST AI writes stopped, owner-approved:
+     * 废弃的餐饮模拟租户, 其 AI 副本已清理, 不再往 ai_analysis_results 写。设为空串 = 不排除任何工厂。
+     *
+     * <p>⛔ 不按训练授权判: Steve 2026-10-24 规则, 训练授权只管训练样本存不存 / 怎么存;
+     * 经营报告是给工厂的服务, 不是训练样本, 撤回训练授权的工厂照常出报告。
+     */
+    @Value("${cretas.ai.report.excluded-factories:MOCK_REST}")
+    private String excludedFactories = "MOCK_REST";
+
+    /** 过滤掉排除清单 {@code cretas.ai.report.excluded-factories} 里的工厂, 其余照常生成。 */
+    List<Factory> reportableFactories(List<Factory> activeFactories, String kind) {
+        Set<String> excluded = new HashSet<>();
+        if (excludedFactories != null) {
+            for (String id : excludedFactories.split(",")) {
+                if (!id.isBlank()) {
+                    excluded.add(id.trim());
+                }
+            }
+        }
+        List<Factory> result = new ArrayList<>(activeFactories.size());
+        for (Factory factory : activeFactories) {
+            String factoryId = factory.getId();
+            if (excluded.contains(factoryId)) {
+                log.info("工厂 {} 在排除清单 cretas.ai.report.excluded-factories 内, 跳过{}", factoryId, kind);
+                continue;
+            }
+            result.add(factory);
+        }
+        return result;
+    }
+
+    /**
      * 每周一早上6点生成周报告
      * Cron表达式: 0 0 6 * * MON
      * - 秒: 0
@@ -59,7 +95,7 @@ public class AIReportScheduler {
 
         try {
             // 1. 获取所有活跃的工厂（直接使用findByIsActiveTrue，避免全表扫描后过滤）
-            List<Factory> activeFactories = factoryRepository.findByIsActiveTrue();
+            List<Factory> activeFactories = reportableFactories(factoryRepository.findByIsActiveTrue(), "周报告");
 
             log.info("找到 {} 个活跃工厂，开始生成周报告", activeFactories.size());
 
@@ -122,7 +158,7 @@ public class AIReportScheduler {
 
         try {
             // 1. 获取所有活跃的工厂
-            List<Factory> activeFactories = factoryRepository.findByIsActiveTrue();
+            List<Factory> activeFactories = reportableFactories(factoryRepository.findByIsActiveTrue(), "日报");
 
             log.info("找到 {} 个活跃工厂，开始生成日报分析", activeFactories.size());
 
@@ -177,7 +213,7 @@ public class AIReportScheduler {
 
         try {
             // 1. 获取所有活跃的工厂（直接使用findByIsActiveTrue，避免全表扫描后过滤）
-            List<Factory> activeFactories = factoryRepository.findByIsActiveTrue();
+            List<Factory> activeFactories = reportableFactories(factoryRepository.findByIsActiveTrue(), "月报告");
 
             log.info("找到 {} 个活跃工厂，开始生成月报告", activeFactories.size());
 

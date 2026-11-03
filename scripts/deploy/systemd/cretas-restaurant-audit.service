@@ -1,3 +1,7 @@
+# ⛔ 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 已停用, 不要再装 / enable / 手动 start。
+#    下面 ExecStart 每天用 MOCK_REST 等三个餐饮租户真调 LLM; 餐饮线已废弃, 47 上的
+#    cretas-restaurant-audit.timer 已于 2026-10-29 disable。仓库里没有任何部署脚本会安装或启用
+#    本 unit (手工装的), 这两份文件只作历史保留。
 [Unit]
 Description=Cretas 餐饮 AI 端到端能力审计 (每日一次, 跌破阈值即标记 failed)
 Documentation=https://github.com/Stevenjxie/cretas/blob/main/scripts/audit/restaurant_capability_audit.py
