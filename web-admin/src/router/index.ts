@@ -413,6 +413,14 @@ const businessRoutes: RouteRecordRaw[] = [
             redirect: (to) => buildProductionAnalysisRedirect(to, 'process-io'),
             meta: { requiresAuth: true, title: '工序投入产出对比', module: 'production' }
           },
+          // 食品 DAG 缺口 09: 同一张成本差异页, 生产管理侧入口 (财务侧见 /finance/cost-variance)。
+          // 只挂在财务下会让管现场成本的生产经理 403 (F006 production_manager 实测, 后端接口本身对它放行)。
+          {
+            path: 'cost-variance',
+            name: 'ProductionCostVariance',
+            component: () => import('@/views/finance/cost-variance/index.vue'),
+            meta: { requiresAuth: true, title: '成本差异', module: 'production' }
+          },
           {
             path: 'analysis-query',
             name: 'ProductionAnalysisQuery',
