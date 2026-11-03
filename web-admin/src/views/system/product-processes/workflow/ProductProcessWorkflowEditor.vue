@@ -7199,6 +7199,21 @@ async function compileWorkflowSpec(
     if (!dryRun) ElMessage.warning('AI 规格里没有可用的工序步骤');
     return null;
   }
+  // 缺口 20: 「牛肉猪肉 3:7」这类一开始就混投的原料, LLM 常把第二种放进 rawMaterials[1] 而不是首道工序的 inputs。
+  // 只认 rawMaterials[0] 会把它整个丢掉(份额也跟着落空)—— 把多出来的入口原料并入第一道工序的额外投入。
+  const entryExtras = (Array.isArray(spec.rawMaterials) ? spec.rawMaterials : []).slice(1)
+    .map((n) => String(n || '').trim()).filter(Boolean);
+  if (entryExtras.length > 0) {
+    const first = steps[0];
+    const already = new Set((first.inputs || []).map((n) => normProcessName(String(n || ''))));
+    steps[0] = {
+      ...first,
+      inputs: [
+        ...entryExtras.filter((n) => !already.has(normProcessName(n))),
+        ...(first.inputs || []),
+      ],
+    };
+  }
 
   // 1) 预解析每步工序 (匹配已有 / 现场创建), async 先做完再建图
   const resolved: WorkProcessItem[] = [];
