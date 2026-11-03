@@ -172,6 +172,8 @@ class ProcessSecretDataLayerContractTest {
             Map.entry("service/finance/ProductionCostConsistency.java", "只取完工日期做成本一致性核对"),
             Map.entry("service/impl/ProductionPlanServiceImpl.java", "内部 UPDATE / 计数, 不输出配方"),
             Map.entry("service/impl/RawMaterialTypeServiceImpl.java", "只数转换率条数 (删原料前的引用检查)"),
+            Map.entry("service/material/MaterialAliasMergeService.java",
+                    "合并重复物料前的引用检查: 只取用到该物料的当前配方的产品名 (列出拦截位置), 不输出配方内容"),
             Map.entry("service/indicator/strategy/impl/FactoryActualProductionMetrics.java",
                     "按产品指标的输出带 productTypeId, 汇总出成字段按归属裁剪"),
             Map.entry("service/indicator/strategy/impl/FactoryLuDailyOutputStrategy.java", "厂级日产量合计"),

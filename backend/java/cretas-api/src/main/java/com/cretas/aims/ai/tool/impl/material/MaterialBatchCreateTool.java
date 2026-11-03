@@ -159,7 +159,9 @@ public class MaterialBatchCreateTool extends AbstractBusinessTool {
 
             // 尝试精确匹配
             for (RawMaterialTypeDTO type : candidateMaterialTypes) {
-                if (type.getName().equals(extractedMaterial)) {
+                // 物料名或别名 (配方单上的叫法) 都算精确命中
+                if (type.getName().equals(extractedMaterial)
+                        || (type.getAliases() != null && type.getAliases().contains(extractedMaterial))) {
                     matchedMaterialType = type;
                     break;
                 }
