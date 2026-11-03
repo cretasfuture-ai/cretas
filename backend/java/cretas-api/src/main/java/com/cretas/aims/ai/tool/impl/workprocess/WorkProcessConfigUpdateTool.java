@@ -87,6 +87,11 @@ public class WorkProcessConfigUpdateTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doPreview(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        throw ProductWorkProcessConfigTool.retired();
+    }
+
+    @SuppressWarnings("unused")
+    private Map<String, Object> legacyPreview(String factoryId, Map<String, Object> params) {
         Resolution resolution = resolve(factoryId, params);
 
         List<ProductWorkProcess> existing = productWorkProcessRepository
@@ -122,9 +127,15 @@ public class WorkProcessConfigUpdateTool extends AbstractBusinessTool {
     }
 
     @Override
-    @Transactional
     protected Map<String, Object> doExecute(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        throw ProductWorkProcessConfigTool.retired();
+    }
+
+    /** 以下为停用前的 REPLACE 写入实现, 不再有调用方; 保留仅为对照, 后续清理时一并删除。 */
+    @SuppressWarnings("unused")
+    @Transactional
+    protected Map<String, Object> legacyReplace(String factoryId, Map<String, Object> params) {
         Resolution resolution = resolve(factoryId, params);
 
         // 1. 清空现有绑定. 先按 workProcessId 收旧绑定 —— 修 P0-A: REPLACE 不能静默清零

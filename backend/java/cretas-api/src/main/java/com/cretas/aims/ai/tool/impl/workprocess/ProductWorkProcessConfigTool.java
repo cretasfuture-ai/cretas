@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.workprocess;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.ProductWorkProcessDTO;
 import com.cretas.aims.dto.WorkProcessDTO;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.ProductWorkProcessService;
@@ -130,6 +131,15 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         return Set.of("canvas", "production", "work-process", "product");
     }
 
+
+    /** 缺口 20: 线性工序绑定写入入口已停用 —— 只剩画布一份真值, 见 docs 与 PR 说明。 */
+    static BusinessException retired() {
+        return new BusinessException(409, "产品工艺现在只有一份真值：工艺画布。这个旧入口写的是线性工序绑定，画布和报工都不读它，已停用。请打开产品的工艺画布，用「AI 配置」描述工艺（份额、回料、副产、控制点都能带）。")
+                .withCode("LEGACY_LINEAR_PROCESS_BINDING_RETIRED")
+                .withHint("请到产品工艺画布使用「AI 配置」")
+                .withSeverity("warning");
+    }
+
     @Override
     protected Map<String, Object> doPreview(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
@@ -145,6 +155,12 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
         if (!apply) {
             return buildResult(plan, false);
         }
+        throw retired();
+    }
+
+    /** 以下为停用前的写入实现, 不再有调用方; 保留仅为对照, 后续清理时一并删除。 */
+    @SuppressWarnings("unused")
+    private Map<String, Object> legacyApply(String factoryId, ProductProcessPlan plan) {
 
         // B-3: fail-soft apply — collect per-step errors instead of aborting mid-write
         // E2: skip "new" steps (workProcessId==null) — those need the process to be

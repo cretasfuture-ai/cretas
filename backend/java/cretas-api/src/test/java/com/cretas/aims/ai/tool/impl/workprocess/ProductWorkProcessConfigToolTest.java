@@ -113,33 +113,19 @@ class ProductWorkProcessConfigToolTest {
     }
 
     @Test
-    @DisplayName("D1 execute apply=true: creates missing associations and updates existing rows with full DTO")
-    void executeAppliesFullRows() throws Exception {
+    @DisplayName("缺口 20: execute apply=true 已停用 —— 线性绑定不再写, 一行都不能落库")
+    void executeApplyIsRetired() throws Exception {
         mockCatalogAndOperators();
         when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
                 .thenReturn(List.of(existingAssociation(10L, "wp-oil", null)));
 
-        Map<String, Object> result = invoke("doExecute", paramsWithApply(
-                "修油交给莫云，第二步滚揉"));
+        com.cretas.aims.exception.BusinessException error = assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> invoke("doExecute", paramsWithApply("修油交给莫云，第二步滚揉")));
 
-        assertEquals(true, result.get("applied"));
-        assertTrue(result.get("message").toString().contains("已应用"));
-
-        ArgumentCaptor<ProductWorkProcessDTO> updateCaptor =
-                ArgumentCaptor.forClass(ProductWorkProcessDTO.class);
-        verify(productWorkProcessService).update(eq(FACTORY_ID), eq(10L), updateCaptor.capture());
-        ProductWorkProcessDTO updateDto = updateCaptor.getValue();
-        assertEquals(PRODUCT_TYPE_ID, updateDto.getProductTypeId());
-        assertEquals("wp-oil", updateDto.getWorkProcessId());
-        assertEquals(1615L, updateDto.getResponsibleWorkerId());
-
-        ArgumentCaptor<ProductWorkProcessDTO> createCaptor =
-                ArgumentCaptor.forClass(ProductWorkProcessDTO.class);
-        verify(productWorkProcessService).create(eq(FACTORY_ID), createCaptor.capture());
-        ProductWorkProcessDTO createDto = createCaptor.getValue();
-        assertEquals(PRODUCT_TYPE_ID, createDto.getProductTypeId());
-        assertEquals("wp-tumble", createDto.getWorkProcessId());
-        assertEquals(2, createDto.getProcessOrder());
+        assertEquals("LEGACY_LINEAR_PROCESS_BINDING_RETIRED", error.getErrorCode());
+        verify(productWorkProcessService, never()).create(any(), any());
+        verify(productWorkProcessService, never()).update(any(), any(), any());
     }
 
     @Test

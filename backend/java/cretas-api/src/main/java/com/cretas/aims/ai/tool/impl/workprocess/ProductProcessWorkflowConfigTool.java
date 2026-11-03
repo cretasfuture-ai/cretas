@@ -6,6 +6,7 @@ import com.cretas.aims.constant.SeasoningProcessCategory;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
+import com.cretas.aims.service.workflow.WorkflowPendingConfirmations;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
@@ -30,9 +31,16 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "name", "skuId", "skuCode", "specification", "ports",
             "conversionRule", "reportingRequired",
             // 阶段 2: 副产是带标记的普通产出节点(不是第 5 种 kind)
-            "isByproduct",
+            "isByproduct", "isRework", "isDefective",
             // 阶段 4: BOM 字段进入 AI 可改范围
-            "materialBindings", "injectionAmount");
+            "materialBindings", "injectionAmount",
+            // 缺口 20: AI 配回料规则 / CCP 控制点 / 说不清的待确认项(同一份画布节点 data)
+            "reworkPolicy", "ccpPoints", "pendingConfirmations");
+
+    private static final Set<String> CCP_POINT_KEYS = Set.of(
+            "id", "name", "hazardType", "criticalLimitMin", "criticalLimitMax", "unit",
+            "monitoringProcedure", "correctiveAction");
+    private static final Set<String> CCP_HAZARD_TYPES = WorkflowPendingConfirmations.HAZARD_TYPES;
 
     /**
      * 一条 materialBinding(调料/辅料投入行)允许出现的键。
@@ -54,14 +62,16 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     private static final Set<String> CONVERSION_MODES = Set.of(
             "ACTUAL_WEIGHT", "FIXED_RATIO", "SUM_OUTPUTS", "FORMULA");
     private static final Set<String> MATERIAL_DATA_KEYS = Set.of(
-            "name", "skuId", "skuCode", "specification", "baseUnit", "bound");
+            "name", "skuId", "skuCode", "specification", "baseUnit", "bound",
+            "isByproduct", "isRework", "isDefective");
     private static final Set<String> PROCESS_DATA_KEYS = Set.of(
             "workProcessId", "processName", "processCategory", "inputUnit", "outputUnit",
             "standardTime", "ports", "conversionRule", "reportingRequired",
-            "allowMultipleUpstreamSources", "allowFinishedGoodsSource");
+            "allowMultipleUpstreamSources", "allowFinishedGoodsSource",
+            "reworkPolicy", "ccpPoints", "pendingConfirmations");
     private static final Set<String> PORT_KEYS = Set.of(
             "id", "direction", "materialNodeId", "materialName", "skuId",
-            "materialKind", "unit", "ordinal");
+            "materialKind", "unit", "ordinal", "inputShareRatio");
     private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
             "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
     private final ProductProcessWorkflowValidator workflowValidator;
@@ -214,7 +224,10 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                 || !isOptionalNullableString(data, "skuCode")
                 || !isOptionalNullableString(data, "specification")
                 || !isOptionalString(data, "baseUnit")
-                || !isOptionalBoolean(data, "bound")) return null;
+                || !isOptionalBoolean(data, "bound")
+                || !isOptionalBoolean(data, "isByproduct")
+                || !isOptionalBoolean(data, "isRework")
+                || !isOptionalBoolean(data, "isDefective")) return null;
         return copyKnownValues(data, MATERIAL_DATA_KEYS);
     }
 
@@ -234,6 +247,9 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         List<Map<String, Object>> sanitizedPorts = sanitizePorts(ports);
         Map<String, Object> sanitizedRule = sanitizeConversionRule(conversionRule);
         if (sanitizedPorts == null || sanitizedRule == null) return null;
+        for (String key : List.of("reworkPolicy", "ccpPoints", "pendingConfirmations")) {
+            if (data.containsKey(key) && !isAllowedFieldValue(key, data.get(key))) return null;
+        }
         Map<String, Object> result = copyKnownValues(data, PROCESS_DATA_KEYS);
         result.put("ports", sanitizedPorts);
         result.put("conversionRule", sanitizedRule);
@@ -253,13 +269,67 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                     || ordinal.doubleValue() < 0 || ordinal.doubleValue() != Math.rint(ordinal.doubleValue())
                     || !isOptionalString(port, "materialNodeId")
                     || !isOptionalString(port, "materialName")
-                    || !isOptionalString(port, "skuId")) return null;
+                    || !isOptionalString(port, "skuId")
+                    || !isValidShare(port)) return null;
             Object materialKind = port.get("materialKind");
             if (materialKind != null && (!(materialKind instanceof String kind)
                     || !MATERIAL_NODE_KINDS.contains(kind))) return null;
             result.add(copyKnownValues(port, PORT_KEYS));
         }
         return List.copyOf(result);
+    }
+
+    /** 主料份额(%): 缺省/null = 不参与推算; 给了就必须 (0,100]。越界拒绝, 不截断。 */
+    private boolean isValidShare(Map<?, ?> port) {
+        Object share = port.get("inputShareRatio");
+        if (share == null) return true;
+        if (!"INPUT".equals(port.get("direction"))) return false;
+        return share instanceof Number n && isFiniteNumber(n)
+                && n.doubleValue() > 0d && n.doubleValue() <= 100d;
+    }
+
+    private boolean isValidReworkPolicy(Object value) {
+        if (value == null) return true;
+        if (!(value instanceof Map<?, ?> policy) || !hasExactKeys(policy, Set.of("sources"))
+                || !(policy.get("sources") instanceof List<?> sources) || sources.isEmpty()) return false;
+        for (Object raw : sources) {
+            if (!(raw instanceof Map<?, ?> source) || !hasExactKeys(source, Set.of("reworkNodeId", "inputRatioPercent"))
+                    || readNonBlankString(source.get("reworkNodeId")) == null
+                    || !(source.get("inputRatioPercent") instanceof Number n) || !isFiniteNumber(n)
+                    || n.doubleValue() < 0d || n.doubleValue() > 100d) return false;
+        }
+        return true;
+    }
+
+    /** CCP 限值/单位/危害类型允许为 null = AI 说不清, 留待人补(发布闸会拦); 给了就必须合法。 */
+    private boolean isValidCcpPoints(Object value) {
+        if (!(value instanceof List<?> points)) return false;
+        for (Object raw : points) {
+            if (!(raw instanceof Map<?, ?> point) || !hasAllowedKeys(point, CCP_POINT_KEYS)
+                    || readNonBlankString(point.get("name")) == null
+                    || !isOptionalFiniteNumber(point, "criticalLimitMin")
+                    || !isOptionalFiniteNumber(point, "criticalLimitMax")
+                    || !isOptionalNullableString(point, "unit")
+                    || !isOptionalNullableString(point, "id")
+                    || !isOptionalNullableString(point, "monitoringProcedure")
+                    || !isOptionalNullableString(point, "correctiveAction")) return false;
+            Object hazard = point.get("hazardType");
+            if (hazard != null && !(hazard instanceof String h && CCP_HAZARD_TYPES.contains(h))) return false;
+            Object min = point.get("criticalLimitMin");
+            Object max = point.get("criticalLimitMax");
+            if (min instanceof Number a && max instanceof Number b && a.doubleValue() > b.doubleValue()) return false;
+        }
+        return true;
+    }
+
+    private boolean isValidPending(Object value) {
+        if (!(value instanceof List<?> items)) return false;
+        for (Object raw : items) {
+            if (!(raw instanceof Map<?, ?> item) || !hasExactKeys(item, Set.of("code", "label"))
+                    || readNonBlankString(item.get("code")) == null
+                    || readNonBlankString(item.get("label")) == null) return false;
+        }
+        return true;
     }
 
     private Map<String, Object> sanitizeConversionRule(Map<?, ?> rule) {
@@ -380,7 +450,10 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             case "conversionRule.mode" -> value instanceof String mode && CONVERSION_MODES.contains(mode);
             case "conversionRule" -> value instanceof Map<?, ?> rule && sanitizeConversionRule(rule) != null;
             case "ports" -> value instanceof List<?> ports && sanitizePorts(ports) != null;
-            case "isByproduct" -> value instanceof Boolean;
+            case "isByproduct", "isRework", "isDefective" -> value instanceof Boolean;
+            case "reworkPolicy" -> isValidReworkPolicy(value);
+            case "ccpPoints" -> isValidCcpPoints(value);
+            case "pendingConfirmations" -> isValidPending(value);
             case "materialBindings" -> value instanceof List<?> bindings && sanitizeMaterialBindings(bindings) != null;
             // 注射量 > 0。同 dosagePerKgG: 0 不是「不注射」, 不注射就不该是注射类工序。
             case "injectionAmount" -> value instanceof Number n && isFiniteNumber(n) && n.doubleValue() > 0d;
@@ -485,6 +558,17 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                 assertSeasoningCategoryAllows(target, "subsequentPotRatio", POT_RATIO_CATEGORIES, "后续锅调料比例");
             }
         }
+        if ("reworkPolicy".equals(path) && patch.get("value") instanceof Map<?, ?> policy
+                && policy.get("sources") instanceof List<?> sources) {
+            for (Object raw : sources) {
+                String reworkNodeId = raw instanceof Map<?, ?> source ? String.valueOf(source.get("reworkNodeId")) : "";
+                ProductProcessWorkflowDTO.Node rework = findNode(candidate, reworkNodeId);
+                if (rework == null || rework.getData() == null
+                        || !Boolean.TRUE.equals(rework.getData().get("isRework"))) {
+                    throw new PatchRejectedException("回料规则指向的 Cell 不存在或不是回料产出（isRework）: " + reworkNodeId);
+                }
+            }
+        }
         Map<String, Object> data = target.getData();
         if (data == null) {
             data = new LinkedHashMap<>();
@@ -531,10 +615,15 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                     || path.equals("reportingRequired")
                     // 阶段 4: 调料投入与注射量挂在工序上
                     || path.equals("materialBindings")
-                    || path.equals("injectionAmount");
+                    || path.equals("injectionAmount")
+                    // 缺口 20
+                    || path.equals("reworkPolicy")
+                    || path.equals("ccpPoints")
+                    || path.equals("pendingConfirmations");
         }
         return MATERIAL_NODE_KINDS.contains(kind)
-                && Set.of("name", "skuId", "skuCode", "specification", "isByproduct").contains(path);
+                && Set.of("name", "skuId", "skuCode", "specification",
+                "isByproduct", "isRework", "isDefective").contains(path);
     }
 
     /**

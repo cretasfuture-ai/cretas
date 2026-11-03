@@ -1153,6 +1153,7 @@ import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
 import { CREATE_SKU_SENTINEL } from './WorkflowSkuPicker.vue';
 import WorkflowSpecialOutputChooser from './WorkflowSpecialOutputChooser.vue';
 import WorkflowReworkConfigDrawer from './WorkflowReworkConfigDrawer.vue';
+import { buildCcpPointsFromSpec, listPendingItems } from './workflowPendingConfirmations';
 import {
   FUSED_MATERIAL_OWNER_WIDTH,
   FUSED_PROCESS_OWNER_WIDTH,
@@ -6507,6 +6508,18 @@ async function publishWorkflow(): Promise<void> {
   // ⛔ 这里刻意**没有**回料门禁(owner 2026-09-01 裁定): 回料是可选能力,
   // 「配了回料但还没配回投目标」不许拦住整张工艺图的发布 —— 那是本末倒置。
   // 状态在回料 Cell 上可见即可, 见 WorkflowMaterialNode 的 rework-config 区块。
+  // 缺口 20: AI 留给人补的项(CCP 限值/单位、说不清的份额与回料比例)补齐前不能发布。
+  // 后端发布闸是真闸; 这里只是提前、逐项告诉人缺什么, 不必等一次 409。
+  const pendingItems = listPendingItems(currentDefinition().nodes);
+  if (pendingItems.length > 0) {
+    ElMessage({
+      type: 'error',
+      duration: 0,
+      showClose: true,
+      message: `还有 ${pendingItems.length} 项待确认，补齐后才能发布：${pendingItems.map((item) => item.text).join('；')}`,
+    });
+    return;
+  }
   if (!(await confirmSeasoningAbsence(identity))) return;
   await withAutoSaveBarrier(() => publishWorkflowUnderBarrier(identity));
 }
@@ -7092,7 +7105,13 @@ async function applyPreparedWorkflowDefinition(
   return true;
 }
 
-interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string; byproduct?: boolean }
+interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string; byproduct?: boolean; rework?: boolean }
+/** 缺口 20: 副产与回料互斥(同一个产出不能既是副产又是回料); 两个都标时按回料。 */
+function outputFlags(output: WorkflowSpecOutput | undefined): { isByproduct?: true; isRework?: true } {
+  if (output?.rework === true) return { isRework: true };
+  if (output?.byproduct === true) return { isByproduct: true };
+  return {};
+}
 /** 一味调料/辅料投入。与补丁路的 materialBinding 同形状, 同一套约束。 */
 interface WorkflowSpecSeasoning {
   name?: string;
@@ -7107,6 +7126,12 @@ interface WorkflowSpecStep {
   outputs?: WorkflowSpecOutput[];
   seasonings?: WorkflowSpecSeasoning[];
   injectionAmount?: number;
+  /** 主料份额: 按投入原料名给相对份额(%), 写到 INPUT 端口的 inputShareRatio。 */
+  inputShares?: Array<{ name?: string; percent?: number | null }>;
+  /** 本工序接收哪些回料(按回料产出名)、各按多少 % 投; 写到本工序 reworkPolicy。 */
+  reworkSources?: Array<{ output?: string; inputRatioPercent?: number | null }>;
+  /** 本工序的 CCP 控制点; AI 没说的限值/单位保持空 = 待确认。 */
+  ccps?: unknown;
 }
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
@@ -7252,6 +7277,10 @@ async function compileWorkflowSpec(
   let mergeInputCount = 0;  // #4 合流额外投入原料端口数
   // 阶段 4: 被类别闸/数值域拒掉的调味行。⛔ 不能静默丢 —— 用户会以为 AI 照做了。
   const seasoningRejections: string[] = [];
+  // 缺口 20: 份额 / 回料 / CCP 里 AI 给得不合规或没说清的项(留作待确认), 同样不静默
+  const specNotices: string[] = [];
+  const processDatas: Array<ProcessNodeData & { kind: 'PROCESS' }> = [];
+  const reworkNodeIdByName = new Map<string, string>();
   let compiledDefinition: ProductProcessWorkflowDefinition | null = null;
   let previewGraphSeed = 0;
   const nextCompileGraphId = () => (dryRun ? --previewGraphSeed : nextGraphIdSeed());
@@ -7344,6 +7373,7 @@ async function compileWorkflowSpec(
         // #5 分流产出同样尝试自动绑定 SKU (唯一精确同名; 否则留待用户绑定)。
         const extraSku = matchOutputSkuByName(extra?.name, kind, outputSkuOptions.value);
         if (extraSku) autoBoundCount += 1;
+        if (extra?.rework === true && extra?.name) reworkNodeIdByName.set(normProcessName(extra.name), matId);
         nodes.push({
           id: matId,
           type: 'material',
@@ -7351,8 +7381,8 @@ async function compileWorkflowSpec(
           // 阶段 4: 规格里标了 byproduct 的分流产出建成副产 cell —— 与手工「+ 副产」同一形状
           // (kind 仍是产出类型, 只多一个 isByproduct 标记, 见 MaterialNodeData 的注释)。
           data: extraSku
-            ? { kind, name: extraSku.name, skuId: extraSku.id, skuCode: extraSku.code || extraSku.id, specification: extraSku.specification, bound: true, baseUnit: extraSku.unit || unit, ...(extra?.byproduct === true ? { isByproduct: true } : {}) }
-            : { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit, ...(extra?.byproduct === true ? { isByproduct: true } : {}) },
+            ? { kind, name: extraSku.name, skuId: extraSku.id, skuCode: extraSku.code || extraSku.id, specification: extraSku.specification, bound: true, baseUnit: extraSku.unit || unit, ...outputFlags(extra) }
+            : { kind, name: extra?.name || `产出 ${extraIdx + 2}`, skuId: '', skuCode: '待选择或现场创建 SKU', bound: false, baseUnit: unit, ...outputFlags(extra) },
         });
         processData.ports = [
           ...processData.ports,
@@ -7397,6 +7427,42 @@ async function compileWorkflowSpec(
         });
         mergeInputCount += 1;
       });
+      // ── 缺口 20: 主料份额 / CCP 控制点 ─────────────────────────────────
+      // 端口 → 物料名: 主链上游是第一个 INPUT 端口, 额外投入按追加顺序。
+      const inputPortNames: Array<[string, string]> = [];
+      const firstInput = processData.ports.find((p) => p.direction === 'INPUT');
+      if (firstInput) inputPortNames.push([firstInput.id, String((prevMaterial.data as Record<string, unknown>).name || '')]);
+      processData.ports.filter((p) => p.direction === 'INPUT' && p !== firstInput).forEach((p, k) => {
+        inputPortNames.push([p.id, extraInputs[k] || '']);
+      });
+      const pendingMarks: Array<{ code: string; label: string }> = [];
+      if (Array.isArray(step.inputShares) && step.inputShares.length) {
+        const shareByPort = new Map<string, number>();
+        step.inputShares.forEach((row) => {
+          const rowName = String(row?.name || '').trim();
+          const target = inputPortNames.find(([, n]) => normProcessName(n) === normProcessName(rowName));
+          if (!target) {
+            specNotices.push(`工序「${processData.processName}」的份额里「${rowName || '未命名'}」不是本工序的投入原料，已忽略`);
+            return;
+          }
+          const percent = row?.percent;
+          if (typeof percent === 'number' && Number.isFinite(percent) && percent > 0 && percent <= 100) {
+            shareByPort.set(target[0], percent);
+          } else {
+            specNotices.push(`工序「${processData.processName}」原料「${rowName}」的份额没说清，已留作待确认`);
+            pendingMarks.push({ code: `SHARE:${target[0]}`, label: `原料「${rowName}」的主料份额待确认（AI 没有给出有效数值）` });
+          }
+        });
+        if (shareByPort.size) {
+          processData.ports = processData.ports.map((p) => (shareByPort.has(p.id)
+            ? { ...p, inputShareRatio: shareByPort.get(p.id)! } : p));
+        }
+      }
+      const ccpPoints = buildCcpPointsFromSpec(
+        String(processData.processName), step.ccps, () => `ccp:${nextCompileGraphId()}`, specNotices);
+      if (ccpPoints.length) (processData as Record<string, unknown>).ccpPoints = ccpPoints;
+      if (pendingMarks.length) (processData as Record<string, unknown>).pendingConfirmations = pendingMarks;
+      processDatas[i] = processData;
       // ── 阶段 4: 规格里的调味参数 ──────────────────────────────────────
       // ⛔ 与补丁路**同一套约束**。这条路的规格不经过后端 Tool, 后端那份 sanitize
       //    在这里一行都跑不到 —— 只改一条路就会留半个洞(设计定稿约束 5)。
@@ -7447,6 +7513,34 @@ async function compileWorkflowSpec(
       // 主链沿首产出继续 (多产出的其余分支是终端支流)
       prevMaterial = serializeFlowNode(outputNode);
     });
+    // ── 缺口 20: 回料规则(规则住在接收回料的工序上, 与手工配置同一个载体 reworkPolicy) ──
+    steps.forEach((step, i) => {
+      const target = processDatas[i];
+      if (!target || !Array.isArray(step.reworkSources) || !step.reworkSources.length) return;
+      const sources: Array<{ reworkNodeId: string; inputRatioPercent: number }> = [];
+      const pending: Array<{ code: string; label: string }> = [];
+      step.reworkSources.forEach((row) => {
+        const outName = String(row?.output || '').trim();
+        const reworkNodeId = reworkNodeIdByName.get(normProcessName(outName));
+        if (!reworkNodeId) {
+          specNotices.push(`工序「${target.processName}」要接的回料「${outName || '未命名'}」在流程里没有对应的回料产出，已忽略`);
+          return;
+        }
+        const ratio = row?.inputRatioPercent;
+        if (typeof ratio === 'number' && Number.isFinite(ratio) && ratio >= 0 && ratio <= 100) {
+          if (!sources.some((x) => x.reworkNodeId === reworkNodeId)) sources.push({ reworkNodeId, inputRatioPercent: ratio });
+        } else {
+          specNotices.push(`工序「${target.processName}」接收回料「${outName}」的投入比例没说清，已留作待确认`);
+          pending.push({ code: `REWORK:${reworkNodeId}`, label: `接收回料「${outName}」的投入比例待确认（AI 没有给出有效数值，请在回料 Cell 上配置）` });
+        }
+      });
+      if (sources.length) (target as Record<string, unknown>).reworkPolicy = { sources };
+      if (pending.length) {
+        const prior = Array.isArray((target as Record<string, unknown>).pendingConfirmations)
+          ? (target as Record<string, unknown>).pendingConfirmations as Array<{ code: string; label: string }> : [];
+        (target as Record<string, unknown>).pendingConfirmations = [...prior, ...pending];
+      }
+    });
     if (dryRun || !commit) {
       const compiledNodes = nodes.map((node) => {
         const data = toPlainWorkflowValue(node.data || {}) as Record<string, unknown>;
@@ -7470,8 +7564,8 @@ async function compileWorkflowSpec(
   if (dryRun || !commit) compileGraph();
   else mutate(compileGraph);
   if (dryRun || !commit) {
-    if (seasoningRejections.length > 0) {
-      workflowAiRejectionWarnings.value = [...seasoningRejections];
+    if (seasoningRejections.length > 0 || specNotices.length > 0) {
+      workflowAiRejectionWarnings.value = [...seasoningRejections, ...specNotices];
     }
     return compiledDefinition;
   }
@@ -7490,6 +7584,14 @@ async function compileWorkflowSpec(
       duration: 0,
       showClose: true,
       message: `以下调味配置未采纳（AI 给的值不符合规则）：${seasoningRejections.join('；')}`,
+    });
+  }
+  if (specNotices.length > 0) {
+    ElMessage({
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+      message: `以下配置 AI 没说清或不符合规则，已忽略或留作「待确认」，补齐前不能发布：${specNotices.join('；')}`,
     });
   }
   return compiledDefinition;

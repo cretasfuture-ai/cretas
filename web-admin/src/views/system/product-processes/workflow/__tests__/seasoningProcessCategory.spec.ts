@@ -130,6 +130,10 @@ describe('编译器真的把约束接上了（不是只导入了函数）', () =
   });
 
   it('规格里的 byproduct 产出建成副产 cell', () => {
-    expect(EDITOR).toMatch(/extra\?\.byproduct === true \? \{ isByproduct: true \}/);
+    // 缺口 20: 副产/回料标记收敛到 outputFlags(), 分流产出两处建节点都经它
+    expect(EDITOR).toMatch(/if \(output\?\.byproduct === true\) return \{ isByproduct: true \}/);
+    expect(EDITOR.match(/\.\.\.outputFlags\(extra\)/g)?.length).toBe(2);
+    // 阴性: 回料优先于副产, 同一产出不会两个标记都带
+    expect(EDITOR).toMatch(/if \(output\?\.rework === true\) return \{ isRework: true \}/);
   });
 });
