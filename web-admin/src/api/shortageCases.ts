@@ -198,3 +198,30 @@ export function applyReschedule(
 ): Promise<ApiResponse<RescheduleProposal>> {
   return post(`/${factoryId}/shortage-cases/${caseId}/reschedule-proposals/${proposalId}/apply`, { candidateKey });
 }
+
+/** 执行后核对: 重排 / 转采购做完后核对交期与缺口; 只有 ACHIEVED 算达成, 判断不了给 UNKNOWN */
+export type OutcomeVerdict = 'ACHIEVED' | 'PENDING_SUPPLY' | 'NOT_ACHIEVED' | 'UNKNOWN';
+
+export interface ShortageOutcomeCheck {
+  id: number;
+  actionId: number | null;
+  trigger: 'RESCHEDULE_APPLIED' | 'PURCHASE_DRAFT' | 'MANUAL_RECHECK';
+  verdict: OutcomeVerdict;
+  verdictLabel: string;
+  gapClosed: boolean;
+  openGapLines: number;
+  dueDate: string | null;
+  latestPlannedEnd: string | null;
+  lateScheduleCount: number;
+  supplyReadyDate: string | null;
+  detail: string;
+  createdAt: string;
+}
+
+export function getOutcomeChecks(factoryId: string, caseId: string): Promise<ApiResponse<ShortageOutcomeCheck[]>> {
+  return get(`/${factoryId}/shortage-cases/${caseId}/outcome-checks`);
+}
+
+export function recheckOutcome(factoryId: string, caseId: string): Promise<ApiResponse<ShortageOutcomeCheck>> {
+  return post(`/${factoryId}/shortage-cases/${caseId}/outcome-checks`, {});
+}
