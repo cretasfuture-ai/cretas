@@ -54,6 +54,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -96,13 +97,13 @@ class OptionalFilterChatEntryContractTest {
     @Test
     void salesOrdersByTheStatusSaidInChinese() throws Exception {
         SalesService sales = mock(SalesService.class);
-        when(sales.getSalesOrdersByStatus(anyString(), any(), anyInt(), anyInt()))
+        when(sales.getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), anyInt()))
                 .thenReturn(PageResponse.of(List.of(), 1, 20, 0L));
         OrderListTool tool = withMapper(new OrderListTool(sales));
 
         assertThat(run(tool, "ORDER_LIST", "查询已确认的销售订单", null).getStatus()).isEqualTo("SUCCESS");
 
-        verify(sales).getSalesOrdersByStatus(eq(F), eq(SalesOrderStatus.CONFIRMED), anyInt(), anyInt());
+        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.CONFIRMED), isNull(), isNull(), anyInt(), anyInt());
         verify(sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
         verify(llm, never()).chatWithTools(anyString(), anyString(), anyList());
     }
@@ -116,7 +117,7 @@ class OptionalFilterChatEntryContractTest {
         assertThat(run(tool, "ORDER_LIST", "查询销售订单", null).getStatus()).isEqualTo("SUCCESS");
 
         verify(sales).getSalesOrders(eq(F), anyInt(), anyInt());
-        verify(sales, never()).getSalesOrdersByStatus(anyString(), any(), anyInt(), anyInt());
+        verify(sales, never()).getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), anyInt());
     }
 
     @Test
@@ -135,21 +136,21 @@ class OptionalFilterChatEntryContractTest {
     @Test
     void shipmentsByTheStatusSaid() throws Exception {
         ShipmentRecordService shipments = mock(ShipmentRecordService.class);
-        when(shipments.getByFactoryIdAndStatus(anyString(), anyString(), anyInt(), anyInt()))
+        when(shipments.searchFiltered(anyString(), any(), any(), any(), any(), anyInt(), anyInt()))
                 .thenReturn(new PageImpl<>(List.of()));
         ShipmentQueryTool tool = withMapper(new ShipmentQueryTool());
         ReflectionTestUtils.setField(tool, "shipmentRecordService", shipments);
 
         assertThat(run(tool, "SHIPMENT_QUERY", "看看已发货的出货单", null).getStatus()).isEqualTo("SUCCESS");
 
-        verify(shipments).getByFactoryIdAndStatus(eq(F), eq("shipped"), anyInt(), anyInt());
+        verify(shipments).searchFiltered(eq(F), isNull(), eq("shipped"), isNull(), isNull(), anyInt(), anyInt());
         verify(shipments, never()).getByFactoryId(anyString(), anyInt(), anyInt());
     }
 
     @Test
     void anEmptyFilteredResultNamesTheFilterForAnyToolOnTheSharedMechanism() throws Exception {
         ShipmentRecordService shipments = mock(ShipmentRecordService.class);
-        when(shipments.getByFactoryIdAndStatus(anyString(), anyString(), anyInt(), anyInt()))
+        when(shipments.searchFiltered(anyString(), any(), any(), any(), any(), anyInt(), anyInt()))
                 .thenReturn(new PageImpl<>(List.of()));
         ShipmentQueryTool tool = withMapper(new ShipmentQueryTool());
         ReflectionTestUtils.setField(tool, "shipmentRecordService", shipments);

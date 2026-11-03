@@ -53,6 +53,23 @@ public class ShipmentRecordService {
     /**
      * 按状态分页查询
      */
+    /**
+     * 按客户 / 状态 / 出货日期筛选 (每个可选, null = 不限), 在分页之前由数据库过滤; page 从 0 开始。
+     */
+    public Page<ShipmentRecord> searchFiltered(String factoryId, String customerId, String status,
+                                               LocalDate shipmentDateFrom, LocalDate shipmentDateTo,
+                                               int page, int size) {
+        if (shipmentDateFrom != null && shipmentDateTo != null && shipmentDateFrom.isAfter(shipmentDateTo)) {
+            throw new com.cretas.aims.exception.BusinessException(400,
+                    "出货日期范围不成立: 开始 " + shipmentDateFrom + " 晚于结束 " + shipmentDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        Page<ShipmentRecord> result = shipmentRecordRepository.searchFiltered(factoryId, customerId, status,
+                shipmentDateFrom, shipmentDateTo, PageRequest.of(page, size));
+        fillCustomerNames(result.getContent());
+        return result;
+    }
+
     public Page<ShipmentRecord> getByFactoryIdAndStatus(String factoryId, String status, int page, int size) {
         Pageable pageable = PageRequest.of(page, size);
         Page<ShipmentRecord> result = shipmentRecordRepository

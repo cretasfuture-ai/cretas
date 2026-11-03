@@ -92,6 +92,8 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             Map<String, Object> result = doExecute(factoryId, params, context);
             // 记下这次按哪个状态筛的, 0 条时回复要点名它, 不能说成「暂无记录」
             result = StatusFilter.annotate(getParametersSchema(), params, result);
+            // 用户说的时间用没用上 (工具没声明 startDate/endDate 就是没用上, 回复要说出来)
+            result = TimeRangeFilter.annotate(getParametersSchema(), params, result);
 
             // 4. 构建成功响应
             String response = buildSuccessResult(result);

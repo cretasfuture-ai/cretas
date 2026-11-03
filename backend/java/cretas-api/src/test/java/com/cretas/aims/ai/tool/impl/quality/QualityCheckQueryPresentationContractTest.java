@@ -43,13 +43,18 @@ class QualityCheckQueryPresentationContractTest {
     }
 
     Map<String,Object> run(List<QualityInspection> records,Map<String,Object> params) throws Exception {
-        var page=new PageResponse<QualityInspection>(); page.setContent(records); page.setTotalElements((long)records.size()); page.setTotalPages(1);
-        when(service.getInspections(eq("F006"),any(),any(PageRequest.class))).thenReturn(page);
+        // 结果筛选在服务 (数据库) 里、分页之前: 桩按传入的 result 筛, 总数是筛过的
+        when(service.getInspectionsFiltered(eq("F006"),any(),any(),any(),any(),any(),any(PageRequest.class))).thenAnswer(inv -> {
+            String result=inv.getArgument(2);
+            var rows=records.stream().filter(r -> result==null || result.equalsIgnoreCase(r.getResult())).toList();
+            var page=new PageResponse<QualityInspection>(); page.setContent(rows); page.setTotalElements((long)rows.size()); page.setTotalPages(1);
+            return page;
+        });
         var call=new ToolCall(); var function=new ToolCall.FunctionCall();
         function.setName("quality_check_query"); function.setArguments(mapper.writeValueAsString(params)); call.setFunction(function);
         var response=mapper.readTree(tool.execute(call,Map.of("factoryId","F006","userId",42L)));
         assertTrue(response.path("success").asBoolean(),response.toString());
-        verify(service).getInspections(eq("F006"),any(),any(PageRequest.class));
+        verify(service).getInspectionsFiltered(eq("F006"),any(),any(),any(),any(),any(),any(PageRequest.class));
         return mapper.convertValue(response.path("data"),Map.class);
     }
 
@@ -93,6 +98,8 @@ class QualityCheckQueryPresentationContractTest {
         assertTrue(((List<?>)data.get("content")).isEmpty());
         String message=data.get("message").toString(); assertTrue(message.contains("当前没有匹配的质检记录"));
         assertTrue(message.contains("不合格")); assertFalse(message.contains("FAIL"));
+        // 总数是筛过的 (S6 验收: 以前 0 条却报「总计 6 条」)
+        assertTrue(message.contains("总计 0 条"), message);
     }
 
     @Test void realInspectionModeCanSupplyTypeWhenNotesHaveNoType() throws Exception {

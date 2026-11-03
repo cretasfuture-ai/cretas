@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.shipment;
 
+import com.cretas.aims.ai.tool.TimeRangeFilter;
 import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.ShipmentRecord;
@@ -79,6 +80,10 @@ public class ShipmentQueryTool extends AbstractBusinessTool {
         dateTo.put("format", "date");
         properties.put("dateTo", dateTo);
 
+        // startDate / endDate: 对话入口放进来的标准时间参数 (「上个月的出货记录」); dateFrom / dateTo 仍作别名
+        properties.put("startDate", TimeRangeFilter.dateProperty("出货日期开始 (含), YYYY-MM-DD"));
+        properties.put("endDate", TimeRangeFilter.dateProperty("出货日期结束 (含), YYYY-MM-DD"));
+
         // shipmentNumber: 出货单号（可选，精确查询）
         Map<String, Object> shipmentNumber = new HashMap<>();
         shipmentNumber.put("type", "string");
@@ -128,8 +133,9 @@ public class ShipmentQueryTool extends AbstractBusinessTool {
         String shipmentNumber = getString(params, "shipmentNumber");
         String status = getString(params, "status");
         String customerId = getString(params, "customerId");
-        String dateFromStr = getString(params, "dateFrom");
-        String dateToStr = getString(params, "dateTo");
+        // 标准名 startDate/endDate 优先, dateFrom/dateTo 作别名 (以前只认后者, 对话放进来的时间被丢掉)
+        String dateFromStr = getString(params, "startDate") != null ? getString(params, "startDate") : getString(params, "dateFrom");
+        String dateToStr = getString(params, "endDate") != null ? getString(params, "endDate") : getString(params, "dateTo");
         Integer page = getInteger(params, "page", 0);
         Integer size = getInteger(params, "size", 10);
 
@@ -159,33 +165,13 @@ public class ShipmentQueryTool extends AbstractBusinessTool {
             }
         }
 
-        // 3. 按客户查询
-        if (customerId != null && !customerId.trim().isEmpty()) {
-            List<ShipmentRecord> records = shipmentRecordService.getByCustomer(factoryId, customerId);
-            return buildListResult(records, customerId, "customerId");
-        }
-
-        // 4. 按日期范围查询
-        if (dateFromStr != null && dateToStr != null) {
-            try {
-                LocalDate dateFrom = LocalDate.parse(dateFromStr, DATE_FORMATTER);
-                LocalDate dateTo = LocalDate.parse(dateToStr, DATE_FORMATTER);
-                List<ShipmentRecord> records = shipmentRecordService.getByDateRange(factoryId, dateFrom, dateTo);
-                return buildDateRangeResult(records, dateFromStr, dateToStr);
-            } catch (DateTimeParseException e) {
-                log.warn("日期格式解析失败: {} - {}", dateFromStr, dateToStr);
-            }
-        }
-
-        // 5. 分页查询 - 按状态或全部
-        Page<ShipmentRecord> pageResult;
-        String mappedStatus = mapStatus(status);
-
-        if (mappedStatus != null) {
-            pageResult = shipmentRecordService.getByFactoryIdAndStatus(factoryId, mappedStatus, page, size);
-        } else {
-            pageResult = shipmentRecordService.getByFactoryId(factoryId, page, size);
-        }
+        // 3. 列表: 客户 / 状态 / 出货日期一起在数据库里、分页之前过滤 (S6 验收 2026-11-03)。
+        //    以前客户、日期、状态各走一条路径, 同时给就静默丢掉其余条件; 日期解析失败也静默变成不限。
+        LocalDate dateFrom = TimeRangeFilter.parseDate(dateFromStr, "startDate");
+        LocalDate dateTo = TimeRangeFilter.parseDate(dateToStr, "endDate");
+        Page<ShipmentRecord> pageResult = shipmentRecordService.searchFiltered(factoryId,
+                customerId != null && !customerId.trim().isEmpty() ? customerId.trim() : null,
+                mapStatus(status), dateFrom, dateTo, page, size);
 
         // 构建分页结果
         Map<String, Object> result = buildPageResult(
@@ -199,8 +185,8 @@ public class ShipmentQueryTool extends AbstractBusinessTool {
         Map<String, Object> queryConditions = new HashMap<>();
         if (status != null) queryConditions.put("status", status);
         if (customerId != null) queryConditions.put("customerId", customerId);
-        if (dateFromStr != null) queryConditions.put("dateFrom", dateFromStr);
-        if (dateToStr != null) queryConditions.put("dateTo", dateToStr);
+        if (dateFrom != null) queryConditions.put("startDate", dateFrom.toString());
+        if (dateTo != null) queryConditions.put("endDate", dateTo.toString());
         result.put("queryConditions", queryConditions);
 
         log.info("出货单查询完成 - 总记录数: {}, 当前页: {}", pageResult.getTotalElements(), page);
@@ -216,32 +202,6 @@ public class ShipmentQueryTool extends AbstractBusinessTool {
         result.put("found", true);
         result.put("shipment", convertToMap(record));
         result.put("message", "查询到出货单: " + record.getShipmentNumber());
-        return result;
-    }
-
-    /**
-     * 构建列表结果
-     */
-    private Map<String, Object> buildListResult(List<ShipmentRecord> records, String filterValue, String filterType) {
-        Map<String, Object> result = new HashMap<>();
-        result.put("content", records.stream().map(this::convertToMap).toList());
-        result.put("totalElements", records.size());
-        result.put("filterType", filterType);
-        result.put("filterValue", filterValue);
-        result.put("message", String.format("按%s查询到 %d 条出货记录", filterType, records.size()));
-        return result;
-    }
-
-    /**
-     * 构建日期范围结果
-     */
-    private Map<String, Object> buildDateRangeResult(List<ShipmentRecord> records, String dateFrom, String dateTo) {
-        Map<String, Object> result = new HashMap<>();
-        result.put("content", records.stream().map(this::convertToMap).toList());
-        result.put("totalElements", records.size());
-        result.put("dateFrom", dateFrom);
-        result.put("dateTo", dateTo);
-        result.put("message", String.format("%s 至 %s 期间共 %d 条出货记录", dateFrom, dateTo, records.size()));
         return result;
     }
 

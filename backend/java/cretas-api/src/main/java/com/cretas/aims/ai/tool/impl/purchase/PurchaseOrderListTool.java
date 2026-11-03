@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.purchase;
 
+import com.cretas.aims.ai.tool.FinanceReviewStatusGuard;
 import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
@@ -73,6 +74,8 @@ public class PurchaseOrderListTool extends AbstractBusinessTool {
         Integer size = getInteger(params, "size", 10);
         String statusStr = getString(params, "status");
 
+        // 待财务审核: 与 PurchaseController 同一道二次拦截 (#736), 工具路径上 controller 不运行
+        FinanceReviewStatusGuard.check(statusStr, getUserRole(context), "采购单");
         PageResponse<PurchaseOrder> result;
         if (statusStr != null && !statusStr.trim().isEmpty()) {
             PurchaseOrderStatus status = PurchaseOrderStatus.valueOf(statusStr);

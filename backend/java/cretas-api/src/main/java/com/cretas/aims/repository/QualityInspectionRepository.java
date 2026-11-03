@@ -22,6 +22,49 @@ import java.util.Optional;
  */
 @Repository
 public interface QualityInspectionRepository extends JpaRepository<QualityInspection, String> {
+
+    /**
+     * 质检记录列表的条件筛选 (批次 / 检验结果 / 检验日期 / 质检类型), 全部在分页之前由数据库过滤
+     * (S6 验收 2026-11-03: 「不合格的质检记录」0 条却说「总计 6 条」—— 以前结果和类型是查回一页后在页内筛的,
+     * 总数是没筛过的; 日期根本没筛)。
+     *
+     * <p>每个条件可选 (null = 不限), 用布尔标志 + 永远非空的值 (null 的 LocalDate 在 PG 上绑不出类型, 见 #1357)。
+     * 结果按 {@code UPPER(result)} 比较, 与原来页内 equalsIgnoreCase 同口径。
+     *
+     * @param checkTypePattern 质检类型在 notes 里的标记 (如 「[质检类型: 原料检验]」)
+     */
+    default Page<QualityInspection> searchFiltered(String factoryId, Long productionBatchId, String result,
+                                                   LocalDate inspectionDateFrom, LocalDate inspectionDateTo,
+                                                   String checkTypePattern, Pageable pageable) {
+        return searchFilteredBound(factoryId,
+                productionBatchId != null, productionBatchId != null ? productionBatchId : -1L,
+                result != null, result != null ? result.trim().toUpperCase(java.util.Locale.ROOT) : "",
+                inspectionDateFrom != null, inspectionDateFrom != null ? inspectionDateFrom : LocalDate.of(1970, 1, 1),
+                inspectionDateTo != null, inspectionDateTo != null ? inspectionDateTo : LocalDate.of(9999, 12, 31),
+                checkTypePattern != null, checkTypePattern != null ? checkTypePattern : "",
+                pageable);
+    }
+
+    /** 只由 {@link #searchFiltered} 调用: 值参数都非空, 是否生效看布尔标志。 */
+    @Query("SELECT q FROM QualityInspection q WHERE q.factoryId = :factoryId " +
+           "AND (:byBatch = false OR q.productionBatchId = :productionBatchId) " +
+           "AND (:byResult = false OR UPPER(q.result) = :result) " +
+           "AND (:byFrom = false OR q.inspectionDate >= :inspectionDateFrom) " +
+           "AND (:byTo = false OR q.inspectionDate <= :inspectionDateTo) " +
+           "AND (:byType = false OR q.notes LIKE CONCAT('%', :checkTypePattern, '%')) " +
+           "ORDER BY q.inspectionDate DESC")
+    Page<QualityInspection> searchFilteredBound(@Param("factoryId") String factoryId,
+                                                @Param("byBatch") boolean byBatch,
+                                                @Param("productionBatchId") Long productionBatchId,
+                                                @Param("byResult") boolean byResult,
+                                                @Param("result") String result,
+                                                @Param("byFrom") boolean byFrom,
+                                                @Param("inspectionDateFrom") LocalDate inspectionDateFrom,
+                                                @Param("byTo") boolean byTo,
+                                                @Param("inspectionDateTo") LocalDate inspectionDateTo,
+                                                @Param("byType") boolean byType,
+                                                @Param("checkTypePattern") String checkTypePattern,
+                                                Pageable pageable);
     /**
      * 根据工厂ID分页查找
      */

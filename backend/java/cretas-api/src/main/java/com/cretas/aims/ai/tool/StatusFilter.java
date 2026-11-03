@@ -176,14 +176,25 @@ public final class StatusFilter {
      * @return 点名筛选条件的回复; 不是「按状态筛过且为空」时为 null (照常走各意图的格式化)
      */
     public static String emptyFilteredReply(Object resultData) {
-        if (!(resultData instanceof Map<?, ?> data) || !(data.get(APPLIED) instanceof Map<?, ?> applied)) {
+        if (!(resultData instanceof Map<?, ?> data)) {
+            return null;
+        }
+        Object applied = data.get(APPLIED);
+        String time = TimeRangeFilter.appliedLabel(data);
+        if (!(applied instanceof Map<?, ?>) && time == null) {
             return null;
         }
         if (!Boolean.TRUE.equals(isEmptyResult(data))) {
             return null;
         }
-        return "没有状态为「" + applied.get("label") + "」的记录。这是按状态筛选后的结果，不代表没有任何记录；"
-                + "去掉状态条件可以查看全部。";
+        if (time == null) {
+            return "没有状态为「" + ((Map<?, ?>) applied).get("label") + "」的记录。这是按状态筛选后的结果，不代表没有任何记录；"
+                    + "去掉状态条件可以查看全部。";
+        }
+        // 同样按时间筛过: 两个条件都点名 (「上个月」查 0 条不是「暂无记录」)
+        String status = applied instanceof Map<?, ?> a ? "、状态为「" + a.get("label") + "」" : "";
+        return "没有时间在 " + time + status + " 的记录。这是按条件筛选后的结果，不代表没有任何记录；"
+                + "去掉条件可以查看全部。";
     }
 
     /** 总数字段为 0, 或 (没有总数字段时) 所有列表字段都为空; 看不出来时为 null。 */

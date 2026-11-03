@@ -410,6 +410,9 @@ public class ToolDispatchService {
                     if (timeRange != null && timeRange.isValid()) {
                         params.put("startDate", timeRange.getStart().toLocalDate().toString());
                         params.put("endDate", timeRange.getEnd().toLocalDate().toString());
+                        // 标记这是用户说的时间: 工具不支持按时间筛时, 回复要说出来 (见 TimeRangeFilter)
+                        params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID,
+                                params.get("startDate") + "~" + params.get("endDate"));
                         log.info("从预处理结果提取时间范围: {} ~ {}", timeRange.getStart(), timeRange.getEnd());
                     }
                 }
