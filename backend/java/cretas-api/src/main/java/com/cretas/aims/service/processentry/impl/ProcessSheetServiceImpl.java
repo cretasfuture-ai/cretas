@@ -1758,20 +1758,25 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // 2B.2 多产出 (fan-out) 分解 —— 一次报工 N 个产出 → N 个单产出物料化, 共享投入按权重拆分, 落 N 行
     // ─────────────────────────────────────────────────────────────
 
-    private record OneOutputOutcome(
+    record OneOutputOutcome(
             Long batchId,
             String batchNumber,
             BigDecimal rowTotalCost,
             String sfiAnchor,
             BigDecimal originalUnitCost) {}
 
-    private record MultiOutputMaterialization(
+    record MultiOutputMaterialization(
             ProcessSheetRowRequest request,
             ProcessSheetRowRequest.OutputLine output,
             OneOutputOutcome outcome,
             ProcessSheetRowResult.OutputResult result) {}
 
-    private record CostAllocationPlan(List<BigDecimal> ratios, String basis) {}
+    /** {@code workflowShares}: 工艺版本固定比例份额(%), 与 ratios 同序; 本工序按重量时为 null。 */
+    record CostAllocationPlan(List<BigDecimal> ratios, String basis, List<BigDecimal> workflowShares) {
+        CostAllocationPlan(List<BigDecimal> ratios, String basis) {
+            this(ratios, basis, null);
+        }
+    }
 
     private record CostBuckets(
             BigDecimal material,
@@ -1872,7 +1877,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 4. 成本只汇总一次，再按可追溯规则分到每个产出。副产回收不冲减库存批成本，
         //    仍由既有 OrderCostBreakdownService 按各产出 YIELD 报工单独冲减，避免重复计价。
         applyMultiOutputCostAllocation(factoryId, planId, materializations,
-                byproductPortIds(workflowConfig, req.getProcessOrder()), warnings);
+                byproductPortIds(workflowConfig, req.getProcessOrder()),
+                fixedCostShares(workflowConfig, req.getProcessOrder()), warnings);
 
         // 5. workflow 任务进度回写一次 (整道工序完成)
         stampWorkflowTaskIfApplicable(factoryId, planId, req, workflowConfig);
@@ -2076,6 +2082,21 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return minutes.divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP);
     }
 
+    /** 本工序在工艺版本上配的固定比例份额 (portId → %); 按重量 / 无工艺快照 → 空表。 */
+    static Map<String, BigDecimal> fixedCostShares(WorkflowClerkSheetConfigDTO config, Integer processOrder) {
+        if (config == null || config.getProcesses() == null || processOrder == null) {
+            return Map.of();
+        }
+        Map<String, BigDecimal> shares = new LinkedHashMap<>();
+        config.getProcesses().stream()
+                .filter(p -> processOrder.equals(p.getProcessOrder()))
+                .flatMap(p -> workflowOutputs(p).stream())
+                .filter(port -> port.getWorkflowPortId() != null && port.getFixedCostShare() != null
+                        && port.getFixedCostShare().signum() > 0)
+                .forEach(port -> shares.put(port.getWorkflowPortId(), port.getFixedCostShare()));
+        return shares;
+    }
+
     private static Set<String> byproductPortIds(WorkflowClerkSheetConfigDTO config, Integer processOrder) {
         if (config == null || config.getProcesses() == null || processOrder == null) {
             return Set.of();
@@ -2100,8 +2121,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                                  BigDecimal jointCost,
                                                  Set<String> byproductPortIds,
                                                  List<String> warnings) {
+        // 显式比例 / 工艺固定比例: 用户已经把每个产出 (含副产) 各拿多少说死了, 不再按净值改写。
         if (byproductPortIds.isEmpty() || jointCost == null || jointCost.signum() <= 0
-                || "EXPLICIT_RATIO".equals(base.basis())) {
+                || "EXPLICIT_RATIO".equals(base.basis()) || "FIXED_RATIO".equals(base.basis())) {
             return base;
         }
         int n = materializations.size();
@@ -2145,8 +2167,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             String planId,
             List<MultiOutputMaterialization> materializations,
             Set<String> byproductPortIds,
+            Map<String, BigDecimal> fixedShares,
             List<String> warnings) {
-        CostAllocationPlan plan = resolveCostAllocationPlan(materializations);
+        CostAllocationPlan plan = resolveCostAllocationPlan(materializations, fixedShares, warnings);
         BigDecimal jointCost = BigDecimal.ZERO;
         boolean costKnown = true;
         BigDecimal materialPool = BigDecimal.ZERO;
@@ -2195,6 +2218,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             ProcessSheetRowRequest request = item.request();
             request.setCostAllocationRatio(ratioPercent);
             request.setCostAllocationBasis(plan.basis());
+            request.setWorkflowFixedCostShare(plan.workflowShares() == null ? null : plan.workflowShares().get(i));
             request.setAllocatedCost(allocated);
             item.result().setCostAllocationRatio(ratioPercent);
             item.result().setCostAllocationBasis(plan.basis());
@@ -2282,10 +2306,47 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
     }
 
-    private CostAllocationPlan resolveCostAllocationPlan(
-            List<MultiOutputMaterialization> materializations) {
+    /**
+     * 裁定多产出的成本分摊 (食品 DAG 缺口 10, Steve 2026-11-03):
+     * <ol>
+     *   <li>工艺版本选了「固定比例」且本次报的每个产出都有份额: 报工没填 / 填的就是工艺份额 → {@code FIXED_RATIO}
+     *       (只报了部分产出时在已报产出间按份额归一, 并提示)。</li>
+     *   <li>报工填了与工艺不同的比例 → {@code EXPLICIT_RATIO} (合计须 100), 每行同时记下工艺原份额
+     *       {@code workflowFixedCostShare} —— 「仍可改, 改了留记录」。</li>
+     *   <li>否则按重量 (默认, 现状): MASS → 同单位 QUANTITY → 拒答要求填比例。</li>
+     * </ol>
+     */
+    static CostAllocationPlan resolveCostAllocationPlan(
+            List<MultiOutputMaterialization> materializations,
+            Map<String, BigDecimal> fixedShares,
+            List<String> warnings) {
+        List<BigDecimal> workflowShares = null;
+        if (fixedShares != null && !fixedShares.isEmpty()
+                && materializations.stream().allMatch(item -> fixedShares.containsKey(item.output().getWorkflowPortId()))) {
+            workflowShares = materializations.stream()
+                    .map(item -> fixedShares.get(item.output().getWorkflowPortId())).toList();
+        }
         boolean anyExplicit = materializations.stream()
                 .anyMatch(item -> item.output().getCostAllocationRatio() != null);
+        if (workflowShares != null) {
+            boolean sameAsWorkflow = true;
+            for (int i = 0; i < materializations.size() && anyExplicit; i++) {
+                BigDecimal entered = materializations.get(i).output().getCostAllocationRatio();
+                if (entered == null || entered.subtract(workflowShares.get(i)).abs().compareTo(new BigDecimal("0.01")) > 0) {
+                    sameAsWorkflow = false;
+                }
+            }
+            if (!anyExplicit || sameAsWorkflow) {
+                if (fixedShares.size() > materializations.size()) {
+                    warnings.add("本次只报了部分产出, 工艺固定比例在已报的产出之间按份额重新归一");
+                }
+                BigDecimal total = workflowShares.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+                List<BigDecimal> ratios = workflowShares.stream()
+                        .map(share -> share.divide(total, 12, RoundingMode.HALF_UP)).toList();
+                return new CostAllocationPlan(ratios, "FIXED_RATIO", workflowShares);
+            }
+            warnings.add("本次手动修改了工艺上的固定分摊比例, 已按填写的比例分摊并记下工艺原比例");
+        }
         List<BigDecimal> weights = new ArrayList<>(materializations.size());
         String basis;
         if (anyExplicit) {
@@ -2335,7 +2396,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         List<BigDecimal> ratios = weights.stream()
                 .map(weight -> weight.divide(totalWeight, 12, RoundingMode.HALF_UP))
                 .toList();
-        return new CostAllocationPlan(ratios, basis);
+        return new CostAllocationPlan(ratios, basis, workflowShares);
     }
 
     private static BigDecimal outputMassKg(ProcessSheetRowRequest.OutputLine output) {
@@ -2402,7 +2463,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return batch;
     }
 
-    private static List<BigDecimal> allocateMoney(BigDecimal total, List<BigDecimal> ratios) {
+    static List<BigDecimal> allocateMoney(BigDecimal total, List<BigDecimal> ratios) {
         if (total == null) {
             return java.util.Collections.nCopies(ratios.size(), null);
         }
