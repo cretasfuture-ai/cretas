@@ -422,7 +422,7 @@ _cron_referenced_clis="$(
     { grep -hoE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
         "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
         "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
-        "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" || [ $? -eq 1 ]; } \
+        "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" || { _r=$?; [ "$_r" -eq 1 ] || exit "$_r"; }; } \
     | sed -E 's#^(\$CODEDIR/|.)##' | sort -u
 )" || _cron_grep_rc=$?
 if [ "$_cron_grep_rc" -ne 0 ]; then

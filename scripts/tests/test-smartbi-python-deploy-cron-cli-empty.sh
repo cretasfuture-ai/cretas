@@ -66,9 +66,10 @@ OUT3=$(run_block "$BLOCK" "$R3")
 echo "$OUT3" | grep -Fq 'REACHED' && fail "入口文件缺失时不应继续: $OUT3"
 echo "$OUT3" | grep -Fxq 'RC=0' && fail "入口文件缺失时 rc 不应为 0: $OUT3"
 echo "$OUT3" | grep -Fq 'LOG[ERROR]' || fail "入口文件缺失时应有 ERROR 日志: $OUT3"
+echo "$OUT3" | grep -Fq '(rc=2)' || fail "ERROR 日志应带 grep 的真实退出码 2: $OUT3"
 
 # 4. 变异: 去掉「rc=1 视为没命中」, 用例 1 必须红 (证明本测试守的就是这个行为)
-MUT=$(printf '%s\n' "$BLOCK" | sed 's/ || \[ \$? -eq 1 \]; }/; }/')
+MUT=${BLOCK/ || \{ _r=\$?; \[ \"\$_r\" -eq 1 \] || exit \"\$_r\"; \}; \}/; \}}
 [ "$MUT" != "$BLOCK" ] || fail "变异没生效 (sed 没改到任何东西)"
 OUTM=$(run_block "$MUT" "$R1")
 echo "$OUTM" | grep -Fq 'REACHED' && fail "变异后无引用用例仍然通过, 测试守不住: $OUTM"
