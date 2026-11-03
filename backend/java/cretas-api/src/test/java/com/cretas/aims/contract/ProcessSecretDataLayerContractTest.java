@@ -88,7 +88,7 @@ class ProcessSecretDataLayerContractTest {
             "changePercentage", "changeRate", "changeoverRatio", "changeoverTimeRatio", "commissionRate",
             "commissionRatePct", "completionRate", "concentrationMax", "concentrationMin", "concentrationTarget",
             "contributionRate", "conversionFactor", "conversionFactorSnapshot", "conversionScore",
-            "cookingFullCostPerKg", "costAllocationRatio", "costSharePct", "costVariancePct", "costVarianceRate",
+            "cookingFullCostPerKg", "costAllocationRatio", "fixedCostShare", "workflowFixedCostShare", "costSharePct", "costVariancePct", "costVarianceRate",
             "cpuUsage", "customerComplaintRate", "defaultSamplePercentage", "defaultTaxRate", "defectRate",
             "deltaPercent", "departmentAvgRate", "deviationPercent", "deviceUtilizationRate", "discountRate",
             "diskUsage", "dominantIntentRatio", "dominantProcessRatio", "dominantRatio", "drawnRatio",
