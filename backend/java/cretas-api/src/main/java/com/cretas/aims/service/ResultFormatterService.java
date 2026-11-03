@@ -13,8 +13,9 @@ import com.cretas.aims.dto.ai.IntentExecuteResponse;
 public interface ResultFormatterService {
 
     /**
-     * 格式化意图执行响应
-     * 根据意图类型和执行结果，生成人类可读的文本摘要
+     * 把 response 里的 resultData <b>原样</b>写成文字 (渲染器本身, 不做价格判定)。
+     * ⛔ 生产代码不直接调它: 给用户看的文字一律走 {@link #formatAndSet(IntentExecuteResponse, Long)},
+     * 先取该用户看得到的那一份数据再渲染 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)。
      *
      * @param response 意图执行响应
      * @return 格式化后的文本，如果无法格式化则返回 null
@@ -22,19 +23,13 @@ public interface ResultFormatterService {
     String format(IntentExecuteResponse response);
 
     /**
-     * 格式化并设置到响应对象
-     * 便捷方法，直接将格式化结果设置到 response.formattedText
+     * 按看这条回复的人 ({@code viewerUserId}) 的价格 / 财务可见性取数据视图, 从这一份渲染文字并设到
+     * response.formattedText。字段里对他隐藏的金额, 文字里也不会出现。viewer 为空 ⇒ 按全部不可见渲染。
+     * response.resultData 本身不在这里改 (HTTP 响应层 / SSE 推送各自按同一判定遮蔽字段)。
      *
-     * @param response 意图执行响应（会被修改）
-     * @return 同一个响应对象，已设置 formattedText
+     * @param response     意图执行响应（formattedText 会被设置）
+     * @param viewerUserId 看这条回复的用户
+     * @return 同一个响应对象
      */
-    default IntentExecuteResponse formatAndSet(IntentExecuteResponse response) {
-        if (response != null) {
-            String formatted = format(response);
-            if (formatted != null && !formatted.isEmpty()) {
-                response.setFormattedText(formatted);
-            }
-        }
-        return response;
-    }
+    IntentExecuteResponse formatAndSet(IntentExecuteResponse response, Long viewerUserId);
 }

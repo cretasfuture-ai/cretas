@@ -80,8 +80,13 @@ public class ExpenseRequestQueryTool extends AbstractBusinessTool {
                     expenseRequestService.summarizeMonth(factoryId, yearMonth);
             BigDecimal total = summary.values().stream()
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
+            // 文字与 total / 各类别金额字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+            boolean showAmounts = replyShowsAmount(context, "total")
+                    && summary.keySet().stream().allMatch(c -> replyShowsAmount(context, c.name()));
             String msg = summary.isEmpty()
                     ? String.format("%s 暂无已批准报销", yearMonth)
+                    : !showAmounts
+                    ? String.format("%s 报销汇总: %d 个类别 (金额按权限不显示)", yearMonth, summary.size())
                     : String.format("%s 报销汇总: 总额 ¥%s, %s", yearMonth, total,
                             summary.entrySet().stream()
                                     .map(e -> e.getKey().name() + "=¥" + e.getValue())
@@ -121,7 +126,8 @@ public class ExpenseRequestQueryTool extends AbstractBusinessTool {
 
         String msg = String.format("找到 %d 条报销记录 (scope=%s, 总数 %d). 首条: %s",
                 rows.size(), scope, page.getTotalElements(),
-                rows.isEmpty() ? "(空)" : formatFirstRow(page.getContent().get(0)));
+                rows.isEmpty() ? "(空)" : formatFirstRow(page.getContent().get(0),
+                        replyShowsAmount(context, "amount")));
         log.info("ExpenseRequestQuery list: factory={} scope={} count={}", factoryId, scope, rows.size());
         return buildSimpleResult(msg, Map.of(
                 "rows", rows,
@@ -129,10 +135,11 @@ public class ExpenseRequestQueryTool extends AbstractBusinessTool {
                 "scope", scope));
     }
 
-    private String formatFirstRow(ExpenseRequest r) {
-        return String.format("[%s] 申请人=%d, %s ¥%s (%s), 状态=%s",
+    /** 金额与行里的 amount 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)。 */
+    private String formatFirstRow(ExpenseRequest r, boolean showAmount) {
+        return String.format("[%s] 申请人=%d, %s %s (%s), 状态=%s",
                 r.getId().substring(0, 8), r.getUserId(),
-                r.getCategory().name(), r.getAmount(),
+                r.getCategory().name(), showAmount ? "¥" + r.getAmount() : "金额按权限不显示",
                 r.getExpenseDate(), r.getStatus().name());
     }
 

@@ -107,10 +107,12 @@ public class CommissionPendingTotalTool extends AbstractBusinessTool {
         data.put("totalAmount", totalAmount.setScale(2, RoundingMode.HALF_UP));
         data.put("breakdownBySales", breakdown);
 
+        // 文字与 totalAmount 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
         String message = String.format(
-                "💸 待付提成: %d 笔, 共 ¥%s%s",
+                "💸 待付提成: %d 笔%s%s",
                 page.getNumberOfElements(),
-                totalAmount.setScale(2, RoundingMode.HALF_UP),
+                replyShowsAmount(context, "totalAmount")
+                        ? ", 共 ¥" + totalAmount.setScale(2, RoundingMode.HALF_UP) : "",
                 page.getTotalElements() > MAX_PAGE
                         ? String.format(" (仅显示前 %d 笔, 总 %d 笔)", MAX_PAGE, page.getTotalElements())
                         : "");

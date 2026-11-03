@@ -31,6 +31,36 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     private static final DecimalFormat AMOUNT_FORMATTER = new DecimalFormat("#,##0.00");
     private static final DecimalFormat QUANTITY_FORMATTER = new DecimalFormat("#,##0.##");
 
+    /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个)。没装配时不从数据渲染 (fail closed)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.PriceFieldResponseAdvice priceView;
+
+    @Override
+    public IntentExecuteResponse formatAndSet(IntentExecuteResponse response, Long viewerUserId) {
+        if (response == null) {
+            return null;
+        }
+        IntentExecuteResponse view = response;
+        if (response.getResultData() != null) {
+            if (priceView == null) {
+                log.warn("ResultFormatter: 价格可见性组件未装配, 不从结果数据渲染文字 (fail closed)");
+                return response;
+            }
+            view = IntentExecuteResponse.builder()
+                    .intentCode(response.getIntentCode())
+                    .intentCategory(response.getIntentCategory())
+                    .status(response.getStatus())
+                    .message(response.getMessage())
+                    .resultData(priceView.maskedViewFor(response.getResultData(), viewerUserId))
+                    .build();
+        }
+        String formatted = format(view);
+        if (formatted != null && !formatted.isEmpty()) {
+            response.setFormattedText(formatted);
+        }
+        return response;
+    }
+
     /** 去掉「时间没用上」标记后照常格式化, 供在前面加提示用。 */
     private String formatIgnoringTimeNotice(IntentExecuteResponse response) {
         Map<String, Object> data = new java.util.LinkedHashMap<>();

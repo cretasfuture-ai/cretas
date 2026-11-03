@@ -170,6 +170,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 批次数 ").append(costVarianceData.getBatchCount())
                             .append("；实际总成本含工艺保密产品，不提供给 AI。");
+                } else if (!replyShowsAmount(context, "totalActualCost")) {
+                    // 文字与 totalActualCost 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+                    msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
+                            .append(" 批次数 ").append(costVarianceData.getBatchCount()).append("；实际总成本按权限不显示。");
                 } else {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())

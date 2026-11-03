@@ -129,11 +129,15 @@ public class CashflowStatementQueryTool extends AbstractBusinessTool {
                 ? String.format("%d-%02d", startYear, startMonth)
                 : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
-        String message = String.format(
+        // 文字与现金流各金额字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        String message = replyShowsAmounts(context, "operatingNetCashFlow", "investingNetCashFlow",
+                "financingNetCashFlow", "netIncreaseInCash")
+                ? String.format(
                 "%s 现金流: 经营 ¥%s / 投资 ¥%s / 筹资 ¥%s / 净增加 ¥%s",
                 periodLabel,
                 dto.getOperatingNetCashFlow(), dto.getInvestingNetCashFlow(),
-                dto.getFinancingNetCashFlow(), dto.getNetIncreaseInCash());
+                dto.getFinancingNetCashFlow(), dto.getNetIncreaseInCash())
+                : String.format("%s 现金流 (金额按权限不显示)", periodLabel);
         return buildSimpleResult(message, data);
     }
 

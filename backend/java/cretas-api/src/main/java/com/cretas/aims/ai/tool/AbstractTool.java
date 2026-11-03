@@ -26,6 +26,33 @@ public abstract class AbstractTool implements ToolExecutor {
     @Autowired
     protected ObjectMapper objectMapper;
 
+    /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个)。没装配时一律按看不到 (fail closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.security.PriceFieldResponseAdvice priceView;
+
+    /**
+     * 金额要写进回复文字 (message / summary) 之前问: 这个值以 {@code key} 放在本工具结果 Map 里时, 调用者看得到吗?
+     * 与字段同一套规则 —— 字段里被遮的金额, 文字里也不能出现 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)。
+     */
+    protected boolean replyShowsAmount(Map<String, Object> context, String key) {
+        return priceView != null && priceView.showsKey(getUserId(context), key);
+    }
+
+    /** 同上, 多个键: 全部看得到才算看得到 (一句话里的几个金额同进同出)。 */
+    protected boolean replyShowsAmounts(Map<String, Object> context, String... keys) {
+        for (String key : keys) {
+            if (!replyShowsAmount(context, key)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 同上, 按价格口径 (类型化字段 @PriceSensitive 的口径, 如 {@code PriceSensitive.PURCHASE}) 判定。 */
+    protected boolean replyShowsPriceSpec(Map<String, Object> context, String spec) {
+        return priceView != null && priceView.showsSpec(getUserId(context), spec);
+    }
+
     /**
      * 解析工具调用参数为 Map
      *
