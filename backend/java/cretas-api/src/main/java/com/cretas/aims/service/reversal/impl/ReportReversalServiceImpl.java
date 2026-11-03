@@ -279,6 +279,22 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                             .withSeverity("BLOCKING")
                             .withHintTarget(String.valueOf(batchId));
                 }
+                // 🔴 假 DONE (2026-11-03 F006 实测, log 29/30/31): 逐道报工的批次只有 process_sheet_rows、
+                // 没有 production_reports, 旧逻辑当成「无报工 no-op」直接置 DONE, executeReversal 一步没跑
+                // —— 在制品/领用都还在, 下游没撤掉, 上游被「已被下道工序领用」永远拦住。
+                // 这种单从没审批过、没走快速撤回、没冲过一条流水; 批次上又还有已入账的录入行 ⇒ 重新打开等审批,
+                // ⛔ 不走下面的「只软删录入行」(那会把行藏起来而库存一笔没冲)。
+                if (isNoOpDoneThatNeverExecuted(ex) && processSheetRowRepository != null
+                        && !rowsOfReversedStep(factoryId, batchId, batch.getProductionPlanId()).isEmpty()) {
+                    ex.setStatus(ReportReversalLog.ReversalStatus.PENDING);
+                    String note = "此前误记为撤回完成 (逐道录入未撤), 已重新提交审批";
+                    ex.setReason(ex.getReason() == null || ex.getReason().isBlank()
+                            ? note : ex.getReason() + " | " + note);
+                    ReportReversalLog reopened = reversalLogRepo.save(ex);
+                    log.warn("[SP2] submitReversal reopened no-op DONE with live process rows: batchId={} logId={}",
+                            batchId, ex.getId());
+                    return reopened;
+                }
                 // 兼容修复上线前已经完成的撤回：旧版本只软删 production_reports，没有清理
                 // process_sheet_rows。重复点击撤回时只修复这批残留行，不重复冲销库存流水。
                 softDeleteProcessSheetRows(factoryId, batchId, batch.getProductionPlanId(), LocalDateTime.now());
@@ -296,6 +312,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // 检查是否有报工数据
         List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(factoryId, batchId);
         boolean hasReports = !reports.isEmpty();
+        // 逐道报工 (工序录入表) 的批次可能一条 production_reports 都没有, 但录入行已物化入账
+        // (在制品入库 / 领用) —— 那不是 no-op, 必须走 executeReversal 才撤得掉。
+        boolean hasProcessRows = !hasReports && processSheetRowRepository != null
+                && !rowsOfReversedStep(factoryId, batchId, batch.getProductionPlanId()).isEmpty();
 
         // ---- SP12 快速撤回路径判断 ----
         // 条件: 本人提交 + 无下游消费(G1已通过) + 最新报工在时间窗口内
@@ -306,11 +326,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         }
 
         boolean isFastPath = hasReports && fastPathDeniedReason == null;
-        // 无报工 → 真 no-op 直接 DONE | 快速撤回通过 → APPROVED(自动批准,待 executeReversal 执行后置 DONE) | 否则 → PENDING
+        // 无报工也无录入行 → 真 no-op 直接 DONE | 快速撤回通过 → APPROVED(自动批准,待 executeReversal 执行后置 DONE)
+        // | 否则 (含只有录入行的逐道报工批次) → PENDING
         // ⚠️ BUG-GOLD-RERUN-FASTPATH-REVERSAL: 快速撤回不能预置 DONE —— executeReversal 对 DONE 幂等跳过
         //   (软删报工/冲销库存/清成本全不执行)。必须存非 DONE 状态让 executeReversal 真正跑完再由它置 DONE。
         ReportReversalLog.ReversalStatus initialStatus;
-        if (!hasReports) {
+        if (!hasReports && !hasProcessRows) {
             initialStatus = ReportReversalLog.ReversalStatus.DONE;
         } else if (isFastPath) {
             initialStatus = ReportReversalLog.ReversalStatus.APPROVED;
@@ -1639,6 +1660,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
         return selected;
+    }
+
+    /** 由「无报工 no-op」直接置 DONE 的撤回单: 没审批、没走快速撤回、没冲过一条流水。 */
+    private static boolean isNoOpDoneThatNeverExecuted(ReportReversalLog ex) {
+        return ex.getApprovedBy() == null && ex.getApprovedAt() == null
+                && !Boolean.TRUE.equals(ex.getFastPath())
+                && (ex.getRevertedTxnIds() == null || ex.getRevertedTxnIds().isEmpty());
     }
 
     private static String entryKey(ProcessSheetRow row) {

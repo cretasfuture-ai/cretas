@@ -467,16 +467,16 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     // ==================== 单元2: 厂级工序聚合 ====================
 
     /**
-     * 缺口 #07 物料平衡表: 逐条 YIELD 报工 (按计划 / 工序 / 任务归属), 由 service 按任务汇合后交
+     * 缺口 #07 物料平衡表: 逐条 YIELD 报工 (按计划 / 工序 / 任务归属; web 逐道录入的报工没有工序任务, 靠 custom_fields 的工序名 + process_order), 由 service 按任务汇合后交
      * MaterialBalanceCalculator。筛选与保密排除同 {@link #aggregateYieldByProcess}。
      */
     @Query(value = """
         SELECT
             pr.id AS report_id,
             pr.work_process_task_id AS task_id,
-            wpt.process_order AS process_order,
-            wp.id AS process_id,
-            wp.process_name AS process_name,
+            COALESCE(wpt.process_order, pr.process_order) AS process_order,
+            COALESCE(CAST(wp.id AS text), COALESCE(pr.custom_fields ->> 'processEntryProcessName', pr.process_category, '')) AS process_id,
+            COALESCE(wp.process_name, pr.custom_fields ->> 'processEntryProcessName', pr.process_category) AS process_name,
             wp.unit AS wp_unit,
             wp.output_unit AS wp_output_unit,
             pb.id AS batch_id,
@@ -494,22 +494,22 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             pr.sample_retain_quantity AS sample_retain_quantity,
             CAST(pr.byproducts AS text) AS byproducts_json
         FROM production_reports pr
-        JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
-        JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
+        LEFT JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
+        LEFT JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
         LEFT JOIN production_batches pb ON pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
         LEFT JOIN production_plans pp ON pp.id = pb.production_plan_id
         LEFT JOIN product_types ptp ON ptp.id = pp.product_type_id
         WHERE pr.factory_id = :factoryId
-          AND wpt.factory_id = :factoryId
           AND pr.report_type = 'YIELD'
           AND pr.deleted_at IS NULL
           AND pr.report_date BETWEEN :startDate AND :endDate
           AND (:planId = '' OR pb.production_plan_id = :planId)
           AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
+          AND (pp.product_type_id IS NULL OR pp.product_type_id NOT IN (:excludedProductTypeIds))
           AND NOT EXISTS (SELECT 1 FROM production_batches xb
                           WHERE xb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
                             AND xb.production_plan_id IN (:excludedPlanIds))
-        ORDER BY pp.plan_number, wpt.process_order, pr.id
+        ORDER BY pp.plan_number, COALESCE(wpt.process_order, pr.process_order), pr.id
         """, nativeQuery = true)
     List<Map<String, Object>> findYieldReportsForBalance(
             @Param("factoryId") String factoryId,

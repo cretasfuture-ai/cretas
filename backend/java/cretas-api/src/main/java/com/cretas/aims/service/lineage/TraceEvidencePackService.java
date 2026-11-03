@@ -240,8 +240,10 @@ public class TraceEvidencePackService {
                 .toList();
         Set<String> supplierIds = raws.stream().map(MaterialBatch::getSupplierId).filter(Objects::nonNull)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-        Map<String, Supplier> suppliers = supplierIds.isEmpty() ? Map.of()
-                : byId(supplierRepository.findAllById(supplierIds), Supplier::getId);
+        // ⚠️ 不用 Map.of(): 客供原料等没有 supplierId, 之后 get(null) 在 Map.of() 上抛 NPE
+        //    (prod 2026-11-03 F006 酱牛肉证据包 500 就是这么来的); byId 返回的 LinkedHashMap 接受 null 键查询
+        Map<String, Supplier> suppliers = byId(supplierIds.isEmpty() ? List.of()
+                : supplierRepository.findAllById(supplierIds), Supplier::getId);
         Map<String, List<SupplierQualification>> qualifications = new LinkedHashMap<>();
         for (String supplierId : supplierIds) {
             qualifications.put(supplierId, Objects.requireNonNullElse(
@@ -337,8 +339,9 @@ public class TraceEvidencePackService {
                         planIds.isEmpty() ? Set.of(NO_MATCH) : planIds), List.of());
         Set<Long> checkpointIds = records.stream().map(HaccpMonitoringRecord::getCheckpointId).filter(Objects::nonNull)
                 .collect(Collectors.toSet());
-        Map<Long, HaccpCheckpoint> checkpoints = checkpointIds.isEmpty() ? Map.of()
-                : byId(checkpointRepository.findAllById(checkpointIds), HaccpCheckpoint::getId);
+        // 同上: 记录上 checkpointId 为空时 get(null) 不能炸
+        Map<Long, HaccpCheckpoint> checkpoints = byId(checkpointIds.isEmpty() ? List.of()
+                : checkpointRepository.findAllById(checkpointIds), HaccpCheckpoint::getId);
 
         if (records.isEmpty() && !productions.isEmpty()) {
             List<HaccpCheckpoint> active = Objects.requireNonNullElse(

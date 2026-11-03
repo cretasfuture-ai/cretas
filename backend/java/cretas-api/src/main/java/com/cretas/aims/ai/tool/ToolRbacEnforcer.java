@@ -276,6 +276,16 @@ public class ToolRbacEnforcer {
         String[] codes = required.toArray(new String[0]);
         boolean ok = rbacGuard.hasAnyPermission(context, codes);
         if (ok) {
+            // 另一组「且」要求 (任一即可): 例如报表数据在 App 里只出现在某个模块的页面上, 对话也要那个模块
+            Set<String> also = tool.getAlsoRequiredPermissions();
+            if (also != null && !also.isEmpty()) {
+                String[] alsoCodes = also.toArray(new String[0]);
+                if (!rbacGuard.hasAnyPermission(context, alsoCodes)) {
+                    log.warn("AI-RBAC 模块拒绝: tool={}, alsoRequiredAny={}, userId={}", tool.getToolName(), also,
+                            context != null ? context.get("userId") : null);
+                    return Decision.deny(rbacGuard.denyMessage(context, tool.getToolName(), alsoCodes), also);
+                }
+            }
             return Decision.allow();
         }
         String action = tool.getToolName();

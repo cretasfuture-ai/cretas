@@ -50,6 +50,9 @@ public class WorkReportSubmitRequest {
     private Integer totalWorkers;
     private BigDecimal operationVolume;
 
+    /** 本次产量(outputQuantity)的计量单位; 不传 = 老客户端, 按批次单位处理并在响应 unitAssumed 里标出 */
+    private String unit;
+
     private List<Map<String, Object>> hourEntries;
     private List<Map<String, Object>> nonProductionEntries;
 
