@@ -239,6 +239,16 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean blockStartOnOpenShortage = false;
 
+    /** 物料平衡黄色阈值 (%), V20261103_140, 默认 5 */
+    @Column(name = "material_balance_warn_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private java.math.BigDecimal materialBalanceWarnPct = new java.math.BigDecimal("5.00");
+
+    /** 物料平衡红色阈值 (%), V20261103_140, 默认 15; 报工当场提示也用它 */
+    @Column(name = "material_balance_red_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private java.math.BigDecimal materialBalanceRedPct = new java.math.BigDecimal("15.00");
+
     // ==================== 审计字段 ====================
     /**
      * 创建人ID
