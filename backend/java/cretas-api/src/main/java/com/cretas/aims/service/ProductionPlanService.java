@@ -192,6 +192,12 @@ public interface ProductionPlanService {
 
     /** Start production and attach the authenticated operator to inventory audit rows. */
     ProductionPlanDTO startProduction(String factoryId, String planId, Long operatorId);
+
+    /**
+     * 开始生产; 工厂开了「缺料时拦开工」(S4-08) 且计划关联的缺料未解决时, 必须带 {@code forceStartReason} 才能开工,
+     * 原因记入缺料实例的处理记录。开关关着时与 {@link #startProduction(String, String, Long)} 完全一样。
+     */
+    ProductionPlanDTO startProduction(String factoryId, String planId, Long operatorId, String forceStartReason);
      /**
      * 完成生产。
      *

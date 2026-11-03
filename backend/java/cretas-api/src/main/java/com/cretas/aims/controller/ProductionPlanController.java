@@ -83,6 +83,19 @@ import com.cretas.aims.exception.BusinessException;
 @RowScopeSupported
 public class ProductionPlanController {
 
+    /** 开工请求体 (可省略): 工厂开了「缺料时拦开工」(S4-08) 时, 用它带强制开工原因。 */
+    public static class StartProductionRequest {
+        private String forceStartReason;
+
+        public String getForceStartReason() {
+            return forceStartReason;
+        }
+
+        public void setForceStartReason(String forceStartReason) {
+            this.forceStartReason = forceStartReason;
+        }
+    }
+
     private final ProductionPlanService productionPlanService;
     private final MobileService mobileService;
     private final ProductionPlanRepository planRepository;
@@ -438,11 +451,14 @@ public class ProductionPlanController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
             @PathVariable @NotNull String planId,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody(required = false) StartProductionRequest request) {
 
         Long userId = extractUserId(authorization);
-        log.info("开始生产: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
-        ProductionPlanDTO plan = productionPlanService.startProduction(factoryId, planId, userId);
+        String forceStartReason = request == null ? null : request.getForceStartReason();
+        log.info("开始生产: factoryId={}, planId={}, userId={}, forced={}", factoryId, planId, userId,
+                forceStartReason != null && !forceStartReason.isBlank());
+        ProductionPlanDTO plan = productionPlanService.startProduction(factoryId, planId, userId, forceStartReason);
         return ApiResponse.success("生产已开始", plan);
     }
 

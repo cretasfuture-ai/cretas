@@ -460,4 +460,40 @@ class ProductionPlanStartValidationTest {
         recipe.setOverallYieldRate(overallYieldRate);
         return recipe;
     }
+
+    // ==================== S4-08 缺料开工闸的接线 ====================
+
+    @Test
+    @DisplayName("S4-08: 开工路径真的调了缺料闸, 闸拦下时计划保持待处理且不落库")
+    void startProduction_shortageGateRefusal_leavesPlanPendingAndUnsaved() {
+        com.cretas.aims.service.shortage.ShortageStartGate gate =
+                org.mockito.Mockito.mock(com.cretas.aims.service.shortage.ShortageStartGate.class);
+        setField(service, "shortageStartGate", gate);
+        ProductionPlan plan = pendingPlan(new BigDecimal("100"));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        org.mockito.Mockito.doThrow(new BusinessException(409, "缺料未解决").withHint("到「缺料异常」处理"))
+                .when(gate).check(org.mockito.ArgumentMatchers.eq(FACTORY_ID), org.mockito.ArgumentMatchers.same(plan),
+                        org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(9L));
+
+        assertThrows(BusinessException.class, () -> service.startProduction(FACTORY_ID, PLAN_ID, 9L));
+
+        assertEquals(ProductionPlanStatus.PENDING, plan.getStatus());
+        org.mockito.Mockito.verify(productionPlanRepository, org.mockito.Mockito.never()).save(any(ProductionPlan.class));
+    }
+
+    @Test
+    @DisplayName("S4-08: 强制开工原因原样交给缺料闸")
+    void startProduction_forceReason_isHandedToTheShortageGate() {
+        com.cretas.aims.service.shortage.ShortageStartGate gate =
+                org.mockito.Mockito.mock(com.cretas.aims.service.shortage.ShortageStartGate.class);
+        setField(service, "shortageStartGate", gate);
+        ProductionPlan plan = pendingPlan(new BigDecimal("100"));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.startProduction(FACTORY_ID, PLAN_ID, 9L, "客户加急");
+
+        org.mockito.Mockito.verify(gate).check(FACTORY_ID, plan, "客户加急", 9L);
+        assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
+    }
 }

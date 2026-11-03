@@ -395,6 +395,7 @@ class CanvasFactoryConfigControllerTest {
         assertEquals("zh-CN", resp.getData().get("language"));
         assertEquals(false, resp.getData().get("skipProcessReportingDefault"));
         assertEquals(false, resp.getData().get("requireRequisitionBeforeReport"));
+        assertEquals(false, resp.getData().get("blockStartOnOpenShortage"));
     }
 
     @Test
@@ -526,5 +527,55 @@ class CanvasFactoryConfigControllerTest {
 
         assertTrue(resp.getSuccess());
         assertEquals(false, resp.getData().get("requireRequisitionBeforeReport"));
+    }
+
+    // ==================== blockStartOnOpenShortage (S4-08 缺料时拦开工, 默认关) ====================
+
+    @Test
+    @DisplayName("updateSettings blockStartOnOpenShortage=true 持久化且可读回")
+    void updateSettings_blockStartOnOpenShortage_persistsAndIsReadable() {
+        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.empty());
+        when(factorySettingsRepo.saveAndFlush(any(FactorySettings.class))).thenAnswer(inv -> {
+            FactorySettings s = inv.getArgument(0);
+            s.setId(1);
+            s.setVersion(0L);
+            return s;
+        });
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("factoryName", "测试工厂");
+        body.put("blockStartOnOpenShortage", true);
+
+        ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(true, resp.getData().get("blockStartOnOpenShortage"));
+    }
+
+    @Test
+    @DisplayName("updateSettings 部分PUT不携带blockStartOnOpenShortage时不清空已有值")
+    void updateSettings_partialPut_doesNotWipeExistingBlockStartOnOpenShortage() {
+        FactorySettings s = new FactorySettings();
+        s.setId(1);
+        s.setFactoryId("F006");
+        s.setVersion(2L);
+        s.setBlockStartOnOpenShortage(true);
+        when(factorySettingsRepo.findByFactoryId("F006")).thenReturn(Optional.of(s));
+        when(factorySettingsRepo.saveAndFlush(any(FactorySettings.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("version", 2L);
+        body.put("factoryName", "改个名字");
+
+        ApiResponse<Map<String, Object>> resp = controller.updateSettings("F006", body);
+
+        assertTrue(resp.getSuccess());
+        assertEquals(true, resp.getData().get("blockStartOnOpenShortage"));
+    }
+
+    @Test
+    @DisplayName("新建的工厂设置默认不拦开工 (六膳门 N1)")
+    void newFactorySettingsDoNotBlockStartByDefault() {
+        assertEquals(false, new FactorySettings().getBlockStartOnOpenShortage());
     }
 }
