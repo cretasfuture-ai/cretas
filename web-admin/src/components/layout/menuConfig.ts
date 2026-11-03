@@ -330,6 +330,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/quality/release', title: '质检放行', icon: '', module: 'quality' },
       // 缺口 13: 报工录 CCP, 超限偏离在这里处理; 按批次导出 CCP 记录
       { path: '/quality/ccp', title: 'CCP 监控记录', icon: '', module: 'quality' },
+      // 缺口 15: 冷链超温告警 → 受影响批次 (暴露时长) → 一键转质检
+      { path: '/quality/cold-chain', title: '冷链超温批次', icon: '', module: 'quality' },
       { path: '/quality/label-qc', title: '包装标签拍检', icon: '', module: 'quality' },
       { path: '/quality/vision-training', title: '视觉质检训练', icon: '', module: 'quality',
         roles: ['factory_super_admin', 'quality_manager'] },
