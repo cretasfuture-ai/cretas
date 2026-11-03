@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.scale;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.entity.common.UnifiedDeviceType;
@@ -47,16 +48,12 @@ public class ScaleListDevicesTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
 
         // status: 状态筛选（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "设备状态筛选");
-        status.put("enum", Arrays.asList(
-                "idle",      // 空闲
-                "active",    // 运行中
-                "offline",   // 离线
-                "error",     // 故障
-                "disabled"   // 停用
-        ));
+        Map<String, Object> status = StatusFilter.property("设备状态筛选", StatusFilter.table(
+                StatusFilter.words("idle", "空闲"),
+                StatusFilter.words("active", "运行中", "工作中", "在线"),
+                StatusFilter.words("offline", "离线"),
+                StatusFilter.words("error", "故障", "异常", "报错"),
+                StatusFilter.words("disabled", "停用", "已停用", "禁用")));
         properties.put("status", status);
 
         // keyword: 关键词搜索（可选）

@@ -4,6 +4,7 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.dto.material.MaterialBatchListFilter;
 import com.cretas.aims.service.MaterialBatchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -105,20 +106,9 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         properties.put("materialTypeId", materialTypeId);
 
         // status: 状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "批次状态筛选");
-        status.put("enum", Arrays.asList(
-                "PENDING",      // 待检验
-                "AVAILABLE",    // 可用
-                "RESERVED",     // 已预留
-                "IN_USE",       // 使用中
-                "USED_UP",      // 已用完
-                "EXPIRED",      // 已过期
-                "FROZEN",       // 冻品
-                "REJECTED"      // 已拒收
-        ));
-        properties.put("status", status);
+        // 状态词表 (含「即将过期」等要换个问法的说法): 对话里说的状态由 AbstractBusinessTool 统一认 (StatusFilter)
+        // enum 取自批次状态枚举本身: 以前手写的列表里有不存在的状态、又漏了 DEPLETED。
+        properties.put("status", MaterialBatchStatusPhrase.property());
 
         // page: 页码（可选，默认1）
         Map<String, Object> page = new HashMap<>();
@@ -178,6 +168,8 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         // 解析筛选参数
         String batchNumber = getString(params, "batchNumber");
         String materialTypeId = getString(params, "materialTypeId");
+        // ERP-S6-10: 对话里说的状态 (「已用完」) 已由 AbstractBusinessTool 按 status 词表认成代码放进 params;
+        // 说了却认不出的在那里就 400 了, 不会静默变成「不限状态」。
         String status = getString(params, "status");
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
@@ -203,20 +195,18 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         }
 
         // 调用服务获取数据
-        PageResponse<MaterialBatchDTO> pageResponse = materialBatchService.getMaterialBatchList(factoryId, pageRequest);
-
-        // 在结果中过滤（因为PageRequest不支持部分筛选条件）
-        List<MaterialBatchDTO> content = pageResponse.getContent();
-        if (content != null) {
-            // 按原料类型过滤
-            if (materialTypeId != null && !materialTypeId.trim().isEmpty()) {
-                content = filterByMaterialTypeId(content, materialTypeId);
-            }
-            // 按日期范围过滤（入库日期）
-            if (startDate != null || endDate != null) {
-                content = filterByDateRange(content, startDate, endDate);
-            }
+        // 原料类型 / 入库日期与状态一样交给数据库在分页之前过滤 (ERP-S6-02):
+        // 以前是查回一页再在这一页里筛, 匹配项在第 2 页以后就读成「没有」, 总数也是错的。
+        PageResponse<MaterialBatchDTO> pageResponse = materialBatchService.getMaterialBatchList(
+                factoryId, pageRequest, new MaterialBatchListFilter(
+                        materialTypeId != null && !materialTypeId.trim().isEmpty() ? materialTypeId.trim() : null,
+                        startDate, endDate));
+        if (pageResponse == null) {
+            // ⛔ 不当成「0 条」: 服务没给出分页结果就是没查到, 明确报错而不是空列表或 NPE
+            throw new IllegalStateException("原料批次查询没有返回分页结果 (factoryId=" + factoryId + ")");
         }
+
+        List<MaterialBatchDTO> content = pageResponse.getContent();
 
         // 构建返回结果
         Map<String, Object> result = buildPageResult(
@@ -226,8 +216,7 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
                 page
         );
 
-        // Filtering may shrink this page; retain the service's actual page size
-        // so server-owned pagination never infers it from the remaining rows.
+        // Keep the service's actual page size so server-owned pagination never infers it from the row count.
         result.put("size", pageResponse.getSize() != null ? pageResponse.getSize() : size);
 
         // 添加查询条件摘要
@@ -238,31 +227,12 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         if (startDate != null) queryConditions.put("startDate", startDate.toString());
         if (endDate != null) queryConditions.put("endDate", endDate.toString());
         result.put("queryConditions", queryConditions);
-
-        // 更新过滤后的记录数
-        result.put("totalElements", content != null ? content.size() : 0L);
+        // totalElements 用数据库给的真实总数 (buildPageResult 已写入); ⛔ 不再改成「本页条数」
 
         log.info("原料批次查询完成 - 总记录数: {}, 当前页: {}",
                 pageResponse.getTotalElements(), page);
 
         return result;
-    }
-
-    /**
-     * 按原料类型ID过滤批次列表
-     *
-     * @param batches 批次列表
-     * @param materialTypeId 原料类型ID
-     * @return 过滤后的列表
-     */
-    private List<MaterialBatchDTO> filterByMaterialTypeId(List<MaterialBatchDTO> batches, String materialTypeId) {
-        List<MaterialBatchDTO> filtered = new ArrayList<>();
-        for (MaterialBatchDTO batch : batches) {
-            if (batch.getMaterialTypeId() != null && batch.getMaterialTypeId().equals(materialTypeId)) {
-                filtered.add(batch);
-            }
-        }
-        return filtered;
     }
 
     /**
@@ -278,34 +248,11 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         try {
             return LocalDate.parse(dateStr.trim());
         } catch (DateTimeParseException e) {
-            log.warn("无法解析日期: {}", dateStr);
-            return null;
+            // ⛔ 不静默当成「不限日期」: 那会把一个按日期查的问题答成全部批次
+            throw new com.cretas.aims.exception.BusinessException(400,
+                    "无法识别的日期: " + dateStr.trim())
+                    .withHint("日期请用 YYYY-MM-DD, 例如 2026-11-03");
         }
-    }
-
-    /**
-     * 按入库日期范围过滤批次列表
-     *
-     * @param batches 批次列表
-     * @param startDate 开始日期（含）
-     * @param endDate 结束日期（含）
-     * @return 过滤后的列表
-     */
-    private List<MaterialBatchDTO> filterByDateRange(List<MaterialBatchDTO> batches, LocalDate startDate, LocalDate endDate) {
-        List<MaterialBatchDTO> filtered = new ArrayList<>();
-        for (MaterialBatchDTO batch : batches) {
-            LocalDate receiptDate = batch.getReceiptDate();
-            if (receiptDate == null) {
-                continue; // 没有入库日期的记录跳过
-            }
-            boolean afterStart = (startDate == null) || !receiptDate.isBefore(startDate);
-            boolean beforeEnd = (endDate == null) || !receiptDate.isAfter(endDate);
-            if (afterStart && beforeEnd) {
-                filtered.add(batch);
-            }
-        }
-        log.info("日期过滤: {} 条 -> {} 条", batches.size(), filtered.size());
-        return filtered;
     }
 
     /** spec §8.2 只读查询, 无副作用 */

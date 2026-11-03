@@ -94,4 +94,13 @@ public class RestaurantDailyRevenueTool extends AbstractBusinessTool {
         log.info("日营业额查询完成 - 日期: {}, 营业额: ¥{}", queryDate, String.format("%.2f", totalRevenue));
         return result;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("finance:read", "procurement:read", "sales:read", "sales:read_write");
+    }
 }

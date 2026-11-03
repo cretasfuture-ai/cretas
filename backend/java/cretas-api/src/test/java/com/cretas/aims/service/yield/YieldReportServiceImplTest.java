@@ -2786,10 +2786,10 @@ class YieldReportServiceImplTest {
         when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
         when(reportRepo.findYieldReportsByTask("F006", 130L)).thenReturn(List.of());
         SemiFinishedInventory splitWip = SemiFinishedInventory.builder()
-                .processOrder(1).availableQuantity(new BigDecimal("52")).unit("kg").intermediateBatchNo("WIP-SPLIT")
+                .processOrder(1).producedQuantity(new BigDecimal("52")).availableQuantity(new BigDecimal("52")).unit("kg").intermediateBatchNo("WIP-SPLIT")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         SemiFinishedInventory siblingBranchWip = SemiFinishedInventory.builder()
-                .processOrder(2).availableQuantity(new BigDecimal("7")).unit("kg").intermediateBatchNo("WIP-COOK")
+                .processOrder(2).producedQuantity(new BigDecimal("7")).availableQuantity(new BigDecimal("7")).unit("kg").intermediateBatchNo("WIP-COOK")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
                 .thenReturn(List.of(splitWip, siblingBranchWip));
@@ -2805,6 +2805,34 @@ class YieldReportServiceImplTest {
     }
 
     @Test
+    void getLimits_wipAvailableExcludesQuantityStillAwaitingQcRelease() {
+        // 缺口 11 交接登记的取舍: 横幅「可领上限」原来不扣待检, 显示偏高, 照填会被领用闸 409 打回。
+        // 上道产出 50, 其中 20 待检 ⇒ 可领 30 (与 QcInspectionGuard 同一口径 drawableBalance)。
+        WorkProcessTask t = task(140L, 2, "WP-L1");
+        when(taskRepo.findByFactoryIdAndId("F006", 140L)).thenReturn(Optional.of(t));
+        WorkProcess wp = WorkProcess.builder().id("WP-L1").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("0.9000")).build();
+        when(processRepo.findById("WP-L1")).thenReturn(Optional.of(wp));
+        when(factorySettingsRepo.findProductionSettingsByFactoryId("F006")).thenReturn(null);
+        when(reportRepo.findYieldReportsByTask("F006", 140L)).thenReturn(List.of());
+        SemiFinishedInventory held = SemiFinishedInventory.builder()
+                .processOrder(1).producedQuantity(new BigDecimal("50")).consumedQuantity(BigDecimal.ZERO)
+                .availableQuantity(new BigDecimal("50")).unit("kg")
+                .inspectionStatus(SemiFinishedInventory.InspectionStatus.PENDING)
+                .inspectionPendingQuantity(new BigDecimal("20"))
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        SemiFinishedInventory released = SemiFinishedInventory.builder()
+                .processOrder(1).producedQuantity(new BigDecimal("15")).consumedQuantity(new BigDecimal("5"))
+                .availableQuantity(new BigDecimal("10")).unit("kg")
+                .status(SemiFinishedInventory.Status.AVAILABLE).build();
+        when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L)).thenReturn(List.of(held, released));
+
+        YieldLimitsDTO dto = svc.getLimits("F006", 1L, 140L, new BigDecimal("30"));
+
+        assertThat(dto.getWipAvailable()).as("待检 20 不算可领: (50−20) + 10").isEqualByComparingTo("40");
+    }
+
+    @Test
     void getLimits_secondProcess_returnsWipAvailableFromPrevProcess() {
         // 道2 getLimits: 上道 (processOrder=1) 有 WIP available=400 → wipAvailable=400
         WorkProcessTask t = task(110L, 2, "WP-L1");
@@ -2816,10 +2844,10 @@ class YieldReportServiceImplTest {
         when(reportRepo.findYieldReportsByTask("F006", 110L)).thenReturn(List.of());
         // 上道 WIP (processOrder=1) available=400; 本道 (processOrder=2) WIP 忽略
         SemiFinishedInventory prevWip = SemiFinishedInventory.builder()
-                .processOrder(1).availableQuantity(new BigDecimal("400"))
+                .processOrder(1).producedQuantity(new BigDecimal("400")).availableQuantity(new BigDecimal("400"))
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         SemiFinishedInventory thisWip = SemiFinishedInventory.builder()
-                .processOrder(2).availableQuantity(new BigDecimal("999"))
+                .processOrder(2).producedQuantity(new BigDecimal("999")).availableQuantity(new BigDecimal("999"))
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
                 .thenReturn(List.of(prevWip, thisWip));
@@ -2857,7 +2885,7 @@ class YieldReportServiceImplTest {
         when(reportRepo.findYieldReportsByTask("F006", 113L)).thenReturn(List.of());
         // 上道 WIP 单位 份 (与本道 WorkProcess.unit=kg 不同) → wipAvailableUnit 取源 WIP 的 份
         SemiFinishedInventory prevWip = SemiFinishedInventory.builder()
-                .processOrder(1).availableQuantity(new BigDecimal("300")).unit("份")
+                .processOrder(1).producedQuantity(new BigDecimal("300")).availableQuantity(new BigDecimal("300")).unit("份")
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
                 .thenReturn(List.of(prevWip));
@@ -3108,7 +3136,7 @@ class YieldReportServiceImplTest {
         when(reportRepo.findYieldReportsByTask("F006", 140L)).thenReturn(List.of());
         SemiFinishedInventory prevWip = SemiFinishedInventory.builder()
                 .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
-                .availableQuantity(new BigDecimal("400"))
+                .producedQuantity(new BigDecimal("400")).availableQuantity(new BigDecimal("400"))
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
                 .thenReturn(List.of(prevWip));
@@ -3148,11 +3176,11 @@ class YieldReportServiceImplTest {
         when(reportRepo.findYieldReportsByTask("F006", 142L)).thenReturn(List.of());
         SemiFinishedInventory wipA = SemiFinishedInventory.builder()
                 .intermediateBatchNo("WIP-A").processOrder(1)
-                .availableQuantity(new BigDecimal("100"))
+                .producedQuantity(new BigDecimal("100")).availableQuantity(new BigDecimal("100"))
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         SemiFinishedInventory wipB = SemiFinishedInventory.builder()
                 .intermediateBatchNo("WIP-B").processOrder(1)
-                .availableQuantity(new BigDecimal("50"))
+                .producedQuantity(new BigDecimal("50")).availableQuantity(new BigDecimal("50"))
                 .status(SemiFinishedInventory.Status.AVAILABLE).build();
         when(wipRepo.findByFactoryIdAndBatchIdAndDeletedAtIsNull("F006", 1L))
                 .thenReturn(List.of(wipA, wipB));

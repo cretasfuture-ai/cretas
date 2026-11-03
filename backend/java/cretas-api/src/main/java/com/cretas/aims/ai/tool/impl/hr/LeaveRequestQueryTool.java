@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.hr;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.hr.LeaveRequest;
 import com.cretas.aims.entity.hr.enums.HrRequestStatus;
@@ -50,10 +51,12 @@ public class LeaveRequestQueryTool extends AbstractBusinessTool {
         properties.put("userId", Map.of(
                 "type", "string",
                 "description", "用户 ID, 不传则查询当前登录用户的申请"));
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "状态过滤: DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED, 不传查全部",
-                "enum", List.of("DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "CANCELLED")));
+        properties.put("status", StatusFilter.property("状态过滤: DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED, 不传查全部", StatusFilter.table(
+                StatusFilter.words("DRAFT", "草稿"),
+                StatusFilter.words("SUBMITTED", "待审批", "审批中", "已提交"),
+                StatusFilter.words("APPROVED", "已批准", "已通过", "批准了"),
+                StatusFilter.words("REJECTED", "已拒绝", "已驳回", "被拒", "驳回"),
+                StatusFilter.words("CANCELLED", "已取消", "已撤回", "撤回"))));
         properties.put("scope", Map.of(
                 "type", "string",
                 "description", "查询范围: mine (我的) / pending (主管待审) / all (HR 全部)",

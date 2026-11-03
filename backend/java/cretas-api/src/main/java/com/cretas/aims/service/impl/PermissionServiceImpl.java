@@ -463,6 +463,21 @@ public class PermissionServiceImpl implements PermissionService {
      * <p>白名单: factory_super_admin / platform_admin (兜底) / procurement_manager (流程发起方) /
      * finance_manager (审核执行方) / dispatcher (协调). 其余一律不可见.
      */
+    /**
+     * 角色码能否查看「待财务审核」的销售单 / 采购单 —— 与 {@link #FINANCE_REVIEW_VIEW_PERMISSION} 同一份白名单。
+     * 给不经过 controller 的入口 (AI 工具) 用: controller 的这道二次拦截在工具路径上不运行。
+     */
+    public static boolean canViewFinanceReview(String roleCode) {
+        if (roleCode == null || roleCode.isBlank()) {
+            return false;
+        }
+        try {
+            return FINANCE_REVIEW_VIEW_ROLES.contains(FactoryUserRole.valueOf(roleCode.trim()));
+        } catch (IllegalArgumentException unknownRole) {
+            return false;
+        }
+    }
+
     private static final Set<FactoryUserRole> FINANCE_REVIEW_VIEW_ROLES = Set.of(
             FactoryUserRole.factory_super_admin,
             FactoryUserRole.platform_admin,

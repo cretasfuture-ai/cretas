@@ -58,6 +58,13 @@ final class GatedDataScan {
     final Map<DataMethod, List<Endpoint>> servedBy = new HashMap<>();
     /** Every read handler by {@code Controller#method}. */
     final Map<String, Endpoint> readEndpoints = new HashMap<>();
+    /**
+     * Data methods called by write handlers (POST / PUT / PATCH / DELETE): a write tool doing what a write
+     * endpoint does (look the purchase order up, then record the receipt) is judged against that endpoint too.
+     */
+    final Map<DataMethod, List<Endpoint>> writeServedBy = new HashMap<>();
+    /** Read handler ({@code Controller#method}) → data methods it calls directly. */
+    final Map<String, Set<DataMethod>> handlerCalls = new HashMap<>();
     final Map<String, Set<DataMethod>> toolCalls = new LinkedHashMap<>();
     final Map<String, Class<?>> toolClasses = new LinkedHashMap<>();
     final List<String> uninstantiable = new ArrayList<>();
@@ -162,6 +169,15 @@ final class GatedDataScan {
                 .contains(org.springframework.web.bind.annotation.RequestMethod.GET);
     }
 
+    private static boolean isWriteHandler(Method m) {
+        if (m.isAnnotationPresent(org.springframework.web.bind.annotation.PostMapping.class)
+                || m.isAnnotationPresent(org.springframework.web.bind.annotation.PutMapping.class)
+                || m.isAnnotationPresent(org.springframework.web.bind.annotation.PatchMapping.class)
+                || m.isAnnotationPresent(org.springframework.web.bind.annotation.DeleteMapping.class)) return true;
+        RequestMapping rm = m.getAnnotation(RequestMapping.class);
+        return rm != null && rm.method().length > 0 && !isReadHandler(m);
+    }
+
     private void scanControllers() throws Exception {
         ClassPathScanningCandidateComponentProvider scanner = new ClassPathScanningCandidateComponentProvider(false);
         scanner.addIncludeFilter(new AnnotationTypeFilter(RestController.class));
@@ -175,8 +191,10 @@ final class GatedDataScan {
                 if (!Modifier.isPublic(m.getModifiers())) continue;
                 // Only read handlers say who may read a piece of data: a write handler that happens to
                 // look a record up does not make reading that record require the write permission.
-                if (!isReadHandler(m)) continue;
-                handlers++;
+                // Write handlers are kept apart, for write tools only (see writeServedBy).
+                boolean read = isReadHandler(m);
+                if (!read && !isWriteHandler(m)) continue;
+                if (read) handlers++;
                 RequirePermission onMethod = m.getAnnotation(RequirePermission.class);
                 RequirePermission effective = onMethod != null ? onMethod : onClass;
                 com.cretas.aims.config.RequireRole rolesOnMethod = m.getAnnotation(com.cretas.aims.config.RequireRole.class);
@@ -185,10 +203,14 @@ final class GatedDataScan {
                         effective == null ? Set.of() : Set.of(effective.value()),
                         roles == null ? Set.of() : Set.of(roles.value()),
                         effective != null && effective.requireAll());
-                readEndpoints.put(endpoint.toString(), endpoint);
                 String key = m.getName() + org.springframework.asm.Type.getMethodDescriptor(m);
+                if (read) {
+                    readEndpoints.put(endpoint.toString(), endpoint);
+                    handlerCalls.computeIfAbsent(endpoint.toString(), k -> new HashSet<>())
+                            .addAll(calls.getOrDefault(key, Set.of()));
+                }
                 for (DataMethod data : calls.getOrDefault(key, Set.of())) {
-                    servedBy.computeIfAbsent(data, k -> new ArrayList<>()).add(endpoint);
+                    (read ? servedBy : writeServedBy).computeIfAbsent(data, k -> new ArrayList<>()).add(endpoint);
                 }
             }
         }
@@ -246,16 +268,71 @@ final class GatedDataScan {
         return gated;
     }
 
-    /** True when at least one data method the tool calls is served by some HTTP handler. */
-    boolean hasCounterpart(String tool) {
-        return toolCalls.getOrDefault(tool, Set.of()).stream().anyMatch(servedBy::containsKey);
+    /** Owner simple name (Impl folded, as {@link #simpleName}) → main classes implementing it. */
+    private Map<String, List<String>> ownerClasses;
+    private final Map<String, Map<String, Set<DataMethod>>> callsByClass = new HashMap<>();
+
+    private Map<String, List<String>> ownerClasses() throws IOException {
+        if (ownerClasses != null) return ownerClasses;
+        ownerClasses = new HashMap<>();
+        org.springframework.core.io.support.PathMatchingResourcePatternResolver resolver =
+                new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
+        for (org.springframework.core.io.Resource r : resolver.getResources("classpath*:com/cretas/aims/**/*.class")) {
+            String url = r.getURL().toString();
+            if (url.contains("test-classes")) continue;
+            String internal = url.substring(url.indexOf("com/cretas/aims/"), url.length() - ".class".length());
+            if (internal.contains("$") || !isDataOwner(internal)) continue;
+            ownerClasses.computeIfAbsent(simpleName(internal), k -> new ArrayList<>()).add(internal.replace('/', '.'));
+        }
+        return ownerClasses;
     }
 
-    List<Endpoint> endpointsFor(String tool) {
-        List<Endpoint> all = new ArrayList<>();
-        for (DataMethod data : toolCalls.getOrDefault(tool, Set.of())) {
-            all.addAll(servedBy.getOrDefault(data, List.of()));
+    /** Data methods called by every overload of {@code owner#method} in the main classes implementing the owner. */
+    private Set<DataMethod> callsOf(DataMethod data) throws IOException {
+        Set<DataMethod> out = new HashSet<>();
+        for (String className : ownerClasses().getOrDefault(data.owner(), List.of())) {
+            Map<String, Set<DataMethod>> calls = callsByClass.get(className);
+            if (calls == null) {
+                try {
+                    calls = callsPerMethod(Class.forName(className, false, GatedDataScan.class.getClassLoader()));
+                } catch (ClassNotFoundException | LinkageError e) {
+                    calls = Map.of();
+                }
+                callsByClass.put(className, calls);
+            }
+            calls.forEach((key, called) -> {
+                if (key.startsWith(data.name() + "(")) out.addAll(called);
+            });
         }
+        return out;
+    }
+
+    /**
+     * Whether a read handler reaches a method of an owner the predicate accepts, through service / repository
+     * implementations (up to 6 hops). A table row or a SURFACE registration may only name handlers that do.
+     */
+    boolean reaches(String handler, java.util.function.Predicate<String> owner) throws IOException {
+        Set<DataMethod> seen = new HashSet<>();
+        List<DataMethod> frontier = new ArrayList<>(handlerCalls.getOrDefault(handler, Set.of()));
+        for (int depth = 0; depth <= 6 && !frontier.isEmpty(); depth++) {
+            List<DataMethod> next = new ArrayList<>();
+            for (DataMethod d : frontier) {
+                if (!seen.add(d)) continue;
+                String base = d.owner().contains("$") ? d.owner().substring(0, d.owner().indexOf('$')) : d.owner();
+                if (owner.test(base)) return true;
+                next.addAll(callsOf(d));
+            }
+            frontier = next;
+        }
+        return false;
+    }
+
+    /** Read endpoints that call any method of this owner. */
+    List<Endpoint> readEndpointsOfOwner(String owner) {
+        List<Endpoint> all = new ArrayList<>();
+        servedBy.forEach((data, endpoints) -> {
+            if (data.owner().equals(owner)) all.addAll(endpoints);
+        });
         return all;
     }
 }

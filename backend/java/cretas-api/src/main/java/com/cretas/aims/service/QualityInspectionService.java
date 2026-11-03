@@ -24,6 +24,15 @@ public interface QualityInspectionService {
     PageResponse<QualityInspection> getInspections(String factoryId, String productionBatchId, PageRequest pageRequest);
 
     /**
+     * 按批次 / 检验结果 / 检验日期 / 质检类型标记筛选 (每个可选, null = 不限), 在分页之前由数据库过滤,
+     * 总数是筛过的。AI 工具 quality_check_query 走这里。
+     */
+    PageResponse<QualityInspection> getInspectionsFiltered(String factoryId, String productionBatchId, String result,
+                                                           java.time.LocalDate inspectionDateFrom,
+                                                           java.time.LocalDate inspectionDateTo,
+                                                           String checkTypePattern, PageRequest pageRequest);
+
+    /**
      * 根据ID获取质量检验记录详情
      *
      * @param factoryId 工厂ID

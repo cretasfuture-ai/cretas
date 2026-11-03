@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.factory;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
@@ -41,8 +42,17 @@ public class MaterialRequisitionQueryPendingTool extends AbstractBusinessTool {
         return Map.of(
             "type", "object",
             "properties", Map.of(
-                "status", Map.of("type", "string",
-                        "description", "PENDING/PICKING/TRANSFERRED/ISSUED, 为空返回 PENDING"),
+                "status", StatusFilter.property("领料单状态, 为空返回 PENDING (待备料)",
+                        // 取自枚举本身: 以前的说明只列了 4 个, 实际有 8 个
+                        StatusFilter.wordsOf(Status.class, null, Map.of(
+                                Status.DRAFT, List.of("草稿"),
+                                Status.PENDING, List.of("待备料", "待处理"),
+                                Status.PICKING, List.of("备料中"),
+                                Status.TRANSFERRED, List.of("已调拨"),
+                                Status.ISSUED, List.of("已签收", "已发料"),
+                                Status.IN_USE, List.of("生产中", "使用中"),
+                                Status.CLOSED, List.of("已关单", "已退料"),
+                                Status.CANCELLED, List.of("已取消")))),
                 "size", Map.of("type", "integer", "description", "最多返回条数, 默认 20")
             ),
             "required", List.of()

@@ -1,5 +1,9 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
+import com.cretas.aims.ai.tool.FinanceReviewStatusGuard;
+import java.time.LocalDate;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -44,9 +48,15 @@ public class OrderListTool extends AbstractBusinessTool {
                 "type", "integer",
                 "description", "每页数量",
                 "default", 20));
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED"));
+        properties.put("status", StatusFilter.property("销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED", StatusFilter.wordsOf(SalesOrderStatus.class, SalesOrderStatus::getDisplayName, java.util.Map.of(
+                SalesOrderStatus.PENDING_FINANCE_REVIEW, List.of("待审核"),
+                SalesOrderStatus.FINANCE_APPROVED, List.of("财务通过"),
+                SalesOrderStatus.FINANCE_REJECTED, List.of("财务驳回"),
+                SalesOrderStatus.PROCESSING, List.of("备货中", "拣货中"),
+                SalesOrderStatus.SHORT_CLOSED, List.of("短交")))));
+        // 订单日期 (含当天): 「上个月的销售订单」以前把时间丢了, 返回全部订单
+        properties.put("startDate", TimeRangeFilter.dateProperty("订单日期开始 (含), YYYY-MM-DD"));
+        properties.put("endDate", TimeRangeFilter.dateProperty("订单日期结束 (含), YYYY-MM-DD"));
         return Map.of(
                 "type", "object",
                 "properties", properties,
@@ -65,17 +75,25 @@ public class OrderListTool extends AbstractBusinessTool {
         int size = Math.max(1, Math.min(100, getInteger(params, "size", 20)));
         String statusValue = getString(params, "status");
 
+        // 待财务审核: 与 SalesController 同一道二次拦截 (#736), 工具路径上 controller 不运行
+        FinanceReviewStatusGuard.check(statusValue, getUserRole(context), "销售单");
+        LocalDate from = TimeRangeFilter.parseDate(params.get("startDate"), "startDate");
+        LocalDate to = TimeRangeFilter.parseDate(params.get("endDate"), "endDate");
+
         PageResponse<SalesOrder> orders;
-        if (statusValue == null || statusValue.isBlank()) {
+        if ((statusValue == null || statusValue.isBlank()) && from == null && to == null) {
             orders = salesService.getSalesOrders(factoryId, page, size);
         } else {
-            SalesOrderStatus status;
-            try {
-                status = SalesOrderStatus.valueOf(statusValue.trim().toUpperCase(Locale.ROOT));
-            } catch (IllegalArgumentException exception) {
-                throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
+            SalesOrderStatus status = null;
+            if (statusValue != null && !statusValue.isBlank()) {
+                try {
+                    status = SalesOrderStatus.valueOf(statusValue.trim().toUpperCase(Locale.ROOT));
+                } catch (IllegalArgumentException exception) {
+                    throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
+                }
             }
-            orders = salesService.getSalesOrdersByStatus(factoryId, status, page, size);
+            // 状态 / 日期都在数据库里、分页之前过滤, 并按 DataScope 收窄 (getSalesOrdersByStatus 不收窄)
+            orders = salesService.getSalesOrdersFiltered(factoryId, status, from, to, page, size);
         }
 
         log.info("查询销售订单列表 - factoryId={}, page={}, size={}, status={}",
@@ -103,6 +121,6 @@ public class OrderListTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("finance:read", "sales:read", "sales:read_write");
+        return java.util.Set.of("sales:read_write", "sales:read", "finance:read");
     }
 }

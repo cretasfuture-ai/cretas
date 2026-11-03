@@ -2,7 +2,7 @@
 """Probe a DashScope (Aliyun bailian) account for free-quota availability per SLOT_MODELS SKU list.
 
 Usage:
-    LLM_ALIYUN_C_API_KEY=sk-xxx python scripts/probe-llm-account.py [aliyun_c|aliyun_a|aliyun_b]
+    LLM_ALIYUN_A_API_KEY=sk-xxx python scripts/probe-llm-account.py [aliyun_a|aliyun_b]
 
 Prints one line per (SLOT, SKU): HTTP status + first 100 chars of body on non-200.
 Exits 0 if all 200, 1 if any non-200.
@@ -22,7 +22,7 @@ SKUS_TO_PROBE = {
     "qwen3-vl-plus":      "qwen3-vl-plus-2025-12-19",  # VL — DeepSeek has no VL model
 }
 
-account = sys.argv[1] if len(sys.argv) > 1 else "aliyun_c"
+account = sys.argv[1] if len(sys.argv) > 1 else "aliyun_a"
 env_var = f"LLM_{account.upper()}_API_KEY"
 api_key = os.environ.get(env_var, "")
 if not api_key:

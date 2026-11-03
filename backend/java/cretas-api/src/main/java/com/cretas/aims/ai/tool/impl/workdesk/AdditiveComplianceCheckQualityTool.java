@@ -213,4 +213,13 @@ public class AdditiveComplianceCheckQualityTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): organizer ruling: additive limits are quality work, quality read (the admin-only canvas page is not the reference);
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("quality:read", "quality:read_write");
+    }
 }

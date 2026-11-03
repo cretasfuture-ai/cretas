@@ -540,6 +540,9 @@ class InventoryPostingIntegrityTest {
             listStockSummary(String f) { return List.of(); }
             @Override public com.cretas.aims.dto.common.PageResponse<com.cretas.aims.dto.material.MaterialBatchDTO>
             getMaterialBatchList(String f, com.cretas.aims.dto.common.PageRequest p) { return null; }
+            @Override public com.cretas.aims.dto.common.PageResponse<com.cretas.aims.dto.material.MaterialBatchDTO>
+            getMaterialBatchList(String f, com.cretas.aims.dto.common.PageRequest p,
+                    com.cretas.aims.dto.material.MaterialBatchListFilter filter) { return null; }
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>
             getMaterialBatchesByStatus(String f, com.cretas.aims.entity.enums.MaterialBatchStatus s) { return List.of(); }
             @Override public List<com.cretas.aims.dto.material.MaterialBatchDTO>

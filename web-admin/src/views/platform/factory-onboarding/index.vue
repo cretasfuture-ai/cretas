@@ -847,6 +847,18 @@
           description="下面只能显示「将写入什么」，无法标出哪些是覆盖。建议确认后再核对一次工厂配置。"
         />
 
+        <el-alert
+          v-if="planStale"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="访谈答案已经变化，当前方案是按旧答案生成的"
+          data-testid="plan-stale-alert"
+        >
+          <p>{{ PLAN_STALE_MESSAGE }}</p>
+          <el-button type="primary" size="small" :loading="generating" @click="generate">按最新答案重新生成</el-button>
+        </el-alert>
+
         <!-- Rule 1: 逐项显示 现值 → 结果 -->
         <el-table :data="diffRows" size="small" border class="diff">
           <el-table-column prop="group" label="类别" width="110" />
@@ -884,6 +896,7 @@
           :factory-name="factoryName || canonicalBlueprint.factoryName"
           :blueprint="canonicalBlueprint"
           @formal-state="onFormalState"
+          @modules-draft-pending="onModulesDraftPending"
         />
 
         <div class="acts">
@@ -1063,7 +1076,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, WarningFilled } from '@element-plus/icons-vue'
@@ -1114,6 +1127,8 @@ import FactoryInterviewArchive from './components/FactoryInterviewArchive.vue'
 import FactoryConversationRoutePreview from './components/FactoryConversationRoutePreview.vue'
 import FactoryConversationTopologyCard from './components/FactoryConversationTopologyCard.vue'
 import FactoryBlueprintDraftsPanel from './components/FactoryBlueprintDraftsPanel.vue'
+import { PLAN_STALE_MESSAGE, isPlanStale } from './planStaleness'
+import { moduleConfigProblems } from './interviewModuleCatalog'
 import FactoryReadiness from '../factory-review/components/FactoryReadiness.vue'
 import FactoryBasicsHandoff from './components/FactoryBasicsHandoff.vue'
 import type { FormalCapability, FormalExecution } from '@/api/factoryBlueprintActivationApi'
@@ -1215,6 +1230,10 @@ const retryTask = ref<null | (() => Promise<void> | void)>(null)
 const progress = ref<FactoryBuildProgress | null>(null)
 const progressChangeNotice = ref<{ title: string; detail: string } | null>(null)
 const generated = ref<AIFactoryInitResult | null>(null)
+/** 生成方案时用的访谈描述；访谈答案之后变了，方案就过期了（见 planStaleness.ts） */
+const generatedFromDescription = ref('')
+const planStale = computed(() => !canonicalViewMode.value
+  && isPlanStale(generatedFromDescription.value, progress.value?.assembledDescription, !!generated.value))
 const proposalNeedsCorrection = ref(false)
 const canonicalBlueprint = ref<CanonicalFactoryBlueprint | null>(null)
 const formalExecutions = ref<Partial<Record<FormalCapability, FormalExecution>>>({})
@@ -1663,9 +1682,14 @@ function errorMessage(error: unknown): string {
   return String(candidate.response?.data?.message ?? candidate.message ?? '请求没有完成')
 }
 
+/** 页面有一万多像素高，顶部的错误条在保存按钮处看不到：同时弹一个不自动消失的错误提示，并把错误条滚到视野里 */
+let flowToast: { close: () => void } | null = null
+
 function clearFlowIssue() {
   flowIssue.value = null
   retryTask.value = null
+  flowToast?.close()
+  flowToast = null
 }
 
 function showFlowIssue(
@@ -1674,6 +1698,11 @@ function showFlowIssue(
 ) {
   flowIssue.value = issue
   retryTask.value = retry
+  flowToast?.close()
+  flowToast = ElMessage.error({
+    message: `${issue.title}：${issue.detail}`, duration: 0, showClose: true, grouping: true,
+  })
+  void nextTick(() => document.querySelector('.flow-issue')?.scrollIntoView({ block: 'center', behavior: 'smooth' }))
 }
 
 async function retryFlowIssue() {
@@ -1805,6 +1834,16 @@ async function chooseFactory() {
 async function scrollLog() {
   await nextTick()
   if (logRef.value) logRef.value.scrollTop = logRef.value.scrollHeight
+}
+
+/** 回到本页（例如从「已确认资料」页选完来源回来）时静默读回最新答案；失败不打扰 */
+async function refreshProgressQuietly() {
+  if (!sessionId.value || canonicalViewMode.value || sending.value || generating.value || previewing.value) return
+  try { await refreshProgress() } catch { /* 读不到就保持现状，保存时服务端仍会校验 */ }
+}
+
+function onPageVisible() {
+  if (document.visibilityState === 'visible') void refreshProgressQuietly()
 }
 
 async function refreshProgress() {
@@ -2648,6 +2687,8 @@ async function saveAuthoritativeDraft(): Promise<CanonicalFactoryBlueprint> {
   if (!generated.value?.schemas || !generated.value.suggestedData) {
     throw new Error('生成配置不完整，无法保存权威蓝图')
   }
+  const moduleProblems = moduleConfigProblems(generated.value.suggestedData.moduleConfigs)
+  if (moduleProblems.length) throw new Error(moduleProblems.join('；'))
   const canonicalSourceCustomerSupplied = canonicalBlueprint.value?.customerSupplied ?? undefined
   const authoritativeSessionId = canonicalViewMode.value
     ? canonicalBlueprint.value?.sessionId ?? undefined
@@ -2678,6 +2719,17 @@ async function saveAuthoritativeDraft(): Promise<CanonicalFactoryBlueprint> {
 async function refreshPreview(): Promise<boolean> {
   if (!generated.value?.schemas || !generated.value.suggestedData || previewing.value) return false
   clearFlowIssue()
+  await refreshProgressQuietly()
+  if (planStale.value) {
+    previewDirty.value = true
+    showFlowIssue({
+      title: '方案需要按最新答案重新生成',
+      detail: PLAN_STALE_MESSAGE,
+      sideEffect: '没有写入工厂；点「按最新答案重新生成」会用最新答案重做方案，手工改过的细节需要再确认。',
+      retryLabel: '按最新答案重新生成',
+    }, generate)
+    return false
+  }
   previewing.value = true
   try {
     await saveAuthoritativeDraft()
@@ -2707,6 +2759,7 @@ async function retrySavedPreview() {
 
 async function generate() {
   if (!progress.value?.assembledDescription) return
+  const describedFrom = progress.value.assembledDescription
   clearFlowIssue()
   generating.value = true
   proposalNeedsCorrection.value = false
@@ -2724,6 +2777,7 @@ async function generate() {
       })
     }
     generated.value = res.data
+    generatedFromDescription.value = describedFrom
     generationReceived = true
     // Rule 1: 进预览前先把现值取回来, 才谈得上「现值 → 确认后的值」
     currentLoadFailed.value = false
@@ -2861,12 +2915,15 @@ async function simulateBlueprint() {
   }
 }
 
+const modulesDraftPending = ref(false)
+function onModulesDraftPending(pending: boolean) { modulesDraftPending.value = pending }
+
 async function publishBlueprint() {
   const blueprint = canonicalBlueprint.value
   if (!blueprint || !blueprint.simulation?.safe) return
   try {
     await ElMessageBox.confirm(
-      `将发布 ${blueprint.factoryName} 的蓝图 v${blueprint.version}。本动作只固化不可变快照，不应用配置、不发布 Workflow。`,
+      `将发布 ${blueprint.factoryName} 的蓝图 v${blueprint.version}。本动作只固化不可变快照，不应用配置、不发布 Workflow。${modulesDraftPending.value ? '有已写入但还没应用的模块草稿：发布之后这一版不能再应用模块配置，请先取消，在上方「配置应用」完成后再发布。' : ''}`,
       `发布 Factory Blueprint — ${blueprint.factoryId}`,
       { type: 'warning', confirmButtonText: '确认发布蓝图', cancelButtonText: '再看看' },
     )
@@ -3256,6 +3313,13 @@ onMounted(async () => {
     await hydrateFactoryWorkspace()
   }
   else await loadFactories()
+  document.addEventListener('visibilitychange', onPageVisible)
+  window.addEventListener('focus', onPageVisible)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onPageVisible)
+  window.removeEventListener('focus', onPageVisible)
 })
 </script>
 

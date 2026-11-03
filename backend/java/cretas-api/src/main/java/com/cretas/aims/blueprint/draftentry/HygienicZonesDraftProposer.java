@@ -15,9 +15,9 @@ import java.util.List;
  private static final String WHY_ZONE="蓝图没有卫生分区的完整边界、用途、卫生等级和进入规则";
  private static final String WHY_FLOW="蓝图没有人员、物料和空气流向的完整交叉控制事实";
  private static <E extends Enum<E>> List<Option> opts(Class<E> c){
-  return java.util.Arrays.stream(c.getEnumConstants()).map(e -> new Option(e.name(), e.name())).toList();
+  return java.util.Arrays.stream(c.getEnumConstants()).map(e -> new Option(e.name(), DraftEnumLabels.label(e))).toList();
  }
- private static <E extends Enum<E>> String enumConstraint(Class<E> c){return java.util.Arrays.stream(c.getEnumConstants()).map(Enum::name).collect(java.util.stream.Collectors.joining("、"))+" 之一";}
+ private static <E extends Enum<E>> String enumConstraint(Class<E> c){return java.util.Arrays.stream(c.getEnumConstants()).map(DraftEnumLabels::label).collect(java.util.stream.Collectors.joining("、"))+" 之一";}
  private static List<RequiredInput> zoneFields(){return List.of(
   RequiredInput.text("zoneCode","分区编码",WHY_ZONE,"大写字母或数字开头，只含大写字母、数字、下划线、连字符，最长 64 位",64),
   RequiredInput.text("zoneName","分区名称",WHY_ZONE,"1–200 字",200),

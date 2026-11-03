@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.notify;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.notify.NotifyChannel;
 import com.cretas.aims.entity.notify.NotifyLog;
@@ -57,10 +58,9 @@ public class NotifyLogQueryTool extends AbstractBusinessTool {
                 "type", "string",
                 "description", "过滤渠道 (可选): WECHAT/DINGTALK/EMAIL/SMS/IN_APP",
                 "enum", List.of("WECHAT", "DINGTALK", "EMAIL", "SMS", "IN_APP")));
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "过滤状态 (可选): SENT 或 FAILED",
-                "enum", List.of("SENT", "FAILED")));
+        properties.put("status", StatusFilter.property("过滤状态 (可选): SENT 或 FAILED", StatusFilter.table(
+                StatusFilter.words("SENT", "已发送", "发送成功", "成功"),
+                StatusFilter.words("FAILED", "发送失败", "失败"))));
         properties.put("recipientUserId", Map.of(
                 "type", "integer",
                 "description", "过滤收件用户 id (可选)"));

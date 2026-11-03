@@ -60,7 +60,7 @@ run_script() {  # $1 script, $2 env-prefix
     rm -f "$ALERTS" "$STUB/calls.log" "$TMP/log" "$TMP/ledger"
     env -i PATH="$FAKEBIN" HOME="$TMP" STUB="$STUB" CRON_BIN_PATH="$FAKEBIN" \
         "${p}_PYDIR=$TMP/pydir" "${p}_ALERTS=$ALERTS" "${p}_LOG=$TMP/log" "${p}_LEDGER=$TMP/ledger" \
-        "${p}_ENV_PROD=$TMP/env.prod" "${p}_ENV_EXTRA=$TMP/env.extra" \
+        "${p}_ENV_PROD=$TMP/env.prod" "${p}_ENV_EXTRA=$TMP/env.extra" "${p}_ENABLED=${ENABLED_OVERRIDE:-1}" \
         "$BASH_ABS" "$ROOT_DIR/scripts/cron/$s" > "$TMP/out" 2>&1; RC=$?
     echo "    $s rc=$RC alerts: $( [ -f "$ALERTS" ] && head -c 160 "$ALERTS" | tr '\n' '|' || echo '<none>')"
 }
@@ -127,6 +127,19 @@ for entry in "daily-close-push.sh|DAILY_CLOSE" "margin-parity-daily.sh|MARGIN_PA
     grep -q "INFO optional env file absent: $TMP/env.extra" "$TMP/log" || fail "[$script 可选] 日志里没有「可选文件不在」那一句"
     ok "$script 可选 env 不在 ⇒ 记一句, rc=0"
 done
+
+# 2026-10-29 MOCK_REST AI writes stopped, owner-approved: replay-equivalence-daily.sh 默认停用。
+# 不设 REPLAY_EQ_ENABLED ⇒ rc=0、python 零调用、日志记「已停」、不告警。
+# (上面那组用 REPLAY_EQ_ENABLED=1 跑, 守的是将来恢复时守卫还在。)
+mk_pydir; printf 'X=1\n' > "$TMP/env.prod"
+ENABLED_OVERRIDE=0 run_script "replay-equivalence-daily.sh" "REPLAY_EQ"
+[ "$RC" = 0 ] || fail "[replay 默认停用] 期望 rc=0 实得 $RC"
+# ⚠️ 不用 *python* 通配: systemctl 的参数 cretas-python.service 也会命中。停用时一个桩都不该被调。
+[ -s "$STUB/calls.log" ] && fail "[replay 默认停用] 停用时不许调到 systemctl/python: $(tr '\n' '|' < "$STUB/calls.log")"
+grep -q "replay equivalence: 已停 (2026-10-29 MOCK_REST AI writes stopped, owner-approved)" "$TMP/log" \
+    || fail "[replay 默认停用] 日志里没有「已停」那一句: $(cat "$TMP/log" 2>/dev/null)"
+[ -f "$ALERTS" ] && fail "[replay 默认停用] 停用不该告警: $(cat "$ALERTS")"
+ok "replay-equivalence-daily.sh 默认停用 ⇒ rc=0, systemctl/python 零调用, 日志记「已停」"
 
 echo "READING: RC2_CONSTRUCTED=$N_RC2 (7 脚本 × {venv-missing, env-file-missing} + 6 × cmd-not-found:systemctl)"
 [ "$N_RC2" -eq 20 ] || fail "rc=2 构造次数应为 20, 实得 $N_RC2"

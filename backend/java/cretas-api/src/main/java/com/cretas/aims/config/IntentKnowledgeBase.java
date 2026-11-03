@@ -3661,8 +3661,8 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("产线运行", "EQUIPMENT_STATUS_QUERY");
 
         // 采购/订单
-        phraseToIntentMapping.put("采购订单", "ORDER_LIST");
-        phraseToIntentMapping.put("采购单", "ORDER_LIST");
+        phraseToIntentMapping.put("采购订单", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("采购单", "PURCHASE_ORDER_LIST");
         phraseToIntentMapping.put("取消订单", "ORDER_DELETE");
         phraseToIntentMapping.put("撤销订单", "ORDER_DELETE");
 
@@ -4509,9 +4509,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("没通过质检", "QUALITY_CHECK_QUERY");
         phraseToIntentMapping.put("质检没通过", "QUALITY_CHECK_QUERY");
         phraseToIntentMapping.put("质检不通过", "QUALITY_CHECK_QUERY");
-        phraseToIntentMapping.put("尚未审批的采购", "ORDER_LIST");
-        phraseToIntentMapping.put("未审批的采购", "ORDER_LIST");
-        phraseToIntentMapping.put("未审批采购", "ORDER_LIST");
+        phraseToIntentMapping.put("尚未审批的采购", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("未审批的采购", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("未审批采购", "PURCHASE_ORDER_LIST");
         phraseToIntentMapping.put("未分配的生产", "PROCESSING_BATCH_LIST");
         phraseToIntentMapping.put("已发货未签收", "ORDER_LIST");
         phraseToIntentMapping.put("已发货但未签收", "ORDER_LIST");
@@ -5670,7 +5670,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("检查设备状态", "EQUIPMENT_STATUS_QUERY");
         phraseToIntentMapping.put("查完订单再看", "ORDER_LIST");
         phraseToIntentMapping.put("查完订单", "ORDER_LIST");
-        phraseToIntentMapping.put("采购订单和销售", "ORDER_LIST");
+        // 「采购订单和销售」两种单都要, ORDER_LIST 只答得了销售那一半 (答出来就是错数据): 不再短路, 交给识别/澄清
         phraseToIntentMapping.put("销售订单", "ORDER_LIST");
         // 2026-07-24: 「销售订单情况怎么样」被语义层抢到仪表盘总览 — 补确定性短语
         phraseToIntentMapping.put("销售订单情况", "ORDER_LIST");
@@ -6362,13 +6362,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("搞掂了冇", "PRODUCTION_STATUS_QUERY");
         phraseToIntentMapping.put("搞掂未", "PRODUCTION_STATUS_QUERY");
         phraseToIntentMapping.put("搞掂条生产线未", "PRODUCTION_STATUS_QUERY");
-        // PURCHASE_ORDER_QUERY → 合并到 ORDER_LIST (采购订单也走统一订单查询)
-        phraseToIntentMapping.put("purchase order", "ORDER_LIST");
-        phraseToIntentMapping.put("采购订单", "ORDER_LIST");
-        phraseToIntentMapping.put("采购单", "ORDER_LIST");
-        phraseToIntentMapping.put("查看采购订单", "ORDER_LIST");
-        phraseToIntentMapping.put("采购订单列表", "ORDER_LIST");
-        phraseToIntentMapping.put("采购单查询", "ORDER_LIST");
+        // 采购订单 → PURCHASE_ORDER_LIST (purchase_order_list)。以前合并进 ORDER_LIST, 而 ORDER_LIST 早已只查销售订单:
+        // 「查询采购订单」答成「538 个销售订单」(F006 验收 2026-11-03)。
+        phraseToIntentMapping.put("purchase order", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("采购订单", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("采购单", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("查看采购订单", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("采购订单列表", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("采购单查询", "PURCHASE_ORDER_LIST");
+        // 「采购单」只有 3 个字, 长句里覆盖率不到 0.4 就被跳过 (「查询已取消状态的采购单」没命中任何短语):
+        // 补 4 字的说法, 长度够就直接命中
+        phraseToIntentMapping.put("的采购单", "PURCHASE_ORDER_LIST");
+        phraseToIntentMapping.put("采购单列表", "PURCHASE_ORDER_LIST");
 
         // PURCHASE_ORDER_CREATE — 创建采购订单
         phraseToIntentMapping.put("创建采购单", "PURCHASE_ORDER_CREATE");

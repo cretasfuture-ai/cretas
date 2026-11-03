@@ -102,6 +102,41 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
     }
 
     @Override
+    public PageResponse<QualityInspection> getInspectionsFiltered(String factoryId, String productionBatchId,
+                                                                  String result, java.time.LocalDate inspectionDateFrom,
+                                                                  java.time.LocalDate inspectionDateTo,
+                                                                  String checkTypePattern, PageRequest pageRequest) {
+        if (inspectionDateFrom != null && inspectionDateTo != null && inspectionDateFrom.isAfter(inspectionDateTo)) {
+            throw new com.cretas.aims.exception.BusinessException(400,
+                    "检验日期范围不成立: 开始 " + inspectionDateFrom + " 晚于结束 " + inspectionDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        Long batchId = null;
+        if (productionBatchId != null && !productionBatchId.trim().isEmpty()) {
+            try {
+                batchId = Long.parseLong(productionBatchId.trim());
+            } catch (NumberFormatException e) {
+                throw new com.cretas.aims.exception.BusinessException(400, "批次ID不是数字: " + productionBatchId)
+                        .withHint("请提供生产批次的数字ID");
+            }
+        }
+        Page<QualityInspection> page = qualityInspectionRepository.searchFiltered(factoryId, batchId,
+                result == null || result.isBlank() ? null : result,
+                inspectionDateFrom, inspectionDateTo,
+                checkTypePattern == null || checkTypePattern.isBlank() ? null : checkTypePattern,
+                org.springframework.data.domain.PageRequest.of(pageRequest.getPage() - 1, pageRequest.getSize()));
+        PageResponse<QualityInspection> response = new PageResponse<>();
+        response.setContent(page.getContent());
+        response.setPage(pageRequest.getPage());
+        response.setSize(pageRequest.getSize());
+        response.setTotalElements(page.getTotalElements());
+        response.setTotalPages(page.getTotalPages());
+        response.setFirst(page.isFirst());
+        response.setLast(page.isLast());
+        return response;
+    }
+
+    @Override
     public QualityInspection getInspectionById(String factoryId, String inspectionId) {
         log.info("获取质量检验记录详情: factoryId={}, inspectionId={}", factoryId, inspectionId);
 

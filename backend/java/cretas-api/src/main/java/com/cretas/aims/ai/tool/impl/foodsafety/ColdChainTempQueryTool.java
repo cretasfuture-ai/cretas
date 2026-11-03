@@ -238,4 +238,13 @@ public class ColdChainTempQueryTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
+    /**
+     * S6 gated-data rule (2026-11-03): its data is served by endpoints gated with these codes (any-of), so the AI path admits the same callers;
+     * pinned by GatedDataToolAiPathPermissionTest (strict sweep).
+     */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write", "quality:read", "quality:read_write", "equipment:read");
+    }
 }

@@ -31,6 +31,20 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     private static final DecimalFormat AMOUNT_FORMATTER = new DecimalFormat("#,##0.00");
     private static final DecimalFormat QUANTITY_FORMATTER = new DecimalFormat("#,##0.##");
 
+    /** 去掉「时间没用上」标记后照常格式化, 供在前面加提示用。 */
+    private String formatIgnoringTimeNotice(IntentExecuteResponse response) {
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        ((Map<?, ?>) response.getResultData()).forEach((k, v) -> data.put(String.valueOf(k), v));
+        data.remove(com.cretas.aims.ai.tool.TimeRangeFilter.NOT_APPLIED);
+        return format(IntentExecuteResponse.builder()
+                .intentCode(response.getIntentCode())
+                .intentCategory(response.getIntentCategory())
+                .status(response.getStatus())
+                .message(response.getMessage())
+                .resultData(data)
+                .build());
+    }
+
     @Override
     public String format(IntentExecuteResponse response) {
         if (response == null || response.getResultData() == null) {
@@ -42,6 +56,17 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         Object resultData = response.getResultData();
 
         try {
+            // 按状态筛过却一条都没有: 点名筛选条件, 不走各意图「当前暂无 XX 记录」的模板 (那读起来像整个库是空的)
+            String emptyFiltered = com.cretas.aims.ai.tool.StatusFilter.emptyFilteredReply(resultData);
+            if (emptyFiltered != null) {
+                return emptyFiltered;
+            }
+            // 用户说了时间, 这个工具却不能按时间筛: 回复开头说出来, 再给不限时间的结果 (⛔ 不静默当成按时间查过)
+            String timeNotice = com.cretas.aims.ai.tool.TimeRangeFilter.notAppliedNotice(resultData);
+            if (timeNotice != null) {
+                String rest = formatIgnoringTimeNotice(response);
+                return rest == null ? timeNotice : timeNotice + "\n" + rest;
+            }
             // 根据意图分类选择格式化器
             String formatted = switch (intentCategory) {
                 case "SHIPMENT" -> formatShipmentResult(intentCode, resultData);

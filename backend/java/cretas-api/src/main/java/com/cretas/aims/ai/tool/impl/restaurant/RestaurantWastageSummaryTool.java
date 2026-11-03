@@ -190,6 +190,6 @@ public class RestaurantWastageSummaryTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("finance:read");
+        return java.util.Set.of("finance:read", "finance:read_write", "procurement:price:view");
     }
 }

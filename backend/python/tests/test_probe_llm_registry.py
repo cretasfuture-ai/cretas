@@ -224,7 +224,7 @@ def test_json_prompt_actually_triggers_response_format_json_object():
     from scripts.probe_llm_registry import _prompt_for
 
     payload = llm_router._apply_slot_params(
-        llm_router.SLOT.CHART, "aliyun_c", "some-model",
+        llm_router.SLOT.CHART, "aliyun_a", "some-model",
         {
             "model": "some-model",
             "messages": [{"role": "user", "content": _prompt_for(llm_router.SLOT.CHART)}],
@@ -324,7 +324,7 @@ def test_probe_normalizes_before_applying_slot_params(monkeypatch):
             return _FakeResponse()
 
     asyncio.run(probe_llm_registry._probe(
-        _FakeClient(), "aliyun_c", "some-model", llm_router.SLOT.CHAT,
+        _FakeClient(), "aliyun_a", "some-model", llm_router.SLOT.CHAT,
     ))
     assert call_order == ["normalize", "apply"]
 

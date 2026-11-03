@@ -224,7 +224,7 @@ public class FactoryBuildInterviewService {
 
     /**
      * 管理员在事实页选完来源后, 让还在进行的那次访谈里的值与已确认事实一致 (保留已确认值 → 会话退回原值;
-     * 改用新回答 → 会话本来就是新值, 无需改)。只动仍在进行的会话, 且只动被选的那一项。
+     * 改用新回答 → 会话本来就是新值, 无需改)。只动仍在进行或已完成的会话, 且只动被选的那一项。
      */
     @Transactional
     public void syncSessionToConfirmedFact(String factoryId, String sourceRef, String field) {
@@ -232,13 +232,30 @@ public class FactoryBuildInterviewService {
         String sessionId = sourceRef.substring("conversation:".length());
         FactoryAssemblyConversationSession session = sessionRepository
                 .findBySessionIdAndFactoryId(sessionId, factoryId).orElse(null);
-        if (session == null || session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE) return;
+        // 已完成的访谈同样要退回：被驳回的值留在会话里，后面据此生成的方案就会带着它（物料「盐」缺储存类型）。
+        if (session == null
+                || (session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE
+                    && session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.COMPLETED)) return;
         String target = confirmedFacts.confirmedValue(factoryId, field).orElse(null);
         if (target == null || target.equals(session.getCollectedParameters().get(field))) return;
         session.addCollectedParameter(field, target);
         FactoryInterviewExpansion.expandIfReady(session);
         FactoryInterviewExpansion.expandProductsIfReady(session);
         sessionRepository.save(session);
+    }
+
+    /**
+     * 找不到「本人的」会话时，分清两种情况再说话：会话其实存在、属于另一位操作人（给出路），
+     * 还是这个编号本工厂根本没有 / 已失效（让本人重新开始）。
+     */
+    private BusinessException sessionNotAvailable(String factoryId, String sessionId) {
+        boolean ownedByAnother = sessionRepository.findBySessionIdAndFactoryId(sessionId, factoryId).isPresent();
+        return ownedByAnother
+                ? new BusinessException(404, "这次建厂访谈是另一位操作人发起的，你的账号不能接着回答它。已保存的蓝图仍可查看；"
+                        + "要重新答题，请点「开始新的访谈版本」，系统会为你的账号单独开一份访谈。")
+                        .withCode("INTERVIEW_SESSION_OWNED_BY_ANOTHER_OPERATOR")
+                : new BusinessException(404, "这次访谈已经失效或已结束，请点「开始新的访谈版本」重新开始。")
+                        .withCode("INTERVIEW_SESSION_NOT_FOUND");
     }
 
     public List<InterviewDefaults.Section> interviewDefaults(String factoryId) {
@@ -265,7 +282,7 @@ public class FactoryBuildInterviewService {
         FactoryAssemblyConversationSession session = sessionRepository
                 .findBySessionIdAndFactoryIdAndUserIdAndActorType(
                         sessionId, factoryId, actor.userId(), actor.type())
-                .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+                .orElseThrow(() -> sessionNotAvailable(factoryId, sessionId));
 
         return buildProgress(factoryId, session);
     }
@@ -654,7 +671,7 @@ public class FactoryBuildInterviewService {
         FactoryAssemblyConversationSession session = sessionRepository
                 .findBySessionIdAndFactoryIdAndUserIdAndActorType(
                         sessionId, factoryId, actor.userId(), actor.type())
-                .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+                .orElseThrow(() -> sessionNotAvailable(factoryId, sessionId));
 
         if (session.getStatus() != FactoryAssemblyConversationSession.SessionStatus.ACTIVE) {
             throw new BusinessException(409,
@@ -767,7 +784,7 @@ public class FactoryBuildInterviewService {
             FactoryAssemblyConversationSession session = sessionRepository
                     .findBySessionIdAndFactoryIdAndUserIdAndActorType(
                             sessionId, factoryId, actor.userId(), actor.type())
-                    .orElseThrow(() -> new BusinessException(404, "会话不存在或不属于当前用户: " + sessionId));
+                    .orElseThrow(() -> sessionNotAvailable(factoryId, sessionId));
             Map<String, Object> answers = new LinkedHashMap<>();
             for (FactoryConfirmedFactService.PendingItem item : confirmedFacts.pendingFor(factoryId, session)) {
                 if (fields == null || fields.isEmpty() || fields.contains(item.field())) {

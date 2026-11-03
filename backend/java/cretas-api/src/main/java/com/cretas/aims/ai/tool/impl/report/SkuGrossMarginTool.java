@@ -438,4 +438,5 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     public AccessMode getAccessMode() {
         return AccessMode.READ;
     }
+
 }

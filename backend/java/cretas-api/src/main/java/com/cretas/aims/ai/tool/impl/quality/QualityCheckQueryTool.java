@@ -1,5 +1,8 @@
 package com.cretas.aims.ai.tool.impl.quality;
 
+import java.time.LocalDate;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -64,16 +67,16 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         properties.put("batchId", batchId);
 
         // status: 检验结果状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "检验结果状态筛选");
-        status.put("enum", Arrays.asList(
-                "PENDING",      // 待检验
-                "PASS",         // 合格
-                "FAIL",         // 不合格
-                "CONDITIONAL"   // 条件通过
-        ));
+        Map<String, Object> status = StatusFilter.property("检验结果状态筛选", StatusFilter.table(
+                StatusFilter.words("PENDING", "待检验", "待检", "未检验"),
+                StatusFilter.words("PASS", "合格", "已通过", "通过"),
+                StatusFilter.words("FAIL", "不合格", "未通过"),
+                StatusFilter.words("CONDITIONAL", "条件通过", "让步接收")));
         properties.put("status", status);
+
+        // 检验日期 (含当天): 「昨天的质检记录」以前把时间丢了, 返回全部记录
+        properties.put("startDate", TimeRangeFilter.dateProperty("检验日期开始 (含), YYYY-MM-DD"));
+        properties.put("endDate", TimeRangeFilter.dateProperty("检验日期结束 (含), YYYY-MM-DD"));
 
         // checkType: 质检类型（可选）
         Map<String, Object> checkType = new HashMap<>();
@@ -133,29 +136,26 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         String batchIdStr = getString(params, "batchId");
         String status = getString(params, "status");
         String checkType = getString(params, "checkType");
+        LocalDate startDate = TimeRangeFilter.parseDate(params.get("startDate"), "startDate");
+        LocalDate endDate = TimeRangeFilter.parseDate(params.get("endDate"), "endDate");
 
         // 构建分页请求
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
 
-        // 调用服务获取数据
-        PageResponse<QualityInspection> pageResponse = qualityInspectionService.getInspections(
+        // 结果 / 类型 / 日期都交给数据库在分页之前过滤 (S6 验收 2026-11-03): 以前查回一页再在页内筛,
+        // 「不合格」0 条却报「总计 6 条」—— 总数是没筛过的; 日期根本没筛。
+        PageResponse<QualityInspection> pageResponse = qualityInspectionService.getInspectionsFiltered(
                 factoryId,
                 batchIdStr,
+                status != null && !status.trim().isEmpty() ? status.trim() : null,
+                startDate,
+                endDate,
+                checkType != null && !checkType.trim().isEmpty() ? checkTypePattern(checkType) : null,
                 pageRequest
         );
-
-        // 应用后置过滤（如果服务不支持status和checkType过滤）
         List<QualityInspection> content = pageResponse.getContent();
-        if (content != null) {
-            if (status != null && !status.trim().isEmpty()) {
-                content = filterByStatus(content, status);
-            }
-            if (checkType != null && !checkType.trim().isEmpty()) {
-                content = filterByCheckType(content, checkType);
-            }
-        }
 
         // 转换为结果Map列表
         List<Map<String, Object>> inspectionList = content != null ?
@@ -175,6 +175,8 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         if (batchIdStr != null) queryConditions.put("batchId", batchIdStr);
         if (status != null) queryConditions.put("status", status);
         if (checkType != null) queryConditions.put("checkType", checkType);
+        if (startDate != null) queryConditions.put("startDate", startDate.toString());
+        if (endDate != null) queryConditions.put("endDate", endDate.toString());
         result.put("queryConditions", queryConditions);
 
         // Sprint 12 Task 4: enrich message to ≥20 CJK chars + include domain keywords (批次 / 质检 / 待审批 / 合格率)
@@ -213,23 +215,9 @@ public class QualityCheckQueryTool extends AbstractBusinessTool {
         return result;
     }
 
-    /**
-     * 按状态过滤
-     */
-    private List<QualityInspection> filterByStatus(List<QualityInspection> inspections, String status) {
-        return inspections.stream()
-                .filter(i -> i.getResult() != null && i.getResult().equalsIgnoreCase(status))
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * 按质检类型过滤（从notes中提取类型信息）
-     */
-    private List<QualityInspection> filterByCheckType(List<QualityInspection> inspections, String checkType) {
-        String typePattern = "[质检类型: " + getCheckTypeDisplayName(checkType) + "]";
-        return inspections.stream()
-                .filter(i -> i.getNotes() != null && i.getNotes().contains(typePattern))
-                .collect(Collectors.toList());
+    /** 质检类型在 notes 里的标记, 与写入时同一格式 (数据库按它过滤)。 */
+    private String checkTypePattern(String checkType) {
+        return "[质检类型: " + getCheckTypeDisplayName(checkType) + "]";
     }
 
     /**

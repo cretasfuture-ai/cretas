@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.alert;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
@@ -59,10 +60,11 @@ public class AlertByEquipmentTool extends AbstractBusinessTool {
         properties.put("equipmentName", equipmentName);
 
         // status: 告警状态（可选）
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "告警状态筛选");
-        status.put("enum", Arrays.asList("ACTIVE", "ACKNOWLEDGED", "RESOLVED", "IGNORED"));
+        Map<String, Object> status = StatusFilter.property("告警状态筛选", StatusFilter.table(
+                StatusFilter.words("ACTIVE", "未处理", "待处理", "未解决", "活跃"),
+                StatusFilter.words("ACKNOWLEDGED", "已确认", "已知悉"),
+                StatusFilter.words("RESOLVED", "已解决", "已处理", "已恢复"),
+                StatusFilter.words("IGNORED", "已忽略", "忽略")));
         properties.put("status", status);
 
         // level: 告警级别（可选）

@@ -60,12 +60,12 @@ public class AlertsDraftProposer implements CapabilityDraftProposer {
             ThresholdKeys.IOT_HUMIDITY_MIN, new Mapped(Metric.ROOM_HUMIDITY, Comparison.LESS_THAN, "环境湿度低于下限"));
     /** Metric-watch name → metric. The direction is the interview catalog's, not restated here. */
     private static final Map<String, Metric> WATCH_METRICS = Map.of("yield_rate", Metric.BATCH_YIELD_PERCENT);
-    private static final String RECIPIENT_VALUES = String.join("、",
-            Arrays.stream(RecipientRole.values()).map(Enum::name).toList());
     static final List<Option> RECIPIENT_OPTIONS = Option.ofEnum(RecipientRole.class, Map.of(
             RecipientRole.QUALITY_INSPECTOR, "质检员", RecipientRole.QUALITY_MANAGER, "质量经理",
             RecipientRole.PRODUCTION_SUPERVISOR, "生产主管", RecipientRole.WAREHOUSE_SUPERVISOR, "仓库主管",
             RecipientRole.MAINTENANCE_OWNER, "设备维护负责人"));
+    private static final String RECIPIENT_VALUES = String.join("、",
+            RECIPIENT_OPTIONS.stream().map(Option::label).toList());
     static final List<Option> SEVERITY_OPTIONS = Option.ofEnum(Severity.class, Map.of(
             Severity.INFO, "提示", Severity.WARNING, "警告", Severity.CRITICAL, "严重"));
     /** The command's limits ({@code ALERT_POLICY_WINDOW_INVALID}, {@code ALERT_POLICY_RECIPIENTS_INVALID}). */
@@ -230,9 +230,9 @@ public class AlertsDraftProposer implements CapabilityDraftProposer {
                         "模块配置草稿中已启用的模块之一：" + String.join("、", modules.stream().map(Option::value).toList()),
                         modules),
                 RequiredInput.oneOf("metric", "盯哪个指标", why,
-                        String.join("、", METRIC_OPTIONS.stream().map(Option::value).toList()) + " 之一", METRIC_OPTIONS),
+                        String.join("、", METRIC_OPTIONS.stream().map(Option::label).toList()) + " 之一", METRIC_OPTIONS),
                 RequiredInput.oneOf("comparison", "怎么比较", why,
-                        String.join("、", COMPARISON_OPTIONS.stream().map(Option::value).toList())
+                        String.join("、", COMPARISON_OPTIONS.stream().map(Option::label).toList())
                                 + " 之一（OUTSIDE_RANGE 要同时填上界）", COMPARISON_OPTIONS),
                 RequiredInput.decimal("thresholdValue", "阈值", why,
                         "数字，整数部分不超过 12 位、小数不超过 6 位；选 OUTSIDE_RANGE 时是区间下界", null, null),

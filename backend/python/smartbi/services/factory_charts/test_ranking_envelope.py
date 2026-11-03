@@ -18,7 +18,7 @@ async def test_chart_router_json_object_keeps_exact_candidates_and_computed_fact
 
     async def provider(slot, payload):
         # Exercise the actual shared-router profile, not an array-only provider mock.
-        outgoing = _apply_slot_params(slot, 'aliyun_c_vl', 'qwen3.8-flash', payload)
+        outgoing = _apply_slot_params(slot, 'aliyun_a_vl', 'qwen3.8-flash', payload)
         assert outgoing['response_format'] == {'type': 'json_object'}
         assert 'rankings' in outgoing['messages'][0]['content']
         rows = [{'id': 'production.output', 'reason_code': 'observe'}]

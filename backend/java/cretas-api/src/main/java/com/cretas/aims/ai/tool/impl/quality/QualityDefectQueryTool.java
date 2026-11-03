@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.quality;
 
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.QualityDefect;
@@ -40,9 +41,9 @@ public class QualityDefectQueryTool extends AbstractBusinessTool {
     @Override
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> properties = new HashMap<>();
-        properties.put("status", Map.of(
-                "type", "string", "description", "状态过滤 (可选)",
-                "enum", Arrays.asList("OPEN", "IN_PROGRESS", "CLOSED")));
+        properties.put("status", StatusFilter.property("状态过滤 (可选)", StatusFilter.wordsOf(DefectStatus.class, DefectStatus::getDisplayName, java.util.Map.of(
+                DefectStatus.OPEN, List.of("未处理", "未关闭"),
+                DefectStatus.CLOSED, List.of("已关闭", "已处理")))));
         properties.put("defectType", Map.of(
                 "type", "string", "description", "缺陷类型过滤 (可选)",
                 "enum", Arrays.asList("APPEARANCE", "WEIGHT", "COMPOSITION", "MICROBIAL",

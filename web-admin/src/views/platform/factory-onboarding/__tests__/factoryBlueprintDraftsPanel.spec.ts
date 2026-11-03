@@ -294,6 +294,28 @@ describe('FactoryBlueprintDraftsPanel', () => {
     w.unmount()
   })
 
+  it('tells the page whether an unapplied module draft exists, so the publish warning only shows when it should', async () => {
+    const written = (drafts: Array<{ draftId: string; label: string; naturalKey: string; status: string }>) =>
+      api.getWrittenDrafts.mockResolvedValue({ data: { schemaVersion: 'v1', blueprintId: 'bp-1', blueprintVersion: 2,
+        sourceDigest: 'abcdef0123456789', capabilities: [{ capabilityId: 'modules', supported: true, drafts }] } })
+    written([{ draftId: 'm-1', label: '模块配置', naturalKey: 'k', status: 'DRAFT' }])
+    const pending = mountPanel(); await flushPromises()
+    expect(pending.emitted('modulesDraftPending')?.at(-1)).toEqual([true])
+    pending.unmount()
+    written([{ draftId: 'm-1', label: '模块配置', naturalKey: 'k', status: 'APPLIED' }])
+    const applied = mountPanel(); await flushPromises()
+    expect(applied.emitted('modulesDraftPending')?.at(-1)).toEqual([false])
+    applied.unmount()
+  })
+
+  it('no dropdown option in the drafts panel is shown as a raw enum code', async () => {
+    const w = mountPanel(); await flushPromises()
+    const labels = w.findAll('option').map((o) => o.text().trim()).filter(Boolean)
+    expect(labels.length, '页面上确实渲染了下拉选项').toBeGreaterThan(0)
+    expect(labels.filter((text) => /^[A-Z_]+$/.test(text)), '这些选项显示的是英文代码而不是中文名').toEqual([])
+    w.unmount()
+  })
+
   it('(a2) a factory super admin of another factory is treated like the platform admin', async () => {
     auth.factoryId = 'F001'
     mountPanel()

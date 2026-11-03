@@ -1,5 +1,7 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
+import com.cretas.aims.ai.tool.FinanceReviewStatusGuard;
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -47,9 +49,12 @@ public class OrderQueryTool extends AbstractBusinessTool {
                 "type", "string",
                 "description", "ORDER_STATUS、ORDER_DETAIL 或 ORDER_TODAY",
                 "default", "ORDER_STATUS"));
-        properties.put("status", Map.of(
-                "type", "string",
-                "description", "可选销售订单状态"));
+        properties.put("status", StatusFilter.property("可选销售订单状态", StatusFilter.wordsOf(SalesOrderStatus.class, SalesOrderStatus::getDisplayName, java.util.Map.of(
+                SalesOrderStatus.PENDING_FINANCE_REVIEW, List.of("待审核"),
+                SalesOrderStatus.FINANCE_APPROVED, List.of("财务通过"),
+                SalesOrderStatus.FINANCE_REJECTED, List.of("财务驳回"),
+                SalesOrderStatus.PROCESSING, List.of("备货中", "拣货中"),
+                SalesOrderStatus.SHORT_CLOSED, List.of("短交")))));
         properties.put("page", Map.of("type", "integer", "default", 1));
         properties.put("size", Map.of("type", "integer", "default", 20));
         return Map.of(
@@ -103,7 +108,10 @@ public class OrderQueryTool extends AbstractBusinessTool {
             } catch (IllegalArgumentException exception) {
                 throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
             }
-            orders = salesService.getSalesOrdersByStatus(factoryId, status, page, size);
+            // 待财务审核: 与 SalesController 同一道二次拦截 (#736)
+            FinanceReviewStatusGuard.check(statusValue, getUserRole(context), "销售单");
+            // 按 DataScope 收窄 (getSalesOrdersByStatus 不收窄: SELF 角色会看到全厂这个状态的订单)
+            orders = salesService.getSalesOrdersFiltered(factoryId, status, null, null, page, size);
         }
         result.put("orders", orders.getContent());
         result.put("total", orders.getTotalElements());
@@ -136,6 +144,6 @@ public class OrderQueryTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("finance:read", "sales:read", "sales:read_write");
+        return java.util.Set.of("sales:read_write", "sales:read", "finance:read");
     }
 }

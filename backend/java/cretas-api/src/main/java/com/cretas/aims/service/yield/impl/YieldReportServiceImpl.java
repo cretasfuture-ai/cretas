@@ -991,8 +991,10 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (prev.isEmpty()) {
             return null;  // 上道还没产出 WIP (例如本道是非 WIP 路径), 不约束
         }
+        // 可领 = 余额 − 待检数量 (缺口 11): 与后端领用闸 QcInspectionGuard 同一口径 (drawableBalance),
+        // 原来用 availableQuantity 不扣待检, 横幅显示偏高, 操作员照着填会被闸 409 打回。
         return prev.stream()
-                .map(w -> nz(w.getAvailableQuantity()))
+                .map(SemiFinishedInventory::drawableBalance)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 

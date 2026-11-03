@@ -12,8 +12,8 @@ import java.util.List;
 @Component
 public class SanitationCipDraftProposer implements CapabilityDraftProposer {
     private static final String WHY="蓝图没有清洁方式、化学浓度、温度、时间、频率、验证和责任人的完整事实";
-    private static List<Option> opts(Class<? extends Enum<?>> type){return Arrays.stream(type.getEnumConstants()).map(e->new Option(e.name(),e.name())).toList();}
-    private static String ec(Class<? extends Enum<?>> type){return String.join("、",opts(type).stream().map(Option::value).toList())+" 之一";}
+    private static List<Option> opts(Class<? extends Enum<?>> type){return Arrays.stream(type.getEnumConstants()).map(e->new Option(e.name(),DraftEnumLabels.label(e))).toList();}
+    private static String ec(Class<? extends Enum<?>> type){return String.join("、",opts(type).stream().map(Option::label).toList())+" 之一";}
     private static List<RequiredInput> fields(){return List.of(
             RequiredInput.text("productCode","产品编码",WHY,"最长 100 位",100),
             RequiredInput.text("routeNodeId","路线节点",WHY,"最长 128 位",128),

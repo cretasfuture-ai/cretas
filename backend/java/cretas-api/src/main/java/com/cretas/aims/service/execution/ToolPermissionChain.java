@@ -51,7 +51,10 @@ public class ToolPermissionChain {
         return tool != null
                 && tool.requiresPermission()
                 && tool.getRequiredPermissions().isEmpty()
-                && !tool.hasPermission(userRole);
+                && !tool.hasPermission(userRole)
+                // S6 (2026-11-03): platform admins pass role gates, as RequireRoleInterceptor lets them through every
+                // @RequireRole (and ToolRbacEnforcer does for getRequiredRoles); the AI path is not stricter than the App.
+                && !com.cretas.aims.ai.tool.ToolRbacEnforcer.PLATFORM_ADMIN_ROLES.contains(userRole);
     }
 
     /** 旧式角色串拒绝时给用户看的话 (4 要素)。 */

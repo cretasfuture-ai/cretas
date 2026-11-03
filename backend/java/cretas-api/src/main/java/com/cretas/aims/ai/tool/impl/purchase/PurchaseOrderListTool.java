@@ -1,5 +1,7 @@
 package com.cretas.aims.ai.tool.impl.purchase;
 
+import com.cretas.aims.ai.tool.FinanceReviewStatusGuard;
+import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -36,10 +38,12 @@ public class PurchaseOrderListTool extends AbstractBusinessTool {
 
         Map<String, Object> properties = new HashMap<>();
 
-        Map<String, Object> status = new HashMap<>();
-        status.put("type", "string");
-        status.put("description", "采购订单状态筛选");
-        status.put("enum", Arrays.asList("DRAFT", "SUBMITTED", "APPROVED", "RECEIVING", "COMPLETED", "CANCELLED"));
+        // 状态取自枚举本身: 以前手写的列表里有枚举不存在的值 (valueOf 必炸), 又漏了真实状态
+        Map<String, Object> status = StatusFilter.property("采购订单状态筛选",
+                StatusFilter.wordsOf(PurchaseOrderStatus.class, PurchaseOrderStatus::getDisplayName, Map.of(
+                        PurchaseOrderStatus.SUBMITTED, List.of("待审批"),
+                        PurchaseOrderStatus.APPROVED, List.of("已批准", "审批通过"),
+                        PurchaseOrderStatus.PARTIAL_RECEIVED, List.of("收货中", "到货中"))));
         properties.put("status", status);
 
         Map<String, Object> page = new HashMap<>();
@@ -70,6 +74,8 @@ public class PurchaseOrderListTool extends AbstractBusinessTool {
         Integer size = getInteger(params, "size", 10);
         String statusStr = getString(params, "status");
 
+        // 待财务审核: 与 PurchaseController 同一道二次拦截 (#736), 工具路径上 controller 不运行
+        FinanceReviewStatusGuard.check(statusStr, getUserRole(context), "采购单");
         PageResponse<PurchaseOrder> result;
         if (statusStr != null && !statusStr.trim().isEmpty()) {
             PurchaseOrderStatus status = PurchaseOrderStatus.valueOf(statusStr);
