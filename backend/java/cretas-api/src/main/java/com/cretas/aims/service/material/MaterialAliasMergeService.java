@@ -12,7 +12,8 @@ import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.security.core.context.SecurityContextHolder;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.utils.SecurityUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,6 +49,7 @@ public class MaterialAliasMergeService {
 
     private final RawMaterialTypeRepository materialTypeRepository;
     private final RawMaterialTypeAliasRepository aliasRepository;
+    private final UnitContractService unitContractService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -188,8 +190,8 @@ public class MaterialAliasMergeService {
                     .map(MaterialMergeDTO.Blocker::getMessage)
                     .collect(Collectors.joining("；"));
             throw new BusinessException(409, "「" + duplicate.getName() + "」现在还不能合并：" + reasons)
-                    .withCode("MATERIAL_MERGE_BLOCKED")
                     .withHint(check.getBlockers().get(0).getHint())
+                    .withCode("MATERIAL_MERGE_BLOCKED")
                     .withHintTarget("masterId");
         }
 
@@ -232,10 +234,12 @@ public class MaterialAliasMergeService {
             throw new BusinessException(400, "主物料不能是它自己").withHintTarget("masterId");
         }
         if (duplicate.getMergedIntoId() != null) {
-            throw new BusinessException(409, "「" + duplicate.getName() + "」已经合并过了");
+            throw new BusinessException(409, "「" + duplicate.getName() + "」已经合并过了")
+                    .withHint("它已停用，请直接使用它合并到的主物料");
         }
         if (master.getMergedIntoId() != null) {
             throw new BusinessException(409, "「" + master.getName() + "」本身已合并到别的物料，不能当主物料")
+                    .withHint("请改选它合并到的那个主物料")
                     .withHintTarget("masterId");
         }
         if (!Boolean.TRUE.equals(master.getIsActive())) {
@@ -264,7 +268,7 @@ public class MaterialAliasMergeService {
                 openPurchaseOrders(factoryId, duplicate.getId())).ifPresent(blockers::add);
 
         List<String> warnings = new ArrayList<>();
-        if (!Objects.equals(normalizeUnit(duplicate.getUnit()), normalizeUnit(master.getUnit()))) {
+        if (!sameUnit(factoryId, duplicate.getUnit(), master.getUnit())) {
             warnings.add("单位不同：「" + duplicate.getName() + "」按 " + duplicate.getUnit()
                     + "，「" + master.getName() + "」按 " + master.getUnit() + "。合并后按主物料的单位记。");
         }
@@ -479,8 +483,13 @@ public class MaterialAliasMergeService {
         return value.stripTrailingZeros().toPlainString();
     }
 
-    private static String normalizeUnit(String unit) {
-        return unit == null ? "" : unit.trim().toLowerCase(java.util.Locale.ROOT);
+    /** 单位同一性问单位契约; 认不出的单位不当作相同 —— 它只决定要不要多给一句提醒。 */
+    private boolean sameUnit(String factoryId, String left, String right) {
+        try {
+            return unitContractService.areEquivalent(factoryId, left, right);
+        } catch (RuntimeException unknownUnit) {
+            return false;
+        }
     }
 
     private static String truncate(String value) {
@@ -493,9 +502,7 @@ public class MaterialAliasMergeService {
     }
 
     private static String currentOperator() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return authentication == null || authentication.getName() == null
-                ? "system"
-                : authentication.getName();
+        String username = SecurityUtils.currentUsername();
+        return username == null || username.isBlank() ? "system" : username;
     }
 }
